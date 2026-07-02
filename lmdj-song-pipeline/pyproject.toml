@@ -1,0 +1,34 @@
+[project]
+name = "song-pipeline"
+version = "0.1.0"
+description = "LMDJ 自动出歌管线：整曲 → ≤6 samples + chart.mid + lanes.json"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy<2",
+    "soundfile",
+    "librosa>=0.10",
+    "scikit-learn",
+    "pretty_midi",
+    "demucs>=4.0",
+    "torch",
+    "torchaudio",
+    "fastapi",
+    "uvicorn",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+# 阶段1 MusicGen 生成（不做生成可不装）
+generate = ["transformers>=4.40", "accelerate"]
+# 从 YouTube 取料
+fetch = ["yt-dlp"]
+
+[project.scripts]
+song-pipeline = "song_pipeline.cli:main"
+
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["song_pipeline"]
