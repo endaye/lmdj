@@ -40,19 +40,19 @@ body {
   height: 100%;
 }
 
-.input-panel {
+.control-panel {
   position: absolute;
   left: 50%;
   bottom: clamp(28px, 8vh, 76px);
-  width: min(560px, calc(100vw - 32px));
+  width: 72px;
   height: var(--panel-height);
   transform: translateX(-50%);
 }
 
-.input-panel input {
+.control-panel button {
   width: 100%;
   height: 100%;
-  padding: 0 20px;
+  padding: 0;
   border: 1px solid rgba(0, 255, 102, 0.72);
   border-radius: 0;
   outline: none;
@@ -63,25 +63,17 @@ body {
   color: var(--fg);
   font: 700 18px/1.2 inherit;
   letter-spacing: 0;
-  text-align: center;
   text-transform: uppercase;
-  caret-color: var(--hot);
+  cursor: pointer;
+  text-align: center;
 }
 
-.input-panel input:focus {
+.control-panel button:focus-visible,
+.control-panel button.is-active {
   border-color: var(--hot);
   box-shadow:
     0 0 0 1px rgba(242, 255, 246, 0.2) inset,
     0 0 34px rgba(0, 255, 102, 0.24);
-}
-
-.input-panel input::placeholder {
-  color: rgba(185, 255, 210, 0.44);
-}
-
-.input-panel input::selection {
-  background: var(--fg);
-  color: #000;
 }
 
 @media (max-width: 640px) {
@@ -93,8 +85,7 @@ body {
     min-height: 360px;
   }
 
-  .input-panel input {
-    padding: 0 14px;
-    font-size: 18px;
+  .control-panel {
+    width: 58px;
   }
 }
