@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>ASCII Matrix Field</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="stage" aria-label="ASCII matrix text visual test">
+      <canvas id="dotCanvas" aria-hidden="true"></canvas>
+
+      <form class="input-panel" autocomplete="off">
+        <input
+          id="textInput"
+          name="text"
+          type="text"
+          value=""
+          maxlength="36"
+          aria-label="输入 ASCII 瀑布文字"
+          placeholder="TYPE TO SIGNAL"
+          spellcheck="false"
+        />
+      </form>
+    </main>
+
+    <script src="./main.js"></script>
+  </body>
+</html>

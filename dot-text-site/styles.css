@@ -1,0 +1,100 @@
+:root {
+  color-scheme: dark;
+  --bg: #000;
+  --fg: #b9ffd2;
+  --hot: #f2fff6;
+  --matrix: #00ff66;
+  --panel-height: 56px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family:
+    "SFMono-Regular", "SF Mono", Consolas, "Liberation Mono", Menlo, monospace;
+}
+
+.stage {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  min-height: 420px;
+  background: var(--bg);
+}
+
+#dotCanvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.input-panel {
+  position: absolute;
+  left: 50%;
+  bottom: clamp(28px, 8vh, 76px);
+  width: min(560px, calc(100vw - 32px));
+  height: var(--panel-height);
+  transform: translateX(-50%);
+}
+
+.input-panel input {
+  width: 100%;
+  height: 100%;
+  padding: 0 20px;
+  border: 1px solid rgba(0, 255, 102, 0.72);
+  border-radius: 0;
+  outline: none;
+  background: rgba(0, 0, 0, 0.82);
+  box-shadow:
+    0 0 0 1px rgba(0, 255, 102, 0.12) inset,
+    0 0 26px rgba(0, 255, 102, 0.14);
+  color: var(--fg);
+  font: 700 18px/1.2 inherit;
+  letter-spacing: 0;
+  text-align: center;
+  text-transform: uppercase;
+  caret-color: var(--hot);
+}
+
+.input-panel input:focus {
+  border-color: var(--hot);
+  box-shadow:
+    0 0 0 1px rgba(242, 255, 246, 0.2) inset,
+    0 0 34px rgba(0, 255, 102, 0.24);
+}
+
+.input-panel input::placeholder {
+  color: rgba(185, 255, 210, 0.44);
+}
+
+.input-panel input::selection {
+  background: var(--fg);
+  color: #000;
+}
+
+@media (max-width: 640px) {
+  :root {
+    --panel-height: 50px;
+  }
+
+  .stage {
+    min-height: 360px;
+  }
+
+  .input-panel input {
+    padding: 0 14px;
+    font-size: 18px;
+  }
+}
