@@ -1,6 +1,8 @@
 # LMDJ Song Pipeline
 
-把一段成品音乐或 MusicGen 生成音频转换成 LMDJ 可用的 playable patch：
+这是高嘉丰提供的 demo 工具，用来验证“成品音乐或 MusicGen 生成音频 -> playable patch 包”的技术链路。它是后续 LMDJ 系统的参考资产，不是最终产品架构定稿。
+
+它当前可以把一段音频转换成：
 
 ```text
 samples/*.wav + chart.mid + lanes.json
