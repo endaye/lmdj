@@ -24,7 +24,9 @@
 
 - 可运行价值：证明音频可以被转换为有限 samples + MIDI chart + lane map。
 - 可复用方向：package 输出格式、验收报告、FastAPI job 状态、快速测试 fixture。
-- 需要谨慎：demo 的 pipeline 结构不等于最终产品架构；输出格式也可能根据游戏设计重定。
+- 项目来源：这是高嘉丰提供的个人参考项目和技术素材库，不是 LMDJ 最终系统源码边界。
+- 需要谨慎：demo 的 pipeline 结构、目录结构、API、CLI、状态模型不等于最终产品架构；输出格式也可能根据 LMDJ 的 `Patch / Pad / Scene / Element` 产品对象重定。
+- 建议用法：先把它当作 Audio Worker / pipeline capability reference；通过 `Patchify` adapter 把其输出转换为 LMDJ 自己的产品 contract。
 
 ### 高嘉丰 Pinterest mood board
 

@@ -7,7 +7,7 @@ LMDJ 当前是一个脑暴与 PRD 快速迭代工作区。这里先沉淀素材�
 ```text
 lmdj/
 ├── docs/                    # PRD 迭代、素材、决策与开放问题
-├── lmdj-song-pipeline/      # 高嘉丰提供的 demo 工具，可作为后续技术参考
+├── lmdj-song-pipeline/      # 高嘉丰提供的参考项目和技术素材库
 ├── AGENTS.md                # Codex 协作说明
 └── CLAUDE.md                # Claude Code 协作说明
 ```
@@ -23,7 +23,7 @@ lmdj/
 
 ## 当前定位
 
-`lmdj-song-pipeline` 是高嘉丰给到的可运行 demo 工具，不等同于 LMDJ 最终系统。它现在的价值是帮助我们理解“音频输入 -> samples + chart.mid + lanes.json”的可能链路，并为后续技术方案提供参考。
+`lmdj-song-pipeline` 是高嘉丰给到的可运行参考项目和技术素材库，不等同于 LMDJ 最终系统，也不默认作为最终代码边界。它现在的价值是帮助我们理解“音频输入 -> samples + chart.mid + lanes.json”的可能链路，并为后续 Audio Worker、Patchify adapter 和技术方案提供参考。
 
 ```text
 PRD 素材

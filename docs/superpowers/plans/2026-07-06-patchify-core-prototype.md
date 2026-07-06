@@ -8,9 +8,24 @@
 
 **技术栈：** Python 3.10+、dataclasses、JSON stdlib、`pretty_midi`、现有 `song_pipeline` package、pytest。
 
+## 计划状态
+
+本计划是 **adapter prototype 方案**，默认把 Patchify Core 加在 `lmdj-song-pipeline` 内部，用最快路径验证参考 pipeline 输出如何转成 LMDJ 产品对象。
+
+新的项目边界判断是：`lmdj-song-pipeline` 是高嘉丰提供的参考项目和可复用技术素材库，不是 LMDJ 最终系统源码边界。因此，执行本计划前需要先确认采用哪条路径：
+
+```text
+Path A: 继续按本计划在 lmdj-song-pipeline 内做 Patchify adapter prototype
+Path B: 新建 LMDJ backend/shared package，把 lmdj-song-pipeline 当作输入来源或可迁移代码
+```
+
+如果当前目标是尽快验证 `patch.json` contract，选 Path A。  
+如果当前目标是建立云端产品代码骨架，选 Path B，并需要重写本计划的文件结构。
+
 ## 全局约束
 
 - 实现和测试都在 `/Users/endaye/Projects/lmdj/lmdj-song-pipeline` 内完成。
+- 该路径只适用于 Path A：参考项目内 adapter prototype。
 - 使用 `.venv/bin/python -m pytest tests/ -q` 做验证。
 - 不要升级 `numpy`；它因为 demucs/numba compatibility 固定为 `<2`。
 - 保留现有 pipeline 输出文件：`samples/*.wav`、`chart.mid`、`lanes.json`、`report.json`、`loop_preview.wav`、`render_preview.wav`。
@@ -22,6 +37,8 @@
 ---
 
 ## 文件结构
+
+下面文件结构只适用于 Path A。如果选择 Path B，应改为在新的 LMDJ backend/shared package 中创建同名职责模块，并把 `lmdj-song-pipeline` 的输出作为测试 fixture 或 adapter input。
 
 - 新建 `lmdj-song-pipeline/song_pipeline/patch_model.py`
   - 负责可序列化的产品对象：`Patch`、`Scene`、`Pad`、`Element`、`RenderRef`。

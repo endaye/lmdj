@@ -15,3 +15,11 @@
 - 结论：`lmdj-song-pipeline` 是后续可参考、可复用的 demo 工具，不是 LMDJ 最终系统架构定稿。
 - 原因：该工具能证明音频到 playable patch 包的技术链路，但产品系统仍在脑暴。
 - 影响：后续 PRD 可以参考它的 package contract 和运行方式，但不默认继承全部设计。
+
+## 2026-07-06
+
+### 已确认：`lmdj-song-pipeline` 是参考项目，不是最终代码边界
+
+- 结论：`lmdj-song-pipeline` 是高嘉丰提供的个人参考项目和可复用技术素材库；LMDJ 可以吸收其中的功能和代码，但最终云端系统、产品对象、服务边界和 package contract 需要按 LMDJ 自己的架构定义。
+- 原因：当前产品方向已经从 demo pipeline 扩展为 AI-native sampler workstation，核心对象是 `Patch / Pad / Scene / Element`，不应被参考项目的目录结构、API、CLI 或状态模型锁死。
+- 影响：后续技术方案需要区分“复用 pipeline 能力”和“继承系统架构”。`Patchify` 应作为参考 pipeline 输出到 LMDJ 产品对象之间的 adapter layer；是否把 adapter prototype 写在 `lmdj-song-pipeline` 内，需要在实施前单独确认。

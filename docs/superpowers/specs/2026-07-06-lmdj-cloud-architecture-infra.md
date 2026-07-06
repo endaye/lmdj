@@ -55,6 +55,20 @@ Web App / CLI
   -> CDN
 ```
 
+## 参考项目边界
+
+`lmdj-song-pipeline` 是高嘉丰提供的个人参考项目，用来证明“音频输入 / MusicGen 输出 -> samples + chart.mid + lanes.json + report.json”这条技术链路。它是重要的技术素材库，但不是 LMDJ 最终云端系统的源码边界。
+
+后续设计应遵守：
+
+- 可以复用其中已经验证过的音频能力：分轨、loop finding、切片、MIDI chart、validation、测试 fixture。
+- 可以参考它的 package contract：`samples/*.wav`、`chart.mid`、`lanes.json`、`report.json`、preview audio。
+- 不默认继承它的目录结构、API 形态、CLI 形态、状态模型或最终 product contract。
+- LMDJ 自己需要沉淀独立的 `Patch / Pad / Scene / Element` 产品对象。
+- `Patchify` 应该被视为参考 pipeline 输出到 LMDJ 产品对象之间的 adapter layer，而不是简单给参考项目追加一个字段。
+
+因此，云端实现时可以先把 `lmdj-song-pipeline` 作为 worker 内部依赖或可迁移代码来源；但 App Backend、Patch model、Job model、Storage model 和 Community model 应按 LMDJ 自身产品架构定义。
+
 ## 服务清单
 
 ### 1. Web App
@@ -212,14 +226,21 @@ idea / brief
 Patchify 是核心 adapter layer：
 
 ```text
-pipeline package
+reference pipeline package
   -> product Patch
   -> Pads
   -> Scenes
   -> Elements
 ```
 
-早期建议作为 Python module 放在 `lmdj-song-pipeline` 中，先稳定生成 `patch.json`。等 Web、AI、社区都开始依赖它之后，再考虑抽成独立 library 或 service。
+早期可以有两种落点：
+
+```text
+Option A: 放在 lmdj-song-pipeline 旁边，作为参考项目的 adapter prototype
+Option B: 新建 LMDJ backend/shared package，将参考 pipeline 作为输入来源
+```
+
+如果目标是快速验证现有 pipeline 输出，Option A 成本最低。如果目标是尽早建立最终云端代码边界，Option B 更干净。无论采用哪种，`Patchify` 的职责都应该是 LMDJ 自己的产品对象映射，而不是继承参考项目的最终格式。
 
 第一版职责：
 
