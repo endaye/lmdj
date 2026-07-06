@@ -29,4 +29,4 @@ source-materials.md  收外部输入和 demo 参考
 - `已确认`：进入 decision log，后续默认遵守。
 - `废弃`：明确不再采用，但保留原因。
 
-运行与管线使用文档放在对应代码目录 `lmdj-song-pipeline/` 内。
+参考 demo 的运行说明放在 [../references/README.md](../references/README.md) 和各自 demo 目录内。

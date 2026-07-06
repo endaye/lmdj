@@ -24,7 +24,7 @@ Path B: 新建 LMDJ backend/shared package，把 lmdj-song-pipeline 当作输入
 
 ## 全局约束
 
-- 实现和测试都在 `/Users/endaye/Projects/lmdj/lmdj-song-pipeline` 内完成。
+- 实现和测试都在 `/Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline` 内完成。
 - 该路径只适用于 Path A：参考项目内 adapter prototype。
 - 使用 `.venv/bin/python -m pytest tests/ -q` 做验证。
 - 不要升级 `numpy`；它因为 demucs/numba compatibility 固定为 `<2`。
@@ -40,38 +40,38 @@ Path B: 新建 LMDJ backend/shared package，把 lmdj-song-pipeline 当作输入
 
 下面文件结构只适用于 Path A。如果选择 Path B，应改为在新的 LMDJ backend/shared package 中创建同名职责模块，并把 `lmdj-song-pipeline` 的输出作为测试 fixture 或 adapter input。
 
-- 新建 `lmdj-song-pipeline/song_pipeline/patch_model.py`
+- 新建 `references/demos/lmdj-song-pipeline/song_pipeline/patch_model.py`
   - 负责可序列化的产品对象：`Patch`、`Scene`、`Pad`、`Element`、`RenderRef`。
   - 提供 `to_dict()` methods 和 `write_patch_json()`。
-- 新建 `lmdj-song-pipeline/song_pipeline/package_loader.py`
+- 新建 `references/demos/lmdj-song-pipeline/song_pipeline/package_loader.py`
   - 负责 package validation 和解析后的 package data。
   - 读取 `lanes.json`、`report.json` 和 `chart.mid`。
   - 确认 sample files 存在，并确认 MIDI pitches 都存在于 `lanes.json`。
-- 新建 `lmdj-song-pipeline/song_pipeline/pad_mapper.py`
+- 新建 `references/demos/lmdj-song-pipeline/song_pipeline/pad_mapper.py`
   - 负责从 pipeline lanes 到产品 pads 的默认 8-pad Focus View mapping。
   - 不访问 filesystem。
-- 新建 `lmdj-song-pipeline/song_pipeline/patchify.py`
+- 新建 `references/demos/lmdj-song-pipeline/song_pipeline/patchify.py`
   - 编排 loader + mapper + model。
   - 为已有 pipeline package directory 生成 `patch.json`。
-- 修改 `lmdj-song-pipeline/song_pipeline/pipeline.py`
+- 修改 `references/demos/lmdj-song-pipeline/song_pipeline/pipeline.py`
   - package artifacts 成功写入后，调用 `patchify_package(out_dir)`。
   - 如果 patchify 失败，不阻塞既有 `report.json` 生成；只在需要时把失败写入 `report["patchify_error"]`。
-- 修改 `lmdj-song-pipeline/song_pipeline/cli.py`
+- 修改 `references/demos/lmdj-song-pipeline/song_pipeline/cli.py`
   - 增加 `song-pipeline patchify <song_dir>`，用于从已有 package 重新生成 `patch.json`。
-- 修改 `lmdj-song-pipeline/song_pipeline/api.py`
+- 修改 `references/demos/lmdj-song-pipeline/song_pipeline/api.py`
   - 如果 `patch.json` 存在，将它包含进 package zip。
-- 新建 `lmdj-song-pipeline/tests/test_patch_model.py`
-- 新建 `lmdj-song-pipeline/tests/test_package_loader.py`
-- 新建 `lmdj-song-pipeline/tests/test_pad_mapper.py`
-- 新建 `lmdj-song-pipeline/tests/test_patchify.py`
+- 新建 `references/demos/lmdj-song-pipeline/tests/test_patch_model.py`
+- 新建 `references/demos/lmdj-song-pipeline/tests/test_package_loader.py`
+- 新建 `references/demos/lmdj-song-pipeline/tests/test_pad_mapper.py`
+- 新建 `references/demos/lmdj-song-pipeline/tests/test_patchify.py`
 
 ---
 
 ### 任务 1：产品 Patch Model
 
 **文件：**
-- 新建：`lmdj-song-pipeline/song_pipeline/patch_model.py`
-- 测试：`lmdj-song-pipeline/tests/test_patch_model.py`
+- 新建：`references/demos/lmdj-song-pipeline/song_pipeline/patch_model.py`
+- 测试：`references/demos/lmdj-song-pipeline/tests/test_patch_model.py`
 
 **接口：**
 - 产出：`Patch`、`Scene`、`Pad`、`Element`、`RenderRef`、`write_patch_json(patch: Patch, out_path: Path) -> None`
@@ -147,7 +147,7 @@ def test_patch_model_serializes_product_objects(tmp_path: Path):
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patch_model.py::test_patch_model_serializes_product_objects -q
 ```
 
@@ -258,7 +258,7 @@ def write_patch_json(patch: Patch, out_path: Path) -> None:
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patch_model.py::test_patch_model_serializes_product_objects -q
 ```
 
@@ -267,7 +267,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 - [ ] **步骤 5：Commit**
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 git add song_pipeline/patch_model.py tests/test_patch_model.py
 git commit -m "feat(patchify): add product patch model"
 ```
@@ -277,8 +277,8 @@ git commit -m "feat(patchify): add product patch model"
 ### 任务 2：Package Loader 和 Validator
 
 **文件：**
-- 新建：`lmdj-song-pipeline/song_pipeline/package_loader.py`
-- 测试：`lmdj-song-pipeline/tests/test_package_loader.py`
+- 新建：`references/demos/lmdj-song-pipeline/song_pipeline/package_loader.py`
+- 测试：`references/demos/lmdj-song-pipeline/tests/test_package_loader.py`
 
 **接口：**
 - 消费：不依赖前置 runtime objects
@@ -353,7 +353,7 @@ def test_load_pipeline_package_rejects_unknown_midi_pitch(tmp_path: Path):
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_package_loader.py -q
 ```
 
@@ -461,7 +461,7 @@ def load_pipeline_package(song_dir: Path) -> PipelinePackage:
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_package_loader.py -q
 ```
 
@@ -470,7 +470,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 - [ ] **步骤 5：Commit**
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 git add song_pipeline/package_loader.py tests/test_package_loader.py
 git commit -m "feat(patchify): validate pipeline packages"
 ```
@@ -480,8 +480,8 @@ git commit -m "feat(patchify): validate pipeline packages"
 ### 任务 3：默认 8-Pad Focus Mapper
 
 **文件：**
-- 新建：`lmdj-song-pipeline/song_pipeline/pad_mapper.py`
-- 测试：`lmdj-song-pipeline/tests/test_pad_mapper.py`
+- 新建：`references/demos/lmdj-song-pipeline/song_pipeline/pad_mapper.py`
+- 测试：`references/demos/lmdj-song-pipeline/tests/test_pad_mapper.py`
 
 **接口：**
 - 消费：`PipelinePackage.lanes`
@@ -536,7 +536,7 @@ def test_build_focus_pads_keeps_empty_control_slots_when_material_is_missing():
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_pad_mapper.py -q
 ```
 
@@ -638,7 +638,7 @@ def build_focus_pads(lanes: list[dict[str, Any]]) -> tuple[list[Element], list[P
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_pad_mapper.py -q
 ```
 
@@ -647,7 +647,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 - [ ] **步骤 5：Commit**
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 git add song_pipeline/pad_mapper.py tests/test_pad_mapper.py
 git commit -m "feat(patchify): map lanes to focus pads"
 ```
@@ -657,8 +657,8 @@ git commit -m "feat(patchify): map lanes to focus pads"
 ### 任务 4：Patchify Orchestrator
 
 **文件：**
-- 新建：`lmdj-song-pipeline/song_pipeline/patchify.py`
-- 测试：`lmdj-song-pipeline/tests/test_patchify.py`
+- 新建：`references/demos/lmdj-song-pipeline/song_pipeline/patchify.py`
+- 测试：`references/demos/lmdj-song-pipeline/tests/test_patchify.py`
 
 **接口：**
 - 消费：`load_pipeline_package(song_dir: Path) -> PipelinePackage`、`build_focus_pads(lanes) -> tuple[list[Element], list[Pad]]`
@@ -737,7 +737,7 @@ def test_patchify_package_writes_patch_json(tmp_path: Path):
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patchify.py -q
 ```
 
@@ -808,7 +808,7 @@ def patchify_package(song_dir: Path) -> Path:
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patchify.py -q
 ```
 
@@ -817,7 +817,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 - [ ] **步骤 5：Commit**
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 git add song_pipeline/patchify.py tests/test_patchify.py
 git commit -m "feat(patchify): build patch json from packages"
 ```
@@ -827,11 +827,11 @@ git commit -m "feat(patchify): build patch json from packages"
 ### 任务 5：Pipeline、CLI 和 API 集成
 
 **文件：**
-- 修改：`lmdj-song-pipeline/song_pipeline/pipeline.py`
-- 修改：`lmdj-song-pipeline/song_pipeline/cli.py`
-- 修改：`lmdj-song-pipeline/song_pipeline/api.py`
-- 测试：`lmdj-song-pipeline/tests/test_smoke.py`
-- 测试：`lmdj-song-pipeline/tests/test_patchify.py`
+- 修改：`references/demos/lmdj-song-pipeline/song_pipeline/pipeline.py`
+- 修改：`references/demos/lmdj-song-pipeline/song_pipeline/cli.py`
+- 修改：`references/demos/lmdj-song-pipeline/song_pipeline/api.py`
+- 测试：`references/demos/lmdj-song-pipeline/tests/test_smoke.py`
+- 测试：`references/demos/lmdj-song-pipeline/tests/test_patchify.py`
 
 **接口：**
 - 消费：`patchify_package(song_dir: Path) -> Path`
@@ -886,7 +886,7 @@ def test_cli_patchify_command_writes_patch_json(tmp_path: Path, capsys):
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_smoke.py::test_pipeline_writes_patch_json tests/test_patchify.py::test_cli_patchify_command_writes_patch_json -q
 ```
 
@@ -957,7 +957,7 @@ from .patchify import patchify_package
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_smoke.py::test_pipeline_writes_patch_json tests/test_patchify.py::test_cli_patchify_command_writes_patch_json -q
 ```
 
@@ -968,7 +968,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/ -q
 ```
 
@@ -977,7 +977,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 - [ ] **步骤 9：Commit**
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 git add song_pipeline/pipeline.py song_pipeline/cli.py song_pipeline/api.py tests/test_smoke.py tests/test_patchify.py
 git commit -m "feat(patchify): emit patch json from pipeline"
 ```
@@ -987,8 +987,8 @@ git commit -m "feat(patchify): emit patch json from pipeline"
 ### 任务 6：Patchify Contract 文档
 
 **文件：**
-- 修改：`lmdj-song-pipeline/README.md`
-- 修改：`lmdj-song-pipeline/SETUP_AND_USAGE.md`
+- 修改：`references/demos/lmdj-song-pipeline/README.md`
+- 修改：`references/demos/lmdj-song-pipeline/SETUP_AND_USAGE.md`
 
 **接口：**
 - 消费：Tasks 1-5 产出的 `patch.json` schema
@@ -996,7 +996,7 @@ git commit -m "feat(patchify): emit patch json from pipeline"
 
 - [ ] **步骤 1：更新 README output format**
 
-把 `lmdj-song-pipeline/README.md` 中的 output block 修改为：
+把 `references/demos/lmdj-song-pipeline/README.md` 中的 output block 修改为：
 
 ```text
 output/{song_id}/
@@ -1017,7 +1017,7 @@ output/{song_id}/
 
 - [ ] **步骤 2：记录 CLI patchify command**
 
-把这个命令加入 `lmdj-song-pipeline/README.md` 的 common command section：
+把这个命令加入 `references/demos/lmdj-song-pipeline/README.md` 的 common command section：
 
 ```bash
 # 从已有 package 重新生成产品层 patch.json。
@@ -1026,7 +1026,7 @@ output/{song_id}/
 
 - [ ] **步骤 3：更新 SETUP_AND_USAGE contract section**
 
-在 `lmdj-song-pipeline/SETUP_AND_USAGE.md` 中，在 output contract section 附近增加一个简短的 `patch.json` subsection：
+在 `references/demos/lmdj-song-pipeline/SETUP_AND_USAGE.md` 中，在 output contract section 附近增加一个简短的 `patch.json` subsection：
 
 ```markdown
 ### patch.json
@@ -1049,7 +1049,7 @@ output/{song_id}/
 
 ```bash
 cd /Users/endaye/Projects/lmdj
-rg -n "patch.json|Patchify" lmdj-song-pipeline/README.md lmdj-song-pipeline/SETUP_AND_USAGE.md
+rg -n "patch.json|Patchify" references/demos/lmdj-song-pipeline/README.md references/demos/lmdj-song-pipeline/SETUP_AND_USAGE.md
 ```
 
 预期：输出中包含 README 和 SETUP_AND_USAGE 对 `patch.json` 与 `Patchify` 的引用。
@@ -1059,7 +1059,7 @@ rg -n "patch.json|Patchify" lmdj-song-pipeline/README.md lmdj-song-pipeline/SETU
 运行：
 
 ```bash
-cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
+cd /Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/ -q
 ```
 
@@ -1069,7 +1069,7 @@ cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 
 ```bash
 cd /Users/endaye/Projects/lmdj
-git add lmdj-song-pipeline/README.md lmdj-song-pipeline/SETUP_AND_USAGE.md
+git add references/demos/lmdj-song-pipeline/README.md references/demos/lmdj-song-pipeline/SETUP_AND_USAGE.md
 git commit -m "docs(patchify): document patch json contract"
 ```
 

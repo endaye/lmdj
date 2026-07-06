@@ -236,7 +236,7 @@ reference pipeline package
 早期可以有两种落点：
 
 ```text
-Option A: 放在 lmdj-song-pipeline 旁边，作为参考项目的 adapter prototype
+Option A: 放在 references/demos/lmdj-song-pipeline 内或旁边，作为参考项目的 adapter prototype
 Option B: 新建 LMDJ backend/shared package，将参考 pipeline 作为输入来源
 ```
 

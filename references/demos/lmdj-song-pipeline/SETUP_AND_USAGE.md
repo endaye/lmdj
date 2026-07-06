@@ -40,7 +40,7 @@ boom bap 重渲染、鼓音色 A/B。详见第 5、6 节。
 ### 2.2 Python 依赖（虚拟环境）
 
 ```bash
-cd lmdj-song-pipeline
+cd references/demos/lmdj-song-pipeline
 python3 -m venv .venv
 .venv/bin/pip install --upgrade pip
 

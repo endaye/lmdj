@@ -7,7 +7,10 @@ LMDJ 当前是一个脑暴与 PRD 快速迭代工作区。这里先沉淀素材�
 ```text
 lmdj/
 ├── docs/                    # PRD 迭代、素材、决策与开放问题
-├── lmdj-song-pipeline/      # 高嘉丰提供的参考项目和技术素材库
+├── references/              # 不纳入正式产品的参考素材和 demo
+│   └── demos/
+│       ├── ascii-matrix-camera/
+│       └── lmdj-song-pipeline/
 ├── AGENTS.md                # Codex 协作说明
 └── CLAUDE.md                # Claude Code 协作说明
 ```
@@ -19,11 +22,12 @@ lmdj/
 - [docs/prd/source-materials.md](docs/prd/source-materials.md)：外部输入、demo、参考资料和素材索引。
 - [docs/prd/open-questions.md](docs/prd/open-questions.md)：待讨论问题池。
 - [docs/prd/decision-log.md](docs/prd/decision-log.md)：已经确认的产品/技术决策。
-- [lmdj-song-pipeline/README.md](lmdj-song-pipeline/README.md)：高嘉丰 demo 工具的快速上手和接口说明。
+- [references/README.md](references/README.md)：参考素材和 demo 的边界说明。
+- [references/demos/lmdj-song-pipeline/README.md](references/demos/lmdj-song-pipeline/README.md)：高嘉丰参考项目的快速上手和接口说明。
 
 ## 当前定位
 
-`lmdj-song-pipeline` 是高嘉丰给到的可运行参考项目和技术素材库，不等同于 LMDJ 最终系统，也不默认作为最终代码边界。它现在的价值是帮助我们理解“音频输入 -> samples + chart.mid + lanes.json”的可能链路，并为后续 Audio Worker、Patchify adapter 和技术方案提供参考。
+`references/demos/` 里的项目都是参考素材，不纳入正式产品源码边界。`lmdj-song-pipeline` 是高嘉丰给到的可运行参考项目和技术素材库；`ascii-matrix-camera` 是视觉互动方向的小 demo。它们的价值是提供技术和体验证据，后续正式系统需要在独立 app / package / worker 中定义自己的边界。
 
 ```text
 PRD 素材
@@ -42,10 +46,10 @@ PRD 素材
 
 ## Demo 工具常用命令
 
-需要跑高嘉丰 demo 时，在 `lmdj-song-pipeline/` 内执行：
+需要跑高嘉丰 demo 时，在 `references/demos/lmdj-song-pipeline/` 内执行：
 
 ```bash
-cd lmdj-song-pipeline
+cd references/demos/lmdj-song-pipeline
 
 python3 -m venv .venv
 .venv/bin/pip install -e .

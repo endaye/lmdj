@@ -4,7 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository layout
 
-The git root (`lmdj/`) contains a single project in the `lmdj-song-pipeline/` subdirectory. **All commands below assume `cd lmdj-song-pipeline` first**, and the venv lives at `lmdj-song-pipeline/.venv`.
+The git root (`lmdj/`) is currently a PRD, architecture, and reference-material workspace. Formal product apps/packages are not established yet.
+
+Reference demos live under `references/demos/` and are not part of the final product source boundary:
+
+- `references/demos/lmdj-song-pipeline/` — 高嘉丰提供的 audio pipeline 参考项目。
+- `references/demos/ascii-matrix-camera/` — ASCII 视觉互动参考 demo。
+
+The commands below apply only when working inside the `lmdj-song-pipeline` reference demo. **Run `cd references/demos/lmdj-song-pipeline` first**, and the venv lives at `references/demos/lmdj-song-pipeline/.venv`.
 
 ## Commands
 

@@ -1,6 +1,6 @@
 # ASCII Matrix Camera Prototype
 
-`ascii-matrix-camera/` is the current validated visual prototype for LMDJ web interaction.
+`references/demos/ascii-matrix-camera/` is a reference visual interaction demo for LMDJ. It is useful as visual evidence, but it is not part of the formal product source boundary.
 
 ## Confirmed Direction
 
@@ -15,7 +15,7 @@
 ## Run
 
 ```bash
-cd ascii-matrix-camera
+cd references/demos/ascii-matrix-camera
 python3 -m http.server 4173
 ```
 

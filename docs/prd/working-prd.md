@@ -73,7 +73,7 @@ Playable Patch 是一个可被运行时加载和演奏的音乐对象，至少�
 ## 8. 当前依赖和参考资产
 
 - 高嘉丰 web prototype PRD 素材：[../lmdj-web-prototype-spec.md](../lmdj-web-prototype-spec.md)。
-- 高嘉丰 demo 工具：[../../lmdj-song-pipeline/README.md](../../lmdj-song-pipeline/README.md)。
+- 高嘉丰 demo 工具：[../../references/demos/lmdj-song-pipeline/README.md](../../references/demos/lmdj-song-pipeline/README.md)。
 
 ## 9. 下一步
 

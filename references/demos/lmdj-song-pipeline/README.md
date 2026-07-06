@@ -1,6 +1,6 @@
 # LMDJ Song Pipeline
 
-这是高嘉丰提供的 demo 工具，用来验证“成品音乐或 MusicGen 生成音频 -> playable patch 包”的技术链路。它是后续 LMDJ 系统的参考资产，不是最终产品架构定稿。
+这是高嘉丰提供的 demo 工具，用来验证“成品音乐或 MusicGen 生成音频 -> playable patch 包”的技术链路。它现在位于 `references/demos/` 下，是后续 LMDJ 系统的参考资产和技术素材库，不是最终产品架构或正式源码边界。
 
 它当前可以把一段音频转换成：
 

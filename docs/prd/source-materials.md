@@ -7,8 +7,9 @@
 | 日期 | 来源 | 类型 | 位置 | 当前用途 | 状态 |
 | --- | --- | --- | --- | --- | --- |
 | 2026-07-02 | 高嘉丰 | PRD 素材 | [../lmdj-web-prototype-spec.md](../lmdj-web-prototype-spec.md) | 参考 web prototype 的端到端链路、状态设计和 package contract | 素材 |
-| 2026-07-02 | 高嘉丰 | Demo 工具 | [../../lmdj-song-pipeline/README.md](../../lmdj-song-pipeline/README.md) | 参考音频生成/分轨/切片/MIDI/验收的技术链路 | 素材 |
+| 2026-07-02 | 高嘉丰 | Demo 工具 | [../../references/demos/lmdj-song-pipeline/README.md](../../references/demos/lmdj-song-pipeline/README.md) | 参考音频生成/分轨/切片/MIDI/验收的技术链路 | 素材 |
 | 2026-07-02 | 高嘉丰 | Mood board | [Pinterest: LMDJ](https://www.pinterest.com/gaoplusfeng/lmdj/) | 参考视觉气质、音乐/演奏场景联想和界面氛围 | 素材 |
+| 2026-07-06 | 内部整理 | Visual demo | [../../references/demos/ascii-matrix-camera/README.md](../../references/demos/ascii-matrix-camera/README.md) | 参考 ASCII matrix、摄像头输入和黑绿视觉气质 | 素材 |
 
 ## 当前可提取信息
 
@@ -33,6 +34,12 @@
 - 当前用途：作为视觉方向和情绪参考，不直接等同于 UI 设计稿。
 - 可提取方向：音乐演奏氛围、视觉材质、界面情绪、角色/场景联想、品牌语气。
 - 需要谨慎：Pinterest 内容可能混合多个来源和风格，进入 PRD 前需要二次筛选和归类。
+
+### ascii-matrix-camera visual demo
+
+- 当前用途：作为视觉互动参考 demo，不纳入正式产品源码边界。
+- 可提取方向：黑底绿色 ASCII、falling matrix、摄像头输入、静态 fallback subject。
+- 需要谨慎：它证明一种视觉气质，不等于最终 LMDJ Web App 或 Performance View 的技术架构。
 
 ## 待补素材
 
