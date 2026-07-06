@@ -1,68 +1,68 @@
-# Patchify Core Prototype Implementation Plan
+# Patchify Core Prototype 实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic workers：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，按任务逐步执行本计划。步骤使用 checkbox（`- [ ]`）语法追踪状态。
 
-**Goal:** Build the first testable Patchify core: convert an existing `lmdj-song-pipeline` package into a stable `patch.json` containing product-level patch, scene, pad, and element objects.
+**目标：** 构建第一版可测试的 Patchify core：把现有 `lmdj-song-pipeline` package 转换成稳定的 `patch.json`，其中包含产品层的 patch、scene、pad 和 element objects。
 
-**Architecture:** Keep the current audio pipeline intact and add a narrow adapter layer after `lanes.json`, `chart.mid`, and `report.json` exist. The new layer validates a package, maps pipeline lanes into the default 8-pad Focus View, emits `patch.json`, and exposes it through CLI/API without changing `PipelineConfig.lane_pitches`.
+**架构：** 保持当前 audio pipeline 不变，只在 `lanes.json`、`chart.mid` 和 `report.json` 已经生成之后增加一个很窄的 adapter layer。这个新层负责验证 package，把 pipeline lanes 映射到默认 8-pad Focus View，输出 `patch.json`，并通过 CLI/API 暴露出来；本计划不修改 `PipelineConfig.lane_pitches`。
 
-**Tech Stack:** Python 3.10+, dataclasses, JSON stdlib, `pretty_midi`, existing `song_pipeline` package, pytest.
+**技术栈：** Python 3.10+、dataclasses、JSON stdlib、`pretty_midi`、现有 `song_pipeline` package、pytest。
 
-## Global Constraints
+## 全局约束
 
-- Work inside `/Users/endaye/Projects/lmdj/lmdj-song-pipeline` for implementation and tests.
-- Use `.venv/bin/python -m pytest tests/ -q` for validation.
-- Do not bump `numpy`; it is pinned `<2` for demucs/numba compatibility.
-- Preserve existing pipeline output files: `samples/*.wav`, `chart.mid`, `lanes.json`, `report.json`, `loop_preview.wav`, `render_preview.wav`.
-- `lanes.json` remains the source of truth for pitch-to-sample mapping; do not infer lane order from filenames.
-- Do not change `PipelineConfig.lane_pitches` in this plan.
-- V1 default pad surface is 8-pad Focus View with fixed slots: `Drums`, `Bass`, `Harmony`, `Lead/Vocal`, `Fill`, `Drop`, `Mute`, `FX/Variation`.
-- The first implementation handles uploaded-song and generated-audio pipeline packages equally; full LLM idea generation belongs in a separate plan.
-
----
-
-## File Structure
-
-- Create `lmdj-song-pipeline/song_pipeline/patch_model.py`
-  - Owns serializable product objects: `Patch`, `Scene`, `Pad`, `Element`, `RenderRef`.
-  - Provides `to_dict()` methods and `write_patch_json()`.
-- Create `lmdj-song-pipeline/song_pipeline/package_loader.py`
-  - Owns package validation and parsed package data.
-  - Reads `lanes.json`, `report.json`, and `chart.mid`.
-  - Confirms sample files exist and MIDI pitches exist in `lanes.json`.
-- Create `lmdj-song-pipeline/song_pipeline/pad_mapper.py`
-  - Owns default 8-pad Focus View mapping from pipeline lanes to product pads.
-  - Has no filesystem access.
-- Create `lmdj-song-pipeline/song_pipeline/patchify.py`
-  - Orchestrates loader + mapper + model.
-  - Produces `patch.json` for an existing pipeline package directory.
-- Modify `lmdj-song-pipeline/song_pipeline/pipeline.py`
-  - After successful package artifacts are written, call `patchify_package(out_dir)`.
-  - Do not block existing `report.json` generation if patchify fails; write failure into `report["patchify_error"]` only if needed.
-- Modify `lmdj-song-pipeline/song_pipeline/cli.py`
-  - Add `song-pipeline patchify <song_dir>` for regenerating `patch.json` from an existing package.
-- Modify `lmdj-song-pipeline/song_pipeline/api.py`
-  - Include `patch.json` in package zip when present.
-- Create `lmdj-song-pipeline/tests/test_patch_model.py`
-- Create `lmdj-song-pipeline/tests/test_package_loader.py`
-- Create `lmdj-song-pipeline/tests/test_pad_mapper.py`
-- Create `lmdj-song-pipeline/tests/test_patchify.py`
+- 实现和测试都在 `/Users/endaye/Projects/lmdj/lmdj-song-pipeline` 内完成。
+- 使用 `.venv/bin/python -m pytest tests/ -q` 做验证。
+- 不要升级 `numpy`；它因为 demucs/numba compatibility 固定为 `<2`。
+- 保留现有 pipeline 输出文件：`samples/*.wav`、`chart.mid`、`lanes.json`、`report.json`、`loop_preview.wav`、`render_preview.wav`。
+- `lanes.json` 仍然是 pitch-to-sample mapping 的事实来源；不要从文件名推断 lane order。
+- 本计划不修改 `PipelineConfig.lane_pitches`。
+- V1 默认 pad surface 是 8-pad Focus View，固定槽位为：`Drums`、`Bass`、`Harmony`、`Lead/Vocal`、`Fill`、`Drop`、`Mute`、`FX/Variation`。
+- 第一版实现对 uploaded-song 和 generated-audio pipeline packages 一视同仁；完整 LLM idea generation 属于单独计划。
 
 ---
 
-### Task 1: Product Patch Model
+## 文件结构
 
-**Files:**
-- Create: `lmdj-song-pipeline/song_pipeline/patch_model.py`
-- Test: `lmdj-song-pipeline/tests/test_patch_model.py`
+- 新建 `lmdj-song-pipeline/song_pipeline/patch_model.py`
+  - 负责可序列化的产品对象：`Patch`、`Scene`、`Pad`、`Element`、`RenderRef`。
+  - 提供 `to_dict()` methods 和 `write_patch_json()`。
+- 新建 `lmdj-song-pipeline/song_pipeline/package_loader.py`
+  - 负责 package validation 和解析后的 package data。
+  - 读取 `lanes.json`、`report.json` 和 `chart.mid`。
+  - 确认 sample files 存在，并确认 MIDI pitches 都存在于 `lanes.json`。
+- 新建 `lmdj-song-pipeline/song_pipeline/pad_mapper.py`
+  - 负责从 pipeline lanes 到产品 pads 的默认 8-pad Focus View mapping。
+  - 不访问 filesystem。
+- 新建 `lmdj-song-pipeline/song_pipeline/patchify.py`
+  - 编排 loader + mapper + model。
+  - 为已有 pipeline package directory 生成 `patch.json`。
+- 修改 `lmdj-song-pipeline/song_pipeline/pipeline.py`
+  - package artifacts 成功写入后，调用 `patchify_package(out_dir)`。
+  - 如果 patchify 失败，不阻塞既有 `report.json` 生成；只在需要时把失败写入 `report["patchify_error"]`。
+- 修改 `lmdj-song-pipeline/song_pipeline/cli.py`
+  - 增加 `song-pipeline patchify <song_dir>`，用于从已有 package 重新生成 `patch.json`。
+- 修改 `lmdj-song-pipeline/song_pipeline/api.py`
+  - 如果 `patch.json` 存在，将它包含进 package zip。
+- 新建 `lmdj-song-pipeline/tests/test_patch_model.py`
+- 新建 `lmdj-song-pipeline/tests/test_package_loader.py`
+- 新建 `lmdj-song-pipeline/tests/test_pad_mapper.py`
+- 新建 `lmdj-song-pipeline/tests/test_patchify.py`
 
-**Interfaces:**
-- Produces: `Patch`, `Scene`, `Pad`, `Element`, `RenderRef`, `write_patch_json(patch: Patch, out_path: Path) -> None`
-- Consumes: no earlier tasks
+---
 
-- [ ] **Step 1: Write the failing test**
+### 任务 1：产品 Patch Model
 
-Create `tests/test_patch_model.py`:
+**文件：**
+- 新建：`lmdj-song-pipeline/song_pipeline/patch_model.py`
+- 测试：`lmdj-song-pipeline/tests/test_patch_model.py`
+
+**接口：**
+- 产出：`Patch`、`Scene`、`Pad`、`Element`、`RenderRef`、`write_patch_json(patch: Patch, out_path: Path) -> None`
+- 消费：不依赖前置任务
+
+- [ ] **步骤 1：编写失败测试**
+
+创建 `tests/test_patch_model.py`：
 
 ```python
 import json
@@ -125,20 +125,20 @@ def test_patch_model_serializes_product_objects(tmp_path: Path):
     assert data["renders"][1]["kind"] == "render_preview"
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **步骤 2：运行测试，确认它失败**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patch_model.py::test_patch_model_serializes_product_objects -q
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'song_pipeline.patch_model'`.
+预期：FAIL，报错为 `ModuleNotFoundError: No module named 'song_pipeline.patch_model'`。
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **步骤 3：编写最小实现**
 
-Create `song_pipeline/patch_model.py`:
+创建 `song_pipeline/patch_model.py`：
 
 ```python
 """Product-level Patchify data model.
@@ -236,18 +236,18 @@ def write_patch_json(patch: Patch, out_path: Path) -> None:
     out_path.write_text(json.dumps(patch.to_dict(), indent=2, ensure_ascii=False))
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [ ] **步骤 4：运行测试，确认它通过**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patch_model.py::test_patch_model_serializes_product_objects -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：Commit**
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
@@ -257,19 +257,19 @@ git commit -m "feat(patchify): add product patch model"
 
 ---
 
-### Task 2: Package Loader And Validator
+### 任务 2：Package Loader 和 Validator
 
-**Files:**
-- Create: `lmdj-song-pipeline/song_pipeline/package_loader.py`
-- Test: `lmdj-song-pipeline/tests/test_package_loader.py`
+**文件：**
+- 新建：`lmdj-song-pipeline/song_pipeline/package_loader.py`
+- 测试：`lmdj-song-pipeline/tests/test_package_loader.py`
 
-**Interfaces:**
-- Consumes: no earlier runtime objects
-- Produces: `PipelinePackage`, `load_pipeline_package(song_dir: Path) -> PipelinePackage`
+**接口：**
+- 消费：不依赖前置 runtime objects
+- 产出：`PipelinePackage`、`load_pipeline_package(song_dir: Path) -> PipelinePackage`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **步骤 1：编写失败测试**
 
-Create `tests/test_package_loader.py`:
+创建 `tests/test_package_loader.py`：
 
 ```python
 import json
@@ -331,20 +331,20 @@ def test_load_pipeline_package_rejects_unknown_midi_pitch(tmp_path: Path):
         load_pipeline_package(song_dir)
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **步骤 2：运行测试，确认它们失败**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_package_loader.py -q
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'song_pipeline.package_loader'`.
+预期：FAIL，报错为 `ModuleNotFoundError: No module named 'song_pipeline.package_loader'`。
 
-- [ ] **Step 3: Write implementation**
+- [ ] **步骤 3：编写实现**
 
-Create `song_pipeline/package_loader.py`:
+创建 `song_pipeline/package_loader.py`：
 
 ```python
 """Load and validate existing song-pipeline packages."""
@@ -439,18 +439,18 @@ def load_pipeline_package(song_dir: Path) -> PipelinePackage:
     )
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **步骤 4：运行测试，确认它们通过**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_package_loader.py -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：Commit**
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
@@ -460,19 +460,19 @@ git commit -m "feat(patchify): validate pipeline packages"
 
 ---
 
-### Task 3: Default 8-Pad Focus Mapper
+### 任务 3：默认 8-Pad Focus Mapper
 
-**Files:**
-- Create: `lmdj-song-pipeline/song_pipeline/pad_mapper.py`
-- Test: `lmdj-song-pipeline/tests/test_pad_mapper.py`
+**文件：**
+- 新建：`lmdj-song-pipeline/song_pipeline/pad_mapper.py`
+- 测试：`lmdj-song-pipeline/tests/test_pad_mapper.py`
 
-**Interfaces:**
-- Consumes: `PipelinePackage.lanes`
-- Produces: `build_focus_pads(lanes: list[dict[str, Any]]) -> tuple[list[Element], list[Pad]]`
+**接口：**
+- 消费：`PipelinePackage.lanes`
+- 产出：`build_focus_pads(lanes: list[dict[str, Any]]) -> tuple[list[Element], list[Pad]]`
 
-- [ ] **Step 1: Write the failing tests**
+- [ ] **步骤 1：编写失败测试**
 
-Create `tests/test_pad_mapper.py`:
+创建 `tests/test_pad_mapper.py`：
 
 ```python
 from song_pipeline.pad_mapper import FOCUS_SLOTS, build_focus_pads
@@ -514,20 +514,20 @@ def test_build_focus_pads_keeps_empty_control_slots_when_material_is_missing():
     assert pads[7].action == "ai_variation"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **步骤 2：运行测试，确认它们失败**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_pad_mapper.py -q
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'song_pipeline.pad_mapper'`.
+预期：FAIL，报错为 `ModuleNotFoundError: No module named 'song_pipeline.pad_mapper'`。
 
-- [ ] **Step 3: Write implementation**
+- [ ] **步骤 3：编写实现**
 
-Create `song_pipeline/pad_mapper.py`:
+创建 `song_pipeline/pad_mapper.py`：
 
 ```python
 """Map pipeline lanes into the product 8-pad Focus View."""
@@ -616,18 +616,18 @@ def build_focus_pads(lanes: list[dict[str, Any]]) -> tuple[list[Element], list[P
     return elements, pads
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **步骤 4：运行测试，确认它们通过**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_pad_mapper.py -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：Commit**
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
@@ -637,19 +637,19 @@ git commit -m "feat(patchify): map lanes to focus pads"
 
 ---
 
-### Task 4: Patchify Orchestrator
+### 任务 4：Patchify Orchestrator
 
-**Files:**
-- Create: `lmdj-song-pipeline/song_pipeline/patchify.py`
-- Test: `lmdj-song-pipeline/tests/test_patchify.py`
+**文件：**
+- 新建：`lmdj-song-pipeline/song_pipeline/patchify.py`
+- 测试：`lmdj-song-pipeline/tests/test_patchify.py`
 
-**Interfaces:**
-- Consumes: `load_pipeline_package(song_dir: Path) -> PipelinePackage`, `build_focus_pads(lanes) -> tuple[list[Element], list[Pad]]`
-- Produces: `build_patch(song_dir: Path, source_type: str = "pipeline") -> Patch`, `patchify_package(song_dir: Path) -> Path`
+**接口：**
+- 消费：`load_pipeline_package(song_dir: Path) -> PipelinePackage`、`build_focus_pads(lanes) -> tuple[list[Element], list[Pad]]`
+- 产出：`build_patch(song_dir: Path, source_type: str = "pipeline") -> Patch`、`patchify_package(song_dir: Path) -> Path`
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **步骤 1：编写失败测试**
 
-Create `tests/test_patchify.py`:
+创建 `tests/test_patchify.py`：
 
 ```python
 import json
@@ -715,20 +715,20 @@ def test_patchify_package_writes_patch_json(tmp_path: Path):
     assert data["pads"][0]["slot"] == "Drums"
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [ ] **步骤 2：运行测试，确认它们失败**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patchify.py -q
 ```
 
-Expected: FAIL with `ModuleNotFoundError: No module named 'song_pipeline.patchify'`.
+预期：FAIL，报错为 `ModuleNotFoundError: No module named 'song_pipeline.patchify'`。
 
-- [ ] **Step 3: Write implementation**
+- [ ] **步骤 3：编写实现**
 
-Create `song_pipeline/patchify.py`:
+创建 `song_pipeline/patchify.py`：
 
 ```python
 """Patchify pipeline packages into product-level patch.json files."""
@@ -786,18 +786,18 @@ def patchify_package(song_dir: Path) -> Path:
     return out_path
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **步骤 4：运行测试，确认它们通过**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_patchify.py -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 5: Commit**
+- [ ] **步骤 5：Commit**
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
@@ -807,22 +807,22 @@ git commit -m "feat(patchify): build patch json from packages"
 
 ---
 
-### Task 5: Pipeline, CLI, And API Integration
+### 任务 5：Pipeline、CLI 和 API 集成
 
-**Files:**
-- Modify: `lmdj-song-pipeline/song_pipeline/pipeline.py`
-- Modify: `lmdj-song-pipeline/song_pipeline/cli.py`
-- Modify: `lmdj-song-pipeline/song_pipeline/api.py`
-- Test: `lmdj-song-pipeline/tests/test_smoke.py`
-- Test: `lmdj-song-pipeline/tests/test_patchify.py`
+**文件：**
+- 修改：`lmdj-song-pipeline/song_pipeline/pipeline.py`
+- 修改：`lmdj-song-pipeline/song_pipeline/cli.py`
+- 修改：`lmdj-song-pipeline/song_pipeline/api.py`
+- 测试：`lmdj-song-pipeline/tests/test_smoke.py`
+- 测试：`lmdj-song-pipeline/tests/test_patchify.py`
 
-**Interfaces:**
-- Consumes: `patchify_package(song_dir: Path) -> Path`
-- Produces: `patch.json` after normal pipeline runs, CLI `song-pipeline patchify <song_dir>`, and package zip containing `patch.json` when present
+**接口：**
+- 消费：`patchify_package(song_dir: Path) -> Path`
+- 产出：普通 pipeline run 后生成 `patch.json`；CLI 提供 `song-pipeline patchify <song_dir>`；package zip 在 `patch.json` 存在时包含它
 
-- [ ] **Step 1: Add failing smoke assertion for automatic `patch.json`**
+- [ ] **步骤 1：为自动生成 `patch.json` 增加失败 smoke assertion**
 
-Modify `tests/test_smoke.py` by adding this test after `test_lanes_midi_consistency`:
+修改 `tests/test_smoke.py`，在 `test_lanes_midi_consistency` 后增加这个测试：
 
 ```python
 def test_pipeline_writes_patch_json(report_and_dir):
@@ -839,9 +839,9 @@ def test_pipeline_writes_patch_json(report_and_dir):
     ]
 ```
 
-- [ ] **Step 2: Add failing CLI coverage**
+- [ ] **步骤 2：增加失败的 CLI 覆盖**
 
-Append this test to `tests/test_patchify.py`:
+把这个测试追加到 `tests/test_patchify.py`：
 
 ```python
 def test_cli_patchify_command_writes_patch_json(tmp_path: Path, capsys):
@@ -864,27 +864,27 @@ def test_cli_patchify_command_writes_patch_json(tmp_path: Path, capsys):
     assert (song_dir / "patch.json").exists()
 ```
 
-- [ ] **Step 3: Run tests to verify they fail**
+- [ ] **步骤 3：运行测试，确认它们失败**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_smoke.py::test_pipeline_writes_patch_json tests/test_patchify.py::test_cli_patchify_command_writes_patch_json -q
 ```
 
-Expected: FAIL because `patch.json` is not written by the pipeline and `patchify` is not a recognized CLI command.
+预期：FAIL，因为 pipeline 还不会写入 `patch.json`，并且 `patchify` 还不是可识别的 CLI command。
 
-- [ ] **Step 4: Integrate patchify into pipeline**
+- [ ] **步骤 4：把 patchify 集成进 pipeline**
 
-Modify `song_pipeline/pipeline.py`:
+修改 `song_pipeline/pipeline.py`：
 
 ```python
 # add import near existing imports
 from .patchify import patchify_package
 ```
 
-In `run_pipeline`, after `report.json` is written and before `log.info(...)`, insert:
+在 `run_pipeline` 中，`report.json` 写入之后、`log.info(...)` 之前，插入：
 
 ```python
     try:
@@ -895,7 +895,7 @@ In `run_pipeline`, after `report.json` is written and before `log.info(...)`, in
             json.dumps(report, indent=2, ensure_ascii=False))
 ```
 
-In `run_pipeline_abc`, after `report.json` is written and before `log.info(...)`, insert the same block:
+在 `run_pipeline_abc` 中，`report.json` 写入之后、`log.info(...)` 之前，插入同一段：
 
 ```python
     try:
@@ -906,16 +906,16 @@ In `run_pipeline_abc`, after `report.json` is written and before `log.info(...)`
             json.dumps(report, indent=2, ensure_ascii=False))
 ```
 
-- [ ] **Step 5: Add CLI command**
+- [ ] **步骤 5：增加 CLI command**
 
-Modify `song_pipeline/cli.py` by adding the parser after `gen` is defined:
+修改 `song_pipeline/cli.py`，在 `gen` 定义之后增加 parser：
 
 ```python
     patchify = sub.add_parser("patchify", help="从已有 pipeline package 生成 patch.json")
     patchify.add_argument("song_dir", type=Path)
 ```
 
-Add this branch before `elif args.cmd == "serve"`:
+在 `elif args.cmd == "serve"` 之前增加这个分支：
 
 ```python
     elif args.cmd == "patchify":
@@ -924,9 +924,9 @@ Add this branch before `elif args.cmd == "serve"`:
         print(out_path)
 ```
 
-- [ ] **Step 6: Include `patch.json` in API zip**
+- [ ] **步骤 6：在 API zip 中包含 `patch.json`**
 
-Modify `song_pipeline/api.py` package endpoint zip creation:
+修改 `song_pipeline/api.py` 的 package endpoint zip 创建逻辑：
 
 ```python
             for f in ["chart.mid", "lanes.json", "report.json", "patch.json"]:
@@ -935,29 +935,29 @@ Modify `song_pipeline/api.py` package endpoint zip creation:
                     z.write(path, f)
 ```
 
-- [ ] **Step 7: Run targeted tests**
+- [ ] **步骤 7：运行 targeted tests**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/test_smoke.py::test_pipeline_writes_patch_json tests/test_patchify.py::test_cli_patchify_command_writes_patch_json -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 8: Run full smoke suite**
+- [ ] **步骤 8：运行完整 smoke suite**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/ -q
 ```
 
-Expected: PASS for all tests.
+预期：所有测试 PASS。
 
-- [ ] **Step 9: Commit**
+- [ ] **步骤 9：Commit**
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
@@ -967,19 +967,19 @@ git commit -m "feat(patchify): emit patch json from pipeline"
 
 ---
 
-### Task 6: Documentation For Patchify Contract
+### 任务 6：Patchify Contract 文档
 
-**Files:**
-- Modify: `lmdj-song-pipeline/README.md`
-- Modify: `lmdj-song-pipeline/SETUP_AND_USAGE.md`
+**文件：**
+- 修改：`lmdj-song-pipeline/README.md`
+- 修改：`lmdj-song-pipeline/SETUP_AND_USAGE.md`
 
-**Interfaces:**
-- Consumes: `patch.json` schema from Tasks 1-5
-- Produces: documented product-level package contract for future UI and community plans
+**接口：**
+- 消费：Tasks 1-5 产出的 `patch.json` schema
+- 产出：面向未来 UI 和 community plans 的产品层 package contract 文档
 
-- [ ] **Step 1: Update README output format**
+- [ ] **步骤 1：更新 README output format**
 
-Modify the output block in `lmdj-song-pipeline/README.md` to:
+把 `lmdj-song-pipeline/README.md` 中的 output block 修改为：
 
 ```text
 output/{song_id}/
@@ -992,63 +992,63 @@ output/{song_id}/
 └── report.json
 ```
 
-Add this paragraph after the `lanes.json` paragraph:
+在 `lanes.json` 段落后增加这段：
 
 ```markdown
-`patch.json` is the product-level Patchify contract for LMDJ workstation clients. It adapts pipeline artifacts into `Patch`, `Scene`, `Pad`, and `Element` objects. `lanes.json` remains the authoritative pitch-to-sample source; `patch.json` is the UI/product adapter layer.
+`patch.json` 是给 LMDJ workstation clients 使用的产品层 Patchify contract。它把 pipeline artifacts 适配为 `Patch`、`Scene`、`Pad` 和 `Element` objects。`lanes.json` 仍然是 pitch-to-sample 的权威来源；`patch.json` 是 UI/product adapter layer。
 ```
 
-- [ ] **Step 2: Document CLI patchify command**
+- [ ] **步骤 2：记录 CLI patchify command**
 
-Add this command to the common command section in `lmdj-song-pipeline/README.md`:
+把这个命令加入 `lmdj-song-pipeline/README.md` 的 common command section：
 
 ```bash
-# Regenerate product patch.json from an existing package.
+# 从已有 package 重新生成产品层 patch.json。
 .venv/bin/song-pipeline patchify output/mysong
 ```
 
-- [ ] **Step 3: Update SETUP_AND_USAGE contract section**
+- [ ] **步骤 3：更新 SETUP_AND_USAGE contract section**
 
-In `lmdj-song-pipeline/SETUP_AND_USAGE.md`, add a short `patch.json` subsection near the output contract section:
+在 `lmdj-song-pipeline/SETUP_AND_USAGE.md` 中，在 output contract section 附近增加一个简短的 `patch.json` subsection：
 
 ```markdown
 ### patch.json
 
-`patch.json` is generated after `lanes.json`, `chart.mid`, and `report.json`.
-It is the product-facing Patchify object consumed by future workstation UI:
+`patch.json` 在 `lanes.json`、`chart.mid` 和 `report.json` 之后生成。
+它是未来 workstation UI 消费的产品层 Patchify object：
 
-- `pads`: default 8-pad Focus View.
-- `scenes`: initial `Original` scene.
-- `elements`: reusable samples, loops, chops, stems, or patterns from the package.
-- `renders`: preview audio references.
-- `metadata`: validation status and score context.
+- `pads`：默认 8-pad Focus View。
+- `scenes`：初始 `Original` scene。
+- `elements`：package 中可复用的 samples、loops、chops、stems 或 patterns。
+- `renders`：preview audio references。
+- `metadata`：validation status 和 score context。
 
-Do not treat `patch.json` as the pitch authority. Read `lanes.json` for pitch/sample truth and use `patch.json` for product layout.
+不要把 `patch.json` 当作 pitch authority。pitch/sample truth 读取 `lanes.json`；product layout 使用 `patch.json`。
 ```
 
-- [ ] **Step 4: Run docs sanity check**
+- [ ] **步骤 4：运行 docs sanity check**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj
 rg -n "patch.json|Patchify" lmdj-song-pipeline/README.md lmdj-song-pipeline/SETUP_AND_USAGE.md
 ```
 
-Expected: output includes README and SETUP_AND_USAGE references to `patch.json` and `Patchify`.
+预期：输出中包含 README 和 SETUP_AND_USAGE 对 `patch.json` 与 `Patchify` 的引用。
 
-- [ ] **Step 5: Run tests to ensure docs changes did not disturb code**
+- [ ] **步骤 5：运行测试，确保文档变更没有影响代码**
 
-Run:
+运行：
 
 ```bash
 cd /Users/endaye/Projects/lmdj/lmdj-song-pipeline
 .venv/bin/python -m pytest tests/ -q
 ```
 
-Expected: PASS.
+预期：PASS。
 
-- [ ] **Step 6: Commit**
+- [ ] **步骤 6：Commit**
 
 ```bash
 cd /Users/endaye/Projects/lmdj
@@ -1058,22 +1058,22 @@ git commit -m "docs(patchify): document patch json contract"
 
 ---
 
-## Self-Review Notes
+## 自查记录
 
-Spec coverage:
+Spec 覆盖情况：
 
-- Idea/upload convergence is covered by producing one package-to-patch adapter that works after generated audio or uploaded audio has become a pipeline package.
-- Patch View is covered through the 8-pad Focus View model and default pad slots.
-- Scene Variation is represented by the first `Original` scene and leaves later generated scenes as a separate plan.
-- AI Talk is not implemented in this plan because it needs UI and speech/input orchestration; this plan prepares the patch/history object surface it will operate on.
-- Sharing/community is not implemented in this plan because it needs platform and render/export plans; this plan adds the product contract those flows consume.
+- Idea/upload convergence 通过一个 package-to-patch adapter 覆盖：generated audio 或 uploaded audio 变成 pipeline package 之后，都会走同一个 adapter。
+- Patch View 通过 8-pad Focus View model 和默认 pad slots 覆盖。
+- Scene Variation 先用第一个 `Original` scene 表达；后续 generated scenes 作为独立计划处理。
+- AI Talk 本计划不实现，因为它需要 UI 和 speech/input orchestration；本计划准备它未来要操作的 patch/history object surface。
+- Sharing/community 本计划不实现，因为它需要 platform 和 render/export plans；本计划增加这些流程未来要消费的产品 contract。
 
-Completeness scan:
+完整性扫描：
 
-- This plan intentionally contains complete Patchify Core tasks only. UI, AI Talk, sharing, and community implementation are explicitly scoped into separate plans because they sit outside Patchify Core.
+- 本计划只包含完整的 Patchify Core tasks。UI、AI Talk、sharing 和 community implementation 明确拆到单独计划，因为它们不属于 Patchify Core。
 
-Type consistency:
+类型一致性：
 
-- `patch_model.Patch` is produced by `patchify.build_patch()`.
-- `package_loader.PipelinePackage` is consumed only by `patchify.py`.
-- `pad_mapper.build_focus_pads()` returns `tuple[list[Element], list[Pad]]`, which matches `Patch(elements=..., pads=...)`.
+- `patch_model.Patch` 由 `patchify.build_patch()` 产出。
+- `package_loader.PipelinePackage` 只被 `patchify.py` 消费。
+- `pad_mapper.build_focus_pads()` 返回 `tuple[list[Element], list[Pad]]`，与 `Patch(elements=..., pads=...)` 匹配。
