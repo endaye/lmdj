@@ -30,3 +30,11 @@ source-materials.md  收外部输入和 demo 参考
 - `废弃`：明确不再采用，但保留原因。
 
 参考 demo 的运行说明放在 [../references/README.md](../references/README.md) 和各自 demo 目录内。
+
+正式实现目录从仓库根目录的 `apps/`、`packages/`、`workers/` 开始：
+
+- `apps/`：Web App 与 App Backend。
+- `packages/`：产品对象、Patchify 等共享逻辑。
+- `workers/`：Audio、Generation、Render 等异步任务。
+
+`references/demos/` 只作为参考、fixture 或迁移来源，不作为正式产品功能的落点。

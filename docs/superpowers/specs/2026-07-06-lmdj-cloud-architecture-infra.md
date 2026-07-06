@@ -233,14 +233,16 @@ reference pipeline package
   -> Elements
 ```
 
-早期可以有两种落点：
+当前已确认落点：
 
 ```text
-Option A: 放在 references/demos/lmdj-song-pipeline 内或旁边，作为参考项目的 adapter prototype
-Option B: 新建 LMDJ backend/shared package，将参考 pipeline 作为输入来源
+packages/patchify/
+  -> LMDJ-owned Patchify Core
+  -> consumes reference pipeline package as input
+  -> emits product patch.json
 ```
 
-如果目标是快速验证现有 pipeline 输出，Option A 成本最低。如果目标是尽早建立最终云端代码边界，Option B 更干净。无论采用哪种，`Patchify` 的职责都应该是 LMDJ 自己的产品对象映射，而不是继承参考项目的最终格式。
+`references/demos/lmdj-song-pipeline/` 只作为参考 demo、fixture 来源或可迁移代码来源，不再作为正式 Patchify 功能的落点。`Patchify` 的职责是 LMDJ 自己的产品对象映射，而不是继承参考项目的最终格式。
 
 第一版职责：
 

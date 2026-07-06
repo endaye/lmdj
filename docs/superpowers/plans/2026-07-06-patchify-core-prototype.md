@@ -1,5 +1,7 @@
 # Patchify Core Prototype 实施计划
 
+> **状态：历史参考 / 不再建议执行。** 2026-07-07 已确认 `references/demos/lmdj-song-pipeline/` 只作为参考 demo，不纳入正式产品源码边界。Patchify 需要在 LMDJ 正式目录中重新编写；新的执行计划见 `docs/superpowers/plans/2026-07-07-patchify-core-path-b.md`。
+
 > **给 agentic workers：** 必需子技能：使用 superpowers:subagent-driven-development（推荐）或 superpowers:executing-plans，按任务逐步执行本计划。步骤使用 checkbox（`- [ ]`）语法追踪状态。
 
 **目标：** 构建第一版可测试的 Patchify core：把现有 `lmdj-song-pipeline` package 转换成稳定的 `patch.json`，其中包含产品层的 patch、scene、pad 和 element objects。

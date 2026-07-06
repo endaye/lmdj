@@ -6,11 +6,14 @@ LMDJ 当前是一个脑暴与 PRD 快速迭代工作区。这里先沉淀素材�
 
 ```text
 lmdj/
+├── apps/                    # 正式产品应用入口：web / api
 ├── docs/                    # PRD 迭代、素材、决策与开放问题
+├── packages/                # 正式共享 package：core-models / patchify
 ├── references/              # 不纳入正式产品的参考素材和 demo
 │   └── demos/
 │       ├── ascii-matrix-camera/
 │       └── lmdj-song-pipeline/
+├── workers/                 # 正式异步 worker：audio / generation / render
 ├── AGENTS.md                # Codex 协作说明
 └── CLAUDE.md                # Claude Code 协作说明
 ```
@@ -28,6 +31,8 @@ lmdj/
 ## 当前定位
 
 `references/demos/` 里的项目都是参考素材，不纳入正式产品源码边界。`lmdj-song-pipeline` 是高嘉丰给到的可运行参考项目和技术素材库；`ascii-matrix-camera` 是视觉互动方向的小 demo。它们的价值是提供技术和体验证据，后续正式系统需要在独立 app / package / worker 中定义自己的边界。
+
+正式产品源码从 `apps/`、`packages/` 和 `workers/` 开始沉淀。Patchify 后续应作为 LMDJ-owned package 重写在 `packages/patchify/`，可以读取参考 pipeline 的输出，但不在 `references/demos/lmdj-song-pipeline/` 内继续追加正式功能。
 
 ```text
 PRD 素材

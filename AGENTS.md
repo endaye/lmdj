@@ -4,7 +4,11 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 
 ## Repository layout
 
-The git root (`lmdj/`) is currently a PRD, architecture, and reference-material workspace. Formal product apps/packages are not established yet.
+The git root (`lmdj/`) started as a PRD, architecture, and reference-material workspace. Formal product source boundaries now begin at:
+
+- `apps/` — product applications, currently planned as `apps/web/` and `apps/api/`.
+- `packages/` — shared product packages, currently planned as `packages/core-models/` and `packages/patchify/`.
+- `workers/` — asynchronous cloud workers, currently planned as `workers/audio/`, `workers/generation/`, and `workers/render/`.
 
 Reference demos live under `references/demos/` and are not part of the final product source boundary:
 
@@ -12,6 +16,8 @@ Reference demos live under `references/demos/` and are not part of the final pro
 - `references/demos/ascii-matrix-camera/` — ASCII 视觉互动参考 demo。
 
 The commands below apply only when working inside the `lmdj-song-pipeline` reference demo. **Run `cd references/demos/lmdj-song-pipeline` first**, and the venv lives at `references/demos/lmdj-song-pipeline/.venv`.
+
+Do not add formal Patchify product features to `references/demos/lmdj-song-pipeline/` unless the user explicitly asks. Patchify should be rebuilt as LMDJ-owned code under `packages/patchify/`, using the demo only as reference material, fixture source, or migration source.
 
 ## Commands
 
