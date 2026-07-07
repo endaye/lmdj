@@ -12,3 +12,28 @@
 - `packages/patchify/` 是正式源码，不写入 `references/demos/lmdj-song-pipeline/`。
 - 可以读取参考 pipeline 的输出 contract，例如 `samples/*.wav`、`chart.mid`、`lanes.json`、`report.json`。
 - 不默认继承参考 demo 的 package contract、CLI、API、状态模型或目录结构。
+
+## 本地验证
+
+```bash
+# core-models
+cd packages/core-models
+python3 -m venv .venv
+.venv/bin/pip install -e ".[test]"
+.venv/bin/python -m pytest tests/ -q
+
+# patchify（依赖 core-models，注意安装顺序）
+cd ../patchify
+python3 -m venv .venv
+.venv/bin/pip install -e ../core-models
+.venv/bin/pip install -e ".[test]"
+.venv/bin/python -m pytest tests/ -q
+```
+
+对一个 pipeline package 目录运行 CLI：
+
+```bash
+.venv/bin/lmdj-patchify /path/to/package
+# 或不依赖 console script：
+.venv/bin/python -m lmdj_patchify.cli /path/to/package
+```

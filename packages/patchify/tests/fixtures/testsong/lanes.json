@@ -1,0 +1,43 @@
+{
+  "bpm": 89.1,
+  "bars": 4.0,
+  "beats": 16,
+  "loop_seconds": 10.6696,
+  "lanes": [
+    {
+      "lane": 0,
+      "name": "kick",
+      "kind": "drum",
+      "pitch": 36,
+      "sample": "samples/kick.wav"
+    },
+    {
+      "lane": 1,
+      "name": "snare",
+      "kind": "drum",
+      "pitch": 38,
+      "sample": "samples/snare.wav"
+    },
+    {
+      "lane": 2,
+      "name": "hat",
+      "kind": "drum",
+      "pitch": 42,
+      "sample": "samples/hat.wav"
+    },
+    {
+      "lane": 3,
+      "name": "bass",
+      "kind": "long",
+      "pitch": 48,
+      "sample": "samples/bass.wav"
+    },
+    {
+      "lane": 4,
+      "name": "melody_a",
+      "kind": "long",
+      "pitch": 50,
+      "sample": "samples/melody_a.wav"
+    }
+  ]
+}

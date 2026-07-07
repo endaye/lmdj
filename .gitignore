@@ -6,7 +6,7 @@
 ._*
 
 # Custom folder icons
-Icon
+Icon
 
 # Volume root files
 .DocumentRevisions-V100
@@ -45,3 +45,17 @@ $RECYCLE.BIN/
 
 # NFS temporary files
 .nfs*
+
+### Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+
+### LMDJ
+# Reference demo run artifacts (pipeline output packages)
+references/demos/lmdj-song-pipeline/output/
+
+# Agent session scratch (SDD ledger, task briefs, review packages)
+.superpowers/
