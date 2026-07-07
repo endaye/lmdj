@@ -8,7 +8,7 @@ const fakeDecode = async (data: ArrayBuffer) => ({ decodedBytes: data.byteLength
 /** golden patch + 每个 element 一份占位 wav 字节 */
 function goldenFiles(patch: unknown = golden): Map<string, ArrayBuffer> {
   const files = new Map<string, ArrayBuffer>([["patch.json", enc(patch)]]);
-  for (const el of (patch as Patch).elements) {
+  for (const el of (patch as unknown as Patch).elements) {
     files.set(el.source_path, new ArrayBuffer(8));
   }
   return files;
@@ -30,7 +30,7 @@ describe("loadPatch", () => {
   });
 
   it("rejects schema-invalid patch.json with issue paths", async () => {
-    const broken = structuredClone(golden) as Patch;
+    const broken = structuredClone(golden) as unknown as Patch;
     (broken.pads[0] as { action: string }).action = "definitely_not_an_action";
     const err = await loadPatch(goldenFiles(broken), fakeDecode).catch((e) => e);
 
@@ -40,7 +40,7 @@ describe("loadPatch", () => {
 
   it("marks missing wav as missing element without blocking the patch", async () => {
     const files = goldenFiles();
-    const first = (golden as Patch).elements[0];
+    const first = (golden as unknown as Patch).elements[0];
     files.delete(first.source_path);
 
     const bundle = await loadPatch(files, fakeDecode);
@@ -48,7 +48,7 @@ describe("loadPatch", () => {
     expect(bundle.playableElementIds.has(first.element_id)).toBe(false);
     expect(bundle.warnings.some((w) => w.includes(first.source_path))).toBe(true);
     // note 数据不预过滤
-    expect(bundle.patch.patterns[0].notes.length).toBe((golden as Patch).patterns[0].notes.length);
+    expect(bundle.patch.patterns[0].notes.length).toBe((golden as unknown as Patch).patterns[0].notes.length);
   });
 
   it("marks undecodable wav as missing element", async () => {
@@ -56,11 +56,11 @@ describe("loadPatch", () => {
       throw new Error("decode failed");
     };
     const bundle = await loadPatch(goldenFiles(), failing);
-    expect(bundle.missingElementIds.size).toBe((golden as Patch).elements.length);
+    expect(bundle.missingElementIds.size).toBe((golden as unknown as Patch).elements.length);
   });
 
   it("rejects a scene referencing an unknown pattern", async () => {
-    const broken = structuredClone(golden) as Patch;
+    const broken = structuredClone(golden) as unknown as Patch;
     broken.scenes[0].pattern_ids = ["pattern_ghost"];
     await expect(loadPatch(goldenFiles(broken), fakeDecode)).rejects.toThrow(/pattern_ghost/);
   });
@@ -68,7 +68,7 @@ describe("loadPatch", () => {
 
 describe("scenePatterns", () => {
   it("resolves patterns via activeScene.pattern_ids, not patterns[0]", () => {
-    const patch = structuredClone(golden) as Patch;
+    const patch = structuredClone(golden) as unknown as Patch;
     const real = structuredClone(patch.patterns[0]);
     real.pattern_id = "pattern_real";
     const decoy = structuredClone(patch.patterns[0]);
@@ -85,7 +85,7 @@ describe("scenePatterns", () => {
 
 describe("padElementIds", () => {
   it("returns the full group for trigger_group pads", () => {
-    const drums = (golden as Patch).pads[0];
+    const drums = (golden as unknown as Patch).pads[0];
     expect(padElementIds(drums)).toEqual(
       (drums.behavior as { element_ids: string[] }).element_ids,
     );
@@ -93,7 +93,7 @@ describe("padElementIds", () => {
   });
 
   it("returns [] for empty/reserved pads", () => {
-    const patch = golden as Patch;
+    const patch = golden as unknown as Patch;
     const reserved = patch.pads.find((p) => p.action === "scene_fill")!;
     expect(padElementIds(reserved)).toEqual([]);
   });

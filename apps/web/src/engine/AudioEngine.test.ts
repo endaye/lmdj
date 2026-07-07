@@ -5,7 +5,7 @@ import { padElementIds } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
 import { AudioEngine } from "./AudioEngine";
 
-function makeBundle(patch: Patch = structuredClone(golden) as Patch): PatchBundle<unknown> {
+function makeBundle(patch: Patch = structuredClone(golden) as unknown as Patch): PatchBundle<unknown> {
   const buffers = new Map<string, unknown>();
   for (const el of patch.elements) buffers.set(el.element_id, { buf: el.element_id });
   return {
@@ -73,7 +73,7 @@ describe("AudioEngine", () => {
   });
 
   it("schedules only the active scene's patterns (decoy pattern is never played)", async () => {
-    const patch = structuredClone(golden) as Patch;
+    const patch = structuredClone(golden) as unknown as Patch;
     const real = structuredClone(patch.patterns[0]);
     const decoy = structuredClone(patch.patterns[0]);
     decoy.pattern_id = "pattern_decoy";
