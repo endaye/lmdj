@@ -159,6 +159,8 @@ render-share-video
 
 第一版可以从 Redis queue 开始，等负载和失败恢复需求明确后再迁移到托管队列。
 
+**幂等要求（2026-07-07 决策）：** 每个 job 类型必须声明重跑语义。音频/生成/渲染类 job 的基线规则是：同输入必须产生同 storage key 的产物，覆盖写安全（`patch_id` 内容派生正是为此设计）。worker 崩溃后重新投递同一 job 不得产生重复资产或错乱状态。重试上限与死信队列去向见"待决问题"。
+
 ### 5. Audio Pipeline Worker
 
 Audio Worker 负责把已有音频变成 pipeline package 和产品 patch。
@@ -233,11 +235,15 @@ reference pipeline package
   -> Elements
 ```
 
-当前已确认落点：
+当前已确认落点（2026-07-07 修订）：
 
 ```text
+packages/core-models/
+  -> Patch / Pattern / Pad / Scene / Element 产品对象模型
+  -> lmdj.patch.v1 JSON Schema（四方契约的机器可读来源）
+
 packages/patchify/
-  -> LMDJ-owned Patchify Core
+  -> LMDJ-owned Patchify Core（纯 adapter，依赖 core-models）
   -> consumes reference pipeline package as input
   -> emits product patch.json
 ```
@@ -246,11 +252,13 @@ packages/patchify/
 
 第一版职责：
 
-- 验证 `lanes.json`、`chart.mid`、`report.json`。
+- 验证 `lanes.json`、`chart.mid`、`report.json`（以 demo 真实契约为准：lane 的 wav key 是 `sample`，`song_id` 取自 `report.json`）。
 - 确认 sample files 存在。
 - 确认 MIDI pitches 都能在 `lanes.json` 中找到。
-- 映射默认 8-pad Focus View。
-- 输出 `patch.json`。
+- 解析 `chart.mid` 为 normalized pattern notes（`length_steps = beats × 4`）。
+- profile 检测（v1 只支持 standard，ABC/DEF 包显式报 unsupported）。
+- 映射默认 8-pad Focus View（trigger_group 语义，melody 第二候选 fallback 到 Lead/Vocal）。
+- 输出 `patch.json`（`lmdj.patch.v1`，patch_id 内容派生，输出必须通过 JSON Schema 校验）。
 
 ### 9. Render / Export Worker
 
@@ -296,15 +304,13 @@ covers/
 
 Postgres 存产品数据、关系数据和 job 状态，不存大文件。
 
-核心表：
+核心表（v1，2026-07-07 收缩）：
 
 ```text
 users
 sessions
 projects
 patches
-scenes
-pads
 elements
 jobs
 renders
@@ -316,9 +322,10 @@ permissions
 其中：
 
 - `patches` 可以存 `patch.json` 的 current version metadata，也可以只存 object storage key。
-- `elements` 存 sample / loop / chop / stem / pattern 的 metadata 和 storage key。
+- `elements` 存 sample / loop / chop / stem / pattern 的 metadata 和 storage key（lineage 外键需要它，故 v1 保留）。
 - `lineage_edges` 存 remix、sample、fork 关系。
 - `jobs` 存异步任务状态、错误、进度和产物引用。
+- **v1 不单独建 `pads` / `scenes` 表**：pads 和 scenes 随 `patch.json` 整体存储。在出现服务端 patch 编辑功能之前归一化它们，只会制造 `patch.json` 与表之间的双写一致性问题。
 
 ### 12. Realtime Status
 
@@ -516,8 +523,10 @@ Deploy: Docker containers
 - Web 和 CLI 共用同一套 API。
 - 大文件不进数据库。
 - 长任务必须异步。
-- `patch.json` 是 UI/product adapter，不是 pitch authority。
-- `lanes.json` 仍然是 pitch/sample truth。
+- Pitch/sample truth 采用三段式模型（2026-07-07 决策）：
+  1. v1 内 `lanes.json`/`chart.mid` 是 Patchify 的**输入 truth**（demo 契约，已冻结）；
+  2. `patch.json` 生成之后即**产品侧唯一 truth**（含 normalized patterns/notes），下游任何消费方不得回读 `lanes.json` 或 `chart.mid`；
+  3. 退出条件：`workers/audio/` 正式实现时直接产出 LMDJ 中间格式，demo 契约 loader 转入维护模式。
 - 先把 Cloud Patchify 跑通，再做完整 AI idea generation。
 - 先保留 lineage 数据结构，再做完整 community feed。
 
@@ -530,3 +539,4 @@ Deploy: Docker containers
 - AI Orchestrator 是否第一版就单独部署。
 - Generation Worker 第一版接第三方 API 还是自建模型。
 - Share video 第一版是否进入 MVP。
+- Job 重试上限、退避策略与死信队列去向（幂等基线已定，见 Job Queue 节）。
