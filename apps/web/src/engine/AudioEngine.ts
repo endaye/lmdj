@@ -117,7 +117,9 @@ export class AudioEngine {
 
   private tick(): void {
     const now = this.ctx.currentTime - this.startTime;
-    const from = Math.max(this.scheduledUntil, now);
+    // catch-up 策略（评审决策）：tick 延迟时补排 [scheduledUntil, now) 的 note，
+    // 宁可稍晚发声也不静默丢拍；WebAudio 会把过去的 start 时间钳到当前。
+    const from = this.scheduledUntil;
     const to = now + LOOKAHEAD_SEC;
     if (to <= from) return;
     for (const pattern of this.patterns) {

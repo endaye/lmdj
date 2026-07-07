@@ -118,6 +118,18 @@ describe("AudioEngine", () => {
     expect(engine.playhead()).toBeNull();
   });
 
+  it("catches up after a delayed tick instead of dropping notes", async () => {
+    const bundle = makeBundle();
+    engine.load(bundle);
+    await engine.play(); // 首个 tick 已排 [0, 0.12)
+    const afterFirstTick = ctx.sources.length;
+
+    ctx.currentTime = 1.0; // 模拟 ~1s 停顿
+    vi.advanceTimersByTime(25); // 下一个 tick：应补排 [0.12, 1.12)
+
+    expect(ctx.sources.length).toBeGreaterThan(afterFirstTick); // 错过的 note 被补排而非丢弃
+  });
+
   it("notifies subscribers on play/stop/mute", async () => {
     const bundle = makeBundle();
     engine.load(bundle);
