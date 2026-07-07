@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmdj-patchify"
+version = "0.1.0"
+description = "LMDJ Patchify core adapter"
+requires-python = ">=3.11"
+# 另需本地安装 lmdj-core-models（path 依赖不写 metadata）：
+#   pip install -e ../core-models
+dependencies = [
+  "pretty_midi>=0.2.11,<1",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+  "jsonschema>=4,<5",
+]
+
+[project.scripts]
+lmdj-patchify = "lmdj_patchify.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lmdj_patchify*"]
