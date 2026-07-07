@@ -39,13 +39,24 @@ def load_package(package_dir: Path) -> LoadedPackage:
     if not isinstance(lane_rows, list) or not lane_rows:
         raise ValueError("lanes.json must contain a non-empty lanes list")
 
+    for required_field in ("bpm", "beats", "loop_seconds"):
+        if required_field not in lanes_data:
+            raise ValueError(f"lanes.json missing required field: {required_field}")
+
     beats = int(lanes_data["beats"])
     loop_seconds = float(lanes_data["loop_seconds"])
+    if beats < 1:
+        raise ValueError("lanes.json beats must be >= 1")
+    if loop_seconds <= 0:
+        raise ValueError("lanes.json loop_seconds must be > 0")
     length_steps = beats * 4
 
     elements: list[Element] = []
     by_pitch: dict[int, Element] = {}
     for row in lane_rows:
+        for required_field in ("lane", "name", "kind", "pitch"):
+            if required_field not in row:
+                raise ValueError(f"lane entry missing required field: {required_field}")
         # demo 真实契约 key 是 sample；path 仅作兼容读取
         source_path = row.get("sample") or row.get("path")
         if not source_path:

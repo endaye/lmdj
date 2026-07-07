@@ -14,7 +14,7 @@ def main() -> None:
     args = parser.parse_args()
 
     patchify_package(args.package_dir, args.out)
-    out_path = args.out or args.package_dir / "patch.json"
+    out_path = args.out or args.package_dir.resolve() / "patch.json"
     print(f"Wrote {out_path}")
 
 

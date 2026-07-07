@@ -44,7 +44,7 @@ def patchify_package(package_dir: Path, out_path: Path | None = None) -> Patch:
         ],
         renders=_discover_renders(loaded.root),
         metadata={
-            "source_package": str(loaded.root),
+            "source_package": loaded.root.name,
             "status": loaded.report.get("status"),
             "score": loaded.report.get("score"),
             "midi_pitches": sorted(loaded.midi_pitches),

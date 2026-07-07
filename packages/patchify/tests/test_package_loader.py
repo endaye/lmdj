@@ -68,3 +68,30 @@ def test_load_package_rejects_missing_required_file(golden_package: Path):
 
     with pytest.raises(ValueError, match="Missing required file"):
         load_package(golden_package)
+
+
+def test_load_package_rejects_missing_beats_field(golden_package: Path):
+    raw = json.loads((golden_package / "lanes.json").read_text())
+    del raw["beats"]
+    (golden_package / "lanes.json").write_text(json.dumps(raw))
+
+    with pytest.raises(ValueError, match="missing required field: beats"):
+        load_package(golden_package)
+
+
+def test_load_package_rejects_zero_loop_seconds(golden_package: Path):
+    raw = json.loads((golden_package / "lanes.json").read_text())
+    raw["loop_seconds"] = 0
+    (golden_package / "lanes.json").write_text(json.dumps(raw))
+
+    with pytest.raises(ValueError, match="loop_seconds must be > 0"):
+        load_package(golden_package)
+
+
+def test_load_package_rejects_lane_row_missing_pitch(golden_package: Path):
+    raw = json.loads((golden_package / "lanes.json").read_text())
+    del raw["lanes"][0]["pitch"]
+    (golden_package / "lanes.json").write_text(json.dumps(raw))
+
+    with pytest.raises(ValueError, match="missing required field: pitch"):
+        load_package(golden_package)
