@@ -49,6 +49,18 @@ PRD 素材
 - 决策单独记录：一旦确认，就写进 decision log，避免反复讨论。
 - 问题显式管理：未定问题进入 open questions，不在正文里含糊带过。
 
+## 本地开发脚本
+
+根目录一键脚本 `scripts/dev.sh`（任意位置可执行）：
+
+```bash
+scripts/dev.sh all                  # setup + 全部测试 + 端到端冒烟
+scripts/dev.sh test                 # core-models + patchify 测试
+scripts/dev.sh patchify <包目录>     # 对 pipeline package 生成 patch.json
+scripts/dev.sh song <音频> <id>      # demo pipeline 处理一首歌并 patchify（需先 setup-demo）
+scripts/dev.sh smoke                # testsong → patch.json → 摘要
+```
+
 ## Demo 工具常用命令
 
 需要跑高嘉丰 demo 时，在 `references/demos/lmdj-song-pipeline/` 内执行：
