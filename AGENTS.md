@@ -19,6 +19,14 @@ The commands below apply only when working inside the `lmdj-song-pipeline` refer
 
 Do not add formal Patchify product features to `references/demos/lmdj-song-pipeline/` unless the user explicitly asks. Patchify should be rebuilt as LMDJ-owned code under `packages/patchify/`, using the demo only as reference material, fixture source, or migration source.
 
+`apps/`, `packages/`, and `workers/` are currently empty scaffolding (`.gitkeep` + a `README.md` each stating the intended boundary). The only runnable code today lives in `references/demos/`. `CLAUDE.md` is the Claude-facing twin of this file — keep the two in sync when editing shared guidance.
+
+## Product model & active work
+
+LMDJ's product code is designed around its own object model, **not** the demo's `Sample`/`LoopWindow` types: `Project / Patch / Pad / Scene / Element / Render / Lineage` (see `packages/README.md`, `apps/README.md`). Patchify Core is the first real package: it turns an audio-pipeline package into a stable `patch.json` (schema `lmdj.patch.v1`) that Web, CLI, the Audio Worker, and the cloud API all consume. Its V1 input contract is a directory of `samples/*.wav` + `chart.mid` + `lanes.json` + `report.json`; V1 maps those lanes onto a fixed **8-pad Focus View** (`Drums`, `Bass`, `Harmony`, `Lead/Vocal`, `Fill`, `Drop`, `Mute`, `FX/Variation`) with deterministic (no-LLM) logic.
+
+The current active plan is **Path B** — build `packages/patchify/` as a standalone Python package that reads the demo's output only as fixtures/migration source. Read `docs/superpowers/plans/2026-07-07-patchify-core-path-b.md` before starting Patchify work; the older `...2026-07-06-patchify-core-prototype.md` (Path A, adapter inside the demo) is marked historical / not to be executed.
+
 ## Commands
 
 ```bash
@@ -47,7 +55,9 @@ There is no linter/formatter configured. `numpy` is pinned `<2` (demucs/numba co
 
 All commits **must** follow [Conventional Commits v1.0.0](https://www.conventionalcommits.org/en/v1.0.0/): `<type>[optional scope]: <description>` (e.g. `feat(pipeline): ...`, `fix(slicer): ...`, `docs: ...`). Breaking changes use `!` or a `BREAKING CHANGE:` footer.
 
-## Architecture
+## Reference-demo architecture (`references/demos/lmdj-song-pipeline/`)
+
+This section describes the reference pipeline, not the LMDJ product boundary. It is the fixture/migration source Patchify reads from, so its output contract matters even though the code itself is not product source.
 
 A 6-stage audio pipeline that turns a finished song into a **≤6-sample + MIDI chart** package matching the `lmdj-pad-rhythm` game's input format (`sample-map` + `chart.mid`). Each stage is one module in `song_pipeline/`, wired together by `pipeline.py::run_pipeline`:
 
@@ -90,4 +100,10 @@ These are standalone `.venv/bin/python scripts/*.py` tools built iteratively, no
 
 ## Further docs
 
-`README.md` (quick reference) and `SETUP_AND_USAGE.md` (exhaustive setup, migration, and per-parameter tuning tables) are both current and worth consulting before deep changes — especially SETUP_AND_USAGE.md §6 for the tuning cheat sheet.
+**Product / PRD (repo root `docs/`, mostly written in Chinese):** this repo began as a PRD-iteration workspace, so product decisions live in docs, not code. Consult before making product-shaping choices:
+- `docs/prd/working-prd.md` — the current working PRD (rewritten freely as it converges).
+- `docs/prd/decision-log.md` — confirmed decisions; `docs/prd/open-questions.md` — undecided questions; `docs/prd/source-materials.md` — external-input index.
+- `docs/superpowers/specs/` — the AI-native sampler workstation design and the cloud architecture/infra spec.
+- `docs/superpowers/plans/` — implementation plans (Patchify Path B is the active one).
+
+**Reference demo:** its own `README.md` (quick reference) and `SETUP_AND_USAGE.md` (exhaustive setup, migration, and per-parameter tuning tables) are current and worth consulting before deep changes inside the demo — especially SETUP_AND_USAGE.md §6 for the tuning cheat sheet.
