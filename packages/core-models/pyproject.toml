@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmdj-core-models"
+version = "0.1.0"
+description = "LMDJ product object models and contracts"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+  "jsonschema>=4,<5",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lmdj_core_models*"]
+
+[tool.setuptools.package-data]
+lmdj_core_models = ["schemas/*.json"]
