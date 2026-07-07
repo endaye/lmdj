@@ -1,6 +1,53 @@
+import { useEffect, useMemo, useState } from "react";
 import type { AudioEngine } from "../engine/AudioEngine";
-import type { PatchBundle } from "../patch/loader";
+import { scenePatterns, type PatchBundle } from "../patch/loader";
 
-export function StepGrid(_props: { engine: AudioEngine; bundle: PatchBundle<unknown> }) {
-  return <div className="step-grid" data-testid="step-grid" />;
+export function StepGrid({
+  engine,
+  bundle,
+}: {
+  engine: AudioEngine;
+  bundle: PatchBundle<unknown>;
+}) {
+  const pattern = scenePatterns(bundle.patch)[0]; // scene 契约路径；v1 单 pattern
+  const [playhead, setPlayhead] = useState<number | null>(null);
+
+  useEffect(() => {
+    const id = setInterval(() => setPlayhead(engine.playhead()), 50);
+    return () => clearInterval(id);
+  }, [engine]);
+
+  const rows = useMemo(() => {
+    const byElement = new Map<string, Set<number>>();
+    for (const note of pattern.notes) {
+      if (!byElement.has(note.element_id)) byElement.set(note.element_id, new Set());
+      byElement.get(note.element_id)!.add(note.step);
+    }
+    return bundle.patch.elements
+      .filter((el) => byElement.has(el.element_id))
+      .map((el) => ({ element: el, steps: byElement.get(el.element_id)! }));
+  }, [bundle.patch, pattern]);
+
+  return (
+    <div className="step-grid" data-testid="step-grid">
+      <table>
+        <tbody>
+          {rows.map(({ element, steps }) => (
+            <tr
+              key={element.element_id}
+              data-testid={`step-row-${element.element_id}`}
+              className={bundle.missingElementIds.has(element.element_id) ? "step-missing" : ""}
+            >
+              <th>{element.name}</th>
+              {Array.from({ length: pattern.length_steps }, (_, step) => (
+                <td key={step} className={step === playhead ? "step-playhead" : ""}>
+                  {steps.has(step) ? "█" : "·"}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
 }
