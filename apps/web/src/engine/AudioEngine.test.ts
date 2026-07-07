@@ -118,16 +118,33 @@ describe("AudioEngine", () => {
     expect(engine.playhead()).toBeNull();
   });
 
-  it("catches up after a delayed tick instead of dropping notes", async () => {
+  it("catches up notes within the bound after a delayed tick", async () => {
     const bundle = makeBundle();
     engine.load(bundle);
     await engine.play(); // 首个 tick 已排 [0, 0.12)
     const afterFirstTick = ctx.sources.length;
 
-    ctx.currentTime = 1.0; // 模拟 ~1s 停顿
-    vi.advanceTimersByTime(25); // 下一个 tick：应补排 [0.12, 1.12)
+    ctx.currentTime = 0.3; // 停顿 0.3s：错过 [0.12, 0.3)，其中 [0.05, 0.3) 在 0.25s 界内
+    vi.advanceTimersByTime(25);
 
-    expect(ctx.sources.length).toBeGreaterThan(afterFirstTick); // 错过的 note 被补排而非丢弃
+    const newSources = ctx.sources.slice(afterFirstTick);
+    expect(newSources.length).toBeGreaterThan(0);
+    // 界内错过的 note 被补排：存在 startedAt 早于当前时刻的（钳到 now 前的过去时间）
+    expect(newSources.some((s) => s.startedAt[0] < 0.3)).toBe(true);
+  });
+
+  it("drops pathological backlog beyond the catch-up bound", async () => {
+    const bundle = makeBundle();
+    engine.load(bundle);
+    await engine.play();
+    const afterFirstTick = ctx.sources.length;
+
+    ctx.currentTime = 60; // 模拟后台节流 1 分钟
+    vi.advanceTimersByTime(25);
+
+    const newSources = ctx.sources.slice(afterFirstTick);
+    // 只补 [60-0.25, 60.12) 窗口，不是 6 圈 × 45 note 的爆发
+    expect(newSources.length).toBeLessThan(20);
   });
 
   it("notifies subscribers on play/stop/mute", async () => {

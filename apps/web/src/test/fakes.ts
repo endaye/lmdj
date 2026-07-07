@@ -1,8 +1,12 @@
 export class FakeGain {
   gain = { value: 1 };
   connected: unknown[] = [];
+  disconnected = false;
   connect(dst: unknown): void {
     this.connected.push(dst);
+  }
+  disconnect(): void {
+    this.disconnected = true;
   }
 }
 

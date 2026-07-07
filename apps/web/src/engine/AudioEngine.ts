@@ -5,6 +5,7 @@ import { notesInWindow, playheadStep, stepDuration } from "./clock";
 export interface GainLike {
   gain: { value: number };
   connect(dst: unknown): void;
+  disconnect?(): void;
 }
 export interface SourceLike {
   buffer: unknown;
@@ -21,6 +22,7 @@ export interface AudioLike {
 
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
+const MAX_CATCHUP_SEC = 0.25;
 
 export class AudioEngine {
   private readonly ctx: AudioLike;
@@ -40,6 +42,7 @@ export class AudioEngine {
 
   load(bundle: PatchBundle<unknown>): void {
     this.stop();
+    for (const gain of this.gains.values()) gain.disconnect?.();
     this.bundle = bundle;
     // scene 契约：activeScene → pattern_ids → patterns（不得直读 patterns[0]）
     this.patterns = scenePatterns(bundle.patch);
@@ -117,9 +120,10 @@ export class AudioEngine {
 
   private tick(): void {
     const now = this.ctx.currentTime - this.startTime;
-    // catch-up 策略（评审决策）：tick 延迟时补排 [scheduledUntil, now) 的 note，
-    // 宁可稍晚发声也不静默丢拍；WebAudio 会把过去的 start 时间钳到当前。
-    const from = this.scheduledUntil;
+    // 有界 catch-up（终审决策）：正常 tick 抖动内补排错过的 note（不丢拍）；
+    // 超过 MAX_CATCHUP_SEC 的病态积压（后台节流/系统休眠）直接丢弃，
+    // 避免唤醒瞬间数百个 note 同时钳到当前时间爆发。
+    const from = Math.max(this.scheduledUntil, now - MAX_CATCHUP_SEC);
     const to = now + LOOKAHEAD_SEC;
     if (to <= from) return;
     for (const pattern of this.patterns) {

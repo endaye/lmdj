@@ -97,4 +97,11 @@ describe("padElementIds", () => {
     const reserved = patch.pads.find((p) => p.action === "scene_fill")!;
     expect(padElementIds(reserved)).toEqual([]);
   });
+
+  it("falls back to the primary element_id when behavior has no element_ids", () => {
+    const patch = structuredClone(golden) as unknown as Patch;
+    const pad = structuredClone(patch.pads[1]); // Bass trigger_element
+    (pad.behavior as Record<string, unknown>).element_ids = undefined;
+    expect(padElementIds(pad)).toEqual([pad.element_id]);
+  });
 });
