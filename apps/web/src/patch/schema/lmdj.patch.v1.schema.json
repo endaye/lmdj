@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.app/schemas/lmdj.patch.v1.schema.json",
+  "title": "lmdj.patch.v1",
+  "description": "LMDJ product patch contract. Forward-compat rule: consumers MUST render unknown or reserved pad actions as disabled/no-op, never as errors. patch_id is a content-derived LOCAL identifier (song_id + sha256(lanes.json+chart.mid)[:8]); global identity is assigned by the platform layer — do not use patch_id as a database primary key. In v1 pipeline output, note velocity is always 100 (no dynamics information).",
+  "type": "object",
+  "required": ["schema", "patch_id", "source", "bpm", "loop_seconds", "elements", "patterns", "pads", "scenes", "renders", "metadata"],
+  "properties": {
+    "schema": {"const": "lmdj.patch.v1"},
+    "patch_id": {"type": "string", "minLength": 1},
+    "source": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {"type": "string"},
+        "song_id": {"type": "string"}
+      }
+    },
+    "bpm": {"type": "number", "exclusiveMinimum": 0},
+    "loop_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "elements": {"type": "array", "items": {"$ref": "#/$defs/element"}},
+    "patterns": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/pattern"}},
+    "pads": {"type": "array", "items": {"$ref": "#/$defs/pad"}},
+    "scenes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/scene"}},
+    "renders": {"type": "array", "items": {"$ref": "#/$defs/render"}},
+    "metadata": {"type": "object"}
+  },
+  "$defs": {
+    "element": {
+      "type": "object",
+      "required": ["element_id", "name", "kind", "source_path", "pitch", "lane"],
+      "properties": {
+        "element_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "kind": {"type": "string"},
+        "source_path": {"type": "string"},
+        "pitch": {"type": "integer", "minimum": 0, "maximum": 127},
+        "lane": {"type": "integer", "minimum": 0},
+        "role": {"type": ["string", "null"]}
+      }
+    },
+    "note": {
+      "type": "object",
+      "required": ["element_id", "lane", "pitch", "step", "velocity"],
+      "properties": {
+        "element_id": {"type": "string", "minLength": 1},
+        "lane": {"type": "integer", "minimum": 0},
+        "pitch": {"type": "integer", "minimum": 0, "maximum": 127},
+        "step": {"type": "integer", "minimum": 0},
+        "velocity": {"type": "integer", "minimum": 0, "maximum": 127}
+      }
+    },
+    "pattern": {
+      "type": "object",
+      "required": ["pattern_id", "name", "source", "resolution", "length_steps", "notes"],
+      "properties": {
+        "pattern_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "source": {
+          "type": "object",
+          "required": ["kind", "path"],
+          "properties": {
+            "kind": {"type": "string"},
+            "path": {"type": "string"}
+          }
+        },
+        "resolution": {"const": "1/16"},
+        "length_steps": {"type": "integer", "minimum": 1},
+        "notes": {"type": "array", "items": {"$ref": "#/$defs/note"}}
+      }
+    },
+    "pad": {
+      "type": "object",
+      "required": ["index", "slot", "label", "action", "element_id", "behavior"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "slot": {"type": "string"},
+        "label": {"type": "string"},
+        "action": {
+          "description": "trigger_element / trigger_group / empty are live in v1. scene_fill / scene_drop / mute_group / ai_variation are RESERVED: consumers must render them disabled and perform no action.",
+          "enum": ["trigger_element", "trigger_group", "empty", "scene_fill", "scene_drop", "mute_group", "ai_variation"]
+        },
+        "element_id": {"type": ["string", "null"]},
+        "behavior": {"type": "object"}
+      }
+    },
+    "scene": {
+      "type": "object",
+      "required": ["scene_id", "name", "pad_indexes", "pattern_ids", "intent"],
+      "properties": {
+        "scene_id": {"type": "string", "minLength": 1},
+        "name": {"type": "string"},
+        "pad_indexes": {"type": "array", "items": {"type": "integer", "minimum": 0}},
+        "pattern_ids": {"type": "array", "items": {"type": "string"}},
+        "intent": {"type": "string"}
+      }
+    },
+    "render": {
+      "type": "object",
+      "required": ["kind", "path"],
+      "properties": {
+        "kind": {"type": "string"},
+        "path": {"type": "string"}
+      }
+    }
+  }
+}

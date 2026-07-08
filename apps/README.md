@@ -4,7 +4,7 @@
 
 当前规划：
 
-- `apps/web/`：LMDJ Web App。负责 idea input、song upload、job progress、Patch View、render/share/remix 入口。
+- `apps/web/`：LMDJ Web App。负责 idea input、song upload、job progress、Patch View、render/share/remix 入口。已落地：Patch View 工作台原型（消费 `patch.json`，见 `apps/web/README.md`）。
 - `apps/api/`：LMDJ App Backend。早期建议是模块化 monolith，对 Web 和 CLI 暴露同一套产品 API。
 
 约束：

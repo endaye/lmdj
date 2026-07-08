@@ -46,6 +46,11 @@ $RECYCLE.BIN/
 # NFS temporary files
 .nfs*
 
+### Node
+node_modules/
+dist/
+*.tsbuildinfo
+
 ### Python
 __pycache__/
 *.py[cod]
