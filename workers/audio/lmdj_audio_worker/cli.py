@@ -36,13 +36,17 @@ def main() -> None:
 
     if args.command == "run":
         runner = DemoPipelineRunner(args.demo_dir, fast=not args.no_fast)
-        final = process_job(
-            args.audio,
-            jobs_root=args.jobs_root,
-            runner=runner,
-            job_id=args.job_id,
-            on_state=lambda s: print(f"[{s.updated_at}] {s.job_id} -> {s.state}"),
-        )
+        try:
+            final = process_job(
+                args.audio,
+                jobs_root=args.jobs_root,
+                runner=runner,
+                job_id=args.job_id,
+                on_state=lambda s: print(f"[{s.updated_at}] {s.job_id} -> {s.state}"),
+            )
+        except FileNotFoundError as error:
+            print(f"error: {error}", file=sys.stderr)
+            sys.exit(1)
         if final.state == "failed":
             print(f"error: {final.error}", file=sys.stderr)
             sys.exit(1)

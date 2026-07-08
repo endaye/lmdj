@@ -52,3 +52,15 @@ def test_status_unknown_job_exits_1(tmp_path: Path):
     result = run_cli("status", "ghost", "--jobs-root", str(tmp_path / "jobs"))
     assert result.returncode == 1
     assert "unknown job_id" in result.stderr
+
+
+def test_run_missing_audio_exits_1_with_clean_error(tmp_path: Path):
+    result = run_cli(
+        "run", str(tmp_path / "ghost.wav"),
+        "--job-id", "cli-ghost",
+        "--jobs-root", str(tmp_path / "jobs"),
+        "--demo-dir", str(tmp_path / "demo"),
+    )
+    assert result.returncode == 1
+    assert "error:" in result.stderr
+    assert "Traceback" not in result.stderr  # clean convention, not a raw crash
