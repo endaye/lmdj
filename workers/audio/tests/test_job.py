@@ -94,3 +94,16 @@ def test_missing_input_raises_before_creating_job(tmp_path: Path, fake_runner: F
 def test_default_job_id_is_generated(tmp_path: Path, sample_audio: Path, fake_runner: FakeRunner):
     final = process_job(sample_audio, jobs_root=tmp_path / "jobs", runner=fake_runner)
     assert len(final.job_id) == 12
+
+
+def test_queued_status_written_before_input_copy(tmp_path: Path, sample_audio: Path):
+    jobs_root = tmp_path / "jobs"
+    job_dir = jobs_root / "jobtest"
+    seen_state: list[str] = []
+    # 首次 emit(queued) 时 input 尚未拷贝 —— 用 on_state 在 queued 时刻检查磁盘
+    def probe(s):
+        if s.state == "queued":
+            seen_state.append("status.json" if (job_dir / "status.json").exists() else "none")
+            seen_state.append("input-present" if (job_dir / "input" / sample_audio.name).exists() else "input-absent")
+    process_job(sample_audio, jobs_root=jobs_root, runner=FakeRunner(), job_id="jobtest", on_state=probe)
+    assert seen_state == ["status.json", "input-absent"]

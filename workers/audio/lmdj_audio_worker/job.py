@@ -29,9 +29,7 @@ def process_job(
         raise FileNotFoundError(f"input audio not found: {audio}")
     job_id = job_id or uuid.uuid4().hex[:12]
     job_dir = jobs_root / job_id
-    (job_dir / "input").mkdir(parents=True, exist_ok=True)
-    input_copy = job_dir / "input" / audio.name
-    shutil.copy2(audio, input_copy)
+    job_dir.mkdir(parents=True, exist_ok=True)
 
     def emit(status: JobStatus) -> JobStatus:
         written = write_status(job_dir, status)
@@ -41,6 +39,9 @@ def process_job(
 
     status = emit(JobStatus(job_id=job_id, state="queued", created_at=utc_now()))
     try:
+        input_copy = job_dir / "input" / audio.name
+        input_copy.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(audio, input_copy)
         status = emit(replace(status, state="separating"))
         package_dir = runner.run(input_copy, job_dir, job_id)
         status = emit(replace(status, state="patchifying", package_dir=package_dir.name))
