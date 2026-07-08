@@ -62,5 +62,8 @@ __pycache__/
 # Reference demo run artifacts (pipeline output packages)
 references/demos/lmdj-song-pipeline/output/
 
+# Audio worker 本地 job 产物
+workers/audio/jobs/
+
 # Agent session scratch (SDD ledger, task briefs, review packages)
 .superpowers/

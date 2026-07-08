@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lmdj-audio-worker"
+version = "0.1.0"
+description = "LMDJ audio worker: audio -> pipeline -> patchify -> patch.json"
+requires-python = ">=3.11"
+# 本地依赖（path 依赖不写 metadata，与 patchify 同惯例）：
+#   pip install -e ../../packages/core-models -e ../../packages/patchify
+dependencies = []
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8,<9",
+]
+
+[project.scripts]
+lmdj-audio-worker = "lmdj_audio_worker.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["lmdj_audio_worker*"]
