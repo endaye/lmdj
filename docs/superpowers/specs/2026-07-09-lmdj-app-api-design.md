@@ -73,6 +73,12 @@ GET  /jobs/{job_id}/files/{path}    → 包内任意相对文件（samples/*.wav
 
 队列（Redis/RQ/云托管——infra 待决）、Postgres / 对象存储、账号 / 鉴权 / 限流、`POST /ideas` 与 generation 入口、remix / sample / fork / share / lineage 端点、`cancel` 实现（infra 枚举已预留）、**Web 侧接入 API 的改动（单独 web 小计划）**、部署 / 容器化 / 生产 CORS 收紧。
 
+## 已知接受风险（v1 本地开发范围内）
+
+- **上传体积无上限**：`POST /uploads` 全量落盘无 max-bytes 检查，网络可达时是磁盘耗尽 DoS 面。归入"限流/quota"范畴（本就在范围外），正式部署时随鉴权/限流一并加 413 上限。
+- **上传临时文件不清理**：`tempfile.mkdtemp()` 产物不主动回收（进程级临时目录）；持久产物是 jobs_root 内 process_job 拷贝的 input，不受影响。
+- 二者仅在 v1 无鉴权、CORS 仅放行 localhost 的本地开发形态下可接受。
+
 ## 成功标准
 
 1. `uvicorn lmdj_api.app:app` 起服务，`curl -F file=@song.wav localhost:8000/uploads` 返回 `{job_id, state:"queued"}`；
