@@ -65,5 +65,8 @@ references/demos/lmdj-song-pipeline/output/
 # Audio worker 本地 job 产物
 workers/audio/jobs/
 
+# App API 本地 job 产物
+apps/api/jobs/
+
 # Agent session scratch (SDD ledger, task briefs, review packages)
 .superpowers/
