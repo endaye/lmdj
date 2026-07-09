@@ -113,3 +113,19 @@ def test_path_traversal_never_serves_out_of_package(tmp_path: Path):
         resp = client.get(f"/jobs/{job_id}/files/{bad}")
         assert resp.status_code in (400, 404), f"{bad} -> {resp.status_code}"
         assert resp.status_code != 200
+
+
+def test_job_id_traversal_is_rejected(tmp_path: Path):
+    client = make_client(tmp_path)
+    job_id = _upload(client)
+    _poll_completed(client, job_id)
+    # Encoded `..` as the job_id segment reaches the handler (client doesn't
+    # normalize %2e); must be rejected, never escape jobs_root.
+    for endpoint in [
+        "/jobs/%2e%2e",
+        "/jobs/%2e%2e/patch",
+        "/jobs/%2e%2e/files/status.json",
+    ]:
+        resp = client.get(endpoint)
+        assert resp.status_code in (400, 404), f"{endpoint} -> {resp.status_code}"
+        assert resp.status_code != 200

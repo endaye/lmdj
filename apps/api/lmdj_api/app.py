@@ -35,7 +35,11 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
     )
 
     def _job_dir(job_id: str) -> Path:
-        job_dir = jobs_root / job_id
+        root = jobs_root.resolve()
+        job_dir = (root / job_id).resolve()
+        # job_id 穿越防护：必须严格落在 jobs_root 内（且不是 jobs_root 本身）
+        if not job_dir.is_relative_to(root) or job_dir == root:
+            raise HTTPException(status_code=400, detail="invalid job_id")
         if not (job_dir / "status.json").exists():
             raise HTTPException(status_code=404, detail="unknown job_id")
         return job_dir
@@ -67,6 +71,8 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
                 status_code=409,
                 content={"detail": "job not completed", "state": status.state},
             )
+        if not status.package_dir:
+            raise HTTPException(status_code=404, detail="patch not available")
         patch_path = job_dir / (status.package_dir or "") / "patch.json"
         if not patch_path.exists():
             raise HTTPException(status_code=404, detail="patch.json not found")
@@ -81,6 +87,8 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
                 status_code=409,
                 content={"detail": "job not completed", "state": status.state},
             )
+        if not status.package_dir:
+            raise HTTPException(status_code=404, detail="patch not available")
         package_dir = (job_dir / (status.package_dir or "")).resolve()
         target = (package_dir / path).resolve()
         # 路径穿越防护：resolve() 后目标必须严格落在 package_dir 内（且不是 package_dir 本身）
