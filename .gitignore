@@ -70,3 +70,6 @@ apps/api/jobs/
 
 # Agent session scratch (SDD ledger, task briefs, review packages)
 .superpowers/
+
+# Playwright MCP cache
+.playwright-mcp/
