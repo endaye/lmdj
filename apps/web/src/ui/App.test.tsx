@@ -6,6 +6,8 @@ import type { Patch } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
 import { AudioEngine } from "../engine/AudioEngine";
 import { App } from "./App";
+import type { ApiClient, JobStatus } from "../api/client";
+import type { PatchBundle } from "../patch/loader";
 
 const enc = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).buffer as ArrayBuffer;
 const fakeDecode = async () => ({ fake: "buffer" });
@@ -55,5 +57,71 @@ describe("App", () => {
     renderApp(rejected);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("banner-rejected")).toBeInTheDocument());
+  });
+});
+
+function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
+  return {
+    uploadSong: async () => "job123",
+    pollJob: async (_b, _j, onState) => {
+      onState?.({ state: "separating", error: null, patch_id: null, package_dir: null, quality: null });
+      const done: JobStatus = { state: "completed", error: null, patch_id: "job123-abc", package_dir: "job123", quality: "passed" };
+      onState?.(done);
+      return done;
+    },
+    fetchPatchBundle: async () => {
+      const files = await exampleFiles(golden)();
+      const { loadPatch } = await import("../patch/loader");
+      return (await loadPatch(files, fakeDecode)) as PatchBundle<unknown>;
+    },
+    ...overrides,
+  };
+}
+
+function renderAppWithApi(api: ApiClient) {
+  const engine = new AudioEngine(new FakeAudioContext());
+  return render(<App engine={engine} decode={fakeDecode} fetchExample={exampleFiles(golden)} apiClient={api} />);
+}
+
+async function submitViaApi() {
+  const file = new File([new Uint8Array([1, 2, 3])], "song.wav", { type: "audio/wav" });
+  await userEvent.upload(screen.getByTestId("api-file-input"), file);
+  await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
+}
+
+describe("App API path", () => {
+  it("shows the API panel on landing with default base", () => {
+    renderAppWithApi(fakeApi());
+    expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("api-base-input")).toHaveValue("http://localhost:8000");
+  });
+
+  it("upload → uploading view → loaded workstation", async () => {
+    renderAppWithApi(fakeApi());
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-grid")).toBeInTheDocument());
+  });
+
+  it("failed job shows error in uploading view with a back button", async () => {
+    const { ApiError } = await import("../api/client");
+    renderAppWithApi(fakeApi({
+      pollJob: async (_b, _j, onState) => {
+        onState?.({ state: "separating", error: null, patch_id: null, package_dir: null, quality: null });
+        throw new ApiError("demucs boom");
+      },
+    }));
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("uploading-error")).toHaveTextContent("demucs boom"));
+    await userEvent.click(screen.getByRole("button", { name: /返回/i }));
+    expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+  });
+
+  it("upload request failure returns to landing with an error", async () => {
+    const { ApiError } = await import("../api/client");
+    renderAppWithApi(fakeApi({
+      uploadSong: async () => { throw new ApiError("network down"); },
+    }));
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("error-panel")).toHaveTextContent("network down"));
   });
 });

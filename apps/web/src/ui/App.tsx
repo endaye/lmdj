@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { defaultApiClient, type ApiClient } from "../api/client";
 import type { AudioEngine } from "../engine/AudioEngine";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
 import { DropZone } from "./DropZone";
@@ -7,6 +8,8 @@ import { Inspector } from "./Inspector";
 import { PadGrid, PAD_KEYS } from "./PadGrid";
 import { StepGrid } from "./StepGrid";
 import { Transport } from "./Transport";
+import { UploadPanel } from "./UploadPanel";
+import { UploadingView } from "./UploadingView";
 
 /** 内置示例：fetch public/example-patch/（浏览器路径；测试注入替身） */
 export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
@@ -28,16 +31,19 @@ export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
 
 type AppState =
   | { phase: "landing"; issues: string[] | null }
+  | { phase: "uploading"; state: string; error: string | null }
   | { phase: "loaded"; bundle: PatchBundle<unknown> };
 
 export function App({
   engine,
   decode,
   fetchExample = fetchExampleFiles,
+  apiClient = defaultApiClient,
 }: {
   engine: AudioEngine;
   decode: (b: ArrayBuffer) => Promise<unknown>;
   fetchExample?: () => Promise<Map<string, ArrayBuffer>>;
+  apiClient?: ApiClient;
 }) {
   const [state, setState] = useState<AppState>({ phase: "landing", issues: null });
 
@@ -46,17 +52,45 @@ export function App({
     setState({ phase: "landing", issues });
   }, []);
 
+  const enterLoaded = useCallback(
+    (bundle: PatchBundle<unknown>) => {
+      engine.load(bundle);
+      setState({ phase: "loaded", bundle });
+    },
+    [engine],
+  );
+
   const handleFiles = useCallback(
     async (files: Map<string, ArrayBuffer>) => {
       try {
-        const bundle = await loadPatch(files, decode);
-        engine.load(bundle);
-        setState({ phase: "loaded", bundle });
+        enterLoaded(await loadPatch(files, decode));
       } catch (error) {
         fail(error);
       }
     },
-    [engine, decode, fail],
+    [decode, enterLoaded, fail],
+  );
+
+  const handleUpload = useCallback(
+    async (base: string, file: File) => {
+      setState({ phase: "uploading", state: "queued", error: null });
+      try {
+        const jobId = await apiClient.uploadSong(base, file);
+        await apiClient.pollJob(base, jobId, (s) =>
+          setState({ phase: "uploading", state: s.state, error: null }),
+        );
+        enterLoaded(await apiClient.fetchPatchBundle(base, jobId, decode));
+      } catch (error) {
+        // uploadSong 失败时 pollJob 尚未回调 → state 仍为 "queued" → 回 landing；
+        // pollJob/fetch 阶段失败 → state 已被推进（≥separating）→ 停 uploading 显 error。
+        setState((prev) =>
+          prev.phase === "uploading" && prev.state !== "queued"
+            ? { phase: "uploading", state: prev.state, error: String(error) }
+            : { phase: "landing", issues: [String(error)] },
+        );
+      }
+    },
+    [apiClient, decode, enterLoaded],
   );
 
   // 键盘：A S D F / Z X C V → pad 0-7（仅 loaded 后生效）
@@ -71,6 +105,19 @@ export function App({
     return () => window.removeEventListener("keydown", onKey);
   }, [state.phase, engine]);
 
+  if (state.phase === "uploading") {
+    return (
+      <div className="app">
+        <h1>LMDJ PATCH VIEW</h1>
+        <UploadingView
+          state={state.state}
+          error={state.error}
+          onBack={() => setState({ phase: "landing", issues: null })}
+        />
+      </div>
+    );
+  }
+
   if (state.phase === "landing") {
     return (
       <div className="app">
@@ -79,6 +126,7 @@ export function App({
           onFiles={(f) => void handleFiles(f)}
           onExample={() => void fetchExample().then(handleFiles, fail)}
         />
+        <UploadPanel onUpload={(base, file) => void handleUpload(base, file)} />
         {state.issues && <ErrorPanel issues={state.issues} />}
       </div>
     );

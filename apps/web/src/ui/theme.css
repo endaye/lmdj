@@ -92,3 +92,28 @@ button:hover { background: rgba(51, 255, 102, 0.12); }
 .step-grid th { text-align: right; padding-right: 8px; font-weight: normal; }
 .step-missing { color: var(--red); }
 .step-playhead { background: var(--green); color: var(--bg); }
+
+.upload-panel {
+  margin-top: 16px;
+  border: 1px solid var(--green-dim);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.upload-panel-title { font-size: 12px; opacity: 0.8; }
+.api-base {
+  font: inherit;
+  color: var(--green);
+  background: #000;
+  border: 1px solid var(--green-dim);
+  padding: 4px 6px;
+}
+.uploading { padding: 32px 16px; }
+.uploading-title { margin-bottom: 16px; }
+.stages { list-style: none; padding: 0; display: flex; gap: 16px; }
+.stage { text-transform: uppercase; font-size: 13px; }
+.stage--done { color: var(--green-dim); }
+.stage--current { color: var(--green); font-weight: bold; }
+.stage--pending { color: var(--gray); }
+.uploading-error { color: var(--red); margin: 16px 0; white-space: pre-wrap; }
