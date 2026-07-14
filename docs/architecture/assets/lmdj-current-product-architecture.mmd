@@ -1,0 +1,73 @@
+flowchart BT
+    subgraph JOURNEY["① 用户旅程 · 当前可用"]
+        direction LR
+        USER["用户"] --> ENTRY["产品入口<br/>上传歌曲 / 本地 Patch / 内置示例"]
+        ENTRY --> WEB_IN["Web 入口<br/>上传、导入、查看任务进度"]
+        WEB_IN --> WORKSTATION["8-Pad Patch 工作台"]
+        WORKSTATION --> RESULT["Pattern 回放<br/>Pad 触发 / 静音组合"]
+    end
+
+    subgraph PROCESSING["② 歌曲 → Patch · 当前处理链路"]
+        direction LR
+        API["App API<br/>上传、任务状态、产物访问"]
+        AUDIO["Audio Worker<br/>任务编排与状态机"]
+        PIPELINE["参考 Song Pipeline<br/>分轨 / Loop / 切片 / MIDI / QA"]
+        PACKAGE["Pipeline Package<br/>samples / chart / lanes / report"]
+        PATCHIFY["Patchify Adapter<br/>标准化处理结果"]
+        JOBS["Job 产物<br/>patch.json + samples"]
+
+        API -->|"创建 Job"| AUDIO
+        AUDIO -->|"启动子进程"| PIPELINE
+        PIPELINE --> PACKAGE
+        PACKAGE --> PATCHIFY
+        PATCHIFY -->|"生成产品产物"| JOBS
+    end
+
+    WEB_IN -->|"上传音频"| API
+    API -->|"任务状态"| WEB_IN
+    JOBS -->|"Patch Bundle"| WORKSTATION
+
+    subgraph FOUNDATION["产品核心 · 统一契约"]
+        direction LR
+        CORE["Core Models<br/>Project / Patch / Pattern<br/>Pad / Scene / Element"]
+        CONTRACT["lmdj.patch.v1<br/>统一 patch.json 契约"]
+
+        CORE -->|"定义模型与 Schema"| CONTRACT
+    end
+
+    CONTRACT -.->|"约束输出"| PATCHIFY
+    CONTRACT -.->|"Schema 校验"| WORKSTATION
+
+    subgraph FUTURE["下一阶段 · 规划中"]
+        direction LR
+        IDEA["一句话音乐想法"]
+        GENERATION["Generation Worker<br/>想法 → 音乐材料"]
+        RENDER["Render Worker<br/>Patch / Scene → 成品音频"]
+        EXPORT["导出 / 分享 / Remix"]
+        CLOUD["生产基础设施<br/>队列 / 存储 / 数据库 / 鉴权"]
+
+        IDEA -.-> GENERATION
+        RENDER -.-> EXPORT
+    end
+
+    GENERATION -.-> AUDIO
+    CONTRACT -.-> RENDER
+    API -.-> CLOUD
+    AUDIO -.-> CLOUD
+
+    classDef current fill:#303030,color:#f8fafc,stroke:#64748b,stroke-width:1.5px;
+    classDef reference fill:#243447,color:#f8fafc,stroke:#7dd3fc,stroke-width:1.5px;
+    classDef contract fill:#1e3a5f,color:#f8fafc,stroke:#60a5fa,stroke-width:2px;
+    classDef planned fill:#312e24,color:#f8fafc,stroke:#fbbf24,stroke-width:1.5px,stroke-dasharray:5 4;
+
+    class USER,ENTRY,WEB_IN,WORKSTATION,RESULT,API,AUDIO,JOBS current;
+    class PIPELINE,PACKAGE reference;
+    class PATCHIFY,CORE,CONTRACT contract;
+    class IDEA,GENERATION,RENDER,EXPORT,CLOUD planned;
+
+    style JOURNEY fill:#202020,color:#f8fafc,stroke:#475569
+    style PROCESSING fill:#202020,color:#f8fafc,stroke:#475569
+    style FOUNDATION fill:#202020,color:#f8fafc,stroke:#475569
+    style FUTURE fill:#202020,color:#f8fafc,stroke:#475569
+
+    linkStyle default stroke:#cbd5e1,stroke-width:1.5px;

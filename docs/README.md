@@ -15,6 +15,7 @@ source-materials.md  收外部输入和 demo 参考
 
 ## 核心文档
 
+- [architecture/current-product-architecture.md](architecture/current-product-architecture.md)：当前产品/业务架构、已落地链路、模块边界与下一阶段规划。
 - [prd/working-prd.md](prd/working-prd.md)：当前工作版 PRD。这里可以直接重写，不需要保留每个旧想法。
 - [prd/source-materials.md](prd/source-materials.md)：素材索引。高嘉丰 PRD、demo 工具、外部参考都先放这里。
 - [prd/open-questions.md](prd/open-questions.md)：开放问题池。用于记录还没想清楚的产品、技术、内容和商业问题。
