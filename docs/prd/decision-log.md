@@ -67,3 +67,17 @@
 - 结论：v1 内 `lanes.json`/`chart.mid` 是 Patchify 的输入 truth（demo 契约，已冻结）；`patch.json` 生成之后即产品侧唯一 truth，下游不得回读 lanes/chart；`workers/audio/` 正式实现时直接产出 LMDJ 中间格式，demo 契约 loader 转入维护模式。
 - 原因：原架构原则"`lanes.json` 仍然是 pitch/sample truth"无限期锚定 demo 格式，与产品自主性冲突；patterns 决策已使下游无需回读。
 - 影响：infra spec 关键架构原则同步改写；jobs 幂等（同输入 → 同 storage key，覆盖写安全）与 Postgres v1 收缩（不单独建 pads/scenes 表）一并修订进 infra spec。
+
+## 2026-07-15
+
+### 已确认：PipelineFromStemsRunner 独立 venv，DSP 栈不进 workers/audio 主包
+
+- 结论：从参考 demo 迁移的 pipeline 阶段 3–6（beat/loop/slicer/sequencer/validation）代码落在 `workers/audio/lmdj_audio_worker/pipeline_from_stems/`，但运行在自己的专用 venv 中、以子进程调用；`workers/audio` 主包 `dependencies` 保持为空，只保留协议层。DSP 关键库版本以入库的 parity constraints 文件为单一来源，PipelineFromStems venv 和 parity 用的 demo baseline venv 都从它创建，运行前校验环境指纹。
+- 原因：DSP 栈（librosa 含 numba、numpy<2）若进主包，会经 `apps/api` 的 path dep 传染进 API venv，破坏既有重依赖隔离决策；同版本锁定又是新旧 pipeline parity 数值容差（1e-4/1e-5）成立的前提，而 demo `pyproject.toml` 依赖多数未 pin，只锁新侧锚定的是机器本地产物、不可复现。
+- 影响：与现有 `DemoPipelineRunner`、separator runner 统一为"子进程 + 独立 venv"模式；parity 只做同平台比较；详见多分轨 benchmark spec §3.1/§3.2（2026-07-15）。
+
+### 已确认：Phase 2A 后生产链路统一走新链，DemoPipelineRunner 退役
+
+- 结论：separator 生产接入（Phase 2A）后，产品 job 统一走 `separator runner 子进程 → PipelineFromStemsRunner 子进程 → Patchify`，包括选 Demucs 时也不再经过 demo 的 `song-pipeline` 整链；`DemoPipelineRunner` 保留到 Phase 2C 端到端验证通过后退役。
+- 原因：双链路并存意味着 Demucs 与其他模型走不同代码路径，benchmark 结论对生产不成立；parity 门槛的存在正是为了让新链安全替换旧链。
+- 影响：demo 从此只剩 fixture 与 parity 基线角色；CLAUDE.md/AGENTS.md 中"audio → demo pipeline subprocess"的链路描述在 Phase 2C 后需同步改写。
