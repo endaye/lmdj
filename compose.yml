@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    environment:
+      LMDJ_JOBS_ROOT: ${LMDJ_JOBS_ROOT:-/data/jobs}
+      LMDJ_CORS_ORIGINS: ${LMDJ_CORS_ORIGINS:-}
+    volumes:
+      - data:/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      LMDJ_DOMAIN: ${LMDJ_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./apps/web/dist:/srv/web:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+volumes:
+  data:
+  caddy_data:
+  caddy_config:

@@ -281,7 +281,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   padding: 5px 10px;
   cursor: pointer;
 }
-.upload-panel button:not(::file-selector-button) { align-self: flex-start; }
+.upload-panel > button { align-self: flex-start; }
 
 /* --- Feedback strips ------------------------------------------------------- */
 

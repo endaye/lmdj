@@ -69,8 +69,17 @@ workers/audio/jobs/
 # App API 本地 job 产物
 apps/api/jobs/
 
+# Local manual/e2e audio corpus (see testdata/audio/suno/README.md)
+testdata/audio/suno/**/*.mp3
+
 # Agent session scratch (SDD ledger, task briefs, review packages)
 .superpowers/
+
+# Local isolated git worktrees
+.worktrees/
+
+# Local deployment configuration
+.env
 
 # Playwright MCP cache
 .playwright-mcp/

@@ -1,7 +1,9 @@
 import { useState } from "react";
 
 export function UploadPanel({ onUpload }: { onUpload: (base: string, file: File) => void }) {
-  const [base, setBase] = useState("http://localhost:8000");
+  const [base, setBase] = useState(
+    (import.meta.env.VITE_API_BASE as string | undefined) ?? "http://localhost:8000",
+  );
   const [file, setFile] = useState<File | null>(null);
 
   return (
