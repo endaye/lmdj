@@ -1,4 +1,4 @@
-"""checkpoint registry（spec §6）：workers/audio/config/separators.json の加載與門禁校驗。"""
+"""checkpoint registry（spec §6）：workers/audio/config/separators.json 的加载与门禁校验。"""
 from __future__ import annotations
 
 import json
@@ -60,7 +60,7 @@ def _command_placeholders(command: list) -> set[str]:
 def _validate_entry(raw: object, index: int) -> list[str]:
     prefix = f"separators[{index}]"
     if not isinstance(raw, dict):
-        return [f"{prefix}: 必須是 object"]
+        return [f"{prefix}: 必须是 object"]
     errors = []
     for f in _REQUIRED_FIELDS:
         if f not in raw:
@@ -72,42 +72,42 @@ def _validate_entry(raw: object, index: int) -> list[str]:
         return errors
     eid = raw["id"]
     if not isinstance(eid, str) or not eid:
-        errors.append(f"{prefix}: id 必須是非空字符串")
+        errors.append(f"{prefix}: id 必须是非空字符串")
     if not _is_sha256(raw["artifact_sha256"]):
-        errors.append(f"{prefix}({eid}): artifact_sha256 必須是 64 位十六進制")
+        errors.append(f"{prefix}({eid}): artifact_sha256 必须是 64 位十六进制")
     if not _is_sha256(raw["env_lock_sha256"]):
-        errors.append(f"{prefix}({eid}): env_lock_sha256 必須是 64 位十六進制")
+        errors.append(f"{prefix}({eid}): env_lock_sha256 必须是 64 位十六进制")
     src = raw["source"]
     if not isinstance(src, dict) or not src.get("url") or not src.get("revision"):
-        errors.append(f"{prefix}({eid}): source 必須含 url 與不可變 revision")
+        errors.append(f"{prefix}({eid}): source 必须含 url 与不可变 revision")
     lic = raw["license"]
     if not isinstance(lic, dict) or not lic.get("code") or not lic.get("weights"):
-        errors.append(f"{prefix}({eid}): license 必須含 code 與 weights 說明")
+        errors.append(f"{prefix}({eid}): license 必须含 code 与 weights 说明")
     if raw["status"] not in ENTRY_STATUSES:
-        errors.append(f"{prefix}({eid}): status 必須屬於 {ENTRY_STATUSES}，"
+        errors.append(f"{prefix}({eid}): status 必须属于 {ENTRY_STATUSES}，"
                       f"收到 {raw['status']!r}")
     cmd = raw["command"]
     if (not isinstance(cmd, list) or not cmd
             or not all(isinstance(p, str) for p in cmd)):
-        errors.append(f"{prefix}({eid}): command 必須是非空字符串列表")
+        errors.append(f"{prefix}({eid}): command 必须是非空字符串列表")
     else:
         unknown = _command_placeholders(cmd) - set(COMMAND_PLACEHOLDERS)
         if unknown:
-            errors.append(f"{prefix}({eid}): command 含未知佔位符 {sorted(unknown)}，"
-                          f"允許 {COMMAND_PLACEHOLDERS}")
+            errors.append(f"{prefix}({eid}): command 含未知占位符 {sorted(unknown)}，"
+                          f"允许 {COMMAND_PLACEHOLDERS}")
     if (not isinstance(raw["stems"], list) or not raw["stems"]
             or not all(isinstance(s, str) for s in raw["stems"])):
-        errors.append(f"{prefix}({eid}): stems 必須是非空字符串列表")
+        errors.append(f"{prefix}({eid}): stems 必须是非空字符串列表")
     devices = raw["devices"]
     if not isinstance(devices, list) or not devices:
-        errors.append(f"{prefix}({eid}): devices 必須是非空列表")
+        errors.append(f"{prefix}({eid}): devices 必须是非空列表")
     else:
         for d in devices:
             if d not in ALLOWED_DEVICES:
-                errors.append(f"{prefix}({eid}): 不支持的設備 {d!r}"
-                              f"（首輪只有 {ALLOWED_DEVICES}）")
+                errors.append(f"{prefix}({eid}): 不支持的设备 {d!r}"
+                              f"（首轮只有 {ALLOWED_DEVICES}）")
     if not isinstance(raw["inference"], dict):
-        errors.append(f"{prefix}({eid}): inference 推理配置必須是 object（spec §6）")
+        errors.append(f"{prefix}({eid}): inference 推理配置必须是 object（spec §6）")
     return errors
 
 
@@ -115,13 +115,13 @@ def load_registry(path: Path) -> tuple[SeparatorEntry, ...]:
     try:
         data = json.loads(Path(path).read_text())
     except (OSError, json.JSONDecodeError) as exc:
-        raise RegistryError([f"無法讀取 registry {path}: {exc}"]) from exc
+        raise RegistryError([f"无法读取 registry {path}: {exc}"]) from exc
     errors: list[str] = []
     if not isinstance(data, dict) or data.get("schema_version") != REGISTRY_SCHEMA_VERSION:
-        errors.append(f"registry schema_version 必須是 {REGISTRY_SCHEMA_VERSION!r}")
+        errors.append(f"registry schema_version 必须是 {REGISTRY_SCHEMA_VERSION!r}")
     raw_entries = data.get("separators") if isinstance(data, dict) else None
     if not isinstance(raw_entries, list):
-        errors.append("registry 必須含 separators 列表")
+        errors.append("registry 必须含 separators 列表")
         raise RegistryError(errors)
     for i, raw in enumerate(raw_entries):
         errors.extend(_validate_entry(raw, i))
@@ -147,7 +147,7 @@ def load_registry(path: Path) -> tuple[SeparatorEntry, ...]:
 
 
 def benchmark_entries(entries: tuple[SeparatorEntry, ...]) -> tuple[SeparatorEntry, ...]:
-    """internal benchmark 允許全部狀態（spec §6 狀態語義）。"""
+    """internal benchmark 允许全部状态（spec §6 状态语义）。"""
     return tuple(entries)
 
 
