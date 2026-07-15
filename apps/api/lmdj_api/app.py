@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import uuid
@@ -15,24 +16,39 @@ from lmdj_audio_worker.status import read_status
 from lmdj_api.executor import JobExecutor
 
 _API_ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_JOBS_ROOT = _API_ROOT / "jobs"
+_FALLBACK_JOBS_ROOT = _API_ROOT / "jobs"
 DEFAULT_DEMO_DIR = _API_ROOT.parent.parent / "references" / "demos" / "lmdj-song-pipeline"
+DEFAULT_CORS_ORIGINS = ["http://localhost:5173"]
 
 _CONTENT_TYPES = {".wav": "audio/wav", ".json": "application/json", ".mid": "audio/midi"}
 
 
+def default_jobs_root() -> Path:
+    value = os.environ.get("LMDJ_JOBS_ROOT")
+    return Path(value) if value else _FALLBACK_JOBS_ROOT
+
+
+def _cors_origins() -> list[str]:
+    value = os.environ.get("LMDJ_CORS_ORIGINS")
+    if value is None:
+        return DEFAULT_CORS_ORIGINS
+    return [origin.strip() for origin in value.split(",") if origin.strip()]
+
+
 def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = None) -> FastAPI:
-    jobs_root = jobs_root or DEFAULT_JOBS_ROOT
+    jobs_root = jobs_root or default_jobs_root()
     runner = runner or DemoPipelineRunner(DEFAULT_DEMO_DIR)
     executor = JobExecutor(runner=runner, jobs_root=jobs_root)
 
     app = FastAPI(title="LMDJ API")
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["http://localhost:5173"],
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    origins = _cors_origins()
+    if origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        )
 
     def _job_dir(job_id: str) -> Path:
         root = jobs_root.resolve()
