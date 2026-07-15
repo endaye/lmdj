@@ -20,6 +20,9 @@ test = [
 pfs = [
   "numpy",
   "soundfile",
+  "librosa",
+  "scikit-learn",
+  "pretty_midi",
 ]
 
 [project.scripts]
