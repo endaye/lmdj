@@ -5,6 +5,9 @@ import { useEngineTick } from "./useEngine";
 
 export const PAD_KEYS = ["A", "S", "D", "F", "Z", "X", "C", "V"];
 
+/** v1 契约:pad 0-3 是语义槽 drums/bass/harmony/lead —— 决定 pad 的 lane 配色 */
+const PAD_LANES = ["drums", "bass", "harmony", "lead"];
+
 type PadState = "normal" | "empty" | "reserved" | "muted" | "error";
 
 function padState(pad: Pad, bundle: PatchBundle<unknown>, engine: AudioEngine): PadState {
@@ -31,6 +34,7 @@ function PadCell({
   return (
     <button
       data-testid={`pad-${pad.index}`}
+      data-lane={PAD_LANES[pad.index]}
       className={`pad pad--${state}${flash ? " pad--flash" : ""}`}
       onClick={() => {
         if (!interactive) return;
