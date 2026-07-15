@@ -7,6 +7,9 @@ CORE="$ROOT/packages/core-models"
 PATCHIFY="$ROOT/packages/patchify"
 DEMO="$ROOT/references/demos/lmdj-song-pipeline"
 TESTSONG="$DEMO/output/testsong"
+WORKER="$ROOT/workers/audio"
+PFS_VENV="$WORKER/.venv-pfs"
+CONSTRAINTS="$WORKER/config/parity-constraints.txt"
 
 usage() {
   cat <<'EOF'
@@ -16,6 +19,8 @@ LMDJ dev helper
 
   setup              创建/补齐 packages 的 venv（core-models + patchify），幂等
   setup-demo         创建参考 demo 的 venv（重依赖 demucs/torch，首次下载很大）
+  setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
+  parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
   song <audio> <id>  用 demo pipeline 处理一首歌并 patchify（需先 setup-demo）
@@ -55,7 +60,7 @@ cmd_setup_demo() {
     echo "==> 创建 demo venv（demucs/torch，可能需要 10 分钟以上）"
     python3 -m venv "$DEMO/.venv"
   fi
-  "$DEMO/.venv/bin/pip" -q install -e "$DEMO"
+  "$DEMO/.venv/bin/pip" -q install -e "$DEMO" -c "$CONSTRAINTS"
   echo "==> demo venv 就绪"
 }
 
@@ -87,14 +92,68 @@ cmd_song() {
 
 cmd_smoke() {
   ensure_pkg_venvs
+  ensure_testsong
+  "$PATCHIFY/.venv/bin/lmdj-patchify" "$TESTSONG"
+  summarize "$TESTSONG/patch.json"
+}
+
+cmd_setup_pfs() {
+  if [ ! -x "$PFS_VENV/bin/python" ]; then
+    echo "==> 创建 pipeline-from-stems venv"
+    python3 -m venv "$PFS_VENV"
+  fi
+  # lmdj_audio_worker/__init__.py 会 import job -> lmdj_patchify，
+  # 所以 pfs venv 也要装两个轻量 path dep（顺序：core-models 先）
+  "$PFS_VENV/bin/pip" -q install -e "$CORE" -c "$CONSTRAINTS"
+  "$PFS_VENV/bin/pip" -q install -e "$PATCHIFY" -c "$CONSTRAINTS"
+  "$PFS_VENV/bin/pip" -q install -e "$WORKER[pfs]" -c "$CONSTRAINTS"
+  echo "==> pfs venv 就绪"
+}
+
+ensure_testsong() {
   if [ ! -f "$TESTSONG/lanes.json" ]; then
     ensure_demo_venv
     echo "==> 生成 testsong（合成曲，stems 预置，跳过 demucs）"
     (cd "$DEMO" && .venv/bin/python scripts/make_test_song.py output/testsong \
       && .venv/bin/song-pipeline run output/testsong/input.wav --song-id testsong --fast)
   fi
-  "$PATCHIFY/.venv/bin/lmdj-patchify" "$TESTSONG"
-  summarize "$TESTSONG/patch.json"
+}
+
+cmd_parity() {
+  ensure_demo_venv
+  ensure_pkg_venvs
+  [ -x "$PFS_VENV/bin/python" ] || { echo "先运行: scripts/dev.sh setup-pfs" >&2; exit 1; }
+  ensure_testsong
+
+  echo "==> 环境指纹校验（不符即中止，spec §3.2）"
+  "$PFS_VENV/bin/python" -m lmdj_audio_worker.envcheck \
+    "$DEMO/.venv" "$PFS_VENV" --constraints "$CONSTRAINTS"
+
+  local tmp; tmp="$(mktemp -d)"
+  echo "==> 旧 pipeline（demo venv，cached stems 跳过 demucs）"
+  mkdir -p "$tmp/old/parity/stems"
+  cp "$TESTSONG/stems/"*.wav "$tmp/old/parity/stems/"
+  (cd "$DEMO" && .venv/bin/song-pipeline run "$TESTSONG/input.wav" \
+    --out "$tmp/old" --song-id parity --fast)
+
+  echo "==> 新 PipelineFromStems（pfs venv，同一组 stems）"
+  "$PFS_VENV/bin/python" -m lmdj_audio_worker.pipeline_from_stems \
+    --stems "$tmp/old/parity/stems" --out "$tmp/new" --song-id parity
+
+  echo "==> parity 比较"
+  "$PFS_VENV/bin/python" -m lmdj_audio_worker.pipeline_from_stems.parity \
+    "$tmp/old/parity" "$tmp/new/parity"
+
+  echo "==> Patchify 两侧 + patch_id 一致性"
+  "$PATCHIFY/.venv/bin/lmdj-patchify" "$tmp/old/parity"
+  "$PATCHIFY/.venv/bin/lmdj-patchify" "$tmp/new/parity"
+  "$PATCHIFY/.venv/bin/python" - "$tmp/old/parity/patch.json" "$tmp/new/parity/patch.json" <<'EOF'
+import json, sys
+a, b = (json.load(open(p)) for p in sys.argv[1:3])
+assert a["patch_id"] == b["patch_id"], f"patch_id 不一致: {a['patch_id']} vs {b['patch_id']}"
+print(f"patch_id 一致: {a['patch_id']}")
+EOF
+  echo "==> parity PASS（临时输出保留在 ${tmp}）"
 }
 
 summarize() {
@@ -117,6 +176,8 @@ cmd="${1:-}"
 case "$cmd" in
   setup)      cmd_setup ;;
   setup-demo) cmd_setup_demo ;;
+  setup-pfs)  cmd_setup_pfs ;;
+  parity)     cmd_parity ;;
   test)       cmd_test ;;
   patchify)   cmd_patchify "$@" ;;
   song)       cmd_song "$@" ;;
