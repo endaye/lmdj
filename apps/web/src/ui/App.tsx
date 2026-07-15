@@ -60,6 +60,12 @@ export function App({
     [engine],
   );
 
+  // 退出当前 patch，停掉播放，回到上传页换一首歌
+  const backToUpload = useCallback(() => {
+    if (engine.playing) engine.stop();
+    setState({ phase: "landing", issues: null });
+  }, [engine]);
+
   const handleFiles = useCallback(
     async (files: Map<string, ArrayBuffer>) => {
       try {
@@ -108,7 +114,10 @@ export function App({
   if (state.phase === "uploading") {
     return (
       <div className="app">
-        <h1>LMDJ PATCH VIEW</h1>
+        <header className="topbar">
+          <Wordmark />
+          <span className="standby">working</span>
+        </header>
         <UploadingView
           state={state.state}
           error={state.error}
@@ -121,13 +130,36 @@ export function App({
   if (state.phase === "landing") {
     return (
       <div className="app">
-        <h1>LMDJ PATCH VIEW</h1>
-        <DropZone
-          onFiles={(f) => void handleFiles(f)}
-          onExample={() => void fetchExample().then(handleFiles, fail)}
-        />
-        <UploadPanel onUpload={(base, file) => void handleUpload(base, file)} />
-        {state.issues && <ErrorPanel issues={state.issues} />}
+        <header className="topbar">
+          <Wordmark />
+          <span className="standby">standby</span>
+        </header>
+        <div className="landing">
+          <div className="hero">
+            <div>
+              <h1 className="hero-title">
+                把一首歌变成<em>八个可演奏的 pad</em>
+              </h1>
+              <p className="hero-sub">
+                载入一个 patch,唤醒这台乐器。四个 pad 按乐器角色配色,敲键、静音、跟着步进谱现场演奏。
+              </p>
+            </div>
+            <div className="ghost-grid" aria-hidden="true">
+              {GHOST_SLOTS.map((slot, i) => (
+                <div key={slot} className="ghost-pad">
+                  <span>{PAD_KEYS[i]}</span>
+                  <span>{slot}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+          <DropZone
+            onFiles={(f) => void handleFiles(f)}
+            onExample={() => void fetchExample().then(handleFiles, fail)}
+          />
+          <UploadPanel onUpload={(base, file) => void handleUpload(base, file)} />
+          {state.issues && <ErrorPanel issues={state.issues} />}
+        </div>
       </div>
     );
   }
@@ -141,14 +173,41 @@ export function App({
           质量分未过阈（status: rejected）——仍可播放，仅作提示
         </div>
       )}
-      <Transport engine={engine} bundle={bundle} />
+      <header className="topbar">
+        <Wordmark />
+        <div className="topbar-actions">
+          <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
+            ⏏ 上传新歌
+          </button>
+          <Transport engine={engine} bundle={bundle} />
+        </div>
+      </header>
       <div className="workstation">
-        <PadGrid engine={engine} bundle={bundle} />
-        <Inspector bundle={bundle} />
+        <section className="panel">
+          <h2 className="panel-title">Performance</h2>
+          <PadGrid engine={engine} bundle={bundle} />
+        </section>
+        <aside className="panel">
+          <Inspector bundle={bundle} />
+        </aside>
         <div className="workstation-bottom">
-          <StepGrid engine={engine} bundle={bundle} />
+          <section className="panel">
+            <h2 className="panel-title">Sequence</h2>
+            <StepGrid engine={engine} bundle={bundle} />
+          </section>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** 固定 8-pad Focus View 的槽位名 —— 待机态虚影乐器复用 */
+const GHOST_SLOTS = ["Drums", "Bass", "Harmony", "Lead", "Fill", "Drop", "Mute", "FX"];
+
+function Wordmark() {
+  return (
+    <div className="wordmark">
+      LMDJ<span className="wordmark-sub">patch view</span>
     </div>
   );
 }

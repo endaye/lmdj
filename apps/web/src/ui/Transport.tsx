@@ -18,9 +18,13 @@ export function Transport({
       >
         {engine.playing ? "■" : "▶"}
       </button>
-      <span>BPM {bundle.patch.bpm}</span>
-      <span>loop {bundle.patch.loop_seconds}s</span>
-      <span>patch: {bundle.patch.patch_id}</span>
+      <span className="transport-readout">
+        BPM <b>{bundle.patch.bpm}</b>
+      </span>
+      <span className="transport-readout">
+        loop <b>{bundle.patch.loop_seconds}s</b>
+      </span>
+      <span className="transport-id">{bundle.patch.patch_id}</span>
     </div>
   );
 }

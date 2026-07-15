@@ -41,6 +41,15 @@ describe("App", () => {
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
   });
 
+  it("returns to the upload screen from the workstation via the eject button", async () => {
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-grid")).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("back-to-upload"));
+    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+  });
+
   it("shows the error panel on schema-invalid patch and stays on landing", async () => {
     const broken = structuredClone(golden) as unknown as Patch;
     (broken.pads[0] as { action: string }).action = "nope";

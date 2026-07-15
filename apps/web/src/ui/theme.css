@@ -1,10 +1,36 @@
+/* ============================================================================
+   LMDJ Patch View — a browser groovebox.
+   Body = anodized graphite instrument. All color lives in the pads, coded by
+   musical lane (drums/bass/harmony/lead), the way Ableton Push / NI Maschine
+   code their RGB pads. Everything else stays quiet, monochrome, silkscreened.
+   ========================================================================== */
+
 :root {
-  --bg: #000;
-  --green: #33ff66;
-  --green-dim: #1a8038;
-  --red: #ff4444;
-  --yellow: #ffcc33;
-  --gray: #555;
+  /* Instrument body — layered graphite, never pure black */
+  --panel: #14151a;
+  --panel-2: #191b21;
+  --well: #0c0d11;
+  --raised: #24262e;
+  --edge: #303441;
+
+  /* Silkscreen ink */
+  --ink: #d3d7e0;
+  --ink-dim: #767c88;
+  --ink-faint: #4b4f5a;
+
+  /* Lane color system — the one place boldness is spent */
+  --lane-drums: #ff7a45;
+  --lane-bass: #b15cff;
+  --lane-harmony: #34d8c0;
+  --lane-lead: #ffd23d;
+
+  /* Utility */
+  --warn: #ffc24b;
+  --alert: #ff5470;
+
+  --radius: 10px;
+  --radius-sm: 6px;
+
   color-scheme: dark;
 }
 
@@ -12,108 +38,517 @@
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--green);
-  font-family: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+  min-height: 100vh;
+  background:
+    radial-gradient(120% 90% at 50% -10%, #1b1d24 0%, var(--panel) 46%, #101116 100%);
+  color: var(--ink);
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
   font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
 button {
   font: inherit;
-  color: inherit;
-  background: transparent;
-  border: 1px solid var(--green);
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: 8px 14px;
   cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
 }
-button:hover { background: rgba(51, 255, 102, 0.12); }
+button:hover { background: #2b2e37; border-color: #454a59; }
+button:active { transform: translateY(1px); }
+button:disabled { opacity: 0.4; cursor: not-allowed; }
+button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2px; }
 
-.app { max-width: 1080px; margin: 0 auto; padding: 16px; }
+.app {
+  max-width: 1120px;
+  margin: 0 auto;
+  padding: 20px 20px 48px;
+}
+
+/* --- Top rail: wordmark + transport ---------------------------------------- */
+
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding-bottom: 18px;
+  margin-bottom: 22px;
+  border-bottom: 1px solid var(--edge);
+}
+
+.wordmark {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 700;
+  font-size: 22px;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+}
+.wordmark::before {
+  /* power indicator — the instrument's pilot light */
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  align-self: center;
+  background: var(--lane-harmony);
+  box-shadow: 0 0 8px var(--lane-harmony);
+}
+.wordmark-sub {
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 500;
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+
+.standby {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border: 1px solid var(--edge);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+.topbar-actions { display: flex; align-items: center; gap: 12px; }
+
+/* Eject — leave the current patch, load another song */
+.btn-eject {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--ink-dim);
+  background: transparent;
+  border: 1px solid var(--edge);
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+.btn-eject:hover { color: var(--ink); border-color: #454a59; background: var(--raised); }
+
+/* --- Transport (reads as an LCD strip) ------------------------------------- */
+
+.transport {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  color: var(--ink-dim);
+  background: var(--well);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px 6px 6px;
+  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6);
+}
+.transport button {
+  width: 40px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  background: var(--raised);
+  color: var(--lane-harmony);
+}
+.transport button:hover { background: #2b2e37; }
+.transport-readout { color: var(--ink-dim); }
+.transport-readout b { color: var(--ink); font-weight: 600; }
+.transport-id { color: var(--ink-faint); }
+
+/* --- Landing --------------------------------------------------------------- */
+
+.landing { display: flex; flex-direction: column; gap: 18px; }
+
+.hero {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 32px;
+  padding: 28px 4px 30px;
+}
+.hero-title {
+  margin: 0 0 10px;
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: clamp(26px, 4.5vw, 40px);
+  line-height: 1.08;
+  letter-spacing: 0.01em;
+  color: var(--ink);
+}
+.hero-title em {
+  font-style: normal;
+  color: var(--lane-harmony);
+}
+.hero-sub {
+  margin: 0;
+  max-width: 42ch;
+  color: var(--ink-dim);
+  font-size: 15px;
+}
+
+/* Ghost instrument — 8 unlit pads previewing what a patch wakes up */
+.ghost-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 60px);
+  grid-auto-rows: 60px;
+  gap: 8px;
+}
+.ghost-pad {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, var(--panel-2), var(--well));
+  border: 1px solid var(--edge);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), inset 0 -6px 12px rgba(0, 0, 0, 0.5);
+  display: grid;
+  place-items: center;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--ink-faint);
+  text-align: center;
+  padding: 4px;
+}
+
+/* --- Drop zone ------------------------------------------------------------- */
 
 .drop-zone {
-  border: 1px dashed var(--green-dim);
-  padding: 48px 24px;
+  border: 1.5px dashed var(--edge);
+  border-radius: var(--radius);
+  padding: 30px 24px;
   text-align: center;
-  white-space: pre;
-  margin-bottom: 16px;
+  background: rgba(255, 255, 255, 0.012);
+  transition: border-color 140ms ease, background 140ms ease;
 }
-.drop-zone--over { border-color: var(--green); background: rgba(51, 255, 102, 0.06); }
+.drop-zone pre,
+.drop-zone > div:first-child {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--ink-dim);
+  white-space: pre;
+  margin: 0 0 8px;
+  font-size: 12px;
+}
+.drop-zone p { display: flex; gap: 10px; justify-content: center; margin: 12px 0 0; }
+.drop-zone--over {
+  border-color: var(--lane-harmony);
+  background: rgba(52, 216, 192, 0.06);
+}
+
+/* --- API upload panel ------------------------------------------------------ */
+
+.upload-panel {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 460px;
+}
+.upload-panel-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.api-base,
+.upload-panel input[type="file"] {
+  font: inherit;
+  color: var(--ink);
+  background: var(--well);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+}
+.api-base { font-family: "IBM Plex Mono", monospace; font-size: 13px; }
+.upload-panel input[type="file"]::file-selector-button {
+  font: inherit;
+  margin-right: 10px;
+  color: var(--ink);
+  background: var(--raised);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-sm);
+  padding: 5px 10px;
+  cursor: pointer;
+}
+.upload-panel button:not(::file-selector-button) { align-self: flex-start; }
+
+/* --- Feedback strips ------------------------------------------------------- */
 
 .error-panel {
-  border: 1px solid var(--red);
-  color: var(--red);
-  padding: 12px;
-  margin-top: 16px;
+  border: 1px solid var(--alert);
+  border-radius: var(--radius-sm);
+  color: var(--alert);
+  background: rgba(255, 84, 112, 0.06);
+  padding: 12px 14px;
   white-space: pre-wrap;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
 }
 
 .banner-rejected {
-  border: 1px solid var(--yellow);
-  color: var(--yellow);
-  padding: 8px 12px;
-  margin-bottom: 12px;
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-sm);
+  color: var(--warn);
+  background: rgba(255, 194, 75, 0.07);
+  padding: 10px 14px;
+  margin-bottom: 16px;
+  font-size: 13px;
 }
 
-.workstation { display: grid; grid-template-columns: 1fr 320px; gap: 16px; }
+/* --- Workstation layout ---------------------------------------------------- */
+
+.workstation {
+  display: grid;
+  grid-template-columns: 1fr 340px;
+  gap: 20px;
+  align-items: start;
+}
 .workstation-bottom { grid-column: 1 / -1; }
 
-.transport { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
-.transport button { width: 48px; height: 32px; }
+.panel {
+  background: var(--panel-2);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.panel-title {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 0 0 14px;
+}
 
-.pad-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+/* --- The pad — the signature element --------------------------------------- */
+
+.pad-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+
 .pad {
+  --lane: var(--edge); /* default: unlit graphite */
+  position: relative;
   aspect-ratio: 1;
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  border: 1px solid var(--green);
-  user-select: none;
-}
-.pad-key { font-size: 11px; opacity: 0.7; }
-.pad-slot { font-size: 11px; opacity: 0.7; }
-.pad-label { font-weight: bold; }
-.pad--empty { border-color: var(--green-dim); color: var(--green-dim); }
-.pad--reserved { border-color: var(--gray); color: var(--gray); cursor: default; }
-.pad--reserved:hover { background: transparent; }
-.pad--muted { border-color: var(--green-dim); color: var(--green-dim); }
-.pad--muted .pad-label { text-decoration: line-through; }
-.pad--error { border-color: var(--red); color: var(--red); }
-.pad--flash { background: rgba(51, 255, 102, 0.35); }
-
-.inspector { border: 1px solid var(--green-dim); padding: 12px; font-size: 12px; }
-.inspector h3 { margin: 0 0 8px; font-size: 12px; }
-.inspector .missing { color: var(--red); }
-.inspector .warn { color: var(--yellow); }
-
-.step-grid { border: 1px solid var(--green-dim); padding: 12px; overflow-x: auto; }
-.step-grid table { border-collapse: collapse; }
-.step-grid td, .step-grid th { padding: 0 1px; font-size: 13px; text-align: center; }
-.step-grid th { text-align: right; padding-right: 8px; font-weight: normal; }
-.step-missing { color: var(--red); }
-.step-playhead { background: var(--green); color: var(--bg); }
-
-.upload-panel {
-  margin-top: 16px;
-  border: 1px solid var(--green-dim);
+  align-items: flex-start;
+  justify-content: flex-end;
+  gap: 3px;
   padding: 12px;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--lane) 40%, var(--edge));
+  border-radius: var(--radius);
+  color: var(--ink);
+  user-select: none;
+  /* seated in a well: top light + inner floor shadow */
+  background:
+    radial-gradient(140% 120% at 50% 0%, color-mix(in srgb, var(--lane) 16%, var(--panel-2)) 0%, var(--well) 78%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.05),
+    inset 0 -10px 20px rgba(0, 0, 0, 0.55),
+    0 2px 4px rgba(0, 0, 0, 0.4);
+  transition: transform 90ms ease, box-shadow 90ms ease, background 140ms ease,
+    border-color 140ms ease;
+}
+.pad:hover {
+  border-color: color-mix(in srgb, var(--lane) 70%, var(--edge));
+}
+.pad:focus-visible { outline: 2px solid var(--lane); outline-offset: 2px; }
+
+.pad[data-lane="drums"] { --lane: var(--lane-drums); }
+.pad[data-lane="bass"] { --lane: var(--lane-bass); }
+.pad[data-lane="harmony"] { --lane: var(--lane-harmony); }
+.pad[data-lane="lead"] { --lane: var(--lane-lead); }
+
+.pad-key {
+  position: absolute;
+  top: 10px;
+  right: 11px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-dim);
+}
+.pad-slot {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: color-mix(in srgb, var(--lane) 75%, var(--ink-dim));
+}
+.pad-label {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.1;
+}
+
+/* States */
+.pad--empty,
+.pad--reserved {
+  --lane: var(--edge);
+  color: var(--ink-faint);
+  background: linear-gradient(180deg, var(--panel-2), var(--well));
+}
+.pad--reserved { cursor: default; }
+.pad--reserved:hover { border-color: var(--edge); }
+.pad--reserved .pad-slot,
+.pad--empty .pad-slot { color: var(--ink-faint); }
+
+.pad--muted { opacity: 0.5; }
+.pad--muted .pad-label { text-decoration: line-through; text-decoration-thickness: 1px; }
+
+.pad--error {
+  --lane: var(--alert);
+  color: var(--alert);
+}
+.pad--error .pad-slot { color: var(--alert); }
+
+/* Bloom on trigger — the one memorable, tactile moment */
+.pad--flash {
+  transform: translateY(2px);
+  background: radial-gradient(140% 130% at 50% 0%, var(--lane) 0%,
+    color-mix(in srgb, var(--lane) 50%, var(--well)) 100%);
+  border-color: var(--lane);
+  color: #0c0d11;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    0 0 24px color-mix(in srgb, var(--lane) 65%, transparent),
+    0 2px 4px rgba(0, 0, 0, 0.4);
+}
+.pad--flash .pad-slot,
+.pad--flash .pad-key { color: rgba(12, 13, 17, 0.75); }
+
+/* --- Inspector — a spec plate ---------------------------------------------- */
+
+.inspector { font-size: 12px; }
+.inspector h3 {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+  margin: 16px 0 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--edge);
+}
+.inspector h3:first-child { margin-top: 0; }
+.inspector > div {
+  font-family: "IBM Plex Mono", monospace;
+  color: var(--ink-dim);
+  padding: 2px 0;
+}
+.inspector ul { list-style: none; padding: 0; margin: 0; }
+.inspector li {
+  font-family: "IBM Plex Mono", monospace;
+  padding: 3px 0;
+  color: var(--ink);
+  border-bottom: 1px dotted var(--edge);
+}
+.inspector li:last-child { border-bottom: none; }
+.inspector .missing { color: var(--alert); }
+.inspector .warn { color: var(--warn); }
+
+/* --- Sequencer — LED step lanes -------------------------------------------- */
+
+.step-grid { overflow-x: auto; }
+.step-grid table { border-collapse: separate; border-spacing: 3px; width: 100%; }
+.step-grid th {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  text-align: right;
+  padding-right: 12px;
+  font-weight: 500;
+  color: var(--ink-dim);
+  white-space: nowrap;
+}
+.step-grid td {
+  width: 20px;
+  height: 20px;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 0; /* hide the raw glyph; the cell IS the LED */
+  border-radius: 3px;
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+/* lit step: colored LED (glyph is █; we render the cell itself) */
+.step-grid td.step-on {
+  background: var(--lane-harmony);
+  box-shadow: 0 0 8px color-mix(in srgb, var(--lane-harmony) 55%, transparent);
+}
+.step-row-drums td.step-on { background: var(--lane-drums); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-drums) 55%, transparent); }
+.step-row-bass td.step-on { background: var(--lane-bass); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-bass) 55%, transparent); }
+.step-row-harmony td.step-on { background: var(--lane-harmony); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-harmony) 55%, transparent); }
+.step-row-lead td.step-on { background: var(--lane-lead); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-lead) 55%, transparent); }
+.step-grid td.step-playhead {
+  box-shadow: inset 0 0 0 1px var(--ink), 0 0 10px rgba(211, 215, 224, 0.4);
+}
+.step-missing th { color: var(--alert); }
+.step-missing td { box-shadow: inset 0 0 0 1px var(--alert); }
+
+/* --- Uploading / processing ------------------------------------------------ */
+
+.uploading { padding: 40px 4px; }
+.uploading-title {
+  font-family: "Chakra Petch", sans-serif;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  font-size: 20px;
+  margin-bottom: 22px;
+}
+.stages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
   display: flex;
-  flex-direction: column;
-  gap: 8px;
+  flex-wrap: wrap;
+  gap: 10px;
 }
-.upload-panel-title { font-size: 12px; opacity: 0.8; }
-.api-base {
-  font: inherit;
-  color: var(--green);
-  background: #000;
-  border: 1px solid var(--green-dim);
-  padding: 4px 6px;
+.stage {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--edge);
+  color: var(--ink-faint);
 }
-.uploading { padding: 32px 16px; }
-.uploading-title { margin-bottom: 16px; }
-.stages { list-style: none; padding: 0; display: flex; gap: 16px; }
-.stage { text-transform: uppercase; font-size: 13px; }
-.stage--done { color: var(--green-dim); }
-.stage--current { color: var(--green); font-weight: bold; }
-.stage--pending { color: var(--gray); }
-.uploading-error { color: var(--red); margin: 16px 0; white-space: pre-wrap; }
+.stage--done { color: var(--ink-dim); border-color: var(--edge); }
+.stage--current {
+  color: #0c0d11;
+  background: var(--lane-harmony);
+  border-color: var(--lane-harmony);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--lane-harmony) 45%, transparent);
+}
+.stage--pending { color: var(--ink-faint); }
+.uploading-error { color: var(--alert); margin: 22px 0; white-space: pre-wrap; font-family: "IBM Plex Mono", monospace; }
+
+/* --- Responsive ------------------------------------------------------------ */
+
+@media (max-width: 760px) {
+  .workstation { grid-template-columns: 1fr; }
+  .hero { grid-template-columns: 1fr; }
+  .ghost-grid { grid-template-columns: repeat(4, 1fr); grid-auto-rows: auto; }
+  .ghost-pad { aspect-ratio: 1; }
+  .topbar { flex-wrap: wrap; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition: none !important; animation: none !important; }
+}

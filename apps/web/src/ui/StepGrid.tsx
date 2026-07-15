@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { AudioEngine } from "../engine/AudioEngine";
-import { scenePatterns, type PatchBundle } from "../patch/loader";
+import { padElementIds, scenePatterns, type PatchBundle } from "../patch/loader";
+
+/** pad 0-3 的语义槽 → 步进格 LED 的 lane 配色(与 PadGrid 四色对齐) */
+const PAD_LANE_CLASS = ["step-row-drums", "step-row-bass", "step-row-harmony", "step-row-lead"];
 
 export function StepGrid({
   engine,
@@ -16,6 +19,16 @@ export function StepGrid({
     const id = setInterval(() => setPlayhead(engine.playhead()), 50);
     return () => clearInterval(id);
   }, [engine]);
+
+  // element_id → lane 配色类;由 pad 0-3 的归属决定(数字 lane 字段不带语义)
+  const laneClass = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const pad of bundle.patch.pads) {
+      const cls = PAD_LANE_CLASS[pad.index];
+      if (cls) for (const id of padElementIds(pad)) m.set(id, cls);
+    }
+    return (id: string) => m.get(id) ?? "step-row-harmony";
+  }, [bundle.patch]);
 
   const rows = useMemo(() => {
     const byElement = new Map<string, Set<number>>();
@@ -36,14 +49,24 @@ export function StepGrid({
             <tr
               key={element.element_id}
               data-testid={`step-row-${element.element_id}`}
-              className={bundle.missingElementIds.has(element.element_id) ? "step-missing" : ""}
+              className={`${laneClass(element.element_id)}${
+                bundle.missingElementIds.has(element.element_id) ? " step-missing" : ""
+              }`}
             >
               <th>{element.name}</th>
-              {Array.from({ length: pattern.length_steps }, (_, step) => (
-                <td key={step} className={step === playhead ? "step-playhead" : ""}>
-                  {steps.has(step) ? "█" : "·"}
-                </td>
-              ))}
+              {Array.from({ length: pattern.length_steps }, (_, step) => {
+                const on = steps.has(step);
+                return (
+                  <td
+                    key={step}
+                    className={`${on ? "step-on" : ""}${
+                      step === playhead ? " step-playhead" : ""
+                    }`}
+                  >
+                    {on ? "█" : "·"}
+                  </td>
+                );
+              })}
             </tr>
           ))}
         </tbody>
