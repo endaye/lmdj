@@ -56,7 +56,7 @@ canonical four stems
 因此 `PipelineFromStemsRunner` 采用与 separator runner 相同的模式：
 
 - 代码位于 `workers/audio/lmdj_audio_worker/pipeline_from_stems/`，但运行在**自己的专用 venv** 中，由 orchestrator / worker 以子进程调用；
-- 该 venv 的 `librosa` / `numpy` / `scikit-learn` / `soundfile` / `pretty_midi` **锁定为与 demo venv 相同的版本**（parity 的前提条件，见 3.2），lock 文件入库，其 hash 计入 benchmark 的 config hash；
+- 版本锁的单一来源是**入库的 parity constraints 文件**（`workers/audio/config/parity-constraints.txt`），pin 死 `librosa` / `numpy` / `scikit-learn` / `soundfile` / `pretty_midi` 等 DSP 关键库的精确版本；PipelineFromStems venv 和 parity 用的 demo baseline venv **都从这份 constraints 创建**（demo 的 `pyproject.toml` 大部分依赖未 pin，"锁定为与 demo venv 相同版本"只锚定机器本地产物，不可复现；constraints 只作用于安装期，不修改 demo 代码，与 demo 冻结原则不冲突）。constraints 的 hash 计入 benchmark 的 config hash；
 - 主包只保留轻量的协议层（构造命令、读取结果 JSON），与现有 `DemoPipelineRunner` 子进程模式一致。
 
 ### 3.2 Parity 门槛
@@ -65,7 +65,7 @@ canonical four stems
 
 下述数值容差**只在满足两个前提时才有效**，实施时不得以环境差异为由放宽容差本身：
 
-- **同版本**：新侧 venv 的 `librosa` / `numpy` / `scikit-learn` / `soundfile` / `pretty_midi` 与 demo venv 锁定同版本（librosa 的 beat tracking、sklearn KMeans 的 `n_init` 语义均跨版本漂移）；
+- **同版本**：新旧两侧 venv 都从 3.1 的入库 parity constraints 创建（librosa 的 beat tracking、sklearn KMeans 的 `n_init` 语义均跨版本漂移）；parity 运行前必须校验两侧环境指纹（关键库 `pip freeze` 结果与 constraints 一致），指纹不符即中止，不得带病比较；
 - **同平台**：parity 是同一台机器上的比较，不做跨平台（Mac vs Linux 的 BLAS/浮点路径差异可超出容差）。
 
 除耗时字段外，必须满足：
@@ -119,6 +119,7 @@ workers/audio/lmdj_audio_worker/
 workers/audio/config/
   separators.json
   benchmark-targets.json
+  parity-constraints.txt   # DSP 关键库版本锁，见 3.1
 workers/audio/tests/
   separation/
   benchmark/
@@ -180,12 +181,24 @@ runner 必须写出 `separation.json`，schema 版本为 `lmdj.separation.v1`，
 
 `peak_device_memory_bytes` 在 CPU 设备上固定写 `0`（不是省略、不是 null），保证字段 schema 稳定。
 
-失败时 runner 仍必须写出 `separation.json`，形态为：
+MPS 设备内存采集算法必须固定，否则 75% 内存硬门槛不可复现——PyTorch 的 MPS 后端没有 CUDA 式的 peak API，只有 `torch.mps.current_allocated_memory()` 和 `torch.mps.driver_allocated_memory()`：
+
+- runner 在推理期间以固定间隔（100 ms）后台采样两个字段；
+- `peak_device_memory_bytes` = 采样期间 `driver_allocated_memory()` 的最大值（取 driver 侧是因为它含缓存池，更接近真实占用；`current_allocated_memory()` 的最大值同时记入 performance 附加字段供参考）；
+- 采样间隔与两个原始最大值都写入 `performance`，报告注明采样式采集会低估真峰值，属已知固有误差，门槛判定统一用同一算法即可比。
+
+失败记录分两级产生——OOM/SIGKILL/超时会让 runner 在写文件前直接消失，不能假设失败 JSON 总是由 runner 写出：
+
+- **runner 自写**：runner 能正常捕获的异常（下载失败、checksum 不符、推理报错、stems 校验失败等），由 runner 自己写出失败 `separation.json`；
+- **orchestrator 合成**：runner 退出后 `separation.json` 缺失、损坏或 schema 不合法，以及 orchestrator 主动 timeout/kill 的场景，由 orchestrator 根据退出码、timeout 与 stderr tail 合成同 schema 的规范化失败记录，并标注 `"source": "orchestrator"`（runner 自写记录 `"source": "runner"`）。
+
+失败 `separation.json` 形态为：
 
 ```json
 {
   "schema_version": "lmdj.separation.v1",
   "status": "failed",
+  "source": "orchestrator",
   "input_sha256": "...",
   "separator": { "id": "...", "family": "...", "checkpoint_sha256": "...", "runner_version": "..." },
   "requested_device": "mps",
@@ -199,7 +212,7 @@ runner 必须写出 `separation.json`，schema 版本为 `lmdj.separation.v1`，
 }
 ```
 
-`error.category` 取值来自第 10 节的统一错误类别。失败包不含 `stems` 字段；orchestrator 以 `status` 判定，不以文件存在性推断。
+（`exit_code: 137` 即 SIGKILL——这正是必须由 orchestrator 合成的典型场景。）`error.category` 取值来自第 10 节的统一错误类别。失败包不含 `stems` 字段。成功记录以 runner 写出的 `status: "completed"` 为准；文件缺失或不合法一律按失败合成，不以 stems 文件存在性推断成功。
 
 Canonical package 硬约束：
 
@@ -296,7 +309,7 @@ lmdj-audio-worker benchmark \
 两平台分工不同，不重复全量质量评测：
 
 - **Mac MPS**：执行完整客观质量评测（MUSDB18HQ 全量 + 真实歌曲集全量）；
-- **Linux CPU**：只执行 smoke + 性能采样子集（manifest 中标记 `perf` split 的代表性 track），产出 RTF 与 peak RSS 硬门槛数据。RoFormer 类模型 CPU RTF 常见 5–20× 实时，四模型全量 MUSDB18HQ 在 16 GiB CPU VM 上耗时以天计，收益为零。
+- **Linux CPU**：只执行 smoke + 性能采样子集（manifest 中标记 `perf` split 的代表性 track），产出 RTF 与 peak RSS 硬门槛数据。RoFormer 类模型 CPU RTF 常见 5–20× 实时，四模型全量 MUSDB18HQ 在 16 GiB CPU VM 上耗时以天计，收益为零。`perf` 子集既然已承担完整推理成本，**同批 track 也计算客观分轨指标与 Patch 指标**（指标计算相对推理是零头），并与 Mac 同 track 结果对照作为平台一致性检查；显著偏差记入报告并标记该 checkpoint 待查。这些指标仅作诊断，**综合分仍只由 Mac 全量 run 计算**，两平台分数不混算。
 
 两个 run 使用同一份 manifest snapshot，可合并为一份跨平台报告。每个 track×checkpoint 组合有默认 per-track timeout（CPU 建议 30× 实时时长，MPS 建议 10×），超时按第 10 节 `timeout` 类别记录并继续。
 
@@ -380,8 +393,9 @@ input sha256
 - 完整评测执行成功率至少 95%；
 - LMDJ Patch passed rate 不得比同 run 的 HT Demucs baseline 低超过 5 个百分点；
 - checkpoint 来源、revision、checksum 和许可完整；
+- 未触发 9.3 的盲听否决规则（任一 checkpoint 触发否决即不得晋级 production，与总分无关）；
 - Linux CPU 目标为 16 GiB VM，单 job peak RSS 不得超过 12 GiB；
-- Mac 以 process peak RSS 与 `torch.mps` peak allocated memory 中较高者计算，不得超过目标机器物理内存的 75%；
+- Mac 以 process peak RSS 与按第 5 节采样算法得到的 `peak_device_memory_bytes` 中较高者计算，不得超过目标机器物理内存的 75%；
 - 任何硬门槛失败都不得用综合总分抵消。
 
 ## 10. 错误模型与设备策略
@@ -440,6 +454,8 @@ Job status、`report.json` 和最终 Patch metadata 记录：
 ### 12.1 自动测试
 
 - `lmdj.separation.v1` contract 的成功和错误边界（含 `status: "failed"` 形态与错误类别映射）；
+- orchestrator 对缺失/损坏/timeout 场景合成失败记录（`source: "orchestrator"`）；
+- parity 运行前的环境指纹校验（指纹不符必须中止）；
 - 兼容层对 `vocals_strategy = drop` 的显式拒绝；
 - registry schema、状态转换、未知字段、重复 ID、许可/checksum 缺失；
 - 缓存 key、checksum 损坏、atomic download、`--fresh`；
@@ -468,7 +484,7 @@ Phase 0B  PipelineFromStemsRunner + frozen-stems parity
 Phase 1A  HT Demucs + SCNet runners
 Phase 1B  BS-RoFormer + Mel-Band RoFormer runners与checkpoint门禁
 Phase 1C  dataset manifests + metrics + report + blind listening package
-Phase 1D  Mac MPS / Linux CPU 双平台完整 benchmark
+Phase 1D  Mac MPS 完整 benchmark + Linux CPU 子集验证
 Review    根据原始报告与硬门槛批准 production checkpoint
 Phase 2A  Audio Worker 接入选定 separator
 Phase 2B  API selector + status/metadata + GET /separators

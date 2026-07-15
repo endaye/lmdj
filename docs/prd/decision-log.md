@@ -72,8 +72,8 @@
 
 ### 已确认：PipelineFromStemsRunner 独立 venv，DSP 栈不进 workers/audio 主包
 
-- 结论：从参考 demo 迁移的 pipeline 阶段 3–6（beat/loop/slicer/sequencer/validation）代码落在 `workers/audio/lmdj_audio_worker/pipeline_from_stems/`，但运行在自己的专用 venv 中、以子进程调用；`workers/audio` 主包 `dependencies` 保持为空，只保留协议层。该 venv 的 `librosa`/`numpy`/`scikit-learn`/`soundfile`/`pretty_midi` 锁定为与 demo venv 相同版本，lock 文件入库。
-- 原因：DSP 栈（librosa 含 numba、numpy<2）若进主包，会经 `apps/api` 的 path dep 传染进 API venv，破坏既有重依赖隔离决策；同版本锁定又是新旧 pipeline parity 数值容差（1e-4/1e-5）成立的前提。
+- 结论：从参考 demo 迁移的 pipeline 阶段 3–6（beat/loop/slicer/sequencer/validation）代码落在 `workers/audio/lmdj_audio_worker/pipeline_from_stems/`，但运行在自己的专用 venv 中、以子进程调用；`workers/audio` 主包 `dependencies` 保持为空，只保留协议层。DSP 关键库版本以入库的 parity constraints 文件为单一来源，PipelineFromStems venv 和 parity 用的 demo baseline venv 都从它创建，运行前校验环境指纹。
+- 原因：DSP 栈（librosa 含 numba、numpy<2）若进主包，会经 `apps/api` 的 path dep 传染进 API venv，破坏既有重依赖隔离决策；同版本锁定又是新旧 pipeline parity 数值容差（1e-4/1e-5）成立的前提，而 demo `pyproject.toml` 依赖多数未 pin，只锁新侧锚定的是机器本地产物、不可复现。
 - 影响：与现有 `DemoPipelineRunner`、separator runner 统一为"子进程 + 独立 venv"模式；parity 只做同平台比较；详见多分轨 benchmark spec §3.1/§3.2（2026-07-15）。
 
 ### 已确认：Phase 2A 后生产链路统一走新链，DemoPipelineRunner 退役
