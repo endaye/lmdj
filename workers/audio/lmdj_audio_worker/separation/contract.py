@@ -213,3 +213,50 @@ def load_result_file(path: Path) -> SeparationResult:
     except (OSError, json.JSONDecodeError) as exc:
         raise ContractError([f"无法读取 {path}: {exc}"]) from exc
     return SeparationResult.from_dict(data)
+
+
+def validate_canonical_stems(package_dir: Path, result: SeparationResult,
+                             expected_frames: int) -> list[str]:
+    """canonical package 音频级硬约束（spec §5）。需要 `pfs` extra。
+
+    expected_frames：输入音频的帧数（44.1 kHz 下），由调用方解码输入后提供。
+    """
+    import numpy as np
+    import soundfile as sf
+
+    errors: list[str] = []
+    stems = result.stems or {}
+    for name in CANONICAL_STEMS:
+        rel = stems.get(name)
+        if rel is None:
+            errors.append(f"{name}: result.stems 缺少该轨")
+            continue
+        path = package_dir / rel
+        if not path.exists():
+            errors.append(f"{name}: 文件不存在 {rel}")
+            continue
+        try:
+            info = sf.info(str(path))
+            data, sr = sf.read(str(path), dtype="float32", always_2d=True)
+        except Exception as exc:  # noqa: BLE001 —— 损坏文件统一转错误条目
+            errors.append(f"{name}: 无法读取（{exc}）")
+            continue
+        if info.subtype != "FLOAT":
+            errors.append(f"{name}: subtype={info.subtype}，要求 32-bit float (FLOAT)")
+        if sr != CANONICAL_SAMPLE_RATE:
+            errors.append(f"{name}: sample_rate={sr}，要求 {CANONICAL_SAMPLE_RATE}")
+        if data.shape[1] != CANONICAL_CHANNELS:
+            errors.append(f"{name}: channels={data.shape[1]}，要求 {CANONICAL_CHANNELS}")
+        if len(data) == 0:
+            errors.append(f"{name}: 空音频")
+            continue
+        if abs(len(data) - expected_frames) > 1:
+            errors.append(f"{name}: 长度 {len(data)} frames，"
+                          f"与输入 {expected_frames} 误差超过 1 sample")
+        if not np.isfinite(data).all():
+            errors.append(f"{name}: 含 NaN/Inf")
+        else:
+            peak = float(np.abs(data).max())
+            if peak > MAX_ABS_PEAK:
+                errors.append(f"{name}: 峰值 {peak:.3f} 超过 {MAX_ABS_PEAK}")
+    return errors
