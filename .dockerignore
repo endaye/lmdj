@@ -1,0 +1,11 @@
+**/.venv
+**/node_modules
+**/dist
+**/__pycache__
+**/*.egg-info
+**/jobs
+references/demos/lmdj-song-pipeline/output
+.git
+.worktrees
+.superpowers
+.playwright-mcp

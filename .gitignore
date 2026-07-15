@@ -71,5 +71,11 @@ apps/api/jobs/
 # Agent session scratch (SDD ledger, task briefs, review packages)
 .superpowers/
 
+# Local isolated git worktrees
+.worktrees/
+
+# Local deployment configuration
+.env
+
 # Playwright MCP cache
 .playwright-mcp/

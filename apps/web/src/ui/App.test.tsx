@@ -1,6 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
 import type { Patch } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
@@ -8,6 +8,8 @@ import { AudioEngine } from "../engine/AudioEngine";
 import { App } from "./App";
 import type { ApiClient, JobStatus } from "../api/client";
 import type { PatchBundle } from "../patch/loader";
+
+afterEach(() => vi.unstubAllEnvs());
 
 const enc = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).buffer as ArrayBuffer;
 const fakeDecode = async () => ({ fake: "buffer" });
@@ -103,6 +105,14 @@ describe("App API path", () => {
     renderAppWithApi(fakeApi());
     expect(screen.getByTestId("api-panel")).toBeInTheDocument();
     expect(screen.getByTestId("api-base-input")).toHaveValue("http://localhost:8000");
+  });
+
+  it("uses VITE_API_BASE for the default base when configured", () => {
+    vi.stubEnv("VITE_API_BASE", "/api");
+
+    renderAppWithApi(fakeApi());
+
+    expect(screen.getByTestId("api-base-input")).toHaveValue("/api");
   });
 
   it("upload → uploading view → loaded workstation", async () => {
