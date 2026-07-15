@@ -74,5 +74,8 @@ apps/api/jobs/
 # Local isolated git worktrees
 .worktrees/
 
+# Local deployment configuration
+.env
+
 # Playwright MCP cache
 .playwright-mcp/
