@@ -1,6 +1,6 @@
 # LMDJ 多分轨模型 Benchmark 与生产选型设计
 
-日期：2026-07-15
+日期：2026-07-15（同日 review 修订：依赖归属、parity 前提、平台分工、指标实现、盲听协议）
 状态：用户已确认设计，待实施计划
 范围：`workers/audio/` 正式产品边界；`references/demos/lmdj-song-pipeline/` 只作行为基线与迁移来源
 
@@ -49,9 +49,26 @@ canonical four stems
 
 阶段 3–6 的实现从参考 demo 迁移到 `workers/audio/`。参考 demo 保持冻结，只作为算法行为、fixture 和 parity 基线。
 
-### 3.1 Parity 门槛
+### 3.1 依赖归属：PipelineFromStemsRunner 独立 venv
 
-使用同一组固定 Demucs stems、固定 config 和固定随机种子，同时运行旧 pipeline 与 `PipelineFromStemsRunner`。除耗时字段外，必须满足：
+迁移的阶段 3–6 依赖整套 DSP 栈（`librosa`（含 numba）、`scikit-learn`、`soundfile`、`pretty_midi`、`numpy<2`）。这些依赖**不进** `workers/audio` 主包（其 `dependencies` 保持为空）——`apps/api` 以 path dep 安装 workers/audio，主包吃下 DSP 栈会把 numba/numpy<2 传染到 API venv，破坏既有的重依赖隔离决策。
+
+因此 `PipelineFromStemsRunner` 采用与 separator runner 相同的模式：
+
+- 代码位于 `workers/audio/lmdj_audio_worker/pipeline_from_stems/`，但运行在**自己的专用 venv** 中，由 orchestrator / worker 以子进程调用；
+- 该 venv 的 `librosa` / `numpy` / `scikit-learn` / `soundfile` / `pretty_midi` **锁定为与 demo venv 相同的版本**（parity 的前提条件，见 3.2），lock 文件入库，其 hash 计入 benchmark 的 config hash；
+- 主包只保留轻量的协议层（构造命令、读取结果 JSON），与现有 `DemoPipelineRunner` 子进程模式一致。
+
+### 3.2 Parity 门槛
+
+使用同一组固定 Demucs stems、固定 config 和固定随机种子，同时运行旧 pipeline 与 `PipelineFromStemsRunner`。
+
+下述数值容差**只在满足两个前提时才有效**，实施时不得以环境差异为由放宽容差本身：
+
+- **同版本**：新侧 venv 的 `librosa` / `numpy` / `scikit-learn` / `soundfile` / `pretty_midi` 与 demo venv 锁定同版本（librosa 的 beat tracking、sklearn KMeans 的 `n_init` 语义均跨版本漂移）；
+- **同平台**：parity 是同一台机器上的比较，不做跨平台（Mac vs Linux 的 BLAS/浮点路径差异可超出容差）。
+
+除耗时字段外，必须满足：
 
 - `report.status`、BPM、选中窗口、sample 数、note 数和 lane 名称一致；
 - validation score 绝对差不超过 `1e-4`；
@@ -92,7 +109,7 @@ workers/audio/lmdj_audio_worker/
       scnet.py
       bs_roformer.py
       mel_band_roformer.py
-  pipeline_from_stems.py
+  pipeline_from_stems/    # 独立 venv 中以子进程运行，见 3.1
   benchmark/
     manifest.py
     orchestrator.py
@@ -161,6 +178,29 @@ runner 必须写出 `separation.json`，schema 版本为 `lmdj.separation.v1`，
 }
 ```
 
+`peak_device_memory_bytes` 在 CPU 设备上固定写 `0`（不是省略、不是 null），保证字段 schema 稳定。
+
+失败时 runner 仍必须写出 `separation.json`，形态为：
+
+```json
+{
+  "schema_version": "lmdj.separation.v1",
+  "status": "failed",
+  "input_sha256": "...",
+  "separator": { "id": "...", "family": "...", "checkpoint_sha256": "...", "runner_version": "..." },
+  "requested_device": "mps",
+  "error": {
+    "category": "oom",
+    "exit_code": 137,
+    "stage": "inference",
+    "stderr_tail": "...",
+    "elapsed_seconds": 0.0
+  }
+}
+```
+
+`error.category` 取值来自第 10 节的统一错误类别。失败包不含 `stems` 字段；orchestrator 以 `status` 判定，不以文件存在性推断。
+
 Canonical package 硬约束：
 
 - stems 必须完整包含 `drums / bass / vocals / other`；
@@ -179,6 +219,8 @@ bass   = bass
 melody = vocals + other
 ```
 
+该映射等价于把 demo 的 `cfg.vocals_strategy` 固定为 `merge`（demo 默认值）。v1 兼容层**只支持 merge**：若 config 中出现 `vocals_strategy = drop`，兼容层必须显式报错，不得静默按 merge 处理——避免 config hash 与实际行为不一致。
+
 为保持旧 pipeline parity，兼容层在进入阶段 3–6 前复制 canonical stems，并沿用旧实现的“单轨峰值超过 1.0 时缩放到 1.0”规则。客观分轨指标始终读取未归一化的 canonical stems；Patch 指标读取兼容层输出。两组音频不得复用同一文件，避免 benchmark 改写原始分轨结果。
 
 ## 6. Checkpoint Registry 与晋级状态
@@ -191,6 +233,7 @@ melody = vocals + other
 - 代码与权重许可说明；
 - 输出 stem 列表、采样率与声道；
 - 支持设备；
+- 推理配置（chunk 大小、overlap、batch 等）——它同时影响质量与 peak memory（直接关系 12 GiB 硬门槛），必须显式登记并计入 config hash，不得依赖 runner 内部默认值；
 - runner 环境 lock/hash；
 - 状态：`experimental / verified / production`。
 
@@ -250,7 +293,12 @@ lmdj-audio-worker benchmark \
   --device mps
 ```
 
-Linux CPU 在目标服务器执行同一份 manifest snapshot；两个 run 可合并为一份跨平台报告。
+两平台分工不同，不重复全量质量评测：
+
+- **Mac MPS**：执行完整客观质量评测（MUSDB18HQ 全量 + 真实歌曲集全量）；
+- **Linux CPU**：只执行 smoke + 性能采样子集（manifest 中标记 `perf` split 的代表性 track），产出 RTF 与 peak RSS 硬门槛数据。RoFormer 类模型 CPU RTF 常见 5–20× 实时，四模型全量 MUSDB18HQ 在 16 GiB CPU VM 上耗时以天计，收益为零。
+
+两个 run 使用同一份 manifest snapshot，可合并为一份跨平台报告。每个 track×checkpoint 组合有默认 per-track timeout（CPU 建议 30× 实时时长，MPS 建议 10×），超时按第 10 节 `timeout` 类别记录并继续。
 
 输出结构：
 
@@ -295,6 +343,12 @@ input sha256
 - SI-SDR：10；
 - mixture consistency 与 stem 泄漏指标：5。
 
+指标实现必须 pin 死，否则数值既无法跨 run 复现也无法与文献对照：
+
+- SDR 使用 `museval`（BSSEval v4，framewise median，MUSDB 文献惯例）；
+- SI-SDR 使用 `fast_bss_eval`，全曲整段计算；
+- 两个库的版本锁在 benchmark venv 的 lock 文件中，记入 `environment.json`。
+
 所有指标同时报告四轨分项和平均值；平均值不得隐藏 bass 或 drums 的显著退化。
 
 ### 9.3 LMDJ Patch 质量：40 分
@@ -303,6 +357,13 @@ input sha256
 - validation score：10；
 - retry、鼓分类降级率、sample/lane 结构：5；
 - 匿名盲听的串音、瞬态、低频清晰度与 Patch 可玩性：10。
+
+盲听最小协议（10 分权重不能由未定义流程决定）：
+
+- 至少 3 名评测者，使用第 8 节的匿名目录，评测期间不得接触模型映射；
+- 每个 track×模型样本在四个维度（串音、瞬态、低频清晰度、Patch 可玩性）上各打 1–5 分；
+- 得分 = 所有评测者、所有维度的均值线性折算到 0–10；
+- **否决规则**：任一维度被 ≥2 名评测者打 1 分（严重缺陷），该 checkpoint 直接进入 9.5 硬门槛失败处理，不参与总分抵消。
 
 ### 9.4 性能成本：20 分
 
@@ -355,6 +416,8 @@ Benchmark 必须强制所请求设备，不允许以下行为：
 
 只有 registry 状态为 `production` 的 separator 可以处理产品 job。
 
+Phase 2A 之后，生产 job 的链路统一为 `separator runner 子进程 → PipelineFromStemsRunner 子进程 → Patchify`——**包括选 Demucs 时也走此链路**，不再经过 demo 的 `song-pipeline` 整链。现有 `DemoPipelineRunner` 保留到 Phase 2C 端到端验证通过为止，之后退役；demo 从此只剩 fixture 与 parity 基线角色。
+
 `POST /uploads` 增加可选 multipart 字段 `separator_id`：
 
 - 未指定时使用 `LMDJ_DEFAULT_SEPARATOR`，初始默认仍为 HT Demucs；
@@ -376,7 +439,8 @@ Job status、`report.json` 和最终 Patch metadata 记录：
 
 ### 12.1 自动测试
 
-- `lmdj.separation.v1` contract 的成功和错误边界；
+- `lmdj.separation.v1` contract 的成功和错误边界（含 `status: "failed"` 形态与错误类别映射）；
+- 兼容层对 `vocals_strategy = drop` 的显式拒绝；
 - registry schema、状态转换、未知字段、重复 ID、许可/checksum 缺失；
 - 缓存 key、checksum 损坏、atomic download、`--fresh`；
 - 四个 runner 的 fake-process 成功、timeout、OOM、stderr 映射；
@@ -390,9 +454,9 @@ Job status、`report.json` 和最终 Patch metadata 记录：
 ### 12.2 真实验收
 
 1. Mac Apple Silicon：四个已启用 checkpoint 各跑一首 smoke，确认 actual device 与 MPS 一致；
-2. Linux 16 GiB CPU VM：同一输入跑四个 checkpoint，记录 RTF 与 peak RSS；
-3. MUSDB18HQ 完整 benchmark；
-4. 10–20 首真实歌曲完整 benchmark 与匿名盲听；
+2. Linux 16 GiB CPU VM：smoke + 性能采样子集跑四个 checkpoint，记录 RTF 与 peak RSS（不做全量质量评测，见第 8 节平台分工）；
+3. Mac MPS 上 MUSDB18HQ 完整 benchmark；
+4. Mac MPS 上 10–20 首真实歌曲完整 benchmark 与匿名盲听；
 5. 晋级 checkpoint 通过真实 API 上传、轮询、Patchify、Web Patch View 播放端到端；
 6. 发布的 report 能从 manifest/registry/environment snapshots 重建实验身份，不包含绝对主机路径。
 
