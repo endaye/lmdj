@@ -266,7 +266,17 @@ def _run_combo(cfg: RunConfig, deps: OrchestratorDeps, summary: RunSummary,
     try:
         package_dir = deps.pfs_run(legacy_dir, pfs_root, track.id)
     except Exception as exc:  # noqa: BLE001
-        _fail("pfs", "downstream", str(exc), time.monotonic() - t0,
+        # PipelineFromStemsRunner.run() raises PipelineRunError with a
+        # `stderr_tail` attribute carrying the actual subprocess traceback
+        # (e.g. loop_finder's "beat 太少" RuntimeError) — without it, combo.json
+        # only ever records "pipeline-from-stems exited with code N", which is
+        # useless for diagnosing *why* a combo failed (discovered while
+        # debugging task-9 acceptance: had to manually rerun the pfs subprocess
+        # to see the real error). Duck-typed getattr so non-subprocess
+        # exceptions (e.g. plain RuntimeError in tests) fall back unchanged.
+        stderr_tail = getattr(exc, "stderr_tail", "") or ""
+        error_text = f"{exc}\n{stderr_tail}" if stderr_tail else str(exc)
+        _fail("pfs", "downstream", error_text, time.monotonic() - t0,
               cache_key, cache_key_components)
         return
     stages["pfs"] = {"status": "ok", "seconds": round(time.monotonic() - t0, 3)}
