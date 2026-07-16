@@ -132,3 +132,88 @@ def run_runner_main(argv: list[str] | None, *, runner_id: str, family: str,
         return fail("oom", "MemoryError")
     except Exception:  # noqa: BLE001 —— 任何未预期异常都必须落盘为失败记录
         return fail("inference", traceback.format_exc())
+
+
+import contextlib
+import resource
+import sys as _sys
+import threading
+import time as _time
+
+
+class PerfTracker:
+    """model_load / inference 分段计时 + wall + peak RSS（spec §5 performance）。"""
+
+    def __init__(self) -> None:
+        self._t0 = _time.monotonic()
+        self._phases: dict[str, float] = {}
+
+    @contextlib.contextmanager
+    def phase(self, name: str):
+        start = _time.monotonic()
+        try:
+            yield
+        finally:
+            self._phases[name] = self._phases.get(name, 0.0) + (
+                _time.monotonic() - start)
+
+    def snapshot(self) -> dict:
+        ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+        peak_rss = ru if _sys.platform == "darwin" else ru * 1024  # Linux 为 KB
+        return {
+            "model_load_seconds": round(self._phases.get("model_load", 0.0), 3),
+            "inference_seconds": round(self._phases.get("inference", 0.0), 3),
+            "wall_seconds": round(_time.monotonic() - self._t0, 3),
+            "peak_rss_bytes": int(peak_rss),
+        }
+
+
+class DeviceMemorySampler:
+    """MPS 设备内存采样（spec §5）：100ms 采样 current/driver，峰值取 driver。
+
+    PyTorch MPS 无 peak API；采样式采集会低估真峰值，属已知固有误差——
+    门槛判定统一用同一算法即可比。CPU 设备固定写 0。
+    """
+
+    def __init__(self, device: str, interval_s: float = 0.1) -> None:
+        self.device = device
+        self.interval_s = interval_s
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+        self._peak_current = 0
+        self._peak_driver = 0
+
+    def _sample_loop(self) -> None:
+        import torch
+        while not self._stop.is_set():
+            self._peak_current = max(
+                self._peak_current, int(torch.mps.current_allocated_memory()))
+            self._peak_driver = max(
+                self._peak_driver, int(torch.mps.driver_allocated_memory()))
+            self._stop.wait(self.interval_s)
+
+    def start(self) -> None:
+        if self.device != "mps":
+            return
+        self._thread = threading.Thread(target=self._sample_loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> dict:
+        if self._thread is not None:
+            self._stop.set()
+            self._thread.join(timeout=5)
+        return {
+            "peak_device_memory_bytes": self._peak_driver,
+            "peak_mps_current_allocated_bytes": self._peak_current,
+            "sample_interval_ms": int(self.interval_s * 1000),
+        }
+
+
+def resolve_device(requested: str) -> str:
+    if requested == "mps":
+        import torch
+        if not torch.backends.mps.is_available():
+            raise RunnerError(
+                "请求 mps 但 torch.backends.mps 不可用（不允许静默转 CPU，spec §10）",
+                category="unsupported_device")
+    return requested
