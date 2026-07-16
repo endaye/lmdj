@@ -123,3 +123,9 @@ def test_all_completed_no_failures_exits_0(tmp_path: Path, monkeypatch):
 
     # no SystemExit raised -> implicit success (same convention as `run`/`status`)
     cli.main(["benchmark", "--dataset", "a.json", "--separators", "x", "--device", "cpu"])
+
+
+def test_invalid_device_exits_2():
+    with pytest.raises(SystemExit) as exc:
+        cli.main(["benchmark", "--dataset", "a.json", "--separators", "x", "--device", "gpu"])
+    assert exc.value.code == 2

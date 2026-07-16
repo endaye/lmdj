@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> None:
     benchmark.add_argument(
         "--separators", required=True,
         help="逗号分隔的 separator id 列表，如 a,b")
-    benchmark.add_argument("--device", required=True)
+    benchmark.add_argument("--device", required=True, choices=("cpu", "mps"))
     benchmark.add_argument("--repeats", type=int, default=1)
     benchmark.add_argument("--seed", type=int, default=0)
     benchmark.add_argument("--fresh", action="store_true", help="忽略缓存，强制重跑")
