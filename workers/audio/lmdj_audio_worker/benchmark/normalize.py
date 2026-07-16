@@ -37,10 +37,16 @@ def normalize_input(src: Path, dest_dir: Path) -> NormalizedInput:
     dest = dest_dir / (src.stem + ".wav")
     if not dest.exists():
         tmp = dest.with_suffix(".tmp.wav")
-        proc = subprocess.run(
-            ["ffmpeg", "-y", "-i", str(src), "-ar", "44100", "-ac", "2",
-             "-c:a", "pcm_f32le", str(tmp)],
-            capture_output=True, text=True)
+        try:
+            proc = subprocess.run(
+                ["ffmpeg", "-y", "-i", str(src), "-ar", "44100", "-ac", "2",
+                 "-c:a", "pcm_f32le", str(tmp)],
+                capture_output=True, text=True)
+        except FileNotFoundError as exc:
+            tmp.unlink(missing_ok=True)
+            raise NormalizeError(
+                "找不到 ffmpeg —— benchmark 归一化依赖系统 ffmpeg（brew install ffmpeg / apt install ffmpeg）"
+            ) from exc
         if proc.returncode != 0:
             tmp.unlink(missing_ok=True)
             raise NormalizeError(

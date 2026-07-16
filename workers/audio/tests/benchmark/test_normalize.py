@@ -52,3 +52,14 @@ def test_corrupt_audio_raises_with_stderr(tmp_path):
     with pytest.raises(normalize.NormalizeError) as exc:
         normalize.normalize_input(bad, tmp_path / "norm")
     assert str(exc.value)
+
+
+def test_missing_ffmpeg_raises(tmp_path, monkeypatch):
+    src = make_src(tmp_path)
+    import subprocess
+    def raise_file_not_found(*args, **kwargs):
+        raise FileNotFoundError("ffmpeg not found")
+    monkeypatch.setattr(subprocess, "run", raise_file_not_found)
+    with pytest.raises(normalize.NormalizeError) as exc:
+        normalize.normalize_input(src, tmp_path / "norm")
+    assert "ffmpeg" in str(exc.value)
