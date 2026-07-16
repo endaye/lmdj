@@ -32,6 +32,21 @@ replace_symlink() {
   fi
 }
 
+wait_for_app_health() {
+  local attempt
+  for attempt in {1..12}; do
+    if docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" exec -T app \
+      /opt/app-venv/bin/python -c \
+      'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/health"))["ok"] is True'; then
+      return 0
+    fi
+    if [ "$attempt" -eq 12 ]; then
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 rm -rf "$RELEASE"
 mkdir -p "$RELEASE"
 tar -xzf "$ARCHIVE" -C "$RELEASE"
@@ -69,9 +84,7 @@ replace_symlink "$DEPLOY_PATH/current.next" "$CURRENT"
 if ! (
   cd "$CURRENT" &&
   docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" up -d --build &&
-  docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" exec -T app \
-    /opt/app-venv/bin/python -c \
-    'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/health"))["ok"] is True' &&
+  wait_for_app_health &&
   curl --fail --silent --show-error --retry 12 --retry-delay 5 \
     --retry-connrefused --retry-all-errors \
     --insecure --resolve "$DOMAIN:443:127.0.0.1" \
