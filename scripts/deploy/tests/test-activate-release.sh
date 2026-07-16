@@ -63,6 +63,10 @@ make_archive "$SHA2" "$TMP/two.tar.gz"
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA1"
 grep -q 'lmdj-smoke' "$DEPLOY_TEST_LOG"
 grep -q -- '-p lmdj ' "$DEPLOY_TEST_LOG"
+grep -q 'docker compose -p lmdj .* up -d --build --force-recreate' "$DEPLOY_TEST_LOG" || {
+  echo "activation must recreate services so release bind mounts follow current" >&2
+  exit 1
+}
 if grep '^curl ' "$DEPLOY_TEST_LOG" | grep -vq -- '--retry-all-errors'; then
   echo "health checks must retry transient curl errors" >&2
   exit 1
@@ -82,5 +86,9 @@ if DEPLOY_TEST_DOCKER_FAIL_EXEC=1 "$ACTIVATE_SCRIPT" "$TMP/one.tar.gz" "$DEPLOY_
   exit 1
 fi
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA2"
+test "$(grep -c 'docker compose -p lmdj .* up -d --build --force-recreate' "$DEPLOY_TEST_LOG")" -ge 2 || {
+  echo "rollback must recreate services so release bind mounts follow current" >&2
+  exit 1
+}
 
 echo "activate-release tests passed"
