@@ -8,6 +8,9 @@ docs/superpowers/plans/2026-07-16-separation-phase1c-metrics.md
 """
 from __future__ import annotations
 
+import warnings
+from pathlib import Path
+
 import numpy as np
 
 STEMS = ("drums", "bass", "vocals", "other")
@@ -75,3 +78,156 @@ def leakage(estimates: dict, references: dict) -> dict:
             worst = max(worst, beta * beta * ref_energy)
         out[i] = 10.0 * np.log10(max(worst, _EPS) / est_energy)
     return out
+
+
+def _finite_or_none(value: float | None, label: str, problems: list[str]) -> float | None:
+    """non-finite（NaN/inf）值统一收敛到 None，并记录 warnings（2026-07-16 review 追加）。
+
+    carry-forward from Task 2 review: si_sdr / mixture_consistency 在遇到损坏
+    （含 NaN）音频时会静默传播 NaN；objective_for_combo 里每个数值都要经过
+    这一守卫，命中时把该值置 None 并在 warnings 里记录是哪个 stem/metric。
+    """
+    if value is None:
+        return None
+    if not np.isfinite(value):
+        problems.append(f"{label}: 非有限值（NaN/inf），已置 None")
+        return None
+    return float(value)
+
+
+def sdr_framewise_median(references: dict, estimates: dict) -> dict[str, float | None]:
+    """museval BSSEval v4：堆叠 (4, samples, ch)，window=hop=44100（1s 帧），
+    逐 stem 帧 nanmedian；某 stem 全 NaN → None（不抛异常）。
+    """
+    from museval.metrics import bss_eval  # 懒加载：主包 dependencies 保持 []
+
+    ref_stack = np.stack([references[stem].astype(np.float64) for stem in STEMS])
+    est_stack = np.stack([estimates[stem].astype(np.float64) for stem in STEMS])
+    sdr, _isr, _sir, _sar, _perms = bss_eval(ref_stack, est_stack, window=44100, hop=44100)
+
+    out: dict[str, float | None] = {}
+    for i, stem in enumerate(STEMS):
+        with warnings.catch_warnings():
+            # nanmedian 对全 NaN 切片会发 RuntimeWarning，这里是预期路径，不需要冒泡。
+            warnings.simplefilter("ignore", category=RuntimeWarning)
+            value = np.nanmedian(sdr[i])
+        out[stem] = None if np.isnan(value) else float(value)
+    return out
+
+
+def load_stems_dir(dir: Path) -> dict[str, np.ndarray]:
+    """4 canonical wav（drums/bass/vocals/other）→ (frames, 2) float32；缺轨 ValueError。"""
+    import soundfile as sf  # 懒加载：与 separation/contract.py 同惯例
+
+    dir = Path(dir)
+    missing: list[str] = []
+    out: dict[str, np.ndarray] = {}
+    for stem in STEMS:
+        path = dir / f"{stem}.wav"
+        if not path.exists():
+            missing.append(stem)
+            continue
+        data, _sr = sf.read(str(path), dtype="float32", always_2d=True)
+        out[stem] = data
+    if missing:
+        raise ValueError(f"{dir}: 缺少 stem 音频 {missing}")
+    return out
+
+
+def load_gt(track) -> dict[str, np.ndarray]:
+    """按 `manifest.data_root()` 解析 `track.ground_truth`；采样率非 44100 → ValueError。
+
+    与估计的长度对齐（差 ≤1 sample 截齐 / 超差 ValueError）在 `objective_for_combo`
+    内完成——这里只负责按 GT 自身采样率装载，不做跨数组对齐。
+    """
+    import soundfile as sf  # 懒加载：与 separation/contract.py 同惯例
+
+    from .manifest import data_root
+
+    root = data_root()
+    out: dict[str, np.ndarray] = {}
+    for stem in STEMS:
+        rel = track.ground_truth[stem]
+        path = root / rel
+        info = sf.info(str(path))
+        if info.samplerate != 44100:
+            raise ValueError(
+                f"{stem}: GT 采样率 {info.samplerate} != 44100（{path}）")
+        data, _sr = sf.read(str(path), dtype="float32", always_2d=True)
+        out[stem] = data
+    return out
+
+
+def _align_gt_estimates(gt: dict, estimates: dict) -> tuple[dict, dict]:
+    """GT 与估计逐 stem 对齐：长度差 ≤1 sample 截齐到较短者；超差 ValueError。"""
+    aligned_gt: dict[str, np.ndarray] = {}
+    aligned_est: dict[str, np.ndarray] = {}
+    for stem in STEMS:
+        g = gt[stem]
+        e = estimates[stem]
+        diff = abs(g.shape[0] - e.shape[0])
+        if diff > 1:
+            raise ValueError(
+                f"{stem}: GT/估计长度差 {diff} samples 超过 ≤1 容差"
+                f"（gt={g.shape[0]}, est={e.shape[0]}）")
+        n = min(g.shape[0], e.shape[0])
+        aligned_gt[stem] = g[:n]
+        aligned_est[stem] = e[:n]
+    return aligned_gt, aligned_est
+
+
+def objective_for_combo(combo_dir: Path, track, mix: np.ndarray) -> dict:
+    """逐组合客观指标（spec §9.2）。
+
+    无 GT：只出 `{"has_gt": False, "mixture_consistency": ...}`。
+    有 GT：再补 `sdr`/`si_sdr`（逐 stem + mean，mean 对 None 跳过）/`leakage`。
+    每个数值都经 `_finite_or_none` 守卫：非有限（NaN/inf）→ None，并在
+    `warnings` 里记录是哪个 stem/metric（不抛异常）。
+    """
+    combo_dir = Path(combo_dir)
+    estimates = load_stems_dir(combo_dir / "separation" / "stems")
+
+    problems: list[str] = []
+    mc = _finite_or_none(mixture_consistency(estimates, mix), "mixture_consistency", problems)
+
+    result: dict = {"has_gt": bool(track.has_ground_truth)}
+
+    if not track.has_ground_truth:
+        result["mixture_consistency"] = mc
+        if problems:
+            result["warnings"] = problems
+        return result
+
+    gt_raw = load_gt(track)
+    gt, est = _align_gt_estimates(gt_raw, estimates)
+
+    sdr_raw = sdr_framewise_median(gt, est)
+    sdr: dict[str, float | None] = {}
+    sdr_values: list[float] = []
+    for stem in STEMS:
+        v = _finite_or_none(sdr_raw.get(stem), f"sdr.{stem}", problems)
+        sdr[stem] = v
+        if v is not None:
+            sdr_values.append(v)
+    sdr["mean"] = float(np.mean(sdr_values)) if sdr_values else None
+
+    si_sdr_out: dict[str, float | None] = {}
+    si_sdr_values: list[float] = []
+    for stem in STEMS:
+        v = _finite_or_none(si_sdr(gt[stem], est[stem]), f"si_sdr.{stem}", problems)
+        si_sdr_out[stem] = v
+        if v is not None:
+            si_sdr_values.append(v)
+    si_sdr_out["mean"] = float(np.mean(si_sdr_values)) if si_sdr_values else None
+
+    leak_raw = leakage(est, gt)
+    leak = {stem: _finite_or_none(leak_raw.get(stem), f"leakage.{stem}", problems)
+            for stem in STEMS}
+
+    result["mixture_consistency"] = mc
+    result["sdr"] = sdr
+    result["si_sdr"] = si_sdr_out
+    result["leakage"] = leak
+    if problems:
+        result["warnings"] = problems
+    return result
