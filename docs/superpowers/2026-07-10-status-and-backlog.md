@@ -65,6 +65,11 @@
 ### 仓库工程
 - `packages/patchify/tests/fixtures/.gitattributes` 把该目录所有 `*.wav` 豁免 LFS——若将来提交大 golden 音频需重新审视。
 
+### Separation（Phase 1A/1B 技术债 & 已知限制）
+- `registry env_lock` 字段级覆盖 MSST constraints 文件（现靠 `test_msst_constraints_file_pinned` 漂移守护）
+- `setup-sep-*` 后加 import-only smoke（mock 单测抓不到运行时依赖缺失，1B 验收实证）
+- mel-roformer MPS driver 峰值 ~24.9GB，16GB 机器可能 OOM——batch 调优协议为既定 fallback；roformer 模型加载 ~40s 对 worker 延迟预算的影响待 1C 评估
+
 ## 关键文档索引
 
 - 契约决策：`docs/prd/decision-log.md`（2026-07-07 一批）
