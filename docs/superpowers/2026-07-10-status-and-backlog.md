@@ -14,6 +14,7 @@
 | #6 | Web 接入 API（浏览器传歌 → 轮询 → 玩到 patch，与拖目录/示例并存） | `apps/web` |
 | #7 | Separation Phase 0（0A+0B）：`lmdj.separation.v1` contract / checkpoint registry / runner 协议（orchestrator 合成失败记录）+ `pipeline_from_stems`（阶段 3–6 逐字节迁移，专用 `.venv-pfs`，constraints 锁版本）+ frozen-stems parity 门槛（`scripts/dev.sh parity`，testsong 全项通过、两侧 patch_id 一致）。spec: `docs/superpowers/specs/2026-07-15-multi-separator-benchmark-design.md`；plan: `docs/superpowers/plans/2026-07-15-separation-phase0.md`。下一步：Phase 1A（HT Demucs + SCNet runners，registry 落真实条目）。 | `workers/audio/separation`、`workers/audio/pipeline_from_stems`、`config/` |
 | #8 | Separation Phase 1A：HT Demucs（verified）+ SCNet-large（experimental）真实 runner 与 registry 条目，MPS 内存采样，`dev.sh separate` smoke（Mac MPS 验收 + canonical→compat→pfs→patchify 链路 sanity）。plan: `docs/superpowers/plans/2026-07-16-separation-phase1a.md` | `workers/audio/separation/runners`、`config/` |
+| #9 | Separation Phase 1B：BS-RoFormer（SDR 9.65）+ Mel-Band RoFormer（SDR 8.22）四轨 runner 与 experimental registry 条目；MSST 家族共享实现抽取（scnet 薄壳化）；Mac MPS 验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1b.md` | `workers/audio/separation/runners`、`config/` |
 
 ## 当前可跑链路（浏览器已亲测闭环）
 
@@ -63,6 +64,11 @@
 
 ### 仓库工程
 - `packages/patchify/tests/fixtures/.gitattributes` 把该目录所有 `*.wav` 豁免 LFS——若将来提交大 golden 音频需重新审视。
+
+### Separation（Phase 1A/1B 技术债 & 已知限制）
+- `registry env_lock` 字段级覆盖 MSST constraints 文件（现靠 `test_msst_constraints_file_pinned` 漂移守护）
+- `setup-sep-*` 后加 import-only smoke（mock 单测抓不到运行时依赖缺失，1B 验收实证）
+- mel-roformer MPS driver 峰值 ~24.9GB，16GB 机器可能 OOM——batch 调优协议为既定 fallback；roformer 模型加载 ~40s 对 worker 延迟预算的影响待 1C 评估
 
 ## 关键文档索引
 

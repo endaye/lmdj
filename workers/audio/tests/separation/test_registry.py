@@ -109,9 +109,11 @@ def test_shipped_registry_file_is_valid():
     shipped = Path(__file__).resolve().parents[2] / "config" / "separators.json"
     entries = registry.load_registry(shipped)
     by_id = {e.id: e for e in entries}
-    assert set(by_id) == {"htdemucs", "scnet-large"}
+    assert set(by_id) == {"htdemucs", "scnet-large", "bs-roformer-4stem", "mel-roformer-4stem"}
     assert by_id["htdemucs"].status == "verified"
     assert by_id["scnet-large"].status == "experimental"
+    assert by_id["bs-roformer-4stem"].status == "experimental"
+    assert by_id["mel-roformer-4stem"].status == "experimental"
 
 
 def test_shipped_env_locks_match_files():
@@ -119,11 +121,28 @@ def test_shipped_env_locks_match_files():
     config_dir = Path(__file__).resolve().parents[2] / "config"
     entries = {e.id: e for e in registry.load_registry(config_dir / "separators.json")}
     lock_files = {"htdemucs": config_dir / "runner-demucs-constraints.txt",
-                  "scnet-large": config_dir / "msst.lock"}
+                  "scnet-large": config_dir / "msst.lock",
+                  "bs-roformer-4stem": config_dir / "msst.lock",
+                  "mel-roformer-4stem": config_dir / "msst.lock"}
     for eid, lock in lock_files.items():
         digest = hashlib.sha256(lock.read_bytes()).hexdigest()
         assert entries[eid].env_lock_sha256 == digest, f"{eid} env lock 漂移"
-    config_sha = hashlib.sha256(
-        (config_dir / "scnet" / "config_musdb18_scnet_large_starrytong.yaml").read_bytes()
-    ).hexdigest()
-    assert entries["scnet-large"].inference["config_sha256"] == config_sha
+    config_shas = {
+        "scnet-large": config_dir / "scnet" / "config_musdb18_scnet_large_starrytong.yaml",
+        "bs-roformer-4stem": config_dir / "bs_roformer" / "config_bs_roformer_384_8_2_485100.yaml",
+        "mel-roformer-4stem": config_dir / "mel_band_roformer" / "model_mel_band_roformer_ep_1_sdr_8.2175.yaml",
+    }
+    for eid, yaml_path in config_shas.items():
+        digest = hashlib.sha256(yaml_path.read_bytes()).hexdigest()
+        assert entries[eid].inference["config_sha256"] == digest, f"{eid} config sha 漂移"
+
+
+def test_msst_constraints_file_pinned():
+    """MSST 家族三个 venv 的真实依赖 pin 文件未进 registry env_lock（该字段哈希的是
+    msst.lock）。本测试是漂移信号：改 runner-scnet-constraints.txt 必须同步更新
+    此哈希，并重跑三个 MSST 家族 runner 的 smoke 验收。"""
+    import hashlib
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    digest = hashlib.sha256(
+        (config_dir / "runner-scnet-constraints.txt").read_bytes()).hexdigest()
+    assert digest == "ab7a963bcd904e94b37ad96e14090a7ca82dd2b04e4f012e011f29b9b5bf70ae"

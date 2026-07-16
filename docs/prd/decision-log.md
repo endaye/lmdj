@@ -89,3 +89,9 @@
 - 结论：SCNet-large 采用 MSST release v1.0.9 的 `SCNet-large_starrytong_fixed.ckpt`（starrytong 训练，MUSDB test SDR 9.70，优于 v1.0.8 的 9.32），config 同 release 入库 vendored；推理复用 MSST 框架的 `demix`，以 `config/msst.lock` pinned commit clone（gitignored），不 pip 安装、不修改其源码。代码与权重 license 均为 MIT。MPS 适配：inference.batch_size 由上游的 8 调为 1（chunk_size 不变），MPS 峰值设备内存 ~11.2GB、CPU 峰值 RSS 从 ~27.9GB 降至 ~5.2GB（代价 CPU 墙钟 ~1.5x）；调优字段与 config_sha256 已同步进 registry。
 - 原因：MSST 不是 pip 包；pinned clone + lock 文件哈希进 registry `env_lock_sha256`，与 constraints 方案同构，满足 spec §6 可追溯门禁；两个候选 checkpoint 中选 SDR 更高且训练者可追溯的一个。
 - 影响：升级 SCNet 推理代码 = 改 msst.lock 的 commit 并重跑 smoke 验收；registry 条目状态 experimental，双平台验证后方可升 verified（spec §6）。后续升级 upstream config 时必须重放该调优并重跑双设备 smoke。
+
+### 已确认：RoFormer 四轨 checkpoint 选型与 MSST 家族共享实现
+
+- 结论：BS-RoFormer 采用 MSST release v1.0.12 的 `model_bs_roformer_ep_17_sdr_9.6568.ckpt`（ZFTurbo 训练，MUSDB SDR 9.65，唯一过门禁的四轨候选）；Mel-Band RoFormer 采用 MSST release v1.0.11 的 ep_1（SDR 8.22，单文件）——同 release 的 ep_5（SDR 8.94）为 3.5GB 双分卷 zip，与单 artifact 缓存契约冲突，弃选并记录为升级路径（需先扩展 cache/registry 支持多分卷 artifact）；HF 社区 fine-tune 因训练过程可追溯性弱于 ZFTurbo release 一并弃选。三个 MSST 家族 runner（scnet/bs/mel）共享 `runners/_msst.py` 实现、同一 MSST pinned clone 与同一 constraints 文件，但按 spec §5 字面各自独立 venv 运行。
+- 原因：spec §6 对 RoFormer 门禁最严（来源/revision/四轨/许可缺一不可）；社区单目标权重不得伪装四轨。benchmark 公平性让位于基建契约完整性，ep_5 升级路径显式保留。
+- 影响：mel-band 家族在 Phase 1D benchmark 中以 ep_1（非家族最强形态）参赛，解读结果时需注明 ~0.7dB 的形态差；若家族展现潜力，升级 ep_5 是独立的基建扩展 + 重验收。验收补充：两个 roformer 在 MPS 首跑即通过（bs 74.3s / mel 54.1s），无需 batch 调优；真实推理暴露 MSST roformer 运行时依赖（beartype/rotary_embedding_torch/librosa）缺 pin，已补进 constraints 并加漂移守护测试——constraints 文件未进 registry env_lock 是已知缺口，注册表字段级修复列入 Phase 1C backlog。
