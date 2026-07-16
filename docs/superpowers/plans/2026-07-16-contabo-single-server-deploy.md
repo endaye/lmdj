@@ -292,11 +292,19 @@ free -h
 
 Expected: application logs, Docker image/volume use, disk capacity, and memory availability are visible without root login.
 
-- [ ] **Step 3: Roll back a bad release**
+- [x] **Step 3: Roll back a bad release**
 
 In GitHub Actions, rerun `Deploy server` and enter the full SHA of the previous successful `main` deployment into `commit_sha`.
 
 Expected: the workflow deploys the older verified archive and updates `/opt/lmdj/DEPLOYED_REVISION` to that SHA.
+
+Verified on 2026-07-16 by deploying `b843e6b651b0b6d98e003014ad1eef41ceaa7d41`
+in Actions run `29483591738`, confirming both `/` and `/api/health` returned HTTP 200,
+then restoring `fefcecb5e8cb7c0e9e831dc954998c9d595f861a` in run `29484324201`.
+The drill exposed and resolved two rollback-specific regressions: historical deployment
+controllers are no longer loaded from the rollback target (PR #17), and persistent
+services are force-recreated after release switches so Caddy bind mounts follow
+`current` (PR #18).
 
 ## Self-Review
 
