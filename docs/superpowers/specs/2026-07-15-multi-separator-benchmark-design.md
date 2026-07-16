@@ -359,7 +359,7 @@ input sha256
 指标实现必须 pin 死，否则数值既无法跨 run 复现也无法与文献对照：
 
 - SDR 使用 `museval`（BSSEval v4，framewise median，MUSDB 文献惯例）；
-- SI-SDR 使用 `fast_bss_eval`，全曲整段计算；
+- SI-SDR 自实现（Le Roux 2019 标准公式，纯 numpy，全曲整段、逐声道均值；fast_bss_eval 0.1.4 在无 torch 环境下 si_sdr 损坏，弃用）；一致性与泄漏的精确定义以 plan 2026-07-16-separation-phase1c-metrics 的"自定义指标的精确定义"节为规范；
 - 两个库的版本锁在 benchmark venv 的 lock 文件中，记入 `environment.json`。
 
 所有指标同时报告四轨分项和平均值；平均值不得隐藏 bass 或 drums 的显著退化。

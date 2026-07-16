@@ -16,6 +16,7 @@
 | #8 | Separation Phase 1A：HT Demucs（verified）+ SCNet-large（experimental）真实 runner 与 registry 条目，MPS 内存采样，`dev.sh separate` smoke（Mac MPS 验收 + canonical→compat→pfs→patchify 链路 sanity）。plan: `docs/superpowers/plans/2026-07-16-separation-phase1a.md` | `workers/audio/separation/runners`、`config/` |
 | #9 | Separation Phase 1B：BS-RoFormer（SDR 9.65）+ Mel-Band RoFormer（SDR 8.22）四轨 runner 与 experimental registry 条目；MSST 家族共享实现抽取（scnet 薄壳化）；Mac MPS 验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1b.md` | `workers/audio/separation/runners`、`config/` |
 | #10 | Separation Phase 1C-a：benchmark 执行层——manifest schema/loader、ffmpeg 输入归一化、orchestrator（全链 + 六元组缓存 key + resume + 单组合失败不中断）、`dev.sh bench` CLI；suno mini-run 真实验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1c-exec.md` | `workers/audio/benchmark`、`testdata/` |
+| #11 | Separation Phase 1C-b：指标/评分/报告/盲听打包（museval SDR + 自实现 SI-SDR/一致性/泄漏，§9 权重与硬门槛，summary.json/csv + 跨平台 merge，匿名盲听包）。plan: docs/superpowers/plans/2026-07-16-separation-phase1c-metrics.md | workers/audio/benchmark |
 
 ## 当前可跑链路（浏览器已亲测闭环）
 
