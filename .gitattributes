@@ -326,3 +326,5 @@
 **/bin/** filter=lfs diff=lfs merge=lfs -text
 # AI files
 *.skill filter=lfs diff=lfs merge=lfs -text
+# LMDJ product config 是文本契约，不走 LFS（覆盖上面的 *.yaml 等规则）
+workers/audio/config/** -filter -diff -merge text=auto
