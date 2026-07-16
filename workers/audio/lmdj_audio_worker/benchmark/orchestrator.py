@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+from ..separation.cache import ChecksumError
 from ..separation.protocol import SeparationRequest
 from ..separation.registry import load_registry
 from . import cache_key as ck
@@ -21,7 +22,7 @@ _WORKER_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_REGISTRY = _WORKER_ROOT / "config" / "separators.json"
 
 # combo.json 阶段顺序（spec §4/§8/记录规范），_run_combo 与 _finalize 沿用同一顺序
-_STAGE_ORDER = ("normalize", "separate", "validate", "compat", "pfs", "patchify")
+_STAGE_ORDER = ("normalize", "checkpoint", "separate", "validate", "compat", "pfs", "patchify")
 
 
 @dataclass
@@ -133,7 +134,8 @@ def _run_combo(cfg: RunConfig, deps: OrchestratorDeps, summary: RunSummary,
             stages[later] = {"status": "skipped", "seconds": 0.0}
 
     def _fail(stage: str, category: str, error_text: str, elapsed: float,
-              cache_key: str | None, cache_key_components: dict) -> None:
+              cache_key: str | None, cache_key_components: dict,
+              exit_code: int | None = None) -> None:
         stages[stage] = {"status": "failed", "seconds": round(elapsed, 3),
                          "error": (error_text or "")[-2000:]}
         _skip_downstream_of(stage)
@@ -162,6 +164,8 @@ def _run_combo(cfg: RunConfig, deps: OrchestratorDeps, summary: RunSummary,
             "category": category,
             "error": (error_text or "")[-2000:],
             "elapsed_seconds": round(elapsed, 3),
+            "checkpoint": entry.artifact_sha256,
+            "exit_code": exit_code,
         })
 
     # normalize 失败：该 track 所有组合都记 inference 失败，stage=normalize，
@@ -181,36 +185,50 @@ def _run_combo(cfg: RunConfig, deps: OrchestratorDeps, summary: RunSummary,
               0.0, cache_key, cache_key_components)
         return
 
-    # 缓存命中：不执行任何阶段，只更新 cached 标记与 run 汇总计数。
+    # 缓存命中：不执行任何阶段、不重写 combo.json——原记录（含原 cached=false
+    # 与 performance）字节不变，只更新 run 汇总计数（cache_hits/completed）。
     if not cfg.fresh:
         prev = snapshots.read_combo(combo_path)
         if (prev is not None and prev.get("cache_key") == cache_key
                 and prev.get("status") == "completed"):
-            updated = dict(prev)
-            updated["cached"] = True
-            snapshots.write_combo(combo_path, updated)
             summary.cache_hits += 1
             summary.completed += 1
             return
 
-    # separate
+    # checkpoint：ensure_checkpoint 的下载/校验异常单独记录，不与 separate 混同。
+    # ChecksumError（来自 ..separation.cache）-> checksum；其余异常 -> download。
     t0 = time.monotonic()
     try:
         checkpoint_dir = deps.ensure_checkpoint(entry)
+    except ChecksumError as exc:
+        _fail("checkpoint", "checksum", str(exc), time.monotonic() - t0,
+              cache_key, cache_key_components)
+        return
+    except Exception as exc:  # noqa: BLE001 —— 其余异常按下载失败归类
+        _fail("checkpoint", "download", str(exc), time.monotonic() - t0,
+              cache_key, cache_key_components)
+        return
+    stages["checkpoint"] = {"status": "ok", "seconds": round(time.monotonic() - t0, 3)}
+
+    # separate
+    t0 = time.monotonic()
+    try:
         request = SeparationRequest(
             input_path=normalized.path, output_dir=combo_path / "separation",
             device=cfg.device, seed=cfg.seed, repeat_id=repeat)
         result = deps.separate(entry, request, checkpoint_dir,
                                timeout_sec=cfg.timeout_sec)
-    except Exception as exc:  # noqa: BLE001 —— 未预期异常按 downstream 归类
-        _fail("separate", "downstream", str(exc), time.monotonic() - t0,
+    except Exception as exc:  # noqa: BLE001 —— deps.separate 自身抛出的未预期异常按 inference 归类
+        _fail("separate", "inference", str(exc), time.monotonic() - t0,
               cache_key, cache_key_components)
         return
     elapsed = time.monotonic() - t0
     if result.status != "completed":
         category = result.error.category if result.error else "inference"
         error_text = result.error.stderr_tail if result.error else ""
-        _fail("separate", category, error_text, elapsed, cache_key, cache_key_components)
+        exit_code = result.error.exit_code if result.error else None
+        _fail("separate", category, error_text, elapsed, cache_key, cache_key_components,
+              exit_code=exit_code)
         return
     stages["separate"] = {"status": "ok", "seconds": round(elapsed, 3)}
 
@@ -219,8 +237,8 @@ def _run_combo(cfg: RunConfig, deps: OrchestratorDeps, summary: RunSummary,
     t0 = time.monotonic()
     try:
         errors = deps.validate_stems(separation_dir, result, normalized.frames)
-    except Exception as exc:  # noqa: BLE001
-        _fail("validate", "downstream", str(exc), time.monotonic() - t0,
+    except Exception as exc:  # noqa: BLE001 —— validate_stems 自身异常仍属 invalid_stems 类别
+        _fail("validate", "invalid_stems", str(exc), time.monotonic() - t0,
               cache_key, cache_key_components)
         return
     elapsed = time.monotonic() - t0

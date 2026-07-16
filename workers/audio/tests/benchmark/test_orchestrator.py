@@ -9,7 +9,7 @@ import pytest
 
 from lmdj_audio_worker.benchmark import orchestrator
 from lmdj_audio_worker.benchmark.normalize import NormalizedInput
-from lmdj_audio_worker.separation.cache import sha256_file
+from lmdj_audio_worker.separation.cache import ChecksumError, sha256_file
 from lmdj_audio_worker.separation.contract import (SeparationError,
                                                     SeparationResult,
                                                     SeparatorInfo,
@@ -289,6 +289,10 @@ def test_separate_failure_skips_downstream_others_complete(tmp_path, monkeypatch
     assert failure["stage"] == "separate"
     assert failure["category"] == "inference"
     assert "elapsed_seconds" in failure and "error" in failure
+    # spec §10 字段集：checkpoint（entry.artifact_sha256）与 exit_code（来自
+    # SeparationError.exit_code，_make_failed 写的是 1）都必须出现在失败记录里。
+    assert failure["checkpoint"] == "a" * 64
+    assert failure["exit_code"] == 1
 
     record = orchestrator.snapshots.read_combo(_combo(summary.run_dir, "track-1", "sepA"))
     assert record["status"] == "failed"
@@ -405,14 +409,26 @@ def test_resume_cache_hits_then_fresh_forces_recompute(tmp_path, monkeypatch):
     assert first.cache_hits == 0
     assert len(fake_separate.calls) == 4
 
+    combo_path = _combo(first.run_dir, "track-1", "sepA")
+    combo_json_path = combo_path / "combo.json"
+    first_bytes = combo_json_path.read_bytes()
+    first_mtime_ns = combo_json_path.stat().st_mtime_ns
+
     second = orchestrator.run_benchmark(cfg, deps=deps)
     assert second.cache_hits == 4
     assert second.completed == 4
     assert second.failed == 0
     assert len(fake_separate.calls) == 4  # 第二遍 fake separate 零调用
 
-    record = orchestrator.snapshots.read_combo(_combo(second.run_dir, "track-1", "sepA"))
-    assert record["cached"] is True
+    # 缓存命中不得重写 combo.json：原记录字节与 mtime 必须原封不动
+    # （原始 cached=false、performance 都保留；命中只在 run.json summary 里可见）。
+    second_bytes = combo_json_path.read_bytes()
+    second_mtime_ns = combo_json_path.stat().st_mtime_ns
+    assert second_bytes == first_bytes
+    assert second_mtime_ns == first_mtime_ns
+
+    record = orchestrator.snapshots.read_combo(combo_path)
+    assert record["cached"] is False
     assert record["status"] == "completed"
 
     cfg_fresh = replace(cfg, fresh=True)
@@ -471,3 +487,160 @@ def test_unknown_separator_id_raises_value_error(tmp_path, monkeypatch):
 
     with pytest.raises(ValueError):
         orchestrator.run_benchmark(cfg, deps=deps)
+
+
+# ---------------------------------------------------------------------------
+# 8. 错误类别归类：ensure_checkpoint 抛 ChecksumError/其他异常，
+#    deps.separate 自身抛异常 -> checksum / download / inference
+# ---------------------------------------------------------------------------
+
+
+def fake_ensure_checkpoint_checksum_error(entry) -> Path:
+    raise ChecksumError(f"{entry.id}: 校验和不符")
+
+
+def fake_ensure_checkpoint_os_error(entry) -> Path:
+    raise OSError("网络不可达")
+
+
+def fake_separate_raises(entry, request, checkpoint_dir, timeout_sec=None):
+    raise RuntimeError("separate 内部炸了")
+
+
+def test_ensure_checkpoint_checksum_error_maps_to_checksum_category(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("LMDJ_BENCH_DATA_ROOT", str(data_root))
+    manifest_path = _manifest(tmp_path, data_root, ["track-1"])
+    registry_path = _registry(tmp_path, [_entry("sepA", "demucs")])
+
+    deps = make_deps(ensure_checkpoint=fake_ensure_checkpoint_checksum_error)
+    cfg = orchestrator.RunConfig(
+        manifests=[str(manifest_path)], separator_ids=["sepA"],
+        device="cpu", out_root=tmp_path / "benchmarks", run_id="run-checksum",
+        registry_path=registry_path)
+
+    summary = orchestrator.run_benchmark(cfg, deps=deps)
+
+    assert summary.total == 1
+    assert summary.completed == 0
+    assert summary.failed == 1
+    failure = summary.failures[0]
+    assert failure["stage"] == "checkpoint"
+    assert failure["category"] == "checksum"
+
+    record = orchestrator.snapshots.read_combo(_combo(summary.run_dir, "track-1", "sepA"))
+    assert record["failed_stage"] == "checkpoint"
+    assert record["error_category"] == "checksum"
+    assert record["stages"]["normalize"]["status"] == "ok"
+    assert record["stages"]["checkpoint"]["status"] == "failed"
+    for stage in ("separate", "validate", "compat", "pfs", "patchify"):
+        assert record["stages"][stage]["status"] == "skipped"
+
+
+def test_ensure_checkpoint_os_error_maps_to_download_category(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("LMDJ_BENCH_DATA_ROOT", str(data_root))
+    manifest_path = _manifest(tmp_path, data_root, ["track-1"])
+    registry_path = _registry(tmp_path, [_entry("sepA", "demucs")])
+
+    deps = make_deps(ensure_checkpoint=fake_ensure_checkpoint_os_error)
+    cfg = orchestrator.RunConfig(
+        manifests=[str(manifest_path)], separator_ids=["sepA"],
+        device="cpu", out_root=tmp_path / "benchmarks", run_id="run-download",
+        registry_path=registry_path)
+
+    summary = orchestrator.run_benchmark(cfg, deps=deps)
+
+    assert summary.total == 1
+    assert summary.completed == 0
+    assert summary.failed == 1
+    failure = summary.failures[0]
+    assert failure["stage"] == "checkpoint"
+    assert failure["category"] == "download"
+
+    record = orchestrator.snapshots.read_combo(_combo(summary.run_dir, "track-1", "sepA"))
+    assert record["failed_stage"] == "checkpoint"
+    assert record["error_category"] == "download"
+
+
+def test_separate_raises_maps_to_inference_category(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("LMDJ_BENCH_DATA_ROOT", str(data_root))
+    manifest_path = _manifest(tmp_path, data_root, ["track-1"])
+    registry_path = _registry(tmp_path, [_entry("sepA", "demucs")])
+
+    deps = make_deps(separate=fake_separate_raises)
+    cfg = orchestrator.RunConfig(
+        manifests=[str(manifest_path)], separator_ids=["sepA"],
+        device="cpu", out_root=tmp_path / "benchmarks", run_id="run-sepraise",
+        registry_path=registry_path)
+
+    summary = orchestrator.run_benchmark(cfg, deps=deps)
+
+    assert summary.total == 1
+    assert summary.completed == 0
+    assert summary.failed == 1
+    failure = summary.failures[0]
+    assert failure["stage"] == "separate"
+    assert failure["category"] == "inference"
+
+    record = orchestrator.snapshots.read_combo(_combo(summary.run_dir, "track-1", "sepA"))
+    assert record["failed_stage"] == "separate"
+    assert record["error_category"] == "inference"
+    assert record["stages"]["normalize"]["status"] == "ok"
+    assert record["stages"]["checkpoint"]["status"] == "ok"
+    assert record["stages"]["separate"]["status"] == "failed"
+    for stage in ("validate", "compat", "pfs", "patchify"):
+        assert record["stages"][stage]["status"] == "skipped"
+
+
+# ---------------------------------------------------------------------------
+# 9. normalize 抛异常只影响该 track 的所有组合，其余 track 不受影响
+# ---------------------------------------------------------------------------
+
+
+class FakeNormalizeRaisesForTrack:
+    """伪造 normalize_input：指定 track_id 抛异常，其余走真实 FakeNormalize 逻辑。"""
+
+    def __init__(self, fail_track_id: str):
+        self._fail_track_id = fail_track_id
+        self._ok = FakeNormalize()
+
+    def __call__(self, src: Path, dest_dir: Path) -> NormalizedInput:
+        track_id = Path(dest_dir).name
+        if track_id == self._fail_track_id:
+            raise RuntimeError("normalize 炸了")
+        return self._ok(src, dest_dir)
+
+
+def test_normalize_exception_fails_all_combos_for_track_others_unaffected(tmp_path, monkeypatch):
+    data_root = tmp_path / "data"
+    monkeypatch.setenv("LMDJ_BENCH_DATA_ROOT", str(data_root))
+    manifest_path = _manifest(tmp_path, data_root, ["track-1", "track-2"])
+    registry_path = _registry(
+        tmp_path, [_entry("sepA", "demucs"), _entry("sepB", "scnet")])
+
+    deps = make_deps(normalize=FakeNormalizeRaisesForTrack("track-1"))
+    cfg = orchestrator.RunConfig(
+        manifests=[str(manifest_path)], separator_ids=["sepA", "sepB"],
+        device="cpu", out_root=tmp_path / "benchmarks", run_id="run-normfail",
+        registry_path=registry_path)
+
+    summary = orchestrator.run_benchmark(cfg, deps=deps)
+
+    assert summary.total == 4
+    assert summary.completed == 2
+    assert summary.failed == 2
+
+    for sep_id in ("sepA", "sepB"):
+        record = orchestrator.snapshots.read_combo(_combo(summary.run_dir, "track-1", sep_id))
+        assert record["status"] == "failed"
+        assert record["failed_stage"] == "normalize"
+        assert record["error_category"] == "inference"
+        for stage in ("checkpoint", "separate", "validate", "compat", "pfs", "patchify"):
+            assert record["stages"][stage]["status"] == "skipped"
+
+        other_record = orchestrator.snapshots.read_combo(
+            _combo(summary.run_dir, "track-2", sep_id))
+        assert other_record["status"] == "completed"
+        assert other_record["failed_stage"] is None
