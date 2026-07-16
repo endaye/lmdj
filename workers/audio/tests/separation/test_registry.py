@@ -135,3 +135,14 @@ def test_shipped_env_locks_match_files():
     for eid, yaml_path in config_shas.items():
         digest = hashlib.sha256(yaml_path.read_bytes()).hexdigest()
         assert entries[eid].inference["config_sha256"] == digest, f"{eid} config sha 漂移"
+
+
+def test_msst_constraints_file_pinned():
+    """MSST 家族三个 venv 的真实依赖 pin 文件未进 registry env_lock（该字段哈希的是
+    msst.lock）。本测试是漂移信号：改 runner-scnet-constraints.txt 必须同步更新
+    此哈希，并重跑三个 MSST 家族 runner 的 smoke 验收。"""
+    import hashlib
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    digest = hashlib.sha256(
+        (config_dir / "runner-scnet-constraints.txt").read_bytes()).hexdigest()
+    assert digest == "ab7a963bcd904e94b37ad96e14090a7ca82dd2b04e4f012e011f29b9b5bf70ae"
