@@ -49,6 +49,10 @@ make_archive "$SHA2" "$TMP/two.tar.gz"
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA1"
 grep -q 'lmdj-smoke' "$DEPLOY_TEST_LOG"
 grep -q -- '-p lmdj ' "$DEPLOY_TEST_LOG"
+if grep '^curl ' "$DEPLOY_TEST_LOG" | grep -vq -- '--retry-all-errors'; then
+  echo "health checks must retry transient curl errors" >&2
+  exit 1
+fi
 
 : > "$DEPLOY_TEST_LOG"
 if DEPLOY_TEST_DOCKER_FAIL_EXEC=1 "$ACTIVATE_SCRIPT" "$TMP/two.tar.gz" "$DEPLOY_PATH"; then
