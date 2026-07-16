@@ -4,6 +4,7 @@ SDR 用 museval（BSSEval v4，1s framewise median，MUSDB 惯例）；
 SI-SDR / mixture consistency / 泄漏为自实现纯 numpy——精确定义见
 docs/superpowers/plans/2026-07-16-separation-phase1c-metrics.md
 （fast_bss_eval 0.1.4 无 torch 时 si_sdr 损坏，弃用）。
+注意：SI_SDR_CEIL_DB 只 clip 精确重建（den<eps）；float32 舍入噪声可产生 >120dB 的值——聚合侧需知。
 """
 from __future__ import annotations
 

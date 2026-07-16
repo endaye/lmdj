@@ -36,6 +36,24 @@ class TestSISdr:
 
         assert result_original == pytest.approx(result_scaled_both, abs=1e-5)
 
+    def test_scale_invariance_literal_float64(self):
+        """要点 2b: LITERAL scale invariance with float64: si_sdr(x, 2.5*x) == si_sdr(x, x) == 120.0.
+
+        Using float64 to avoid float32 rounding noise that can push si_sdr above 120 dB.
+        Verifies both the property (left = right) and the ceiling value (120.0).
+        """
+        np.random.seed(200)
+        x = np.random.randn(500, 2).astype(np.float64)
+
+        # Perfect reconstruction (estimate = reference)
+        result_perfect = metrics.si_sdr(x, x)
+        assert result_perfect == pytest.approx(120.0, abs=1e-6)
+
+        # Scaled estimate = scaled reference (true scale invariance)
+        result_scaled = metrics.si_sdr(x, 2.5 * x)
+        assert result_scaled == pytest.approx(120.0, abs=1e-6)
+        assert result_scaled == pytest.approx(result_perfect, abs=1e-6)
+
     def test_monotonicity_decreases_with_noise(self):
         """要点 3: si_sdr monotonically decreases as noise increases (σ=0.1 < σ=0.01)."""
         np.random.seed(42)
@@ -163,6 +181,7 @@ class TestMixtureConsistency:
         residual_energy = float(np.sum(residual ** 2))
         actual_ratio = residual_energy / mix_energy
 
+        assert actual_ratio == pytest.approx(0.01, rel=1e-6)
         assert result == pytest.approx(-20.0, abs=0.1)
 
 
@@ -260,7 +279,7 @@ class TestLeakage:
         # All stems should have very low leakage (highly orthogonal sinusoids)
         for stem, leak in result.items():
             if leak is not None:
-                assert leak < -50, f"Stem {stem} leakage {leak} dB should be < -50 dB (orthogonal sinusoids)"
+                assert leak < -60, f"Stem {stem} leakage {leak} dB should be < -60 dB (orthogonal sinusoids)"
 
     def test_silent_estimate_returns_none(self):
         """要点 7c: leakage returns None when estimate has zero energy."""
