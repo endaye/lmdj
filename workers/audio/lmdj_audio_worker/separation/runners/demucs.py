@@ -35,7 +35,13 @@ def _work(args) -> RunnerOutput:
     if not artifact.exists():
         raise RunnerError(f"checkpoint 缺失: {artifact}", category="checksum")
     with tracker.phase("model_load"):
-        model = load_model(artifact)
+        # demucs.states.load_model 内部对 str/Path 调用 torch.load(path, 'cpu')
+        # 且不传 weights_only，在 torch>=2.6 上会因默认值改为 True 而拒绝反序列化
+        # HTDemucs 类对象。checkpoint 已在 ensure_checkpoint() 中做过 sha256 校验
+        # （registry 锁定的可信来源），这里显式用 weights_only=False 自行 torch.load
+        # 再把 dict 交给 load_model（load_model 接受 dict 直接跳过其内部 torch.load）。
+        package = torch.load(artifact, map_location="cpu", weights_only=False)
+        model = load_model(package)
         model.to(device)
         model.eval()
     if model.samplerate != CANONICAL_SR:
