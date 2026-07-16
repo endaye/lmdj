@@ -50,6 +50,8 @@ jobs:
             exit 1
           }
           echo "sha=$target" >> "$GITHUB_OUTPUT"
+          git show origin/main:scripts/deploy/activate-release.sh > "$RUNNER_TEMP/activate-release.sh"
+          chmod +x "$RUNNER_TEMP/activate-release.sh"
           git checkout --detach "$target"
 
       - uses: actions/setup-node@v6
@@ -90,7 +92,7 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH/incoming'"
           scp "$RUNNER_TEMP/lmdj-$TARGET_SHA.tar.gz" \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz"
-          scp scripts/deploy/activate-release.sh \
+          scp "$RUNNER_TEMP/activate-release.sh" \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/activate-release.sh"
 
       - name: Activate staging release
