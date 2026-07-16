@@ -11,6 +11,7 @@ WORKER="$ROOT/workers/audio"
 PFS_VENV="$WORKER/.venv-pfs"
 SEP_DEMUCS_VENV="$WORKER/.venv-sep-demucs"
 SEP_SCNET_VENV="$WORKER/.venv-sep-scnet"
+SEP_BSROF_VENV="$WORKER/.venv-sep-bs-roformer"
 MSST_DIR="$WORKER/.msst"
 CONSTRAINTS="$WORKER/config/parity-constraints.txt"
 
@@ -25,6 +26,7 @@ LMDJ dev helper
   setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
   setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
   setup-sep-scnet    创建 SCNet runner venv + MSST pinned clone
+  setup-sep-bs-roformer  创建 BS-RoFormer runner venv（复用 MSST clone/constraints）
   separate <id> <audio> [device]   跑单个 separator smoke（默认 mps）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
@@ -127,7 +129,7 @@ cmd_setup_sep_demucs() {
   echo "==> demucs runner venv 就绪"
 }
 
-cmd_setup_sep_scnet() {
+ensure_msst_clone() {
   local lock="$WORKER/config/msst.lock"
   local url commit
   url=$(grep '^url=' "$lock" | cut -d= -f2-)
@@ -137,16 +139,33 @@ cmd_setup_sep_scnet() {
     git clone --no-checkout "$url" "$MSST_DIR"
   fi
   (cd "$MSST_DIR" && git fetch -q origin "$commit" && git checkout -q "$commit")
-  if [ ! -x "$SEP_SCNET_VENV/bin/python" ]; then
-    echo "==> 创建 scnet runner venv"
-    python3 -m venv "$SEP_SCNET_VENV"
+}
+
+setup_msst_family_venv() {
+  local venv="$1"
+  if [ ! -x "$venv/bin/python" ]; then
+    echo "==> 创建 $(basename "$venv")"
+    python3 -m venv "$venv"
   fi
-  "$SEP_SCNET_VENV/bin/pip" -q install -e "$ROOT/packages/core-models" -c "$WORKER/config/runner-scnet-constraints.txt"
-  "$SEP_SCNET_VENV/bin/pip" -q install -e "$ROOT/packages/patchify" -c "$WORKER/config/runner-scnet-constraints.txt"
-  # 安装 constraints 里列出的全部包（constraints 同时作为需求清单与版本锁）
-  grep -v '^#' "$WORKER/config/runner-scnet-constraints.txt" | sed '/^$/d' > /tmp/scnet-reqs.txt
-  "$SEP_SCNET_VENV/bin/pip" -q install -e "$WORKER" -r /tmp/scnet-reqs.txt
+  "$venv/bin/pip" -q install -e "$CORE" -c "$WORKER/config/runner-scnet-constraints.txt"
+  "$venv/bin/pip" -q install -e "$PATCHIFY" -c "$WORKER/config/runner-scnet-constraints.txt"
+  grep -v '^#' "$WORKER/config/runner-scnet-constraints.txt" | sed '/^$/d' > /tmp/msst-reqs.txt
+  "$venv/bin/pip" -q install -e "$WORKER" -r /tmp/msst-reqs.txt
+}
+
+cmd_setup_sep_scnet() {
+  local lock="$WORKER/config/msst.lock"
+  local commit
+  commit=$(grep '^commit=' "$lock" | cut -d= -f2-)
+  ensure_msst_clone
+  setup_msst_family_venv "$SEP_SCNET_VENV"
   echo "==> scnet runner venv 就绪（MSST @ ${commit}）"
+}
+
+cmd_setup_sep_bs_roformer() {
+  ensure_msst_clone
+  setup_msst_family_venv "$SEP_BSROF_VENV"
+  echo "==> bs-roformer runner venv 就绪"
 }
 
 ensure_testsong() {
@@ -224,6 +243,7 @@ case "$cmd" in
   setup-pfs)       cmd_setup_pfs ;;
   setup-sep-demucs) cmd_setup_sep_demucs ;;
   setup-sep-scnet) cmd_setup_sep_scnet ;;
+  setup-sep-bs-roformer) cmd_setup_sep_bs_roformer ;;
   separate)        cmd_separate "$@" ;;
   parity)          cmd_parity ;;
   test)            cmd_test ;;
