@@ -365,10 +365,21 @@ def _aggregate(combos: list[dict]) -> dict:
     si_sdr_means = [o["si_sdr"]["mean"] for o in gt_objectives if o.get("si_sdr", {}).get("mean") is not None]
     mc_values = [o["mixture_consistency"] for o in all_objectives if o.get("mixture_consistency") is not None]
 
+    # leak_worst_db: per-combo max leakage (最坏泄漏), then mean over combos with GT.
+    # 只用于报告可见性；已通过 consistency_leakage 简化参与打分。
+    leak_worst_db_values = []
+    for o in gt_objectives:
+        leakage = o.get("leakage")
+        if isinstance(leakage, dict):
+            stem_values = [v for v in leakage.values() if v is not None]
+            if stem_values:
+                leak_worst_db_values.append(max(stem_values))
+
     separation = {
         "sdr_mean": _mean(sdr_means),
         "si_sdr_mean": _mean(si_sdr_means),
         "consistency_leakage_mean": _mean(mc_values),
+        "leak_worst_db_mean": _mean(leak_worst_db_values),
         "gt_combo_count": len(gt_objectives),
     }
 
@@ -550,6 +561,7 @@ def _build_csv_rows(per_separator_device: dict, scores: dict, gates: dict) -> li
                 "sdr_mean": agg["separation"]["sdr_mean"],
                 "si_sdr_mean": agg["separation"]["si_sdr_mean"],
                 "mixture_consistency_mean": agg["separation"]["consistency_leakage_mean"],
+                "leak_worst_db": agg["separation"]["leak_worst_db_mean"],
                 "passed_rate": agg["patch"]["completed_passed_rate"],
                 "rtf_wall_mean": agg["performance"]["rtf_wall_mean"],
                 "peak_memory_bytes": agg["performance"]["peak_memory_max"],

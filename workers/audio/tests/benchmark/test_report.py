@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from unittest.mock import Mock
 
 import pandas as pd
 import pytest
@@ -224,6 +225,42 @@ class TestCollectRunAggregation:
 
         assert result["per_separator_device"]["sepA"]["cpu"]["structural_stability"] == pytest.approx(0.0)
 
+    def test_leak_worst_db_two_gt_combos_aggregates_to_mean_of_max(self, tmp_path: Path, monkeypatch):
+        """leak_worst_db: per-combo max of stem leakage → mean over combos with GT."""
+        run_dir = tmp_path / "run1"
+        _write_env(run_dir, "macOS-14.5-arm64")
+        _write_combo(run_dir, "song1", "sepA", "cpu", 0, status="completed", performance=_PERF)
+        _write_combo(run_dir, "song2", "sepA", "cpu", 0, status="completed", performance=_PERF)
+
+        # Combo 1: leakage max = -9.0
+        obj1 = {"has_gt": True, "mixture_consistency": -40.0,
+                "sdr": {"mean": 8.0}, "si_sdr": {"mean": 7.5},
+                "leakage": {"drums": -10.0, "bass": -12.0, "vocals": -9.0, "other": -11.0}}
+        # Combo 2: leakage max = -5.0 → mean = (-9.0 + -5.0) / 2 = -7.0
+        obj2 = {"has_gt": True, "mixture_consistency": -38.0,
+                "sdr": {"mean": 7.5}, "si_sdr": {"mean": 7.0},
+                "leakage": {"drums": -6.0, "bass": -5.0, "vocals": -7.0, "other": -8.0}}
+
+        mock_objective = Mock(side_effect=[obj1, obj2])
+        monkeypatch.setattr(report, "objective_for_combo", mock_objective)
+        monkeypatch.setattr(report, "_load_mix", lambda run_dir, dataset_id, track_id: object())
+
+        result = report.collect_run(run_dir, manifests={
+            "ds1": Manifest(dataset_id="ds1", tracks=(
+                Track(id="song1", input="song1.wav", split="full", tags=(),
+                      has_ground_truth=True,
+                      ground_truth={"drums": "song1/drums.wav", "bass": "song1/bass.wav",
+                                   "vocals": "song1/vocals.wav", "other": "song1/other.wav"}),
+                Track(id="song2", input="song2.wav", split="full", tags=(),
+                      has_ground_truth=True,
+                      ground_truth={"drums": "song2/drums.wav", "bass": "song2/bass.wav",
+                                   "vocals": "song2/vocals.wav", "other": "song2/other.wav"}),
+            ))
+        })
+
+        agg = result["per_separator_device"]["sepA"]["cpu"]
+        assert agg["separation"]["leak_worst_db_mean"] == pytest.approx(-7.0)
+
 
 class TestCollectRunObjective:
     def _manifest(self, has_gt: bool = True) -> dict:
@@ -369,10 +406,11 @@ class TestBuildSummary:
         expected_cols = {
             "separator", "device", "total_combos", "completed_combos",
             "completion_rate", "sdr_mean", "si_sdr_mean", "mixture_consistency_mean",
-            "passed_rate", "rtf_wall_mean", "peak_memory_bytes", "total_score",
-            "scored_out_of", "gate_blocked",
+            "leak_worst_db", "passed_rate", "rtf_wall_mean", "peak_memory_bytes",
+            "total_score", "scored_out_of", "gate_blocked",
         }
-        assert expected_cols.issubset(set(df.columns))
+        # Exact set equality — prevent silent column drift
+        assert set(df.columns) == expected_cols
         assert len(df) == 1
         assert df.iloc[0]["separator"] == "sepA"
         assert df.iloc[0]["device"] == "mps"
