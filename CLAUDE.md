@@ -70,6 +70,7 @@ scripts/dev.sh separate <id> <audio> [device]   # run one separator via registry
 scripts/dev.sh bench --dataset M.json --separators a,b --device mps   # benchmark executor: full chain + cache/resume (data root defaults to testdata/audio)
 scripts/dev.sh bench-report --run DIR [...]   # aggregate run(s) -> summary.json/csv with §9 scoring and hard gates
 scripts/dev.sh bench-listen --run DIR         # build anonymized blind-listening package
+python -m lmdj_audio_worker.benchmark.musdb --root <musdb18hq-dir> --out M.json   # generate MUSDB18HQ manifest (workers/audio venv; 1D prep)
 scripts/dev.sh patchify <package_dir> [--out PATH]   # generate patch.json for a package
 scripts/dev.sh song <audio> <song_id>                # full demo pipeline + patchify (needs setup-demo)
 
