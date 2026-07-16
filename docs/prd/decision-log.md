@@ -95,3 +95,9 @@
 - 结论：BS-RoFormer 采用 MSST release v1.0.12 的 `model_bs_roformer_ep_17_sdr_9.6568.ckpt`（ZFTurbo 训练，MUSDB SDR 9.65，唯一过门禁的四轨候选）；Mel-Band RoFormer 采用 MSST release v1.0.11 的 ep_1（SDR 8.22，单文件）——同 release 的 ep_5（SDR 8.94）为 3.5GB 双分卷 zip，与单 artifact 缓存契约冲突，弃选并记录为升级路径（需先扩展 cache/registry 支持多分卷 artifact）；HF 社区 fine-tune 因训练过程可追溯性弱于 ZFTurbo release 一并弃选。三个 MSST 家族 runner（scnet/bs/mel）共享 `runners/_msst.py` 实现、同一 MSST pinned clone 与同一 constraints 文件，但按 spec §5 字面各自独立 venv 运行。
 - 原因：spec §6 对 RoFormer 门禁最严（来源/revision/四轨/许可缺一不可）；社区单目标权重不得伪装四轨。benchmark 公平性让位于基建契约完整性，ep_5 升级路径显式保留。
 - 影响：mel-band 家族在 Phase 1D benchmark 中以 ep_1（非家族最强形态）参赛，解读结果时需注明 ~0.7dB 的形态差；若家族展现潜力，升级 ep_5 是独立的基建扩展 + 重验收。验收补充：两个 roformer 在 MPS 首跑即通过（bs 74.3s / mel 54.1s），无需 batch 调优；真实推理暴露 MSST roformer 运行时依赖（beartype/rotary_embedding_torch/librosa）缺 pin，已补进 constraints 并加漂移守护测试——constraints 文件未进 registry env_lock 是已知缺口，注册表字段级修复列入 Phase 1C backlog。
+
+### 已确认：SI-SDR 自实现、指标归一化与盲听协议（Phase 1C-b）
+
+- 结论：SI-SDR 采用 numpy 自实现（Le Roux 2019 标准公式），全曲整段、逐声道独立计算后均值；弃用 `fast_bss_eval`（0.1.4 版本在无 torch 环境下 si_sdr 计算损坏，已验证复现）。consistency（混合音 L2 范数守恒）与 leakage（stem 频段隔离度）采用自定义指标，精确定义见 plan 2026-07-16-separation-phase1c-metrics.md"自定义指标的精确定义"节。综合分归一化采用同 run 内 min-max 缩放（避免跨 run 之间设备/样本差异导致排序颠覆），得分缺失（盲听项）统一标注为"退化"，盲听按 0–10 线性折算（90 分制数据汇聚）。盲听评测包采用匿名目录（stem 顺序随机化、模型映射隐藏）。
+- 原因：museval 外壳重且依赖重（scipy/numba），benchmark 主进程保持轻量需要子进程评分；si_sdr 标准实现在小模型权重配置下数值稳定性远优于 fast_bss_eval；一致性与泄漏是 Patch 可玩性的关键因子，论文 SDR 不能直接度量；综合分一旦跨 run 排序就无法对标固定架构，同 run 内排序足以驱动模型选型（MUSDB 固定 + 真实歌曲重复跑 3 遍）。
+- 影响：SI-SDR 计算纳入 workers/audio/benchmark/metrics/ 实现；consistency/leakage 指标的定义与验证可追溯至 plan 文档；blind-listening/ 目录生成器加 stem 随机化与 salt 混淆；报告生成时的缺失项处理与盲听三评者聚合需防范极端样本（可玩性 1 分否决）。
