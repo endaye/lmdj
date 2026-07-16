@@ -854,8 +854,11 @@ def run_benchmark(cfg: RunConfig, *, deps: OrchestratorDeps | None = None) -> Ru
             normalized = None
             norm_error = None
             try:
+                # 按 track.id 分目录：不同 track 同名源文件（如都叫 vocal.mp3）
+                # 若共用一个目录会因幂等复用静默拿到第一首的音频
                 normalized = deps.normalize(
-                    resolve_input(track), run_dir / "normalized" / m.dataset_id)
+                    resolve_input(track),
+                    run_dir / "normalized" / m.dataset_id / track.id)
             except Exception as exc:  # noqa: BLE001 —— 记录后继续其他 track
                 norm_error = str(exc)[-2000:]
             for sep_id in cfg.separator_ids:
