@@ -28,6 +28,7 @@ pfs = [
 # 版本由 workers/audio/config/metrics-constraints.txt 锁定（安装时 -c 传入）。
 metrics = [
   "museval",
+  "pandas",
 ]
 
 [project.scripts]
