@@ -1117,6 +1117,10 @@ git commit -m "feat(registry): register htdemucs (verified) and scnet-large (exp
 
 - [ ] **Step 1: Write the failing tests**
 
+> 实施勘误：下方 `OK_RUNNER` 以内联 `-c` 脚本入 command 列表会触发 registry 的占位符校验
+> （`string.Formatter.parse` 把脚本体里的 `{}` 当占位符拒绝）。实际实现改为把脚本写入
+> 临时文件、command 引用其路径——以 `tests/separation/test_smoke_cli.py` 的入库版本为准。
+
 ```python
 # workers/audio/tests/separation/test_smoke_cli.py
 from __future__ import annotations
