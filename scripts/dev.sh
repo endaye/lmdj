@@ -25,6 +25,7 @@ LMDJ dev helper
   setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
   setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
   setup-sep-scnet    创建 SCNet runner venv + MSST pinned clone
+  separate <id> <audio> [device]   跑单个 separator smoke（默认 mps）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
@@ -209,6 +210,12 @@ print(f"unmapped : {data['metadata']['unmapped_element_ids']}")
 EOF
 }
 
+cmd_separate() {
+  [ $# -ge 2 ] || { echo "用法: scripts/dev.sh separate <id> <audio> [device]" >&2; exit 1; }
+  (cd "$ROOT" && "$WORKER/.venv/bin/python" -m lmdj_audio_worker.separation.smoke \
+    --id "$1" --input "$2" --device "${3:-mps}")
+}
+
 cmd="${1:-}"
 [ -n "$cmd" ] && shift || true
 case "$cmd" in
@@ -217,6 +224,7 @@ case "$cmd" in
   setup-pfs)       cmd_setup_pfs ;;
   setup-sep-demucs) cmd_setup_sep_demucs ;;
   setup-sep-scnet) cmd_setup_sep_scnet ;;
+  separate)        cmd_separate "$@" ;;
   parity)          cmd_parity ;;
   test)            cmd_test ;;
   patchify)        cmd_patchify "$@" ;;
