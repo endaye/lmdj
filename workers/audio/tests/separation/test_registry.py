@@ -107,4 +107,23 @@ def test_production_filter(tmp_path):
 
 def test_shipped_registry_file_is_valid():
     shipped = Path(__file__).resolve().parents[2] / "config" / "separators.json"
-    assert registry.load_registry(shipped) == ()
+    entries = registry.load_registry(shipped)
+    by_id = {e.id: e for e in entries}
+    assert set(by_id) == {"htdemucs", "scnet-large"}
+    assert by_id["htdemucs"].status == "verified"
+    assert by_id["scnet-large"].status == "experimental"
+
+
+def test_shipped_env_locks_match_files():
+    import hashlib
+    config_dir = Path(__file__).resolve().parents[2] / "config"
+    entries = {e.id: e for e in registry.load_registry(config_dir / "separators.json")}
+    lock_files = {"htdemucs": config_dir / "runner-demucs-constraints.txt",
+                  "scnet-large": config_dir / "msst.lock"}
+    for eid, lock in lock_files.items():
+        digest = hashlib.sha256(lock.read_bytes()).hexdigest()
+        assert entries[eid].env_lock_sha256 == digest, f"{eid} env lock 漂移"
+    config_sha = hashlib.sha256(
+        (config_dir / "scnet" / "config_musdb18_scnet_large_starrytong.yaml").read_bytes()
+    ).hexdigest()
+    assert entries["scnet-large"].inference["config_sha256"] == config_sha

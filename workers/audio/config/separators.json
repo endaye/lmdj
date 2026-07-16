@@ -1,4 +1,49 @@
 {
   "schema_version": "lmdj.separators.v1",
-  "separators": []
+  "separators": [
+    {
+      "id": "htdemucs",
+      "family": "demucs",
+      "runner": "demucs",
+      "command": ["workers/audio/.venv-sep-demucs/bin/python", "-m",
+                  "lmdj_audio_worker.separation.runners.demucs",
+                  "--input", "{input}", "--output", "{output_dir}",
+                  "--device", "{device}", "--checkpoint-dir", "{checkpoint_dir}",
+                  "--seed", "{seed}"],
+      "source": {"url": "https://dl.fbaipublicfiles.com/demucs/hybrid_transformer/955717e8-8726e21a.th",
+                 "revision": "hybrid_transformer/955717e8 (demucs 4.0.1 remote)"},
+      "artifact_sha256": "8726e21a993978c7ba086d3872e7608d7d5bfca646ca4aca459ffda844faa8b4",
+      "license": {"code": "MIT (adefossez/demucs)", "weights": "MIT (adefossez/demucs)"},
+      "stems": ["drums", "bass", "other", "vocals"],
+      "sample_rate": 44100,
+      "channels": 2,
+      "devices": ["cpu", "mps"],
+      "inference": {"shifts": 0, "split": true, "overlap": 0.25},
+      "env_lock_sha256": "bdaf157e8bc2ec25a2f207848ac2a39618913d1fc67694baa1cc36ef4c34ac6d",
+      "status": "verified"
+    },
+    {
+      "id": "scnet-large",
+      "family": "scnet",
+      "runner": "scnet",
+      "command": ["workers/audio/.venv-sep-scnet/bin/python", "-m",
+                  "lmdj_audio_worker.separation.runners.scnet",
+                  "--input", "{input}", "--output", "{output_dir}",
+                  "--device", "{device}", "--checkpoint-dir", "{checkpoint_dir}",
+                  "--seed", "{seed}"],
+      "source": {"url": "https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.9/SCNet-large_starrytong_fixed.ckpt",
+                 "revision": "MSST release v1.0.9 (trained by starrytong, MUSDB SDR 9.70)"},
+      "artifact_sha256": "65900dfa07d6b6e5d784c0f143920200a4bd281d6e78a806c549d0b912d5885e",
+      "license": {"code": "MIT (ZFTurbo/MSST + starrytong/SCNet)", "weights": "MIT (MSST release v1.0.9)"},
+      "stems": ["drums", "bass", "other", "vocals"],
+      "sample_rate": 44100,
+      "channels": 2,
+      "devices": ["cpu", "mps"],
+      "inference": {"model_type": "scnet",
+                    "config": "config/scnet/config_musdb18_scnet_large_starrytong.yaml",
+                    "config_sha256": "3efa43af7c50d4a6e1105d2599d2d6a31c8012ee99eaad9a7e80e057945d44ee"},
+      "env_lock_sha256": "2136e91f98f4431408ea04d26018372b57117f234ce2c9c93268391aef63f708",
+      "status": "experimental"
+    }
+  ]
 }
