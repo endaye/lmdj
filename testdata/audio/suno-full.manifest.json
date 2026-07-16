@@ -1,0 +1,30 @@
+{
+  "schema_version": "lmdj.benchmark-manifest.v1",
+  "dataset_id": "suno-full",
+  "tracks": [
+    {"id": "boom-bap-01", "input": "suno/boom-bap/boom-bap-01.mp3", "split": "smoke",
+     "tags": ["boom-bap"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "boom-bap-02", "input": "suno/boom-bap/boom-bap-02.mp3", "split": "full",
+     "tags": ["boom-bap"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "city-pop-01", "input": "suno/city-pop/city-pop-01.mp3", "split": "smoke",
+     "tags": ["city-pop"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "city-pop-02", "input": "suno/city-pop/city-pop-02.mp3", "split": "full",
+     "tags": ["city-pop"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "g-funk-01", "input": "suno/g-funk/g-funk-01.mp3", "split": "smoke",
+     "tags": ["g-funk"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "g-funk-02", "input": "suno/g-funk/g-funk-02.mp3", "split": "full",
+     "tags": ["g-funk"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "g-funk-03", "input": "suno/g-funk/g-funk-03.mp3", "split": "full",
+     "tags": ["g-funk"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "g-funk-04", "input": "suno/g-funk/g-funk-04.mp3", "split": "full",
+     "tags": ["g-funk"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "jazzy-hip-hop-01", "input": "suno/jazzy-hip-hop/jazzy-hip-hop-01.mp3", "split": "smoke",
+     "tags": ["jazzy-hip-hop"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "jazzy-hip-hop-02", "input": "suno/jazzy-hip-hop/jazzy-hip-hop-02.mp3", "split": "full",
+     "tags": ["jazzy-hip-hop"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "jazzy-hip-hop-03", "input": "suno/jazzy-hip-hop/jazzy-hip-hop-03.mp3", "split": "full",
+     "tags": ["jazzy-hip-hop"], "has_ground_truth": false, "ground_truth": null},
+    {"id": "jazzy-hip-hop-04", "input": "suno/jazzy-hip-hop/jazzy-hip-hop-04.mp3", "split": "full",
+     "tags": ["jazzy-hip-hop"], "has_ground_truth": false, "ground_truth": null}
+  ]
+}

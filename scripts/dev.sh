@@ -30,6 +30,7 @@ LMDJ dev helper
   setup-sep-bs-roformer  创建 BS-RoFormer runner venv（复用 MSST clone/constraints）
   setup-sep-mel-roformer 创建 Mel-Band RoFormer runner venv（复用 MSST clone/constraints）
   separate <id> <audio> [device]   跑单个 separator smoke（默认 mps）
+  bench --dataset M.json --separators a,b --device mps   benchmark 执行层（data root 默认 testdata/audio）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
@@ -243,6 +244,11 @@ cmd_separate() {
     --id "$1" --input "$2" --device "${3:-mps}")
 }
 
+cmd_bench() {
+  (cd "$ROOT" && LMDJ_BENCH_DATA_ROOT="${LMDJ_BENCH_DATA_ROOT:-$ROOT/testdata/audio}" \
+    "$WORKER/.venv/bin/python" -m lmdj_audio_worker.cli benchmark "$@")
+}
+
 cmd="${1:-}"
 [ -n "$cmd" ] && shift || true
 case "$cmd" in
@@ -254,6 +260,7 @@ case "$cmd" in
   setup-sep-bs-roformer) cmd_setup_sep_bs_roformer ;;
   setup-sep-mel-roformer) cmd_setup_sep_mel_roformer ;;
   separate)        cmd_separate "$@" ;;
+  bench)           cmd_bench "$@" ;;
   parity)          cmd_parity ;;
   test)            cmd_test ;;
   patchify)        cmd_patchify "$@" ;;
