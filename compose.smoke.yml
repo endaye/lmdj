@@ -1,0 +1,5 @@
+services:
+  app:
+    ports:
+      - "127.0.0.1:${LMDJ_SMOKE_PORT:-18000}:8000"
+    restart: "no"

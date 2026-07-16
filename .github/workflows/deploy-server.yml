@@ -1,0 +1,105 @@
+name: Deploy server
+
+on:
+  workflow_dispatch:
+    inputs:
+      commit_sha:
+        description: Full main commit SHA; leave empty for current main
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve and verify main SHA
+        id: target
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUESTED_SHA: ${{ inputs.commit_sha }}
+        run: |
+          git fetch origin main
+          target="${REQUESTED_SHA:-$(git rev-parse origin/main)}"
+          if [[ ! "$target" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "commit_sha must be a full 40-character lowercase SHA" >&2
+            exit 1
+          fi
+          git cat-file -e "${target}^{commit}"
+          git merge-base --is-ancestor "$target" origin/main || {
+            echo "$target is not reachable from origin/main" >&2
+            exit 1
+          }
+          run_id="$(gh run list --commit "$target" --workflow ci.yml --status success \
+            --json databaseId --jq '.[0].databaseId')"
+          test -n "$run_id" || {
+            echo "no successful CI run found for $target" >&2
+            exit 1
+          }
+          echo "sha=$target" >> "$GITHUB_OUTPUT"
+          git checkout --detach "$target"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Build web
+        working-directory: apps/web
+        env:
+          VITE_API_BASE: /api
+        run: npm ci && npm run build
+
+      - name: Package release
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: scripts/deploy/package-release.sh "$TARGET_SHA" "$RUNNER_TEMP/lmdj-$TARGET_SHA.tar.gz"
+
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_SSH_KNOWN_HOSTS: ${{ secrets.DEPLOY_SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+          printf '%s\n' "$DEPLOY_SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+
+      - name: Upload release
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH/incoming'"
+          scp "$RUNNER_TEMP/lmdj-$TARGET_SHA.tar.gz" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz"
+          scp scripts/deploy/activate-release.sh \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/activate-release.sh"
+
+      - name: Activate staging release
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "bash '$DEPLOY_PATH/incoming/activate-release.sh' \
+             '$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz' '$DEPLOY_PATH'"
