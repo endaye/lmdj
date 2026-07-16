@@ -57,7 +57,8 @@ docker compose -p lmdj-smoke \
   -f "$RELEASE/compose.yml" -f "$RELEASE/compose.smoke.yml" \
   up -d --build app
 curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-  --retry-connrefused http://127.0.0.1:18000/health >/dev/null
+  --retry-connrefused --retry-all-errors \
+  http://127.0.0.1:18000/health >/dev/null
 smoke_down
 trap - EXIT
 
@@ -72,10 +73,12 @@ if ! (
     /opt/app-venv/bin/python -c \
     'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/health"))["ok"] is True' &&
   curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-    --retry-connrefused --insecure --resolve "$DOMAIN:443:127.0.0.1" \
+    --retry-connrefused --retry-all-errors \
+    --insecure --resolve "$DOMAIN:443:127.0.0.1" \
     "https://$DOMAIN/" >/dev/null &&
   curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-    --retry-connrefused --insecure --resolve "$DOMAIN:443:127.0.0.1" \
+    --retry-connrefused --retry-all-errors \
+    --insecure --resolve "$DOMAIN:443:127.0.0.1" \
     "https://$DOMAIN/api/health" >/dev/null
 ); then
   (
