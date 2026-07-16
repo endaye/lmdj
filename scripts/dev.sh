@@ -10,6 +10,8 @@ TESTSONG="$DEMO/output/testsong"
 WORKER="$ROOT/workers/audio"
 PFS_VENV="$WORKER/.venv-pfs"
 SEP_DEMUCS_VENV="$WORKER/.venv-sep-demucs"
+SEP_SCNET_VENV="$WORKER/.venv-sep-scnet"
+MSST_DIR="$WORKER/.msst"
 CONSTRAINTS="$WORKER/config/parity-constraints.txt"
 
 usage() {
@@ -22,6 +24,7 @@ LMDJ dev helper
   setup-demo         创建参考 demo 的 venv（重依赖 demucs/torch，首次下载很大）
   setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
   setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
+  setup-sep-scnet    创建 SCNet runner venv + MSST pinned clone
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
@@ -123,6 +126,28 @@ cmd_setup_sep_demucs() {
   echo "==> demucs runner venv 就绪"
 }
 
+cmd_setup_sep_scnet() {
+  local lock="$WORKER/config/msst.lock"
+  local url commit
+  url=$(grep '^url=' "$lock" | cut -d= -f2-)
+  commit=$(grep '^commit=' "$lock" | cut -d= -f2-)
+  if [ ! -d "$MSST_DIR/.git" ]; then
+    echo "==> clone MSST @ ${commit}"
+    git clone --no-checkout "$url" "$MSST_DIR"
+  fi
+  (cd "$MSST_DIR" && git fetch -q origin "$commit" && git checkout -q "$commit")
+  if [ ! -x "$SEP_SCNET_VENV/bin/python" ]; then
+    echo "==> 创建 scnet runner venv"
+    python3 -m venv "$SEP_SCNET_VENV"
+  fi
+  "$SEP_SCNET_VENV/bin/pip" -q install -e "$ROOT/packages/core-models" -c "$WORKER/config/runner-scnet-constraints.txt"
+  "$SEP_SCNET_VENV/bin/pip" -q install -e "$ROOT/packages/patchify" -c "$WORKER/config/runner-scnet-constraints.txt"
+  # 安装 constraints 里列出的全部包（constraints 同时作为需求清单与版本锁）
+  grep -v '^#' "$WORKER/config/runner-scnet-constraints.txt" | sed '/^$/d' > /tmp/scnet-reqs.txt
+  "$SEP_SCNET_VENV/bin/pip" -q install -e "$WORKER" -r /tmp/scnet-reqs.txt
+  echo "==> scnet runner venv 就绪（MSST @ ${commit}）"
+}
+
 ensure_testsong() {
   if [ ! -f "$TESTSONG/lanes.json" ]; then
     ensure_demo_venv
@@ -191,6 +216,7 @@ case "$cmd" in
   setup-demo)      cmd_setup_demo ;;
   setup-pfs)       cmd_setup_pfs ;;
   setup-sep-demucs) cmd_setup_sep_demucs ;;
+  setup-sep-scnet) cmd_setup_sep_scnet ;;
   parity)          cmd_parity ;;
   test)            cmd_test ;;
   patchify)        cmd_patchify "$@" ;;
