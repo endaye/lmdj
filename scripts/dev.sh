@@ -9,6 +9,7 @@ DEMO="$ROOT/references/demos/lmdj-song-pipeline"
 TESTSONG="$DEMO/output/testsong"
 WORKER="$ROOT/workers/audio"
 PFS_VENV="$WORKER/.venv-pfs"
+SEP_DEMUCS_VENV="$WORKER/.venv-sep-demucs"
 CONSTRAINTS="$WORKER/config/parity-constraints.txt"
 
 usage() {
@@ -20,6 +21,7 @@ LMDJ dev helper
   setup              创建/补齐 packages 的 venv（core-models + patchify），幂等
   setup-demo         创建参考 demo 的 venv（重依赖 demucs/torch，首次下载很大）
   setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
+  setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
@@ -110,6 +112,17 @@ cmd_setup_pfs() {
   echo "==> pfs venv 就绪"
 }
 
+cmd_setup_sep_demucs() {
+  if [ ! -x "$SEP_DEMUCS_VENV/bin/python" ]; then
+    echo "==> 创建 demucs runner venv"
+    python3 -m venv "$SEP_DEMUCS_VENV"
+  fi
+  "$SEP_DEMUCS_VENV/bin/pip" -q install -e "$CORE" -c "$WORKER/config/runner-demucs-constraints.txt"
+  "$SEP_DEMUCS_VENV/bin/pip" -q install -e "$PATCHIFY" -c "$WORKER/config/runner-demucs-constraints.txt"
+  "$SEP_DEMUCS_VENV/bin/pip" -q install -e "$WORKER" demucs soundfile -c "$WORKER/config/runner-demucs-constraints.txt"
+  echo "==> demucs runner venv 就绪"
+}
+
 ensure_testsong() {
   if [ ! -f "$TESTSONG/lanes.json" ]; then
     ensure_demo_venv
@@ -174,15 +187,16 @@ EOF
 cmd="${1:-}"
 [ -n "$cmd" ] && shift || true
 case "$cmd" in
-  setup)      cmd_setup ;;
-  setup-demo) cmd_setup_demo ;;
-  setup-pfs)  cmd_setup_pfs ;;
-  parity)     cmd_parity ;;
-  test)       cmd_test ;;
-  patchify)   cmd_patchify "$@" ;;
-  song)       cmd_song "$@" ;;
-  smoke)      cmd_smoke ;;
-  all)        cmd_setup; cmd_test; cmd_smoke ;;
+  setup)           cmd_setup ;;
+  setup-demo)      cmd_setup_demo ;;
+  setup-pfs)       cmd_setup_pfs ;;
+  setup-sep-demucs) cmd_setup_sep_demucs ;;
+  parity)          cmd_parity ;;
+  test)            cmd_test ;;
+  patchify)        cmd_patchify "$@" ;;
+  song)            cmd_song "$@" ;;
+  smoke)           cmd_smoke ;;
+  all)             cmd_setup; cmd_test; cmd_smoke ;;
   ""|-h|--help|help) usage ;;
-  *)          echo "未知命令: $cmd" >&2; usage; exit 1 ;;
+  *)               echo "未知命令: $cmd" >&2; usage; exit 1 ;;
 esac
