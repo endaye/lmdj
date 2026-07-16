@@ -60,7 +60,7 @@ def test_environment_json_sha256_matches_recomputed_hashes(tmp_path):
         tmp_path / "benchmarks", "run-001", [manifest_path], registry_path, {})
 
     env = json.loads((run_dir / "environment.json").read_text())
-    for fname in ("parity-constraints.txt", "runner-scnet-constraints.txt", "msst.lock"):
+    for fname in ("parity-constraints.txt", "runner-scnet-constraints.txt", "msst.lock", "metrics-constraints.txt"):
         expected = hashlib.sha256((_CONFIG_DIR / fname).read_bytes()).hexdigest()
         assert env["config_sha256"][fname] == expected
     assert "platform" in env

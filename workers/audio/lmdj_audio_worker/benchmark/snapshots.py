@@ -21,7 +21,7 @@ from pathlib import Path
 RUN_ID_RE = re.compile(r"[A-Za-z0-9_-]+")
 
 _DATA_ROOT_ENV_VAR = "LMDJ_BENCH_DATA_ROOT"
-_CONFIG_FILES = ("parity-constraints.txt", "runner-scnet-constraints.txt", "msst.lock")
+_CONFIG_FILES = ("parity-constraints.txt", "runner-scnet-constraints.txt", "msst.lock", "metrics-constraints.txt")
 _CONFIG_DIR = Path(__file__).resolve().parents[2] / "config"
 
 

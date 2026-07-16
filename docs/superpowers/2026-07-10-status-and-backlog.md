@@ -16,6 +16,7 @@
 | #8 | Separation Phase 1A：HT Demucs（verified）+ SCNet-large（experimental）真实 runner 与 registry 条目，MPS 内存采样，`dev.sh separate` smoke（Mac MPS 验收 + canonical→compat→pfs→patchify 链路 sanity）。plan: `docs/superpowers/plans/2026-07-16-separation-phase1a.md` | `workers/audio/separation/runners`、`config/` |
 | #9 | Separation Phase 1B：BS-RoFormer（SDR 9.65）+ Mel-Band RoFormer（SDR 8.22）四轨 runner 与 experimental registry 条目；MSST 家族共享实现抽取（scnet 薄壳化）；Mac MPS 验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1b.md` | `workers/audio/separation/runners`、`config/` |
 | #10 | Separation Phase 1C-a：benchmark 执行层——manifest schema/loader、ffmpeg 输入归一化、orchestrator（全链 + 六元组缓存 key + resume + 单组合失败不中断）、`dev.sh bench` CLI；suno mini-run 真实验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1c-exec.md` | `workers/audio/benchmark`、`testdata/` |
+| #11 | Separation Phase 1C-b：指标/评分/报告/盲听打包（museval SDR + 自实现 SI-SDR/一致性/泄漏，§9 权重与硬门槛，summary.json/csv + 跨平台 merge，匿名盲听包）。plan: docs/superpowers/plans/2026-07-16-separation-phase1c-metrics.md | workers/audio/benchmark |
 
 ## 当前可跑链路（浏览器已亲测闭环）
 
@@ -40,8 +41,8 @@
 
 ## 下一步候选（优先级建议）
 
-1. **Separation Phase 1C-b（§9 指标/评分/summary/盲听打包）** —— benchmark 数据的聚合/评分、summary.json/csv 生成、盲听打包、稳定性重复子集策略。
-2. **Separation Phase 1D 前置物料** —— MUSDB18HQ 下载（~30GB，需注册）；真实歌曲集扩充至 10–20 首（suno 现 12 首可作起点）。
+1. **Separation Phase 1D 前置物料** —— MUSDB18HQ 下载（~30GB，需注册）；真实歌曲集扩充至 10–20 首（suno 现 12 首可作起点）。
+2. **Separation Phase 1D 执行** —— Mac MPS 全量 benchmark + Linux CPU 子集验证 + 盲听实测 → 依 §9.5 硬门槛与综合分产出选型报告（spec §13 Review 节点）。
 3. **`workers/generation`（云架构 Phase 2 入口）** —— idea/creative brief → 音乐材料 → 接 Audio Worker/Patchify，实现"一句话生成 patch"。产品叙事上的下一个大跳。
 4. **Patch View 增强（纯前端，schema 已预留）** —— Scenes 切换、量化触发（`behavior.quantize` 目前读取不执行）、trigger_group 组员展开。
 5. **apps/api 生产化前置** —— 队列（Redis/RQ，infra 待决）、鉴权/限流、对象存储、Postgres（jobs/patches/elements/lineage）。infra spec 已有蓝图。

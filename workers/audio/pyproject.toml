@@ -24,6 +24,12 @@ pfs = [
   "scikit-learn",
   "pretty_midi",
 ]
+# 指标计算依赖。
+# 版本由 workers/audio/config/metrics-constraints.txt 锁定（安装时 -c 传入）。
+metrics = [
+  "museval",
+  "pandas",
+]
 
 [project.scripts]
 lmdj-audio-worker = "lmdj_audio_worker.cli:main"
