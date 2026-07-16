@@ -1391,7 +1391,13 @@ def build_command(entry: SeparatorEntry, request: SeparationRequest,
         "seed": str(request.seed),
         "repeat_id": str(request.repeat_id),
     }
-    return [part.format(**mapping) for part in entry.command]
+    # 不用 str.format：command 元素可能含字面量 {}（如内嵌脚本/JSON），只做 {key} 精确替换
+    result = []
+    for part in entry.command:
+        for key, value in mapping.items():
+            part = part.replace(f"{{{key}}}", value)
+        result.append(part)
+    return result
 
 
 def _tail(stream: object) -> str:

@@ -55,6 +55,7 @@ dist/
 __pycache__/
 *.py[cod]
 .venv/
+.venv-pfs/
 *.egg-info/
 .pytest_cache/
 

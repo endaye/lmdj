@@ -12,6 +12,7 @@
 | #3 | Audio Worker（音频 → pipeline 子进程 → patchify → patch.json，status.json 状态机 + CLI） | `workers/audio` |
 | #4 | App Backend（FastAPI：upload → job → status → patch 产物） | `apps/api` |
 | #6 | Web 接入 API（浏览器传歌 → 轮询 → 玩到 patch，与拖目录/示例并存） | `apps/web` |
+| #7 | Separation Phase 0（0A+0B）：`lmdj.separation.v1` contract / checkpoint registry / runner 协议（orchestrator 合成失败记录）+ `pipeline_from_stems`（阶段 3–6 逐字节迁移，专用 `.venv-pfs`，constraints 锁版本）+ frozen-stems parity 门槛（`scripts/dev.sh parity`，testsong 全项通过、两侧 patch_id 一致）。spec: `docs/superpowers/specs/2026-07-15-multi-separator-benchmark-design.md`；plan: `docs/superpowers/plans/2026-07-15-separation-phase0.md`。下一步：Phase 1A（HT Demucs + SCNet runners，registry 落真实条目）。 | `workers/audio/separation`、`workers/audio/pipeline_from_stems`、`config/` |
 
 ## 当前可跑链路（浏览器已亲测闭环）
 
