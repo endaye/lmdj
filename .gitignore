@@ -66,6 +66,10 @@ references/demos/lmdj-song-pipeline/output/
 # Audio worker 本地 job 产物
 workers/audio/jobs/
 
+# SCNet runner: MSST pinned clone + runner venvs (Task 4)
+workers/audio/.msst
+workers/audio/.venv-sep-*
+
 # App API 本地 job 产物
 apps/api/jobs/
 

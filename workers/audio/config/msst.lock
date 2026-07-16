@@ -1,0 +1,4 @@
+# MSST（SCNet 推理框架）pinned clone 锁。env_lock_sha256（registry scnet-large 条目）= 本文件的 SHA-256。
+# 升级方式：改 commit 重跑 setup-sep-scnet + Task 8 验收；不得在 clone 内打补丁。
+url=https://github.com/ZFTurbo/Music-Source-Separation-Training.git
+commit=83d495dfc81b2ede9bc62f4209619f8bdfd14995

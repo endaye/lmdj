@@ -81,3 +81,11 @@
 - 结论：separator 生产接入（Phase 2A）后，产品 job 统一走 `separator runner 子进程 → PipelineFromStemsRunner 子进程 → Patchify`，包括选 Demucs 时也不再经过 demo 的 `song-pipeline` 整链；`DemoPipelineRunner` 保留到 Phase 2C 端到端验证通过后退役。
 - 原因：双链路并存意味着 Demucs 与其他模型走不同代码路径，benchmark 结论对生产不成立；parity 门槛的存在正是为了让新链安全替换旧链。
 - 影响：demo 从此只剩 fixture 与 parity 基线角色；CLAUDE.md/AGENTS.md 中"audio → demo pipeline subprocess"的链路描述在 Phase 2C 后需同步改写。
+
+## 2026-07-16
+
+### 已确认：SCNet-large 选 starrytong fixed checkpoint，MSST 以 pinned clone 方式复用
+
+- 结论：SCNet-large 采用 MSST release v1.0.9 的 `SCNet-large_starrytong_fixed.ckpt`（starrytong 训练，MUSDB test SDR 9.70，优于 v1.0.8 的 9.32），config 同 release 入库 vendored；推理复用 MSST 框架的 `demix`，以 `config/msst.lock` pinned commit clone（gitignored），不 pip 安装、不修改其源码。代码与权重 license 均为 MIT。MPS 适配：inference.batch_size 由上游的 8 调为 1（chunk_size 不变），MPS 峰值设备内存 ~11.2GB、CPU 峰值 RSS 从 ~27.9GB 降至 ~5.2GB（代价 CPU 墙钟 ~1.5x）；调优字段与 config_sha256 已同步进 registry。
+- 原因：MSST 不是 pip 包；pinned clone + lock 文件哈希进 registry `env_lock_sha256`，与 constraints 方案同构，满足 spec §6 可追溯门禁；两个候选 checkpoint 中选 SDR 更高且训练者可追溯的一个。
+- 影响：升级 SCNet 推理代码 = 改 msst.lock 的 commit 并重跑 smoke 验收；registry 条目状态 experimental，双平台验证后方可升 verified（spec §6）。后续升级 upstream config 时必须重放该调优并重跑双设备 smoke。
