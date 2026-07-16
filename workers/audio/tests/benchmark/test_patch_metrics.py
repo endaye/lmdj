@@ -276,6 +276,33 @@ class TestBadPatchJson:
         assert result["patch_loads"] is False
 
 
+class TestMalformedLanes:
+    def test_malformed_lanes_degrades_to_none(self, tmp_path: Path):
+        """lanes 包含非 dict 条目（如整数）时，整体降级为 None，不抛异常。"""
+        combo_dir = tmp_path / "combo"
+        _write_combo(combo_dir, status="completed")
+        _write_report(combo_dir, TRACK_ID, {
+            "status": "passed",
+            "score": 0.6,
+            "n_samples": 2,
+            "lanes": ["drum_low", 123],  # 第二条目是非 dict，应降级
+            "attempts": [{"window": 0, "start": 0.0, "score": 0.6}],
+        })
+        _write_patch(combo_dir, TRACK_ID, {"patch_id": f"{TRACK_ID}-abcd1234"})
+
+        result = patch_metrics_for_combo(combo_dir, TRACK_ID)
+
+        # lanes 相关字段都应为 None，其他字段独立
+        assert result["drum_degraded"] is None
+        assert result["n_lanes"] is None
+        assert result["lane_names"] is None
+        # report 的其他字段不受影响
+        assert result["validation_score"] == 0.6
+        assert result["n_samples"] == 2
+        assert result["attempts"] == 1
+        assert result["patch_loads"] is True
+
+
 class TestNonexistentComboDir:
     def test_entirely_missing_combo_dir_does_not_raise(self, tmp_path: Path):
         combo_dir = tmp_path / "does-not-exist"

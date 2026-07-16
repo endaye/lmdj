@@ -50,10 +50,11 @@ def patch_metrics_for_combo(combo_dir: Path, track_id: str) -> dict:
             attempts = len(attempts_list)
 
         lanes = report.get("lanes")
-        if isinstance(lanes, list):
+        if isinstance(lanes, list) and all(isinstance(lane, dict) for lane in lanes):
             n_lanes = len(lanes)
             lane_names = [lane.get("name") for lane in lanes]
             drum_degraded = any(name in _DEGRADED_DRUM_NAMES for name in lane_names)
+        # lanes 包含非 dict 条目时，整体降级为 None（结构不可用）
 
     patch = _read_json(pfs_dir / "patch.json")
     patch_loads = patch is not None and "patch_id" in patch
