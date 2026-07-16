@@ -87,3 +87,6 @@ testdata/audio/suno/**/*.mp3
 
 # Playwright MCP cache
 .playwright-mcp/
+
+# Benchmark run outputs (spec §8: run.json/snapshots/results, local only)
+benchmarks/
