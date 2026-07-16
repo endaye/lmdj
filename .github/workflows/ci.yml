@@ -52,7 +52,9 @@ jobs:
             packages/core-models/pyproject.toml
             packages/patchify/pyproject.toml
             workers/audio/pyproject.toml
-      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[test]"
+            workers/audio/config/parity-constraints.txt
+      # pfs extra 带 DSP 测试依赖（soundfile/numpy/librosa/...），版本由 parity-constraints 锁定
+      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[test,pfs]" -c workers/audio/config/parity-constraints.txt
       - run: python -m pytest workers/audio/tests -q
 
   api:
