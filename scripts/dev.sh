@@ -12,6 +12,7 @@ PFS_VENV="$WORKER/.venv-pfs"
 SEP_DEMUCS_VENV="$WORKER/.venv-sep-demucs"
 SEP_SCNET_VENV="$WORKER/.venv-sep-scnet"
 SEP_BSROF_VENV="$WORKER/.venv-sep-bs-roformer"
+SEP_MELROF_VENV="$WORKER/.venv-sep-mel-roformer"
 MSST_DIR="$WORKER/.msst"
 CONSTRAINTS="$WORKER/config/parity-constraints.txt"
 
@@ -27,6 +28,7 @@ LMDJ dev helper
   setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
   setup-sep-scnet    创建 SCNet runner venv + MSST pinned clone
   setup-sep-bs-roformer  创建 BS-RoFormer runner venv（复用 MSST clone/constraints）
+  setup-sep-mel-roformer 创建 Mel-Band RoFormer runner venv（复用 MSST clone/constraints）
   separate <id> <audio> [device]   跑单个 separator smoke（默认 mps）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
@@ -168,6 +170,12 @@ cmd_setup_sep_bs_roformer() {
   echo "==> bs-roformer runner venv 就绪"
 }
 
+cmd_setup_sep_mel_roformer() {
+  ensure_msst_clone
+  setup_msst_family_venv "$SEP_MELROF_VENV"
+  echo "==> mel-roformer runner venv 就绪"
+}
+
 ensure_testsong() {
   if [ ! -f "$TESTSONG/lanes.json" ]; then
     ensure_demo_venv
@@ -244,6 +252,7 @@ case "$cmd" in
   setup-sep-demucs) cmd_setup_sep_demucs ;;
   setup-sep-scnet) cmd_setup_sep_scnet ;;
   setup-sep-bs-roformer) cmd_setup_sep_bs_roformer ;;
+  setup-sep-mel-roformer) cmd_setup_sep_mel_roformer ;;
   separate)        cmd_separate "$@" ;;
   parity)          cmd_parity ;;
   test)            cmd_test ;;
