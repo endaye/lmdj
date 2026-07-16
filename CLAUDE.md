@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Git workflow
+
+`main` is protected and must remain deployable. During normal development, do not create, modify, or commit project files directly on local `main`.
+
+- Before changing files, update `main`, then create a short-lived branch. Codex-created branches use the `codex/` prefix; use an isolated worktree when the work should not disturb the main checkout.
+- Complete and verify all changes on the short-lived branch, push it, and merge it into `main` only through a Pull Request after required CI and review gates pass. Use squash merge unless the repository policy explicitly changes.
+- After merge, delete the short-lived branch. Use `main` only for synchronization, read-only inspection, creating branches, and deploying already-merged commits.
+- If an intended edit starts while the current branch is `main`, stop and create or switch to a short-lived branch before modifying files. Do not make the edits first and move them later.
+- An administrator may bypass the PR path only for incident recovery or to repair branch protection that blocks its own fix. Keep the bypass minimal and follow it with a PR, issue, or incident record describing the reason, changes, and verification. Urgency alone is not an exception.
+
 ## Repository layout
 
 The git root (`lmdj/`) started as a PRD, architecture, and reference-material workspace. The product stack is now built out across three source boundaries:
