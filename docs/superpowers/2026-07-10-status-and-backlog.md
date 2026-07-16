@@ -41,7 +41,7 @@
 ## 下一步候选（优先级建议）
 
 1. **Separation Phase 1C-b（§9 指标/评分/summary/盲听打包）** —— benchmark 数据的聚合/评分、summary.json/csv 生成、盲听打包、稳定性重复子集策略。
-2. **Separation Phase 1D 前置物料** —— MUSDB18HQ 下载（~30GB，需注册）；真实歌曲集扩充至 10–20 首（suno 现 11 首可作起点）。
+2. **Separation Phase 1D 前置物料** —— MUSDB18HQ 下载（~30GB，需注册）；真实歌曲集扩充至 10–20 首（suno 现 12 首可作起点）。
 3. **`workers/generation`（云架构 Phase 2 入口）** —— idea/creative brief → 音乐材料 → 接 Audio Worker/Patchify，实现"一句话生成 patch"。产品叙事上的下一个大跳。
 4. **Patch View 增强（纯前端，schema 已预留）** —— Scenes 切换、量化触发（`behavior.quantize` 目前读取不执行）、trigger_group 组员展开。
 5. **apps/api 生产化前置** —— 队列（Redis/RQ，infra 待决）、鉴权/限流、对象存储、Postgres（jobs/patches/elements/lineage）。infra spec 已有蓝图。
