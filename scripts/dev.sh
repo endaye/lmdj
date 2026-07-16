@@ -31,6 +31,8 @@ LMDJ dev helper
   setup-sep-mel-roformer 创建 Mel-Band RoFormer runner venv（复用 MSST clone/constraints）
   separate <id> <audio> [device]   跑单个 separator smoke（默认 mps）
   bench --dataset M.json --separators a,b --device mps   benchmark 执行层（data root 默认 testdata/audio）
+  bench-report --run DIR [--run DIR2] ...   聚合 benchmark run，产出 summary.json/csv + 对齐文本表（spec §9）
+  bench-listen --run DIR [--no-stems]       把一个 run 的 completed 组合打包成匿名盲听样本（spec §8/§9.3）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
   test               跑两个 package 的全部测试（23 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
@@ -249,6 +251,16 @@ cmd_bench() {
     "$WORKER/.venv/bin/python" -m lmdj_audio_worker.cli benchmark "$@")
 }
 
+cmd_bench_report() {
+  [ $# -ge 1 ] || { echo "用法: scripts/dev.sh bench-report --run DIR [--run DIR2] [--listening-scores F] [--attestations F] [--out DIR]" >&2; exit 1; }
+  (cd "$ROOT" && "$WORKER/.venv/bin/python" -m lmdj_audio_worker.cli report "$@")
+}
+
+cmd_bench_listen() {
+  [ $# -ge 1 ] || { echo "用法: scripts/dev.sh bench-listen --run DIR [--no-stems]" >&2; exit 1; }
+  (cd "$ROOT" && "$WORKER/.venv/bin/python" -m lmdj_audio_worker.cli listening-package "$@")
+}
+
 cmd="${1:-}"
 [ -n "$cmd" ] && shift || true
 case "$cmd" in
@@ -261,6 +273,8 @@ case "$cmd" in
   setup-sep-mel-roformer) cmd_setup_sep_mel_roformer ;;
   separate)        cmd_separate "$@" ;;
   bench)           cmd_bench "$@" ;;
+  bench-report)    cmd_bench_report "$@" ;;
+  bench-listen)    cmd_bench_listen "$@" ;;
   parity)          cmd_parity ;;
   test)            cmd_test ;;
   patchify)        cmd_patchify "$@" ;;
