@@ -41,7 +41,9 @@
       "devices": ["cpu", "mps"],
       "inference": {"model_type": "scnet",
                     "config": "config/scnet/config_musdb18_scnet_large_starrytong.yaml",
-                    "config_sha256": "3efa43af7c50d4a6e1105d2599d2d6a31c8012ee99eaad9a7e80e057945d44ee"},
+                    "config_sha256": "db5fa0d98f2cffcfeeec032ab8aae26193e242525c0010a798b8537e505e499c",
+                    "batch_size": 1,
+                    "chunk_size": 485100},
       "env_lock_sha256": "2136e91f98f4431408ea04d26018372b57117f234ce2c9c93268391aef63f708",
       "status": "experimental"
     }

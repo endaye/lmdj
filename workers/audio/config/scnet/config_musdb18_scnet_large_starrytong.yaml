@@ -1,3 +1,17 @@
+# LMDJ-owned vendored config (spec §5/§6) — origin + local tuning documented here.
+# 来源: MSST release v1.0.9
+#   https://github.com/ZFTurbo/Music-Source-Separation-Training/releases/download/v1.0.9/config_musdb18_scnet_large_starrytong.yaml
+# 原始文件 sha256: 3efa43af7c50d4a6e1105d2599d2d6a31c8012ee99eaad9a7e80e057945d44ee
+# LMDJ 改动（MPS 内存适配，2026-07-16，Fix round 2）：
+#   - inference.batch_size: 8 -> 1
+#     原因：MSST `demix()`（generic 模式，见 .msst/utils/model_utils.py）按
+#     `batch_size` 把多个 chunk_size 长的音频块一次性 `torch.stack` 后送入模型；
+#     batch_size=8 时 SCNet-large 在 Apple Silicon MPS 上 device 内存占用超出
+#     驱动可用上限，进程被 SIGKILL（exit -9，OOM）。改为 batch_size=1（逐块串行推理，
+#     其余分块/交叉淡入淡出逻辑不变）后 MPS 峰值降到 ~11.16GB，推理通过；CPU 路径
+#     同一改动下峰值 RSS 也从 ~27.9GB 降到 ~5.17GB。chunk_size 未改（无需再收窄）。
+#   - 其余字段（audio.*、model.*、training.*、augmentations.*、inference 内其余字段）
+#     保持与上游 release 完全一致，未作任何改动。
 audio:
   chunk_size: 485100 # 44100 * 11
   num_channels: 2
@@ -82,7 +96,7 @@ augmentations:
     random_polarity: 0.5 # polarity change (multiply waveform to -1)
 
 inference:
-  batch_size: 8
+  batch_size: 1
   dim_t: 256
   num_overlap: 4
   normalize: true
