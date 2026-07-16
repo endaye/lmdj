@@ -8,3 +8,7 @@ ml_collections==1.1.0
 omegaconf==2.3.0
 pyyaml==6.0.2
 tqdm==4.67.1
+# Phase 1B roformer 家族实际 import 需要（bs_roformer.py / mel_band_roformer.py @ pinned commit）：
+beartype==0.22.9
+rotary_embedding_torch==0.9.1
+librosa==0.11.0
