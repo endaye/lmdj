@@ -15,6 +15,7 @@
 | #7 | Separation Phase 0（0A+0B）：`lmdj.separation.v1` contract / checkpoint registry / runner 协议（orchestrator 合成失败记录）+ `pipeline_from_stems`（阶段 3–6 逐字节迁移，专用 `.venv-pfs`，constraints 锁版本）+ frozen-stems parity 门槛（`scripts/dev.sh parity`，testsong 全项通过、两侧 patch_id 一致）。spec: `docs/superpowers/specs/2026-07-15-multi-separator-benchmark-design.md`；plan: `docs/superpowers/plans/2026-07-15-separation-phase0.md`。下一步：Phase 1A（HT Demucs + SCNet runners，registry 落真实条目）。 | `workers/audio/separation`、`workers/audio/pipeline_from_stems`、`config/` |
 | #8 | Separation Phase 1A：HT Demucs（verified）+ SCNet-large（experimental）真实 runner 与 registry 条目，MPS 内存采样，`dev.sh separate` smoke（Mac MPS 验收 + canonical→compat→pfs→patchify 链路 sanity）。plan: `docs/superpowers/plans/2026-07-16-separation-phase1a.md` | `workers/audio/separation/runners`、`config/` |
 | #9 | Separation Phase 1B：BS-RoFormer（SDR 9.65）+ Mel-Band RoFormer（SDR 8.22）四轨 runner 与 experimental registry 条目；MSST 家族共享实现抽取（scnet 薄壳化）；Mac MPS 验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1b.md` | `workers/audio/separation/runners`、`config/` |
+| #10 | Separation Phase 1C-a：benchmark 执行层——manifest schema/loader、ffmpeg 输入归一化、orchestrator（全链 + 六元组缓存 key + resume + 单组合失败不中断）、`dev.sh bench` CLI；suno mini-run 真实验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1c-exec.md` | `workers/audio/benchmark`、`testdata/` |
 
 ## 当前可跑链路（浏览器已亲测闭环）
 
@@ -39,9 +40,11 @@
 
 ## 下一步候选（优先级建议）
 
-1. **`workers/generation`（云架构 Phase 2 入口）** —— idea/creative brief → 音乐材料 → 接 Audio Worker/Patchify，实现"一句话生成 patch"。产品叙事上的下一个大跳。
-2. **Patch View 增强（纯前端，schema 已预留）** —— Scenes 切换、量化触发（`behavior.quantize` 目前读取不执行）、trigger_group 组员展开。
-3. **apps/api 生产化前置** —— 队列（Redis/RQ，infra 待决）、鉴权/限流、对象存储、Postgres（jobs/patches/elements/lineage）。infra spec 已有蓝图。
+1. **Separation Phase 1C-b（§9 指标/评分/summary/盲听打包）** —— benchmark 数据的聚合/评分、summary.json/csv 生成、盲听打包、稳定性重复子集策略。
+2. **Separation Phase 1D 前置物料** —— MUSDB18HQ 下载（~30GB，需注册）；真实歌曲集扩充至 10–20 首（suno 现 11 首可作起点）。
+3. **`workers/generation`（云架构 Phase 2 入口）** —— idea/creative brief → 音乐材料 → 接 Audio Worker/Patchify，实现"一句话生成 patch"。产品叙事上的下一个大跳。
+4. **Patch View 增强（纯前端，schema 已预留）** —— Scenes 切换、量化触发（`behavior.quantize` 目前读取不执行）、trigger_group 组员展开。
+5. **apps/api 生产化前置** —— 队列（Redis/RQ，infra 待决）、鉴权/限流、对象存储、Postgres（jobs/patches/elements/lineage）。infra spec 已有蓝图。
 
 ## 延后的技术项（open follow-ups，非阻塞）
 
