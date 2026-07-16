@@ -54,7 +54,7 @@ jobs:
             workers/audio/pyproject.toml
             workers/audio/config/parity-constraints.txt
       # pfs extra 带 DSP 测试依赖（soundfile/numpy/librosa/...），版本由 parity-constraints 锁定
-      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[test,pfs]" -c workers/audio/config/parity-constraints.txt
+      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[test,pfs,metrics]" -c workers/audio/config/parity-constraints.txt -c workers/audio/config/metrics-constraints.txt
       - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - run: python -m pytest workers/audio/tests -q
 
