@@ -12,6 +12,27 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 - If an intended edit starts while the current branch is `main`, stop and create or switch to a short-lived branch before modifying files. Do not make the edits first and move them later.
 - An administrator may bypass the PR path only for incident recovery or to repair branch protection that blocks its own fix. Keep the bypass minimal and follow it with a PR, issue, or incident record describing the reason, changes, and verification. Urgency alone is not an exception.
 
+## Automatic commit workflow
+
+Each user turn that modifies tracked project files is one atomic version. After
+the requested change is complete and verified, create a Conventional Commit
+automatically without waiting for the user to ask.
+
+- Commit only files changed for the current user turn; preserve all unrelated
+  staged, unstaged, and untracked work.
+- A later user-requested modification gets a new commit rather than amending the
+  previous turn's commit.
+- Documentation-only changes follow the same automatic commit rule.
+- Do not create empty commits for read-only review, diagnosis, planning, or
+  turns that make no file changes.
+- If verification fails or the task-local file set cannot be isolated safely,
+  report the blocker instead of committing questionable or unrelated work.
+- Inspect the committed file list and final worktree status before reporting
+  completion.
+- Automatic commit does not authorize push, Pull Request creation, merge,
+  deployment, or publication; those remain separate actions under this
+  repository's Git workflow.
+
 ## Repository layout
 
 The git root (`lmdj/`) started as a PRD, architecture, and reference-material workspace. The product stack is now built out across three source boundaries:
