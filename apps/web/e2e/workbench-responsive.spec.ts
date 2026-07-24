@@ -410,6 +410,7 @@ test("phone Sheet preserves selection, playback, and creator mode state", async 
   await page.getByTestId("play-toggle").click();
   await expect(page.getByTestId("play-toggle")).toHaveText("■");
   const sourceMode = page.getByRole("button", { name: "Source" });
+  const performanceMode = page.getByRole("button", { name: "Performance" });
   const toggle = page.getByTestId("inspector-toggle");
   await toggle.click();
   await expect(page.getByTestId("context-inspector")).toBeVisible();
@@ -420,7 +421,25 @@ test("phone Sheet preserves selection, playback, and creator mode state", async 
 
   await expect(pad).toHaveAttribute("data-visual-state", "selected");
   await expect(page.getByTestId("play-toggle")).toHaveText("■");
+  await expect(performanceMode).toHaveAttribute("aria-pressed", "true");
+
+  await sourceMode.click();
   await expect(sourceMode).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("loaded-source-panel")).toContainText(
+    "已加载来源",
+  );
+  await expect(page.getByTestId("loaded-source-panel")).toContainText(
+    "Example package",
+  );
+  await expect(page.getByTestId("pad-matrix")).toBeHidden();
+
+  await performanceMode.click();
+  await expect(performanceMode).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByTestId("pad-0")).toHaveAttribute(
+    "data-visual-state",
+    "selected",
+  );
+  await expect(page.getByTestId("play-toggle")).toHaveText("■");
 
   const exportMode = page.getByRole("button", { name: "Export" });
   await exportMode.click();

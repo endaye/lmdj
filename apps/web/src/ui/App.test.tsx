@@ -79,11 +79,64 @@ describe("App", () => {
     renderApp(golden);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("workbench-shell")).toBeInTheDocument());
+    expect(screen.getByRole("button", { name: "Performance" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
     expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
     expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
     expect(screen.getByTestId("status-bar")).toHaveTextContent("Pads 01–16");
     expect(screen.getByTestId("status-bar")).toHaveTextContent(/MIDI Bank.*不适用/i);
+  });
+
+  it("switches between a truthful loaded Source context and the retained Performance instrument", async () => {
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId("pad-1"));
+    const retainedPad = screen.getByTestId("pad-1");
+    const retainedMidiConnect = screen.getByRole("button", {
+      name: "Connect MIDI",
+    });
+    const patchId = (golden as unknown as Patch).patch_id;
+    await userEvent.click(screen.getByRole("button", { name: "Source" }));
+
+    expect(screen.getByTestId("loaded-source-panel")).toHaveTextContent(
+      "已加载来源",
+    );
+    expect(screen.getByTestId("loaded-source-panel")).toHaveTextContent(
+      "Example package",
+    );
+    expect(screen.getByTestId("loaded-source-panel")).toHaveTextContent(patchId);
+    expect(screen.getByTestId("loaded-source-panel")).toHaveTextContent(
+      "16 个数据 Pad",
+    );
+    expect(screen.getByTestId("pad-matrix")).not.toBeVisible();
+    expect(screen.getByTestId("pattern-surface")).not.toBeVisible();
+    expect(retainedMidiConnect).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "更换音频" })).toBeEnabled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Performance" }));
+    expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
+    expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
+    expect(screen.getByTestId("pad-1")).toBe(retainedPad);
+    expect(screen.getByRole("button", { name: "Connect MIDI" })).toBe(
+      retainedMidiConnect,
+    );
+    expect(screen.getByTestId("context-inspector-content")).toHaveTextContent(
+      "Pad 02 · bass",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Source" }));
+    await userEvent.click(screen.getByRole("button", { name: "更换音频" }));
+    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    expect(screen.queryByTestId("loaded-source-panel")).not.toBeInTheDocument();
   });
 
   it("keeps Pattern above all sixteen contract pads and syncs selection into the Inspector", async () => {
@@ -369,7 +422,7 @@ describe("App API path", () => {
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
 
-    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Performance" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );

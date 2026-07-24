@@ -12,6 +12,11 @@ import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/load
 import { ErrorPanel } from "./ErrorPanel";
 import { ContextInspector } from "./ContextInspector";
 import { ExportChecklist } from "./ExportChecklist";
+import {
+  LoadedSourceInspector,
+  LoadedSourcePanel,
+  type LoadedSourceSummary,
+} from "./LoadedSourcePanel";
 import { MidiPanel } from "./MidiPanel";
 import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 import { PatternSurface } from "./PatternSurface";
@@ -71,7 +76,7 @@ type AppState =
     };
 
 type LoadedSource =
-  | { kind: "api"; base: string; jobId: string }
+  | { kind: "api"; base: string; jobId: string; fileName: string }
   | { kind: "local" | "example" };
 
 type ApiLoadedSource = Extract<LoadedSource, { kind: "api" }>;
@@ -140,7 +145,7 @@ export function App({
   const enterLoaded = useCallback(
     (bundle: PatchBundle<unknown>, source: LoadedSource) => {
       engine.load(bundle);
-      setMode("source");
+      setMode("performance");
       setState({
         phase: "loaded",
         bundle,
@@ -207,7 +212,7 @@ export function App({
         );
         enterLoaded(
           await apiClient.fetchPatchBundle(root, jobId, decode),
-          { kind: "api", base: root, jobId },
+          { kind: "api", base: root, jobId, fileName: file.name },
         );
       } catch (error) {
         const preflight = isPreflightRejection(error);
@@ -503,6 +508,31 @@ export function App({
   };
   const apiSource = state.source.kind === "api" ? state.source : null;
   const nonApiSource = state.source.kind === "api" ? null : state.source;
+  const loadedSource: LoadedSourceSummary =
+    state.source.kind === "api"
+      ? {
+          kind: "API Job",
+          name: state.source.fileName,
+          detail: `Job ${state.source.jobId} · ${state.source.base}`,
+        }
+      : state.source.kind === "example"
+        ? {
+            kind: "Example package",
+            name: "Bundled example",
+            detail: "Included lmdj.patch.v1 package",
+          }
+        : {
+            kind: "Local package",
+            name: "Browser-selected package",
+            detail: "Loaded from the dropped patch package",
+          };
+  const loadedSourceFacts = {
+    patchId: bundle.patch.patch_id,
+    padCount: bundle.patch.pads.length,
+    elementCount: bundle.patch.elements.length,
+    playableElementCount: bundle.playableElementIds.size,
+    missingElementCount: bundle.missingElementIds.size,
+  };
   const exportInspector =
     mode === "export"
       ? apiSource === null
@@ -571,36 +601,57 @@ export function App({
         }
         instrumentCanvas={
           <>
-            <div className="workbench-canvas-heading">
-              <div>
-                <span>Performance</span>
-                <small>{model.padCount} live slots</small>
-              </div>
-              <span className="workbench-readiness">{model.readiness}</span>
-            </div>
-            <PatternSurface
-              bundle={bundle}
-              engine={engine}
-              playheadStep={playheadStep}
-            />
-            <MidiPanel
-              onTrigger={triggerPad}
-              bank={midiBank}
-              onBankChange={setMidiBank}
-              onMappingModeChange={setMidiMappingMode}
-            />
-            <section className="panel workbench-pad-slot">
-              <PadMatrix16
-                bundle={bundle}
-                engine={engine}
-                selectedPadIndex={selectedPadIndex}
-                onSelect={setSelectedPadIndex}
+            {mode === "source" && (
+              <LoadedSourcePanel
+                source={loadedSource}
+                facts={loadedSourceFacts}
+                onReplace={backToUpload}
               />
-            </section>
+            )}
+            <div
+              className="workbench-performance-view"
+              hidden={mode === "source"}
+            >
+                <div className="workbench-canvas-heading">
+                  <div>
+                    <span>Performance</span>
+                    <small>{model.padCount} live slots</small>
+                  </div>
+                  <span className="workbench-readiness">{model.readiness}</span>
+                </div>
+                <PatternSurface
+                  bundle={bundle}
+                  engine={engine}
+                  playheadStep={playheadStep}
+                />
+                <MidiPanel
+                  onTrigger={triggerPad}
+                  bank={midiBank}
+                  onBankChange={setMidiBank}
+                  onMappingModeChange={setMidiMappingMode}
+                />
+                <section className="panel workbench-pad-slot">
+                  <PadMatrix16
+                    bundle={bundle}
+                    engine={engine}
+                    selectedPadIndex={selectedPadIndex}
+                    onSelect={setSelectedPadIndex}
+                  />
+                </section>
+            </div>
           </>
         }
         contextInspector={
-          <ContextInspector model={model} exportContent={exportInspector} />
+          mode === "source"
+            ? (
+                <LoadedSourceInspector
+                  source={loadedSource}
+                  facts={loadedSourceFacts}
+                />
+              )
+            : (
+                <ContextInspector model={model} exportContent={exportInspector} />
+              )
         }
         statusBar={
           <>

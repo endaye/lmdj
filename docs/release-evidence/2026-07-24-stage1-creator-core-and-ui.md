@@ -42,7 +42,7 @@ shell helper 的自动验证使用本地 HTTP fixture server，只验证
 | Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`327 passed` |
 | API 全套 | PASS | `61 passed`；1 条既有 Starlette/httpx deprecation warning |
 | `npm run check-contract` | PASS | `4 passed` |
-| `npm test` | PASS | `20` files、`141 passed` |
+| `npm test` | PASS | `21` files、`144 passed`；覆盖 Loaded 默认 Performance 与 Source / Performance 真实内容切换 |
 | `npm run test:e2e` | PASS | 8 个容器边界 + 五个 viewport 交互 + 两个相反侧 drawer + 一个手机状态保持，`16 passed` |
 | `npm run build` | PASS | TypeScript + Vite production build |
 
@@ -130,6 +130,14 @@ Close button 三种关闭路径和焦点归还。键盘与 MIDI 使用同一 tri
 Processing、Failed、Loaded 与 Export Checklist 的层级、状态文字和共享
 视觉 token。CreatorToolRail 测试确认没有 Generate、Line-in、Chop、
 AI Preview、Take 或 Pattern A–D 伪交互入口。
+
+Loaded Workbench 默认进入并高亮 `Performance`，中央区域显示 Pattern、MIDI
+与 16 Pad 乐器。切换到 `Source` 后，中央区域和 Inspector 都改为真实的
+“已加载来源”上下文，显示已知的来源类型、API 文件名或 package 类型、
+Patch ID、16 Pad contract、可播放/缺失音频资产；不会继续显示 Performance
+内容，也不会仅改变高亮。切换模式本身不卸载 Patch，返回 `Performance`
+后 Pad selection 与播放状态仍保留；只有显式点击“更换音频”才返回 Upload。
+E2E 在手机工作台中验证了上述模式内容差异与状态保持。
 
 以上链接是本轮在对应 viewport 设置下、真实 Loaded Workbench 页面生成的
 Playwright 截图。`1440×900` 与 `1280×720` 保存 viewport 画面；
