@@ -16,7 +16,7 @@
 
 | 问题 | 为什么重要 | 处理时点 | 状态 |
 | --- | --- | --- | --- |
-| 第 9–16 个有效 Pad 的角色和 Bank A/B 语义是什么？ | 决定 Patch Mapping、控制器 Bank 和 2×8 UI 的正式产品含义。 | 8-pad Creator 切片通过后，单独设计。 | 延后 |
+| 当前 empty Pad 后续按什么规则填充素材和功能？ | 16 个数据槽已经固定，但后续角色分配仍会影响 Patch Mapping。 | 首条 Creator 切片通过后，单独设计填充策略。 | 延后 |
 | Sampler Edit 第一版最小参数集是否只含 Start/End、Loop、One-shot、Mute、Volume、Swap？ | 决定第二条 Stage 1 切片是否还能保持纵向闭环。 | Sampler Edit + Take 设计会。 | 待决 |
 | Take 是只记录 Pad/MIDI 事件，还是同时生成音频 Bounce？ | 决定 Take contract、Web Audio 录制和 Export Pack。 | Sampler Edit + Take 设计会。 | 待决 |
 | Prompt/Voice 首个 Generation Provider 使用第三方 API 还是本地模型？ | 影响成本、延迟、授权、失败恢复和 Agent Orchestration。 | Creator 基础闭环通过后。 | 延后 |

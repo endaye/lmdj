@@ -110,11 +110,11 @@
 - 原因：仓库已经跑通 Upload → Patchify → 8-pad Play，但尚未证明创作者能用通用 MIDI 演奏并把完整素材包带入真实 DAW。
 - 影响：Separator benchmark、Timing、Generation 和 Agent Orchestration 保留各自价值，但不能替代或阻塞这条 Creator 闭环。
 
-### 已确认：首条切片只支持 8 个有效 Pad，UI 保留 16 位外观
+### 已确认：首条切片固定 16 个数据 Pad，UI 与数据一一对应
 
-- 结论：`patch.json` 继续只描述当前八个有效 Pad；Web 使用 2×8 的 16 位布局，位置 8–15 仅为 view-only 空槽。16 个有效 Pad 和 8-Pad Controller Bank 切换延后。
-- 原因：当前产品只需要八个可演奏位置；把八个空槽写入产品数据会伪造未实现能力并扩大契约、映射和测试范围。
-- 影响：保持 `lmdj.patch.v1`，不为 UI 占位升级 Schema；文案继续表述“8 个可演奏 Pad”。
+- 结论：`patch.json` 固定描述索引 `0..15` 的 16 个 Pad；Web 使用一一对应的 2×8 布局，不创建 view-only 空槽。未分配素材的位置也是使用 `action: "empty"` 的真实 Pad。
+- 原因：数据、Scene、输入映射和 UI 必须共享同一组稳定索引；由消费者自行补槽会形成两套产品事实，并让 16 位界面与 Patch 契约失配。
+- 影响：在首条切片内原子收紧 `lmdj.patch.v1` 的 `pads` 约束为恰好 16 项，同步 Patchify、Web、Schema 副本、生成类型、fixtures 和测试；文案使用“16 个 Pad Slot”，同时明确 empty Pad 没有可播放素材。
 
 ### 已确认：Creator Export 首期使用通用 ZIP，以 Ableton Live 做 Smoke Test
 
@@ -126,7 +126,7 @@
 
 - 结论：Web MIDI 输入必须进入首条切片；键盘和鼠标是备用输入，不能代替实体 MIDI Pad 验收。
 - 原因：Creator Core 和后续 Hardware Proof 都要求核心演奏从鼠标键盘解耦。
-- 影响：本切片只映射八个有效 Pad，不提前实现第二 Bank。
+- 影响：16-pad Controller 可直接映射 `0..15`；8-pad Controller 必须通过 Bank A/B 覆盖 `0..7` 和 `8..15`，不能只访问前八个位置。
 
 ### 已确认：Prompt、AI Variation、Sampler Edit 和 Take 不进入首条切片
 

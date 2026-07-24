@@ -48,7 +48,7 @@
 - 核心定义：LMDJ 是把音乐变成可编辑、可演奏、可继续制作的 AI-native Playable Layer。
 - 当前优先：Stage 1 Creator Core，先证明 Upload / Generate → Patch → Play / Take → DAW Export。
 - 首条切片：Upload → Make It Playable → Play → Creator Export Pack。
-- 2026-07-24 的实现收缩：先支持 8 个有效 Pad；UI 可保留 16 位外观；通用 ZIP + Ableton Smoke；MIDI 是验收项。
+- 2026-07-24 的本地决策：固定 16 个数据 Pad，UI 与数据一一对应；未使用位置为真实 empty Pad；通用 ZIP + Ableton Smoke；MIDI 是验收项。
 
 ## 待补素材
 

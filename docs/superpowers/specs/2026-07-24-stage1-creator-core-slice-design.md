@@ -14,23 +14,24 @@
 Upload WAV/MP3
   → Preflight Validation
   → Existing Audio Pipeline
-  → 8 Active Pads
+  → 16 Data Pads / 16-position UI
   → Keyboard / Generic MIDI Play
   → Creator Export ZIP
   → Ableton Live Smoke Test
 ```
 
-它验证的是“用户拥有的音频能否成为可演奏、可继续制作的素材包”，不是生成入口、完整 Sampler、完整 DAW 或 16-pad 系统。
+它验证的是“用户拥有的音频能否成为 16-slot Playable Patch，并作为完整素材包进入 DAW 继续制作”，不是生成入口、完整 Sampler 或完整 DAW。
 
 ## 2. 已确认的产品决策
 
 | 决策点 | 本切片结论 |
 | --- | --- |
-| 有效 Pad 数 | 只支持当前 8 个有效 Pad，索引为 `0..7` |
-| 16-pad 外观 | UI 使用 2×8 的 16 位布局；位置 `8..15` 是 view-only 空槽，不写入 `patch.json`，不参与播放 |
-| 16 个有效 Pad | 延后；本切片不做 Bank 切换，不宣称支持 16 个有效逻辑 Pad |
-| Patch 契约 | 保持 `lmdj.patch.v1`；不因 UI 空槽修改 Schema |
+| 有效 Pad 数 | 固定 16 个数据 Pad，索引为 `0..15` |
+| 空槽 | 未分配素材的位置也是 `patch.pads[]` 中的真实 Pad，使用 `action: "empty"` |
+| 16-pad 外观 | UI 固定显示与 `patch.pads[]` 一一对应的 2×8 布局，不创建 view-only Pad |
+| Patch 契约 | 在首条切片内原子收紧 `lmdj.patch.v1`：`pads` 必须恰好 16 项，并同步所有消费者和 fixture |
 | MIDI | 是本切片验收项；键盘只是备用输入 |
+| 8-pad Controller | 使用 Bank A/B 覆盖 `0..7` 和 `8..15` |
 | Export | 通用 ZIP + 明确 Manifest；不生成 `.als`、Logic、FL Studio 等专有工程文件 |
 | 首个 DAW | Ableton Live，只做真实导入 Smoke Test |
 | 执行顺序 | 先完成 Upload → Play → Export；Prompt、Agent Orchestration、AI Variation 后置 |
@@ -39,18 +40,18 @@ Upload WAV/MP3
 
 ### 3.1 Pad 扩展
 
-**采用：8 个数据 Pad + 16 位 UI 外观。**
+**采用：16 个数据 Pad + 16 位 UI 一一对应。**
 
-- 优点：保留现有 Patchify 和 `lmdj.patch.v1` 语义，不用制造八个虚假产品对象；界面又能提前验证 2×8 的设备形态。
-- 代价：后 8 位暂时不可交互，未来扩成 16 个有效 Pad 时仍需单独设计槽位语义和 Bank 映射。
+- 优点：数据、Scene、输入映射和 UI 共享同一组 `0..15` 索引；空槽是明确的产品状态，不存在 UI 合成数据。
+- 代价：需要原子更新 Patchify、Schema、Web fixture、输入映射和测试。
 
-**不采用：立即让 Patchify 固定输出 16 个 Pad。**
+**不采用：8 个数据 Pad + 8 个 view-only UI 占位。**
 
-- 这会把空位写成产品数据，并迫使 Scene、键盘、MIDI、测试和文案同时宣称 16-pad 能力，超出当前范围。
+- 这会让屏幕上的后八个位置没有对应产品对象，数据、输入和 UI 无法保持一致。
 
-**不采用：继续只显示 8 位 UI。**
+**不采用：可变长度 Pad 数组。**
 
-- 改动最少，但不能验证已确认的 2×8 产品形态，也会让后续 UI 扩展产生第二次布局迁移。
+- 可变长度会迫使每个消费者自行补槽或截断，无法形成稳定的 2×8 产品契约。
 
 ### 3.2 Export
 
@@ -68,19 +69,20 @@ Upload WAV/MP3
 
 ### 3.3 MIDI
 
-**采用：Web MIDI + 默认映射 + MIDI Learn。**
+**采用：16-pad 直接映射 + 8-pad Bank A/B + MIDI Learn。**
 
-- 默认将 Note On `36..43` 映射到 Pad `0..7`。
-- 用户可进入 MIDI Learn，依次敲击八个实体 Pad；系统记录八个不同 note number，并保存在浏览器 `localStorage`。
-- 键盘 `A S D F / Z X C V` 继续映射到 Pad `0..7`。
+- 16-pad Controller 默认将 Note On `36..51` 映射到 Pad `0..15`。
+- 8-pad Controller 学习八个实体 note number；Bank A 映射 `0..7`，Bank B 映射 `8..15`。
+- 用户可进入 MIDI Learn；完整映射成功后保存在浏览器 `localStorage`。
+- 键盘 `A S D F / Z X C V` 触发当前 Bank 的八个 Pad；`Shift` 切换 Bank A/B。
 
 **不采用：只支持键盘。**
 
 - 不满足 Stage 1 对通用 MIDI Pad 的明确验收。
 
-**延后：现在实现两组 Bank。**
+**不采用：只映射前八个 Pad。**
 
-- 当前只有 8 个有效 Pad，Bank 没有可切换的第二组内容。
+- 这会让 `8..15` 的数据 Pad 无法通过已经确认的通用 8-pad Controller 访问。
 
 ## 4. 当前基线与保留边界
 
@@ -119,12 +121,15 @@ apps/web
 
 ### 5.2 Pad Surface
 
-`patch.json` 继续包含最多八个当前有效 Pad。Web 创建固定 16 位视图：
+`patch.json` 固定包含 16 个 Pad。Patchify 和 Web 使用相同索引：
 
-- `0..7`：由 `patch.pads` 驱动；
-- `8..15`：渲染为 disabled / empty 的占位视图；
-- 占位视图没有 `Pad` 产品对象，不传给 `AudioEngine`，不接受键盘、鼠标或 MIDI 触发；
-- UI 文案使用“8 个可演奏 Pad”，不宣称已支持 16 个有效 Pad。
+- `0..15`：全部由 `patch.pads` 驱动；
+- 未分配素材的位置使用 `action: "empty"`，由既有 no-op 规则处理；
+- UI 不补齐、不截断、不生成合成 Pad；
+- `Scene.pad_indexes` 包含 `0..15`；
+- UI 文案使用“16 个 Pad Slot”；empty 状态不宣称拥有可播放素材。
+
+当前 standard profile 保留既有前八个槽位语义；若 pipeline 没有更多可映射素材，索引 `8..15` 仍以真实 empty Pad 输出。后续可以在不改变数组形状的前提下逐步填充。
 
 ### 5.3 MIDI Input
 
@@ -142,11 +147,12 @@ Web MIDI Note On
 
 - 只处理 command 为 Note On 且 velocity `> 0` 的消息；
 - Note On velocity `0` 按 Note Off 处理，不触发；
-- 只触发 `0..7`；
+- 支持触发 `0..15`；empty/reserved Pad 继续安全 no-op；
+- 8-pad Controller 的 Bank A/B 分别增加偏移 `0` 和 `8`；
 - 默认监听用户授权后可用的全部 MIDI input；
 - 设备断开时显示非阻塞状态，键盘和鼠标仍可用；
 - 浏览器不支持 Web MIDI 或用户拒绝权限时给出明确提示，不伪装为已连接；
-- MIDI Learn 未完成八个不同 note number 前不覆盖上一次有效映射。
+- MIDI Learn 未形成一套完整的 16-pad direct mapping 或 8-pad banked mapping 前，不覆盖上一次有效映射。
 
 ### 5.4 Music Metadata
 
@@ -267,8 +273,9 @@ WAV/MP3
 ### 8.1 自动测试
 
 - API：WAV/MP3 成功；超过 `200 MiB`；超过 `600 秒`；损坏音频；伪造扩展名。
-- Pad UI：始终渲染 16 位；只有前八位来自 Patch；后八位 disabled 且不会调用 `triggerPad`。
-- MIDI adapter：默认映射、velocity 0、未知 note、learn 完成、learn 中断、设备断开、权限拒绝。
+- Contract：`patch.pads` 恰好 16 项、索引连续且唯一；unused slot 为真实 `empty` Pad；Scene 覆盖 `0..15`。
+- Pad UI：渲染 `patch.pads` 的 16 项且顺序一致；不生成 view-only Pad；empty Pad no-op。
+- MIDI adapter：16-pad direct、8-pad Bank A/B、默认映射、velocity 0、未知 note、learn 完成、learn 中断、设备断开、权限拒绝。
 - Export Builder：ZIP 文件清单、SHA-256、稳定排序、路径穿越、缺少 Key/MIDI/Sample、只列真实 Stem。
 - Web：API Job 显示导出按钮；local/example 不显示；409 显示缺失项；下载失败保留 loaded 状态。
 - Contract：`npm run check-contract` 继续通过；`lmdj.patch.v1` 无漂移。
@@ -279,7 +286,8 @@ WAV/MP3
 
 - 三次均从 Upload 到可播放工作台；
 - 同一输入得到相同 `patch_id`；
-- 实体 MIDI Pad 的八个键分别触发正确的八个逻辑位置；
+- 16 个数据 Pad 与 16 个 UI 位置逐项一致；
+- 8-pad MIDI Controller 切换 Bank A/B 后覆盖全部 16 个逻辑位置；有素材的 Pad 触发正确声音，empty Pad 保持 no-op；
 - 导出的 ZIP 三次均通过完整性校验；
 - 在 Ableton Live 中导入 Stems/Samples 和 MIDI，设置 Manifest BPM 后可以继续编排；
 - 一位非开发者在无口头指导下完成 Upload、MIDI 演奏和 Export；
@@ -287,8 +295,6 @@ WAV/MP3
 
 ## 9. 本切片明确不做
 
-- 第 9–16 个有效 Pad；
-- 8-Pad Controller 的 Bank 切换；
 - Prompt / Voice 生成和 Generation Provider；
 - Agent Orchestration 实现；
 - AI Replace / Variation；
@@ -301,7 +307,7 @@ WAV/MP3
 
 ## 10. 后续顺序
 
-1. 本切片：Upload → 8 Active Pads / 16-position UI → MIDI → Creator Export ZIP。
+1. 本切片：Upload → 16 Data Pads / 16-position UI → MIDI + Bank A/B → Creator Export ZIP。
 2. Stage 1 第二切片：Sampler Edit + Take Recording，并把 Take 纳入 Creator Export。
 3. Stage 1 后段：Prompt/Voice → Generation → 同一个 Patch Engine。
 4. Stage 2：AI Variation、Patch Versioning、Project Bin / Global Library。

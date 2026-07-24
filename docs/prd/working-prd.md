@@ -50,7 +50,7 @@ Stage 是 Proof Gate，不是固定周数。每周发布可运行版本，但只
 ```text
 Upload
   → Make It Playable
-  → 8 Active Pads / 16-position UI
+  → 16 Data Pads / 16-position UI
   → Keyboard + MIDI Play
   → Creator Export ZIP
   → Ableton Live Smoke Test
@@ -60,8 +60,9 @@ Upload
 
 - 输入 WAV/MP3，默认最大 `200 MiB`、`600 秒`；
 - 复用现有 Audio Pipeline 和 `lmdj.patch.v1`；
-- 当前只支持八个有效 Pad；
-- UI 可使用 2×8 的十六位外观，后八位是 view-only 空槽；
+- `patch.json` 固定包含 16 个数据 Pad，索引为 `0..15`；
+- UI 使用与数据一一对应的 2×8 十六位布局；未使用位置是 `action: "empty"` 的真实 Pad；
+- 8-pad Controller 使用 Bank A/B 覆盖全部十六个逻辑位置；
 - MIDI 是验收项，键盘和鼠标是备用输入；
 - Creator Export 使用通用 ZIP，包含 Patch、真实存在的 Stems、Samples/Slices、MIDI 和 BPM/Key/Loop Manifest；
 - 首个 DAW 验收目标为 Ableton Live；
@@ -72,7 +73,6 @@ Upload
 
 ## 5. 首条切片不做
 
-- 第 9–16 个有效 Pad 和 Bank 切换；
 - Prompt / Voice 生成；
 - Agent Orchestration 实现；
 - AI Replace / Variation；

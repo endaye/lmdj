@@ -48,8 +48,8 @@
 
 ```text
 Upload
-  → 8 Active Pads / 16-position UI
-  → Keyboard + Generic MIDI Play
+  → 16 Data Pads / 16-position UI
+  → Keyboard + Generic MIDI Play / Bank A-B
   → Creator Export ZIP
   → Ableton Live Smoke Test
 ```
@@ -58,7 +58,7 @@ Upload
 
 ## 下一步候选（按产品证明排序）
 
-1. **Stage 1 Creator Core 首条切片** —— Upload 前置校验、8 个有效 Pad / 16 位 UI、Web MIDI、Creator Export ZIP。
+1. **Stage 1 Creator Core 首条切片** —— Upload 前置校验、16 个数据 Pad / 16 位 UI、Web MIDI + Bank A/B、Creator Export ZIP。
 2. **Release Evidence** —— 固定音频连续跑三次、实体 MIDI Pad 映射、非开发者无指导完成流程、Ableton Live 导入 Smoke。
 3. **Stage 1 第二切片** —— Sampler Edit + Take Recording，并将 Take 纳入 Creator Export。
 4. **Separation / Timing 风险消除** —— 完成足以选择生产 baseline 的 Phase 1D benchmark、盲听和 Timing 评审；不阻塞首条 Creator 切片。
