@@ -40,9 +40,9 @@ shell helper 的自动验证使用本地 HTTP fixture server，只验证
 | `scripts/tests/test_creator_smoke.sh` | PASS | 成功输出六个要求字段；15-Pad contract、HTTP 500、不同 ZIP hash 均非零退出 |
 | `scripts/dev.sh test` | PASS | core-models `7 passed`；Patchify `18 passed` |
 | Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`327 passed` |
-| API 全套 | PASS | `61 passed`；1 条既有 Starlette/httpx deprecation warning |
+| API 全套 | PASS | `64 passed`；1 条既有 Starlette/httpx deprecation warning |
 | `npm run check-contract` | PASS | `4 passed` |
-| `npm test` | PASS | `21` files、`144 passed`；覆盖 Loaded 默认 Performance 与 Source / Performance 真实内容切换 |
+| `npm test` | PASS | `21` files、`146 passed`；覆盖 Loaded 默认 Performance、Source / Performance 真实内容切换与 preflight probe timeout 呈现 |
 | `npm run test:e2e` | PASS | 8 个容器边界 + 五个 viewport 交互 + 两个相反侧 drawer + 一个手机状态保持，`16 passed` |
 | `npm run build` | PASS | TypeScript + Vite production build |
 
