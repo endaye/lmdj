@@ -19,6 +19,7 @@
 - 键盘直接覆盖 16 个逻辑位置：顶排 `1 2 3 4 5 6 7 8` → `0..7`，底排 `Q W E R T Y U I` → `8..15`；键盘不随 MIDI Bank 切换。
 - MIDI Learn 只有在取得 16 个或 8 个互不重复的 note number 后才能覆盖上一次有效映射。
 - Workbench 使用 Instrument-first Canvas：Pattern 在 PadMatrix16 上方；≥960px 为 8×2，360–959px 为 4×4；每个 Pad 保持 1:1，4×4 的 row-gap 与 column-gap 相等。
+- Inspector 断点约束：≥1280px 的常驻 Inspector 不得覆盖 Pad；960–1279px 的抽屉和 600–959px 的覆盖式抽屉可覆盖 Canvas，但打开时必须避开当前 selected / playing Pad 或以其他方式保持其 trigger feedback 可见；360–599px 使用全高参数 Sheet，必须有可访问的关闭路径，关闭后保留 selection / playback / mode 状态；Status Bar 在正常关闭状态不得遮挡 Pad。
 - 视觉 token、Pad 状态、动效、响应式和可访问性直接采用 UI Design Spec；不得继续扩展旧 graphite Patch View 作为第二套视觉系统。
 - 首条切片不呈现可交互的 Generate、Line-in、Chop / Sampler Edit、AI Preview、Take 或 Pattern A–D；这些入口随对应后续能力再启用。
 - Upload 默认限制为 `200 MiB` 和 `600 秒`；环境变量名固定为 `LMDJ_UPLOAD_MAX_BYTES`、`LMDJ_UPLOAD_MAX_DURATION_SECONDS`。
@@ -524,7 +525,7 @@ CSS 使用 `aspect-ratio: 1 / 1`，不以固定高度伪造正方形：
 - 每个 Pad `abs(width - height) <= 1px`；
 - 4×4 的 computed `rowGap === columnGap`；
 - 任意两个相邻 Pad 的 bounding boxes 不重叠；
-- Pattern 在第一排 Pad 上方，Inspector/Status Bar 不覆盖 Pad；
+- Pattern 在第一排 Pad 上方；≥1280px 的常驻 Inspector 和正常关闭状态的 Status Bar 不覆盖 Pad；960–1279px 的抽屉及 600–959px 的覆盖式抽屉打开时，当前 selected / playing Pad 的 trigger feedback 仍可见；360–599px 的全高参数 Sheet 有可访问的关闭路径，关闭后保留 selection / playback / mode 状态；
 - 低高度页面可滚动到最后一排 Pad；
 - focus outline、selected、playing、empty、missing 五类状态可区分。
 
@@ -1190,7 +1191,7 @@ Expected: 四组全部 PASS；Web 门禁同时包含 contract、Vitest、五 vie
 - Pattern 始终位于 PadMatrix16 上方；
 - `>=960px` 是 8×2，`360–959px` 是 4×4；
 - 4×4 row-gap 与 column-gap 相等；
-- 16 个 Pad 都是正方形且无 Inspector / Status Bar 遮挡；
+- 16 个 Pad 都是正方形；常驻 Inspector 与正常关闭状态的 Status Bar 不覆盖 Pad；960–1279px 的抽屉和 600–959px 的覆盖式抽屉打开时，当前 selected / playing Pad 的 trigger feedback 可见；360–599px 的全高参数 Sheet 有可访问的关闭路径，关闭后保留 selection / playback / mode 状态；
 - Source / Processing / Failed / Loaded / Export Checklist 与 reference 使用同一视觉 token 和层级；
 - Generate、Line-in、Chop、AI Preview、Take、Pattern A–D 没有伪交互入口。
 
