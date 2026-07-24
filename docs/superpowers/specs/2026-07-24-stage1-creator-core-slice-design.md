@@ -2,7 +2,7 @@
 
 日期：2026-07-24
 
-状态：待用户书面复核（方向与范围已在讨论中确认）
+状态：用户已书面确认（2026-07-24）
 
 上游依据：[LMDJ 软件 MVP Stage 1–4 与团队协作 Memo｜2026-07-18](https://fcn8wuu8uotg.feishu.cn/docx/ZK5eduti6oE9Dox8Pkbc8r0vnPb)（`approved-for-planning`，读取 revision 63）
 
