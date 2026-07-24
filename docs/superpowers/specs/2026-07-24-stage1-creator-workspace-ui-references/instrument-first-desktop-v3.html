@@ -1,0 +1,218 @@
+<style>
+  :root {
+    --paper:#f6f2e8; --ink:#11110f; --red:#ff4f31; --yellow:#ffd21c;
+    --cyan:#32c7e9; --violet:#8a4af3; --mint:#46c79b; --pink:#ff69c8;
+  }
+  #frame-content { background:#e8e2d5; }
+  .design-head { display:flex; align-items:end; justify-content:space-between; gap:24px; margin-bottom:18px; }
+  .design-head .copy { max-width:760px; }
+  .design-head h2 { font-size:28px; color:var(--ink); letter-spacing:-.03em; }
+  .design-head .subtitle { color:#55524c; margin:0; }
+  .scale-tag { border:2px solid var(--ink); background:var(--yellow); color:var(--ink); border-radius:999px; padding:7px 12px; font-size:11px; font-weight:900; white-space:nowrap; }
+
+  .desktop-frame { max-width:1180px; margin:0 auto; aspect-ratio:16 / 10; border:4px solid var(--ink); background:var(--paper); color:var(--ink); box-shadow:14px 14px 0 var(--ink); display:grid; grid-template-rows:54px 1fr 46px; font-family:Arial, Helvetica, sans-serif; overflow:hidden; }
+  .desktop-frame * { box-sizing:border-box; }
+
+  .appbar { display:grid; grid-template-columns:110px 1fr auto; border-bottom:3px solid var(--ink); }
+  .brand { display:grid; place-items:center; border-right:3px solid var(--ink); font-size:23px; font-weight:1000; letter-spacing:-.06em; }
+  .project { display:flex; align-items:center; gap:14px; padding:0 15px; min-width:0; }
+  .project-kicker { font-size:8px; font-weight:900; letter-spacing:.16em; }
+  .project-name { font-size:16px; font-weight:900; text-transform:uppercase; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .project-meta { margin-left:auto; font-size:9px; font-weight:700; white-space:nowrap; }
+  .top-actions { display:flex; align-items:stretch; }
+  .top-action { min-width:52px; display:grid; place-items:center; border-left:2px solid var(--ink); font-size:9px; font-weight:900; background:var(--paper); }
+  .top-action.transport { font-size:16px; }
+  .top-action.rec { background:var(--red); color:#fff; }
+  .top-action.export { background:var(--ink); color:#fff; min-width:90px; }
+
+  .workspace { display:grid; grid-template-columns:110px minmax(0,1fr) 260px; min-height:0; }
+  .toolrail { border-right:3px solid var(--ink); display:flex; flex-direction:column; background:#ebe4d5; }
+  .rail-label { padding:8px 10px; border-bottom:2px solid var(--ink); font-size:8px; font-weight:900; letter-spacing:.14em; }
+  .tool { min-height:54px; border:0; border-bottom:2px solid var(--ink); border-radius:0; background:transparent; color:var(--ink); padding:7px 9px; text-align:left; display:grid; grid-template-columns:23px 1fr; align-items:center; gap:7px; }
+  .tool:hover { background:var(--yellow); }
+  .tool.active { background:var(--red); color:#fff; }
+  .tool-icon { width:23px; height:23px; border:2px solid currentColor; display:grid; place-items:center; font-size:10px; }
+  .tool-copy b { display:block; font-size:9px; }
+  .tool-copy span { display:block; font-size:6px; opacity:.75; margin-top:2px; }
+  .rail-version { margin-top:auto; padding:10px; font-size:7px; line-height:1.6; border-top:2px solid var(--ink); }
+
+  .canvas { padding:14px 16px 12px; display:grid; grid-template-rows:auto minmax(115px,1fr) auto; gap:10px; min-width:0; min-height:0; }
+  .canvas-head { display:flex; align-items:end; justify-content:space-between; gap:12px; min-width:0; }
+  .canvas-title { font-size:35px; font-weight:1000; line-height:.79; letter-spacing:-.07em; text-transform:uppercase; }
+  .canvas-sub { display:flex; align-items:center; gap:6px; font-size:8px; font-weight:900; white-space:nowrap; }
+  .live-dot { width:8px; height:8px; border:2px solid var(--ink); background:var(--mint); border-radius:50%; }
+
+  .pad-grid16 { display:grid; grid-template-columns:repeat(8,minmax(0,1fr)); grid-template-rows:repeat(2,minmax(0,1fr)); gap:6px; width:100%; aspect-ratio:4 / 1; align-self:end; min-height:0; }
+  .music-pad { border:2px solid var(--ink); position:relative; overflow:hidden; padding:7px 6px; display:flex; flex-direction:column; justify-content:space-between; min-width:0; cursor:pointer; transition:.15s; }
+  .music-pad:hover { transform:translate(-2px,-2px); box-shadow:4px 4px 0 var(--ink); }
+  .music-pad.selected { outline:4px solid var(--ink); outline-offset:2px; z-index:1; box-shadow:6px 6px 0 var(--ink); }
+  .music-pad .num { font-size:8px; font-weight:900; }
+  .music-pad .pad-name { font-size:11px; line-height:.95; font-weight:1000; text-transform:uppercase; position:relative; z-index:2; overflow-wrap:anywhere; }
+  .music-pad .key { font-size:7px; font-weight:900; opacity:.72; position:absolute; right:5px; top:5px; }
+  .music-pad .orb { width:54px; aspect-ratio:1; border-radius:50%; border:2px solid var(--ink); background:rgba(255,255,255,.45); position:absolute; right:-23px; bottom:-24px; }
+  .music-pad:nth-child(3n) .orb { border-radius:0; transform:rotate(45deg); }
+  .music-pad:nth-child(4n) .orb { width:62px; background:repeating-linear-gradient(90deg,rgba(255,255,255,.6) 0 5px,transparent 5px 10px); }
+  .drum { background:var(--red); color:#fff; }
+  .bass { background:var(--violet); color:#fff; }
+  .harmony { background:var(--mint); }
+  .lead { background:var(--yellow); }
+  .loop { background:var(--cyan); }
+  .action { background:var(--pink); }
+  .muted { background:#d6d0c3; color:#77736b; }
+
+  .sequence { border:2px solid var(--ink); display:grid; grid-template-columns:105px 1fr; min-height:0; background:#fff; }
+  .seq-info { border-right:2px solid var(--ink); display:flex; flex-direction:column; justify-content:space-between; padding:8px; }
+  .seq-info b { font-size:10px; }
+  .seq-info span { font-size:7px; }
+  .seq-tabs { display:flex; gap:3px; }
+  .seq-tab { border:1.5px solid var(--ink); padding:2px 4px; font-size:6px; }
+  .seq-tab.active { background:var(--yellow); }
+  .seq-grid { position:relative; background:
+    repeating-linear-gradient(90deg,transparent 0 calc(3.125% - 1px),#c6c0b5 calc(3.125% - 1px) 3.125%),
+    repeating-linear-gradient(0deg,transparent 0 calc(20% - 1px),#c6c0b5 calc(20% - 1px) 20%); }
+  .seq-grid::before { content:""; position:absolute; top:0; bottom:0; left:37.5%; border-left:3px solid var(--red); }
+  .note { position:absolute; height:9%; border:1px solid var(--ink); background:var(--red); }
+  .n1{left:2%;top:8%;width:5%}.n2{left:14%;top:28%;width:3%}.n3{left:25%;top:8%;width:7%}.n4{left:39%;top:48%;width:5%}.n5{left:52%;top:68%;width:10%;background:var(--violet)}.n6{left:68%;top:28%;width:4%;background:var(--mint)}.n7{left:79%;top:48%;width:8%;background:var(--yellow)}.n8{left:91%;top:8%;width:5%}
+
+  .inspector { border-left:3px solid var(--ink); display:grid; grid-template-rows:auto auto 1fr auto; min-height:0; background:#f8f4eb; }
+  .inspect-head { padding:12px; border-bottom:2px solid var(--ink); background:var(--mint); }
+  .inspect-kicker { font-size:7px; font-weight:900; letter-spacing:.14em; }
+  .inspect-title { font-size:22px; font-weight:1000; line-height:.9; margin-top:7px; text-transform:uppercase; }
+  .wave { height:74px; border-bottom:2px solid var(--ink); position:relative; background:#111; overflow:hidden; }
+  .wave::before { content:"▁▅▂▇▃▆▁▃▇▅▂▆▃▁▇▅▂▆▃▇▁▅▂▆▃"; color:var(--mint); position:absolute; left:8px; right:0; top:18px; font-size:18px; letter-spacing:-2px; white-space:nowrap; }
+  .settings { overflow:hidden; }
+  .setting { display:grid; grid-template-columns:1fr auto; gap:8px; padding:8px 11px; border-bottom:1.5px solid var(--ink); font-size:8px; align-items:center; }
+  .setting b { font-size:9px; }
+  .value { border:1.5px solid var(--ink); padding:3px 5px; background:#fff; font-weight:900; }
+  .ai-card { margin:10px; border:2px solid var(--ink); padding:8px; background:var(--yellow); font-size:8px; }
+  .ai-card b { display:block; font-size:10px; margin-bottom:4px; }
+  .inspect-actions { display:grid; grid-template-columns:1fr 1fr; border-top:2px solid var(--ink); }
+  .inspect-action { padding:10px 6px; border-right:2px solid var(--ink); text-align:center; font-size:8px; font-weight:900; }
+  .inspect-action:last-child { border-right:0; background:var(--ink); color:#fff; }
+
+  .statusbar { border-top:3px solid var(--ink); display:grid; grid-template-columns:110px 1fr auto; align-items:stretch; }
+  .bank { border-right:3px solid var(--ink); display:grid; place-items:center; background:var(--yellow); font-size:9px; font-weight:1000; }
+  .status-message { display:flex; align-items:center; padding:0 14px; gap:10px; font-size:8px; font-weight:800; }
+  .status-message .pill { border:1.5px solid var(--ink); border-radius:999px; padding:3px 6px; background:var(--mint); }
+  .zoom { display:flex; align-items:center; border-left:2px solid var(--ink); font-size:8px; font-weight:900; }
+  .zoom span { padding:0 12px; }
+
+  .anatomy { max-width:1180px; margin:28px auto 0; display:grid; grid-template-columns:repeat(4,1fr); gap:10px; color:var(--ink); }
+  .anatomy-card { border:2px solid var(--ink); background:var(--paper); padding:10px; font-size:12px; }
+  .anatomy-card b { display:block; font-size:13px; margin-bottom:4px; }
+  .approval { max-width:1180px; margin:12px auto 0; display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .approval .option { border-radius:0; border:2px solid var(--ink); background:var(--paper); color:var(--ink); }
+  .approval .option.selected { background:var(--yellow); border-color:var(--ink); }
+  @media(max-width:900px){
+    .anatomy{grid-template-columns:1fr 1fr}.desktop-frame{min-width:920px}.design-scroll{overflow:auto;padding-bottom:16px}
+  }
+</style>
+
+<div class="design-head">
+  <div class="copy">
+    <div class="label">Design section 1 · Information architecture</div>
+    <h2>A · Instrument-first Canvas — 1440×900 主稿骨架</h2>
+    <p class="subtitle">这不是硬件照片的网页复刻：它保留硬件的“左控件 / 中央演奏 / 右侧参数”肌肉记忆，同时补上桌面创作所需的序列、版本和 Export。</p>
+  </div>
+  <div class="scale-tag">BASELINE · 1440 × 900</div>
+</div>
+
+<div class="design-scroll">
+  <div class="desktop-frame">
+    <header class="appbar">
+      <div class="brand">LMDJ</div>
+      <div class="project">
+        <span class="project-kicker">PROJECT</span>
+        <span class="project-name">Night Bloom</span>
+        <span class="project-meta">92 BPM · C MIN · 04:12</span>
+      </div>
+      <div class="top-actions">
+        <div class="top-action">UNDO</div><div class="top-action">SAVE</div><div class="top-action transport">▶</div><div class="top-action rec">● REC</div><div class="top-action export">EXPORT ↗</div>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <nav class="toolrail">
+        <div class="rail-label">CREATOR TOOLS</div>
+        <button class="tool active"><span class="tool-icon">≈</span><span class="tool-copy"><b>SOURCE</b><span>Stems & assets</span></span></button>
+        <button class="tool"><span class="tool-icon">✂</span><span class="tool-copy"><b>CHOP</b><span>Slice & map</span></span></button>
+        <button class="tool"><span class="tool-icon">✦</span><span class="tool-copy"><b>AI</b><span>Variation</span></span></button>
+        <button class="tool"><span class="tool-icon">↻</span><span class="tool-copy"><b>LOOP</b><span>Playback</span></span></button>
+        <button class="tool"><span class="tool-icon">●</span><span class="tool-copy"><b>TAKES</b><span>Recordings</span></span></button>
+        <div class="rail-version">PATCH v03<br>Auto-saved 12s ago</div>
+      </nav>
+
+      <main class="canvas">
+        <div class="canvas-head">
+          <div class="canvas-title">Make It<br>Playable</div>
+          <div class="canvas-sub"><span class="live-dot"></span>16 LIVE SLOTS · BANK A</div>
+        </div>
+        <section class="sequence">
+          <div class="seq-info">
+            <div><b>PATTERN 01</b><br><span>4 BARS · 1/16</span></div>
+            <div class="seq-tabs"><span class="seq-tab active">A</span><span class="seq-tab">B</span><span class="seq-tab">C</span><span class="seq-tab">D</span></div>
+          </div>
+          <div class="seq-grid">
+            <i class="note n1"></i><i class="note n2"></i><i class="note n3"></i><i class="note n4"></i><i class="note n5"></i><i class="note n6"></i><i class="note n7"></i><i class="note n8"></i>
+          </div>
+        </section>
+        <section class="pad-grid16">
+          <div class="music-pad drum"><span class="num">01</span><span class="key">1</span><span class="pad-name">Kick</span><i class="orb"></i></div>
+          <div class="music-pad drum"><span class="num">02</span><span class="key">2</span><span class="pad-name">Snare</span><i class="orb"></i></div>
+          <div class="music-pad drum"><span class="num">03</span><span class="key">3</span><span class="pad-name">Hat</span><i class="orb"></i></div>
+          <div class="music-pad drum"><span class="num">04</span><span class="key">4</span><span class="pad-name">Perc</span><i class="orb"></i></div>
+          <div class="music-pad bass"><span class="num">05</span><span class="key">5</span><span class="pad-name">Bass</span><i class="orb"></i></div>
+          <div class="music-pad harmony selected"><span class="num">06</span><span class="key">6</span><span class="pad-name">Chord</span><i class="orb"></i></div>
+          <div class="music-pad lead"><span class="num">07</span><span class="key">7</span><span class="pad-name">Lead</span><i class="orb"></i></div>
+          <div class="music-pad lead"><span class="num">08</span><span class="key">8</span><span class="pad-name">Vocal</span><i class="orb"></i></div>
+          <div class="music-pad loop"><span class="num">09</span><span class="key">Q</span><span class="pad-name">Loop A</span><i class="orb"></i></div>
+          <div class="music-pad loop"><span class="num">10</span><span class="key">W</span><span class="pad-name">Loop B</span><i class="orb"></i></div>
+          <div class="music-pad action"><span class="num">11</span><span class="key">E</span><span class="pad-name">Fill</span><i class="orb"></i></div>
+          <div class="music-pad action"><span class="num">12</span><span class="key">R</span><span class="pad-name">Drop</span><i class="orb"></i></div>
+          <div class="music-pad muted"><span class="num">13</span><span class="key">T</span><span class="pad-name">Mute</span><i class="orb"></i></div>
+          <div class="music-pad action"><span class="num">14</span><span class="key">Y</span><span class="pad-name">Roll</span><i class="orb"></i></div>
+          <div class="music-pad action"><span class="num">15</span><span class="key">U</span><span class="pad-name">FX</span><i class="orb"></i></div>
+          <div class="music-pad action"><span class="num">16</span><span class="key">I</span><span class="pad-name">Variation</span><i class="orb"></i></div>
+        </section>
+      </main>
+
+      <aside class="inspector">
+        <div class="inspect-head">
+          <div class="inspect-kicker">SELECTED · PAD 06</div>
+          <div class="inspect-title">Chord<br>Slice</div>
+        </div>
+        <div class="wave"></div>
+        <div class="settings">
+          <div class="setting"><span><b>START / END</b>Sample region</span><span class="value">00.42—02.18</span></div>
+          <div class="setting"><span><b>PLAY MODE</b>Trigger behavior</span><span class="value">ONE-SHOT</span></div>
+          <div class="setting"><span><b>VOLUME</b>Pad gain</span><span class="value">−2.4 dB</span></div>
+          <div class="setting"><span><b>COLOR</b>Musical role</span><span class="value">HARMONY</span></div>
+          <div class="ai-card"><b>✦ AI CHANGE</b>“Make this chord warmer and less busy.”<br><br>Creates a preview asset; original stays untouched.</div>
+        </div>
+        <div class="inspect-actions"><div class="inspect-action">COMPARE</div><div class="inspect-action">MAKE VARIATION ↗</div></div>
+      </aside>
+    </div>
+
+    <footer class="statusbar">
+      <div class="bank">BANK A · 01–16</div>
+      <div class="status-message"><span class="pill">PATCH READY</span><span>16/16 mapped · MIDI controller connected · No export blockers</span></div>
+      <div class="zoom"><span>−</span><span>100%</span><span>＋</span></div>
+    </footer>
+  </div>
+</div>
+
+<div class="anatomy">
+  <div class="anatomy-card"><b>1 · Pattern 在上，方形 Pad 在下</b>上方先呈现节奏与播放头，下方 16-pad 始终以 1:1 承接实际演奏动作；与未来硬件保持一致。</div>
+  <div class="anatomy-card"><b>2 · 左栏是动作</b>Source / Chop / AI / Loop / Takes 是稳定工具模式；不会因为选中不同 Pad 而跳动。</div>
+  <div class="anatomy-card"><b>3 · 右栏是上下文</b>只编辑当前 Pad 或 Asset。未选中时显示 Patch 摘要；窄屏时变成右侧抽屉。</div>
+  <div class="anatomy-card"><b>4 · 流程降为状态</b>Upload、处理质量和 Export 阻塞通过顶部与底部状态表达，不占用主画布。</div>
+</div>
+
+<div class="approval options">
+  <div class="option" data-choice="desktop-structure-approved" onclick="toggleSelect(this)">
+    <div class="letter">✓</div><div class="content"><h3>骨架正确，继续细化</h3><p>下一步看 Pad 视觉语言、状态和交互动效。</p></div>
+  </div>
+  <div class="option" data-choice="desktop-structure-revise" onclick="toggleSelect(this)">
+    <div class="letter">↺</div><div class="content"><h3>结构需要调整</h3><p>点击后回到对话里告诉我想移动、隐藏或放大的区域。</p></div>
+  </div>
+</div>

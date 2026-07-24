@@ -1,0 +1,194 @@
+<style>
+  :root {
+    --paper:#f6f2e8; --ink:#11110f; --red:#ff4f31; --yellow:#ffd21c;
+    --cyan:#32c7e9; --violet:#8a4af3; --mint:#46c79b; --pink:#ff69c8; --muted:#d5cfc2;
+  }
+  #frame-content { background:#e8e2d5; color:var(--ink); }
+  .states-head { display:flex; align-items:end; justify-content:space-between; gap:20px; margin-bottom:18px; }
+  .states-head .copy { max-width:840px; }
+  .states-head h2 { font-size:28px; letter-spacing:-.04em; }
+  .states-head .subtitle { color:#57534d; margin:0; }
+  .truth-tag { border:2px solid var(--ink); border-radius:999px; background:var(--yellow); padding:7px 12px; font-size:11px; font-weight:900; white-space:nowrap; }
+
+  .state-map { display:grid; grid-template-columns:repeat(5,1fr); border:3px solid var(--ink); margin-bottom:16px; }
+  .map-step { padding:10px; border-right:2px solid var(--ink); background:var(--paper); min-height:66px; }
+  .map-step:last-child { border:0; }
+  .map-step.active { background:var(--mint); }
+  .map-step b { display:block; font-size:11px; margin-bottom:4px; }
+  .map-step span { font-size:8px; color:#5f5b54; }
+
+  .state-cards { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  .state-card { border:3px solid var(--ink); background:var(--paper); }
+  .state-card-head { padding:10px 12px; border-bottom:2px solid var(--ink); display:flex; justify-content:space-between; align-items:center; }
+  .state-card-head b { font-size:13px; }
+  .state-card-head span { font-size:8px; font-weight:900; }
+  .mini-app { height:285px; display:grid; grid-template:28px 1fr / 55px 1fr 105px; font-family:Arial,sans-serif; overflow:hidden; }
+  .mini-top { grid-column:1/-1; border-bottom:2px solid var(--ink); display:flex; align-items:center; justify-content:space-between; padding:0 7px; font-size:6px; font-weight:900; }
+  .mini-logo { font-size:12px; }
+  .mini-side { border-right:2px solid var(--ink); display:flex; flex-direction:column; }
+  .mini-tool { min-height:37px; border-bottom:1.5px solid var(--ink); display:grid; place-items:center; font-size:5px; font-weight:900; }
+  .mini-tool.active { background:var(--red); color:#fff; }
+  .mini-main { padding:9px; position:relative; overflow:hidden; }
+  .mini-main h3 { font-size:18px; line-height:.85; letter-spacing:-.06em; margin:0 0 8px; }
+  .mini-aside { border-left:2px solid var(--ink); padding:7px; font-size:6px; background:#eee8dc; }
+
+  .source-tabs { display:grid; grid-template-columns:repeat(3,1fr); border:1.5px solid var(--ink); margin-bottom:8px; }
+  .source-tab { padding:5px 3px; border-right:1.5px solid var(--ink); font-size:6px; font-weight:900; text-align:center; }
+  .source-tab:last-child { border:0; }
+  .source-tab.active { background:var(--yellow); }
+  .drop { border:2px dashed var(--ink); height:118px; display:grid; place-items:center; text-align:center; font-size:7px; background:#fff; }
+  .drop b { display:block; font-size:10px; margin-bottom:3px; }
+  .source-foot { display:flex; justify-content:space-between; align-items:center; margin-top:8px; font-size:6px; }
+  .primary { background:var(--ink); color:#fff; padding:5px 8px; font-size:6px; font-weight:900; }
+
+  .process-list { border:2px solid var(--ink); }
+  .process-row { min-height:38px; display:grid; grid-template-columns:22px 1fr auto; align-items:center; gap:5px; padding:4px 6px; border-bottom:1.5px solid var(--ink); font-size:6px; }
+  .process-row:last-child { border:0; }
+  .process-row.done { background:var(--mint); }
+  .process-row.current { background:var(--yellow); }
+  .process-row b { font-size:7px; }
+  .step-icon { width:17px; height:17px; border:1.5px solid var(--ink); display:grid; place-items:center; font-weight:900; }
+  .processing-pads { display:grid; grid-template-columns:repeat(8,1fr); gap:2px; margin-top:8px; }
+  .ghost-pad { aspect-ratio:1; border:1px solid var(--ink); background:#ddd6ca; }
+  .ghost-pad.ready { background:var(--red); }
+
+  .ready-pattern { height:64px; border:1.5px solid var(--ink); background:
+    linear-gradient(90deg,transparent 0 42%,var(--red) 42% 43%,transparent 43%),
+    repeating-linear-gradient(90deg,transparent 0 8px,#c3bcb0 8px 9px),
+    repeating-linear-gradient(0deg,transparent 0 12px,#c3bcb0 12px 13px),#fff; }
+  .ready-pads { display:grid; grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(2,1fr); gap:3px; margin-top:7px; }
+  .ready-pad { aspect-ratio:1; border:1.5px solid var(--ink); }
+  .ready-pad:nth-child(-n+4){background:var(--red)}.ready-pad:nth-child(5){background:var(--violet)}.ready-pad:nth-child(6){background:var(--mint)}
+  .ready-pad:nth-child(7),.ready-pad:nth-child(8){background:var(--yellow)}.ready-pad:nth-child(9),.ready-pad:nth-child(10){background:var(--cyan)}.ready-pad:nth-child(n+11){background:var(--pink)}
+  .ready-aside-head { background:var(--mint); margin:-7px -7px 7px; padding:7px; border-bottom:1.5px solid var(--ink); font-size:9px; font-weight:900; }
+  .ready-setting { border-bottom:1px solid var(--ink); padding:6px 0; }
+
+  .error-strip { border:2px solid var(--red); background:#fff; color:var(--red); padding:7px; font-size:7px; margin-bottom:7px; }
+  .error-strip b { display:block; font-size:9px; margin-bottom:3px; }
+  .quality-actions { display:flex; gap:5px; margin-top:7px; }
+  .secondary { border:1.5px solid var(--ink); background:#fff; padding:4px 6px; font-size:6px; font-weight:900; }
+  .export-list { border:2px solid var(--ink); }
+  .export-row { padding:6px; border-bottom:1px solid var(--ink); display:flex; justify-content:space-between; gap:8px; font-size:6px; }
+  .export-row:last-child { border:0; }
+  .export-row.ok { background:var(--mint); }
+  .export-row.warn { background:var(--yellow); }
+  .export-cta { margin-top:8px; display:grid; grid-template-columns:1fr auto; gap:6px; align-items:center; font-size:6px; }
+
+  .behavior-rules { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-top:14px; }
+  .behavior { border:2px solid var(--ink); background:var(--paper); padding:10px; font-size:10px; }
+  .behavior b { display:block; font-size:12px; margin-bottom:4px; }
+  .approval { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:14px; }
+  .approval .option { border-radius:0; border:2px solid var(--ink); background:var(--paper); color:var(--ink); }
+  .approval .option.selected { background:var(--yellow); border-color:var(--ink); }
+  @media(max-width:950px){
+    .state-map{grid-template-columns:1fr}.map-step{border-right:0;border-bottom:2px solid var(--ink)}
+    .state-cards{grid-template-columns:1fr}.behavior-rules{grid-template-columns:1fr 1fr}
+  }
+</style>
+
+<div class="states-head">
+  <div class="copy">
+    <div class="label">Design section 4 · Stage 1 states</div>
+    <h2>同一台乐器，从空白到可演奏，再到可导出</h2>
+    <p class="subtitle">状态变化发生在 Instrument-first Canvas 内部。系统不隐藏质量问题、不用假数据顶替失败，也不会因为处理中就把用户锁在一张没有上下文的进度页。</p>
+  </div>
+  <div class="truth-tag">NO FAKE SUCCESS</div>
+</div>
+
+<div class="state-map">
+  <div class="map-step"><b>01 · SOURCE</b><span>Generate / Upload / Line-in</span></div>
+  <div class="map-step"><b>02 · PROCESS</b><span>Validate → Separate → Slice</span></div>
+  <div class="map-step active"><b>03 · PATCH</b><span>Map 16 slots → Preview</span></div>
+  <div class="map-step"><b>04 · PLAY / TAKE</b><span>MIDI / Keyboard → Record</span></div>
+  <div class="map-step"><b>05 · EXPORT</b><span>Pack evidence → DAW</span></div>
+</div>
+
+<div class="state-cards">
+  <div class="state-card">
+    <div class="state-card-head"><b>A · Empty / Source</b><span>ENTRY STATE</span></div>
+    <div class="mini-app">
+      <div class="mini-top"><span class="mini-logo">LMDJ</span><span>UNTITLED PROJECT</span><span>LOCAL DRAFT</span></div>
+      <div class="mini-side"><span class="mini-tool active">SOURCE</span><span class="mini-tool">CHOP</span><span class="mini-tool">AI</span><span class="mini-tool">LOOP</span><span class="mini-tool">TAKES</span></div>
+      <div class="mini-main">
+        <h3>FEED IT<br>A SOUND</h3>
+        <div class="source-tabs"><span class="source-tab">GENERATE</span><span class="source-tab active">UPLOAD</span><span class="source-tab">LINE-IN</span></div>
+        <div class="drop"><div><b>DROP WAV / MP3</b>or choose a file<br><br>Max duration and supported formats shown before processing.</div></div>
+        <div class="source-foot"><span>Try with included example</span><span class="primary">MAKE IT PLAYABLE →</span></div>
+      </div>
+      <aside class="mini-aside"><b>SOURCE RULES</b><br><br>Original audio is always retained.<br><br>No upload starts before format and duration validation.</aside>
+    </div>
+  </div>
+
+  <div class="state-card">
+    <div class="state-card-head"><b>B · Processing</b><span>LIVE EVIDENCE</span></div>
+    <div class="mini-app">
+      <div class="mini-top"><span class="mini-logo">LMDJ</span><span>NIGHT BLOOM</span><span>02:14 ELAPSED</span></div>
+      <div class="mini-side"><span class="mini-tool active">SOURCE</span><span class="mini-tool">CHOP</span><span class="mini-tool">AI</span><span class="mini-tool">LOOP</span><span class="mini-tool">TAKES</span></div>
+      <div class="mini-main">
+        <h3>BUILDING<br>YOUR PATCH</h3>
+        <div class="process-list">
+          <div class="process-row done"><span class="step-icon">✓</span><span><b>INPUT VALIDATED</b><br>WAV · 44.1kHz · 03:28</span><span>00:02</span></div>
+          <div class="process-row done"><span class="step-icon">✓</span><span><b>STEMS SEPARATED</b><br>4 canonical stems</span><span>01:42</span></div>
+          <div class="process-row current"><span class="step-icon">↻</span><span><b>CHOP + MAP</b><br>11 of 16 slots ready</span><span>00:30</span></div>
+          <div class="process-row"><span class="step-icon">4</span><span><b>PATCH VERIFY</b><br>Waiting</span><span>—</span></div>
+        </div>
+        <div class="processing-pads"><i class="ghost-pad ready"></i><i class="ghost-pad ready"></i><i class="ghost-pad ready"></i><i class="ghost-pad ready"></i><i class="ghost-pad ready"></i><i class="ghost-pad ready"></i><i class="ghost-pad"></i><i class="ghost-pad"></i></div>
+      </div>
+      <aside class="mini-aside"><b>YOU CAN LEAVE</b><br><br>Project state is preserved.<br><br>Cancel returns to the retained source; completed artifacts stay visible.</aside>
+    </div>
+  </div>
+
+  <div class="state-card">
+    <div class="state-card-head"><b>C · Patch Ready</b><span>PRIMARY WORKSPACE</span></div>
+    <div class="mini-app">
+      <div class="mini-top"><span class="mini-logo">LMDJ</span><span>NIGHT BLOOM · 92 BPM</span><span>● REC · EXPORT ↗</span></div>
+      <div class="mini-side"><span class="mini-tool">SOURCE</span><span class="mini-tool active">CHOP</span><span class="mini-tool">AI</span><span class="mini-tool">LOOP</span><span class="mini-tool">TAKES</span></div>
+      <div class="mini-main">
+        <h3>MAKE IT<br>PLAYABLE</h3>
+        <div class="ready-pattern"></div>
+        <div class="ready-pads">
+          <i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i>
+          <i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i><i class="ready-pad"></i>
+        </div>
+      </div>
+      <aside class="mini-aside"><div class="ready-aside-head">06<br>CHORD SLICE</div><div class="ready-setting">START / END</div><div class="ready-setting">ONE-SHOT</div><div class="ready-setting">−2.4 dB</div><div class="ready-setting">✦ AI VARIATION</div></aside>
+    </div>
+  </div>
+
+  <div class="state-card">
+    <div class="state-card-head"><b>D · Quality / Failure / Export</b><span>TRUTHFUL OUTCOME</span></div>
+    <div class="mini-app">
+      <div class="mini-top"><span class="mini-logo">LMDJ</span><span>NIGHT BLOOM</span><span>SAVED</span></div>
+      <div class="mini-side"><span class="mini-tool active">SOURCE</span><span class="mini-tool">CHOP</span><span class="mini-tool">AI</span><span class="mini-tool">LOOP</span><span class="mini-tool">TAKES</span></div>
+      <div class="mini-main">
+        <div class="error-strip"><b>QUALITY NEEDS REVIEW</b>Vocal separation is below the preferred threshold. Original audio and 12 playable slots are intact.</div>
+        <div class="quality-actions"><span class="secondary">KEEP ORIGINAL LAYER</span><span class="secondary">RETRY SEPARATION</span></div>
+        <h3 style="font-size:13px;margin-top:11px">CREATOR EXPORT</h3>
+        <div class="export-list">
+          <div class="export-row ok"><span>STEMS · 4 files</span><b>READY</b></div>
+          <div class="export-row ok"><span>SAMPLES / SLICES · 28</span><b>READY</b></div>
+          <div class="export-row ok"><span>MIDI + MANIFEST</span><b>READY</b></div>
+          <div class="export-row warn"><span>VOCAL CLEAN STEM</span><b>REVIEW</b></div>
+        </div>
+        <div class="export-cta"><span>Package will be marked “partial” until reviewed.</span><span class="primary">EXPORT AVAILABLE FILES</span></div>
+      </div>
+      <aside class="mini-aside"><b>NEVER OVERWRITE</b><br><br>Retry creates a new processing result.<br><br>Partial export lists every missing or review-required item.</aside>
+    </div>
+  </div>
+</div>
+
+<div class="behavior-rules">
+  <div class="behavior"><b>Source is durable</b>Provider、分轨或切片失败时保留项目与原始音频，允许重试或换入口。</div>
+  <div class="behavior"><b>Progress is evidence</b>显示真实完成阶段、产物数量和耗时；未知状态不伪造成稳定百分比。</div>
+  <div class="behavior"><b>AI creates alternatives</b>Replace / Variation 先生成 Preview Asset，接受前不覆盖当前 Pad。</div>
+  <div class="behavior"><b>Export is a checklist</b>成功、缺失、需复核逐项列出；不完整包不会被标成完整成功。</div>
+</div>
+
+<div class="approval options">
+  <div class="option" data-choice="stage1-states-approved" onclick="toggleSelect(this)">
+    <div class="letter">✓</div><div class="content"><h3>Stage 1 状态正确</h3><p>整套 UI 设计可以整理为正式规格。</p></div>
+  </div>
+  <div class="option" data-choice="stage1-states-revise" onclick="toggleSelect(this)">
+    <div class="letter">↺</div><div class="content"><h3>某个状态需要调整</h3><p>点击后回到对话里指出入口、处理、失败或 Export 的问题。</p></div>
+  </div>
+</div>

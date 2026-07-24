@@ -1,0 +1,225 @@
+<style>
+  :root {
+    --paper:#f6f2e8; --ink:#11110f; --red:#ff4f31; --yellow:#ffd21c;
+    --cyan:#32c7e9; --violet:#8a4af3; --mint:#46c79b; --pink:#ff69c8; --muted:#d5cfc2;
+  }
+  #frame-content { background:#e8e2d5; color:var(--ink); }
+  .responsive-head { display:flex; align-items:end; justify-content:space-between; gap:20px; margin-bottom:17px; }
+  .responsive-head .copy { max-width:830px; }
+  .responsive-head h2 { font-size:28px; letter-spacing:-.04em; }
+  .responsive-head .subtitle { color:#57534d; margin:0; }
+  .fluid-tag { border:2px solid var(--ink); border-radius:999px; background:var(--cyan); padding:7px 12px; font-size:11px; font-weight:900; white-space:nowrap; }
+
+  .breakpoint-grid { display:grid; grid-template-columns:1.45fr 1fr; gap:15px; }
+  .device-card { border:3px solid var(--ink); background:var(--paper); padding:12px; }
+  .device-card h3 { font-size:14px; margin:0 0 3px; }
+  .device-card > p { font-size:10px; color:#5f5b54; margin:0 0 10px; }
+  .device-stage { background:#d8d1c3; border:2px solid var(--ink); padding:12px; min-height:270px; display:grid; place-items:center; overflow:hidden; }
+
+  .mini { border:2px solid var(--ink); background:var(--paper); color:var(--ink); display:grid; overflow:hidden; font-family:Arial,sans-serif; box-shadow:5px 5px 0 var(--ink); }
+  .mini * { box-sizing:border-box; }
+  .m-top { border-bottom:2px solid var(--ink); display:flex; align-items:center; justify-content:space-between; padding:0 7px; font-size:5px; font-weight:1000; }
+  .m-logo { font-size:11px; }
+  .m-export { background:var(--ink); color:#fff; align-self:stretch; display:grid; place-items:center; padding:0 7px; margin-right:-7px; }
+  .m-side { border-right:2px solid var(--ink); display:flex; flex-direction:column; }
+  .m-tool { border-bottom:1.5px solid var(--ink); min-height:24px; display:grid; place-items:center; font-size:5px; font-weight:900; }
+  .m-tool.active { background:var(--red); color:#fff; }
+  .m-main { padding:6px; display:grid; gap:5px; min-height:0; }
+  .m-title { font-size:10px; font-weight:1000; line-height:.85; }
+  .m-pattern { border:1.5px solid var(--ink); min-height:42px; background:
+    linear-gradient(90deg,transparent 0 39%,var(--red) 39% 40%,transparent 40%),
+    repeating-linear-gradient(90deg,transparent 0 7px,#c0b9ad 7px 8px),
+    repeating-linear-gradient(0deg,transparent 0 9px,#c0b9ad 9px 10px),#fff; }
+  .m-pads { display:grid; gap:3px; min-height:0; align-content:end; }
+  .m-pad { border:1.5px solid var(--ink); position:relative; overflow:hidden; font-size:5px; font-weight:1000; padding:2px; aspect-ratio:1; }
+  .m-pad::after { content:""; position:absolute; width:65%; aspect-ratio:1; border:1px solid var(--ink); background:rgba(255,255,255,.5); border-radius:50%; right:-35%; bottom:-35%; }
+  .m-pad:nth-child(-n+4){background:var(--red)}.m-pad:nth-child(5){background:var(--violet);color:#fff}.m-pad:nth-child(6){background:var(--mint)}
+  .m-pad:nth-child(7),.m-pad:nth-child(8){background:var(--yellow)}.m-pad:nth-child(9),.m-pad:nth-child(10){background:var(--cyan)}.m-pad:nth-child(n+11){background:var(--pink)}
+  .m-inspector { border-left:2px solid var(--ink); display:grid; grid-template-rows:auto 1fr auto; }
+  .m-inspect-head { background:var(--mint); border-bottom:1.5px solid var(--ink); padding:6px; font-size:9px; font-weight:1000; }
+  .m-settings { background:repeating-linear-gradient(0deg,var(--paper) 0 27px,var(--ink) 27px 28px); }
+  .m-ai { border-top:1.5px solid var(--ink); background:var(--yellow); padding:5px; font-size:5px; font-weight:900; }
+  .m-bottom { border-top:2px solid var(--ink); display:flex; align-items:center; justify-content:space-between; padding:0 6px; font-size:5px; font-weight:900; }
+  .m-modebar { border-top:2px solid var(--ink); display:grid; grid-template-columns:repeat(5,1fr); }
+  .m-mode { border-right:1px solid var(--ink); display:grid; place-items:center; font-size:5px; font-weight:900; }
+  .m-mode.active { background:var(--red); color:#fff; }
+  .m-drawer { position:absolute; right:0; top:0; bottom:0; width:42%; border-left:2px solid var(--ink); background:var(--paper); box-shadow:-5px 0 0 rgba(17,17,15,.15); display:grid; grid-template-rows:auto 1fr auto; }
+
+  .desktop-wide { width:100%; max-width:650px; aspect-ratio:16/9; grid-template:24px 1fr 20px / 48px 1fr 112px; }
+  .desktop-wide .m-top { grid-column:1/-1; }
+  .desktop-wide .m-main { grid-template-rows:auto 1fr auto; }
+  .desktop-wide .m-pads { grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(2,auto); }
+  .desktop-wide .m-bottom { grid-column:1/-1; }
+
+  .compact { width:100%; max-width:430px; aspect-ratio:4/3; grid-template:22px 1fr 20px / 34px 1fr; position:relative; }
+  .compact .m-top { grid-column:1/-1; }
+  .compact .m-main { grid-template-rows:auto 1fr auto; }
+  .compact .m-pads { grid-template-columns:repeat(8,1fr); grid-template-rows:repeat(2,auto); }
+  .compact .m-bottom { grid-column:1/-1; }
+  .compact .m-tool { font-size:0; }
+  .compact .m-tool::after { content:"◆"; font-size:6px; }
+  .compact .drawer-tab { position:absolute; right:0; top:28%; background:var(--mint); border:1.5px solid var(--ink); border-right:0; font-size:5px; font-weight:900; padding:5px 3px; }
+
+  .tablet { width:285px; aspect-ratio:3/4; grid-template:24px 1fr 28px / 1fr; }
+  .tablet .m-main { grid-template-rows:auto 1fr auto; }
+  .tablet .m-pads {
+    --pad-gap:6px;
+    display:flex;
+    flex-direction:column;
+    gap:var(--pad-gap);
+    width:86%;
+    margin:0 auto;
+    padding:6px 0;
+    align-self:end;
+  }
+  .tablet .m-pad-row {
+    display:grid;
+    grid-template-columns:repeat(4,minmax(0,1fr));
+    gap:var(--pad-gap);
+  }
+  .tablet .m-pad-row:nth-child(1) .m-pad { background:var(--red); color:var(--ink); }
+  .tablet .m-pad-row:nth-child(2) .m-pad:nth-child(1) { background:var(--violet); color:#fff; }
+  .tablet .m-pad-row:nth-child(2) .m-pad:nth-child(2) { background:var(--mint); color:var(--ink); }
+  .tablet .m-pad-row:nth-child(2) .m-pad:nth-child(3),
+  .tablet .m-pad-row:nth-child(2) .m-pad:nth-child(4) { background:var(--yellow); color:var(--ink); }
+  .tablet .m-pad-row:nth-child(3) .m-pad:nth-child(1),
+  .tablet .m-pad-row:nth-child(3) .m-pad:nth-child(2) { background:var(--cyan); color:var(--ink); }
+  .tablet .m-pad-row:nth-child(3) .m-pad:nth-child(3),
+  .tablet .m-pad-row:nth-child(3) .m-pad:nth-child(4),
+  .tablet .m-pad-row:nth-child(4) .m-pad { background:var(--pink); color:var(--ink); }
+  .tablet .m-pad::before {
+    content:"";
+    position:absolute;
+    inset:-4px;
+    border:1px dashed rgba(17,17,15,.24);
+    pointer-events:none;
+  }
+
+  .phone { width:170px; aspect-ratio:9/18; grid-template:22px 1fr 27px / 1fr; position:relative; }
+  .phone .m-main { grid-template-rows:auto 1fr auto; padding:5px; }
+  .phone .m-pads { grid-template-columns:repeat(4,1fr); grid-template-rows:repeat(4,auto); }
+  .phone .m-title { font-size:8px; }
+  .phone .m-pattern { min-height:36px; }
+
+  .small-grid { display:grid; grid-template-columns:1fr 1fr; gap:15px; margin-top:15px; }
+  .ratio-rules { margin-top:15px; display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:9px; }
+  .rule { border:2px solid var(--ink); background:var(--paper); padding:10px; font-size:10px; }
+  .rule b { display:block; font-size:12px; margin-bottom:4px; }
+  .rule code { font-family:inherit; display:inline-block; background:var(--yellow); border:1.5px solid var(--ink); padding:2px 4px; margin-top:5px; font-size:8px; font-weight:900; }
+  .approval { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-top:15px; }
+  .approval .option { border-radius:0; border:2px solid var(--ink); background:var(--paper); color:var(--ink); }
+  .approval .option.selected { background:var(--yellow); border-color:var(--ink); }
+  @media(max-width:950px){
+    .breakpoint-grid{grid-template-columns:1fr}
+    .small-grid{grid-template-columns:1fr}
+    .ratio-rules{grid-template-columns:1fr 1fr}
+  }
+</style>
+
+<div class="responsive-head">
+  <div class="copy">
+    <div class="label">Design section 3 · Responsive system</div>
+    <h2>响应式不是缩放，而是保持演奏优先级后重新编排</h2>
+    <p class="subtitle">所有尺寸都保留 Pattern 在上、Pad 在下；真正变化的是工具栏、Inspector 和 Pad 列数。断点由可用容器宽度决定，不依赖某一种设备型号。</p>
+  </div>
+  <div class="fluid-tag">SQUARE PADS · UNIFORM GAP</div>
+</div>
+
+<div class="breakpoint-grid">
+  <div class="device-card">
+    <h3>① Wide Desktop · 1280px 以上</h3>
+    <p>完整三栏：文字工具栏、8×2 Pad、常驻 Inspector。1440×900 是精调基准，21:9 时只放大中央演奏区。</p>
+    <div class="device-stage">
+      <div class="mini desktop-wide">
+        <div class="m-top"><span class="m-logo">LMDJ</span><span>NIGHT BLOOM · 92 BPM</span><span class="m-export">EXPORT ↗</span></div>
+        <div class="m-side"><div class="m-tool active">SOURCE</div><div class="m-tool">CHOP</div><div class="m-tool">AI</div><div class="m-tool">LOOP</div><div class="m-tool">TAKES</div></div>
+        <div class="m-main">
+          <div class="m-title">MAKE IT PLAYABLE</div><div class="m-pattern"></div>
+          <div class="m-pads">
+            <i class="m-pad">01</i><i class="m-pad">02</i><i class="m-pad">03</i><i class="m-pad">04</i><i class="m-pad">05</i><i class="m-pad">06</i><i class="m-pad">07</i><i class="m-pad">08</i>
+            <i class="m-pad">09</i><i class="m-pad">10</i><i class="m-pad">11</i><i class="m-pad">12</i><i class="m-pad">13</i><i class="m-pad">14</i><i class="m-pad">15</i><i class="m-pad">16</i>
+          </div>
+        </div>
+        <div class="m-inspector"><div class="m-inspect-head">06<br>CHORD SLICE</div><div class="m-settings"></div><div class="m-ai">✦ AI CHANGE</div></div>
+        <div class="m-bottom"><span>BANK A · 01–16</span><span>PATCH READY · MIDI CONNECTED</span><span>100%</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="device-card">
+    <h3>② Compact Desktop / Landscape Tablet · 960–1279px</h3>
+    <p>左栏压成图标，Inspector 改为按需抽屉；Pad 仍保持 8×2，优先保护演奏时的横向肌肉记忆。</p>
+    <div class="device-stage">
+      <div class="mini compact">
+        <div class="m-top"><span class="m-logo">LMDJ</span><span>NIGHT BLOOM</span><span class="m-export">EXPORT</span></div>
+        <div class="m-side"><div class="m-tool active">S</div><div class="m-tool">C</div><div class="m-tool">A</div><div class="m-tool">L</div><div class="m-tool">T</div></div>
+        <div class="m-main">
+          <div class="m-title">MAKE IT PLAYABLE</div><div class="m-pattern"></div>
+          <div class="m-pads">
+            <i class="m-pad">01</i><i class="m-pad">02</i><i class="m-pad">03</i><i class="m-pad">04</i><i class="m-pad">05</i><i class="m-pad">06</i><i class="m-pad">07</i><i class="m-pad">08</i>
+            <i class="m-pad">09</i><i class="m-pad">10</i><i class="m-pad">11</i><i class="m-pad">12</i><i class="m-pad">13</i><i class="m-pad">14</i><i class="m-pad">15</i><i class="m-pad">16</i>
+          </div>
+        </div>
+        <div class="m-bottom"><span>BANK A</span><span>PATCH READY</span><span>⋯</span></div>
+        <div class="drawer-tab">EDIT 06</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="small-grid">
+  <div class="device-card">
+    <h3>③ Portrait Tablet · 600–959px</h3>
+    <p>工具栏移到底部，Pad 重排为 4×4；行距与列距严格使用同一个 gap，外边距随可用空间伸缩。</p>
+    <div class="device-stage">
+      <div class="mini tablet">
+        <div class="m-top"><span class="m-logo">LMDJ</span><span>NIGHT BLOOM</span><span class="m-export">↗</span></div>
+        <div class="m-main">
+          <div class="m-title">MAKE IT PLAYABLE</div><div class="m-pattern"></div>
+          <div class="m-pads" aria-label="4 by 4 pad grid with uniform row and column gaps">
+            <div class="m-pad-row"><i class="m-pad">01</i><i class="m-pad">02</i><i class="m-pad">03</i><i class="m-pad">04</i></div>
+            <div class="m-pad-row"><i class="m-pad">05</i><i class="m-pad">06</i><i class="m-pad">07</i><i class="m-pad">08</i></div>
+            <div class="m-pad-row"><i class="m-pad">09</i><i class="m-pad">10</i><i class="m-pad">11</i><i class="m-pad">12</i></div>
+            <div class="m-pad-row"><i class="m-pad">13</i><i class="m-pad">14</i><i class="m-pad">15</i><i class="m-pad">16</i></div>
+          </div>
+        </div>
+        <div class="m-modebar"><span class="m-mode active">SOURCE</span><span class="m-mode">CHOP</span><span class="m-mode">AI</span><span class="m-mode">LOOP</span><span class="m-mode">TAKES</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="device-card">
+    <h3>④ Phone / Narrow Window · 360–599px</h3>
+    <p>保持完整 16-pad 与 Pattern，不隐藏功能；4×4 Pad、紧凑 Pattern、底部模式栏。参数编辑进入全高 Sheet。</p>
+    <div class="device-stage">
+      <div class="mini phone">
+        <div class="m-top"><span class="m-logo">LMDJ</span><span>92 BPM</span><span class="m-export">•••</span></div>
+        <div class="m-main">
+          <div class="m-title">MAKE IT PLAYABLE</div><div class="m-pattern"></div>
+          <div class="m-pads">
+            <i class="m-pad">01</i><i class="m-pad">02</i><i class="m-pad">03</i><i class="m-pad">04</i><i class="m-pad">05</i><i class="m-pad">06</i><i class="m-pad">07</i><i class="m-pad">08</i>
+            <i class="m-pad">09</i><i class="m-pad">10</i><i class="m-pad">11</i><i class="m-pad">12</i><i class="m-pad">13</i><i class="m-pad">14</i><i class="m-pad">15</i><i class="m-pad">16</i>
+          </div>
+        </div>
+        <div class="m-modebar"><span class="m-mode active">SRC</span><span class="m-mode">CHOP</span><span class="m-mode">AI</span><span class="m-mode">LOOP</span><span class="m-mode">TAKE</span></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="ratio-rules">
+  <div class="rule"><b>超宽屏不加信息密度</b>中央 Canvas 扩张，Pad 变宽、Pattern 显示更多时间；两侧栏设最大宽度。<br><code>≥ 1600px</code></div>
+  <div class="rule"><b>正方形优先于填满</b>Pad 使用固定 1:1 比例；多余高度交给 Pattern 或留白，不把演奏触点拉成长方形。<br><code>aspect-ratio: 1</code></div>
+  <div class="rule"><b>统一的 XY Gap</b>4×4 网格只使用一个 gap token；空间不足时先收缩外 margin，绝不分别压缩 row-gap。<br><code>gap: clamp(8px, 1.4vw, 16px)</code></div>
+  <div class="rule"><b>8×2 与 4×4 切换</b>≥960px 保持硬件位置；更窄时按行连续重排为 4×4，01–16 顺序始终不变。<br><code>container width</code></div>
+  <div class="rule"><b>高度也参与决策</b>低高度窗口减少 Pattern 高度并让页面滚动，绝不压缩 Pad 到不可演奏。<br><code>@container height</code></div>
+</div>
+
+<div class="approval options">
+  <div class="option" data-choice="responsive-system-approved" onclick="toggleSelect(this)">
+    <div class="letter">✓</div><div class="content"><h3>响应式规则正确</h3><p>下一步确认 Stage 1 的页面状态、加载与失败体验。</p></div>
+  </div>
+  <div class="option" data-choice="responsive-system-revise" onclick="toggleSelect(this)">
+    <div class="letter">↺</div><div class="content"><h3>某个尺寸需要调整</h3><p>点击后回到对话里指出目标尺寸和希望保留的区域。</p></div>
+  </div>
+</div>

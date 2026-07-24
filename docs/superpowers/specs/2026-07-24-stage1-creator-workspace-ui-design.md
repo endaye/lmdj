@@ -45,6 +45,7 @@ Stage 1 使用 **Instrument-first Canvas**：
 
 ## 3. 设计输入
 
+- 本次评审原型：[Stage 1 Creator Workspace UI 视觉参考](./2026-07-24-stage1-creator-workspace-ui-references/README.md)。
 - 飞书 PRD：`LMDJ 软件 MVP Stage 1–4 与团队协作 Memo｜2026-07-18`，文档 revision 63。
 - PRD 硬件参考：2×8 Pad、Pad 上方 21:9 屏幕、左侧高频控制区。
 - 视觉参考：[Kumaleon](https://kumaleon.com/)。
