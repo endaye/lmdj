@@ -1,7 +1,7 @@
 # LMDJ Stage 1 Creator Workspace UI 设计
 
 - 日期：2026-07-24
-- 状态：已评审设计；固定 16 Pad 与首条切片边界已更新，待用户书面复核
+- 状态：用户已书面确认；尚未实施
 - 目标落点：`apps/web/`
 - 视觉基准：1440×900，自适应到不同宽高比
 - 首条切片边界：[LMDJ Stage 1 Creator Core 首条纵向切片设计](./2026-07-24-stage1-creator-core-slice-design.md)
@@ -376,6 +376,7 @@ Source UI
 - Web 仍只读取 `patch.json` 和其中引用的文件。
 - 不读取 `lanes.json`、`chart.mid` 或 `report.json` 来补 UI。
 - 处理质量、Export blocker、Asset 来源等新信息必须进入正式产品契约或 API 状态模型。
+- ExportChecklist 读取 Creator Core Spec 定义的 `/jobs/{job_id}/export/status`；它不从 Patch 猜测 Stem、Key 或导出完整性，status 与 ZIP 下载共用服务端 inspection 规则。
 
 ### 10.2 16-pad 契约迁移
 

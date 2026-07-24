@@ -2,7 +2,7 @@
 
 日期：2026-07-24
 
-状态：产品范围已确认；本次 UI 整合待用户书面复核（2026-07-24）
+状态：用户已书面确认（2026-07-24）
 
 上游依据：[LMDJ 软件 MVP Stage 1–4 与团队协作 Memo｜2026-07-18](https://fcn8wuu8uotg.feishu.cn/docx/ZK5eduti6oE9Dox8Pkbc8r0vnPb)（`approved-for-planning`，读取 revision 63）
 
@@ -140,7 +140,7 @@ apps/web
 所有 UI 要求直接采用 UI Design Spec，尤其是：
 
 - Instrument-first Canvas，Pattern Surface 在 PadMatrix16 上方；
-- 桌面 8×2、600–959px 为 4×4、每个 Pad 保持 1:1；
+- `>=960px` 为 8×2、`360–959px` 为 4×4、每个 Pad 保持 1:1；
 - Pad 顺序固定 01–16，视觉位置与数据索引一一对应；
 - Creator Tools、Context Inspector、Status Bar、Pad 状态、动效、响应式和可访问性不在本文重复定义；
 - 本切片只启用 Upload、Processing、Patch Ready、Quality Needs Review、Failed 和 Creator Export 所需能力；Generate、Line-in、Chop 编辑、AI Preview、Take 保持后置。
@@ -196,7 +196,12 @@ Audio Worker 在 Patchify 成功后生成 `export-source.json`（`lmdj.creator-e
 
 ### 5.6 Creator Export Builder
 
-`apps/api` 提供 `GET /jobs/{job_id}/export`。Builder 在 Job 已完成后根据 `export-source.json` 从合法 package 目录创建确定性的 ZIP：
+`apps/api` 提供两个共用同一完整性检查器的只读端点：
+
+- `GET /jobs/{job_id}/export/status`：返回 `status`、`downloadable`、四类 checklist item、缺失项、warning 和 music metadata，供 UI 在下载前真实呈现 Ready / Review / Missing / Partial；
+- `GET /jobs/{job_id}/export`：只有完整性检查允许下载时才返回 ZIP。
+
+Status 与 Builder 必须复用同一 inspection 结果，不允许 UI、status route 和 ZIP route 各自推断完整性。Builder 在 Job 已完成后根据 `export-source.json` 从合法 package 目录创建确定性的 ZIP：
 
 ```text
 creator-export-{patch_id}.zip
@@ -245,10 +250,13 @@ creator-export-{patch_id}.zip
 - 缺少 Key、MIDI、全部 Samples 或 Patch 时为 `partial`，端点返回 HTTP `409` 和结构化缺失项，不提供一个被标成成功的 ZIP；
 - ZIP 文件名和 Manifest 不包含用户原始绝对路径。
 
+Status response 的 checklist 固定为 `stems`、`samples`、`midi`、`music`，每项状态为 `ready | review | missing`。缺少可选 Stem 可使 Stems 为 Review/Missing，但不单独阻止下载；缺少上述必需项时 `downloadable=false`。
+
 ### 5.7 Web Export UI
 
 Creator Export 使用 UI Design Spec 的 `ExportChecklist`，不降级为单一成功 Toast。已加载 API Job 的工作台显示“导出 Creator Pack”入口：
 
+- 进入 Export mode 时先读取 `/export/status`，不从 Patch 猜测 Stem、Key 或导出完整性；
 - complete：下载 ZIP；
 - partial：逐项显示 Ready / Review / Missing 和缺失项，当前切片不下载被标成成功的部分 ZIP；
 - 本地拖放或内置示例没有 Job ID 时不显示远端导出按钮；
@@ -291,8 +299,8 @@ WAV/MP3
 - Contract：`patch.pads` 恰好 16 项、索引连续且唯一；unused slot 为真实 `empty` Pad；Scene 覆盖 `0..15`。
 - Pad UI：执行 UI Design Spec §13 的组件、响应式、可访问性测试；渲染 `patch.pads` 的 16 项且顺序一致，不生成 view-only Pad，empty Pad no-op。
 - MIDI adapter：16-pad direct、8-pad Bank A/B、默认映射、velocity 0、未知 note、learn 完成、learn 中断、设备断开、权限拒绝。
-- Export Builder：ZIP 文件清单、SHA-256、稳定排序、路径穿越、缺少 Key/MIDI/Sample、只列真实 Stem。
-- Web：Pattern 位于 PadMatrix16 上方；API Job 显示 ExportChecklist；local/example 不显示远端导出；409 显示缺失项；下载失败保留 loaded 状态。
+- Export Builder：status 与 ZIP 共用 inspection、文件清单、SHA-256、稳定排序、路径穿越、缺少 Key/MIDI/Sample、只列真实 Stem。
+- Web：Pattern 位于 PadMatrix16 上方；API Job 从 `/export/status` 显示真实 ExportChecklist；local/example 不显示远端导出；409 显示缺失项；下载失败保留 loaded 状态。
 - Contract：`npm run check-contract` 继续通过；`lmdj.patch.v1` 无漂移。
 
 ### 8.2 Release Evidence

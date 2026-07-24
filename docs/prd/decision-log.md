@@ -112,9 +112,9 @@
 
 ### 已确认：首条切片固定 16 个数据 Pad，UI 与数据一一对应
 
-- 结论：`patch.json` 固定描述索引 `0..15` 的 16 个 Pad；Web 使用一一对应的 2×8 布局，不创建 view-only 空槽。未分配素材的位置也是使用 `action: "empty"` 的真实 Pad。
+- 结论：`patch.json` 固定描述索引 `0..15` 的 16 个 Pad；Web 与数据一一对应，`>=960px` 使用 8 列 × 2 行，`360–959px` 使用 4×4，不创建 view-only 空槽。未分配素材的位置也是使用 `action: "empty"` 的真实 Pad。
 - 原因：数据、Scene、输入映射和 UI 必须共享同一组稳定索引；由消费者自行补槽会形成两套产品事实，并让 16 位界面与 Patch 契约失配。
-- 影响：在首条切片内原子收紧 `lmdj.patch.v1` 的 `pads` 约束为恰好 16 项，同步 Patchify、Web、Schema 副本、生成类型、fixtures 和测试；文案使用“16 个 Pad Slot”，同时明确 empty Pad 没有可播放素材。
+- 影响：在首条切片内原子收紧 `lmdj.patch.v1` 的 `pads` 约束为恰好 16 项，同步 Patchify、Web、Schema 副本、生成类型、fixtures 和测试；UI 布局、视觉、状态与响应式直接采用 Creator Workspace UI Design Spec，文案使用“16 个 Pad Slot”，同时明确 empty Pad 没有可播放素材。
 
 ### 已确认：Creator Export 首期使用通用 ZIP，以 Ableton Live 做 Smoke Test
 
