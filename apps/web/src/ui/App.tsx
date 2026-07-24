@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { ApiError, defaultApiClient, type ApiClient } from "../api/client";
+import {
+  ApiError,
+  defaultApiClient,
+  normalizeBase,
+  type ApiClient,
+  type CreatorExportStatus,
+} from "../api/client";
 import type { AudioEngine } from "../engine/AudioEngine";
 import { loadMidiMapping, type MidiBank, type MidiMapping } from "../midi/mapping";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
 import { ErrorPanel } from "./ErrorPanel";
 import { ContextInspector } from "./ContextInspector";
+import { ExportChecklist } from "./ExportChecklist";
 import { MidiPanel } from "./MidiPanel";
 import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 import { PatternSurface } from "./PatternSurface";
@@ -56,7 +63,24 @@ type AppState =
       issues: string[];
       issueTitle: string;
     }
-  | { phase: "loaded"; bundle: PatchBundle<unknown> };
+  | {
+      phase: "loaded";
+      bundle: PatchBundle<unknown>;
+      source: LoadedSource;
+      exportState: ExportState;
+    };
+
+type LoadedSource =
+  | { kind: "api"; base: string; jobId: string }
+  | { kind: "local" | "example" };
+
+type ApiLoadedSource = Extract<LoadedSource, { kind: "api" }>;
+
+type ExportState =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ready"; status: CreatorExportStatus }
+  | { kind: "error"; message: string };
 
 function usePlayheadStep(engine: AudioEngine, active: boolean): number | null {
   const [step, setStep] = useState<number | null>(null);
@@ -107,9 +131,15 @@ export function App({
   }, []);
 
   const enterLoaded = useCallback(
-    (bundle: PatchBundle<unknown>) => {
+    (bundle: PatchBundle<unknown>, source: LoadedSource) => {
       engine.load(bundle);
-      setState({ phase: "loaded", bundle });
+      setMode("source");
+      setState({
+        phase: "loaded",
+        bundle,
+        source,
+        exportState: { kind: "idle" },
+      });
     },
     [engine],
   );
@@ -117,13 +147,17 @@ export function App({
   // 退出当前 patch，停掉播放，回到上传页换一首歌
   const backToUpload = useCallback(() => {
     if (engine.playing) engine.stop();
+    setMode("source");
     setState({ phase: "source", issues: null, issueTitle: null });
   }, [engine]);
 
   const handleFiles = useCallback(
-    async (files: Map<string, ArrayBuffer>) => {
+    async (
+      files: Map<string, ArrayBuffer>,
+      source: Extract<LoadedSource, { kind: "local" | "example" }>,
+    ) => {
       try {
-        enterLoaded(await loadPatch(files, decode));
+        enterLoaded(await loadPatch(files, decode), source);
       } catch (error) {
         failPatch(error);
       }
@@ -133,28 +167,29 @@ export function App({
 
   const handleUpload = useCallback(
     async (base: string, file: File) => {
+      const root = normalizeBase(base);
       setState({
         phase: "processing",
         file,
-        base,
+        base: root,
         jobState: "preflight",
         lastNonterminalStage: "preflight",
       });
       try {
-        const jobId = await apiClient.uploadSong(base, file);
+        const jobId = await apiClient.uploadSong(root, file);
         setState({
           phase: "processing",
           file,
-          base,
+          base: root,
           jobId,
           jobState: "queued",
           lastNonterminalStage: "queued",
         });
-        await apiClient.pollJob(base, jobId, (job) =>
+        await apiClient.pollJob(root, jobId, (job) =>
           setState((previous) => ({
             phase: "processing",
             file,
-            base,
+            base: root,
             jobId,
             jobState: job.state,
             lastNonterminalStage:
@@ -163,7 +198,10 @@ export function App({
                 : job.state,
           })),
         );
-        enterLoaded(await apiClient.fetchPatchBundle(base, jobId, decode));
+        enterLoaded(
+          await apiClient.fetchPatchBundle(root, jobId, decode),
+          { kind: "api", base: root, jobId },
+        );
       } catch (error) {
         const preflight = isPreflightRejection(error);
         setState((previous) => ({
@@ -190,6 +228,57 @@ export function App({
       }
     },
     [apiClient, decode, enterLoaded],
+  );
+
+  const requestExportStatus = useCallback(
+    async (source: ApiLoadedSource) => {
+      const matchesSource = (candidate: AppState) =>
+        candidate.phase === "loaded" &&
+        candidate.source.kind === "api" &&
+        candidate.source.base === source.base &&
+        candidate.source.jobId === source.jobId;
+      setState((previous) =>
+        matchesSource(previous)
+          ? { ...previous, exportState: { kind: "loading" } }
+          : previous,
+      );
+      try {
+        const status = await apiClient.fetchCreatorExportStatus(
+          source.base,
+          source.jobId,
+        );
+        setState((previous) =>
+          matchesSource(previous)
+            ? { ...previous, exportState: { kind: "ready", status } }
+            : previous,
+        );
+      } catch (error) {
+        setState((previous) =>
+          matchesSource(previous)
+            ? {
+                ...previous,
+                exportState: { kind: "error", message: errorMessage(error) },
+              }
+            : previous,
+        );
+      }
+    },
+    [apiClient],
+  );
+
+  const handleModeChange = useCallback(
+    (nextMode: WorkbenchMode) => {
+      setMode(nextMode);
+      if (
+        nextMode === "export" &&
+        state.phase === "loaded" &&
+        state.source.kind === "api" &&
+        state.exportState.kind === "idle"
+      ) {
+        void requestExportStatus(state.source);
+      }
+    },
+    [requestExportStatus, state],
   );
 
   // 键盘固定覆盖 16 个逻辑 Pad；MIDI Bank 只影响 8-pad Controller。
@@ -226,8 +315,15 @@ export function App({
           canvas={
             <>
               <SourcePanel
-                onFiles={(files) => void handleFiles(files)}
-                onExample={() => void fetchExample().then(handleFiles, failPatch)}
+                onFiles={(files) =>
+                  void handleFiles(files, { kind: "local" })
+                }
+                onExample={() =>
+                  void fetchExample().then(
+                    (files) => handleFiles(files, { kind: "example" }),
+                    failPatch,
+                  )
+                }
                 onUpload={(base, file) => void handleUpload(base, file)}
               />
               {state.issues && (
@@ -348,7 +444,98 @@ export function App({
 
   const { bundle } = state;
   const status = (bundle.patch.metadata as Record<string, unknown> | undefined)?.status;
-  const model = buildWorkbenchViewModel(bundle, selectedPadIndex);
+  const exportStatus =
+    state.exportState.kind === "ready" ? state.exportState.status : null;
+  const baseModel = buildWorkbenchViewModel(
+    bundle,
+    selectedPadIndex,
+    exportStatus
+      ? {
+          status: exportStatus.status,
+          missing: exportStatus.missing,
+          key: exportStatus.music.key?.value ?? null,
+        }
+      : undefined,
+  );
+  const exportNeedsReview =
+    exportStatus !== null &&
+    (
+      exportStatus.warnings.length > 0 ||
+      Object.values(exportStatus.items).some(
+        (item) => item.status === "review",
+      )
+    );
+  const exportBlockers = exportStatus?.warnings.map(
+    (warning) => `export warning: ${warning}`,
+  ) ?? [];
+  const model = {
+    ...baseModel,
+    blockers: [...baseModel.blockers, ...exportBlockers],
+    readiness:
+      exportStatus?.status === "partial"
+        ? "partial" as const
+        : baseModel.readiness !== "ready" || exportNeedsReview
+          ? "needs-review" as const
+          : "ready" as const,
+  };
+  const updateExportStatus = (
+    source: ApiLoadedSource,
+    nextStatus: CreatorExportStatus,
+  ) => {
+    setState((previous) =>
+      previous.phase === "loaded" &&
+      previous.source.kind === "api" &&
+      previous.source.base === source.base &&
+      previous.source.jobId === source.jobId
+        ? {
+            ...previous,
+            exportState: { kind: "ready", status: nextStatus },
+          }
+        : previous,
+    );
+  };
+  const apiSource = state.source.kind === "api" ? state.source : null;
+  const nonApiSource = state.source.kind === "api" ? null : state.source;
+  const exportInspector =
+    mode === "export"
+      ? apiSource === null
+        ? (
+            <ExportUnavailable source={nonApiSource!.kind} />
+          )
+        : state.exportState.kind === "ready"
+          ? (
+              <ExportChecklist
+                apiBase={apiSource.base}
+                jobId={apiSource.jobId}
+                status={state.exportState.status}
+                apiClient={apiClient}
+                onStatusChange={(nextStatus) =>
+                  updateExportStatus(apiSource, nextStatus)
+                }
+              />
+            )
+          : state.exportState.kind === "error"
+            ? (
+                <div className="export-status-error">
+                  <header>
+                    <span>Export</span>
+                    <h2>导出 Creator Pack</h2>
+                  </header>
+                  <p role="alert">{state.exportState.message}</p>
+                  <button
+                    type="button"
+                    onClick={() => void requestExportStatus(apiSource)}
+                  >
+                    Retry Export Status
+                  </button>
+                </div>
+              )
+            : (
+                <div className="export-status-loading" role="status">
+                  正在读取服务端 Creator Pack 状态…
+                </div>
+              )
+      : undefined;
   return (
     <div className="app">
       {status === "rejected" && (
@@ -359,14 +546,14 @@ export function App({
       <WorkbenchShell
         model={model}
         mode={mode}
-        onModeChange={setMode}
+        onModeChange={handleModeChange}
         availableModes={["source", "performance", "export"]}
         appBar={
           <>
             <Wordmark />
             <div className="topbar-actions">
               <span className="workbench-project-meta">
-                {model.bpm} · {model.durationSeconds}s
+                {model.bpm} · {model.durationSeconds}s · Key {model.key ?? "—"}
               </span>
               <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
                 ⏏ 上传新歌
@@ -404,7 +591,9 @@ export function App({
             </section>
           </>
         }
-        contextInspector={<ContextInspector model={model} />}
+        contextInspector={
+          <ContextInspector model={model} exportContent={exportInspector} />
+        }
         statusBar={
           <>
             <strong>Pads 01–16</strong>
@@ -415,8 +604,8 @@ export function App({
             </span>
             <span>
               {model.readiness === "ready"
-                ? "Patch ready · no export blockers"
-                : `${model.blockers.length} item(s) need review`}
+                ? "ready · Patch ready · no export blockers"
+                : `${model.readiness} · ${model.blockers.length} item(s) need review`}
             </span>
             <span>{model.patchId}</span>
           </>
@@ -440,6 +629,23 @@ function isPreflightRejection(error: unknown): boolean {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function ExportUnavailable({
+  source,
+}: {
+  source: "local" | "example";
+}) {
+  return (
+    <section className="export-unavailable" data-testid="export-unavailable">
+      <header>
+        <span>Export</span>
+        <h2>导出 Creator Pack</h2>
+      </header>
+      <p>仅远端 Job 可导出。</p>
+      <small>当前来源：{source === "example" ? "Example" : "Local"} package</small>
+    </section>
+  );
 }
 
 function CreatorStateShell({

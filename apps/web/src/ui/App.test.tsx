@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
@@ -6,7 +6,12 @@ import type { Patch } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
 import { AudioEngine } from "../engine/AudioEngine";
 import { App } from "./App";
-import type { ApiClient, JobStatus } from "../api/client";
+import {
+  ApiError,
+  type ApiClient,
+  type CreatorExportStatus,
+  type JobStatus,
+} from "../api/client";
 import type { PatchBundle } from "../patch/loader";
 
 class MemoryStorage implements Storage {
@@ -27,6 +32,24 @@ afterEach(() => {
 
 const enc = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).buffer as ArrayBuffer;
 const fakeDecode = async () => ({ fake: "buffer" });
+const creatorExportStatus: CreatorExportStatus = {
+  status: "complete",
+  downloadable: true,
+  items: {
+    stems: { status: "review", paths: ["stems/drums.wav"] },
+    samples: { status: "ready", paths: ["samples/kick.wav"] },
+    midi: { status: "ready", paths: ["midi/chart.mid"] },
+    music: { status: "ready", missing: [] },
+  },
+  missing: [],
+  warnings: ["optional stems unavailable: vocals"],
+  music: {
+    bpm: 90,
+    key: { value: "A minor", confidence: 0.72 },
+    time_signature: { numerator: 4, denominator: 4, source: "pipeline" },
+    loop: { seconds: 10.67, steps: 64, beats: 16, bars: 4 },
+  },
+};
 
 function exampleFiles(patch: unknown): () => Promise<Map<string, ArrayBuffer>> {
   return async () => {
@@ -210,6 +233,9 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
       const { loadPatch } = await import("../patch/loader");
       return (await loadPatch(files, fakeDecode)) as PatchBundle<unknown>;
     },
+    fetchCreatorExportStatus: async () => creatorExportStatus,
+    downloadCreatorExport: async () =>
+      new Blob(["creator pack"], { type: "application/zip" }),
     ...overrides,
   };
 }
@@ -244,6 +270,246 @@ describe("App API path", () => {
     renderAppWithApi(fakeApi());
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+  });
+
+  it("loads Creator status once on API Export mode and synchronizes inspector, Key, and readiness", async () => {
+    const fetchCreatorExportStatus = vi
+      .fn<ApiClient["fetchCreatorExportStatus"]>()
+      .mockResolvedValue(creatorExportStatus);
+    const engine = new AudioEngine(new FakeAudioContext());
+    const stop = vi.spyOn(engine, "stop");
+    render(
+      <App
+        engine={engine}
+        decode={fakeDecode}
+        fetchExample={exampleFiles(golden)}
+        apiClient={fakeApi({ fetchCreatorExportStatus })}
+      />,
+    );
+    const base = screen.getByTestId("api-base-input");
+    await userEvent.clear(base);
+    await userEvent.type(base, "http://api.test///");
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("pad-1"));
+    stop.mockClear();
+
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    await waitFor(() =>
+      expect(screen.getByTestId("export-checklist")).toBeInTheDocument(),
+    );
+    expect(fetchCreatorExportStatus).toHaveBeenCalledTimes(1);
+    expect(fetchCreatorExportStatus).toHaveBeenCalledWith(
+      "http://api.test",
+      "job123",
+    );
+    expect(screen.getByTestId("context-inspector")).toHaveTextContent(
+      "导出 Creator Pack",
+    );
+    expect(screen.getByTestId("app-bar")).toHaveTextContent("Key A minor");
+    expect(screen.getByTestId("status-bar")).toHaveTextContent("needs-review");
+    expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
+    expect(screen.getByTestId("pad-1")).toHaveAttribute("data-selected", "true");
+    expect(stop).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    expect(fetchCreatorExportStatus).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a failed export status request without losing the Pad matrix or selection", async () => {
+    const fetchCreatorExportStatus = vi
+      .fn<ApiClient["fetchCreatorExportStatus"]>()
+      .mockRejectedValueOnce(new TypeError("offline"))
+      .mockResolvedValueOnce(creatorExportStatus);
+    renderAppWithApi(fakeApi({ fetchCreatorExportStatus }));
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId("pad-2"));
+
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("offline");
+    expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
+    expect(screen.getByTestId("pad-2")).toHaveAttribute("data-selected", "true");
+    await userEvent.click(
+      screen.getByRole("button", { name: /Retry Export Status/i }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("export-checklist")).toBeInTheDocument(),
+    );
+    expect(fetchCreatorExportStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("resets Export mode before loading a new API Job so its status can be requested", async () => {
+    const uploadSong = vi
+      .fn<ApiClient["uploadSong"]>()
+      .mockResolvedValueOnce("job-old")
+      .mockResolvedValueOnce("job-new");
+    const fetchCreatorExportStatus = vi
+      .fn<ApiClient["fetchCreatorExportStatus"]>()
+      .mockResolvedValue(creatorExportStatus);
+    renderAppWithApi(fakeApi({ uploadSong, fetchCreatorExportStatus }));
+
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(fetchCreatorExportStatus).toHaveBeenCalledWith(
+        "http://localhost:8000",
+        "job-old",
+      ),
+    );
+    await userEvent.click(screen.getByTestId("back-to-upload"));
+
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    expect(screen.getByRole("button", { name: "Source" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.queryByText("正在读取服务端 Creator Pack 状态…"),
+    ).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(fetchCreatorExportStatus).toHaveBeenCalledWith(
+        "http://localhost:8000",
+        "job-new",
+      ),
+    );
+    expect(fetchCreatorExportStatus).toHaveBeenCalledTimes(2);
+  });
+
+  it("ignores a late 409 from an old Job download after a new Job is loaded", async () => {
+    const uploadSong = vi
+      .fn<ApiClient["uploadSong"]>()
+      .mockResolvedValueOnce("job-old")
+      .mockResolvedValueOnce("job-new");
+    const nextStatus = structuredClone(creatorExportStatus);
+    nextStatus.warnings = [];
+    nextStatus.items.stems.status = "ready";
+    nextStatus.music.key = { value: "C major", confidence: 0.91 };
+    const fetchCreatorExportStatus = vi
+      .fn<ApiClient["fetchCreatorExportStatus"]>()
+      .mockImplementation(async (_base, jobId) =>
+        jobId === "job-old" ? creatorExportStatus : nextStatus
+      );
+    let rejectOldDownload: ((reason: unknown) => void) | undefined;
+    const downloadCreatorExport = vi
+      .fn<ApiClient["downloadCreatorExport"]>()
+      .mockImplementation(
+        () =>
+          new Promise<Blob>((_resolve, reject) => {
+            rejectOldDownload = reject;
+          }),
+      );
+    renderAppWithApi(
+      fakeApi({
+        uploadSong,
+        fetchCreatorExportStatus,
+        downloadCreatorExport,
+      }),
+    );
+
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("export-checklist")).toBeInTheDocument(),
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: /Download Creator Pack/i }),
+    );
+    await userEvent.click(screen.getByTestId("back-to-upload"));
+
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Source" }));
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("app-bar")).toHaveTextContent("Key C major"),
+    );
+
+    await act(async () => {
+      rejectOldDownload?.(
+        new ApiError(
+          "old export incomplete",
+          409,
+          { code: "export_incomplete", missing: ["chart.mid"] },
+        ),
+      );
+      await Promise.resolve();
+    });
+
+    expect(screen.getByTestId("app-bar")).toHaveTextContent("Key C major");
+    expect(screen.getByTestId("status-bar")).not.toHaveTextContent("partial");
+    expect(screen.getByTestId("export-item-midi")).toHaveTextContent("Ready");
+  });
+
+  it("marks the example as remote-only in Export mode without status requests or a fake download", async () => {
+    const fetchCreatorExportStatus = vi.fn<
+      ApiClient["fetchCreatorExportStatus"]
+    >();
+    renderAppWithApi(fakeApi({ fetchCreatorExportStatus }));
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(screen.getByTestId("context-inspector")).toHaveTextContent(
+      "仅远端 Job 可导出",
+    );
+    expect(screen.getByTestId("context-inspector")).toHaveTextContent("Example");
+    expect(
+      screen.queryByRole("button", { name: /Download Creator Pack/i }),
+    ).not.toBeInTheDocument();
+    expect(fetchCreatorExportStatus).not.toHaveBeenCalled();
+  });
+
+  it("marks a locally picked package as remote-only without requesting status", async () => {
+    const fetchCreatorExportStatus = vi.fn<
+      ApiClient["fetchCreatorExportStatus"]
+    >();
+    const { container } = renderAppWithApi(
+      fakeApi({ fetchCreatorExportStatus }),
+    );
+    const patchFile = new File(
+      [JSON.stringify(golden)],
+      "patch.json",
+      { type: "application/json" },
+    );
+    Object.defineProperty(patchFile, "webkitRelativePath", {
+      value: "local-pack/patch.json",
+    });
+    Object.defineProperty(patchFile, "arrayBuffer", {
+      value: async () => enc(golden),
+    });
+    const sampleFiles = (golden as unknown as Patch).elements.map((element) => {
+      const file = new File([new Uint8Array(8)], element.source_path.split("/").at(-1) ?? "sample.wav");
+      Object.defineProperty(file, "webkitRelativePath", {
+        value: `local-pack/${element.source_path}`,
+      });
+      Object.defineProperty(file, "arrayBuffer", {
+        value: async () => new ArrayBuffer(8),
+      });
+      return file;
+    });
+    const input = container.querySelector(
+      '.drop-zone input[type="file"]',
+    ) as HTMLInputElement;
+
+    await userEvent.upload(input, [patchFile, ...sampleFiles]);
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(screen.getByTestId("context-inspector")).toHaveTextContent(
+      "仅远端 Job 可导出",
+    );
+    expect(screen.getByTestId("context-inspector")).toHaveTextContent("Local");
+    expect(fetchCreatorExportStatus).not.toHaveBeenCalled();
   });
 
   it("shows truthful input validation until upload returns a job id", async () => {

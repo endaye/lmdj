@@ -2,10 +2,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
 import {
   ApiError,
+  downloadCreatorExport,
+  fetchCreatorExportStatus,
   fetchPatchBundle,
   normalizeBase,
   pollJob,
   uploadSong,
+  type CreatorExportStatus,
   type JobStatus,
 } from "./client";
 
@@ -157,5 +160,83 @@ describe("fetchPatchBundle", () => {
     const bundle = await fetchPatchBundle("http://x:8000", "job123", fakeDecode);
     const firstId = bundle.patch.elements[0].element_id;
     expect(bundle.missingElementIds.has(firstId)).toBe(true);
+  });
+});
+
+const creatorExportStatus: CreatorExportStatus = {
+  status: "complete",
+  downloadable: true,
+  items: {
+    stems: { status: "review", paths: ["stems/drums.wav"] },
+    samples: { status: "ready", paths: ["samples/kick.wav"] },
+    midi: { status: "ready", paths: ["midi/chart.mid"] },
+    music: { status: "ready", missing: [] },
+  },
+  missing: [],
+  warnings: ["optional stems unavailable: vocals"],
+  music: {
+    bpm: 90,
+    key: { value: "A minor", confidence: 0.72 },
+    time_signature: { numerator: 4, denominator: 4, source: "pipeline" },
+    loop: { seconds: 10.67, steps: 64, beats: 16, bars: 4 },
+  },
+};
+
+describe("Creator export", () => {
+  it("fetches the server inspection as the status source of truth", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(jsonResponse(creatorExportStatus));
+
+    await expect(
+      fetchCreatorExportStatus("http://x:8000/", "job123"),
+    ).resolves.toEqual(creatorExportStatus);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://x:8000/jobs/job123/export/status",
+    );
+  });
+
+  it("returns the successful Creator export response as a Blob", async () => {
+    const blob = new Blob(["creator pack"], { type: "application/zip" });
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue({
+      ok: true,
+      status: 200,
+      blob: async () => blob,
+    } as Response);
+
+    await expect(
+      downloadCreatorExport("http://x:8000/", "job123"),
+    ).resolves.toBe(blob);
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://x:8000/jobs/job123/export",
+    );
+  });
+
+  it("preserves a 409 missing list in ApiError.detail", async () => {
+    const detail = {
+      code: "export_incomplete",
+      missing: ["music.key", "samples/snare.wav"],
+    };
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail }, false, 409),
+    );
+
+    const error = await downloadCreatorExport(
+      "http://x:8000",
+      "job123",
+    ).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(409);
+    expect(error.detail).toEqual(detail);
+  });
+
+  it("surfaces a network failure without manufacturing a response", async () => {
+    const networkError = new TypeError("offline");
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(networkError);
+
+    await expect(
+      fetchCreatorExportStatus("http://x:8000", "job123"),
+    ).rejects.toBe(networkError);
   });
 });

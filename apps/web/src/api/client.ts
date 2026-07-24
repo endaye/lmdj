@@ -21,6 +21,42 @@ export interface JobStatus {
   quality: string | null;
 }
 
+export type ExportItemStatus = "ready" | "review" | "missing";
+
+export interface CreatorExportItem {
+  status: ExportItemStatus;
+  paths?: string[];
+  missing?: string[];
+}
+
+export interface CreatorExportStatus {
+  status: "complete" | "partial";
+  downloadable: boolean;
+  items: {
+    stems: CreatorExportItem;
+    samples: CreatorExportItem;
+    midi: CreatorExportItem;
+    music: CreatorExportItem;
+  };
+  missing: string[];
+  warnings: string[];
+  music: {
+    bpm?: number;
+    key?: { value: string; confidence: number } | null;
+    time_signature?: {
+      numerator: number;
+      denominator: number;
+      source: string;
+    };
+    loop?: {
+      seconds: number;
+      steps: number;
+      beats: number;
+      bars: number;
+    };
+  };
+}
+
 export type DecodeFn = (b: ArrayBuffer) => Promise<unknown>;
 
 export function normalizeBase(base: string): string {
@@ -122,10 +158,63 @@ export async function fetchPatchBundle(
   return loadPatch(files, decode);
 }
 
+async function responseDetail(response: Response): Promise<unknown> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return body.detail;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function fetchCreatorExportStatus(
+  base: string,
+  jobId: string,
+): Promise<CreatorExportStatus> {
+  const response = await fetch(
+    `${normalizeBase(base)}/jobs/${jobId}/export/status`,
+  );
+  if (!response.ok) {
+    const detail = await responseDetail(response);
+    throw new ApiError(
+      `export status failed (HTTP ${response.status})`,
+      response.status,
+      detail,
+    );
+  }
+  return (await response.json()) as CreatorExportStatus;
+}
+
+export async function downloadCreatorExport(
+  base: string,
+  jobId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${normalizeBase(base)}/jobs/${jobId}/export`,
+  );
+  if (!response.ok) {
+    const detail = await responseDetail(response);
+    throw new ApiError(
+      `Creator export failed (HTTP ${response.status})`,
+      response.status,
+      detail,
+    );
+  }
+  return response.blob();
+}
+
 export interface ApiClient {
   uploadSong: typeof uploadSong;
   pollJob: typeof pollJob;
   fetchPatchBundle: typeof fetchPatchBundle;
+  fetchCreatorExportStatus: typeof fetchCreatorExportStatus;
+  downloadCreatorExport: typeof downloadCreatorExport;
 }
 
-export const defaultApiClient: ApiClient = { uploadSong, pollJob, fetchPatchBundle };
+export const defaultApiClient: ApiClient = {
+  uploadSong,
+  pollJob,
+  fetchPatchBundle,
+  fetchCreatorExportStatus,
+  downloadCreatorExport,
+};

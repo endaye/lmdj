@@ -650,6 +650,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .context-inspector-content[data-inspector-accent="lead"] { --inspector-accent: var(--lead); }
 .context-inspector-content[data-inspector-accent="action"] { --inspector-accent: var(--action); }
 .context-inspector-content[data-inspector-accent="empty"] { --inspector-accent: var(--muted); }
+.context-inspector-content[data-inspector-accent="export"] { --inspector-accent: var(--lead); }
 .context-inspector__header {
   margin: -14px -14px 14px;
   padding: 12px;
@@ -715,6 +716,146 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .context-inspector-content li small { font-size: 9px; }
 .context-inspector-content .inspector-source--missing { color: #a2122c; }
 .context-inspector-content .inspector-source--unavailable { color: #5e5a53; }
+
+/* --- Creator export — server inspection, not Patch inference --------------- */
+
+.export-checklist,
+.export-status-error,
+.export-status-loading,
+.export-unavailable {
+  min-height: 100%;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+}
+.export-checklist__header,
+.export-status-error > header,
+.export-unavailable > header {
+  margin: -14px -14px 14px;
+  padding: 12px;
+  border-bottom: 3px solid var(--ink);
+  background: var(--lead);
+}
+.export-checklist__header > span,
+.export-status-error > header > span,
+.export-unavailable > header > span {
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+}
+.export-checklist__header h2,
+.export-status-error h2,
+.export-unavailable h2 {
+  margin: 3px 0 0;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: 20px;
+  line-height: 1;
+}
+.export-overall {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 7px 8px;
+  border: 3px solid var(--ink);
+  background: var(--harmony);
+  text-transform: uppercase;
+}
+.export-overall > span {
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 2px solid currentColor;
+  font-weight: 900;
+}
+.export-overall[data-status="review"] { background: var(--lead); }
+.export-overall[data-status="partial"] { background: var(--drums); color: #fff; }
+.export-items {
+  display: grid;
+  gap: 6px;
+}
+.context-inspector-content .export-items > li {
+  min-height: 44px;
+  display: grid;
+  grid-template-columns: 26px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 6px;
+  border: 2px solid var(--ink);
+}
+.export-items > li[data-status="ready"] { border-style: solid; }
+.export-items > li[data-status="review"] {
+  border-style: dashed;
+  background: #fff6c8;
+}
+.export-items > li[data-status="missing"] {
+  border-width: 3px;
+  border-style: double;
+  background: #ffe1dc;
+}
+.export-state-icon {
+  width: 24px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border: 2px solid currentColor;
+  font-weight: 900;
+}
+.export-items strong { text-transform: uppercase; }
+.export-warnings,
+.export-missing,
+.export-request-error,
+.export-status-error > p,
+.export-unavailable > p {
+  margin: 10px 0;
+  padding: 8px;
+  border: 2px solid var(--ink);
+  background: #fff;
+  overflow-wrap: anywhere;
+}
+.export-warnings { border-style: dashed; }
+.context-inspector-content .export-warnings li {
+  display: list-item;
+  margin-left: 16px;
+  padding: 3px 0;
+  border: 0;
+}
+.export-missing,
+.export-request-error,
+.export-status-error > p {
+  border-width: 3px;
+  background: #ffe1dc;
+}
+.export-download,
+.export-status-error button {
+  width: 100%;
+  min-height: 42px;
+  border: 3px solid var(--ink);
+  border-radius: 0;
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 4px 4px 0 var(--lead);
+  font-weight: 800;
+}
+.export-download:hover,
+.export-status-error button:hover {
+  border-color: var(--ink);
+  background: var(--drums);
+}
+.export-download:disabled {
+  background: var(--muted);
+  color: var(--ink);
+  box-shadow: none;
+}
+.export-status-loading {
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  border: 3px dashed var(--ink);
+  text-align: center;
+}
+.export-unavailable small { display: block; font-weight: 800; }
 
 /* --- Sequencer — LED step lanes -------------------------------------------- */
 
