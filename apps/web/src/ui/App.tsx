@@ -120,6 +120,13 @@ export function App({
     () => loadMidiMapping(localStorage).mode,
   );
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
+  const triggerPad = useCallback(
+    (index: number) => {
+      setSelectedPadIndex(index);
+      engine.triggerPad(index);
+    },
+    [engine],
+  );
 
   const failPatch = useCallback((error: unknown) => {
     const issues = error instanceof PatchValidationError ? error.issues : [String(error)];
@@ -300,11 +307,11 @@ export function App({
       const index = PAD_KEYS.indexOf(
         e.key.toUpperCase() as (typeof PAD_KEYS)[number],
       );
-      if (index >= 0) engine.triggerPad(index);
+      if (index >= 0) triggerPad(index);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [state.phase, engine]);
+  }, [state.phase, triggerPad]);
 
   if (state.phase === "source") {
     return (
@@ -507,6 +514,7 @@ export function App({
               <ExportChecklist
                 apiBase={apiSource.base}
                 jobId={apiSource.jobId}
+                patchId={bundle.patch.patch_id}
                 status={state.exportState.status}
                 apiClient={apiClient}
                 onStatusChange={(nextStatus) =>
@@ -576,7 +584,7 @@ export function App({
               playheadStep={playheadStep}
             />
             <MidiPanel
-              onTrigger={(index) => engine.triggerPad(index)}
+              onTrigger={triggerPad}
               bank={midiBank}
               onBankChange={setMidiBank}
               onMappingModeChange={setMidiMappingMode}

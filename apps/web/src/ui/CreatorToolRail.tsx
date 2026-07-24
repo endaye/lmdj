@@ -6,6 +6,12 @@ const MODE_LABELS: Record<WorkbenchMode, string> = {
   export: "Export",
 };
 
+const MODE_ICONS: Record<WorkbenchMode, string> = {
+  source: "◉",
+  performance: "▦",
+  export: "⇩",
+};
+
 export function CreatorToolRail({
   mode,
   onModeChange,
@@ -23,10 +29,18 @@ export function CreatorToolRail({
           key={availableMode}
           type="button"
           className="creator-tool-rail__mode"
+          aria-label={MODE_LABELS[availableMode]}
           aria-pressed={mode === availableMode}
           onClick={() => onModeChange(availableMode)}
         >
-          {MODE_LABELS[availableMode]}
+          <span
+            className="creator-tool-rail__icon"
+            data-icon={MODE_ICONS[availableMode]}
+            aria-hidden="true"
+          />
+          <span className="creator-tool-rail__text">
+            {MODE_LABELS[availableMode]}
+          </span>
         </button>
       ))}
     </nav>

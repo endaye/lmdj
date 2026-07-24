@@ -30,12 +30,14 @@ type RequestState =
 export function ExportChecklist({
   apiBase,
   jobId,
+  patchId,
   status,
   apiClient,
   onStatusChange,
 }: {
   apiBase: string;
   jobId: string;
+  patchId: string;
   status: CreatorExportStatus;
   apiClient: ApiClient;
   onStatusChange: (status: CreatorExportStatus) => void;
@@ -51,7 +53,7 @@ export function ExportChecklist({
       try {
         const anchor = document.createElement("a");
         anchor.href = url;
-        anchor.download = `creator-export-${jobId}.zip`;
+        anchor.download = `creator-export-${patchId}.zip`;
         anchor.click();
       } finally {
         URL.revokeObjectURL(url);

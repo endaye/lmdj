@@ -42,8 +42,8 @@ shell helper 的自动验证使用本地 HTTP fixture server，只验证
 | Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`327 passed` |
 | API 全套 | PASS | `61 passed`；1 条既有 Starlette/httpx deprecation warning |
 | `npm run check-contract` | PASS | `4 passed` |
-| `npm test` | PASS | `20` files、`140 passed` |
-| `npm run test:e2e` | PASS | 五个 viewport，`5 passed` |
+| `npm test` | PASS | `20` files、`141 passed` |
+| `npm run test:e2e` | PASS | 8 个容器边界 + 五个 viewport 交互 + 两个相反侧 drawer + 一个手机状态保持，`16 passed` |
 | `npm run build` | PASS | TypeScript + Vite production build |
 
 Worker 在隔离 worktree 中使用以下等价命令，以显式提供仓库内不写入
@@ -102,28 +102,42 @@ LMDJ_API_BASE_URL=http://127.0.0.1:8765 \
 
 ## Workspace UI 自动验收
 
-`apps/web/e2e/workbench-responsive.spec.ts` 在真实 Chromium 页面上对五个
-viewport 执行布局、几何、交互状态和 reduced-motion 断言：
+`apps/web/e2e/workbench-responsive.spec.ts` 在真实 Chromium 页面上执行 16
+个测试：先在同一个宽 viewport 内把 Workbench inline content box 精确设为
+`1280`、`960/1279`、`600/959`、`360/599`，并额外把 Workbench 嵌入
+`676px` 窄容器，验证响应式只取决于容器而不是设备或 viewport；随后对五个
+evidence viewport 执行 Pad 几何、Inspector 交互状态和 reduced-motion
+断言，并以两个相反侧 drawer case 和一个手机 Sheet case 验证触发反馈与状态保持：
 
-| Viewport | Grid | Pattern 在 Pad 上方 | 16 个正方形 Pad | 无 Inspector / Status 遮挡 | 结果 |
-|---|---:|---|---|---|---|
-| [`1440×900`](artifacts/2026-07-24-stage1/workbench-loaded-1440x900.png) | 8×2 | PASS | PASS | PASS | PASS |
-| [`1280×720`](artifacts/2026-07-24-stage1/workbench-loaded-1280x720.png) | 8×2 | PASS | PASS | PASS | PASS |
-| [`1024×768`](artifacts/2026-07-24-stage1/workbench-loaded-1024x768.png) | 8×2 | PASS | PASS | PASS | PASS |
-| [`768×1024`](artifacts/2026-07-24-stage1/workbench-loaded-768x1024.png) | 4×4 | PASS | PASS | PASS | PASS |
-| [`390×844`](artifacts/2026-07-24-stage1/workbench-loaded-390x844.png) | 4×4 | PASS | PASS | PASS | PASS |
+| Viewport | Grid | 外围结构 | Inspector 行为 | 结果 |
+|---|---:|---|---|---|
+| [`1440×900`](artifacts/2026-07-24-stage1/workbench-loaded-1440x900.png) | 8×2 | 左侧文字栏 + Canvas + 右侧常驻栏 | 常驻且不遮挡 Pad | PASS |
+| [`1280×720`](artifacts/2026-07-24-stage1/workbench-loaded-1280x720.png) | 8×2 | 实测 shell content `1250px`：左侧图标栏 + Canvas | 可访问 drawer | PASS |
+| [`1024×768`](artifacts/2026-07-24-stage1/workbench-loaded-1024x768.png) | 8×2 | 左侧图标栏 + Canvas | 可访问 drawer | PASS |
+| [`768×1024`](artifacts/2026-07-24-stage1/workbench-loaded-768x1024.png) | 4×4 | Canvas + 底部工具栏 | 覆盖式 drawer | PASS |
+| [`390×844`](artifacts/2026-07-24-stage1/workbench-loaded-390x844.png) | 4×4 | 紧凑 Top Bar + 底部 mode bar | 全高 Sheet | PASS |
 
 两个 4×4 viewport 的 row-gap 与 column-gap 相等。五个 viewport 都验证了
-16 Pad 数量、Pad 之间不重叠、Pattern 顺序、Inspector / Status 边界和最后
-一个 Pad 可见性。`npm test` 同时覆盖 Source、Processing、Failed、Loaded
-与 Export Checklist 的层级、状态文字和共享视觉 token。CreatorToolRail
-测试确认没有 Generate、Line-in、Chop、AI Preview、Take 或 Pattern A–D
-伪交互入口。
+16 Pad 数量、Pad 之间不重叠、Pattern 顺序、关闭 drawer / Sheet 后的
+Canvas 边界、Status 边界和最后一个 Pad 可见性。窄屏 Inspector 打开时按
+spec 覆盖 Canvas，但 `600–1279px` drawer 会按所选 Pad 的列从相反侧打开，
+宽度不超过容器 50%，因此不会盖住当前 selected / playing 反馈；全宽 Sheet
+仅用于 `360–599px`。自动化另行验证显式 toggle 的
+`aria-expanded` / `aria-controls`、图标模式的可访问名称、背景区域
+`inert`、Inspector 内 Tab / Shift+Tab focus trap，以及 Escape、backdrop、
+Close button 三种关闭路径和焦点归还。键盘与 MIDI 使用同一 trigger callback，
+会先同步当前 Pad / Inspector，再触发 AudioEngine。`npm test` 同时覆盖 Source、
+Processing、Failed、Loaded 与 Export Checklist 的层级、状态文字和共享
+视觉 token。CreatorToolRail 测试确认没有 Generate、Line-in、Chop、
+AI Preview、Take 或 Pattern A–D 伪交互入口。
 
 以上链接是本轮在对应 viewport 设置下、真实 Loaded Workbench 页面生成的
-Playwright 截图。桌面宽屏保存 viewport 画面；页面高度超过 viewport 的
-compact/tablet/mobile 版本保存 full-page 画面，以同时保留 Pattern、16 Pads、
-Inspector 和 Status Bar。截图与可重复的几何/状态断言共同构成本轮 UI evidence。
+Playwright 截图。`1440×900` 与 `1280×720` 保存 viewport 画面；
+`1024×768`、`768×1024`、`390×844` 因页面高度超过 viewport 而保存
+full-page 画面，以保留 Pattern、16 Pads、底部 mode bar（适用时）和
+Status Bar。窄屏截图保持 Inspector 关闭，避免用有意的 modal 覆盖遮住
+instrument；drawer / Sheet 的打开、内容可访问性与关闭路径由上述真实浏览器
+测试记录。截图与可重复的几何/状态断言共同构成本轮 UI evidence。
 
 ## MIDI、音频、Export 与 Ableton 验收
 
@@ -138,7 +152,7 @@ DAW 或真人任务证据。
 | 键盘 `1..8` / `Q..I` 固定映射且不受 MIDI Bank 影响 | PASS (automated) | Web MIDI / App Vitest 覆盖 |
 | 有素材 Pad 发出正确声音 | NOT RUN / FAIL | 无实体 controller + 监听验收 |
 | empty Pad 无声且无异常 | PASS (automated only) | Web Audio / Pad action tests；未做实体 controller 复核 |
-| ExportChecklist 显示 Ready / Review / Missing / Partial；必需项缺失不下载伪 ZIP | PASS (automated) | Web `ExportChecklist` / App 与 API 409 测试 |
+| ExportChecklist 显示 Ready / Review / Missing / Partial；必需项缺失不下载伪 ZIP；下载名使用 Patch ID | PASS (automated) | Web `ExportChecklist` / App 与 API 409 测试 |
 | ZIP 中 Stems、Samples、MIDI、Manifest 可导入 Ableton Live | NOT RUN / FAIL | `/Applications` 未安装 Ableton Live |
 | 按 Manifest BPM 设置工程后可继续编排 | NOT RUN / FAIL | `/Applications` 未安装 Ableton Live |
 | 非开发者无口头指导完成 Upload、MIDI 演奏、Export | NOT RUN / FAIL | 本轮没有招募测试参与者 |

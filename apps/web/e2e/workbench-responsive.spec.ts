@@ -8,6 +8,17 @@ const VIEWPORTS = [
   { name: "phone", width: 390, height: 844 },
 ] as const;
 
+const SHELL_BREAKPOINTS = [
+  { name: "wide", width: 1280, layout: "wide" },
+  { name: "compact-wide-start", width: 960, layout: "compact-wide" },
+  { name: "compact-wide-end", width: 1279, layout: "compact-wide" },
+  { name: "tablet-start", width: 600, layout: "tablet" },
+  { name: "tablet-end", width: 959, layout: "tablet" },
+  { name: "nested-narrow", width: 676, layout: "tablet" },
+  { name: "phone-start", width: 360, layout: "phone" },
+  { name: "phone-end", width: 599, layout: "phone" },
+] as const;
+
 type Box = { x: number; y: number; width: number; height: number };
 
 function overlaps(a: Box, b: Box): boolean {
@@ -51,6 +62,130 @@ async function openExampleWithMissingAsset(page: Page): Promise<void> {
   await page.mouse.move(0, 0);
 }
 
+async function setShellWidth(shell: Locator, width: number): Promise<void> {
+  await shell.evaluate((element, exactWidth) => {
+    const shellElement = element as HTMLElement;
+    const style = getComputedStyle(shellElement);
+    const borderInline =
+      Number.parseFloat(style.borderLeftWidth) +
+      Number.parseFloat(style.borderRightWidth);
+    shellElement.style.width = `${exactWidth + borderInline}px`;
+    shellElement.style.maxWidth = "none";
+  }, width);
+  await expect(shell).toHaveAttribute(
+    "data-layout",
+    width >= 1280
+      ? "wide"
+      : width >= 960
+        ? "compact-wide"
+        : width >= 600
+          ? "tablet"
+          : "phone",
+  );
+  expect(await shell.evaluate((element) => element.clientWidth)).toBe(width);
+}
+
+for (const breakpoint of SHELL_BREAKPOINTS) {
+  test(`${breakpoint.name} ${breakpoint.width}px uses the specified responsive shell`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await openExampleWithMissingAsset(page);
+
+    const shell = page.getByTestId("workbench-shell");
+    await setShellWidth(shell, breakpoint.width);
+    const appBar = page.getByTestId("app-bar");
+    const tools = page.getByTestId("creator-tools");
+    const canvas = page.getByTestId("instrument-canvas");
+    const inspector = page.getByTestId("context-inspector");
+    const toggle = page.getByTestId("inspector-toggle");
+    const status = page.getByTestId("status-bar");
+    const shellBox = await box(shell);
+    const appBarBox = await box(appBar);
+    const toolsBox = await box(tools);
+    const canvasBox = await box(canvas);
+    const statusBox = await box(status);
+
+    if (breakpoint.layout === "wide") {
+      await expect(toggle).toBeHidden();
+      await expect(inspector).toBeVisible();
+      const inspectorBox = await box(inspector);
+      expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(canvasBox.x);
+      expect(canvasBox.x + canvasBox.width).toBeLessThanOrEqual(inspectorBox.x);
+      expect(inspectorBox.x + inspectorBox.width).toBeLessThanOrEqual(
+        shellBox.x + shellBox.width,
+      );
+      await expect(
+        tools.getByRole("button", { name: "Performance" }),
+      ).toContainText("Performance");
+      return;
+    }
+
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(toggle).toHaveAttribute(
+      "aria-controls",
+      "workbench-context-inspector",
+    );
+    await expect(inspector).toBeHidden();
+
+    if (breakpoint.layout === "compact-wide") {
+      expect(toolsBox.x + toolsBox.width).toBeLessThanOrEqual(canvasBox.x);
+      const performance = tools.getByRole("button", { name: "Performance" });
+      await expect(performance).toHaveAccessibleName("Performance");
+      await expect(performance.locator(".creator-tool-rail__text")).toBeHidden();
+    } else {
+      expect(toolsBox.y).toBeGreaterThanOrEqual(canvasBox.y + canvasBox.height);
+      expect(toolsBox.y + toolsBox.height).toBeLessThanOrEqual(statusBox.y);
+      expect(toolsBox.width).toBeGreaterThanOrEqual(canvasBox.width - 1);
+    }
+
+    if (breakpoint.layout === "phone") {
+      expect(appBarBox.height).toBeLessThanOrEqual(58);
+      await expect(appBar).toHaveAttribute("data-compact", "true");
+    } else {
+      await expect(appBar).toHaveAttribute("data-compact", "false");
+    }
+
+    await toggle.click();
+    await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await expect(inspector).toBeVisible();
+    const backdrop = page.getByTestId("inspector-backdrop");
+    const close = page.getByTestId("inspector-close");
+    await expect(backdrop).toBeVisible();
+    await expect(backdrop).toHaveAttribute("tabindex", "-1");
+    await expect(close).toBeFocused();
+    for (const inertRegion of [appBar, tools, canvas, status]) {
+      await expect(inertRegion).toHaveAttribute("inert", "");
+    }
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(close).toBeFocused();
+    const inspectorBox = await box(inspector);
+    expect(overlaps(inspectorBox, canvasBox)).toBe(true);
+    if (breakpoint.layout === "phone") {
+      const contentBox = await box(page.getByTestId("workbench-content"));
+      expect(inspectorBox.width).toBeGreaterThanOrEqual(contentBox.width - 1);
+      expect(inspectorBox.height).toBeGreaterThanOrEqual(contentBox.height - 1);
+    }
+
+    await page.keyboard.press("Escape");
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(inspector).toBeHidden();
+    await expect(toggle).toBeFocused();
+    for (const inertRegion of [appBar, tools, canvas, status]) {
+      await expect(inertRegion).not.toHaveAttribute("inert", "");
+    }
+
+    await toggle.click();
+    await page.getByTestId("inspector-backdrop").click({ position: { x: 2, y: 2 } });
+    await expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await expect(inspector).toBeHidden();
+    await expect(toggle).toBeFocused();
+  });
+}
+
 for (const viewport of VIEWPORTS) {
   test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the instrument usable`, async ({
     page,
@@ -60,6 +195,8 @@ for (const viewport of VIEWPORTS) {
 
     const matrix = page.getByTestId("pad-matrix");
     const pads = matrix.locator("[data-pad-index]");
+    const shell = page.getByTestId("workbench-shell");
+    const shellWidth = (await box(shell)).width;
     await expect(pads).toHaveCount(16);
 
     const layout = await matrix.evaluate((element) => {
@@ -70,7 +207,7 @@ for (const viewport of VIEWPORTS) {
         columnGap: Number.parseFloat(style.columnGap),
       };
     });
-    const expectedColumns = viewport.width >= 960 ? 8 : 4;
+    const expectedColumns = shellWidth >= 960 ? 8 : 4;
     expect(layout.columns).toBe(expectedColumns);
     if (expectedColumns === 4) expect(layout.rowGap).toBe(layout.columnGap);
 
@@ -101,10 +238,22 @@ for (const viewport of VIEWPORTS) {
     const firstRowTop = Math.min(...boxes.slice(0, expectedColumns).map((padBox) => padBox.y));
     expect(patternBox.y + patternBox.height).toBeLessThanOrEqual(firstRowTop);
 
-    const inspectorBox = await box(page.getByTestId("context-inspector"));
+    const inspector = page.getByTestId("context-inspector");
+    const inspectorToggle = page.getByTestId("inspector-toggle");
+    if (shellWidth < 1280) {
+      await inspectorToggle.click();
+      await expect(inspectorToggle).toHaveAttribute("aria-expanded", "true");
+    }
+    const inspectorBox = await box(inspector);
     const statusBox = await box(page.getByTestId("status-bar"));
+    if (shellWidth >= 1280) {
+      for (const padBox of boxes) {
+        expect(overlaps(inspectorBox, padBox)).toBe(false);
+      }
+    } else {
+      expect(boxes.some((padBox) => overlaps(inspectorBox, padBox))).toBe(true);
+    }
     for (const padBox of boxes) {
-      expect(overlaps(inspectorBox, padBox)).toBe(false);
       expect(overlaps(statusBox, padBox)).toBe(false);
     }
     if (viewport.width <= 620) {
@@ -132,6 +281,10 @@ for (const viewport of VIEWPORTS) {
     });
     expect(initialInspectorStyle.transitionProperty.split(", ")).toContain("background-color");
     expect(initialInspectorStyle.transitionDuration).toBe("0.16s");
+    if (shellWidth < 1280) {
+      await page.getByTestId("inspector-close").click();
+      await expect(inspector).toBeHidden();
+    }
 
     await pads.nth(4).focus();
     await page.keyboard.press("Tab");
@@ -150,11 +303,19 @@ for (const viewport of VIEWPORTS) {
     await expect(selected).toHaveAttribute("data-visual-state", "playing");
     const playingSignature = await visualSignature(selected);
     await expect(selected).toHaveAttribute("data-visual-state", "selected");
+    if (shellWidth < 1280) {
+      await inspectorToggle.click();
+      await expect(inspector).toBeVisible();
+    }
     await expect(inspectorContent).toHaveAttribute("data-inspector-accent", "bass");
     await expect.poll(
       () => inspectorHeader.evaluate((element) => getComputedStyle(element).backgroundColor),
     ).not.toBe(initialInspectorStyle.backgroundColor);
     const selectedSignature = await visualSignature(selected);
+    if (shellWidth < 1280) {
+      await page.getByTestId("inspector-close").click();
+    }
+    await selected.focus();
     await page.keyboard.press("Tab");
     await page.keyboard.press("Shift+Tab");
     await expect(selected).toBeFocused();
@@ -192,3 +353,84 @@ for (const viewport of VIEWPORTS) {
     }
   });
 }
+
+for (const viewport of [
+  { name: "compact-wide-opposite-side", width: 1024, height: 768 },
+  { name: "tablet-opposite-side", width: 768, height: 1024 },
+] as const) {
+  test(`${viewport.name} keeps the selected Pad clear of the Inspector drawer`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await openExampleWithMissingAsset(page);
+
+    const shell = page.getByTestId("workbench-shell");
+    const pads = page.getByTestId("pad-matrix").locator("[data-pad-index]");
+    const inspector = page.getByTestId("context-inspector");
+    const toggle = page.getByTestId("inspector-toggle");
+
+    const playableLeftPad = pads.nth(1);
+    await playableLeftPad.click();
+    await expect(playableLeftPad).toHaveAttribute("data-visual-state", "playing");
+    await expect(playableLeftPad).toHaveAttribute("data-visual-state", "selected");
+    await toggle.click();
+    await expect(inspector).toHaveAttribute("data-side", "right");
+    await expect(page.getByTestId("context-inspector-header")).toContainText(
+      "Pad 02 · bass",
+    );
+    expect(overlaps(await box(inspector), await box(playableLeftPad))).toBe(false);
+    expect((await box(inspector)).width).toBeLessThanOrEqual((await box(shell)).width / 2 + 1);
+    await page.keyboard.press("Escape");
+
+    const rightPadIndex = 7;
+    const rightPad = pads.nth(rightPadIndex);
+    await page.keyboard.press("8");
+    await expect(rightPad).toHaveAttribute("data-visual-state", "selected");
+    await toggle.click();
+    await expect(inspector).toHaveAttribute("data-side", "left");
+    await expect(page.getByTestId("context-inspector-header")).toContainText(
+      `Pad ${String(rightPadIndex + 1).padStart(2, "0")}`,
+    );
+    await expect.poll(async () =>
+      overlaps(await box(inspector), await box(rightPad)),
+    ).toBe(false);
+    expect((await box(inspector)).width).toBeLessThanOrEqual((await box(shell)).width / 2 + 1);
+  });
+}
+
+test("phone Sheet preserves selection, playback, and creator mode state", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openExampleWithMissingAsset(page);
+
+  const pad = page.getByTestId("pad-0");
+  await pad.click();
+  await expect(pad).toHaveAttribute("data-visual-state", "selected");
+  await page.getByTestId("play-toggle").click();
+  await expect(page.getByTestId("play-toggle")).toHaveText("■");
+  const sourceMode = page.getByRole("button", { name: "Source" });
+  const toggle = page.getByTestId("inspector-toggle");
+  await toggle.click();
+  await expect(page.getByTestId("context-inspector")).toBeVisible();
+  await expect(page.getByTestId("context-inspector-header")).toContainText(
+    "Pad 01 · kick",
+  );
+  await page.getByTestId("inspector-close").click();
+
+  await expect(pad).toHaveAttribute("data-visual-state", "selected");
+  await expect(page.getByTestId("play-toggle")).toHaveText("■");
+  await expect(sourceMode).toHaveAttribute("aria-pressed", "true");
+
+  const exportMode = page.getByRole("button", { name: "Export" });
+  await exportMode.click();
+  await expect(exportMode).toHaveAttribute("aria-pressed", "true");
+  await toggle.click();
+  await expect(page.getByTestId("context-inspector")).toBeVisible();
+  await expect(page.getByTestId("export-unavailable")).toContainText("Example");
+  await page.getByTestId("inspector-close").click();
+
+  await expect(pad).toHaveAttribute("data-visual-state", "selected");
+  await expect(page.getByTestId("play-toggle")).toHaveText("■");
+  await expect(exportMode).toHaveAttribute("aria-pressed", "true");
+});

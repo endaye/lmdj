@@ -60,6 +60,7 @@ function StatefulChecklist({
     <ExportChecklist
       apiBase="http://api.test/"
       jobId="job123"
+      patchId="song-a1b2c3d4"
       status={status}
       apiClient={apiClient}
       onStatusChange={setStatus}
@@ -122,6 +123,10 @@ describe("ExportChecklist", () => {
     expect(download).toHaveBeenCalledWith("http://api.test/", "job123");
     expect(createObjectURL).toHaveBeenCalledOnce();
     expect(click).toHaveBeenCalledOnce();
+    expect(click.mock.instances[0]).toHaveAttribute(
+      "download",
+      "creator-export-song-a1b2c3d4.zip",
+    );
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:creator-pack");
   });
 

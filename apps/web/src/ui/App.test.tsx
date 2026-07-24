@@ -130,6 +130,9 @@ describe("App", () => {
     expect(triggerPad).toHaveBeenNthCalledWith(2, 7);
     expect(triggerPad).toHaveBeenNthCalledWith(3, 8);
     expect(triggerPad).toHaveBeenNthCalledWith(4, 15);
+    expect(screen.getByTestId("context-inspector-content")).toHaveTextContent(
+      "Pad 16 · Empty",
+    );
   });
 
   it("keeps keyboard Pad indexes fixed after switching an eight-pad MIDI Bank", async () => {
