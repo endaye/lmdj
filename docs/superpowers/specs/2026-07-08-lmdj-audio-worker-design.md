@@ -23,13 +23,14 @@
 workers/audio/               lmdj-audio-worker（Python ≥3.11；依赖 lmdj-patchify + lmdj-core-models，本地 editable 安装）
 {jobs_root}/{job_id}/        默认 jobs_root = workers/audio/jobs/（gitignored，根 .gitignore 增加 workers/audio/jobs/）
   input/<原文件名>            提交音频的拷贝
-  {job_id}/                  package：demo pipeline `--out {job_dir} --song-id {job_id}` 直写 + patchify 产出 patch.json
+  source-<sha256(audio)>/    package：demo pipeline `--out {job_dir} --song-id source-<sha256(audio)>` 直写 + patchify 产出 patch.json
   status.json                状态唯一真相，原子写（tmp + os.replace）
 ```
 
-`--song-id` 取 job_id：patch_id 因此为 `{job_id}-{内容hash}`，与 status.json 天然互链且全局可读（若用固定名，所有 patch 前缀相同，身份全靠 hash）。`status.json.package_dir` 记录该相对目录名。
+`job_id`、job 目录和 `status.json` 是每次运行的随机、Job-scoped 身份。Worker 流式计算上传音频字节的 SHA-256，并以 `source-<full-hex-digest>` 作为 `--song-id` 和 package 目录名；`status.json.package_dir` 记录该相对目录名，所有 package 查找都必须经由它，而不能从 `job_id` 推导。于是当相同音频经过确定性 pipeline 得到相同 `lanes.json` 与 `chart.mid` 时，完整 `patch_id`（`{song_id}-{内容hash}`）可跨 Job 稳定；source hash 不替代或弱化既有内容 hash。
 
-- `job_id`：调用方可指定；缺省 `uuid4().hex[:12]`。幂等性由 patchify 的内容派生 `patch_id` 承担，job_id 仅为运行标识。
+- `job_id`：调用方可指定；缺省 `uuid4().hex[:12]`，仅为运行标识。
+- `song_id` / `package_dir`：`source-<sha256(audio bytes)>`，与随机 Job 身份独立。
 - `status.json` 契约：
 
 ```json
@@ -37,8 +38,8 @@ workers/audio/               lmdj-audio-worker（Python ≥3.11；依赖 lmdj-pa
   "job_id": "a1b2c3d4e5f6",
   "state": "completed",
   "error": null,
-  "patch_id": "a1b2c3d4e5f6-6d0b984b",
-  "package_dir": "a1b2c3d4e5f6",
+  "patch_id": "source-250670be...9709-6d0b984b",
+  "package_dir": "source-250670be...9709",
   "quality": "passed",
   "created_at": "2026-07-08T00:00:00Z",
   "updated_at": "2026-07-08T00:03:21Z"
@@ -56,7 +57,7 @@ workers/audio/               lmdj-audio-worker（Python ≥3.11；依赖 lmdj-pa
 
 - `PipelineRunner` 协议：`run(audio: Path, out_dir: Path, song_id: str) -> Path`，返回 package 目录；失败抛 `PipelineRunError(message, stderr_tail)`。
 - `DemoPipelineRunner(demo_dir, fast=True, timeout_sec=1800)`：
-  - 子进程：`{demo_dir}/.venv/bin/song-pipeline run <audio> --out {job_dir} --song-id {job_id} [--fast]`；
+  - 子进程：`{demo_dir}/.venv/bin/song-pipeline run <audio> --out {job_dir} --song-id source-<sha256(audio)> [--fast]`；
   - demo venv 缺失 → 可读错误（提示 `scripts/dev.sh setup-demo`）；
   - 超时 → kill + `PipelineRunError`；非零退出码 → 抓 stderr 尾部；
   - 成功判定：package 目录存在且含 `lanes.json`（其余交给 patchify 的 loader 校验）。
@@ -64,8 +65,8 @@ workers/audio/               lmdj-audio-worker（Python ≥3.11；依赖 lmdj-pa
 ### `job.py`
 
 - `process_job(audio: Path, *, job_id: str | None, jobs_root: Path, runner: PipelineRunner) -> JobStatus`：
-  1. 建 job 目录、拷贝 input、落 `queued`；
-  2. 落 `separating`（整个 pipeline 子进程期间的粗粒度状态）→ `runner.run(...)`；
+  1. 建随机 job 目录、落 `queued`；流式 hash 输入字节为 source ID，再拷贝 input；
+  2. 落 `separating`（整个 pipeline 子进程期间的粗粒度状态）→ `runner.run(..., source_id)`；
   3. 落 `patchifying` → 库调 `lmdj_patchify.patchify_package(package_dir)`（轻依赖，同 venv）；
   4. 终态：`completed`（带 patch_id/quality）或 `failed`（带 error）；任何异常必落盘，不吞。
 - 同步执行（阻塞至终态）；并发/队列属未来层。
@@ -109,7 +110,7 @@ lmdj-audio-worker status <job_id> [--jobs-root DIR]
 
 ## 成功标准
 
-1. `lmdj-audio-worker run 一首歌.mp3` 同步产出 `{jobs_root}/{job_id}/{job_id}/patch.json`（过 schema），status.json 终态 `completed`；
+1. `lmdj-audio-worker run 一首歌.mp3` 同步产出 `{jobs_root}/{job_id}/source-<sha256(audio)>/patch.json`（过 schema），并通过 `status.json.package_dir` 查找，status.json 终态 `completed`；
 2. 全过程状态转移逐次落盘，外部进程任意时刻读 status.json 都是合法完整 JSON；
 3. demo venv 缺失/子进程失败/劣质包，全部落 `failed` + 可读 error，无未捕获异常；
 4. worker 包 venv 无 torch/numpy<2 锁（`pip list` 干净）；

@@ -3,6 +3,7 @@ from __future__ import annotations
 import shutil
 import uuid
 from dataclasses import replace
+from hashlib import sha256
 from pathlib import Path
 from typing import Callable
 
@@ -12,6 +13,14 @@ from lmdj_audio_worker.export_source import build_export_source, write_export_so
 from lmdj_audio_worker.music_metadata import KeyAnalyzer, KeyEstimate, PfsKeyAnalyzer
 from lmdj_audio_worker.runner import PipelineRunError, PipelineRunner
 from lmdj_audio_worker.status import JobStatus, utc_now, write_status
+
+
+def _source_id(audio: Path) -> str:
+    digest = sha256()
+    with audio.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return f"source-{digest.hexdigest()}"
 
 
 def process_job(
@@ -42,11 +51,12 @@ def process_job(
 
     status = emit(JobStatus(job_id=job_id, state="queued", created_at=utc_now()))
     try:
+        source_id = _source_id(audio)
         input_copy = job_dir / "input" / audio.name
         input_copy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(audio, input_copy)
         status = emit(replace(status, state="separating"))
-        package_dir = runner.run(input_copy, job_dir, job_id)
+        package_dir = runner.run(input_copy, job_dir, source_id)
         status = emit(replace(status, state="patchifying", package_dir=package_dir.name))
         patch = patchify_package(package_dir)
         analyzer = key_analyzer or PfsKeyAnalyzer()
