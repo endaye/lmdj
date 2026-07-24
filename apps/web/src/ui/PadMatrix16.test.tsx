@@ -4,7 +4,7 @@ import golden from "../patch/__fixtures__/patch.golden.json";
 import { AudioEngine } from "../engine/AudioEngine";
 import { padElementIds, type Patch, type PatchBundle } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
-import { PAD_KEY_HINTS, PadMatrix16 } from "./PadMatrix16";
+import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 
 function setup(mutate?: (bundle: PatchBundle<unknown>) => void) {
   const patch = structuredClone(golden) as unknown as Patch;
@@ -26,7 +26,6 @@ function setup(mutate?: (bundle: PatchBundle<unknown>) => void) {
       engine={engine}
       selectedPadIndex={undefined}
       onSelect={onSelect}
-      keyHints={PAD_KEY_HINTS}
     />,
   );
   return { bundle, engine, onSelect, triggerPad };
@@ -37,7 +36,7 @@ afterEach(() => {
 });
 
 describe("PadMatrix16", () => {
-  it("maps the sixteen contract pads in index order with stable names and hints", () => {
+  it("always maps all sixteen contract pads with fixed keyboard hints", () => {
     const { bundle } = setup();
     const buttons = screen.getAllByTestId(/^pad-\d+$/);
 
@@ -50,7 +49,7 @@ describe("PadMatrix16", () => {
       expect(button).toHaveAccessibleName(
         new RegExp(`Pad ${pad.index + 1}: ${pad.label}, (idle|empty|reserved)`),
       );
-      expect(button).toHaveTextContent(PAD_KEY_HINTS[pad.index]);
+      expect(button).toHaveTextContent(PAD_KEYS[pad.index]);
     }
   });
 
@@ -110,7 +109,6 @@ describe("PadMatrix16", () => {
         engine={engine}
         selectedPadIndex={0}
         onSelect={onSelect}
-        keyHints={PAD_KEY_HINTS}
       />,
     );
 

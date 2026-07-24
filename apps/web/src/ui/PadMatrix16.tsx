@@ -4,10 +4,11 @@ import { padElementIds, type Pad, type PatchBundle } from "../patch/loader";
 import { PadButton, type PadVisualState } from "./PadButton";
 import { useEngineTick } from "./useEngine";
 
-export const PAD_KEY_HINTS = [
+export const PAD_KEYS = [
   "1", "2", "3", "4", "5", "6", "7", "8",
   "Q", "W", "E", "R", "T", "Y", "U", "I",
 ] as const;
+export const PAD_KEY_HINTS = PAD_KEYS;
 
 function staticState(
   pad: Pad,
@@ -29,13 +30,11 @@ export function PadMatrix16({
   engine,
   selectedPadIndex,
   onSelect,
-  keyHints,
 }: {
   bundle: PatchBundle<unknown>;
   engine: AudioEngine;
   selectedPadIndex: number | undefined;
   onSelect: (index: number) => void;
-  keyHints: readonly string[];
 }) {
   useEngineTick(engine);
   const [playingPadIndex, setPlayingPadIndex] = useState<number>();
@@ -75,7 +74,7 @@ export function PadMatrix16({
             key={pad.index}
             pad={pad}
             visualState={visualState}
-            keyHint={keyHints[pad.index] ?? ""}
+            keyHint={PAD_KEYS[pad.index]}
             onSelect={onSelect}
             onTrigger={interactive ? () => trigger(pad) : undefined}
             onToggleMute={interactive ? () => engine.toggleMutePad(pad.index) : undefined}

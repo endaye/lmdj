@@ -421,6 +421,38 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   order: 2;
   container-type: inline-size;
 }
+.midi-panel {
+  order: 2;
+  display: grid;
+  grid-template-columns: auto minmax(120px, 1fr) auto auto;
+  align-items: center;
+  gap: 8px 12px;
+  padding: 9px 10px;
+  border: 2px solid var(--ink);
+  background: #e8e2d5;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+}
+.midi-panel__connection,
+.midi-panel__mapping,
+.midi-panel__bank {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.midi-panel button {
+  min-height: 32px;
+  padding: 4px 7px;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 800;
+}
+.midi-panel button[aria-pressed="true"] { background: var(--loop); }
+.midi-panel button:disabled { opacity: .55; }
 .pad-matrix {
   --pad-gap: clamp(8px, 1.4cqw, 16px);
   display: grid;
@@ -913,7 +945,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .workbench-status-bar {
   min-height: 46px;
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto auto 1fr auto;
   align-items: center;
   gap: 14px;
   padding: 0 14px;
@@ -948,6 +980,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   .workbench-context-inspector { border: 0; border-top: 3px solid var(--ink); }
   .workbench-status-bar { grid-template-columns: 1fr; gap: 4px; padding: 8px 12px; }
   .workbench-status-bar strong { margin: -8px -12px 0; border: 0; border-bottom: 2px solid var(--ink); }
+  .midi-panel { grid-template-columns: 1fr; }
+  .midi-panel__connection,
+  .midi-panel__mapping,
+  .midi-panel__bank { flex-wrap: wrap; }
 }
 
 @media (min-width: 960px) {

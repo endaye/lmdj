@@ -1,6 +1,6 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
 import type { Patch } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
@@ -9,7 +9,21 @@ import { App } from "./App";
 import type { ApiClient, JobStatus } from "../api/client";
 import type { PatchBundle } from "../patch/loader";
 
-afterEach(() => vi.unstubAllEnvs());
+class MemoryStorage implements Storage {
+  private readonly values = new Map<string, string>();
+  get length() { return this.values.size; }
+  clear() { this.values.clear(); }
+  getItem(key: string) { return this.values.get(key) ?? null; }
+  key(index: number) { return [...this.values.keys()][index] ?? null; }
+  removeItem(key: string) { this.values.delete(key); }
+  setItem(key: string, value: string) { this.values.set(key, value); }
+}
+
+beforeEach(() => vi.stubGlobal("localStorage", new MemoryStorage()));
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.unstubAllGlobals();
+});
 
 const enc = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).buffer as ArrayBuffer;
 const fakeDecode = async () => ({ fake: "buffer" });
@@ -45,7 +59,7 @@ describe("App", () => {
     expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
     expect(screen.getByTestId("status-bar")).toHaveTextContent("Pads 01–16");
-    expect(screen.getByTestId("status-bar")).not.toHaveTextContent(/Bank/i);
+    expect(screen.getByTestId("status-bar")).toHaveTextContent(/MIDI Bank.*不适用/i);
   });
 
   it("keeps Pattern above all sixteen contract pads and syncs selection into the Inspector", async () => {
@@ -77,16 +91,77 @@ describe("App", () => {
     }
   });
 
-  it("temporarily preserves the existing eight-key keyboard bridge", async () => {
+  it("maps 1–8 and Q–I directly to all sixteen logical Pads", async () => {
     const engine = new AudioEngine(new FakeAudioContext());
     const triggerPad = vi.spyOn(engine, "triggerPad");
     render(<App engine={engine} decode={fakeDecode} fetchExample={exampleFiles(golden)} />);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
 
-    fireEvent.keyDown(window, { key: "a" });
+    for (const key of ["1", "8", "Q", "I"]) {
+      fireEvent.keyDown(window, { key });
+    }
 
-    expect(triggerPad).toHaveBeenCalledWith(0);
+    expect(triggerPad).toHaveBeenNthCalledWith(1, 0);
+    expect(triggerPad).toHaveBeenNthCalledWith(2, 7);
+    expect(triggerPad).toHaveBeenNthCalledWith(3, 8);
+    expect(triggerPad).toHaveBeenNthCalledWith(4, 15);
+  });
+
+  it("keeps keyboard Pad indexes fixed after switching an eight-pad MIDI Bank", async () => {
+    localStorage.setItem(
+      "lmdj.midi.mapping.v1",
+      JSON.stringify({
+        mode: "banked-8",
+        notes: [36, 37, 38, 39, 40, 41, 42, 43],
+      }),
+    );
+    const engine = new AudioEngine(new FakeAudioContext());
+    const triggerPad = vi.spyOn(engine, "triggerPad");
+    render(<App engine={engine} decode={fakeDecode} fetchExample={exampleFiles(golden)} />);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId("pad-0"));
+    expect(screen.getByTestId("context-inspector-content")).toHaveTextContent(
+      "Pad 01 · kick",
+    );
+    triggerPad.mockClear();
+    await userEvent.click(screen.getByRole("button", { name: /Bank B/i }));
+    expect(triggerPad).not.toHaveBeenCalled();
+    expect(screen.getByTestId("context-inspector-content")).toHaveTextContent(
+      "Pad 01 · kick",
+    );
+    fireEvent.keyDown(window, { key: "1" });
+    fireEvent.keyDown(window, { key: "Q" });
+
+    expect(triggerPad).toHaveBeenNthCalledWith(1, 0);
+    expect(triggerPad).toHaveBeenNthCalledWith(2, 8);
+    expect(screen.getByTestId("status-bar")).toHaveTextContent("MIDI Bank B");
+  });
+
+  it("ignores modified, repeated, and editable keyboard events", async () => {
+    const engine = new AudioEngine(new FakeAudioContext());
+    const triggerPad = vi.spyOn(engine, "triggerPad");
+    render(<App engine={engine} decode={fakeDecode} fetchExample={exampleFiles(golden)} />);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: "1", repeat: true });
+    fireEvent.keyDown(window, { key: "1", metaKey: true });
+    fireEvent.keyDown(window, { key: "1", ctrlKey: true });
+    fireEvent.keyDown(window, { key: "1", altKey: true });
+
+    const input = document.createElement("input");
+    const editable = document.createElement("div");
+    editable.setAttribute("contenteditable", "true");
+    document.body.append(input, editable);
+    fireEvent.keyDown(input, { key: "1" });
+    fireEvent.keyDown(editable, { key: "Q" });
+    input.remove();
+    editable.remove();
+
+    expect(triggerPad).not.toHaveBeenCalled();
   });
 
   it("returns to the upload screen from the workstation via the eject button", async () => {

@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { defaultApiClient, type ApiClient } from "../api/client";
 import type { AudioEngine } from "../engine/AudioEngine";
+import { loadMidiMapping, type MidiBank, type MidiMapping } from "../midi/mapping";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
 import { DropZone } from "./DropZone";
 import { ErrorPanel } from "./ErrorPanel";
 import { ContextInspector } from "./ContextInspector";
-import { PAD_KEY_HINTS, PadMatrix16 } from "./PadMatrix16";
+import { MidiPanel } from "./MidiPanel";
+import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 import { PatternSurface } from "./PatternSurface";
 import { UploadPanel } from "./UploadPanel";
 import { UploadingView } from "./UploadingView";
@@ -38,9 +40,6 @@ type AppState =
   | { phase: "uploading"; state: string; error: string | null }
   | { phase: "loaded"; bundle: PatchBundle<unknown> };
 
-// Task 5 replaces this temporary eight-key bridge with the final 16-key mapping.
-const LEGACY_PAD_TRIGGER_KEYS = ["A", "S", "D", "F", "Z", "X", "C", "V"];
-
 function usePlayheadStep(engine: AudioEngine, active: boolean): number | null {
   const [step, setStep] = useState<number | null>(null);
   useEffect(() => {
@@ -70,6 +69,10 @@ export function App({
   const [state, setState] = useState<AppState>({ phase: "landing", issues: null });
   const [selectedPadIndex, setSelectedPadIndex] = useState<number>();
   const [mode, setMode] = useState<WorkbenchMode>("source");
+  const [midiBank, setMidiBank] = useState<MidiBank>("A");
+  const [midiMappingMode, setMidiMappingMode] = useState<MidiMapping["mode"]>(
+    () => loadMidiMapping(localStorage).mode,
+  );
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
 
   const fail = useCallback((error: unknown) => {
@@ -124,12 +127,25 @@ export function App({
     [apiClient, decode, enterLoaded],
   );
 
-  // 键盘：A S D F / Z X C V → pad 0-7（仅 loaded 后生效）
+  // 键盘固定覆盖 16 个逻辑 Pad；MIDI Bank 只影响 8-pad Controller。
   useEffect(() => {
     if (state.phase !== "loaded") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      const index = LEGACY_PAD_TRIGGER_KEYS.indexOf(e.key.toUpperCase());
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        (
+          target.matches("input, textarea, select") ||
+          target.isContentEditable ||
+          target.closest('[contenteditable]:not([contenteditable="false"])')
+        )
+      ) {
+        return;
+      }
+      const index = PAD_KEYS.indexOf(
+        e.key.toUpperCase() as (typeof PAD_KEYS)[number],
+      );
       if (index >= 0) engine.triggerPad(index);
     };
     window.addEventListener("keydown", onKey);
@@ -172,7 +188,7 @@ export function App({
             <div className="ghost-grid" aria-hidden="true">
               {GHOST_SLOTS.map((slot, i) => (
                 <div key={slot} className="ghost-pad">
-                  <span>{PAD_KEY_HINTS[i]}</span>
+                  <span>{PAD_KEYS[i]}</span>
                   <span>{slot}</span>
                 </div>
               ))}
@@ -231,13 +247,18 @@ export function App({
               engine={engine}
               playheadStep={playheadStep}
             />
+            <MidiPanel
+              onTrigger={(index) => engine.triggerPad(index)}
+              bank={midiBank}
+              onBankChange={setMidiBank}
+              onMappingModeChange={setMidiMappingMode}
+            />
             <section className="panel workbench-pad-slot">
               <PadMatrix16
                 bundle={bundle}
                 engine={engine}
                 selectedPadIndex={selectedPadIndex}
                 onSelect={setSelectedPadIndex}
-                keyHints={PAD_KEY_HINTS}
               />
             </section>
           </>
@@ -246,6 +267,11 @@ export function App({
         statusBar={
           <>
             <strong>Pads 01–16</strong>
+            <span>
+              {midiMappingMode === "direct-16"
+                ? "MIDI Bank 不适用"
+                : `MIDI Bank ${midiBank}`}
+            </span>
             <span>
               {model.readiness === "ready"
                 ? "Patch ready · no export blockers"
