@@ -153,6 +153,40 @@ def test_repeated_builds_have_identical_sha256(tmp_path: Path) -> None:
     assert _sha256(first) == _sha256(second)
 
 
+def test_build_streams_assets_without_path_read_bytes(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(
+        tmp_path,
+        stems=("stems/drums.wav", "stems/vocals.wav"),
+        samples=("samples/kick.wav", "samples/snare.wav"),
+    )
+    original_read_bytes = Path.read_bytes
+
+    def reject_asset_read_bytes(path: Path) -> bytes:
+        if path.resolve().is_relative_to(package.resolve()):
+            pytest.fail(f"asset loaded wholesale: {path}")
+        return original_read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", reject_asset_read_bytes)
+
+    output = _builder().build_creator_export(package, tmp_path / "exports")
+
+    with zipfile.ZipFile(output) as archive:
+        manifest = json.loads(archive.read("manifest.json"))
+        for group in ("patch", "stems", "samples", "midi"):
+            entries = (
+                [manifest["files"][group]]
+                if group == "patch"
+                else manifest["files"][group]
+            )
+            for entry in entries:
+                payload = archive.read(entry["path"])
+                assert entry["bytes"] == len(payload)
+                assert entry["sha256"] == hashlib.sha256(payload).hexdigest()
+
+
 def test_build_uses_one_shared_inspection_result(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import tempfile
 import zipfile
 from dataclasses import dataclass, field
@@ -20,6 +21,7 @@ _CANONICAL_STEM_NAMES = frozenset({
     "other.wav",
     "vocals.wav",
 })
+_STREAM_CHUNK_BYTES = 1024 * 1024
 
 
 class ExportIncomplete(Exception):
@@ -353,11 +355,20 @@ def inspect_creator_export(package_dir: Path) -> CreatorExportStatus:
     )
 
 
-def _manifest_entry(archive_path: str, payload: bytes) -> dict[str, Any]:
+def _manifest_entry(file: _ExportFile) -> dict[str, Any]:
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        with file.path.open("rb") as source:
+            while chunk := source.read(_STREAM_CHUNK_BYTES):
+                size += len(chunk)
+                digest.update(chunk)
+    except OSError as error:
+        raise ExportIncomplete([file.source_path]) from error
     return {
-        "path": archive_path,
-        "bytes": len(payload),
-        "sha256": hashlib.sha256(payload).hexdigest(),
+        "path": file.archive_path,
+        "bytes": size,
+        "sha256": digest.hexdigest(),
     }
 
 
@@ -372,6 +383,17 @@ def _zip_info(archive_path: str) -> zipfile.ZipInfo:
     return info
 
 
+def _write_asset(archive: zipfile.ZipFile, file: _ExportFile) -> None:
+    try:
+        with (
+            file.path.open("rb") as source,
+            archive.open(_zip_info(file.archive_path), "w", force_zip64=True) as target,
+        ):
+            shutil.copyfileobj(source, target, length=_STREAM_CHUNK_BYTES)
+    except OSError as error:
+        raise ExportIncomplete([file.source_path]) from error
+
+
 def build_creator_export(package_dir: Path, output_dir: Path) -> Path:
     inspection = inspect_creator_export(package_dir)
     if not inspection.downloadable:
@@ -379,37 +401,15 @@ def build_creator_export(package_dir: Path, output_dir: Path) -> Path:
     if inspection._patch_id is None:
         raise ExportIncomplete(["patch.json"])
 
-    payloads: dict[str, bytes] = {}
-    for files in inspection._files.values():
-        for file in files:
-            try:
-                payloads[file.archive_path] = file.path.read_bytes()
-            except OSError as error:
-                raise ExportIncomplete([file.source_path]) from error
-
+    patch_file = inspection._files["patch"][0]
+    stems = sorted(inspection._files["stems"], key=lambda file: file.archive_path)
+    samples = sorted(inspection._files["samples"], key=lambda file: file.archive_path)
+    midi = sorted(inspection._files["midi"], key=lambda file: file.archive_path)
     file_manifest = {
-        "patch": _manifest_entry("patch.json", payloads["patch.json"]),
-        "stems": [
-            _manifest_entry(path, payloads[path])
-            for path in sorted(
-                file.archive_path
-                for file in inspection._files["stems"]
-            )
-        ],
-        "samples": [
-            _manifest_entry(path, payloads[path])
-            for path in sorted(
-                file.archive_path
-                for file in inspection._files["samples"]
-            )
-        ],
-        "midi": [
-            _manifest_entry(path, payloads[path])
-            for path in sorted(
-                file.archive_path
-                for file in inspection._files["midi"]
-            )
-        ],
+        "patch": _manifest_entry(patch_file),
+        "stems": [_manifest_entry(file) for file in stems],
+        "samples": [_manifest_entry(file) for file in samples],
+        "midi": [_manifest_entry(file) for file in midi],
         "takes": [],
     }
     manifest = {
@@ -441,12 +441,12 @@ def build_creator_export(package_dir: Path, output_dir: Path) -> Path:
     try:
         with zipfile.ZipFile(temporary, "w") as archive:
             archive.writestr(_zip_info("manifest.json"), manifest_payload)
-            archive.writestr(_zip_info("patch.json"), payloads["patch.json"])
-            for archive_path in sorted(
-                path for path in payloads
-                if path != "patch.json"
+            _write_asset(archive, patch_file)
+            for file in sorted(
+                (*stems, *samples, *midi),
+                key=lambda candidate: candidate.archive_path,
             ):
-                archive.writestr(_zip_info(archive_path), payloads[archive_path])
+                _write_asset(archive, file)
         os.replace(temporary, output)
     except Exception:
         temporary.unlink(missing_ok=True)
