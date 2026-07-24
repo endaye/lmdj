@@ -8,6 +8,8 @@ from typing import Callable
 
 from lmdj_patchify.patchify import patchify_package
 
+from lmdj_audio_worker.export_source import build_export_source, write_export_source
+from lmdj_audio_worker.music_metadata import KeyAnalyzer, KeyEstimate, PfsKeyAnalyzer
 from lmdj_audio_worker.runner import PipelineRunError, PipelineRunner
 from lmdj_audio_worker.status import JobStatus, utc_now, write_status
 
@@ -19,6 +21,7 @@ def process_job(
     runner: PipelineRunner,
     job_id: str | None = None,
     on_state: Callable[[JobStatus], None] | None = None,
+    key_analyzer: KeyAnalyzer | None = None,
 ) -> JobStatus:
     """同步执行一个 audio job：input 拷贝 → pipeline → patchify → 终态。
 
@@ -46,6 +49,15 @@ def process_job(
         package_dir = runner.run(input_copy, job_dir, job_id)
         status = emit(replace(status, state="patchifying", package_dir=package_dir.name))
         patch = patchify_package(package_dir)
+        analyzer = key_analyzer or PfsKeyAnalyzer()
+        key: KeyEstimate | None = None
+        warnings: list[str] = []
+        try:
+            key = analyzer.analyze(input_copy)
+        except Exception as error:  # noqa: BLE001 — metadata 退化不能使 playable Job 失败
+            warnings.append(f"key analysis failed: {error}")
+        source = build_export_source(package_dir, patch, key, warnings)
+        write_export_source(package_dir, source)
         quality = str(patch.metadata.get("status") or "unknown")
         return emit(replace(status, state="completed", patch_id=patch.patch_id, quality=quality))
     except PipelineRunError as error:
