@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import subprocess
 from pathlib import Path
 from typing import Protocol
@@ -29,8 +30,25 @@ class DemoPipelineRunner:
     def executable(self) -> Path:
         return self.demo_dir / ".venv" / "bin" / "song-pipeline"
 
+    @property
+    def python(self) -> Path:
+        return self.demo_dir / ".venv" / "bin" / "python"
+
+    @property
+    def bootstrap(self) -> Path:
+        return Path(__file__).with_name("deterministic_bootstrap.py")
+
+    @staticmethod
+    def seed_for_audio(audio: Path) -> int:
+        digest = hashlib.sha256()
+        with audio.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+        return int.from_bytes(digest.digest(), "big")
+
     def command(self, audio: Path, out_dir: Path, song_id: str) -> list[str]:
         cmd = [
+            str(self.python), str(self.bootstrap), str(self.seed_for_audio(audio)),
             str(self.executable), "run", str(audio),
             "--out", str(out_dir), "--song-id", song_id,
         ]

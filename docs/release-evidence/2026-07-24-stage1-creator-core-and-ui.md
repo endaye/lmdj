@@ -107,8 +107,9 @@ Creator ZIP 下载 hash 和单 Job 确定性均一致；跨 Job 的磁盘输出 
 根因和修复：随机 API Job ID 曾被复用为 pipeline `song_id`，而 Demucs
 `apply_model(shifts=1)` 使用未设 seed 的 Python random offset。Worker 现在从
 上传音频字节流式计算 SHA-256，并传入独立于 Job identity 的
-`source-<full-hex-digest>` 作为 `song_id`；冻结 demo separation 从音频字节
-为既有 shift augmentation 设 seed、恢复 Python random state，并序列化该 seeded call。
+`source-<full-hex-digest>` 作为 `song_id`；Worker-owned bootstrap 在 demo venv
+child 导入 Demucs 前以相同音频字节 seed Python random。实现位置移至产品 Worker，
+不改变已记录的三次运行 hash 与 PASS 结论；冻结 demo 保持未修改。
 
 ## Workspace UI 自动验收
 

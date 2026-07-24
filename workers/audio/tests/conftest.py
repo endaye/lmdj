@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -47,13 +48,14 @@ def sample_audio(tmp_path: Path) -> Path:
 
 
 def make_stub_demo(tmp_path: Path, body: str) -> Path:
-    """伪 demo 目录：.venv/bin/song-pipeline 是一个可执行 python 脚本。"""
+    """伪 demo 目录：提供 demo venv 的 Python 与 console entrypoint。"""
     demo = tmp_path / "demo"
     bin_dir = demo / ".venv" / "bin"
     bin_dir.mkdir(parents=True)
     exe = bin_dir / "song-pipeline"
     exe.write_text("#!/usr/bin/env python3\n" + body)
     exe.chmod(0o755)
+    (bin_dir / "python").symlink_to(sys.executable)
     return demo
 
 

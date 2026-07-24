@@ -57,7 +57,7 @@ workers/audio/               lmdj-audio-worker（Python ≥3.11；依赖 lmdj-pa
 
 - `PipelineRunner` 协议：`run(audio: Path, out_dir: Path, song_id: str) -> Path`，返回 package 目录；失败抛 `PipelineRunError(message, stderr_tail)`。
 - `DemoPipelineRunner(demo_dir, fast=True, timeout_sec=1800)`：
-  - 子进程：`{demo_dir}/.venv/bin/song-pipeline run <audio> --out {job_dir} --song-id source-<sha256(audio)> [--fast]`；
+  - 子进程：`{demo_dir}/.venv/bin/python workers/audio/lmdj_audio_worker/deterministic_bootstrap.py <sha256(audio)-derived-seed> {demo_dir}/.venv/bin/song-pipeline run <audio> --out {job_dir} --song-id source-<sha256(audio)> [--fast]`；bootstrap 在 demo 导入 Demucs 前 seed child `random`，但属于 Worker 而非冻结 demo；
   - demo venv 缺失 → 可读错误（提示 `scripts/dev.sh setup-demo`）；
   - 超时 → kill + `PipelineRunError`；非零退出码 → 抓 stderr 尾部；
   - 成功判定：package 目录存在且含 `lanes.json`（其余交给 patchify 的 loader 校验）。
