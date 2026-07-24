@@ -36,10 +36,11 @@ describe("App", () => {
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
   });
 
-  it("loads the example patch into the workstation view", async () => {
+  it("loads the example patch into the Instrument-first workbench shell", async () => {
     renderApp(golden);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
-    await waitFor(() => expect(screen.getByTestId("pad-grid")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("workbench-shell")).toBeInTheDocument());
+    expect(screen.getByTestId("pad-grid")).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
   });
 

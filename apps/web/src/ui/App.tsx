@@ -10,6 +10,11 @@ import { StepGrid } from "./StepGrid";
 import { Transport } from "./Transport";
 import { UploadPanel } from "./UploadPanel";
 import { UploadingView } from "./UploadingView";
+import { WorkbenchShell } from "./WorkbenchShell";
+import {
+  buildWorkbenchViewModel,
+  type WorkbenchMode,
+} from "./workbench/model";
 
 /** 内置示例：fetch public/example-patch/（浏览器路径；测试注入替身） */
 export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
@@ -46,6 +51,8 @@ export function App({
   apiClient?: ApiClient;
 }) {
   const [state, setState] = useState<AppState>({ phase: "landing", issues: null });
+  const [selectedPadIndex] = useState<number | undefined>(0);
+  const [mode, setMode] = useState<WorkbenchMode>("source");
 
   const fail = useCallback((error: unknown) => {
     const issues = error instanceof PatchValidationError ? error.issues : [String(error)];
@@ -166,6 +173,7 @@ export function App({
 
   const { bundle } = state;
   const status = (bundle.patch.metadata as Record<string, unknown> | undefined)?.status;
+  const model = buildWorkbenchViewModel(bundle, selectedPadIndex);
   return (
     <div className="app">
       {status === "rejected" && (
@@ -173,30 +181,56 @@ export function App({
           质量分未过阈（status: rejected）——仍可播放，仅作提示
         </div>
       )}
-      <header className="topbar">
-        <Wordmark />
-        <div className="topbar-actions">
-          <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
-            ⏏ 上传新歌
-          </button>
-          <Transport engine={engine} bundle={bundle} />
-        </div>
-      </header>
-      <div className="workstation">
-        <section className="panel">
-          <h2 className="panel-title">Performance</h2>
-          <PadGrid engine={engine} bundle={bundle} />
-        </section>
-        <aside className="panel">
-          <Inspector bundle={bundle} />
-        </aside>
-        <div className="workstation-bottom">
-          <section className="panel">
-            <h2 className="panel-title">Sequence</h2>
-            <StepGrid engine={engine} bundle={bundle} />
-          </section>
-        </div>
-      </div>
+      <WorkbenchShell
+        model={model}
+        mode={mode}
+        onModeChange={setMode}
+        availableModes={["source", "performance", "export"]}
+        appBar={
+          <>
+            <Wordmark />
+            <div className="topbar-actions">
+              <span className="workbench-project-meta">
+                {model.bpm} · {model.durationSeconds}s
+              </span>
+              <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
+                ⏏ 上传新歌
+              </button>
+              <Transport engine={engine} bundle={bundle} />
+            </div>
+          </>
+        }
+        instrumentCanvas={
+          <>
+            <div className="workbench-canvas-heading">
+              <div>
+                <span>Performance</span>
+                <small>{model.padCount} live slots</small>
+              </div>
+              <span className="workbench-readiness">{model.readiness}</span>
+            </div>
+            <section className="panel workbench-sequence-slot">
+              <h2 className="panel-title">Sequence</h2>
+              <StepGrid engine={engine} bundle={bundle} />
+            </section>
+            <section className="panel workbench-pad-slot">
+              <PadGrid engine={engine} bundle={bundle} />
+            </section>
+          </>
+        }
+        contextInspector={<Inspector bundle={bundle} />}
+        statusBar={
+          <>
+            <strong>Bank A · 01–16</strong>
+            <span>
+              {model.readiness === "ready"
+                ? "Patch ready · no export blockers"
+                : `${model.blockers.length} item(s) need review`}
+            </span>
+            <span>{model.patchId}</span>
+          </>
+        }
+      />
     </div>
   );
 }
