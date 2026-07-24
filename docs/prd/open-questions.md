@@ -1,40 +1,33 @@
 # 开放问题
 
-这里记录脑暴阶段尚未确认的问题。每个问题尽量包含为什么重要、下一步怎么验证。
+更新时间：2026-07-24
 
-## 产品定位
+这里记录 2026-07-18 Stage Memo 和 2026-07-24 本地决策之后仍未确认的问题。已经解决的旧问题已转入 [decision-log.md](decision-log.md)，不继续以“待决”状态保留。
 
-| 问题 | 为什么重要 | 下一步 | 状态 |
+## Stage 1 首条切片
+
+| 问题 | 为什么重要 | 处理时点 | 状态 |
 | --- | --- | --- | --- |
-| V1 首要用户是谁：内部团队、创作者还是玩家？ | 决定 PRD 叙事、功能取舍和验收标准。 | 做一轮优先级讨论。 | 待决 |
-| LMDJ 的核心卖点是生成、演奏、还是生成后可演奏？ | 决定首页流程和核心对象。 | 用 3 个一句话定位做对比。 | 待决 |
-| Playable Patch 是产品对象、文件格式，还是两者都是？ | 影响技术 contract、UI 命名和后续编辑能力。 | 先写字段定义，再评审。 | 待决 |
+| MIDI Learn 是否需要支持多套 Controller Profile？ | 决定 `localStorage` 数据模型和设备切换体验。 | 首版只保存一套全局映射，Release Evidence 后再评估。 | 已收缩 |
+| Key analysis 的最低可接受置信度是多少？ | 低置信度 Key 不能在 Export Manifest 中伪装为可靠结论。 | 用固定测试素材和 Ableton Smoke 记录置信度，再确定门槛。 | 待验证 |
+| Export ZIP 的可选 Stem 缺失应显示 warning 还是阻止下载？ | 当前不同 Runner 可能输出不同 Stem 组合。 | 设计已确定“真实列出 + warning”；真实验收后复核。 | 待验证 |
 
-## 视觉与品牌
+## Stage 1 后续
 
-| 问题 | 为什么重要 | 下一步 | 状态 |
+| 问题 | 为什么重要 | 处理时点 | 状态 |
 | --- | --- | --- | --- |
-| 高嘉丰 Pinterest mood board 里哪些视觉方向应进入 LMDJ？ | 视觉气质会影响产品定位、界面密度、演奏反馈和 demo 呈现方式。 | 先从 mood board 里归类 3-5 个视觉关键词，再决定保留/排除项。 | 待决 |
+| 第 9–16 个有效 Pad 的角色和 Bank A/B 语义是什么？ | 决定 Patch Mapping、控制器 Bank 和 2×8 UI 的正式产品含义。 | 8-pad Creator 切片通过后，单独设计。 | 延后 |
+| Sampler Edit 第一版最小参数集是否只含 Start/End、Loop、One-shot、Mute、Volume、Swap？ | 决定第二条 Stage 1 切片是否还能保持纵向闭环。 | Sampler Edit + Take 设计会。 | 待决 |
+| Take 是只记录 Pad/MIDI 事件，还是同时生成音频 Bounce？ | 决定 Take contract、Web Audio 录制和 Export Pack。 | Sampler Edit + Take 设计会。 | 待决 |
+| Prompt/Voice 首个 Generation Provider 使用第三方 API 还是本地模型？ | 影响成本、延迟、授权、失败恢复和 Agent Orchestration。 | Creator 基础闭环通过后。 | 延后 |
+| Production Separator 最终选择哪个 checkpoint？ | 影响 Stem 质量、资源成本和生产 Runner 迁移。 | Phase 1D benchmark / blind listening review。 | 待验证 |
+| Canonical Timing Analyzer 是否必须先于 Production Runner 晋级？ | 影响跨 Separator 的 Patch 稳定性。 | Runner Phase 2A 评审前。 | 待评审 |
 
-## Prototype 范围
+## Stage 2–4
 
-| 问题 | 为什么重要 | 下一步 | 状态 |
+| 问题 | 为什么重要 | 处理时点 | 状态 |
 | --- | --- | --- | --- |
-| V1 是否必须 live generation？ | live generation 成本高、慢、失败率不可控；fixture-first 更利于体验验证。 | 比较 live-first 和 fixture-first 两套 demo 路径。 | 待决 |
-| web prototype 是重用 lmdj-pad-rhythm，还是新建独立 app？ | 决定工程投入和运行时复用程度。 | 盘点现有 runtime 的 MIDI、sample 和 judging 能力。 | 待决 |
-| 是否需要展示 pipeline 内部阶段？ | 内部对齐需要透明，玩家体验可能不需要。 | 区分 internal prototype 与 external demo。 | 待决 |
-
-## 技术与数据
-
-| 问题 | 为什么重要 | 下一步 | 状态 |
-| --- | --- | --- | --- |
-| `lanes.json` 是否作为长期 contract？ | demo 已经使用，但最终游戏输入格式可能变化。 | 把字段拆成必需/可变两层。 | 待决 |
-| `Z X N M` 是否是最终键位？ | 影响 runtime 教学、谱面密度和可玩性。 | 用 4 键 prototype 先验证。 | 假设 |
-| 失败状态是否阻止 runtime？ | 影响 demo 可靠性和用户理解。 | 定义 internal demo 与 production 行为差异。 | 待决 |
-
-## 内容与版权
-
-| 问题 | 为什么重要 | 下一步 | 状态 |
-| --- | --- | --- | --- |
-| 生成音乐或采样来源如何处理版权风险？ | 影响公开 demo 与素材策略。 | 先限制为内部 demo 或自有/可用素材。 | 待决 |
-| 是否需要支持用户上传现成歌曲？ | 上传路径比纯生成更容易验证，但版权和处理时长更复杂。 | 作为 V1 输入路径备选。 | 待决 |
+| Project Bin / Global Library 使用本地、云端还是混合存储？ | 决定 Asset 生命周期、成本、离线和账号边界。 | Stage 2。 | 延后 |
+| Stage 3 Curated Playable Packs 的内容来源和权利如何保证？ | 内容权利不能阻塞 Learn / Arcade，但也不能被忽略。 | Stage 3 前。 | 延后 |
+| Performance / Arcade 的 Timing、内容和连续性保护强度如何分层？ | Learn 不能用保护伪造技能，Arcade 又需要连续音乐性。 | Stage 3。 | 延后 |
+| Stage 4 的延迟阈值、屏幕触控和旋钮数量是什么？ | 决定 Hardware Proof 的验收与控制面。 | Stage 4。 | 延后 |

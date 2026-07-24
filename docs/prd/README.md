@@ -1,13 +1,14 @@
 # PRD 迭代系统
 
-这个目录用于脑暴阶段的快速产品迭代。目标不是一次写完最终 PRD，而是把输入、假设、问题和决策拆开管理，让版本可以快速收敛。
+这个目录用于产品输入、工作版 PRD、开放问题和已确认决策的持续迭代。当前路线图依据是 2026-07-18 的 [LMDJ Software MVP Stage 1–4 Memo](https://fcn8wuu8uotg.feishu.cn/docx/ZK5eduti6oE9Dox8Pkbc8r0vnPb)；仓库内的设计与计划负责把它收敛成可执行切片。
 
 ## 文档分工
 
 - [source-materials.md](source-materials.md)：素材池。记录外部 PRD、demo 工具、参考产品、访谈输入和技术样例。
-- [working-prd.md](working-prd.md)：当前工作版 PRD。优先保持清晰、可改、可讨论。
+- [working-prd.md](working-prd.md)：当前工作版 PRD 摘要，反映最新 Stage Memo 和已经确认的本地收缩决策。
 - [open-questions.md](open-questions.md)：开放问题池。每个问题都应该有负责人、下一步和状态。
 - [decision-log.md](decision-log.md)：决策记录。只记录已经确认的结论、原因和影响范围。
+- [Stage 1 Creator Core 首条纵向切片设计](../superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md)：当前下一条可执行产品切片的边界、数据流和验收。
 
 ## 推荐迭代节奏
 

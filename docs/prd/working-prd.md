@@ -1,83 +1,95 @@
 # LMDJ 工作版 PRD
 
-状态：脑暴中  
-更新时间：2026-07-02  
-口径：当前文档是工作版，不是定稿。内容可以快速改写，已确认结论以 [decision-log.md](decision-log.md) 为准。
+状态：`approved-for-planning` 摘要
 
-## 1. 一句话方向
+更新时间：2026-07-24
 
-LMDJ 想把音乐素材转化为可被玩家“演奏”的 Playable Patch，让用户通过清晰的引导和有限输入参与音乐，而不是只听一段生成结果。
+上游依据：[LMDJ Software MVP Stage 1–4 Memo](https://fcn8wuu8uotg.feishu.cn/docx/ZK5eduti6oE9Dox8Pkbc8r0vnPb)（2026-07-18）
 
-## 2. 当前核心假设
+本文只保留当前开发排序所需的产品摘要。完整叙事、Stage 2–4 和团队协作机制以上游 Memo 为准；已经确认的本地收缩以 [decision-log.md](decision-log.md) 为准。
 
-- 用户价值不只是“生成一首歌”，而是“把音乐变成可以上手玩的东西”。
-- Playable Patch 是核心产品对象，应该比单纯的音频文件或 MIDI 文件更重要。
-- 高嘉丰的 `lmdj-song-pipeline` demo 可以作为技术参考，但最终系统边界需要重新定义。
-- web prototype 的第一目标是帮助团队对齐链路和体验，不是做营销页。
+## 1. 产品定义
 
-## 3. 目标用户与场景
-
-待补。当前需要先明确第一阶段服务谁：
-
-- 内部团队：用来验证生成链路、演奏体验和 package contract。
-- 创作者：输入音乐想法，得到可演奏 patch。
-- 玩家：直接体验一个可演奏音乐片段。
-
-## 4. 核心体验草案
+LMDJ 不是 AI 音乐生成器、简化 DAW 或音乐游戏，而是一层把音乐变成可编辑、可演奏、可继续制作的 AI-native Playable Layer：
 
 ```text
-输入音乐意图或音乐素材
-  -> 生成 / 转换为 Playable Patch
-  -> 展示 patch 结构和可演奏部分
-  -> 用户跟随 MIDI 视觉引导进行演奏
-  -> 系统给出回放和表现反馈
+Suno / 其他生成模型
+  → LMDJ Playable Patch
+  → 人的编辑与演奏
+  → DAW 二次制作
 ```
 
-## 5. Playable Patch 暂定定义
+`Playable Patch Engine` 是核心资产；生成 Provider 可替换，DAW 是下游专业制作环境。
 
-Playable Patch 是一个可被运行时加载和演奏的音乐对象，至少包含：
+## 2. Stage Proof Chain
 
-- 声音素材：samples 或 loops。
-- 谱面信息：MIDI notes 或等价事件序列。
-- lane 映射：输入键位、音色、pitch、可演奏/自动播放属性。
-- 元数据：BPM、loop 长度、来源、生成参数、质量报告。
+| Stage | 主命题 | 过关证明 |
+| --- | --- | --- |
+| Stage 1 | Creator Core | 生成/导入到 Patch、演奏和 DAW 导出的创作者闭环成立 |
+| Stage 2 | Creator Depth + Asset Memory | AI 修改更快、可控、可回滚，且个人声音资产可积累复用 |
+| Stage 3 | Learn + Content Loop | 新手通过 Learn 建立可观察的音乐技能 |
+| Stage 4 | Hardware Proof | 核心演奏可映射到通用硬件并脱离鼠标键盘 |
 
-待定问题：Playable Patch 是否必须由 AI 生成，还是也支持人工导入和编辑。
+Stage 是 Proof Gate，不是固定周数。每周发布可运行版本，但只在证据满足后进入下一 Stage。
 
-## 6. V1 Prototype 可能范围
+## 3. 当前 Stage：Creator Core
 
-当前倾向先做团队对齐型 prototype：
+当前优先用户是 DAW 创作者 / Prosumer。产品必须证明：
 
-- 可以接收 prompt 或素材输入。
-- 可以产生或加载一个 Playable Patch。
-- 可以显示 package / patch 结构。
-- 可以用固定键位完成一次 guided performance。
-- 可以明确展示失败、拒绝、无效 package 等状态。
+- 用户拥有的 WAV/MP3 能进入真实音频管线；
+- 音频被转换为可播放的 Patch；
+- 通用 MIDI Pad 可以触发正确素材；
+- 用户可以获得完整、可检查的 Creator Export Pack；
+- Export 能进入真实 DAW 继续制作；
+- 失败状态明确，不用假数据或静默降级伪造成功。
 
-不急于做：
+现有仓库已经完成 Upload → Pipeline → Patchify → 8-pad Web Play，尚未完成 MIDI、Export Pack、DAW Smoke、Sampler Edit 和 Take。
 
-- 账号系统。
-- 商店或社区。
-- 完整 DAW 编辑器。
-- 移动端触控演奏。
-- 商业化版权承诺。
+## 4. 首条纵向切片
 
-## 7. 成功标准草案
+```text
+Upload
+  → Make It Playable
+  → 8 Active Pads / 16-position UI
+  → Keyboard + MIDI Play
+  → Creator Export ZIP
+  → Ableton Live Smoke Test
+```
 
-- 团队能看懂从输入到 Playable Patch 再到演奏的完整链路。
-- 至少一个真实或 fixture patch 可以稳定进入 runtime。
-- 用户能通过有限键位完成一次可感知的演奏。
-- 失败状态不会被隐藏，能知道失败发生在哪一段。
-- PRD 能持续迭代，不被单个 demo 或单份素材绑死。
+已确认范围：
 
-## 8. 当前依赖和参考资产
+- 输入 WAV/MP3，默认最大 `200 MiB`、`600 秒`；
+- 复用现有 Audio Pipeline 和 `lmdj.patch.v1`；
+- 当前只支持八个有效 Pad；
+- UI 可使用 2×8 的十六位外观，后八位是 view-only 空槽；
+- MIDI 是验收项，键盘和鼠标是备用输入；
+- Creator Export 使用通用 ZIP，包含 Patch、真实存在的 Stems、Samples/Slices、MIDI 和 BPM/Key/Loop Manifest；
+- 首个 DAW 验收目标为 Ableton Live；
+- 同一固定测试音频连续运行三次；
+- 非开发者可以在无口头指导下完成 Upload、MIDI 演奏和 Export。
 
-- 高嘉丰 web prototype PRD 素材：[../lmdj-web-prototype-spec.md](../lmdj-web-prototype-spec.md)。
-- 高嘉丰 demo 工具：[../../references/demos/lmdj-song-pipeline/README.md](../../references/demos/lmdj-song-pipeline/README.md)。
+详细设计见 [Stage 1 Creator Core 首条纵向切片设计](../superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md)。
 
-## 9. 下一步
+## 5. 首条切片不做
 
-- 明确第一阶段目标用户：内部团队、创作者、玩家三者谁优先。
-- 明确 V1 是否必须 live generation，还是允许 fixture-first prototype。
-- 盘点现有 rhythm runtime 能力，确认最短可跑通路径。
-- 把 Playable Patch 的字段从“技术输出”整理成“产品对象”。
+- 第 9–16 个有效 Pad 和 Bank 切换；
+- Prompt / Voice 生成；
+- Agent Orchestration 实现；
+- AI Replace / Variation；
+- Sampler Start/End、Loop、Swap、Roll、Chop；
+- Take 录制；
+- Asset Library、账号和云同步；
+- `.als` 等专有 DAW 工程格式；
+- Learn / Arcade；
+- 自研硬件。
+
+## 6. 后续开发顺序
+
+1. 完成首条 Upload → MIDI Play → Export ZIP 纵向切片和 Release Evidence。
+2. Stage 1 第二切片：Sampler Edit + Take Recording，并把 Take 纳入 Creator Export。
+3. Stage 1 后段：Prompt/Voice → Generation → 同一个 Patch Engine。
+4. Stage 2：AI Variation、Patch Versioning、Project Bin / Global Library。
+5. Stage 3：Learn / Arcade 与内容循环。
+6. Stage 4：通用 MIDI、音频接口和 21:9 屏幕原型的 Hardware Proof。
+
+Separator benchmark、Timing Analysis、生产 Runner 迁移继续作为技术风险消除工作，但不能替代当前 Creator 纵向切片。

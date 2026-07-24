@@ -101,3 +101,35 @@
 - 结论：SI-SDR 采用 numpy 自实现（Le Roux 2019 标准公式），全曲整段、逐声道独立计算后均值；弃用 `fast_bss_eval`（0.1.4 版本在无 torch 环境下 si_sdr 计算损坏，已验证复现）。consistency（混合音 L2 范数守恒）与 leakage（stem 频段隔离度）采用自定义指标，精确定义见 plan 2026-07-16-separation-phase1c-metrics.md"自定义指标的精确定义"节。综合分归一化采用同 run 内 min-max 缩放（避免跨 run 之间设备/样本差异导致排序颠覆），得分缺失（盲听项）统一标注为"退化"，盲听按 0–10 线性折算（90 分制数据汇聚）。盲听评测包采用匿名目录（stem 顺序随机化、模型映射隐藏）。
 - 原因：museval 外壳重且依赖重（scipy/numba），benchmark 主进程保持轻量需要子进程评分；si_sdr 标准实现在小模型权重配置下数值稳定性远优于 fast_bss_eval；一致性与泄漏是 Patch 可玩性的关键因子，论文 SDR 不能直接度量；综合分一旦跨 run 排序就无法对标固定架构，同 run 内排序足以驱动模型选型（MUSDB 固定 + 真实歌曲重复跑 3 遍）。
 - 影响：SI-SDR 计算纳入 workers/audio/benchmark/metrics/ 实现；consistency/leakage 指标的定义与验证可追溯至 plan 文档；blind-listening/ 目录生成器加 stem 随机化与 salt 混淆；报告生成时的缺失项处理与盲听三评者聚合需防范极端样本（可玩性 1 分否决）。
+
+## 2026-07-24
+
+### 已确认：Stage 1 Creator Core 成为当前产品主线
+
+- 结论：2026-07-18 的 `LMDJ Software MVP Stage 1–4 Memo` 是当前 `approved-for-planning` 路线图依据。下一条产品纵向切片是 `Upload → Make It Playable → Play → Creator Export Pack`。
+- 原因：仓库已经跑通 Upload → Patchify → 8-pad Play，但尚未证明创作者能用通用 MIDI 演奏并把完整素材包带入真实 DAW。
+- 影响：Separator benchmark、Timing、Generation 和 Agent Orchestration 保留各自价值，但不能替代或阻塞这条 Creator 闭环。
+
+### 已确认：首条切片只支持 8 个有效 Pad，UI 保留 16 位外观
+
+- 结论：`patch.json` 继续只描述当前八个有效 Pad；Web 使用 2×8 的 16 位布局，位置 8–15 仅为 view-only 空槽。16 个有效 Pad 和 8-Pad Controller Bank 切换延后。
+- 原因：当前产品只需要八个可演奏位置；把八个空槽写入产品数据会伪造未实现能力并扩大契约、映射和测试范围。
+- 影响：保持 `lmdj.patch.v1`，不为 UI 占位升级 Schema；文案继续表述“8 个可演奏 Pad”。
+
+### 已确认：Creator Export 首期使用通用 ZIP，以 Ableton Live 做 Smoke Test
+
+- 结论：首期导出为包含 Patch、Stems、Samples/Slices、MIDI 和 BPM/Key/Loop Manifest 的通用 ZIP；不生成 `.als`、Logic 或 FL Studio 专有工程文件。第一目标 DAW 是 Ableton Live。
+- 原因：开放文件包能验证“继续制作”，又不会把首条切片变成私有 DAW 工程格式兼容项目。
+- 影响：导出完整性必须结构化验证；缺失必需项时不得把不完整 ZIP 标成成功。
+
+### 已确认：通用 MIDI Pad 是首条切片的验收项
+
+- 结论：Web MIDI 输入必须进入首条切片；键盘和鼠标是备用输入，不能代替实体 MIDI Pad 验收。
+- 原因：Creator Core 和后续 Hardware Proof 都要求核心演奏从鼠标键盘解耦。
+- 影响：本切片只映射八个有效 Pad，不提前实现第二 Bank。
+
+### 已确认：Prompt、AI Variation、Sampler Edit 和 Take 不进入首条切片
+
+- 结论：Prompt/Voice、Agent Orchestration、AI Replace/Variation、Sampler Edit、Take Recording、Asset Library 都后置。
+- 原因：首条切片必须在一条可运行流程内优先证明 Upload、演奏和 DAW Export；同时引入这些能力会破坏一周纵向切片边界。
+- 影响：Sampler Edit + Take 是紧随其后的 Stage 1 切片；Generation 在 Creator 基础闭环成立后接入同一个 Patch Engine。

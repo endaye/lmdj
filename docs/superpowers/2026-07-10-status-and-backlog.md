@@ -1,6 +1,8 @@
 # LMDJ 状态与 Backlog
 
-日期：2026-07-10
+初始日期：2026-07-10
+
+最近更新：2026-07-24
 用途：会话交接 / 下一步待办。记录已落地里程碑、当前可跑链路、延后的技术项、下一步候选。
 
 ## 已落地里程碑（均已合并 main）
@@ -17,6 +19,7 @@
 | #9 | Separation Phase 1B：BS-RoFormer（SDR 9.65）+ Mel-Band RoFormer（SDR 8.22）四轨 runner 与 experimental registry 条目；MSST 家族共享实现抽取（scnet 薄壳化）；Mac MPS 验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1b.md` | `workers/audio/separation/runners`、`config/` |
 | #10 | Separation Phase 1C-a：benchmark 执行层——manifest schema/loader、ffmpeg 输入归一化、orchestrator（全链 + 六元组缓存 key + resume + 单组合失败不中断）、`dev.sh bench` CLI；suno mini-run 真实验收。plan: `docs/superpowers/plans/2026-07-16-separation-phase1c-exec.md` | `workers/audio/benchmark`、`testdata/` |
 | #11 | Separation Phase 1C-b：指标/评分/报告/盲听打包（museval SDR + 自实现 SI-SDR/一致性/泄漏，§9 权重与硬门槛，summary.json/csv + 跨平台 merge，匿名盲听包）。plan: docs/superpowers/plans/2026-07-16-separation-phase1c-metrics.md | workers/audio/benchmark |
+| #23 | MUSDB18HQ manifest generator，支持从本地 MUSDB18HQ 目录生成 benchmark 数据集清单。 | `workers/audio/benchmark/musdb.py` |
 
 ## 当前可跑链路（浏览器已亲测闭环）
 
@@ -39,20 +42,35 @@
 - `references/demos/lmdj-song-pipeline/` 是冻结的参考 demo，只作子进程/fixture/迁移来源，不加正式功能。
 - 各正式包保持轻量：不把 demo 的 torch/numpy<2 锁带进来（worker/api 走子进程隔离）。
 
-## 下一步候选（优先级建议）
+## 当前产品主线（2026-07-24）
 
-1. **Separation Phase 1D 前置物料** —— MUSDB18HQ 下载（~30GB，需注册）；真实歌曲集扩充至 10–20 首（suno 现 12 首可作起点）。
-2. **Separation Phase 1D 执行** —— Mac MPS 全量 benchmark + Linux CPU 子集验证 + 盲听实测 → 依 §9.5 硬门槛与综合分产出选型报告（spec §13 Review 节点）。
-3. **`workers/generation`（云架构 Phase 2 入口）** —— idea/creative brief → 音乐材料 → 接 Audio Worker/Patchify，实现"一句话生成 patch"。产品叙事上的下一个大跳。
-4. **Patch View 增强（纯前端，schema 已预留）** —— Scenes 切换、量化触发（`behavior.quantize` 目前读取不执行）、trigger_group 组员展开。
-5. **apps/api 生产化前置** —— 队列（Redis/RQ，infra 待决）、鉴权/限流、对象存储、Postgres（jobs/patches/elements/lineage）。infra spec 已有蓝图。
+最新 `approved-for-planning` PRD 将当前 Stage 收敛为 Creator Core。下一条纵向切片不再是单独扩展底层模型，而是：
+
+```text
+Upload
+  → 8 Active Pads / 16-position UI
+  → Keyboard + Generic MIDI Play
+  → Creator Export ZIP
+  → Ableton Live Smoke Test
+```
+
+详细边界见 `docs/superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md`。
+
+## 下一步候选（按产品证明排序）
+
+1. **Stage 1 Creator Core 首条切片** —— Upload 前置校验、8 个有效 Pad / 16 位 UI、Web MIDI、Creator Export ZIP。
+2. **Release Evidence** —— 固定音频连续跑三次、实体 MIDI Pad 映射、非开发者无指导完成流程、Ableton Live 导入 Smoke。
+3. **Stage 1 第二切片** —— Sampler Edit + Take Recording，并将 Take 纳入 Creator Export。
+4. **Separation / Timing 风险消除** —— 完成足以选择生产 baseline 的 Phase 1D benchmark、盲听和 Timing 评审；不阻塞首条 Creator 切片。
+5. **Generation / Agent Orchestration** —— Creator 基础闭环成立后，再接 Prompt/Voice → Generation → 同一个 Patch Engine。
+6. **apps/api 生产化** —— 队列、鉴权/限流、对象存储和 Postgres 随真实产品流量与 durable workflow 需要推进。
 
 ## 延后的技术项（open follow-ups，非阻塞）
 
 > 说明：以下为各任务/终审判为 ACCEPT 的延后项，已排除会话中后续修复掉的（stale GainNodes、catch-up 判别、audio input-copy zombie job、apps/api job_id 路径穿越——均已修并复核）。
 
 ### apps/api（已知接受风险，见其 spec）
-- **上传体积无上限**：`POST /uploads` 无 max-bytes，网络可达时磁盘耗尽 DoS 面；归入限流范畴，生产化时随鉴权/限流加 413。
+- **上传体积无上限**：`POST /uploads` 无 max-bytes，网络可达时磁盘耗尽 DoS 面；已进入 Stage 1 首条切片，不再等到完整生产化阶段。
 - **上传临时文件不清理**：`tempfile.mkdtemp()` 产物不回收（进程级临时目录）。
 
 ### apps/web
@@ -77,6 +95,8 @@
 ## 关键文档索引
 
 - 契约决策：`docs/prd/decision-log.md`（2026-07-07 一批）
+- 当前产品摘要：`docs/prd/working-prd.md`（2026-07-24）
+- 当前 Creator 切片：`docs/superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md`
 - 设计 spec：`docs/superpowers/specs/`（workstation / cloud-infra / patch-view / audio-worker / app-api / web-api-integration）
 - 实施计划：`docs/superpowers/plans/`（patchify path-b / web-patch-view / audio-worker / app-api / web-api-integration）
 - SDD 执行账本：`.superpowers/sdd/progress.md`（gitignored，本地）
