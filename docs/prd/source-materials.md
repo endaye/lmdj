@@ -1,6 +1,6 @@
 # 素材池
 
-这里记录脑暴阶段收到的 PRD、demo、参考产品和技术样例。素材只代表输入，不代表最终方案。
+这里记录收到的 PRD、demo、参考产品和技术样例。除非状态明确标为 `approved-for-planning` 或已经进入 [decision-log.md](decision-log.md)，素材只代表输入，不代表最终方案。
 
 ## 已收到素材
 
@@ -10,6 +10,7 @@
 | 2026-07-02 | 高嘉丰 | Demo 工具 | [../../references/demos/lmdj-song-pipeline/README.md](../../references/demos/lmdj-song-pipeline/README.md) | 参考音频生成/分轨/切片/MIDI/验收的技术链路 | 素材 |
 | 2026-07-02 | 高嘉丰 | Mood board | [Pinterest: LMDJ](https://www.pinterest.com/gaoplusfeng/lmdj/) | 参考视觉气质、音乐/演奏场景联想和界面氛围 | 素材 |
 | 2026-07-06 | 内部整理 | Visual demo | [../../references/demos/ascii-matrix-camera/README.md](../../references/demos/ascii-matrix-camera/README.md) | 参考 ASCII matrix、摄像头输入和黑绿视觉气质 | 素材 |
+| 2026-07-18 | 团队决策 Memo | 最新 PRD / Roadmap | [LMDJ Software MVP Stage 1–4 Memo](https://fcn8wuu8uotg.feishu.cn/docx/ZK5eduti6oE9Dox8Pkbc8r0vnPb) | 当前产品定义、Stage 1–4 Proof Chain、范围和验收依据 | `approved-for-planning` |
 
 ## 当前可提取信息
 
@@ -40,6 +41,14 @@
 - 当前用途：作为视觉互动参考 demo，不纳入正式产品源码边界。
 - 可提取方向：黑底绿色 ASCII、falling matrix、摄像头输入、静态 fallback subject。
 - 需要谨慎：它证明一种视觉气质，不等于最终 LMDJ Web App 或 Performance View 的技术架构。
+
+### 2026-07-18 Stage 1–4 Memo
+
+- 当前用途：作为产品路线和开发排序的最新 `approved-for-planning` 输入。
+- 核心定义：LMDJ 是把音乐变成可编辑、可演奏、可继续制作的 AI-native Playable Layer。
+- 当前优先：Stage 1 Creator Core，先证明 Upload / Generate → Patch → Play / Take → DAW Export。
+- 首条切片：Upload → Make It Playable → Play → Creator Export Pack。
+- 2026-07-24 的本地决策：固定 16 个数据 Pad，UI 与数据一一对应；未使用位置为真实 empty Pad；通用 ZIP + Ableton Smoke；MIDI 是验收项。
 
 ## 待补素材
 
