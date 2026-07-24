@@ -1,9 +1,12 @@
 """阶段2 分轨：Demucs → drums / bass / melody(other [+vocals])"""
 from __future__ import annotations
 
+from hashlib import sha256
 import logging
 import os
 from pathlib import Path
+import random
+import threading
 
 import numpy as np
 import soundfile as sf
@@ -13,6 +16,7 @@ from .config import PipelineConfig
 log = logging.getLogger(__name__)
 
 _models: dict[str, object] = {}
+_demucs_random_lock = threading.Lock()
 
 
 def _device() -> str:
@@ -33,6 +37,26 @@ def _get_model(name: str):
     return _models[name]
 
 
+def _audio_seed(audio_path: Path) -> int:
+    digest = sha256()
+    with audio_path.open("rb") as source:
+        while chunk := source.read(1024 * 1024):
+            digest.update(chunk)
+    return int.from_bytes(digest.digest(), "big")
+
+
+def _apply_model_deterministically(audio_path: Path, model, wav, *, device: str):
+    from demucs.apply import apply_model
+
+    with _demucs_random_lock:
+        previous_random_state = random.getstate()
+        try:
+            random.seed(_audio_seed(audio_path))
+            return apply_model(model, wav, device=device, progress=True, split=True)
+        finally:
+            random.setstate(previous_random_state)
+
+
 def separate(audio_path: Path, work_dir: Path, cfg: PipelineConfig) -> dict[str, Path]:
     """整曲分轨，返回 {"drums"|"bass"|"melody": wav路径}。
 
@@ -46,7 +70,6 @@ def separate(audio_path: Path, work_dir: Path, cfg: PipelineConfig) -> dict[str,
         return expected
 
     import torch
-    from demucs.apply import apply_model
     from demucs.audio import AudioFile
 
     model = _get_model(cfg.demucs_model)
@@ -58,8 +81,8 @@ def separate(audio_path: Path, work_dir: Path, cfg: PipelineConfig) -> dict[str,
     device = _device()
     log.info("demucs separating on %s ...", device)
     with torch.no_grad():
-        sources = apply_model(model, wav_norm[None], device=device,
-                              progress=True, split=True)[0]
+        sources = _apply_model_deterministically(
+            audio_path, model, wav_norm[None], device=device)[0]
     sources = sources * (ref.std() + 1e-8) + ref.mean()
 
     stems = {name: src for name, src in zip(model.sources, sources)}
