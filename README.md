@@ -60,7 +60,42 @@ scripts/dev.sh test                 # core-models + patchify 测试
 scripts/dev.sh patchify <包目录>     # 对 pipeline package 生成 patch.json
 scripts/dev.sh song <音频> <id>      # demo pipeline 处理一首歌并 patchify（需先 setup-demo）
 scripts/dev.sh smoke                # testsong → patch.json → 摘要
+scripts/dev.sh creator-smoke <音频>  # 真实 API：上传 → 16 Pad → 两次确定性 Export
 ```
+
+`creator-smoke` 默认连接 `http://127.0.0.1:8000`，可通过
+`LMDJ_API_BASE_URL` 指向其他本地 API。它使用 `curl --fail-with-body`
+发起请求，并用 core-models package venv 中的 Python + `jsonschema`
+校验 Patch；不依赖 `jq`。任一 HTTP、Job 或 Patch contract 失败以及两次
+Creator Export SHA-256 不一致都会以非零状态退出。
+
+HTTP 连接、单次请求和 Job 轮询分别有 5 秒、120 秒和 1800 秒的默认墙钟
+上限，可通过 `LMDJ_CREATOR_SMOKE_CONNECT_TIMEOUT_SECONDS`、
+`LMDJ_CREATOR_SMOKE_REQUEST_TIMEOUT_SECONDS` 和
+`LMDJ_CREATOR_SMOKE_TIMEOUT_SECONDS` 调整。三者都必须是正整数。
+
+启动本地 API 并执行完整 Creator smoke：
+
+```bash
+scripts/dev.sh setup
+scripts/dev.sh setup-demo
+scripts/dev.sh setup-pfs
+
+cd apps/api
+python3 -m venv .venv
+.venv/bin/pip install -e ../../packages/core-models
+.venv/bin/pip install -e ../../packages/patchify
+.venv/bin/pip install -e ../../workers/audio
+.venv/bin/pip install -e .
+.venv/bin/uvicorn lmdj_api.app:app --port 8000
+
+# 另开终端，在仓库根目录执行
+scripts/dev.sh creator-smoke /absolute/path/to/audio.wav
+```
+
+成功输出包含 `job_id`、`patch_id`、`pads: 16`、两次 Export SHA-256
+以及 `deterministic: yes`。脚本级成功与失败路径可用
+`scripts/tests/test_creator_smoke.sh` 验证。
 
 ## Demo 工具常用命令
 
