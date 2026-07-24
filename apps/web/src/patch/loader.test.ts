@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import golden from "./__fixtures__/patch.golden.json";
-import { loadPatch, PatchValidationError, padElementIds, scenePatterns, type Patch } from "./loader";
+import {
+  loadPatch,
+  PatchValidationError,
+  padElementIds,
+  scenePatterns,
+  type Pad,
+  type Patch,
+} from "./loader";
 
 const enc = (data: unknown) => new TextEncoder().encode(JSON.stringify(data)).buffer as ArrayBuffer;
 const fakeDecode = async (data: ArrayBuffer) => ({ decodedBytes: data.byteLength });
@@ -36,6 +43,44 @@ describe("loadPatch", () => {
 
     expect(err).toBeInstanceOf(PatchValidationError);
     expect((err as PatchValidationError).issues.join("\n")).toContain("/pads/0/action");
+  });
+
+  it("rejects a patch with 15 pads", async () => {
+    const broken = structuredClone(golden) as unknown as Patch;
+    const invalid = broken as unknown as {
+      pads: Pad[];
+      scenes: Array<{ pad_indexes: number[] }>;
+    };
+    invalid.pads = broken.pads.slice(0, 15);
+    invalid.scenes[0].pad_indexes = Array.from({ length: 15 }, (_, index) => index);
+
+    await expect(loadPatch(goldenFiles(broken), fakeDecode)).rejects.toThrow(PatchValidationError);
+  });
+
+  it("rejects a patch with 17 pads", async () => {
+    const broken = structuredClone(golden) as unknown as Patch;
+    broken.pads.push(structuredClone(broken.pads[15]));
+    (broken as unknown as { scenes: Array<{ pad_indexes: number[] }> }).scenes[0].pad_indexes =
+      Array.from({ length: 17 }, (_, index) => index);
+
+    await expect(loadPatch(goldenFiles(broken), fakeDecode)).rejects.toThrow(PatchValidationError);
+  });
+
+  it("rejects pads whose array order does not match their indexes", async () => {
+    const broken = structuredClone(golden) as unknown as Patch;
+    [broken.pads[0], broken.pads[1]] = [broken.pads[1], broken.pads[0]];
+
+    await expect(loadPatch(goldenFiles(broken), fakeDecode)).rejects.toThrow(
+      /pads must be ordered with indexes 0\.\.15/,
+    );
+  });
+
+  it("rejects a scene that does not cover every pad index", async () => {
+    const broken = structuredClone(golden) as unknown as Patch;
+    (broken as unknown as { scenes: Array<{ pad_indexes: number[] }> }).scenes[0].pad_indexes =
+      broken.scenes[0].pad_indexes.slice(0, 15);
+
+    await expect(loadPatch(goldenFiles(broken), fakeDecode)).rejects.toThrow(PatchValidationError);
   });
 
   it("marks missing wav as missing element without blocking the patch", async () => {

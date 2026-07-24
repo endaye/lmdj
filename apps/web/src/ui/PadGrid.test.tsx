@@ -24,10 +24,10 @@ function setup(mutate?: (patch: Patch, bundle: PatchBundle<unknown>) => void) {
 }
 
 describe("PadGrid", () => {
-  it("renders 8 pads with slot names and key hints", () => {
+  it("renders 16 pads with slot names and key hints", () => {
     setup();
-    const pads = screen.getAllByTestId(/^pad-\d$/);
-    expect(pads).toHaveLength(8);
+    const pads = screen.getAllByTestId(/^pad-\d+$/);
+    expect(pads).toHaveLength(16);
     expect(screen.getByText("Drums")).toBeInTheDocument();
     expect(screen.getByText("A")).toBeInTheDocument(); // pad 0 键提示
   });

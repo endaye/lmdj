@@ -26,6 +26,24 @@ export class PatchValidationError extends Error {
 const ajv = new Ajv2020({ allErrors: true, strict: false });
 const validate = ajv.compile(schema as object);
 
+export function assertPadShape(patch: Patch): void {
+  const expected = Array.from({ length: 16 }, (_, index) => index);
+  const actual = patch.pads.map((pad) => pad.index);
+  if (actual.some((index, position) => index !== expected[position])) {
+    throw new PatchValidationError(["pads must be ordered with indexes 0..15"]);
+  }
+  for (const scene of patch.scenes) {
+    if (
+      scene.pad_indexes.length !== 16
+      || scene.pad_indexes.some((index, position) => index !== expected[position])
+    ) {
+      throw new PatchValidationError([
+        `scene ${scene.scene_id} must cover pad indexes 0..15`,
+      ]);
+    }
+  }
+}
+
 /** scene 契约读取路径的唯一实现：activeScene（v1 = scenes[0]）→ pattern_ids → patterns */
 export function scenePatterns(patch: Patch): Pattern[] {
   const scene = patch.scenes[0];
@@ -69,6 +87,7 @@ export async function loadPatch<B>(
     );
   }
   const patch = data as Patch;
+  assertPadShape(patch);
   scenePatterns(patch); // scene→pattern 引用完整性在加载期 fail-fast
 
   const buffers = new Map<string, B>();

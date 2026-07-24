@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 SCHEMA = "lmdj.patch.v1"
+PAD_COUNT = 16
 
 # v1 生效 action；其余 enum 项为 reserved（消费方必须 no-op）
 LIVE_ACTIONS = frozenset({"trigger_element", "trigger_group", "empty"})
@@ -106,6 +107,14 @@ class Patch:
     renders: list[RenderRef]
     metadata: dict[str, Any] = field(default_factory=dict)
     schema: str = SCHEMA
+
+    def __post_init__(self) -> None:
+        expected = list(range(PAD_COUNT))
+        if [pad.index for pad in self.pads] != expected:
+            raise ValueError("pads must have indexes 0..15 in array order")
+        for scene in self.scenes:
+            if scene.pad_indexes != expected:
+                raise ValueError(f"scene {scene.scene_id} must cover pad indexes 0..15")
 
     def to_dict(self) -> dict[str, Any]:
         return {

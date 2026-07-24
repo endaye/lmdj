@@ -475,6 +475,70 @@
       "behavior": {
         "scope": "scene"
       }
+    },
+    {
+      "index": 8,
+      "slot": "Slot 09",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 9,
+      "slot": "Slot 10",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 10,
+      "slot": "Slot 11",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 11,
+      "slot": "Slot 12",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 12,
+      "slot": "Slot 13",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 13,
+      "slot": "Slot 14",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 14,
+      "slot": "Slot 15",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
+    },
+    {
+      "index": 15,
+      "slot": "Slot 16",
+      "label": "Empty",
+      "action": "empty",
+      "element_id": null,
+      "behavior": {}
     }
   ],
   "scenes": [
@@ -489,7 +553,15 @@
         4,
         5,
         6,
-        7
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15
       ],
       "pattern_ids": [
         "pattern_original"
