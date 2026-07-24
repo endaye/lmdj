@@ -11,6 +11,7 @@ from fastapi import UploadFile
 
 DEFAULT_MAX_BYTES = 200 * 1024 * 1024
 DEFAULT_MAX_DURATION_SECONDS = 600.0
+DEFAULT_FFPROBE_TIMEOUT_SECONDS = 15.0
 _CHUNK_BYTES = 1024 * 1024
 _SUPPORTED = ["wav", "mp3"]
 
@@ -19,6 +20,7 @@ _SUPPORTED = ["wav", "mp3"]
 class UploadLimits:
     max_bytes: int
     max_duration_seconds: float
+    ffprobe_timeout_seconds: float = DEFAULT_FFPROBE_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -42,6 +44,12 @@ def limits_from_env() -> UploadLimits:
             os.environ.get(
                 "LMDJ_UPLOAD_MAX_DURATION_SECONDS",
                 DEFAULT_MAX_DURATION_SECONDS,
+            ),
+        ),
+        ffprobe_timeout_seconds=float(
+            os.environ.get(
+                "LMDJ_FFPROBE_TIMEOUT_SECONDS",
+                DEFAULT_FFPROBE_TIMEOUT_SECONDS,
             ),
         ),
     )
@@ -99,6 +107,7 @@ def persist_and_probe(
             capture_output=True,
             text=True,
             check=False,
+            timeout=limits.ffprobe_timeout_seconds,
         )
         if result.returncode != 0:
             raise _unsupported(destination)
@@ -123,6 +132,15 @@ def persist_and_probe(
             raise _unsupported(destination)
     except PreflightError:
         raise
+    except subprocess.TimeoutExpired:
+        destination.unlink(missing_ok=True)
+        raise PreflightError(
+            status_code=422,
+            detail={
+                "code": "audio_probe_timeout",
+                "timeout_seconds": limits.ffprobe_timeout_seconds,
+            },
+        ) from None
     except (OSError, TypeError, ValueError, json.JSONDecodeError):
         raise _unsupported(destination) from None
 

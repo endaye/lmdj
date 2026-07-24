@@ -9,6 +9,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 from lmdj_audio_worker import DemoPipelineRunner, PipelineRunner
 from lmdj_audio_worker.status import read_status
@@ -97,7 +98,12 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
         suffix = Path(file.filename or "").suffix.lower()
         destination = temp_dir / f"upload{suffix}"
         try:
-            persist_and_probe(file, destination, upload_limits)
+            await run_in_threadpool(
+                persist_and_probe,
+                file,
+                destination,
+                upload_limits,
+            )
         except PreflightError as error:
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise HTTPException(

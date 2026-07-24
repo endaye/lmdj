@@ -260,4 +260,34 @@ def test_invokes_ffprobe_with_the_stage_one_contract(monkeypatch, tmp_path: Path
         "capture_output": True,
         "text": True,
         "check": False,
+        "timeout": 15.0,
     }
+
+
+def test_ffprobe_timeout_has_stable_preflight_error_and_removes_upload(
+    monkeypatch,
+    tmp_path: Path,
+):
+    def timeout(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    destination = tmp_path / "slow.wav"
+
+    with pytest.raises(PreflightError) as caught:
+        persist_and_probe(
+            upload("slow.wav", wav_bytes()),
+            destination,
+            UploadLimits(
+                max_bytes=10_000,
+                max_duration_seconds=600,
+                ffprobe_timeout_seconds=0.25,
+            ),
+        )
+
+    assert caught.value.status_code == 422
+    assert caught.value.detail == {
+        "code": "audio_probe_timeout",
+        "timeout_seconds": 0.25,
+    }
+    assert not destination.exists()

@@ -389,6 +389,60 @@ def test_oversized_upload_is_413_and_does_not_create_job(
     assert not (tmp_path / "jobs").exists()
 
 
+def test_upload_preflight_does_not_block_app_event_loop(
+    monkeypatch,
+    tmp_path: Path,
+):
+    app_module = importlib.import_module("lmdj_api.app")
+    started = threading.Event()
+    release = threading.Event()
+    health_done = threading.Event()
+    responses: dict[str, object] = {}
+
+    def blocking_preflight(_file, destination, _limits):
+        started.set()
+        assert release.wait(timeout=2)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(short_wav_bytes())
+
+    monkeypatch.setattr(app_module, "persist_and_probe", blocking_preflight)
+    app = create_app(runner=FakeRunner(), jobs_root=tmp_path / "jobs")
+
+    with TestClient(app) as client:
+        upload_thread = threading.Thread(
+            target=lambda: responses.setdefault(
+                "upload",
+                client.post(
+                    "/uploads",
+                    files={
+                        "file": (
+                            "song.wav",
+                            io.BytesIO(short_wav_bytes()),
+                            "audio/wav",
+                        ),
+                    },
+                ),
+            ),
+        )
+        upload_thread.start()
+        assert started.wait(timeout=1)
+
+        def request_health() -> None:
+            responses["health"] = client.get("/health")
+            health_done.set()
+
+        health_thread = threading.Thread(target=request_health)
+        health_thread.start()
+        event_loop_was_responsive = health_done.wait(timeout=0.2)
+        release.set()
+        upload_thread.join(timeout=2)
+        health_thread.join(timeout=2)
+
+    assert event_loop_was_responsive
+    assert responses["health"].status_code == 200
+    assert responses["upload"].status_code == 200
+
+
 def test_unsupported_audio_is_415_and_does_not_create_job(
     monkeypatch,
     tmp_path: Path,
