@@ -4,27 +4,32 @@
 
 分支：`codex/align-creator-ui-spec`
 
-验证基线：`0caa88a7`（Task 1–9）
+实现验证基线：`c6924e0c`（覆盖 Task 1–9 基线 `0caa88a7` 之后的
+repeatability fixes）。
 
 ## 结论
 
 **NOT READY — PR Ready 被阻塞。**
 
 自动化代码门禁全部通过，固定 16 Pad、响应式 Workbench、Creator Export
-以及同一 Job 内重复下载的字节确定性均有证据。但同一固定音频连续三次
-真实处理产生了三个不同的 `patch_id`，违反“三次 patch_id 必须一致”的
-release gate。实体 MIDI、Ableton Live 和无指导用户测试也因缺少设备、
-软件和参与者而未执行；这些项目必须完成后才能把 PR 标为 Ready。
+以及同一 Job 内重复下载的字节确定性均有证据。同一固定音频通过生产 FastAPI
+路由完成的三个独立 Job 现已得到相同 full `patch_id`、`lanes.json`、
+`chart.mid`、`patch.json` 和 stems hash，三次 repeatability gate 为 PASS。
+实体 MIDI、Ableton Live 和无指导用户测试仍因缺少设备、软件和参与者而未执行；
+这些项目必须完成后才能把 PR 标为 Ready。
 
 ## 环境与方法
 
 - macOS `26.5.2`（Build `25F84`）。
 - Google Chrome `150.0.7871.182`。
 - 固定音频：
-  `references/demos/lmdj-song-pipeline/output/testsong/input.wav`。
-- Live API：`uvicorn lmdj_api.app:app`，使用默认
-  `DemoPipelineRunner` 和生产 `POST /uploads`、Job、Patch、Export 路由；
-  Job 数据根为临时目录 `/tmp/lmdj-stage1-live-jobs.O4rtsK`。
+  `references/demos/lmdj-song-pipeline/output/testsong/input.wav`，SHA-256 为
+  `250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709`。
+- Live API：显式以 `create_app(runner=DemoPipelineRunner(...))` 注入
+  `DemoPipelineRunner`，并使用生产 `POST /uploads`、Job、Patch、Export 路由；
+  Job 数据根为临时目录 `/tmp/lmdj-stage1-repeatability-live.W47sPw`。
+- 该 runner 使用当前分支的 demo source，并指向 main checkout 的完整 demo venv
+  （worktree 的测试 venv 缺少 torch）。
 - Key 分析：通过 `scripts/dev.sh setup-pfs` 创建的隔离
   `workers/audio/.venv-pfs`。
 - `system_profiler SPUSBDataType` 未发现 MIDI/controller；
@@ -39,7 +44,8 @@ shell helper 的自动验证使用本地 HTTP fixture server，只验证
 |---|---|---|
 | `scripts/tests/test_creator_smoke.sh` | PASS | 成功输出六个要求字段；15-Pad contract、HTTP 500、不同 ZIP hash 均非零退出 |
 | `scripts/dev.sh test` | PASS | core-models `7 passed`；Patchify `18 passed` |
-| Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`327 passed` |
+| Reference demo 全套 | PASS | `8 passed`；1 条既有 librosa fixture warning |
+| Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`328 passed` |
 | API 全套 | PASS | `64 passed`；1 条既有 Starlette/httpx deprecation warning |
 | `npm run check-contract` | PASS | `4 passed` |
 | `npm test` | PASS | `21` files、`146 passed`；覆盖 Loaded 默认 Performance、Source / Performance 真实内容切换与 preflight probe timeout 呈现 |
@@ -60,45 +66,49 @@ PYTHONPATH=workers/audio:packages/core-models:packages/patchify \
 启动命令：
 
 ```bash
-PYTHONPATH=apps/api:workers/audio:packages/core-models:packages/patchify \
-LMDJ_JOBS_ROOT=/tmp/lmdj-stage1-live-jobs.O4rtsK \
+PYTHONPATH=references/demos/lmdj-song-pipeline:apps/api:workers/audio:packages/core-models:packages/patchify \
+LMDJ_JOBS_ROOT=/tmp/lmdj-stage1-repeatability-live.W47sPw \
   /Users/endaye/Projects/lmdj/apps/api/.venv/bin/python \
-  -m uvicorn lmdj_api.app:app --host 127.0.0.1 --port 8765
+  -c '
+from pathlib import Path
+import uvicorn
+from lmdj_api.app import create_app
+from lmdj_audio_worker.runner import DemoPipelineRunner
+
+app = create_app(runner=DemoPipelineRunner(Path("/Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline")))
+uvicorn.run(app, host="127.0.0.1", port=8876)
+'
 ```
 
 每次执行：
 
 ```bash
-LMDJ_API_BASE_URL=http://127.0.0.1:8765 \
+LMDJ_API_BASE_URL=http://127.0.0.1:8876 \
   scripts/dev.sh creator-smoke \
   references/demos/lmdj-song-pipeline/output/testsong/input.wav
 ```
 
 | Run | job_id | patch_id | Pads | Export SHA-256 A | Export SHA-256 B | 单 Job 确定性 |
 |---|---|---|---:|---|---|---|
-| 1 | `40e5f4e7f582` | `40e5f4e7f582-b3f6cb0b` | 16 | `ed122516319ccfd55317278bcf034039b0a8ef16c5f91aec4836a93d4132d002` | `ed122516319ccfd55317278bcf034039b0a8ef16c5f91aec4836a93d4132d002` | PASS |
-| 2 | `c38da0338c2f` | `c38da0338c2f-99735e74` | 16 | `21243d0eaf6c53aac3e84bd2077b481e657db1dd5a45b523b3b6b02af43e6ff1` | `21243d0eaf6c53aac3e84bd2077b481e657db1dd5a45b523b3b6b02af43e6ff1` | PASS |
-| 3 | `9f427e4c3b23` | `9f427e4c3b23-9cb2e79c` | 16 | `9466ed64e054de5fcfbebf474620a29b5b08f576addaa855962e15c1241234a7` | `9466ed64e054de5fcfbebf474620a29b5b08f576addaa855962e15c1241234a7` | PASS |
+| 1 | `e0cd0f5db09f` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
+| 2 | `698613fe3811` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
+| 3 | `205170b612d3` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
 
-跨运行 Repeatability：**FAIL**。
+跨运行 Repeatability：**PASS**。三个 Job 的 full `patch_id`、16 Pad、两次
+Creator ZIP 下载 hash 和单 Job 确定性均一致；跨 Job 的磁盘输出 hash 也完全一致：
 
-- full `patch_id` 包含每次随机生成的 Job ID，因此按当前命名设计本身就无法
-  在三个 Job 间相同。
-- 三个内容 hash 后缀 `b3f6cb0b`、`99735e74`、`9cb2e79c` 也不同，不是
-  只有前缀差异。
-- Run 1 的 `lanes.json` SHA-256 为
-  `dadf39a091d7e602c8b13e3e2bd22812cdd0cb26aa2ec9a42fbdc5e80626384a`，
-  lanes 为 `drum_low / drum_high / bass / melody_a`。
-- Run 2 与 Run 3 的 `lanes.json` SHA-256 都是
-  `68e5cf2c34da47ac48f206f9775804638727a1065b053af0c527a14212f24abd`，
-  lanes 为 `kick / snare / hat / bass / melody_a`；但 `chart.mid`
-  SHA-256 分别是
-  `77a0124a2c72b01336bd74df0c67fcdf4175dbcf9ffb8fe2f1f45ad19d225928`
-  和
-  `92dd237993525f2d96e1f5733608402054c2c25c63f71123efc605297b4dad8b`。
+- `lanes.json`：`68e5cf2c34da47ac48f206f9775804638727a1065b053af0c527a14212f24abd`
+- `chart.mid`：`83497e28236df81ab7f2cf876e774a8d8f67c10bcf71aa4fe4f7fc949fb4a9dc`
+- `patch.json`：`8673b4b13bd81079e06c3c75a66c5511e696d640af51ddcc673894ea15c886e5`
+- stems：bass `0f43e141bffe688afbeb41f2c9cd5a3366e313915f88dc05595aa555211f3e36`；
+  drums `7072814aa2a5e437d9543df3d67f671c93dc12e18f74d2e5bbcda322d2e1b647`；
+  melody `74becbc38a19237fe4f46c5f04342528be127a328bfb1965ff4766e0c121bc5e`。
 
-后续需要分别解决 patch identity 的 Job-ID 耦合和 pipeline 的跨运行输出
-非确定性；本 evidence task 不修改音频算法。
+根因和修复：随机 API Job ID 曾被复用为 pipeline `song_id`，而 Demucs
+`apply_model(shifts=1)` 使用未设 seed 的 Python random offset。Worker 现在从
+上传音频字节流式计算 SHA-256，并传入独立于 Job identity 的
+`source-<full-hex-digest>` 作为 `song_id`；冻结 demo separation 从音频字节
+为既有 shift augmentation 设 seed、恢复 Python random state，并序列化该 seeded call。
 
 ## Workspace UI 自动验收
 
@@ -167,11 +177,9 @@ DAW 或真人任务证据。
 
 ## Ready 阻塞项
 
-1. 修复同一音频跨 Job 的 patch identity 与 pipeline 输出非确定性，重新跑三次，
-   要求三个 full `patch_id` 一致。
-2. 使用实体 16-pad 与 8-pad controller 完成 Note、Bank、声音和 empty Pad 验收。
-3. 在 Ableton Live 导入 Creator ZIP 的 Stems、Samples、MIDI、Manifest，
+1. 使用实体 16-pad 与 8-pad controller 完成 Note、Bank、声音和 empty Pad 验收。
+2. 在 Ableton Live 导入 Creator ZIP 的 Stems、Samples、MIDI、Manifest，
    按 Manifest BPM 继续编排。
-4. 由至少一名非开发者无口头指导完成 Upload、MIDI 演奏和 Export。
+3. 由至少一名非开发者无口头指导完成 Upload、MIDI 演奏和 Export。
 
 上述任一项未通过，PR 都不得标记 Ready。

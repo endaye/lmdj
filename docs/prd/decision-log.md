@@ -133,3 +133,11 @@
 - 结论：Prompt/Voice、Agent Orchestration、AI Replace/Variation、Sampler Edit、Take Recording、Asset Library 都后置。
 - 原因：首条切片必须在一条可运行流程内优先证明 Upload、演奏和 DAW Export；同时引入这些能力会破坏一周纵向切片边界。
 - 影响：Sampler Edit + Take 是紧随其后的 Stage 1 切片；Generation 在 Creator 基础闭环成立后接入同一个 Patch Engine。
+
+## 2026-07-25
+
+### 已确认：Creator repeatability 以 source identity 与内容后缀建立，而非 Job identity
+
+- 结论：API Job ID 仅标识一次运行；Worker 从上传音频字节计算 SHA-256，并以 `source-<full-hex-digest>` 作为 pipeline `song_id` 和 package identity；`patch_id` 继续使用该 source identity 加 `lanes.json + chart.mid` 的内容 hash 后缀。Demucs `apply_model(shifts=1)` 的既有 shift augmentation 从音频字节作内容确定性 seed，调用串行化并恢复 Python random state。
+- 原因：随机 Job ID 进入 `song_id` 会让相同输入跨 Job 必然改变 patch identity；未设 seed 的 Demucs Python random shift offset 也会使同一音频的 pipeline 输出漂移。
+- 影响：同一固定音频在生产 FastAPI 路径的三个独立 Job 已验证 full `patch_id`、`lanes.json`、`chart.mid`、`patch.json` 和 stems hash 一致；这只证明当前确定性 pipeline 的 repeatability，不替代实体 MIDI、Ableton Live 或无指导用户验收。

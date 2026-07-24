@@ -50,12 +50,13 @@ Stage 是 Proof Gate，不是固定周数。每周发布可运行版本，但只
 - 键盘覆盖全部 16 个逻辑位置；Web MIDI 已实现 direct-16 与 8-pad Bank A/B 映射；
 - Creator Export Status、Checklist 和 ZIP 下载已实现，必需项缺失时不会下载伪成功 ZIP；
 - Source、Performance、Export 使用真实且不同的工作台状态；响应式和浏览器自动化门禁已通过。
+- 同一固定音频通过生产路径运行三个独立 Job，full `patch_id`、内容 hash 和 Creator ZIP
+  均一致；跨 Job repeatability 已实现并验证通过。
 
 但“代码已实现 / 自动化通过”不等于 Stage 1 已过 Release Gate。当前
 [Release Evidence](../release-evidence/2026-07-24-stage1-creator-core-and-ui.md)
 结论仍为 **NOT READY**：
 
-- 同一固定音频跨三个独立 Job 的 full `patch_id` 和内容 hash 后缀不一致，跨 Job repeatability 未通过；
 - 实体 16-pad / 8-pad MIDI Controller 验收尚未执行；
 - Creator Export ZIP 尚未在 Ableton Live 中完成导入和继续编排验收；
 - 尚未由非开发者在无口头指导下完成 Upload、MIDI 演奏和 Export。
@@ -102,7 +103,7 @@ Upload
 
 ## 6. 后续开发顺序
 
-1. 解决跨 Job repeatability，并完成实体 MIDI、Ableton 和无指导用户验收；重跑 Release Evidence，直到首条纵向切片通过 Stage 1 Release Gate。
+1. 完成实体 MIDI、Ableton 和无指导用户验收；重跑 Release Evidence，直到首条纵向切片通过 Stage 1 Release Gate。
 2. Release Gate 通过后进入 Stage 1 第二切片：Sampler Edit + Take Recording，并把 Take 纳入 Creator Export。
 3. Stage 1 后段：Prompt/Voice → Generation → 同一个 Patch Engine。
 4. Stage 2：AI Variation、Patch Versioning、Project Bin / Global Library。
