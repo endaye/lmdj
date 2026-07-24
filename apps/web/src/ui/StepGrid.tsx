@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AudioEngine } from "../engine/AudioEngine";
 import { padElementIds, scenePatterns, type PatchBundle } from "../patch/loader";
 
-/** pad 0-3 的语义槽 → 步进格 LED 的 lane 配色(与 PadGrid 四色对齐) */
+/** pad 0-3 的语义槽 → 步进格 LED 的 lane 配色（与 PadMatrix16 角色色对齐） */
 const PAD_LANE_CLASS = ["step-row-drums", "step-row-bass", "step-row-harmony", "step-row-lead"];
 
 export function StepGrid({

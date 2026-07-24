@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
@@ -32,6 +32,7 @@ function renderApp(patch: unknown) {
 describe("App", () => {
   it("starts on the landing screen with a drop zone and example button", () => {
     renderApp(golden);
+    expect(screen.getByRole("heading", { name: /十六个可演奏的 pad/i })).toBeInTheDocument();
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
   });
@@ -40,14 +41,58 @@ describe("App", () => {
     renderApp(golden);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("workbench-shell")).toBeInTheDocument());
-    expect(screen.getByTestId("pad-grid")).toBeInTheDocument();
+    expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
+    expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
+    expect(screen.getByTestId("status-bar")).toHaveTextContent("Pads 01–16");
+    expect(screen.getByTestId("status-bar")).not.toHaveTextContent(/Bank/i);
+  });
+
+  it("keeps Pattern above all sixteen contract pads and syncs selection into the Inspector", async () => {
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    const pattern = screen.getByTestId("pattern-surface");
+    const matrix = screen.getByTestId("pad-matrix");
+    expect(pattern.compareDocumentPosition(matrix)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+
+    const pad = screen.getByRole("button", { name: /Pad 2: bass, idle/i });
+    await userEvent.click(pad);
+    expect(screen.getByTestId("context-inspector-content")).toHaveTextContent("Pad 02 · bass");
+    expect(screen.getByTestId("context-inspector-content")).toHaveTextContent("trigger_element");
+    await waitFor(() => expect(pad).toHaveAccessibleName(/Pad 2: bass, selected/i));
+  });
+
+  it("names every Pad with its contract index, label, and non-color state", async () => {
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    const patch = golden as unknown as Patch;
+    for (const pad of patch.pads) {
+      expect(screen.getByTestId(`pad-${pad.index}`)).toHaveAccessibleName(
+        new RegExp(`Pad ${pad.index + 1}: ${pad.label}, (idle|empty|reserved)`),
+      );
+    }
+  });
+
+  it("temporarily preserves the existing eight-key keyboard bridge", async () => {
+    const engine = new AudioEngine(new FakeAudioContext());
+    const triggerPad = vi.spyOn(engine, "triggerPad");
+    render(<App engine={engine} decode={fakeDecode} fetchExample={exampleFiles(golden)} />);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    fireEvent.keyDown(window, { key: "a" });
+
+    expect(triggerPad).toHaveBeenCalledWith(0);
   });
 
   it("returns to the upload screen from the workstation via the eject button", async () => {
     renderApp(golden);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
-    await waitFor(() => expect(screen.getByTestId("pad-grid")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("back-to-upload"));
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
     expect(screen.getByTestId("api-panel")).toBeInTheDocument();
@@ -119,7 +164,7 @@ describe("App API path", () => {
   it("upload → uploading view → loaded workstation", async () => {
     renderAppWithApi(fakeApi());
     await submitViaApi();
-    await waitFor(() => expect(screen.getByTestId("pad-grid")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
   });
 
   it("failed job shows error in uploading view with a back button", async () => {

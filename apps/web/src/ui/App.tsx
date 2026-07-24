@@ -4,10 +4,9 @@ import type { AudioEngine } from "../engine/AudioEngine";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
 import { DropZone } from "./DropZone";
 import { ErrorPanel } from "./ErrorPanel";
-import { Inspector } from "./Inspector";
-import { PadGrid, PAD_KEYS } from "./PadGrid";
-import { StepGrid } from "./StepGrid";
-import { Transport } from "./Transport";
+import { ContextInspector } from "./ContextInspector";
+import { PAD_KEY_HINTS, PadMatrix16 } from "./PadMatrix16";
+import { PatternSurface } from "./PatternSurface";
 import { UploadPanel } from "./UploadPanel";
 import { UploadingView } from "./UploadingView";
 import { WorkbenchShell } from "./WorkbenchShell";
@@ -39,6 +38,24 @@ type AppState =
   | { phase: "uploading"; state: string; error: string | null }
   | { phase: "loaded"; bundle: PatchBundle<unknown> };
 
+// Task 5 replaces this temporary eight-key bridge with the final 16-key mapping.
+const LEGACY_PAD_TRIGGER_KEYS = ["A", "S", "D", "F", "Z", "X", "C", "V"];
+
+function usePlayheadStep(engine: AudioEngine, active: boolean): number | null {
+  const [step, setStep] = useState<number | null>(null);
+  useEffect(() => {
+    if (!active) {
+      setStep(null);
+      return;
+    }
+    const update = () => setStep(engine.playhead());
+    update();
+    const timer = setInterval(update, 50);
+    return () => clearInterval(timer);
+  }, [active, engine]);
+  return step;
+}
+
 export function App({
   engine,
   decode,
@@ -51,8 +68,9 @@ export function App({
   apiClient?: ApiClient;
 }) {
   const [state, setState] = useState<AppState>({ phase: "landing", issues: null });
-  const [selectedPadIndex] = useState<number | undefined>(0);
+  const [selectedPadIndex, setSelectedPadIndex] = useState<number>();
   const [mode, setMode] = useState<WorkbenchMode>("source");
+  const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
 
   const fail = useCallback((error: unknown) => {
     const issues = error instanceof PatchValidationError ? error.issues : [String(error)];
@@ -111,7 +129,7 @@ export function App({
     if (state.phase !== "loaded") return;
     const onKey = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
-      const index = PAD_KEYS.indexOf(e.key.toUpperCase());
+      const index = LEGACY_PAD_TRIGGER_KEYS.indexOf(e.key.toUpperCase());
       if (index >= 0) engine.triggerPad(index);
     };
     window.addEventListener("keydown", onKey);
@@ -145,7 +163,7 @@ export function App({
           <div className="hero">
             <div>
               <h1 className="hero-title">
-                把一首歌变成<em>八个可演奏的 pad</em>
+                把一首歌变成<em>十六个可演奏的 pad</em>
               </h1>
               <p className="hero-sub">
                 载入一个 patch,唤醒这台乐器。四个 pad 按乐器角色配色,敲键、静音、跟着步进谱现场演奏。
@@ -154,7 +172,7 @@ export function App({
             <div className="ghost-grid" aria-hidden="true">
               {GHOST_SLOTS.map((slot, i) => (
                 <div key={slot} className="ghost-pad">
-                  <span>{PAD_KEYS[i]}</span>
+                  <span>{PAD_KEY_HINTS[i]}</span>
                   <span>{slot}</span>
                 </div>
               ))}
@@ -196,7 +214,6 @@ export function App({
               <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
                 ⏏ 上传新歌
               </button>
-              <Transport engine={engine} bundle={bundle} />
             </div>
           </>
         }
@@ -209,19 +226,26 @@ export function App({
               </div>
               <span className="workbench-readiness">{model.readiness}</span>
             </div>
-            <section className="panel workbench-sequence-slot">
-              <h2 className="panel-title">Sequence</h2>
-              <StepGrid engine={engine} bundle={bundle} />
-            </section>
+            <PatternSurface
+              bundle={bundle}
+              engine={engine}
+              playheadStep={playheadStep}
+            />
             <section className="panel workbench-pad-slot">
-              <PadGrid engine={engine} bundle={bundle} />
+              <PadMatrix16
+                bundle={bundle}
+                engine={engine}
+                selectedPadIndex={selectedPadIndex}
+                onSelect={setSelectedPadIndex}
+                keyHints={PAD_KEY_HINTS}
+              />
             </section>
           </>
         }
-        contextInspector={<Inspector bundle={bundle} />}
+        contextInspector={<ContextInspector model={model} />}
         statusBar={
           <>
-            <strong>Bank A · 01–16</strong>
+            <strong>Pads 01–16</strong>
             <span>
               {model.readiness === "ready"
                 ? "Patch ready · no export blockers"

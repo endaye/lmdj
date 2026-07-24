@@ -4,7 +4,6 @@ import golden from "../patch/__fixtures__/patch.golden.json";
 import { AudioEngine } from "../engine/AudioEngine";
 import { scenePatterns, type Patch, type PatchBundle } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
-import { Inspector } from "./Inspector";
 import { StepGrid } from "./StepGrid";
 
 function makeBundle(mutate?: (b: PatchBundle<unknown>) => void): PatchBundle<unknown> {
@@ -52,22 +51,5 @@ describe("StepGrid", () => {
     renderGrid(bundle);
     const first = bundle.patch.patterns[0].notes[0].element_id;
     expect(screen.getByTestId(`step-row-${first}`)).toHaveClass("step-missing");
-  });
-});
-
-describe("Inspector", () => {
-  it("shows patch facts, score, and unmapped/warnings", () => {
-    const bundle = makeBundle((b) => {
-      b.warnings.push("missing sample file: samples/ghost.wav (el_ghost)");
-      (b.patch.metadata as Record<string, unknown>).unmapped_element_ids = ["el_orphan"];
-    });
-    render(<Inspector bundle={bundle} />);
-
-    expect(screen.getByTestId("inspector")).toHaveTextContent(bundle.patch.patch_id);
-    expect(screen.getByTestId("inspector")).toHaveTextContent("el_orphan");
-    expect(screen.getByTestId("inspector")).toHaveTextContent("ghost.wav");
-    for (const el of bundle.patch.elements) {
-      expect(screen.getByTestId("inspector")).toHaveTextContent(el.name);
-    }
   });
 });

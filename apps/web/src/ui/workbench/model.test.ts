@@ -27,6 +27,9 @@ describe("buildWorkbenchViewModel", () => {
     expect(model.key).toBeNull();
     expect(model.readiness).toBe("ready");
     expect(model.blockers).toEqual([]);
+    expect(model.schema).toBe(source.patch.schema);
+    expect(model.quality).toEqual({ status: "passed", score: 0.6556 });
+    expect(model.elements).toHaveLength(source.patch.elements.length);
   });
 
   it("marks missing audio and decoder warnings for review", () => {
@@ -55,5 +58,21 @@ describe("buildWorkbenchViewModel", () => {
 
   it("leaves the selected pad undefined for an invalid pad index", () => {
     expect(buildWorkbenchViewModel(bundle(), 99).selectedPad).toBeUndefined();
+  });
+
+  it("projects unmapped ids, warnings, and source availability for inspection", () => {
+    const source = bundle();
+    const missingId = source.patch.pads[2].element_id!;
+    source.missingElementIds.add(missingId);
+    source.warnings.push("decoder failed");
+    (source.patch.metadata as Record<string, unknown>).unmapped_element_ids = ["el_orphan"];
+
+    const model = buildWorkbenchViewModel(source, 2);
+
+    expect(model.unmappedElementIds).toEqual(["el_orphan"]);
+    expect(model.warnings).toEqual(["decoder failed"]);
+    expect(model.selectedPadSources).toEqual([
+      expect.objectContaining({ elementId: missingId, status: "missing" }),
+    ]);
   });
 });
