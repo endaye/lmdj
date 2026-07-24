@@ -14,6 +14,11 @@ from lmdj_audio_worker import DemoPipelineRunner, PipelineRunner
 from lmdj_audio_worker.status import read_status
 
 from lmdj_api.executor import JobExecutor
+from lmdj_api.export_builder import (
+    ExportIncomplete,
+    build_creator_export,
+    inspect_creator_export,
+)
 from lmdj_api.preflight import PreflightError, limits_from_env, persist_and_probe
 
 _API_ROOT = Path(__file__).resolve().parent.parent
@@ -61,6 +66,26 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
         if not (job_dir / "status.json").exists():
             raise HTTPException(status_code=404, detail="unknown job_id")
         return job_dir
+
+    def _completed_package_dir(job_id: str) -> tuple[Path, Path]:
+        job_dir = _job_dir(job_id)
+        status = read_status(job_dir)
+        if status.state != "completed":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "job_not_completed", "state": status.state},
+            )
+        if not status.package_dir:
+            raise HTTPException(status_code=404, detail="export not available")
+        package_dir = (job_dir / status.package_dir).resolve()
+        if (
+            package_dir == job_dir
+            or not package_dir.is_relative_to(job_dir)
+        ):
+            raise HTTPException(status_code=400, detail="invalid package_dir")
+        if not package_dir.is_dir():
+            raise HTTPException(status_code=404, detail="export package not found")
+        return job_dir, package_dir
 
     @app.get("/health")
     def health() -> dict:
@@ -133,6 +158,54 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
             raise HTTPException(status_code=404, detail="file not found")
         media = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")
         return FileResponse(target, media_type=media)
+
+    @app.get("/jobs/{job_id}/export/status")
+    def creator_export_status(job_id: str) -> dict:
+        _, package_dir = _completed_package_dir(job_id)
+        try:
+            return inspect_creator_export(package_dir).to_dict()
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_export_source"},
+            ) from error
+
+    @app.get("/jobs/{job_id}/export")
+    def creator_export(job_id: str):
+        job_dir, package_dir = _completed_package_dir(job_id)
+        export_dir = job_dir / "exports"
+        resolved_export_dir = export_dir.resolve()
+        if (
+            resolved_export_dir == job_dir
+            or not resolved_export_dir.is_relative_to(job_dir)
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_export_output"},
+            )
+        try:
+            export_path = build_creator_export(
+                package_dir,
+                export_dir,
+            )
+        except ExportIncomplete as error:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "export_incomplete",
+                    "missing": error.missing,
+                },
+            ) from error
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_export_source"},
+            ) from error
+        return FileResponse(
+            export_path,
+            media_type="application/zip",
+            filename=export_path.name,
+        )
 
     return app
 
