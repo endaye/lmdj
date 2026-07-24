@@ -682,7 +682,8 @@ function isPreflightRejection(error: unknown): boolean {
   return (
     code === "file_too_large" ||
     code === "unsupported_audio" ||
-    code === "duration_too_long"
+    code === "duration_too_long" ||
+    code === "audio_probe_timeout"
   );
 }
 

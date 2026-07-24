@@ -671,6 +671,11 @@ describe("App API path", () => {
       { code: "duration_too_long", max_duration_seconds: 600 },
       "600",
     ],
+    [
+      422,
+      { code: "audio_probe_timeout", timeout_seconds: 0.25 },
+      "音频检查超时：0.25 秒",
+    ],
   ])(
     "shows structured preflight detail for HTTP %i",
     async (status, detail, expected) => {
@@ -688,6 +693,9 @@ describe("App API path", () => {
       );
       expect(screen.getByTestId("error-panel")).toHaveTextContent(
         "上传未通过检查",
+      );
+      expect(screen.getByTestId("error-panel")).not.toHaveTextContent(
+        /upload failed|处理未完成/i,
       );
       expect(screen.getByTestId("failed-state")).toHaveTextContent("song.wav");
       expect(screen.getByTestId("failed-state")).toHaveTextContent("preflight");

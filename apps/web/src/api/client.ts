@@ -101,6 +101,12 @@ function uploadErrorMessage(status: number, detail: unknown): string {
   ) {
     return `音频时长超过最大限制：${value.max_duration_seconds} 秒`;
   }
+  if (
+    value.code === "audio_probe_timeout" &&
+    typeof value.timeout_seconds === "number"
+  ) {
+    return `音频检查超时：${value.timeout_seconds} 秒`;
+  }
   return `upload failed (HTTP ${status})`;
 }
 

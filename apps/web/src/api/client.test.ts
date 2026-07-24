@@ -73,6 +73,11 @@ describe("uploadSong", () => {
       { code: "duration_too_long", max_duration_seconds: 600 },
       "600",
     ],
+    [
+      422,
+      { code: "audio_probe_timeout", timeout_seconds: 0.25 },
+      "音频检查超时：0.25 秒",
+    ],
   ])("preserves structured HTTP %i upload detail", async (status, detail, visibleValue) => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       jsonResponse({ detail }, false, status),
