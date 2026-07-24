@@ -4,8 +4,8 @@
 
 分支：`codex/align-creator-ui-spec`
 
-实现验证基线：`c6924e0c`（覆盖 Task 1–9 基线 `0caa88a7` 之后的
-repeatability fixes）。
+实现验证基线：`e740044b`（Worker-owned deterministic seeding；冻结 demo
+在最终树中未修改）。
 
 ## 结论
 
@@ -27,7 +27,7 @@ repeatability fixes）。
   `250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709`。
 - Live API：显式以 `create_app(runner=DemoPipelineRunner(...))` 注入
   `DemoPipelineRunner`，并使用生产 `POST /uploads`、Job、Patch、Export 路由；
-  Job 数据根为临时目录 `/tmp/lmdj-stage1-repeatability-live.W47sPw`。
+  Job 数据根为临时目录 `/tmp/lmdj-stage1-final-live.ElCi0P`。
 - 该 runner 使用当前分支的 demo source，并指向 main checkout 的完整 demo venv
   （worktree 的测试 venv 缺少 torch）。
 - Key 分析：通过 `scripts/dev.sh setup-pfs` 创建的隔离
@@ -43,9 +43,9 @@ shell helper 的自动验证使用本地 HTTP fixture server，只验证
 | 门禁 | 结果 | 证据 |
 |---|---|---|
 | `scripts/tests/test_creator_smoke.sh` | PASS | 成功输出六个要求字段；15-Pad contract、HTTP 500、不同 ZIP hash 均非零退出 |
-| `scripts/dev.sh test` | PASS | core-models `7 passed`；Patchify `18 passed` |
-| Reference demo 全套 | PASS | `8 passed`；1 条既有 librosa fixture warning |
-| Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`328 passed` |
+| `scripts/dev.sh test` | PASS | core-models `7 passed`；Patchify 18 个测试通过 |
+| Reference demo 全套 | PASS | `6 passed`；1 条既有 librosa fixture warning |
+| Worker 全套 | PASS | 安装声明的 `[metrics]` extra 并使用 `metrics-constraints.txt` 后，`330 passed` |
 | API 全套 | PASS | `64 passed`；1 条既有 Starlette/httpx deprecation warning |
 | `npm run check-contract` | PASS | `4 passed` |
 | `npm test` | PASS | `21` files、`146 passed`；覆盖 Loaded 默认 Performance、Source / Performance 真实内容切换与 preflight probe timeout 呈现 |
@@ -67,32 +67,32 @@ PYTHONPATH=workers/audio:packages/core-models:packages/patchify \
 
 ```bash
 PYTHONPATH=references/demos/lmdj-song-pipeline:apps/api:workers/audio:packages/core-models:packages/patchify \
-LMDJ_JOBS_ROOT=/tmp/lmdj-stage1-repeatability-live.W47sPw \
+LMDJ_JOBS_ROOT=/tmp/lmdj-stage1-final-live.ElCi0P \
   /Users/endaye/Projects/lmdj/apps/api/.venv/bin/python \
   -c '
 from pathlib import Path
 import uvicorn
 from lmdj_api.app import create_app
-from lmdj_audio_worker.runner import DemoPipelineRunner
+from lmdj_audio_worker import DemoPipelineRunner
 
 app = create_app(runner=DemoPipelineRunner(Path("/Users/endaye/Projects/lmdj/references/demos/lmdj-song-pipeline")))
-uvicorn.run(app, host="127.0.0.1", port=8876)
+uvicorn.run(app, host="127.0.0.1", port=8877)
 '
 ```
 
 每次执行：
 
 ```bash
-LMDJ_API_BASE_URL=http://127.0.0.1:8876 \
+LMDJ_API_BASE_URL=http://127.0.0.1:8877 \
   scripts/dev.sh creator-smoke \
   references/demos/lmdj-song-pipeline/output/testsong/input.wav
 ```
 
 | Run | job_id | patch_id | Pads | Export SHA-256 A | Export SHA-256 B | 单 Job 确定性 |
 |---|---|---|---:|---|---|---|
-| 1 | `e0cd0f5db09f` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
-| 2 | `698613fe3811` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
-| 3 | `205170b612d3` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
+| 1 | `249b0bad18e0` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
+| 2 | `0d93bf1e8ab2` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
+| 3 | `f89bbe95a151` | `source-250670be35509dfd08e96cddf397aaa1ec65ae3af4cdf21cc94dcb720dce9709-e8d0db07` | 16 | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | `a50626ef4672ae82d8267399887f6c58bb7b17a5e04a71ada5b74e261e8c68f5` | PASS |
 
 跨运行 Repeatability：**PASS**。三个 Job 的 full `patch_id`、16 Pad、两次
 Creator ZIP 下载 hash 和单 Job 确定性均一致；跨 Job 的磁盘输出 hash 也完全一致：
@@ -103,13 +103,27 @@ Creator ZIP 下载 hash 和单 Job 确定性均一致；跨 Job 的磁盘输出 
 - stems：bass `0f43e141bffe688afbeb41f2c9cd5a3366e313915f88dc05595aa555211f3e36`；
   drums `7072814aa2a5e437d9543df3d67f671c93dc12e18f74d2e5bbcda322d2e1b647`；
   melody `74becbc38a19237fe4f46c5f04342528be127a328bfb1965ff4766e0c121bc5e`。
+- samples：bass `7b7d626a1654697648075f0f8c79cbc521589f41cad9682a0a556029212880a9`；
+  hat `87c179f9da657695a27435634ca845bd109004f8f4378ef91a34f43ff8fcf72b`；
+  kick `8a312debfb4bd836b4894eaceba223844c45f9021899a16af5bdb933d5a513fa`；
+  melody_a `8d27aa3594711a334dbda2562c318fb344fd43bc074f97e07572703a3b2c2d26`；
+  snare `4475cf9e234940b028dcda3c122b493aed37fdec27ae7186d46f2b4d77871146`。
 
 根因和修复：随机 API Job ID 曾被复用为 pipeline `song_id`，而 Demucs
-`apply_model(shifts=1)` 使用未设 seed 的 Python random offset。Worker 现在从
-上传音频字节流式计算 SHA-256，并传入独立于 Job identity 的
-`source-<full-hex-digest>` 作为 `song_id`；Worker-owned bootstrap 在 demo venv
-child 导入 Demucs 前以相同音频字节 seed Python random。实现位置移至产品 Worker，
-不改变已记录的三次运行 hash 与 PASS 结论；冻结 demo 保持未修改。
+`apply_model(shifts=1)` 使用未设 seed 的 Python random offset。最终实现
+`e740044b` 由 Worker 从上传音频字节流式计算 SHA-256，并传入独立于 Job identity
+的 `source-<full-hex-digest>` 作为 `song_id`；Worker-owned bootstrap 在 demo venv
+child 导入 Demucs 前以相同音频字节 seed Python random。
+
+冻结 demo 边界（最终树事实）：以下命令无输出，证明最终实现未修改 frozen demo：
+
+```bash
+git diff --name-only \
+  0f7f375d353df7377492383f37f24ed880a4c909..e740044b -- \
+  references/demos/lmdj-song-pipeline
+```
+
+这仅证明最终树事实；不声称历史分支从未包含中间 demo 改动。
 
 ## Workspace UI 自动验收
 
