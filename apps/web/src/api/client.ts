@@ -3,7 +3,11 @@ import { loadPatch, type PatchBundle } from "../patch/loader";
 const DEFAULT_BASE = "http://localhost:8000";
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status?: number) {
+  constructor(
+    message: string,
+    public readonly status?: number,
+    public readonly detail?: unknown,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -29,9 +33,39 @@ export async function uploadSong(base: string, file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${normalizeBase(base)}/uploads`, { method: "POST", body: form });
-  if (!res.ok) throw new ApiError(`upload failed (HTTP ${res.status})`, res.status);
+  if (!res.ok) {
+    let detail: unknown;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      detail = body.detail;
+    } catch {
+      detail = undefined;
+    }
+    throw new ApiError(uploadErrorMessage(res.status, detail), res.status, detail);
+  }
   const body = (await res.json()) as { job_id: string };
   return body.job_id;
+}
+
+function uploadErrorMessage(status: number, detail: unknown): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (!detail || typeof detail !== "object") {
+    return `upload failed (HTTP ${status})`;
+  }
+  const value = detail as Record<string, unknown>;
+  if (value.code === "file_too_large" && typeof value.max_bytes === "number") {
+    return `文件超过最大限制：${value.max_bytes} bytes`;
+  }
+  if (value.code === "unsupported_audio" && Array.isArray(value.supported)) {
+    return `不支持的音频格式；支持 ${value.supported.join(", ")}`;
+  }
+  if (
+    value.code === "duration_too_long" &&
+    typeof value.max_duration_seconds === "number"
+  ) {
+    return `音频时长超过最大限制：${value.max_duration_seconds} 秒`;
+  }
+  return `upload failed (HTTP ${status})`;
 }
 
 export interface PollOpts {

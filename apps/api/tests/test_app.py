@@ -1,15 +1,17 @@
 import io
+import importlib
 import threading
 import time
 from pathlib import Path
 
 import jsonschema
+import pytest
 from fastapi.testclient import TestClient
 from lmdj_core_models.model import load_patch_schema
 
 from lmdj_api.app import create_app
 
-from tests.conftest import FakeRunner
+from tests.conftest import FakeRunner, short_wav_bytes
 
 
 def make_client(tmp_path: Path, runner=None) -> TestClient:
@@ -18,7 +20,10 @@ def make_client(tmp_path: Path, runner=None) -> TestClient:
 
 
 def _upload(client: TestClient) -> str:
-    resp = client.post("/uploads", files={"file": ("song.wav", io.BytesIO(b"RIFFfake"), "audio/wav")})
+    resp = client.post(
+        "/uploads",
+        files={"file": ("song.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+    )
     assert resp.status_code == 200, resp.text
     body = resp.json()
     assert body["state"] == "queued"
@@ -38,7 +43,7 @@ def test_health(tmp_path: Path):
     assert make_client(tmp_path).get("/health").json() == {"ok": True}
 
 
-def test_upload_then_poll_to_completed(tmp_path: Path):
+def test_upload_then_poll_to_completed(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
     job_id = _upload(client)
     final = _poll_completed(client, job_id)
@@ -49,7 +54,7 @@ def test_upload_then_poll_to_completed(tmp_path: Path):
     assert final["patch_id"].startswith("testsong-")
 
 
-def test_get_patch_returns_schema_valid_json(tmp_path: Path):
+def test_get_patch_returns_schema_valid_json(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
     job_id = _upload(client)
     _poll_completed(client, job_id)
@@ -61,7 +66,7 @@ def test_get_patch_returns_schema_valid_json(tmp_path: Path):
     assert data["schema"] == "lmdj.patch.v1"
 
 
-def test_get_sample_file_returns_bytes(tmp_path: Path):
+def test_get_sample_file_returns_bytes(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
     job_id = _upload(client)
     _poll_completed(client, job_id)
@@ -81,7 +86,7 @@ def test_unknown_job_is_404(tmp_path: Path):
     assert client.get("/jobs/ghost/files/samples/x.wav").status_code == 404
 
 
-def test_patch_before_completed_is_409(tmp_path: Path):
+def test_patch_before_completed_is_409(tmp_path: Path, ffprobe_wav):
     barrier = threading.Event()
     client = make_client(tmp_path, runner=FakeRunner(barrier=barrier))
     job_id = _upload(client)
@@ -96,7 +101,7 @@ def test_patch_before_completed_is_409(tmp_path: Path):
     barrier.set()
 
 
-def test_path_traversal_never_serves_out_of_package(tmp_path: Path):
+def test_path_traversal_never_serves_out_of_package(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
     job_id = _upload(client)
     _poll_completed(client, job_id)
@@ -115,7 +120,7 @@ def test_path_traversal_never_serves_out_of_package(tmp_path: Path):
         assert resp.status_code != 200
 
 
-def test_job_id_traversal_is_rejected(tmp_path: Path):
+def test_job_id_traversal_is_rejected(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
     job_id = _upload(client)
     _poll_completed(client, job_id)
@@ -129,3 +134,121 @@ def test_job_id_traversal_is_rejected(tmp_path: Path):
         resp = client.get(endpoint)
         assert resp.status_code in (400, 404), f"{endpoint} -> {resp.status_code}"
         assert resp.status_code != 200
+
+
+def test_oversized_upload_is_413_and_does_not_create_job(
+    monkeypatch,
+    tmp_path: Path,
+):
+    monkeypatch.setenv("LMDJ_UPLOAD_MAX_BYTES", "4")
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/uploads",
+        files={"file": ("large.wav", io.BytesIO(b"12345"), "audio/wav")},
+    )
+
+    assert response.status_code == 413
+    assert response.json()["detail"] == {
+        "code": "file_too_large",
+        "max_bytes": 4,
+    }
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_unsupported_audio_is_415_and_does_not_create_job(
+    monkeypatch,
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    ffprobe_wav(format_name="mp3")
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/uploads",
+        files={"file": ("spoofed.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == {
+        "code": "unsupported_audio",
+        "supported": ["wav", "mp3"],
+    }
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_too_long_audio_is_422_and_does_not_create_job(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    ffprobe_wav(duration_seconds=600.01)
+    client = make_client(tmp_path)
+
+    response = client.post(
+        "/uploads",
+        files={"file": ("long.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"] == {
+        "code": "duration_too_long",
+        "max_duration_seconds": 600,
+    }
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_unexpected_preflight_error_cleans_temp_and_does_not_create_job(
+    monkeypatch,
+    tmp_path: Path,
+):
+    app_module = importlib.import_module("lmdj_api.app")
+    upload_temp = tmp_path / "upload-temp"
+
+    def make_temp(**_kwargs):
+        upload_temp.mkdir()
+        return str(upload_temp)
+
+    def fail_preflight(*_args, **_kwargs):
+        raise OSError("disk stopped")
+
+    monkeypatch.setattr(app_module.tempfile, "mkdtemp", make_temp)
+    monkeypatch.setattr(app_module, "persist_and_probe", fail_preflight)
+    client = make_client(tmp_path)
+
+    with pytest.raises(OSError, match="disk stopped"):
+        client.post(
+            "/uploads",
+            files={"file": ("song.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+        )
+
+    assert not upload_temp.exists()
+    assert not (tmp_path / "jobs").exists()
+
+
+def test_synchronous_submit_error_cleans_temp_and_does_not_create_job(
+    monkeypatch,
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    app_module = importlib.import_module("lmdj_api.app")
+    upload_temp = tmp_path / "upload-temp"
+
+    def make_temp(**_kwargs):
+        upload_temp.mkdir()
+        return str(upload_temp)
+
+    def fail_submit(*_args, **_kwargs):
+        raise RuntimeError("executor unavailable")
+
+    monkeypatch.setattr(app_module.tempfile, "mkdtemp", make_temp)
+    monkeypatch.setattr(app_module.JobExecutor, "submit", fail_submit)
+    client = make_client(tmp_path)
+
+    with pytest.raises(RuntimeError, match="executor unavailable"):
+        client.post(
+            "/uploads",
+            files={"file": ("song.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+        )
+
+    assert not upload_temp.exists()
+    assert not (tmp_path / "jobs").exists()

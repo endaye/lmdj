@@ -14,6 +14,7 @@ from lmdj_audio_worker import DemoPipelineRunner, PipelineRunner
 from lmdj_audio_worker.status import read_status
 
 from lmdj_api.executor import JobExecutor
+from lmdj_api.preflight import PreflightError, limits_from_env, persist_and_probe
 
 _API_ROOT = Path(__file__).resolve().parent.parent
 _FALLBACK_JOBS_ROOT = _API_ROOT / "jobs"
@@ -39,6 +40,7 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
     jobs_root = jobs_root or default_jobs_root()
     runner = runner or DemoPipelineRunner(DEFAULT_DEMO_DIR)
     executor = JobExecutor(runner=runner, jobs_root=jobs_root)
+    upload_limits = limits_from_env()
 
     app = FastAPI(title="LMDJ API")
     origins = _cors_origins()
@@ -66,12 +68,29 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
 
     @app.post("/uploads")
     async def uploads(file: UploadFile = File(...)) -> dict:
+        temp_dir = Path(tempfile.mkdtemp(prefix="lmdj-upload-"))
+        suffix = Path(file.filename or "").suffix.lower()
+        destination = temp_dir / f"upload{suffix}"
+        try:
+            persist_and_probe(file, destination, upload_limits)
+        except PreflightError as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=error.status_code,
+                detail=error.detail,
+            ) from error
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
+        finally:
+            await file.close()
+
         job_id = uuid.uuid4().hex[:12]
-        suffix = Path(file.filename or "input.wav").suffix or ".wav"
-        tmp = Path(tempfile.mkdtemp()) / f"upload{suffix}"
-        with tmp.open("wb") as out:
-            shutil.copyfileobj(file.file, out)
-        executor.submit(tmp, job_id)
+        try:
+            executor.submit(destination, job_id)
+        except Exception:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise
         return {"job_id": job_id, "state": "queued"}
 
     @app.get("/jobs/{job_id}")

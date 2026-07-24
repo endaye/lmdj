@@ -1,40 +1,86 @@
-const STAGES = ["queued", "separating", "patchifying", "completed"];
+const STAGES = [
+  {
+    state: "queued",
+    label: "Input Validated",
+    description: "Upload accepted; source evidence retained.",
+  },
+  {
+    state: "separating",
+    label: "Stem Separation",
+    description: "Building canonical stems.",
+  },
+  {
+    state: "patchifying",
+    label: "Chop + Map",
+    description: "Mapping playable material to 16 Pads.",
+  },
+  {
+    state: "completed",
+    label: "Patch Verify",
+    description: "Verifying the shared patch contract.",
+  },
+] as const;
 
 export function UploadingView({
   state,
-  error,
-  onBack,
 }: {
   state: string;
-  error: string | null;
-  onBack: () => void;
 }) {
-  const currentIndex = STAGES.indexOf(state);
+  if (state === "preflight") {
+    return (
+      <div
+        className="processing-preflight"
+        data-testid="processing-preflight"
+        aria-live="polite"
+      >
+        <span className="stage-icon" aria-hidden="true">↻</span>
+        <span>
+          <strong>Validating Input</strong>
+          <small>Checking size, format, codec, and duration before creating a Job.</small>
+        </span>
+        <code>preflight</code>
+      </div>
+    );
+  }
+
+  const currentIndex = STAGES.findIndex((stage) => stage.state === state);
   return (
-    <div className="uploading" data-testid="uploading">
-      <div className="uploading-title">PROCESSING…</div>
-      <ol className="stages">
-        {STAGES.map((stage, i) => {
-          const cls = error
-            ? "stage--pending"
-            : i < currentIndex
-              ? "stage--done"
-              : i === currentIndex
-                ? "stage--current"
-                : "stage--pending";
+    <ol className="stages" aria-label="Processing stages">
+      {STAGES.map((stage, index) => {
+          const status =
+            index < currentIndex
+              ? "done"
+              : index === currentIndex
+                ? "current"
+                : "pending";
           return (
-            <li key={stage} className={`stage ${cls}`} data-testid={`stage-${stage}`}>
-              {stage}
+            <li
+              key={stage.state}
+              className={`stage stage--${status}`}
+              data-testid={`processing-stage-${stage.state}`}
+              aria-current={status === "current" ? "step" : undefined}
+            >
+              <span className="stage-icon" aria-hidden="true">
+                {status === "done" ? "✓" : index + 1}
+              </span>
+              <span>
+                <strong>{stage.label}</strong>
+                <small>{stage.description}</small>
+              </span>
+              <code>{stage.state}</code>
             </li>
           );
         })}
-      </ol>
-      {error && (
-        <div className="uploading-error" data-testid="uploading-error">
-          {error}
-        </div>
+      {currentIndex === -1 && (
+        <li className="stage stage--unknown" data-testid="processing-stage-unknown">
+          <span className="stage-icon" aria-hidden="true">?</span>
+          <span>
+            <strong>Unknown</strong>
+            <small>The worker reported an unmapped state.</small>
+          </span>
+          <code>{state}</code>
+        </li>
       )}
-      {error && <button onClick={onBack}>返回</button>}
-    </div>
+      </ol>
   );
 }

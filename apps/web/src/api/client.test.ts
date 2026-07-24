@@ -53,6 +53,38 @@ describe("uploadSong", () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({}, false, 500));
     await expect(uploadSong("http://x:8000", new File([], "s.wav"))).rejects.toBeInstanceOf(ApiError);
   });
+
+  it.each([
+    [
+      413,
+      { code: "file_too_large", max_bytes: 209715200 },
+      "209715200",
+    ],
+    [
+      415,
+      { code: "unsupported_audio", supported: ["wav", "mp3"] },
+      "wav, mp3",
+    ],
+    [
+      422,
+      { code: "duration_too_long", max_duration_seconds: 600 },
+      "600",
+    ],
+  ])("preserves structured HTTP %i upload detail", async (status, detail, visibleValue) => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse({ detail }, false, status),
+    );
+
+    const error = await uploadSong(
+      "http://x:8000",
+      new File([], "song.wav"),
+    ).catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.status).toBe(status);
+    expect(error.detail).toEqual(detail);
+    expect(error.message).toContain(visibleValue);
+  });
 });
 
 describe("pollJob", () => {

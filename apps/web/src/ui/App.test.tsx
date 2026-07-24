@@ -46,7 +46,8 @@ function renderApp(patch: unknown) {
 describe("App", () => {
   it("starts on the landing screen with a drop zone and example button", () => {
     renderApp(golden);
-    expect(screen.getByRole("heading", { name: /十六个可演奏的 pad/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /feed it a sound/i })).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-shell")).toBeInTheDocument();
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
   });
@@ -179,6 +180,9 @@ describe("App", () => {
     renderApp(broken);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("error-panel")).toBeInTheDocument());
+    expect(screen.getByTestId("error-panel")).toHaveTextContent(
+      "patch.json 未通过 lmdj.patch.v1 校验",
+    );
     expect(screen.getByTestId("error-panel").textContent).toContain("/pads/0/action");
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
   });
@@ -242,6 +246,39 @@ describe("App API path", () => {
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
   });
 
+  it("shows truthful input validation until upload returns a job id", async () => {
+    let resolveUpload: ((jobId: string) => void) | undefined;
+    const uploadSong = vi.fn<ApiClient["uploadSong"]>(
+      () =>
+        new Promise<string>((resolve) => {
+          resolveUpload = resolve;
+        }),
+    );
+    renderAppWithApi(fakeApi({
+      uploadSong,
+      pollJob: async () => await new Promise<JobStatus>(() => {}),
+    }));
+
+    await submitViaApi();
+
+    expect(screen.getByTestId("processing-preflight")).toHaveTextContent(
+      "Validating Input",
+    );
+    expect(screen.getByTestId("processing-preflight")).toHaveTextContent(
+      "preflight",
+    );
+    expect(screen.queryByText("Input Validated")).not.toBeInTheDocument();
+
+    resolveUpload?.("job123");
+
+    await waitFor(() =>
+      expect(screen.getByTestId("processing-stage-queued")).toHaveAttribute(
+        "aria-current",
+        "step",
+      ),
+    );
+  });
+
   it("failed job shows error in uploading view with a back button", async () => {
     const { ApiError } = await import("../api/client");
     renderAppWithApi(fakeApi({
@@ -251,17 +288,159 @@ describe("App API path", () => {
       },
     }));
     await submitViaApi();
-    await waitFor(() => expect(screen.getByTestId("uploading-error")).toHaveTextContent("demucs boom"));
-    await userEvent.click(screen.getByRole("button", { name: /返回/i }));
+    await waitFor(() => expect(screen.getByTestId("failed-state")).toHaveTextContent("demucs boom"));
+    expect(screen.getByTestId("failed-state")).toHaveTextContent("song.wav");
+    expect(screen.getByTestId("failed-state")).toHaveTextContent("separating");
+    await userEvent.click(screen.getByRole("button", { name: /Back/i }));
     expect(screen.getByTestId("api-panel")).toBeInTheDocument();
   });
 
-  it("upload request failure returns to landing with an error", async () => {
+  it("preserves the last nonterminal stage when poll reports failed then throws", async () => {
     const { ApiError } = await import("../api/client");
     renderAppWithApi(fakeApi({
-      uploadSong: async () => { throw new ApiError("network down"); },
+      pollJob: async (_base, _jobId, onState) => {
+        onState?.({
+          state: "separating",
+          error: null,
+          patch_id: null,
+          package_dir: null,
+          quality: null,
+        });
+        onState?.({
+          state: "patchifying",
+          error: null,
+          patch_id: null,
+          package_dir: null,
+          quality: null,
+        });
+        onState?.({
+          state: "failed",
+          error: "mapping failed",
+          patch_id: null,
+          package_dir: null,
+          quality: null,
+        });
+        throw new ApiError("mapping failed");
+      },
     }));
+
     await submitViaApi();
-    await waitFor(() => expect(screen.getByTestId("error-panel")).toHaveTextContent("network down"));
+
+    await waitFor(() => expect(screen.getByTestId("failed-state")).toBeInTheDocument());
+    expect(screen.getByTestId("failed-state")).toHaveTextContent("patchifying");
+    expect(screen.getByTestId("failed-state")).not.toHaveTextContent(
+      /Failed atfailed/i,
+    );
+  });
+
+  it.each([
+    [
+      413,
+      { code: "file_too_large", max_bytes: 209715200 },
+      "209715200",
+    ],
+    [
+      415,
+      { code: "unsupported_audio", supported: ["wav", "mp3"] },
+      "wav, mp3",
+    ],
+    [
+      422,
+      { code: "duration_too_long", max_duration_seconds: 600 },
+      "600",
+    ],
+  ])(
+    "shows structured preflight detail for HTTP %i",
+    async (status, detail, expected) => {
+      const { ApiError } = await import("../api/client");
+      renderAppWithApi(fakeApi({
+        uploadSong: async () => {
+          throw new ApiError(`rejected ${expected}`, status, detail);
+        },
+      }));
+
+      await submitViaApi();
+
+      await waitFor(() =>
+        expect(screen.getByTestId("error-panel")).toHaveTextContent(expected),
+      );
+      expect(screen.getByTestId("error-panel")).toHaveTextContent(
+        "上传未通过检查",
+      );
+      expect(screen.getByTestId("failed-state")).toHaveTextContent("song.wav");
+      expect(screen.getByTestId("failed-state")).toHaveTextContent("preflight");
+    },
+  );
+
+  it("keeps an unknown job state visible while processing", async () => {
+    renderAppWithApi(fakeApi({
+      pollJob: async (_base, _jobId, onState) => {
+        onState?.({
+          state: "spectralizing",
+          error: null,
+          patch_id: null,
+          package_dir: null,
+          quality: null,
+        });
+        return await new Promise<JobStatus>(() => {});
+      },
+    }));
+
+    await submitViaApi();
+
+    await waitFor(() => expect(screen.getByText("Unknown")).toBeInTheDocument());
+    expect(screen.getAllByText("spectralizing").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("workbench-shell")).toBeInTheDocument();
+  });
+
+  it("retries a failed upload through preflight and creates a new job", async () => {
+    const { ApiError } = await import("../api/client");
+    const uploadSong = vi
+      .fn<ApiClient["uploadSong"]>()
+      .mockRejectedValueOnce(
+        new ApiError(
+          "too large: 209715200",
+          413,
+          { code: "file_too_large", max_bytes: 209715200 },
+        ),
+      )
+      .mockResolvedValueOnce("job-new");
+    renderAppWithApi(fakeApi({ uploadSong }));
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("failed-state")).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole("button", { name: /Retry/i }));
+
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+    expect(uploadSong).toHaveBeenCalledTimes(2);
+    expect(uploadSong.mock.calls[1][1].name).toBe("song.wav");
+  });
+
+  it("keeps the paper and ink workbench shell for source, processing, and failed", async () => {
+    const { ApiError } = await import("../api/client");
+    let rejectProcessing: ((reason: unknown) => void) | undefined;
+    renderAppWithApi(fakeApi({
+      pollJob: async (_base, _jobId, onState) => {
+        onState?.({
+          state: "separating",
+          error: null,
+          patch_id: null,
+          package_dir: null,
+          quality: null,
+        });
+        return await new Promise<JobStatus>((_resolve, reject) => {
+          rejectProcessing = reject;
+        });
+      },
+    }));
+    expect(screen.getByTestId("workbench-shell")).toHaveClass("workbench-shell");
+    await submitViaApi();
+    await waitFor(() => expect(screen.getByTestId("processing-panel")).toBeInTheDocument());
+    expect(screen.getByTestId("app-bar")).toBeInTheDocument();
+
+    rejectProcessing?.(new ApiError("worker stopped"));
+
+    await waitFor(() => expect(screen.getByTestId("failed-state")).toBeInTheDocument());
+    expect(screen.getByTestId("app-bar")).toBeInTheDocument();
   });
 });

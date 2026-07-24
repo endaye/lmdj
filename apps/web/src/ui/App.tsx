@@ -1,16 +1,15 @@
-import { useCallback, useEffect, useState } from "react";
-import { defaultApiClient, type ApiClient } from "../api/client";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { ApiError, defaultApiClient, type ApiClient } from "../api/client";
 import type { AudioEngine } from "../engine/AudioEngine";
 import { loadMidiMapping, type MidiBank, type MidiMapping } from "../midi/mapping";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
-import { DropZone } from "./DropZone";
 import { ErrorPanel } from "./ErrorPanel";
 import { ContextInspector } from "./ContextInspector";
 import { MidiPanel } from "./MidiPanel";
 import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 import { PatternSurface } from "./PatternSurface";
-import { UploadPanel } from "./UploadPanel";
-import { UploadingView } from "./UploadingView";
+import { ProcessingPanel } from "./ProcessingPanel";
+import { SourcePanel } from "./SourcePanel";
 import { WorkbenchShell } from "./WorkbenchShell";
 import {
   buildWorkbenchViewModel,
@@ -36,8 +35,27 @@ export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
 }
 
 type AppState =
-  | { phase: "landing"; issues: string[] | null }
-  | { phase: "uploading"; state: string; error: string | null }
+  | {
+      phase: "source";
+      issues: string[] | null;
+      issueTitle: string | null;
+    }
+  | {
+      phase: "processing";
+      file: File;
+      base: string;
+      jobId?: string;
+      jobState: string;
+      lastNonterminalStage: string;
+    }
+  | {
+      phase: "failed";
+      file: File;
+      base: string;
+      failedAt: string;
+      issues: string[];
+      issueTitle: string;
+    }
   | { phase: "loaded"; bundle: PatchBundle<unknown> };
 
 function usePlayheadStep(engine: AudioEngine, active: boolean): number | null {
@@ -66,7 +84,11 @@ export function App({
   fetchExample?: () => Promise<Map<string, ArrayBuffer>>;
   apiClient?: ApiClient;
 }) {
-  const [state, setState] = useState<AppState>({ phase: "landing", issues: null });
+  const [state, setState] = useState<AppState>({
+    phase: "source",
+    issues: null,
+    issueTitle: null,
+  });
   const [selectedPadIndex, setSelectedPadIndex] = useState<number>();
   const [mode, setMode] = useState<WorkbenchMode>("source");
   const [midiBank, setMidiBank] = useState<MidiBank>("A");
@@ -75,9 +97,13 @@ export function App({
   );
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
 
-  const fail = useCallback((error: unknown) => {
+  const failPatch = useCallback((error: unknown) => {
     const issues = error instanceof PatchValidationError ? error.issues : [String(error)];
-    setState({ phase: "landing", issues });
+    setState({
+      phase: "source",
+      issues,
+      issueTitle: "patch.json 未通过 lmdj.patch.v1 校验",
+    });
   }, []);
 
   const enterLoaded = useCallback(
@@ -91,7 +117,7 @@ export function App({
   // 退出当前 patch，停掉播放，回到上传页换一首歌
   const backToUpload = useCallback(() => {
     if (engine.playing) engine.stop();
-    setState({ phase: "landing", issues: null });
+    setState({ phase: "source", issues: null, issueTitle: null });
   }, [engine]);
 
   const handleFiles = useCallback(
@@ -99,29 +125,68 @@ export function App({
       try {
         enterLoaded(await loadPatch(files, decode));
       } catch (error) {
-        fail(error);
+        failPatch(error);
       }
     },
-    [decode, enterLoaded, fail],
+    [decode, enterLoaded, failPatch],
   );
 
   const handleUpload = useCallback(
     async (base: string, file: File) => {
-      setState({ phase: "uploading", state: "queued", error: null });
+      setState({
+        phase: "processing",
+        file,
+        base,
+        jobState: "preflight",
+        lastNonterminalStage: "preflight",
+      });
       try {
         const jobId = await apiClient.uploadSong(base, file);
-        await apiClient.pollJob(base, jobId, (s) =>
-          setState({ phase: "uploading", state: s.state, error: null }),
+        setState({
+          phase: "processing",
+          file,
+          base,
+          jobId,
+          jobState: "queued",
+          lastNonterminalStage: "queued",
+        });
+        await apiClient.pollJob(base, jobId, (job) =>
+          setState((previous) => ({
+            phase: "processing",
+            file,
+            base,
+            jobId,
+            jobState: job.state,
+            lastNonterminalStage:
+              job.state === "failed" && previous.phase === "processing"
+                ? previous.lastNonterminalStage
+                : job.state,
+          })),
         );
         enterLoaded(await apiClient.fetchPatchBundle(base, jobId, decode));
       } catch (error) {
-        // uploadSong 失败时 pollJob 尚未回调 → state 仍为 "queued" → 回 landing；
-        // pollJob/fetch 阶段失败 → state 已被推进（≥separating）→ 停 uploading 显 error。
-        setState((prev) =>
-          prev.phase === "uploading" && prev.state !== "queued"
-            ? { phase: "uploading", state: prev.state, error: String(error) }
-            : { phase: "landing", issues: [String(error)] },
-        );
+        const preflight = isPreflightRejection(error);
+        setState((previous) => ({
+          phase: "failed",
+          file,
+          base,
+          failedAt:
+            preflight
+              ? "preflight"
+              : previous.phase === "processing"
+                ? previous.lastNonterminalStage
+                : "upload",
+          issues:
+            error instanceof PatchValidationError
+              ? error.issues
+              : [errorMessage(error)],
+          issueTitle:
+            preflight
+              ? "上传未通过检查"
+              : error instanceof PatchValidationError
+                ? "patch.json 未通过 lmdj.patch.v1 校验"
+                : "处理未完成",
+        }));
       }
     },
     [apiClient, decode, enterLoaded],
@@ -152,55 +217,131 @@ export function App({
     return () => window.removeEventListener("keydown", onKey);
   }, [state.phase, engine]);
 
-  if (state.phase === "uploading") {
+  if (state.phase === "source") {
     return (
       <div className="app">
-        <header className="topbar">
-          <Wordmark />
-          <span className="standby">working</span>
-        </header>
-        <UploadingView
-          state={state.state}
-          error={state.error}
-          onBack={() => setState({ phase: "landing", issues: null })}
+        <CreatorStateShell
+          label="Source"
+          appState="source"
+          canvas={
+            <>
+              <SourcePanel
+                onFiles={(files) => void handleFiles(files)}
+                onExample={() => void fetchExample().then(handleFiles, failPatch)}
+                onUpload={(base, file) => void handleUpload(base, file)}
+              />
+              {state.issues && (
+                <ErrorPanel
+                  title={
+                    state.issueTitle ??
+                    "patch.json 未通过 lmdj.patch.v1 校验"
+                  }
+                  issues={state.issues}
+                />
+              )}
+            </>
+          }
+          inspector={
+            <div className="state-inspector">
+              <strong>Source rules</strong>
+              <p>Preflight must pass before a Job exists.</p>
+              <p>Supported input: WAV or MP3.</p>
+            </div>
+          }
+          status={
+            <>
+              <strong>Source</strong>
+              <span>WAV / MP3</span>
+              <span>200 MiB · 600 秒</span>
+              <span>Local draft</span>
+            </>
+          }
         />
       </div>
     );
   }
 
-  if (state.phase === "landing") {
+  if (state.phase === "processing") {
     return (
       <div className="app">
-        <header className="topbar">
-          <Wordmark />
-          <span className="standby">standby</span>
-        </header>
-        <div className="landing">
-          <div className="hero">
-            <div>
-              <h1 className="hero-title">
-                把一首歌变成<em>十六个可演奏的 pad</em>
-              </h1>
-              <p className="hero-sub">
-                载入一个 patch,唤醒这台乐器。四个 pad 按乐器角色配色,敲键、静音、跟着步进谱现场演奏。
-              </p>
+        <CreatorStateShell
+          label="Processing"
+          appState={state.jobState}
+          canvas={
+            <ProcessingPanel
+              fileName={state.file.name}
+              state={state.jobState}
+            />
+          }
+          inspector={
+            <div className="state-inspector">
+              <strong>Source retained</strong>
+              <p>{state.file.name}</p>
+              <p>Job {state.jobId ?? "pending preflight"}</p>
+              <p>Worker state: {state.jobState}</p>
             </div>
-            <div className="ghost-grid" aria-hidden="true">
-              {GHOST_SLOTS.map((slot, i) => (
-                <div key={slot} className="ghost-pad">
-                  <span>{PAD_KEYS[i]}</span>
-                  <span>{slot}</span>
+          }
+          status={
+            <>
+              <strong>Processing</strong>
+              <span>{state.file.name}</span>
+              <span>{state.jobState}</span>
+              <span>{state.jobId ?? "validating input"}</span>
+            </>
+          }
+        />
+      </div>
+    );
+  }
+
+  if (state.phase === "failed") {
+    return (
+      <div className="app">
+        <CreatorStateShell
+          label="Failed"
+          appState="failed"
+          canvas={
+            <section className="failed-state" data-testid="failed-state">
+              <header className="state-heading">
+                <span>Failed · truthful outcome</span>
+                <h1>Source needs attention</h1>
+                <p>{state.file.name}</p>
+              </header>
+              <ErrorPanel title={state.issueTitle} issues={state.issues} />
+              <dl className="failed-context">
+                <div>
+                  <dt>File</dt>
+                  <dd>{state.file.name}</dd>
                 </div>
-              ))}
+                <div>
+                  <dt>Failed at</dt>
+                  <dd>{state.failedAt}</dd>
+                </div>
+              </dl>
+              <div className="failed-actions">
+                <button onClick={() => void handleUpload(state.base, state.file)}>
+                  Retry
+                </button>
+                <button onClick={backToUpload}>Back</button>
+              </div>
+            </section>
+          }
+          inspector={
+            <div className="state-inspector">
+              <strong>Source retained</strong>
+              <p>Retry starts a new upload and preflight.</p>
+              <p>No failed Job is reused.</p>
             </div>
-          </div>
-          <DropZone
-            onFiles={(f) => void handleFiles(f)}
-            onExample={() => void fetchExample().then(handleFiles, fail)}
-          />
-          <UploadPanel onUpload={(base, file) => void handleUpload(base, file)} />
-          {state.issues && <ErrorPanel issues={state.issues} />}
-        </div>
+          }
+          status={
+            <>
+              <strong>Failed</strong>
+              <span>{state.file.name}</span>
+              <span>{state.failedAt}</span>
+              <span>Source retained</span>
+            </>
+          }
+        />
       </div>
     );
   }
@@ -285,8 +426,53 @@ export function App({
   );
 }
 
-/** 固定 8-pad Focus View 的槽位名 —— 待机态虚影乐器复用 */
-const GHOST_SLOTS = ["Drums", "Bass", "Harmony", "Lead", "Fill", "Drop", "Mute", "FX"];
+function isPreflightRejection(error: unknown): boolean {
+  if (!(error instanceof ApiError) || !error.detail || typeof error.detail !== "object") {
+    return false;
+  }
+  const code = (error.detail as Record<string, unknown>).code;
+  return (
+    code === "file_too_large" ||
+    code === "unsupported_audio" ||
+    code === "duration_too_long"
+  );
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function CreatorStateShell({
+  label,
+  appState,
+  canvas,
+  inspector,
+  status,
+}: {
+  label: string;
+  appState: string;
+  canvas: ReactNode;
+  inspector: ReactNode;
+  status: ReactNode;
+}) {
+  return (
+    <WorkbenchShell
+      shellLabel={`LMDJ ${label}`}
+      mode="source"
+      onModeChange={() => {}}
+      availableModes={["source"]}
+      appBar={
+        <>
+          <Wordmark />
+          <span className="workbench-state-key">{appState}</span>
+        </>
+      }
+      instrumentCanvas={canvas}
+      contextInspector={inspector}
+      statusBar={status}
+    />
+  );
+}
 
 function Wordmark() {
   return (

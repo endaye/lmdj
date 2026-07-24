@@ -5,6 +5,7 @@ import type { WorkbenchMode, WorkbenchViewModel } from "./workbench/model";
 /** Structural shell only: audio, loading, and playback effects stay in App and its slots. */
 export function WorkbenchShell({
   model,
+  shellLabel,
   mode,
   onModeChange,
   availableModes,
@@ -13,7 +14,8 @@ export function WorkbenchShell({
   contextInspector,
   statusBar,
 }: {
-  model: WorkbenchViewModel;
+  model?: WorkbenchViewModel;
+  shellLabel?: string;
   mode: WorkbenchMode;
   onModeChange: (mode: WorkbenchMode) => void;
   availableModes: WorkbenchMode[];
@@ -23,7 +25,11 @@ export function WorkbenchShell({
   statusBar: ReactNode;
 }) {
   return (
-    <section className="workbench-shell" data-testid="workbench-shell" aria-label={`Patch ${model.patchId}`}>
+    <section
+      className="workbench-shell"
+      data-testid="workbench-shell"
+      aria-label={model ? `Patch ${model.patchId}` : shellLabel ?? "LMDJ Creator"}
+    >
       <header className="workbench-app-bar" data-testid="app-bar">
         {appBar}
       </header>
