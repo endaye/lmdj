@@ -1,18 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Compose v5 delegates builds to Buildx Bake whenever BuildKit is enabled.
-# The staging host must use Compose's classic path because its Bake subprocess
-# is killed before a build begins.
-export DOCKER_BUILDKIT=0
-
 ARCHIVE="${1:-}"
 DEPLOY_PATH="${2:-}"
-if [ -z "$ARCHIVE" ] || [ -z "$DEPLOY_PATH" ]; then
-  echo "usage: activate-release.sh RELEASE_TAR DEPLOY_PATH" >&2
+IMAGE_ARCHIVE="${3:-}"
+if [ -z "$ARCHIVE" ] || [ -z "$DEPLOY_PATH" ] || [ -z "$IMAGE_ARCHIVE" ]; then
+  echo "usage: activate-release.sh RELEASE_TAR DEPLOY_PATH IMAGE_TAR" >&2
   exit 2
 fi
 test -f "$ARCHIVE"
+test -f "$IMAGE_ARCHIVE"
 test -f "$DEPLOY_PATH/shared/.env"
 
 SHA="$(tar -xOf "$ARCHIVE" ./REVISION | tr -d '\r\n')"
@@ -63,6 +60,9 @@ if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
   echo "LMDJ_DOMAIN must be a hostname without scheme or path" >&2
   exit 1
 fi
+export LMDJ_IMAGE_TAG="$SHA"
+docker load -i "$IMAGE_ARCHIVE"
+docker tag "lmdj-app:$SHA" lmdj-app:latest
 
 smoke_down() {
   docker compose -p lmdj-smoke \
@@ -75,7 +75,7 @@ smoke_down
 docker compose -p lmdj-smoke \
   --env-file "$DEPLOY_PATH/shared/.env" \
   -f "$RELEASE/compose.yml" -f "$RELEASE/compose.smoke.yml" \
-  up -d --build app
+  up -d --no-build app
 curl --fail --silent --show-error --retry 12 --retry-delay 5 \
   --retry-connrefused --retry-all-errors \
   http://127.0.0.1:18000/health >/dev/null
@@ -88,7 +88,8 @@ replace_symlink "$DEPLOY_PATH/current.next" "$CURRENT"
 
 if ! (
   cd "$CURRENT" &&
-  docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" up -d --build --force-recreate &&
+  docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+    up -d --no-build --force-recreate &&
   wait_for_app_health &&
   curl --fail --silent --show-error --retry 12 --retry-delay 5 \
     --retry-connrefused --retry-all-errors \
@@ -109,7 +110,9 @@ if ! (
     replace_symlink "$DEPLOY_PATH/current.rollback" "$CURRENT"
     (
       cd "$CURRENT"
-      docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" up -d --build --force-recreate
+      LMDJ_IMAGE_TAG="$(basename "$PREVIOUS")" \
+        docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+        up -d --no-build --force-recreate
     )
   else
     (

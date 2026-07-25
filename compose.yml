@@ -1,5 +1,6 @@
 services:
   app:
+    image: lmdj-app:${LMDJ_IMAGE_TAG:-latest}
     build: .
     environment:
       LMDJ_JOBS_ROOT: ${LMDJ_JOBS_ROOT:-/data/jobs}

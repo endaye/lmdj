@@ -66,6 +66,15 @@ jobs:
           VITE_API_BASE: /api
         run: npm ci && npm run build
 
+      - name: Build server images
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          docker build --tag "lmdj-app:$TARGET_SHA" .
+          docker pull caddy:2
+          docker save "lmdj-app:$TARGET_SHA" caddy:2 \
+            | gzip -1 > "$RUNNER_TEMP/lmdj-images-$TARGET_SHA.tar.gz"
+
       - name: Package release
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
@@ -92,6 +101,8 @@ jobs:
           ssh "$DEPLOY_USER@$DEPLOY_HOST" "mkdir -p '$DEPLOY_PATH/incoming'"
           scp "$RUNNER_TEMP/lmdj-$TARGET_SHA.tar.gz" \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz"
+          scp "$RUNNER_TEMP/lmdj-images-$TARGET_SHA.tar.gz" \
+            "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/lmdj-images-$TARGET_SHA.tar.gz"
           scp "$RUNNER_TEMP/activate-release.sh" \
             "$DEPLOY_USER@$DEPLOY_HOST:$DEPLOY_PATH/incoming/activate-release.sh"
 
@@ -104,4 +115,5 @@ jobs:
         run: |
           ssh "$DEPLOY_USER@$DEPLOY_HOST" \
             "bash '$DEPLOY_PATH/incoming/activate-release.sh' \
-             '$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz' '$DEPLOY_PATH'"
+             '$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz' '$DEPLOY_PATH' \
+             '$DEPLOY_PATH/incoming/lmdj-images-$TARGET_SHA.tar.gz'"

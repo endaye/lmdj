@@ -11,6 +11,7 @@ mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
 printf 'docker_buildkit=%s\n' "${DOCKER_BUILDKIT:-unset}" >> "$DEPLOY_TEST_LOG"
+printf 'lmdj_image_tag=%s\n' "${LMDJ_IMAGE_TAG:-unset}" >> "$DEPLOY_TEST_LOG"
 printf 'docker %s\n' "$*" >> "$DEPLOY_TEST_LOG"
 if [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC:-0}" = "1" ] && [[ "$*" == *" exec -T app "* ]]; then
   exit 1
@@ -59,17 +60,30 @@ SHA1="1111111111111111111111111111111111111111"
 SHA2="2222222222222222222222222222222222222222"
 make_archive "$SHA1" "$TMP/one.tar.gz"
 make_archive "$SHA2" "$TMP/two.tar.gz"
+printf 'prebuilt image bundle\n' > "$TMP/images.tar.gz"
 
-"$ACTIVATE_SCRIPT" "$TMP/one.tar.gz" "$DEPLOY_PATH"
+"$ACTIVATE_SCRIPT" "$TMP/one.tar.gz" "$DEPLOY_PATH" "$TMP/images.tar.gz"
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA1"
 grep -q 'lmdj-smoke' "$DEPLOY_TEST_LOG"
 grep -q -- '-p lmdj ' "$DEPLOY_TEST_LOG"
-grep -q 'docker compose -p lmdj .* up -d --build --force-recreate' "$DEPLOY_TEST_LOG" || {
-  echo "activation must recreate services so release bind mounts follow current" >&2
+grep -q 'docker load -i .*images.tar.gz' "$DEPLOY_TEST_LOG" || {
+  echo "activation must load the prebuilt image bundle" >&2
   exit 1
 }
-if grep '^docker_buildkit=' "$DEPLOY_TEST_LOG" | grep -vq '^docker_buildkit=0$'; then
-  echo "activation must disable BuildKit so Compose v5 does not delegate to Bake" >&2
+grep -q "docker tag lmdj-app:$SHA1 lmdj-app:latest" "$DEPLOY_TEST_LOG" || {
+  echo "activation must preserve compatibility with releases before image tags" >&2
+  exit 1
+}
+grep -q 'docker compose -p lmdj .* up -d --no-build --force-recreate' "$DEPLOY_TEST_LOG" || {
+  echo "activation must recreate services without building on the server" >&2
+  exit 1
+}
+if grep '^docker ' "$DEPLOY_TEST_LOG" | grep -Eq -- ' compose .*--build| build '; then
+  echo "activation must not build images on the server" >&2
+  exit 1
+fi
+if grep '^lmdj_image_tag=' "$DEPLOY_TEST_LOG" | grep -vq "^lmdj_image_tag=$SHA1$"; then
+  echo "activation must select the image tagged for the release SHA" >&2
   exit 1
 fi
 if grep '^curl ' "$DEPLOY_TEST_LOG" | grep -vq -- '--retry-all-errors'; then
@@ -81,18 +95,19 @@ fi
 export DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE="$TMP/docker-exec-count"
 rm -f "$DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE"
 DEPLOY_TEST_DOCKER_FAIL_EXEC_COUNT=1 \
-  "$ACTIVATE_SCRIPT" "$TMP/two.tar.gz" "$DEPLOY_PATH"
+  "$ACTIVATE_SCRIPT" "$TMP/two.tar.gz" "$DEPLOY_PATH" "$TMP/images.tar.gz"
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA2"
 test "$(grep -c 'docker .* exec -T app ' "$DEPLOY_TEST_LOG")" -ge 2
 
 : > "$DEPLOY_TEST_LOG"
-if DEPLOY_TEST_DOCKER_FAIL_EXEC=1 "$ACTIVATE_SCRIPT" "$TMP/one.tar.gz" "$DEPLOY_PATH"; then
+if DEPLOY_TEST_DOCKER_FAIL_EXEC=1 \
+  "$ACTIVATE_SCRIPT" "$TMP/one.tar.gz" "$DEPLOY_PATH" "$TMP/images.tar.gz"; then
   echo "failed health check unexpectedly succeeded" >&2
   exit 1
 fi
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA2"
-test "$(grep -c 'docker compose -p lmdj .* up -d --build --force-recreate' "$DEPLOY_TEST_LOG")" -ge 2 || {
-  echo "rollback must recreate services so release bind mounts follow current" >&2
+test "$(grep -c 'docker compose -p lmdj .* up -d --no-build --force-recreate' "$DEPLOY_TEST_LOG")" -ge 2 || {
+  echo "rollback must recreate services without building on the server" >&2
   exit 1
 }
 
