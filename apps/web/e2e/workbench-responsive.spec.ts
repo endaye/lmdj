@@ -85,6 +85,16 @@ async function setShellWidth(shell: Locator, width: number): Promise<void> {
   expect(await shell.evaluate((element) => element.clientWidth)).toBe(width);
 }
 
+test("Source file chooser uses white button text", async ({ page }) => {
+  await page.goto("/");
+
+  const color = await page.getByTestId("api-file-input").evaluate((element) =>
+    getComputedStyle(element, "::file-selector-button").color
+  );
+
+  expect(color).toBe("rgb(255, 255, 255)");
+});
+
 for (const breakpoint of SHELL_BREAKPOINTS) {
   test(`${breakpoint.name} ${breakpoint.width}px uses the specified responsive shell`, async ({
     page,

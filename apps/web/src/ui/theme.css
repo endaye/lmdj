@@ -1586,6 +1586,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   background: var(--paper);
   color: var(--ink);
 }
+.source-panel .upload-panel input[type="file"]::file-selector-button {
+  color: #fff;
+}
 .source-panel button,
 .failed-state button {
   border: 2px solid var(--ink);
