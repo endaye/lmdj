@@ -33,6 +33,27 @@ def test_get_or_create_is_durable_and_idempotent(tmp_path: Path):
     assert read_status(jobs_root / "job-a") == first
 
 
+def test_idempotent_submission_preserves_selected_pipeline(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    catalog = catalog_with_ids(jobs_root, "job-a", "job-unused")
+
+    first, created = catalog.get_or_create(
+        "submission-123",
+        "song.wav",
+        pipeline="materials-v1",
+    )
+    duplicate, created_again = catalog.get_or_create(
+        "submission-123",
+        "song.wav",
+        pipeline="legacy",
+    )
+
+    assert created is True
+    assert created_again is False
+    assert duplicate == first
+    assert duplicate.pipeline == "materials-v1"
+
+
 def test_catalog_reloads_submission_mapping_from_status_files(tmp_path: Path):
     jobs_root = tmp_path / "jobs"
     created, _ = catalog_with_ids(jobs_root, "job-a").get_or_create(
@@ -57,6 +78,7 @@ def test_restart_marks_nonterminal_jobs_interrupted(tmp_path: Path, state: str):
             state=state,
             submission_id=f"submission-{state}",
             original_filename=f"{state}.wav",
+            pipeline="materials-v1",
             created_at="2026-07-26T00:00:00Z",
         ),
     )
@@ -69,6 +91,7 @@ def test_restart_marks_nonterminal_jobs_interrupted(tmp_path: Path, state: str):
     assert interrupted.error_code == "service_interrupted"
     assert "restarted" in (interrupted.error or "")
     assert interrupted.submission_id == original.submission_id
+    assert interrupted.pipeline == "materials-v1"
     assert interrupted.created_at == original.created_at
 
 

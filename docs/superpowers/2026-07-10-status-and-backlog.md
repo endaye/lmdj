@@ -26,7 +26,10 @@
 ```text
 浏览器提交（submission_id）→ apps/api(POST /uploads) → 单槽 FIFO JobExecutor
   → workers/audio(process_job)
-  → demo pipeline(子进程, demo 自有 venv) → patchify
+  → 构建 API 时显式选择 runner：
+      legacy → demo pipeline(子进程, demo 自有 venv)
+      materials-v1 → Timing + 四轨分离 + Material Extractor
+  → patchify
   → patch.json (lmdj.patch.v1) + samples 落 job 目录
   → apps/web 轮询 GET /jobs/{id}，刷新后按 Job/submission 恢复
   → GET /patch + /files/* → loadPatch
@@ -36,9 +39,13 @@
 
 三条 patch 加载路（拖目录 / 内置示例 / API）汇入同一 `loadPatch`。本地开发：`scripts/dev.sh`（Python 侧）、各包 `npm test` / `pytest`。
 
-## 当前分支已实现、待 PR
+## 当前集成分支已实现、待 PR
 
-- `codex/queue-visibility`：单槽 FIFO 队列、实时容量/队列位置、submission 幂等、浏览器本地任务恢复、API 重启后 `interrupted` 终态、响应式任务队列 UI。实现计划：`docs/superpowers/plans/2026-07-26-upload-job-visibility.md`；实测证据：`docs/release-evidence/2026-07-26-upload-job-visibility.md`。
+- `codex/queued-material-pipeline` 已串行集成两个独立实现提交：
+  - `eb212c4f`：单槽 FIFO 队列、实时容量/队列位置、submission 幂等、浏览器本地任务恢复、API 重启后 `interrupted` 终态、响应式任务队列 UI；
+  - `2fa029af`：`lmdj.materials.v1`、Material Extractor、固定槽 Patchify、`CreatorPipelineRunner`、Phrase 排他和 Creator Export provenance。
+- 交叉契约已锁定：Job 创建时持久化 pipeline，幂等重试和重启中断保持该身份；Material Job 在 `extracting` 时占用唯一执行槽，后续 Job 保持 `queued` 与 FIFO 位置；队列 pipeline 与 runner 不匹配时明确失败。
+- 实现计划：`docs/superpowers/plans/2026-07-26-upload-job-visibility.md`、`docs/superpowers/plans/2026-07-26-material-pipeline-v1.md`。独立验证证据：`docs/release-evidence/2026-07-26-upload-job-visibility.md`、`docs/superpowers/evidence/2026-07-26-material-pipeline-v1.md`。组合验证证据见 `docs/release-evidence/2026-07-26-queued-material-pipeline.md`。
 - 该项仍是“分支已实现”，不是“已合并 main”；完整生产 API 仍不包含鉴权、限流、Postgres、对象存储或跨进程 durable workflow。
 
 ## 贯穿的设计约束（改动时须遵守）
@@ -63,9 +70,10 @@ Upload
 
 详细边界见 `docs/superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md`。
 
-## Material Pipeline v1 实现分支（2026-07-26，尚未合并）
+## Material Pipeline v1 实现（2026-07-26，已进入集成分支、尚未合并）
 
-`codex/material-pipeline-v1` 已实现显式可选的新 Creator 素材链：
+独立实现已从 `codex/material-pipeline-v1` 串行集成到
+`codex/queued-material-pipeline`，提供显式可选的新 Creator 素材链：
 
 ```text
 original audio
@@ -101,15 +109,13 @@ original audio
 
 ## 下一步候选（按产品证明排序）
 
-1. **Material + Queue 串行集成** —— 合并已验证的 API 队列生产化与
-   Material Pipeline v1，锁定 FIFO/重启/幂等与 `extracting`/产物状态的交叉契约。
-2. **Release Evidence** —— 固定音频连续跑三次、盲听、实体 MIDI Pad
+1. **Release Evidence** —— 固定音频连续跑三次、盲听、实体 MIDI Pad
    映射、非开发者无指导完成流程、Ableton Live 导入 Smoke；通过前
    `LMDJ_PIPELINE` 默认仍为 `legacy`。
-3. **Stage 1 第二切片** —— Sampler Edit + Take Recording，并将 Take 纳入 Creator Export。
-4. **Separation / Timing 风险消除** —— 完成足以选择生产 baseline 的 Phase 1D benchmark、盲听和 Timing 评审；不阻塞首条 Creator 切片。
-5. **Generation / Agent Orchestration** —— Creator 基础闭环成立后，再接 Prompt/Voice → Generation → 同一个 Patch Engine。
-6. **apps/api 继续生产化** —— 当前单进程 FIFO 与重启中断语义合并后，再按真实产品流量引入鉴权/限流、对象存储、Postgres 与跨进程 durable workflow。
+2. **Stage 1 第二切片** —— Sampler Edit + Take Recording，并将 Take 纳入 Creator Export。
+3. **Separation / Timing 风险消除** —— 完成足以选择生产 baseline 的 Phase 1D benchmark、盲听和 Timing 评审；不阻塞首条 Creator 切片。
+4. **Generation / Agent Orchestration** —— Creator 基础闭环成立后，再接 Prompt/Voice → Generation → 同一个 Patch Engine。
+5. **apps/api 继续生产化** —— 当前单进程 FIFO 与重启中断语义合并后，再按真实产品流量引入鉴权/限流、对象存储、Postgres 与跨进程 durable workflow。
 
 Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小需求见
 [`2026-07-26-upload-job-visibility-requirement.md`](specs/2026-07-26-upload-job-visibility-requirement.md)。
@@ -119,7 +125,6 @@ Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小�
 > 说明：以下为各任务/终审判为 ACCEPT 的延后项，已排除会话中后续修复掉的（stale GainNodes、catch-up 判别、audio input-copy zombie job、apps/api job_id 路径穿越——均已修并复核）。
 
 ### apps/api（已知接受风险，见其 spec）
-- **上传体积无上限**：`POST /uploads` 无 max-bytes，网络可达时磁盘耗尽 DoS 面；已进入 Stage 1 首条切片，不再等到完整生产化阶段。
 - **上传临时文件不清理**：`tempfile.mkdtemp()` 产物不回收（进程级临时目录）。
 
 ### apps/web

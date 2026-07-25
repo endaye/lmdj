@@ -1,3 +1,4 @@
+import shutil
 import threading
 from pathlib import Path
 
@@ -6,8 +7,41 @@ from lmdj_audio_worker.status import JobStatus, read_status, write_status
 
 from tests.conftest import FakeRunner
 
+MATERIAL_GOLDEN = (
+    Path(__file__).resolve().parents[3]
+    / "packages"
+    / "patchify"
+    / "tests"
+    / "fixtures"
+    / "material-package"
+)
 
-def queued(jobs_root: Path, job_id: str) -> JobStatus:
+
+class QueuedMaterialRunner:
+    pipeline_id = "materials-v1"
+
+    def __init__(self, barrier: threading.Event, extracting: threading.Event) -> None:
+        self.barrier = barrier
+        self.extracting = extracting
+
+    def run_with_stages(self, audio, out_dir, song_id, on_stage):
+        on_stage("extracting")
+        self.extracting.set()
+        self.barrier.wait(timeout=5)
+        destination = out_dir / song_id
+        shutil.copytree(MATERIAL_GOLDEN, destination)
+        return destination
+
+    def run(self, audio, out_dir, song_id):
+        raise AssertionError("materials-v1 must use stage-aware execution")
+
+
+def queued(
+    jobs_root: Path,
+    job_id: str,
+    *,
+    pipeline: str | None = None,
+) -> JobStatus:
     return write_status(
         jobs_root / job_id,
         JobStatus(
@@ -15,6 +49,7 @@ def queued(jobs_root: Path, job_id: str) -> JobStatus:
             state="queued",
             submission_id=f"submission-{job_id}",
             original_filename=f"{job_id}.wav",
+            pipeline=pipeline,
             created_at="2026-07-26T00:00:00Z",
         ),
     )
@@ -80,6 +115,44 @@ def test_snapshot_reports_active_capacity_and_fifo_positions(
 
     barrier.set()
     executor.wait_idle()
+
+
+def test_material_jobs_remain_fifo_while_active_job_is_extracting(
+    tmp_path: Path,
+    golden_audio: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    barrier = threading.Event()
+    extracting = threading.Event()
+    executor = JobExecutor(
+        runner=QueuedMaterialRunner(barrier, extracting),
+        jobs_root=jobs_root,
+    )
+
+    executor.submit(
+        golden_audio,
+        queued(jobs_root, "material-a", pipeline="materials-v1"),
+    )
+    assert extracting.wait(timeout=5)
+    executor.submit(
+        golden_audio,
+        queued(jobs_root, "material-b", pipeline="materials-v1"),
+    )
+
+    snapshot = executor.snapshot()
+    active = read_status(jobs_root / "material-a")
+    waiting = read_status(jobs_root / "material-b")
+    assert snapshot.active_job_id == "material-a"
+    assert snapshot.positions == {"material-b": 1}
+    assert active.state == "extracting"
+    assert active.pipeline == "materials-v1"
+    assert waiting.state == "queued"
+    assert waiting.pipeline == "materials-v1"
+
+    barrier.set()
+    executor.wait_idle()
+    assert read_status(jobs_root / "material-a").state == "completed"
+    assert read_status(jobs_root / "material-b").state == "completed"
 
 
 def test_runner_failure_persists_failed_not_crash(tmp_path: Path, golden_audio: Path):

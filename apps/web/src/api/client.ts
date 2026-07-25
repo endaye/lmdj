@@ -29,6 +29,7 @@ export interface JobStatus {
   quality: string | null;
   submission_id?: string | null;
   original_filename?: string | null;
+  pipeline?: string | null;
   created_at?: string;
   updated_at?: string;
   queue_position?: number | null;

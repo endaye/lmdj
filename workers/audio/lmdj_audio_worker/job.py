@@ -62,6 +62,12 @@ def process_job(
         return written
 
     pipeline_id = str(getattr(runner, "pipeline_id", "legacy"))
+    if (
+        initial_status is not None
+        and initial_status.pipeline is not None
+        and initial_status.pipeline != pipeline_id
+    ):
+        raise ValueError("initial status pipeline does not match selected runner")
     queued_status = initial_status or JobStatus(
         job_id=job_id,
         state="queued",

@@ -126,6 +126,26 @@ def test_initial_status_must_be_queued_for_selected_job(
         )
 
 
+def test_initial_status_pipeline_must_match_selected_runner(
+    tmp_path: Path,
+    sample_audio: Path,
+):
+    initial = JobStatus(
+        job_id="jobtest",
+        state="queued",
+        pipeline="legacy",
+    )
+
+    with pytest.raises(ValueError, match="pipeline"):
+        process_job(
+            sample_audio,
+            jobs_root=tmp_path / "jobs",
+            runner=StageAwareFakeRunner(),
+            job_id="jobtest",
+            initial_status=initial,
+        )
+
+
 def test_same_audio_across_jobs_uses_stable_source_identity_for_full_patch_id(
     tmp_path: Path,
     sample_audio: Path,
