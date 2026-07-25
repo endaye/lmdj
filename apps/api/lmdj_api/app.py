@@ -44,9 +44,21 @@ def _cors_origins() -> list[str]:
     return [origin.strip() for origin in value.split(",") if origin.strip()]
 
 
+def runner_from_env() -> PipelineRunner:
+    pipeline = os.environ.get("LMDJ_PIPELINE", "legacy")
+    if pipeline == "legacy":
+        return DemoPipelineRunner(DEFAULT_DEMO_DIR)
+    if pipeline == "materials-v1":
+        # DSP dependencies remain optional for legacy API deployments.
+        from lmdj_audio_worker.creator_runner import CreatorPipelineRunner
+
+        return CreatorPipelineRunner()
+    raise ValueError("LMDJ_PIPELINE must be one of: legacy, materials-v1")
+
+
 def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = None) -> FastAPI:
     jobs_root = jobs_root or default_jobs_root()
-    runner = runner or DemoPipelineRunner(DEFAULT_DEMO_DIR)
+    runner = runner or runner_from_env()
     catalog = JobCatalog(jobs_root)
     catalog.interrupt_nonterminal()
     executor = JobExecutor(runner=runner, jobs_root=jobs_root)
@@ -153,6 +165,7 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
         status, created = catalog.get_or_create(
             submission_id,
             original_filename,
+            pipeline=str(getattr(runner, "pipeline_id", "legacy")),
         )
         if not created:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -222,6 +235,12 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
         # 路径穿越防护：resolve() 后目标必须严格落在 package_dir 内（且不是 package_dir 本身）
         if not target.is_relative_to(package_dir) or target == package_dir:
             raise HTTPException(status_code=400, detail="invalid path")
+        internal_contracts = {
+            (package_dir / "materials.json").resolve(),
+            (package_dir / "separation.json").resolve(),
+        }
+        if target in internal_contracts:
+            raise HTTPException(status_code=404, detail="file not found")
         if not target.is_file():
             raise HTTPException(status_code=404, detail="file not found")
         media = _CONTENT_TYPES.get(target.suffix, "application/octet-stream")

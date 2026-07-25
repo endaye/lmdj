@@ -12,6 +12,28 @@ from lmdj_audio_worker.status import JobStatus, read_status
 
 from tests.conftest import GOLDEN, FakeRunner
 
+MATERIAL_GOLDEN = (
+    Path(__file__).resolve().parents[3]
+    / "packages"
+    / "patchify"
+    / "tests"
+    / "fixtures"
+    / "material-package"
+)
+
+
+class StageAwareFakeRunner:
+    pipeline_id = "materials-v1"
+
+    def run_with_stages(self, audio, out_dir, song_id, on_stage):
+        on_stage("extracting")
+        destination = out_dir / song_id
+        shutil.copytree(MATERIAL_GOLDEN, destination)
+        return destination
+
+    def run(self, audio, out_dir, song_id):
+        raise AssertionError("stage-aware runner must use run_with_stages")
+
 
 class FakeKeyAnalyzer:
     def __init__(
@@ -259,3 +281,26 @@ def test_queued_status_written_before_input_copy(tmp_path: Path, sample_audio: P
             seen_state.append("input-present" if (job_dir / "input" / sample_audio.name).exists() else "input-absent")
     process_job(sample_audio, jobs_root=jobs_root, runner=FakeRunner(), job_id="jobtest", on_state=probe)
     assert seen_state == ["status.json", "input-absent"]
+
+
+def test_stage_aware_runner_emits_extracting_and_records_pipeline(
+    tmp_path: Path,
+    sample_audio: Path,
+):
+    states = []
+    final = process_job(
+        sample_audio,
+        jobs_root=tmp_path / "jobs",
+        runner=StageAwareFakeRunner(),
+        job_id="materialsjob",
+        on_state=lambda status: states.append(status.state),
+    )
+    assert states == [
+        "queued",
+        "separating",
+        "extracting",
+        "patchifying",
+        "completed",
+    ]
+    assert final.pipeline == "materials-v1"
+    assert final.patch_id is not None

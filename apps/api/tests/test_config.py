@@ -1,8 +1,11 @@
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
-from lmdj_api.app import create_app, default_jobs_root
+from lmdj_audio_worker import DemoPipelineRunner
+from lmdj_audio_worker.creator_runner import CreatorPipelineRunner
+from lmdj_api.app import create_app, default_jobs_root, runner_from_env
 from lmdj_api.preflight import UploadLimits, limits_from_env
 from tests.conftest import FakeRunner
 
@@ -69,3 +72,19 @@ def test_upload_limits_accept_environment_overrides(monkeypatch):
         max_duration_seconds=42.5,
         ffprobe_timeout_seconds=3.25,
     )
+
+
+def test_pipeline_defaults_to_legacy(monkeypatch):
+    monkeypatch.delenv("LMDJ_PIPELINE", raising=False)
+    assert isinstance(runner_from_env(), DemoPipelineRunner)
+
+
+def test_pipeline_can_select_materials_v1(monkeypatch):
+    monkeypatch.setenv("LMDJ_PIPELINE", "materials-v1")
+    assert isinstance(runner_from_env(), CreatorPipelineRunner)
+
+
+def test_unknown_pipeline_is_rejected(monkeypatch):
+    monkeypatch.setenv("LMDJ_PIPELINE", "auto-fallback")
+    with pytest.raises(ValueError, match="legacy, materials-v1"):
+        runner_from_env()

@@ -30,6 +30,7 @@ class JobStatus:
     quality: str | None = None
     submission_id: str | None = None
     original_filename: str | None = None
+    pipeline: str | None = None
     created_at: str = ""
     updated_at: str = ""
 

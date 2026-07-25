@@ -282,6 +282,19 @@ def test_get_sample_file_returns_bytes(tmp_path: Path, ffprobe_wav):
     assert len(resp.content) > 0
 
 
+def test_internal_material_contract_is_not_publicly_served(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    job_id, package = _write_completed_export_job(jobs_root)
+    (package / "materials.json").write_text('{"schema":"lmdj.materials.v1"}')
+    (package / "separation.json").write_text(
+        '{"schema_version":"lmdj.separation.v1"}'
+    )
+    client = TestClient(create_app(runner=FakeRunner(), jobs_root=jobs_root))
+
+    assert client.get(f"/jobs/{job_id}/files/materials.json").status_code == 404
+    assert client.get(f"/jobs/{job_id}/files/separation.json").status_code == 404
+
+
 def test_unknown_job_is_404(tmp_path: Path):
     client = make_client(tmp_path)
     assert client.get("/jobs/ghost").status_code == 404

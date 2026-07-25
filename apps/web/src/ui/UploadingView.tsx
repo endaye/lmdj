@@ -12,7 +12,7 @@ const STAGES = [
   {
     state: "extracting",
     label: "Material Extraction",
-    description: "Finding playable material and evidence.",
+    description: "Selecting quality-gated one-shots and aligned loops.",
   },
   {
     state: "patchifying",

@@ -36,7 +36,8 @@ def process_job(
     """同步执行一个 audio job：input 拷贝 → pipeline → patchify → 终态。
 
     所有状态转移先落盘（status.json 原子写）；任何异常落为 failed，不吞。
-    v1 发射 queued → separating → patchifying → completed | failed。
+    legacy 发射 queued → separating → patchifying → completed | failed；
+    stage-aware runner 可增加 extracting。
     """
     if not audio.exists():
         raise FileNotFoundError(f"input audio not found: {audio}")
@@ -60,9 +61,17 @@ def process_job(
             on_state(written)
         return written
 
+    pipeline_id = str(getattr(runner, "pipeline_id", "legacy"))
+    queued_status = initial_status or JobStatus(
+        job_id=job_id,
+        state="queued",
+        created_at=utc_now(),
+    )
     status = emit(
-        initial_status
-        or JobStatus(job_id=job_id, state="queued", created_at=utc_now()),
+        replace(
+            queued_status,
+            pipeline=queued_status.pipeline or pipeline_id,
+        )
     )
     try:
         source_id = _source_id(audio)
@@ -70,7 +79,22 @@ def process_job(
         input_copy.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(audio, input_copy)
         status = emit(replace(status, state="separating"))
-        package_dir = runner.run(input_copy, job_dir, source_id)
+        run_with_stages = getattr(runner, "run_with_stages", None)
+        if callable(run_with_stages):
+            def report_stage(stage: str) -> None:
+                nonlocal status
+                if stage != "extracting":
+                    raise ValueError(f"unsupported pipeline stage: {stage}")
+                status = emit(replace(status, state=stage))
+
+            package_dir = run_with_stages(
+                input_copy,
+                job_dir,
+                source_id,
+                report_stage,
+            )
+        else:
+            package_dir = runner.run(input_copy, job_dir, source_id)
         status = emit(replace(status, state="patchifying", package_dir=package_dir.name))
         patch = patchify_package(package_dir)
         analyzer = key_analyzer or PfsKeyAnalyzer()

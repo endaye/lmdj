@@ -63,10 +63,49 @@ Upload
 
 详细边界见 `docs/superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md`。
 
+## Material Pipeline v1 实现分支（2026-07-26，尚未合并）
+
+`codex/material-pipeline-v1` 已实现显式可选的新 Creator 素材链：
+
+```text
+original audio
+  ├─ canonical Timing
+  └─ canonical four-stem Separator
+        → quality-gated Material Extractor
+        → lmdj.materials.v1
+        → fixed-slot Patchify + deterministic chart.mid
+        → lmdj.patch.v1 / Web / Creator Export
+```
+
+- `lmdj.materials.v1` 只存在于 Worker → Patchify 内部边界；Web/API 仍只以
+  `patch.json` 与结构化 Export Source 为产品真相。
+- 固定 16 槽采用 Kick/Snare/Hat/Percussion/Bass/Melody/Vocal/Phrase 的 A/B
+  布局；B 必须引用同角色 A，空槽不紧密排列。
+- `CreatorPipelineRunner` 发射
+  `queued → separating → extracting → patchifying → completed|failed`。
+- `LMDJ_PIPELINE=legacy|materials-v1` 在 API 构建时显式选择；默认继续是
+  `legacy`，新链失败不会在同一个 Job 内静默回退。
+- Material 样本写为确定性的 PCM-24 WAV；这是为了避免 libsndfile FLOAT WAV
+  `PEAK` chunk 的墙钟时间戳破坏 sample SHA-256 重复性。
+- Web 从 Pad behavior 实现普通素材与 `full_mix_exclusive` Phrase 的双向排他，
+  不读取 `materials.json`；API 也明确拒绝公开内部 Material/Separation
+  manifest。
+
+实现计划：
+[`2026-07-26-material-pipeline-v1.md`](plans/2026-07-26-material-pipeline-v1.md)。
+机器验证记录：
+[`2026-07-26-material-pipeline-v1.md`](evidence/2026-07-26-material-pipeline-v1.md)。
+
+该分支只完成实现与自动化验证，不代表默认 Runner 晋升。固定曲库盲听、实体
+8-Pad/16-Pad Controller 和 Ableton Live Smoke 仍是发布门槛。
+
 ## 下一步候选（按产品证明排序）
 
-1. **Stage 1 Creator Core 首条切片** —— Upload 前置校验、16 个数据 Pad / 16 位 UI、Web MIDI + Bank A/B、Creator Export ZIP。
-2. **Release Evidence** —— 固定音频连续跑三次、实体 MIDI Pad 映射、非开发者无指导完成流程、Ableton Live 导入 Smoke。
+1. **Material + Queue 串行集成** —— 合并已验证的 API 队列生产化与
+   Material Pipeline v1，锁定 FIFO/重启/幂等与 `extracting`/产物状态的交叉契约。
+2. **Release Evidence** —— 固定音频连续跑三次、盲听、实体 MIDI Pad
+   映射、非开发者无指导完成流程、Ableton Live 导入 Smoke；通过前
+   `LMDJ_PIPELINE` 默认仍为 `legacy`。
 3. **Stage 1 第二切片** —— Sampler Edit + Take Recording，并将 Take 纳入 Creator Export。
 4. **Separation / Timing 风险消除** —— 完成足以选择生产 baseline 的 Phase 1D benchmark、盲听和 Timing 评审；不阻塞首条 Creator 切片。
 5. **Generation / Agent Orchestration** —— Creator 基础闭环成立后，再接 Prompt/Voice → Generation → 同一个 Patch Engine。

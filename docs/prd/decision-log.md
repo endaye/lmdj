@@ -141,3 +141,39 @@
 - 结论：API Job ID 仅标识一次运行；Worker 从上传音频字节计算 SHA-256，并以 `source-<full-hex-digest>` 作为 pipeline `song_id` 和 package identity；`patch_id` 继续使用该 source identity 加 `lanes.json + chart.mid` 的内容 hash 后缀。Worker-owned bootstrap 在 demo venv child 导入 Demucs 前，以音频字节的 SHA-256 seed Python `random`；seed 随子进程退出，不修改冻结 demo。
 - 原因：随机 Job ID 进入 `song_id` 会让相同输入跨 Job 必然改变 patch identity；未设 seed 的 Demucs Python random shift offset 也会使同一音频的 pipeline 输出漂移。
 - 影响：同一固定音频在生产 FastAPI 路径的三个独立 Job 已验证 full `patch_id`、`lanes.json`、`chart.mid`、`patch.json` 和 stems hash 一致；这只证明当前确定性 pipeline 的 repeatability，不替代实体 MIDI、Ableton Live 或无指导用户验收。
+
+## 2026-07-26
+
+### 已确认：Material Package 是内部契约，Patch 继续是产品真相
+
+- 结论：在规范四轨 Separator 与 Patchify 之间增加
+  `lmdj.materials.v1`；它由 `packages/core-models` 托管模型、Schema 与一致性
+  约束，只供 Audio Worker 写入、Patchify 读取。Web/API 不读取或公开
+  `materials.json`，继续只消费 `lmdj.patch.v1` 和结构化 Export Source。
+- 原因：16 Pad 真正可演奏需要在 Owned Product Boundary 内表达来源、
+  Timing、质量、A/B 差异和空槽决策；但把中间分析格式暴露给消费者会重新制造
+  多套产品真相。
+- 影响：Material loader 按固定 `slot_index` 直接映射，不从文件名或 MIDI
+  猜角色；旧 `lanes.json + chart.mid` loader 只服务显式 legacy 路径。
+
+### 已确认：16 个 Material 槽固定角色，质量优先于填满
+
+- 结论：槽位 `0..7` 为
+  Kick/Snare/Hat/Percussion/Bass/Melody/Vocal/Phrase A，`8..15` 为同角色
+  B。B 必须引用同角色 A；未过门槛的位置保留真实 Empty；Phrase 来自原始 Mix
+  并使用 `full_mix_exclusive`。
+- 原因：固定位置保持键盘/MIDI 肌肉记忆，显式 Empty 比用劣质素材填满或动态
+  前移更真实。Vocal 必须保持独立，不能回并到 Melody。
+- 影响：少于 6 个素材、没有 Vocal 或没有 B 不触发 review；零 accepted
+  Material 才是失败。Web 实现普通素材与 Phrase 的双向排他播放。
+
+### 已确认：Material pipeline 显式选择，默认晋升另设发布门槛
+
+- 结论：新 Job 通过 `LMDJ_PIPELINE=legacy|materials-v1` 选择 Runner；默认
+  继续为 `legacy`。选择在 API/Executor 建立时冻结，新链失败不得在同一个 Job
+  内静默调用 legacy。
+- 原因：可观测失败与可重复身份优先于表面成功；静默回退会让 Job 产物和质量
+  无法解释。
+- 影响：实现与自动化测试完成不等于生产默认晋升。固定曲库三次重复、盲听、
+  实体 8-Pad/16-Pad、Creator Export 与 Ableton Live Smoke 全部通过后，另行
+  提交默认值变更。

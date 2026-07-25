@@ -53,6 +53,8 @@ class JobCatalog:
         self,
         submission_id: str,
         original_filename: str,
+        *,
+        pipeline: str | None = None,
     ) -> tuple[JobStatus, bool]:
         submission_id = validate_submission_id(submission_id)
         with self._lock:
@@ -73,6 +75,7 @@ class JobCatalog:
                     state="queued",
                     submission_id=submission_id,
                     original_filename=_display_filename(original_filename),
+                    pipeline=pipeline,
                     created_at=utc_now(),
                 ),
             )

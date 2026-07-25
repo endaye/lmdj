@@ -9,8 +9,10 @@ export interface GainLike {
 }
 export interface SourceLike {
   buffer: unknown;
+  loop: boolean;
   connect(dst: unknown): void;
   start(when?: number): void;
+  stop(when?: number): void;
 }
 export interface AudioLike {
   currentTime: number;
@@ -23,6 +25,18 @@ export interface AudioLike {
 const TICK_MS = 25;
 const LOOKAHEAD_SEC = 0.12;
 const MAX_CATCHUP_SEC = 0.25;
+const PHRASE_EXCLUSIVE_GROUP = "full_mix_exclusive";
+
+interface PlaybackBehavior {
+  trigger: "one_shot" | "loop";
+  exclusiveGroup: string | null;
+}
+
+interface ActiveSource {
+  source: SourceLike;
+  elementId: string;
+  behavior: PlaybackBehavior;
+}
 
 export class AudioEngine {
   private readonly ctx: AudioLike;
@@ -35,6 +49,8 @@ export class AudioEngine {
   private startTime = 0;
   private scheduledUntil = 0;
   private listeners = new Set<() => void>();
+  private behaviorByElement = new Map<string, PlaybackBehavior>();
+  private activeSources = new Set<ActiveSource>();
 
   constructor(ctx: AudioLike) {
     this.ctx = ctx;
@@ -48,10 +64,27 @@ export class AudioEngine {
     this.patterns = scenePatterns(bundle.patch);
     this.stepDur = stepDuration(bundle.patch.bpm);
     this.gains = new Map();
+    this.behaviorByElement = new Map();
     for (const element of bundle.patch.elements) {
       const gain = this.ctx.createGain();
       gain.connect(this.ctx.destination);
       this.gains.set(element.element_id, gain);
+    }
+    for (const pad of bundle.patch.pads) {
+      const raw = pad.behavior as {
+        trigger?: unknown;
+        exclusive_group?: unknown;
+      };
+      const behavior: PlaybackBehavior = {
+        trigger: raw.trigger === "loop" ? "loop" : "one_shot",
+        exclusiveGroup:
+          typeof raw.exclusive_group === "string"
+            ? raw.exclusive_group
+            : null,
+      };
+      for (const elementId of padElementIds(pad)) {
+        this.behaviorByElement.set(elementId, behavior);
+      }
     }
     this.mutedPads = new Set();
     this.emit();
@@ -72,10 +105,11 @@ export class AudioEngine {
   }
 
   stop(): void {
-    if (!this.timer) return;
-    clearInterval(this.timer);
-    this.timer = null; // 已发声的 one-shot 自然播完（v1 不做硬切）
-    this.emit();
+    const changed = this.timer !== null || this.activeSources.size > 0;
+    if (this.timer) clearInterval(this.timer);
+    this.timer = null;
+    this.stopSources(() => true);
+    if (changed) this.emit();
   }
 
   triggerPad(index: number): void {
@@ -138,10 +172,50 @@ export class AudioEngine {
     const buffer = this.bundle?.buffers.get(elementId);
     const gain = this.gains.get(elementId);
     if (!buffer || !gain) return; // 缺失素材：跳过发声，note 数据不动
+    const behavior = this.behaviorByElement.get(elementId) ?? {
+      trigger: "one_shot",
+      exclusiveGroup: null,
+    };
+    if (behavior.exclusiveGroup === PHRASE_EXCLUSIVE_GROUP) {
+      this.stopSources(
+        (active) => active.behavior.exclusiveGroup !== PHRASE_EXCLUSIVE_GROUP,
+      );
+    } else {
+      this.stopSources(
+        (active) => active.behavior.exclusiveGroup === PHRASE_EXCLUSIVE_GROUP,
+      );
+    }
+    if (behavior.trigger === "loop") {
+      this.stopSources((active) => active.elementId === elementId);
+    }
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
+    source.loop = behavior.trigger === "loop";
     source.connect(gain);
+    const active: ActiveSource = { source, elementId, behavior };
+    const endedSource = source as SourceLike & {
+      onended: ((event: Event) => unknown) | null;
+    };
+    endedSource.onended = () => this.activeSources.delete(active);
+    this.activeSources.add(active);
     source.start(when ?? this.ctx.currentTime);
+  }
+
+  private stopSources(predicate: (active: ActiveSource) => boolean): void {
+    for (const active of [...this.activeSources]) {
+      if (!predicate(active)) continue;
+      this.activeSources.delete(active);
+      (
+        active.source as SourceLike & {
+          onended: ((event: Event) => unknown) | null;
+        }
+      ).onended = null;
+      try {
+        active.source.stop();
+      } catch {
+        // Browser may throw when a source has already ended; bookkeeping wins.
+      }
+    }
   }
 
   private emit(): void {

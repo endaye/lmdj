@@ -254,6 +254,15 @@ def inspect_creator_export(package_dir: Path) -> CreatorExportStatus:
         _source_paths(source, "midi"),
         "midi",
     )
+    timing_values = source.get("timing")
+    if timing_values is None:
+        timing: tuple[_ExportFile, ...] = ()
+    else:
+        timing = _inventory_files(
+            package_root,
+            _source_paths(source, "timing"),
+            "timing",
+        )
 
     source_warnings = source.get("warnings")
     if not isinstance(source_warnings, list) or any(
@@ -311,6 +320,11 @@ def inspect_creator_export(package_dir: Path) -> CreatorExportStatus:
         missing.extend(file.source_path for file in missing_midi)
     midi_status = "ready" if real_midi and not missing_midi else "missing"
 
+    real_timing = tuple(file for file in timing if file.path.is_file())
+    missing_timing = [file for file in timing if not file.path.is_file()]
+    for file in missing_timing:
+        warnings.append(f"optional timing unavailable: {file.source_path}")
+
     music = source.get("music")
     if not isinstance(music, dict):
         music = {}
@@ -321,27 +335,33 @@ def inspect_creator_export(package_dir: Path) -> CreatorExportStatus:
     missing = _unique(missing)
     warnings = _unique(warnings)
     status = "partial" if missing else "complete"
+    items = {
+        "stems": {
+            "status": stem_status,
+            "paths": sorted(file.archive_path for file in real_stems),
+        },
+        "samples": {
+            "status": sample_status,
+            "paths": sorted(file.archive_path for file in real_samples),
+        },
+        "midi": {
+            "status": midi_status,
+            "paths": sorted(file.archive_path for file in real_midi),
+        },
+        "music": {
+            "status": music_status,
+            "missing": missing_music,
+        },
+    }
+    if timing_values is not None and timing:
+        items["timing"] = {
+            "status": "ready" if real_timing and not missing_timing else "review",
+            "paths": sorted(file.archive_path for file in real_timing),
+        }
     return CreatorExportStatus(
         status=status,
         downloadable=not missing,
-        items={
-            "stems": {
-                "status": stem_status,
-                "paths": sorted(file.archive_path for file in real_stems),
-            },
-            "samples": {
-                "status": sample_status,
-                "paths": sorted(file.archive_path for file in real_samples),
-            },
-            "midi": {
-                "status": midi_status,
-                "paths": sorted(file.archive_path for file in real_midi),
-            },
-            "music": {
-                "status": music_status,
-                "missing": missing_music,
-            },
-        },
+        items=items,
         missing=missing,
         warnings=warnings,
         music=music,
@@ -351,6 +371,7 @@ def inspect_creator_export(package_dir: Path) -> CreatorExportStatus:
             "stems": real_stems,
             "samples": real_samples,
             "midi": real_midi,
+            "timing": real_timing,
         },
     )
 
@@ -405,6 +426,10 @@ def build_creator_export(package_dir: Path, output_dir: Path) -> Path:
     stems = sorted(inspection._files["stems"], key=lambda file: file.archive_path)
     samples = sorted(inspection._files["samples"], key=lambda file: file.archive_path)
     midi = sorted(inspection._files["midi"], key=lambda file: file.archive_path)
+    timing = sorted(
+        inspection._files.get("timing", ()),
+        key=lambda file: file.archive_path,
+    )
     file_manifest = {
         "patch": _manifest_entry(patch_file),
         "stems": [_manifest_entry(file) for file in stems],
@@ -412,6 +437,10 @@ def build_creator_export(package_dir: Path, output_dir: Path) -> Path:
         "midi": [_manifest_entry(file) for file in midi],
         "takes": [],
     }
+    if timing:
+        file_manifest["timing"] = [
+            _manifest_entry(file) for file in timing
+        ]
     manifest = {
         "schema": EXPORT_SCHEMA,
         "status": "complete",
@@ -443,7 +472,7 @@ def build_creator_export(package_dir: Path, output_dir: Path) -> Path:
             archive.writestr(_zip_info("manifest.json"), manifest_payload)
             _write_asset(archive, patch_file)
             for file in sorted(
-                (*stems, *samples, *midi),
+                (*stems, *samples, *midi, *timing),
                 key=lambda candidate: candidate.archive_path,
             ):
                 _write_asset(archive, file)

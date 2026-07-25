@@ -17,6 +17,38 @@ function makeBundle(patch: Patch = structuredClone(golden) as unknown as Patch):
   };
 }
 
+function materialPlaybackPatch(): Patch {
+  const patch = structuredClone(golden) as unknown as Patch;
+  const ordinary = patch.elements[0].element_id;
+  const phrase = patch.elements[1].element_id;
+  patch.pads[0] = {
+    index: 0,
+    slot: "Kick A",
+    label: "Kick A",
+    action: "trigger_element",
+    element_id: ordinary,
+    behavior: {
+      trigger: "loop",
+      quantize: "1/16",
+      element_ids: [ordinary],
+    },
+  };
+  patch.pads[7] = {
+    index: 7,
+    slot: "Phrase A",
+    label: "Phrase A",
+    action: "trigger_element",
+    element_id: phrase,
+    behavior: {
+      trigger: "loop",
+      quantize: "1/16",
+      exclusive_group: "full_mix_exclusive",
+      element_ids: [phrase],
+    },
+  };
+  return patch;
+}
+
 describe("AudioEngine", () => {
   let ctx: FakeAudioContext;
   let engine: AudioEngine;
@@ -52,6 +84,45 @@ describe("AudioEngine", () => {
     }
     expect(ctx.sources).toHaveLength(0);
     expect(bundle.patch.pads.every((p) => !engine.isPadMuted(p.index))).toBe(true);
+  });
+
+  it("enforces Phrase and ordinary playback exclusivity in both directions", () => {
+    engine.load(makeBundle(materialPlaybackPatch()));
+
+    engine.triggerPad(0);
+    const ordinary = ctx.sources.at(-1)!;
+    expect(ordinary.loop).toBe(true);
+    expect(ordinary.stoppedAt).toHaveLength(0);
+
+    engine.triggerPad(7);
+    const phrase = ctx.sources.at(-1)!;
+    expect(ordinary.stoppedAt).toEqual([0]);
+    expect(phrase.loop).toBe(true);
+    expect(phrase.stoppedAt).toHaveLength(0);
+
+    engine.triggerPad(0);
+    expect(phrase.stoppedAt).toEqual([0]);
+  });
+
+  it("retriggering a loop replaces the earlier source", () => {
+    engine.load(makeBundle(materialPlaybackPatch()));
+    engine.triggerPad(0);
+    const first = ctx.sources.at(-1)!;
+    engine.triggerPad(0);
+    const second = ctx.sources.at(-1)!;
+
+    expect(first.stoppedAt).toEqual([0]);
+    expect(second.stoppedAt).toHaveLength(0);
+  });
+
+  it("stop terminates active material sources even without transport", () => {
+    engine.load(makeBundle(materialPlaybackPatch()));
+    engine.triggerPad(7);
+    const phrase = ctx.sources.at(-1)!;
+
+    engine.stop();
+
+    expect(phrase.stoppedAt).toEqual([0]);
   });
 
   it("toggleMutePad zeroes the whole group's gains and restores them", () => {
