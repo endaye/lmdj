@@ -23,9 +23,25 @@ if [ "$*" = "image ls --format {{.Repository}}:{{.Tag}}" ]; then
     'lmdj-caddy:0000000000000000000000000000000000000000'
   exit 0
 fi
-if [ "${DEPLOY_TEST_MISSING_RELEASE_IMAGES:-0}" = "1" ] \
-  && [[ "$*" =~ ^image\ inspect\ lmdj-(app|caddy):[0-9a-f]{40}$ ]]; then
-  exit 1
+if [[ "$*" == compose\ -p\ lmdj\ *" ps -q app" ]]; then
+  if [ "${DEPLOY_TEST_MISSING_RUNNING_CONTAINER:-0}" != "1" ]; then
+    printf 'running-app-container\n'
+  fi
+  exit 0
+fi
+if [[ "$*" == compose\ -p\ lmdj\ *" ps -q caddy" ]]; then
+  if [ "${DEPLOY_TEST_MISSING_RUNNING_CONTAINER:-0}" != "1" ]; then
+    printf 'running-caddy-container\n'
+  fi
+  exit 0
+fi
+if [ "$*" = "inspect --format {{.Image}} running-app-container" ]; then
+  printf 'sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n'
+  exit 0
+fi
+if [ "$*" = "inspect --format {{.Image}} running-caddy-container" ]; then
+  printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
+  exit 0
 fi
 if [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC:-0}" = "1" ] && [[ "$*" == *" exec -T app "* ]]; then
   exit 1
@@ -120,21 +136,23 @@ fi
 : > "$DEPLOY_TEST_LOG"
 export DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE="$TMP/docker-exec-count"
 rm -f "$DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE"
-DEPLOY_TEST_MISSING_RELEASE_IMAGES=1 DEPLOY_TEST_DOCKER_FAIL_EXEC_COUNT=1 \
+DEPLOY_TEST_DOCKER_FAIL_EXEC_COUNT=1 \
   "$ACTIVATE_SCRIPT" "$TMP/two.tar.gz" "$DEPLOY_PATH" "$TMP/images-two.tar.gz"
 test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA2"
 test ! -e "$TMP/two.tar.gz"
 test ! -e "$TMP/images-two.tar.gz"
 test "$(grep -c 'docker .* exec -T app ' "$DEPLOY_TEST_LOG")" -ge 2
-grep -q "docker tag lmdj-app:latest lmdj-app:$SHA1" "$DEPLOY_TEST_LOG"
-grep -q "docker tag caddy:2 lmdj-caddy:$SHA1" "$DEPLOY_TEST_LOG"
+grep -q "docker tag sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa lmdj-app:$SHA1" \
+  "$DEPLOY_TEST_LOG"
+grep -q "docker tag sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb lmdj-caddy:$SHA1" \
+  "$DEPLOY_TEST_LOG"
 grep -q 'docker image rm lmdj-app:0000000000000000000000000000000000000000' \
   "$DEPLOY_TEST_LOG"
 grep -q 'docker image rm lmdj-caddy:0000000000000000000000000000000000000000' \
   "$DEPLOY_TEST_LOG"
 
 : > "$DEPLOY_TEST_LOG"
-if DEPLOY_TEST_MISSING_RELEASE_IMAGES=1 DEPLOY_TEST_DOCKER_FAIL_EXEC=1 \
+if DEPLOY_TEST_DOCKER_FAIL_EXEC=1 \
   "$ACTIVATE_SCRIPT" "$TMP/one-fail.tar.gz" "$DEPLOY_PATH" "$TMP/images-fail.tar.gz"; then
   echo "failed health check unexpectedly succeeded" >&2
   exit 1
@@ -150,5 +168,15 @@ test "$(grep -c 'docker compose -p lmdj .* up -d --no-build --force-recreate' "$
   echo "rollback must recreate services without building on the server" >&2
   exit 1
 }
+
+make_archive "$SHA1" "$TMP/missing-running.tar.gz"
+printf 'prebuilt image bundle\n' > "$TMP/images-missing-running.tar.gz"
+if DEPLOY_TEST_MISSING_RUNNING_CONTAINER=1 \
+  "$ACTIVATE_SCRIPT" "$TMP/missing-running.tar.gz" "$DEPLOY_PATH" \
+  "$TMP/images-missing-running.tar.gz"; then
+  echo "activation without previous running images unexpectedly succeeded" >&2
+  exit 1
+fi
+test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA2"
 
 echo "activate-release tests passed"

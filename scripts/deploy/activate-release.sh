@@ -68,15 +68,30 @@ EOF
 }
 
 preserve_previous_images() {
+  local service repository container image
   if [ -z "$PREVIOUS_SHA" ]; then
     return
   fi
-  if ! docker image inspect "lmdj-app:$PREVIOUS_SHA" >/dev/null 2>&1; then
-    docker tag lmdj-app:latest "lmdj-app:$PREVIOUS_SHA"
-  fi
-  if ! docker image inspect "lmdj-caddy:$PREVIOUS_SHA" >/dev/null 2>&1; then
-    docker tag caddy:2 "lmdj-caddy:$PREVIOUS_SHA"
-  fi
+  for service in app caddy; do
+    case "$service" in
+      app) repository="lmdj-app" ;;
+      caddy) repository="lmdj-caddy" ;;
+    esac
+    container="$(
+      docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+        -f "$PREVIOUS/compose.yml" ps -q "$service"
+    )"
+    if [ -z "$container" ]; then
+      echo "cannot preserve previous $service image: running container not found" >&2
+      return 1
+    fi
+    image="$(docker inspect --format '{{.Image}}' "$container")"
+    if [[ ! "$image" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+      echo "cannot preserve previous $service image: invalid image ID" >&2
+      return 1
+    fi
+    docker tag "$image" "$repository:$PREVIOUS_SHA"
+  done
 }
 
 cleanup_release_images() {
