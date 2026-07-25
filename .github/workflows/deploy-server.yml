@@ -20,6 +20,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     environment: staging
+    permissions:
+      contents: write
+      actions: read
     steps:
       - uses: actions/checkout@v6
         with:
@@ -51,7 +54,11 @@ jobs:
           }
           echo "sha=$target" >> "$GITHUB_OUTPUT"
           git show origin/main:scripts/deploy/activate-release.sh > "$RUNNER_TEMP/activate-release.sh"
-          chmod +x "$RUNNER_TEMP/activate-release.sh"
+          git show origin/main:scripts/release/release_version.py > "$RUNNER_TEMP/release_version.py"
+          git show origin/main:scripts/release/publish-staging-release.sh > "$RUNNER_TEMP/publish-staging-release.sh"
+          chmod +x "$RUNNER_TEMP/activate-release.sh" \
+            "$RUNNER_TEMP/release_version.py" \
+            "$RUNNER_TEMP/publish-staging-release.sh"
           git checkout --detach "$target"
 
       - uses: actions/setup-node@v6
@@ -117,3 +124,51 @@ jobs:
             "bash '$DEPLOY_PATH/incoming/activate-release.sh' \
              '$DEPLOY_PATH/incoming/$TARGET_SHA.tar.gz' '$DEPLOY_PATH' \
              '$DEPLOY_PATH/incoming/lmdj-images-$TARGET_SHA.tar.gz'"
+
+      - name: Verify staging revision
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ secrets.DEPLOY_PATH }}
+        run: |
+          remote_revision="$(ssh "$DEPLOY_USER@$DEPLOY_HOST" \
+            "cat '$DEPLOY_PATH/DEPLOYED_REVISION'")"
+          if [ "$remote_revision" != "$TARGET_SHA" ]; then
+            echo "staging revision mismatch: expected $TARGET_SHA, got $remote_revision" >&2
+            exit 1
+          fi
+
+      - name: Prepare staging release
+        id: release
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          git fetch origin 'refs/tags/*:refs/tags/*'
+          deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          if ! python3 "$RUNNER_TEMP/release_version.py" \
+            --repo "$GITHUB_WORKSPACE" \
+            --target-sha "$TARGET_SHA" \
+            --repository "$GITHUB_REPOSITORY" \
+            --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            --deployed-at "$deployed_at" \
+            --output-dir "$RUNNER_TEMP" \
+            --github-output "$GITHUB_OUTPUT"; then
+            echo "staging deployment completed at $TARGET_SHA, but release metadata preparation failed" >&2
+            echo "rerun this workflow with the same commit_sha after resolving the Tag history" >&2
+            exit 1
+          fi
+
+      - name: Publish staging release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+          NOTES_FILE: ${{ steps.release.outputs.notes_file }}
+        run: |
+          if ! "$RUNNER_TEMP/publish-staging-release.sh" \
+            "$TARGET_SHA" "$RELEASE_TAG" "$NOTES_FILE"; then
+            echo "staging deployment completed at $TARGET_SHA, but Tag/Release publication failed" >&2
+            echo "rerun this workflow with the same commit_sha to reconcile missing metadata" >&2
+            exit 1
+          fi

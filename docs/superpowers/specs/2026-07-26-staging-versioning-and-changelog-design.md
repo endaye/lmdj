@@ -2,9 +2,16 @@
 
 日期：2026-07-26
 
-状态：待书面评审
+状态：已实现
 
 落点：扩展现有 GitHub Actions staging 部署链路，在成功部署后生成统一产品版本、Git Tag、GitHub Release 与 Markdown Changelog 附件。
+
+实现：
+
+- `scripts/release/release_version.py`：版本计算、回滚保护与 Changelog 渲染；
+- `scripts/release/publish-staging-release.sh`：Tag、Release 与附件的幂等发布；
+- `.github/workflows/deploy-server.yml`：部署后 revision gate 与发布编排；
+- `scripts/release/tests/`、`scripts/deploy/tests/test-deploy-workflow.sh`：自动化契约测试。
 
 ## 目标
 
