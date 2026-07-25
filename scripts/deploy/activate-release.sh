@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Compose v5 delegates builds to Buildx Bake whenever BuildKit is enabled.
+# The staging host must use Compose's classic path because its Bake subprocess
+# is killed before a build begins.
+export DOCKER_BUILDKIT=0
+
 ARCHIVE="${1:-}"
 DEPLOY_PATH="${2:-}"
 if [ -z "$ARCHIVE" ] || [ -z "$DEPLOY_PATH" ]; then
