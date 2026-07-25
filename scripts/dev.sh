@@ -3,6 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+API="$ROOT/apps/api"
+WEB="$ROOT/apps/web"
 CORE="$ROOT/packages/core-models"
 PATCHIFY="$ROOT/packages/patchify"
 DEMO="$ROOT/references/demos/lmdj-song-pipeline"
@@ -39,6 +41,7 @@ LMDJ dev helper
   song <audio> <id>  用 demo pipeline 处理一首歌并 patchify（需先 setup-demo）
   smoke              端到端冒烟：testsong → patch.json → 摘要（testsong 缺失时自动生成）
   creator-smoke <audio>  API 全链路：上传、16-Pad 校验、两次确定性 Export
+  dev                同时启动本地 API + Web（Ctrl+C 同时关闭）
   all                setup + test + smoke
 EOF
 }
@@ -109,6 +112,143 @@ cmd_smoke() {
   ensure_testsong
   "$PATCHIFY/.venv/bin/lmdj-patchify" "$TESTSONG"
   summarize "$TESTSONG/patch.json"
+}
+
+print_api_dev_setup() {
+  cat >&2 <<'EOF'
+API 开发环境未就绪。运行：
+  cd apps/api
+  python3 -m venv .venv
+  .venv/bin/pip install -e ../../packages/core-models
+  .venv/bin/pip install -e ../../packages/patchify
+  .venv/bin/pip install -e ../../workers/audio
+  .venv/bin/pip install -e .
+EOF
+}
+
+ensure_dev_dependencies() {
+  if [ ! -x "$API/.venv/bin/python" ] || [ ! -x "$API/.venv/bin/uvicorn" ]; then
+    print_api_dev_setup
+    return 1
+  fi
+  if ! "$API/.venv/bin/python" -c \
+    'import lmdj_api, lmdj_audio_worker, lmdj_patchify, lmdj_core_models' \
+    >/dev/null 2>&1
+  then
+    print_api_dev_setup
+    return 1
+  fi
+
+  if [ ! -x "$WEB/node_modules/.bin/vite" ] || ! command -v npm >/dev/null 2>&1; then
+    echo "Web 开发环境未就绪。运行: cd apps/web && npm install" >&2
+    return 1
+  fi
+
+  if [ ! -x "$DEMO/.venv/bin/python" ] \
+    || [ ! -x "$DEMO/.venv/bin/song-pipeline" ] \
+    || ! "$DEMO/.venv/bin/python" -c 'import torch, demucs' >/dev/null 2>&1
+  then
+    echo "Demo 开发环境未就绪。运行: scripts/dev.sh setup-demo" >&2
+    return 1
+  fi
+
+  if ! command -v curl >/dev/null 2>&1; then
+    echo "缺少 curl，无法检查本地服务就绪状态" >&2
+    return 1
+  fi
+}
+
+DEV_API_PID=""
+DEV_WEB_PID=""
+
+cleanup_dev_children() {
+  local exit_status=$?
+  local child_pid
+  trap - EXIT INT TERM HUP
+  for child_pid in "$DEV_API_PID" "$DEV_WEB_PID"; do
+    if [ -n "$child_pid" ] && kill -0 "$child_pid" 2>/dev/null; then
+      kill -TERM "$child_pid" 2>/dev/null || true
+    fi
+  done
+  for child_pid in "$DEV_API_PID" "$DEV_WEB_PID"; do
+    if [ -n "$child_pid" ]; then
+      wait "$child_pid" 2>/dev/null || true
+    fi
+  done
+  exit "$exit_status"
+}
+
+wait_for_dev_ready() {
+  local deadline="$((SECONDS + 30))"
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    if ! kill -0 "$DEV_API_PID" 2>/dev/null \
+      || ! kill -0 "$DEV_WEB_PID" 2>/dev/null
+    then
+      echo "本地服务在就绪前退出" >&2
+      return 1
+    fi
+    if curl --silent --fail --output /dev/null \
+      http://127.0.0.1:8000/health \
+      && curl --silent --fail --output /dev/null \
+        http://127.0.0.1:5173/
+    then
+      return 0
+    fi
+    sleep 0.2
+  done
+  echo "本地服务在 30 秒内未就绪" >&2
+  return 1
+}
+
+cmd_dev() {
+  ensure_dev_dependencies
+
+  trap cleanup_dev_children EXIT
+  trap 'exit 130' INT
+  trap 'exit 143' TERM
+  trap 'exit 129' HUP
+
+  (
+    cd "$API"
+    exec .venv/bin/uvicorn lmdj_api.app:app --host 127.0.0.1 --port 8000
+  ) &
+  DEV_API_PID=$!
+
+  (
+    cd "$WEB"
+    exec npm run dev -- --host 127.0.0.1 --port 5173
+  ) &
+  DEV_WEB_PID=$!
+
+  wait_for_dev_ready
+  cat <<'EOF'
+==> LMDJ local dev ready
+    Web: http://localhost:5173
+    API: http://localhost:8000
+EOF
+
+  while kill -0 "$DEV_API_PID" 2>/dev/null \
+    && kill -0 "$DEV_WEB_PID" 2>/dev/null
+  do
+    sleep 0.2
+  done
+
+  local failed_service failed_pid failed_status
+  if ! kill -0 "$DEV_API_PID" 2>/dev/null; then
+    failed_service="API"
+    failed_pid="$DEV_API_PID"
+  else
+    failed_service="Web"
+    failed_pid="$DEV_WEB_PID"
+  fi
+  failed_status=1
+  if wait "$failed_pid"; then
+    failed_status=1
+  else
+    failed_status=$?
+  fi
+  echo "$failed_service 服务已退出，正在关闭本地开发环境" >&2
+  return "$failed_status"
 }
 
 cmd_creator_smoke() {
@@ -468,6 +608,7 @@ case "$cmd" in
   song)            cmd_song "$@" ;;
   smoke)           cmd_smoke ;;
   creator-smoke)   cmd_creator_smoke "$@" ;;
+  dev)             cmd_dev ;;
   all)             cmd_setup; cmd_test; cmd_smoke ;;
   ""|-h|--help|help) usage ;;
   *)               echo "未知命令: $cmd" >&2; usage; exit 1 ;;
