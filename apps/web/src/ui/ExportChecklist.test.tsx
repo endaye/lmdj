@@ -38,6 +38,9 @@ function api(
 ): ApiClient {
   return {
     uploadSong: vi.fn(),
+    fetchJob: vi.fn(),
+    resolveSubmission: vi.fn(),
+    fetchQueueCapacity: vi.fn(),
     pollJob: vi.fn(),
     fetchPatchBundle: vi.fn(),
     fetchCreatorExportStatus: vi.fn(),

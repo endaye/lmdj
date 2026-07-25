@@ -8,7 +8,7 @@ import pytest
 from lmdj_audio_worker.job import process_job
 from lmdj_audio_worker.music_metadata import KeyEstimate
 from lmdj_audio_worker.runner import PipelineRunError
-from lmdj_audio_worker.status import read_status
+from lmdj_audio_worker.status import JobStatus, read_status
 
 from tests.conftest import GOLDEN, FakeRunner
 
@@ -55,6 +55,53 @@ def test_happy_path_completes_with_patch(tmp_path: Path, sample_audio: Path, fak
     assert (job_dir / "input" / sample_audio.name).exists()
     assert (job_dir / (final.package_dir or "") / "patch.json").exists()
     assert read_status(job_dir).state == "completed"
+
+
+def test_initial_status_metadata_survives_to_completed(
+    tmp_path: Path,
+    sample_audio: Path,
+):
+    initial = JobStatus(
+        job_id="jobtest",
+        state="queued",
+        submission_id="submission-1",
+        original_filename="song.wav",
+        created_at="2026-07-26T00:00:00Z",
+    )
+
+    final = process_job(
+        sample_audio,
+        jobs_root=tmp_path / "jobs",
+        runner=FakeRunner(),
+        job_id="jobtest",
+        initial_status=initial,
+    )
+
+    assert final.submission_id == "submission-1"
+    assert final.original_filename == "song.wav"
+    assert final.created_at == "2026-07-26T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    "initial",
+    [
+        JobStatus(job_id="other", state="queued"),
+        JobStatus(job_id="jobtest", state="separating"),
+    ],
+)
+def test_initial_status_must_be_queued_for_selected_job(
+    tmp_path: Path,
+    sample_audio: Path,
+    initial: JobStatus,
+):
+    with pytest.raises(ValueError, match="initial status"):
+        process_job(
+            sample_audio,
+            jobs_root=tmp_path / "jobs",
+            runner=FakeRunner(),
+            job_id="jobtest",
+            initial_status=initial,
+        )
 
 
 def test_same_audio_across_jobs_uses_stable_source_identity_for_full_patch_id(

@@ -31,6 +31,7 @@ def process_job(
     job_id: str | None = None,
     on_state: Callable[[JobStatus], None] | None = None,
     key_analyzer: KeyAnalyzer | None = None,
+    initial_status: JobStatus | None = None,
 ) -> JobStatus:
     """同步执行一个 audio job：input 拷贝 → pipeline → patchify → 终态。
 
@@ -39,7 +40,17 @@ def process_job(
     """
     if not audio.exists():
         raise FileNotFoundError(f"input audio not found: {audio}")
+    if initial_status is not None and job_id is None:
+        job_id = initial_status.job_id
     job_id = job_id or uuid.uuid4().hex[:12]
+    if (
+        initial_status is not None
+        and (
+            initial_status.job_id != job_id
+            or initial_status.state != "queued"
+        )
+    ):
+        raise ValueError("initial status must be queued for the selected job_id")
     job_dir = jobs_root / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -49,7 +60,10 @@ def process_job(
             on_state(written)
         return written
 
-    status = emit(JobStatus(job_id=job_id, state="queued", created_at=utc_now()))
+    status = emit(
+        initial_status
+        or JobStatus(job_id=job_id, state="queued", created_at=utc_now()),
+    )
     try:
         source_id = _source_id(audio)
         input_copy = job_dir / "input" / audio.name

@@ -2,7 +2,7 @@
 
 初始日期：2026-07-10
 
-最近更新：2026-07-24
+最近更新：2026-07-26
 用途：会话交接 / 下一步待办。记录已落地里程碑、当前可跑链路、延后的技术项、下一步候选。
 
 ## 已落地里程碑（均已合并 main）
@@ -24,15 +24,22 @@
 ## 当前可跑链路（浏览器已亲测闭环）
 
 ```text
-浏览器传歌 → apps/api(POST /uploads) → workers/audio(process_job)
+浏览器提交（submission_id）→ apps/api(POST /uploads) → 单槽 FIFO JobExecutor
+  → workers/audio(process_job)
   → demo pipeline(子进程, demo 自有 venv) → patchify
   → patch.json (lmdj.patch.v1) + samples 落 job 目录
-  → apps/web 轮询 GET /jobs/{id} → GET /patch + /files/* → loadPatch
-  → 8-pad 工作台可播放/静音/触发
+  → apps/web 轮询 GET /jobs/{id}，刷新后按 Job/submission 恢复
+  → GET /patch + /files/* → loadPatch
+  → 固定 16-pad Creator Workbench 可播放/静音/触发
 契约中枢：packages/core-models（模型 + JSON Schema，四方共同契约）
 ```
 
 三条 patch 加载路（拖目录 / 内置示例 / API）汇入同一 `loadPatch`。本地开发：`scripts/dev.sh`（Python 侧）、各包 `npm test` / `pytest`。
+
+## 当前分支已实现、待 PR
+
+- `codex/queue-visibility`：单槽 FIFO 队列、实时容量/队列位置、submission 幂等、浏览器本地任务恢复、API 重启后 `interrupted` 终态、响应式任务队列 UI。实现计划：`docs/superpowers/plans/2026-07-26-upload-job-visibility.md`；实测证据：`docs/release-evidence/2026-07-26-upload-job-visibility.md`。
+- 该项仍是“分支已实现”，不是“已合并 main”；完整生产 API 仍不包含鉴权、限流、Postgres、对象存储或跨进程 durable workflow。
 
 ## 贯穿的设计约束（改动时须遵守）
 
@@ -63,7 +70,7 @@ Upload
 3. **Stage 1 第二切片** —— Sampler Edit + Take Recording，并将 Take 纳入 Creator Export。
 4. **Separation / Timing 风险消除** —— 完成足以选择生产 baseline 的 Phase 1D benchmark、盲听和 Timing 评审；不阻塞首条 Creator 切片。
 5. **Generation / Agent Orchestration** —— Creator 基础闭环成立后，再接 Prompt/Voice → Generation → 同一个 Patch Engine。
-6. **apps/api 生产化** —— 队列、鉴权/限流、对象存储和 Postgres 随真实产品流量与 durable workflow 需要推进。
+6. **apps/api 继续生产化** —— 当前单进程 FIFO 与重启中断语义合并后，再按真实产品流量引入鉴权/限流、对象存储、Postgres 与跨进程 durable workflow。
 
 Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小需求见
 [`2026-07-26-upload-job-visibility-requirement.md`](specs/2026-07-26-upload-job-visibility-requirement.md)。
@@ -77,7 +84,6 @@ Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小�
 - **上传临时文件不清理**：`tempfile.mkdtemp()` 产物不回收（进程级临时目录）。
 
 ### apps/web
-- **UploadingView 对未知/失败态脆弱**：后端 `STATES` 含 `generating/extracting/rendering`（v1 未发射），若发射则 `currentIndex=-1` 全阶段变 pending；失败时也把已完成阶段 collapse 成 pending（可改为在失败点冻结进度）。
 - **处理中无取消/返回**：`uploading` 态仅在 error 时给"返回"，健康但慢的 job 最长锁 300s。
 - **spec 错误表待对齐**：patch-invalid-after-completed 实际路由到 uploading-error（非 landing），是计划已接受的取舍，spec 表述待更新。
 - 杂项：`PAD_KEYS` 无 >8 pad 越界保护；pad 无 aria 属性；`fetchPatchBundle` 双解析 patch.json（无害）。
@@ -85,7 +91,7 @@ Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小�
 ### packages / workers（测试覆盖 & 一致性）
 - core-models：patch.json 顶层 key 顺序无测试断言；`Pattern.to_dict` 手写 vs `asdict` 不一致（cosmetic）；`LIVE_ACTIONS`/`RESERVED_ACTIONS` 常量定义未被引用（预期后续/文档用）；schema 未设 `additionalProperties:false`（有意的前向兼容选择，倾向 wontfix）；schema 边界（minItems/velocity 范围/resolution）除 3 个强制用例外未测。
 - patchify：pitch-rejection 测试整体合成 chart.mid 而非破坏单字段；无显式 end-of-loop step-folding 测试；"lead 存在 + 2 harmonies → 跳过 fallback"分支未测；`cli.py` 省略 `--out` 时打印未 resolve 的路径（cosmetic）。
-- audio worker：`TimeoutExpired.stderr` 未纳入 `stderr_tail`；`quality` 用 `or` 而非 `.get(default)`（空 status → "unknown"）；`_job_dir` 之外 `except` 略宽于 missing-audio（benign）；`executor._threads` 无界增长（dev 无害）。
+- audio worker：`TimeoutExpired.stderr` 未纳入 `stderr_tail`；`quality` 用 `or` 而非 `.get(default)`（空 status → "unknown"）；`_job_dir` 之外 `except` 略宽于 missing-audio（benign）。
 
 ### 仓库工程
 - `packages/patchify/tests/fixtures/.gitattributes` 把该目录所有 `*.wav` 豁免 LFS——若将来提交大 golden 音频需重新审视。

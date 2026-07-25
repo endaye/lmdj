@@ -6,12 +6,15 @@ from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timezone
 from pathlib import Path
 
-# infra spec 全枚举：v1 只发射 queued/separating/patchifying/completed/failed，
-# 但契约上全部合法，未来细化不破契约。
+# infra spec 全枚举：legacy v1 只发射
+# queued/separating/patchifying/completed/failed。interrupted 是 API 在服务重启时
+# 为无法恢复的旧非终态 Job 写入的明确终态。
 STATES = frozenset({
     "queued", "generating", "separating", "extracting", "patchifying",
-    "rendering", "completed", "failed", "cancelled",
+    "rendering", "completed", "failed", "cancelled", "interrupted",
 })
+TERMINAL_STATES = frozenset({"completed", "failed", "cancelled", "interrupted"})
+NONTERMINAL_STATES = STATES - TERMINAL_STATES
 
 STATUS_FILENAME = "status.json"
 
@@ -21,9 +24,12 @@ class JobStatus:
     job_id: str
     state: str
     error: str | None = None
+    error_code: str | None = None
     patch_id: str | None = None
     package_dir: str | None = None
     quality: str | None = None
+    submission_id: str | None = None
+    original_filename: str | None = None
     created_at: str = ""
     updated_at: str = ""
 

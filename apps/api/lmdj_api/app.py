@@ -4,9 +4,10 @@ import os
 import shutil
 import tempfile
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -21,6 +22,7 @@ from lmdj_api.export_builder import (
     inspect_creator_export,
 )
 from lmdj_api.preflight import PreflightError, limits_from_env, persist_and_probe
+from lmdj_api.job_catalog import JobCatalog, validate_submission_id
 
 _API_ROOT = Path(__file__).resolve().parent.parent
 _FALLBACK_JOBS_ROOT = _API_ROOT / "jobs"
@@ -45,6 +47,8 @@ def _cors_origins() -> list[str]:
 def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = None) -> FastAPI:
     jobs_root = jobs_root or default_jobs_root()
     runner = runner or DemoPipelineRunner(DEFAULT_DEMO_DIR)
+    catalog = JobCatalog(jobs_root)
+    catalog.interrupt_nonterminal()
     executor = JobExecutor(runner=runner, jobs_root=jobs_root)
     upload_limits = limits_from_env()
 
@@ -88,15 +92,34 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
             raise HTTPException(status_code=404, detail="export package not found")
         return job_dir, package_dir
 
+    def _public_status(status) -> dict[str, object]:
+        snapshot = executor.snapshot()
+        return {
+            **status.to_dict(),
+            "queue_position": snapshot.positions.get(status.job_id),
+            "capacity": asdict(snapshot.capacity),
+        }
+
     @app.get("/health")
     def health() -> dict:
         return {"ok": True}
 
+    @app.get("/queue")
+    def queue_capacity() -> dict:
+        return asdict(executor.snapshot().capacity)
+
     @app.post("/uploads")
-    async def uploads(file: UploadFile = File(...)) -> dict:
+    async def uploads(
+        file: UploadFile = File(...),
+        idempotency_key: str | None = Header(
+            default=None,
+            alias="Idempotency-Key",
+        ),
+    ) -> dict:
         temp_dir = Path(tempfile.mkdtemp(prefix="lmdj-upload-"))
         suffix = Path(file.filename or "").suffix.lower()
         destination = temp_dir / f"upload{suffix}"
+        original_filename = file.filename or ""
         try:
             await run_in_threadpool(
                 persist_and_probe,
@@ -116,17 +139,56 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
         finally:
             await file.close()
 
-        job_id = uuid.uuid4().hex[:12]
         try:
-            executor.submit(destination, job_id)
+            submission_id = validate_submission_id(
+                idempotency_key or uuid.uuid4().hex,
+            )
+        except ValueError as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_submission_id"},
+            ) from error
+
+        status, created = catalog.get_or_create(
+            submission_id,
+            original_filename,
+        )
+        if not created:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            return _public_status(status)
+
+        try:
+            executor.submit(destination, status)
         except Exception:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            shutil.rmtree(jobs_root / status.job_id, ignore_errors=True)
+            try:
+                jobs_root.rmdir()
+            except OSError:
+                pass
             raise
-        return {"job_id": job_id, "state": "queued"}
+        return _public_status(status)
 
     @app.get("/jobs/{job_id}")
     def job_status(job_id: str) -> dict:
-        return read_status(_job_dir(job_id)).to_dict()
+        return _public_status(read_status(_job_dir(job_id)))
+
+    @app.get("/submissions/{submission_id}")
+    def submission_status(submission_id: str) -> dict:
+        try:
+            status = catalog.find_by_submission_id(submission_id)
+        except ValueError as error:
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_submission_id"},
+            ) from error
+        if status is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"code": "unknown_submission_id"},
+            )
+        return _public_status(status)
 
     @app.get("/jobs/{job_id}/patch")
     def job_patch(job_id: str):

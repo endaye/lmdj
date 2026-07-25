@@ -12,6 +12,7 @@ import {
   type CreatorExportStatus,
   type JobStatus,
 } from "../api/client";
+import { STORAGE_KEY, type StoredSubmission } from "../jobs/storage";
 import type { PatchBundle } from "../patch/loader";
 
 class MemoryStorage implements Storage {
@@ -50,6 +51,35 @@ const creatorExportStatus: CreatorExportStatus = {
     loop: { seconds: 10.67, steps: 64, beats: 16, bars: 4 },
   },
 };
+
+const queueCapacity = {
+  max_concurrency: 1,
+  processing: 0,
+  waiting: 0,
+};
+
+function apiJob(
+  jobId: string,
+  state: string,
+  overrides: Partial<JobStatus> = {},
+): JobStatus {
+  return {
+    job_id: jobId,
+    state,
+    error: null,
+    error_code: null,
+    patch_id: null,
+    package_dir: null,
+    quality: null,
+    submission_id: "submission-test",
+    original_filename: "song.wav",
+    created_at: "2026-07-26T00:00:00Z",
+    updated_at: "2026-07-26T00:00:01Z",
+    queue_position: null,
+    capacity: queueCapacity,
+    ...overrides,
+  };
+}
 
 function exampleFiles(patch: unknown): () => Promise<Map<string, ArrayBuffer>> {
   return async () => {
@@ -277,7 +307,10 @@ describe("App", () => {
 
 function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
   return {
-    uploadSong: async () => "job123",
+    uploadSong: async () => apiJob("job123", "queued"),
+    fetchJob: async (_base, jobId) => apiJob(jobId, "completed"),
+    resolveSubmission: async () => apiJob("job123", "queued"),
+    fetchQueueCapacity: async () => queueCapacity,
     pollJob: async (_b, _j, onState) => {
       onState?.({ state: "separating", error: null, patch_id: null, package_dir: null, quality: null });
       const done: JobStatus = { state: "completed", error: null, patch_id: "job123-abc", package_dir: "job123", quality: "passed" };
@@ -401,8 +434,8 @@ describe("App API path", () => {
   it("resets Export mode before loading a new API Job so its status can be requested", async () => {
     const uploadSong = vi
       .fn<ApiClient["uploadSong"]>()
-      .mockResolvedValueOnce("job-old")
-      .mockResolvedValueOnce("job-new");
+      .mockResolvedValueOnce(apiJob("job-old", "queued"))
+      .mockResolvedValueOnce(apiJob("job-new", "queued"));
     const fetchCreatorExportStatus = vi
       .fn<ApiClient["fetchCreatorExportStatus"]>()
       .mockResolvedValue(creatorExportStatus);
@@ -442,8 +475,8 @@ describe("App API path", () => {
   it("ignores a late 409 from an old Job download after a new Job is loaded", async () => {
     const uploadSong = vi
       .fn<ApiClient["uploadSong"]>()
-      .mockResolvedValueOnce("job-old")
-      .mockResolvedValueOnce("job-new");
+      .mockResolvedValueOnce(apiJob("job-old", "queued"))
+      .mockResolvedValueOnce(apiJob("job-new", "queued"));
     const nextStatus = structuredClone(creatorExportStatus);
     nextStatus.warnings = [];
     nextStatus.items.stems.status = "ready";
@@ -569,10 +602,10 @@ describe("App API path", () => {
   });
 
   it("shows truthful input validation until upload returns a job id", async () => {
-    let resolveUpload: ((jobId: string) => void) | undefined;
+    let resolveUpload: ((status: JobStatus) => void) | undefined;
     const uploadSong = vi.fn<ApiClient["uploadSong"]>(
       () =>
-        new Promise<string>((resolve) => {
+        new Promise<JobStatus>((resolve) => {
           resolveUpload = resolve;
         }),
     );
@@ -591,7 +624,7 @@ describe("App API path", () => {
     );
     expect(screen.queryByText("Input Validated")).not.toBeInTheDocument();
 
-    resolveUpload?.("job123");
+    resolveUpload?.(apiJob("job123", "queued"));
 
     await waitFor(() =>
       expect(screen.getByTestId("processing-stage-queued")).toHaveAttribute(
@@ -599,6 +632,253 @@ describe("App API path", () => {
         "step",
       ),
     );
+  });
+
+  it("keeps two submissions visible while FIFO moves B behind A", async () => {
+    const callbacks = new Map<string, (status: JobStatus) => void>();
+    const resolvers = new Map<string, (status: JobStatus) => void>();
+    const uploadSong = vi
+      .fn<ApiClient["uploadSong"]>()
+      .mockResolvedValueOnce(
+        apiJob("job-a", "queued", {
+          original_filename: "song-a.wav",
+          capacity: { max_concurrency: 1, processing: 1, waiting: 0 },
+        }),
+      )
+      .mockResolvedValueOnce(
+        apiJob("job-b", "queued", {
+          original_filename: "song-b.wav",
+          queue_position: 1,
+          capacity: { max_concurrency: 1, processing: 1, waiting: 1 },
+        }),
+      );
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async (_base, jobId, onState) => {
+        callbacks.set(jobId, onState ?? (() => undefined));
+        if (jobId === "job-a") {
+          onState?.(
+            apiJob("job-a", "separating", {
+              original_filename: "song-a.wav",
+              capacity: { max_concurrency: 1, processing: 1, waiting: 0 },
+            }),
+          );
+        } else {
+          onState?.(
+            apiJob("job-b", "queued", {
+              original_filename: "song-b.wav",
+              queue_position: 1,
+              capacity: { max_concurrency: 1, processing: 1, waiting: 1 },
+            }),
+          );
+        }
+        return await new Promise<JobStatus>((resolve) => {
+          resolvers.set(jobId, resolve);
+        });
+      },
+    );
+    renderAppWithApi(fakeApi({ uploadSong, pollJob }));
+
+    const songA = new File([new Uint8Array([1])], "song-a.wav", {
+      type: "audio/wav",
+    });
+    await userEvent.upload(screen.getByTestId("api-file-input"), songA);
+    await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
+        "正在处理",
+      ),
+    );
+
+    const songB = new File([new Uint8Array([2])], "song-b.wav", {
+      type: "audio/wav",
+    });
+    await userEvent.upload(screen.getByTestId("api-file-input"), songB);
+    await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
+        "song-a.wav",
+      );
+      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent("job-a");
+      expect(screen.getByTestId("job-card-job-b")).toHaveTextContent(
+        "song-b.wav",
+      );
+      expect(screen.getByTestId("job-card-job-b")).toHaveTextContent(
+        "队列位置 1",
+      );
+      expect(screen.getByTestId("queue-capacity")).toHaveTextContent(
+        "最大并发 1",
+      );
+      expect(screen.getByTestId("queue-capacity")).toHaveTextContent(
+        "正在处理 1",
+      );
+      expect(screen.getByTestId("queue-capacity")).toHaveTextContent("等待 1");
+    });
+
+    await act(async () => {
+      const doneA = apiJob("job-a", "completed", {
+        patch_id: "patch-a",
+        package_dir: "package-a",
+        capacity: { max_concurrency: 1, processing: 1, waiting: 0 },
+      });
+      callbacks.get("job-a")?.(doneA);
+      resolvers.get("job-a")?.(doneA);
+      await Promise.resolve();
+      callbacks.get("job-b")?.(
+        apiJob("job-b", "separating", {
+          original_filename: "song-b.wav",
+          capacity: { max_concurrency: 1, processing: 1, waiting: 0 },
+        }),
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
+        "处理完成",
+      );
+      expect(screen.getByTestId("job-card-job-b")).toHaveTextContent(
+        "正在处理",
+      );
+    });
+    expect(screen.queryByTestId("pad-matrix")).not.toBeInTheDocument();
+  });
+
+  it("restores a stored Job after remount and resumes polling", async () => {
+    const stored: StoredSubmission = {
+      submissionId: "submission-restored",
+      jobId: "job-restored",
+      base: "http://localhost:8000",
+      fileName: "restored.wav",
+      submittedAt: "2026-07-26T01:02:03.000Z",
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([stored]));
+    const fetchJob = vi
+      .fn<ApiClient["fetchJob"]>()
+      .mockResolvedValue(
+        apiJob("job-restored", "separating", {
+          submission_id: stored.submissionId,
+          original_filename: stored.fileName,
+          capacity: { max_concurrency: 1, processing: 1, waiting: 0 },
+        }),
+      );
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async () => await new Promise<JobStatus>(() => {}),
+    );
+
+    renderAppWithApi(fakeApi({ fetchJob, pollJob }));
+
+    await waitFor(() => {
+      expect(fetchJob).toHaveBeenCalledWith(stored.base, stored.jobId);
+      expect(pollJob).toHaveBeenCalledWith(
+        stored.base,
+        stored.jobId,
+        expect.any(Function),
+      );
+      expect(screen.getByTestId("job-card-job-restored")).toHaveTextContent(
+        "restored.wav",
+      );
+      expect(screen.getByTestId("job-card-job-restored")).toHaveTextContent(
+        "2026-07-26T00:00:00Z",
+      );
+    });
+  });
+
+  it("resolves a persisted submission after the upload response was lost", async () => {
+    const stored: StoredSubmission = {
+      submissionId: "submission-lost-response",
+      jobId: null,
+      base: "http://localhost:8000",
+      fileName: "lost.wav",
+      submittedAt: "2026-07-26T02:03:04.000Z",
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([stored]));
+    const resolveSubmission = vi
+      .fn<ApiClient["resolveSubmission"]>()
+      .mockResolvedValue(
+        apiJob("job-recovered", "queued", {
+          submission_id: stored.submissionId,
+          original_filename: stored.fileName,
+          queue_position: 1,
+        }),
+      );
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async () => await new Promise<JobStatus>(() => {}),
+    );
+
+    renderAppWithApi(fakeApi({ resolveSubmission, pollJob }));
+
+    await waitFor(() => {
+      expect(resolveSubmission).toHaveBeenCalledWith(
+        stored.base,
+        stored.submissionId,
+      );
+      expect(screen.getByTestId("job-card-job-recovered")).toHaveTextContent(
+        "job-recovered",
+      );
+    });
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]")).toEqual([
+      expect.objectContaining({ jobId: "job-recovered" }),
+    ]);
+  });
+
+  it("restores interrupted as a terminal server outcome", async () => {
+    const stored: StoredSubmission = {
+      submissionId: "submission-interrupted",
+      jobId: "job-interrupted",
+      base: "http://localhost:8000",
+      fileName: "interrupted.wav",
+      submittedAt: "2026-07-26T03:04:05.000Z",
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([stored]));
+    const pollJob = vi.fn<ApiClient["pollJob"]>();
+
+    renderAppWithApi(
+      fakeApi({
+        fetchJob: async () =>
+          apiJob("job-interrupted", "interrupted", {
+            error: "API service restarted before this Job completed.",
+            error_code: "service_interrupted",
+            submission_id: stored.submissionId,
+            original_filename: stored.fileName,
+          }),
+        pollJob,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("job-card-job-interrupted")).toHaveTextContent(
+        "服务中断",
+      ),
+    );
+    expect(screen.getByTestId("job-card-job-interrupted")).toHaveTextContent(
+      "API service restarted before this Job completed.",
+    );
+    expect(screen.getByTestId("job-card-job-interrupted")).not.toHaveTextContent(
+      "Failed to fetch",
+    );
+    expect(pollJob).not.toHaveBeenCalled();
+  });
+
+  it("deduplicates a double click while one submission request is in flight", async () => {
+    const uploadSong = vi.fn<ApiClient["uploadSong"]>(
+      async () => await new Promise<JobStatus>(() => {}),
+    );
+    renderAppWithApi(fakeApi({ uploadSong }));
+    const file = new File([new Uint8Array([1, 2, 3])], "double.wav", {
+      type: "audio/wav",
+    });
+    await userEvent.upload(screen.getByTestId("api-file-input"), file);
+    const submit = screen.getByRole("button", { name: /传歌/i });
+
+    fireEvent.click(submit);
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(uploadSong).toHaveBeenCalledTimes(1));
+    const submissions = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) ?? "[]",
+    ) as StoredSubmission[];
+    expect(submissions).toHaveLength(1);
+    expect(uploadSong.mock.calls[0][2]).toBe(submissions[0].submissionId);
   });
 
   it("failed job shows error in uploading view with a back button", async () => {
@@ -734,7 +1014,7 @@ describe("App API path", () => {
           { code: "file_too_large", max_bytes: 209715200 },
         ),
       )
-      .mockResolvedValueOnce("job-new");
+      .mockResolvedValueOnce(apiJob("job-new", "queued"));
     renderAppWithApi(fakeApi({ uploadSong }));
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("failed-state")).toBeInTheDocument());

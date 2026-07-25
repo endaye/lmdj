@@ -13,12 +13,26 @@ export class ApiError extends Error {
   }
 }
 
+export interface QueueCapacity {
+  max_concurrency: number;
+  processing: number;
+  waiting: number;
+}
+
 export interface JobStatus {
+  job_id?: string;
   state: string;
   error: string | null;
+  error_code?: string | null;
   patch_id: string | null;
   package_dir: string | null;
   quality: string | null;
+  submission_id?: string | null;
+  original_filename?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  queue_position?: number | null;
+  capacity?: QueueCapacity;
 }
 
 export type ExportItemStatus = "ready" | "review" | "missing";
@@ -65,10 +79,18 @@ export function normalizeBase(base: string): string {
   return trimmed.replace(/\/+$/, "");
 }
 
-export async function uploadSong(base: string, file: File): Promise<string> {
+export async function uploadSong(
+  base: string,
+  file: File,
+  submissionId: string,
+): Promise<JobStatus> {
   const form = new FormData();
   form.append("file", file);
-  const res = await fetch(`${normalizeBase(base)}/uploads`, { method: "POST", body: form });
+  const res = await fetch(`${normalizeBase(base)}/uploads`, {
+    method: "POST",
+    body: form,
+    headers: { "Idempotency-Key": submissionId },
+  });
   if (!res.ok) {
     let detail: unknown;
     try {
@@ -79,8 +101,7 @@ export async function uploadSong(base: string, file: File): Promise<string> {
     }
     throw new ApiError(uploadErrorMessage(res.status, detail), res.status, detail);
   }
-  const body = (await res.json()) as { job_id: string };
-  return body.job_id;
+  return (await res.json()) as JobStatus;
 }
 
 function uploadErrorMessage(status: number, detail: unknown): string {
@@ -118,6 +139,48 @@ export interface PollOpts {
 
 const realSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+async function fetchStatus(url: string): Promise<JobStatus> {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new ApiError(
+      `status fetch failed (HTTP ${response.status})`,
+      response.status,
+      await responseDetail(response),
+    );
+  }
+  return (await response.json()) as JobStatus;
+}
+
+export async function fetchJob(
+  base: string,
+  jobId: string,
+): Promise<JobStatus> {
+  return fetchStatus(`${normalizeBase(base)}/jobs/${jobId}`);
+}
+
+export async function resolveSubmission(
+  base: string,
+  submissionId: string,
+): Promise<JobStatus> {
+  return fetchStatus(
+    `${normalizeBase(base)}/submissions/${encodeURIComponent(submissionId)}`,
+  );
+}
+
+export async function fetchQueueCapacity(
+  base: string,
+): Promise<QueueCapacity> {
+  const response = await fetch(`${normalizeBase(base)}/queue`);
+  if (!response.ok) {
+    throw new ApiError(
+      `queue fetch failed (HTTP ${response.status})`,
+      response.status,
+      await responseDetail(response),
+    );
+  }
+  return (await response.json()) as QueueCapacity;
+}
+
 export async function pollJob(
   base: string,
   jobId: string,
@@ -131,12 +194,16 @@ export async function pollJob(
   const started = Date.now();
 
   for (;;) {
-    const res = await fetch(`${root}/jobs/${jobId}`);
-    if (!res.ok) throw new ApiError(`status poll failed (HTTP ${res.status})`, res.status);
-    const status = (await res.json()) as JobStatus;
+    const status = await fetchStatus(`${root}/jobs/${jobId}`);
     onState?.(status);
     if (status.state === "completed") return status;
-    if (status.state === "failed") throw new ApiError(status.error || "job failed");
+    if (["failed", "cancelled", "interrupted"].includes(status.state)) {
+      throw new ApiError(
+        status.error || `job ${status.state}`,
+        undefined,
+        status,
+      );
+    }
     if (Date.now() - started >= timeoutMs) throw new ApiError("job timed out");
     await sleep(intervalMs);
   }
@@ -211,6 +278,9 @@ export async function downloadCreatorExport(
 
 export interface ApiClient {
   uploadSong: typeof uploadSong;
+  fetchJob: typeof fetchJob;
+  resolveSubmission: typeof resolveSubmission;
+  fetchQueueCapacity: typeof fetchQueueCapacity;
   pollJob: typeof pollJob;
   fetchPatchBundle: typeof fetchPatchBundle;
   fetchCreatorExportStatus: typeof fetchCreatorExportStatus;
@@ -219,6 +289,9 @@ export interface ApiClient {
 
 export const defaultApiClient: ApiClient = {
   uploadSong,
+  fetchJob,
+  resolveSubmission,
+  fetchQueueCapacity,
   pollJob,
   fetchPatchBundle,
   fetchCreatorExportStatus,

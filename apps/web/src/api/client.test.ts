@@ -3,13 +3,17 @@ import golden from "../patch/__fixtures__/patch.golden.json";
 import {
   ApiError,
   downloadCreatorExport,
+  fetchJob,
+  fetchQueueCapacity,
   fetchCreatorExportStatus,
   fetchPatchBundle,
   normalizeBase,
   pollJob,
+  resolveSubmission,
   uploadSong,
   type CreatorExportStatus,
   type JobStatus,
+  type QueueCapacity,
 } from "./client";
 
 const fakeDecode = async () => ({ fake: "buffer" });
@@ -28,6 +32,34 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
   } as unknown as Response;
 }
 
+const emptyCapacity: QueueCapacity = {
+  max_concurrency: 1,
+  processing: 0,
+  waiting: 0,
+};
+
+function jobStatus(
+  state: string,
+  overrides: Partial<JobStatus> = {},
+): JobStatus {
+  return {
+    job_id: "job123",
+    state,
+    error: null,
+    error_code: null,
+    patch_id: null,
+    package_dir: null,
+    quality: null,
+    submission_id: "submission-123",
+    original_filename: "song.wav",
+    created_at: "2026-07-26T00:00:00Z",
+    updated_at: "2026-07-26T00:00:01Z",
+    queue_position: null,
+    capacity: emptyCapacity,
+    ...overrides,
+  };
+}
+
 describe("normalizeBase", () => {
   it("strips trailing slash and defaults when empty", () => {
     expect(normalizeBase("http://x:8000/")).toBe("http://x:8000");
@@ -37,24 +69,37 @@ describe("normalizeBase", () => {
 });
 
 describe("uploadSong", () => {
-  it("POSTs multipart and returns job_id", async () => {
+  it("POSTs multipart with a stable submission ID and returns status", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({ job_id: "job123", state: "queued" }),
+      jsonResponse(jobStatus("queued")),
     );
     const file = new File([new Uint8Array([1, 2, 3])], "song.wav", { type: "audio/wav" });
 
-    const jobId = await uploadSong("http://x:8000/", file);
+    const status = await uploadSong(
+      "http://x:8000/",
+      file,
+      "submission-123",
+    );
 
-    expect(jobId).toBe("job123");
+    expect(status.job_id).toBe("job123");
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://x:8000/uploads");
     expect((init as RequestInit).method).toBe("POST");
     expect((init as RequestInit).body).toBeInstanceOf(FormData);
+    expect((init as RequestInit).headers).toEqual({
+      "Idempotency-Key": "submission-123",
+    });
   });
 
   it("throws ApiError on non-2xx", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(jsonResponse({}, false, 500));
-    await expect(uploadSong("http://x:8000", new File([], "s.wav"))).rejects.toBeInstanceOf(ApiError);
+    await expect(
+      uploadSong(
+        "http://x:8000",
+        new File([], "s.wav"),
+        "submission-123",
+      ),
+    ).rejects.toBeInstanceOf(ApiError);
   });
 
   it.each([
@@ -86,6 +131,7 @@ describe("uploadSong", () => {
     const error = await uploadSong(
       "http://x:8000",
       new File([], "song.wav"),
+      "submission-123",
     ).catch((caught) => caught);
 
     expect(error).toBeInstanceOf(ApiError);
@@ -95,12 +141,49 @@ describe("uploadSong", () => {
   });
 });
 
+describe("Job visibility", () => {
+  it("fetches a Job, resolves a submission, and reads queue capacity", async () => {
+    const capacity = {
+      max_concurrency: 1,
+      processing: 1,
+      waiting: 2,
+    };
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (url) => {
+        if (String(url).endsWith("/queue")) return jsonResponse(capacity);
+        return jsonResponse(jobStatus("queued", {
+          queue_position: 2,
+          capacity,
+        }));
+      },
+    );
+
+    await expect(fetchJob("http://x:8000", "job123")).resolves.toMatchObject({
+      job_id: "job123",
+      queue_position: 2,
+    });
+    await expect(
+      resolveSubmission("http://x:8000", "submission-123"),
+    ).resolves.toMatchObject({ submission_id: "submission-123" });
+    await expect(fetchQueueCapacity("http://x:8000")).resolves.toEqual(capacity);
+    expect(fetchMock.mock.calls.map(([url]) => String(url))).toEqual([
+      "http://x:8000/jobs/job123",
+      "http://x:8000/submissions/submission-123",
+      "http://x:8000/queue",
+    ]);
+  });
+});
+
 describe("pollJob", () => {
   it("polls until completed, calling onState each round", async () => {
     const seq: JobStatus[] = [
-      { state: "queued", error: null, patch_id: null, package_dir: null, quality: null },
-      { state: "separating", error: null, patch_id: null, package_dir: null, quality: null },
-      { state: "completed", error: null, patch_id: "job123-abc", package_dir: "job123", quality: "passed" },
+      jobStatus("queued", { queue_position: 1 }),
+      jobStatus("separating"),
+      jobStatus("completed", {
+        patch_id: "job123-abc",
+        package_dir: "job123",
+        quality: "passed",
+      }),
     ];
     let i = 0;
     vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(seq[i++]));
@@ -119,16 +202,38 @@ describe("pollJob", () => {
 
   it("throws ApiError carrying the job error on failed", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({ state: "failed", error: "demucs boom", patch_id: null, package_dir: null, quality: null }),
+      jsonResponse(jobStatus("failed", { error: "demucs boom" })),
     );
     const err = await pollJob("http://x:8000", "j", undefined, { intervalMs: 0, sleep: noSleep }).catch((e) => e);
     expect(err).toBeInstanceOf(ApiError);
     expect(String(err)).toContain("demucs boom");
   });
 
+  it.each(["interrupted", "cancelled"])(
+    "treats %s as a terminal server outcome",
+    async (state) => {
+      vi.spyOn(globalThis, "fetch").mockResolvedValue(
+        jsonResponse(jobStatus(state, {
+          error: state === "interrupted" ? "API service restarted" : "cancelled",
+          error_code: state === "interrupted" ? "service_interrupted" : null,
+        })),
+      );
+
+      const error = await pollJob(
+        "http://x:8000",
+        "j",
+        undefined,
+        { intervalMs: 0, sleep: noSleep },
+      ).catch((caught) => caught);
+
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error.detail).toMatchObject({ state });
+    },
+  );
+
   it("throws ApiError on timeout", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
-      jsonResponse({ state: "separating", error: null, patch_id: null, package_dir: null, quality: null }),
+      jsonResponse(jobStatus("separating")),
     );
     await expect(
       pollJob("http://x:8000", "j", undefined, { intervalMs: 0, timeoutMs: 0, sleep: noSleep }),

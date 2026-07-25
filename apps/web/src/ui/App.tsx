@@ -1,12 +1,25 @@
-import { useCallback, useEffect, useState, type ReactNode } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   ApiError,
   defaultApiClient,
   normalizeBase,
   type ApiClient,
   type CreatorExportStatus,
+  type JobStatus,
+  type QueueCapacity,
 } from "../api/client";
 import type { AudioEngine } from "../engine/AudioEngine";
+import {
+  loadSubmissions,
+  upsertSubmission,
+  type StoredSubmission,
+} from "../jobs/storage";
 import { loadMidiMapping, type MidiBank, type MidiMapping } from "../midi/mapping";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
 import { ErrorPanel } from "./ErrorPanel";
@@ -18,6 +31,10 @@ import {
   type LoadedSourceSummary,
 } from "./LoadedSourcePanel";
 import { MidiPanel } from "./MidiPanel";
+import {
+  JobQueuePanel,
+  type TrackedJob,
+} from "./JobQueuePanel";
 import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 import { PatternSurface } from "./PatternSurface";
 import { ProcessingPanel } from "./ProcessingPanel";
@@ -56,6 +73,7 @@ type AppState =
       phase: "processing";
       file: File;
       base: string;
+      submissionId: string;
       jobId?: string;
       jobState: string;
       lastNonterminalStage: string;
@@ -64,6 +82,7 @@ type AppState =
       phase: "failed";
       file: File;
       base: string;
+      submissionId: string;
       failedAt: string;
       issues: string[];
       issueTitle: string;
@@ -86,6 +105,41 @@ type ExportState =
   | { kind: "loading" }
   | { kind: "ready"; status: CreatorExportStatus }
   | { kind: "error"; message: string };
+
+const EMPTY_CAPACITY: QueueCapacity = {
+  max_concurrency: 1,
+  processing: 0,
+  waiting: 0,
+};
+
+const TERMINAL_JOB_STATES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "interrupted",
+]);
+
+function trackedFromSubmission(submission: StoredSubmission): TrackedJob {
+  return {
+    submission,
+    status: null,
+    clientState: submission.jobId ? "accepted" : "preflight",
+    clientError: null,
+    lastNonterminalState: submission.jobId ? "queued" : "preflight",
+  };
+}
+
+function jobStatusFromError(error: unknown): JobStatus | null {
+  if (
+    error instanceof ApiError &&
+    error.detail &&
+    typeof error.detail === "object" &&
+    typeof (error.detail as { state?: unknown }).state === "string"
+  ) {
+    return error.detail as JobStatus;
+  }
+  return null;
+}
 
 function usePlayheadStep(engine: AudioEngine, active: boolean): number | null {
   const [step, setStep] = useState<number | null>(null);
@@ -118,6 +172,14 @@ export function App({
     issues: null,
     issueTitle: null,
   });
+  const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>(() =>
+    loadSubmissions(localStorage).map(trackedFromSubmission)
+  );
+  const trackedJobsRef = useRef(trackedJobs);
+  const pollingJobsRef = useRef(new Set<string>());
+  const inflightUploadsRef = useRef(new Map<string, string>());
+  const [queueCapacity, setQueueCapacity] =
+    useState<QueueCapacity>(EMPTY_CAPACITY);
   const [selectedPadIndex, setSelectedPadIndex] = useState<number>();
   const [mode, setMode] = useState<WorkbenchMode>("source");
   const [midiBank, setMidiBank] = useState<MidiBank>("A");
@@ -131,6 +193,47 @@ export function App({
       engine.triggerPad(index);
     },
     [engine],
+  );
+
+  const updateTrackedJobs = useCallback(
+    (update: (current: TrackedJob[]) => TrackedJob[]) => {
+      const next = update(trackedJobsRef.current);
+      trackedJobsRef.current = next;
+      setTrackedJobs(next);
+    },
+    [],
+  );
+
+  const updateTrackedJob = useCallback(
+    (
+      submissionId: string,
+      update: (current: TrackedJob) => TrackedJob,
+    ) => {
+      updateTrackedJobs((current) =>
+        current.map((job) =>
+          job.submission.submissionId === submissionId
+            ? update(job)
+            : job
+        )
+      );
+    },
+    [updateTrackedJobs],
+  );
+
+  const applyJobStatus = useCallback(
+    (submissionId: string, status: JobStatus) => {
+      if (status.capacity) setQueueCapacity(status.capacity);
+      updateTrackedJob(submissionId, (current) => ({
+        ...current,
+        status,
+        clientState: "accepted",
+        clientError: null,
+        lastNonterminalState: TERMINAL_JOB_STATES.has(status.state)
+          ? current.lastNonterminalState
+          : status.state,
+      }));
+    },
+    [updateTrackedJob],
   );
 
   const failPatch = useCallback((error: unknown) => {
@@ -177,70 +280,300 @@ export function App({
     [decode, enterLoaded, failPatch],
   );
 
-  const handleUpload = useCallback(
-    async (base: string, file: File) => {
+  const openCompletedJob = useCallback(
+    async (job: TrackedJob) => {
+      const { jobId, base, fileName } = job.submission;
+      if (!jobId) return;
+      try {
+        enterLoaded(
+          await apiClient.fetchPatchBundle(base, jobId, decode),
+          { kind: "api", base, jobId, fileName },
+        );
+      } catch (error) {
+        updateTrackedJob(job.submission.submissionId, (current) => ({
+          ...current,
+          clientError: errorMessage(error),
+        }));
+      }
+    },
+    [apiClient, decode, enterLoaded, updateTrackedJob],
+  );
+
+  const pollTrackedJob = useCallback(
+    async (
+      submission: StoredSubmission,
+      {
+        autoOpen,
+        sourceFile,
+      }: {
+        autoOpen: boolean;
+        sourceFile?: File;
+      },
+    ) => {
+      const { submissionId, jobId, base } = submission;
+      if (!jobId || pollingJobsRef.current.has(jobId)) return;
+      pollingJobsRef.current.add(jobId);
+      let lastNonterminal = "queued";
+      try {
+        const final = await apiClient.pollJob(base, jobId, (job) => {
+          applyJobStatus(submissionId, job);
+          if (!TERMINAL_JOB_STATES.has(job.state)) {
+            lastNonterminal = job.state;
+          }
+          setState((previous) =>
+            previous.phase === "processing" &&
+            previous.submissionId === submissionId
+              ? {
+                  ...previous,
+                  jobId,
+                  jobState: job.state,
+                  lastNonterminalStage: TERMINAL_JOB_STATES.has(job.state)
+                    ? previous.lastNonterminalStage
+                    : job.state,
+                }
+              : previous
+          );
+        });
+        applyJobStatus(submissionId, final);
+        if (
+          autoOpen &&
+          trackedJobsRef.current.every(
+            (job) =>
+              job.submission.submissionId === submissionId ||
+              (
+                job.status !== null &&
+                TERMINAL_JOB_STATES.has(job.status.state)
+              ),
+          ) &&
+          final.state === "completed"
+        ) {
+          const current = trackedJobsRef.current.find(
+            (job) => job.submission.submissionId === submissionId,
+          );
+          if (current) await openCompletedJob(current);
+        }
+      } catch (error) {
+        const terminal = jobStatusFromError(error);
+        if (terminal) applyJobStatus(submissionId, terminal);
+        updateTrackedJob(submissionId, (current) => ({
+          ...current,
+          clientError: terminal ? null : errorMessage(error),
+        }));
+        if (
+          autoOpen &&
+          sourceFile &&
+          trackedJobsRef.current.every(
+            (job) =>
+              job.submission.submissionId === submissionId ||
+              (
+                job.status !== null &&
+                TERMINAL_JOB_STATES.has(job.status.state)
+              ),
+          )
+        ) {
+          setState({
+            phase: "failed",
+            file: sourceFile,
+            base,
+            submissionId,
+            failedAt: lastNonterminal,
+            issues: [errorMessage(error)],
+            issueTitle: "处理未完成",
+          });
+        }
+      } finally {
+        pollingJobsRef.current.delete(jobId);
+      }
+    },
+    [apiClient, applyJobStatus, openCompletedJob, updateTrackedJob],
+  );
+
+  const submitUpload = useCallback(
+    async (
+      base: string,
+      file: File,
+      existing?: StoredSubmission,
+    ) => {
       const root = normalizeBase(base);
+      const signature = `${root}\0${file.name}\0${file.size}\0${file.lastModified}`;
+      if (inflightUploadsRef.current.has(signature)) return;
+
+      const submission: StoredSubmission = existing ?? {
+        submissionId: crypto.randomUUID(),
+        jobId: null,
+        base: root,
+        fileName: file.name,
+        submittedAt: new Date().toISOString(),
+      };
+      const autoOpen = trackedJobsRef.current.every(
+        (job) =>
+          job.submission.submissionId === submission.submissionId ||
+          (
+            job.status !== null &&
+            TERMINAL_JOB_STATES.has(job.status.state)
+          ),
+      );
+      inflightUploadsRef.current.set(signature, submission.submissionId);
+      upsertSubmission(localStorage, submission);
+      updateTrackedJobs((current) => {
+        const retained = current.filter(
+          (job) =>
+            job.submission.submissionId !== submission.submissionId,
+        );
+        return [...retained, trackedFromSubmission(submission)];
+      });
       setState({
         phase: "processing",
         file,
         base: root,
+        submissionId: submission.submissionId,
         jobState: "preflight",
         lastNonterminalStage: "preflight",
       });
+
       try {
-        const jobId = await apiClient.uploadSong(root, file);
-        setState({
-          phase: "processing",
+        const accepted = await apiClient.uploadSong(
+          root,
           file,
-          base: root,
-          jobId,
-          jobState: "queued",
-          lastNonterminalStage: "queued",
+          submission.submissionId,
+        );
+        if (!accepted.job_id) {
+          throw new ApiError("upload response did not include a Job ID");
+        }
+        const acceptedSubmission = {
+          ...submission,
+          jobId: accepted.job_id,
+        };
+        upsertSubmission(localStorage, acceptedSubmission);
+        updateTrackedJob(submission.submissionId, (current) => ({
+          ...current,
+          submission: acceptedSubmission,
+          status: accepted,
+          clientState: "accepted",
+          clientError: null,
+          lastNonterminalState: TERMINAL_JOB_STATES.has(accepted.state)
+            ? current.lastNonterminalState
+            : accepted.state,
+        }));
+        if (accepted.capacity) setQueueCapacity(accepted.capacity);
+        setState((previous) =>
+          previous.phase === "processing" &&
+          previous.submissionId === submission.submissionId
+            ? {
+                ...previous,
+                jobId: accepted.job_id,
+                jobState: accepted.state,
+                lastNonterminalStage: TERMINAL_JOB_STATES.has(accepted.state)
+                  ? previous.lastNonterminalStage
+                  : accepted.state,
+              }
+            : previous
+        );
+        await pollTrackedJob(acceptedSubmission, {
+          autoOpen,
+          sourceFile: file,
         });
-        await apiClient.pollJob(root, jobId, (job) =>
-          setState((previous) => ({
-            phase: "processing",
-            file,
-            base: root,
-            jobId,
-            jobState: job.state,
-            lastNonterminalStage:
-              job.state === "failed" && previous.phase === "processing"
-                ? previous.lastNonterminalStage
-                : job.state,
-          })),
-        );
-        enterLoaded(
-          await apiClient.fetchPatchBundle(root, jobId, decode),
-          { kind: "api", base: root, jobId, fileName: file.name },
-        );
       } catch (error) {
         const preflight = isPreflightRejection(error);
-        setState((previous) => ({
-          phase: "failed",
-          file,
-          base,
-          failedAt:
-            preflight
-              ? "preflight"
-              : previous.phase === "processing"
-                ? previous.lastNonterminalStage
-                : "upload",
-          issues:
-            error instanceof PatchValidationError
-              ? error.issues
-              : [errorMessage(error)],
-          issueTitle:
-            preflight
-              ? "上传未通过检查"
-              : error instanceof PatchValidationError
-                ? "patch.json 未通过 lmdj.patch.v1 校验"
-                : "处理未完成",
+        updateTrackedJob(submission.submissionId, (current) => ({
+          ...current,
+          clientError: errorMessage(error),
         }));
+        if (trackedJobsRef.current.length === 1) {
+          setState({
+            phase: "failed",
+            file,
+            base: root,
+            submissionId: submission.submissionId,
+            failedAt: preflight ? "preflight" : "upload",
+            issues:
+              error instanceof PatchValidationError
+                ? error.issues
+                : [errorMessage(error)],
+            issueTitle:
+              preflight
+                ? "上传未通过检查"
+                : error instanceof PatchValidationError
+                  ? "patch.json 未通过 lmdj.patch.v1 校验"
+                  : "处理未完成",
+          });
+        }
+      } finally {
+        inflightUploadsRef.current.delete(signature);
       }
     },
-    [apiClient, decode, enterLoaded],
+    [apiClient, pollTrackedJob, updateTrackedJob, updateTrackedJobs],
   );
+
+  const handleUpload = useCallback(
+    (base: string, file: File) => submitUpload(base, file),
+    [submitUpload],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    const restored = [...trackedJobsRef.current];
+    if (restored.length === 0) return;
+
+    for (const base of new Set(
+      restored.map((job) => job.submission.base),
+    )) {
+      void apiClient.fetchQueueCapacity(base).then(
+        (capacity) => {
+          if (!cancelled) setQueueCapacity(capacity);
+        },
+        () => undefined,
+      );
+    }
+
+    for (const tracked of restored) {
+      const { submission } = tracked;
+      void (
+        submission.jobId
+          ? apiClient.fetchJob(submission.base, submission.jobId)
+          : apiClient.resolveSubmission(
+              submission.base,
+              submission.submissionId,
+            )
+      ).then(
+        (status) => {
+          if (cancelled || !status.job_id) return;
+          const recovered = {
+            ...submission,
+            jobId: status.job_id,
+          };
+          upsertSubmission(localStorage, recovered);
+          updateTrackedJob(submission.submissionId, (current) => ({
+            ...current,
+            submission: recovered,
+          }));
+          applyJobStatus(submission.submissionId, status);
+          if (!TERMINAL_JOB_STATES.has(status.state)) {
+            void pollTrackedJob(recovered, { autoOpen: false });
+          }
+        },
+        (error) => {
+          if (cancelled) return;
+          updateTrackedJob(submission.submissionId, (current) => ({
+            ...current,
+            clientError:
+              error instanceof ApiError && error.status === 404
+                ? "服务器未找到这次提交；请重新选择源文件提交。"
+                : errorMessage(error),
+          }));
+        },
+      );
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    apiClient,
+    applyJobStatus,
+    pollTrackedJob,
+    updateTrackedJob,
+  ]);
 
   const requestExportStatus = useCallback(
     async (source: ApiLoadedSource) => {
@@ -338,6 +671,11 @@ export function App({
                 }
                 onUpload={(base, file) => void handleUpload(base, file)}
               />
+              <JobQueuePanel
+                jobs={trackedJobs}
+                capacity={queueCapacity}
+                onOpenCompleted={(job) => void openCompletedJob(job)}
+              />
               {state.issues && (
                 <ErrorPanel
                   title={
@@ -379,6 +717,11 @@ export function App({
             <ProcessingPanel
               fileName={state.file.name}
               state={state.jobState}
+              lastNonterminalState={state.lastNonterminalStage}
+              jobs={trackedJobs}
+              capacity={queueCapacity}
+              onUpload={(base, file) => void handleUpload(base, file)}
+              onOpenCompleted={(job) => void openCompletedJob(job)}
             />
           }
           inspector={
@@ -427,7 +770,19 @@ export function App({
                 </div>
               </dl>
               <div className="failed-actions">
-                <button onClick={() => void handleUpload(state.base, state.file)}>
+                <button
+                  onClick={() => {
+                    const tracked = trackedJobsRef.current.find(
+                      (job) =>
+                        job.submission.submissionId === state.submissionId,
+                    );
+                    void submitUpload(
+                      state.base,
+                      state.file,
+                      tracked?.submission,
+                    );
+                  }}
+                >
                   Retry
                 </button>
                 <button onClick={backToUpload}>Back</button>
@@ -437,8 +792,8 @@ export function App({
           inspector={
             <div className="state-inspector">
               <strong>Source retained</strong>
-              <p>Retry starts a new upload and preflight.</p>
-              <p>No failed Job is reused.</p>
+              <p>Retry reuses the same submission identity.</p>
+              <p>The API returns the existing Job if it already accepted it.</p>
             </div>
           }
           status={
