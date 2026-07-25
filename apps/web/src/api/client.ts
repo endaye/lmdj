@@ -3,7 +3,11 @@ import { loadPatch, type PatchBundle } from "../patch/loader";
 const DEFAULT_BASE = "http://localhost:8000";
 
 export class ApiError extends Error {
-  constructor(message: string, public readonly status?: number) {
+  constructor(
+    message: string,
+    public readonly status?: number,
+    public readonly detail?: unknown,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -15,6 +19,42 @@ export interface JobStatus {
   patch_id: string | null;
   package_dir: string | null;
   quality: string | null;
+}
+
+export type ExportItemStatus = "ready" | "review" | "missing";
+
+export interface CreatorExportItem {
+  status: ExportItemStatus;
+  paths?: string[];
+  missing?: string[];
+}
+
+export interface CreatorExportStatus {
+  status: "complete" | "partial";
+  downloadable: boolean;
+  items: {
+    stems: CreatorExportItem;
+    samples: CreatorExportItem;
+    midi: CreatorExportItem;
+    music: CreatorExportItem;
+  };
+  missing: string[];
+  warnings: string[];
+  music: {
+    bpm?: number;
+    key?: { value: string; confidence: number } | null;
+    time_signature?: {
+      numerator: number;
+      denominator: number;
+      source: string;
+    };
+    loop?: {
+      seconds: number;
+      steps: number;
+      beats: number;
+      bars: number;
+    };
+  };
 }
 
 export type DecodeFn = (b: ArrayBuffer) => Promise<unknown>;
@@ -29,9 +69,45 @@ export async function uploadSong(base: string, file: File): Promise<string> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${normalizeBase(base)}/uploads`, { method: "POST", body: form });
-  if (!res.ok) throw new ApiError(`upload failed (HTTP ${res.status})`, res.status);
+  if (!res.ok) {
+    let detail: unknown;
+    try {
+      const body = (await res.json()) as { detail?: unknown };
+      detail = body.detail;
+    } catch {
+      detail = undefined;
+    }
+    throw new ApiError(uploadErrorMessage(res.status, detail), res.status, detail);
+  }
   const body = (await res.json()) as { job_id: string };
   return body.job_id;
+}
+
+function uploadErrorMessage(status: number, detail: unknown): string {
+  if (typeof detail === "string" && detail) return detail;
+  if (!detail || typeof detail !== "object") {
+    return `upload failed (HTTP ${status})`;
+  }
+  const value = detail as Record<string, unknown>;
+  if (value.code === "file_too_large" && typeof value.max_bytes === "number") {
+    return `文件超过最大限制：${value.max_bytes} bytes`;
+  }
+  if (value.code === "unsupported_audio" && Array.isArray(value.supported)) {
+    return `不支持的音频格式；支持 ${value.supported.join(", ")}`;
+  }
+  if (
+    value.code === "duration_too_long" &&
+    typeof value.max_duration_seconds === "number"
+  ) {
+    return `音频时长超过最大限制：${value.max_duration_seconds} 秒`;
+  }
+  if (
+    value.code === "audio_probe_timeout" &&
+    typeof value.timeout_seconds === "number"
+  ) {
+    return `音频检查超时：${value.timeout_seconds} 秒`;
+  }
+  return `upload failed (HTTP ${status})`;
 }
 
 export interface PollOpts {
@@ -88,10 +164,63 @@ export async function fetchPatchBundle(
   return loadPatch(files, decode);
 }
 
+async function responseDetail(response: Response): Promise<unknown> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return body.detail;
+  } catch {
+    return undefined;
+  }
+}
+
+export async function fetchCreatorExportStatus(
+  base: string,
+  jobId: string,
+): Promise<CreatorExportStatus> {
+  const response = await fetch(
+    `${normalizeBase(base)}/jobs/${jobId}/export/status`,
+  );
+  if (!response.ok) {
+    const detail = await responseDetail(response);
+    throw new ApiError(
+      `export status failed (HTTP ${response.status})`,
+      response.status,
+      detail,
+    );
+  }
+  return (await response.json()) as CreatorExportStatus;
+}
+
+export async function downloadCreatorExport(
+  base: string,
+  jobId: string,
+): Promise<Blob> {
+  const response = await fetch(
+    `${normalizeBase(base)}/jobs/${jobId}/export`,
+  );
+  if (!response.ok) {
+    const detail = await responseDetail(response);
+    throw new ApiError(
+      `Creator export failed (HTTP ${response.status})`,
+      response.status,
+      detail,
+    );
+  }
+  return response.blob();
+}
+
 export interface ApiClient {
   uploadSong: typeof uploadSong;
   pollJob: typeof pollJob;
   fetchPatchBundle: typeof fetchPatchBundle;
+  fetchCreatorExportStatus: typeof fetchCreatorExportStatus;
+  downloadCreatorExport: typeof downloadCreatorExport;
 }
 
-export const defaultApiClient: ApiClient = { uploadSong, pollJob, fetchPatchBundle };
+export const defaultApiClient: ApiClient = {
+  uploadSong,
+  pollJob,
+  fetchPatchBundle,
+  fetchCreatorExportStatus,
+  downloadCreatorExport,
+};

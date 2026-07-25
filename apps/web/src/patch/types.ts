@@ -19,7 +19,11 @@ export interface LmdjPatchV1 {
    * @minItems 1
    */
   patterns: [Pattern, ...Pattern[]];
-  pads: Pad[];
+  /**
+   * @minItems 16
+   * @maxItems 16
+   */
+  pads: [Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad, Pad];
   /**
    * @minItems 1
    */
@@ -78,7 +82,28 @@ export interface Pad {
 export interface Scene {
   scene_id: string;
   name: string;
-  pad_indexes: number[];
+  /**
+   * @minItems 16
+   * @maxItems 16
+   */
+  pad_indexes: [
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number,
+    number
+  ];
   pattern_ids: string[];
   intent: string;
   [k: string]: unknown;

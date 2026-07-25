@@ -1,14 +1,45 @@
 import json
 import shutil
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
 
 from lmdj_audio_worker.job import process_job
+from lmdj_audio_worker.music_metadata import KeyEstimate
 from lmdj_audio_worker.runner import PipelineRunError
 from lmdj_audio_worker.status import read_status
 
 from tests.conftest import GOLDEN, FakeRunner
+
+
+class FakeKeyAnalyzer:
+    def __init__(
+        self,
+        estimate: KeyEstimate | None = None,
+        error: Exception | None = None,
+    ) -> None:
+        self.estimate = estimate or KeyEstimate("C major", 0.8)
+        self.error = error
+        self.calls: list[Path] = []
+
+    def analyze(self, audio: Path) -> KeyEstimate:
+        self.calls.append(audio)
+        if self.error:
+            raise self.error
+        return self.estimate
+
+
+class ReportSongIdRunner(FakeRunner):
+    """模拟 demo：report.json 记录 PipelineRunner 收到的 song_id。"""
+
+    def run(self, audio: Path, out_dir: Path, song_id: str) -> Path:
+        package_dir = super().run(audio, out_dir, song_id)
+        report_path = package_dir / "report.json"
+        report = json.loads(report_path.read_text())
+        report["song_id"] = song_id
+        report_path.write_text(json.dumps(report))
+        return package_dir
 
 
 def test_happy_path_completes_with_patch(tmp_path: Path, sample_audio: Path, fake_runner: FakeRunner):
@@ -18,12 +49,33 @@ def test_happy_path_completes_with_patch(tmp_path: Path, sample_audio: Path, fak
 
     assert final.state == "completed"
     assert final.quality == "passed"
-    assert final.package_dir == "jobtest"
+    assert final.package_dir == f"source-{sha256(sample_audio.read_bytes()).hexdigest()}"
     assert final.patch_id and final.patch_id.startswith("testsong-")  # fixture 的 report.song_id
     job_dir = jobs_root / "jobtest"
     assert (job_dir / "input" / sample_audio.name).exists()
-    assert (job_dir / "jobtest" / "patch.json").exists()
+    assert (job_dir / (final.package_dir or "") / "patch.json").exists()
     assert read_status(job_dir).state == "completed"
+
+
+def test_same_audio_across_jobs_uses_stable_source_identity_for_full_patch_id(
+    tmp_path: Path,
+    sample_audio: Path,
+) -> None:
+    runner = ReportSongIdRunner()
+    jobs_root = tmp_path / "jobs"
+
+    first = process_job(sample_audio, jobs_root=jobs_root, runner=runner, job_id="job-one")
+    second = process_job(sample_audio, jobs_root=jobs_root, runner=runner, job_id="job-two")
+    different_audio = tmp_path / "different.wav"
+    different_audio.write_bytes(b"RIFF....WAVEfmt different-audio")
+    third = process_job(different_audio, jobs_root=jobs_root, runner=runner, job_id="job-three")
+
+    expected_source_id = f"source-{sha256(sample_audio.read_bytes()).hexdigest()}"
+    received_source_ids = [call[2] for call in runner.calls]
+    assert received_source_ids[:2] == [expected_source_id, expected_source_id]
+    assert received_source_ids[2] != expected_source_id
+    assert first.patch_id == second.patch_id
+    assert third.patch_id != first.patch_id
 
 
 def test_state_sequence_is_persisted_per_transition(tmp_path: Path, sample_audio: Path):
@@ -41,6 +93,59 @@ def test_state_sequence_is_persisted_per_transition(tmp_path: Path, sample_audio
 
     assert transitions == ["queued", "separating", "patchifying", "completed"]
     assert seen == ["separating"]
+
+
+def test_export_source_is_written_before_completed(
+    tmp_path: Path,
+    sample_audio: Path,
+) -> None:
+    jobs_root = tmp_path / "jobs"
+    job_dir = jobs_root / "jobtest"
+    key_analyzer = FakeKeyAnalyzer(KeyEstimate("A minor", 0.72))
+    inventory_seen: list[bool] = []
+
+    final = process_job(
+        sample_audio,
+        jobs_root=jobs_root,
+        runner=FakeRunner(),
+        job_id="jobtest",
+        key_analyzer=key_analyzer,
+        on_state=lambda status: (
+            inventory_seen.append(
+                (job_dir / (status.package_dir or "") / "export-source.json").exists(),
+            )
+            if status.state == "completed"
+            else None
+        ),
+    )
+
+    source = json.loads((job_dir / (final.package_dir or "") / "export-source.json").read_text())
+    assert final.state == "completed"
+    assert inventory_seen == [True]
+    assert key_analyzer.calls == [job_dir / "input" / sample_audio.name]
+    assert source["music"]["key"] == {"value": "A minor", "confidence": 0.72}
+
+
+def test_key_analysis_failure_keeps_playable_job_completed_with_partial_inventory(
+    tmp_path: Path,
+    sample_audio: Path,
+) -> None:
+    jobs_root = tmp_path / "jobs"
+
+    final = process_job(
+        sample_audio,
+        jobs_root=jobs_root,
+        runner=FakeRunner(),
+        job_id="jobtest",
+        key_analyzer=FakeKeyAnalyzer(error=RuntimeError("metadata unavailable")),
+    )
+
+    source = json.loads(
+        (jobs_root / "jobtest" / (final.package_dir or "") / "export-source.json").read_text(),
+    )
+    assert final.state == "completed"
+    assert source["music"]["key"] is None
+    assert "metadata unavailable" in source["warnings"][0]
 
 
 def test_rejected_pipeline_is_completed_with_quality_flag(tmp_path: Path, sample_audio: Path):

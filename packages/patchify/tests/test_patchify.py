@@ -21,6 +21,10 @@ def test_patchify_package_writes_valid_patch_json(golden_package: Path):
     assert data["patterns"][0]["length_steps"] == patch.patterns[0].length_steps
     assert data["patterns"][0]["notes"], "patterns must carry normalized notes"
     assert data["scenes"][0]["pattern_ids"] == ["pattern_original"]
+    assert len(data["pads"]) == 16
+    assert [pad["index"] for pad in data["pads"]] == list(range(16))
+    assert all(pad["action"] == "empty" for pad in data["pads"][8:16])
+    assert data["scenes"][0]["pad_indexes"] == list(range(16))
 
     element_ids = {e["element_id"] for e in data["elements"]}
     mapped = {eid for pad in data["pads"] for eid in pad["behavior"].get("element_ids", [])}

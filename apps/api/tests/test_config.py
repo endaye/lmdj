@@ -3,6 +3,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from lmdj_api.app import create_app, default_jobs_root
+from lmdj_api.preflight import UploadLimits, limits_from_env
 from tests.conftest import FakeRunner
 
 
@@ -44,3 +45,27 @@ def test_default_jobs_root_fallback(monkeypatch):
     monkeypatch.delenv("LMDJ_JOBS_ROOT", raising=False)
 
     assert default_jobs_root().name == "jobs"
+
+
+def test_upload_limits_have_stage_one_defaults(monkeypatch):
+    monkeypatch.delenv("LMDJ_UPLOAD_MAX_BYTES", raising=False)
+    monkeypatch.delenv("LMDJ_UPLOAD_MAX_DURATION_SECONDS", raising=False)
+    monkeypatch.delenv("LMDJ_FFPROBE_TIMEOUT_SECONDS", raising=False)
+
+    assert limits_from_env() == UploadLimits(
+        max_bytes=200 * 1024 * 1024,
+        max_duration_seconds=600,
+        ffprobe_timeout_seconds=15,
+    )
+
+
+def test_upload_limits_accept_environment_overrides(monkeypatch):
+    monkeypatch.setenv("LMDJ_UPLOAD_MAX_BYTES", "123456")
+    monkeypatch.setenv("LMDJ_UPLOAD_MAX_DURATION_SECONDS", "42.5")
+    monkeypatch.setenv("LMDJ_FFPROBE_TIMEOUT_SECONDS", "3.25")
+
+    assert limits_from_env() == UploadLimits(
+        max_bytes=123456,
+        max_duration_seconds=42.5,
+        ffprobe_timeout_seconds=3.25,
+    )

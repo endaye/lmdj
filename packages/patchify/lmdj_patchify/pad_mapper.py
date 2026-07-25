@@ -11,7 +11,9 @@ FOCUS_SLOTS = [
     "Drop",
     "Mute",
     "FX/Variation",
+    *[f"Slot {index + 1:02d}" for index in range(8, 16)],
 ]
+_EMPTY_SLOTS = FOCUS_SLOTS[8:]
 
 _SEMANTIC_ROLES = ("drums", "bass", "harmony", "lead")
 
@@ -29,17 +31,24 @@ def map_focus_pads(elements: list[Element]) -> list[Pad]:
         # demo 从不产出 lead/vocal 名；melody 第二候选 fallback 到 Lead/Vocal 槽位
         groups["lead"] = [groups["harmony"].pop(1)]
 
-    return [
+    semantic = [
         _group_pad(0, "Drums", groups["drums"]),
         _group_pad(1, "Bass", groups["bass"]),
         _group_pad(2, "Harmony", groups["harmony"]),
         _group_pad(3, "Lead/Vocal", groups["lead"]),
+    ]
+    controls = [
         # reserved actions：v1 无语义，消费方必须 no-op（见 schema description）
         Pad(4, "Fill", "Fill", "scene_fill", None, {"quantize": "1 bar"}),
         Pad(5, "Drop", "Drop", "scene_drop", None, {"quantize": "1 bar"}),
         Pad(6, "Mute", "Mute", "mute_group", None, {"target": "selected_or_master"}),
         Pad(7, "FX/Variation", "FX", "ai_variation", None, {"scope": "scene"}),
     ]
+    empty = [
+        Pad(index, slot, "Empty", "empty", None, {})
+        for index, slot in enumerate(_EMPTY_SLOTS, start=8)
+    ]
+    return semantic + controls + empty
 
 
 def _group_pad(index: int, slot: str, group: list[Element]) -> Pad:

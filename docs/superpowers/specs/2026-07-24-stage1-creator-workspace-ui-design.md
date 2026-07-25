@@ -1,9 +1,10 @@
 # LMDJ Stage 1 Creator Workspace UI 设计
 
 - 日期：2026-07-24
-- 状态：已评审设计，尚未实施
+- 状态：用户已书面确认；尚未实施
 - 目标落点：`apps/web/`
 - 视觉基准：1440×900，自适应到不同宽高比
+- 首条切片边界：[LMDJ Stage 1 Creator Core 首条纵向切片设计](./2026-07-24-stage1-creator-core-slice-design.md)
 
 ## 1. 设计结论
 
@@ -42,6 +43,15 @@ Stage 1 使用 **Instrument-first Canvas**：
 - Generate、Line-in、AI Variation 与 Creator Export 的完整后端能力。
 
 实现不得把“Schema 能解析任意数量的 pads”误报成“16-pad 端到端已支持”。16-pad 必须由 producer、共享契约语义、Web、CLI/Worker/API 相关测试一起迁移。
+
+### 2.4 首条 Creator Core 切片采用范围
+
+当前首条切片直接采用本文的信息架构、视觉系统、响应式规则、Pad 状态、页面状态、可访问性和测试要求，但只启用已经进入该切片的功能：
+
+- 启用：Upload、Processing、Pattern、固定 16-pad、键盘 / MIDI 演奏、Quality Needs Review、Failed、Creator Export Checklist。
+- 后置：Generate、Line-in、Chop / Sampler Edit、AI Preview、Take、Pattern A–D 编辑和 DAW-specific project。
+- 后置功能不得以可交互假入口、假数据或伪成功状态出现在首条切片。
+- UI 规范以本文为唯一来源；Core Slice Spec 只定义产品范围、数据契约、API 和导出行为，不维护另一套布局或视觉规则。
 
 ## 3. 设计输入
 
@@ -104,7 +114,7 @@ Stage 1 使用 **Instrument-first Canvas**：
 
 ### 5.2 Creator Tools
 
-左栏是稳定工具模式：
+左栏是完整 Stage 1 的稳定工具模式：
 
 | 模式 | 职责 |
 |---|---|
@@ -115,6 +125,8 @@ Stage 1 使用 **Instrument-first Canvas**：
 | Takes | Record、Replay、Take 列表 |
 
 切换工具模式不改变 Pad 的空间位置或演奏语义。
+
+首条 Creator Core 切片只呈现已经可用的 Source / Performance / Export 能力；Chop、AI、Takes 等后置模式不渲染为可交互工具。
 
 ### 5.3 Pattern Surface
 
@@ -130,6 +142,7 @@ Stage 1 使用 **Instrument-first Canvas**：
 - 顶排默认键盘提示为 `1 2 3 4 5 6 7 8`。
 - 底排默认键盘提示为 `Q W E R T Y U I`。
 - 通用 8-pad Controller 使用 Bank A/B 映射；UI 必须同时显示逻辑 Slot 与当前硬件 Bank。
+- 键盘直接覆盖 16 个逻辑 Slot，不随 MIDI Bank 切换。
 - 16-pad Grid 的整体宽高比为 4:1；每个 Pad 使用 `aspect-ratio: 1`。
 
 ### 5.5 Context Inspector
@@ -140,6 +153,8 @@ Stage 1 使用 **Instrument-first Canvas**：
 - 选中 Pad：声音名、角色、波形、Start/End、Mode、Volume、Mute、Swap。
 - AI Preview：原素材与候选素材的 Compare、Accept、Discard。
 - 窄屏：右侧抽屉或全高 Sheet，不占据常驻列。
+
+首条 Creator Core 切片只启用 Patch 摘要、质量、Export blocker，以及所选 Pad 的只读声音 / 角色 / 状态信息；Start/End、Mode、Volume、Swap 和 AI Preview 控件随对应产品能力后置。
 
 ### 5.6 Status Bar
 
@@ -273,13 +288,15 @@ Pad 内优先级：
 
 ### 9.1 Empty / Source
 
-同一 Source 面板提供：
+完整 Stage 1 的同一 Source 面板提供：
 
 - Generate。
 - Upload。
 - Line-in。
 
 Upload 在处理前显示格式、时长与体积限制。原始音频进入项目后必须持久保留。
+
+首条 Creator Core 切片只启用 Upload；Generate 和 Line-in 不显示为可交互入口。
 
 ### 9.2 Processing
 
@@ -306,7 +323,7 @@ Input Validated → Stem Separation → Chop + Map → Patch Verify
 - 16-pad 在下。
 - 可通过点击、键盘或 MIDI 触发。
 - Pad 选择驱动 Inspector。
-- Take、AI Preview 和 Export 使用相同 Patch 状态。
+- 完整 Stage 1 中 Take、AI Preview 和 Export 使用相同 Patch 状态；首条切片只启用 Export。
 
 ### 9.4 Quality Needs Review
 
@@ -333,11 +350,9 @@ Export 是清单，不是单一成功 Toast：
 | Stems | Ready / Review / Missing |
 | Samples / Slices | Ready / Review / Missing |
 | MIDI | Ready / Missing |
-| Full Take | Ready / Missing |
 | BPM / Key / Time Signature / Loop Metadata | Ready / Missing |
-| DAW-specific project | Available / Unsupported / Failed |
 
-部分导出必须标为 Partial，并列出缺失项。
+Full Take 和 DAW-specific project 属于后续 Stage 1，不进入首条切片清单。部分导出必须标为 Partial 并列出缺失项；首条切片遇到必需项缺失时不下载被标成成功的 ZIP。
 
 ## 10. 数据流与组件边界
 
@@ -361,6 +376,7 @@ Source UI
 - Web 仍只读取 `patch.json` 和其中引用的文件。
 - 不读取 `lanes.json`、`chart.mid` 或 `report.json` 来补 UI。
 - 处理质量、Export blocker、Asset 来源等新信息必须进入正式产品契约或 API 状态模型。
+- ExportChecklist 读取 Creator Core Spec 定义的 `/jobs/{job_id}/export/status`；它不从 Patch 猜测 Stem、Key 或导出完整性，status 与 ZIP 下载共用服务端 inspection 规则。
 
 ### 10.2 16-pad 契约迁移
 
@@ -370,13 +386,15 @@ Source UI
 - Patchify 固定产出 8 个 Focus Slots。
 - Web 默认键位和测试固定为 8。
 
-本设计决定继续使用 `lmdj.patch.v1` 的可变长度 `pads`，正式支持 8-pad 旧 Patch 与 16-pad Stage 1 Patch。仅增加 Pad 数量不创建新 Schema 版本；若实施需要新增必填字段或改变既有字段语义，则必须另行评审 Schema 版本。
+本设计决定在首条 Creator Core 切片内原子收紧 `lmdj.patch.v1`：`pads` 必须恰好 16 项，数组顺序与 `Pad.index` 都是 `0..15`，`Scene.pad_indexes` 完整覆盖 `0..15`。未分配素材的位置也是正式数据 Pad，使用 `action: "empty"`；Web 不补槽、不截断、不创建 view-only Pad。
+
+Stage 1 正式输入不兼容 8-pad 旧 Patch。由于当前产品尚未发布外部稳定契约，本次迁移保留 `lmdj.patch.v1` 名称并同步所有 producer、消费者、生成物和 fixtures；若实施还需要新增必填字段或改变其他既有字段语义，必须另行评审 Schema 版本。
 
 实现 16-pad 时必须：
 
-1. 在 Decision Log 确认 16 个 Slot 的正式语义和 reserved/live action。
+1. 以 Decision Log 已确认的固定 16 个数据 Pad 为准。
 2. 原子更新 Core Models、Patchify、Audio Worker、API fixture、Web Contract 输出与测试。
-3. 保留对旧 8-pad Patch 的兼容展示：8 个 Pad 正常显示，其余 Slot 为 Empty；不得伪造音频。
+3. standard profile 保留既有前八个 Slot 语义；`8..15` 在尚无素材映射时输出真实 Empty Pad，不伪造音频。
 4. `npm run sync-contract` 后以 `npm run check-contract` 防止生成物漂移。
 
 ### 10.3 主要 UI 单元
@@ -405,7 +423,7 @@ Source UI
 | 只有部分 Pad 可播放 | 可播放 Pad 正常工作；其余为 Empty/Error |
 | 音频文件缺失或解码失败 | 对应 Pad Error；Pattern 数据不删除 |
 | AI Preview 失败 | 当前 Pad 不变，候选标 Failed，可重试 |
-| Export 部分失败 | 清单标 Partial，允许导出已完成项 |
+| Export 部分失败 | 清单标 Partial 并列出缺失项；首条切片不下载伪成功 ZIP |
 | 未知 Job 状态 | 显示可读的 Unknown 状态和原始阶段名，不重置进度 |
 
 ## 12. 可访问性
@@ -423,20 +441,28 @@ Source UI
 
 ### 13.1 合同测试
 
-- 8-pad 旧 Patch 兼容。
-- 16-pad 新 Patch 完整渲染。
+- `patch.pads` 恰好 16 项，数组顺序和 index 都是 `0..15`。
+- 15 项、17 项、乱序或重复 index 的 Patch 被拒绝。
+- 16-pad Patch 完整渲染；Empty Pad 来自数据而不是 UI 补位。
 - `scene.pad_indexes` 覆盖 0–15。
 - reserved / unknown action 仍为 disabled/no-op。
 - Web 只读 `patch.json`。
 
 ### 13.2 组件测试
 
+首条 Creator Core 切片必须覆盖：
+
 - 渲染恰好 16 个 Slot。
 - Pattern 在 DOM 与视觉顺序上位于 Pad Grid 之前。
 - 选中 Pad 更新 Inspector。
-- AI Preview 不替换当前 Asset，Accept 后才切换。
 - Missing / Error / Muted 不只依赖颜色。
 - Keyboard 与 MIDI 映射触发正确逻辑 Slot。
+
+后续 Stage 1 能力启用时再增加：
+
+- AI Preview 不替换当前 Asset，Accept 后才切换。
+- Sampler 编辑动作更新 Inspector，但不改变 Pad 的逻辑 Slot。
+- Take Recording 不改变当前 Patch 的可演奏状态。
 
 ### 13.3 响应式测试
 
@@ -457,26 +483,28 @@ Source UI
 - Inspector 抽屉不遮挡当前触发反馈。
 - 低高度窗口可以滚动，Pad 不被压扁。
 
-### 13.4 端到端验收
+### 13.4 首条 Creator Core 切片端到端验收
 
 1. Upload 一首真实音频并看到真实处理阶段。
 2. 得到 16 个逻辑 Slot；没有素材的 Slot 明确显示 Empty。
 3. 点击、键盘和 MIDI 触发一致。
 4. Pattern 位于 Pad 上方并跟随播放头。
-5. AI Variation 可 Compare、Discard、Accept，原素材在 Accept 前不变。
-6. 录制 Take 后可回放。
-7. Export 清单可区分 Ready、Review、Missing 和 Partial。
-8. 质量不足或处理失败时，Source 和成功产物不丢失。
+5. Export 清单可区分 Ready、Review、Missing 和 Partial；必需项缺失时不下载伪成功 ZIP。
+6. 质量不足或处理失败时，Source 和成功产物不丢失。
+
+### 13.5 后续 Stage 1 UI 验收
+
+1. AI Variation 可 Compare、Discard、Accept，原素材在 Accept 前不变。
+2. 录制 Take 后可回放并进入后续 Export 清单。
+3. Generate、Line-in、Chop 和 Pattern A–D 在各自产品能力落地后再启用。
 
 ## 14. 实施顺序建议
 
-1. 记录 16-pad Slot 与契约迁移决策。
-2. 更新 producer、fixture 与 contract tests。
-3. 建立视觉 token、WorkbenchShell 和响应式骨架。
-4. 实现 Pattern 上 / Square Pad 下的 16-pad Surface。
-5. 实现 Context Inspector 与 Pad 状态。
-6. 整合 Source、Processing 与失败状态。
-7. 实现 AI Preview、Take 与 Export Checklist。
-8. 完成响应式、可访问性与真实浏览器验收。
+1. 按固定 16 Pad 决策更新 producer、fixture 与 contract tests。
+2. 建立视觉 token、WorkbenchShell 和响应式骨架。
+3. 实现 Pattern 上 / Square Pad 下的 16-pad Surface。
+4. 整合 Upload、Processing、Context Inspector、Pad 状态与 Export Checklist。
+5. 完成首条切片的响应式、可访问性与真实浏览器验收。
+6. 后续再实现 Generate、Line-in、Chop、AI Preview、Take 与 Pattern A–D。
 
 这份文档定义产品与 UI 设计，不替代逐文件实施计划。

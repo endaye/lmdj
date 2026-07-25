@@ -27,11 +27,12 @@ def test_run_completes_and_status_reads_back(tmp_path: Path, sample_audio: Path)
     assert result.returncode == 0, result.stderr
     assert "-> completed" in result.stdout
     assert "patch.json" in result.stdout
-    assert (jobs_root / "clitest" / "clitest" / "patch.json").exists()
 
     status = run_cli("status", "clitest", "--jobs-root", str(jobs_root))
     assert status.returncode == 0
-    assert json.loads(status.stdout)["state"] == "completed"
+    completed = json.loads(status.stdout)
+    assert completed["state"] == "completed"
+    assert (jobs_root / "clitest" / completed["package_dir"] / "patch.json").exists()
 
 
 def test_run_failure_exits_1_with_error(tmp_path: Path, sample_audio: Path):

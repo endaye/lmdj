@@ -25,3 +25,12 @@ def test_schema_rejects_wrong_schema_id():
     data["schema"] = "lmdj.patch.v0"
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(data, schema)
+
+
+def test_schema_rejects_any_pad_count_other_than_16():
+    schema = load_patch_schema()
+    data = _sample_patch().to_dict()
+    for pads in (data["pads"][:15], data["pads"] + [data["pads"][-1]]):
+        invalid = {**data, "pads": pads}
+        with pytest.raises(jsonschema.ValidationError):
+            jsonschema.validate(invalid, schema)

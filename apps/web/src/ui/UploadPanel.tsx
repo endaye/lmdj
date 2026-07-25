@@ -8,7 +8,7 @@ export function UploadPanel({ onUpload }: { onUpload: (base: string, file: File)
 
   return (
     <div className="upload-panel" data-testid="api-panel">
-      <div className="upload-panel-title">从 API 加载（上传歌曲）</div>
+      <div className="upload-panel-title">Upload audio</div>
       <input
         className="api-base"
         data-testid="api-base-input"
@@ -18,12 +18,12 @@ export function UploadPanel({ onUpload }: { onUpload: (base: string, file: File)
       />
       <input
         type="file"
-        accept="audio/*"
+        accept=".wav,.mp3,audio/wav,audio/mpeg"
         data-testid="api-file-input"
         onChange={(e) => setFile(e.target.files?.[0] ?? null)}
       />
       <button disabled={!file} onClick={() => file && onUpload(base, file)}>
-        传歌
+        传歌 · 上传并制作 Patch
       </button>
     </div>
   );

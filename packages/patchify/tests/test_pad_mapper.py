@@ -26,6 +26,9 @@ def test_map_focus_pads_groups_drums_under_one_pad():
     pads = map_focus_pads(STANDARD)
 
     assert [pad.slot for pad in pads] == FOCUS_SLOTS
+    assert len(pads) == 16
+    assert [pad.index for pad in pads] == list(range(16))
+    assert all(pad.action == "empty" for pad in pads[8:16])
     drums = pads[0]
     assert drums.action == "trigger_group"
     assert drums.element_id == "el_kick"                       # primary
@@ -53,6 +56,7 @@ def test_control_pads_use_reserved_actions():
 def test_map_focus_pads_keeps_empty_slots_playable_as_controls():
     pads = map_focus_pads([])
 
-    assert len(pads) == 8
+    assert len(pads) == 16
     assert pads[0].action == "empty"
     assert pads[4].action == "scene_fill"
+    assert all(pad.action == "empty" for pad in pads[8:16])

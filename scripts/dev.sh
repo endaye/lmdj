@@ -34,10 +34,11 @@ LMDJ dev helper
   bench-report --run DIR [--run DIR2] ...   聚合 benchmark run，产出 summary.json/csv + 对齐文本表（spec §9）
   bench-listen --run DIR [--no-stems]       把一个 run 的 completed 组合打包成匿名盲听样本（spec §8/§9.3）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
-  test               跑两个 package 的全部测试（23 个）
+  test               跑两个 package 的全部测试（25 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
   song <audio> <id>  用 demo pipeline 处理一首歌并 patchify（需先 setup-demo）
   smoke              端到端冒烟：testsong → patch.json → 摘要（testsong 缺失时自动生成）
+  creator-smoke <audio>  API 全链路：上传、16-Pad 校验、两次确定性 Export
   all                setup + test + smoke
 EOF
 }
@@ -108,6 +109,192 @@ cmd_smoke() {
   ensure_testsong
   "$PATCHIFY/.venv/bin/lmdj-patchify" "$TESTSONG"
   summarize "$TESTSONG/patch.json"
+}
+
+cmd_creator_smoke() {
+  [ $# -eq 1 ] || {
+    echo "用法: scripts/dev.sh creator-smoke <audio>" >&2
+    exit 1
+  }
+  [ -f "$1" ] || {
+    echo "音频不存在: $1" >&2
+    exit 1
+  }
+  ensure_pkg_venvs
+
+  local audio="$1"
+  local api_base="${LMDJ_API_BASE_URL:-http://127.0.0.1:8000}"
+  local poll_interval="${LMDJ_CREATOR_SMOKE_POLL_INTERVAL_SECONDS:-1}"
+  local connect_timeout="${LMDJ_CREATOR_SMOKE_CONNECT_TIMEOUT_SECONDS:-5}"
+  local request_timeout="${LMDJ_CREATOR_SMOKE_REQUEST_TIMEOUT_SECONDS:-120}"
+  local timeout_seconds="${LMDJ_CREATOR_SMOKE_TIMEOUT_SECONDS:-1800}"
+  local timeout_value
+  for timeout_value in "$connect_timeout" "$request_timeout" "$timeout_seconds"; do
+    case "$timeout_value" in
+      ""|0|*[!0-9]*)
+        echo "Creator smoke timeouts must be positive integer seconds" >&2
+        return 1
+        ;;
+    esac
+  done
+  api_base="${api_base%/}"
+  CREATOR_SMOKE_TMP="$(mktemp -d)"
+  trap 'rm -rf "${CREATOR_SMOKE_TMP:-}"' EXIT
+
+  local upload_json="$CREATOR_SMOKE_TMP/upload.json"
+  local status_json="$CREATOR_SMOKE_TMP/status.json"
+  local patch_json="$CREATOR_SMOKE_TMP/patch.json"
+  local export_a="$CREATOR_SMOKE_TMP/export-a.zip"
+  local export_b="$CREATOR_SMOKE_TMP/export-b.zip"
+
+  curl --silent --show-error --fail-with-body \
+    --connect-timeout "$connect_timeout" \
+    --max-time "$request_timeout" \
+    --form "file=@${audio}" \
+    --output "$upload_json" \
+    "$api_base/uploads"
+
+  local job_id
+  job_id=$(
+    "$CORE/.venv/bin/python" - "$upload_json" <<'EOF'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    body = json.load(handle)
+job_id = body.get("job_id")
+if not isinstance(job_id, str) or not job_id:
+    raise SystemExit("upload response missing job_id")
+print(job_id)
+EOF
+  )
+
+  local state=""
+  local poll_started_at poll_deadline now remaining status_max_time
+  poll_started_at="$(date +%s)"
+  poll_deadline="$((poll_started_at + timeout_seconds))"
+  while :; do
+    now="$(date +%s)"
+    remaining="$((poll_deadline - now))"
+    if [ "$remaining" -le 0 ]; then
+      echo "Creator job timed out after ${timeout_seconds}s: $job_id" >&2
+      return 1
+    fi
+    status_max_time="$request_timeout"
+    if [ "$remaining" -lt "$status_max_time" ]; then
+      status_max_time="$remaining"
+    fi
+    curl --silent --show-error --fail-with-body \
+      --connect-timeout "$connect_timeout" \
+      --max-time "$status_max_time" \
+      --output "$status_json" \
+      "$api_base/jobs/$job_id"
+    state=$(
+      "$CORE/.venv/bin/python" - "$status_json" <<'EOF'
+import json
+import sys
+
+with open(sys.argv[1]) as handle:
+    body = json.load(handle)
+state = body.get("state")
+if not isinstance(state, str):
+    raise SystemExit("job status response missing state")
+print(state)
+EOF
+    )
+    case "$state" in
+      completed) break ;;
+      failed|cancelled)
+        echo "Creator job $state: $job_id" >&2
+        return 1
+        ;;
+      queued|generating|separating|extracting|patchifying|rendering)
+        sleep "$poll_interval"
+        ;;
+      *)
+        echo "Unknown Creator job state: $state" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  curl --silent --show-error --fail-with-body \
+    --connect-timeout "$connect_timeout" \
+    --max-time "$request_timeout" \
+    --output "$patch_json" \
+    "$api_base/jobs/$job_id/patch"
+
+  local patch_summary
+  patch_summary=$(
+    "$CORE/.venv/bin/python" - "$patch_json" <<'EOF'
+import json
+import sys
+
+import jsonschema
+
+from lmdj_core_models.model import load_patch_schema
+
+with open(sys.argv[1]) as handle:
+    patch = json.load(handle)
+jsonschema.validate(patch, load_patch_schema())
+expected = list(range(16))
+if [pad.get("index") for pad in patch["pads"]] != expected:
+    raise SystemExit("patch pads must be ordered with indexes 0..15")
+for scene in patch["scenes"]:
+    if scene.get("pad_indexes") != expected:
+        raise SystemExit(
+            f"scene {scene.get('scene_id', '<unknown>')} must cover indexes 0..15"
+        )
+patch_id = patch.get("patch_id")
+if not isinstance(patch_id, str) or not patch_id:
+    raise SystemExit("patch response missing patch_id")
+print(f"{patch_id}\t{len(patch['pads'])}")
+EOF
+  )
+  local patch_id pad_count
+  IFS=$'\t' read -r patch_id pad_count <<<"$patch_summary"
+
+  curl --silent --show-error --fail-with-body \
+    --connect-timeout "$connect_timeout" \
+    --max-time "$request_timeout" \
+    --output "$export_a" \
+    "$api_base/jobs/$job_id/export"
+  curl --silent --show-error --fail-with-body \
+    --connect-timeout "$connect_timeout" \
+    --max-time "$request_timeout" \
+    --output "$export_b" \
+    "$api_base/jobs/$job_id/export"
+
+  local export_sha256_a export_sha256_b
+  export_sha256_a=$(
+    "$CORE/.venv/bin/python" - "$export_a" <<'EOF'
+import hashlib
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    print(hashlib.file_digest(handle, "sha256").hexdigest())
+EOF
+  )
+  export_sha256_b=$(
+    "$CORE/.venv/bin/python" - "$export_b" <<'EOF'
+import hashlib
+import sys
+
+with open(sys.argv[1], "rb") as handle:
+    print(hashlib.file_digest(handle, "sha256").hexdigest())
+EOF
+  )
+  if [ "$export_sha256_a" != "$export_sha256_b" ]; then
+    echo "Creator exports are not deterministic for job $job_id" >&2
+    return 1
+  fi
+
+  printf 'job_id: %s\n' "$job_id"
+  printf 'patch_id: %s\n' "$patch_id"
+  printf 'pads: %s\n' "$pad_count"
+  printf 'export_sha256_a: %s\n' "$export_sha256_a"
+  printf 'export_sha256_b: %s\n' "$export_sha256_b"
+  printf 'deterministic: yes\n'
 }
 
 cmd_setup_pfs() {
@@ -280,6 +467,7 @@ case "$cmd" in
   patchify)        cmd_patchify "$@" ;;
   song)            cmd_song "$@" ;;
   smoke)           cmd_smoke ;;
+  creator-smoke)   cmd_creator_smoke "$@" ;;
   all)             cmd_setup; cmd_test; cmd_smoke ;;
   ""|-h|--help|help) usage ;;
   *)               echo "未知命令: $cmd" >&2; usage; exit 1 ;;
