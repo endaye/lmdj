@@ -65,6 +65,9 @@ Upload
 5. **Generation / Agent Orchestration** —— Creator 基础闭环成立后，再接 Prompt/Voice → Generation → 同一个 Patch Engine。
 6. **apps/api 生产化** —— 队列、鉴权/限流、对象存储和 Postgres 随真实产品流量与 durable workflow 需要推进。
 
+Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小需求见
+[`2026-07-26-upload-job-visibility-requirement.md`](specs/2026-07-26-upload-job-visibility-requirement.md)。
+
 ## 延后的技术项（open follow-ups，非阻塞）
 
 > 说明：以下为各任务/终审判为 ACCEPT 的延后项，已排除会话中后续修复掉的（stale GainNodes、catch-up 判别、audio input-copy zombie job、apps/api job_id 路径穿越——均已修并复核）。
