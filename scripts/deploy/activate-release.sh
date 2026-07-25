@@ -22,8 +22,28 @@ RELEASES="$DEPLOY_PATH/releases"
 RELEASE="$RELEASES/$SHA"
 CURRENT="$DEPLOY_PATH/current"
 PREVIOUS=""
+PREVIOUS_SHA=""
+DEPLOY_SUCCEEDED=0
+IMAGE_LOADED=0
+SMOKE_ACTIVE=0
 mkdir -p "$RELEASES" "$RELEASE"
-if [ -L "$CURRENT" ]; then PREVIOUS="$(readlink "$CURRENT")"; fi
+if [ -L "$CURRENT" ]; then
+  PREVIOUS="$(readlink "$CURRENT")"
+  PREVIOUS_SHA="$(basename "$PREVIOUS")"
+fi
+
+cleanup_on_exit() {
+  if [ "$SMOKE_ACTIVE" = "1" ]; then
+    smoke_down
+  fi
+  rm -f "$ARCHIVE" "$IMAGE_ARCHIVE"
+  if [ "$DEPLOY_SUCCEEDED" != "1" ] && [ "$IMAGE_LOADED" = "1" ] \
+    && [ "$SHA" != "$PREVIOUS_SHA" ]; then
+    docker image rm "lmdj-app:$SHA" || true
+    docker image rm "lmdj-caddy:$SHA" || true
+  fi
+}
+trap cleanup_on_exit EXIT
 
 replace_symlink() {
   local source="$1" target="$2"
@@ -34,10 +54,57 @@ replace_symlink() {
   fi
 }
 
+write_image_override() {
+  local release="$1" sha="$2"
+  cat > "$release/compose.images.yml" <<EOF
+services:
+  app:
+    image: lmdj-app:$sha
+    pull_policy: never
+  caddy:
+    image: lmdj-caddy:$sha
+    pull_policy: never
+EOF
+}
+
+preserve_previous_images() {
+  if [ -z "$PREVIOUS_SHA" ]; then
+    return
+  fi
+  if ! docker image inspect "lmdj-app:$PREVIOUS_SHA" >/dev/null 2>&1; then
+    docker tag lmdj-app:latest "lmdj-app:$PREVIOUS_SHA"
+  fi
+  if ! docker image inspect "lmdj-caddy:$PREVIOUS_SHA" >/dev/null 2>&1; then
+    docker tag caddy:2 "lmdj-caddy:$PREVIOUS_SHA"
+  fi
+}
+
+cleanup_release_images() {
+  local reference repository tag
+  while IFS= read -r reference; do
+    repository="${reference%%:*}"
+    tag="${reference#*:}"
+    case "$repository" in
+      lmdj-app|lmdj-caddy) ;;
+      *) continue ;;
+    esac
+    if [[ ! "$tag" =~ ^[0-9a-f]{40}$ ]]; then
+      continue
+    fi
+    if [ "$tag" = "$SHA" ] || { [ -n "$PREVIOUS_SHA" ] && [ "$tag" = "$PREVIOUS_SHA" ]; }; then
+      continue
+    fi
+    docker image rm "$reference" || true
+  done < <(docker image ls --format '{{.Repository}}:{{.Tag}}')
+  docker image prune -f >/dev/null
+}
+
 wait_for_app_health() {
   local attempt
   for attempt in {1..12}; do
-    if docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" exec -T app \
+    if docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+      -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
+      exec -T app \
       /opt/app-venv/bin/python -c \
       'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/health"))["ok"] is True'; then
       return 0
@@ -55,32 +122,39 @@ tar -xzf "$ARCHIVE" -C "$RELEASE"
 test "$(cat "$RELEASE/REVISION")" = "$SHA"
 test -f "$RELEASE/compose.yml"
 test -f "$RELEASE/compose.smoke.yml"
+write_image_override "$RELEASE" "$SHA"
+if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
+  write_image_override "$PREVIOUS" "$PREVIOUS_SHA"
+fi
 DOMAIN="$(sed -n 's/^LMDJ_DOMAIN=//p' "$DEPLOY_PATH/shared/.env" | tail -n 1)"
 if [[ ! "$DOMAIN" =~ ^[A-Za-z0-9.-]+$ ]]; then
   echo "LMDJ_DOMAIN must be a hostname without scheme or path" >&2
   exit 1
 fi
 export LMDJ_IMAGE_TAG="$SHA"
+preserve_previous_images
 docker load -i "$IMAGE_ARCHIVE"
-docker tag "lmdj-app:$SHA" lmdj-app:latest
+IMAGE_LOADED=1
 
 smoke_down() {
   docker compose -p lmdj-smoke \
     --env-file "$DEPLOY_PATH/shared/.env" \
     -f "$RELEASE/compose.yml" -f "$RELEASE/compose.smoke.yml" \
+    -f "$RELEASE/compose.images.yml" \
     down -v --remove-orphans >/dev/null 2>&1 || true
 }
-trap smoke_down EXIT
+SMOKE_ACTIVE=1
 smoke_down
 docker compose -p lmdj-smoke \
   --env-file "$DEPLOY_PATH/shared/.env" \
   -f "$RELEASE/compose.yml" -f "$RELEASE/compose.smoke.yml" \
+  -f "$RELEASE/compose.images.yml" \
   up -d --no-build app
 curl --fail --silent --show-error --retry 12 --retry-delay 5 \
   --retry-connrefused --retry-all-errors \
   http://127.0.0.1:18000/health >/dev/null
 smoke_down
-trap - EXIT
+SMOKE_ACTIVE=0
 
 rm -f "$DEPLOY_PATH/current.next"
 ln -s "$RELEASE" "$DEPLOY_PATH/current.next"
@@ -89,6 +163,7 @@ replace_symlink "$DEPLOY_PATH/current.next" "$CURRENT"
 if ! (
   cd "$CURRENT" &&
   docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+    -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
     up -d --no-build --force-recreate &&
   wait_for_app_health &&
   curl --fail --silent --show-error --retry 12 --retry-delay 5 \
@@ -102,7 +177,9 @@ if ! (
 ); then
   (
     cd "$CURRENT"
-    docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" logs --tail 100
+    docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+      -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
+      logs --tail 100
   ) || true
   if [ -n "$PREVIOUS" ] && [ -d "$PREVIOUS" ]; then
     rm -f "$DEPLOY_PATH/current.rollback"
@@ -112,17 +189,23 @@ if ! (
       cd "$CURRENT"
       LMDJ_IMAGE_TAG="$(basename "$PREVIOUS")" \
         docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+        -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
         up -d --no-build --force-recreate
     )
   else
     (
       cd "$CURRENT"
-      docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" down --remove-orphans
+      docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+        -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
+        down --remove-orphans
     ) || true
     rm -f "$CURRENT"
   fi
   exit 1
 fi
 
+DEPLOY_SUCCEEDED=1
 printf '%s\n' "$SHA" > "$DEPLOY_PATH/DEPLOYED_REVISION"
+find "$DEPLOY_PATH/incoming" -maxdepth 1 -type f -name '*.tar.gz' -delete
+cleanup_release_images
 echo "deployed $SHA"

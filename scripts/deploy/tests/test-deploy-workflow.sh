@@ -24,7 +24,12 @@ grep -Fq 'docker build --tag "lmdj-app:$TARGET_SHA" .' "$WORKFLOW" || {
   exit 1
 }
 
-grep -Fq 'docker save "lmdj-app:$TARGET_SHA" caddy:2' "$WORKFLOW" || {
+grep -Fq 'docker tag caddy:2 "lmdj-caddy:$TARGET_SHA"' "$WORKFLOW" || {
+  echo "deploy workflow must give Caddy an immutable release tag" >&2
+  exit 1
+}
+
+grep -Fq 'docker save "lmdj-app:$TARGET_SHA" "lmdj-caddy:$TARGET_SHA"' "$WORKFLOW" || {
   echo "deploy workflow must bundle every server image for offline loading" >&2
   exit 1
 }
