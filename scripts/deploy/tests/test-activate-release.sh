@@ -10,6 +10,7 @@ FAKE_BIN="$TMP/bin"
 mkdir -p "$FAKE_BIN"
 cat > "$FAKE_BIN/docker" <<'EOF'
 #!/usr/bin/env bash
+printf 'compose_bake=%s\n' "${COMPOSE_BAKE:-unset}" >> "$DEPLOY_TEST_LOG"
 printf 'docker %s\n' "$*" >> "$DEPLOY_TEST_LOG"
 if [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC:-0}" = "1" ] && [[ "$*" == *" exec -T app "* ]]; then
   exit 1
@@ -67,6 +68,10 @@ grep -q 'docker compose -p lmdj .* up -d --build --force-recreate' "$DEPLOY_TEST
   echo "activation must recreate services so release bind mounts follow current" >&2
   exit 1
 }
+if grep '^compose_bake=' "$DEPLOY_TEST_LOG" | grep -vq '^compose_bake=false$'; then
+  echo "activation must disable Compose Bake for deterministic server builds" >&2
+  exit 1
+fi
 if grep '^curl ' "$DEPLOY_TEST_LOG" | grep -vq -- '--retry-all-errors'; then
   echo "health checks must retry transient curl errors" >&2
   exit 1

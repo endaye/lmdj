@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export COMPOSE_BAKE=false
+
 ARCHIVE="${1:-}"
 DEPLOY_PATH="${2:-}"
 if [ -z "$ARCHIVE" ] || [ -z "$DEPLOY_PATH" ]; then
