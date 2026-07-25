@@ -34,7 +34,7 @@ LMDJ dev helper
   bench-report --run DIR [--run DIR2] ...   聚合 benchmark run，产出 summary.json/csv + 对齐文本表（spec §9）
   bench-listen --run DIR [--no-stems]       把一个 run 的 completed 组合打包成匿名盲听样本（spec §8/§9.3）
   parity             frozen-stems parity 门槛：旧 demo pipeline vs PipelineFromStems（spec §3.2）
-  test               跑两个 package 的全部测试（23 个）
+  test               跑两个 package 的全部测试（25 个）
   patchify <dir>...  对一个 pipeline package 目录生成 patch.json（参数透传 CLI）
   song <audio> <id>  用 demo pipeline 处理一首歌并 patchify（需先 setup-demo）
   smoke              端到端冒烟：testsong → patch.json → 摘要（testsong 缺失时自动生成）
