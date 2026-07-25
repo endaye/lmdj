@@ -99,7 +99,7 @@
 - Preserves: 前八项既有 Focus View 语义；索引 `8..15` 是 `action="empty"` 的正式数据 Pad。
 - Preserves: `loadPatch()` 是唯一 Web 加载入口；empty/reserved Pad 仍由 `padElementIds()` 返回空数组。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 core-models 测试中增加 16 Pad 合法 fixture，并加入：
 
@@ -143,7 +143,7 @@ expect(patch.scenes[0].pad_indexes).toEqual(
 
 旧 `PadGrid.test.tsx` 在被 Task 3 替换前必须把正则改为 `/^pad-\d+$/` 并断言 16 项，确保 contract 迁移提交本身仍通过 Web 全套测试；不得在这里扩展旧视觉或复制第二套 layout 规则。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 packages/core-models/.venv/bin/python -m pytest packages/core-models/tests -q
@@ -154,7 +154,7 @@ npx vitest run src/patch/contract.test.ts src/patch/loader.test.ts
 
 Expected: core-models / Patchify 因仍是 8 Pad 语义而 FAIL；Web fixtures 仍为 8 Pad，loader 也尚未执行连续索引语义校验。
 
-- [ ] **Step 3: 实现 producer、共享 Schema 与 Web 语义不变量**
+- [x] **Step 3: 实现 producer、共享 Schema 与 Web 语义不变量**
 
 在 `model.py` 的常量区增加 `PAD_COUNT`，并在现有 `Patch` dataclass 的全部字段之后加入 `__post_init__`：
 
@@ -226,7 +226,7 @@ function assertPadShape(patch: Patch): void {
 
 `assertPadShape()` 必须在 Schema 校验之后、audio decode 之前运行，避免无效 Patch 进入 ViewModel 或 AudioEngine。此 Task 不改 UI；新版 Workbench 在 Task 2–3 一次接入，避免先扩展旧 Patch View 再废弃。
 
-- [ ] **Step 4: 运行整个原子迁移门禁**
+- [x] **Step 4: 运行整个原子迁移门禁**
 
 ```bash
 scripts/dev.sh test
@@ -238,7 +238,7 @@ npm run build
 
 Expected: core-models、Patchify、Web contract、loader 与 TypeScript build 全部 PASS；producer、schema 副本、types、fixtures 和 consumer 都只接受恰好 16 Pad。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add packages/core-models packages/patchify \
@@ -272,7 +272,7 @@ git commit -m "feat(contract): require sixteen Pad slots"
   - `WorkbenchShell` 的结构区域：App Bar、Creator Tools、Instrument Canvas、Context Inspector、Status Bar。
 - Preserves: Patch/audio 仍只由 `loadPatch()` 进入；ViewModel 不复制音频 buffer，也不改写 Patch。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 `model.test.ts` 使用 golden bundle 覆盖：
 
@@ -295,7 +295,7 @@ app-bar → creator-tools → instrument-canvas → context-inspector → status
 
 `CreatorToolRail.test.tsx` 断言只呈现 Source / Performance / Export，且切换模式不改变 Pad selection；首条切片不存在可点击的 Generate、Line-in、Chop、AI Preview、Take、Pattern A–D 控件，避免用 disabled 假入口制造能力错觉。`App.test.tsx` 断言加载 example 后进入同一个 WorkbenchShell，而不是旧 graphite Patch View。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd apps/web
@@ -308,7 +308,7 @@ npx vitest run \
 
 Expected: FAIL——ViewModel 与 WorkbenchShell 尚不存在。
 
-- [ ] **Step 3: 实现 ViewModel 与视觉基础**
+- [x] **Step 3: 实现 ViewModel 与视觉基础**
 
 ViewModel 保持纯函数：
 
@@ -380,7 +380,7 @@ export function buildWorkbenchViewModel(
 
 `App` 只建立一份 `selectedPadIndex` 和 `WorkbenchViewModel`，把既有 transport/engine 回调注入 shell slots；Source、Processing、Failed 状态仍留待 Task 6 统一视觉化。
 
-- [ ] **Step 4: 运行 Web 验证**
+- [x] **Step 4: 运行 Web 验证**
 
 ```bash
 cd apps/web
@@ -394,7 +394,7 @@ npm run build
 
 Expected: 定向测试与 build 全部 PASS；旧 Patch View 不再是 loaded state 根节点。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/ui
@@ -437,7 +437,7 @@ git commit -m "feat(web): add Instrument-first workbench shell"
   - `npm run test:e2e`
 - Preserves: `AudioEngine.triggerPad(index)` 是 click / keyboard / MIDI 的唯一 Pad 播放入口。
 
-- [ ] **Step 1: 写组件失败测试**
+- [x] **Step 1: 写组件失败测试**
 
 `PadMatrix16.test.tsx` 断言恰好渲染 `patch.pads` 的 16 项，DOM 与 `Pad.index` 都是 `0..15`，empty slot 也有稳定名称与 no-op 状态；点击有素材 Pad 同时 `onSelect(index)` 并调用 `engine.triggerPad(index)`，empty/reserved Pad 只更新选择，不伪造播放。
 
@@ -445,7 +445,7 @@ git commit -m "feat(web): add Instrument-first workbench shell"
 
 `PatternSurface.test.tsx` 覆盖 transport、step 状态、播放头和无 Pattern 时的明确空态。`ContextInspector.test.tsx` 覆盖未选择时显示 Patch 摘要、quality、unmapped / warning，选择后显示 Pad label/action/source 状态；把 `StepGrid.test.tsx` 中混入的旧 Inspector 测试迁到这里。`App.test.tsx` 断言 `PatternSurface` 在 `PadMatrix16` 之前，选择 Pad 后 Inspector 同步更新；每个 Pad 的 accessible name 同时包含 index、label 和状态。
 
-- [ ] **Step 2: 运行组件测试确认失败**
+- [x] **Step 2: 运行组件测试确认失败**
 
 ```bash
 cd apps/web
@@ -460,7 +460,7 @@ npx vitest run \
 
 Expected: FAIL——四个 Instrument Canvas 组件尚不存在。
 
-- [ ] **Step 3: 实现 Instrument Canvas**
+- [x] **Step 3: 实现 Instrument Canvas**
 
 `PadMatrix16` 必须直接 map contract data：
 
@@ -511,7 +511,7 @@ CSS 使用 `aspect-ratio: 1 / 1`，不以固定高度伪造正方形：
 
 `PatternSurface` 位于 Canvas 顶部，PadMatrix16 位于其下；ContextInspector 不复制 selection state，只消费 Task 2 的 ViewModel。替换 loaded state 中旧 `PadGrid`，保留可复用的 Transport / StepGrid 子组件，并删除不再引用的 `PadGrid` / `Inspector` 文件；不保留第二套同时可达的 Pad Surface。
 
-- [ ] **Step 4: 写并运行真实浏览器响应式验收**
+- [x] **Step 4: 写并运行真实浏览器响应式验收**
 
 安装 `@playwright/test` 为 dev dependency，增加：
 
@@ -537,7 +537,7 @@ npm run test:e2e
 
 Expected: 五个 viewport 全部 PASS。以 `pad-visual-language-v1.html` 和 `responsive-system-v8.html` 逐项校准层级、间距、字体、颜色和状态；差异记录在测试注释或 PR evidence，不另起第二份视觉规范。
 
-- [ ] **Step 5: 运行 Web 全套验证**
+- [x] **Step 5: 运行 Web 全套验证**
 
 ```bash
 cd apps/web
@@ -549,7 +549,7 @@ npm run build
 
 Expected: contract、Vitest、Playwright 与 build 全部 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add apps/web
@@ -574,7 +574,7 @@ git commit -m "feat(web): build responsive sixteen-Pad workspace"
   - `loadMidiMapping(storage): MidiMapping`
   - `saveMidiMapping(storage, mapping): void`
 
-- [ ] **Step 1: 写映射测试**
+- [x] **Step 1: 写映射测试**
 
 ```ts
 expect(padIndexForNote(DEFAULT_DIRECT_MAPPING, 36, "A")).toBe(0);
@@ -586,7 +586,7 @@ expect(padIndexForNote(DEFAULT_DIRECT_MAPPING, 52, "A")).toBeNull();
 
 Learn 测试必须覆盖重复 note 不计数、未完成时返回 `null`、第 16/8 个唯一 note 完成、损坏 localStorage 回退默认映射。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd apps/web
@@ -595,7 +595,7 @@ npx vitest run src/midi/mapping.test.ts
 
 Expected: FAIL——`mapping.ts` 尚不存在。
 
-- [ ] **Step 3: 实现纯映射**
+- [x] **Step 3: 实现纯映射**
 
 核心实现固定为：
 
@@ -618,7 +618,7 @@ export function padIndexForNote(
 
 `MidiLearnSession` 的 constructor 接收 mode，目标数量由 mode 决定为 16 或 8；`capture()` 忽略 `<0`、`>127` 和重复值，只有达到目标数量才返回新的不可变 mapping。localStorage key 固定为 `lmdj.midi.mapping.v1`，读取时重新验证 mode、长度、范围和唯一性。
 
-- [ ] **Step 4: 运行测试确认通过**
+- [x] **Step 4: 运行测试确认通过**
 
 ```bash
 cd apps/web
@@ -627,7 +627,7 @@ npx vitest run src/midi/mapping.test.ts
 
 Expected: PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/midi
@@ -657,7 +657,7 @@ git commit -m "feat(web): add sixteen-Pad MIDI mappings"
   - `interface MidiSnapshot { support: "unknown"|"unsupported"|"available"; connection: "idle"|"requesting"|"connected"|"denied"|"disconnected"; devices: string[] }`
   - `MidiPanel` props `{ onTrigger(index), bank, onBankChange }`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 构造 fake `MIDIAccess` 与两个 fake input，验证：
 
@@ -685,7 +685,7 @@ expect(engine.triggerPad).toHaveBeenNthCalledWith(4, 15);
 
 切换 MIDI Bank 后，相同键盘输入仍触发同一逻辑 index；repeat/meta/ctrl/alt、输入框和 contenteditable 内的按键不触发。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd apps/web
@@ -694,7 +694,7 @@ npx vitest run src/midi/MidiInput.test.ts src/ui/MidiPanel.test.tsx src/ui/App.t
 
 Expected: FAIL——适配器和面板尚不存在。
 
-- [ ] **Step 3: 实现适配器与 UI**
+- [x] **Step 3: 实现适配器与 UI**
 
 `MidiInput` constructor 接收：
 
@@ -730,7 +730,7 @@ keydown 将 `event.key.toUpperCase()` 在 `PAD_KEYS` 中的位置直接作为 Pa
 
 `MidiPanel` 的 note 回调通过当前 mapping 和 `midiBank` 得到 index 后调用 engine。切换 Bank 不发声，不改变 selected Pad；Direct-16 mapping 下 Bank 控件显示为“不适用”且不改变映射结果。
 
-- [ ] **Step 4: 运行 Web 全套验证**
+- [x] **Step 4: 运行 Web 全套验证**
 
 ```bash
 cd apps/web
@@ -740,7 +740,7 @@ npm run build
 
 Expected: 全部 PASS；jsdom 测试无真实 MIDI 权限请求。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web/src/midi apps/web/src/ui
@@ -782,7 +782,7 @@ git commit -m "feat(web): play sixteen Pads through MIDI banks"
 - Extends: `ApiError` 增加 `detail?: unknown`；`uploadSong()` 将 API 的结构化 `detail` 转为用户可见错误。
 - Produces: 与 loaded Workbench 共用 UI tokens 的 `Source`、`Processing`、`Failed` 页面状态；processing 只展示真实 Job state，不伪造百分比。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 使用 stdlib `wave` 生成短 WAV；用 monkeypatch 的 `subprocess.run` 返回 ffprobe JSON。覆盖：WAV 成功、MP3 成功、超过 bytes→413、损坏/无 audio stream→415、伪造扩展名→415、超过 duration→422、环境默认值和覆盖值。
 
@@ -806,7 +806,7 @@ Web client / App 测试断言 413、415、422 分别显示服务端返回的最�
 - Retry 重新经过 preflight，不直接复用失败 Job；
 - 所有状态延续 Workbench 的 paper/ink/token 系统和 App Bar，不回退旧 graphite landing。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd apps/api
@@ -821,7 +821,7 @@ npx vitest run \
 
 Expected: FAIL——preflight 模块、结构化 HTTP 拒绝路径和新版页面状态尚不存在。
 
-- [ ] **Step 3: 实现流式落盘与 ffprobe**
+- [x] **Step 3: 实现流式落盘与 ffprobe**
 
 每次读取 `1024 * 1024` bytes，累计超过 `max_bytes` 立即删除 destination 并抛 413。Preflight error detail 固定为结构化对象：
 
@@ -853,7 +853,7 @@ Web `uploadSong()` 对非 2xx 先读取 JSON，将 `body.detail` 传入 `ApiErro
 
 Source、Processing、Ready、Review、Failed 与 Export 的层级和状态表现以 `docs/superpowers/specs/2026-07-24-stage1-creator-workspace-ui-references/stage1-product-states-v1.html` 校准；参考稿中的后置控件不得进入首条切片。
 
-- [ ] **Step 4: 运行 API 验证**
+- [x] **Step 4: 运行 API 验证**
 
 ```bash
 cd apps/api
@@ -869,7 +869,7 @@ npm run build
 
 Expected: API、Web 状态测试和 build 全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/lmdj_api/preflight.py apps/api/lmdj_api/app.py apps/api/tests \
@@ -898,7 +898,7 @@ git commit -m "feat(stage1): validate uploads and source states"
   - `write_export_source(package_dir: Path, source: dict) -> Path`
 - `process_job(..., key_analyzer: KeyAnalyzer | None = None)`；未注入时使用 `PfsKeyAnalyzer`，失败只形成 warning 和 partial export source，不把 playable Job 改为 failed。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 PFS Key 单测用合成 C-major chroma 替换 librosa 特征函数，断言 `C major` 和 `0 <= confidence <= 1`。子进程包装测试覆盖成功 JSON、非零退出、超时、`.venv-pfs` 缺失。
 
@@ -918,7 +918,7 @@ assert source["music"]["loop"]["steps"] == active_pattern.length_steps
 
 再覆盖缺 Key warning、只列真实 stem、绝对路径/`..` 路径拒绝。Job 测试断言 completed 前已写 `export-source.json`。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 workers/audio/.venv/bin/python -m pytest \
@@ -929,7 +929,7 @@ workers/audio/.venv/bin/python -m pytest \
 
 Expected: FAIL——三个新接口尚不存在。
 
-- [ ] **Step 3: 实现隔离分析和 inventory**
+- [x] **Step 3: 实现隔离分析和 inventory**
 
 PFS CLI 用 `librosa.load(..., sr=22050, mono=True)` 与 `librosa.feature.chroma_cqt()`；对平均 chroma 分别和 Krumhansl major/minor profile 的 12 个旋转做 Pearson correlation，最高项决定 Key，confidence 使用最高与第二名相关系数差归一化并 clamp 到 `0..1`。stdout 只输出：
 
@@ -949,7 +949,7 @@ PFS CLI 用 `librosa.load(..., sr=22050, mono=True)` 与 `librosa.feature.chroma
 
 `process_job()` 在 Patchify 后分析 `input_copy`，写 `export-source.json`，然后才 emit `completed`。
 
-- [ ] **Step 4: 运行 Worker 验证**
+- [x] **Step 4: 运行 Worker 验证**
 
 ```bash
 workers/audio/.venv/bin/python -m pytest workers/audio/tests -q
@@ -958,7 +958,7 @@ scripts/dev.sh smoke
 
 Expected: Worker 全部 PASS；smoke 的 package 含 16-Pad `patch.json`。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add workers/audio
@@ -985,13 +985,13 @@ git commit -m "feat(worker): inventory Creator export sources"
 - Status response: `{ status, downloadable, items, missing, warnings, music }`；`items` 固定为 stems、samples、midi、music 四项，每项状态为 `ready | review | missing`。
 - Download response: complete 返回 ZIP attachment；incomplete 返回 HTTP 409 `{"detail":{"code":"export_incomplete","missing":[...]}}`。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 覆盖 status inspection、完整 ZIP、同一 package 连续两次 SHA-256 相同、ZIP entry 顺序稳定、每个 manifest entry 的 bytes/hash、只列真实 stems、路径穿越拒绝、缺 patch/key/MIDI/all samples 分别 409。
 
 API 测试断言未完成 Job 的 status / download 都为 409、本地未知 Job 为 404；完整 Job 的 status 返回 `downloadable: true` 和实际 Key，成功 download response 的 `content-disposition` 文件名为 `creator-export-{patch_id}.zip`；缺 Key 时 status 为 partial、music item 为 missing、download 为 409。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd apps/api
@@ -1000,7 +1000,7 @@ cd apps/api
 
 Expected: FAIL——builder 和 route 尚不存在。
 
-- [ ] **Step 3: 实现 Manifest 与 ZIP**
+- [x] **Step 3: 实现 Manifest 与 ZIP**
 
 `inspect_creator_export()` 是唯一完整性判断入口，返回：
 
@@ -1049,7 +1049,7 @@ entry 顺序固定为 `manifest.json`、`patch.json`、其余 archive path 字�
 
 两个 API route 使用既有 `_job_dir()` 与 completed/package_dir guard。status route 返回 inspection JSON；download route 捕获 `ExportIncomplete` 后抛 `HTTPException(status_code=409, detail={"code": "export_incomplete", "missing": error.missing})`，不返回 ZIP。
 
-- [ ] **Step 4: 运行 API 全套验证**
+- [x] **Step 4: 运行 API 全套验证**
 
 ```bash
 cd apps/api
@@ -1058,7 +1058,7 @@ cd apps/api
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/api/lmdj_api apps/api/tests
@@ -1088,7 +1088,7 @@ git commit -m "feat(api): build deterministic Creator export packs"
 - Consumes: Task 6 已加入的 `ApiError.detail?: unknown`。
 - App loaded state扩为 `{ bundle, source, exportState }`；`source` 为 `{ kind:"api"; base; jobId } | { kind:"local"|"example" }`，`exportState` 同时驱动 ExportChecklist、App Bar Key 和 Status Bar readiness。
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 client 测试覆盖 status JSON、成功 Blob、409 `body.detail.missing` 保留在 `ApiError.detail`、网络错误。组件测试固定覆盖四种可见语义：
 
@@ -1099,7 +1099,7 @@ client 测试覆盖 status JSON、成功 Blob、409 `body.detail.missing` 保留
 
 App 测试覆盖 API Job 切到 Export mode 时获取 status、Context Inspector 显示“导出 Creator Pack”、App Bar 显示服务端 Key；拖放和 example 明确显示“仅远端 Job 可导出”，不发 status 请求，也不渲染伪可用下载按钮。
 
-- [ ] **Step 2: 运行测试确认失败**
+- [x] **Step 2: 运行测试确认失败**
 
 ```bash
 cd apps/web
@@ -1108,7 +1108,7 @@ npx vitest run src/api/client.test.ts src/ui/ExportChecklist.test.tsx src/ui/App
 
 Expected: FAIL——download client 和 ExportChecklist 尚不存在。
 
-- [ ] **Step 3: 实现下载与 source provenance**
+- [x] **Step 3: 实现下载与 source provenance**
 
 `fetchCreatorExportStatus()` GET `/jobs/{jobId}/export/status`，以服务端 inspection 结果作为 checklist 唯一事实；不得从 Patch 猜测 Stem 或 Key 是否存在。`downloadCreatorExport()` GET `/jobs/{jobId}/export`；非 2xx 尝试读取 JSON 并附到 `ApiError.detail`。只有 2xx Blob 交给 `ExportChecklist`：
 
@@ -1125,7 +1125,7 @@ URL.revokeObjectURL(url);
 
 Checklist 直接呈现服务端四个 item 状态：缺必需项为 Missing；可选 Stem 或质量 warning 为 Review；其余为 Ready。Full Take 和 DAW-specific project 不出现在首条切片清单。UI 使用文字、图标和边框共同编码状态，不只依赖颜色。
 
-- [ ] **Step 4: 运行 Web 全套验证**
+- [x] **Step 4: 运行 Web 全套验证**
 
 ```bash
 cd apps/web
@@ -1136,7 +1136,7 @@ npm run build
 
 Expected: 全部 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add apps/web
@@ -1156,7 +1156,7 @@ git commit -m "feat(web): download Creator export packs"
 **Interfaces:**
 - Produces: `scripts/dev.sh creator-smoke <audio>`，依次上传、轮询、校验 16 Pad、下载两次 Export 并比较 SHA-256。
 
-- [ ] **Step 1: 给 smoke helper 写 shell-level 验证**
+- [x] **Step 1: 给 smoke helper 写 shell-level 验证**
 
 `creator-smoke` 必须在任何 HTTP 或 contract 失败时非零退出，并打印：
 
@@ -1171,7 +1171,7 @@ deterministic: yes
 
 实现使用 `curl --fail-with-body` 和 package venv 内 Python `jsonschema`；不得用 `jq` 作为额外系统依赖。
 
-- [ ] **Step 2: 运行所有自动门禁**
+- [x] **Step 2: 运行所有自动门禁**
 
 ```bash
 scripts/dev.sh test
@@ -1182,7 +1182,7 @@ cd apps/web && npm run check-contract && npm test && npm run test:e2e && npm run
 
 Expected: 四组全部 PASS；Web 门禁同时包含 contract、Vitest、五 viewport Playwright 和 production build。
 
-- [ ] **Step 3: 连续运行固定音频三次**
+- [x] **Step 3: 连续运行固定音频三次**
 
 启动 API/Web 后，对同一固定音频执行三次 `scripts/dev.sh creator-smoke <audio>`。在 evidence 文档逐次记录 job_id、patch_id、16 Pad 检查、两个 ZIP SHA-256 和结果；三次 patch_id 必须一致，每次两个 ZIP hash 必须一致。
 
@@ -1212,7 +1212,7 @@ Expected: 四组全部 PASS；Web 门禁同时包含 contract、Vitest、五 vie
 
 每项记录 `PASS` 或 `FAIL`；任一 FAIL 阻止 PR 标记 Ready。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/dev.sh README.md docs/release-evidence/2026-07-24-stage1-creator-core-and-ui.md
@@ -1220,7 +1220,7 @@ git add scripts/dev.sh README.md docs/release-evidence/2026-07-24-stage1-creator
 git commit -m "docs: record Stage 1 Creator release evidence"
 ```
 
-- [ ] **Step 6: 最终分支检查**
+- [x] **Step 6: 最终分支检查**
 
 ```bash
 git status --short
