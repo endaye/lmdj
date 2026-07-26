@@ -39,15 +39,6 @@
 
 三条 patch 加载路（拖目录 / 内置示例 / API）汇入同一 `loadPatch`。本地开发：`scripts/dev.sh`（Python 侧）、各包 `npm test` / `pytest`。
 
-## 当前集成分支已实现、待 PR
-
-- `codex/queued-material-pipeline` 已串行集成两个独立实现提交：
-  - `eb212c4f`：单槽 FIFO 队列、实时容量/队列位置、submission 幂等、浏览器本地任务恢复、API 重启后 `interrupted` 终态、响应式任务队列 UI；
-  - `2fa029af`：`lmdj.materials.v1`、Material Extractor、固定槽 Patchify、`CreatorPipelineRunner`、Phrase 排他和 Creator Export provenance。
-- 交叉契约已锁定：Job 创建时持久化 pipeline，幂等重试和重启中断保持该身份；Material Job 在 `extracting` 时占用唯一执行槽，后续 Job 保持 `queued` 与 FIFO 位置；队列 pipeline 与 runner 不匹配时明确失败。
-- 实现计划：`docs/superpowers/plans/2026-07-26-upload-job-visibility.md`、`docs/superpowers/plans/2026-07-26-material-pipeline-v1.md`。独立验证证据：`docs/release-evidence/2026-07-26-upload-job-visibility.md`、`docs/superpowers/evidence/2026-07-26-material-pipeline-v1.md`。组合验证证据见 `docs/release-evidence/2026-07-26-queued-material-pipeline.md`。
-- 该项仍是“分支已实现”，不是“已合并 main”；完整生产 API 仍不包含鉴权、限流、Postgres、对象存储或跨进程 durable workflow。
-
 ## 贯穿的设计约束（改动时须遵守）
 
 - `lmdj.patch.v1` 是 Web/CLI/Worker/API 四方唯一契约；schema 单一真相源在 `packages/core-models`，web 侧是 `npm run sync-contract` 生成物（`check-contract` 防漂移）。
@@ -70,10 +61,12 @@ Upload
 
 详细边界见 `docs/superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md`。
 
-## Material Pipeline v1 实现（2026-07-26，已进入集成分支、尚未合并）
+## Material Pipeline v1 实现（2026-07-26，已合并 main）
 
-独立实现已从 `codex/material-pipeline-v1` 串行集成到
-`codex/queued-material-pipeline`，提供显式可选的新 Creator 素材链：
+PR #35 已合并 `lmdj.materials.v1`、Material Extractor、固定槽
+Patchify、`CreatorPipelineRunner` 和队列集成。生产 API 在未显式设置时仍默认
+`legacy`；`scripts/dev.sh dev` 仅在本地开发边界默认
+`materials-v1 / htdemucs / mps`。
 
 ```text
 original audio
