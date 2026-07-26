@@ -44,6 +44,7 @@ import {
   buildWorkbenchViewModel,
   type WorkbenchMode,
 } from "./workbench/model";
+import webPackage from "../../package.json";
 
 /** 内置示例：fetch public/example-patch/（浏览器路径；测试注入替身） */
 export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
@@ -653,7 +654,7 @@ export function App({
 
   if (state.phase === "source") {
     return (
-      <div className="app">
+      <AppFrame>
         <CreatorStateShell
           label="Source"
           appState="source"
@@ -703,13 +704,13 @@ export function App({
             </>
           }
         />
-      </div>
+      </AppFrame>
     );
   }
 
   if (state.phase === "processing") {
     return (
-      <div className="app">
+      <AppFrame>
         <CreatorStateShell
           label="Processing"
           appState={state.jobState}
@@ -741,13 +742,13 @@ export function App({
             </>
           }
         />
-      </div>
+      </AppFrame>
     );
   }
 
   if (state.phase === "failed") {
     return (
-      <div className="app">
+      <AppFrame>
         <CreatorStateShell
           label="Failed"
           appState="failed"
@@ -805,7 +806,7 @@ export function App({
             </>
           }
         />
-      </div>
+      </AppFrame>
     );
   }
 
@@ -930,7 +931,7 @@ export function App({
               )
       : undefined;
   return (
-    <div className="app">
+    <AppFrame>
       {status === "rejected" && (
         <div className="banner-rejected" data-testid="banner-rejected">
           质量分未过阈（status: rejected）——仍可播放，仅作提示
@@ -1025,7 +1026,7 @@ export function App({
           </>
         }
       />
-    </div>
+    </AppFrame>
   );
 }
 
@@ -1099,6 +1100,21 @@ function Wordmark() {
   return (
     <div className="wordmark">
       LMDJ<span className="wordmark-sub">patch view</span>
+    </div>
+  );
+}
+
+function AppFrame({ children }: { children: ReactNode }) {
+  return (
+    <div className="app">
+      {children}
+      <small
+        className="app-version"
+        data-testid="app-version"
+        title="当前版本"
+      >
+        v{webPackage.version}
+      </small>
     </div>
   );
 }
