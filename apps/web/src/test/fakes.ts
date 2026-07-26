@@ -12,13 +12,20 @@ export class FakeGain {
 
 export class FakeSource {
   buffer: unknown = null;
+  loop = false;
+  onended: ((event: unknown) => void) | null = null;
   connectedTo: unknown = null;
   startedAt: number[] = [];
+  stoppedAt: number[] = [];
   connect(dst: unknown): void {
     this.connectedTo = dst;
   }
   start(when = 0): void {
     this.startedAt.push(when);
+  }
+  stop(when = 0): void {
+    this.stoppedAt.push(when);
+    this.onended?.({ type: "ended" });
   }
 }
 

@@ -40,6 +40,11 @@ def test_build_export_source_inventories_patch_and_real_files(tmp_path: Path) ->
     assert source["stems"] == ["stems/drums.wav"]
     assert source["samples"] == sorted({element.source_path for element in patch.elements})
     assert source["midi"] == ["chart.mid"]
+    assert source["timing"] == []
+    assert source["provenance"] == {
+        "pipeline": "legacy",
+        "extraction_config_version": None,
+    }
     assert source["music"]["bpm"] == patch.bpm
     assert source["music"]["key"] == {"value": "A minor", "confidence": 0.72}
     assert source["music"]["time_signature"] == {

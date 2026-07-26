@@ -143,6 +143,27 @@ def test_build_writes_stable_manifest_inventory_and_zip_metadata(
                 assert entry["sha256"] == hashlib.sha256(payload).hexdigest()
 
 
+def test_material_export_includes_real_timing_artifact(tmp_path: Path) -> None:
+    package = _write_package(tmp_path)
+    (package / "timing.json").write_text('{"schema":"lmdj.timing.v1"}')
+    source_path = package / "export-source.json"
+    source = json.loads(source_path.read_text())
+    source["timing"] = ["timing.json"]
+    source_path.write_text(json.dumps(source))
+
+    status = _builder().inspect_creator_export(package)
+    output = _builder().build_creator_export(package, tmp_path / "exports")
+
+    assert status.items["timing"] == {
+        "status": "ready",
+        "paths": ["timing/timing.json"],
+    }
+    with zipfile.ZipFile(output) as archive:
+        assert "timing/timing.json" in archive.namelist()
+        manifest = json.loads(archive.read("manifest.json"))
+        assert manifest["files"]["timing"][0]["path"] == "timing/timing.json"
+
+
 def test_repeated_builds_have_identical_sha256(tmp_path: Path) -> None:
     package = _write_package(tmp_path)
 

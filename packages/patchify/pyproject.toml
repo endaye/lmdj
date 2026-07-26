@@ -11,12 +11,12 @@ requires-python = ">=3.11"
 #   pip install -e ../core-models
 dependencies = [
   "pretty_midi>=0.2.11,<1",
+  "jsonschema>=4,<5",
 ]
 
 [project.optional-dependencies]
 test = [
   "pytest>=8,<9",
-  "jsonschema>=4,<5",
 ]
 
 [project.scripts]

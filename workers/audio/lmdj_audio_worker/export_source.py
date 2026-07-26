@@ -59,6 +59,11 @@ def build_export_source(
         for stem in (package_root / "stems").glob("*.wav")
         if stem.is_file()
     )
+    timing = (
+        [_safe_relative_path(package_root, "timing.json")]
+        if (package_root / "timing.json").is_file()
+        else []
+    )
     active_pattern = _active_pattern(patch)
     steps = active_pattern.length_steps
     source_warnings = list(warnings)
@@ -70,6 +75,13 @@ def build_export_source(
         "stems": stems,
         "samples": samples,
         "midi": midi,
+        "timing": timing,
+        "provenance": {
+            "pipeline": patch.metadata.get("pipeline", "legacy"),
+            "extraction_config_version": patch.metadata.get(
+                "extraction_config_version"
+            ),
+        },
         "music": {
             "bpm": patch.bpm,
             "key": (

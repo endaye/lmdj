@@ -8,9 +8,31 @@ import pytest
 from lmdj_audio_worker.job import process_job
 from lmdj_audio_worker.music_metadata import KeyEstimate
 from lmdj_audio_worker.runner import PipelineRunError
-from lmdj_audio_worker.status import read_status
+from lmdj_audio_worker.status import JobStatus, read_status
 
 from tests.conftest import GOLDEN, FakeRunner
+
+MATERIAL_GOLDEN = (
+    Path(__file__).resolve().parents[3]
+    / "packages"
+    / "patchify"
+    / "tests"
+    / "fixtures"
+    / "material-package"
+)
+
+
+class StageAwareFakeRunner:
+    pipeline_id = "materials-v1"
+
+    def run_with_stages(self, audio, out_dir, song_id, on_stage):
+        on_stage("extracting")
+        destination = out_dir / song_id
+        shutil.copytree(MATERIAL_GOLDEN, destination)
+        return destination
+
+    def run(self, audio, out_dir, song_id):
+        raise AssertionError("stage-aware runner must use run_with_stages")
 
 
 class FakeKeyAnalyzer:
@@ -55,6 +77,73 @@ def test_happy_path_completes_with_patch(tmp_path: Path, sample_audio: Path, fak
     assert (job_dir / "input" / sample_audio.name).exists()
     assert (job_dir / (final.package_dir or "") / "patch.json").exists()
     assert read_status(job_dir).state == "completed"
+
+
+def test_initial_status_metadata_survives_to_completed(
+    tmp_path: Path,
+    sample_audio: Path,
+):
+    initial = JobStatus(
+        job_id="jobtest",
+        state="queued",
+        submission_id="submission-1",
+        original_filename="song.wav",
+        created_at="2026-07-26T00:00:00Z",
+    )
+
+    final = process_job(
+        sample_audio,
+        jobs_root=tmp_path / "jobs",
+        runner=FakeRunner(),
+        job_id="jobtest",
+        initial_status=initial,
+    )
+
+    assert final.submission_id == "submission-1"
+    assert final.original_filename == "song.wav"
+    assert final.created_at == "2026-07-26T00:00:00Z"
+
+
+@pytest.mark.parametrize(
+    "initial",
+    [
+        JobStatus(job_id="other", state="queued"),
+        JobStatus(job_id="jobtest", state="separating"),
+    ],
+)
+def test_initial_status_must_be_queued_for_selected_job(
+    tmp_path: Path,
+    sample_audio: Path,
+    initial: JobStatus,
+):
+    with pytest.raises(ValueError, match="initial status"):
+        process_job(
+            sample_audio,
+            jobs_root=tmp_path / "jobs",
+            runner=FakeRunner(),
+            job_id="jobtest",
+            initial_status=initial,
+        )
+
+
+def test_initial_status_pipeline_must_match_selected_runner(
+    tmp_path: Path,
+    sample_audio: Path,
+):
+    initial = JobStatus(
+        job_id="jobtest",
+        state="queued",
+        pipeline="legacy",
+    )
+
+    with pytest.raises(ValueError, match="pipeline"):
+        process_job(
+            sample_audio,
+            jobs_root=tmp_path / "jobs",
+            runner=StageAwareFakeRunner(),
+            job_id="jobtest",
+            initial_status=initial,
+        )
 
 
 def test_same_audio_across_jobs_uses_stable_source_identity_for_full_patch_id(
@@ -212,3 +301,26 @@ def test_queued_status_written_before_input_copy(tmp_path: Path, sample_audio: P
             seen_state.append("input-present" if (job_dir / "input" / sample_audio.name).exists() else "input-absent")
     process_job(sample_audio, jobs_root=jobs_root, runner=FakeRunner(), job_id="jobtest", on_state=probe)
     assert seen_state == ["status.json", "input-absent"]
+
+
+def test_stage_aware_runner_emits_extracting_and_records_pipeline(
+    tmp_path: Path,
+    sample_audio: Path,
+):
+    states = []
+    final = process_job(
+        sample_audio,
+        jobs_root=tmp_path / "jobs",
+        runner=StageAwareFakeRunner(),
+        job_id="materialsjob",
+        on_state=lambda status: states.append(status.state),
+    )
+    assert states == [
+        "queued",
+        "separating",
+        "extracting",
+        "patchifying",
+        "completed",
+    ]
+    assert final.pipeline == "materials-v1"
+    assert final.patch_id is not None

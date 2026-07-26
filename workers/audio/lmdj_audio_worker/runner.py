@@ -21,6 +21,8 @@ class PipelineRunner(Protocol):
 class DemoPipelineRunner:
     """子进程调用冻结的参考 demo pipeline（demo 自己的 venv，依赖完全隔离）。"""
 
+    pipeline_id = "legacy"
+
     def __init__(self, demo_dir: Path, fast: bool = True, timeout_sec: int = 1800) -> None:
         self.demo_dir = demo_dir.resolve()
         self.fast = fast
@@ -83,6 +85,8 @@ class DemoPipelineRunner:
 
 class PipelineFromStemsRunner:
     """子进程调用 pipeline-from-stems（专用 .venv-pfs，DSP 依赖隔离，spec §3.1）。"""
+
+    pipeline_id = "legacy-pfs"
 
     def __init__(self, worker_dir: Path | None = None, timeout_sec: int = 600) -> None:
         self.worker_dir = (worker_dir or Path(__file__).resolve().parent.parent)

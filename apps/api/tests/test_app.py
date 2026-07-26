@@ -16,19 +16,48 @@ from lmdj_api.app import create_app
 from tests.conftest import FakeRunner, short_wav_bytes
 
 
+class CountingRunner(FakeRunner):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.calls: list[str] = []
+        self._calls_lock = threading.Lock()
+
+    def run(self, audio: Path, out_dir: Path, song_id: str) -> Path:
+        with self._calls_lock:
+            self.calls.append(out_dir.name)
+        return super().run(audio, out_dir, song_id)
+
+
 def make_client(tmp_path: Path, runner=None) -> TestClient:
     app = create_app(runner=runner or FakeRunner(), jobs_root=tmp_path / "jobs")
     return TestClient(app)
 
 
-def _upload(client: TestClient) -> str:
+def _upload(
+    client: TestClient,
+    *,
+    filename: str = "song.wav",
+    submission_id: str | None = None,
+) -> str:
+    headers = (
+        {"Idempotency-Key": submission_id}
+        if submission_id is not None
+        else None
+    )
     resp = client.post(
         "/uploads",
-        files={"file": ("song.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+        files={"file": (filename, io.BytesIO(short_wav_bytes()), "audio/wav")},
+        headers=headers,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["state"] == "queued"
+    assert body["state"] in {
+        "queued",
+        "separating",
+        "extracting",
+        "patchifying",
+        "completed",
+    }
     return body["job_id"]
 
 
@@ -101,6 +130,122 @@ def test_health(tmp_path: Path):
     assert make_client(tmp_path).get("/health").json() == {"ok": True}
 
 
+def test_duplicate_submission_id_returns_same_job_and_runs_once(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    runner = CountingRunner()
+    client = make_client(tmp_path, runner=runner)
+
+    first = _upload(client, submission_id="submission-same")
+    second = _upload(
+        client,
+        filename="ignored-name.wav",
+        submission_id="submission-same",
+    )
+    _poll_completed(client, first)
+
+    assert second == first
+    assert runner.calls == [first]
+    status = client.get(f"/jobs/{first}").json()
+    assert status["submission_id"] == "submission-same"
+    assert status["original_filename"] == "song.wav"
+
+
+def test_different_submission_ids_create_distinct_jobs(tmp_path: Path, ffprobe_wav):
+    client = make_client(tmp_path)
+
+    first = _upload(client, submission_id="submission-first")
+    second = _upload(client, submission_id="submission-second")
+
+    assert first != second
+
+
+def test_queue_capacity_and_position_are_truthful(tmp_path: Path, ffprobe_wav):
+    barrier = threading.Event()
+    started = threading.Event()
+    client = make_client(
+        tmp_path,
+        runner=FakeRunner(barrier=barrier, started=started),
+    )
+    first = _upload(
+        client,
+        filename="song-a.wav",
+        submission_id="submission-song-a",
+    )
+    assert started.wait(timeout=5)
+    second = _upload(
+        client,
+        filename="song-b.wav",
+        submission_id="submission-song-b",
+    )
+
+    first_status = client.get(f"/jobs/{first}").json()
+    second_status = client.get(f"/jobs/{second}").json()
+    capacity = client.get("/queue").json()
+
+    assert first_status["queue_position"] is None
+    assert second_status["state"] == "queued"
+    assert second_status["queue_position"] == 1
+    assert capacity == {
+        "max_concurrency": 1,
+        "processing": 1,
+        "waiting": 1,
+    }
+    assert second_status["capacity"] == capacity
+
+    barrier.set()
+
+
+def test_submission_route_recovers_job_after_response_loss(tmp_path: Path, ffprobe_wav):
+    client = make_client(tmp_path)
+    job_id = _upload(client, submission_id="submission-lost-response")
+
+    recovered = client.get("/submissions/submission-lost-response")
+
+    assert recovered.status_code == 200
+    assert recovered.json()["job_id"] == job_id
+
+
+def test_app_startup_marks_old_nonterminal_job_interrupted(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    write_status(
+        jobs_root / "oldjob",
+        JobStatus(
+            job_id="oldjob",
+            state="separating",
+            submission_id="submission-old-job",
+            original_filename="old.wav",
+            created_at="2026-07-26T00:00:00Z",
+        ),
+    )
+
+    client = TestClient(create_app(runner=FakeRunner(), jobs_root=jobs_root))
+    status = client.get("/jobs/oldjob").json()
+
+    assert status["state"] == "interrupted"
+    assert status["error_code"] == "service_interrupted"
+    assert "restarted" in status["error"]
+
+
+def test_public_status_contains_visible_identity_fields(tmp_path: Path, ffprobe_wav):
+    client = make_client(tmp_path)
+    job_id = _upload(
+        client,
+        filename="visible-song.wav",
+        submission_id="submission-visible",
+    )
+
+    status = client.get(f"/jobs/{job_id}").json()
+
+    assert status["job_id"] == job_id
+    assert status["original_filename"] == "visible-song.wav"
+    assert status["created_at"]
+    assert status["state"] in {"queued", "separating", "patchifying", "completed"}
+    assert "queue_position" in status
+    assert status["capacity"]["max_concurrency"] == 1
+
+
 def test_upload_then_poll_to_completed(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
     job_id = _upload(client)
@@ -135,6 +280,19 @@ def test_get_sample_file_returns_bytes(tmp_path: Path, ffprobe_wav):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("audio/")
     assert len(resp.content) > 0
+
+
+def test_internal_material_contract_is_not_publicly_served(tmp_path: Path):
+    jobs_root = tmp_path / "jobs"
+    job_id, package = _write_completed_export_job(jobs_root)
+    (package / "materials.json").write_text('{"schema":"lmdj.materials.v1"}')
+    (package / "separation.json").write_text(
+        '{"schema_version":"lmdj.separation.v1"}'
+    )
+    client = TestClient(create_app(runner=FakeRunner(), jobs_root=jobs_root))
+
+    assert client.get(f"/jobs/{job_id}/files/materials.json").status_code == 404
+    assert client.get(f"/jobs/{job_id}/files/separation.json").status_code == 404
 
 
 def test_unknown_job_is_404(tmp_path: Path):

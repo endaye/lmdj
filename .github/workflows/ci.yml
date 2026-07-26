@@ -70,8 +70,10 @@ jobs:
             packages/core-models/pyproject.toml
             packages/patchify/pyproject.toml
             workers/audio/pyproject.toml
+            workers/audio/config/parity-constraints.txt
             apps/api/pyproject.toml
-      - run: python -m pip install -e packages/core-models -e packages/patchify -e workers/audio -e "apps/api[test]"
+      # materials-v1 config tests import the DSP-backed Creator runner.
+      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[pfs]" -e "apps/api[test]" -c workers/audio/config/parity-constraints.txt
       - run: python -m pytest apps/api/tests -q
 
   web:

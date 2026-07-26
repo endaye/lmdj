@@ -10,6 +10,11 @@ const STAGES = [
     description: "Building canonical stems.",
   },
   {
+    state: "extracting",
+    label: "Material Extraction",
+    description: "Selecting quality-gated one-shots and aligned loops.",
+  },
+  {
     state: "patchifying",
     label: "Chop + Map",
     description: "Mapping playable material to 16 Pads.",
@@ -23,8 +28,10 @@ const STAGES = [
 
 export function UploadingView({
   state,
+  lastNonterminalState,
 }: {
   state: string;
+  lastNonterminalState: string;
 }) {
   if (state === "preflight") {
     return (
@@ -43,7 +50,12 @@ export function UploadingView({
     );
   }
 
-  const currentIndex = STAGES.findIndex((stage) => stage.state === state);
+  const terminal =
+    state === "failed" || state === "interrupted" || state === "cancelled";
+  const effectiveState = terminal ? lastNonterminalState : state;
+  const currentIndex = STAGES.findIndex(
+    (stage) => stage.state === effectiveState,
+  );
   return (
     <ol className="stages" aria-label="Processing stages">
       {STAGES.map((stage, index) => {
@@ -77,6 +89,29 @@ export function UploadingView({
           <span>
             <strong>Unknown</strong>
             <small>The worker reported an unmapped state.</small>
+          </span>
+          <code>{effectiveState}</code>
+        </li>
+      )}
+      {terminal && (
+        <li
+          className={`stage stage--terminal stage--terminal-${state}`}
+          data-testid={`processing-terminal-${state}`}
+        >
+          <span className="stage-icon" aria-hidden="true">!</span>
+          <span>
+            <strong>
+              {state === "interrupted"
+                ? "Service interrupted"
+                : state === "cancelled"
+                  ? "Processing cancelled"
+                  : "Processing failed"}
+            </strong>
+            <small>
+              {state === "interrupted"
+                ? "The API restarted before this Job completed."
+                : "Completed stages above remain the last confirmed evidence."}
+            </small>
           </span>
           <code>{state}</code>
         </li>
