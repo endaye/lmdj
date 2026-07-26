@@ -218,22 +218,6 @@ describe("AudioEngine", () => {
     expect(newSources.length).toBeLessThan(20);
   });
 
-  it("reports real active sources and notifies when the final source ends", () => {
-    engine.load(makeBundle(materialPlaybackPatch()));
-    const events: boolean[] = [];
-    const unsubscribe = engine.subscribe(() => events.push(engine.active));
-
-    engine.triggerPad(0);
-    expect(engine.active).toBe(true);
-    expect(engine.activeElementIds().size).toBe(1);
-
-    ctx.sources.at(-1)!.onended?.({ type: "ended" });
-    expect(engine.active).toBe(false);
-    expect(engine.activeElementIds()).toEqual(new Set());
-    expect(events).toEqual([true, false]);
-    unsubscribe();
-  });
-
   it("notifies subscribers on play/stop/mute", async () => {
     const bundle = makeBundle();
     engine.load(bundle);
@@ -243,10 +227,8 @@ describe("AudioEngine", () => {
     await engine.play();
     engine.toggleMutePad(0);
     engine.stop();
-    expect(events.length).toBeGreaterThanOrEqual(3);
-    const countBeforeUnsubscribe = events.length;
     unsubscribe();
     engine.toggleMutePad(0);
-    expect(events).toHaveLength(countBeforeUnsubscribe);
+    expect(events.length).toBe(3);
   });
 });

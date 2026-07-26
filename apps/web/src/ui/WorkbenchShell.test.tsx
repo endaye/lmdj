@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
@@ -104,38 +104,5 @@ describe("WorkbenchShell", () => {
     await userEvent.click(screen.getByTestId("inspector-close"));
     await waitFor(() => expect(toggle).toHaveFocus());
     expect(toggle).toHaveAttribute("aria-expanded", "false");
-  });
-
-  it("reserves an assistant slot without changing landmark order", () => {
-    const onCanvasInteraction = vi.fn();
-    render(
-      <WorkbenchShell
-        model={model()}
-        mode="source"
-        onModeChange={() => undefined}
-        availableModes={["source", "performance", "export"]}
-        appBar={<span>app bar</span>}
-        assistant={<button>assistant dock</button>}
-        assistantExpanded
-        onCanvasInteraction={onCanvasInteraction}
-        instrumentCanvas={<span>instrument canvas</span>}
-        contextInspector={<span>context inspector</span>}
-        statusBar={<span>status bar</span>}
-      />,
-    );
-    expect(screen.getByTestId("app-bar")).toHaveAttribute(
-      "data-assistant-open",
-      "true",
-    );
-    expect(screen.getByTestId("assistant-slot")).toContainElement(
-      screen.getByRole("button", { name: "assistant dock" }),
-    );
-    expect(
-      screen.getByTestId("app-bar").compareDocumentPosition(
-        screen.getByTestId("instrument-canvas"),
-      ),
-    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    fireEvent.pointerDown(screen.getByTestId("instrument-canvas"));
-    expect(onCanvasInteraction).toHaveBeenCalledTimes(1);
   });
 });

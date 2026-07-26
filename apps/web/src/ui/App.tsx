@@ -15,13 +15,6 @@ import {
   type QueueCapacity,
 } from "../api/client";
 import type { AudioEngine } from "../engine/AudioEngine";
-import { deriveChameleonVisualState } from "../chameleon/adapter";
-import { ChameleonSurface } from "../chameleon/ChameleonSurface";
-import { activePlaybackRole } from "../chameleon/playback";
-import { useChameleonController } from "../chameleon/useChameleonController";
-import { createVisualSignature } from "../chameleon/visualSignature";
-import { runChameleonViewTransition } from "../chameleon/viewTransition";
-import { useEngineTick } from "./useEngine";
 import {
   loadSubmissions,
   upsertSubmission,
@@ -47,7 +40,6 @@ import { PatternSurface } from "./PatternSurface";
 import { ProcessingPanel } from "./ProcessingPanel";
 import { SourcePanel } from "./SourcePanel";
 import { WorkbenchShell } from "./WorkbenchShell";
-import { Wordmark } from "./Wordmark";
 import {
   buildWorkbenchViewModel,
   type WorkbenchMode,
@@ -181,12 +173,6 @@ export function App({
     issues: null,
     issueTitle: null,
   });
-  // Consume the AudioEngine's real source start/end notifications instead of
-  // guessing one-shot durations with a timer.
-  useEngineTick(engine);
-  const transitionTo = useCallback((next: AppState) => {
-    runChameleonViewTransition(() => setState(next));
-  }, []);
   const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>(() =>
     loadSubmissions(localStorage).map(trackedFromSubmission)
   );
@@ -264,22 +250,22 @@ export function App({
     (bundle: PatchBundle<unknown>, source: LoadedSource) => {
       engine.load(bundle);
       setMode("performance");
-      transitionTo({
+      setState({
         phase: "loaded",
         bundle,
         source,
         exportState: { kind: "idle" },
       });
     },
-    [engine, transitionTo],
+    [engine],
   );
 
   // 退出当前 patch，停掉播放，回到上传页换一首歌
   const backToUpload = useCallback(() => {
     if (engine.playing) engine.stop();
     setMode("source");
-    transitionTo({ phase: "source", issues: null, issueTitle: null });
-  }, [engine, transitionTo]);
+    setState({ phase: "source", issues: null, issueTitle: null });
+  }, [engine]);
 
   const handleFiles = useCallback(
     async (
@@ -437,7 +423,7 @@ export function App({
         );
         return [...retained, trackedFromSubmission(submission)];
       });
-      transitionTo({
+      setState({
         phase: "processing",
         file,
         base: root,
@@ -517,13 +503,7 @@ export function App({
         inflightUploadsRef.current.delete(signature);
       }
     },
-    [
-      apiClient,
-      pollTrackedJob,
-      transitionTo,
-      updateTrackedJob,
-      updateTrackedJobs,
-    ],
+    [apiClient, pollTrackedJob, updateTrackedJob, updateTrackedJobs],
   );
 
   const handleUpload = useCallback(
@@ -672,90 +652,58 @@ export function App({
     return () => window.removeEventListener("keydown", onKey);
   }, [state.phase, triggerPad]);
 
-  // Derived before every conditional return so hooks stay unconditional.
-  const activeJob =
-    state.phase === "processing"
-      ? trackedJobs.find(
-          (job) =>
-            job.submission.submissionId === state.submissionId,
-        )
-      : undefined;
-  const patchId =
-    state.phase === "loaded" ? state.bundle.patch.patch_id : null;
-  const playbackRole =
-    state.phase === "loaded"
-      ? activePlaybackRole(
-          state.bundle.patch,
-          engine.activeElementIds(),
-        )
-      : null;
-  const chameleonVisual = deriveChameleonVisualState({
-    appPhase: state.phase,
-    jobState: state.phase === "processing" ? state.jobState : null,
-    queuePosition: activeJob?.status?.queue_position ?? null,
-    patchId,
-    errorKey:
-      state.phase === "failed"
-        ? `${state.submissionId}:${state.failedAt}`
-        : null,
-    errorLabel:
-      state.phase === "failed" ? state.issueTitle : null,
-    isPlaying: state.phase === "loaded" && engine.active,
-    playbackRole,
-  });
-  const chameleon = useChameleonController(chameleonVisual);
-  const chameleonSeed =
-    state.phase === "loaded"
-      ? state.bundle.patch.patch_id
-      : state.phase === "processing" || state.phase === "failed"
-        ? state.submissionId
-        : "lmdj:gallery";
-  const assistant = state.phase === "source"
-    ? undefined
-    : (
-        <ChameleonSurface
-          state={chameleon.visualState}
-          signature={createVisualSignature(
-            chameleonSeed,
-            chameleon.visualState,
-          )}
-          onActivate={() => undefined}
-          onToggle={chameleon.toggle}
-          onDismiss={chameleon.dismiss}
-        />
-      );
-
   if (state.phase === "source") {
     return (
       <AppFrame>
-        <SourcePanel
-          onFiles={(files) =>
-            void handleFiles(files, { kind: "local" })
+        <CreatorStateShell
+          label="Source"
+          appState="source"
+          canvas={
+            <>
+              <SourcePanel
+                onFiles={(files) =>
+                  void handleFiles(files, { kind: "local" })
+                }
+                onExample={() =>
+                  void fetchExample().then(
+                    (files) => handleFiles(files, { kind: "example" }),
+                    failPatch,
+                  )
+                }
+                onUpload={(base, file) => void handleUpload(base, file)}
+              />
+              <JobQueuePanel
+                jobs={trackedJobs}
+                capacity={queueCapacity}
+                onOpenCompleted={(job) => void openCompletedJob(job)}
+              />
+              {state.issues && (
+                <ErrorPanel
+                  title={
+                    state.issueTitle ??
+                    "patch.json 未通过 lmdj.patch.v1 校验"
+                  }
+                  issues={state.issues}
+                />
+              )}
+            </>
           }
-          onExample={() =>
-            void fetchExample().then(
-              (files) => handleFiles(files, { kind: "example" }),
-              failPatch,
-            )
+          inspector={
+            <div className="state-inspector">
+              <strong>Source rules</strong>
+              <p>Preflight must pass before a Job exists.</p>
+              <p>Supported input: WAV or MP3.</p>
+            </div>
           }
-          onUpload={(base, file) => void handleUpload(base, file)}
+          status={
+            <>
+              <strong>Source</strong>
+              <span>WAV / MP3</span>
+              <span>200 MiB · 600 秒</span>
+              <span>Local draft</span>
+            </>
+          }
         />
-        <section className="gallery-stage__jobs">
-          <JobQueuePanel
-            jobs={trackedJobs}
-            capacity={queueCapacity}
-            onOpenCompleted={(job) => void openCompletedJob(job)}
-          />
-        </section>
-        {state.issues && (
-          <ErrorPanel
-            title={
-              state.issueTitle
-                ?? "patch.json 未通过 lmdj.patch.v1 校验"
-            }
-            issues={state.issues}
-          />
-        )}
       </AppFrame>
     );
   }
@@ -766,9 +714,6 @@ export function App({
         <CreatorStateShell
           label="Processing"
           appState={state.jobState}
-          assistant={assistant}
-          assistantExpanded={chameleon.expanded}
-          onCanvasInteraction={chameleon.dismiss}
           canvas={
             <ProcessingPanel
               fileName={state.file.name}
@@ -807,9 +752,6 @@ export function App({
         <CreatorStateShell
           label="Failed"
           appState="failed"
-          assistant={assistant}
-          assistantExpanded={chameleon.expanded}
-          onCanvasInteraction={chameleon.dismiss}
           canvas={
             <section className="failed-state" data-testid="failed-state">
               <header className="state-heading">
@@ -1013,9 +955,6 @@ export function App({
             </div>
           </>
         }
-        assistant={assistant}
-        assistantExpanded={chameleon.expanded}
-        onCanvasInteraction={chameleon.dismiss}
         instrumentCanvas={
           <>
             {mode === "source" && (
@@ -1131,18 +1070,12 @@ function CreatorStateShell({
   canvas,
   inspector,
   status,
-  assistant,
-  assistantExpanded,
-  onCanvasInteraction,
 }: {
   label: string;
   appState: string;
   canvas: ReactNode;
   inspector: ReactNode;
   status: ReactNode;
-  assistant?: ReactNode;
-  assistantExpanded?: boolean;
-  onCanvasInteraction?: () => void;
 }) {
   return (
     <WorkbenchShell
@@ -1156,13 +1089,18 @@ function CreatorStateShell({
           <span className="workbench-state-key">{appState}</span>
         </>
       }
-      assistant={assistant}
-      assistantExpanded={assistantExpanded}
-      onCanvasInteraction={onCanvasInteraction}
       instrumentCanvas={canvas}
       contextInspector={inspector}
       statusBar={status}
     />
+  );
+}
+
+function Wordmark() {
+  return (
+    <div className="wordmark">
+      LMDJ<span className="wordmark-sub">patch view</span>
+    </div>
   );
 }
 
@@ -1175,7 +1113,7 @@ function AppFrame({ children }: { children: ReactNode }) {
         data-testid="app-version"
         title="当前版本"
       >
-        LMDJ · {PRODUCT_VERSION}
+        {PRODUCT_VERSION}
       </small>
     </div>
   );

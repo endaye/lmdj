@@ -59,16 +59,6 @@ async function openExampleWithMissingAsset(page: Page): Promise<void> {
   await page.goto("/");
   await page.getByRole("button", { name: /加载示例 patch/i }).click();
   await expect(page.getByTestId("pad-matrix")).toBeVisible();
-  // A loaded Patch auto-reveals the Chameleon once and collapses it after
-  // 4000ms, which re-flows the reserved assistant strip in the App Bar. These
-  // instrument-layout assertions predate the assistant, so dismiss the reveal
-  // up front and measure a settled shell. Assistant clearance itself is
-  // covered by e2e/chameleon-exhibition.spec.ts.
-  await page.getByRole("button", { name: "Close assistant" }).click();
-  await expect(page.getByTestId("app-bar")).toHaveAttribute(
-    "data-assistant-open",
-    "false",
-  );
   await page.mouse.move(0, 0);
 }
 
@@ -95,26 +85,14 @@ async function setShellWidth(shell: Locator, width: number): Promise<void> {
   expect(await shell.evaluate((element) => element.clientWidth)).toBe(width);
 }
 
-test("Source file chooser is the Chameleon, not a bare native input", async ({
-  page,
-}) => {
+test("Source file chooser uses white button text", async ({ page }) => {
   await page.goto("/");
 
-  // The Gallery Stage replaced the visible native file picker: the character
-  // itself is the accessible upload control and the input stays hidden, so the
-  // old ::file-selector-button colour is no longer a real product surface.
-  const input = page.getByTestId("api-file-input");
-  await expect(input).toBeHidden();
-  await expect(input).toHaveAttribute(
-    "accept",
-    ".wav,.mp3,audio/wav,audio/mpeg",
+  const color = await page.getByTestId("api-file-input").evaluate((element) =>
+    getComputedStyle(element, "::file-selector-button").color
   );
 
-  const trigger = page.getByRole("button", {
-    name: "Choose a WAV or MP3 to make a Patch",
-  });
-  await expect(trigger).toBeVisible();
-  await expect(trigger).toHaveCSS("color", "rgb(17, 17, 15)");
+  expect(color).toBe("rgb(255, 255, 255)");
 });
 
 for (const breakpoint of SHELL_BREAKPOINTS) {
