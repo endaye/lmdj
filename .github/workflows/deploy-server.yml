@@ -61,6 +61,18 @@ jobs:
             "$RUNNER_TEMP/publish-staging-release.sh"
           git checkout --detach "$target"
 
+      - name: Plan staging version
+        id: version
+        env:
+          TARGET_SHA: ${{ steps.target.outputs.sha }}
+        run: |
+          git fetch origin 'refs/tags/*:refs/tags/*'
+          python3 "$RUNNER_TEMP/release_version.py" \
+            --mode plan \
+            --repo "$GITHUB_WORKSPACE" \
+            --target-sha "$TARGET_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -71,13 +83,19 @@ jobs:
         working-directory: apps/web
         env:
           VITE_API_BASE: /api
+          VITE_PRODUCT_VERSION: ${{ steps.version.outputs.tag }}
+          VITE_BUILD_REVISION: ${{ steps.target.outputs.sha }}
         run: npm ci && npm run build
 
       - name: Build server images
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          PRODUCT_VERSION: ${{ steps.version.outputs.tag }}
         run: |
-          docker build --tag "lmdj-app:$TARGET_SHA" .
+          docker build \
+            --build-arg "LMDJ_PRODUCT_VERSION=$PRODUCT_VERSION" \
+            --build-arg "LMDJ_BUILD_REVISION=$TARGET_SHA" \
+            --tag "lmdj-app:$TARGET_SHA" .
           docker pull caddy:2
           docker tag caddy:2 "lmdj-caddy:$TARGET_SHA"
           docker save "lmdj-app:$TARGET_SHA" "lmdj-caddy:$TARGET_SHA" \
@@ -144,12 +162,15 @@ jobs:
         id: release
         env:
           TARGET_SHA: ${{ steps.target.outputs.sha }}
+          EXPECTED_TAG: ${{ steps.version.outputs.tag }}
         run: |
           git fetch origin 'refs/tags/*:refs/tags/*'
           deployed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           if ! python3 "$RUNNER_TEMP/release_version.py" \
+            --mode render \
             --repo "$GITHUB_WORKSPACE" \
             --target-sha "$TARGET_SHA" \
+            --expected-tag "$EXPECTED_TAG" \
             --repository "$GITHUB_REPOSITORY" \
             --run-url "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
             --deployed-at "$deployed_at" \

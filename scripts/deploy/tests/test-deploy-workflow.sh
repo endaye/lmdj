@@ -54,7 +54,37 @@ if grep -Fq 'scp scripts/deploy/activate-release.sh' "$WORKFLOW"; then
   exit 1
 fi
 
-grep -Fq 'docker build --tag "lmdj-app:$TARGET_SHA" .' "$WORKFLOW" || {
+grep -Fq '      - name: Plan staging version' "$WORKFLOW" || {
+  echo "deploy workflow must plan the product version before building artifacts" >&2
+  exit 1
+}
+
+grep -Fq -- '--mode plan' "$WORKFLOW" || {
+  echo "deploy workflow must use the metadata-free release plan mode" >&2
+  exit 1
+}
+
+grep -Fq 'VITE_PRODUCT_VERSION: ${{ steps.version.outputs.tag }}' "$WORKFLOW" || {
+  echo "web build must receive the planned product version" >&2
+  exit 1
+}
+
+grep -Fq 'VITE_BUILD_REVISION: ${{ steps.target.outputs.sha }}' "$WORKFLOW" || {
+  echo "web build must receive the full target revision" >&2
+  exit 1
+}
+
+grep -Fq -- '--build-arg "LMDJ_PRODUCT_VERSION=$PRODUCT_VERSION"' "$WORKFLOW" || {
+  echo "server image must receive the planned product version" >&2
+  exit 1
+}
+
+grep -Fq -- '--build-arg "LMDJ_BUILD_REVISION=$TARGET_SHA"' "$WORKFLOW" || {
+  echo "server image must receive the full target revision" >&2
+  exit 1
+}
+
+grep -Fq -- '--tag "lmdj-app:$TARGET_SHA" .' "$WORKFLOW" || {
   echo "deploy workflow must build the server image on the GitHub runner" >&2
   exit 1
 }
@@ -104,6 +134,16 @@ grep -Fq 'python3 "$RUNNER_TEMP/release_version.py"' "$WORKFLOW" || {
   exit 1
 }
 
+grep -Fq -- '--mode render' "$WORKFLOW" || {
+  echo "deploy workflow must render release metadata after staging activation" >&2
+  exit 1
+}
+
+grep -Fq -- '--expected-tag "$EXPECTED_TAG"' "$WORKFLOW" || {
+  echo "release rendering must reject drift from the version embedded at build time" >&2
+  exit 1
+}
+
 grep -Fq '      - name: Publish staging release' "$WORKFLOW" || {
   echo "deploy workflow must publish the immutable Tag and Release" >&2
   exit 1
@@ -114,6 +154,8 @@ grep -Fq '"$RUNNER_TEMP/publish-staging-release.sh"' "$WORKFLOW" || {
   exit 1
 }
 
+assert_order '      - name: Plan staging version' '      - name: Build web'
+assert_order '      - name: Plan staging version' '      - name: Build server images'
 assert_order '      - name: Activate staging release' '      - name: Verify staging revision'
 assert_order '      - name: Verify staging revision' '      - name: Prepare staging release'
 assert_order '      - name: Prepare staging release' '      - name: Publish staging release'
@@ -125,6 +167,26 @@ fi
 
 grep -Fq 'bash scripts/release/tests/test-release-versioning.sh' "$CI_WORKFLOW" || {
   echo "deploy-config CI must run the release-versioning suite" >&2
+  exit 1
+}
+
+grep -Fq 'ARG LMDJ_PRODUCT_VERSION' "$ROOT/Dockerfile" || {
+  echo "Dockerfile must accept the product version build argument" >&2
+  exit 1
+}
+
+grep -Fq 'ARG LMDJ_BUILD_REVISION' "$ROOT/Dockerfile" || {
+  echo "Dockerfile must accept the build revision argument" >&2
+  exit 1
+}
+
+grep -Fq 'LMDJ_PRODUCT_VERSION=$LMDJ_PRODUCT_VERSION' "$ROOT/Dockerfile" || {
+  echo "Dockerfile must preserve the product version in the runtime image" >&2
+  exit 1
+}
+
+grep -Fq 'LMDJ_BUILD_REVISION=$LMDJ_BUILD_REVISION' "$ROOT/Dockerfile" || {
+  echo "Dockerfile must preserve the build revision in the runtime image" >&2
   exit 1
 }
 

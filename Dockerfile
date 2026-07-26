@@ -34,7 +34,11 @@ RUN python -m venv /opt/app-venv \
 RUN references/demos/lmdj-song-pipeline/.venv/bin/python -c \
     "from demucs.pretrained import get_model; get_model('htdemucs')"
 
-ENV LMDJ_JOBS_ROOT=/data/jobs
+ARG LMDJ_PRODUCT_VERSION=dev
+ARG LMDJ_BUILD_REVISION=unknown
+ENV LMDJ_JOBS_ROOT=/data/jobs \
+    LMDJ_PRODUCT_VERSION=$LMDJ_PRODUCT_VERSION \
+    LMDJ_BUILD_REVISION=$LMDJ_BUILD_REVISION
 EXPOSE 8000
 
 CMD ["/opt/app-venv/bin/uvicorn", "lmdj_api.app:app", "--host", "0.0.0.0", "--port", "8000"]

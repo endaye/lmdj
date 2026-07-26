@@ -189,3 +189,18 @@
   皮肤外观分离，状态只读取预留遮罩并由运行时参数驱动。当前只确认资产边界，
   不代表 3D runtime、模型、绑定、Web 组件或完整状态映射已经实现。详细规范见
   [Chameleon 可换皮肤贴图规范 v1](assets/chameleon/chameleon-skin-system-v1.md)。
+
+### 已确认：Chameleon 连接 Gallery Stage 与 Creator Workbench
+
+- 结论：首页采用 Kumaleon 启发的 Exhibition Workbench 方向，已批准的
+  Chameleon 线稿位于中央并作为点击、键盘和拖放上传入口；进入 Creator
+  Workbench 后缩进右上角 Assistant Dock。当前使用明确的 2D 无框悬浮，
+  用户未来提供的 SVG 和可选 3D Renderer 复用同一位置与状态接口。
+- 原因：首页需要建立品牌世界和角色关系，工作台需要保护 Pattern、16 Pad、
+  Inspector 与 Export 的操作密度；用同一角色在两个空间之间转换，可以保留
+  品牌连续性，而不让高强度海报语言侵入长期编辑。
+- 影响：角色状态只映射真实上传、Job、Patch 和播放状态；`ready` 与 `error`
+  可单次自动展开，其他处理阶段停留在 Dock。Web 不读取 Material、stem、lane
+  或 MIDI 内部文件，2D / SVG / 3D 失败也不得阻断 Creator Core。产品版本继续
+  作为右下角 SemVer 展签。详细设计见
+  [LMDJ Chameleon 展览式工作台设计](../superpowers/specs/2026-07-26-chameleon-exhibition-workbench-design.md)。

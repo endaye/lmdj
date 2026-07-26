@@ -14,6 +14,7 @@ import {
 } from "../api/client";
 import { STORAGE_KEY, type StoredSubmission } from "../jobs/storage";
 import type { PatchBundle } from "../patch/loader";
+import { PRODUCT_VERSION } from "../version";
 
 class MemoryStorage implements Storage {
   private readonly values = new Map<string, string>();
@@ -103,6 +104,9 @@ describe("App", () => {
     expect(screen.getByTestId("workbench-shell")).toBeInTheDocument();
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
+    expect(screen.getByTestId("app-version")).toHaveTextContent(
+      PRODUCT_VERSION,
+    );
   });
 
   it("loads the example patch into the Instrument-first workbench shell", async () => {

@@ -253,10 +253,14 @@ class ReleaseVersionTests(unittest.TestCase):
             [
                 sys.executable,
                 str(SCRIPT),
+                "--mode",
+                "render",
                 "--repo",
                 str(self.repo.path),
                 "--target-sha",
                 target,
+                "--expected-tag",
+                "v0.2.0",
                 "--repository",
                 "endaye/lmdj",
                 "--run-url",
@@ -278,6 +282,70 @@ class ReleaseVersionTests(unittest.TestCase):
         self.assertIn("previous_tag=\n", outputs)
         self.assertIn("existing=false\n", outputs)
         self.assertIn(f"notes_file={notes_file.resolve()}\n", outputs)
+
+    def test_cli_plan_writes_version_without_deployment_metadata(self) -> None:
+        target = self.repo.commit("feat: initial product")
+        self.repo.set_origin_main()
+        github_output = self.repo.path / "github-output"
+
+        subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--mode",
+                "plan",
+                "--repo",
+                str(self.repo.path),
+                "--target-sha",
+                target,
+                "--github-output",
+                str(github_output),
+            ],
+            check=True,
+        )
+
+        outputs = github_output.read_text()
+        self.assertIn("tag=v0.2.0\n", outputs)
+        self.assertIn("previous_tag=\n", outputs)
+        self.assertIn("existing=false\n", outputs)
+        self.assertNotIn("notes_file=", outputs)
+
+    def test_cli_render_rejects_expected_tag_drift(self) -> None:
+        target = self.repo.commit("feat: initial product")
+        self.repo.set_origin_main()
+
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(SCRIPT),
+                "--mode",
+                "render",
+                "--repo",
+                str(self.repo.path),
+                "--target-sha",
+                target,
+                "--expected-tag",
+                "v0.2.1",
+                "--repository",
+                "endaye/lmdj",
+                "--run-url",
+                "https://github.com/endaye/lmdj/actions/runs/42",
+                "--deployed-at",
+                "2026-07-26T10:11:12Z",
+                "--output-dir",
+                str(self.repo.path / "release-output"),
+            ],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(
+            "expected tag v0.2.1 does not match planned tag v0.2.0",
+            result.stderr,
+        )
 
 
 if __name__ == "__main__":
