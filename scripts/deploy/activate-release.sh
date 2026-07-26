@@ -157,7 +157,7 @@ wait_for_caddy_health() {
       -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
       exec -T -e "LMDJ_HEALTH_DOMAIN=$DOMAIN" app \
       /opt/app-venv/bin/python -c \
-      'import json, os, socket, ssl, urllib.request; domain=os.environ["LMDJ_HEALTH_DOMAIN"]; resolve=socket.getaddrinfo; socket.getaddrinfo=lambda host, port, *args, **kwargs: resolve("caddy" if host == domain else host, port, *args, **kwargs); ctx=ssl._create_unverified_context(); home=urllib.request.Request(f"https://{domain}/"); health=urllib.request.Request(f"https://{domain}/api/health"); assert urllib.request.urlopen(home, context=ctx, timeout=10).status == 200; assert json.load(urllib.request.urlopen(health, context=ctx, timeout=10))["ok"] is True'; then
+      'import json, os, socket, ssl, urllib.request; domain=os.environ["LMDJ_HEALTH_DOMAIN"]; resolve=socket.getaddrinfo; socket.getaddrinfo=lambda host, port, *args, **kwargs: resolve("caddy" if host == domain else host, port, *args, **kwargs); ctx=ssl._create_unverified_context(); opener=urllib.request.build_opener(urllib.request.ProxyHandler({}), urllib.request.HTTPSHandler(context=ctx)); home=urllib.request.Request(f"https://{domain}/"); health=urllib.request.Request(f"https://{domain}/api/health"); assert opener.open(home, timeout=10).status == 200; assert json.load(opener.open(health, timeout=10))["ok"] is True'; then
       return 0
     fi
     if [ "$attempt" -eq 12 ]; then
