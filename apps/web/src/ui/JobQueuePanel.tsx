@@ -31,10 +31,12 @@ export function JobQueuePanel({
   jobs,
   capacity,
   onOpenCompleted,
+  onDelete,
 }: {
   jobs: TrackedJob[];
   capacity: QueueCapacity;
   onOpenCompleted: (job: TrackedJob) => void;
+  onDelete: (job: TrackedJob) => void;
 }) {
   if (jobs.length === 0) return null;
 
@@ -59,6 +61,22 @@ export function JobQueuePanel({
         {jobs.map((job) => {
           const key = job.submission.jobId ?? job.submission.submissionId;
           const state = job.status?.state;
+          const terminal = [
+            "completed",
+            "failed",
+            "cancelled",
+            "interrupted",
+          ].includes(state ?? "");
+          const canDelete =
+            Boolean(job.submission.controlToken) &&
+            (state === "queued" || terminal);
+          const deleteLabel = !job.submission.controlToken
+            ? "旧任务不可删除"
+            : state === "queued"
+              ? "取消并删除"
+              : terminal
+                ? "删除曲目"
+                : "处理完成后可删除";
           return (
             <li
               className={`job-card job-card--${state ?? job.clientState}`}
@@ -103,13 +121,25 @@ export function JobQueuePanel({
                   {job.clientError}
                 </p>
               )}
-              {state === "completed" && (
-                <button
-                  type="button"
-                  onClick={() => onOpenCompleted(job)}
-                >
-                  Open Patch
-                </button>
+              {job.submission.jobId && (
+                <div className="job-card__actions">
+                  {state === "completed" && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenCompleted(job)}
+                    >
+                      Open Patch
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="btn-danger"
+                    disabled={!canDelete}
+                    onClick={() => onDelete(job)}
+                  >
+                    {deleteLabel}
+                  </button>
+                </div>
               )}
             </li>
           );

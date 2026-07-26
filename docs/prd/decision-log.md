@@ -204,3 +204,20 @@
   或 MIDI 内部文件，2D / SVG / 3D 失败也不得阻断 Creator Core。产品版本继续
   作为右下角 SemVer 展签。详细设计见
   [LMDJ Chameleon 展览式工作台设计](../superpowers/specs/2026-07-26-chameleon-exhibition-workbench-design.md)。
+
+## 2026-07-27
+
+### 已确认：上传曲目只由用户手动删除，不设置自动保留期
+
+- 结论：浏览器为新提交生成独立 Job control token；用户可手动取消并删除
+  `queued` Job，或永久删除 `completed / failed / cancelled / interrupted`
+  Job。正在 `separating / extracting / patchifying / rendering` 的 Job
+  明确拒绝删除，处理完成后由用户再次操作；不登记延迟删除，也不按天数自动
+  清理正式 Job。
+- 原因：当前产品没有账号体系，删除不能只依赖公开 Job ID 或
+  `submission_id`；同时现有阻塞式 Runner 没有可靠的强制取消边界，不能把
+  “请求删除”伪装成已停止处理。
+- 影响：删除覆盖 Job 内原始音频、生成素材、Patch、Export 和浏览器任务
+  记录；用户本地源文件、已下载文件与模型缓存不受影响。Job control token
+  只在浏览器保存，服务端仅保存 SHA-256。执行器仍自动回收
+  `lmdj-upload-*` 技术临时目录；这不属于自动删除正式曲目。

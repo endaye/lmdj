@@ -68,6 +68,27 @@ def test_submit_runs_process_job_to_completed(tmp_path: Path, golden_audio: Path
     assert status.submission_id == "submission-jobA"
 
 
+def test_completed_job_reclaims_its_owned_upload_directory(
+    tmp_path: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    upload_dir = tmp_path / "lmdj-upload-owned"
+    upload_dir.mkdir()
+    audio = upload_dir / "upload.wav"
+    audio.write_bytes(b"RIFF....WAVEfmt fake-audio")
+    executor = JobExecutor(runner=FakeRunner(), jobs_root=jobs_root)
+
+    executor.submit(
+        audio,
+        queued(jobs_root, "jobA"),
+        cleanup_dir=upload_dir,
+    )
+    executor.wait_idle()
+
+    assert not upload_dir.exists()
+    assert read_status(jobs_root / "jobA").state == "completed"
+
+
 def test_jobs_run_serially_not_concurrently(tmp_path: Path, golden_audio: Path):
     jobs_root = tmp_path / "jobs"
     barrier = threading.Event()
@@ -113,6 +134,37 @@ def test_snapshot_reports_active_capacity_and_fifo_positions(
     assert snapshot.capacity.waiting == 2
     assert snapshot.positions == {"jobB": 1, "jobC": 2}
 
+    barrier.set()
+    executor.wait_idle()
+
+
+def test_cancel_queued_removes_it_and_reclaims_owned_upload(
+    tmp_path: Path,
+    golden_audio: Path,
+):
+    jobs_root = tmp_path / "jobs"
+    barrier = threading.Event()
+    started = threading.Event()
+    executor = JobExecutor(
+        runner=FakeRunner(barrier=barrier, started=started),
+        jobs_root=jobs_root,
+    )
+    executor.submit(golden_audio, queued(jobs_root, "jobA"))
+    assert started.wait(timeout=5)
+    upload_dir = tmp_path / "lmdj-upload-waiting"
+    upload_dir.mkdir()
+    waiting_audio = upload_dir / "upload.wav"
+    waiting_audio.write_bytes(golden_audio.read_bytes())
+    executor.submit(
+        waiting_audio,
+        queued(jobs_root, "jobB"),
+        cleanup_dir=upload_dir,
+    )
+
+    assert executor.cancel_queued("jobB") is True
+
+    assert not upload_dir.exists()
+    assert executor.snapshot().positions == {}
     barrier.set()
     executor.wait_idle()
 

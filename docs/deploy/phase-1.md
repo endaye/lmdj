@@ -39,6 +39,10 @@ docker compose logs --follow app
 docker system df
 ```
 
-Completed job packages live in the `data` volume at `/data/jobs`. Phase 1 has no automatic job cleanup, so monitor disk usage. In-progress jobs do not survive an app-container restart; completed packages do.
+Completed job packages live in the `data` volume at `/data/jobs`. Phase 1 has no
+time-based or automatic Job cleanup, so monitor disk usage. Browser-owned Jobs
+can be deleted manually from the upload queue or an open API-backed workbench;
+active processing Jobs must reach a terminal state before deletion. In-progress
+jobs do not survive an app-container restart; completed packages do.
 
 For the normal SHA-based staging deployment and rollback flow, use `docs/deploy/staging.md` after that workflow has been installed.

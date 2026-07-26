@@ -118,10 +118,13 @@ Stage 1 的上传任务可见性不等待完整 API 队列生产化；其最小�
 > 说明：以下为各任务/终审判为 ACCEPT 的延后项，已排除会话中后续修复掉的（stale GainNodes、catch-up 判别、audio input-copy zombie job、apps/api job_id 路径穿越——均已修并复核）。
 
 ### apps/api（已知接受风险，见其 spec）
-- **上传临时文件不清理**：`tempfile.mkdtemp()` 产物不回收（进程级临时目录）。
+- **进程崩溃可能遗留上传临时文件**：正常完成、失败或手动删除 queued Job
+  已回收 `tempfile.mkdtemp()` 目录；进程在 executor finally 前崩溃时仍可能
+  留下孤立的 `lmdj-upload-*`。
 
 ### apps/web
-- **处理中无取消/返回**：`uploading` 态仅在 error 时给"返回"，健康但慢的 job 最长锁 300s。
+- **处理中无强制取消**：手动删除只支持 queued 与终态 Job；健康但慢的活跃
+  Job 必须处理到终态后再由用户删除，不登记延迟自动删除。
 - **spec 错误表待对齐**：patch-invalid-after-completed 实际路由到 uploading-error（非 landing），是计划已接受的取舍，spec 表述待更新。
 - 杂项：`PAD_KEYS` 无 >8 pad 越界保护；pad 无 aria 属性；`fetchPatchBundle` 双解析 patch.json（无害）。
 

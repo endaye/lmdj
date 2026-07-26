@@ -23,6 +23,7 @@ function renderPanel(
       capacity={{ max_concurrency: 1, processing: 0, waiting: 0 }}
       onUpload={() => undefined}
       onOpenCompleted={() => undefined}
+      onDelete={() => undefined}
     />,
   );
 }

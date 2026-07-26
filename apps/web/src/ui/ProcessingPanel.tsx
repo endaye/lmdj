@@ -11,6 +11,7 @@ export function ProcessingPanel({
   capacity,
   onUpload,
   onOpenCompleted,
+  onDelete,
 }: {
   fileName: string;
   state: string;
@@ -19,6 +20,7 @@ export function ProcessingPanel({
   capacity: QueueCapacity;
   onUpload: (base: string, file: File) => void;
   onOpenCompleted: (job: TrackedJob) => void;
+  onDelete: (job: TrackedJob) => void;
 }) {
   return (
     <section className="processing-panel" data-testid="processing-panel">
@@ -38,6 +40,7 @@ export function ProcessingPanel({
         jobs={jobs}
         capacity={capacity}
         onOpenCompleted={onOpenCompleted}
+        onDelete={onDelete}
       />
     </section>
   );

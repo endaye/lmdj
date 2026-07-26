@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
 import {
   ApiError,
+  deleteJob,
   downloadCreatorExport,
   fetchJob,
   fetchQueueCapacity,
@@ -79,6 +80,7 @@ describe("uploadSong", () => {
       "http://x:8000/",
       file,
       "submission-123",
+      "control-token-1234567890abcdefgh",
     );
 
     expect(status.job_id).toBe("job123");
@@ -88,6 +90,7 @@ describe("uploadSong", () => {
     expect((init as RequestInit).body).toBeInstanceOf(FormData);
     expect((init as RequestInit).headers).toEqual({
       "Idempotency-Key": "submission-123",
+      "X-LMDJ-Job-Control": "control-token-1234567890abcdefgh",
     });
   });
 
@@ -98,6 +101,7 @@ describe("uploadSong", () => {
         "http://x:8000",
         new File([], "s.wav"),
         "submission-123",
+        "control-token-1234567890abcdefgh",
       ),
     ).rejects.toBeInstanceOf(ApiError);
   });
@@ -132,6 +136,7 @@ describe("uploadSong", () => {
       "http://x:8000",
       new File([], "song.wav"),
       "submission-123",
+      "control-token-1234567890abcdefgh",
     ).catch((caught) => caught);
 
     expect(error).toBeInstanceOf(ApiError);
@@ -171,6 +176,50 @@ describe("Job visibility", () => {
       "http://x:8000/submissions/submission-123",
       "http://x:8000/queue",
     ]);
+  });
+});
+
+describe("deleteJob", () => {
+  it("sends the manual-delete capability and accepts an already missing Job", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(null, { status: 404 }),
+    );
+
+    await expect(
+      deleteJob(
+        "http://x:8000/",
+        "job123",
+        "control-token-1234567890abcdefgh",
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "http://x:8000/jobs/job123",
+      {
+        method: "DELETE",
+        headers: {
+          "X-LMDJ-Job-Control": "control-token-1234567890abcdefgh",
+        },
+      },
+    );
+  });
+
+  it("surfaces an active Job as a truthful manual-delete conflict", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      jsonResponse(
+        { detail: { code: "job_in_progress", state: "separating" } },
+        false,
+        409,
+      ),
+    );
+
+    await expect(
+      deleteJob(
+        "http://x:8000",
+        "job123",
+        "control-token-1234567890abcdefgh",
+      ),
+    ).rejects.toThrow("处理完成后才能删除");
   });
 });
 

@@ -167,6 +167,17 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   white-space: nowrap;
 }
 .btn-eject:hover { color: var(--ink); border-color: #454a59; background: var(--raised); }
+.btn-delete-track {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--red);
+  background: transparent;
+  border: 1px solid var(--red);
+  padding: 7px 12px;
+  white-space: nowrap;
+}
+.btn-delete-track:hover { color: #fff; background: var(--red); }
 
 /* --- Transport (reads as an LCD strip) ------------------------------------- */
 
@@ -1758,9 +1769,16 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   overflow: auto;
   color: #a2122c;
 }
-.job-card > button {
+.job-card__actions {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border-left: 2px solid var(--ink);
+}
+.job-card__actions button {
   align-self: center;
-  margin: 10px;
   border: 2px solid var(--ink);
   border-radius: 0;
   background: var(--ink);
@@ -1770,7 +1788,100 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   font-weight: 800;
   white-space: nowrap;
 }
-.job-card > button:hover { background: var(--red); color: #fff; }
+.job-card__actions button:hover:not(:disabled) {
+  background: var(--red);
+  color: #fff;
+}
+.job-card__actions button:disabled {
+  cursor: not-allowed;
+  opacity: .52;
+  box-shadow: none;
+}
+.job-card__actions .btn-danger {
+  background: var(--paper);
+  color: var(--red);
+  border-color: var(--red);
+  box-shadow: none;
+}
+
+.delete-dialog-backdrop {
+  position: fixed;
+  z-index: 100;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(17, 19, 24, .72);
+}
+.delete-dialog {
+  width: min(560px, 100%);
+  border: 3px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 10px 10px 0 var(--red);
+}
+.delete-dialog header,
+.delete-dialog > p,
+.delete-dialog > small,
+.delete-dialog__actions {
+  display: block;
+  margin: 0;
+  padding: 14px 18px;
+  border-bottom: 2px solid var(--ink);
+}
+.delete-dialog header span {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+.delete-dialog header h2 {
+  margin: 4px 0 0;
+  font-family: "Chakra Petch", sans-serif;
+}
+.delete-dialog > p,
+.delete-dialog > small,
+.delete-dialog__error {
+  font-family: "IBM Plex Mono", monospace;
+  line-height: 1.55;
+}
+.delete-dialog__error {
+  margin: 0;
+  padding: 12px 18px;
+  color: #fff;
+  background: var(--red);
+  border-bottom: 2px solid var(--ink);
+}
+.delete-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  border-bottom: 0;
+}
+.delete-dialog__actions button {
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 800;
+}
+.delete-dialog__actions .btn-danger {
+  color: #fff;
+  background: var(--red);
+  border-color: var(--red);
+}
+.delete-notice {
+  position: fixed;
+  z-index: 90;
+  right: 20px;
+  bottom: 44px;
+  max-width: min(440px, calc(100vw - 40px));
+  padding: 12px 16px;
+  color: var(--ink);
+  background: var(--mint);
+  border: 2px solid var(--ink);
+  box-shadow: 5px 5px 0 var(--ink);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 800;
+}
 
 .processing-panel .stages {
   display: grid;
@@ -1898,4 +2009,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   .job-card dl > div:last-child { border-bottom: 0; }
   .job-card__terminal,
   .job-card__error { border-top: 2px solid var(--ink); border-left: 0; }
+  .job-card__actions {
+    flex-direction: row;
+    justify-content: flex-end;
+    border-top: 2px solid var(--ink);
+    border-left: 0;
+  }
 }

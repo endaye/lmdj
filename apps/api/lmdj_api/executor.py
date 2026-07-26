@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import threading
 import time
 from collections import deque
@@ -31,6 +32,11 @@ class QueueSnapshot:
 class _QueuedJob:
     audio_path: Path
     initial_status: JobStatus
+    cleanup_dir: Path | None
+
+
+class ActiveJobError(RuntimeError):
+    pass
 
 
 class JobExecutor:
@@ -53,7 +59,13 @@ class JobExecutor:
         )
         self._worker.start()
 
-    def submit(self, audio_path: Path, initial_status: JobStatus) -> None:
+    def submit(
+        self,
+        audio_path: Path,
+        initial_status: JobStatus,
+        *,
+        cleanup_dir: Path | None = None,
+    ) -> None:
         if initial_status.state != "queued":
             raise ValueError("submitted JobStatus must be queued")
         with self._condition:
@@ -65,8 +77,27 @@ class JobExecutor:
                 )
             ):
                 raise ValueError(f"job already submitted: {initial_status.job_id}")
-            self._pending.append(_QueuedJob(audio_path, initial_status))
+            self._pending.append(
+                _QueuedJob(audio_path, initial_status, cleanup_dir),
+            )
             self._condition.notify_all()
+
+    def cancel_queued(self, job_id: str) -> bool:
+        """Remove one waiting Job without pretending an active Job is cancellable."""
+        removed: _QueuedJob | None = None
+        with self._condition:
+            if self._active_job_id == job_id:
+                raise ActiveJobError(job_id)
+            for index, item in enumerate(self._pending):
+                if item.initial_status.job_id == job_id:
+                    removed = item
+                    del self._pending[index]
+                    self._condition.notify_all()
+                    break
+        if removed is None:
+            return False
+        self._cleanup_upload(removed)
+        return True
 
     def snapshot(self) -> QueueSnapshot:
         with self._condition:
@@ -126,6 +157,21 @@ class JobExecutor:
                     ),
                 )
             finally:
+                self._cleanup_upload(item)
                 with self._condition:
                     self._active_job_id = None
                     self._condition.notify_all()
+
+    @staticmethod
+    def _cleanup_upload(item: _QueuedJob) -> None:
+        if item.cleanup_dir is None:
+            return
+        cleanup_dir = item.cleanup_dir.resolve()
+        audio_path = item.audio_path.resolve()
+        if audio_path.parent != cleanup_dir:
+            log.error(
+                "refusing upload cleanup outside the owned directory: %s",
+                cleanup_dir,
+            )
+            return
+        shutil.rmtree(cleanup_dir, ignore_errors=True)
