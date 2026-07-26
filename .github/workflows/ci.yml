@@ -96,6 +96,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+      - run: bash scripts/release/tests/test-release-versioning.sh
       - run: bash scripts/deploy/tests/test-package-release.sh
       - run: bash scripts/deploy/tests/test-activate-release.sh
       - run: bash scripts/deploy/tests/test-deploy-workflow.sh
