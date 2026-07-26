@@ -29,6 +29,17 @@ wait_for_log() {
   return 1
 }
 
+wait_for_file() {
+  local file="$1"
+  local attempt
+  for attempt in $(seq 1 200); do
+    [ -s "$file" ] && return 0
+    [ -z "$DEV_PID" ] || process_is_alive "$DEV_PID" || break
+    sleep 0.02
+  done
+  return 1
+}
+
 wait_until_dead() {
   local pid="$1"
   local attempt
@@ -72,11 +83,19 @@ grep -Fq "cd apps/api" "$STATE_DIR/missing-api.log"
 mkdir -p "$FIXTURE_ROOT/apps/api/.venv/bin"
 cat >"$FIXTURE_ROOT/apps/api/.venv/bin/python" <<'EOF'
 #!/usr/bin/env bash
+if [[ "$*" == *"numpy, soundfile, librosa, sklearn, pretty_midi"* ]] \
+  && [ ! -f "$FAKE_STATE_DIR/material.ready" ]
+then
+  exit 1
+fi
 exit 0
 EOF
 cat >"$FIXTURE_ROOT/apps/api/.venv/bin/uvicorn" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$$" >"$FAKE_STATE_DIR/api.pid"
+printf '%s\n' "${LMDJ_PIPELINE:-}" >"$FAKE_STATE_DIR/api.pipeline"
+printf '%s\n' "${LMDJ_SEPARATOR_ID:-}" >"$FAKE_STATE_DIR/api.separator"
+printf '%s\n' "${LMDJ_SEPARATOR_DEVICE:-}" >"$FAKE_STATE_DIR/api.device"
 trap 'exit 7' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
@@ -99,24 +118,33 @@ exit 0
 EOF
 chmod +x "$FIXTURE_ROOT/apps/web/node_modules/.bin/vite"
 
-if "$DEV_SCRIPT" dev >"$STATE_DIR/missing-demo.log" 2>&1; then
-  fail "dev accepted a missing Demo venv"
-fi
-grep -Fq "Demo 开发环境未就绪" "$STATE_DIR/missing-demo.log"
-grep -Fq "scripts/dev.sh setup-demo" "$STATE_DIR/missing-demo.log"
+mkdir -p \
+  "$FIXTURE_ROOT/workers/audio/config" \
+  "$FIXTURE_ROOT/workers/audio/.venv-sep-demucs/bin"
+cat >"$FIXTURE_ROOT/workers/audio/config/separators.json" <<'EOF'
+{
+  "separators": [
+    {
+      "id": "htdemucs",
+      "devices": ["cpu", "mps"],
+      "command": ["workers/audio/.venv-sep-demucs/bin/python"]
+    }
+  ]
+}
+EOF
+cat >"$FIXTURE_ROOT/workers/audio/.venv-sep-demucs/bin/python" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x "$FIXTURE_ROOT/workers/audio/.venv-sep-demucs/bin/python"
 
-mkdir -p "$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin"
-cat >"$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/python" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-cat >"$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/song-pipeline" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x \
-  "$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/python" \
-  "$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/song-pipeline"
+if FAKE_STATE_DIR="$STATE_DIR" \
+  "$DEV_SCRIPT" dev >"$STATE_DIR/missing-material.log" 2>&1
+then
+  fail "dev accepted missing Material DSP dependencies"
+fi
+grep -Fq "Material 开发环境未就绪" "$STATE_DIR/missing-material.log"
+grep -Fq "scripts/dev.sh setup-materials" "$STATE_DIR/missing-material.log"
 
 cat >"$FAKE_BIN/npm" <<'EOF'
 #!/usr/bin/env bash
@@ -140,9 +168,102 @@ start_dev() {
     "$DEV_SCRIPT" dev >"$log_file" 2>&1 &
   DEV_PID=$!
   wait_for_log "==> LMDJ local dev ready" "$log_file"
-  [ -s "$STATE_DIR/api.pid" ] || fail "API child PID was not recorded"
-  [ -s "$STATE_DIR/web.pid" ] || fail "Web child PID was not recorded"
+  wait_for_file "$STATE_DIR/api.pid" \
+    || fail "API child PID was not recorded"
+  wait_for_file "$STATE_DIR/web.pid" \
+    || fail "Web child PID was not recorded"
 }
+
+start_legacy_dev() {
+  local log_file="$1"
+  rm -f "$STATE_DIR/api.pid" "$STATE_DIR/web.pid"
+  PATH="$FAKE_BIN:$PATH" \
+    FAKE_STATE_DIR="$STATE_DIR" \
+    LMDJ_PIPELINE=legacy \
+    "$DEV_SCRIPT" dev >"$log_file" 2>&1 &
+  DEV_PID=$!
+  wait_for_log "==> LMDJ local dev ready" "$log_file"
+  wait_for_file "$STATE_DIR/api.pid" \
+    || fail "legacy API child PID was not recorded"
+  wait_for_file "$STATE_DIR/web.pid" \
+    || fail "legacy Web child PID was not recorded"
+}
+
+touch "$STATE_DIR/material.ready"
+start_dev "$STATE_DIR/material-default.log"
+grep -Fxq "materials-v1" "$STATE_DIR/api.pipeline"
+grep -Fxq "htdemucs" "$STATE_DIR/api.separator"
+grep -Fxq "mps" "$STATE_DIR/api.device"
+grep -Fq "Pipeline: materials-v1" "$STATE_DIR/material-default.log"
+grep -Fq "Separator: htdemucs" "$STATE_DIR/material-default.log"
+grep -Fq "Device: mps" "$STATE_DIR/material-default.log"
+api_pid="$(cat "$STATE_DIR/api.pid")"
+web_pid="$(cat "$STATE_DIR/web.pid")"
+kill -TERM "$DEV_PID"
+set +e
+wait "$DEV_PID"
+dev_status=$?
+set -e
+DEV_PID=""
+[ "$dev_status" -eq 143 ] \
+  || fail "Material default SIGTERM exit was $dev_status, expected 143"
+wait_until_dead "$api_pid" || fail "API survived Material default cleanup"
+wait_until_dead "$web_pid" || fail "Web survived Material default cleanup"
+
+if PATH="$FAKE_BIN:$PATH" \
+  FAKE_STATE_DIR="$STATE_DIR" \
+  LMDJ_PIPELINE=legacy \
+  "$DEV_SCRIPT" dev >"$STATE_DIR/missing-demo.log" 2>&1
+then
+  fail "legacy dev accepted a missing Demo venv"
+fi
+grep -Fq "Demo 开发环境未就绪" "$STATE_DIR/missing-demo.log"
+grep -Fq "scripts/dev.sh setup-demo" "$STATE_DIR/missing-demo.log"
+
+mkdir -p "$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin"
+cat >"$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/python" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+cat >"$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/song-pipeline" <<'EOF'
+#!/usr/bin/env bash
+exit 0
+EOF
+chmod +x \
+  "$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/python" \
+  "$FIXTURE_ROOT/references/demos/lmdj-song-pipeline/.venv/bin/song-pipeline"
+
+start_legacy_dev "$STATE_DIR/legacy.log"
+grep -Fxq "legacy" "$STATE_DIR/api.pipeline"
+grep -Fxq "" "$STATE_DIR/api.separator"
+grep -Fxq "" "$STATE_DIR/api.device"
+grep -Fq "Pipeline: legacy" "$STATE_DIR/legacy.log"
+grep -Fq "Separator: n/a" "$STATE_DIR/legacy.log"
+grep -Fq "Device: n/a" "$STATE_DIR/legacy.log"
+api_pid="$(cat "$STATE_DIR/api.pid")"
+web_pid="$(cat "$STATE_DIR/web.pid")"
+kill -TERM "$DEV_PID"
+set +e
+wait "$DEV_PID"
+dev_status=$?
+set -e
+DEV_PID=""
+[ "$dev_status" -eq 143 ] \
+  || fail "Legacy SIGTERM exit was $dev_status, expected 143"
+wait_until_dead "$api_pid" || fail "API survived Legacy cleanup"
+wait_until_dead "$web_pid" || fail "Web survived Legacy cleanup"
+
+rm -f "$STATE_DIR/api.pid" "$STATE_DIR/web.pid"
+if LMDJ_PIPELINE=invalid \
+  "$DEV_SCRIPT" dev >"$STATE_DIR/invalid.log" 2>&1
+then
+  fail "dev accepted invalid pipeline"
+fi
+grep -Fq \
+  "LMDJ_PIPELINE must be one of: legacy, materials-v1" \
+  "$STATE_DIR/invalid.log"
+[ ! -e "$STATE_DIR/api.pid" ] || fail "invalid pipeline started API"
+[ ! -e "$STATE_DIR/web.pid" ] || fail "invalid pipeline started Web"
 
 # Signal-driven shutdown reaps both children.
 #

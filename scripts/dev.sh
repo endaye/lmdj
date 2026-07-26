@@ -127,6 +127,88 @@ API 开发环境未就绪。运行：
 EOF
 }
 
+DEV_PIPELINE=""
+DEV_SEPARATOR_ID=""
+DEV_SEPARATOR_DEVICE=""
+
+configure_dev_runtime() {
+  DEV_PIPELINE="${LMDJ_PIPELINE:-materials-v1}"
+  case "$DEV_PIPELINE" in
+    materials-v1)
+      DEV_SEPARATOR_ID="${LMDJ_SEPARATOR_ID:-htdemucs}"
+      DEV_SEPARATOR_DEVICE="${LMDJ_SEPARATOR_DEVICE:-mps}"
+      ;;
+    legacy)
+      DEV_SEPARATOR_ID=""
+      DEV_SEPARATOR_DEVICE=""
+      ;;
+    *)
+      echo "LMDJ_PIPELINE must be one of: legacy, materials-v1" >&2
+      return 1
+      ;;
+  esac
+}
+
+material_runner_path() {
+  python3 - "$ROOT" "$DEV_SEPARATOR_ID" "$DEV_SEPARATOR_DEVICE" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+separator_id = sys.argv[2]
+device = sys.argv[3]
+registry = json.loads(
+    (root / "workers/audio/config/separators.json").read_text()
+)
+entries = {
+    entry["id"]: entry
+    for entry in registry.get("separators", [])
+    if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+}
+if separator_id not in entries:
+    raise SystemExit(
+        f"unknown LMDJ separator {separator_id!r}; available: {sorted(entries)}"
+    )
+entry = entries[separator_id]
+if device not in entry.get("devices", []):
+    raise SystemExit(
+        f"separator {separator_id!r} does not support {device!r}"
+    )
+command = entry.get("command")
+if not isinstance(command, list) or not command:
+    raise SystemExit(f"separator {separator_id!r} has no command")
+runner = pathlib.Path(command[0])
+print(runner if runner.is_absolute() else root / runner)
+PY
+}
+
+ensure_material_dev_dependencies() {
+  if ! "$API/.venv/bin/python" -c \
+    'import numpy, soundfile, librosa, sklearn, pretty_midi; from lmdj_audio_worker.creator_runner import CreatorPipelineRunner' \
+    >/dev/null 2>&1
+  then
+    echo "Material 开发环境未就绪。运行: scripts/dev.sh setup-materials" >&2
+    return 1
+  fi
+  local runner_path
+  runner_path="$(material_runner_path)" || return 1
+  if [ ! -x "$runner_path" ]; then
+    echo "Material Separator 未就绪。运行: scripts/dev.sh setup-materials" >&2
+    return 1
+  fi
+}
+
+ensure_legacy_dev_dependencies() {
+  if [ ! -x "$DEMO/.venv/bin/python" ] \
+    || [ ! -x "$DEMO/.venv/bin/song-pipeline" ] \
+    || ! "$DEMO/.venv/bin/python" -c 'import torch, demucs' >/dev/null 2>&1
+  then
+    echo "Demo 开发环境未就绪。运行: scripts/dev.sh setup-demo" >&2
+    return 1
+  fi
+}
+
 ensure_dev_dependencies() {
   if [ ! -x "$API/.venv/bin/python" ] || [ ! -x "$API/.venv/bin/uvicorn" ]; then
     print_api_dev_setup
@@ -145,18 +227,15 @@ ensure_dev_dependencies() {
     return 1
   fi
 
-  if [ ! -x "$DEMO/.venv/bin/python" ] \
-    || [ ! -x "$DEMO/.venv/bin/song-pipeline" ] \
-    || ! "$DEMO/.venv/bin/python" -c 'import torch, demucs' >/dev/null 2>&1
-  then
-    echo "Demo 开发环境未就绪。运行: scripts/dev.sh setup-demo" >&2
-    return 1
-  fi
-
   if ! command -v curl >/dev/null 2>&1; then
     echo "缺少 curl，无法检查本地服务就绪状态" >&2
     return 1
   fi
+
+  case "$DEV_PIPELINE" in
+    materials-v1) ensure_material_dev_dependencies ;;
+    legacy) ensure_legacy_dev_dependencies ;;
+  esac
 }
 
 DEV_API_PID=""
@@ -202,6 +281,7 @@ wait_for_dev_ready() {
 }
 
 cmd_dev() {
+  configure_dev_runtime
   ensure_dev_dependencies
 
   trap cleanup_dev_children EXIT
@@ -211,6 +291,13 @@ cmd_dev() {
 
   (
     cd "$API"
+    export LMDJ_PIPELINE="$DEV_PIPELINE"
+    if [ "$DEV_PIPELINE" = "materials-v1" ]; then
+      export LMDJ_SEPARATOR_ID="$DEV_SEPARATOR_ID"
+      export LMDJ_SEPARATOR_DEVICE="$DEV_SEPARATOR_DEVICE"
+    else
+      unset LMDJ_SEPARATOR_ID LMDJ_SEPARATOR_DEVICE
+    fi
     exec .venv/bin/uvicorn lmdj_api.app:app --host 127.0.0.1 --port 8000
   ) &
   DEV_API_PID=$!
@@ -222,11 +309,17 @@ cmd_dev() {
   DEV_WEB_PID=$!
 
   wait_for_dev_ready
-  cat <<'EOF'
-==> LMDJ local dev ready
-    Web: http://localhost:5173
-    API: http://localhost:8000
-EOF
+  echo "==> LMDJ local dev ready"
+  echo "    Web: http://localhost:5173"
+  echo "    API: http://localhost:8000"
+  echo "    Pipeline: $DEV_PIPELINE"
+  if [ "$DEV_PIPELINE" = "materials-v1" ]; then
+    echo "    Separator: $DEV_SEPARATOR_ID"
+    echo "    Device: $DEV_SEPARATOR_DEVICE"
+  else
+    echo "    Separator: n/a"
+    echo "    Device: n/a"
+  fi
 
   while kill -0 "$DEV_API_PID" 2>/dev/null \
     && kill -0 "$DEV_WEB_PID" 2>/dev/null
