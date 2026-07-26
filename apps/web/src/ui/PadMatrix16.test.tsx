@@ -118,4 +118,23 @@ describe("PadMatrix16", () => {
     act(() => vi.advanceTimersByTime(120));
     expect(screen.getByTestId("pad-0")).toHaveAttribute("data-visual-state", "selected");
   });
+
+  it("keeps a loop pad visibly playing until its second tap", () => {
+    vi.useFakeTimers();
+    const { bundle } = setup((loaded) => {
+      loaded.patch.pads[1].behavior = {
+        ...loaded.patch.pads[1].behavior,
+        trigger: "loop",
+      };
+    });
+    const loopPad = screen.getByTestId("pad-1");
+
+    fireEvent.click(loopPad);
+    act(() => vi.advanceTimersByTime(120));
+    expect(loopPad).toHaveAttribute("data-visual-state", "playing");
+
+    fireEvent.click(loopPad);
+    expect(bundle.patch.pads[1].behavior.trigger).toBe("loop");
+    expect(loopPad).toHaveAttribute("data-visual-state", "idle");
+  });
 });

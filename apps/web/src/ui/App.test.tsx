@@ -186,6 +186,8 @@ describe("App", () => {
     await userEvent.click(pad);
     expect(screen.getByTestId("context-inspector-content")).toHaveTextContent("Pad 02 · bass");
     expect(screen.getByTestId("context-inspector-content")).toHaveTextContent("trigger_element");
+    await waitFor(() => expect(pad).toHaveAccessibleName(/Pad 2: bass, playing/i));
+    await userEvent.click(pad);
     await waitFor(() => expect(pad).toHaveAccessibleName(/Pad 2: bass, selected/i));
   });
 

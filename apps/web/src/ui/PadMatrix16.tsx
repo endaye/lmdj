@@ -19,6 +19,7 @@ function staticState(
   const ids = padElementIds(pad);
   if (ids.some((id) => bundle.missingElementIds.has(id))) return "missing";
   if (engine.isPadMuted(pad.index)) return "muted";
+  if (engine.isPadLooping(pad.index)) return "playing";
   if (pad.index === selectedPadIndex) return "selected";
   if (pad.action === "empty") return "empty";
   if (ids.length === 0) return "reserved";
@@ -52,6 +53,7 @@ export function PadMatrix16({
     if (ids.length === 0) return;
     engine.triggerPad(pad.index);
     if (!ids.some((id) => bundle.playableElementIds.has(id))) return;
+    if (pad.behavior.trigger === "loop") return;
     if (resetTimer.current) clearTimeout(resetTimer.current);
     setPlayingPadIndex(pad.index);
     resetTimer.current = setTimeout(() => setPlayingPadIndex(undefined), 120);
