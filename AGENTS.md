@@ -86,6 +86,9 @@ scripts/dev.sh test         # run all core-models + patchify tests
 scripts/dev.sh smoke        # end-to-end: testsong → patch.json → summary (auto-builds testsong)
 scripts/dev.sh all          # setup + test + smoke
 scripts/dev.sh setup-demo   # create the demo venv (heavy: demucs/torch, first run 10min+)
+scripts/dev.sh setup-materials  # local Material DSP + HT Demucs runner
+scripts/dev.sh dev              # local default: materials-v1 API + Web
+LMDJ_PIPELINE=legacy scripts/dev.sh dev  # explicit legacy local chain
 scripts/dev.sh setup-pfs    # create the pipeline-from-stems venv (DSP deps pinned by parity-constraints.txt)
 scripts/dev.sh parity       # frozen-stems parity gate: demo pipeline vs PipelineFromStems (spec §3.2)
 scripts/dev.sh setup-sep-demucs   # create the HT Demucs runner venv (torch stack, pinned)
@@ -115,10 +118,13 @@ npm run check-contract # assert schema copy + generated types.ts have not drifte
 npm run sync-contract  # regenerate the web-side contract after a core-models schema change
 ```
 
-App API + web end-to-end (needs `scripts/dev.sh setup-demo` first):
+Local App API + Web defaults to `materials-v1` and needs
+`scripts/dev.sh setup-materials` first. Production/unset API configuration
+still defaults to `legacy`; use `LMDJ_PIPELINE=legacy scripts/dev.sh dev`
+for the frozen local demo chain.
 
 ```bash
-cd apps/api && .venv/bin/uvicorn lmdj_api.app:app --port 8000   # then run apps/web dev server
+scripts/dev.sh dev  # starts the local materials-v1 API + Web pair
 ```
 
 ### Reference demo (`references/demos/lmdj-song-pipeline/`)

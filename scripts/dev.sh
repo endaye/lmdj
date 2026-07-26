@@ -25,6 +25,7 @@ LMDJ dev helper
 用法: scripts/dev.sh <command>
 
   setup              创建/补齐 packages 的 venv（core-models + patchify），幂等
+  setup-materials    创建/补齐本地 Material API DSP + HT Demucs runner 环境
   setup-demo         创建参考 demo 的 venv（重依赖 demucs/torch，首次下载很大）
   setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
   setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
@@ -126,12 +127,106 @@ API 开发环境未就绪。运行：
 EOF
 }
 
+DEV_PIPELINE=""
+DEV_SEPARATOR_ID=""
+DEV_SEPARATOR_DEVICE=""
+
+configure_dev_runtime() {
+  DEV_PIPELINE="${LMDJ_PIPELINE:-materials-v1}"
+  case "$DEV_PIPELINE" in
+    materials-v1)
+      DEV_SEPARATOR_ID="${LMDJ_SEPARATOR_ID:-htdemucs}"
+      DEV_SEPARATOR_DEVICE="${LMDJ_SEPARATOR_DEVICE:-mps}"
+      ;;
+    legacy)
+      DEV_SEPARATOR_ID=""
+      DEV_SEPARATOR_DEVICE=""
+      ;;
+    *)
+      echo "LMDJ_PIPELINE must be one of: legacy, materials-v1" >&2
+      return 1
+      ;;
+  esac
+}
+
+material_runner_path() {
+  local separator_id="${1:-$DEV_SEPARATOR_ID}"
+  local separator_device="${2:-$DEV_SEPARATOR_DEVICE}"
+  python3 - "$ROOT" "$separator_id" "$separator_device" <<'PY'
+import json
+import pathlib
+import sys
+
+root = pathlib.Path(sys.argv[1])
+separator_id = sys.argv[2]
+device = sys.argv[3]
+registry = json.loads(
+    (root / "workers/audio/config/separators.json").read_text()
+)
+entries = {
+    entry["id"]: entry
+    for entry in registry.get("separators", [])
+    if isinstance(entry, dict) and isinstance(entry.get("id"), str)
+}
+if separator_id not in entries:
+    raise SystemExit(
+        f"unknown LMDJ separator {separator_id!r}; available: {sorted(entries)}"
+    )
+entry = entries[separator_id]
+if device not in entry.get("devices", []):
+    raise SystemExit(
+        f"separator {separator_id!r} does not support {device!r}"
+    )
+command = entry.get("command")
+if not isinstance(command, list) or not command:
+    raise SystemExit(f"separator {separator_id!r} has no command")
+runner = pathlib.Path(command[0])
+print(runner if runner.is_absolute() else root / runner)
+PY
+}
+
+separator_setup_command() {
+  case "$1" in
+    htdemucs) echo "scripts/dev.sh setup-materials" ;;
+    scnet-large) echo "scripts/dev.sh setup-sep-scnet" ;;
+    bs-roformer-4stem) echo "scripts/dev.sh setup-sep-bs-roformer" ;;
+    mel-roformer-4stem) echo "scripts/dev.sh setup-sep-mel-roformer" ;;
+    *) echo "the setup command for separator $1" ;;
+  esac
+}
+
+ensure_material_dev_dependencies() {
+  if ! "$API/.venv/bin/python" -c \
+    'import numpy, soundfile, librosa, sklearn, pretty_midi; from lmdj_audio_worker.creator_runner import CreatorPipelineRunner' \
+    >/dev/null 2>&1
+  then
+    echo "Material 开发环境未就绪。运行: scripts/dev.sh setup-materials" >&2
+    return 1
+  fi
+  local runner_path
+  runner_path="$(material_runner_path)" || return 1
+  if [ ! -x "$runner_path" ]; then
+    echo "Material Separator 未就绪。运行: $(separator_setup_command "$DEV_SEPARATOR_ID")" >&2
+    return 1
+  fi
+}
+
+ensure_legacy_dev_dependencies() {
+  if [ ! -x "$DEMO/.venv/bin/python" ] \
+    || [ ! -x "$DEMO/.venv/bin/song-pipeline" ] \
+    || ! "$DEMO/.venv/bin/python" -c 'import torch, demucs' >/dev/null 2>&1
+  then
+    echo "Demo 开发环境未就绪。运行: scripts/dev.sh setup-demo" >&2
+    return 1
+  fi
+}
+
 ensure_dev_dependencies() {
   if [ ! -x "$API/.venv/bin/python" ] || [ ! -x "$API/.venv/bin/uvicorn" ]; then
     print_api_dev_setup
     return 1
   fi
-  if ! "$API/.venv/bin/python" -c \
+  if ! env LMDJ_PIPELINE=legacy "$API/.venv/bin/python" -c \
     'import lmdj_api, lmdj_audio_worker, lmdj_patchify, lmdj_core_models' \
     >/dev/null 2>&1
   then
@@ -144,18 +239,15 @@ ensure_dev_dependencies() {
     return 1
   fi
 
-  if [ ! -x "$DEMO/.venv/bin/python" ] \
-    || [ ! -x "$DEMO/.venv/bin/song-pipeline" ] \
-    || ! "$DEMO/.venv/bin/python" -c 'import torch, demucs' >/dev/null 2>&1
-  then
-    echo "Demo 开发环境未就绪。运行: scripts/dev.sh setup-demo" >&2
-    return 1
-  fi
-
   if ! command -v curl >/dev/null 2>&1; then
     echo "缺少 curl，无法检查本地服务就绪状态" >&2
     return 1
   fi
+
+  case "$DEV_PIPELINE" in
+    materials-v1) ensure_material_dev_dependencies ;;
+    legacy) ensure_legacy_dev_dependencies ;;
+  esac
 }
 
 DEV_API_PID=""
@@ -201,6 +293,7 @@ wait_for_dev_ready() {
 }
 
 cmd_dev() {
+  configure_dev_runtime
   ensure_dev_dependencies
 
   trap cleanup_dev_children EXIT
@@ -209,8 +302,16 @@ cmd_dev() {
   trap 'exit 129' HUP
 
   (
-    cd "$API"
-    exec .venv/bin/uvicorn lmdj_api.app:app --host 127.0.0.1 --port 8000
+    cd "$ROOT"
+    export LMDJ_PIPELINE="$DEV_PIPELINE"
+    if [ "$DEV_PIPELINE" = "materials-v1" ]; then
+      export LMDJ_SEPARATOR_ID="$DEV_SEPARATOR_ID"
+      export LMDJ_SEPARATOR_DEVICE="$DEV_SEPARATOR_DEVICE"
+    else
+      unset LMDJ_SEPARATOR_ID LMDJ_SEPARATOR_DEVICE
+    fi
+    exec "$API/.venv/bin/uvicorn" \
+      lmdj_api.app:app --host 127.0.0.1 --port 8000
   ) &
   DEV_API_PID=$!
 
@@ -221,11 +322,17 @@ cmd_dev() {
   DEV_WEB_PID=$!
 
   wait_for_dev_ready
-  cat <<'EOF'
-==> LMDJ local dev ready
-    Web: http://localhost:5173
-    API: http://localhost:8000
-EOF
+  echo "==> LMDJ local dev ready"
+  echo "    Web: http://localhost:5173"
+  echo "    API: http://localhost:8000"
+  echo "    Pipeline: $DEV_PIPELINE"
+  if [ "$DEV_PIPELINE" = "materials-v1" ]; then
+    echo "    Separator: $DEV_SEPARATOR_ID"
+    echo "    Device: $DEV_SEPARATOR_DEVICE"
+  else
+    echo "    Separator: n/a"
+    echo "    Device: n/a"
+  fi
 
   while kill -0 "$DEV_API_PID" 2>/dev/null \
     && kill -0 "$DEV_WEB_PID" 2>/dev/null
@@ -437,6 +544,31 @@ EOF
   printf 'deterministic: yes\n'
 }
 
+install_api_material_dependencies() {
+  if [ ! -x "$API/.venv/bin/python" ]; then
+    echo "==> 创建 API venv"
+    python3 -m venv "$API/.venv"
+  fi
+  "$API/.venv/bin/pip" -q install -e "$CORE" -c "$CONSTRAINTS"
+  "$API/.venv/bin/pip" -q install -e "$PATCHIFY" -c "$CONSTRAINTS"
+  "$API/.venv/bin/pip" -q install -e "$WORKER[pfs]" -c "$CONSTRAINTS"
+  "$API/.venv/bin/pip" -q install -e "$API"
+  "$API/.venv/bin/python" -c \
+    'import numpy, soundfile, librosa, sklearn, pretty_midi; from lmdj_audio_worker.creator_runner import CreatorPipelineRunner'
+}
+
+cmd_setup_materials() {
+  install_api_material_dependencies
+  cmd_setup_sep_demucs
+  local default_runner_path
+  default_runner_path="$(material_runner_path htdemucs mps)" || return 1
+  [ -x "$default_runner_path" ] || {
+    echo "HT Demucs registry runner 环境未就绪: $default_runner_path" >&2
+    return 1
+  }
+  echo "==> Material 本地环境就绪"
+}
+
 cmd_setup_pfs() {
   if [ ! -x "$PFS_VENV/bin/python" ]; then
     echo "==> 创建 pipeline-from-stems venv"
@@ -592,6 +724,7 @@ cmd="${1:-}"
 [ -n "$cmd" ] && shift || true
 case "$cmd" in
   setup)           cmd_setup ;;
+  setup-materials)  cmd_setup_materials ;;
   setup-demo)      cmd_setup_demo ;;
   setup-pfs)       cmd_setup_pfs ;;
   setup-sep-demucs) cmd_setup_sep_demucs ;;

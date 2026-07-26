@@ -57,6 +57,9 @@ PRD 素材
 ```bash
 scripts/dev.sh all                  # setup + 全部测试 + 端到端冒烟
 scripts/dev.sh test                 # core-models + patchify 测试
+scripts/dev.sh setup-materials       # 本地 Material DSP + HT Demucs runner
+scripts/dev.sh dev                   # 本地默认 materials-v1；同时启动 API + Web
+LMDJ_PIPELINE=legacy scripts/dev.sh dev  # 显式回到冻结 demo 链
 scripts/dev.sh patchify <包目录>     # 对 pipeline package 生成 patch.json
 scripts/dev.sh song <音频> <id>      # demo pipeline 处理一首歌并 patchify（需先 setup-demo）
 scripts/dev.sh smoke                # testsong → patch.json → 摘要
@@ -74,20 +77,35 @@ HTTP 连接、单次请求和 Job 轮询分别有 5 秒、120 秒和 1800 秒的
 `LMDJ_CREATOR_SMOKE_REQUEST_TIMEOUT_SECONDS` 和
 `LMDJ_CREATOR_SMOKE_TIMEOUT_SECONDS` 调整。三者都必须是正整数。
 
-启动本地 API 并执行完整 Creator smoke：
+本地 API + Web 默认使用 Material 链。clean checkout 先确认系统可用 `curl`，
+再执行 `cd apps/web && npm install` 准备 Web；回到仓库根目录运行
+`scripts/dev.sh setup-materials` 后，即可执行 `scripts/dev.sh dev`。
+
+显式使用冻结 demo 链不需要 Material DSP，但仍需准备 API、Web 和 demo 环境：
 
 ```bash
-scripts/dev.sh setup
-scripts/dev.sh setup-demo
-scripts/dev.sh setup-pfs
-
+# 仓库根目录；系统需已安装 curl
 cd apps/api
 python3 -m venv .venv
 .venv/bin/pip install -e ../../packages/core-models
 .venv/bin/pip install -e ../../packages/patchify
 .venv/bin/pip install -e ../../workers/audio
 .venv/bin/pip install -e .
-.venv/bin/uvicorn lmdj_api.app:app --port 8000
+cd ../web
+npm install
+cd ../..
+scripts/dev.sh setup-demo
+LMDJ_PIPELINE=legacy scripts/dev.sh dev
+```
+
+这里复用现有的逐包 editable 安装顺序，没有为 legacy 另增 setup 命令。
+
+启动本地 API 并执行完整 Creator smoke：
+
+```bash
+scripts/dev.sh setup
+scripts/dev.sh setup-materials
+scripts/dev.sh dev
 
 # 另开终端，在仓库根目录执行
 scripts/dev.sh creator-smoke /absolute/path/to/audio.wav
