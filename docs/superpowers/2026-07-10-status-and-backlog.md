@@ -2,7 +2,7 @@
 
 初始日期：2026-07-10
 
-最近更新：2026-07-26
+最近更新：2026-07-27
 用途：会话交接 / 下一步待办。记录已落地里程碑、当前可跑链路、延后的技术项、下一步候选。
 
 ## 已落地里程碑（均已合并 main）
@@ -60,6 +60,13 @@ Upload
 ```
 
 详细边界见 `docs/superpowers/specs/2026-07-24-stage1-creator-core-slice-design.md`。
+
+2026-07-27 已确认 Stage 1 的歌曲入口信息架构：使用现有 browser-owned
+submission / Job 恢复能力建立独立“我的歌曲”入口，将进行中任务与最近歌曲
+分组；“上传新歌”改为独立动作。该方向直接服务无口头指导 Release Gate，但
+目前仍是**设计已确认、代码未实施**，且不代表账号级 Asset Library 或跨设备
+历史已经进入 Stage 1。详细设计见
+[`2026-07-27-stage1-my-songs-navigation-design.md`](specs/2026-07-27-stage1-my-songs-navigation-design.md)。
 
 ## Material Pipeline v1 实现（2026-07-26，已合并 main）
 
