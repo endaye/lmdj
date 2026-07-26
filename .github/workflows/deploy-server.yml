@@ -79,7 +79,8 @@ jobs:
         run: |
           docker build --tag "lmdj-app:$TARGET_SHA" .
           docker pull caddy:2
-          docker save "lmdj-app:$TARGET_SHA" caddy:2 \
+          docker tag caddy:2 "lmdj-caddy:$TARGET_SHA"
+          docker save "lmdj-app:$TARGET_SHA" "lmdj-caddy:$TARGET_SHA" \
             | gzip -1 > "$RUNNER_TEMP/lmdj-images-$TARGET_SHA.tar.gz"
 
       - name: Package release
