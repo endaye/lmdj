@@ -100,8 +100,10 @@ function renderApp(patch: unknown) {
 describe("App", () => {
   it("starts on the landing screen with a drop zone and example button", () => {
     renderApp(golden);
-    expect(screen.getByRole("heading", { name: /feed it a sound/i })).toBeInTheDocument();
-    expect(screen.getByTestId("workbench-shell")).toBeInTheDocument();
+    expect(
+      screen.getByRole("heading", { name: /feed it\s+a sound/i }),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId("source-panel")).toHaveClass("gallery-stage");
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
     expect(screen.getByTestId("app-version")).toHaveTextContent(
@@ -284,7 +286,7 @@ describe("App", () => {
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
     await userEvent.click(screen.getByTestId("back-to-upload"));
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
-    expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("chameleon-upload-stage")).toBeInTheDocument();
   });
 
   it("shows the error panel on schema-invalid patch and stays on landing", async () => {
@@ -306,6 +308,47 @@ describe("App", () => {
     renderApp(rejected);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("banner-rejected")).toBeInTheDocument());
+  });
+
+  it("starts on the Gallery Stage with the Chameleon upload entrance", () => {
+    renderApp(golden);
+    expect(
+      screen.getByRole("button", {
+        name: "Choose a WAV or MP3 to make a Patch",
+      }),
+    ).toBeEnabled();
+    expect(screen.queryByTestId("creator-tools")).not.toBeInTheDocument();
+  });
+
+  it("auto-reveals a loaded Patch once and lets the user dismiss it", async () => {
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    const dock = await screen.findByRole("button", {
+      name: "Chameleon assistant · Patch ready",
+    });
+    expect(dock).toHaveAttribute("aria-expanded", "true");
+    await userEvent.click(screen.getByRole("button", { name: "Close assistant" }));
+    expect(dock).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("maps a real active Pad source to playing state", async () => {
+    const engine = new AudioEngine(new FakeAudioContext());
+    render(
+      <App
+        engine={engine}
+        decode={fakeDecode}
+        fetchExample={exampleFiles(golden)}
+      />,
+    );
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await screen.findByTestId("pad-matrix");
+    // Pad 1 is the Bass slot in the golden fixture; role lives on its element.
+    await userEvent.click(screen.getByTestId("pad-1"));
+    expect(
+      screen.getByRole("button", {
+        name: "Chameleon assistant · Playing bass",
+      }),
+    ).toBeInTheDocument();
   });
 });
 
@@ -339,15 +382,42 @@ function renderAppWithApi(api: ApiClient) {
 }
 
 async function submitViaApi() {
-  const file = new File([new Uint8Array([1, 2, 3])], "song.wav", { type: "audio/wav" });
+  const file = new File(
+    [new Uint8Array([1, 2, 3])],
+    "song.wav",
+    { type: "audio/wav" },
+  );
   await userEvent.upload(screen.getByTestId("api-file-input"), file);
-  await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
 }
 
 describe("App API path", () => {
-  it("shows the API panel on landing with default base", () => {
+  it("keeps ordinary processing collapsed in the truthful Dock", async () => {
+    let releasePoll: ((status: JobStatus) => void) | undefined;
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async (_base, _jobId, onState) => {
+        const separating = apiJob("job123", "separating");
+        onState?.(separating);
+        return await new Promise<JobStatus>((resolve) => {
+          releasePoll = resolve;
+        });
+      },
+    );
+    renderAppWithApi(fakeApi({ pollJob }));
+    await submitViaApi();
+    const dock = await screen.findByRole("button", {
+      name: "Chameleon assistant · Separating stems",
+    });
+    expect(dock).toHaveAttribute("aria-expanded", "false");
+    // Release the pending poll so no async update escapes this test.
+    await act(async () => {
+      releasePoll?.(apiJob("job123", "cancelled"));
+      await Promise.resolve();
+    });
+  });
+
+  it("shows the Chameleon upload stage on landing with default base", () => {
     renderAppWithApi(fakeApi());
-    expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("chameleon-upload-stage")).toBeInTheDocument();
     expect(screen.getByTestId("api-base-input")).toHaveValue("http://localhost:8000");
   });
 
@@ -685,8 +755,8 @@ describe("App API path", () => {
     const songA = new File([new Uint8Array([1])], "song-a.wav", {
       type: "audio/wav",
     });
+    // Song A enters through the Gallery Stage: selecting the file submits it.
     await userEvent.upload(screen.getByTestId("api-file-input"), songA);
-    await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
     await waitFor(() =>
       expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
         "正在处理",
@@ -696,6 +766,7 @@ describe("App API path", () => {
     const songB = new File([new Uint8Array([2])], "song-b.wav", {
       type: "audio/wav",
     });
+    // Song B enters from the processing screen, which still uses UploadPanel.
     await userEvent.upload(screen.getByTestId("api-file-input"), songB);
     await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
 
@@ -863,7 +934,7 @@ describe("App API path", () => {
     expect(pollJob).not.toHaveBeenCalled();
   });
 
-  it("deduplicates a double click while one submission request is in flight", async () => {
+  it("deduplicates a double submission while one request is in flight", async () => {
     const uploadSong = vi.fn<ApiClient["uploadSong"]>(
       async () => await new Promise<JobStatus>(() => {}),
     );
@@ -871,11 +942,12 @@ describe("App API path", () => {
     const file = new File([new Uint8Array([1, 2, 3])], "double.wav", {
       type: "audio/wav",
     });
-    await userEvent.upload(screen.getByTestId("api-file-input"), file);
-    const submit = screen.getByRole("button", { name: /传歌/i });
+    // The Gallery Stage submits on selection, so a double submission is two
+    // change events on the same hidden input rather than two button clicks.
+    const input = screen.getByTestId("api-file-input") as HTMLInputElement;
 
-    fireEvent.click(submit);
-    fireEvent.click(submit);
+    fireEvent.change(input, { target: { files: [file] } });
+    fireEvent.change(input, { target: { files: [file] } });
 
     await waitFor(() => expect(uploadSong).toHaveBeenCalledTimes(1));
     const submissions = JSON.parse(
@@ -898,7 +970,7 @@ describe("App API path", () => {
     expect(screen.getByTestId("failed-state")).toHaveTextContent("song.wav");
     expect(screen.getByTestId("failed-state")).toHaveTextContent("separating");
     await userEvent.click(screen.getByRole("button", { name: /Back/i }));
-    expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("chameleon-upload-stage")).toBeInTheDocument();
   });
 
   it("preserves the last nonterminal stage when poll reports failed then throws", async () => {
@@ -1047,7 +1119,7 @@ describe("App API path", () => {
         });
       },
     }));
-    expect(screen.getByTestId("workbench-shell")).toHaveClass("workbench-shell");
+    expect(screen.getByTestId("source-panel")).toHaveClass("gallery-stage");
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("processing-panel")).toBeInTheDocument());
     expect(screen.getByTestId("app-bar")).toBeInTheDocument();
