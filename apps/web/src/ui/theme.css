@@ -2216,8 +2216,11 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   z-index: 42;
   align-self: center;
 }
+/* Reserves real layout space for the expanded panel so the character never
+   covers Pattern, Pad, Inspector, Export or the Status Bar. Must stay >=
+   (floating top offset + floating height) - dock height. */
 .workbench-app-bar[data-assistant-open="true"] {
-  padding-bottom: 188px;
+  padding-bottom: 204px;
 }
 .chameleon-assistant {
   position: relative;
@@ -2271,16 +2274,16 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   top: 56px;
   right: 0;
   width: 180px;
-  min-height: 170px;
+  min-height: 160px;
   display: grid;
   place-items: center;
-  padding: 8px 8px 24px;
+  padding: 8px 8px 16px;
   border: 0;
   background: transparent;
   color: var(--ink);
 }
 .chameleon-floating .chameleon-2d {
-  width: 150px;
+  width: 140px;
 }
 .chameleon-floating > strong {
   padding: 4px 6px;

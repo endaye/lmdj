@@ -1,7 +1,7 @@
 # LMDJ Chameleon 展览式工作台设计
 
 - 日期：2026-07-26
-- 状态：用户已逐节确认；尚未实施
+- 状态：用户已逐节确认；2D 初版已实现
 - 目标落点：`apps/web/`
 - 视觉方向：Kumaleon 启发的 Exhibition Workbench
 - 角色资产：当前 2D 线稿，未来 SVG 与可选 3D
@@ -38,7 +38,13 @@ Stage 1 Creator Workspace UI 继续负责 Pattern、16 Pad、Inspector、Export
 - Creator Workbench 已具有固定 16 Pad、Pattern、播放、MIDI 和 Export；
 - 页面右下角已显示产品 SemVer 或 `dev`，浏览器 Console 和 API `/health`
   提供工程构建身份；
-- 已批准 Chameleon 线稿、廓形标志、基础 3D 造型方向和单网格多皮肤资产边界。
+- 已批准 Chameleon 线稿、廓形标志、基础 3D 造型方向和单网格多皮肤资产边界；
+- 首页 Gallery Stage、Chameleon 音频上传入口、工作台 Assistant Dock、
+  真实 Visual State、单次 ready/error 展开、响应式回退和 Reduced Motion
+  已通过 Web 单元测试、构建与浏览器验收。
+
+验证命令（`apps/web/`）：`npm test`、`npm run check-contract`、
+`npm run build`、`npm run test:e2e`。
 
 ### 2.2 已有资产但不能误报为运行时
 
@@ -51,14 +57,8 @@ Stage 1 Creator Workspace UI 继续负责 Pattern、16 Pad、Inspector、Export
 
 ### 2.3 本设计批准、尚未实施
 
-- 首页中央 Chameleon 上传入口；
-- 首页到工作台 Assistant Dock 的角色位置转换；
-- Visual State Adapter、Visual Signature 和 Chameleon Controller；
-- 当前 PNG 的 2D 无框悬浮状态；
-- 工作台右上角 Assistant Dock；
-- `ready` 和 `error` 的单次自动展开；
-- 本文定义的展览式页面表面、生成纹理和动效规则；
-- SVG 局部动画与 3D Renderer。
+- 用户未来提供的正式 SVG 局部动画；
+- 独立评审后的 3D 模型、Rig、动画、GLB 和 WebGL Runtime。
 
 ## 3. 核心设计结论
 
