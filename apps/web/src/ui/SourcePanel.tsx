@@ -1,5 +1,6 @@
+import { ChameleonUploadStage } from "../chameleon/ChameleonUploadStage";
 import { DropZone } from "./DropZone";
-import { UploadPanel } from "./UploadPanel";
+import { Wordmark } from "./Wordmark";
 
 export function SourcePanel({
   onFiles,
@@ -11,18 +12,27 @@ export function SourcePanel({
   onUpload: (base: string, file: File) => void;
 }) {
   return (
-    <section className="source-panel" data-testid="source-panel">
-      <header className="state-heading">
-        <span>Source · Stage 01</span>
-        <h1>Feed it a sound</h1>
-        <p>Upload one supported audio file or open the included example.</p>
+    <section
+      className="source-panel gallery-stage"
+      data-testid="source-panel"
+    >
+      <header className="gallery-stage__header">
+        <Wordmark />
+        <span>AI MUSIC MATERIAL INSTRUMENT · STAGE 01</span>
       </header>
+      <div className="gallery-stage__hero">
+        <header className="gallery-stage__title">
+          <span>Source · Stage 01</span>
+          <h1>Feed it<br />a sound</h1>
+          <p>One track enters. A playable 16-pad Patch comes back.</p>
+        </header>
+        <ChameleonUploadStage onUpload={onUpload} />
+      </div>
       <div className="source-limits" aria-label="Upload limits">
         <strong>WAV / MP3</strong>
         <span>200 MiB max</span>
         <span>600 秒 max</span>
       </div>
-      <UploadPanel onUpload={onUpload} />
       <div className="source-example">
         <span>Already have a patch package?</span>
         <DropZone onFiles={onFiles} onExample={onExample} />

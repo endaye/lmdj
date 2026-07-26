@@ -40,6 +40,7 @@ import { PatternSurface } from "./PatternSurface";
 import { ProcessingPanel } from "./ProcessingPanel";
 import { SourcePanel } from "./SourcePanel";
 import { WorkbenchShell } from "./WorkbenchShell";
+import { Wordmark } from "./Wordmark";
 import {
   buildWorkbenchViewModel,
   type WorkbenchMode,
@@ -1093,14 +1094,6 @@ function CreatorStateShell({
       contextInspector={inspector}
       statusBar={status}
     />
-  );
-}
-
-function Wordmark() {
-  return (
-    <div className="wordmark">
-      LMDJ<span className="wordmark-sub">patch view</span>
-    </div>
   );
 }
 
