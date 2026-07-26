@@ -295,6 +295,8 @@ wait_for_dev_ready() {
 cmd_dev() {
   configure_dev_runtime
   ensure_dev_dependencies
+  local build_revision
+  build_revision="$(git -C "$ROOT" rev-parse --verify HEAD 2>/dev/null || printf 'unknown')"
 
   trap cleanup_dev_children EXIT
   trap 'exit 130' INT
@@ -304,6 +306,8 @@ cmd_dev() {
   (
     cd "$ROOT"
     export LMDJ_PIPELINE="$DEV_PIPELINE"
+    export LMDJ_PRODUCT_VERSION=dev
+    export LMDJ_BUILD_REVISION="$build_revision"
     if [ "$DEV_PIPELINE" = "materials-v1" ]; then
       export LMDJ_SEPARATOR_ID="$DEV_SEPARATOR_ID"
       export LMDJ_SEPARATOR_DEVICE="$DEV_SEPARATOR_DEVICE"
@@ -317,6 +321,8 @@ cmd_dev() {
 
   (
     cd "$WEB"
+    export VITE_PRODUCT_VERSION=dev
+    export VITE_BUILD_REVISION="$build_revision"
     exec npm run dev -- --host 127.0.0.1 --port 5173
   ) &
   DEV_WEB_PID=$!

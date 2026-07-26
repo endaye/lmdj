@@ -37,6 +37,23 @@ def test_cors_default_is_dev_localhost(monkeypatch, tmp_path: Path):
     assert response.headers.get("access-control-allow-origin") == "http://localhost:5173"
 
 
+def test_health_reports_product_version_and_full_revision_from_env(
+    monkeypatch,
+    tmp_path: Path,
+):
+    revision = "afa06994f35e97ce8fd1729f10d69958524ec634"
+    monkeypatch.setenv("LMDJ_PRODUCT_VERSION", "v0.2.0")
+    monkeypatch.setenv("LMDJ_BUILD_REVISION", revision)
+
+    client = TestClient(create_app(runner=FakeRunner(), jobs_root=tmp_path / "jobs"))
+
+    assert client.get("/health").json() == {
+        "ok": True,
+        "version": "v0.2.0",
+        "revision": revision,
+    }
+
+
 def test_default_jobs_root_from_env(monkeypatch, tmp_path: Path):
     expected = tmp_path / "custom-jobs"
     monkeypatch.setenv("LMDJ_JOBS_ROOT", str(expected))

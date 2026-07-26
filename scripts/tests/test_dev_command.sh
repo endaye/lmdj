@@ -70,6 +70,13 @@ mkdir -p "$FIXTURE_ROOT/scripts" "$STATE_DIR" "$FAKE_BIN"
 cp "$SOURCE_ROOT/scripts/dev.sh" "$FIXTURE_ROOT/scripts/dev.sh"
 chmod +x "$FIXTURE_ROOT/scripts/dev.sh"
 DEV_SCRIPT="$FIXTURE_ROOT/scripts/dev.sh"
+git -C "$FIXTURE_ROOT" init -q -b main
+git -C "$FIXTURE_ROOT" add scripts/dev.sh
+git -C "$FIXTURE_ROOT" \
+  -c user.name="Dev Command Test" \
+  -c user.email="dev-command@example.com" \
+  commit -q -m "test: fixture"
+EXPECTED_REVISION="$(git -C "$FIXTURE_ROOT" rev-parse HEAD)"
 
 help_output="$("$DEV_SCRIPT" --help)"
 grep -Fq "dev" <<<"$help_output" || fail "help does not list dev"
@@ -102,6 +109,8 @@ printf '%s\n' "$$" >"$FAKE_STATE_DIR/api.pid"
 printf '%s\n' "${LMDJ_PIPELINE:-}" >"$FAKE_STATE_DIR/api.pipeline"
 printf '%s\n' "${LMDJ_SEPARATOR_ID:-}" >"$FAKE_STATE_DIR/api.separator"
 printf '%s\n' "${LMDJ_SEPARATOR_DEVICE:-}" >"$FAKE_STATE_DIR/api.device"
+printf '%s\n' "${LMDJ_PRODUCT_VERSION:-}" >"$FAKE_STATE_DIR/api.version"
+printf '%s\n' "${LMDJ_BUILD_REVISION:-}" >"$FAKE_STATE_DIR/api.revision"
 if [ "${LMDJ_PIPELINE:-}" = "materials-v1" ]; then
   case "${LMDJ_SEPARATOR_ID:-}" in
     htdemucs)
@@ -229,6 +238,8 @@ fi
 cat >"$FAKE_BIN/npm" <<'EOF'
 #!/usr/bin/env bash
 printf '%s\n' "$$" >"$FAKE_STATE_DIR/web.pid"
+printf '%s\n' "${VITE_PRODUCT_VERSION:-}" >"$FAKE_STATE_DIR/web.version"
+printf '%s\n' "${VITE_BUILD_REVISION:-}" >"$FAKE_STATE_DIR/web.revision"
 trap 'exit 0' TERM
 trap 'exit 130' INT
 trap 'exit 129' HUP
@@ -248,7 +259,11 @@ start_dev() {
     "$STATE_DIR/web.pid" \
     "$STATE_DIR/runner.id" \
     "$STATE_DIR/runner.cwd" \
-    "$STATE_DIR/runner.args"
+    "$STATE_DIR/runner.args" \
+    "$STATE_DIR/api.version" \
+    "$STATE_DIR/api.revision" \
+    "$STATE_DIR/web.version" \
+    "$STATE_DIR/web.revision"
   PATH="$FAKE_BIN:$PATH" \
     FAKE_STATE_DIR="$STATE_DIR" \
     env "$@" "$DEV_SCRIPT" dev >"$log_file" 2>&1 &
@@ -283,6 +298,10 @@ grep -Fxq "mps" "$STATE_DIR/api.device"
 grep -Fq "Pipeline: materials-v1" "$STATE_DIR/material-default.log"
 grep -Fq "Separator: htdemucs" "$STATE_DIR/material-default.log"
 grep -Fq "Device: mps" "$STATE_DIR/material-default.log"
+grep -Fxq "dev" "$STATE_DIR/api.version"
+grep -Fxq "dev" "$STATE_DIR/web.version"
+grep -Fxq "$EXPECTED_REVISION" "$STATE_DIR/api.revision"
+grep -Fxq "$EXPECTED_REVISION" "$STATE_DIR/web.revision"
 wait_for_file "$STATE_DIR/runner.id" \
   || fail "default Material runner was not invoked"
 grep -Fxq "htdemucs" "$STATE_DIR/runner.id"

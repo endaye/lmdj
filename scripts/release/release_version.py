@@ -312,23 +312,62 @@ def _valid_utc_timestamp(value: str) -> bool:
     return True
 
 
+def _write_plan_outputs(plan: ReleasePlan, github_output: Path | None) -> None:
+    if github_output is None:
+        return
+    with github_output.open("a", encoding="utf-8") as output:
+        output.write(f"tag={plan.tag}\n")
+        output.write(f"previous_tag={plan.previous_tag or ''}\n")
+        output.write(f"existing={str(plan.existing).lower()}\n")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Plan a staging product release and render its Changelog."
     )
+    parser.add_argument("--mode", choices=("plan", "render"), default="render")
     parser.add_argument("--repo", type=Path, default=Path.cwd())
     parser.add_argument("--target-sha", required=True)
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--run-url", required=True)
-    parser.add_argument("--deployed-at", required=True)
-    parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--expected-tag")
+    parser.add_argument("--repository")
+    parser.add_argument("--run-url")
+    parser.add_argument("--deployed-at")
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args(argv)
 
-    if not _valid_utc_timestamp(args.deployed_at):
-        parser.error("--deployed-at must be UTC ISO 8601 like 2026-07-26T10:11:12Z")
     try:
         plan = plan_release(args.repo, args.target_sha)
+    except ReleaseError as error:
+        print(f"release planning failed: {error}", file=sys.stderr)
+        return 1
+
+    if args.mode == "plan":
+        _write_plan_outputs(plan, args.github_output)
+        print(plan.tag)
+        return 0
+
+    required_render_args = {
+        "--expected-tag": args.expected_tag,
+        "--repository": args.repository,
+        "--run-url": args.run_url,
+        "--deployed-at": args.deployed_at,
+        "--output-dir": args.output_dir,
+    }
+    missing = [name for name, value in required_render_args.items() if value is None]
+    if missing:
+        parser.error(f"render mode requires {', '.join(missing)}")
+    if not _valid_utc_timestamp(args.deployed_at):
+        parser.error("--deployed-at must be UTC ISO 8601 like 2026-07-26T10:11:12Z")
+    if plan.tag != args.expected_tag:
+        print(
+            f"release planning failed: expected tag {args.expected_tag} "
+            f"does not match planned tag {plan.tag}",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
         notes = render_notes(
             plan,
             repository=args.repository,
@@ -343,11 +382,9 @@ def main(argv: list[str] | None = None) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     notes_file = output_dir / f"CHANGELOG-{plan.tag}.md"
     notes_file.write_text(notes, encoding="utf-8")
+    _write_plan_outputs(plan, args.github_output)
     if args.github_output:
         with args.github_output.open("a", encoding="utf-8") as output:
-            output.write(f"tag={plan.tag}\n")
-            output.write(f"previous_tag={plan.previous_tag or ''}\n")
-            output.write(f"existing={str(plan.existing).lower()}\n")
             output.write(f"notes_file={notes_file}\n")
     print(plan.tag)
     return 0

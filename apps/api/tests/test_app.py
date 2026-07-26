@@ -126,8 +126,15 @@ def _write_completed_export_job(
     return job_id, package
 
 
-def test_health(tmp_path: Path):
-    assert make_client(tmp_path).get("/health").json() == {"ok": True}
+def test_health(tmp_path: Path, monkeypatch):
+    monkeypatch.delenv("LMDJ_PRODUCT_VERSION", raising=False)
+    monkeypatch.delenv("LMDJ_BUILD_REVISION", raising=False)
+
+    assert make_client(tmp_path).get("/health").json() == {
+        "ok": True,
+        "version": "dev",
+        "revision": "unknown",
+    }
 
 
 def test_duplicate_submission_id_returns_same_job_and_runs_once(

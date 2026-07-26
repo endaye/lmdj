@@ -2,11 +2,19 @@
 
 日期：2026-07-26
 
-状态：待实现
+状态：已实现
 
 关联设计：`2026-07-26-staging-versioning-and-changelog-design.md`
 
 落点：让同一次 LMDJ Web、API、Audio Worker staging 部署在运行时暴露同一个产品 SemVer 和 Git revision，并保证它们与最终 Git Tag 指向同一提交。
+
+实现：
+
+- `scripts/release/release_version.py`：构建前 Plan、部署后 expected-tag Render；
+- `apps/web/src/version.ts`、`apps/web/src/main.tsx`、`apps/web/src/ui/App.tsx`：UI 产品版本与单次 console 构建身份；
+- `apps/api/lmdj_api/version.py`、`apps/api/lmdj_api/app.py`：API 构建身份与 `/health`；
+- `.github/workflows/deploy-server.yml`、`Dockerfile`、`scripts/dev.sh`：staging 和本地同源注入；
+- Web、API、Release、Deploy 与本地启动测试：运行时契约和版本漂移防护。
 
 ## 目标
 

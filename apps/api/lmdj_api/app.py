@@ -23,6 +23,7 @@ from lmdj_api.export_builder import (
 )
 from lmdj_api.preflight import PreflightError, limits_from_env, persist_and_probe
 from lmdj_api.job_catalog import JobCatalog, validate_submission_id
+from lmdj_api.version import build_identity_from_env
 
 _API_ROOT = Path(__file__).resolve().parent.parent
 _FALLBACK_JOBS_ROOT = _API_ROOT / "jobs"
@@ -63,6 +64,7 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
     catalog.interrupt_nonterminal()
     executor = JobExecutor(runner=runner, jobs_root=jobs_root)
     upload_limits = limits_from_env()
+    build_identity = build_identity_from_env()
 
     app = FastAPI(title="LMDJ API")
     origins = _cors_origins()
@@ -114,7 +116,7 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
 
     @app.get("/health")
     def health() -> dict:
-        return {"ok": True}
+        return {"ok": True, **asdict(build_identity)}
 
     @app.get("/queue")
     def queue_capacity() -> dict:

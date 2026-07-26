@@ -44,7 +44,7 @@ import {
   buildWorkbenchViewModel,
   type WorkbenchMode,
 } from "./workbench/model";
-import webPackage from "../../package.json";
+import { PRODUCT_VERSION } from "../version";
 
 /** 内置示例：fetch public/example-patch/（浏览器路径；测试注入替身） */
 export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
@@ -1113,7 +1113,7 @@ function AppFrame({ children }: { children: ReactNode }) {
         data-testid="app-version"
         title="当前版本"
       >
-        v{webPackage.version}
+        {PRODUCT_VERSION}
       </small>
     </div>
   );
