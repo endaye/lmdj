@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { JobStatus, QueueCapacity } from "../api/client";
 import type { StoredSubmission } from "../jobs/storage";
@@ -18,6 +19,7 @@ function submission(
   return {
     submissionId,
     jobId,
+    controlToken: `control-${submissionId}-1234567890`,
     base: "http://localhost:8000",
     fileName,
     submittedAt: "2026-07-26T00:00:00.000Z",
@@ -49,6 +51,7 @@ function status(
 
 describe("JobQueuePanel", () => {
   it("shows capacity, identity, active work, and FIFO position", () => {
+    const onDelete = vi.fn();
     const jobs: TrackedJob[] = [
       {
         submission: submission("submission-a", "job-a", "song-a.wav"),
@@ -71,6 +74,7 @@ describe("JobQueuePanel", () => {
         jobs={jobs}
         capacity={capacity}
         onOpenCompleted={vi.fn()}
+        onDelete={onDelete}
       />,
     );
 
@@ -82,6 +86,37 @@ describe("JobQueuePanel", () => {
     expect(screen.getByTestId("job-card-job-a")).toHaveTextContent("正在处理");
     expect(screen.getByTestId("job-card-job-b")).toHaveTextContent("song-b.wav");
     expect(screen.getByTestId("job-card-job-b")).toHaveTextContent("队列位置 1");
+    expect(
+      screen.getByRole("button", { name: "处理完成后可删除" }),
+    ).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "取消并删除" }),
+    ).toBeEnabled();
+  });
+
+  it("requests an explicit manual delete for a queued Job", async () => {
+    const queuedJob: TrackedJob = {
+      submission: submission("submission-b", "job-b", "song-b.wav"),
+      status: status("job-b", "queued", { queue_position: 1 }),
+      clientState: "accepted",
+      clientError: null,
+      lastNonterminalState: "queued",
+    };
+    const onDelete = vi.fn();
+
+    render(
+      <JobQueuePanel
+        jobs={[queuedJob]}
+        capacity={capacity}
+        onOpenCompleted={vi.fn()}
+        onDelete={onDelete}
+      />,
+    );
+    await userEvent.click(
+      screen.getByRole("button", { name: "取消并删除" }),
+    );
+
+    expect(onDelete).toHaveBeenCalledWith(queuedJob);
   });
 
   it("explains an interrupted terminal job and permits explicit resubmission", () => {
@@ -103,6 +138,7 @@ describe("JobQueuePanel", () => {
         jobs={jobs}
         capacity={{ ...capacity, processing: 0, waiting: 0 }}
         onOpenCompleted={vi.fn()}
+        onDelete={vi.fn()}
       />,
     );
 

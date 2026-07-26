@@ -7,15 +7,15 @@ import uuid
 from dataclasses import asdict
 from pathlib import Path
 
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from starlette.concurrency import run_in_threadpool
 
 from lmdj_audio_worker import DemoPipelineRunner, PipelineRunner
-from lmdj_audio_worker.status import read_status
+from lmdj_audio_worker.status import TERMINAL_STATES, read_status
 
-from lmdj_api.executor import JobExecutor
+from lmdj_api.executor import ActiveJobError, JobExecutor
 from lmdj_api.export_builder import (
     ExportIncomplete,
     build_creator_export,
@@ -23,6 +23,12 @@ from lmdj_api.export_builder import (
 )
 from lmdj_api.preflight import PreflightError, limits_from_env, persist_and_probe
 from lmdj_api.job_catalog import JobCatalog, validate_submission_id
+from lmdj_api.job_control import (
+    new_control_token,
+    validate_control_token,
+    verify_job_control,
+    write_job_control,
+)
 from lmdj_api.version import build_identity_from_env
 
 _API_ROOT = Path(__file__).resolve().parent.parent
@@ -129,6 +135,10 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
             default=None,
             alias="Idempotency-Key",
         ),
+        job_control: str | None = Header(
+            default=None,
+            alias="X-LMDJ-Job-Control",
+        ),
     ) -> dict:
         temp_dir = Path(tempfile.mkdtemp(prefix="lmdj-upload-"))
         suffix = Path(file.filename or "").suffix.lower()
@@ -164,6 +174,19 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
                 detail={"code": "invalid_submission_id"},
             ) from error
 
+        try:
+            issued_control = (
+                validate_control_token(job_control)
+                if job_control is not None
+                else new_control_token()
+            )
+        except ValueError as error:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            raise HTTPException(
+                status_code=400,
+                detail={"code": "invalid_job_control"},
+            ) from error
+
         status, created = catalog.get_or_create(
             submission_id,
             original_filename,
@@ -171,10 +194,23 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
         )
         if not created:
             shutil.rmtree(temp_dir, ignore_errors=True)
+            if job_control is not None and not verify_job_control(
+                jobs_root / status.job_id,
+                job_control,
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "job_control_mismatch"},
+                )
             return _public_status(status)
 
         try:
-            executor.submit(destination, status)
+            write_job_control(jobs_root / status.job_id, issued_control)
+            executor.submit(
+                destination,
+                status,
+                cleanup_dir=temp_dir,
+            )
         except Exception:
             shutil.rmtree(temp_dir, ignore_errors=True)
             shutil.rmtree(jobs_root / status.job_id, ignore_errors=True)
@@ -183,7 +219,10 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
             except OSError:
                 pass
             raise
-        return _public_status(status)
+        return {
+            **_public_status(status),
+            "job_control_token": issued_control,
+        }
 
     @app.get("/jobs/{job_id}")
     def job_status(job_id: str) -> dict:
@@ -204,6 +243,42 @@ def create_app(runner: PipelineRunner | None = None, jobs_root: Path | None = No
                 detail={"code": "unknown_submission_id"},
             )
         return _public_status(status)
+
+    @app.delete("/jobs/{job_id}", status_code=204)
+    def delete_job(
+        job_id: str,
+        job_control: str | None = Header(
+            default=None,
+            alias="X-LMDJ-Job-Control",
+        ),
+    ) -> Response:
+        job_dir = _job_dir(job_id)
+        if job_control is None or not verify_job_control(job_dir, job_control):
+            raise HTTPException(
+                status_code=403,
+                detail={"code": "job_delete_forbidden"},
+            )
+
+        status = read_status(job_dir)
+        if status.state == "queued":
+            try:
+                removed = executor.cancel_queued(job_id)
+            except ActiveJobError as error:
+                raise HTTPException(
+                    status_code=409,
+                    detail={"code": "job_in_progress", "state": "queued"},
+                ) from error
+            if not removed:
+                status = read_status(job_dir)
+
+        if status.state not in TERMINAL_STATES and status.state != "queued":
+            raise HTTPException(
+                status_code=409,
+                detail={"code": "job_in_progress", "state": status.state},
+            )
+
+        shutil.rmtree(job_dir)
+        return Response(status_code=204)
 
     @app.get("/jobs/{job_id}/patch")
     def job_patch(job_id: str):

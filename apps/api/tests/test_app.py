@@ -38,16 +38,17 @@ def _upload(
     *,
     filename: str = "song.wav",
     submission_id: str | None = None,
+    control_token: str | None = None,
 ) -> str:
-    headers = (
-        {"Idempotency-Key": submission_id}
-        if submission_id is not None
-        else None
-    )
+    headers = {}
+    if submission_id is not None:
+        headers["Idempotency-Key"] = submission_id
+    if control_token is not None:
+        headers["X-LMDJ-Job-Control"] = control_token
     resp = client.post(
         "/uploads",
         files={"file": (filename, io.BytesIO(short_wav_bytes()), "audio/wav")},
-        headers=headers,
+        headers=headers or None,
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
@@ -159,6 +160,30 @@ def test_duplicate_submission_id_returns_same_job_and_runs_once(
     assert status["original_filename"] == "song.wav"
 
 
+def test_duplicate_submission_rejects_a_different_control_token(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    client = make_client(tmp_path)
+    _upload(
+        client,
+        submission_id="submission-controlled",
+        control_token="a" * 32,
+    )
+
+    response = client.post(
+        "/uploads",
+        files={"file": ("song.wav", io.BytesIO(short_wav_bytes()), "audio/wav")},
+        headers={
+            "Idempotency-Key": "submission-controlled",
+            "X-LMDJ-Job-Control": "b" * 32,
+        },
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "job_control_mismatch"
+
+
 def test_different_submission_ids_create_distinct_jobs(tmp_path: Path, ffprobe_wav):
     client = make_client(tmp_path)
 
@@ -212,6 +237,104 @@ def test_submission_route_recovers_job_after_response_loss(tmp_path: Path, ffpro
 
     assert recovered.status_code == 200
     assert recovered.json()["job_id"] == job_id
+
+
+def test_completed_job_can_be_deleted_with_its_control_token(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    client = make_client(tmp_path)
+    control_token = "delete-control-token-1234567890ab"
+    job_id = _upload(client, control_token=control_token)
+    _poll_completed(client, job_id)
+    job_dir = tmp_path / "jobs" / job_id
+    assert (job_dir / "input").is_dir()
+
+    response = client.delete(
+        f"/jobs/{job_id}",
+        headers={"X-LMDJ-Job-Control": control_token},
+    )
+
+    assert response.status_code == 204
+    assert not job_dir.exists()
+    assert client.get(f"/jobs/{job_id}").status_code == 404
+
+
+def test_delete_rejects_the_wrong_control_token(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    client = make_client(tmp_path)
+    job_id = _upload(client, control_token="c" * 32)
+    _poll_completed(client, job_id)
+
+    response = client.delete(
+        f"/jobs/{job_id}",
+        headers={"X-LMDJ-Job-Control": "d" * 32},
+    )
+
+    assert response.status_code == 403
+    assert (tmp_path / "jobs" / job_id).is_dir()
+
+
+def test_delete_rejects_an_active_job_without_deferring_deletion(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    barrier = threading.Event()
+    started = threading.Event()
+    client = make_client(
+        tmp_path,
+        runner=FakeRunner(barrier=barrier, started=started),
+    )
+    control_token = "active-control-token-1234567890ab"
+    job_id = _upload(client, control_token=control_token)
+    assert started.wait(timeout=5)
+
+    response = client.delete(
+        f"/jobs/{job_id}",
+        headers={"X-LMDJ-Job-Control": control_token},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "job_in_progress"
+    assert (tmp_path / "jobs" / job_id).is_dir()
+    barrier.set()
+
+
+def test_queued_job_can_be_removed_without_running(
+    tmp_path: Path,
+    ffprobe_wav,
+):
+    barrier = threading.Event()
+    started = threading.Event()
+    runner = CountingRunner(barrier=barrier, started=started)
+    client = make_client(tmp_path, runner=runner)
+    first = _upload(
+        client,
+        submission_id="submission-active",
+        control_token="active-queue-control-token-12345",
+    )
+    assert started.wait(timeout=5)
+    second_token = "queued-control-token-1234567890abcd"
+    second = _upload(
+        client,
+        submission_id="submission-waiting",
+        control_token=second_token,
+    )
+    assert client.get(f"/jobs/{second}").json()["state"] == "queued"
+
+    response = client.delete(
+        f"/jobs/{second}",
+        headers={"X-LMDJ-Job-Control": second_token},
+    )
+
+    assert response.status_code == 204
+    assert not (tmp_path / "jobs" / second).exists()
+    assert client.get("/queue").json()["waiting"] == 0
+    barrier.set()
+    _poll_completed(client, first)
+    assert runner.calls == [first]
 
 
 def test_app_startup_marks_old_nonterminal_job_interrupted(tmp_path: Path):

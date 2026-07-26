@@ -41,6 +41,7 @@ function api(
     fetchJob: vi.fn(),
     resolveSubmission: vi.fn(),
     fetchQueueCapacity: vi.fn(),
+    deleteJob: vi.fn(),
     pollJob: vi.fn(),
     fetchPatchBundle: vi.fn(),
     fetchCreatorExportStatus: vi.fn(),

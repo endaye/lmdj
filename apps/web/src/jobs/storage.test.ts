@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   STORAGE_KEY,
   loadSubmissions,
+  removeSubmission,
   saveSubmissions,
   upsertSubmission,
   type StoredSubmission,
@@ -54,5 +55,18 @@ describe("submission storage", () => {
 
     expect(updated).toEqual([{ ...first, jobId: "job123" }]);
     expect(loadSubmissions(storage)).toEqual(updated);
+  });
+
+  it("removes only the selected browser-owned submission", () => {
+    const storage = new MemoryStorage();
+    const second = {
+      ...first,
+      submissionId: "submission-456",
+      jobId: "job456",
+    };
+    saveSubmissions(storage, [first, second]);
+
+    expect(removeSubmission(storage, first.submissionId)).toEqual([second]);
+    expect(loadSubmissions(storage)).toEqual([second]);
   });
 });

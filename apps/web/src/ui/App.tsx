@@ -17,12 +17,14 @@ import {
 import type { AudioEngine } from "../engine/AudioEngine";
 import {
   loadSubmissions,
+  removeSubmission,
   upsertSubmission,
   type StoredSubmission,
 } from "../jobs/storage";
 import { loadMidiMapping, type MidiBank, type MidiMapping } from "../midi/mapping";
 import { loadPatch, PatchValidationError, type PatchBundle } from "../patch/loader";
 import { ErrorPanel } from "./ErrorPanel";
+import { DeleteJobDialog } from "./DeleteJobDialog";
 import { ContextInspector } from "./ContextInspector";
 import { ExportChecklist } from "./ExportChecklist";
 import {
@@ -178,6 +180,7 @@ export function App({
   );
   const trackedJobsRef = useRef(trackedJobs);
   const pollingJobsRef = useRef(new Set<string>());
+  const deletedJobIdsRef = useRef(new Set<string>());
   const inflightUploadsRef = useRef(new Map<string, string>());
   const [queueCapacity, setQueueCapacity] =
     useState<QueueCapacity>(EMPTY_CAPACITY);
@@ -187,6 +190,10 @@ export function App({
   const [midiMappingMode, setMidiMappingMode] = useState<MidiMapping["mode"]>(
     () => loadMidiMapping(localStorage).mode,
   );
+  const [deleteTarget, setDeleteTarget] = useState<TrackedJob | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
   const triggerPad = useCallback(
     (index: number) => {
@@ -262,10 +269,73 @@ export function App({
 
   // 退出当前 patch，停掉播放，回到上传页换一首歌
   const backToUpload = useCallback(() => {
-    if (engine.playing) engine.stop();
+    engine.stop();
     setMode("source");
     setState({ phase: "source", issues: null, issueTitle: null });
   }, [engine]);
+
+  const requestDelete = useCallback((job: TrackedJob) => {
+    setDeleteTarget(job);
+    setDeleteError(null);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteTarget) return;
+    const {
+      submissionId,
+      jobId,
+      controlToken,
+      base,
+    } = deleteTarget.submission;
+    if (!jobId || !controlToken) {
+      setDeleteError("这个旧任务没有安全删除凭证，无法删除服务器文件。");
+      return;
+    }
+
+    deletedJobIdsRef.current.add(jobId);
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await apiClient.deleteJob(base, jobId, controlToken);
+      removeSubmission(localStorage, submissionId);
+      updateTrackedJobs((current) =>
+        current.filter(
+          (job) => job.submission.submissionId !== submissionId,
+        )
+      );
+      setDeleteTarget(null);
+      setDeleteNotice(`《${deleteTarget.submission.fileName}》已从服务器和本浏览器删除。`);
+      const deletingCurrent =
+        (state.phase === "processing" || state.phase === "failed") &&
+        state.submissionId === submissionId;
+      const deletingLoaded =
+        state.phase === "loaded" &&
+        state.source.kind === "api" &&
+        state.source.jobId === jobId;
+      if (deletingCurrent || deletingLoaded) backToUpload();
+      void apiClient.fetchQueueCapacity(base).then(
+        setQueueCapacity,
+        () => undefined,
+      );
+    } catch (error) {
+      deletedJobIdsRef.current.delete(jobId);
+      setDeleteError(errorMessage(error));
+    } finally {
+      setDeleting(false);
+    }
+  }, [
+    apiClient,
+    backToUpload,
+    deleteTarget,
+    state,
+    updateTrackedJobs,
+  ]);
+
+  useEffect(() => {
+    if (!deleteNotice) return;
+    const timer = setTimeout(() => setDeleteNotice(null), 4_000);
+    return () => clearTimeout(timer);
+  }, [deleteNotice]);
 
   const handleFiles = useCallback(
     async (
@@ -317,6 +387,7 @@ export function App({
       let lastNonterminal = "queued";
       try {
         const final = await apiClient.pollJob(base, jobId, (job) => {
+          if (deletedJobIdsRef.current.has(jobId)) return;
           applyJobStatus(submissionId, job);
           if (!TERMINAL_JOB_STATES.has(job.state)) {
             lastNonterminal = job.state;
@@ -335,6 +406,7 @@ export function App({
               : previous
           );
         });
+        if (deletedJobIdsRef.current.has(jobId)) return;
         applyJobStatus(submissionId, final);
         if (
           autoOpen &&
@@ -354,6 +426,7 @@ export function App({
           if (current) await openCompletedJob(current);
         }
       } catch (error) {
+        if (deletedJobIdsRef.current.has(jobId)) return;
         const terminal = jobStatusFromError(error);
         if (terminal) applyJobStatus(submissionId, terminal);
         updateTrackedJob(submissionId, (current) => ({
@@ -402,6 +475,7 @@ export function App({
       const submission: StoredSubmission = existing ?? {
         submissionId: crypto.randomUUID(),
         jobId: null,
+        controlToken: crypto.randomUUID(),
         base: root,
         fileName: file.name,
         submittedAt: new Date().toISOString(),
@@ -437,6 +511,7 @@ export function App({
           root,
           file,
           submission.submissionId,
+          submission.controlToken ?? crypto.randomUUID(),
         );
         if (!accepted.job_id) {
           throw new ApiError("upload response did not include a Job ID");
@@ -652,9 +727,31 @@ export function App({
     return () => window.removeEventListener("keydown", onKey);
   }, [state.phase, triggerPad]);
 
+  const deleteFeedback = (
+    <>
+      <DeleteJobDialog
+        job={deleteTarget}
+        busy={deleting}
+        error={deleteError}
+        onCancel={() => {
+          if (deleting) return;
+          setDeleteTarget(null);
+          setDeleteError(null);
+        }}
+        onConfirm={() => void confirmDelete()}
+      />
+      {deleteNotice && (
+        <div className="delete-notice" role="status">
+          {deleteNotice}
+        </div>
+      )}
+    </>
+  );
+
   if (state.phase === "source") {
     return (
       <AppFrame>
+        {deleteFeedback}
         <CreatorStateShell
           label="Source"
           appState="source"
@@ -676,6 +773,7 @@ export function App({
                 jobs={trackedJobs}
                 capacity={queueCapacity}
                 onOpenCompleted={(job) => void openCompletedJob(job)}
+                onDelete={requestDelete}
               />
               {state.issues && (
                 <ErrorPanel
@@ -711,6 +809,7 @@ export function App({
   if (state.phase === "processing") {
     return (
       <AppFrame>
+        {deleteFeedback}
         <CreatorStateShell
           label="Processing"
           appState={state.jobState}
@@ -723,6 +822,7 @@ export function App({
               capacity={queueCapacity}
               onUpload={(base, file) => void handleUpload(base, file)}
               onOpenCompleted={(job) => void openCompletedJob(job)}
+              onDelete={requestDelete}
             />
           }
           inspector={
@@ -749,6 +849,7 @@ export function App({
   if (state.phase === "failed") {
     return (
       <AppFrame>
+        {deleteFeedback}
         <CreatorStateShell
           label="Failed"
           appState="failed"
@@ -863,6 +964,12 @@ export function App({
     );
   };
   const apiSource = state.source.kind === "api" ? state.source : null;
+  const loadedTrackedJob =
+    apiSource === null
+      ? null
+      : trackedJobs.find(
+          (job) => job.submission.jobId === apiSource.jobId,
+        ) ?? null;
   const nonApiSource = state.source.kind === "api" ? null : state.source;
   const loadedSource: LoadedSourceSummary =
     state.source.kind === "api"
@@ -932,6 +1039,7 @@ export function App({
       : undefined;
   return (
     <AppFrame>
+      {deleteFeedback}
       {status === "rejected" && (
         <div className="banner-rejected" data-testid="banner-rejected">
           质量分未过阈（status: rejected）——仍可播放，仅作提示
@@ -952,6 +1060,15 @@ export function App({
               <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
                 ⏏ 上传新歌
               </button>
+              {loadedTrackedJob?.submission.controlToken && (
+                <button
+                  className="btn-delete-track"
+                  type="button"
+                  onClick={() => requestDelete(loadedTrackedJob)}
+                >
+                  删除曲目
+                </button>
+              )}
             </div>
           </>
         }

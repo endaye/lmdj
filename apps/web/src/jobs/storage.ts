@@ -3,6 +3,7 @@ export const STORAGE_KEY = "lmdj.upload-submissions.v1";
 export interface StoredSubmission {
   submissionId: string;
   jobId: string | null;
+  controlToken?: string | null;
   base: string;
   fileName: string;
   submittedAt: string;
@@ -14,6 +15,11 @@ function isStoredSubmission(value: unknown): value is StoredSubmission {
   return (
     typeof record.submissionId === "string" &&
     (typeof record.jobId === "string" || record.jobId === null) &&
+    (
+      record.controlToken === undefined ||
+      record.controlToken === null ||
+      typeof record.controlToken === "string"
+    ) &&
     typeof record.base === "string" &&
     typeof record.fileName === "string" &&
     typeof record.submittedAt === "string"
@@ -53,6 +59,17 @@ export function upsertSubmission(
       : current.map((candidate, candidateIndex) =>
           candidateIndex === index ? submission : candidate
         );
+  saveSubmissions(storage, next);
+  return next;
+}
+
+export function removeSubmission(
+  storage: Storage,
+  submissionId: string,
+): StoredSubmission[] {
+  const next = loadSubmissions(storage).filter(
+    (submission) => submission.submissionId !== submissionId,
+  );
   saveSubmissions(storage, next);
   return next;
 }

@@ -317,6 +317,7 @@ function fakeApi(overrides: Partial<ApiClient> = {}): ApiClient {
     fetchJob: async (_base, jobId) => apiJob(jobId, "completed"),
     resolveSubmission: async () => apiJob("job123", "queued"),
     fetchQueueCapacity: async () => queueCapacity,
+    deleteJob: async () => undefined,
     pollJob: async (_b, _j, onState) => {
       onState?.({ state: "separating", error: null, patch_id: null, package_dir: null, quality: null });
       const done: JobStatus = { state: "completed", error: null, patch_id: "job123-abc", package_dir: "job123", quality: "passed" };
@@ -863,6 +864,59 @@ describe("App API path", () => {
       "Failed to fetch",
     );
     expect(pollJob).not.toHaveBeenCalled();
+  });
+
+  it("manually deletes an open terminal Job and returns to Source", async () => {
+    const stored: StoredSubmission = {
+      submissionId: "submission-delete",
+      jobId: "job-delete",
+      controlToken: "control-delete-1234567890abcdefgh",
+      base: "http://localhost:8000",
+      fileName: "delete-me.wav",
+      submittedAt: "2026-07-26T03:04:05.000Z",
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([stored]));
+    const deleteJob = vi.fn<ApiClient["deleteJob"]>().mockResolvedValue();
+
+    renderAppWithApi(
+      fakeApi({
+        fetchJob: async () =>
+          apiJob("job-delete", "completed", {
+            submission_id: stored.submissionId,
+            original_filename: stored.fileName,
+          }),
+        deleteJob,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "删除曲目" }),
+      ).toBeEnabled(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Open Patch" }));
+    await waitFor(() =>
+      expect(screen.getByTestId("pad-matrix")).toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "删除曲目" }));
+    expect(screen.getByRole("dialog")).toHaveTextContent(
+      "永久删除《delete-me.wav》",
+    );
+    await userEvent.click(screen.getByRole("button", { name: "永久删除" }));
+
+    await waitFor(() =>
+      expect(deleteJob).toHaveBeenCalledWith(
+        stored.base,
+        stored.jobId,
+        stored.controlToken,
+      ),
+    );
+    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent(
+      "已从服务器和本浏览器删除",
+    );
+    expect(screen.queryByTestId("job-card-job-delete")).not.toBeInTheDocument();
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]")).toEqual([]);
   });
 
   it("deduplicates a double click while one submission request is in flight", async () => {

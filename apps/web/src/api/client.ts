@@ -84,13 +84,17 @@ export async function uploadSong(
   base: string,
   file: File,
   submissionId: string,
+  controlToken: string,
 ): Promise<JobStatus> {
   const form = new FormData();
   form.append("file", file);
   const res = await fetch(`${normalizeBase(base)}/uploads`, {
     method: "POST",
     body: form,
-    headers: { "Idempotency-Key": submissionId },
+    headers: {
+      "Idempotency-Key": submissionId,
+      "X-LMDJ-Job-Control": controlToken,
+    },
   });
   if (!res.ok) {
     let detail: unknown;
@@ -180,6 +184,28 @@ export async function fetchQueueCapacity(
     );
   }
   return (await response.json()) as QueueCapacity;
+}
+
+export async function deleteJob(
+  base: string,
+  jobId: string,
+  controlToken: string,
+): Promise<void> {
+  const response = await fetch(`${normalizeBase(base)}/jobs/${jobId}`, {
+    method: "DELETE",
+    headers: { "X-LMDJ-Job-Control": controlToken },
+  });
+  if (response.ok || response.status === 404) return;
+  const detail = await responseDetail(response);
+  throw new ApiError(
+    response.status === 409
+      ? "任务仍在处理中，处理完成后才能删除"
+      : response.status === 403
+        ? "无法验证这个任务的删除权限"
+      : `delete failed (HTTP ${response.status})`,
+    response.status,
+    detail,
+  );
 }
 
 export async function pollJob(
@@ -282,6 +308,7 @@ export interface ApiClient {
   fetchJob: typeof fetchJob;
   resolveSubmission: typeof resolveSubmission;
   fetchQueueCapacity: typeof fetchQueueCapacity;
+  deleteJob: typeof deleteJob;
   pollJob: typeof pollJob;
   fetchPatchBundle: typeof fetchPatchBundle;
   fetchCreatorExportStatus: typeof fetchCreatorExportStatus;
@@ -293,6 +320,7 @@ export const defaultApiClient: ApiClient = {
   fetchJob,
   resolveSubmission,
   fetchQueueCapacity,
+  deleteJob,
   pollJob,
   fetchPatchBundle,
   fetchCreatorExportStatus,
