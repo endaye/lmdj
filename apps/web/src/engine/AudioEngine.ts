@@ -94,6 +94,16 @@ export class AudioEngine {
     return this.timer !== null;
   }
 
+  get active(): boolean {
+    return this.timer !== null || this.activeSources.size > 0;
+  }
+
+  activeElementIds(): Set<string> {
+    return new Set(
+      [...this.activeSources].map((source) => source.elementId),
+    );
+  }
+
   async play(): Promise<void> {
     if (!this.bundle || this.timer) return;
     await this.ctx.resume(); // 浏览器手势解锁
@@ -196,9 +206,12 @@ export class AudioEngine {
     const endedSource = source as SourceLike & {
       onended: ((event: Event) => unknown) | null;
     };
-    endedSource.onended = () => this.activeSources.delete(active);
+    endedSource.onended = () => {
+      if (this.activeSources.delete(active)) this.emit();
+    };
     this.activeSources.add(active);
     source.start(when ?? this.ctx.currentTime);
+    this.emit();
   }
 
   private stopSources(predicate: (active: ActiveSource) => boolean): void {
