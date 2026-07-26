@@ -52,6 +52,9 @@ export function WorkbenchShell({
   onModeChange,
   availableModes,
   appBar,
+  assistant,
+  assistantExpanded = false,
+  onCanvasInteraction,
   instrumentCanvas,
   contextInspector,
   statusBar,
@@ -62,6 +65,9 @@ export function WorkbenchShell({
   onModeChange: (mode: WorkbenchMode) => void;
   availableModes: WorkbenchMode[];
   appBar: ReactNode;
+  assistant?: ReactNode;
+  assistantExpanded?: boolean;
+  onCanvasInteraction?: () => void;
   instrumentCanvas: ReactNode;
   contextInspector: ReactNode;
   statusBar: ReactNode;
@@ -153,9 +159,18 @@ export function WorkbenchShell({
         className="workbench-app-bar"
         data-testid="app-bar"
         data-compact={isPhone ? "true" : "false"}
+        data-assistant-open={assistantExpanded ? "true" : "false"}
         inert={modalOpen}
       >
-        {appBar}
+        <div className="workbench-app-bar__main">{appBar}</div>
+        {assistant && (
+          <div
+            className="workbench-assistant-slot"
+            data-testid="assistant-slot"
+          >
+            {assistant}
+          </div>
+        )}
         <button
           ref={toggleRef}
           type="button"
@@ -185,6 +200,7 @@ export function WorkbenchShell({
           className="workbench-instrument-canvas"
           data-testid="instrument-canvas"
           inert={modalOpen}
+          onPointerDownCapture={onCanvasInteraction}
         >
           {instrumentCanvas}
         </main>
