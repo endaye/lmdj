@@ -34,13 +34,13 @@ import {
 } from "./LoadedSourcePanel";
 import { MidiPanel } from "./MidiPanel";
 import {
-  JobQueuePanel,
+  MySongsView,
   type TrackedJob,
-} from "./JobQueuePanel";
+} from "./MySongsView";
 import { PAD_KEYS, PadMatrix16 } from "./PadMatrix16";
 import { PatternSurface } from "./PatternSurface";
 import { ProcessingPanel } from "./ProcessingPanel";
-import { SourcePanel } from "./SourcePanel";
+import { NewSongView } from "./NewSongView";
 import { WorkbenchShell } from "./WorkbenchShell";
 import {
   buildWorkbenchViewModel,
@@ -68,13 +68,17 @@ export async function fetchExampleFiles(): Promise<Map<string, ArrayBuffer>> {
 
 type AppState =
   | {
-      phase: "source";
+      phase: "library";
+    }
+  | {
+      phase: "new-upload";
       issues: string[] | null;
       issueTitle: string | null;
     }
   | {
       phase: "processing";
-      file: File;
+      fileName: string;
+      sourceFile?: File;
       base: string;
       submissionId: string;
       jobId?: string;
@@ -83,7 +87,8 @@ type AppState =
     }
   | {
       phase: "failed";
-      file: File;
+      fileName: string;
+      sourceFile?: File;
       base: string;
       submissionId: string;
       failedAt: string;
@@ -170,15 +175,21 @@ export function App({
   fetchExample?: () => Promise<Map<string, ArrayBuffer>>;
   apiClient?: ApiClient;
 }) {
-  const [state, setState] = useState<AppState>({
-    phase: "source",
-    issues: null,
-    issueTitle: null,
-  });
+  const [initialSubmissions] = useState(() => loadSubmissions(localStorage));
+  const [state, setState] = useState<AppState>(() =>
+    initialSubmissions.length > 0
+      ? { phase: "library" }
+      : {
+          phase: "new-upload",
+          issues: null,
+          issueTitle: null,
+        }
+  );
   const [trackedJobs, setTrackedJobs] = useState<TrackedJob[]>(() =>
-    loadSubmissions(localStorage).map(trackedFromSubmission)
+    initialSubmissions.map(trackedFromSubmission)
   );
   const trackedJobsRef = useRef(trackedJobs);
+  const foregroundSubmissionRef = useRef<string | null>(null);
   const pollingJobsRef = useRef(new Set<string>());
   const deletedJobIdsRef = useRef(new Set<string>());
   const inflightUploadsRef = useRef(new Map<string, string>());
@@ -194,6 +205,7 @@ export function App({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
+  const [completionNotice, setCompletionNotice] = useState<string | null>(null);
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
   const triggerPad = useCallback(
     (index: number) => {
@@ -246,8 +258,9 @@ export function App({
 
   const failPatch = useCallback((error: unknown) => {
     const issues = error instanceof PatchValidationError ? error.issues : [String(error)];
+    foregroundSubmissionRef.current = null;
     setState({
-      phase: "source",
+      phase: "new-upload",
       issues,
       issueTitle: "patch.json 未通过 lmdj.patch.v1 校验",
     });
@@ -256,6 +269,7 @@ export function App({
   const enterLoaded = useCallback(
     (bundle: PatchBundle<unknown>, source: LoadedSource) => {
       engine.load(bundle);
+      foregroundSubmissionRef.current = null;
       setMode("performance");
       setState({
         phase: "loaded",
@@ -267,11 +281,22 @@ export function App({
     [engine],
   );
 
-  // 退出当前 patch，停掉播放，回到上传页换一首歌
-  const backToUpload = useCallback(() => {
+  const showLibrary = useCallback(() => {
     engine.stop();
+    foregroundSubmissionRef.current = null;
     setMode("source");
-    setState({ phase: "source", issues: null, issueTitle: null });
+    setState({ phase: "library" });
+  }, [engine]);
+
+  const showNewUpload = useCallback(() => {
+    engine.stop();
+    foregroundSubmissionRef.current = null;
+    setMode("source");
+    setState({
+      phase: "new-upload",
+      issues: null,
+      issueTitle: null,
+    });
   }, [engine]);
 
   const requestDelete = useCallback((job: TrackedJob) => {
@@ -312,7 +337,7 @@ export function App({
         state.phase === "loaded" &&
         state.source.kind === "api" &&
         state.source.jobId === jobId;
-      if (deletingCurrent || deletingLoaded) backToUpload();
+      if (deletingCurrent || deletingLoaded) showLibrary();
       void apiClient.fetchQueueCapacity(base).then(
         setQueueCapacity,
         () => undefined,
@@ -325,17 +350,61 @@ export function App({
     }
   }, [
     apiClient,
-    backToUpload,
     deleteTarget,
+    showLibrary,
     state,
     updateTrackedJobs,
   ]);
+
+  const removeLocalRecord = useCallback(
+    (job: TrackedJob) => {
+      const { submissionId, jobId, fileName } = job.submission;
+      removeSubmission(localStorage, submissionId);
+      updateTrackedJobs((current) =>
+        current.filter(
+          (candidate) =>
+            candidate.submission.submissionId !== submissionId,
+        )
+      );
+      setDeleteNotice(
+        `《${fileName}》已从此浏览器移除；服务器文件未更改。`,
+      );
+      const viewingSubmission =
+        (state.phase === "processing" || state.phase === "failed") &&
+        state.submissionId === submissionId;
+      const viewingLoadedJob =
+        state.phase === "loaded" &&
+        state.source.kind === "api" &&
+        state.source.jobId === jobId;
+      if (viewingSubmission || viewingLoadedJob) showLibrary();
+    },
+    [showLibrary, state, updateTrackedJobs],
+  );
+
+  const viewProgress = useCallback((job: TrackedJob) => {
+    foregroundSubmissionRef.current = job.submission.submissionId;
+    setState({
+      phase: "processing",
+      fileName: job.submission.fileName,
+      base: job.submission.base,
+      submissionId: job.submission.submissionId,
+      jobId: job.submission.jobId ?? undefined,
+      jobState: job.status?.state ?? job.clientState,
+      lastNonterminalStage: job.lastNonterminalState,
+    });
+  }, []);
 
   useEffect(() => {
     if (!deleteNotice) return;
     const timer = setTimeout(() => setDeleteNotice(null), 4_000);
     return () => clearTimeout(timer);
   }, [deleteNotice]);
+
+  useEffect(() => {
+    if (!completionNotice) return;
+    const timer = setTimeout(() => setCompletionNotice(null), 6_000);
+    return () => clearTimeout(timer);
+  }, [completionNotice]);
 
   const handleFiles = useCallback(
     async (
@@ -373,13 +442,7 @@ export function App({
   const pollTrackedJob = useCallback(
     async (
       submission: StoredSubmission,
-      {
-        autoOpen,
-        sourceFile,
-      }: {
-        autoOpen: boolean;
-        sourceFile?: File;
-      },
+      { sourceFile }: { sourceFile?: File } = {},
     ) => {
       const { submissionId, jobId, base } = submission;
       if (!jobId || pollingJobsRef.current.has(jobId)) return;
@@ -409,21 +472,17 @@ export function App({
         if (deletedJobIdsRef.current.has(jobId)) return;
         applyJobStatus(submissionId, final);
         if (
-          autoOpen &&
-          trackedJobsRef.current.every(
-            (job) =>
-              job.submission.submissionId === submissionId ||
-              (
-                job.status !== null &&
-                TERMINAL_JOB_STATES.has(job.status.state)
-              ),
-          ) &&
+          foregroundSubmissionRef.current === submissionId &&
           final.state === "completed"
         ) {
           const current = trackedJobsRef.current.find(
             (job) => job.submission.submissionId === submissionId,
           );
           if (current) await openCompletedJob(current);
+        } else if (final.state === "completed") {
+          setCompletionNotice(
+            `《${submission.fileName}》已准备好，可以继续创作。`,
+          );
         }
       } catch (error) {
         if (deletedJobIdsRef.current.has(jobId)) return;
@@ -434,20 +493,12 @@ export function App({
           clientError: terminal ? null : errorMessage(error),
         }));
         if (
-          autoOpen &&
-          sourceFile &&
-          trackedJobsRef.current.every(
-            (job) =>
-              job.submission.submissionId === submissionId ||
-              (
-                job.status !== null &&
-                TERMINAL_JOB_STATES.has(job.status.state)
-              ),
-          )
+          foregroundSubmissionRef.current === submissionId
         ) {
           setState({
             phase: "failed",
-            file: sourceFile,
+            fileName: submission.fileName,
+            sourceFile,
             base,
             submissionId,
             failedAt: lastNonterminal,
@@ -480,15 +531,8 @@ export function App({
         fileName: file.name,
         submittedAt: new Date().toISOString(),
       };
-      const autoOpen = trackedJobsRef.current.every(
-        (job) =>
-          job.submission.submissionId === submission.submissionId ||
-          (
-            job.status !== null &&
-            TERMINAL_JOB_STATES.has(job.status.state)
-          ),
-      );
       inflightUploadsRef.current.set(signature, submission.submissionId);
+      foregroundSubmissionRef.current = submission.submissionId;
       upsertSubmission(localStorage, submission);
       updateTrackedJobs((current) => {
         const retained = current.filter(
@@ -499,7 +543,8 @@ export function App({
       });
       setState({
         phase: "processing",
-        file,
+        fileName: file.name,
+        sourceFile: file,
         base: root,
         submissionId: submission.submissionId,
         jobState: "preflight",
@@ -545,20 +590,18 @@ export function App({
               }
             : previous
         );
-        await pollTrackedJob(acceptedSubmission, {
-          autoOpen,
-          sourceFile: file,
-        });
+        await pollTrackedJob(acceptedSubmission, { sourceFile: file });
       } catch (error) {
         const preflight = isPreflightRejection(error);
         updateTrackedJob(submission.submissionId, (current) => ({
           ...current,
           clientError: errorMessage(error),
         }));
-        if (trackedJobsRef.current.length === 1) {
+        if (foregroundSubmissionRef.current === submission.submissionId) {
           setState({
             phase: "failed",
-            file,
+            fileName: file.name,
+            sourceFile: file,
             base: root,
             submissionId: submission.submissionId,
             failedAt: preflight ? "preflight" : "upload",
@@ -625,7 +668,7 @@ export function App({
           }));
           applyJobStatus(submission.submissionId, status);
           if (!TERMINAL_JOB_STATES.has(status.state)) {
-            void pollTrackedJob(recovered, { autoOpen: false });
+            void pollTrackedJob(recovered);
           }
         },
         (error) => {
@@ -745,19 +788,68 @@ export function App({
           {deleteNotice}
         </div>
       )}
+      {completionNotice && (
+        <div className="completion-notice" role="status">
+          {completionNotice}
+        </div>
+      )}
     </>
   );
 
-  if (state.phase === "source") {
+  if (state.phase === "library") {
     return (
       <AppFrame>
         {deleteFeedback}
         <CreatorStateShell
-          label="Source"
-          appState="source"
+          label="My Songs"
+          appState="library"
+          activeView="library"
+          onShowLibrary={showLibrary}
+          onShowNewUpload={showNewUpload}
+          canvas={
+            <MySongsView
+              jobs={trackedJobs}
+              capacity={queueCapacity}
+              onOpenCompleted={(job) => void openCompletedJob(job)}
+              onViewProgress={viewProgress}
+              onNewUpload={showNewUpload}
+              onDelete={requestDelete}
+              onRemoveLocal={removeLocalRecord}
+            />
+          }
+          inspector={
+            <div className="state-inspector">
+              <strong>Browser scope</strong>
+              <p>仅显示此浏览器保存的提交记录。</p>
+              <p>账号级历史与跨设备同步尚未启用。</p>
+            </div>
+          }
+          status={
+            <>
+              <strong>我的歌曲</strong>
+              <span>{trackedJobs.length} 首</span>
+              <span>正在处理 {queueCapacity.processing}</span>
+              <span>等待 {queueCapacity.waiting}</span>
+            </>
+          }
+        />
+      </AppFrame>
+    );
+  }
+
+  if (state.phase === "new-upload") {
+    return (
+      <AppFrame>
+        {deleteFeedback}
+        <CreatorStateShell
+          label="New Song"
+          appState="new-upload"
+          activeView="new-upload"
+          onShowLibrary={showLibrary}
+          onShowNewUpload={showNewUpload}
           canvas={
             <>
-              <SourcePanel
+              <NewSongView
                 onFiles={(files) =>
                   void handleFiles(files, { kind: "local" })
                 }
@@ -768,12 +860,6 @@ export function App({
                   )
                 }
                 onUpload={(base, file) => void handleUpload(base, file)}
-              />
-              <JobQueuePanel
-                jobs={trackedJobs}
-                capacity={queueCapacity}
-                onOpenCompleted={(job) => void openCompletedJob(job)}
-                onDelete={requestDelete}
               />
               {state.issues && (
                 <ErrorPanel
@@ -788,17 +874,17 @@ export function App({
           }
           inspector={
             <div className="state-inspector">
-              <strong>Source rules</strong>
-              <p>Preflight must pass before a Job exists.</p>
-              <p>Supported input: WAV or MP3.</p>
+              <strong>Upload rules</strong>
+              <p>Preflight 通过后才会创建 Job。</p>
+              <p>支持 WAV / MP3，最大 200 MiB、最长 600 秒。</p>
             </div>
           }
           status={
             <>
-              <strong>Source</strong>
+              <strong>上传新歌</strong>
               <span>WAV / MP3</span>
               <span>200 MiB · 600 秒</span>
-              <span>Local draft</span>
+              <span>New submission</span>
             </>
           }
         />
@@ -813,22 +899,20 @@ export function App({
         <CreatorStateShell
           label="Processing"
           appState={state.jobState}
+          activeView="processing"
+          onShowLibrary={showLibrary}
+          onShowNewUpload={showNewUpload}
           canvas={
             <ProcessingPanel
-              fileName={state.file.name}
+              fileName={state.fileName}
               state={state.jobState}
               lastNonterminalState={state.lastNonterminalStage}
-              jobs={trackedJobs}
-              capacity={queueCapacity}
-              onUpload={(base, file) => void handleUpload(base, file)}
-              onOpenCompleted={(job) => void openCompletedJob(job)}
-              onDelete={requestDelete}
             />
           }
           inspector={
             <div className="state-inspector">
               <strong>Source retained</strong>
-              <p>{state.file.name}</p>
+              <p>{state.fileName}</p>
               <p>Job {state.jobId ?? "pending preflight"}</p>
               <p>Worker state: {state.jobState}</p>
             </div>
@@ -836,7 +920,7 @@ export function App({
           status={
             <>
               <strong>Processing</strong>
-              <span>{state.file.name}</span>
+              <span>{state.fileName}</span>
               <span>{state.jobState}</span>
               <span>{state.jobId ?? "validating input"}</span>
             </>
@@ -853,18 +937,21 @@ export function App({
         <CreatorStateShell
           label="Failed"
           appState="failed"
+          activeView="failed"
+          onShowLibrary={showLibrary}
+          onShowNewUpload={showNewUpload}
           canvas={
             <section className="failed-state" data-testid="failed-state">
               <header className="state-heading">
                 <span>Failed · truthful outcome</span>
-                <h1>Source needs attention</h1>
-                <p>{state.file.name}</p>
+                <h1>这首歌曲需要处理</h1>
+                <p>{state.fileName}</p>
               </header>
               <ErrorPanel title={state.issueTitle} issues={state.issues} />
               <dl className="failed-context">
                 <div>
                   <dt>File</dt>
-                  <dd>{state.file.name}</dd>
+                  <dd>{state.fileName}</dd>
                 </div>
                 <div>
                   <dt>Failed at</dt>
@@ -874,20 +961,24 @@ export function App({
               <div className="failed-actions">
                 <button
                   onClick={() => {
+                    if (!state.sourceFile) {
+                      showNewUpload();
+                      return;
+                    }
                     const tracked = trackedJobsRef.current.find(
                       (job) =>
                         job.submission.submissionId === state.submissionId,
                     );
                     void submitUpload(
                       state.base,
-                      state.file,
+                      state.sourceFile,
                       tracked?.submission,
                     );
                   }}
                 >
-                  Retry
+                  重新上传
                 </button>
-                <button onClick={backToUpload}>Back</button>
+                <button onClick={showLibrary}>我的歌曲</button>
               </div>
             </section>
           }
@@ -901,7 +992,7 @@ export function App({
           status={
             <>
               <strong>Failed</strong>
-              <span>{state.file.name}</span>
+              <span>{state.fileName}</span>
               <span>{state.failedAt}</span>
               <span>Source retained</span>
             </>
@@ -1053,13 +1144,19 @@ export function App({
         appBar={
           <>
             <Wordmark />
+            <GlobalNavigation
+              activeView="workbench"
+              libraryLabel="← 我的歌曲"
+              onShowLibrary={showLibrary}
+              onShowNewUpload={showNewUpload}
+            />
             <div className="topbar-actions">
+              <strong className="workbench-project-name">
+                {loadedSource.name}
+              </strong>
               <span className="workbench-project-meta">
                 {model.bpm} · {model.durationSeconds}s · Key {model.key ?? "—"}
               </span>
-              <button className="btn-eject" data-testid="back-to-upload" onClick={backToUpload}>
-                ⏏ 上传新歌
-              </button>
               {loadedTrackedJob?.submission.controlToken && (
                 <button
                   className="btn-delete-track"
@@ -1078,7 +1175,7 @@ export function App({
               <LoadedSourcePanel
                 source={loadedSource}
                 facts={loadedSourceFacts}
-                onReplace={backToUpload}
+                onReplace={showNewUpload}
               />
             )}
             <div
@@ -1184,12 +1281,18 @@ function ExportUnavailable({
 function CreatorStateShell({
   label,
   appState,
+  activeView,
+  onShowLibrary,
+  onShowNewUpload,
   canvas,
   inspector,
   status,
 }: {
   label: string;
   appState: string;
+  activeView: "library" | "new-upload" | "processing" | "failed";
+  onShowLibrary: () => void;
+  onShowNewUpload: () => void;
   canvas: ReactNode;
   inspector: ReactNode;
   status: ReactNode;
@@ -1203,6 +1306,11 @@ function CreatorStateShell({
       appBar={
         <>
           <Wordmark />
+          <GlobalNavigation
+            activeView={activeView}
+            onShowLibrary={onShowLibrary}
+            onShowNewUpload={onShowNewUpload}
+          />
           <span className="workbench-state-key">{appState}</span>
         </>
       }
@@ -1210,6 +1318,45 @@ function CreatorStateShell({
       contextInspector={inspector}
       statusBar={status}
     />
+  );
+}
+
+function GlobalNavigation({
+  activeView,
+  libraryLabel = "我的歌曲",
+  onShowLibrary,
+  onShowNewUpload,
+}: {
+  activeView:
+    | "library"
+    | "new-upload"
+    | "processing"
+    | "failed"
+    | "workbench";
+  libraryLabel?: string;
+  onShowLibrary: () => void;
+  onShowNewUpload: () => void;
+}) {
+  return (
+    <nav className="global-navigation" aria-label="主要导航">
+      <button
+        type="button"
+        data-testid="my-songs-nav"
+        aria-current={activeView === "library" ? "page" : undefined}
+        onClick={onShowLibrary}
+      >
+        {libraryLabel}
+      </button>
+      <button
+        type="button"
+        className="global-navigation__new"
+        data-testid="new-song-nav"
+        aria-current={activeView === "new-upload" ? "page" : undefined}
+        onClick={onShowNewUpload}
+      >
+        ＋ 上传新歌
+      </button>
+    </nav>
   );
 }
 

@@ -57,6 +57,7 @@ async function openExampleWithMissingAsset(page: Page): Promise<void> {
     route.fulfill({ status: 404, body: "missing for responsive state gate" }),
   );
   await page.goto("/");
+  await page.getByText("高级 · 导入 Patch 包").click();
   await page.getByRole("button", { name: /加载示例 patch/i }).click();
   await expect(page.getByTestId("pad-matrix")).toBeVisible();
   await page.mouse.move(0, 0);
@@ -93,6 +94,83 @@ test("Source file chooser uses white button text", async ({ page }) => {
   );
 
   expect(color).toBe("rgb(255, 255, 255)");
+});
+
+test("360px My Songs keeps primary navigation and record actions usable", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 800 });
+  await page.addInitScript(() => {
+    localStorage.setItem(
+      "lmdj.upload-submissions.v1",
+      JSON.stringify([
+        {
+          submissionId: "submission-mobile",
+          jobId: "job-mobile",
+          controlToken: "control-mobile-1234567890abcdefgh",
+          base: "http://localhost:8000",
+          fileName: "mobile-song.wav",
+          submittedAt: "2026-07-27T06:30:00.000Z",
+        },
+      ]),
+    );
+  });
+  await page.route("http://localhost:8000/queue", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "Access-Control-Allow-Origin": "*" },
+      contentType: "application/json",
+      body: JSON.stringify({
+        max_concurrency: 1,
+        processing: 0,
+        waiting: 0,
+      }),
+    }),
+  );
+  await page.route("http://localhost:8000/jobs/job-mobile", (route) =>
+    route.fulfill({
+      status: 200,
+      headers: { "Access-Control-Allow-Origin": "*" },
+      contentType: "application/json",
+      body: JSON.stringify({
+        job_id: "job-mobile",
+        state: "completed",
+        error: null,
+        patch_id: "patch-mobile",
+        package_dir: "package-mobile",
+        quality: "accepted",
+        original_filename: "mobile-song.wav",
+        pipeline: "materials-v1",
+        created_at: "2026-07-27T06:30:00.000Z",
+        updated_at: "2026-07-27T06:35:00.000Z",
+        queue_position: null,
+      }),
+    }),
+  );
+
+  await page.goto("/");
+  await expect(page.getByTestId("my-songs")).toBeVisible();
+  await expect(page.getByText("仅显示此浏览器提交的曲目")).toBeVisible();
+  const card = page.getByTestId("song-card-job-mobile");
+  await expect(card).toContainText("mobile-song.wav");
+  await expect(card.getByRole("button", { name: "继续创作" })).toBeVisible();
+
+  await card.getByRole("button", { name: /更多操作/ }).click();
+  await expect(
+    card.getByRole("button", { name: "永久删除" }),
+  ).toBeVisible();
+
+  expect(
+    await page.evaluate(
+      () => document.documentElement.scrollWidth <= window.innerWidth,
+    ),
+  ).toBe(true);
+
+  await page.getByTestId("new-song-nav").click();
+  await expect(page.getByTestId("new-song-view")).toBeVisible();
+  await expect(page.getByTestId("api-file-input")).toBeVisible();
+  await page.getByTestId("my-songs-nav").click();
+  await expect(page.getByTestId("my-songs")).toBeVisible();
 });
 
 for (const breakpoint of SHELL_BREAKPOINTS) {
@@ -312,6 +390,8 @@ for (const viewport of VIEWPORTS) {
     await selected.click();
     await expect(selected).toHaveAttribute("data-visual-state", "playing");
     const playingSignature = await visualSignature(selected);
+    await expect(selected).toHaveAttribute("data-selected", "true");
+    await selected.click();
     await expect(selected).toHaveAttribute("data-visual-state", "selected");
     if (shellWidth < 1280) {
       await inspectorToggle.click();
@@ -382,7 +462,7 @@ for (const viewport of [
     const playableLeftPad = pads.nth(1);
     await playableLeftPad.click();
     await expect(playableLeftPad).toHaveAttribute("data-visual-state", "playing");
-    await expect(playableLeftPad).toHaveAttribute("data-visual-state", "selected");
+    await expect(playableLeftPad).toHaveAttribute("data-selected", "true");
     await toggle.click();
     await expect(inspector).toHaveAttribute("data-side", "right");
     await expect(page.getByTestId("context-inspector-header")).toContainText(

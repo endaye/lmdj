@@ -63,9 +63,10 @@ Upload
 
 2026-07-27 已确认 Stage 1 的歌曲入口信息架构：使用现有 browser-owned
 submission / Job 恢复能力建立独立“我的歌曲”入口，将进行中任务与最近歌曲
-分组；“上传新歌”改为独立动作。该方向直接服务无口头指导 Release Gate，但
-目前仍是**设计已确认、代码未实施**，且不代表账号级 Asset Library 或跨设备
-历史已经进入 Stage 1。详细设计见
+分组；“上传新歌”改为独立动作。Web 代码已经实施，并通过单元测试、契约同步、
+生产构建和 360px–1440px Chromium 响应式回归。该能力直接服务无口头指导
+Release Gate，但不代表账号级 Asset Library 或跨设备历史已经进入 Stage 1。
+详细设计与验收边界见
 [`2026-07-27-stage1-my-songs-navigation-design.md`](specs/2026-07-27-stage1-my-songs-navigation-design.md)。
 
 ## Material Pipeline v1 实现（2026-07-26，已合并 main）
