@@ -96,6 +96,8 @@ Device 必须作为环境变量传给 API 子进程。
 公共校验继续检查：
 
 - API Python 与 uvicorn；
+- API package 存在性 probe 固定使用 `LMDJ_PIPELINE=legacy`，避免在所选
+  pipeline 的专项校验前构造 Material runner；
 - Web Vite 与 npm；
 - curl。
 
@@ -108,7 +110,13 @@ Device 必须作为环境变量传给 API 子进程。
 - API venv 可以导入 `CreatorPipelineRunner`；
 - 默认或显式 Separator 必须能从 registry 解析；
 - registry command 对应的 runner Python 必须存在；
-- 失败信息统一指向 `scripts/dev.sh setup-materials`。
+- Material DSP 或默认 HT Demucs runner 缺失时指向
+  `scripts/dev.sh setup-materials`；
+- 支持的非默认 Separator runner 缺失时分别指向所选 ID 对应的
+  `setup-sep-scnet`、`setup-sep-bs-roformer` 或
+  `setup-sep-mel-roformer`；
+- 未知 Separator ID 或不支持的 Device 保留 registry 专项错误，不回退为通用
+  API 环境提示。
 
 ### legacy
 

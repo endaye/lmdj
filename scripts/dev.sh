@@ -150,7 +150,9 @@ configure_dev_runtime() {
 }
 
 material_runner_path() {
-  python3 - "$ROOT" "$DEV_SEPARATOR_ID" "$DEV_SEPARATOR_DEVICE" <<'PY'
+  local separator_id="${1:-$DEV_SEPARATOR_ID}"
+  local separator_device="${2:-$DEV_SEPARATOR_DEVICE}"
+  python3 - "$ROOT" "$separator_id" "$separator_device" <<'PY'
 import json
 import pathlib
 import sys
@@ -183,6 +185,16 @@ print(runner if runner.is_absolute() else root / runner)
 PY
 }
 
+separator_setup_command() {
+  case "$1" in
+    htdemucs) echo "scripts/dev.sh setup-materials" ;;
+    scnet-large) echo "scripts/dev.sh setup-sep-scnet" ;;
+    bs-roformer-4stem) echo "scripts/dev.sh setup-sep-bs-roformer" ;;
+    mel-roformer-4stem) echo "scripts/dev.sh setup-sep-mel-roformer" ;;
+    *) echo "the setup command for separator $1" ;;
+  esac
+}
+
 ensure_material_dev_dependencies() {
   if ! "$API/.venv/bin/python" -c \
     'import numpy, soundfile, librosa, sklearn, pretty_midi; from lmdj_audio_worker.creator_runner import CreatorPipelineRunner' \
@@ -194,7 +206,7 @@ ensure_material_dev_dependencies() {
   local runner_path
   runner_path="$(material_runner_path)" || return 1
   if [ ! -x "$runner_path" ]; then
-    echo "Material Separator 未就绪。运行: scripts/dev.sh setup-materials" >&2
+    echo "Material Separator 未就绪。运行: $(separator_setup_command "$DEV_SEPARATOR_ID")" >&2
     return 1
   fi
 }
@@ -214,7 +226,7 @@ ensure_dev_dependencies() {
     print_api_dev_setup
     return 1
   fi
-  if ! "$API/.venv/bin/python" -c \
+  if ! env LMDJ_PIPELINE=legacy "$API/.venv/bin/python" -c \
     'import lmdj_api, lmdj_audio_worker, lmdj_patchify, lmdj_core_models' \
     >/dev/null 2>&1
   then
@@ -290,7 +302,7 @@ cmd_dev() {
   trap 'exit 129' HUP
 
   (
-    cd "$API"
+    cd "$ROOT"
     export LMDJ_PIPELINE="$DEV_PIPELINE"
     if [ "$DEV_PIPELINE" = "materials-v1" ]; then
       export LMDJ_SEPARATOR_ID="$DEV_SEPARATOR_ID"
@@ -298,7 +310,8 @@ cmd_dev() {
     else
       unset LMDJ_SEPARATOR_ID LMDJ_SEPARATOR_DEVICE
     fi
-    exec .venv/bin/uvicorn lmdj_api.app:app --host 127.0.0.1 --port 8000
+    exec "$API/.venv/bin/uvicorn" \
+      lmdj_api.app:app --host 127.0.0.1 --port 8000
   ) &
   DEV_API_PID=$!
 
@@ -547,8 +560,10 @@ install_api_material_dependencies() {
 cmd_setup_materials() {
   install_api_material_dependencies
   cmd_setup_sep_demucs
-  [ -x "$SEP_DEMUCS_VENV/bin/python" ] || {
-    echo "HT Demucs runner 环境未就绪" >&2
+  local default_runner_path
+  default_runner_path="$(material_runner_path htdemucs mps)" || return 1
+  [ -x "$default_runner_path" ] || {
+    echo "HT Demucs registry runner 环境未就绪: $default_runner_path" >&2
     return 1
   }
   echo "==> Material 本地环境就绪"

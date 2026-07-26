@@ -77,9 +77,28 @@ HTTP 连接、单次请求和 Job 轮询分别有 5 秒、120 秒和 1800 秒的
 `LMDJ_CREATOR_SMOKE_REQUEST_TIMEOUT_SECONDS` 和
 `LMDJ_CREATOR_SMOKE_TIMEOUT_SECONDS` 调整。三者都必须是正整数。
 
-本地 API + Web 默认使用 Material 链，先执行 `scripts/dev.sh setup-materials`；
-显式使用冻结 demo 链时，先执行 `scripts/dev.sh setup-demo`，再以
-`LMDJ_PIPELINE=legacy scripts/dev.sh dev` 启动。
+本地 API + Web 默认使用 Material 链。clean checkout 先确认系统可用 `curl`，
+再执行 `cd apps/web && npm install` 准备 Web；回到仓库根目录运行
+`scripts/dev.sh setup-materials` 后，即可执行 `scripts/dev.sh dev`。
+
+显式使用冻结 demo 链不需要 Material DSP，但仍需准备 API、Web 和 demo 环境：
+
+```bash
+# 仓库根目录；系统需已安装 curl
+cd apps/api
+python3 -m venv .venv
+.venv/bin/pip install -e ../../packages/core-models
+.venv/bin/pip install -e ../../packages/patchify
+.venv/bin/pip install -e ../../workers/audio
+.venv/bin/pip install -e .
+cd ../web
+npm install
+cd ../..
+scripts/dev.sh setup-demo
+LMDJ_PIPELINE=legacy scripts/dev.sh dev
+```
+
+这里复用现有的逐包 editable 安装顺序，没有为 legacy 另增 setup 命令。
 
 启动本地 API 并执行完整 Creator smoke：
 
