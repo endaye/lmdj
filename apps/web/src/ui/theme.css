@@ -46,7 +46,7 @@
   --radius: 10px;
   --radius-sm: 6px;
 
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -55,7 +55,9 @@ body {
   margin: 0;
   min-height: 100vh;
   background:
-    radial-gradient(120% 90% at 50% -10%, #1b1d24 0%, var(--panel) 46%, #101116 100%);
+    linear-gradient(90deg, transparent 0 23px, rgba(17, 17, 15, .08) 24px 25px, transparent 26px),
+    var(--paper);
+  background-size: 96px 100%;
   color: var(--ink);
   font-family: "IBM Plex Sans", system-ui, sans-serif;
   font-size: 14px;
@@ -89,14 +91,15 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   right: max(12px, env(safe-area-inset-right));
   bottom: max(10px, env(safe-area-inset-bottom));
   z-index: 40;
-  padding: 3px 7px;
-  border: 1px solid color-mix(in srgb, var(--paper) 32%, transparent);
-  background: color-mix(in srgb, var(--ink) 88%, transparent);
-  color: color-mix(in srgb, var(--paper) 78%, transparent);
+  padding: 3px 0;
+  border: 0;
+  border-top: 1px solid currentColor;
+  background: transparent;
+  color: color-mix(in srgb, var(--ink) 58%, transparent);
   font-family: "IBM Plex Mono", monospace;
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: .08em;
   line-height: 1.2;
   pointer-events: none;
 }
@@ -969,6 +972,16 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   .pad:hover,
   .pad--playing {
     transform: none;
+  }
+  /* State text, data-* attributes and colour still change; only decorative
+     breathing, parallax, pulsing and path motion are removed. */
+  .chameleon-2d,
+  .chameleon-2d__pattern,
+  .chameleon-stage-trigger,
+  .chameleon-floating {
+    animation: none !important;
+    transition: none !important;
+    transform: none !important;
   }
 }
 
@@ -1898,4 +1911,479 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   .job-card dl > div:last-child { border-bottom: 0; }
   .job-card__terminal,
   .job-card__error { border-top: 2px solid var(--ink); border-left: 0; }
+}
+
+/* --- Chameleon exhibition workbench --------------------------------------- */
+
+.gallery-stage {
+  position: relative;
+  min-height: min(880px, calc(100vh - 48px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  gap: 18px;
+  overflow: hidden;
+  border: 3px solid var(--ink);
+  background:
+    linear-gradient(
+      90deg,
+      transparent calc(100% - 1px),
+      rgba(17, 17, 15, .08) calc(100% - 1px)
+    ) 0 0 / 8.333333% 100%,
+    var(--paper);
+  color: var(--ink);
+  box-shadow: 10px 10px 0 var(--ink);
+}
+.gallery-stage::before {
+  content: "";
+  position: absolute;
+  inset: 54px 0 auto;
+  height: 3px;
+  background: var(--ink);
+  pointer-events: none;
+}
+.gallery-stage__header {
+  min-height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 0 14px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .12em;
+}
+.gallery-stage__hero {
+  min-height: 520px;
+  display: grid;
+  grid-template-columns: minmax(220px, .75fr) minmax(360px, 1.25fr);
+  align-items: center;
+  gap: 24px;
+  padding: 28px clamp(18px, 4vw, 64px);
+}
+.gallery-stage__title {
+  position: relative;
+  z-index: 2;
+}
+.gallery-stage__title > span,
+.gallery-stage__title p {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 800;
+}
+.gallery-stage__title h1 {
+  margin: 8px 0 14px;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: clamp(64px, 9vw, 148px);
+  font-weight: 700;
+  line-height: .72;
+  letter-spacing: -.08em;
+  text-transform: uppercase;
+}
+.gallery-stage__title p {
+  max-width: 34ch;
+  margin: 0;
+}
+.gallery-stage > .source-limits,
+.gallery-stage > .source-example {
+  margin-inline: clamp(18px, 4vw, 64px);
+}
+.gallery-stage > .source-example {
+  margin-bottom: 28px;
+}
+.gallery-stage__jobs {
+  margin-top: 28px;
+}
+
+.chameleon-upload-stage {
+  position: relative;
+  min-height: 480px;
+  display: grid;
+  place-items: center;
+  isolation: isolate;
+}
+.chameleon-upload-stage::before,
+.chameleon-upload-stage::after {
+  content: "";
+  position: absolute;
+  z-index: -2;
+  border: 3px solid var(--ink);
+}
+.chameleon-upload-stage::before {
+  width: min(46vw, 520px);
+  aspect-ratio: 1;
+  background: var(--lead);
+  transform: rotate(-7deg);
+}
+.chameleon-upload-stage::after {
+  width: min(34vw, 390px);
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: var(--action);
+  transform: translate(18%, 5%);
+}
+.chameleon-upload-stage--over::before {
+  background: var(--harmony);
+}
+.chameleon-upload-stage__api {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 800;
+}
+.chameleon-upload-stage__api .api-base {
+  width: min(240px, 42vw);
+  border: 1px solid var(--ink);
+  border-radius: 0;
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  color: var(--ink);
+  padding: 5px 7px;
+}
+.source-panel .chameleon-stage-trigger {
+  position: relative;
+  z-index: 2;
+  width: min(100%, 520px);
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--ink);
+  box-shadow: none;
+}
+.source-panel .chameleon-stage-trigger:hover {
+  border-color: transparent;
+  background: transparent;
+}
+.chameleon-stage-trigger__label {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  margin-top: -26px;
+  padding: 7px 10px;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+}
+.chameleon-stage-trigger__label strong {
+  font-size: 11px;
+  letter-spacing: .12em;
+}
+.chameleon-2d {
+  --chameleon-accent: var(--ink);
+  position: relative;
+  width: clamp(200px, 38vw, 480px);
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  transform: translateX(var(--chameleon-offset));
+}
+.chameleon-2d--shared {
+  view-transition-name: lmdj-chameleon;
+  contain: layout;
+}
+::view-transition-old(lmdj-chameleon),
+::view-transition-new(lmdj-chameleon) {
+  animation-duration: 360ms;
+  animation-timing-function: cubic-bezier(.2, .8, .2, 1);
+}
+.chameleon-2d[data-accent="drums"] { --chameleon-accent: var(--drums); }
+.chameleon-2d[data-accent="bass"] { --chameleon-accent: var(--bass); }
+.chameleon-2d[data-accent="harmony"] { --chameleon-accent: var(--harmony); }
+.chameleon-2d[data-accent="lead"] { --chameleon-accent: var(--lead); }
+.chameleon-2d[data-accent="loop"] { --chameleon-accent: var(--loop); }
+.chameleon-2d[data-accent="action"],
+.chameleon-2d[data-accent="mixed"] { --chameleon-accent: var(--action); }
+.chameleon-2d[data-accent="success"] { --chameleon-accent: var(--harmony); }
+.chameleon-2d[data-accent="danger"] { --chameleon-accent: var(--red); }
+.chameleon-2d__pattern {
+  position: absolute;
+  inset: 12%;
+  z-index: -1;
+  border: 2px solid var(--ink);
+  background:
+    repeating-linear-gradient(
+      var(--chameleon-angle),
+      var(--chameleon-accent) 0 12px,
+      transparent 12px var(--chameleon-step)
+    );
+  transform: rotate(var(--chameleon-angle-negative));
+}
+.chameleon-2d[data-phase="separating"] .chameleon-2d__pattern {
+  background:
+    repeating-linear-gradient(
+      90deg,
+      var(--drums) 0 18px,
+      var(--bass) 18px 36px,
+      var(--harmony) 36px 54px,
+      var(--lead) 54px 72px
+    );
+}
+.chameleon-2d[data-phase="extracting"] .chameleon-2d__pattern {
+  background:
+    radial-gradient(circle, var(--action) 0 5px, transparent 6px)
+    0 0 / var(--chameleon-step) var(--chameleon-step);
+}
+.chameleon-2d[data-phase="patchifying"] .chameleon-2d__pattern {
+  background:
+    linear-gradient(var(--ink) 2px, transparent 2px)
+    0 0 / var(--chameleon-step) var(--chameleon-step),
+    linear-gradient(90deg, var(--ink) 2px, var(--lead) 2px)
+    0 0 / var(--chameleon-step) var(--chameleon-step);
+}
+.chameleon-2d[data-phase="ready"] .chameleon-2d__pattern {
+  background: var(--harmony);
+}
+.chameleon-2d[data-phase="error"] .chameleon-2d__pattern {
+  background:
+    repeating-linear-gradient(
+      -45deg,
+      var(--red) 0 12px,
+      var(--paper) 12px 24px
+    );
+}
+.chameleon-2d img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  mix-blend-mode: multiply;
+  user-select: none;
+}
+.chameleon-2d__fallback {
+  width: 72%;
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 3px solid var(--ink);
+  border-radius: 50%;
+  background: var(--paper);
+  font-family: "Chakra Petch", sans-serif;
+  font-size: clamp(42px, 8vw, 92px);
+  font-weight: 800;
+}
+.chameleon-2d[data-motion="ambient"] {
+  animation: chameleon-breathe 5s ease-in-out infinite;
+}
+.chameleon-2d[data-motion="processing"] {
+  animation: chameleon-process 1.8s ease-in-out infinite;
+}
+.chameleon-2d[data-motion="celebrate"] {
+  animation: chameleon-celebrate 700ms ease-out both;
+}
+.chameleon-2d[data-motion="recoil"] {
+  animation: chameleon-recoil 360ms ease-out both;
+}
+@keyframes chameleon-breathe {
+  0%, 100% { transform: translateX(var(--chameleon-offset)) scale(1); }
+  50% { transform: translateX(var(--chameleon-offset)) scale(1.018); }
+}
+@keyframes chameleon-process {
+  0%, 100% { transform: translateX(var(--chameleon-offset)) rotate(-1deg); }
+  50% { transform: translateX(var(--chameleon-offset)) rotate(1deg); }
+}
+@keyframes chameleon-celebrate {
+  0% { transform: translateX(var(--chameleon-offset)) scale(.92); }
+  65% { transform: translateX(var(--chameleon-offset)) scale(1.04); }
+  100% { transform: translateX(var(--chameleon-offset)) scale(1); }
+}
+@keyframes chameleon-recoil {
+  0% { transform: translateX(var(--chameleon-offset)); }
+  45% { transform: translateX(calc(var(--chameleon-offset) - 12px)); }
+  100% { transform: translateX(var(--chameleon-offset)); }
+}
+
+.workbench-app-bar {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+.workbench-app-bar__main {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.workbench-assistant-slot {
+  position: relative;
+  z-index: 42;
+  align-self: center;
+}
+.workbench-app-bar[data-assistant-open="true"] {
+  padding-bottom: 188px;
+}
+.chameleon-assistant {
+  position: relative;
+}
+.chameleon-dock {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  display: grid;
+  place-items: center;
+  overflow: visible;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.chameleon-dock .chameleon-2d {
+  width: 42px;
+}
+.chameleon-dock .chameleon-2d__pattern {
+  display: none;
+}
+.chameleon-dock__state {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  min-width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 900;
+}
+.chameleon-dock__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+.chameleon-floating {
+  position: absolute;
+  top: 56px;
+  right: 0;
+  width: 180px;
+  min-height: 170px;
+  display: grid;
+  place-items: center;
+  padding: 8px 8px 24px;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+}
+.chameleon-floating .chameleon-2d {
+  width: 150px;
+}
+.chameleon-floating > strong {
+  padding: 4px 6px;
+  border-top: 2px solid var(--ink);
+  background: var(--paper);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  text-transform: uppercase;
+}
+.chameleon-floating__close {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  right: 0;
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--ink);
+  border-radius: 50%;
+  padding: 0;
+  background: var(--paper);
+  color: var(--ink);
+  font-weight: 900;
+}
+
+@media (max-width: 767px) {
+  .gallery-stage {
+    min-height: calc(100vh - 24px);
+    box-shadow: 5px 5px 0 var(--ink);
+    background:
+      linear-gradient(
+        90deg,
+        transparent calc(100% - 1px),
+        rgba(17, 17, 15, .08) calc(100% - 1px)
+      ) 0 0 / 25% 100%,
+      var(--paper);
+  }
+  .gallery-stage__header {
+    align-items: flex-start;
+    flex-direction: column;
+    justify-content: center;
+    gap: 2px;
+  }
+  .gallery-stage__hero {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 20px 14px;
+  }
+  .gallery-stage__title h1 {
+    font-size: clamp(54px, 20vw, 88px);
+  }
+  .chameleon-upload-stage {
+    min-height: 330px;
+  }
+  .chameleon-upload-stage::before {
+    width: min(76vw, 320px);
+  }
+  .chameleon-upload-stage::after {
+    width: min(60vw, 250px);
+  }
+  .chameleon-upload-stage__api {
+    position: static;
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .chameleon-upload-stage__api .api-base {
+    width: min(220px, 64vw);
+  }
+  .chameleon-2d {
+    width: clamp(200px, 70vw, 280px);
+  }
+}
+
+/* The workbench sizes itself from its own inline size, not the viewport, so
+   the Dock and the expanded panel follow the same container query as the rest
+   of the shell. */
+@container workbench (max-width: 599px) {
+  .workbench-app-bar[data-assistant-open="true"] {
+    padding-bottom: 156px;
+  }
+  /* A 44px Dock is the tallest App Bar child on phones; trim the block padding
+     so the compact bar keeps its ≤58px budget. */
+  .workbench-app-bar {
+    padding-block: 4px;
+  }
+  .chameleon-dock {
+    width: 44px;
+    height: 44px;
+  }
+  .chameleon-dock .chameleon-2d {
+    width: 38px;
+  }
+  .chameleon-floating {
+    top: 50px;
+    right: -46px;
+    width: min(280px, calc(100cqw - 40px));
+    min-height: 144px;
+    grid-template-columns: 112px minmax(0, 1fr);
+    padding: 8px;
+  }
+  .chameleon-floating .chameleon-2d {
+    width: 112px;
+  }
 }
