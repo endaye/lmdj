@@ -1056,7 +1056,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   position: relative;
   min-height: 0;
   display: grid;
-  grid-template-columns: 118px minmax(0, 1fr) 272px;
+  grid-template-columns: 148px minmax(0, 1fr) 272px;
   grid-template-areas: "tools canvas inspector";
 }
 .workbench-creator-tools {
@@ -1081,6 +1081,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-transform: uppercase;
 }
 .creator-tool-rail__mode {
+  min-width: 0;
   min-height: 54px;
   display: flex;
   align-items: center;
@@ -1094,6 +1095,12 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   font-size: 12px;
   font-weight: 700;
   text-align: left;
+}
+.creator-tool-rail__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .creator-tool-rail__icon {
   width: 22px;
