@@ -1,4 +1,11 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
@@ -98,11 +105,12 @@ function renderApp(patch: unknown) {
 }
 
 describe("App", () => {
-  it("starts on the landing screen with a drop zone and example button", () => {
+  it("starts on the New Song screen with upload primary and Advanced sources", () => {
     renderApp(golden);
-    expect(screen.getByRole("heading", { name: /feed it a sound/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "上传新歌" })).toBeInTheDocument();
     expect(screen.getByTestId("workbench-shell")).toBeInTheDocument();
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("advanced-source-actions")).not.toHaveAttribute("open");
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
     expect(screen.getByTestId("app-version")).toHaveTextContent(
       PRODUCT_VERSION,
@@ -169,7 +177,7 @@ describe("App", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Source" }));
     await userEvent.click(screen.getByRole("button", { name: "更换音频" }));
-    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("new-song-view")).toBeInTheDocument();
     expect(screen.queryByTestId("loaded-source-panel")).not.toBeInTheDocument();
   });
 
@@ -280,12 +288,17 @@ describe("App", () => {
     expect(triggerPad).not.toHaveBeenCalled();
   });
 
-  it("returns to the upload screen from the workstation via the eject button", async () => {
+  it("returns to My Songs from the workstation and keeps New Song separate", async () => {
     renderApp(golden);
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
-    await userEvent.click(screen.getByTestId("back-to-upload"));
-    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("my-songs-nav"));
+    expect(screen.getByTestId("my-songs")).toBeInTheDocument();
+    expect(screen.getByTestId("my-songs-empty")).toBeInTheDocument();
+    expect(screen.queryByTestId("api-panel")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("new-song-nav"));
+    expect(screen.getByTestId("new-song-view")).toBeInTheDocument();
     expect(screen.getByTestId("api-panel")).toBeInTheDocument();
   });
 
@@ -344,7 +357,9 @@ function renderAppWithApi(api: ApiClient) {
 async function submitViaApi() {
   const file = new File([new Uint8Array([1, 2, 3])], "song.wav", { type: "audio/wav" });
   await userEvent.upload(screen.getByTestId("api-file-input"), file);
-  await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
+  await userEvent.click(
+    screen.getByRole("button", { name: "上传并制作 Patch" }),
+  );
 }
 
 describe("App API path", () => {
@@ -366,6 +381,46 @@ describe("App API path", () => {
     renderAppWithApi(fakeApi());
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+  });
+
+  it("does not hijack the page when a background song completes", async () => {
+    let resolvePoll: ((status: JobStatus) => void) | undefined;
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async (_base, _jobId, onState) => {
+        onState?.(apiJob("job123", "extracting"));
+        return await new Promise<JobStatus>((resolve) => {
+          resolvePoll = resolve;
+        });
+      },
+    );
+    renderAppWithApi(fakeApi({ pollJob }));
+    await submitViaApi();
+    await waitFor(() =>
+      expect(screen.getByTestId("processing-panel")).toHaveTextContent(
+        "Material Extraction",
+      ),
+    );
+
+    await userEvent.click(screen.getByTestId("my-songs-nav"));
+    expect(screen.getByTestId("my-songs")).toBeInTheDocument();
+
+    await act(async () => {
+      resolvePoll?.(
+        apiJob("job123", "completed", {
+          patch_id: "job123-abc",
+          package_dir: "job123",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole("status")).toHaveTextContent(
+        "已准备好，可以继续创作",
+      ),
+    );
+    expect(screen.getByTestId("recent-songs")).toHaveTextContent("song.wav");
+    expect(screen.queryByTestId("pad-matrix")).not.toBeInTheDocument();
   });
 
   it("loads Creator status once on API Export mode and synchronizes inspector, Key, and readiness", async () => {
@@ -457,7 +512,7 @@ describe("App API path", () => {
         "job-old",
       ),
     );
-    await userEvent.click(screen.getByTestId("back-to-upload"));
+    await userEvent.click(screen.getByTestId("new-song-nav"));
 
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
@@ -519,7 +574,7 @@ describe("App API path", () => {
     await userEvent.click(
       screen.getByRole("button", { name: /Download Creator Pack/i }),
     );
-    await userEvent.click(screen.getByTestId("back-to-upload"));
+    await userEvent.click(screen.getByTestId("new-song-nav"));
 
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
@@ -689,29 +744,37 @@ describe("App API path", () => {
       type: "audio/wav",
     });
     await userEvent.upload(screen.getByTestId("api-file-input"), songA);
-    await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "上传并制作 Patch" }),
+    );
     await waitFor(() =>
-      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
-        "正在处理",
+      expect(screen.getByTestId("processing-panel")).toHaveTextContent(
+        "song-a.wav",
       ),
     );
+    await userEvent.click(screen.getByTestId("new-song-nav"));
 
     const songB = new File([new Uint8Array([2])], "song-b.wav", {
       type: "audio/wav",
     });
     await userEvent.upload(screen.getByTestId("api-file-input"), songB);
-    await userEvent.click(screen.getByRole("button", { name: /传歌/i }));
+    await userEvent.click(
+      screen.getByRole("button", { name: "上传并制作 Patch" }),
+    );
+    await userEvent.click(screen.getByTestId("my-songs-nav"));
 
     await waitFor(() => {
-      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
+      expect(screen.getByTestId("song-card-job-a")).toHaveTextContent(
         "song-a.wav",
       );
-      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent("job-a");
-      expect(screen.getByTestId("job-card-job-b")).toHaveTextContent(
+      expect(screen.getByTestId("song-card-job-a")).toHaveTextContent(
+        "正在分离音轨",
+      );
+      expect(screen.getByTestId("song-card-job-b")).toHaveTextContent(
         "song-b.wav",
       );
-      expect(screen.getByTestId("job-card-job-b")).toHaveTextContent(
-        "队列位置 1",
+      expect(screen.getByTestId("song-card-job-b")).toHaveTextContent(
+        "等待中 · 第 1 位",
       );
       expect(screen.getByTestId("queue-capacity")).toHaveTextContent(
         "最大并发 1",
@@ -740,11 +803,11 @@ describe("App API path", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByTestId("job-card-job-a")).toHaveTextContent(
-        "处理完成",
+      expect(screen.getByTestId("song-card-job-a")).toHaveTextContent(
+        "已完成",
       );
-      expect(screen.getByTestId("job-card-job-b")).toHaveTextContent(
-        "正在处理",
+      expect(screen.getByTestId("song-card-job-b")).toHaveTextContent(
+        "正在分离音轨",
       );
     });
     expect(screen.queryByTestId("pad-matrix")).not.toBeInTheDocument();
@@ -774,6 +837,8 @@ describe("App API path", () => {
 
     renderAppWithApi(fakeApi({ fetchJob, pollJob }));
 
+    expect(screen.getByTestId("my-songs")).toBeInTheDocument();
+    expect(screen.queryByTestId("api-panel")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(fetchJob).toHaveBeenCalledWith(stored.base, stored.jobId);
       expect(pollJob).toHaveBeenCalledWith(
@@ -781,13 +846,68 @@ describe("App API path", () => {
         stored.jobId,
         expect.any(Function),
       );
-      expect(screen.getByTestId("job-card-job-restored")).toHaveTextContent(
+      expect(screen.getByTestId("song-card-job-restored")).toHaveTextContent(
         "restored.wav",
       );
-      expect(screen.getByTestId("job-card-job-restored")).toHaveTextContent(
+      expect(
+        screen.getByTestId("song-card-job-restored").querySelector("time"),
+      ).toHaveAttribute(
+        "datetime",
         "2026-07-26T00:00:00Z",
       );
     });
+  });
+
+  it("opens a restored song when the user chooses to follow its progress", async () => {
+    const stored: StoredSubmission = {
+      submissionId: "submission-follow",
+      jobId: "job-follow",
+      base: "http://localhost:8000",
+      fileName: "follow.wav",
+      submittedAt: "2026-07-26T01:02:03.000Z",
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify([stored]));
+    let resolvePoll: ((status: JobStatus) => void) | undefined;
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async () =>
+        await new Promise<JobStatus>((resolve) => {
+          resolvePoll = resolve;
+        }),
+    );
+    renderAppWithApi(
+      fakeApi({
+        fetchJob: async () =>
+          apiJob("job-follow", "separating", {
+            submission_id: stored.submissionId,
+            original_filename: stored.fileName,
+          }),
+        pollJob,
+      }),
+    );
+
+    await waitFor(() =>
+      expect(screen.getByTestId("song-card-job-follow")).toHaveTextContent(
+        "正在分离音轨",
+      ),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "查看进度" }));
+    expect(screen.getByTestId("processing-panel")).toHaveTextContent(
+      "follow.wav",
+    );
+
+    await act(async () => {
+      resolvePoll?.(
+        apiJob("job-follow", "completed", {
+          patch_id: "patch-follow",
+          package_dir: "package-follow",
+        }),
+      );
+      await Promise.resolve();
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("pad-matrix")).toBeInTheDocument(),
+    );
   });
 
   it("resolves a persisted submission after the upload response was lost", async () => {
@@ -819,8 +939,8 @@ describe("App API path", () => {
         stored.base,
         stored.submissionId,
       );
-      expect(screen.getByTestId("job-card-job-recovered")).toHaveTextContent(
-        "job-recovered",
+      expect(screen.getByTestId("song-card-job-recovered")).toHaveTextContent(
+        "lost.wav",
       );
     });
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]")).toEqual([
@@ -853,20 +973,23 @@ describe("App API path", () => {
     );
 
     await waitFor(() =>
-      expect(screen.getByTestId("job-card-job-interrupted")).toHaveTextContent(
+      expect(screen.getByTestId("song-card-job-interrupted")).toHaveTextContent(
         "服务中断",
       ),
     );
-    expect(screen.getByTestId("job-card-job-interrupted")).toHaveTextContent(
+    await userEvent.click(
+      screen.getByRole("button", { name: "技术详情" }),
+    );
+    expect(screen.getByTestId("song-card-job-interrupted")).toHaveTextContent(
       "API service restarted before this Job completed.",
     );
-    expect(screen.getByTestId("job-card-job-interrupted")).not.toHaveTextContent(
+    expect(screen.getByTestId("song-card-job-interrupted")).not.toHaveTextContent(
       "Failed to fetch",
     );
     expect(pollJob).not.toHaveBeenCalled();
   });
 
-  it("manually deletes an open terminal Job and returns to Source", async () => {
+  it("manually deletes an open terminal Job and returns to My Songs", async () => {
     const stored: StoredSubmission = {
       submissionId: "submission-delete",
       jobId: "job-delete",
@@ -891,10 +1014,10 @@ describe("App API path", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "删除曲目" }),
+        screen.getByRole("button", { name: "继续创作" }),
       ).toBeEnabled(),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Open Patch" }));
+    await userEvent.click(screen.getByRole("button", { name: "继续创作" }));
     await waitFor(() =>
       expect(screen.getByTestId("pad-matrix")).toBeInTheDocument(),
     );
@@ -911,11 +1034,11 @@ describe("App API path", () => {
         stored.controlToken,
       ),
     );
-    expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
+    expect(screen.getByTestId("my-songs-empty")).toBeInTheDocument();
     expect(screen.getByRole("status")).toHaveTextContent(
       "已从服务器和本浏览器删除",
     );
-    expect(screen.queryByTestId("job-card-job-delete")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("song-card-job-delete")).not.toBeInTheDocument();
     expect(JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "[]")).toEqual([]);
   });
 
@@ -928,7 +1051,9 @@ describe("App API path", () => {
       type: "audio/wav",
     });
     await userEvent.upload(screen.getByTestId("api-file-input"), file);
-    const submit = screen.getByRole("button", { name: /传歌/i });
+    const submit = screen.getByRole("button", {
+      name: "上传并制作 Patch",
+    });
 
     fireEvent.click(submit);
     fireEvent.click(submit);
@@ -953,7 +1078,13 @@ describe("App API path", () => {
     await waitFor(() => expect(screen.getByTestId("failed-state")).toHaveTextContent("demucs boom"));
     expect(screen.getByTestId("failed-state")).toHaveTextContent("song.wav");
     expect(screen.getByTestId("failed-state")).toHaveTextContent("separating");
-    await userEvent.click(screen.getByRole("button", { name: /Back/i }));
+    await userEvent.click(
+      within(screen.getByTestId("failed-state")).getByRole("button", {
+        name: "我的歌曲",
+      }),
+    );
+    expect(screen.getByTestId("my-songs")).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("new-song-nav"));
     expect(screen.getByTestId("api-panel")).toBeInTheDocument();
   });
 
@@ -1079,7 +1210,7 @@ describe("App API path", () => {
     await submitViaApi();
     await waitFor(() => expect(screen.getByTestId("failed-state")).toBeInTheDocument());
 
-    await userEvent.click(screen.getByRole("button", { name: /Retry/i }));
+    await userEvent.click(screen.getByRole("button", { name: "重新上传" }));
 
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
     expect(uploadSong).toHaveBeenCalledTimes(2);

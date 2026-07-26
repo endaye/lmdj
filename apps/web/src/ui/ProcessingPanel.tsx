@@ -1,26 +1,13 @@
 import { UploadingView } from "./UploadingView";
-import type { QueueCapacity } from "../api/client";
-import { JobQueuePanel, type TrackedJob } from "./JobQueuePanel";
-import { UploadPanel } from "./UploadPanel";
 
 export function ProcessingPanel({
   fileName,
   state,
   lastNonterminalState,
-  jobs,
-  capacity,
-  onUpload,
-  onOpenCompleted,
-  onDelete,
 }: {
   fileName: string;
   state: string;
   lastNonterminalState: string;
-  jobs: TrackedJob[];
-  capacity: QueueCapacity;
-  onUpload: (base: string, file: File) => void;
-  onOpenCompleted: (job: TrackedJob) => void;
-  onDelete: (job: TrackedJob) => void;
 }) {
   return (
     <section className="processing-panel" data-testid="processing-panel">
@@ -35,13 +22,9 @@ export function ProcessingPanel({
         state={state}
         lastNonterminalState={lastNonterminalState}
       />
-      <UploadPanel onUpload={onUpload} />
-      <JobQueuePanel
-        jobs={jobs}
-        capacity={capacity}
-        onOpenCompleted={onOpenCompleted}
-        onDelete={onDelete}
-      />
+      <p className="processing-panel__hint">
+        可以返回“我的歌曲”继续浏览；处理会在后台继续。
+      </p>
     </section>
   );
 }

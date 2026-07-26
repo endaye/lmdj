@@ -1,4 +1,4 @@
-import type { TrackedJob } from "./JobQueuePanel";
+import type { TrackedJob } from "./MySongsView";
 
 export function DeleteJobDialog({
   job,
