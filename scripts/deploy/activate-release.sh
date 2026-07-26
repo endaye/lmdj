@@ -131,6 +131,42 @@ wait_for_app_health() {
   done
 }
 
+wait_for_smoke_health() {
+  local attempt
+  for attempt in {1..12}; do
+    if docker compose -p lmdj-smoke \
+      --env-file "$DEPLOY_PATH/shared/.env" \
+      -f "$RELEASE/compose.yml" -f "$RELEASE/compose.smoke.yml" \
+      -f "$RELEASE/compose.images.yml" \
+      exec -T app \
+      /opt/app-venv/bin/python -c \
+      'import json, urllib.request; assert json.load(urllib.request.urlopen("http://127.0.0.1:8000/health"))["ok"] is True'; then
+      return 0
+    fi
+    if [ "$attempt" -eq 12 ]; then
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+wait_for_caddy_health() {
+  local attempt
+  for attempt in {1..12}; do
+    if docker compose -p lmdj --env-file "$DEPLOY_PATH/shared/.env" \
+      -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
+      exec -T -e "LMDJ_HEALTH_DOMAIN=$DOMAIN" app \
+      /opt/app-venv/bin/python -c \
+      'import json, os, ssl, urllib.request; ctx=ssl._create_unverified_context(); domain=os.environ["LMDJ_HEALTH_DOMAIN"]; home=urllib.request.Request("https://caddy/", headers={"Host": domain}); health=urllib.request.Request("https://caddy/api/health", headers={"Host": domain}); assert urllib.request.urlopen(home, context=ctx, timeout=10).status == 200; assert json.load(urllib.request.urlopen(health, context=ctx, timeout=10))["ok"] is True'; then
+      return 0
+    fi
+    if [ "$attempt" -eq 12 ]; then
+      return 1
+    fi
+    sleep 5
+  done
+}
+
 rm -rf "$RELEASE"
 mkdir -p "$RELEASE"
 tar -xzf "$ARCHIVE" -C "$RELEASE"
@@ -165,9 +201,7 @@ docker compose -p lmdj-smoke \
   -f "$RELEASE/compose.yml" -f "$RELEASE/compose.smoke.yml" \
   -f "$RELEASE/compose.images.yml" \
   up -d --no-build app
-curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-  --retry-connrefused --retry-all-errors \
-  http://127.0.0.1:18000/health >/dev/null
+wait_for_smoke_health
 smoke_down
 SMOKE_ACTIVE=0
 
@@ -181,14 +215,7 @@ if ! (
     -f "$CURRENT/compose.yml" -f "$CURRENT/compose.images.yml" \
     up -d --no-build --force-recreate &&
   wait_for_app_health &&
-  curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-    --retry-connrefused --retry-all-errors \
-    --insecure --resolve "$DOMAIN:443:127.0.0.1" \
-    "https://$DOMAIN/" >/dev/null &&
-  curl --fail --silent --show-error --retry 12 --retry-delay 5 \
-    --retry-connrefused --retry-all-errors \
-    --insecure --resolve "$DOMAIN:443:127.0.0.1" \
-    "https://$DOMAIN/api/health" >/dev/null
+  wait_for_caddy_health
 ); then
   (
     cd "$CURRENT"
