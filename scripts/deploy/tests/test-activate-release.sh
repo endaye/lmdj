@@ -149,9 +149,10 @@ grep -q 'docker compose -p lmdj .* exec -T -e LMDJ_HEALTH_DOMAIN=staging.example
   echo "Caddy health check must run inside the app container" >&2
   exit 1
 }
-grep -q 'https://caddy/' "$DEPLOY_TEST_LOG"
-grep -q 'https://caddy/api/health' "$DEPLOY_TEST_LOG"
-grep -Fq 'headers={"Host": domain}' "$DEPLOY_TEST_LOG"
+grep -Fq 'home=urllib.request.Request("https://caddy/", headers={"Host": domain})' \
+  "$DEPLOY_TEST_LOG"
+grep -Fq 'health=urllib.request.Request("https://caddy/api/health", headers={"Host": domain})' \
+  "$DEPLOY_TEST_LOG"
 
 : > "$DEPLOY_TEST_LOG"
 export DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE="$TMP/docker-exec-count"
