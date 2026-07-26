@@ -25,6 +25,7 @@ LMDJ dev helper
 用法: scripts/dev.sh <command>
 
   setup              创建/补齐 packages 的 venv（core-models + patchify），幂等
+  setup-materials    创建/补齐本地 Material API DSP + HT Demucs runner 环境
   setup-demo         创建参考 demo 的 venv（重依赖 demucs/torch，首次下载很大）
   setup-pfs          创建 pipeline-from-stems venv（librosa 等 DSP 栈，constraints 锁版本）
   setup-sep-demucs   创建 HT Demucs runner venv（torch 栈，constraints 锁版本）
@@ -437,6 +438,29 @@ EOF
   printf 'deterministic: yes\n'
 }
 
+install_api_material_dependencies() {
+  if [ ! -x "$API/.venv/bin/python" ]; then
+    echo "==> 创建 API venv"
+    python3 -m venv "$API/.venv"
+  fi
+  "$API/.venv/bin/pip" -q install -e "$CORE" -c "$CONSTRAINTS"
+  "$API/.venv/bin/pip" -q install -e "$PATCHIFY" -c "$CONSTRAINTS"
+  "$API/.venv/bin/pip" -q install -e "$WORKER[pfs]" -c "$CONSTRAINTS"
+  "$API/.venv/bin/pip" -q install -e "$API"
+  "$API/.venv/bin/python" -c \
+    'import numpy, soundfile, librosa, sklearn, pretty_midi; from lmdj_audio_worker.creator_runner import CreatorPipelineRunner'
+}
+
+cmd_setup_materials() {
+  install_api_material_dependencies
+  cmd_setup_sep_demucs
+  [ -x "$SEP_DEMUCS_VENV/bin/python" ] || {
+    echo "HT Demucs runner 环境未就绪" >&2
+    return 1
+  }
+  echo "==> Material 本地环境就绪"
+}
+
 cmd_setup_pfs() {
   if [ ! -x "$PFS_VENV/bin/python" ]; then
     echo "==> 创建 pipeline-from-stems venv"
@@ -592,6 +616,7 @@ cmd="${1:-}"
 [ -n "$cmd" ] && shift || true
 case "$cmd" in
   setup)           cmd_setup ;;
+  setup-materials)  cmd_setup_materials ;;
   setup-demo)      cmd_setup_demo ;;
   setup-pfs)       cmd_setup_pfs ;;
   setup-sep-demucs) cmd_setup_sep_demucs ;;
