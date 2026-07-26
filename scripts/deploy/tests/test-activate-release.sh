@@ -43,7 +43,8 @@ if [ "$*" = "inspect --format {{.Image}} running-caddy-container" ]; then
   printf 'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n'
   exit 0
 fi
-if [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC:-0}" = "1" ] && [[ "$*" == *" exec -T app "* ]]; then
+if [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC:-0}" = "1" ] \
+  && [[ "$*" == compose\ -p\ lmdj\ *" exec -T app "* ]]; then
   exit 1
 fi
 if [[ "$*" == *" exec -T app "* ]] && [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC_COUNT:-0}" -gt 0 ]; then
@@ -60,7 +61,7 @@ EOF
 cat > "$FAKE_BIN/curl" <<'EOF'
 #!/usr/bin/env bash
 printf 'curl %s\n' "$*" >> "$DEPLOY_TEST_LOG"
-exit 0
+exit 127
 EOF
 chmod +x "$FAKE_BIN/docker" "$FAKE_BIN/curl"
 cat > "$FAKE_BIN/sleep" <<'EOF'
@@ -128,10 +129,20 @@ if grep '^lmdj_image_tag=' "$DEPLOY_TEST_LOG" | grep -vq "^lmdj_image_tag=$SHA1$
   echo "activation must select the image tagged for the release SHA" >&2
   exit 1
 fi
-if grep '^curl ' "$DEPLOY_TEST_LOG" | grep -vq -- '--retry-all-errors'; then
-  echo "health checks must retry transient curl errors" >&2
+if grep -q '^curl ' "$DEPLOY_TEST_LOG"; then
+  echo "activation must not depend on host curl" >&2
   exit 1
 fi
+grep -q 'docker compose -p lmdj-smoke .* exec -T app .*127.0.0.1:8000/health' \
+  "$DEPLOY_TEST_LOG" || {
+  echo "smoke health check must run inside the app container" >&2
+  exit 1
+}
+grep -q 'docker compose -p lmdj .* exec -T -e LMDJ_HEALTH_DOMAIN=staging.example.com app ' \
+  "$DEPLOY_TEST_LOG" || {
+  echo "Caddy health check must run inside the app container" >&2
+  exit 1
+}
 
 : > "$DEPLOY_TEST_LOG"
 export DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE="$TMP/docker-exec-count"
