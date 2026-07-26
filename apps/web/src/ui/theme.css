@@ -155,29 +155,45 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .topbar-actions { display: flex; align-items: center; gap: 12px; }
 
-/* Eject — leave the current patch, load another song */
-.btn-eject {
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  color: var(--ink-dim);
-  background: transparent;
-  border: 1px solid var(--edge);
-  padding: 7px 12px;
-  white-space: nowrap;
-}
-.btn-eject:hover { color: var(--ink); border-color: #454a59; background: var(--raised); }
+/* Workbench actions — shared hard-edged control language */
+.btn-eject,
 .btn-delete-track {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-family: "IBM Plex Mono", monospace;
   font-size: 12px;
+  font-weight: 800;
   letter-spacing: 0.04em;
-  color: var(--red);
-  background: transparent;
-  border: 1px solid var(--red);
-  padding: 7px 12px;
+  line-height: 1;
+  color: var(--ink);
+  background: var(--paper);
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  padding: 8px 14px;
   white-space: nowrap;
 }
-.btn-delete-track:hover { color: #fff; background: var(--red); }
+.btn-eject {
+  box-shadow: 3px 3px 0 var(--yellow);
+}
+.btn-eject:hover {
+  color: var(--ink);
+  border-color: var(--ink);
+  background: var(--yellow);
+}
+.btn-delete-track {
+  box-shadow: 3px 3px 0 var(--red);
+}
+.btn-delete-track:hover {
+  color: #fff;
+  border-color: var(--ink);
+  background: var(--red);
+}
+.btn-eject:active,
+.btn-delete-track:active {
+  box-shadow: 1px 1px 0 var(--ink);
+}
 
 /* --- Transport (reads as an LCD strip) ------------------------------------- */
 
@@ -1021,7 +1037,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   font-weight: 700;
   white-space: nowrap;
 }
-.workbench-app-bar .btn-eject,
 .workbench-app-bar .transport,
 .workbench-app-bar .transport button {
   border-color: var(--ink);
@@ -1030,6 +1045,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink);
   box-shadow: none;
 }
+.workbench-app-bar .btn-eject,
+.workbench-app-bar .btn-delete-track {
+  flex: 0 0 auto;
+}
 .workbench-app-bar .transport-readout,
 .workbench-app-bar .transport-id { color: var(--ink); }
 
@@ -1037,7 +1056,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   position: relative;
   min-height: 0;
   display: grid;
-  grid-template-columns: 118px minmax(0, 1fr) 272px;
+  grid-template-columns: 148px minmax(0, 1fr) 272px;
   grid-template-areas: "tools canvas inspector";
 }
 .workbench-creator-tools {
@@ -1062,6 +1081,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-transform: uppercase;
 }
 .creator-tool-rail__mode {
+  min-width: 0;
   min-height: 54px;
   display: flex;
   align-items: center;
@@ -1075,6 +1095,12 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   font-size: 12px;
   font-weight: 700;
   text-align: left;
+}
+.creator-tool-rail__text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .creator-tool-rail__icon {
   width: 22px;
@@ -1305,12 +1331,16 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     margin-left: auto;
   }
   .workbench-app-bar .btn-eject {
-    width: 36px;
-    height: 36px;
+    width: 40px;
+    height: 40px;
     overflow: hidden;
     padding: 0;
-    white-space: nowrap;
-    text-indent: 7px;
+    font-size: 0;
+    text-indent: 0;
+  }
+  .workbench-app-bar .btn-eject::before {
+    content: "⏏";
+    font-size: 14px;
   }
   .workbench-inspector-toggle {
     min-width: 38px;
@@ -1622,10 +1652,27 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-radius: 0;
   background: var(--paper);
   color: var(--ink);
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
 }
 .source-panel .upload-panel input[type="file"]::file-selector-button,
 .processing-panel .upload-panel input[type="file"]::file-selector-button {
+  min-height: 40px;
+  margin-right: 14px;
+  padding: 8px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: var(--ink);
   color: #fff;
+  box-shadow: 3px 3px 0 var(--yellow);
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 800;
+  cursor: pointer;
+}
+.source-panel .upload-panel input[type="file"]::file-selector-button:hover,
+.processing-panel .upload-panel input[type="file"]::file-selector-button:hover {
+  background: var(--yellow);
+  color: var(--ink);
 }
 .source-panel button,
 .processing-panel button,
@@ -1704,8 +1751,12 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .job-card {
   min-width: 0;
+  min-height: 112px;
   display: grid;
-  grid-template-columns: minmax(160px, .7fr) minmax(260px, 1.3fr) auto;
+  grid-template-columns:
+    minmax(220px, .85fr)
+    minmax(420px, 1.65fr)
+    minmax(200px, .55fr);
   align-items: stretch;
   border-bottom: 2px solid var(--ink);
 }
@@ -1715,8 +1766,8 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 4px;
-  padding: 12px;
+  gap: 6px;
+  padding: 16px;
   border-right: 2px solid var(--ink);
 }
 .job-card__identity strong,
@@ -1726,7 +1777,13 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .job-card__identity strong {
   font-family: "Chakra Petch", sans-serif;
-  font-size: 18px;
+  font-size: 20px;
+  line-height: 1.1;
+}
+.job-card__identity span {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 11px;
+  font-weight: 700;
 }
 .job-card--queued .job-card__identity { background: var(--yellow); }
 .job-card--separating .job-card__identity,
@@ -1738,22 +1795,25 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .job-card dl {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-auto-rows: minmax(52px, 1fr);
   margin: 0;
 }
 .job-card dl > div {
   min-width: 0;
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr);
+  grid-template-columns: 84px minmax(0, 1fr);
   border-right: 1px solid var(--ink);
   border-bottom: 1px solid var(--ink);
 }
-.job-card dl > div:nth-last-child(-n + 2) { border-bottom: 0; }
+.job-card dl > div:nth-child(n + 3) { border-bottom: 0; }
 .job-card dt,
 .job-card dd {
   margin: 0;
-  padding: 6px;
+  display: flex;
+  align-items: center;
+  padding: 9px 10px;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 9px;
+  font-size: 10px;
 }
 .job-card dt { border-right: 1px solid var(--ink); font-weight: 800; }
 .job-card__terminal,
@@ -1770,15 +1830,16 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: #a2122c;
 }
 .job-card__actions {
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  gap: 8px;
-  padding: 10px;
+  min-width: 0;
+  display: grid;
+  align-content: center;
+  gap: 10px;
+  padding: 14px;
   border-left: 2px solid var(--ink);
 }
 .job-card__actions button {
-  align-self: center;
+  width: 100%;
+  min-height: 42px;
   border: 2px solid var(--ink);
   border-radius: 0;
   background: var(--ink);
@@ -1786,11 +1847,13 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   box-shadow: 3px 3px 0 var(--yellow);
   font-family: "IBM Plex Mono", monospace;
   font-weight: 800;
+  line-height: 1.15;
   white-space: nowrap;
 }
 .job-card__actions button:hover:not(:disabled) {
-  background: var(--red);
-  color: #fff;
+  border-color: var(--ink);
+  background: var(--yellow);
+  color: var(--ink);
 }
 .job-card__actions button:disabled {
   cursor: not-allowed;
@@ -1799,9 +1862,13 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .job-card__actions .btn-danger {
   background: var(--paper);
-  color: var(--red);
-  border-color: var(--red);
-  box-shadow: none;
+  color: var(--ink);
+  border-color: var(--ink);
+  box-shadow: 3px 3px 0 var(--red);
+}
+.job-card__actions .btn-danger:hover:not(:disabled) {
+  color: #fff;
+  background: var(--red);
 }
 
 .delete-dialog-backdrop {
@@ -1998,20 +2065,22 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     border-bottom: 1px solid var(--ink);
   }
   .queue-capacity span:last-child { border-bottom: 0; }
-  .job-card { grid-template-columns: minmax(0, 1fr); }
+  .job-card {
+    min-height: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
   .job-card__identity { border-right: 0; border-bottom: 2px solid var(--ink); }
   .job-card dl { grid-template-columns: minmax(0, 1fr); }
   .job-card dl > div {
     border-right: 0;
     border-bottom: 1px solid var(--ink);
   }
-  .job-card dl > div:nth-last-child(-n + 2) { border-bottom: 1px solid var(--ink); }
+  .job-card dl > div:nth-child(n + 3) { border-bottom: 1px solid var(--ink); }
   .job-card dl > div:last-child { border-bottom: 0; }
   .job-card__terminal,
   .job-card__error { border-top: 2px solid var(--ink); border-left: 0; }
   .job-card__actions {
-    flex-direction: row;
-    justify-content: flex-end;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
     border-top: 2px solid var(--ink);
     border-left: 0;
   }
