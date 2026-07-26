@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1254 1254" role="img" aria-labelledby="title desc">
   <title id="title">LMDJ Chameleon body skin mask</title>
-  <desc id="desc">A runtime-ready body mask for generated 2D skins, with protected eye and nostril cutouts.</desc>
+  <desc id="desc">A standalone runtime body mask for generated 2D skins, with a fully textured rear thigh and protected eye and nostril cutouts.</desc>
   <defs>
     <mask id="body-skin-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="1254" height="1254" style="mask-type:luminance">
       <g id="body-silhouette" color="#fff">
