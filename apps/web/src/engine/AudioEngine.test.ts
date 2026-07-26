@@ -104,15 +104,51 @@ describe("AudioEngine", () => {
     expect(phrase.stoppedAt).toEqual([0]);
   });
 
-  it("retriggering a loop replaces the earlier source", () => {
+  it("tapping a manually started loop again stops it without creating a replacement", () => {
     engine.load(makeBundle(materialPlaybackPatch()));
     engine.triggerPad(0);
     const first = ctx.sources.at(-1)!;
     engine.triggerPad(0);
-    const second = ctx.sources.at(-1)!;
 
     expect(first.stoppedAt).toEqual([0]);
+    expect(ctx.sources).toHaveLength(1);
+    expect(engine.isPadLooping(0)).toBe(false);
+  });
+
+  it("reports a manually started loop as active until its second tap", () => {
+    engine.load(makeBundle(materialPlaybackPatch()));
+
+    expect(engine.isPadLooping(0)).toBe(false);
+    engine.triggerPad(0);
+    expect(engine.isPadLooping(0)).toBe(true);
+    engine.triggerPad(0);
+    expect(engine.isPadLooping(0)).toBe(false);
+  });
+
+  it("keeps pattern-scheduled loop notes as triggers instead of toggles", async () => {
+    const patch = materialPlaybackPatch();
+    const ordinary = patch.pads[0].element_id!;
+    patch.patterns[0].length_steps = 1;
+    patch.patterns[0].notes = [{
+      element_id: ordinary,
+      lane: 0,
+      pitch: 36,
+      step: 0,
+      velocity: 100,
+    }];
+    engine.load(makeBundle(patch));
+
+    await engine.play();
+    const first = ctx.sources.at(-1)!;
+    ctx.currentTime = 0.2;
+    vi.advanceTimersByTime(25);
+    const second = ctx.sources.at(-1)!;
+
+    expect(ctx.sources.length).toBeGreaterThan(1);
+    expect(first.stoppedAt).toEqual([0]);
+    expect(second).not.toBe(first);
     expect(second.stoppedAt).toHaveLength(0);
+    expect(engine.isPadLooping(0)).toBe(false);
   });
 
   it("stop terminates active material sources even without transport", () => {

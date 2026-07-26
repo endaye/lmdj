@@ -36,6 +36,7 @@ interface ActiveSource {
   source: SourceLike;
   elementId: string;
   behavior: PlaybackBehavior;
+  origin: "manual" | "pattern";
 }
 
 export class AudioEngine {
@@ -118,7 +119,27 @@ export class AudioEngine {
     const ids = padElementIds(pad); // reserved/empty → [] → no-op
     if (ids.length === 0) return;
     void this.ctx.resume();
-    for (const id of ids) this.playElement(id);
+    const idSet = new Set(ids);
+    const isLoopPad = ids.some(
+      (id) => this.behaviorByElement.get(id)?.trigger === "loop",
+    );
+    if (
+      isLoopPad
+      && [...this.activeSources].some(
+        (active) =>
+          active.origin === "manual"
+          && active.behavior.trigger === "loop"
+          && idSet.has(active.elementId),
+      )
+    ) {
+      this.stopSources(
+        (active) => active.origin === "manual" && idSet.has(active.elementId),
+      );
+      this.emit();
+      return;
+    }
+    for (const id of ids) this.playElement(id, undefined, "manual");
+    this.emit();
   }
 
   toggleMutePad(index: number): void {
@@ -138,6 +159,18 @@ export class AudioEngine {
 
   isPadMuted(index: number): boolean {
     return this.mutedPads.has(index);
+  }
+
+  isPadLooping(index: number): boolean {
+    const pad = this.bundle?.patch.pads[index];
+    if (!pad) return false;
+    const ids = new Set(padElementIds(pad));
+    return [...this.activeSources].some(
+      (active) =>
+        active.origin === "manual"
+        && active.behavior.trigger === "loop"
+        && ids.has(active.elementId),
+    );
   }
 
   /** 播放中返回当前 step（取 scene 首 pattern 的 length_steps），停止时 null */
@@ -160,51 +193,69 @@ export class AudioEngine {
     const from = Math.max(this.scheduledUntil, now - MAX_CATCHUP_SEC);
     const to = now + LOOKAHEAD_SEC;
     if (to <= from) return;
+    let manualLoopStateChanged = false;
     for (const pattern of this.patterns) {
       for (const hit of notesInWindow(pattern.notes, pattern.length_steps, this.stepDur, from, to)) {
-        this.playElement(hit.note.element_id, this.startTime + hit.time);
+        manualLoopStateChanged = this.playElement(
+          hit.note.element_id,
+          this.startTime + hit.time,
+          "pattern",
+        ) || manualLoopStateChanged;
       }
     }
     this.scheduledUntil = to;
+    if (manualLoopStateChanged) this.emit();
   }
 
-  private playElement(elementId: string, when?: number): void {
+  private playElement(
+    elementId: string,
+    when: number | undefined,
+    origin: "manual" | "pattern",
+  ): boolean {
     const buffer = this.bundle?.buffers.get(elementId);
     const gain = this.gains.get(elementId);
-    if (!buffer || !gain) return; // 缺失素材：跳过发声，note 数据不动
+    if (!buffer || !gain) return false; // 缺失素材：跳过发声，note 数据不动
     const behavior = this.behaviorByElement.get(elementId) ?? {
       trigger: "one_shot",
       exclusiveGroup: null,
     };
+    let manualLoopStateChanged = false;
     if (behavior.exclusiveGroup === PHRASE_EXCLUSIVE_GROUP) {
-      this.stopSources(
+      manualLoopStateChanged = this.stopSources(
         (active) => active.behavior.exclusiveGroup !== PHRASE_EXCLUSIVE_GROUP,
       );
     } else {
-      this.stopSources(
+      manualLoopStateChanged = this.stopSources(
         (active) => active.behavior.exclusiveGroup === PHRASE_EXCLUSIVE_GROUP,
       );
     }
     if (behavior.trigger === "loop") {
-      this.stopSources((active) => active.elementId === elementId);
+      manualLoopStateChanged = this.stopSources(
+        (active) => active.elementId === elementId,
+      ) || manualLoopStateChanged;
     }
     const source = this.ctx.createBufferSource();
     source.buffer = buffer;
     source.loop = behavior.trigger === "loop";
     source.connect(gain);
-    const active: ActiveSource = { source, elementId, behavior };
+    const active: ActiveSource = { source, elementId, behavior, origin };
     const endedSource = source as SourceLike & {
       onended: ((event: Event) => unknown) | null;
     };
     endedSource.onended = () => this.activeSources.delete(active);
     this.activeSources.add(active);
     source.start(when ?? this.ctx.currentTime);
+    return manualLoopStateChanged;
   }
 
-  private stopSources(predicate: (active: ActiveSource) => boolean): void {
+  private stopSources(predicate: (active: ActiveSource) => boolean): boolean {
+    let manualLoopStopped = false;
     for (const active of [...this.activeSources]) {
       if (!predicate(active)) continue;
       this.activeSources.delete(active);
+      if (active.origin === "manual" && active.behavior.trigger === "loop") {
+        manualLoopStopped = true;
+      }
       (
         active.source as SourceLike & {
           onended: ((event: Event) => unknown) | null;
@@ -216,6 +267,7 @@ export class AudioEngine {
         // Browser may throw when a source has already ended; bookkeeping wins.
       }
     }
+    return manualLoopStopped;
   }
 
   private emit(): void {
