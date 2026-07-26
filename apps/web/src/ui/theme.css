@@ -1645,10 +1645,27 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-radius: 0;
   background: var(--paper);
   color: var(--ink);
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 600;
 }
 .source-panel .upload-panel input[type="file"]::file-selector-button,
 .processing-panel .upload-panel input[type="file"]::file-selector-button {
+  min-height: 40px;
+  margin-right: 14px;
+  padding: 8px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 0;
+  background: var(--ink);
   color: #fff;
+  box-shadow: 3px 3px 0 var(--yellow);
+  font-family: "IBM Plex Mono", monospace;
+  font-weight: 800;
+  cursor: pointer;
+}
+.source-panel .upload-panel input[type="file"]::file-selector-button:hover,
+.processing-panel .upload-panel input[type="file"]::file-selector-button:hover {
+  background: var(--yellow);
+  color: var(--ink);
 }
 .source-panel button,
 .processing-panel button,
