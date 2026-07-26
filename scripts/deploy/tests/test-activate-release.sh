@@ -47,6 +47,10 @@ if [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC:-0}" = "1" ] \
   && [[ "$*" == compose\ -p\ lmdj\ *" exec -T app "* ]]; then
   exit 1
 fi
+if [ "${DEPLOY_TEST_DOCKER_FAIL_CADDY_HEALTH:-0}" = "1" ] \
+  && [[ "$*" == compose\ -p\ lmdj\ *" exec -T -e LMDJ_HEALTH_DOMAIN="* ]]; then
+  exit 1
+fi
 if [[ "$*" == *" exec -T app "* ]] && [ "${DEPLOY_TEST_DOCKER_FAIL_EXEC_COUNT:-0}" -gt 0 ]; then
   count_file="${DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE:?}"
   count="$(cat "$count_file" 2>/dev/null || printf '0')"
@@ -92,9 +96,11 @@ SHA2="2222222222222222222222222222222222222222"
 make_archive "$SHA1" "$TMP/one.tar.gz"
 make_archive "$SHA2" "$TMP/two.tar.gz"
 make_archive "$SHA1" "$TMP/one-fail.tar.gz"
+make_archive "$SHA1" "$TMP/one-caddy-fail.tar.gz"
 printf 'prebuilt image bundle\n' > "$TMP/images-one.tar.gz"
 printf 'prebuilt image bundle\n' > "$TMP/images-two.tar.gz"
 printf 'prebuilt image bundle\n' > "$TMP/images-fail.tar.gz"
+printf 'prebuilt image bundle\n' > "$TMP/images-caddy-fail.tar.gz"
 mkdir -p "$DEPLOY_PATH/incoming"
 printf 'stale\n' > "$DEPLOY_PATH/incoming/stale.tar.gz"
 
@@ -143,6 +149,9 @@ grep -q 'docker compose -p lmdj .* exec -T -e LMDJ_HEALTH_DOMAIN=staging.example
   echo "Caddy health check must run inside the app container" >&2
   exit 1
 }
+grep -q 'https://caddy/' "$DEPLOY_TEST_LOG"
+grep -q 'https://caddy/api/health' "$DEPLOY_TEST_LOG"
+grep -Fq 'headers={"Host": domain}' "$DEPLOY_TEST_LOG"
 
 : > "$DEPLOY_TEST_LOG"
 export DEPLOY_TEST_DOCKER_EXEC_COUNT_FILE="$TMP/docker-exec-count"
@@ -177,6 +186,23 @@ grep -q "image: lmdj-app:$SHA2" "$DEPLOY_PATH/releases/$SHA2/compose.images.yml"
 grep -q "image: lmdj-caddy:$SHA2" "$DEPLOY_PATH/releases/$SHA2/compose.images.yml"
 test "$(grep -c 'docker compose -p lmdj .* up -d --no-build --force-recreate' "$DEPLOY_TEST_LOG")" -ge 2 || {
   echo "rollback must recreate services without building on the server" >&2
+  exit 1
+}
+
+: > "$DEPLOY_TEST_LOG"
+if DEPLOY_TEST_DOCKER_FAIL_CADDY_HEALTH=1 \
+  "$ACTIVATE_SCRIPT" "$TMP/one-caddy-fail.tar.gz" "$DEPLOY_PATH" \
+  "$TMP/images-caddy-fail.tar.gz"; then
+  echo "failed Caddy health check unexpectedly succeeded" >&2
+  exit 1
+fi
+test "$(basename "$(readlink "$DEPLOY_PATH/current")")" = "$SHA2"
+test ! -e "$TMP/one-caddy-fail.tar.gz"
+test ! -e "$TMP/images-caddy-fail.tar.gz"
+grep -q "docker image rm lmdj-app:$SHA1" "$DEPLOY_TEST_LOG"
+grep -q "docker image rm lmdj-caddy:$SHA1" "$DEPLOY_TEST_LOG"
+test "$(grep -c 'docker compose -p lmdj .* up -d --no-build --force-recreate' "$DEPLOY_TEST_LOG")" -ge 2 || {
+  echo "Caddy health failure must recreate the previous release" >&2
   exit 1
 }
 
