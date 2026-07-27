@@ -588,13 +588,25 @@ for (const viewport of VIEWPORTS) {
 
     if (viewport.name === "phone") {
       await page.emulateMedia({ reducedMotion: "reduce" });
-      await pads.nth(0).click();
-      await expect(pads.nth(0)).toHaveAttribute("data-visual-state", "playing");
-      await expect(pads.nth(0)).toContainText("PLAYING");
-      expect(await pads.nth(0).evaluate((element) => getComputedStyle(element).transform)).toBe("none");
+      const reducedMotionPad = pads.nth(0);
+      const reducedMotionPadBox = await box(reducedMotionPad);
+      await page.mouse.move(
+        reducedMotionPadBox.x + reducedMotionPadBox.width / 2,
+        reducedMotionPadBox.y + reducedMotionPadBox.height / 2,
+      );
+      await page.mouse.down();
+      await expect(reducedMotionPad).toHaveAttribute("data-visual-state", "playing");
+      await expect(reducedMotionPad).toContainText("PLAYING");
+      expect(
+        await reducedMotionPad.evaluate(
+          (element) => getComputedStyle(element).transform,
+        ),
+      ).toBe("none");
       expect(
         await inspectorHeader.evaluate((element) => getComputedStyle(element).transitionDuration),
       ).toBe("0s");
+      await page.mouse.up();
+      await expect(reducedMotionPad).toHaveAttribute("data-visual-state", "selected");
     }
   });
 }
