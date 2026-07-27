@@ -1,10 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
-import { AudioEngine } from "../engine/AudioEngine";
 import { scenePatterns, type Patch, type PatchBundle } from "../patch/loader";
-import { FakeAudioContext } from "../test/fakes";
-import { StepGrid } from "./StepGrid";
+import { buildTimelineCells, StepGrid } from "./StepGrid";
 
 function makeBundle(mutate?: (b: PatchBundle<unknown>) => void): PatchBundle<unknown> {
   const patch = structuredClone(golden) as unknown as Patch;
@@ -19,15 +17,12 @@ function makeBundle(mutate?: (b: PatchBundle<unknown>) => void): PatchBundle<unk
   return bundle;
 }
 
-function renderGrid(bundle: PatchBundle<unknown>) {
-  const engine = new AudioEngine(new FakeAudioContext());
-  engine.load(bundle);
-  render(<StepGrid engine={engine} bundle={bundle} />);
-  return engine;
+function renderGrid(bundle: PatchBundle<unknown>, playheadStep: number | null = null) {
+  render(<StepGrid bundle={bundle} playheadStep={playheadStep} />);
 }
 
 describe("StepGrid", () => {
-  it("renders one row per element with notes, cells matching the pattern", () => {
+  it("renders one note start per unique event step", () => {
     const bundle = makeBundle();
     renderGrid(bundle);
     const pattern = scenePatterns(bundle.patch)[0];
@@ -35,12 +30,54 @@ describe("StepGrid", () => {
     expect(elementIds.size).toBeGreaterThan(0);
     for (const id of elementIds) {
       const row = screen.getByTestId(`step-row-${id}`);
-      const filled = row.textContent?.match(/█/g)?.length ?? 0;
+      const starts = row.querySelectorAll('[data-note-state="start"]');
       const steps = new Set(
         pattern.notes.filter((n) => n.element_id === id).map((n) => n.step),
       );
-      expect(filled).toBe(steps.size);
+      expect(starts).toHaveLength(steps.size);
     }
+  });
+
+  it("renders one-shots as hits and loops as spans to their next trigger", () => {
+    const bundle = makeBundle();
+    renderGrid(bundle);
+
+    const kick = screen.getByTestId("step-row-el_kick");
+    const kickCells = within(kick).getAllByRole("cell");
+    expect(kick).toHaveAttribute("data-duration-mode", "hit");
+    expect(kickCells[10]).toHaveAttribute("data-note-state", "start");
+    expect(kickCells[10]).toHaveAttribute("data-note-length", "1");
+    expect(kickCells[10]).toHaveClass("note-start", "note-end", "note-hit");
+
+    const bass = screen.getByTestId("step-row-el_bass");
+    const bassCells = within(bass).getAllByRole("cell");
+    expect(bass).toHaveAttribute("data-duration-mode", "loop");
+    expect(bassCells[0]).toHaveAttribute("data-note-state", "start");
+    expect(bassCells[0]).toHaveAttribute("data-note-length", "64");
+    expect(bassCells[1]).toHaveAttribute("data-note-state", "sustain");
+    expect(bassCells[63]).toHaveAttribute("data-note-state", "end");
+
+    const melody = screen.getByTestId("step-row-el_melody_a");
+    const melodyCells = within(melody).getAllByRole("cell");
+    expect(melodyCells[0]).toHaveAttribute("data-note-length", "16");
+    expect(melodyCells[15]).toHaveAttribute("data-note-state", "end");
+    expect(melodyCells[16]).toHaveAttribute("data-note-length", "12");
+  });
+
+  it("uses an explicit duration_steps value when the contract supplies one", () => {
+    const bundle = makeBundle((b) => {
+      const note = b.patch.patterns[0].notes.find((candidate) =>
+        candidate.element_id === "el_kick"
+      );
+      expect(note).toBeDefined();
+      note!.duration_steps = 3;
+    });
+    renderGrid(bundle);
+
+    const cells = within(screen.getByTestId("step-row-el_kick")).getAllByRole("cell");
+    expect(cells[10]).toHaveAttribute("data-note-length", "3");
+    expect(cells[11]).toHaveAttribute("data-note-state", "sustain");
+    expect(cells[12]).toHaveAttribute("data-note-state", "end");
   });
 
   it("renders bar and beat hierarchy across the complete pattern", () => {
@@ -48,8 +85,8 @@ describe("StepGrid", () => {
     renderGrid(bundle);
 
     expect(
-      screen.getByRole("table", { name: "Pattern Original step grid" }),
-    ).toHaveAccessibleName("Pattern Original step grid");
+      screen.getByRole("table", { name: "Pattern Original timeline" }),
+    ).toHaveAccessibleName("Pattern Original timeline");
     const bars = screen.getAllByTestId(/^step-bar-/);
     expect(bars).toHaveLength(4);
     expect(bars.map((bar) => bar.textContent)).toEqual(["Bar 1", "Bar 2", "Bar 3", "Bar 4"]);
@@ -57,9 +94,22 @@ describe("StepGrid", () => {
 
     const firstRow = screen.getByTestId(`step-row-${bundle.patch.patterns[0].notes[0].element_id}`);
     const cells = within(firstRow).getAllByRole("cell");
-    expect(cells[0]).toHaveClass("step-bar-start");
+    expect(cells[0]).not.toHaveClass("step-bar-start");
     expect(cells[4]).toHaveClass("step-beat-start");
     expect(cells[16]).toHaveClass("step-bar-start");
+  });
+
+  it("marks the current playhead across the ruler and every lane", () => {
+    const bundle = makeBundle();
+    renderGrid(bundle, 4);
+
+    const ruler = screen.getByRole("columnheader", {
+      name: "Bar 1, beat 2, step 5",
+    });
+    expect(ruler).toHaveAttribute("aria-current", "true");
+    for (const row of screen.getAllByTestId(/^step-row-/)) {
+      expect(within(row).getAllByRole("cell")[4]).toHaveClass("step-playhead");
+    }
   });
 
   it("keeps the final partial bar aligned with the remaining steps", () => {
@@ -83,5 +133,25 @@ describe("StepGrid", () => {
     renderGrid(bundle);
     const first = bundle.patch.patterns[0].notes[0].element_id;
     expect(screen.getByTestId(`step-row-${first}`)).toHaveClass("step-missing");
+  });
+});
+
+describe("buildTimelineCells", () => {
+  it("clips explicit durations to the visible pattern boundary", () => {
+    const cells = buildTimelineCells(
+      [{
+        element_id: "el_test",
+        lane: 0,
+        pitch: 36,
+        step: 6,
+        velocity: 100,
+        duration_steps: 8,
+      }],
+      8,
+      false,
+    );
+
+    expect(cells[6]).toMatchObject({ active: true, start: true, durationSteps: 2 });
+    expect(cells[7]).toMatchObject({ active: true, end: true });
   });
 });
