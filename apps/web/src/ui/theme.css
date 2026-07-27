@@ -1033,89 +1033,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .pattern-timeline {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
-  gap: 8px;
-}
-.pattern-timeline__meta {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: stretch;
-  min-width: 0;
-  border: 2px solid var(--ink);
-  background: var(--paper);
-  box-shadow: 3px 3px 0 var(--ink);
-}
-.pattern-timeline__tag,
-.pattern-timeline__legend {
-  min-height: 28px;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: .07em;
-  text-transform: uppercase;
-}
-.pattern-timeline__tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 9px;
-  border-right: 2px solid var(--ink);
-  background: var(--action);
-  color: var(--ink);
-  white-space: nowrap;
-}
-.pattern-timeline__tag i {
-  width: 9px;
-  height: 9px;
-  border: 2px solid var(--ink);
-  background: var(--lead);
-  transform: rotate(45deg);
-}
-.pattern-timeline__legend {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  justify-content: flex-end;
-  flex-wrap: wrap;
-  gap: 12px;
-  padding: 5px 9px;
-  overflow: hidden;
-}
-.pattern-timeline__legend span {
-  display: inline-flex;
-  flex: 0 0 auto;
-  align-items: center;
-  gap: 5px;
-  white-space: nowrap;
-}
-.pattern-timeline__legend i {
-  width: 18px;
-  height: 8px;
-  display: inline-block;
-  border: 2px solid var(--ink);
-  background: var(--lane-harmony);
-}
-.pattern-timeline__legend .legend-hit {
-  width: 9px;
-  height: 9px;
-  border-radius: 3px;
-}
-.pattern-timeline__legend .legend-loop {
-  background:
-    linear-gradient(
-      135deg,
-      color-mix(in srgb, var(--lane-harmony) 80%, var(--paper)) 0 50%,
-      var(--lane-harmony) 50% 100%
-    );
-}
-.pattern-timeline__legend .legend-playhead {
-  width: 3px;
-  height: 12px;
-  border: 0;
-  background: var(--loop);
-  box-shadow: -1px 0 0 var(--ink), 1px 0 0 var(--ink);
 }
 .step-grid {
   --step-size: 22px;
@@ -1369,21 +1289,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 
 @container workbench (max-width: 599px) {
-  .pattern-timeline__meta {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .pattern-timeline__tag {
-    border-right: 2px solid var(--ink);
-    border-bottom: 0;
-  }
   .step-grid {
     --step-size: 16px;
     --lane-width: 72px;
-  }
-  .pattern-timeline__legend {
-    justify-content: space-between;
-    gap: 9px;
-    font-size: 8px;
   }
   .step-grid tbody th {
     padding-inline: 28px 5px;
@@ -2097,21 +2005,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     gap: 8px;
     padding: 3px 0;
     font-size: 8px;
-  }
-  .pattern-timeline {
-    gap: 4px;
-  }
-  .pattern-timeline__meta {
-    box-shadow: 2px 2px 0 var(--ink);
-  }
-  .pattern-timeline__tag,
-  .pattern-timeline__legend {
-    min-height: 22px;
-    padding-block: 3px;
-    font-size: 7px;
-  }
-  .pattern-timeline__legend {
-    gap: 7px;
   }
   .step-grid__bar-label {
     height: 18px;

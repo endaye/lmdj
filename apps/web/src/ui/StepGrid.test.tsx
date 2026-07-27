@@ -38,7 +38,7 @@ describe("StepGrid", () => {
     }
   });
 
-  it("labels lanes with stable display indexes and a complete legend", () => {
+  it("labels lanes with stable display indexes without a separate legend bar", () => {
     const bundle = makeBundle();
     renderGrid(bundle);
 
@@ -46,11 +46,8 @@ describe("StepGrid", () => {
     expect(rows[0]).toHaveAttribute("data-lane-index", "1");
     expect(within(rows[0]).getByText("01")).toBeInTheDocument();
     expect(rows.at(-1)).toHaveAttribute("data-lane-index", String(rows.length));
-
-    const legend = screen.getByLabelText("Pattern timeline legend");
-    expect(within(legend).getByText("Hit")).toBeInTheDocument();
-    expect(within(legend).getByText("Loop span")).toBeInTheDocument();
-    expect(within(legend).getByText("Playhead")).toBeInTheDocument();
+    expect(screen.queryByLabelText("Pattern timeline legend")).not.toBeInTheDocument();
+    expect(screen.queryByText("Sequence map")).not.toBeInTheDocument();
   });
 
   it("renders one-shots as hits and loops as spans to their next trigger", () => {
