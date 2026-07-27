@@ -677,7 +677,7 @@ export function App({
             ...current,
             clientError:
               error instanceof ApiError && error.status === 404
-                ? "服务器未找到这次提交；请重新选择源文件提交。"
+                ? "服务器未找到这次提交；可移除此浏览器记录后重新上传。"
                 : errorMessage(error),
           }));
         },
