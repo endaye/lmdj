@@ -1,5 +1,6 @@
 import { DropZone } from "./DropZone";
 import { UploadPanel } from "./UploadPanel";
+import { ProjectSignature } from "./generative/ProjectSignature";
 
 export function NewSongView({
   onFiles,
@@ -22,6 +23,12 @@ export function NewSongView({
         <span>最大 200 MiB</span>
         <span>最长 600 秒</span>
       </div>
+      <ProjectSignature
+        seed="new-song"
+        phase="idle"
+        variant="stage"
+        testId="new-song-signature"
+      />
       <UploadPanel onUpload={onUpload} />
       <details
         className="advanced-source-actions"

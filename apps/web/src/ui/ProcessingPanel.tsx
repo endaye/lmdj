@@ -1,11 +1,15 @@
 import { UploadingView } from "./UploadingView";
+import { ProjectSignature } from "./generative/ProjectSignature";
+import { projectVisualPhase } from "./generative/visualSignature";
 
 export function ProcessingPanel({
   fileName,
+  signatureSeed,
   state,
   lastNonterminalState,
 }: {
   fileName: string;
+  signatureSeed: string;
   state: string;
   lastNonterminalState: string;
 }) {
@@ -18,6 +22,12 @@ export function ProcessingPanel({
           Source retained · <strong>{fileName}</strong>
         </p>
       </header>
+      <ProjectSignature
+        seed={signatureSeed}
+        phase={projectVisualPhase(state)}
+        variant="stage"
+        testId="processing-signature"
+      />
       <UploadingView
         state={state}
         lastNonterminalState={lastNonterminalState}

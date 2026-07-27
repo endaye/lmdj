@@ -1,6 +1,8 @@
 import { useState } from "react";
 import type { JobStatus, QueueCapacity } from "../api/client";
 import type { StoredSubmission } from "../jobs/storage";
+import { ProjectSignature } from "./generative/ProjectSignature";
+import { projectVisualPhase } from "./generative/visualSignature";
 
 export interface TrackedJob {
   submission: StoredSubmission;
@@ -157,6 +159,12 @@ function SongCard({
         <span>{stateLabel(job)}</span>
         <time dateTime={submittedAt(job)}>{formattedDate(job)}</time>
       </div>
+      <ProjectSignature
+        seed={job.submission.submissionId}
+        phase={projectVisualPhase(technicalState(job), Boolean(job.clientError))}
+        variant="band"
+        testId={`song-signature-${job.submission.submissionId}`}
+      />
       <div className="song-card__actions">
         {action === "open" && (
           <button type="button" onClick={() => onOpenCompleted(job)}>

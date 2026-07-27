@@ -81,7 +81,7 @@ button {
   color: var(--ink);
   background: var(--raised);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   padding: 8px 14px;
   cursor: pointer;
   transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
@@ -152,10 +152,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   content: "";
   width: 8px;
   height: 8px;
-  border-radius: 50%;
+  border-radius: 0;
   align-self: center;
   background: var(--lane-harmony);
-  box-shadow: 0 0 8px var(--lane-harmony);
+  box-shadow: none;
 }
 .wordmark-sub {
   font-family: "IBM Plex Mono", monospace;
@@ -173,7 +173,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-transform: uppercase;
   color: var(--ink-faint);
   border: 1px solid var(--edge);
-  border-radius: 999px;
+  border-radius: 0;
   padding: 4px 12px;
 }
 
@@ -199,7 +199,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   white-space: nowrap;
 }
 .btn-eject {
-  box-shadow: 3px 3px 0 var(--yellow);
+  box-shadow: none;
 }
 .btn-eject:hover {
   color: var(--ink);
@@ -207,7 +207,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   background: var(--yellow);
 }
 .btn-delete-track {
-  box-shadow: 3px 3px 0 var(--red);
+  box-shadow: none;
 }
 .btn-delete-track:hover {
   color: #fff;
@@ -216,7 +216,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .btn-eject:active,
 .btn-delete-track:active {
-  box-shadow: 1px 1px 0 var(--ink);
+  box-shadow: none;
 }
 
 /* --- Transport (reads as an LCD strip) ------------------------------------- */
@@ -230,9 +230,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink-dim);
   background: var(--well);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   padding: 4px 6px 4px 4px;
-  box-shadow: inset 0 1px 3px rgba(0, 0, 0, 0.6);
+  box-shadow: none;
 }
 .transport button {
   width: 34px;
@@ -303,10 +303,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   gap: 8px;
 }
 .ghost-pad {
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   background: linear-gradient(180deg, var(--panel-2), var(--well));
   border: 1px solid var(--edge);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), inset 0 -6px 12px rgba(0, 0, 0, 0.5);
+  box-shadow: none;
   display: grid;
   place-items: center;
   font-family: "IBM Plex Mono", monospace;
@@ -321,7 +321,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .drop-zone {
   border: 1.5px dashed var(--edge);
-  border-radius: var(--radius);
+  border-radius: 0;
   padding: 30px 24px;
   text-align: center;
   background: rgba(255, 255, 255, 0.012);
@@ -345,7 +345,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .upload-panel {
   border: 1px solid var(--edge);
-  border-radius: var(--radius);
+  border-radius: 0;
   background: var(--panel-2);
   padding: 16px;
   display: flex;
@@ -366,7 +366,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink);
   background: var(--well);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   padding: 8px 10px;
 }
 .api-base { font-family: "IBM Plex Mono", monospace; font-size: 13px; }
@@ -376,7 +376,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink);
   background: var(--raised);
   border: 1px solid var(--edge);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   padding: 5px 10px;
   cursor: pointer;
 }
@@ -386,7 +386,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .error-panel {
   border: 1px solid var(--alert);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   color: var(--alert);
   background: rgba(255, 84, 112, 0.06);
   padding: 12px 14px;
@@ -397,7 +397,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .banner-rejected {
   border: 1px solid var(--warn);
-  border-radius: var(--radius-sm);
+  border-radius: 0;
   color: var(--warn);
   background: rgba(255, 194, 75, 0.07);
   padding: 10px 14px;
@@ -418,7 +418,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .panel {
   background: var(--panel-2);
   border: 1px solid var(--edge);
-  border-radius: var(--radius);
+  border-radius: 0;
   padding: 18px;
 }
 .panel-title {
@@ -527,7 +527,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .pattern-playhead--running {
   background: var(--loop);
-  box-shadow: 3px 3px 0 var(--ink);
+  box-shadow: none;
 }
 .pattern-surface .transport {
   flex-wrap: nowrap;
@@ -679,10 +679,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink);
   text-align: left;
   user-select: none;
-  box-shadow: 4px 4px 0 var(--ink);
+  box-shadow: none;
   transition:
     transform 120ms ease,
-    box-shadow 120ms ease,
     background-color 120ms linear;
 }
 .pad--role-drums { --pad-role: var(--drums); }
@@ -694,15 +693,14 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .pad:hover {
   border-color: var(--ink);
-  background: var(--pad-role);
-  transform: translateY(-3px);
-  box-shadow: 7px 7px 0 var(--ink);
+  background: var(--ink);
+  color: var(--paper);
+  transform: none;
 }
 .pad:focus-visible {
   z-index: 4;
-  outline: 3px solid #fff;
+  outline: 3px solid var(--ink);
   outline-offset: 2px;
-  box-shadow: 0 0 0 5px var(--ink);
 }
 .pad-index,
 .pad-key {
@@ -735,19 +733,29 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   transform: rotate(var(--pad-geometry-angle));
   background: rgba(255, 255, 255, .42);
 }
-.pad[data-geometry-shape="circle"] .pad-geometry { border-radius: 50%; }
+.pad[data-geometry-shape="circle"] .pad-geometry,
+.project-signature__motif[data-shape="circle"],
+.performance-trace__mark {
+  border-radius: 50%;
+}
 .pad[data-geometry-shape="grid"] .pad-geometry {
   background:
     linear-gradient(90deg, transparent 45%, currentColor 46% 54%, transparent 55%),
     linear-gradient(transparent 45%, currentColor 46% 54%, transparent 55%),
     rgba(255, 255, 255, .42);
 }
-.pad[data-geometry-shape="slice"] .pad-geometry {
+.pad[data-geometry-shape="slice"] .pad-geometry,
+.project-signature__motif[data-shape="slice"] {
   border-radius: 50% 0;
+}
+.pad[data-geometry-shape="slice"] .pad-geometry {
   clip-path: polygon(0 0, 100% var(--pad-geometry-offset), 40% 100%);
 }
-.pad[data-geometry-shape="wave"] .pad-geometry {
+.pad[data-geometry-shape="wave"] .pad-geometry,
+.project-signature__motif[data-shape="wave"] {
   border-radius: 45% 55% 40% 60%;
+}
+.pad[data-geometry-shape="wave"] .pad-geometry {
   transform: rotate(var(--pad-geometry-angle)) skewX(-14deg);
 }
 .pad-slot {
@@ -790,22 +798,22 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .pad-state__icon { font-size: 1.2em; }
 
-.pad--selected,
-.pad[data-selected="true"] {
-  outline: 2px solid var(--ink);
-  outline-offset: 2px;
-  box-shadow: 0 0 0 2px var(--paper), 0 0 0 5px var(--ink);
+.pad[data-selected="true"]::after {
+  content: "";
+  position: absolute;
+  z-index: 4;
+  inset: 3px;
+  border: 2px solid var(--ink);
+  pointer-events: none;
 }
-.pad--selected:focus-visible,
-.pad[data-selected="true"]:focus-visible {
-  outline: 3px solid var(--paper);
-  outline-offset: 3px;
-  box-shadow: 0 0 0 3px var(--loop), 0 0 0 7px var(--ink);
+.pad[data-selected="true"]:hover::after {
+  border-color: var(--paper);
 }
 .pad[data-pressed="true"] {
-  transform: translateY(3px) scale(.96);
-  background: color-mix(in srgb, var(--pad-role) 84%, var(--ink));
-  box-shadow: 1px 1px 0 var(--ink);
+  border-width: 5px;
+  background: var(--pad-role);
+  color: var(--ink);
+  transform: translateY(1px);
 }
 .pad--muted {
   filter: grayscale(.8);
@@ -826,7 +834,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-style: solid;
   background: var(--paper);
   color: #5e5a53;
-  box-shadow: 3px 3px 0 #8d887f;
+  box-shadow: none;
 }
 .pad--empty .pad-geometry { opacity: .18; }
 .pad--reserved {
@@ -1035,7 +1043,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-radius: 0;
   background: var(--ink);
   color: #fff;
-  box-shadow: 4px 4px 0 var(--lead);
+  box-shadow: none;
   font-weight: 800;
 }
 .export-download:hover,
@@ -1075,7 +1083,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   overflow: hidden;
   border: 3px solid var(--ink);
   background: var(--panel);
-  box-shadow: 4px 4px 0 var(--ink);
+  box-shadow: none;
 }
 .step-grid table {
   width: 100%;
@@ -1112,7 +1120,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   max-width: var(--lane-width);
   background: var(--paper);
   border-right: 3px solid var(--ink);
-  box-shadow: 5px 0 0 color-mix(in srgb, var(--ink) 12%, transparent);
+  box-shadow: none;
 }
 .step-grid tbody th {
   height: auto;
@@ -1252,23 +1260,23 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   inset: 8px 0;
   border-block: 2px solid var(--ink);
   background: var(--note-color, var(--lane-harmony));
-  box-shadow: 0 3px 0 color-mix(in srgb, var(--note-color, var(--lane-harmony)) 35%, var(--ink));
+  box-shadow: none;
 }
 .step-grid td.note-start::before {
   left: 4px;
   border-left: 2px solid var(--ink);
-  border-radius: 5px 0 0 5px;
+  border-radius: 0;
 }
 .step-grid td.note-end::before {
   right: 4px;
   border-right: 2px solid var(--ink);
-  border-radius: 0 5px 5px 0;
+  border-radius: 0;
 }
 .step-grid td.note-start.note-end::before {
   inset: 6px 5px 8px;
   border: 2px solid var(--ink);
-  border-radius: 6px;
-  box-shadow: 2px 2px 0 var(--ink);
+  border-radius: 0;
+  box-shadow: none;
 }
 .step-grid tr[data-duration-mode="loop"] td.note-active::before {
   background:
@@ -1291,7 +1299,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   left: 50%;
   width: 3px;
   background: var(--loop);
-  box-shadow: -1px 0 0 var(--ink), 1px 0 0 var(--ink);
+  box-shadow: none;
   transform: translateX(-50%);
 }
 .step-grid__beat-ruler .step-playhead {
@@ -1353,7 +1361,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   letter-spacing: 0.08em;
   text-transform: uppercase;
   padding: 8px 14px;
-  border-radius: 999px;
+  border-radius: 0;
   border: 1px solid var(--edge);
   color: var(--ink-faint);
 }
@@ -1362,7 +1370,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: #0c0d11;
   background: var(--lane-harmony);
   border-color: var(--lane-harmony);
-  box-shadow: 0 0 14px color-mix(in srgb, var(--lane-harmony) 45%, transparent);
+  box-shadow: none;
 }
 .stage--pending { color: var(--ink-faint); }
 .uploading-error { color: var(--alert); margin: 22px 0; white-space: pre-wrap; font-family: "IBM Plex Mono", monospace; }
@@ -1379,8 +1387,11 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
+  .performance-trace { display: none; }
   .pad:hover,
+  .pad:active,
   .pad[data-pressed="true"] {
+    transition: none;
     transform: none;
   }
 }
@@ -1401,10 +1412,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border: 3px solid var(--ink);
   background: var(--paper);
   color: var(--ink);
-  box-shadow: 6px 6px 0 var(--ink);
+  box-shadow: none;
 }
 .workbench-shell[data-layout="phone"] {
-  box-shadow: 4px 4px 0 var(--ink);
+  box-shadow: none;
 }
 
 .workbench-app-bar {
@@ -1466,7 +1477,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .global-navigation .global-navigation__new {
   background: var(--ink);
   color: #fff;
-  box-shadow: inset 0 -4px 0 var(--yellow);
+  box-shadow: none;
 }
 .global-navigation .global-navigation__new:hover,
 .global-navigation .global-navigation__new[aria-current="page"] {
@@ -1522,7 +1533,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   flex: 0 0 auto;
   gap: 5px;
   padding: 6px 9px;
-  box-shadow: 3px 3px 0 var(--red);
+  box-shadow: none;
 }
 .workbench-app-bar .btn-delete-track > span:first-child {
   font-size: 18px;
@@ -1618,6 +1629,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .workbench-shell[data-content-fit="fixed"] .workbench-instrument-canvas {
   overflow: hidden;
 }
+.workbench-performance-view {
+  position: relative;
+  isolation: isolate;
+}
 .workbench-performance-view:not([hidden]) {
   min-width: 0;
   min-height: 0;
@@ -1627,6 +1642,49 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     minmax(88px, .85fr);
   gap: 8px;
   overflow: hidden;
+}
+.performance-trace-layer {
+  position: absolute;
+  z-index: 8;
+  inset: 8%;
+  overflow: hidden;
+  pointer-events: none;
+}
+.performance-trace {
+  --trace-color: var(--action);
+  position: absolute;
+  left: clamp(20%, var(--trace-offset), 72%);
+  top: 50%;
+  width: 24%;
+  aspect-ratio: 1;
+  border: 5px solid var(--trace-color);
+  border-left-color: transparent;
+  border-bottom-color: transparent;
+  opacity: .72;
+  transform:
+    translate(-50%, -50%)
+    skewX(-18deg)
+    rotate(var(--trace-angle));
+  animation: performance-trace-fade var(--trace-duration) linear forwards;
+}
+.performance-trace--drums { --trace-color: var(--drums); }
+.performance-trace--bass { --trace-color: var(--bass); }
+.performance-trace--harmony { --trace-color: var(--harmony); }
+.performance-trace--lead { --trace-color: var(--lead); }
+.performance-trace--action { --trace-color: var(--action); }
+.performance-trace--empty { --trace-color: var(--muted); }
+.performance-trace__mark {
+  position: absolute;
+  right: 8%;
+  top: 8%;
+  width: 14px;
+  height: 14px;
+  border: 3px solid var(--ink);
+  background: var(--trace-color);
+}
+@keyframes performance-trace-fade {
+  from { opacity: .72; }
+  to { opacity: 0; }
 }
 .workbench-readiness {
   grid-area: readiness;
@@ -1732,7 +1790,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     width: min(360px, 50%);
     overflow-y: auto;
     border-width: 0 0 0 3px;
-    box-shadow: -8px 0 0 rgba(17, 17, 15, .2);
+    box-shadow: none;
     transform: translateX(102%);
     visibility: hidden;
     pointer-events: none;
@@ -1742,7 +1800,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     right: auto;
     left: 0;
     border-width: 0 3px 0 0;
-    box-shadow: 8px 0 0 rgba(17, 17, 15, .2);
+    box-shadow: none;
     transform: translateX(-102%);
   }
   .workbench-context-inspector--open,
@@ -2152,6 +2210,64 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 /* --- Library / New Song / Processing / Failed share the Creator shell ----- */
 
+.project-signature {
+  --signature-color: var(--loop);
+  position: relative;
+  isolation: isolate;
+  min-width: 0;
+  overflow: hidden;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  pointer-events: none;
+}
+.project-signature[data-phase="queued"],
+.project-signature[data-phase="preflight"] { --signature-color: var(--yellow); }
+.project-signature[data-phase="separating"],
+.project-signature[data-phase="extracting"],
+.project-signature[data-phase="patchifying"],
+.project-signature[data-phase="processing"] { --signature-color: var(--mint); }
+.project-signature[data-phase="ready"] { --signature-color: var(--lead); }
+.project-signature[data-phase="review"] { --signature-color: var(--yellow); }
+.project-signature[data-phase="error"] { --signature-color: var(--red); }
+.project-signature[data-variant="band"] { width: 96px; min-height: 58px; }
+.project-signature[data-variant="stage"] { min-height: 116px; }
+.project-signature[data-variant="stamp"] { min-height: 72px; }
+.project-signature__grid {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+}
+.project-signature__grid i {
+  border-right: 1px solid var(--ink);
+  background: transparent;
+}
+.project-signature__grid i:last-child { border-right: 0; }
+.project-signature__grid i[data-active="true"] {
+  background: var(--signature-color);
+}
+.project-signature__motif {
+  position: absolute;
+  right: calc(var(--signature-offset) * -0.2);
+  bottom: -35%;
+  width: clamp(52px, 22%, 118px);
+  aspect-ratio: 1;
+  border: 3px solid var(--ink);
+  background:
+    repeating-linear-gradient(
+      var(--signature-angle),
+      color-mix(in srgb, var(--signature-color) 76%, var(--paper)) 0 7px,
+      transparent 7px 14px
+    );
+  transform: rotate(var(--signature-angle));
+}
+.processing-panel > .project-signature {
+  width: 100%;
+}
+.export-checklist > .project-signature {
+  margin-bottom: 12px;
+}
+
 .workbench-state-key {
   grid-area: project;
   justify-self: end;
@@ -2180,7 +2296,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   grid-template-columns: minmax(180px, .8fr) minmax(280px, 1.2fr);
   border: 3px solid var(--ink);
   background: var(--paper);
-  box-shadow: 7px 7px 0 var(--ink);
+  box-shadow: none;
 }
 .loaded-source-card__identity {
   min-width: 0;
@@ -2322,7 +2438,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 @container workbench (max-width: 599px) {
   .loaded-source-card {
     grid-template-columns: minmax(0, 1fr);
-    box-shadow: 4px 4px 0 var(--ink);
+    box-shadow: none;
   }
   .loaded-source-card__identity {
     border-right: 0;
@@ -2378,7 +2494,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-radius: 0;
   background: var(--ink);
   color: #fff;
-  box-shadow: 3px 3px 0 var(--yellow);
+  box-shadow: none;
   font-family: "IBM Plex Mono", monospace;
   font-weight: 800;
   cursor: pointer;
@@ -2394,7 +2510,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-radius: 0;
   background: var(--ink);
   color: #fff;
-  box-shadow: 3px 3px 0 var(--yellow);
+  box-shadow: none;
   font-family: "IBM Plex Mono", monospace;
   font-weight: 800;
 }
@@ -2456,7 +2572,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   gap: 16px;
   border: 3px solid var(--ink);
   background: var(--loop);
-  box-shadow: 6px 6px 0 var(--ink);
+  box-shadow: none;
 }
 .my-songs__header > div:first-child { padding: 18px; }
 .my-songs__header span,
@@ -2511,14 +2627,14 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   padding: 8px 14px;
   background: var(--ink);
   color: #fff;
-  box-shadow: 3px 3px 0 var(--yellow);
+  box-shadow: none;
   font-family: "IBM Plex Mono", monospace;
   font-weight: 800;
 }
 .song-section {
   border: 3px solid var(--ink);
   background: var(--paper);
-  box-shadow: 6px 6px 0 var(--ink);
+  box-shadow: none;
 }
 .song-section > header {
   display: flex;
@@ -2540,7 +2656,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   min-height: 32px;
   place-items: center;
   border: 2px solid var(--ink);
-  border-radius: 50%;
+  border-radius: 0;
   background: var(--yellow);
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
@@ -2556,7 +2672,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .song-card {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) 96px auto;
   align-items: stretch;
   border-bottom: 2px solid var(--ink);
 }
@@ -2641,7 +2757,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border: 2px solid var(--ink);
   padding: 8px;
   background: var(--paper);
-  box-shadow: 5px 5px 0 var(--ink);
+  box-shadow: none;
 }
 .song-card__menu-popover button {
   min-height: 38px;
@@ -2716,7 +2832,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   width: min(560px, 100%);
   border: 3px solid var(--ink);
   background: var(--paper);
-  box-shadow: 10px 10px 0 var(--red);
+  box-shadow: none;
 }
 .delete-dialog header,
 .delete-dialog > p,
@@ -2777,7 +2893,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink);
   background: var(--mint);
   border: 2px solid var(--ink);
-  box-shadow: 5px 5px 0 var(--ink);
+  box-shadow: none;
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   font-weight: 800;

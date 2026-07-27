@@ -65,6 +65,7 @@ function StatefulChecklist({
       apiBase="http://api.test/"
       jobId="job123"
       patchId="song-a1b2c3d4"
+      signatureSeed="submission-export"
       status={status}
       apiClient={apiClient}
       onStatusChange={setStatus}
@@ -88,6 +89,15 @@ describe("ExportChecklist", () => {
     };
 
     render(<StatefulChecklist initialStatus={status} apiClient={api()} />);
+
+    expect(screen.getByTestId("export-signature")).toHaveAttribute(
+      "data-phase",
+      "review",
+    );
+    expect(screen.getByTestId("export-signature")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
 
     const expected = [
       ["Stems", "Review", "review"],

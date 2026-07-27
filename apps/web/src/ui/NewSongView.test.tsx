@@ -18,6 +18,10 @@ describe("NewSongView", () => {
     ).toBeInTheDocument();
     expect(screen.getByLabelText("上传限制")).toHaveTextContent("最大 200 MiB");
     expect(screen.getByTestId("api-panel")).toBeInTheDocument();
+    expect(screen.getByTestId("new-song-signature")).toHaveAttribute(
+      "data-phase",
+      "idle",
+    );
     expect(screen.getByTestId("advanced-source-actions")).not.toHaveAttribute(
       "open",
     );

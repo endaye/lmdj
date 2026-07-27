@@ -13,6 +13,7 @@ import type { Patch } from "../patch/loader";
 import { FakeAudioContext } from "../test/fakes";
 import { AudioEngine } from "../engine/AudioEngine";
 import { App } from "./App";
+import { createVisualSignature } from "./generative/visualSignature";
 import {
   ApiError,
   type ApiClient,
@@ -154,6 +155,89 @@ describe("App", () => {
     const midiController = screen.getByRole("region", { name: "MIDI controller" });
     expect(screen.getByTestId("context-inspector")).toContainElement(midiController);
     expect(screen.getByTestId("instrument-canvas")).not.toContainElement(midiController);
+  });
+
+  it("creates one bounded visual trace only after a direct Pad press", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({
+      matches: false,
+      media: "(prefers-reduced-motion: reduce)",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    expect(screen.getByTestId("performance-trace-layer")).toBeInTheDocument();
+    expect(screen.queryByTestId("performance-trace")).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId("play-toggle"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Stop Pattern" })).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("performance-trace")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Stop Pattern" }));
+
+    fireEvent.pointerDown(screen.getByTestId("pad-0"), {
+      button: 0,
+      pointerId: 1,
+    });
+    expect(screen.getAllByTestId("performance-trace")).toHaveLength(1);
+    expect(screen.getByTestId("performance-trace")).toHaveAttribute(
+      "data-pad-index",
+      "0",
+    );
+    fireEvent.pointerUp(screen.getByTestId("pad-0"), {
+      button: 0,
+      pointerId: 1,
+    });
+  });
+
+  it("clears direct Pad traces when leaving and re-entering a project", async () => {
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({
+      matches: false,
+      media: "(prefers-reduced-motion: reduce)",
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    renderApp(golden);
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
+
+    fireEvent.pointerDown(screen.getByTestId("pad-0"), {
+      button: 0,
+      pointerId: 1,
+    });
+    expect(screen.getAllByTestId("performance-trace")).toHaveLength(1);
+    fireEvent.pointerUp(screen.getByTestId("pad-0"), {
+      button: 0,
+      pointerId: 1,
+    });
+
+    await userEvent.click(screen.getByTestId("my-songs-nav"));
+    expect(screen.queryByTestId("performance-trace-layer")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("new-song-nav"));
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId("performance-trace-layer")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("performance-trace")).not.toBeInTheDocument();
+
+    fireEvent.pointerDown(screen.getByTestId("pad-1"), {
+      button: 0,
+      pointerId: 2,
+    });
+    expect(screen.getAllByTestId("performance-trace")).toHaveLength(1);
+    fireEvent.pointerUp(screen.getByTestId("pad-1"), {
+      button: 0,
+      pointerId: 2,
+    });
+    await userEvent.click(screen.getByTestId("new-song-nav"));
+    await userEvent.click(screen.getByRole("button", { name: /示例/i }));
+    await waitFor(() =>
+      expect(screen.getByTestId("performance-trace-layer")).toBeInTheDocument(),
+    );
+    expect(screen.queryByTestId("performance-trace")).not.toBeInTheDocument();
   });
 
   it("switches between a truthful loaded Source context and the retained Performance instrument", async () => {
@@ -411,6 +495,53 @@ describe("App API path", () => {
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
   });
 
+  it("keeps one browser submission signature from Processing through Export", async () => {
+    let resolvePoll: ((status: JobStatus) => void) | undefined;
+    const pollJob = vi.fn<ApiClient["pollJob"]>(
+      async (_base, _jobId, onState) => {
+        onState?.(apiJob("job123", "separating"));
+        return await new Promise<JobStatus>((resolve) => {
+          resolvePoll = resolve;
+        });
+      },
+    );
+    renderAppWithApi(fakeApi({ pollJob }));
+    await submitViaApi();
+
+    const processingSignature = await screen.findByTestId(
+      "processing-signature",
+    );
+    const [storedSubmission] = JSON.parse(
+      localStorage.getItem(STORAGE_KEY) ?? "[]",
+    ) as StoredSubmission[];
+    const expectedSignature = createVisualSignature(
+      storedSubmission.submissionId,
+    ).id;
+    const signature = processingSignature.dataset.signature;
+    expect(signature).toBeTruthy();
+    expect(processingSignature).toHaveAttribute(
+      "data-signature",
+      expectedSignature,
+    );
+
+    await act(async () => {
+      resolvePoll?.(
+        apiJob("job123", "completed", {
+          patch_id: "job123-abc",
+          package_dir: "job123",
+        }),
+      );
+      await Promise.resolve();
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("pad-matrix")).toBeInTheDocument(),
+    );
+    await userEvent.click(screen.getByRole("button", { name: "Export" }));
+    const exportSignature = await screen.findByTestId("export-signature");
+    expect(exportSignature).toHaveAttribute("data-signature", expectedSignature);
+    expect(exportSignature.dataset.signature).toBe(signature);
+  });
+
   it("does not hijack the page when a background song completes", async () => {
     let resolvePoll: ((status: JobStatus) => void) | undefined;
     const pollJob = vi.fn<ApiClient["pollJob"]>(
@@ -658,6 +789,7 @@ describe("App API path", () => {
     expect(
       screen.queryByRole("button", { name: /Download Creator Pack/i }),
     ).not.toBeInTheDocument();
+    expect(screen.queryByTestId("export-signature")).not.toBeInTheDocument();
     expect(fetchCreatorExportStatus).not.toHaveBeenCalled();
   });
 
@@ -1119,6 +1251,10 @@ describe("App API path", () => {
     await waitFor(() => expect(screen.getByTestId("failed-state")).toHaveTextContent("demucs boom"));
     expect(screen.getByTestId("failed-state")).toHaveTextContent("song.wav");
     expect(screen.getByTestId("failed-state")).toHaveTextContent("separating");
+    expect(screen.getByTestId("failed-signature")).toHaveAttribute(
+      "data-phase",
+      "error",
+    );
     await userEvent.click(
       within(screen.getByTestId("failed-state")).getByRole("button", {
         name: "我的歌曲",

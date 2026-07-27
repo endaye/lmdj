@@ -1,7 +1,7 @@
 # LMDJ Polanyi Living Instrument UI 设计
 
 - 日期：2026-07-27
-- 状态：用户已逐节确认；待书面 Spec 复核
+- 状态：本分支已实现并通过自动化验证；待 PR / CI
 - 目标落点：`apps/web/`
 - 设计范围：我的歌曲 → 上传 / 处理 → Creator Workbench → Creator Export
 - 实施优先级：Creator Workbench 演奏体验优先，流程一致性其次
@@ -92,9 +92,9 @@
 - My Songs、Processing、Workbench 与 Export 的视觉连续性；
 - 对上述规则的单元、组件和浏览器验收。
 
-### 3.3 本设计不声明已落地
+### 3.3 本轮边界
 
-- 本文只是已确认设计，不代表视觉重构或 Performance Trace 已实现；
+- 视觉重构与 Performance Trace 已在本轮落地；以下内容仍明确不在本轮范围内；
 - Chameleon 2D / 3D、角色状态机和皮肤系统不在本轮；
 - 不修改 Audio Worker、API、Patchify 或共享契约。
 
@@ -586,3 +586,26 @@ npm run test:e2e -- workbench-responsive.spec.ts
 8. 当前阶段保持极度克制和理性；
 9. 高度 Kawaii 的角色层集中后置；
 10. 本轮不实现 Chameleon、3D、皮肤或 Web3。
+
+## 20. 本分支实现验证
+
+实现范围：
+
+- 共享确定性 Visual Signature；
+- My Songs / Processing / Workbench / Export 的同 seed 视觉连续性；
+- 直接 Pad Press 的一拍 Performance Trace；
+- 全部 UI 直角、零阴影和平面反馈；
+- Reduced Motion、响应式、状态真实性与契约纯度回归。
+
+验证命令：
+
+```bash
+cd apps/web
+npm test
+npm run check-contract
+npm run build
+npm run test:e2e -- workbench-responsive.spec.ts
+```
+
+该状态只表示本实现分支通过本地自动化验证，不表示已推送、已创建 PR、已合并
+或已部署。

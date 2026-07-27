@@ -5,6 +5,10 @@ import type {
   PointerEvent,
 } from "react";
 import type { Pad } from "../patch/loader";
+import {
+  createVisualSignature,
+  roleForPad,
+} from "./generative/visualSignature";
 
 export type PadVisualState =
   | "idle"
@@ -24,45 +28,6 @@ const STATE_PRESENTATION: Record<PadVisualState, { label: string; icon: string }
   empty: { label: "EMPTY", icon: "○" },
   reserved: { label: "RESERVED", icon: "◇" },
 };
-
-function hashSource(value: string): number {
-  let hash = 2166136261;
-  for (let index = 0; index < value.length; index += 1) {
-    hash ^= value.charCodeAt(index);
-    hash = Math.imul(hash, 16777619);
-  }
-  return hash >>> 0;
-}
-
-function geometryFor(pad: Pad): {
-  signature: string;
-  shape: "circle" | "grid" | "slice" | "wave";
-  style: CSSProperties;
-} {
-  const identity = pad.element_id ?? pad.slot;
-  const hash = hashSource(identity);
-  const shapes = ["circle", "grid", "slice", "wave"] as const;
-  const shape = shapes[hash % shapes.length];
-  const angle = (hash >>> 4) % 180;
-  const offset = 18 + ((hash >>> 12) % 55);
-  return {
-    signature: `${shape}-${angle}-${offset}`,
-    shape,
-    style: {
-      "--pad-geometry-angle": `${angle}deg`,
-      "--pad-geometry-offset": `${offset}%`,
-    } as CSSProperties,
-  };
-}
-
-function roleFor(pad: Pad): string {
-  if (pad.action === "empty") return "empty";
-  if (pad.index === 0) return "drums";
-  if (pad.index === 1) return "bass";
-  if (pad.index === 2) return "harmony";
-  if (pad.index === 3) return "lead";
-  return "action";
-}
 
 function reducedMotionPreferred(): boolean {
   return typeof window !== "undefined"
@@ -90,7 +55,14 @@ export function PadButton({
   onToggleMute?: (index: number) => void;
 }) {
   const state = STATE_PRESENTATION[visualState];
-  const geometry = geometryFor(pad);
+  const identity = pad.element_id ?? pad.slot;
+  const geometry = createVisualSignature(identity);
+  const geometryStyle = {
+    "--pad-geometry-angle": `${geometry.angle}deg`,
+    "--pad-geometry-offset": `${geometry.offset}%`,
+    "--pad-geometry-density": String(geometry.density),
+    "--pad-geometry-phase": `${geometry.phase}%`,
+  } as CSSProperties;
   const selected = visualState === "selected" || visualState === "playing";
 
   const handleContextMenu = (event: MouseEvent<HTMLButtonElement>) => {
@@ -135,18 +107,18 @@ export function PadButton({
   return (
     <button
       type="button"
-      className={`pad pad--role-${roleFor(pad)} pad--${visualState}`}
+      className={`pad pad--role-${roleForPad(pad)} pad--${visualState}`}
       data-testid={`pad-${pad.index}`}
       data-pad-index={pad.index}
       data-visual-state={visualState}
-      data-geometry-signature={geometry.signature}
+      data-geometry-signature={geometry.id}
       data-geometry-shape={geometry.shape}
       data-reduced-motion={String(reducedMotionPreferred())}
       data-selected={String(selected)}
       data-pressed={String(pressed)}
       aria-label={`Pad ${pad.index + 1}: ${pad.label}, ${visualState}`}
       aria-pressed={selected}
-      style={geometry.style}
+      style={geometryStyle}
       onClick={handleClick}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerRelease}

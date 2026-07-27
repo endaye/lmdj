@@ -10,6 +10,12 @@ const VIEWPORTS = [
   { name: "short-phone", width: 360, height: 640 },
 ] as const;
 
+const TRACE_VIEWPORTS = [
+  { name: "desktop-wide", width: 1440, height: 900 },
+  { name: "portrait-tablet", width: 768, height: 1024 },
+  { name: "phone", width: 390, height: 844 },
+] as const;
+
 const SHELL_BREAKPOINTS = [
   { name: "wide", width: 1280, layout: "wide" },
   { name: "compact-wide-start", width: 960, layout: "compact-wide" },
@@ -52,6 +58,18 @@ async function visualSignature(locator: Locator): Promise<string> {
   });
 }
 
+async function expectRectilinearShadowless(locator: Locator): Promise<void> {
+  const style = await locator.evaluate((element) => {
+    const computed = getComputedStyle(element);
+    return {
+      borderRadius: computed.borderRadius,
+      boxShadow: computed.boxShadow,
+    };
+  });
+  expect(style.borderRadius).toBe("0px");
+  expect(style.boxShadow).toBe("none");
+}
+
 async function openExampleWithMissingAsset(page: Page): Promise<void> {
   // The product remains contract-pure: a 404 makes loadPatch mark the referenced
   // Patch element missing; the test does not inject view-only Pad data.
@@ -87,6 +105,96 @@ async function setShellWidth(shell: Locator, width: number): Promise<void> {
   );
   expect(await shell.evaluate((element) => element.clientWidth)).toBe(width);
 }
+
+test("Creator UI is rectilinear and shadowless while generative marks stay decorative", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openExampleWithMissingAsset(page);
+
+  const surfaces = [
+    page.getByTestId("workbench-shell"),
+    page.getByTestId("app-bar"),
+    page.getByTestId("pattern-surface"),
+    page.getByTestId("pad-0"),
+    page.getByTestId("context-inspector"),
+    page.getByTestId("status-bar"),
+  ];
+  for (const surface of surfaces) {
+    await expectRectilinearShadowless(surface);
+  }
+
+  const traceLayer = page.getByTestId("performance-trace-layer");
+  await expect(traceLayer).toHaveCSS("pointer-events", "none");
+});
+
+for (const viewport of TRACE_VIEWPORTS) {
+  test(`${viewport.name} direct Performance Traces stay inside Instrument Canvas`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
+    await openExampleWithMissingAsset(page);
+
+    const canvas = page.getByTestId("instrument-canvas");
+    const traces = page.getByTestId("performance-trace");
+    for (const padIndex of [0, 1, 0]) {
+      const pad = page.getByTestId(`pad-${padIndex}`);
+      const existingSignatures = await traces.evaluateAll((elements) =>
+        elements.map((element) => element.getAttribute("data-signature"))
+      );
+      const padBox = await box(pad);
+      await page.mouse.move(
+        padBox.x + padBox.width / 2,
+        padBox.y + padBox.height / 2,
+      );
+      await page.mouse.down();
+      await expect(pad).toHaveAttribute("data-pressed", "true");
+
+      const trace = traces.last();
+      await expect(trace).toBeVisible();
+      await expect(trace).toHaveAttribute("data-pad-index", String(padIndex));
+      expect(existingSignatures).not.toContain(
+        await trace.getAttribute("data-signature"),
+      );
+      const [canvasBox, traceBox] = await Promise.all([
+        box(canvas),
+        box(trace),
+      ]);
+
+      await page.mouse.up();
+      await expect(pad).toHaveAttribute("data-pressed", "false");
+      expect(traceBox.x).toBeGreaterThanOrEqual(canvasBox.x);
+      expect(traceBox.y).toBeGreaterThanOrEqual(canvasBox.y);
+      expect(traceBox.x + traceBox.width).toBeLessThanOrEqual(
+        canvasBox.x + canvasBox.width,
+      );
+      expect(traceBox.y + traceBox.height).toBeLessThanOrEqual(
+        canvasBox.y + canvasBox.height,
+      );
+    }
+  });
+}
+
+test("Reduced Motion keeps direct Pad feedback without a moving trace", async ({
+  page,
+}) => {
+  await page.emulateMedia({ reducedMotion: "reduce" });
+  await openExampleWithMissingAsset(page);
+  await page.getByTestId("pad-0").dispatchEvent("pointerdown", {
+    button: 0,
+    pointerId: 1,
+    isPrimary: true,
+  });
+
+  await expect(page.getByTestId("pad-0")).toHaveAttribute(
+    "data-pressed",
+    "true",
+  );
+  await expect(page.getByTestId("performance-trace")).toHaveCount(0);
+});
 
 test("Source file chooser uses white button text", async ({ page }) => {
   await page.goto("/");
