@@ -65,15 +65,15 @@ describe("MidiInput", () => {
     expect(access.onstatechange).toBeNull();
   });
 
-  it("accepts Note On with positive velocity and ignores note-off forms", async () => {
+  it("reports press and release for both MIDI note-off forms", async () => {
     const input = new FakeMidiInput("one", "Controller One");
     const access = new FakeMidiAccess();
     access.add(input);
-    const triggered: number[] = [];
+    const events: Array<[number, boolean]> = [];
     const midi = new MidiInput(
-      (note) => {
+      (note, pressed) => {
         const index = padIndexForNote(DEFAULT_DIRECT_MAPPING, note, "A");
-        if (index !== null) triggered.push(index);
+        if (index !== null) events.push([index, pressed]);
       },
       async () => access as unknown as MIDIAccess,
     );
@@ -83,7 +83,11 @@ describe("MidiInput", () => {
     input.emit([0x90, 36, 0]);
     input.emit([0x80, 36, 100]);
 
-    expect(triggered).toEqual([0]);
+    expect(events).toEqual([
+      [0, true],
+      [0, false],
+      [0, false],
+    ]);
   });
 
   it("listens to every connected input and binds devices added later", async () => {

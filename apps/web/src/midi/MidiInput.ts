@@ -28,7 +28,7 @@ export class MidiInput {
   private disposed = false;
 
   constructor(
-    private readonly onNote: (note: number) => void,
+    private readonly onNote: (note: number, pressed: boolean) => void,
     requestAccess?: () => Promise<MIDIAccess>,
   ) {
     const nativeRequest =
@@ -127,7 +127,11 @@ export class MidiInput {
     const command = data[0] & 0xf0;
     const note = data[1];
     const velocity = data[2];
-    if (command === 0x90 && velocity > 0) this.onNote(note);
+    if (command === 0x90 && velocity > 0) {
+      this.onNote(note, true);
+    } else if (command === 0x80 || (command === 0x90 && velocity === 0)) {
+      this.onNote(note, false);
+    }
   }
 
   private update(snapshot: MidiSnapshot): void {

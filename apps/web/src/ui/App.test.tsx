@@ -219,8 +219,14 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
 
-    for (const key of ["1", "8", "Q", "I"]) {
+    fireEvent.keyDown(window, { key: "1" });
+    expect(screen.getByTestId("pad-0")).toHaveAttribute("data-pressed", "true");
+    fireEvent.keyUp(window, { key: "1" });
+    expect(screen.getByTestId("pad-0")).toHaveAttribute("data-pressed", "false");
+
+    for (const key of ["8", "Q", "I"]) {
       fireEvent.keyDown(window, { key });
+      fireEvent.keyUp(window, { key });
     }
 
     expect(triggerPad).toHaveBeenNthCalledWith(1, 0);

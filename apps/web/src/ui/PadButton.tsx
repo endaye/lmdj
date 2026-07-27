@@ -1,4 +1,9 @@
-import type { CSSProperties, MouseEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent,
+  MouseEvent,
+  PointerEvent,
+} from "react";
 import type { Pad } from "../patch/loader";
 
 export type PadVisualState =
@@ -68,16 +73,20 @@ function reducedMotionPreferred(): boolean {
 export function PadButton({
   pad,
   visualState,
+  pressed,
   keyHint,
   onSelect,
-  onTrigger,
+  onPress,
+  onRelease,
   onToggleMute,
 }: {
   pad: Pad;
   visualState: PadVisualState;
+  pressed: boolean;
   keyHint: string;
   onSelect: (index: number) => void;
-  onTrigger?: (index: number) => void;
+  onPress?: (index: number) => void;
+  onRelease?: (index: number) => void;
   onToggleMute?: (index: number) => void;
 }) {
   const state = STATE_PRESENTATION[visualState];
@@ -88,6 +97,39 @@ export function PadButton({
     if (!onToggleMute) return;
     event.preventDefault();
     onToggleMute(pad.index);
+  };
+
+  const handlePointerDown = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!onPress || event.isPrimary === false || event.button > 0) return;
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    onPress(pad.index);
+  };
+
+  const handlePointerRelease = (event: PointerEvent<HTMLButtonElement>) => {
+    if (!onRelease) return;
+    onRelease(pad.index);
+    if (event.currentTarget.hasPointerCapture?.(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+  };
+
+  const handleKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!onPress || event.repeat || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    onPress(pad.index);
+  };
+
+  const handleKeyUp = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (!onRelease || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    onRelease(pad.index);
+  };
+
+  const handleClick = (event: MouseEvent<HTMLButtonElement>) => {
+    onSelect(pad.index);
+    if (event.detail !== 0 || !onPress || !onRelease) return;
+    onPress(pad.index);
+    onRelease(pad.index);
   };
 
   return (
@@ -101,13 +143,17 @@ export function PadButton({
       data-geometry-shape={geometry.shape}
       data-reduced-motion={String(reducedMotionPreferred())}
       data-selected={String(selected)}
+      data-pressed={String(pressed)}
       aria-label={`Pad ${pad.index + 1}: ${pad.label}, ${visualState}`}
       aria-pressed={selected}
       style={geometry.style}
-      onClick={() => {
-        onSelect(pad.index);
-        onTrigger?.(pad.index);
-      }}
+      onClick={handleClick}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerRelease}
+      onPointerCancel={handlePointerRelease}
+      onLostPointerCapture={handlePointerRelease}
+      onKeyDown={handleKeyDown}
+      onKeyUp={handleKeyUp}
       onContextMenu={handleContextMenu}
     >
       <span className="pad-index">{String(pad.index + 1).padStart(2, "0")}</span>
