@@ -1,0 +1,23 @@
+{
+  "name": "LMDJ Sound Role Icons",
+  "version": 2,
+  "concept": "Sound Specimens",
+  "grid": 32,
+  "stroke_width": 2.4,
+  "roles": [
+    {"id": "kick", "label": "Kick", "family": "drums", "color": "#FF4F31", "silhouette": "impact monolith"},
+    {"id": "snare", "label": "Snare", "family": "drums", "color": "#FF4F31", "silhouette": "tension vessel"},
+    {"id": "hat", "label": "Hat", "family": "drums", "color": "#FF4F31", "silhouette": "orbiting saucer"},
+    {"id": "percussion", "label": "Percussion", "family": "drums", "color": "#FF4F31", "silhouette": "geometric ensemble"},
+    {"id": "bass", "label": "Bass", "family": "bass", "color": "#8A4AF3", "silhouette": "low-frequency creature"},
+    {"id": "melody", "label": "Melody", "family": "harmony", "color": "#46C79B", "silhouette": "pitch constellation"},
+    {"id": "vocal", "label": "Vocal", "family": "lead", "color": "#FFD21C", "silhouette": "broadcast totem"},
+    {"id": "phrase", "label": "Phrase", "family": "loop", "color": "#32C7E9", "silhouette": "bounded mix specimen"}
+  ],
+  "variant_rule": "A and B reuse the same role icon; distinguish variants with an external A/B badge.",
+  "usage": {
+    "pattern_sidebar": "24px icon, full opacity, accessible label retained",
+    "pad_background": "72-112px icon, 12-24% opacity, crop allowed",
+    "minimum_size": "16px"
+  }
+}
