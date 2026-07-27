@@ -47,10 +47,17 @@ describe("PatternSurface", () => {
         .getByTestId("pattern-summary")
         .closest(".pattern-surface__header"),
     ).toBeInTheDocument();
+    const controls = within(surface).getByTestId("pattern-controls");
+    expect(within(controls).getByTestId("transport-bpm")).toBeInTheDocument();
+    expect(within(controls).getByTestId("transport-loop")).toBeInTheDocument();
+    expect(within(controls).getByTestId("play-toggle")).toBeInTheDocument();
+    expect(controls.lastElementChild?.lastElementChild).toBe(
+      within(controls).getByTestId("play-toggle"),
+    );
     expect(within(surface).getByTestId("step-grid")).toBeInTheDocument();
   });
 
-  it("shows compact timing values while preserving full precision and source identity", () => {
+  it("shows compact timing values with full precision but omits duplicate source identity", () => {
     const bundle = makeBundle();
     bundle.patch.bpm = 117.453835;
     bundle.patch.loop_seconds = 8.173424052096724;
@@ -69,10 +76,8 @@ describe("PatternSurface", () => {
       "title",
       "Loop 8.173424052096724 seconds",
     );
-    expect(screen.getByTestId("transport-source")).toHaveTextContent(
-      bundle.patch.patch_id,
-    );
-    expect(screen.getByTestId("transport-source")).toHaveAttribute("tabindex", "0");
+    expect(screen.queryByTestId("transport-source")).not.toBeInTheDocument();
+    expect(screen.queryByText(bundle.patch.patch_id)).not.toBeInTheDocument();
   });
 
   it("renders an explicit empty state when the active scene has no pattern", () => {

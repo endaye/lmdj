@@ -17,13 +17,6 @@ export function Transport({
   useEngineTick(engine);
   return (
     <div className="transport">
-      <button
-        data-testid="play-toggle"
-        aria-label={engine.playing ? "Stop Pattern" : "Play Pattern"}
-        onClick={() => (engine.playing ? engine.stop() : void engine.play())}
-      >
-        {engine.playing ? "■" : "▶"}
-      </button>
       <div className="transport-metrics">
         <span
           className="transport-readout"
@@ -44,16 +37,13 @@ export function Transport({
           </b>
         </span>
       </div>
-      <div
-        className="transport-source"
-        data-testid="transport-source"
-        title={bundle.patch.patch_id}
-        tabIndex={0}
-        aria-label="Patch source identifier"
+      <button
+        data-testid="play-toggle"
+        aria-label={engine.playing ? "Stop Pattern" : "Play Pattern"}
+        onClick={() => (engine.playing ? engine.stop() : void engine.play())}
       >
-        <span>Source</span>
-        <code>{bundle.patch.patch_id}</code>
-      </div>
+        {engine.playing ? "■" : "▶"}
+      </button>
     </div>
   );
 }

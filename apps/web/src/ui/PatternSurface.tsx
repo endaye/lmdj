@@ -35,18 +35,20 @@ export function PatternSurface({
             </div>
           )}
         </div>
-        <span
-          className={`pattern-playhead${playheadPosition ? " pattern-playhead--running" : ""}`}
-          data-testid="pattern-playhead"
-        >
-          {pattern && playheadPosition
-            ? `Bar ${playheadPosition.bar} · Beat ${playheadPosition.beat} · Step ${String(
-                playheadPosition.step,
-              ).padStart(2, "0")} / ${pattern.length_steps}`
-            : "Stopped"}
-        </span>
+        <div className="pattern-surface__controls" data-testid="pattern-controls">
+          <span
+            className={`pattern-playhead${playheadPosition ? " pattern-playhead--running" : ""}`}
+            data-testid="pattern-playhead"
+          >
+            {pattern && playheadPosition
+              ? `Bar ${playheadPosition.bar} · Beat ${playheadPosition.beat} · Step ${String(
+                  playheadPosition.step,
+                ).padStart(2, "0")} / ${pattern.length_steps}`
+              : "Stopped"}
+          </span>
+          <Transport engine={engine} bundle={bundle} />
+        </div>
       </div>
-      <Transport engine={engine} bundle={bundle} />
       {pattern ? (
         <StepGrid bundle={bundle} playheadStep={playheadStep} />
       ) : (

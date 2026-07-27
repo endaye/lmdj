@@ -263,46 +263,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   border-left: 1px solid currentColor;
 }
 .transport-readout b { color: var(--ink); font-weight: 600; }
-.transport-source {
-  width: 0;
-  min-width: 0;
-  flex: 1 1 0;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  overflow-x: auto;
-  overscroll-behavior-inline: contain;
-  padding: 3px 5px 4px;
-  color: var(--ink-faint);
-  scrollbar-color: var(--loop) transparent;
-  scrollbar-width: thin;
-  white-space: nowrap;
-}
-.transport-source::-webkit-scrollbar {
-  height: 4px;
-}
-.transport-source::-webkit-scrollbar-track {
-  background: color-mix(in srgb, var(--ink) 10%, transparent);
-}
-.transport-source::-webkit-scrollbar-thumb {
-  background: var(--loop);
-}
-.transport-source > span {
-  padding-right: 4px;
-  font-size: 8px;
-  font-weight: 800;
-  letter-spacing: .08em;
-  text-transform: uppercase;
-}
-.transport-source code {
-  flex: 0 0 auto;
-  font: inherit;
-  color: inherit;
-}
-.transport-source:focus-visible {
-  outline: 2px solid var(--loop);
-  outline-offset: -2px;
-}
 
 /* --- Landing --------------------------------------------------------------- */
 
@@ -477,7 +437,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   border: 2px solid var(--ink);
   background: var(--paper);
   padding: 12px;
@@ -489,6 +449,15 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 6px;
+}
+.pattern-surface__controls {
+  min-width: 0;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
 }
 .pattern-surface__identity {
   min-width: 0;
@@ -522,6 +491,8 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .pattern-playhead {
   flex: 0 0 auto;
+  display: grid;
+  place-items: center;
   border: 2px solid var(--ink);
   background: var(--paper);
   padding: 4px 7px;
@@ -533,23 +504,35 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .pattern-surface .transport {
   flex-wrap: nowrap;
-  margin-bottom: 6px;
-  border: 2px solid var(--ink);
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0;
+  border: 0;
   border-radius: 0;
-  background: #e8e2d5;
+  background: transparent;
   box-shadow: none;
   color: var(--ink);
 }
+.pattern-surface .transport-metrics {
+  border: 2px solid var(--ink);
+  background: #e8e2d5;
+}
 .pattern-surface .transport button {
-  min-width: 36px;
-  min-height: 32px;
+  width: 52px;
+  height: 44px;
+  min-width: 52px;
+  min-height: 44px;
+  flex-basis: 52px;
   border: 2px solid var(--ink);
   border-radius: 0;
   background: var(--lead);
   color: var(--ink);
+  font-size: 18px;
 }
-.pattern-surface .transport-readout,
-.pattern-surface .transport-source { color: var(--ink); }
+.pattern-surface .transport button:hover {
+  background: color-mix(in srgb, var(--lead) 82%, white);
+}
+.pattern-surface .transport-readout { color: var(--ink); }
 .pattern-summary {
   display: flex;
   min-width: 0;
@@ -1896,23 +1879,43 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   }
   .pattern-surface .transport {
     flex-wrap: nowrap;
-    gap: 6px;
+    gap: 3px;
   }
   .pattern-surface .transport-metrics {
-    border: 0;
+    border-width: 2px;
   }
   .pattern-surface .transport-readout {
-    padding-inline: 4px;
+    gap: 2px;
+    padding-inline: 3px;
+    font-size: 7px;
     white-space: nowrap;
   }
   .pattern-surface .transport-readout + .transport-readout {
     border-left: 1px solid var(--ink);
   }
-  .pattern-surface .transport-source > span {
-    display: none;
+  .pattern-surface__header {
+    gap: 4px;
+  }
+  .pattern-surface__identity {
+    gap: 1px 4px;
+  }
+  .pattern-surface__controls {
+    gap: 3px;
+  }
+  .pattern-playhead {
+    padding-inline: 4px;
+    font-size: 7px;
+  }
+  .pattern-surface .transport button {
+    width: 42px;
+    height: 38px;
+    min-width: 42px;
+    min-height: 38px;
+    flex-basis: 42px;
+    font-size: 15px;
   }
   .pattern-summary {
-    font-size: 8px;
+    font-size: 7px;
     letter-spacing: .04em;
   }
   .pattern-summary span + span::before {
@@ -1991,15 +1994,12 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   .pattern-surface h2 {
     font-size: 17px;
   }
-  .pattern-surface .transport {
-    margin-bottom: 4px;
-    padding: 3px;
-  }
   .pattern-surface .transport button {
-    min-width: 30px;
-    min-height: 28px;
-    width: 30px;
-    height: 28px;
+    min-width: 44px;
+    min-height: 36px;
+    width: 44px;
+    height: 36px;
+    flex-basis: 44px;
   }
   .pattern-summary {
     gap: 8px;

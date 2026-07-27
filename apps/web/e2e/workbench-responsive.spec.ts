@@ -97,7 +97,7 @@ test("Source file chooser uses white button text", async ({ page }) => {
   expect(color).toBe("rgb(255, 255, 255)");
 });
 
-test("long timing precision and source identity use the compact scrolling transport", async ({
+test("timing values stay compact while duplicate source identity is omitted", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
@@ -117,14 +117,23 @@ test("long timing precision and source identity use the compact scrolling transp
 
   await expect(page.getByTestId("transport-bpm")).toHaveText("117.45");
   await expect(page.getByTestId("transport-loop")).toHaveText("8.17s");
-  const source = page.getByTestId("transport-source");
-  await expect(source).toHaveAttribute("title", longPatchId);
-  expect(
-    await source.evaluate((element) => ({
-      scrollable: element.scrollWidth > element.clientWidth,
-      overflowX: getComputedStyle(element).overflowX,
-    })),
-  ).toEqual({ scrollable: true, overflowX: "auto" });
+  await expect(page.getByTestId("transport-source")).toHaveCount(0);
+
+  const controls = page.getByTestId("pattern-controls");
+  await expect(controls.getByText(longPatchId, { exact: true })).toHaveCount(0);
+  const play = page.getByTestId("play-toggle");
+  const [controlsBox, playBox] = await Promise.all([box(controls), box(play)]);
+  expect(playBox.x + playBox.width).toBeGreaterThan(controlsBox.x + controlsBox.width - 2);
+  expect(playBox.height).toBeGreaterThan(
+    await page.getByTestId("transport-bpm").evaluate((element) =>
+      element.parentElement!.getBoundingClientRect().height
+    ),
+  );
+  expect(playBox.height).toBeGreaterThan(
+    await page.getByTestId("pattern-playhead").evaluate((element) =>
+      element.getBoundingClientRect().height
+    ),
+  );
 });
 
 test("360px My Songs keeps primary navigation and record actions usable", async ({
