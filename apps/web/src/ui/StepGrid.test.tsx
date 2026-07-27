@@ -38,6 +38,21 @@ describe("StepGrid", () => {
     }
   });
 
+  it("labels lanes with stable display indexes and a complete legend", () => {
+    const bundle = makeBundle();
+    renderGrid(bundle);
+
+    const rows = screen.getAllByTestId(/^step-row-/);
+    expect(rows[0]).toHaveAttribute("data-lane-index", "1");
+    expect(within(rows[0]).getByText("01")).toBeInTheDocument();
+    expect(rows.at(-1)).toHaveAttribute("data-lane-index", String(rows.length));
+
+    const legend = screen.getByLabelText("Pattern timeline legend");
+    expect(within(legend).getByText("Hit")).toBeInTheDocument();
+    expect(within(legend).getByText("Loop span")).toBeInTheDocument();
+    expect(within(legend).getByText("Playhead")).toBeInTheDocument();
+  });
+
   it("renders one-shots as hits and loops as spans to their next trigger", () => {
     const bundle = makeBundle();
     renderGrid(bundle);

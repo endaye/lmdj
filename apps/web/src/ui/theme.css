@@ -913,50 +913,111 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 .pattern-timeline {
   display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+.pattern-timeline__meta {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: stretch;
+  min-width: 0;
+  border: 2px solid var(--ink);
+  background: var(--paper);
+  box-shadow: 3px 3px 0 var(--ink);
+}
+.pattern-timeline__tag,
+.pattern-timeline__legend {
+  min-height: 28px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .07em;
+  text-transform: uppercase;
+}
+.pattern-timeline__tag {
+  display: inline-flex;
+  align-items: center;
   gap: 7px;
+  padding: 5px 9px;
+  border-right: 2px solid var(--ink);
+  background: var(--action);
+  color: var(--ink);
+  white-space: nowrap;
+}
+.pattern-timeline__tag i {
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--ink);
+  background: var(--lead);
+  transform: rotate(45deg);
 }
 .pattern-timeline__legend {
   display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 12px;
-  font-family: "IBM Plex Mono", monospace;
-  font-size: 9px;
-  font-weight: 700;
-  letter-spacing: .06em;
-  text-transform: uppercase;
+  padding: 5px 9px;
+  overflow: hidden;
 }
 .pattern-timeline__legend span {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 5px;
+  white-space: nowrap;
 }
 .pattern-timeline__legend i {
   width: 18px;
   height: 8px;
   display: inline-block;
-  border: 1px solid var(--ink);
+  border: 2px solid var(--ink);
   background: var(--lane-harmony);
 }
 .pattern-timeline__legend .legend-hit {
-  width: 8px;
+  width: 9px;
+  height: 9px;
+  border-radius: 3px;
+}
+.pattern-timeline__legend .legend-loop {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--lane-harmony) 80%, var(--paper)) 0 50%,
+      var(--lane-harmony) 50% 100%
+    );
 }
 .pattern-timeline__legend .legend-playhead {
-  width: 2px;
+  width: 3px;
   height: 12px;
   border: 0;
   background: var(--loop);
-  box-shadow: 0 0 0 1px var(--ink);
+  box-shadow: -1px 0 0 var(--ink), 1px 0 0 var(--ink);
 }
 .step-grid {
   --step-size: 22px;
-  --lane-width: 112px;
+  --lane-width: 148px;
   position: relative;
+  isolation: isolate;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
-  scrollbar-gutter: stable;
-  border: 2px solid var(--ink);
+  scrollbar-color: var(--loop) var(--paper);
+  scrollbar-width: thin;
+  border: 3px solid var(--ink);
   background: var(--panel);
+  box-shadow: 4px 4px 0 var(--ink);
+}
+.step-grid::-webkit-scrollbar {
+  height: 13px;
+}
+.step-grid::-webkit-scrollbar-track {
+  border-top: 2px solid var(--ink);
+  background: var(--paper);
+}
+.step-grid::-webkit-scrollbar-thumb {
+  border: 2px solid var(--ink);
+  background: var(--loop);
 }
 .step-grid table {
   width: max-content;
@@ -964,6 +1025,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
+  isolation: isolate;
 }
 .step-grid__caption {
   position: absolute;
@@ -985,41 +1047,82 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .step-grid__lane-heading {
   position: sticky;
   left: 0;
-  z-index: 2;
+  z-index: 20;
   width: var(--lane-width);
   min-width: var(--lane-width);
   max-width: var(--lane-width);
   background: var(--paper);
-  border-right: 2px solid var(--ink);
+  border-right: 3px solid var(--ink);
+  box-shadow: 5px 0 0 color-mix(in srgb, var(--ink) 12%, transparent);
 }
 .step-grid tbody th {
-  height: 28px;
-  padding: 3px 9px;
-  border-bottom: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
+  height: 34px;
+  padding: 4px 9px 4px 32px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 35%, transparent);
   overflow: hidden;
+  text-align: left;
 }
-.step-grid tbody th span {
+.step-grid tbody th::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 8px;
+  border-right: 2px solid var(--ink);
+  background: var(--note-color, var(--lane-harmony));
+}
+.step-grid tbody th::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 8px;
+  height: 8px;
+  border: 1px solid var(--ink);
+  background: color-mix(in srgb, var(--note-color, var(--lane-harmony)) 70%, var(--paper));
+  transform: rotate(45deg);
+}
+.step-grid__lane-index {
+  position: absolute;
+  left: 14px;
+  top: 6px;
+  color: var(--ink);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+}
+.step-grid tbody th .step-grid__lane-name {
   display: block;
+  max-width: calc(100% - 18px);
   overflow: hidden;
-  color: var(--ink-dim);
+  color: var(--ink);
+  font-family: "Chakra Petch", sans-serif;
   font-size: 11px;
-  font-weight: 700;
+  font-weight: 800;
   line-height: 1.1;
   text-overflow: ellipsis;
+  text-transform: uppercase;
 }
 .step-grid tbody th small {
-  display: block;
-  color: color-mix(in srgb, var(--ink-dim) 72%, transparent);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--ink-dim);
   font-size: 7px;
   font-weight: 800;
   line-height: 1;
   letter-spacing: .08em;
 }
+.step-grid tbody th small i {
+  width: 5px;
+  height: 5px;
+  border: 1px solid var(--ink);
+  background: var(--note-color, var(--lane-harmony));
+}
 .step-grid__lane-heading {
-  z-index: 4;
+  z-index: 30;
   vertical-align: bottom;
-  padding: 0 9px 4px;
-  border-bottom: 2px solid var(--ink);
+  padding: 0 10px 5px;
+  border-bottom: 3px solid var(--ink);
   color: var(--ink);
   font-size: 9px;
   font-weight: 800;
@@ -1027,16 +1130,22 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-transform: uppercase;
 }
 .step-grid__bar-label {
-  height: 22px;
-  padding: 3px 7px 2px;
+  height: 24px;
+  padding: 4px 9px 2px;
   border-bottom: 2px solid var(--ink);
   background: var(--paper);
   color: var(--ink);
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 800;
-  letter-spacing: .08em;
+  letter-spacing: .12em;
   text-align: left;
   text-transform: uppercase;
+}
+.step-grid__bar-label:nth-of-type(3n + 2) {
+  background: color-mix(in srgb, var(--loop) 14%, var(--paper));
+}
+.step-grid__bar-label:nth-of-type(3n + 3) {
+  background: color-mix(in srgb, var(--action) 12%, var(--paper));
 }
 .step-grid__beat-ruler th {
   position: relative;
@@ -1044,10 +1153,11 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   width: var(--step-size);
   min-width: var(--step-size);
   max-width: var(--step-size);
-  height: 18px;
+  height: 20px;
   padding: 0;
-  border-bottom: 2px solid var(--ink);
-  background: var(--paper);
+  border-right: 1px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  border-bottom: 3px solid var(--ink);
+  background: #ebe5d9;
   color: var(--ink-dim);
   font-size: 8px;
   font-weight: 800;
@@ -1060,55 +1170,74 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   width: var(--step-size);
   min-width: var(--step-size);
   max-width: var(--step-size);
-  height: 28px;
+  height: 34px;
   padding: 0;
-  border-right: 1px solid var(--edge);
-  border-bottom: 1px solid var(--edge);
+  border-right: 1px solid color-mix(in srgb, var(--ink-legacy) 18%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--ink-legacy) 22%, transparent);
   text-align: center;
   background: color-mix(in srgb, var(--well) 92%, var(--raised));
 }
+.step-grid tbody tr:nth-child(even) td {
+  background: color-mix(in srgb, var(--well) 86%, var(--raised));
+}
 .step-grid .step-beat-start {
-  border-left: 2px solid color-mix(in srgb, var(--ink-legacy) 45%, transparent);
+  border-left: 2px solid color-mix(in srgb, var(--paper) 44%, transparent);
 }
 .step-grid .step-bar-start {
-  border-left: 3px solid var(--ink-legacy);
+  border-left: 3px solid var(--paper);
 }
 .step-grid td.note-active::before {
   content: "";
   position: absolute;
   z-index: 2;
-  inset: 4px 0;
+  inset: 8px 0;
+  border-block: 2px solid var(--ink);
   background: var(--note-color, var(--lane-harmony));
-  box-shadow: 0 0 8px color-mix(in srgb, var(--note-color, var(--lane-harmony)) 42%, transparent);
+  box-shadow: 0 3px 0 color-mix(in srgb, var(--note-color, var(--lane-harmony)) 35%, var(--ink));
 }
 .step-grid td.note-start::before {
-  left: 3px;
-  border-radius: 4px 0 0 4px;
+  left: 4px;
+  border-left: 2px solid var(--ink);
+  border-radius: 5px 0 0 5px;
 }
 .step-grid td.note-end::before {
-  right: 3px;
-  border-radius: 0 4px 4px 0;
+  right: 4px;
+  border-right: 2px solid var(--ink);
+  border-radius: 0 5px 5px 0;
 }
 .step-grid td.note-start.note-end::before {
-  border-radius: 4px;
+  inset: 6px 5px 8px;
+  border: 2px solid var(--ink);
+  border-radius: 6px;
+  box-shadow: 2px 2px 0 var(--ink);
+}
+.step-grid tr[data-duration-mode="loop"] td.note-active::before {
+  background:
+    linear-gradient(
+      135deg,
+      color-mix(in srgb, var(--note-color, var(--lane-harmony)) 76%, var(--paper)) 0 50%,
+      var(--note-color, var(--lane-harmony)) 50% 100%
+    );
 }
 .step-row-drums { --note-color: var(--lane-drums); }
 .step-row-bass { --note-color: var(--lane-bass); }
 .step-row-harmony { --note-color: var(--lane-harmony); }
 .step-row-lead { --note-color: var(--lane-lead); }
-.step-grid .step-playhead {
-  background-color: color-mix(in srgb, var(--loop) 18%, transparent);
-}
 .step-grid .step-playhead::after {
   content: "";
   position: absolute;
-  z-index: 5;
+  z-index: 6;
   top: -1px;
   bottom: -1px;
-  left: -1px;
-  width: 2px;
+  left: 50%;
+  width: 3px;
   background: var(--loop);
-  box-shadow: 0 0 6px color-mix(in srgb, var(--loop) 80%, transparent);
+  box-shadow: -1px 0 0 var(--ink), 1px 0 0 var(--ink);
+  transform: translateX(-50%);
+}
+.step-grid__beat-ruler .step-playhead {
+  background: var(--loop);
+  color: var(--ink);
 }
 .step-missing th { color: var(--alert); }
 .step-missing { --note-color: var(--alert); }
@@ -1124,22 +1253,32 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 @container workbench (max-width: 959px) {
   .step-grid {
     --step-size: 18px;
-    --lane-width: 96px;
+    --lane-width: 128px;
   }
 }
 
 @container workbench (max-width: 599px) {
+  .pattern-timeline__meta {
+    grid-template-columns: 1fr;
+  }
+  .pattern-timeline__tag {
+    border-right: 0;
+    border-bottom: 2px solid var(--ink);
+  }
   .step-grid {
     --step-size: 16px;
-    --lane-width: 84px;
+    --lane-width: 108px;
   }
   .pattern-timeline__legend {
-    justify-content: flex-start;
+    justify-content: space-between;
     gap: 9px;
     font-size: 8px;
   }
   .step-grid tbody th {
-    padding-inline: 6px;
+    padding-inline: 28px 5px;
+  }
+  .step-grid tbody th::after {
+    display: none;
   }
 }
 
