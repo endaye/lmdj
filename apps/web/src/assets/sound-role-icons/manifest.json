@@ -1,23 +1,25 @@
 {
   "name": "LMDJ Sound Role Icons",
-  "version": 3,
-  "concept": "Geometric Signals",
+  "version": 4,
+  "concept": "Ordered Signals",
   "grid": 32,
+  "base_unit": 4,
+  "optical_stroke": 2,
   "color_model": "single currentColor with transparent negative space",
   "roles": [
-    {"id": "kick", "label": "Kick", "family": "drums", "color": "#FF4F31", "signal": "pulse target"},
-    {"id": "snare", "label": "Snare", "family": "drums", "color": "#FF4F31", "signal": "tension weave"},
-    {"id": "hat", "label": "Hat", "family": "drums", "color": "#FF4F31", "signal": "stacked arches"},
-    {"id": "percussion", "label": "Percussion", "family": "drums", "color": "#FF4F31", "signal": "distributed rhythm"},
-    {"id": "bass", "label": "Bass", "family": "bass", "color": "#8A4AF3", "signal": "low-frequency sphere"},
-    {"id": "melody", "label": "Melody", "family": "harmony", "color": "#46C79B", "signal": "rotating pitch"},
-    {"id": "vocal", "label": "Vocal", "family": "lead", "color": "#FFD21C", "signal": "radiating voice"},
-    {"id": "phrase", "label": "Phrase", "family": "loop", "color": "#32C7E9", "signal": "nested time frame"}
+    {"id": "kick", "label": "Kick", "family": "drums", "color": "#FF4F31", "signal": "pulse target", "order": "four-axis radial"},
+    {"id": "snare", "label": "Snare", "family": "drums", "color": "#FF4F31", "signal": "tension weave", "order": "four-fold modular"},
+    {"id": "hat", "label": "Hat", "family": "drums", "color": "#FF4F31", "signal": "stacked arches", "order": "bilateral nested"},
+    {"id": "percussion", "label": "Percussion", "family": "drums", "color": "#FF4F31", "signal": "distributed rhythm", "order": "eight-fold radial"},
+    {"id": "bass", "label": "Bass", "family": "bass", "color": "#8A4AF3", "signal": "low-frequency sphere", "order": "horizontal reflected"},
+    {"id": "melody", "label": "Melody", "family": "harmony", "color": "#46C79B", "signal": "rotating pitch", "order": "four-fold rotational"},
+    {"id": "vocal", "label": "Vocal", "family": "lead", "color": "#FFD21C", "signal": "radiating voice", "order": "twelve-fold radial"},
+    {"id": "phrase", "label": "Phrase", "family": "loop", "color": "#32C7E9", "signal": "nested time frame", "order": "diagonal progression"}
   ],
   "variant_rule": "A and B reuse the same role icon; distinguish variants with an external A/B badge.",
   "usage": {
     "pattern_sidebar": "24px icon, full opacity, accessible label retained",
-    "pad_background": "72-112px icon, 10-22% opacity, crop allowed",
+    "pad_background": "72-112px icon, 8-14% opacity, crop allowed",
     "minimum_size": "16px"
   }
 }
