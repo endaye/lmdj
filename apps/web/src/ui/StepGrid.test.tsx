@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
 import { AudioEngine } from "../engine/AudioEngine";
@@ -41,6 +41,38 @@ describe("StepGrid", () => {
       );
       expect(filled).toBe(steps.size);
     }
+  });
+
+  it("renders bar and beat hierarchy across the complete pattern", () => {
+    const bundle = makeBundle();
+    renderGrid(bundle);
+
+    expect(
+      screen.getByRole("table", { name: "Pattern Original step grid" }),
+    ).toHaveAccessibleName("Pattern Original step grid");
+    const bars = screen.getAllByTestId(/^step-bar-/);
+    expect(bars).toHaveLength(4);
+    expect(bars.map((bar) => bar.textContent)).toEqual(["Bar 1", "Bar 2", "Bar 3", "Bar 4"]);
+    expect(bars.every((bar) => bar.getAttribute("colspan") === "16")).toBe(true);
+
+    const firstRow = screen.getByTestId(`step-row-${bundle.patch.patterns[0].notes[0].element_id}`);
+    const cells = within(firstRow).getAllByRole("cell");
+    expect(cells[0]).toHaveClass("step-bar-start");
+    expect(cells[4]).toHaveClass("step-beat-start");
+    expect(cells[16]).toHaveClass("step-bar-start");
+  });
+
+  it("keeps the final partial bar aligned with the remaining steps", () => {
+    const bundle = makeBundle((b) => {
+      b.patch.patterns[0].length_steps = 18;
+      b.patch.patterns[0].notes = b.patch.patterns[0].notes.filter((note) => note.step < 18);
+    });
+    renderGrid(bundle);
+
+    const bars = screen.getAllByTestId(/^step-bar-/);
+    expect(bars).toHaveLength(2);
+    expect(bars[0]).toHaveAttribute("colspan", "16");
+    expect(bars[1]).toHaveAttribute("colspan", "2");
   });
 
   it("marks rows of missing elements", () => {

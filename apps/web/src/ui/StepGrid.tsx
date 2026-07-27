@@ -4,6 +4,8 @@ import { padElementIds, scenePatterns, type PatchBundle } from "../patch/loader"
 
 /** pad 0-3 的语义槽 → 步进格 LED 的 lane 配色（与 PadMatrix16 角色色对齐） */
 const PAD_LANE_CLASS = ["step-row-drums", "step-row-bass", "step-row-harmony", "step-row-lead"];
+const STEPS_PER_BEAT = 4;
+const STEPS_PER_BAR = 16;
 
 export function StepGrid({
   engine,
@@ -40,10 +42,59 @@ export function StepGrid({
       .filter((el) => byElement.has(el.element_id))
       .map((el) => ({ element: el, steps: byElement.get(el.element_id)! }));
   }, [bundle.patch, pattern]);
+  const steps = Array.from({ length: pattern.length_steps }, (_, step) => step);
+  const bars = Array.from(
+    { length: Math.ceil(pattern.length_steps / STEPS_PER_BAR) },
+    (_, bar) => ({
+      number: bar + 1,
+      steps: Math.min(STEPS_PER_BAR, pattern.length_steps - bar * STEPS_PER_BAR),
+    }),
+  );
 
   return (
     <div className="step-grid" data-testid="step-grid">
-      <table>
+      <table aria-label={`Pattern ${pattern.name} step grid`}>
+        <caption className="step-grid__caption">
+          {pattern.name}, {pattern.length_steps} steps at {pattern.resolution}
+        </caption>
+        <thead>
+          <tr className="step-grid__bar-ruler">
+            <th className="step-grid__lane-heading" rowSpan={2} scope="col">
+              Lane
+            </th>
+            {bars.map((bar) => (
+              <th
+                className="step-grid__bar-label"
+                colSpan={bar.steps}
+                data-testid={`step-bar-${bar.number}`}
+                key={bar.number}
+                scope="colgroup"
+              >
+                Bar {bar.number}
+              </th>
+            ))}
+          </tr>
+          <tr className="step-grid__beat-ruler">
+            {steps.map((step) => {
+              const isBeatStart = step % STEPS_PER_BEAT === 0;
+              const beat = Math.floor((step % STEPS_PER_BAR) / STEPS_PER_BEAT) + 1;
+              const bar = Math.floor(step / STEPS_PER_BAR) + 1;
+              return (
+                <th
+                  aria-label={`Bar ${bar}, beat ${beat}, step ${step + 1}`}
+                  className={`${step % STEPS_PER_BAR === 0 ? "step-bar-start" : ""}${
+                    step % STEPS_PER_BAR !== 0 && isBeatStart ? " step-beat-start" : ""
+                  }`}
+                  data-step={step}
+                  key={step}
+                  scope="col"
+                >
+                  {isBeatStart ? beat : ""}
+                </th>
+              );
+            })}
+          </tr>
+        </thead>
         <tbody>
           {rows.map(({ element, steps }) => (
             <tr
@@ -53,13 +104,18 @@ export function StepGrid({
                 bundle.missingElementIds.has(element.element_id) ? " step-missing" : ""
               }`}
             >
-              <th>{element.name}</th>
+              <th scope="row">{element.name}</th>
               {Array.from({ length: pattern.length_steps }, (_, step) => {
                 const on = steps.has(step);
                 return (
                   <td
                     key={step}
-                    className={`${on ? "step-on" : ""}${
+                    data-step={step}
+                    className={`${step % STEPS_PER_BAR === 0 ? "step-bar-start " : ""}${
+                      step % STEPS_PER_BAR !== 0 && step % STEPS_PER_BEAT === 0
+                        ? "step-beat-start "
+                        : ""
+                    }${on ? "step-on" : ""}${
                       step === playhead ? " step-playhead" : ""
                     }`}
                   >

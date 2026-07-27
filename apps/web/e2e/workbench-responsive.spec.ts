@@ -275,6 +275,24 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
 }
 
 for (const viewport of VIEWPORTS) {
+  test(`${viewport.name} ${viewport.width}x${viewport.height} keeps Pattern steps readable`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: viewport.width, height: viewport.height });
+    await openExampleWithMissingAsset(page);
+
+    const grid = page.getByTestId("step-grid");
+    const firstCell = grid.locator("tbody td").first();
+    const firstCellBox = await box(firstCell);
+    expect(firstCellBox.width).toBeGreaterThanOrEqual(viewport.width < 600 ? 12 : 14);
+    expect(firstCellBox.height).toBeGreaterThanOrEqual(viewport.width < 600 ? 12 : 14);
+    expect(
+      await grid.evaluate((element) => element.scrollWidth > element.clientWidth),
+    ).toBe(true);
+    await expect(grid.getByText("Bar 1", { exact: true })).toBeVisible();
+    await expect(grid.getByText("Bar 4", { exact: true })).toBeAttached();
+  });
+
   test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the instrument usable`, async ({
     page,
   }) => {

@@ -907,8 +907,28 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 /* --- Sequencer — LED step lanes -------------------------------------------- */
 
-.step-grid { overflow-x: auto; }
-.step-grid table { border-collapse: separate; border-spacing: 3px; width: 100%; }
+.step-grid {
+  --step-size: 18px;
+  --step-gap: 3px;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+.step-grid table {
+  width: max-content;
+  min-width: 100%;
+  table-layout: fixed;
+  border-collapse: separate;
+  border-spacing: var(--step-gap);
+}
+.step-grid__caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 .step-grid th {
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
@@ -918,15 +938,64 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   color: var(--ink-dim);
   white-space: nowrap;
 }
+.step-grid tbody th,
+.step-grid__lane-heading {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  width: 72px;
+  min-width: 72px;
+  max-width: 72px;
+  background: var(--paper);
+}
+.step-grid__lane-heading {
+  z-index: 4;
+  vertical-align: bottom;
+  padding-bottom: 3px;
+  text-transform: uppercase;
+}
+.step-grid__bar-ruler th {
+  height: 18px;
+  padding: 0 4px 2px;
+  border-bottom: 2px solid var(--ink);
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-align: left;
+  text-transform: uppercase;
+}
+.step-grid__beat-ruler th {
+  box-sizing: border-box;
+  width: var(--step-size);
+  min-width: var(--step-size);
+  max-width: var(--step-size);
+  height: 14px;
+  padding: 0;
+  color: var(--ink-dim);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+}
 .step-grid td {
-  width: 20px;
-  height: 20px;
+  box-sizing: border-box;
+  width: var(--step-size);
+  min-width: var(--step-size);
+  max-width: var(--step-size);
+  height: var(--step-size);
   text-align: center;
   color: var(--ink-faint);
   font-size: 0; /* hide the raw glyph; the cell IS the LED */
   border-radius: 3px;
   background: var(--well);
   box-shadow: inset 0 0 0 1px var(--edge);
+}
+.step-grid .step-beat-start {
+  border-left: 1px solid var(--ink-dim);
+}
+.step-grid .step-bar-start {
+  border-left: 2px solid var(--ink);
 }
 /* lit step: colored LED (glyph is █; we render the cell itself) */
 .step-grid td.step-on {
@@ -942,6 +1011,19 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .step-missing th { color: var(--alert); }
 .step-missing td { box-shadow: inset 0 0 0 1px var(--alert); }
+
+@container workbench (max-width: 959px) {
+  .step-grid {
+    --step-size: 14px;
+    --step-gap: 2px;
+  }
+}
+
+@container workbench (max-width: 599px) {
+  .step-grid {
+    --step-size: 12px;
+  }
+}
 
 /* --- Uploading / processing ------------------------------------------------ */
 
