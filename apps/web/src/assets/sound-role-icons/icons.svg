@@ -45,7 +45,7 @@
   </symbol>
   <symbol id="bass" viewBox="0 0 256 256">
     <g transform="scale(8)">
-      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
         <circle cx="16" cy="16" r="12"/>
         <path d="M6 12C9 8 12 8 15 12C18 16 21 16 26 11" stroke-width="2.2"/>
         <path d="M6 20C9 16 12 16 15 20C18 24 21 24 26 19" stroke-width="2.2"/>
@@ -54,7 +54,7 @@
   </symbol>
   <symbol id="melody" viewBox="0 0 256 256">
     <g transform="scale(8)">
-      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
         <path d="M17 14C17 8 20 5 26 5C26 11 23 14 17 14Z"/>
         <path d="M18 17C24 17 27 20 27 26C21 26 18 23 18 17Z"/>
         <path d="M15 18C15 24 12 27 6 27C6 21 9 18 15 18Z"/>
