@@ -354,6 +354,24 @@ for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await openExampleWithMissingAsset(page);
 
+    const heading = page.locator(".workbench-canvas-heading");
+    const headingTitle = heading.getByText("Performance", { exact: true });
+    const liveSlots = heading.getByText("16 live slots", { exact: true });
+    const headingBox = await box(heading);
+    const headingTitleBox = await box(headingTitle);
+    const liveSlotsBox = await box(liveSlots);
+    expect(headingTitleBox.x + headingTitleBox.width).toBeLessThanOrEqual(
+      liveSlotsBox.x + 1,
+    );
+    expect(
+      await heading.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    expect(liveSlotsBox.x + liveSlotsBox.width).toBeLessThanOrEqual(
+      headingBox.x + headingBox.width,
+    );
+
     const grid = page.getByTestId("step-grid");
     const firstCell = grid.locator("tbody td").first();
     const firstCellBox = await box(firstCell);
