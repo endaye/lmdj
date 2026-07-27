@@ -29,16 +29,23 @@ const CONNECTION_LABELS: Record<MidiSnapshot["connection"], string> = {
   disconnected: "Disconnected",
 };
 
+export interface MidiPanelStatus {
+  connection: string;
+  devices: string[];
+}
+
 export function MidiPanel({
   onTrigger,
   bank,
   onBankChange,
   onMappingModeChange,
+  onStatusChange,
 }: {
   onTrigger: (index: number) => void;
   bank: MidiBank;
   onBankChange: (bank: MidiBank) => void;
   onMappingModeChange?: (mode: MidiMapping["mode"]) => void;
+  onStatusChange?: (status: MidiPanelStatus) => void;
 }) {
   const [mapping, setMapping] = useState<MidiMapping>(() =>
     loadMidiMapping(localStorage),
@@ -110,10 +117,17 @@ export function MidiPanel({
       ? "Web MIDI unsupported"
       : CONNECTION_LABELS[snapshot.connection];
 
+  useEffect(() => {
+    onStatusChange?.({
+      connection: supportLabel,
+      devices: snapshot.devices,
+    });
+  }, [onStatusChange, snapshot.devices, supportLabel]);
+
   return (
     <section className="midi-panel" aria-label="MIDI controller">
       <div className="midi-panel__connection">
-        <strong>MIDI</strong>
+        <strong>Connection</strong>
         <span data-testid="midi-connection">{supportLabel}</span>
         <button
           type="button"

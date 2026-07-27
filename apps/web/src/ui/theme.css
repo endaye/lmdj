@@ -570,28 +570,44 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   overflow: hidden;
 }
 .midi-panel {
-  order: 2;
   display: grid;
-  grid-template-columns: auto minmax(120px, 1fr) auto auto;
-  align-items: center;
-  gap: 5px 9px;
-  padding: 5px 7px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 9px;
+  padding: 10px;
   border: 2px solid var(--ink);
   background: #e8e2d5;
   font-family: "IBM Plex Mono", monospace;
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 700;
 }
-.midi-panel__connection,
-.midi-panel__mapping,
+.midi-panel__connection {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+}
+.midi-panel__mapping {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 7px;
+}
 .midi-panel__bank {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
+}
+.midi-panel__connection > span,
+.midi-panel__mapping > span,
+.midi-panel > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .midi-panel button {
-  min-height: 28px;
-  padding: 3px 6px;
+  min-height: 32px;
+  padding: 4px 8px;
   border: 2px solid var(--ink);
   border-radius: 0;
   background: var(--paper);
@@ -806,6 +822,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .context-inspector-content[data-inspector-accent="action"] { --inspector-accent: var(--action); }
 .context-inspector-content[data-inspector-accent="empty"] { --inspector-accent: var(--muted); }
 .context-inspector-content[data-inspector-accent="export"] { --inspector-accent: var(--lead); }
+.context-inspector__midi {
+  margin-top: 16px;
+}
 .context-inspector__header {
   margin: -14px -14px 14px;
   padding: 12px;
@@ -1526,7 +1545,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   grid-template-rows:
     auto
     minmax(124px, 1.35fr)
-    auto
     minmax(88px, .85fr);
   gap: 8px;
   overflow: hidden;
@@ -1574,6 +1592,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   background: #f8f4eb;
   overflow: auto;
   overscroll-behavior: contain;
+}
+.workbench-inspector-view:not([hidden]) {
+  min-height: 100%;
 }
 .workbench-inspector-toggle {
   display: none;
@@ -1721,7 +1742,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     grid-template-rows:
       auto
       minmax(156px, 1.24fr)
-      auto
       minmax(120px, .76fr);
   }
 }
@@ -1800,7 +1820,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     grid-template-rows:
       auto
       minmax(200px, 1fr)
-      auto
       minmax(160px, 1fr);
     gap: 6px;
   }
@@ -1847,32 +1866,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   }
   .workbench-status-bar span:nth-of-type(n + 2) {
     display: none;
-  }
-  .midi-panel {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 3px 5px;
-    padding: 4px 5px;
-    font-size: 7px;
-  }
-  .midi-panel__connection,
-  .midi-panel__mapping,
-  .midi-panel__bank {
-    min-width: 0;
-    flex-wrap: nowrap;
-    gap: 3px;
-    white-space: nowrap;
-  }
-  .midi-panel > span {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .midi-panel button {
-    min-height: 24px;
-    padding: 2px 4px;
-    font-size: 7px;
-    white-space: nowrap;
   }
   .workbench-pad-slot.panel {
     padding: 6px;
@@ -1978,7 +1971,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     grid-template-rows:
       auto
       minmax(164px, 1.42fr)
-      auto
       minmax(64px, .58fr);
     gap: 6px;
   }
@@ -2024,9 +2016,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   .step-grid tbody th small {
     font-size: 6px;
   }
-  .midi-panel {
-    padding-block: 3px;
-  }
   .creator-tool-rail__mode {
     min-height: 42px;
   }
@@ -2038,7 +2027,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
       grid-template-rows:
         auto
         minmax(205px, 1.35fr)
-        auto
         minmax(92px, .65fr);
     }
     .pad-matrix {

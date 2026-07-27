@@ -32,7 +32,7 @@ import {
   LoadedSourcePanel,
   type LoadedSourceSummary,
 } from "./LoadedSourcePanel";
-import { MidiPanel } from "./MidiPanel";
+import { MidiPanel, type MidiPanelStatus } from "./MidiPanel";
 import {
   MySongsView,
   type TrackedJob,
@@ -201,6 +201,10 @@ export function App({
   const [midiMappingMode, setMidiMappingMode] = useState<MidiMapping["mode"]>(
     () => loadMidiMapping(localStorage).mode,
   );
+  const [midiStatus, setMidiStatus] = useState<MidiPanelStatus>({
+    connection: "Not connected",
+    devices: [],
+  });
   const [deleteTarget, setDeleteTarget] = useState<TrackedJob | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -1194,12 +1198,6 @@ export function App({
                   engine={engine}
                   playheadStep={playheadStep}
                 />
-                <MidiPanel
-                  onTrigger={triggerPad}
-                  bank={midiBank}
-                  onBankChange={setMidiBank}
-                  onMappingModeChange={setMidiMappingMode}
-                />
                 <section className="panel workbench-pad-slot">
                   <PadMatrix16
                     bundle={bundle}
@@ -1212,31 +1210,44 @@ export function App({
           </>
         }
         contextInspector={
-          mode === "source"
-            ? (
-                <LoadedSourceInspector
-                  source={loadedSource}
-                  facts={loadedSourceFacts}
-                />
-              )
-            : (
-                <ContextInspector model={model} exportContent={exportInspector} />
-              )
+          <>
+            <div className="workbench-inspector-view" hidden={mode !== "source"}>
+              <LoadedSourceInspector
+                source={loadedSource}
+                facts={loadedSourceFacts}
+              />
+            </div>
+            <div className="workbench-inspector-view" hidden={mode === "source"}>
+              <ContextInspector
+                model={model}
+                exportContent={exportInspector}
+                midiContent={
+                  <MidiPanel
+                    onTrigger={triggerPad}
+                    bank={midiBank}
+                    onBankChange={setMidiBank}
+                    onMappingModeChange={setMidiMappingMode}
+                    onStatusChange={setMidiStatus}
+                  />
+                }
+              />
+            </div>
+          </>
         }
         statusBar={
           <>
-            <strong>Pads 01–16</strong>
+            <strong>MIDI {midiStatus.connection}</strong>
+            <span>
+              {midiStatus.devices.length > 0
+                ? midiStatus.devices.join(", ")
+                : "No MIDI input"}
+            </span>
             <span>
               {midiMappingMode === "direct-16"
-                ? "MIDI Bank 不适用"
-                : `MIDI Bank ${midiBank}`}
+                ? "Direct 16 · Bank 不适用"
+                : `8-pad Controller · Bank ${midiBank}`}
             </span>
-            <span>
-              {model.readiness === "ready"
-                ? "ready · Patch ready · no export blockers"
-                : `${model.readiness} · ${model.blockers.length} item(s) need review`}
-            </span>
-            <span>{model.patchId}</span>
+            <span>{model.readiness} · {model.patchId}</span>
           </>
         }
       />

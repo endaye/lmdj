@@ -55,9 +55,11 @@ function inspectorAccent(model: WorkbenchViewModel): string {
 export function ContextInspector({
   model,
   exportContent,
+  midiContent,
 }: {
   model: WorkbenchViewModel;
   exportContent?: ReactNode;
+  midiContent?: ReactNode;
 }) {
   const pad = model.selectedPad;
   return (
@@ -113,6 +115,12 @@ export function ContextInspector({
             </>
           )}
         </>
+      )}
+      {midiContent && (
+        <div className="context-inspector__midi" hidden={Boolean(exportContent)}>
+          <h3>MIDI Setup</h3>
+          {midiContent}
+        </div>
       )}
     </div>
   );

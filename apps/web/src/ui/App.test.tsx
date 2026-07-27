@@ -132,8 +132,14 @@ describe("App", () => {
     expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
     expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
     expect(screen.getByText(/BPM/)).toBeInTheDocument();
-    expect(screen.getByTestId("status-bar")).toHaveTextContent("Pads 01–16");
-    expect(screen.getByTestId("status-bar")).toHaveTextContent(/MIDI Bank.*不适用/i);
+    const statusBar = screen.getByTestId("status-bar");
+    expect(statusBar).toHaveTextContent("MIDI Not connected");
+    expect(statusBar).toHaveTextContent("No MIDI input");
+    expect(statusBar).toHaveTextContent("Direct 16 · Bank 不适用");
+    expect(within(statusBar).queryByRole("button")).not.toBeInTheDocument();
+    const midiController = screen.getByRole("region", { name: "MIDI controller" });
+    expect(screen.getByTestId("context-inspector")).toContainElement(midiController);
+    expect(screen.getByTestId("instrument-canvas")).not.toContainElement(midiController);
   });
 
   it("switches between a truthful loaded Source context and the retained Performance instrument", async () => {
@@ -261,7 +267,9 @@ describe("App", () => {
 
     expect(triggerPad).toHaveBeenNthCalledWith(1, 0);
     expect(triggerPad).toHaveBeenNthCalledWith(2, 8);
-    expect(screen.getByTestId("status-bar")).toHaveTextContent("MIDI Bank B");
+    expect(screen.getByTestId("status-bar")).toHaveTextContent(
+      "8-pad Controller · Bank B",
+    );
   });
 
   it("ignores modified, repeated, and editable keyboard events", async () => {

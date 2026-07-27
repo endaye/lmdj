@@ -286,8 +286,12 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
     for (const inertRegion of [appBar, tools, canvas, status]) {
       await expect(inertRegion).toHaveAttribute("inert", "");
     }
+    const midiConnect = inspector.getByRole("button", { name: "Connect MIDI" });
+    await expect(midiConnect).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Connect MIDI" })).toHaveCount(0);
+    await expect(status.getByRole("button")).toHaveCount(0);
     await page.keyboard.press("Tab");
-    await expect(close).toBeFocused();
+    await expect(midiConnect).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(close).toBeFocused();
     const inspectorBox = await box(inspector);

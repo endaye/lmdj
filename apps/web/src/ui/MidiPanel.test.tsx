@@ -56,13 +56,20 @@ function installWebMidi() {
   return { input, request };
 }
 
-function BankHarness({ onTrigger }: { onTrigger: (index: number) => void }) {
+function BankHarness({
+  onTrigger,
+  onStatusChange,
+}: {
+  onTrigger: (index: number) => void;
+  onStatusChange?: Parameters<typeof MidiPanel>[0]["onStatusChange"];
+}) {
   const [bank, setBank] = useState<MidiBank>("A");
   return (
     <MidiPanel
       onTrigger={onTrigger}
       bank={bank}
       onBankChange={setBank}
+      onStatusChange={onStatusChange}
     />
   );
 }
@@ -87,7 +94,13 @@ afterEach(() => {
 describe("MidiPanel", () => {
   it("connects only after the user clicks Connect and shows every device", async () => {
     const { request } = installWebMidi();
-    render(<BankHarness onTrigger={() => undefined} />);
+    const onStatusChange = vi.fn();
+    render(
+      <BankHarness
+        onTrigger={() => undefined}
+        onStatusChange={onStatusChange}
+      />,
+    );
 
     expect(request).not.toHaveBeenCalled();
     await userEvent.click(screen.getByRole("button", { name: /Connect MIDI/i }));
@@ -95,6 +108,10 @@ describe("MidiPanel", () => {
     await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
     expect(screen.getByTestId("midi-connection")).toHaveTextContent("Connected");
     expect(screen.getByTestId("midi-devices")).toHaveTextContent("Stage Controller");
+    expect(onStatusChange).toHaveBeenLastCalledWith({
+      connection: "Connected",
+      devices: ["Stage Controller"],
+    });
   });
 
   it("learns and saves a complete direct sixteen-note mapping", async () => {
