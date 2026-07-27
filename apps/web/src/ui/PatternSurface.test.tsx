@@ -20,7 +20,15 @@ function makeBundle(): PatchBundle<unknown> {
 function renderSurface(bundle: PatchBundle<unknown>, playheadStep: number | null) {
   const engine = new AudioEngine(new FakeAudioContext());
   engine.load(bundle);
-  render(<PatternSurface bundle={bundle} engine={engine} playheadStep={playheadStep} />);
+  render(
+    <PatternSurface
+      bundle={bundle}
+      engine={engine}
+      padCount={16}
+      playheadStep={playheadStep}
+      readiness="ready"
+    />,
+  );
 }
 
 describe("PatternSurface", () => {
@@ -31,6 +39,9 @@ describe("PatternSurface", () => {
 
     const surface = screen.getByTestId("pattern-surface");
     expect(within(surface).getByTestId("play-toggle")).toBeInTheDocument();
+    expect(within(surface).getByText("Performance")).toBeInTheDocument();
+    expect(within(surface).getByText("16 live slots")).toBeInTheDocument();
+    expect(within(surface).getByText("ready")).toBeInTheDocument();
     expect(within(surface).getByRole("heading", { name: pattern.name })).toBeInTheDocument();
     expect(within(surface).getByTestId("pattern-summary")).toHaveTextContent(
       `${pattern.length_steps} steps`,

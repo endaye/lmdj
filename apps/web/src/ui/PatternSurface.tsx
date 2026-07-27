@@ -2,15 +2,20 @@ import type { AudioEngine } from "../engine/AudioEngine";
 import { scenePatterns, type PatchBundle } from "../patch/loader";
 import { StepGrid } from "./StepGrid";
 import { Transport } from "./Transport";
+import type { WorkbenchReadiness } from "./workbench/model";
 
 export function PatternSurface({
   bundle,
   engine,
+  padCount,
   playheadStep,
+  readiness,
 }: {
   bundle: PatchBundle<unknown>;
   engine: AudioEngine;
+  padCount: number;
   playheadStep: number | null;
+  readiness: WorkbenchReadiness;
 }) {
   const pattern = scenePatterns(bundle.patch)[0];
   const playheadPosition = playheadStep === null
@@ -24,6 +29,11 @@ export function PatternSurface({
   return (
     <section className="pattern-surface" data-testid="pattern-surface">
       <div className="pattern-surface__header">
+        <div className="pattern-surface__performance">
+          <strong>Performance</strong>
+          <small>{padCount} live slots</small>
+        </div>
+        <span className="workbench-readiness">{readiness}</span>
         <div className="pattern-surface__identity">
           <span className="pattern-surface__eyebrow">Pattern</span>
           <h2>{pattern?.name ?? "Pattern unavailable"}</h2>

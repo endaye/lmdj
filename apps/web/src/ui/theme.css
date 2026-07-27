@@ -438,19 +438,47 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   min-height: 0;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  border: 2px solid var(--ink);
-  background: var(--paper);
-  padding: 12px;
+  border: 0;
+  background: transparent;
+  padding: 0;
   overflow: hidden;
 }
 .pattern-surface__header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "performance readiness"
+    "identity controls";
   align-items: end;
-  justify-content: space-between;
-  gap: 12px;
+  gap: 4px 12px;
   margin-bottom: 6px;
 }
+.pattern-surface__performance {
+  grid-area: performance;
+  min-width: 0;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  white-space: nowrap;
+}
+.pattern-surface__performance strong {
+  overflow: hidden;
+  font-family: "Chakra Petch", sans-serif;
+  font-size: clamp(22px, 3cqw, 30px);
+  line-height: .9;
+  letter-spacing: -.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+}
+.pattern-surface__performance small {
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
 .pattern-surface__controls {
+  grid-area: controls;
   min-width: 0;
   display: flex;
   flex: 0 0 auto;
@@ -460,11 +488,11 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   margin-left: auto;
 }
 .pattern-surface__identity {
+  grid-area: identity;
   min-width: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  display: flex;
   align-items: baseline;
-  gap: 2px 10px;
+  gap: 10px;
 }
 .pattern-surface__eyebrow,
 .pattern-playhead,
@@ -476,7 +504,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-transform: uppercase;
 }
 .pattern-surface__eyebrow {
-  grid-column: 1 / -1;
   display: block;
 }
 .pattern-surface h2 {
@@ -1597,33 +1624,14 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   min-height: 0;
   display: grid;
   grid-template-rows:
-    auto
     minmax(124px, 1.35fr)
     minmax(88px, .85fr);
   gap: 8px;
   overflow: hidden;
 }
-.workbench-canvas-heading {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  font-family: "Chakra Petch", sans-serif;
-  font-size: clamp(22px, 3cqw, 30px);
-  font-weight: 700;
-  line-height: 0.9;
-  letter-spacing: -0.04em;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-.workbench-canvas-heading > div {
-  min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-}
-.workbench-canvas-heading small,
 .workbench-readiness {
+  grid-area: readiness;
+  justify-self: end;
   font-family: "IBM Plex Mono", monospace;
   font-size: 10px;
   font-weight: 700;
@@ -1839,7 +1847,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   }
   .workbench-performance-view:not([hidden]) {
     grid-template-rows:
-      auto
       minmax(156px, 1.24fr)
       minmax(120px, .76fr);
   }
@@ -1915,18 +1922,17 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   }
   .workbench-performance-view:not([hidden]) {
     grid-template-rows:
-      auto
       minmax(200px, 1fr)
       minmax(160px, 1fr);
     gap: 6px;
   }
-  .workbench-canvas-heading {
+  .pattern-surface__performance {
     gap: 6px;
   }
-  .workbench-canvas-heading > div {
-    gap: 6px;
+  .pattern-surface__eyebrow {
+    display: none;
   }
-  .workbench-canvas-heading small,
+  .pattern-surface__performance small,
   .workbench-readiness {
     font-size: 8px;
   }
@@ -2050,6 +2056,14 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   }
 }
 
+@container workbench (min-width: 1440px) {
+  .pattern-surface__header {
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas: "performance identity readiness controls";
+    align-items: center;
+  }
+}
+
 @media (max-height: 820px) and (min-width: 600px) {
   .step-grid tbody th {
     padding-block: 1px;
@@ -2079,16 +2093,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   }
   .workbench-performance-view:not([hidden]) {
     grid-template-rows:
-      auto
       minmax(164px, 1.42fr)
       minmax(64px, .58fr);
     gap: 6px;
-  }
-  .workbench-canvas-heading {
-    font-size: 23px;
-  }
-  .pattern-surface {
-    padding: 7px;
   }
   .pattern-surface__header {
     margin-bottom: 5px;
@@ -2135,7 +2142,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   @container workbench (max-width: 599px) {
     .workbench-performance-view:not([hidden]) {
       grid-template-rows:
-        auto
         minmax(205px, 1.35fr)
         minmax(92px, .65fr);
     }

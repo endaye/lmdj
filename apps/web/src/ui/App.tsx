@@ -1213,26 +1213,21 @@ export function App({
               className="workbench-performance-view"
               hidden={mode !== "performance"}
             >
-                <div className="workbench-canvas-heading">
-                  <div>
-                    <span>Performance</span>
-                    <small>{model.padCount} live slots</small>
-                  </div>
-                  <span className="workbench-readiness">{model.readiness}</span>
-                </div>
-                <PatternSurface
+              <PatternSurface
+                bundle={bundle}
+                engine={engine}
+                padCount={model.padCount}
+                playheadStep={playheadStep}
+                readiness={model.readiness}
+              />
+              <section className="panel workbench-pad-slot">
+                <PadMatrix16
                   bundle={bundle}
                   engine={engine}
-                  playheadStep={playheadStep}
+                  selectedPadIndex={selectedPadIndex}
+                  onSelect={setSelectedPadIndex}
                 />
-                <section className="panel workbench-pad-slot">
-                  <PadMatrix16
-                    bundle={bundle}
-                    engine={engine}
-                    selectedPadIndex={selectedPadIndex}
-                    onSelect={setSelectedPadIndex}
-                  />
-                </section>
+              </section>
             </div>
             {mode === "export" && (
               <div className="workbench-export-view">

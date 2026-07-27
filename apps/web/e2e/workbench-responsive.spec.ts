@@ -1,6 +1,7 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VIEWPORTS = [
+  { name: "desktop-ultrawide", width: 1920, height: 1080 },
   { name: "desktop-wide", width: 1440, height: 900 },
   { name: "desktop-compact", width: 1280, height: 720 },
   { name: "landscape-tablet", width: 1024, height: 768 },
@@ -354,23 +355,27 @@ for (const viewport of VIEWPORTS) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await openExampleWithMissingAsset(page);
 
-    const heading = page.locator(".workbench-canvas-heading");
-    const headingTitle = heading.getByText("Performance", { exact: true });
-    const liveSlots = heading.getByText("16 live slots", { exact: true });
-    const headingBox = await box(heading);
-    const headingTitleBox = await box(headingTitle);
-    const liveSlotsBox = await box(liveSlots);
-    expect(headingTitleBox.x + headingTitleBox.width).toBeLessThanOrEqual(
-      liveSlotsBox.x + 1,
-    );
+    const surface = page.getByTestId("pattern-surface");
+    const heading = surface.locator(".pattern-surface__header");
+    await expect(heading.getByText("Performance", { exact: true })).toBeVisible();
+    await expect(heading.getByText("16 live slots", { exact: true })).toBeVisible();
+    await expect(heading.getByRole("heading", { name: "Original" })).toBeVisible();
+    await expect(heading.getByTestId("pattern-controls")).toBeVisible();
+    expect(
+      await surface.evaluate((element) => getComputedStyle(element).borderWidth),
+    ).toBe("0px");
     expect(
       await heading.evaluate(
         (element) => element.scrollWidth <= element.clientWidth,
       ),
     ).toBe(true);
-    expect(liveSlotsBox.x + liveSlotsBox.width).toBeLessThanOrEqual(
-      headingBox.x + headingBox.width,
-    );
+    if (viewport.width >= 1920) {
+      expect(
+        await heading.evaluate(
+          (element) => getComputedStyle(element).gridTemplateAreas,
+        ),
+      ).toBe('"performance identity readiness controls"');
+    }
 
     const grid = page.getByTestId("step-grid");
     const firstCell = grid.locator("tbody td").first();
@@ -492,8 +497,12 @@ for (const viewport of VIEWPORTS) {
       expect(overlaps(statusBox, padBox)).toBe(false);
     }
     if (viewport.width <= 620) {
-      const headingTitle = await box(page.locator(".workbench-canvas-heading > div > span"));
-      const headingMeta = await box(page.locator(".workbench-canvas-heading > div > small"));
+      const headingTitle = await box(
+        page.locator(".pattern-surface__performance > strong"),
+      );
+      const headingMeta = await box(
+        page.locator(".pattern-surface__performance > small"),
+      );
       expect(overlaps(headingTitle, headingMeta)).toBe(false);
     }
 
