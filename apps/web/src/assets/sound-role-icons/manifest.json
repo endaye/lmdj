@@ -1,12 +1,20 @@
 {
   "name": "LMDJ Sound Role Icons",
-  "version": 5,
+  "version": 6,
   "concept": "Ordered Signals",
   "canvas": 256,
   "design_grid": 32,
   "scale": 8,
   "base_unit": 32,
-  "optical_stroke": 16,
+  "optical_strokes": {
+    "baseline": 16,
+    "hat": 14.4,
+    "hat_inner": 16,
+    "bass_ring": 14.4,
+    "bass_wave": 16,
+    "vocal": 16,
+    "phrase": 14.4
+  },
   "color_model": "single currentColor with transparent negative space",
   "roles": [
     {"id": "kick", "label": "Kick", "family": "drums", "color": "#FF4F31", "signal": "pulse target", "order": "four-axis radial"},
@@ -14,14 +22,15 @@
     {"id": "hat", "label": "Hat", "family": "drums", "color": "#FF4F31", "signal": "stacked arches", "order": "bilateral nested"},
     {"id": "percussion", "label": "Percussion", "family": "drums", "color": "#FF4F31", "signal": "distributed rhythm", "order": "eight-fold radial"},
     {"id": "bass", "label": "Bass", "family": "bass", "color": "#8A4AF3", "signal": "low-frequency sphere", "order": "horizontal reflected"},
-    {"id": "melody", "label": "Melody", "family": "harmony", "color": "#46C79B", "signal": "rotating pitch", "order": "four-fold rotational"},
+    {"id": "melody", "label": "Melody", "family": "harmony", "color": "#46C79B", "signal": "mirrored pitch petals", "order": "four-fold square mirror"},
     {"id": "vocal", "label": "Vocal", "family": "lead", "color": "#FFD21C", "signal": "radiating voice", "order": "twelve-fold radial"},
     {"id": "phrase", "label": "Phrase", "family": "loop", "color": "#32C7E9", "signal": "nested time frame", "order": "diagonal progression"}
   ],
   "variant_rule": "A and B reuse the same role icon; distinguish variants with an external A/B badge.",
   "usage": {
-    "pattern_sidebar": "24px icon, full opacity, accessible label retained",
+    "pattern_sidebar": "Display icon remains the fallback; use the future Micro asset at 16-24px when available.",
     "pad_background": "72-112px icon, 8-14% opacity, crop allowed",
-    "minimum_size": "16px"
+    "display_recommended_size": "72-256px",
+    "micro_status": "planned as a separate asset set"
   }
 }

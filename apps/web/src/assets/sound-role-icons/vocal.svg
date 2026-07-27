@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" color="#11110F">
   <g transform="scale(8)">
-    <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square">
+    <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
       <path d="M16 3V9"/>
       <path d="M16 3V9" transform="rotate(30 16 16)"/>
       <path d="M16 3V9" transform="rotate(60 16 16)"/>

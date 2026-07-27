@@ -21,10 +21,10 @@
   </symbol>
   <symbol id="hat" viewBox="0 0 256 256">
     <g transform="scale(8)">
-      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="round">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="round">
         <path d="M5 27V16C5 9.9 9.9 5 16 5C22.1 5 27 9.9 27 16V27"/>
         <path d="M10 27V17C10 13.7 12.7 11 16 11C19.3 11 22 13.7 22 17V27"/>
-        <path d="M15 27V18C15 17.4 15.4 17 16 17C16.6 17 17 17.4 17 18V27"/>
+        <path d="M15 27V18C15 17.4 15.4 17 16 17C16.6 17 17 17.4 17 18V27" stroke-width="2"/>
       </g>
     </g>
   </symbol>
@@ -45,15 +45,15 @@
   </symbol>
   <symbol id="bass" viewBox="0 0 256 256">
     <g transform="scale(8)">
-      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="4">
         <defs>
           <clipPath id="bass-wave-clip">
-            <circle cx="16" cy="16" r="11"/>
+            <circle cx="16" cy="16" r="11.1"/>
           </clipPath>
         </defs>
         <g clip-path="url(#bass-wave-clip)">
-          <path d="M3 12C9 8 12 8 15 12C18 16 21 16 29 10.5" stroke-width="2.2"/>
-          <path d="M3 20C9 16 12 16 15 20C18 24 21 24 29 18.5" stroke-width="2.2"/>
+          <path d="M3 12C9 8 12 8 15 12C18 16 21 16 29 10.5" stroke-width="2"/>
+          <path d="M3 20C9 16 12 16 15 20C18 24 21 24 29 18.5" stroke-width="2"/>
         </g>
         <circle cx="16" cy="16" r="12"/>
       </g>
@@ -71,7 +71,7 @@
   </symbol>
   <symbol id="vocal" viewBox="0 0 256 256">
     <g transform="scale(8)">
-      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square">
+      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
         <path d="M16 3V9"/>
         <path d="M16 3V9" transform="rotate(30 16 16)"/>
         <path d="M16 3V9" transform="rotate(60 16 16)"/>
@@ -90,7 +90,7 @@
   </symbol>
   <symbol id="phrase" viewBox="0 0 256 256">
     <g transform="scale(8)">
-      <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square" stroke-linejoin="miter">
+      <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="miter">
         <path d="M5 5H27V27"/>
         <path d="M5 11H21V27"/>
         <path d="M5 17H15V27"/>
