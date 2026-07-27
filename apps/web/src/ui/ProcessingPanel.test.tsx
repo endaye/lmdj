@@ -17,6 +17,7 @@ function renderPanel(
   return render(
     <ProcessingPanel
       fileName="night-bloom.wav"
+      signatureSeed="submission-night-bloom"
       state={state}
       lastNonterminalState={lastNonterminalState}
     />,
@@ -34,6 +35,14 @@ describe("ProcessingPanel", () => {
       expect(screen.getByTestId(`processing-stage-${state}`)).toHaveAttribute(
         "aria-current",
         "step",
+      );
+      expect(screen.getByTestId("processing-signature")).toHaveAttribute(
+        "data-signature",
+        "circle-37-26-4-2",
+      );
+      expect(screen.getByTestId("processing-signature")).toHaveAttribute(
+        "data-phase",
+        state === "completed" ? "ready" : state,
       );
       expect(screen.getByTestId("processing-panel").textContent).not.toMatch(/\d+%/);
     },

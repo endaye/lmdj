@@ -8,6 +8,7 @@ import {
   MySongsView,
   type TrackedJob,
 } from "./MySongsView";
+import { createVisualSignature } from "./generative/visualSignature";
 
 const capacity: QueueCapacity = {
   max_concurrency: 1,
@@ -165,6 +166,29 @@ describe("MySongsView", () => {
     expect(screen.getByTestId("song-card-job-b")).toHaveTextContent(
       "等待中 · 第 1 位",
     );
+    expect(
+      within(screen.getByTestId("song-card-job-a")).getByTestId(
+        "song-signature-submission-a",
+      ),
+    ).toHaveAttribute("data-phase", "separating");
+    expect(
+      within(screen.getByTestId("song-card-job-a")).getByTestId(
+        "song-signature-submission-a",
+      ),
+    ).toHaveAttribute(
+      "data-signature",
+      createVisualSignature(processing.submission.submissionId).id,
+    );
+    expect(
+      within(screen.getByTestId("song-card-job-b")).getByTestId(
+        "song-signature-submission-b",
+      ),
+    ).toHaveAttribute("data-phase", "queued");
+    expect(
+      within(screen.getByTestId("song-card-job-c")).getByTestId(
+        "song-signature-submission-c",
+      ),
+    ).toHaveAttribute("data-phase", "ready");
     expect(
       within(screen.getByTestId("song-card-job-c")).getByRole("button", {
         name: "继续创作",

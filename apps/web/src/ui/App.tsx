@@ -27,6 +27,9 @@ import { ErrorPanel } from "./ErrorPanel";
 import { DeleteJobDialog } from "./DeleteJobDialog";
 import { ContextInspector } from "./ContextInspector";
 import { ExportChecklist } from "./ExportChecklist";
+import { PerformanceTraceLayer } from "./generative/PerformanceTraceLayer";
+import type { PadPressEvent } from "./generative/performanceTrace";
+import { ProjectSignature } from "./generative/ProjectSignature";
 import {
   LoadedSourceInspector,
   LoadedSourcePanel,
@@ -103,7 +106,13 @@ type AppState =
     };
 
 type LoadedSource =
-  | { kind: "api"; base: string; jobId: string; fileName: string }
+  | {
+      kind: "api";
+      base: string;
+      jobId: string;
+      submissionId: string;
+      fileName: string;
+    }
   | { kind: "local" | "example" };
 
 type ApiLoadedSource = Extract<LoadedSource, { kind: "api" }>;
@@ -204,6 +213,8 @@ export function App({
   const [pressedPadIndices, setPressedPadIndices] = useState<Set<number>>(
     () => new Set(),
   );
+  const [padPressEvent, setPadPressEvent] = useState<PadPressEvent | null>(null);
+  const padPressSequenceRef = useRef(0);
   const [mode, setMode] = useState<WorkbenchMode>("source");
   const [midiBank, setMidiBank] = useState<MidiBank>("A");
   const [midiMappingMode, setMidiMappingMode] = useState<MidiMapping["mode"]>(
@@ -227,6 +238,11 @@ export function App({
         const next = new Set(current);
         next.add(index);
         return next;
+      });
+      padPressSequenceRef.current += 1;
+      setPadPressEvent({
+        sequence: padPressSequenceRef.current,
+        padIndex: index,
       });
       engine.triggerPad(index);
     },
@@ -298,6 +314,8 @@ export function App({
   const enterLoaded = useCallback(
     (bundle: PatchBundle<unknown>, source: LoadedSource) => {
       engine.load(bundle);
+      padPressSequenceRef.current = 0;
+      setPadPressEvent(null);
       foregroundSubmissionRef.current = null;
       setMode("performance");
       setState({
@@ -312,6 +330,7 @@ export function App({
 
   const showLibrary = useCallback(() => {
     engine.stop();
+    setPadPressEvent(null);
     foregroundSubmissionRef.current = null;
     setMode("source");
     setState({ phase: "library" });
@@ -319,6 +338,7 @@ export function App({
 
   const showNewUpload = useCallback(() => {
     engine.stop();
+    setPadPressEvent(null);
     foregroundSubmissionRef.current = null;
     setMode("source");
     setState({
@@ -451,12 +471,12 @@ export function App({
 
   const openCompletedJob = useCallback(
     async (job: TrackedJob) => {
-      const { jobId, base, fileName } = job.submission;
+      const { jobId, base, fileName, submissionId } = job.submission;
       if (!jobId) return;
       try {
         enterLoaded(
           await apiClient.fetchPatchBundle(base, jobId, decode),
-          { kind: "api", base, jobId, fileName },
+          { kind: "api", base, jobId, submissionId, fileName },
         );
       } catch (error) {
         updateTrackedJob(job.submission.submissionId, (current) => ({
@@ -946,6 +966,7 @@ export function App({
           canvas={
             <ProcessingPanel
               fileName={state.fileName}
+              signatureSeed={state.submissionId}
               state={state.jobState}
               lastNonterminalState={state.lastNonterminalStage}
             />
@@ -988,6 +1009,12 @@ export function App({
                 <h1>这首歌曲需要处理</h1>
                 <p>{state.fileName}</p>
               </header>
+              <ProjectSignature
+                seed={state.submissionId}
+                phase="error"
+                variant="stage"
+                testId="failed-signature"
+              />
               <ErrorPanel title={state.issueTitle} issues={state.issues} />
               <dl className="failed-context">
                 <div>
@@ -1096,6 +1123,10 @@ export function App({
     );
   };
   const apiSource = state.source.kind === "api" ? state.source : null;
+  const projectSignatureSeed =
+    state.source.kind === "api"
+      ? state.source.submissionId
+      : bundle.patch.patch_id;
   const loadedTrackedJob =
     apiSource === null
       ? null
@@ -1140,6 +1171,7 @@ export function App({
                 apiBase={apiSource.base}
                 jobId={apiSource.jobId}
                 patchId={bundle.patch.patch_id}
+                signatureSeed={projectSignatureSeed}
                 status={state.exportState.status}
                 apiClient={apiClient}
                 onStatusChange={(nextStatus) =>
@@ -1245,6 +1277,13 @@ export function App({
               className="workbench-performance-view"
               hidden={mode !== "performance"}
             >
+              <PerformanceTraceLayer
+                press={padPressEvent}
+                pads={bundle.patch.pads}
+                bpm={model.bpm}
+                playheadStep={playheadStep}
+                projectSeed={projectSignatureSeed}
+              />
               <PatternSurface
                 bundle={bundle}
                 engine={engine}

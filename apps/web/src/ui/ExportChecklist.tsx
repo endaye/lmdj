@@ -5,6 +5,7 @@ import {
   type CreatorExportStatus,
   type ExportItemStatus,
 } from "../api/client";
+import { ProjectSignature } from "./generative/ProjectSignature";
 
 const ITEMS = [
   ["stems", "Stems"],
@@ -31,6 +32,7 @@ export function ExportChecklist({
   apiBase,
   jobId,
   patchId,
+  signatureSeed,
   status,
   apiClient,
   onStatusChange,
@@ -38,12 +40,14 @@ export function ExportChecklist({
   apiBase: string;
   jobId: string;
   patchId: string;
+  signatureSeed: string;
   status: CreatorExportStatus;
   apiClient: ApiClient;
   onStatusChange: (status: CreatorExportStatus) => void;
 }) {
   const [request, setRequest] = useState<RequestState>({ kind: "idle" });
   const overall = overallStatus(status);
+  const signaturePhase = overall === "Ready" ? "ready" : "review";
 
   const download = async () => {
     setRequest({ kind: "downloading" });
@@ -74,6 +78,12 @@ export function ExportChecklist({
         <span>Export</span>
         <h2>导出 Creator Pack</h2>
       </header>
+      <ProjectSignature
+        seed={signatureSeed}
+        phase={signaturePhase}
+        variant="stamp"
+        testId="export-signature"
+      />
 
       <div
         className="export-overall"

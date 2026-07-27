@@ -60,6 +60,7 @@ describe("PadButton", () => {
       />,
     );
     const first = screen.getByTestId("pad-0").dataset.geometrySignature;
+    expect(first).toMatch(/^(circle|grid|slice|wave)-\d+-\d+-\d+-\d+$/);
 
     rerender(
       <PadButton
