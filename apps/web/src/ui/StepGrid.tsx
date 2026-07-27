@@ -169,10 +169,16 @@ export function StepGrid({
 
   return (
     <div className="pattern-timeline">
-      <div className="pattern-timeline__legend" aria-label="Pattern timeline legend">
-        <span><i className="legend-hit" aria-hidden="true" /> Hit</span>
-        <span><i className="legend-loop" aria-hidden="true" /> Loop span</span>
-        <span><i className="legend-playhead" aria-hidden="true" /> Playhead</span>
+      <div className="pattern-timeline__meta">
+        <span className="pattern-timeline__tag">
+          <i aria-hidden="true" />
+          Sequence map
+        </span>
+        <div className="pattern-timeline__legend" aria-label="Pattern timeline legend">
+          <span><i className="legend-hit" aria-hidden="true" /> Hit</span>
+          <span><i className="legend-loop" aria-hidden="true" /> Loop span</span>
+          <span><i className="legend-playhead" aria-hidden="true" /> Playhead</span>
+        </div>
       </div>
       <div className="step-grid" data-testid="step-grid" ref={scrollerRef}>
         <table aria-label={`Pattern ${pattern.name} timeline`}>
@@ -219,18 +225,22 @@ export function StepGrid({
             </tr>
           </thead>
           <tbody>
-            {rows.map(({ element, loops, cells }) => (
+            {rows.map(({ element, loops, cells }, rowIndex) => (
               <tr
                 key={element.element_id}
                 data-testid={`step-row-${element.element_id}`}
+                data-lane-index={rowIndex + 1}
                 data-duration-mode={loops ? "loop" : "hit"}
                 className={`${laneClass(element)}${
                   bundle.missingElementIds.has(element.element_id) ? " step-missing" : ""
                 }`}
               >
                 <th scope="row">
-                  <span>{element.name}</span>
-                  <small>{loops ? "LOOP" : "HIT"}</small>
+                  <span className="step-grid__lane-index" aria-hidden="true">
+                    {String(rowIndex + 1).padStart(2, "0")}
+                  </span>
+                  <span className="step-grid__lane-name">{element.name}</span>
+                  <small><i aria-hidden="true" />{loops ? "LOOP" : "HIT"}</small>
                 </th>
                 {cells.map((cell, step) => {
                   const noteState = cell.start
