@@ -20,7 +20,15 @@ function makeBundle(): PatchBundle<unknown> {
 function renderSurface(bundle: PatchBundle<unknown>, playheadStep: number | null) {
   const engine = new AudioEngine(new FakeAudioContext());
   engine.load(bundle);
-  render(<PatternSurface bundle={bundle} engine={engine} playheadStep={playheadStep} />);
+  render(
+    <PatternSurface
+      bundle={bundle}
+      engine={engine}
+      padCount={16}
+      playheadStep={playheadStep}
+      readiness="ready"
+    />,
+  );
 }
 
 describe("PatternSurface", () => {
@@ -31,6 +39,9 @@ describe("PatternSurface", () => {
 
     const surface = screen.getByTestId("pattern-surface");
     expect(within(surface).getByTestId("play-toggle")).toBeInTheDocument();
+    expect(within(surface).getByText("Performance")).toBeInTheDocument();
+    expect(within(surface).getByText("16 live slots")).toBeInTheDocument();
+    expect(within(surface).getByText("ready")).toBeInTheDocument();
     expect(within(surface).getByRole("heading", { name: pattern.name })).toBeInTheDocument();
     expect(within(surface).getByTestId("pattern-summary")).toHaveTextContent(
       `${pattern.length_steps} steps`,
@@ -42,8 +53,42 @@ describe("PatternSurface", () => {
     expect(playhead).toHaveTextContent("Bar 1 · Beat 2 · Step 05 / 64");
     expect(playhead).toHaveClass("pattern-playhead--running");
     expect(playhead).not.toHaveAttribute("aria-live");
-    expect(within(surface).getByTestId("pattern-summary")).toHaveTextContent("Original");
+    expect(
+      within(surface)
+        .getByTestId("pattern-summary")
+        .closest(".pattern-surface__header"),
+    ).toBeInTheDocument();
+    const controls = within(surface).getByTestId("pattern-controls");
+    expect(within(controls).getByTestId("transport-bpm")).toBeInTheDocument();
+    expect(within(controls).getByTestId("transport-loop")).toBeInTheDocument();
+    expect(within(controls).getByTestId("play-toggle")).toBeInTheDocument();
+    expect(controls.lastElementChild?.lastElementChild).toBe(
+      within(controls).getByTestId("play-toggle"),
+    );
     expect(within(surface).getByTestId("step-grid")).toBeInTheDocument();
+  });
+
+  it("shows compact timing values with full precision but omits duplicate source identity", () => {
+    const bundle = makeBundle();
+    bundle.patch.bpm = 117.453835;
+    bundle.patch.loop_seconds = 8.173424052096724;
+    bundle.patch.patch_id =
+      "source-09f69a8fcc1461ff3631657100ffe2b1eae58f6a2b96e2f9aa3ce6fa3f02d99e-2280ebab";
+
+    renderSurface(bundle, null);
+
+    expect(screen.getByTestId("transport-bpm")).toHaveTextContent("117.45");
+    expect(screen.getByTestId("transport-bpm").parentElement).toHaveAttribute(
+      "title",
+      "BPM 117.453835",
+    );
+    expect(screen.getByTestId("transport-loop")).toHaveTextContent("8.17s");
+    expect(screen.getByTestId("transport-loop").parentElement).toHaveAttribute(
+      "title",
+      "Loop 8.173424052096724 seconds",
+    );
+    expect(screen.queryByTestId("transport-source")).not.toBeInTheDocument();
+    expect(screen.queryByText(bundle.patch.patch_id)).not.toBeInTheDocument();
   });
 
   it("renders an explicit empty state when the active scene has no pattern", () => {

@@ -32,7 +32,7 @@ import {
   LoadedSourcePanel,
   type LoadedSourceSummary,
 } from "./LoadedSourcePanel";
-import { MidiPanel } from "./MidiPanel";
+import { MidiPanel, type MidiPanelStatus } from "./MidiPanel";
 import {
   MySongsView,
   type TrackedJob,
@@ -120,6 +120,11 @@ const EMPTY_CAPACITY: QueueCapacity = {
   waiting: 0,
 };
 
+const HEADER_NUMBER = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  useGrouping: false,
+});
+
 const TERMINAL_JOB_STATES = new Set([
   "completed",
   "failed",
@@ -196,24 +201,48 @@ export function App({
   const [queueCapacity, setQueueCapacity] =
     useState<QueueCapacity>(EMPTY_CAPACITY);
   const [selectedPadIndex, setSelectedPadIndex] = useState<number>();
+  const [pressedPadIndices, setPressedPadIndices] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [mode, setMode] = useState<WorkbenchMode>("source");
   const [midiBank, setMidiBank] = useState<MidiBank>("A");
   const [midiMappingMode, setMidiMappingMode] = useState<MidiMapping["mode"]>(
     () => loadMidiMapping(localStorage).mode,
   );
+  const [midiStatus, setMidiStatus] = useState<MidiPanelStatus>({
+    connection: "Not connected",
+    devices: [],
+  });
   const [deleteTarget, setDeleteTarget] = useState<TrackedJob | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const [completionNotice, setCompletionNotice] = useState<string | null>(null);
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
-  const triggerPad = useCallback(
+  const pressPad = useCallback(
     (index: number) => {
       setSelectedPadIndex(index);
+      setPressedPadIndices((current) => {
+        if (current.has(index)) return current;
+        const next = new Set(current);
+        next.add(index);
+        return next;
+      });
       engine.triggerPad(index);
     },
     [engine],
   );
+  const releasePad = useCallback((index: number) => {
+    setPressedPadIndices((current) => {
+      if (!current.has(index)) return current;
+      const next = new Set(current);
+      next.delete(index);
+      return next;
+    });
+  }, []);
+  const releaseAllPads = useCallback(() => {
+    setPressedPadIndices((current) => current.size === 0 ? current : new Set());
+  }, []);
 
   const updateTrackedJobs = useCallback(
     (update: (current: TrackedJob[]) => TrackedJob[]) => {
@@ -748,7 +777,10 @@ export function App({
   // 键盘固定覆盖 16 个逻辑 Pad；MIDI Bank 只影响 8-pad Controller。
   useEffect(() => {
     if (state.phase !== "loaded") return;
-    const onKey = (e: KeyboardEvent) => {
+    const padIndexForKey = (key: string) => PAD_KEYS.indexOf(
+      key.toUpperCase() as (typeof PAD_KEYS)[number],
+    );
+    const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target;
       if (
@@ -761,14 +793,23 @@ export function App({
       ) {
         return;
       }
-      const index = PAD_KEYS.indexOf(
-        e.key.toUpperCase() as (typeof PAD_KEYS)[number],
-      );
-      if (index >= 0) triggerPad(index);
+      const index = padIndexForKey(e.key);
+      if (index >= 0) pressPad(index);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state.phase, triggerPad]);
+    const onKeyUp = (e: KeyboardEvent) => {
+      const index = padIndexForKey(e.key);
+      if (index >= 0) releasePad(index);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", releaseAllPads);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", releaseAllPads);
+      releaseAllPads();
+    };
+  }, [pressPad, releaseAllPads, releasePad, state.phase]);
 
   const deleteFeedback = (
     <>
@@ -1087,7 +1128,7 @@ export function App({
     playableElementCount: bundle.playableElementIds.size,
     missingElementCount: bundle.missingElementIds.size,
   };
-  const exportInspector =
+  const exportView =
     mode === "export"
       ? apiSource === null
         ? (
@@ -1151,19 +1192,41 @@ export function App({
               onShowNewUpload={showNewUpload}
             />
             <div className="topbar-actions">
-              <strong className="workbench-project-name">
-                {loadedSource.name}
-              </strong>
-              <span className="workbench-project-meta">
-                {model.bpm} · {model.durationSeconds}s · Key {model.key ?? "—"}
-              </span>
+              <div className="workbench-project-summary">
+                <strong
+                  className="workbench-project-name"
+                  data-testid="workbench-project-name"
+                  title={loadedSource.name}
+                >
+                  {loadedSource.name}
+                </strong>
+                <div className="workbench-project-facts" aria-label="曲目参数">
+                  <span>
+                    <small>BPM</small>
+                    <b data-testid="header-bpm">{HEADER_NUMBER.format(model.bpm)}</b>
+                  </span>
+                  <span>
+                    <small>Loop</small>
+                    <b data-testid="header-loop">
+                      {HEADER_NUMBER.format(model.durationSeconds)}s
+                    </b>
+                  </span>
+                  <span>
+                    <small>Key</small>
+                    <b>{model.key ?? "—"}</b>
+                  </span>
+                </div>
+              </div>
               {loadedTrackedJob?.submission.controlToken && (
                 <button
                   className="btn-delete-track"
                   type="button"
+                  aria-label="删除曲目"
+                  title="删除当前曲目"
                   onClick={() => requestDelete(loadedTrackedJob)}
                 >
-                  删除曲目
+                  <span aria-hidden="true">×</span>
+                  <span className="btn-delete-track__label">删除</span>
                 </button>
               )}
             </div>
@@ -1180,63 +1243,79 @@ export function App({
             )}
             <div
               className="workbench-performance-view"
-              hidden={mode === "source"}
+              hidden={mode !== "performance"}
             >
-                <div className="workbench-canvas-heading">
-                  <div>
-                    <span>Performance</span>
-                    <small>{model.padCount} live slots</small>
-                  </div>
-                  <span className="workbench-readiness">{model.readiness}</span>
-                </div>
-                <PatternSurface
+              <PatternSurface
+                bundle={bundle}
+                engine={engine}
+                padCount={model.padCount}
+                playheadStep={playheadStep}
+                readiness={model.readiness}
+              />
+              <section className="panel workbench-pad-slot">
+                <PadMatrix16
                   bundle={bundle}
                   engine={engine}
-                  playheadStep={playheadStep}
+                  selectedPadIndex={selectedPadIndex}
+                  pressedPadIndices={pressedPadIndices}
+                  onSelect={setSelectedPadIndex}
+                  onPress={pressPad}
+                  onRelease={releasePad}
                 />
-                <MidiPanel
-                  onTrigger={triggerPad}
-                  bank={midiBank}
-                  onBankChange={setMidiBank}
-                  onMappingModeChange={setMidiMappingMode}
-                />
-                <section className="panel workbench-pad-slot">
-                  <PadMatrix16
-                    bundle={bundle}
-                    engine={engine}
-                    selectedPadIndex={selectedPadIndex}
-                    onSelect={setSelectedPadIndex}
-                  />
-                </section>
+              </section>
             </div>
+            {mode === "export" && (
+              <div className="workbench-export-view">
+                {exportView}
+              </div>
+            )}
           </>
         }
         contextInspector={
-          mode === "source"
-            ? (
-                <LoadedSourceInspector
-                  source={loadedSource}
-                  facts={loadedSourceFacts}
-                />
-              )
-            : (
-                <ContextInspector model={model} exportContent={exportInspector} />
-              )
+          <>
+            <div className="workbench-inspector-view" hidden={mode !== "source"}>
+              <LoadedSourceInspector
+                source={loadedSource}
+                facts={loadedSourceFacts}
+              />
+            </div>
+            <div className="workbench-inspector-view" hidden={mode !== "performance"}>
+              <ContextInspector
+                model={model}
+                midiContent={
+                  <MidiPanel
+                    onPress={pressPad}
+                    onRelease={releasePad}
+                    bank={midiBank}
+                    onBankChange={setMidiBank}
+                    onMappingModeChange={setMidiMappingMode}
+                    onStatusChange={setMidiStatus}
+                  />
+                }
+              />
+            </div>
+            <div className="workbench-inspector-view" hidden={mode !== "export"}>
+              <LoadedSourceInspector
+                source={loadedSource}
+                facts={loadedSourceFacts}
+              />
+            </div>
+          </>
         }
         statusBar={
           <>
-            <strong>Pads 01–16</strong>
+            <strong>MIDI {midiStatus.connection}</strong>
+            <span>
+              {midiStatus.devices.length > 0
+                ? midiStatus.devices.join(", ")
+                : "No MIDI input"}
+            </span>
             <span>
               {midiMappingMode === "direct-16"
-                ? "MIDI Bank 不适用"
-                : `MIDI Bank ${midiBank}`}
+                ? "Direct 16 · Bank 不适用"
+                : `8-pad Controller · Bank ${midiBank}`}
             </span>
-            <span>
-              {model.readiness === "ready"
-                ? "ready · Patch ready · no export blockers"
-                : `${model.readiness} · ${model.blockers.length} item(s) need review`}
-            </span>
-            <span>{model.patchId}</span>
+            <span>{model.readiness} · {model.patchId}</span>
           </>
         }
       />
@@ -1302,7 +1381,7 @@ function CreatorStateShell({
       shellLabel={`LMDJ ${label}`}
       mode="source"
       onModeChange={() => {}}
-      availableModes={["source"]}
+      availableModes={[]}
       appBar={
         <>
           <Wordmark />
@@ -1351,10 +1430,12 @@ function GlobalNavigation({
         type="button"
         className="global-navigation__new"
         data-testid="new-song-nav"
+        aria-label="上传新歌"
         aria-current={activeView === "new-upload" ? "page" : undefined}
         onClick={onShowNewUpload}
       >
-        ＋ 上传新歌
+        <span className="global-navigation__new-icon" aria-hidden="true">＋</span>
+        <span className="global-navigation__new-label">上传新歌</span>
       </button>
     </nav>
   );

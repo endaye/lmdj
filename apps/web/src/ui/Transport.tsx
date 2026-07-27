@@ -2,6 +2,11 @@ import type { AudioEngine } from "../engine/AudioEngine";
 import type { PatchBundle } from "../patch/loader";
 import { useEngineTick } from "./useEngine";
 
+const COMPACT_NUMBER = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  useGrouping: false,
+});
+
 export function Transport({
   engine,
   bundle,
@@ -12,19 +17,33 @@ export function Transport({
   useEngineTick(engine);
   return (
     <div className="transport">
+      <div className="transport-metrics">
+        <span
+          className="transport-readout"
+          title={`BPM ${bundle.patch.bpm}`}
+        >
+          <span>BPM</span>
+          <b data-testid="transport-bpm">
+            {COMPACT_NUMBER.format(bundle.patch.bpm)}
+          </b>
+        </span>
+        <span
+          className="transport-readout"
+          title={`Loop ${bundle.patch.loop_seconds} seconds`}
+        >
+          <span>Loop</span>
+          <b data-testid="transport-loop">
+            {COMPACT_NUMBER.format(bundle.patch.loop_seconds)}s
+          </b>
+        </span>
+      </div>
       <button
         data-testid="play-toggle"
+        aria-label={engine.playing ? "Stop Pattern" : "Play Pattern"}
         onClick={() => (engine.playing ? engine.stop() : void engine.play())}
       >
         {engine.playing ? "■" : "▶"}
       </button>
-      <span className="transport-readout">
-        BPM <b>{bundle.patch.bpm}</b>
-      </span>
-      <span className="transport-readout">
-        loop <b>{bundle.patch.loop_seconds}s</b>
-      </span>
-      <span className="transport-id">{bundle.patch.patch_id}</span>
     </div>
   );
 }

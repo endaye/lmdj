@@ -112,6 +112,12 @@ describe("App", () => {
     expect(screen.getByTestId("drop-zone")).toBeInTheDocument();
     expect(screen.getByTestId("advanced-source-actions")).not.toHaveAttribute("open");
     expect(screen.getByRole("button", { name: /示例/i })).toBeInTheDocument();
+    expect(screen.queryByText("Creator Tools")).not.toBeInTheDocument();
+    for (const name of ["Source", "Performance", "Export"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-pressed", "false");
+    }
     expect(screen.getByTestId("app-version")).toHaveTextContent(
       PRODUCT_VERSION,
     );
@@ -131,9 +137,23 @@ describe("App", () => {
     );
     expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
     expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
-    expect(screen.getByText(/BPM/)).toBeInTheDocument();
-    expect(screen.getByTestId("status-bar")).toHaveTextContent("Pads 01–16");
-    expect(screen.getByTestId("status-bar")).toHaveTextContent(/MIDI Bank.*不适用/i);
+    expect(screen.getByTestId("transport-bpm")).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-project-name")).toHaveTextContent(
+      "Bundled example",
+    );
+    expect(screen.getByTestId("header-bpm")).toHaveTextContent("89.1");
+    expect(screen.getByTestId("header-loop")).toHaveTextContent("10.67s");
+    expect(screen.getByLabelText("曲目参数")).toHaveTextContent(
+      "BPM89.1Loop10.67sKey—",
+    );
+    const statusBar = screen.getByTestId("status-bar");
+    expect(statusBar).toHaveTextContent("MIDI Not connected");
+    expect(statusBar).toHaveTextContent("No MIDI input");
+    expect(statusBar).toHaveTextContent("Direct 16 · Bank 不适用");
+    expect(within(statusBar).queryByRole("button")).not.toBeInTheDocument();
+    const midiController = screen.getByRole("region", { name: "MIDI controller" });
+    expect(screen.getByTestId("context-inspector")).toContainElement(midiController);
+    expect(screen.getByTestId("instrument-canvas")).not.toContainElement(midiController);
   });
 
   it("switches between a truthful loaded Source context and the retained Performance instrument", async () => {
@@ -219,8 +239,14 @@ describe("App", () => {
     await userEvent.click(screen.getByRole("button", { name: /示例/i }));
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
 
-    for (const key of ["1", "8", "Q", "I"]) {
+    fireEvent.keyDown(window, { key: "1" });
+    expect(screen.getByTestId("pad-0")).toHaveAttribute("data-pressed", "true");
+    fireEvent.keyUp(window, { key: "1" });
+    expect(screen.getByTestId("pad-0")).toHaveAttribute("data-pressed", "false");
+
+    for (const key of ["8", "Q", "I"]) {
       fireEvent.keyDown(window, { key });
+      fireEvent.keyUp(window, { key });
     }
 
     expect(triggerPad).toHaveBeenNthCalledWith(1, 0);
@@ -261,7 +287,9 @@ describe("App", () => {
 
     expect(triggerPad).toHaveBeenNthCalledWith(1, 0);
     expect(triggerPad).toHaveBeenNthCalledWith(2, 8);
-    expect(screen.getByTestId("status-bar")).toHaveTextContent("MIDI Bank B");
+    expect(screen.getByTestId("status-bar")).toHaveTextContent(
+      "8-pad Controller · Bank B",
+    );
   });
 
   it("ignores modified, repeated, and editable keyboard events", async () => {
@@ -456,13 +484,22 @@ describe("App API path", () => {
       "job123",
     );
     expect(screen.getByTestId("context-inspector")).toHaveTextContent(
-      "导出 Creator Pack",
+      "API Job",
     );
-    expect(screen.getByTestId("app-bar")).toHaveTextContent("Key A minor");
+    expect(screen.getByTestId("instrument-canvas")).toContainElement(
+      screen.getByTestId("export-checklist"),
+    );
+    expect(
+      within(screen.getByLabelText("曲目参数")).getByText("A minor"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("status-bar")).toHaveTextContent("needs-review");
-    expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
+    expect(screen.getByTestId("pad-matrix")).not.toBeVisible();
     expect(screen.getByTestId("pad-1")).toHaveAttribute("data-selected", "true");
     expect(stop).not.toHaveBeenCalled();
+
+    await userEvent.click(screen.getByRole("button", { name: "Performance" }));
+    expect(screen.getByTestId("pad-matrix")).toBeVisible();
+    expect(screen.getByTestId("pad-1")).toHaveAttribute("data-selected", "true");
 
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     expect(fetchCreatorExportStatus).toHaveBeenCalledTimes(1);
@@ -581,7 +618,9 @@ describe("App API path", () => {
     await userEvent.click(screen.getByRole("button", { name: "Source" }));
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     await waitFor(() =>
-      expect(screen.getByTestId("app-bar")).toHaveTextContent("Key C major"),
+      expect(
+        within(screen.getByLabelText("曲目参数")).getByText("C major"),
+      ).toBeInTheDocument(),
     );
 
     await act(async () => {
@@ -595,7 +634,9 @@ describe("App API path", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("app-bar")).toHaveTextContent("Key C major");
+    expect(
+      within(screen.getByLabelText("曲目参数")).getByText("C major"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("status-bar")).not.toHaveTextContent("partial");
     expect(screen.getByTestId("export-item-midi")).toHaveTextContent("Ready");
   });
@@ -610,7 +651,7 @@ describe("App API path", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
 
-    expect(screen.getByTestId("context-inspector")).toHaveTextContent(
+    expect(screen.getByTestId("instrument-canvas")).toHaveTextContent(
       "仅远端 Job 可导出",
     );
     expect(screen.getByTestId("context-inspector")).toHaveTextContent("Example");
@@ -656,7 +697,7 @@ describe("App API path", () => {
     await waitFor(() => expect(screen.getByTestId("pad-matrix")).toBeInTheDocument());
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
 
-    expect(screen.getByTestId("context-inspector")).toHaveTextContent(
+    expect(screen.getByTestId("instrument-canvas")).toHaveTextContent(
       "仅远端 Job 可导出",
     );
     expect(screen.getByTestId("context-inspector")).toHaveTextContent("Local");

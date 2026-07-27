@@ -169,17 +169,6 @@ export function StepGrid({
 
   return (
     <div className="pattern-timeline">
-      <div className="pattern-timeline__meta">
-        <span className="pattern-timeline__tag">
-          <i aria-hidden="true" />
-          Sequence map
-        </span>
-        <div className="pattern-timeline__legend" aria-label="Pattern timeline legend">
-          <span><i className="legend-hit" aria-hidden="true" /> Hit</span>
-          <span><i className="legend-loop" aria-hidden="true" /> Loop span</span>
-          <span><i className="legend-playhead" aria-hidden="true" /> Playhead</span>
-        </div>
-      </div>
       <div className="step-grid" data-testid="step-grid" ref={scrollerRef}>
         <table aria-label={`Pattern ${pattern.name} timeline`}>
           <caption className="step-grid__caption">

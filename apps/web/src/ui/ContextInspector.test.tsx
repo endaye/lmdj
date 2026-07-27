@@ -80,4 +80,29 @@ describe("ContextInspector", () => {
     expect(inspector).toHaveTextContent(missing);
     expect(inspector).toHaveTextContent("MISSING");
   });
+
+  it("hosts MIDI settings outside export content", () => {
+    const source = bundle();
+    const midi = <button type="button">Connect MIDI</button>;
+    const { rerender } = render(
+      <ContextInspector
+        model={buildWorkbenchViewModel(source)}
+        midiContent={midi}
+      />,
+    );
+
+    expect(screen.getByRole("heading", { name: "MIDI Setup" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect MIDI" })).toBeVisible();
+
+    rerender(
+      <ContextInspector
+        model={buildWorkbenchViewModel(source)}
+        exportContent={<div>Export details</div>}
+        midiContent={midi}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Connect MIDI", hidden: true }))
+      .not.toBeVisible();
+  });
 });

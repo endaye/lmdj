@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from "react";
 import type { AudioEngine } from "../engine/AudioEngine";
 import { padElementIds, type Pad, type PatchBundle } from "../patch/loader";
 import { PadButton, type PadVisualState } from "./PadButton";
@@ -30,34 +29,20 @@ export function PadMatrix16({
   bundle,
   engine,
   selectedPadIndex,
+  pressedPadIndices,
   onSelect,
+  onPress,
+  onRelease,
 }: {
   bundle: PatchBundle<unknown>;
   engine: AudioEngine;
   selectedPadIndex: number | undefined;
+  pressedPadIndices: ReadonlySet<number>;
   onSelect: (index: number) => void;
+  onPress: (index: number) => void;
+  onRelease: (index: number) => void;
 }) {
   useEngineTick(engine);
-  const [playingPadIndex, setPlayingPadIndex] = useState<number>();
-  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-
-  useEffect(
-    () => () => {
-      if (resetTimer.current) clearTimeout(resetTimer.current);
-    },
-    [],
-  );
-
-  const trigger = (pad: Pad) => {
-    const ids = padElementIds(pad);
-    if (ids.length === 0) return;
-    engine.triggerPad(pad.index);
-    if (!ids.some((id) => bundle.playableElementIds.has(id))) return;
-    if (pad.behavior.trigger === "loop") return;
-    if (resetTimer.current) clearTimeout(resetTimer.current);
-    setPlayingPadIndex(pad.index);
-    resetTimer.current = setTimeout(() => setPlayingPadIndex(undefined), 120);
-  };
 
   return (
     <div
@@ -67,18 +52,22 @@ export function PadMatrix16({
     >
       {bundle.patch.pads.map((pad) => {
         const state = staticState(pad, bundle, engine, selectedPadIndex);
-        const visualState = state === "missing" || playingPadIndex !== pad.index
-          ? state
-          : "playing";
-        const interactive = padElementIds(pad).length > 0;
+        const ids = padElementIds(pad);
+        const interactive = ids.length > 0;
+        const pressed = state !== "missing"
+          && pressedPadIndices.has(pad.index)
+          && ids.some((id) => bundle.playableElementIds.has(id));
+        const visualState = pressed ? "playing" : state;
         return (
           <PadButton
             key={pad.index}
             pad={pad}
             visualState={visualState}
+            pressed={pressed}
             keyHint={PAD_KEYS[pad.index]}
             onSelect={onSelect}
-            onTrigger={interactive ? () => trigger(pad) : undefined}
+            onPress={interactive ? onPress : undefined}
+            onRelease={interactive ? onRelease : undefined}
             onToggleMute={interactive ? () => engine.toggleMutePad(pad.index) : undefined}
           />
         );

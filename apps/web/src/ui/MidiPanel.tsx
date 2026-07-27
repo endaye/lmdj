@@ -29,16 +29,25 @@ const CONNECTION_LABELS: Record<MidiSnapshot["connection"], string> = {
   disconnected: "Disconnected",
 };
 
+export interface MidiPanelStatus {
+  connection: string;
+  devices: string[];
+}
+
 export function MidiPanel({
-  onTrigger,
+  onPress,
+  onRelease,
   bank,
   onBankChange,
   onMappingModeChange,
+  onStatusChange,
 }: {
-  onTrigger: (index: number) => void;
+  onPress: (index: number) => void;
+  onRelease: (index: number) => void;
   bank: MidiBank;
   onBankChange: (bank: MidiBank) => void;
   onMappingModeChange?: (mode: MidiMapping["mode"]) => void;
+  onStatusChange?: (status: MidiPanelStatus) => void;
 }) {
   const [mapping, setMapping] = useState<MidiMapping>(() =>
     loadMidiMapping(localStorage),
@@ -50,15 +59,19 @@ export function MidiPanel({
   } | null>(null);
   const mappingRef = useRef(mapping);
   const bankRef = useRef(bank);
-  const triggerRef = useRef(onTrigger);
+  const pressRef = useRef(onPress);
+  const releaseRef = useRef(onRelease);
+  const activeNotesRef = useRef(new Map<number, number>());
   const learnRef = useRef<LearnState | null>(null);
   mappingRef.current = mapping;
   bankRef.current = bank;
-  triggerRef.current = onTrigger;
+  pressRef.current = onPress;
+  releaseRef.current = onRelease;
 
-  const handleNote = useCallback((note: number) => {
+  const handleNote = useCallback((note: number, pressed: boolean) => {
     const learn = learnRef.current;
     if (learn) {
+      if (!pressed) return;
       const completed = learn.session.capture(note);
       if (Number.isInteger(note) && note >= 0 && note <= 127) {
         learn.notes.add(note);
@@ -77,18 +90,45 @@ export function MidiPanel({
       return;
     }
 
+    if (!pressed) {
+      const activeIndex = activeNotesRef.current.get(note);
+      if (activeIndex === undefined) return;
+      activeNotesRef.current.delete(note);
+      releaseRef.current(activeIndex);
+      return;
+    }
+
     const index = padIndexForNote(mappingRef.current, note, bankRef.current);
-    if (index !== null) triggerRef.current(index);
+    if (index !== null) {
+      activeNotesRef.current.set(note, index);
+      pressRef.current(index);
+    }
   }, []);
 
   const [midi] = useState(() => new MidiInput(handleNote));
+
+  const releaseActiveNotes = useCallback(() => {
+    const activeIndexes = new Set(activeNotesRef.current.values());
+    activeNotesRef.current.clear();
+    for (const index of activeIndexes) releaseRef.current(index);
+  }, []);
 
   useEffect(() => {
     setSnapshot(midi.snapshot);
     return midi.subscribe(setSnapshot);
   }, [midi]);
 
-  useEffect(() => () => midi.dispose(), [midi]);
+  useEffect(
+    () => () => {
+      releaseActiveNotes();
+      midi.dispose();
+    },
+    [midi, releaseActiveNotes],
+  );
+
+  useEffect(() => {
+    if (snapshot.connection !== "connected") releaseActiveNotes();
+  }, [releaseActiveNotes, snapshot.connection]);
 
   useEffect(() => {
     onMappingModeChange?.(mapping.mode);
@@ -110,13 +150,21 @@ export function MidiPanel({
       ? "Web MIDI unsupported"
       : CONNECTION_LABELS[snapshot.connection];
 
+  useEffect(() => {
+    onStatusChange?.({
+      connection: supportLabel,
+      devices: snapshot.devices,
+    });
+  }, [onStatusChange, snapshot.devices, supportLabel]);
+
   return (
     <section className="midi-panel" aria-label="MIDI controller">
       <div className="midi-panel__connection">
-        <strong>MIDI</strong>
+        <strong>Connection</strong>
         <span data-testid="midi-connection">{supportLabel}</span>
         <button
           type="button"
+          aria-label="Connect MIDI"
           onClick={() => void midi.connect()}
           disabled={
             snapshot.connection === "requesting" ||
@@ -124,7 +172,7 @@ export function MidiPanel({
             snapshot.support === "unsupported"
           }
         >
-          Connect MIDI
+          Connect
         </button>
       </div>
 
@@ -138,11 +186,19 @@ export function MidiPanel({
         <span data-testid="midi-mapping-mode">
           {direct ? "Direct 16" : "8-pad Controller"}
         </span>
-        <button type="button" onClick={() => beginLearn("direct-16")}>
-          Learn Direct 16
+        <button
+          type="button"
+          aria-label="Learn Direct 16"
+          onClick={() => beginLearn("direct-16")}
+        >
+          Learn 16
         </button>
-        <button type="button" onClick={() => beginLearn("banked-8")}>
-          Learn 8-pad
+        <button
+          type="button"
+          aria-label="Learn 8-pad"
+          onClick={() => beginLearn("banked-8")}
+        >
+          Learn 8
         </button>
       </div>
 

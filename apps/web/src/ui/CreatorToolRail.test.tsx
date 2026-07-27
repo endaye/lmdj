@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CreatorToolRail } from "./CreatorToolRail";
 
 describe("CreatorToolRail", () => {
-  it("renders only the available creator modes and reports a mode change", async () => {
+  it("renders the three persistent creator views and reports an available mode change", async () => {
     const onModeChange = vi.fn();
     render(
       <CreatorToolRail
@@ -22,6 +22,26 @@ describe("CreatorToolRail", () => {
     ]);
     await userEvent.click(screen.getByRole("button", { name: "Performance" }));
     expect(onModeChange).toHaveBeenCalledWith("performance");
+  });
+
+  it("keeps unavailable views visible but disabled and unselected", async () => {
+    const onModeChange = vi.fn();
+    render(
+      <CreatorToolRail
+        mode="source"
+        onModeChange={onModeChange}
+        availableModes={[]}
+      />,
+    );
+
+    expect(screen.queryByText("Creator Tools")).not.toBeInTheDocument();
+    for (const name of ["Source", "Performance", "Export"]) {
+      const button = screen.getByRole("button", { name });
+      expect(button).toBeDisabled();
+      expect(button).toHaveAttribute("aria-pressed", "false");
+      await userEvent.click(button);
+    }
+    expect(onModeChange).not.toHaveBeenCalled();
   });
 
   it("has no false-entry controls for unavailable creator capabilities", () => {

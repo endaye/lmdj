@@ -1,11 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const VIEWPORTS = [
+  { name: "desktop-ultrawide", width: 1920, height: 1080 },
   { name: "desktop-wide", width: 1440, height: 900 },
   { name: "desktop-compact", width: 1280, height: 720 },
   { name: "landscape-tablet", width: 1024, height: 768 },
   { name: "portrait-tablet", width: 768, height: 1024 },
   { name: "phone", width: 390, height: 844 },
+  { name: "short-phone", width: 360, height: 640 },
 ] as const;
 
 const SHELL_BREAKPOINTS = [
@@ -94,6 +96,45 @@ test("Source file chooser uses white button text", async ({ page }) => {
   );
 
   expect(color).toBe("rgb(255, 255, 255)");
+});
+
+test("timing values stay compact while duplicate source identity is omitted", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const longPatchId =
+    "source-09f69a8fcc1461ff3631657100ffe2b1eae58f6a2b96e2f9aa3ce6fa3f02d99e-2280ebab";
+  await page.route("**/example-patch/patch.json", async (route) => {
+    const response = await route.fetch();
+    const patch = await response.json();
+    patch.patch_id = longPatchId;
+    patch.bpm = 117.453835;
+    patch.loop_seconds = 8.173424052096724;
+    await route.fulfill({ response, json: patch });
+  });
+  await page.goto("/");
+  await page.getByText("高级 · 导入 Patch 包").click();
+  await page.getByRole("button", { name: /加载示例 patch/i }).click();
+
+  await expect(page.getByTestId("transport-bpm")).toHaveText("117.45");
+  await expect(page.getByTestId("transport-loop")).toHaveText("8.17s");
+  await expect(page.getByTestId("transport-source")).toHaveCount(0);
+
+  const controls = page.getByTestId("pattern-controls");
+  await expect(controls.getByText(longPatchId, { exact: true })).toHaveCount(0);
+  const play = page.getByTestId("play-toggle");
+  const [controlsBox, playBox] = await Promise.all([box(controls), box(play)]);
+  expect(playBox.x + playBox.width).toBeGreaterThan(controlsBox.x + controlsBox.width - 2);
+  expect(playBox.height).toBeGreaterThan(
+    await page.getByTestId("transport-bpm").evaluate((element) =>
+      element.parentElement!.getBoundingClientRect().height
+    ),
+  );
+  expect(playBox.height).toBeGreaterThan(
+    await page.getByTestId("pattern-playhead").evaluate((element) =>
+      element.getBoundingClientRect().height
+    ),
+  );
 });
 
 test("360px My Songs keeps primary navigation and record actions usable", async ({
@@ -193,6 +234,35 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
     const toolsBox = await box(tools);
     const canvasBox = await box(canvas);
     const statusBox = await box(status);
+    const headerGroups = [
+      appBar.locator(".wordmark"),
+      appBar.locator(".global-navigation"),
+      appBar.locator(".topbar-actions"),
+      toggle,
+    ];
+    const visibleHeaderBoxes: Box[] = [];
+
+    for (const group of headerGroups) {
+      if (await group.isVisible()) {
+        const groupBox = await box(group);
+        expect(groupBox.x).toBeGreaterThanOrEqual(appBarBox.x);
+        expect(groupBox.x + groupBox.width).toBeLessThanOrEqual(
+          appBarBox.x + appBarBox.width,
+        );
+        visibleHeaderBoxes.push(groupBox);
+      }
+    }
+    for (let index = 0; index < visibleHeaderBoxes.length; index += 1) {
+      for (
+        let comparison = index + 1;
+        comparison < visibleHeaderBoxes.length;
+        comparison += 1
+      ) {
+        expect(
+          overlaps(visibleHeaderBoxes[index], visibleHeaderBoxes[comparison]),
+        ).toBe(false);
+      }
+    }
 
     if (breakpoint.layout === "wide") {
       await expect(toggle).toBeHidden();
@@ -246,8 +316,12 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
     for (const inertRegion of [appBar, tools, canvas, status]) {
       await expect(inertRegion).toHaveAttribute("inert", "");
     }
+    const midiConnect = inspector.getByRole("button", { name: "Connect MIDI" });
+    await expect(midiConnect).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Connect MIDI" })).toHaveCount(0);
+    await expect(status.getByRole("button")).toHaveCount(0);
     await page.keyboard.press("Tab");
-    await expect(close).toBeFocused();
+    await expect(midiConnect).toBeFocused();
     await page.keyboard.press("Shift+Tab");
     await expect(close).toBeFocused();
     const inspectorBox = await box(inspector);
@@ -275,22 +349,55 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`${viewport.name} ${viewport.width}x${viewport.height} keeps Pattern steps readable`, async ({
+  test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the full Pattern overview in frame`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await openExampleWithMissingAsset(page);
 
+    const surface = page.getByTestId("pattern-surface");
+    const heading = surface.locator(".pattern-surface__header");
+    await expect(heading.getByText("Performance", { exact: true })).toBeVisible();
+    await expect(heading.getByText("16 live slots", { exact: true })).toBeVisible();
+    await expect(heading.getByRole("heading", { name: "Original" })).toBeVisible();
+    await expect(heading.getByTestId("pattern-controls")).toBeVisible();
+    expect(
+      await surface.evaluate((element) => getComputedStyle(element).borderWidth),
+    ).toBe("0px");
+    expect(
+      await heading.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    if (viewport.width >= 1920) {
+      expect(
+        await heading.evaluate(
+          (element) => getComputedStyle(element).gridTemplateAreas,
+        ),
+      ).toBe('"performance identity readiness controls"');
+    }
+
     const grid = page.getByTestId("step-grid");
     const firstCell = grid.locator("tbody td").first();
     const firstCellBox = await box(firstCell);
-    expect(firstCellBox.width).toBeGreaterThanOrEqual(viewport.width < 600 ? 12 : 14);
-    expect(firstCellBox.height).toBeGreaterThanOrEqual(viewport.width < 600 ? 12 : 14);
+    expect(firstCellBox.width).toBeGreaterThanOrEqual(viewport.width < 600 ? 2 : 5);
+    expect(firstCellBox.height).toBeGreaterThanOrEqual(4);
     expect(
-      await grid.evaluate((element) => element.scrollWidth > element.clientWidth),
-    ).toBe(true);
+      await grid.evaluate((element) => ({
+        overflow: element.scrollWidth - element.clientWidth,
+        overflowX: getComputedStyle(element).overflowX,
+      })),
+    ).toEqual({ overflow: expect.any(Number), overflowX: "hidden" });
+    expect(
+      await grid.evaluate((element) => element.scrollWidth - element.clientWidth),
+    ).toBeLessThanOrEqual(2);
     await expect(grid.getByText("Bar 1", { exact: true })).toBeVisible();
-    await expect(grid.getByText("Bar 4", { exact: true })).toBeAttached();
+    await expect(grid.getByText("Bar 4", { exact: true })).toBeVisible();
+    const gridBox = await box(grid);
+    const lastLaneBox = await box(grid.locator("tbody tr").last());
+    expect(lastLaneBox.y + lastLaneBox.height).toBeLessThanOrEqual(
+      gridBox.y + gridBox.height + 1,
+    );
   });
 
   test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the instrument usable`, async ({
@@ -302,8 +409,32 @@ for (const viewport of VIEWPORTS) {
     const matrix = page.getByTestId("pad-matrix");
     const pads = matrix.locator("[data-pad-index]");
     const shell = page.getByTestId("workbench-shell");
-    const shellWidth = (await box(shell)).width;
+    const shellBox = await box(shell);
+    const shellWidth = shellBox.width;
     await expect(pads).toHaveCount(16);
+    expect(shellBox.x).toBeGreaterThanOrEqual(0);
+    expect(shellBox.y).toBeGreaterThanOrEqual(0);
+    expect(shellBox.x + shellBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(shellBox.y + shellBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(
+      await page.evaluate(() => ({
+        horizontal: document.documentElement.scrollWidth <= window.innerWidth,
+        vertical: document.documentElement.scrollHeight <= window.innerHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+      })),
+    ).toEqual({
+      horizontal: true,
+      vertical: true,
+      scrollX: 0,
+      scrollY: 0,
+    });
+    expect(
+      await page.getByTestId("instrument-canvas").evaluate((element) =>
+        element.scrollWidth <= element.clientWidth
+        && element.scrollHeight <= element.clientHeight
+      ),
+    ).toBe(true);
 
     const layout = await matrix.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -330,7 +461,10 @@ for (const viewport of VIEWPORTS) {
       }),
     );
     for (const padBox of boxes) {
-      expect(Math.abs(padBox.width - padBox.height)).toBeLessThanOrEqual(1);
+      expect(padBox.width).toBeGreaterThanOrEqual(viewport.height <= 640 ? 18 : 32);
+      expect(padBox.height).toBeGreaterThanOrEqual(viewport.height <= 640 ? 18 : 32);
+      expect(padBox.width / padBox.height).toBeGreaterThanOrEqual(.78);
+      expect(padBox.width / padBox.height).toBeLessThanOrEqual(1.22);
     }
     for (let left = 0; left < boxes.length; left += 1) {
       for (let right = left + 1; right < boxes.length; right += 1) {
@@ -363,13 +497,16 @@ for (const viewport of VIEWPORTS) {
       expect(overlaps(statusBox, padBox)).toBe(false);
     }
     if (viewport.width <= 620) {
-      const headingTitle = await box(page.locator(".workbench-canvas-heading > div > span"));
-      const headingMeta = await box(page.locator(".workbench-canvas-heading > div > small"));
+      const headingTitle = await box(
+        page.locator(".pattern-surface__performance > strong"),
+      );
+      const headingMeta = await box(
+        page.locator(".pattern-surface__performance > small"),
+      );
       expect(overlaps(headingTitle, headingMeta)).toBe(false);
     }
 
     const lastPad = pads.nth(15);
-    await lastPad.scrollIntoViewIfNeeded();
     await expect(lastPad).toBeInViewport();
     const lastBox = await box(lastPad);
     const currentStatusBox = await box(page.getByTestId("status-bar"));
@@ -451,13 +588,25 @@ for (const viewport of VIEWPORTS) {
 
     if (viewport.name === "phone") {
       await page.emulateMedia({ reducedMotion: "reduce" });
-      await pads.nth(0).click();
-      await expect(pads.nth(0)).toHaveAttribute("data-visual-state", "playing");
-      await expect(pads.nth(0)).toContainText("PLAYING");
-      expect(await pads.nth(0).evaluate((element) => getComputedStyle(element).transform)).toBe("none");
+      const reducedMotionPad = pads.nth(0);
+      const reducedMotionPadBox = await box(reducedMotionPad);
+      await page.mouse.move(
+        reducedMotionPadBox.x + reducedMotionPadBox.width / 2,
+        reducedMotionPadBox.y + reducedMotionPadBox.height / 2,
+      );
+      await page.mouse.down();
+      await expect(reducedMotionPad).toHaveAttribute("data-visual-state", "playing");
+      await expect(reducedMotionPad).toContainText("PLAYING");
+      expect(
+        await reducedMotionPad.evaluate(
+          (element) => getComputedStyle(element).transform,
+        ),
+      ).toBe("none");
       expect(
         await inspectorHeader.evaluate((element) => getComputedStyle(element).transitionDuration),
       ).toBe("0s");
+      await page.mouse.up();
+      await expect(reducedMotionPad).toHaveAttribute("data-visual-state", "selected");
     }
   });
 }
