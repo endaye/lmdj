@@ -1,10 +1,12 @@
 {
   "name": "LMDJ Sound Role Icons",
-  "version": 4,
+  "version": 5,
   "concept": "Ordered Signals",
-  "grid": 32,
-  "base_unit": 4,
-  "optical_stroke": 2,
+  "canvas": 256,
+  "design_grid": 32,
+  "scale": 8,
+  "base_unit": 32,
+  "optical_stroke": 16,
   "color_model": "single currentColor with transparent negative space",
   "roles": [
     {"id": "kick", "label": "Kick", "family": "drums", "color": "#FF4F31", "signal": "pulse target", "order": "four-axis radial"},
