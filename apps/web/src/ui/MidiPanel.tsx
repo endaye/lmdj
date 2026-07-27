@@ -35,13 +35,15 @@ export interface MidiPanelStatus {
 }
 
 export function MidiPanel({
-  onTrigger,
+  onPress,
+  onRelease,
   bank,
   onBankChange,
   onMappingModeChange,
   onStatusChange,
 }: {
-  onTrigger: (index: number) => void;
+  onPress: (index: number) => void;
+  onRelease: (index: number) => void;
   bank: MidiBank;
   onBankChange: (bank: MidiBank) => void;
   onMappingModeChange?: (mode: MidiMapping["mode"]) => void;
@@ -57,15 +59,19 @@ export function MidiPanel({
   } | null>(null);
   const mappingRef = useRef(mapping);
   const bankRef = useRef(bank);
-  const triggerRef = useRef(onTrigger);
+  const pressRef = useRef(onPress);
+  const releaseRef = useRef(onRelease);
+  const activeNotesRef = useRef(new Map<number, number>());
   const learnRef = useRef<LearnState | null>(null);
   mappingRef.current = mapping;
   bankRef.current = bank;
-  triggerRef.current = onTrigger;
+  pressRef.current = onPress;
+  releaseRef.current = onRelease;
 
-  const handleNote = useCallback((note: number) => {
+  const handleNote = useCallback((note: number, pressed: boolean) => {
     const learn = learnRef.current;
     if (learn) {
+      if (!pressed) return;
       const completed = learn.session.capture(note);
       if (Number.isInteger(note) && note >= 0 && note <= 127) {
         learn.notes.add(note);
@@ -84,18 +90,45 @@ export function MidiPanel({
       return;
     }
 
+    if (!pressed) {
+      const activeIndex = activeNotesRef.current.get(note);
+      if (activeIndex === undefined) return;
+      activeNotesRef.current.delete(note);
+      releaseRef.current(activeIndex);
+      return;
+    }
+
     const index = padIndexForNote(mappingRef.current, note, bankRef.current);
-    if (index !== null) triggerRef.current(index);
+    if (index !== null) {
+      activeNotesRef.current.set(note, index);
+      pressRef.current(index);
+    }
   }, []);
 
   const [midi] = useState(() => new MidiInput(handleNote));
+
+  const releaseActiveNotes = useCallback(() => {
+    const activeIndexes = new Set(activeNotesRef.current.values());
+    activeNotesRef.current.clear();
+    for (const index of activeIndexes) releaseRef.current(index);
+  }, []);
 
   useEffect(() => {
     setSnapshot(midi.snapshot);
     return midi.subscribe(setSnapshot);
   }, [midi]);
 
-  useEffect(() => () => midi.dispose(), [midi]);
+  useEffect(
+    () => () => {
+      releaseActiveNotes();
+      midi.dispose();
+    },
+    [midi, releaseActiveNotes],
+  );
+
+  useEffect(() => {
+    if (snapshot.connection !== "connected") releaseActiveNotes();
+  }, [releaseActiveNotes, snapshot.connection]);
 
   useEffect(() => {
     onMappingModeChange?.(mapping.mode);

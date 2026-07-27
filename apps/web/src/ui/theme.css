@@ -802,11 +802,10 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   outline-offset: 3px;
   box-shadow: 0 0 0 3px var(--loop), 0 0 0 7px var(--ink);
 }
-.pad--playing {
-  transform: scale(.93);
-  background: var(--lead);
-  color: var(--ink);
-  box-shadow: 0 0 0 5px var(--drums);
+.pad[data-pressed="true"] {
+  transform: translateY(3px) scale(.96);
+  background: color-mix(in srgb, var(--pad-role) 84%, var(--ink));
+  box-shadow: 1px 1px 0 var(--ink);
 }
 .pad--muted {
   filter: grayscale(.8);
@@ -1381,7 +1380,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
   .pad:hover,
-  .pad--playing {
+  .pad[data-pressed="true"] {
     transform: none;
   }
 }

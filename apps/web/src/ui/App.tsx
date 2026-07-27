@@ -201,6 +201,9 @@ export function App({
   const [queueCapacity, setQueueCapacity] =
     useState<QueueCapacity>(EMPTY_CAPACITY);
   const [selectedPadIndex, setSelectedPadIndex] = useState<number>();
+  const [pressedPadIndices, setPressedPadIndices] = useState<Set<number>>(
+    () => new Set(),
+  );
   const [mode, setMode] = useState<WorkbenchMode>("source");
   const [midiBank, setMidiBank] = useState<MidiBank>("A");
   const [midiMappingMode, setMidiMappingMode] = useState<MidiMapping["mode"]>(
@@ -216,13 +219,30 @@ export function App({
   const [deleteNotice, setDeleteNotice] = useState<string | null>(null);
   const [completionNotice, setCompletionNotice] = useState<string | null>(null);
   const playheadStep = usePlayheadStep(engine, state.phase === "loaded");
-  const triggerPad = useCallback(
+  const pressPad = useCallback(
     (index: number) => {
       setSelectedPadIndex(index);
+      setPressedPadIndices((current) => {
+        if (current.has(index)) return current;
+        const next = new Set(current);
+        next.add(index);
+        return next;
+      });
       engine.triggerPad(index);
     },
     [engine],
   );
+  const releasePad = useCallback((index: number) => {
+    setPressedPadIndices((current) => {
+      if (!current.has(index)) return current;
+      const next = new Set(current);
+      next.delete(index);
+      return next;
+    });
+  }, []);
+  const releaseAllPads = useCallback(() => {
+    setPressedPadIndices((current) => current.size === 0 ? current : new Set());
+  }, []);
 
   const updateTrackedJobs = useCallback(
     (update: (current: TrackedJob[]) => TrackedJob[]) => {
@@ -757,7 +777,10 @@ export function App({
   // 键盘固定覆盖 16 个逻辑 Pad；MIDI Bank 只影响 8-pad Controller。
   useEffect(() => {
     if (state.phase !== "loaded") return;
-    const onKey = (e: KeyboardEvent) => {
+    const padIndexForKey = (key: string) => PAD_KEYS.indexOf(
+      key.toUpperCase() as (typeof PAD_KEYS)[number],
+    );
+    const onKeyDown = (e: KeyboardEvent) => {
       if (e.repeat || e.metaKey || e.ctrlKey || e.altKey) return;
       const target = e.target;
       if (
@@ -770,14 +793,23 @@ export function App({
       ) {
         return;
       }
-      const index = PAD_KEYS.indexOf(
-        e.key.toUpperCase() as (typeof PAD_KEYS)[number],
-      );
-      if (index >= 0) triggerPad(index);
+      const index = padIndexForKey(e.key);
+      if (index >= 0) pressPad(index);
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [state.phase, triggerPad]);
+    const onKeyUp = (e: KeyboardEvent) => {
+      const index = padIndexForKey(e.key);
+      if (index >= 0) releasePad(index);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", releaseAllPads);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", releaseAllPads);
+      releaseAllPads();
+    };
+  }, [pressPad, releaseAllPads, releasePad, state.phase]);
 
   const deleteFeedback = (
     <>
@@ -1225,7 +1257,10 @@ export function App({
                   bundle={bundle}
                   engine={engine}
                   selectedPadIndex={selectedPadIndex}
+                  pressedPadIndices={pressedPadIndices}
                   onSelect={setSelectedPadIndex}
+                  onPress={pressPad}
+                  onRelease={releasePad}
                 />
               </section>
             </div>
@@ -1249,7 +1284,8 @@ export function App({
                 model={model}
                 midiContent={
                   <MidiPanel
-                    onTrigger={triggerPad}
+                    onPress={pressPad}
+                    onRelease={releasePad}
                     bank={midiBank}
                     onBankChange={setMidiBank}
                     onMappingModeChange={setMidiMappingMode}

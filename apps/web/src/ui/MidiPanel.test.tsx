@@ -57,16 +57,19 @@ function installWebMidi() {
 }
 
 function BankHarness({
-  onTrigger,
+  onPress,
+  onRelease = () => undefined,
   onStatusChange,
 }: {
-  onTrigger: (index: number) => void;
+  onPress: (index: number) => void;
+  onRelease?: (index: number) => void;
   onStatusChange?: Parameters<typeof MidiPanel>[0]["onStatusChange"];
 }) {
   const [bank, setBank] = useState<MidiBank>("A");
   return (
     <MidiPanel
-      onTrigger={onTrigger}
+      onPress={onPress}
+      onRelease={onRelease}
       bank={bank}
       onBankChange={setBank}
       onStatusChange={onStatusChange}
@@ -97,7 +100,7 @@ describe("MidiPanel", () => {
     const onStatusChange = vi.fn();
     render(
       <BankHarness
-        onTrigger={() => undefined}
+        onPress={() => undefined}
         onStatusChange={onStatusChange}
       />,
     );
@@ -116,7 +119,7 @@ describe("MidiPanel", () => {
 
   it("learns and saves a complete direct sixteen-note mapping", async () => {
     const { input } = installWebMidi();
-    render(<BankHarness onTrigger={() => undefined} />);
+    render(<BankHarness onPress={() => undefined} />);
     await userEvent.click(screen.getByRole("button", { name: /Connect MIDI/i }));
     await userEvent.click(screen.getByRole("button", { name: /Learn Direct 16/i }));
 
@@ -138,7 +141,7 @@ describe("MidiPanel", () => {
     };
     localStorage.setItem("lmdj.midi.mapping.v1", JSON.stringify(previous));
     const { input } = installWebMidi();
-    render(<BankHarness onTrigger={() => undefined} />);
+    render(<BankHarness onPress={() => undefined} />);
     await userEvent.click(screen.getByRole("button", { name: /Connect MIDI/i }));
     await userEvent.click(screen.getByRole("button", { name: /Learn Direct 16/i }));
 
@@ -154,20 +157,23 @@ describe("MidiPanel", () => {
 
   it("learns eight notes and maps the same controller across Bank A and B", async () => {
     const { input } = installWebMidi();
-    const onTrigger = vi.fn();
-    render(<BankHarness onTrigger={onTrigger} />);
+    const onPress = vi.fn();
+    const onRelease = vi.fn();
+    render(<BankHarness onPress={onPress} onRelease={onRelease} />);
     await userEvent.click(screen.getByRole("button", { name: /Connect MIDI/i }));
     await userEvent.click(screen.getByRole("button", { name: /Learn 8-pad/i }));
     for (let note = 60; note < 68; note += 1) input.emit(note);
 
     input.emit(60);
-    expect(onTrigger).toHaveBeenLastCalledWith(0);
+    expect(onPress).toHaveBeenLastCalledWith(0);
+    input.emit(60, 0);
+    expect(onRelease).toHaveBeenLastCalledWith(0);
     await userEvent.click(
       await screen.findByRole("button", { name: /Bank B/i }),
     );
     input.emit(60);
 
-    expect(onTrigger).toHaveBeenLastCalledWith(8);
+    expect(onPress).toHaveBeenLastCalledWith(8);
     expect(screen.getByRole("button", { name: /Bank B/i })).toHaveAttribute(
       "aria-pressed",
       "true",
@@ -176,11 +182,13 @@ describe("MidiPanel", () => {
 
   it("marks Bank as not applicable for Direct 16 and maps independently of the bank prop", async () => {
     const { input } = installWebMidi();
-    const onTrigger = vi.fn();
+    const onPress = vi.fn();
+    const onRelease = vi.fn();
     const onBankChange = vi.fn();
     render(
       <MidiPanel
-        onTrigger={onTrigger}
+        onPress={onPress}
+        onRelease={onRelease}
         bank="B"
         onBankChange={onBankChange}
       />,
@@ -191,7 +199,7 @@ describe("MidiPanel", () => {
     expect(screen.queryByRole("button", { name: /Bank A/i })).not.toBeInTheDocument();
     input.emit(51);
 
-    expect(onTrigger).toHaveBeenCalledWith(15);
+    expect(onPress).toHaveBeenCalledWith(15);
     expect(onBankChange).not.toHaveBeenCalled();
   });
 });

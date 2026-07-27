@@ -25,9 +25,11 @@ describe("PadButton", () => {
         <PadButton
           pad={drumPad}
           visualState={visualState}
+          pressed={false}
           keyHint="1"
           onSelect={() => undefined}
-          onTrigger={() => undefined}
+          onPress={() => undefined}
+          onRelease={() => undefined}
         />,
       );
 
@@ -50,9 +52,11 @@ describe("PadButton", () => {
       <PadButton
         pad={drumPad}
         visualState="idle"
+        pressed={false}
         keyHint="1"
         onSelect={() => undefined}
-        onTrigger={() => undefined}
+        onPress={() => undefined}
+        onRelease={() => undefined}
       />,
     );
     const first = screen.getByTestId("pad-0").dataset.geometrySignature;
@@ -61,9 +65,11 @@ describe("PadButton", () => {
       <PadButton
         pad={structuredClone(drumPad)}
         visualState="idle"
+        pressed={false}
         keyHint="1"
         onSelect={() => undefined}
-        onTrigger={() => undefined}
+        onPress={() => undefined}
+        onRelease={() => undefined}
       />,
     );
     expect(screen.getByTestId("pad-0")).toHaveAttribute("data-geometry-signature", first);
@@ -72,31 +78,62 @@ describe("PadButton", () => {
       <PadButton
         pad={replacement}
         visualState="idle"
+        pressed={false}
         keyHint="1"
         onSelect={() => undefined}
-        onTrigger={() => undefined}
+        onPress={() => undefined}
+        onRelease={() => undefined}
       />,
     );
     expect(screen.getByTestId("pad-0").dataset.geometrySignature).not.toBe(first);
   });
 
-  it("selects and triggers from the same button activation", () => {
+  it("starts on pointer down, releases on pointer up, and selects on click", () => {
     const onSelect = vi.fn();
-    const onTrigger = vi.fn();
+    const onPress = vi.fn();
+    const onRelease = vi.fn();
     render(
       <PadButton
         pad={drumPad}
         visualState="idle"
+        pressed
         keyHint="1"
         onSelect={onSelect}
-        onTrigger={onTrigger}
+        onPress={onPress}
+        onRelease={onRelease}
       />,
     );
 
-    fireEvent.click(screen.getByTestId("pad-0"));
+    const pad = screen.getByTestId("pad-0");
+    fireEvent.pointerDown(pad, { button: 0, pointerId: 1 });
+    fireEvent.pointerUp(pad, { button: 0, pointerId: 1 });
+    fireEvent.click(pad, { detail: 1 });
 
+    expect(onPress).toHaveBeenCalledWith(0);
+    expect(onRelease).toHaveBeenCalledWith(0);
     expect(onSelect).toHaveBeenCalledWith(0);
-    expect(onTrigger).toHaveBeenCalledWith(0);
+    expect(pad).toHaveAttribute("data-pressed", "true");
+  });
+
+  it("keeps assistive click activation playable without a pointer event", () => {
+    const onPress = vi.fn();
+    const onRelease = vi.fn();
+    render(
+      <PadButton
+        pad={drumPad}
+        visualState="idle"
+        pressed={false}
+        keyHint="1"
+        onSelect={() => undefined}
+        onPress={onPress}
+        onRelease={onRelease}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("pad-0"), { detail: 0 });
+
+    expect(onPress).toHaveBeenCalledWith(0);
+    expect(onRelease).toHaveBeenCalledWith(0);
   });
 
   it("retains static text and icon state when reduced motion is preferred", () => {
@@ -111,9 +148,11 @@ describe("PadButton", () => {
       <PadButton
         pad={drumPad}
         visualState="playing"
+        pressed
         keyHint="1"
         onSelect={() => undefined}
-        onTrigger={() => undefined}
+        onPress={() => undefined}
+        onRelease={() => undefined}
       />,
     );
 

@@ -1,5 +1,6 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { useState } from "react";
+import { describe, expect, it, vi } from "vitest";
 import golden from "../patch/__fixtures__/patch.golden.json";
 import { AudioEngine } from "../engine/AudioEngine";
 import { padElementIds, type Patch, type PatchBundle } from "../patch/loader";
@@ -20,20 +21,39 @@ function setup(mutate?: (bundle: PatchBundle<unknown>) => void) {
   engine.load(bundle);
   const triggerPad = vi.spyOn(engine, "triggerPad");
   const onSelect = vi.fn();
+  const onPress = vi.fn((index: number) => engine.triggerPad(index));
+  const onRelease = vi.fn();
+  function Harness() {
+    const [pressedPadIndices, setPressedPadIndices] = useState<Set<number>>(
+      () => new Set(),
+    );
+    return (
+      <PadMatrix16
+        bundle={bundle}
+        engine={engine}
+        selectedPadIndex={undefined}
+        pressedPadIndices={pressedPadIndices}
+        onSelect={onSelect}
+        onPress={(index) => {
+          setPressedPadIndices((current) => new Set(current).add(index));
+          onPress(index);
+        }}
+        onRelease={(index) => {
+          setPressedPadIndices((current) => {
+            const next = new Set(current);
+            next.delete(index);
+            return next;
+          });
+          onRelease(index);
+        }}
+      />
+    );
+  }
   render(
-    <PadMatrix16
-      bundle={bundle}
-      engine={engine}
-      selectedPadIndex={undefined}
-      onSelect={onSelect}
-    />,
+    <Harness />,
   );
-  return { bundle, engine, onSelect, triggerPad };
+  return { bundle, engine, onPress, onRelease, onSelect, triggerPad };
 }
-
-afterEach(() => {
-  vi.useRealTimers();
-});
 
 describe("PadMatrix16", () => {
   it("always maps all sixteen contract pads with fixed keyboard hints", () => {
@@ -54,12 +74,22 @@ describe("PadMatrix16", () => {
   });
 
   it("selects and triggers a material-backed pad through AudioEngine.triggerPad", () => {
-    const { onSelect, triggerPad } = setup();
+    const { onPress, onRelease, onSelect, triggerPad } = setup();
+    const pad = screen.getByTestId("pad-0");
 
-    fireEvent.click(screen.getByTestId("pad-0"));
+    fireEvent.pointerDown(pad, { button: 0, pointerId: 1 });
 
-    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(onPress).toHaveBeenCalledWith(0);
     expect(triggerPad).toHaveBeenCalledWith(0);
+    expect(pad).toHaveAttribute("data-pressed", "true");
+    expect(pad).toHaveAttribute("data-visual-state", "playing");
+
+    fireEvent.pointerUp(pad, { button: 0, pointerId: 1 });
+    fireEvent.click(pad, { detail: 1 });
+
+    expect(onRelease).toHaveBeenCalledWith(0);
+    expect(onSelect).toHaveBeenCalledWith(0);
+    expect(pad).toHaveAttribute("data-pressed", "false");
   });
 
   it("selects empty and reserved pads without faking playback", () => {
@@ -90,37 +120,7 @@ describe("PadMatrix16", () => {
     expect(screen.getByTestId("pad-0")).toHaveAttribute("data-visual-state", "muted");
   });
 
-  it("shows the 120ms playing state before settling on selection", () => {
-    vi.useFakeTimers();
-    const patch = structuredClone(golden) as unknown as Patch;
-    const bundle: PatchBundle<unknown> = {
-      patch,
-      buffers: new Map(patch.elements.map((element) => [element.element_id, {}])),
-      playableElementIds: new Set(patch.elements.map((element) => element.element_id)),
-      missingElementIds: new Set(),
-      warnings: [],
-    };
-    const engine = new AudioEngine(new FakeAudioContext());
-    engine.load(bundle);
-    const onSelect = vi.fn();
-    render(
-      <PadMatrix16
-        bundle={bundle}
-        engine={engine}
-        selectedPadIndex={0}
-        onSelect={onSelect}
-      />,
-    );
-
-    fireEvent.click(screen.getByTestId("pad-0"));
-    expect(screen.getByTestId("pad-0")).toHaveAttribute("data-visual-state", "playing");
-
-    act(() => vi.advanceTimersByTime(120));
-    expect(screen.getByTestId("pad-0")).toHaveAttribute("data-visual-state", "selected");
-  });
-
-  it("keeps a loop pad visibly playing until its second tap", () => {
-    vi.useFakeTimers();
+  it("keeps a loop playing after release without keeping its pressed color", () => {
     const { bundle } = setup((loaded) => {
       loaded.patch.pads[1].behavior = {
         ...loaded.patch.pads[1].behavior,
@@ -129,11 +129,14 @@ describe("PadMatrix16", () => {
     });
     const loopPad = screen.getByTestId("pad-1");
 
-    fireEvent.click(loopPad);
-    act(() => vi.advanceTimersByTime(120));
+    fireEvent.pointerDown(loopPad, { button: 0, pointerId: 1 });
+    expect(loopPad).toHaveAttribute("data-pressed", "true");
+    fireEvent.pointerUp(loopPad, { button: 0, pointerId: 1 });
     expect(loopPad).toHaveAttribute("data-visual-state", "playing");
+    expect(loopPad).toHaveAttribute("data-pressed", "false");
 
-    fireEvent.click(loopPad);
+    fireEvent.pointerDown(loopPad, { button: 0, pointerId: 2 });
+    fireEvent.pointerUp(loopPad, { button: 0, pointerId: 2 });
     expect(bundle.patch.pads[1].behavior.trigger).toBe("loop");
     expect(loopPad).toHaveAttribute("data-visual-state", "idle");
   });
