@@ -1351,10 +1351,12 @@ function GlobalNavigation({
         type="button"
         className="global-navigation__new"
         data-testid="new-song-nav"
+        aria-label="上传新歌"
         aria-current={activeView === "new-upload" ? "page" : undefined}
         onClick={onShowNewUpload}
       >
-        ＋ 上传新歌
+        <span className="global-navigation__new-icon" aria-hidden="true">＋</span>
+        <span className="global-navigation__new-label">上传新歌</span>
       </button>
     </nav>
   );

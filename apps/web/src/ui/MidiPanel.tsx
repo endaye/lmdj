@@ -117,6 +117,7 @@ export function MidiPanel({
         <span data-testid="midi-connection">{supportLabel}</span>
         <button
           type="button"
+          aria-label="Connect MIDI"
           onClick={() => void midi.connect()}
           disabled={
             snapshot.connection === "requesting" ||
@@ -124,7 +125,7 @@ export function MidiPanel({
             snapshot.support === "unsupported"
           }
         >
-          Connect MIDI
+          Connect
         </button>
       </div>
 
@@ -138,11 +139,19 @@ export function MidiPanel({
         <span data-testid="midi-mapping-mode">
           {direct ? "Direct 16" : "8-pad Controller"}
         </span>
-        <button type="button" onClick={() => beginLearn("direct-16")}>
-          Learn Direct 16
+        <button
+          type="button"
+          aria-label="Learn Direct 16"
+          onClick={() => beginLearn("direct-16")}
+        >
+          Learn 16
         </button>
-        <button type="button" onClick={() => beginLearn("banked-8")}>
-          Learn 8-pad
+        <button
+          type="button"
+          aria-label="Learn 8-pad"
+          onClick={() => beginLearn("banked-8")}
+        >
+          Learn 8
         </button>
       </div>
 

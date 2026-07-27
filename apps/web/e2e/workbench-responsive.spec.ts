@@ -6,6 +6,7 @@ const VIEWPORTS = [
   { name: "landscape-tablet", width: 1024, height: 768 },
   { name: "portrait-tablet", width: 768, height: 1024 },
   { name: "phone", width: 390, height: 844 },
+  { name: "short-phone", width: 360, height: 640 },
 ] as const;
 
 const SHELL_BREAKPOINTS = [
@@ -275,7 +276,7 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
 }
 
 for (const viewport of VIEWPORTS) {
-  test(`${viewport.name} ${viewport.width}x${viewport.height} keeps Pattern steps readable`, async ({
+  test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the full Pattern overview in frame`, async ({
     page,
   }) => {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
@@ -284,13 +285,13 @@ for (const viewport of VIEWPORTS) {
     const grid = page.getByTestId("step-grid");
     const firstCell = grid.locator("tbody td").first();
     const firstCellBox = await box(firstCell);
-    expect(firstCellBox.width).toBeGreaterThanOrEqual(viewport.width < 600 ? 12 : 14);
-    expect(firstCellBox.height).toBeGreaterThanOrEqual(viewport.width < 600 ? 12 : 14);
+    expect(firstCellBox.width).toBeGreaterThanOrEqual(viewport.width < 600 ? 2 : 5);
+    expect(firstCellBox.height).toBeGreaterThanOrEqual(4);
     expect(
-      await grid.evaluate((element) => element.scrollWidth > element.clientWidth),
+      await grid.evaluate((element) => element.scrollWidth <= element.clientWidth),
     ).toBe(true);
     await expect(grid.getByText("Bar 1", { exact: true })).toBeVisible();
-    await expect(grid.getByText("Bar 4", { exact: true })).toBeAttached();
+    await expect(grid.getByText("Bar 4", { exact: true })).toBeVisible();
   });
 
   test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the instrument usable`, async ({
@@ -302,8 +303,32 @@ for (const viewport of VIEWPORTS) {
     const matrix = page.getByTestId("pad-matrix");
     const pads = matrix.locator("[data-pad-index]");
     const shell = page.getByTestId("workbench-shell");
-    const shellWidth = (await box(shell)).width;
+    const shellBox = await box(shell);
+    const shellWidth = shellBox.width;
     await expect(pads).toHaveCount(16);
+    expect(shellBox.x).toBeGreaterThanOrEqual(0);
+    expect(shellBox.y).toBeGreaterThanOrEqual(0);
+    expect(shellBox.x + shellBox.width).toBeLessThanOrEqual(viewport.width);
+    expect(shellBox.y + shellBox.height).toBeLessThanOrEqual(viewport.height);
+    expect(
+      await page.evaluate(() => ({
+        horizontal: document.documentElement.scrollWidth <= window.innerWidth,
+        vertical: document.documentElement.scrollHeight <= window.innerHeight,
+        scrollX: window.scrollX,
+        scrollY: window.scrollY,
+      })),
+    ).toEqual({
+      horizontal: true,
+      vertical: true,
+      scrollX: 0,
+      scrollY: 0,
+    });
+    expect(
+      await page.getByTestId("instrument-canvas").evaluate((element) =>
+        element.scrollWidth <= element.clientWidth
+        && element.scrollHeight <= element.clientHeight
+      ),
+    ).toBe(true);
 
     const layout = await matrix.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -330,7 +355,10 @@ for (const viewport of VIEWPORTS) {
       }),
     );
     for (const padBox of boxes) {
-      expect(Math.abs(padBox.width - padBox.height)).toBeLessThanOrEqual(1);
+      expect(padBox.width).toBeGreaterThanOrEqual(viewport.height <= 640 ? 18 : 32);
+      expect(padBox.height).toBeGreaterThanOrEqual(viewport.height <= 640 ? 18 : 32);
+      expect(padBox.width / padBox.height).toBeGreaterThanOrEqual(.78);
+      expect(padBox.width / padBox.height).toBeLessThanOrEqual(1.22);
     }
     for (let left = 0; left < boxes.length; left += 1) {
       for (let right = left + 1; right < boxes.length; right += 1) {
@@ -369,7 +397,6 @@ for (const viewport of VIEWPORTS) {
     }
 
     const lastPad = pads.nth(15);
-    await lastPad.scrollIntoViewIfNeeded();
     await expect(lastPad).toBeInViewport();
     const lastBox = await box(lastPad);
     const currentStatusBox = await box(page.getByTestId("status-bar"));

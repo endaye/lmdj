@@ -147,6 +147,7 @@ export function WorkbenchShell({
       className="workbench-shell"
       data-testid="workbench-shell"
       data-layout={layout}
+      data-content-fit={model ? "fixed" : "scrollable"}
       aria-label={model ? `Patch ${model.patchId}` : shellLabel ?? "LMDJ Creator"}
     >
       <header
