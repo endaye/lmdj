@@ -1091,7 +1091,7 @@ export function App({
     playableElementCount: bundle.playableElementIds.size,
     missingElementCount: bundle.missingElementIds.size,
   };
-  const exportInspector =
+  const exportView =
     mode === "export"
       ? apiSource === null
         ? (
@@ -1184,7 +1184,7 @@ export function App({
             )}
             <div
               className="workbench-performance-view"
-              hidden={mode === "source"}
+              hidden={mode !== "performance"}
             >
                 <div className="workbench-canvas-heading">
                   <div>
@@ -1207,6 +1207,11 @@ export function App({
                   />
                 </section>
             </div>
+            {mode === "export" && (
+              <div className="workbench-export-view">
+                {exportView}
+              </div>
+            )}
           </>
         }
         contextInspector={
@@ -1217,10 +1222,9 @@ export function App({
                 facts={loadedSourceFacts}
               />
             </div>
-            <div className="workbench-inspector-view" hidden={mode === "source"}>
+            <div className="workbench-inspector-view" hidden={mode !== "performance"}>
               <ContextInspector
                 model={model}
-                exportContent={exportInspector}
                 midiContent={
                   <MidiPanel
                     onTrigger={triggerPad}
@@ -1230,6 +1234,12 @@ export function App({
                     onStatusChange={setMidiStatus}
                   />
                 }
+              />
+            </div>
+            <div className="workbench-inspector-view" hidden={mode !== "export"}>
+              <LoadedSourceInspector
+                source={loadedSource}
+                facts={loadedSourceFacts}
               />
             </div>
           </>
@@ -1313,7 +1323,7 @@ function CreatorStateShell({
       shellLabel={`LMDJ ${label}`}
       mode="source"
       onModeChange={() => {}}
-      availableModes={["source"]}
+      availableModes={[]}
       appBar={
         <>
           <Wordmark />
