@@ -120,6 +120,11 @@ const EMPTY_CAPACITY: QueueCapacity = {
   waiting: 0,
 };
 
+const HEADER_NUMBER = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 2,
+  useGrouping: false,
+});
+
 const TERMINAL_JOB_STATES = new Set([
   "completed",
   "failed",
@@ -1155,19 +1160,41 @@ export function App({
               onShowNewUpload={showNewUpload}
             />
             <div className="topbar-actions">
-              <strong className="workbench-project-name">
-                {loadedSource.name}
-              </strong>
-              <span className="workbench-project-meta">
-                {model.bpm} · {model.durationSeconds}s · Key {model.key ?? "—"}
-              </span>
+              <div className="workbench-project-summary">
+                <strong
+                  className="workbench-project-name"
+                  data-testid="workbench-project-name"
+                  title={loadedSource.name}
+                >
+                  {loadedSource.name}
+                </strong>
+                <div className="workbench-project-facts" aria-label="曲目参数">
+                  <span>
+                    <small>BPM</small>
+                    <b data-testid="header-bpm">{HEADER_NUMBER.format(model.bpm)}</b>
+                  </span>
+                  <span>
+                    <small>Loop</small>
+                    <b data-testid="header-loop">
+                      {HEADER_NUMBER.format(model.durationSeconds)}s
+                    </b>
+                  </span>
+                  <span>
+                    <small>Key</small>
+                    <b>{model.key ?? "—"}</b>
+                  </span>
+                </div>
+              </div>
               {loadedTrackedJob?.submission.controlToken && (
                 <button
                   className="btn-delete-track"
                   type="button"
+                  aria-label="删除曲目"
+                  title="删除当前曲目"
                   onClick={() => requestDelete(loadedTrackedJob)}
                 >
-                  删除曲目
+                  <span aria-hidden="true">×</span>
+                  <span className="btn-delete-track__label">删除</span>
                 </button>
               )}
             </div>

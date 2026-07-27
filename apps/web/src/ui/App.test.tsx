@@ -137,7 +137,15 @@ describe("App", () => {
     );
     expect(screen.getByTestId("pad-matrix")).toBeInTheDocument();
     expect(screen.getByTestId("pattern-surface")).toBeInTheDocument();
-    expect(screen.getByText(/BPM/)).toBeInTheDocument();
+    expect(screen.getByTestId("transport-bpm")).toBeInTheDocument();
+    expect(screen.getByTestId("workbench-project-name")).toHaveTextContent(
+      "Bundled example",
+    );
+    expect(screen.getByTestId("header-bpm")).toHaveTextContent("89.1");
+    expect(screen.getByTestId("header-loop")).toHaveTextContent("10.67s");
+    expect(screen.getByLabelText("曲目参数")).toHaveTextContent(
+      "BPM89.1Loop10.67sKey—",
+    );
     const statusBar = screen.getByTestId("status-bar");
     expect(statusBar).toHaveTextContent("MIDI Not connected");
     expect(statusBar).toHaveTextContent("No MIDI input");
@@ -475,7 +483,9 @@ describe("App API path", () => {
     expect(screen.getByTestId("instrument-canvas")).toContainElement(
       screen.getByTestId("export-checklist"),
     );
-    expect(screen.getByTestId("app-bar")).toHaveTextContent("Key A minor");
+    expect(
+      within(screen.getByLabelText("曲目参数")).getByText("A minor"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("status-bar")).toHaveTextContent("needs-review");
     expect(screen.getByTestId("pad-matrix")).not.toBeVisible();
     expect(screen.getByTestId("pad-1")).toHaveAttribute("data-selected", "true");
@@ -602,7 +612,9 @@ describe("App API path", () => {
     await userEvent.click(screen.getByRole("button", { name: "Source" }));
     await userEvent.click(screen.getByRole("button", { name: "Export" }));
     await waitFor(() =>
-      expect(screen.getByTestId("app-bar")).toHaveTextContent("Key C major"),
+      expect(
+        within(screen.getByLabelText("曲目参数")).getByText("C major"),
+      ).toBeInTheDocument(),
     );
 
     await act(async () => {
@@ -616,7 +628,9 @@ describe("App API path", () => {
       await Promise.resolve();
     });
 
-    expect(screen.getByTestId("app-bar")).toHaveTextContent("Key C major");
+    expect(
+      within(screen.getByLabelText("曲目参数")).getByText("C major"),
+    ).toBeInTheDocument();
     expect(screen.getByTestId("status-bar")).not.toHaveTextContent("partial");
     expect(screen.getByTestId("export-item-midi")).toHaveTextContent("Ready");
   });

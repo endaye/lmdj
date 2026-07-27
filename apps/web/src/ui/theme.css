@@ -1382,22 +1382,40 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 
 .workbench-app-bar {
-  min-height: 54px;
-  display: flex;
+  min-height: 60px;
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  grid-template-areas: "brand nav project inspector";
   align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 0 14px;
+  gap: 12px;
+  padding: 6px 12px;
   border-bottom: 3px solid var(--ink);
 }
-.workbench-app-bar .wordmark { color: var(--ink); }
+.workbench-app-bar .wordmark {
+  grid-area: brand;
+  gap: 8px;
+  color: var(--ink);
+  font-size: 20px;
+  white-space: nowrap;
+}
 .workbench-app-bar .wordmark::before { background: var(--harmony); box-shadow: none; }
-.workbench-app-bar .wordmark-sub { color: var(--ink); }
-.workbench-app-bar .topbar-actions { min-width: 0; }
+.workbench-app-bar .wordmark-sub {
+  color: var(--ink);
+  font-size: 9px;
+  letter-spacing: .24em;
+}
+.workbench-app-bar .topbar-actions {
+  grid-area: project;
+  min-width: 0;
+  justify-self: stretch;
+  justify-content: flex-end;
+  gap: 8px;
+}
 .global-navigation {
+  grid-area: nav;
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 0;
 }
 .global-navigation button {
   min-height: 38px;
@@ -1412,6 +1430,9 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   font-weight: 800;
   white-space: nowrap;
 }
+.global-navigation button + button {
+  border-left: 0;
+}
 .global-navigation button:hover,
 .global-navigation button[aria-current="page"] {
   background: var(--loop);
@@ -1419,7 +1440,7 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .global-navigation .global-navigation__new {
   background: var(--ink);
   color: #fff;
-  box-shadow: 3px 3px 0 var(--yellow);
+  box-shadow: inset 0 -4px 0 var(--yellow);
 }
 .global-navigation .global-navigation__new:hover,
 .global-navigation .global-navigation__new[aria-current="page"] {
@@ -1429,34 +1450,59 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 .global-navigation__new-icon {
   margin-right: 4px;
 }
+.workbench-project-summary {
+  min-width: 0;
+  display: grid;
+  justify-items: end;
+  gap: 3px;
+}
 .workbench-project-name {
-  max-width: 220px;
+  max-width: min(30vw, 300px);
   overflow: hidden;
   text-overflow: ellipsis;
   font-family: "Chakra Petch", sans-serif;
-  font-size: 15px;
+  font-size: 14px;
+  line-height: 1;
   white-space: nowrap;
 }
-.workbench-project-meta {
+.workbench-project-facts {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--ink);
   font-family: "IBM Plex Mono", monospace;
-  font-size: 11px;
-  font-weight: 700;
+  font-size: 9px;
   white-space: nowrap;
 }
-.workbench-app-bar .transport,
-.workbench-app-bar .transport button {
-  border-color: var(--ink);
-  border-radius: 0;
-  background: var(--paper);
-  color: var(--ink);
-  box-shadow: none;
+.workbench-project-facts > span {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 2px 6px;
+  border-left: 1px solid var(--ink);
 }
-.workbench-app-bar .btn-eject,
+.workbench-project-facts > span:first-child { border-left: 0; }
+.workbench-project-facts small {
+  font-size: 7px;
+  font-weight: 800;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.workbench-project-facts b {
+  font-weight: 700;
+}
 .workbench-app-bar .btn-delete-track {
+  min-width: 62px;
+  min-height: 40px;
   flex: 0 0 auto;
+  gap: 5px;
+  padding: 6px 9px;
+  box-shadow: 3px 3px 0 var(--red);
 }
-.workbench-app-bar .transport-readout,
-.workbench-app-bar .transport-id { color: var(--ink); }
+.workbench-app-bar .btn-delete-track > span:first-child {
+  font-size: 18px;
+  line-height: .8;
+}
+.workbench-inspector-toggle { grid-area: inspector; }
 
 .workbench-shell__content {
   position: relative;
@@ -1719,6 +1765,51 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 
 @container workbench (min-width: 600px) and (max-width: 959px) {
+  .workbench-app-bar {
+    gap: 8px;
+    padding-inline: 8px;
+  }
+  .workbench-app-bar .wordmark {
+    font-size: 18px;
+  }
+  .workbench-app-bar .wordmark-sub {
+    display: none;
+  }
+  .global-navigation button {
+    padding-inline: 8px;
+    font-size: 10px;
+  }
+  .workbench-project-name {
+    max-width: 138px;
+    font-size: 12px;
+  }
+  .workbench-project-facts > span {
+    gap: 3px;
+    padding-inline: 4px;
+  }
+  .workbench-project-facts small {
+    font-size: 6px;
+  }
+  .workbench-app-bar .btn-delete-track {
+    width: 38px;
+    min-width: 38px;
+    padding: 0;
+  }
+  .btn-delete-track__label,
+  .workbench-inspector-toggle > span:last-child {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+  .workbench-inspector-toggle {
+    width: 40px;
+    min-width: 40px;
+    justify-content: center;
+    padding: 6px;
+  }
   .workbench-shell__content {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr) auto;
@@ -1760,14 +1851,12 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
     padding: 6px 8px;
   }
   .workbench-app-bar .wordmark-sub,
-  .workbench-project-meta,
-  .workbench-project-name,
   .workbench-state-key {
     display: none;
   }
   .global-navigation {
     margin-left: auto;
-    gap: 6px;
+    gap: 0;
   }
   .global-navigation button {
     min-height: 40px;
@@ -2045,6 +2134,8 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 /* --- Library / New Song / Processing / Failed share the Creator shell ----- */
 
 .workbench-state-key {
+  grid-area: project;
+  justify-self: end;
   border: 2px solid var(--ink);
   padding: 5px 8px;
   background: var(--yellow);

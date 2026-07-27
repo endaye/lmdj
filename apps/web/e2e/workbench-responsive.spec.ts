@@ -233,6 +233,35 @@ for (const breakpoint of SHELL_BREAKPOINTS) {
     const toolsBox = await box(tools);
     const canvasBox = await box(canvas);
     const statusBox = await box(status);
+    const headerGroups = [
+      appBar.locator(".wordmark"),
+      appBar.locator(".global-navigation"),
+      appBar.locator(".topbar-actions"),
+      toggle,
+    ];
+    const visibleHeaderBoxes: Box[] = [];
+
+    for (const group of headerGroups) {
+      if (await group.isVisible()) {
+        const groupBox = await box(group);
+        expect(groupBox.x).toBeGreaterThanOrEqual(appBarBox.x);
+        expect(groupBox.x + groupBox.width).toBeLessThanOrEqual(
+          appBarBox.x + appBarBox.width,
+        );
+        visibleHeaderBoxes.push(groupBox);
+      }
+    }
+    for (let index = 0; index < visibleHeaderBoxes.length; index += 1) {
+      for (
+        let comparison = index + 1;
+        comparison < visibleHeaderBoxes.length;
+        comparison += 1
+      ) {
+        expect(
+          overlaps(visibleHeaderBoxes[index], visibleHeaderBoxes[comparison]),
+        ).toBe(false);
+      }
+    }
 
     if (breakpoint.layout === "wide") {
       await expect(toggle).toBeHidden();
