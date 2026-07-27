@@ -97,6 +97,36 @@ test("Source file chooser uses white button text", async ({ page }) => {
   expect(color).toBe("rgb(255, 255, 255)");
 });
 
+test("long timing precision and source identity use the compact scrolling transport", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  const longPatchId =
+    "source-09f69a8fcc1461ff3631657100ffe2b1eae58f6a2b96e2f9aa3ce6fa3f02d99e-2280ebab";
+  await page.route("**/example-patch/patch.json", async (route) => {
+    const response = await route.fetch();
+    const patch = await response.json();
+    patch.patch_id = longPatchId;
+    patch.bpm = 117.453835;
+    patch.loop_seconds = 8.173424052096724;
+    await route.fulfill({ response, json: patch });
+  });
+  await page.goto("/");
+  await page.getByText("高级 · 导入 Patch 包").click();
+  await page.getByRole("button", { name: /加载示例 patch/i }).click();
+
+  await expect(page.getByTestId("transport-bpm")).toHaveText("117.45");
+  await expect(page.getByTestId("transport-loop")).toHaveText("8.17s");
+  const source = page.getByTestId("transport-source");
+  await expect(source).toHaveAttribute("title", longPatchId);
+  expect(
+    await source.evaluate((element) => ({
+      scrollable: element.scrollWidth > element.clientWidth,
+      overflowX: getComputedStyle(element).overflowX,
+    })),
+  ).toEqual({ scrollable: true, overflowX: "auto" });
+});
+
 test("360px My Songs keeps primary navigation and record actions usable", async ({
   page,
 }) => {
@@ -288,10 +318,21 @@ for (const viewport of VIEWPORTS) {
     expect(firstCellBox.width).toBeGreaterThanOrEqual(viewport.width < 600 ? 2 : 5);
     expect(firstCellBox.height).toBeGreaterThanOrEqual(4);
     expect(
-      await grid.evaluate((element) => element.scrollWidth <= element.clientWidth),
-    ).toBe(true);
+      await grid.evaluate((element) => ({
+        overflow: element.scrollWidth - element.clientWidth,
+        overflowX: getComputedStyle(element).overflowX,
+      })),
+    ).toEqual({ overflow: expect.any(Number), overflowX: "hidden" });
+    expect(
+      await grid.evaluate((element) => element.scrollWidth - element.clientWidth),
+    ).toBeLessThanOrEqual(2);
     await expect(grid.getByText("Bar 1", { exact: true })).toBeVisible();
     await expect(grid.getByText("Bar 4", { exact: true })).toBeVisible();
+    const gridBox = await box(grid);
+    const lastLaneBox = await box(grid.locator("tbody tr").last());
+    expect(lastLaneBox.y + lastLaneBox.height).toBeLessThanOrEqual(
+      gridBox.y + gridBox.height + 1,
+    );
   });
 
   test(`${viewport.name} ${viewport.width}x${viewport.height} keeps the instrument usable`, async ({

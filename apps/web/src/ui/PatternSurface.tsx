@@ -24,9 +24,16 @@ export function PatternSurface({
   return (
     <section className="pattern-surface" data-testid="pattern-surface">
       <div className="pattern-surface__header">
-        <div>
+        <div className="pattern-surface__identity">
           <span className="pattern-surface__eyebrow">Pattern</span>
           <h2>{pattern?.name ?? "Pattern unavailable"}</h2>
+          {pattern && (
+            <div className="pattern-summary" data-testid="pattern-summary">
+              <span>{pattern.resolution}</span>
+              <span>{pattern.length_steps} steps</span>
+              <span>{pattern.notes.length} notes</span>
+            </div>
+          )}
         </div>
         <span
           className={`pattern-playhead${playheadPosition ? " pattern-playhead--running" : ""}`}
@@ -41,15 +48,7 @@ export function PatternSurface({
       </div>
       <Transport engine={engine} bundle={bundle} />
       {pattern ? (
-        <>
-          <div className="pattern-summary" data-testid="pattern-summary">
-            <span>{pattern.name}</span>
-            <span>{pattern.resolution}</span>
-            <span>{pattern.length_steps} steps</span>
-            <span>{pattern.notes.length} notes</span>
-          </div>
-          <StepGrid bundle={bundle} playheadStep={playheadStep} />
-        </>
+        <StepGrid bundle={bundle} playheadStep={playheadStep} />
       ) : (
         <div className="pattern-empty" data-testid="pattern-empty" role="status">
           No active pattern · load or map a Pattern to this Scene.

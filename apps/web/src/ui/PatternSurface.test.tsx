@@ -42,8 +42,37 @@ describe("PatternSurface", () => {
     expect(playhead).toHaveTextContent("Bar 1 · Beat 2 · Step 05 / 64");
     expect(playhead).toHaveClass("pattern-playhead--running");
     expect(playhead).not.toHaveAttribute("aria-live");
-    expect(within(surface).getByTestId("pattern-summary")).toHaveTextContent("Original");
+    expect(
+      within(surface)
+        .getByTestId("pattern-summary")
+        .closest(".pattern-surface__header"),
+    ).toBeInTheDocument();
     expect(within(surface).getByTestId("step-grid")).toBeInTheDocument();
+  });
+
+  it("shows compact timing values while preserving full precision and source identity", () => {
+    const bundle = makeBundle();
+    bundle.patch.bpm = 117.453835;
+    bundle.patch.loop_seconds = 8.173424052096724;
+    bundle.patch.patch_id =
+      "source-09f69a8fcc1461ff3631657100ffe2b1eae58f6a2b96e2f9aa3ce6fa3f02d99e-2280ebab";
+
+    renderSurface(bundle, null);
+
+    expect(screen.getByTestId("transport-bpm")).toHaveTextContent("117.45");
+    expect(screen.getByTestId("transport-bpm").parentElement).toHaveAttribute(
+      "title",
+      "BPM 117.453835",
+    );
+    expect(screen.getByTestId("transport-loop")).toHaveTextContent("8.17s");
+    expect(screen.getByTestId("transport-loop").parentElement).toHaveAttribute(
+      "title",
+      "Loop 8.173424052096724 seconds",
+    );
+    expect(screen.getByTestId("transport-source")).toHaveTextContent(
+      bundle.patch.patch_id,
+    );
+    expect(screen.getByTestId("transport-source")).toHaveAttribute("tabindex", "0");
   });
 
   it("renders an explicit empty state when the active scene has no pattern", () => {
