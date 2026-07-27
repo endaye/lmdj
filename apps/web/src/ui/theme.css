@@ -426,9 +426,13 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 }
 .pattern-playhead {
   border: 2px solid var(--ink);
-  background: var(--loop);
+  background: var(--paper);
   padding: 4px 7px;
   white-space: nowrap;
+}
+.pattern-playhead--running {
+  background: var(--loop);
+  box-shadow: 3px 3px 0 var(--ink);
 }
 .pattern-surface .transport {
   flex-wrap: wrap;
@@ -907,19 +911,59 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
 
 /* --- Sequencer — LED step lanes -------------------------------------------- */
 
+.pattern-timeline {
+  display: grid;
+  gap: 7px;
+}
+.pattern-timeline__legend {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+}
+.pattern-timeline__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.pattern-timeline__legend i {
+  width: 18px;
+  height: 8px;
+  display: inline-block;
+  border: 1px solid var(--ink);
+  background: var(--lane-harmony);
+}
+.pattern-timeline__legend .legend-hit {
+  width: 8px;
+}
+.pattern-timeline__legend .legend-playhead {
+  width: 2px;
+  height: 12px;
+  border: 0;
+  background: var(--loop);
+  box-shadow: 0 0 0 1px var(--ink);
+}
 .step-grid {
-  --step-size: 18px;
-  --step-gap: 3px;
+  --step-size: 22px;
+  --lane-width: 112px;
+  position: relative;
   overflow-x: auto;
   overscroll-behavior-inline: contain;
   scrollbar-gutter: stable;
+  border: 2px solid var(--ink);
+  background: var(--panel);
 }
 .step-grid table {
   width: max-content;
   min-width: 100%;
   table-layout: fixed;
   border-collapse: separate;
-  border-spacing: var(--step-gap);
+  border-spacing: 0;
 }
 .step-grid__caption {
   position: absolute;
@@ -933,7 +977,6 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   font-family: "IBM Plex Mono", monospace;
   font-size: 11px;
   text-align: right;
-  padding-right: 12px;
   font-weight: 500;
   color: var(--ink-dim);
   white-space: nowrap;
@@ -943,21 +986,51 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   position: sticky;
   left: 0;
   z-index: 2;
-  width: 72px;
-  min-width: 72px;
-  max-width: 72px;
+  width: var(--lane-width);
+  min-width: var(--lane-width);
+  max-width: var(--lane-width);
   background: var(--paper);
+  border-right: 2px solid var(--ink);
+}
+.step-grid tbody th {
+  height: 28px;
+  padding: 3px 9px;
+  border-bottom: 1px solid color-mix(in srgb, var(--ink) 24%, transparent);
+  overflow: hidden;
+}
+.step-grid tbody th span {
+  display: block;
+  overflow: hidden;
+  color: var(--ink-dim);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+}
+.step-grid tbody th small {
+  display: block;
+  color: color-mix(in srgb, var(--ink-dim) 72%, transparent);
+  font-size: 7px;
+  font-weight: 800;
+  line-height: 1;
+  letter-spacing: .08em;
 }
 .step-grid__lane-heading {
   z-index: 4;
   vertical-align: bottom;
-  padding-bottom: 3px;
+  padding: 0 9px 4px;
+  border-bottom: 2px solid var(--ink);
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 800;
+  text-align: left;
   text-transform: uppercase;
 }
-.step-grid__bar-ruler th {
-  height: 18px;
-  padding: 0 4px 2px;
+.step-grid__bar-label {
+  height: 22px;
+  padding: 3px 7px 2px;
   border-bottom: 2px solid var(--ink);
+  background: var(--paper);
   color: var(--ink);
   font-size: 9px;
   font-weight: 800;
@@ -966,12 +1039,15 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-transform: uppercase;
 }
 .step-grid__beat-ruler th {
+  position: relative;
   box-sizing: border-box;
   width: var(--step-size);
   min-width: var(--step-size);
   max-width: var(--step-size);
-  height: 14px;
+  height: 18px;
   padding: 0;
+  border-bottom: 2px solid var(--ink);
+  background: var(--paper);
   color: var(--ink-dim);
   font-size: 8px;
   font-weight: 800;
@@ -979,49 +1055,91 @@ button:focus-visible { outline: 2px solid var(--lane-harmony); outline-offset: 2
   text-align: center;
 }
 .step-grid td {
+  position: relative;
   box-sizing: border-box;
   width: var(--step-size);
   min-width: var(--step-size);
   max-width: var(--step-size);
-  height: var(--step-size);
+  height: 28px;
+  padding: 0;
+  border-right: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
   text-align: center;
-  color: var(--ink-faint);
-  font-size: 0; /* hide the raw glyph; the cell IS the LED */
-  border-radius: 3px;
-  background: var(--well);
-  box-shadow: inset 0 0 0 1px var(--edge);
+  background: color-mix(in srgb, var(--well) 92%, var(--raised));
 }
 .step-grid .step-beat-start {
-  border-left: 1px solid var(--ink-dim);
+  border-left: 2px solid color-mix(in srgb, var(--ink-legacy) 45%, transparent);
 }
 .step-grid .step-bar-start {
-  border-left: 2px solid var(--ink);
+  border-left: 3px solid var(--ink-legacy);
 }
-/* lit step: colored LED (glyph is █; we render the cell itself) */
-.step-grid td.step-on {
-  background: var(--lane-harmony);
-  box-shadow: 0 0 8px color-mix(in srgb, var(--lane-harmony) 55%, transparent);
+.step-grid td.note-active::before {
+  content: "";
+  position: absolute;
+  z-index: 2;
+  inset: 4px 0;
+  background: var(--note-color, var(--lane-harmony));
+  box-shadow: 0 0 8px color-mix(in srgb, var(--note-color, var(--lane-harmony)) 42%, transparent);
 }
-.step-row-drums td.step-on { background: var(--lane-drums); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-drums) 55%, transparent); }
-.step-row-bass td.step-on { background: var(--lane-bass); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-bass) 55%, transparent); }
-.step-row-harmony td.step-on { background: var(--lane-harmony); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-harmony) 55%, transparent); }
-.step-row-lead td.step-on { background: var(--lane-lead); box-shadow: 0 0 8px color-mix(in srgb, var(--lane-lead) 55%, transparent); }
-.step-grid td.step-playhead {
-  box-shadow: inset 0 0 0 1px var(--ink), 0 0 10px rgba(211, 215, 224, 0.4);
+.step-grid td.note-start::before {
+  left: 3px;
+  border-radius: 4px 0 0 4px;
+}
+.step-grid td.note-end::before {
+  right: 3px;
+  border-radius: 0 4px 4px 0;
+}
+.step-grid td.note-start.note-end::before {
+  border-radius: 4px;
+}
+.step-row-drums { --note-color: var(--lane-drums); }
+.step-row-bass { --note-color: var(--lane-bass); }
+.step-row-harmony { --note-color: var(--lane-harmony); }
+.step-row-lead { --note-color: var(--lane-lead); }
+.step-grid .step-playhead {
+  background-color: color-mix(in srgb, var(--loop) 18%, transparent);
+}
+.step-grid .step-playhead::after {
+  content: "";
+  position: absolute;
+  z-index: 5;
+  top: -1px;
+  bottom: -1px;
+  left: -1px;
+  width: 2px;
+  background: var(--loop);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--loop) 80%, transparent);
 }
 .step-missing th { color: var(--alert); }
-.step-missing td { box-shadow: inset 0 0 0 1px var(--alert); }
+.step-missing { --note-color: var(--alert); }
+.step-missing td.note-active::before {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      var(--alert) 0 4px,
+      color-mix(in srgb, var(--alert) 45%, var(--well)) 4px 8px
+    );
+}
 
 @container workbench (max-width: 959px) {
   .step-grid {
-    --step-size: 14px;
-    --step-gap: 2px;
+    --step-size: 18px;
+    --lane-width: 96px;
   }
 }
 
 @container workbench (max-width: 599px) {
   .step-grid {
-    --step-size: 12px;
+    --step-size: 16px;
+    --lane-width: 84px;
+  }
+  .pattern-timeline__legend {
+    justify-content: flex-start;
+    gap: 9px;
+    font-size: 8px;
+  }
+  .step-grid tbody th {
+    padding-inline: 6px;
   }
 }
 

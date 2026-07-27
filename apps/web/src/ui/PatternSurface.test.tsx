@@ -39,7 +39,8 @@ describe("PatternSurface", () => {
       `${pattern.notes.length} notes`,
     );
     const playhead = within(surface).getByTestId("pattern-playhead");
-    expect(playhead).toHaveTextContent("Step 05 / 64");
+    expect(playhead).toHaveTextContent("Bar 1 · Beat 2 · Step 05 / 64");
+    expect(playhead).toHaveClass("pattern-playhead--running");
     expect(playhead).not.toHaveAttribute("aria-live");
     expect(within(surface).getByTestId("pattern-summary")).toHaveTextContent("Original");
     expect(within(surface).getByTestId("step-grid")).toBeInTheDocument();
