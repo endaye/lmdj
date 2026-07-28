@@ -4,7 +4,7 @@
 >
 > 研究范围：`SAMPLE`、`SEQUENCE`、`PERFORM` 三个核心界面，以及贯穿三者的 Resample、Record Song、Mixer、Export 流程
 >
-> 相关文档：[Koala Sampler 产品研究与 LMDJ 启示](./2026-07-28-koala-sampler-product-research.md)
+> 相关文档：[Koala Sampler 产品研究与 LMDJ 启示](./2026-07-28-koala-sampler-product-research.md) · [Koala Sampler 技术栈、底层架构与工具链研究](./2026-07-28-koala-sampler-technical-stack.md)
 
 ## 0. 阅读方式与交付物
 

@@ -6,7 +6,10 @@
 >
 > 研究性质：竞品与产品工作流研究，不代表 LMDJ 已批准的功能范围或实施计划
 
-详细流程与图解：[Koala Sampler 业务流程、UI 布局与流程设计研究](./2026-07-28-koala-sampler-business-flows.md)
+相关研究：
+
+- [Koala Sampler 业务流程、UI 布局与流程设计研究](./2026-07-28-koala-sampler-business-flows.md)
+- [Koala Sampler 技术栈、底层架构与工具链研究](./2026-07-28-koala-sampler-technical-stack.md)
 
 ## 摘要
 
