@@ -12,6 +12,7 @@
 
 - [Koala Sampler 产品研究与 LMDJ 启示](./2026-07-28-koala-sampler-product-research.md)
 - [Koala Sampler 业务流程、UI 布局与流程设计研究](./2026-07-28-koala-sampler-business-flows.md)
+- [Koala 能力迁移到纯前端 Web App 的技术可行性分析](./2026-07-28-koala-web-app-feasibility-analysis.md)
 
 ---
 
