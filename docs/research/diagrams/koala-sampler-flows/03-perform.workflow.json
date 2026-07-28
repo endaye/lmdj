@@ -1,0 +1,90 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "PERFORM 业务流程",
+    "subtitle": "启动播放 → 切换 Sequence → Live FX / Mixer → 录制或重采样",
+    "output": "03-perform.html"
+  },
+  "lanes": [
+    { "id": "user", "label": "用户动作" },
+    { "id": "ui", "label": "PERFORM 界面" },
+    { "id": "engine", "label": "实时音频处理" },
+    { "id": "result", "label": "产生的结果" },
+    { "id": "exit", "label": "保存 / 回流", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "start", "label": "准备播放", "fromCol": 0, "toCol": 1 },
+    { "id": "play", "label": "实时表演", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "capture", "label": "捕获结果", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": [
+    "prepare",
+    "play",
+    "switchseq",
+    "touchfx",
+    "holdmix",
+    "stop"
+  ],
+  "nodes": [
+    { "id": "prepare", "lane": "user", "col": 0, "type": "external", "label": "选 Pattern", "sublabel": "可先启用 Record Song", "width": 96 },
+    { "id": "switchseq", "lane": "user", "col": 2, "type": "external", "label": "切换 Sequence", "sublabel": "按 Slot 组织段落" },
+    { "id": "holdmix", "lane": "user", "col": 4, "type": "external", "label": "Hold / Mixer", "sublabel": "锁定 FX 或调整 Bus" },
+    { "id": "play", "lane": "ui", "col": 1, "type": "frontend", "label": "Play", "sublabel": "启动 Sequencer", "tag": "表演开始" },
+    { "id": "touchfx", "lane": "ui", "col": 3, "type": "frontend", "label": "16 Live FX", "sublabel": "按住 + 滑动 + 多点触控", "tag": "实时控制" },
+    { "id": "stop", "lane": "ui", "col": 5, "type": "frontend", "label": "Stop", "sublabel": "停止播放与录制", "tag": "形成 Take" },
+    { "id": "seqsnap", "lane": "engine", "col": 2, "type": "backend", "label": "Pattern 切换", "sublabel": "遵循 Seq Snap 边界" },
+    { "id": "fxchain", "lane": "engine", "col": 3, "type": "backend", "label": "FX 信号链", "sublabel": "左上 → 右下串行", "width": 60 },
+    { "id": "mixbus", "lane": "engine", "col": 4, "type": "backend", "label": "Bus Mix", "sublabel": "A–D + Main，各 5 槽", "width": 60 },
+    { "id": "performance", "lane": "result", "col": 3, "type": "database", "label": "Performance", "sublabel": "Pattern + FX + Mix 动作" },
+    { "id": "recording", "lane": "result", "col": 5, "type": "database", "label": "Song Recording", "sublabel": "从 Play 到 Stop 的音频" },
+    { "id": "resample", "lane": "exit", "col": 3, "type": "messagebus", "label": "Resample", "sublabel": "带 Live FX 回到 Pad" },
+    { "id": "save", "lane": "exit", "col": 5, "type": "cloud", "label": "命名并保存", "sublabel": "WAV / Share / Export" }
+  ],
+  "edges": [
+    { "from": "prepare", "to": "play", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "play", "to": "switchseq", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "switchseq", "to": "touchfx", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "touchfx", "to": "holdmix", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "holdmix", "to": "stop", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "switchseq", "to": "seqsnap", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "touchfx", "to": "fxchain", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "holdmix", "to": "mixbus", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "seqsnap", "to": "performance", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "fxchain", "to": "performance", "label": "实时参数", "variant": "dashed" },
+    { "from": "mixbus", "to": "performance", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "stop", "to": "recording", "label": "若已录制", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop", "labelDy": -8 },
+    { "from": "performance", "to": "resample", "label": "继续创作", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "recording", "to": "save", "label": "命名文件", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "resample", "to": "play", "label": "新 Pad 再进入循环", "variant": "emphasis", "role": "return", "fromSide": "left", "toSide": "left", "route": "return-left" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "UI 核心布局",
+      "items": [
+        "顶部：Play、Record 状态和 Sequence Slot",
+        "主体：16 条二维 FX 控制区域；竖屏分两页",
+        "底部：HOLD、Mixer 入口和 SAMPLE/SEQUENCE/PERFORM 导航"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "表演模型",
+      "items": [
+        "Sequence 决定音乐结构，FX 决定实时表达",
+        "按下生效、松开恢复；HOLD 把瞬时动作转为状态",
+        "多点触控允许多个 FX 同时参与"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "结果捕获",
+      "items": [
+        "Record Song 捕获 Play 到 Stop 的完整音频",
+        "Resample 把带效果表演写回新 Pad",
+        "一个动作既可以成为成品，也可以成为下一轮素材"
+      ]
+    }
+  ]
+}
