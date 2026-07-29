@@ -1,0 +1,203 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LMDJ + Optional Godot Client",
+    "subtitle": "Preserve lmdj.patch.v1; add Godot as a consumer, not a pipeline replacement",
+    "output": "2026-07-29-godot-lmdj-architecture.html"
+  },
+  "components": [
+    {
+      "id": "web",
+      "type": "frontend",
+      "label": "Creator Web",
+      "sublabel": "React + Web Audio",
+      "pos": [60, 280],
+      "size": [130, 62]
+    },
+    {
+      "id": "api",
+      "type": "backend",
+      "label": "App API",
+      "sublabel": "FastAPI",
+      "pos": [250, 280],
+      "size": [130, 62]
+    },
+    {
+      "id": "executor",
+      "type": "messagebus",
+      "label": "JobExecutor",
+      "sublabel": "single-slot FIFO",
+      "pos": [440, 280],
+      "size": [130, 62]
+    },
+    {
+      "id": "worker",
+      "type": "backend",
+      "label": "Audio Worker",
+      "sublabel": "timing + stems + materials",
+      "pos": [630, 280],
+      "size": [140, 62]
+    },
+    {
+      "id": "core",
+      "type": "backend",
+      "label": "Core + Patchify",
+      "sublabel": "contract + adapter",
+      "pos": [830, 280],
+      "size": [140, 62]
+    },
+    {
+      "id": "package",
+      "type": "database",
+      "label": "Patch Package",
+      "sublabel": "patch.json + samples",
+      "pos": [1040, 280],
+      "size": [150, 62],
+      "tag": "single public contract"
+    },
+    {
+      "id": "adapter",
+      "type": "backend",
+      "label": "Patch Adapter",
+      "sublabel": "validate + map",
+      "pos": [1260, 280],
+      "size": [135, 62]
+    },
+    {
+      "id": "loader",
+      "type": "backend",
+      "label": "Runtime Loader",
+      "sublabel": "HTTP + ZIP + audio",
+      "pos": [1455, 280],
+      "size": [135, 62]
+    },
+    {
+      "id": "audio",
+      "type": "frontend",
+      "label": "Playback",
+      "sublabel": "AudioServer + transport",
+      "pos": [1650, 280],
+      "size": [145, 62]
+    },
+    {
+      "id": "input",
+      "type": "external",
+      "label": "Input Router",
+      "sublabel": "MIDI + keyboard + touch",
+      "pos": [1455, 100],
+      "size": [135, 62]
+    },
+    {
+      "id": "ui",
+      "type": "frontend",
+      "label": "Godot UI",
+      "sublabel": "pads + pattern + visuals",
+      "pos": [1650, 100],
+      "size": [145, 62]
+    },
+    {
+      "id": "extension",
+      "type": "security",
+      "label": "GDExtension",
+      "sublabel": "optional native DSP",
+      "pos": [1455, 460],
+      "size": [135, 62],
+      "tag": "only if justified"
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Existing LMDJ product boundary",
+      "wraps": ["web", "api", "executor", "worker", "core"]
+    },
+    {
+      "kind": "region",
+      "label": "Optional Godot client boundary",
+      "wraps": ["adapter", "loader", "audio", "input", "ui", "extension"]
+    }
+  ],
+  "connections": [
+    {
+      "from": "web",
+      "to": "api",
+      "label": "HTTPS",
+      "variant": "emphasis"
+    },
+    {
+      "from": "api",
+      "to": "executor"
+    },
+    {
+      "from": "executor",
+      "to": "worker"
+    },
+    {
+      "from": "worker",
+      "to": "core"
+    },
+    {
+      "from": "core",
+      "to": "package",
+      "label": "lmdj.patch.v1",
+      "variant": "emphasis"
+    },
+    {
+      "from": "package",
+      "to": "adapter",
+      "label": "stable consumer boundary",
+      "variant": "emphasis",
+      "labelAt": [1225, 356]
+    },
+    {
+      "from": "adapter",
+      "to": "loader"
+    },
+    {
+      "from": "loader",
+      "to": "audio"
+    },
+    {
+      "from": "input",
+      "to": "audio",
+      "label": "pad actions",
+      "fromSide": "right",
+      "toSide": "top",
+      "route": "orthogonal-h"
+    },
+    {
+      "from": "ui",
+      "to": "audio",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "extension",
+      "to": "audio",
+      "label": "native-only capability",
+      "variant": "security",
+      "fromSide": "right",
+      "toSide": "bottom",
+      "route": "orthogonal-h"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Recommended boundary",
+      "items": [
+        "Godot consumes patch.json and sample assets through an adapter",
+        "React, API, Audio Worker, Core Models and Patchify remain authoritative"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Prototype gate",
+      "items": [
+        "Start with GDScript and built-in modules",
+        "Add GDExtension only after measured native requirements"
+      ]
+    }
+  ]
+}
