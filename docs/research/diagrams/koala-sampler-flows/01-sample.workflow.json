@@ -1,0 +1,89 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "SAMPLE 业务流程",
+    "subtitle": "声音进入 → Pad 建立 → 编辑与切片 → 可演奏资产",
+    "output": "01-sample.html"
+  },
+  "lanes": [
+    { "id": "user", "label": "用户动作" },
+    { "id": "ui", "label": "SAMPLE 界面" },
+    { "id": "engine", "label": "应用处理" },
+    { "id": "result", "label": "可见结果" },
+    { "id": "branch", "label": "高级 / 回流路径", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "input", "label": "选择输入", "fromCol": 0, "toCol": 1 },
+    { "id": "edit", "label": "编辑声音", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "use", "label": "组织与使用", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": [
+    "chooseinput",
+    "emptypad",
+    "capture",
+    "selectedpad",
+    "editcontrols",
+    "playable"
+  ],
+  "nodes": [
+    { "id": "chooseinput", "lane": "user", "col": 0, "type": "external", "label": "选择来源", "sublabel": "Mic / File / Video / Resample" },
+    { "id": "capture", "lane": "user", "col": 2, "type": "external", "label": "录制 / 导入", "sublabel": "按住录音或确认文件" },
+    { "id": "editcontrols", "lane": "user", "col": 4, "type": "external", "label": "直接编辑", "sublabel": "拖波形、按住滑动" },
+    { "id": "emptypad", "lane": "ui", "col": 1, "type": "frontend", "label": "空 Pad", "sublabel": "当前 Bank 中的目标槽", "tag": "动作入口" },
+    { "id": "selectedpad", "lane": "ui", "col": 3, "type": "frontend", "label": "选中 Pad", "sublabel": "波形 + VOL/PITCH/PAN", "tag": "编辑上下文" },
+    { "id": "playable", "lane": "ui", "col": 5, "type": "frontend", "label": "可演奏 Pad", "sublabel": "One-shot / Gate / Loop", "tag": "立即试听" },
+    { "id": "decode", "lane": "engine", "col": 2, "type": "backend", "label": "采集音频", "sublabel": "录入、解码或提取" },
+    { "id": "transform", "lane": "engine", "col": 4, "type": "backend", "label": "保存参数", "sublabel": "选区、包络、播放模式" },
+    { "id": "sampleasset", "lane": "result", "col": 2, "type": "database", "label": "Sample Asset", "sublabel": "音频进入 Pad 槽位" },
+    { "id": "padstate", "lane": "result", "col": 5, "type": "database", "label": "Pad State", "sublabel": "声音 + 参数 + Bus" },
+    { "id": "chop", "lane": "branch", "col": 2, "type": "messagebus", "label": "Auto-chop", "sublabel": "Transient / Equal / Lazy" },
+    { "id": "stems", "lane": "branch", "col": 4, "type": "cloud", "label": "Split Stems", "sublabel": "Drums / Bass / Vocals / Other" },
+    { "id": "bounce", "lane": "branch", "col": 0, "type": "messagebus", "label": "Bounce", "sublabel": "处理结果写入新 Pad" }
+  ],
+  "edges": [
+    { "from": "chooseinput", "to": "emptypad", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "emptypad", "to": "capture", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "capture", "to": "selectedpad", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "selectedpad", "to": "editcontrols", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "editcontrols", "to": "playable", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "capture", "to": "decode", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "decode", "to": "sampleasset", "label": "写入槽位", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "editcontrols", "to": "transform", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "transform", "to": "padstate", "label": "非破坏参数", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "sampleasset", "to": "chop", "label": "切片", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "selectedpad", "to": "stems", "label": "分轨", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "padstate", "to": "bounce", "label": "提交处理", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "chop", "to": "sampleasset", "label": "多个新 Pad", "variant": "emphasis", "role": "return", "fromSide": "top", "toSide": "bottom", "route": "drop", "labelDy": 24 },
+    { "from": "bounce", "to": "sampleasset", "label": "新 Sample", "variant": "emphasis", "role": "return", "fromSide": "top", "toSide": "bottom", "route": "drop" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "UI 核心布局",
+      "items": [
+        "顶部：菜单、输入源、当前 Song 上下文",
+        "中部：4×4 Pad + Bank A–D",
+        "下部：VOL / PITCH / PAN / EDIT / DELETE 与主导航"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "关键设计",
+      "items": [
+        "空 Pad 同时承担录音入口和目标容器",
+        "编辑通过直接触摸波形和按住滑动完成",
+        "每一步都保持 Pad 可试听，避免脱离演奏"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "复杂度分层",
+      "items": [
+        "基础用户停留在录制、裁剪和播放模式",
+        "高级用户再进入 Chop、Stem、Stretch 和 EQ",
+        "Bounce 把高级处理重新压回简单 Pad 模型"
+      ]
+    }
+  ]
+}

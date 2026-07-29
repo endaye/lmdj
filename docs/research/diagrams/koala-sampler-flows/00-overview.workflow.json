@@ -1,0 +1,82 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Koala Sampler 端到端创作闭环",
+    "subtitle": "SAMPLE → SEQUENCE → PERFORM → RESAMPLE / EXPORT",
+    "output": "00-overview.html"
+  },
+  "lanes": [
+    { "id": "user", "label": "用户动作" },
+    { "id": "screen", "label": "主界面" },
+    { "id": "artifact", "label": "产生的对象 / 状态" },
+    { "id": "exit", "label": "继续创作或交付", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "capture", "label": "采集", "fromCol": 0, "toCol": 1 },
+    { "id": "compose", "label": "编序", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "perform", "label": "演奏与回流", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": [
+    "source",
+    "sample",
+    "playpads",
+    "sequence",
+    "switchfx",
+    "perform"
+  ],
+  "nodes": [
+    { "id": "source", "lane": "user", "col": 0, "type": "external", "label": "选择声音", "sublabel": "麦克风 / 文件 / 视频" },
+    { "id": "playpads", "lane": "user", "col": 2, "type": "external", "label": "演奏 Pad", "sublabel": "实时输入节奏" },
+    { "id": "switchfx", "lane": "user", "col": 4, "type": "external", "label": "切换 + FX", "sublabel": "多点触控表演" },
+    { "id": "sample", "lane": "screen", "col": 1, "type": "frontend", "label": "SAMPLE", "sublabel": "录制、编辑、切片", "tag": "声音成为 Pad" },
+    { "id": "sequence", "lane": "screen", "col": 3, "type": "frontend", "label": "SEQUENCE", "sublabel": "录音、量化、编排", "tag": "演奏成为 Pattern" },
+    { "id": "perform", "lane": "screen", "col": 5, "type": "frontend", "label": "PERFORM", "sublabel": "Live FX、Mixer、录制", "tag": "Pattern 成为表演" },
+    { "id": "samplepad", "lane": "artifact", "col": 1, "type": "database", "label": "Sample Pad", "sublabel": "可触发声音 + 参数" },
+    { "id": "seqslot", "lane": "artifact", "col": 3, "type": "database", "label": "Sequence", "sublabel": "Note + timing + length" },
+    { "id": "song", "lane": "artifact", "col": 5, "type": "database", "label": "Performance", "sublabel": "Sequence 切换 + FX" },
+    { "id": "resample", "lane": "exit", "col": 5, "type": "messagebus", "label": "Resample", "sublabel": "结果回到新 Pad" },
+    { "id": "export", "lane": "exit", "col": 3, "type": "cloud", "label": "Export", "sublabel": "WAV / Stems / Ableton" }
+  ],
+  "edges": [
+    { "from": "source", "to": "sample", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "sample", "to": "playpads", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "playpads", "to": "sequence", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "sequence", "to": "switchfx", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "switchfx", "to": "perform", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "sample", "to": "samplepad", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "sequence", "to": "seqslot", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "perform", "to": "song", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "song", "to": "resample", "label": "继续创作", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "song", "to": "export", "label": "完成 / 交接", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "主心智模型",
+      "items": [
+        "SAMPLE 把声音变成可演奏 Pad",
+        "SEQUENCE 把演奏变成可重复结构",
+        "PERFORM 把结构变成一次音乐表演"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "产品飞轮",
+      "items": [
+        "任何输出都可经 Resample 回到 Pad",
+        "结果再次成为下一轮创作的输入",
+        "复杂度通过声音提交而不是菜单堆叠"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "双出口",
+      "items": [
+        "Resample：留在 Koala 内继续创作",
+        "Export：进入 WAV、Stems 或 Ableton",
+        "产品不强迫用户在一个环境内完成全部工作"
+      ]
+    }
+  ]
+}

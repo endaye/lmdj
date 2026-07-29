@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "SEQUENCE 业务流程",
+    "subtitle": "设置时间规则 → 实时录制 → 修正 → 组织 Pattern",
+    "output": "02-sequence.html"
+  },
+  "lanes": [
+    { "id": "user", "label": "用户动作" },
+    { "id": "ui", "label": "SEQUENCE 界面" },
+    { "id": "engine", "label": "编序器处理" },
+    { "id": "result", "label": "产生的结构" },
+    { "id": "branch", "label": "编辑 / 编排分支", "variant": "exception" }
+  ],
+  "phases": [
+    { "id": "setup", "label": "准备", "fromCol": 0, "toCol": 1 },
+    { "id": "record", "label": "录制", "fromCol": 2, "toCol": 3, "variant": "emphasis" },
+    { "id": "arrange", "label": "修正与组织", "fromCol": 4, "toCol": 5, "variant": "dashed" }
+  ],
+  "mainPath": [
+    "timesettings",
+    "freeslot",
+    "record",
+    "livepads",
+    "stoprecord",
+    "playback"
+  ],
+  "nodes": [
+    { "id": "timesettings", "lane": "user", "col": 0, "type": "external", "label": "设定时间", "sublabel": "Tempo / Bars / Quantize" },
+    { "id": "record", "lane": "user", "col": 2, "type": "external", "label": "点击 Record", "sublabel": "进入实时录制" },
+    { "id": "stoprecord", "lane": "user", "col": 4, "type": "external", "label": "停止 / Overdub", "sublabel": "回放或继续叠录" },
+    { "id": "freeslot", "lane": "ui", "col": 1, "type": "frontend", "label": "Sequence Slot", "sublabel": "选择空槽 + 长度", "tag": "录制目标" },
+    { "id": "livepads", "lane": "ui", "col": 3, "type": "frontend", "label": "演奏区域", "sublabel": "Pad / Keyboard / Repeat", "tag": "实时输入" },
+    { "id": "playback", "lane": "ui", "col": 5, "type": "frontend", "label": "Sequence 回放", "sublabel": "切换 Slot + Seq Snap", "tag": "可表演 Pattern" },
+    { "id": "clock", "lane": "engine", "col": 1, "type": "backend", "label": "时间规则", "sublabel": "拍号、节拍器、Swing" },
+    { "id": "captureevents", "lane": "engine", "col": 3, "type": "backend", "label": "记录事件", "sublabel": "Pad、时间、时长、力度" },
+    { "id": "switchrule", "lane": "engine", "col": 5, "type": "backend", "label": "切换规则", "sublabel": "Off / Beat / Bar / End" },
+    { "id": "eventlist", "lane": "result", "col": 2, "type": "database", "label": "Note Events", "sublabel": "Raw 或 1/16 量化" },
+    { "id": "pattern", "lane": "result", "col": 5, "type": "database", "label": "Sequence", "sublabel": "事件 + 长度 + 设置" },
+    { "id": "pianoroll", "lane": "branch", "col": 2, "type": "frontend", "label": "Piano Roll", "sublabel": "移动、长度、力度、概率" },
+    { "id": "copy", "lane": "branch", "col": 4, "type": "messagebus", "label": "复制 / Mix", "sublabel": "拖到另一 Slot" },
+    { "id": "append", "lane": "branch", "col": 5, "type": "messagebus", "label": "Add to End", "sublabel": "拼接形成更长结构" }
+  ],
+  "edges": [
+    { "from": "timesettings", "to": "freeslot", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "freeslot", "to": "record", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "record", "to": "livepads", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "livepads", "to": "stoprecord", "variant": "default", "fromSide": "top", "toSide": "bottom", "route": "drop" },
+    { "from": "stoprecord", "to": "playback", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "freeslot", "to": "clock", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "livepads", "to": "captureevents", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "captureevents", "to": "eventlist", "label": "按 Quantize 写入", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "playback", "to": "switchrule", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "switchrule", "to": "pattern", "label": "稳定循环", "variant": "dashed", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "eventlist", "to": "pianoroll", "label": "双击 Slot", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "eventlist", "to": "pattern", "label": "形成 Pattern", "variant": "dashed" },
+    { "from": "pattern", "to": "copy", "label": "拖动 Slot", "variant": "emphasis", "fromSide": "bottom", "toSide": "top", "route": "drop" },
+    { "from": "copy", "to": "append", "variant": "dashed" },
+    { "from": "pianoroll", "to": "eventlist", "label": "保存修正", "variant": "emphasis", "role": "return", "fromSide": "top", "toSide": "bottom", "route": "drop", "labelDy": 24 }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "UI 核心布局",
+      "items": [
+        "顶部：Play、Record、Tempo、Metronome",
+        "中部：32 个 Sequence Slot 与当前选中状态",
+        "下部：Pad / Keyboard 输入、Bars、Undo、Clear、主导航"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "默认路径",
+      "items": [
+        "先选 Slot 和长度，再通过实时演奏录制",
+        "Record 再按一次进入播放；再次录制即 Overdub",
+        "Piano Roll 是录制后的修正层，不是起点"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "Pattern 作为对象",
+      "items": [
+        "Slot 可拖拽复制、混合或接到末尾",
+        "Seq Snap 控制切换发生在立即、拍、Bar 或结尾",
+        "Arrangement 先通过 Pattern 操作成立，再进入时间线"
+      ]
+    }
+  ]
+}
