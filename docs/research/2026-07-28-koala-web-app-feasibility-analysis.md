@@ -13,6 +13,7 @@
 - [Koala Sampler 产品研究与 LMDJ 启示](./2026-07-28-koala-sampler-product-research.md)
 - [Koala Sampler 业务流程、UI 布局与流程设计研究](./2026-07-28-koala-sampler-business-flows.md)
 - [Koala Sampler 技术栈、底层架构与工具链研究](./2026-07-28-koala-sampler-technical-stack.md)
+- [跨平台音频核心的模块化、C++ 与 UI 架构建议](./2026-07-29-cross-platform-audio-core-architecture.md)
 
 ---
 
