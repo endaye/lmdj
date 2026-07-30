@@ -1,9 +1,0 @@
-# DemucsRunner venv 版本锁（与 demo venv 同版 torch 栈，2026-07-16 基准）。
-# env_lock_sha256（registry htdemucs 条目）= 本文件的 SHA-256。
-demucs==4.0.1
-torch==2.12.1
-torchaudio==2.11.0
-numpy==1.26.4
-soundfile==0.14.0
-einops==0.8.2
-julius==0.2.8

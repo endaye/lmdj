@@ -1,4 +1,4 @@
-name: CI
+name: Core CI
 
 on:
   pull_request:
@@ -10,103 +10,27 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: core-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  core-models:
-    runs-on: ubuntu-latest
+  core:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-          cache: pip
-          cache-dependency-path: packages/core-models/pyproject.toml
-      - run: python -m pip install -e "packages/core-models[test]"
-      - run: python -m pytest packages/core-models/tests -q
-
-  patchify:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            packages/core-models/pyproject.toml
-            packages/patchify/pyproject.toml
-      - run: python -m pip install -e packages/core-models -e "packages/patchify[test]"
-      - run: python -m pytest packages/patchify/tests -q
-
-  audio-worker:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            packages/core-models/pyproject.toml
-            packages/patchify/pyproject.toml
-            workers/audio/pyproject.toml
-            workers/audio/config/parity-constraints.txt
-      # pfs extra 带 DSP 测试依赖（soundfile/numpy/librosa/...），版本由 parity-constraints 锁定
-      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[test,pfs,metrics]" -c workers/audio/config/parity-constraints.txt -c workers/audio/config/metrics-constraints.txt
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
-      - run: python -m pytest workers/audio/tests -q
-
-  api:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-          cache: pip
-          cache-dependency-path: |
-            packages/core-models/pyproject.toml
-            packages/patchify/pyproject.toml
-            workers/audio/pyproject.toml
-            workers/audio/config/parity-constraints.txt
-            apps/api/pyproject.toml
-      # materials-v1 config tests import the DSP-backed Creator runner.
-      - run: python -m pip install -e packages/core-models -e packages/patchify -e "workers/audio[pfs]" -e "apps/api[test]" -c workers/audio/config/parity-constraints.txt
-      - run: python -m pytest apps/api/tests -q
-
-  web:
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: apps/web
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: apps/web/package-lock.json
-      - run: npm ci
-      - run: npm test
-      - run: npm run build
-        env:
-          VITE_API_BASE: /api
-
-  deploy-config:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - run: bash scripts/release/tests/test-release-versioning.sh
-      - run: bash scripts/deploy/tests/test-package-release.sh
-      - run: bash scripts/deploy/tests/test-activate-release.sh
-      - run: bash scripts/deploy/tests/test-deploy-workflow.sh
-      - run: cp .env.example .env
-      - run: docker compose config --quiet
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: bash tests/build/test_active_tree.sh
+      - run: python3 tests/build/version_test.py
       - run: >-
-          docker run --rm
-          -v "$PWD/Caddyfile:/etc/caddy/Caddyfile:ro"
-          caddy:2 caddy validate
-          --config /etc/caddy/Caddyfile
-          --adapter caddyfile
+          python3 scripts/version.py verify
+          --version-file products/lmdj/version.json
+      - run: scripts/core.sh configure release
+      - run: scripts/core.sh build release
+      - run: scripts/core.sh test release

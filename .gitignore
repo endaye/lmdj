@@ -60,18 +60,11 @@ __pycache__/
 .pytest_cache/
 
 ### LMDJ
+# Headless Core build outputs
+build/core/
+
 # Reference demo run artifacts (pipeline output packages)
 references/demos/lmdj-song-pipeline/output/
-
-# Audio worker 本地 job 产物
-workers/audio/jobs/
-
-# SCNet runner: MSST pinned clone + runner venvs (Task 4)
-workers/audio/.msst
-workers/audio/.venv-sep-*
-
-# App API 本地 job 产物
-apps/api/jobs/
 
 # Local manual/e2e audio corpus (see testdata/audio/suno/README.md)
 testdata/audio/suno/**/*.mp3
@@ -82,15 +75,8 @@ testdata/audio/suno/**/*.mp3
 # Local isolated git worktrees
 .worktrees/
 
-# Local deployment configuration
-.env
-
 # Playwright MCP cache
 .playwright-mcp/
 
-# Playwright run artifacts (traces, screenshots, .last-run.json)
-apps/web/test-results/
-apps/web/playwright-report/
-
-# Benchmark run outputs (spec §8: run.json/snapshots/results, local only)
-benchmarks/
+# Local environment overrides
+.env

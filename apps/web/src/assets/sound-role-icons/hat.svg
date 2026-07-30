@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" color="#11110F">
-  <g transform="scale(8)">
-    <g fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="square" stroke-linejoin="round">
-      <path d="M5 27V16C5 9.9 9.9 5 16 5C22.1 5 27 9.9 27 16V27"/>
-      <path d="M10 27V17C10 13.7 12.7 11 16 11C19.3 11 22 13.7 22 17V27"/>
-      <path d="M15 27V18C15 17.4 15.4 17 16 17C16.6 17 17 17.4 17 18V27" stroke-width="2"/>
-    </g>
-  </g>
-</svg>
