@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/error/lmdj.error.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Public Error v1",
+  "type": "object",
+  "required": ["contract", "code", "message", "details"],
+  "properties": {
+    "contract": {
+      "const": "lmdj.error.v1"
+    },
+    "code": {
+      "enum": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "REVISION_CONFLICT",
+        "DUPLICATE_ID",
+        "UNSUPPORTED_AUDIO",
+        "MISSING_ASSET",
+        "INVALID_PROJECT",
+        "COOK_FAILED",
+        "PROVIDER_NOT_FOUND",
+        "PROVIDER_FAILED",
+        "PERMISSION_DENIED",
+        "IO_ERROR",
+        "INTERNAL_ERROR"
+      ]
+    },
+    "message": {
+      "type": "string",
+      "minLength": 1
+    },
+    "details": {
+      "type": "object"
+    }
+  },
+  "additionalProperties": false
+}

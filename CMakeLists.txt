@@ -28,3 +28,10 @@ add_test(
   COMMAND "${Python3_EXECUTABLE}" tests/build/version_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+
+add_test(
+  NAME contract.schemas
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/conformance/schema_contract_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)

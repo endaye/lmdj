@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/module/lmdj.module.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Module Manifest v1",
+  "type": "object",
+  "required": [
+    "contract",
+    "module",
+    "version",
+    "api_version",
+    "dependencies"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.module.v1"
+    },
+    "module": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9-]+|-[a-z0-9-]+)*$"
+    },
+    "version": {
+      "$ref": "#/$defs/semver"
+    },
+    "api_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "dependencies": {
+      "type": "object",
+      "propertyNames": {
+        "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9-]+|-[a-z0-9-]+)*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/semver"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    }
+  }
+}

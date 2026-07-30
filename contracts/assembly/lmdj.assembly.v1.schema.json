@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/assembly/lmdj.assembly.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Product Assembly v1",
+  "type": "object",
+  "required": [
+    "contract",
+    "product",
+    "modules",
+    "hosts",
+    "providers",
+    "contracts"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.assembly.v1"
+    },
+    "product": {
+      "$ref": "#/$defs/product"
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/versioned_component"
+      },
+      "uniqueItems": true
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/versioned_component"
+      },
+      "uniqueItems": true
+    },
+    "providers": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/provider"
+      },
+      "uniqueItems": true
+    },
+    "contracts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/versioned_component"
+      },
+      "uniqueItems": true
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z0-9-]+|-[a-z0-9-]+)*$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "product_version": {
+      "type": "string",
+      "pattern": "^[1-9][0-9]*\\.[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "product": {
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/product_version"
+        }
+      },
+      "additionalProperties": false
+    },
+    "versioned_component": {
+      "type": "object",
+      "required": ["id", "version"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        }
+      },
+      "additionalProperties": false
+    },
+    "model_identity": {
+      "type": "object",
+      "required": ["id", "version", "artifact_sha256"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "provider": {
+      "type": "object",
+      "required": ["id", "version", "capabilities", "model_identity"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/id"
+        },
+        "version": {
+          "$ref": "#/$defs/semver"
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/versioned_component"
+          },
+          "uniqueItems": true
+        },
+        "model_identity": {
+          "oneOf": [
+            {"$ref": "#/$defs/model_identity"},
+            {"type": "null"}
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
