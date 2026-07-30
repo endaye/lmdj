@@ -215,6 +215,22 @@ void begin_and_append(
   }
 }
 
+void test_typed_active_journal_preserves_captured_revision() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "typed-active.lmdj";
+  ProjectStore store;
+  TakeJournal journal;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto take = recorded_take("typed-active-take");
+  begin_and_append(journal, bundle, take, 7);
+
+  const auto active =
+      journal.read_active_journal(bundle, take.id);
+  LMDJ_CHECK(active.has_value());
+  LMDJ_CHECK(active.value().take == take);
+  LMDJ_CHECK(active.value().expected_revision == 7);
+}
+
 void test_take_journal_requires_uuid_and_48000_metadata() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
@@ -690,6 +706,7 @@ void test_symlinked_recovery_directory_is_rejected_before_seal() {
 
 int main() {
   try {
+    test_typed_active_journal_preserves_captured_revision();
     test_take_journal_requires_uuid_and_48000_metadata();
     test_invalid_command_id_is_rejected_before_journal_matching();
     test_append_flushes_each_event_and_restart_reads_acknowledged_data();

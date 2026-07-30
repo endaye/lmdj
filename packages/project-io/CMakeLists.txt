@@ -15,6 +15,8 @@ target_link_libraries(
   lmdj_project_io
   PUBLIC
     lmdj::authoring_domain
+  PRIVATE
+    lmdj_picosha2
 )
 lmdj_target_warnings(lmdj_project_io)
 lmdj_target_sanitizers(lmdj_project_io)
@@ -37,6 +39,8 @@ if(BUILD_TESTING)
     lmdj_project_io_testable
     PUBLIC
       lmdj::authoring_domain
+    PRIVATE
+      lmdj_picosha2
   )
   target_compile_definitions(
     lmdj_project_io_testable

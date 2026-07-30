@@ -641,12 +641,26 @@ foundation::Result<void> TakeJournal::append(
 foundation::Result<domain::RawTake> TakeJournal::read_active(
     const std::filesystem::path& bundle,
     foundation::TakeId take_id) const {
-  auto document = read_journal(bundle, take_id);
-  if (!document.has_value()) {
-    return foundation::Result<domain::RawTake>::failure(document.error());
+  auto active = read_active_journal(bundle, take_id);
+  if (!active.has_value()) {
+    return foundation::Result<domain::RawTake>::failure(active.error());
   }
   return foundation::Result<domain::RawTake>::success(
-      std::move(document.value().take));
+      std::move(active.value().take));
+}
+
+foundation::Result<ActiveTakeJournal> TakeJournal::read_active_journal(
+    const std::filesystem::path& bundle,
+    foundation::TakeId take_id) const {
+  auto document = read_journal(bundle, take_id);
+  if (!document.has_value()) {
+    return foundation::Result<ActiveTakeJournal>::failure(document.error());
+  }
+  return foundation::Result<ActiveTakeJournal>::success(
+      ActiveTakeJournal{
+          std::move(document.value().take),
+          document.value().expected_revision,
+      });
 }
 
 foundation::Result<std::filesystem::path> TakeJournal::seal(

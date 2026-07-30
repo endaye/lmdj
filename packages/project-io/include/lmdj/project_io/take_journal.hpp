@@ -9,6 +9,13 @@
 
 namespace lmdj::project_io {
 
+struct ActiveTakeJournal {
+  domain::RawTake take;
+  std::uint64_t expected_revision;
+
+  bool operator==(const ActiveTakeJournal&) const = default;
+};
+
 struct RecoveryCandidate {
   domain::RawTake take;
   std::uint64_t expected_revision;
@@ -30,6 +37,9 @@ class TakeJournal {
       foundation::TakeId take_id,
       const domain::RawTakeEvent& event);
   foundation::Result<domain::RawTake> read_active(
+      const std::filesystem::path& bundle,
+      foundation::TakeId take_id) const;
+  foundation::Result<ActiveTakeJournal> read_active_journal(
       const std::filesystem::path& bundle,
       foundation::TakeId take_id) const;
   foundation::Result<std::filesystem::path> seal(

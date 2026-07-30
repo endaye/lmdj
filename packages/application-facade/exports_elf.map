@@ -1,0 +1,10 @@
+LMDJ_CORE_C_1.0 {
+  global:
+    lmdj_engine_create;
+    lmdj_engine_command;
+    lmdj_engine_query;
+    lmdj_string_free;
+    lmdj_engine_free;
+  local:
+    *;
+};
