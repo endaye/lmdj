@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/version/lmdj.product-version.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Product Build Version v1",
+  "type": "object",
+  "required": [
+    "contract",
+    "product",
+    "milestone",
+    "minor",
+    "build",
+    "patch"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.product-version.v1"
+    },
+    "product": {
+      "const": "lmdj"
+    },
+    "milestone": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "minor": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "build": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "patch": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["build"],
+        "properties": {
+          "build": {
+            "const": 0
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "patch": {
+            "const": 0
+          }
+        }
+      }
+    }
+  ],
+  "additionalProperties": false
+}

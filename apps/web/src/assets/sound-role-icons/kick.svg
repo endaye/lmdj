@@ -1,9 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" color="#11110F">
-  <g transform="scale(8)">
-    <g fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="square">
-      <circle cx="16" cy="16" r="10"/>
-      <circle cx="16" cy="16" r="3.25" fill="currentColor" stroke="none"/>
-      <path d="M16 3V6M16 26V29M3 16H6M26 16H29"/>
-    </g>
-  </g>
-</svg>

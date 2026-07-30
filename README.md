@@ -1,135 +1,71 @@
 # LMDJ
 
-LMDJ 当前是一个脑暴与 PRD 快速迭代工作区。这里先沉淀素材、问题、决策和工作版 PRD，再逐步收敛到可执行方案。
+LMDJ is being rebuilt as a modular, cross-platform playable beat instrument:
+turn any sound into Pads, perform the Beat yourself, and use optional
+Capability Providers for slicing, separation, analysis, and later pattern
+assistance.
 
-## 项目结构
+New Headless Core is the only active product source. The retired
+`lmdj.patch.v1` / `lmdj.materials.v1` Web/API/Worker product has been removed
+from the active tree and remains recoverable from Git history.
 
-```text
-lmdj/
-├── apps/                    # 正式产品应用入口：web / api
-├── docs/                    # PRD 迭代、素材、决策与开放问题
-├── packages/                # 正式共享 package：core-models / patchify
-├── references/              # 不纳入正式产品的参考素材和 demo
-│   └── demos/
-│       ├── ascii-matrix-camera/
-│       └── lmdj-song-pipeline/
-├── workers/                 # 正式异步 worker：audio / generation / render
-├── AGENTS.md                # Codex 协作说明
-└── CLAUDE.md                # Claude Code 协作说明
-```
+## Current status
 
-## 文档入口
+- Designed: full product and Core architecture.
+- In implementation: M1 Headless Core Proof.
+- Current branch candidate: `1.0.1.0` / `canary`; PR 1 targets `dev` after
+  merge and CI.
+- Not yet implemented: realtime audio, Web/PWA, Creator UI, Sample
+  intelligence, Sequence editor, Perform view, Sound Sets, production
+  Providers, or cloud deployment.
 
-- [docs/README.md](docs/README.md)：文档系统总览与脑暴阶段工作流。
-- [docs/prd/working-prd.md](docs/prd/working-prd.md)：当前工作版 PRD，允许快速改写。
-- [docs/prd/source-materials.md](docs/prd/source-materials.md)：外部输入、demo、参考资料和素材索引。
-- [docs/prd/open-questions.md](docs/prd/open-questions.md)：待讨论问题池。
-- [docs/prd/decision-log.md](docs/prd/decision-log.md)：已经确认的产品/技术决策。
-- [docs/governance/version-management.md](docs/governance/version-management.md)：Product Build、Channel、Tag、Module、Contract 与 Provider 的统一版本规范。
-- [docs/deploy/staging.md](docs/deploy/staging.md)：单服务器 staging 的部署、回滚与运维。
-- [references/README.md](references/README.md)：参考素材和 demo 的边界说明。
-- [references/demos/lmdj-song-pipeline/README.md](references/demos/lmdj-song-pipeline/README.md)：高嘉丰参考项目的快速上手和接口说明。
-
-## 当前定位
-
-`references/demos/` 里的项目都是参考素材，不纳入正式产品源码边界。`lmdj-song-pipeline` 是高嘉丰给到的可运行参考项目和技术素材库；`ascii-matrix-camera` 是视觉互动方向的小 demo。它们的价值是提供技术和体验证据，后续正式系统需要在独立 app / package / worker 中定义自己的边界。
-
-正式产品源码从 `apps/`、`packages/` 和 `workers/` 开始沉淀。Patchify 后续应作为 LMDJ-owned package 重写在 `packages/patchify/`，可以读取参考 pipeline 的输出，但不在 `references/demos/lmdj-song-pipeline/` 内继续追加正式功能。
+## Architecture
 
 ```text
-PRD 素材
-  -> 工作版 PRD
-  -> 开放问题
-  -> 决策记录
-  -> 原型 / 技术验证
+Product Assembly
+  -> thin Hosts (CLI / MCP / future UI)
+  -> Application Facade and narrow C ABI
+  -> Authoring Domain + Project I/O
+  -> immutable Runtime Snapshot
+  -> Audio Runtime
+
+Capability Provider
+  -> Attempt-scoped Artifact input/output
+  -> Candidate or typed failure
+  -> never mutates Project Truth
 ```
 
-## 脑暴阶段原则
+Active source boundaries:
 
-- 素材不等于定稿：高嘉丰 PRD、demo 工具、外部参考都先进入素材池。
-- 工作版 PRD 可以频繁变化：先保证观点清楚，再追求完整。
-- 决策单独记录：一旦确认，就写进 decision log，避免反复讨论。
-- 问题显式管理：未定问题进入 open questions，不在正文里含糊带过。
+```text
+apps/       thin Core Hosts
+packages/   product-neutral Core Modules
+providers/  Capability Provider implementations
+products/   Product Assembly and Product Build identity
+contracts/  versioned cross-language Contracts
+workers/    future out-of-process Provider Hosts
+```
 
-## 本地开发脚本
+Reference demos under `references/demos/` are frozen and are not product code.
 
-根目录一键脚本 `scripts/dev.sh`（任意位置可执行）：
+## Build
+
+Requirements: CMake 3.24+, a C++20 compiler, Python 3.11+, Git, and curl.
 
 ```bash
-scripts/dev.sh all                  # setup + 全部测试 + 端到端冒烟
-scripts/dev.sh test                 # core-models + patchify 测试
-scripts/dev.sh setup-materials       # 本地 Material DSP + HT Demucs runner
-scripts/dev.sh dev                   # 本地默认 materials-v1；同时启动 API + Web
-LMDJ_PIPELINE=legacy scripts/dev.sh dev  # 显式回到冻结 demo 链
-scripts/dev.sh patchify <包目录>     # 对 pipeline package 生成 patch.json
-scripts/dev.sh song <音频> <id>      # demo pipeline 处理一首歌并 patchify（需先 setup-demo）
-scripts/dev.sh smoke                # testsong → patch.json → 摘要
-scripts/dev.sh creator-smoke <音频>  # 真实 API：上传 → 16 Pad → 两次确定性 Export
+bash scripts/verify-core-dependencies.sh
+scripts/core.sh configure dev
+scripts/core.sh build dev
+scripts/core.sh test dev
 ```
 
-`creator-smoke` 默认连接 `http://127.0.0.1:8000`，可通过
-`LMDJ_API_BASE_URL` 指向其他本地 API。它使用 `curl --fail-with-body`
-发起请求，并用 core-models package venv 中的 Python + `jsonschema`
-校验 Patch；不依赖 `jq`。任一 HTTP、Job 或 Patch contract 失败以及两次
-Creator Export SHA-256 不一致都会以非零状态退出。
+`scripts/core.sh clean` removes only `build/core`.
 
-HTTP 连接、单次请求和 Job 轮询分别有 5 秒、120 秒和 1800 秒的默认墙钟
-上限，可通过 `LMDJ_CREATOR_SMOKE_CONNECT_TIMEOUT_SECONDS`、
-`LMDJ_CREATOR_SMOKE_REQUEST_TIMEOUT_SECONDS` 和
-`LMDJ_CREATOR_SMOKE_TIMEOUT_SECONDS` 调整。三者都必须是正整数。
+## Source of truth
 
-本地 API + Web 默认使用 Material 链。clean checkout 先确认系统可用 `curl`，
-再执行 `cd apps/web && npm install` 准备 Web；回到仓库根目录运行
-`scripts/dev.sh setup-materials` 后，即可执行 `scripts/dev.sh dev`。
-
-显式使用冻结 demo 链不需要 Material DSP，但仍需准备 API、Web 和 demo 环境：
-
-```bash
-# 仓库根目录；系统需已安装 curl
-cd apps/api
-python3 -m venv .venv
-.venv/bin/pip install -e ../../packages/core-models
-.venv/bin/pip install -e ../../packages/patchify
-.venv/bin/pip install -e ../../workers/audio
-.venv/bin/pip install -e .
-cd ../web
-npm install
-cd ../..
-scripts/dev.sh setup-demo
-LMDJ_PIPELINE=legacy scripts/dev.sh dev
-```
-
-这里复用现有的逐包 editable 安装顺序，没有为 legacy 另增 setup 命令。
-
-启动本地 API 并执行完整 Creator smoke：
-
-```bash
-scripts/dev.sh setup
-scripts/dev.sh setup-materials
-scripts/dev.sh dev
-
-# 另开终端，在仓库根目录执行
-scripts/dev.sh creator-smoke /absolute/path/to/audio.wav
-```
-
-成功输出包含 `job_id`、`patch_id`、`pads: 16`、两次 Export SHA-256
-以及 `deterministic: yes`。脚本级成功与失败路径可用
-`scripts/tests/test_creator_smoke.sh` 验证。
-
-## Demo 工具常用命令
-
-需要跑高嘉丰 demo 时，在 `references/demos/lmdj-song-pipeline/` 内执行：
-
-```bash
-cd references/demos/lmdj-song-pipeline
-
-python3 -m venv .venv
-.venv/bin/pip install -e .
-.venv/bin/python -m pytest tests/ -q
-
-.venv/bin/song-pipeline run input.mp3 --song-id mysong --fast
-.venv/bin/song-pipeline gen --bpm 85 --style "lofi hiphop beat" --seconds 30 --seed 42 --fast --run
-.venv/bin/song-pipeline serve --port 8000
-```
-
-本地开发默认带 `--fast`，除非明确需要更慢但更准的 `htdemucs_ft`。
+- [Core redesign](docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+- [Headless Core implementation plan](docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md)
+- [Version management](docs/governance/version-management.md)
+- [Product decision log](docs/prd/decision-log.md)
+- [Open product questions](docs/prd/open-questions.md)
+- [Reference boundary](references/README.md)

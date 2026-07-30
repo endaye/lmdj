@@ -1,0 +1,43 @@
+add_library(
+  lmdj_foundation
+  STATIC
+    src/artifact.cpp
+    src/json.cpp
+)
+add_library(lmdj::foundation ALIAS lmdj_foundation)
+
+target_include_directories(
+  lmdj_foundation
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(
+  lmdj_foundation
+  PUBLIC
+    nlohmann_json::nlohmann_json
+  PRIVATE
+    lmdj_picosha2
+)
+lmdj_target_warnings(lmdj_foundation)
+lmdj_target_sanitizers(lmdj_foundation)
+
+if(BUILD_TESTING)
+  add_executable(
+    lmdj_foundation_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/foundation/artifact_test.cpp"
+  )
+  target_include_directories(
+    lmdj_foundation_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_foundation_tests
+    PRIVATE
+      lmdj::foundation
+      nlohmann_json::nlohmann_json
+  )
+  lmdj_target_warnings(lmdj_foundation_tests)
+  lmdj_target_sanitizers(lmdj_foundation_tests)
+  add_test(NAME foundation.artifact COMMAND lmdj_foundation_tests)
+endif()

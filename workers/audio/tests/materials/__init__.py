@@ -1,1 +1,0 @@
-"""Material pipeline tests."""

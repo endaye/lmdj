@@ -1,8 +1,0 @@
-# benchmark 指标层版本锁（spec §9.2：指标实现必须 pin 死并记入 environment.json）。
-# SI-SDR/一致性/泄漏为自实现 numpy（fast_bss_eval 0.1.4 无 torch 时 si_sdr 损坏，弃用——见 decision-log 2026-07-16）。
-museval==0.4.1
-pandas==3.0.3
-scipy==1.17.1
-simplejson==4.1.1
-numpy==1.26.4
-soundfile==0.14.0
