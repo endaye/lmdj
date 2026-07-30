@@ -1718,7 +1718,14 @@ git commit -m "feat(provider): add capability registry and isolated attempts"
 - Create: `packages/application-facade/src/c_api.cpp`
 - Create: `tests/core/facade/application_test.cpp`
 - Create: `tests/core/facade/c_api_test.cpp`
+- Create: `tests/core/facade/dynamic_load_test.cpp`
 - Modify: `CMakeLists.txt`
+- Modify: `packages/project-io/module.json`
+- Modify: `packages/project-io/CMakeLists.txt`
+- Modify: `packages/project-io/include/lmdj/project_io/project_store.hpp`
+- Modify: `packages/project-io/src/project_store.cpp`
+- Modify: `tests/core/project_io/project_store_test.cpp`
+- Modify: `docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md`
 
 **Interfaces:**
 
@@ -1726,8 +1733,12 @@ git commit -m "feat(provider): add capability registry and isolated attempts"
 - Produces the only supported Host API.
 - C ABI owns opaque engine handles and caller-freed UTF-8 JSON responses.
 - `application-facade` starts at SemVer `0.1.0` and locks exact `0.1.0`
-  dependencies on `authoring-domain`, `project-io`, `project-cooker`,
-  `audio-runtime`, and `provider-sdk`.
+  dependencies on `foundation`, `authoring-domain`, `project-cooker`,
+  `audio-runtime`, and `provider-sdk`, plus exact `project-io 0.2.0`.
+- Task 8 adds the bounded, symlink-safe, byte-length- and SHA-verifying
+  `ProjectStore::read_artifact` API and advances `project-io` from `0.1.0` to
+  `0.2.0`. Facade must use this API as Cooker's Artifact resolver and must not
+  know the Project bundle's private Artifact layout.
 - Task 8 remains inside PR 4, so it does not allocate another Product Build.
 
 - [ ] **Step 1: Add failing Facade behavior tests**
@@ -1738,6 +1749,8 @@ Use:
 struct ApplicationConfig {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> providers;
+  provider::ProviderPolicy provider_policy;
+  provider::TimestampSource timestamp_source;
 };
 
 class Application {
@@ -1773,6 +1786,35 @@ provider.selected
 attempt.inspect
 ```
 
+All request objects reject additional properties. The exact fields after
+`operation` are:
+
+| Operation | Exact fields after `operation` |
+| --- | --- |
+| `project.create` | `project_path`, `project_id`, `bpm` |
+| `asset.import` | `project_path`, `command_id`, `expected_revision`, `asset_id`, `source_path`, `media_type` |
+| `pad.assign` | `project_path`, `command_id`, `expected_revision`, `slot:{bank,pad}`, `asset_id` (UUID or null) |
+| `take.begin` | `project_path`, `take_id`, `expected_revision`, `sample_rate` |
+| `take.append` | `project_path`, `take_id`, `event:{slot:{bank,pad},frame_offset,velocity}` |
+| `take.commit` | `project_path`, `command_id`, `expected_revision`, `take_id`, `pattern:{pattern_id,bars,events:[{slot,step,velocity}]}` |
+| `render.offline` | `project_path`, `pattern_id`, `output_path` |
+| `provider.select` | `capability`, `provider_id` |
+| `provider.run` | `attempt_id`, `capability`, `inputs`, `parameters`, `data_classification`, `platform`, `region`, `required_permissions` |
+| `project.inspect` | `project_path` |
+| `take.recoverable.list` | `project_path` |
+| `snapshot.cook` | `project_path`, `pattern_id` |
+| `provider.list` | no additional fields |
+| `provider.selected` | `capability` |
+| `attempt.inspect` | `attempt_id` |
+
+UUID-backed IDs use lowercase RFC 4122 version/variant-shaped strings.
+Attempt IDs use Provider SDK's safe file-ID grammar. Integer fields reject
+fractional, negative, string, and overflow values. Every success envelope has
+exactly `ok`, `result`, and `project_revision`; Project-scoped operations
+return the observed/current unsigned revision and Workspace-only Provider
+operations return JSON `null`. Errors have exactly
+`ok:false,error:{code,message,details}` and claim no Project revision.
+
 Tests call only these methods and assert stable success/error envelopes, revision propagation, and no exception crossing the public boundary. `snapshot.cook` is a non-persisting diagnostic Query. `render.offline` is a self-contained Command with this request shape:
 
 ```json
@@ -1785,6 +1827,13 @@ Tests call only these methods and assert stable success/error envelopes, revisio
 ```
 
 The Facade test must construct one `Application`, call `snapshot.cook`, destroy it, construct a fresh `Application`, and successfully call `render.offline` using only `project_path` and `pattern_id`. No public request or response contains `snapshot_id`.
+
+`ApplicationConfig` injects Provider policy and time. Defaults are an empty
+Registry, deny-all policy, and a non-locale Host clock. Product-neutral Facade
+must not hard-code Proof region/classification/platform/permission policy.
+`take.commit` reads Raw Take events from the Project-owned active journal; the
+request supplies only Pattern data, which is fully validated before any
+revision-conflict path.
 
 - [ ] **Step 2: Add failing C ABI tests**
 
@@ -1824,6 +1873,14 @@ Return `0` when the ABI call itself completed and placed a JSON envelope in `out
 
 `packages/application-facade/CMakeLists.txt` builds product-neutral static target `lmdj_application` and shared C ABI target `lmdj_core_c`. The latter is emitted under `build/core/<preset>/lib/` with the platform extension supplied by CMake.
 
+The opaque engine implementation uses a synchronized live registry and
+process-lifetime tombstone shells. Calls look up before dereference, retain
+in-flight shared ownership, and serialize per engine. Null, unknown, freed,
+double-freed, and ABA handles are safe. The Task 8 C config is exactly
+`{"workspace_root":"/absolute/path"}` and composes an empty Registry with
+deny-all policy. All static dependencies of the shared ABI are PIC, and a real
+dynamic-load test resolves only the declared callable surface.
+
 - [ ] **Step 3: Observe the expected failures**
 
 Run:
@@ -1850,9 +1907,19 @@ Queries never increment revision. `snapshot.cook` loads the requested Project re
 
 `render.offline` loads the Project and Pattern named in the same request, performs Cook and Render inside that one Facade call, and returns the output Artifact. There is no public Snapshot handle registry. A long-lived Host may later cache immutable Snapshots as a private optimization, but cache identity can never become required public input.
 
+Render rejects an existing destination and every path inside a `.lmdj`
+bundle. It writes a unique sibling temporary file, verifies the rendered
+Artifact, then atomically publishes without overwrite. Every failure removes
+the temporary and leaves Project Truth and any existing destination unchanged.
+
 - [ ] **Step 5: Implement exception-safe C ABI ownership**
 
-Catch all exceptions inside `c_api.cpp` and translate to `INTERNAL_ERROR`. Allocate returned strings with one allocator and free only through `lmdj_string_free`. Add tests for malformed JSON, repeated create/free, null pointers, and 1,000 command/query calls under ASan.
+Catch all exceptions inside `c_api.cpp` and translate to `INTERNAL_ERROR`.
+Allocate returned strings with one allocator and free only through
+`lmdj_string_free`. Define ABI version/status macros, null required output
+pointers before work, and make `lmdj_string_free(NULL)` a no-op. Add tests for
+malformed JSON/UTF-8, null pointers, unknown/freed/double-free/ABA handles,
+repeated create/free, racing free, and 1,000 command/query calls under ASan.
 
 - [ ] **Step 6: Run Facade and sanitizer tests**
 
@@ -1871,7 +1938,9 @@ Expected: tests pass with no sanitizer report.
 - [ ] **Step 7: Commit Facade and C ABI**
 
 ```bash
-git add packages/application-facade tests/core/facade CMakeLists.txt
+git add packages/application-facade packages/project-io tests/core/facade \
+  tests/core/project_io/project_store_test.cpp CMakeLists.txt \
+  docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md
 git commit -m "feat(facade): expose unified application and c abi"
 ```
 
@@ -2155,6 +2224,8 @@ git commit -m "feat(mcp): expose core tools over stdio"
 - Modify: `scripts/core.sh`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `packages/application-facade/CMakeLists.txt`
+- Modify: `packages/application-facade/src/c_api.cpp`
+- Modify: `packages/application-facade/include/lmdj/facade/c_api.h`
 - Modify: `apps/core-cli/src/main.cpp`
 - Modify: `apps/core-mcp/lmdj_core_mcp/__main__.py`
 - Modify: `README.md`
@@ -2168,6 +2239,11 @@ git commit -m "feat(mcp): expose core tools over stdio"
   Channel, full Git revision, platform, and built Artifact hashes.
 - E2E uses public CLI and MCP surfaces only.
 - CI proves the same Assembly on macOS and Ubuntu.
+- Task 11 explicitly extends the Task 8 C ABI configuration/composition so MCP
+  and CLI resolve the same Assembly Providers and Provider policy. This is
+  completion of the still-unreleased `application-facade 0.1.0` Proof surface;
+  if `0.1.0` has been published before Task 11, advance the Module SemVer
+  instead of silently changing it.
 
 - [ ] **Step 1: Advance the PR 6 Product Build**
 
@@ -2198,7 +2274,7 @@ Expected: both report Product Build `1.0.6.0`.
   "modules": [
     {"id": "foundation", "version": "0.1.0"},
     {"id": "authoring-domain", "version": "0.1.0"},
-    {"id": "project-io", "version": "0.1.0"},
+    {"id": "project-io", "version": "0.2.0"},
     {"id": "project-cooker", "version": "0.1.0"},
     {"id": "audio-runtime", "version": "0.1.0"},
     {"id": "provider-sdk", "version": "0.1.0"},

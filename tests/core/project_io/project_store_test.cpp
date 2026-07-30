@@ -531,6 +531,111 @@ void test_imported_assets_are_content_addressed_and_deduplicated() {
       artifact);
 }
 
+void test_duplicate_command_ids_require_complete_persisted_identity() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "replay-identity.lmdj";
+  const auto source = temp.path() / "source-a.wav";
+  const auto changed_source = temp.path() / "source-b.wav";
+  write_bytes(source, "source-a");
+  write_bytes(changed_source, "source-b");
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+
+  const lmdj::domain::AssignPad assigned{
+      meta("identity-pad", 0),
+      PadSlotId{0, 0},
+      std::nullopt,
+  };
+  auto applied = store.execute(bundle, Command{assigned});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(!applied.value().replayed);
+  applied = store.execute(bundle, Command{assigned});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(applied.value().replayed);
+
+  auto changed_pad_revision = assigned;
+  changed_pad_revision.meta.expected_revision = 1;
+  auto rejected =
+      store.execute(bundle, Command{changed_pad_revision});
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+
+  auto changed_slot = assigned;
+  changed_slot.slot = PadSlotId{0, 1};
+  rejected = store.execute(bundle, Command{changed_slot});
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+
+  auto changed_assignment = assigned;
+  changed_assignment.asset_id =
+      AssetId{test_uuid("different-assignment")};
+  rejected = store.execute(bundle, Command{changed_assignment});
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+
+  rejected = store.execute(
+      bundle,
+      Command{create_pattern(
+          "identity-pad", 0, "cross-type-pattern")});
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+
+  const ProjectStore::ImportArtifactRequest import_request{
+      meta("identity-import", 1),
+      AssetId{test_uuid("identity-asset")},
+      source,
+      "audio/wav",
+  };
+  auto imported = store.import_artifact(bundle, import_request);
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(!imported.value().replayed);
+  imported = store.import_artifact(bundle, import_request);
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(imported.value().replayed);
+
+  auto changed_import_revision = import_request;
+  changed_import_revision.meta.expected_revision = 2;
+  imported = store.import_artifact(bundle, changed_import_revision);
+  LMDJ_CHECK(!imported.has_value());
+  LMDJ_CHECK(imported.error().code == ErrorCode::invalid_argument);
+
+  auto changed_asset = import_request;
+  changed_asset.asset_id = AssetId{test_uuid("changed-asset")};
+  imported = store.import_artifact(bundle, changed_asset);
+  LMDJ_CHECK(!imported.has_value());
+  LMDJ_CHECK(imported.error().code == ErrorCode::invalid_argument);
+
+  auto changed_bytes = import_request;
+  changed_bytes.source = changed_source;
+  imported = store.import_artifact(bundle, changed_bytes);
+  LMDJ_CHECK(!imported.has_value());
+  LMDJ_CHECK(imported.error().code == ErrorCode::invalid_argument);
+
+  auto changed_media = import_request;
+  changed_media.media_type = "application/octet-stream";
+  imported = store.import_artifact(bundle, changed_media);
+  LMDJ_CHECK(!imported.has_value());
+  LMDJ_CHECK(imported.error().code == ErrorCode::invalid_argument);
+
+  auto cross_type_import = import_request;
+  cross_type_import.meta = assigned.meta;
+  imported = store.import_artifact(bundle, cross_type_import);
+  LMDJ_CHECK(!imported.has_value());
+  LMDJ_CHECK(imported.error().code == ErrorCode::invalid_argument);
+
+  auto import_id_as_pad = assigned;
+  import_id_as_pad.meta = import_request.meta;
+  rejected = store.execute(bundle, Command{import_id_as_pad});
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+
+  auto missing_source = import_request;
+  missing_source.source = temp.path() / "no-longer-present.wav";
+  imported = store.import_artifact(bundle, missing_source);
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(imported.value().replayed);
+}
+
 void test_import_rejects_invalid_command_before_receipt_and_source_io() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
@@ -898,6 +1003,100 @@ void test_independent_advisory_lock_blocks_execute_until_release() {
       read_json(bundle / "manifest.json").at("head_revision") == 1);
 }
 
+void test_artifact_reads_are_bounded_symlink_safe_and_integrity_verified() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "artifact-read.lmdj";
+  const auto source = temp.path() / "source.wav";
+  const std::string source_bytes = "project-owned-artifact";
+  write_bytes(source, source_bytes);
+
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto imported = store.import_artifact(
+      bundle,
+      ProjectStore::ImportArtifactRequest{
+          meta("artifact-read-command", 0),
+          AssetId{test_uuid("artifact-read-asset")},
+          source,
+          "audio/wav",
+      });
+  LMDJ_CHECK(imported.has_value());
+  const auto& artifact =
+      imported.value().state.assets.begin()->second.artifact;
+
+  const auto bytes = store.read_artifact(bundle, artifact);
+  LMDJ_CHECK(bytes.has_value());
+  LMDJ_CHECK(
+      std::string(
+          reinterpret_cast<const char*>(bytes.value().data()),
+          bytes.value().size()) == source_bytes);
+
+  auto wrong_length = artifact;
+  ++wrong_length.byte_length;
+  const auto length_result =
+      store.read_artifact(bundle, wrong_length);
+  LMDJ_CHECK(!length_result.has_value());
+  LMDJ_CHECK(length_result.error().code == ErrorCode::cook_failed);
+
+  auto oversized = artifact;
+  oversized.byte_length = 64U * 1024U * 1024U + 1U;
+  const auto oversized_result =
+      store.read_artifact(bundle, oversized);
+  LMDJ_CHECK(!oversized_result.has_value());
+  LMDJ_CHECK(oversized_result.error().code == ErrorCode::invalid_argument);
+
+  const auto fabricated_sha = std::string(64, 'a');
+  const auto fabricated_blob =
+      bundle / "assets" / (fabricated_sha + ".wav");
+  write_bytes(fabricated_blob, source_bytes);
+  auto wrong_hash = artifact;
+  wrong_hash.sha256 = fabricated_sha;
+  const auto hash_result = store.read_artifact(bundle, wrong_hash);
+  LMDJ_CHECK(!hash_result.has_value());
+  LMDJ_CHECK(hash_result.error().code == ErrorCode::cook_failed);
+  std::filesystem::remove(fabricated_blob);
+
+  const auto blob =
+      bundle / "assets" / (artifact.sha256 + ".wav");
+  const auto external = temp.path() / "external.wav";
+  write_bytes(external, source_bytes);
+  std::filesystem::remove(blob);
+  std::filesystem::create_symlink(external, blob);
+  const auto symlink_result = store.read_artifact(bundle, artifact);
+  LMDJ_CHECK(!symlink_result.has_value());
+  LMDJ_CHECK(symlink_result.error().code == ErrorCode::invalid_project);
+}
+
+void test_artifact_read_rejects_symlinked_intermediate_directory() {
+  TempDirectory temp;
+  const auto real_root = temp.path() / "real";
+  std::filesystem::create_directory(real_root);
+  const auto bundle = real_root / "artifact-read.lmdj";
+  const auto source = temp.path() / "source.wav";
+  write_bytes(source, "stable-dirfd-artifact");
+
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto imported = store.import_artifact(
+      bundle,
+      ProjectStore::ImportArtifactRequest{
+          meta("stable-dirfd-command", 0),
+          AssetId{test_uuid("stable-dirfd-asset")},
+          source,
+          "audio/wav",
+      });
+  LMDJ_CHECK(imported.has_value());
+  const auto artifact =
+      imported.value().state.assets.begin()->second.artifact;
+
+  const auto alias = temp.path() / "alias";
+  std::filesystem::create_directory_symlink(real_root, alias);
+  const auto aliased_bundle = alias / bundle.filename();
+  const auto read = store.read_artifact(aliased_bundle, artifact);
+  LMDJ_CHECK(!read.has_value());
+  LMDJ_CHECK(read.error().code == ErrorCode::invalid_project);
+}
+
 }  // namespace
 
 int main() {
@@ -909,6 +1108,7 @@ int main() {
     test_create_rejects_mismatched_existing_initial_checkpoint();
     test_committed_transactions_replay_to_manifest_head();
     test_imported_assets_are_content_addressed_and_deduplicated();
+    test_duplicate_command_ids_require_complete_persisted_identity();
     test_import_rejects_invalid_command_before_receipt_and_source_io();
     test_import_rejects_invalid_asset_before_source_io();
     test_import_rejects_empty_media_type_before_source_io();
@@ -919,6 +1119,8 @@ int main() {
     test_public_commands_reject_unsafe_ids_before_publishing();
     test_symlinked_managed_directory_is_rejected_before_recovery();
     test_independent_advisory_lock_blocks_execute_until_release();
+    test_artifact_reads_are_bounded_symlink_safe_and_integrity_verified();
+    test_artifact_read_rejects_symlinked_intermediate_directory();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

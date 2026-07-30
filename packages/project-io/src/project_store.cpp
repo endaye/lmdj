@@ -22,9 +22,11 @@
 
 #include <fcntl.h>
 #include <sys/file.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include <nlohmann/json.hpp>
+#include <picosha2.h>
 
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/take_journal.hpp>
@@ -59,6 +61,8 @@ namespace {
 using foundation::Error;
 using foundation::ErrorCode;
 
+constexpr std::uint64_t kMaximumArtifactBytes = 64U * 1024U * 1024U;
+
 class BundleLock {
  public:
   explicit BundleLock(int descriptor) : descriptor_(descriptor) {}
@@ -92,8 +96,38 @@ class BundleLock {
   int descriptor_;
 };
 
+class OwnedDescriptor {
+ public:
+  explicit OwnedDescriptor(int descriptor) : descriptor_(descriptor) {}
+  OwnedDescriptor(const OwnedDescriptor&) = delete;
+  OwnedDescriptor& operator=(const OwnedDescriptor&) = delete;
+  OwnedDescriptor(OwnedDescriptor&& other) noexcept
+      : descriptor_(std::exchange(other.descriptor_, -1)) {}
+  OwnedDescriptor& operator=(OwnedDescriptor&& other) noexcept {
+    if (this != &other) {
+      close();
+      descriptor_ = std::exchange(other.descriptor_, -1);
+    }
+    return *this;
+  }
+  ~OwnedDescriptor() { close(); }
+
+  int get() const noexcept { return descriptor_; }
+
+ private:
+  void close() noexcept {
+    if (descriptor_ >= 0) {
+      ::close(descriptor_);
+      descriptor_ = -1;
+    }
+  }
+
+  int descriptor_;
+};
+
 struct LoadedProject {
   domain::ProjectState state;
+  std::map<foundation::CommandId, domain::Command> commands;
   std::map<foundation::CommandId, domain::CommandReceipt> receipts;
   std::map<foundation::CommandId, foundation::TakeId> cleanup_obligations;
   std::vector<std::string> transactions;
@@ -282,6 +316,96 @@ foundation::Result<BundleLock> acquire_lock(
     }
     const auto error =
         io_error("project lock could not be acquired", path);
+    ::close(descriptor);
+    return foundation::Result<BundleLock>::failure(error);
+  }
+  return foundation::Result<BundleLock>::success(BundleLock{descriptor});
+}
+
+foundation::Result<OwnedDescriptor> open_directory_without_symlinks(
+    const std::filesystem::path& path) {
+  auto normalized = path.lexically_normal();
+#if defined(__APPLE__)
+  const auto relative = normalized.relative_path();
+  if (normalized.is_absolute() && !relative.empty()) {
+    const auto first = *relative.begin();
+    if (first == "var" || first == "tmp") {
+      normalized = std::filesystem::path("/private") / relative;
+    }
+  }
+#endif
+  if (normalized.empty()) {
+    return foundation::Result<OwnedDescriptor>::failure(
+        invalid_project("directory path is empty", path));
+  }
+  const int start = ::open(
+      normalized.is_absolute() ? "/" : ".",
+      O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (start < 0) {
+    return foundation::Result<OwnedDescriptor>::failure(
+        io_error("directory traversal root could not be opened", path));
+  }
+  OwnedDescriptor current(start);
+  for (const auto& component : normalized.relative_path()) {
+    if (component.empty() || component == ".") {
+      continue;
+    }
+    if (component == "..") {
+      return foundation::Result<OwnedDescriptor>::failure(
+          invalid_project(
+              "directory traversal cannot contain parent components",
+              path));
+    }
+    const int next = ::openat(
+        current.get(),
+        component.c_str(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (next < 0) {
+      if (errno == ELOOP || errno == ENOTDIR) {
+        return foundation::Result<OwnedDescriptor>::failure(
+            invalid_project(
+                "directory traversal encountered a symbolic or invalid component",
+                path,
+                component.generic_string()));
+      }
+      return foundation::Result<OwnedDescriptor>::failure(
+          io_error(
+              "directory traversal component could not be opened",
+              path));
+    }
+    current = OwnedDescriptor(next);
+  }
+  return foundation::Result<OwnedDescriptor>::success(std::move(current));
+}
+
+foundation::Result<BundleLock> acquire_lock_at(
+    int bundle_descriptor,
+    const std::filesystem::path& bundle) {
+  const int descriptor = ::openat(
+      bundle_descriptor,
+      ".lock",
+      O_RDWR | O_CLOEXEC | O_NOFOLLOW);
+  if (descriptor < 0) {
+    return foundation::Result<BundleLock>::failure(
+        io_error(
+            "project lock file could not be opened through bundle handle",
+            bundle / ".lock"));
+  }
+  struct stat metadata {};
+  if (::fstat(descriptor, &metadata) != 0 ||
+      !S_ISREG(metadata.st_mode)) {
+    const auto error = invalid_project(
+        "project lock is not a regular file",
+        bundle / ".lock");
+    ::close(descriptor);
+    return foundation::Result<BundleLock>::failure(error);
+  }
+  while (::flock(descriptor, LOCK_EX) != 0) {
+    if (errno == EINTR) {
+      continue;
+    }
+    const auto error =
+        io_error("project lock could not be acquired", bundle / ".lock");
     ::close(descriptor);
     return foundation::Result<BundleLock>::failure(error);
   }
@@ -1189,6 +1313,7 @@ foundation::Result<LoadedProject> load_project(
         {},
         {},
         {},
+        {},
     };
     for (const auto& encoded_path : manifest.at("transactions")) {
       const auto relative =
@@ -1225,6 +1350,7 @@ foundation::Result<LoadedProject> load_project(
                 bundle / relative));
       }
       const auto& meta = command_meta(command.value());
+      loaded.commands.emplace(meta.command_id, command.value());
       loaded.receipts.emplace(
           meta.command_id,
           domain::CommandReceipt{revision, applied.value().event});
@@ -1649,7 +1775,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::filesystem::path& bundle,
     LoadedProject loaded,
     const domain::Command& command,
-    const std::optional<ArtifactStage>& artifact_stage) {
+    const std::optional<ArtifactStage>& artifact_stage,
+    domain::Command* persisted_identity) {
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -1661,6 +1788,27 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
 
   const bool replay_candidate =
       loaded.receipts.contains(meta.command_id);
+  if (replay_candidate) {
+    const auto original = loaded.commands.find(meta.command_id);
+    if (original == loaded.commands.end()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          invalid_project(
+              "persisted command identity is missing",
+              bundle / "manifest.json"));
+    }
+    if (command_json(original->second) != command_json(command)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "command id is already bound to a different command identity",
+          });
+    }
+    if (persisted_identity != nullptr) {
+      *persisted_identity = original->second;
+    }
+  } else if (persisted_identity != nullptr) {
+    *persisted_identity = command;
+  }
   bool journal_matches = false;
   std::optional<foundation::TakeId> cleanup_take_id;
   if (!replay_candidate) {
@@ -2025,57 +2173,175 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
       std::move(loaded.value().state));
 }
 
-foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     const std::filesystem::path& bundle,
     const domain::Command& command) {
   auto tree = validate_managed_bundle_tree(bundle);
   if (!tree.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    return foundation::Result<CommandExecution>::failure(tree.error());
   }
   auto lock_result = acquire_lock(bundle);
   if (!lock_result.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<CommandExecution>::failure(
         lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
   tree = validate_managed_bundle_tree(bundle);
   if (!tree.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    return foundation::Result<CommandExecution>::failure(tree.error());
   }
   auto loaded = load_project(bundle);
   if (!loaded.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<CommandExecution>::failure(
         loaded.error());
   }
   const auto recovered = recover_uncommitted(bundle, loaded.value());
   if (!recovered.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<CommandExecution>::failure(
         recovered.error());
   }
-  return commit_loaded(
-      bundle, std::move(loaded.value()), command, std::nullopt);
+  auto persisted_identity = command;
+  auto outcome = commit_loaded(
+      bundle,
+      std::move(loaded.value()),
+      command,
+      std::nullopt,
+      &persisted_identity);
+  if (!outcome.has_value()) {
+    return foundation::Result<CommandExecution>::failure(
+        outcome.error());
+  }
+  return foundation::Result<CommandExecution>::success(
+      CommandExecution{
+          std::move(persisted_identity),
+          std::move(outcome.value()),
+      });
 }
 
-foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::Command& command) {
+  auto executed = execute_with_identity(bundle, command);
+  if (!executed.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        executed.error());
+  }
+  return foundation::Result<domain::AppliedCommand>::success(
+      std::move(executed.value().outcome));
+}
+
+foundation::Result<std::optional<RecordTakeReplay>>
+ProjectStore::replay_record_take(
+    const std::filesystem::path& bundle,
+    const RecordTakeReplayIdentity& identity) {
+  if (!domain::is_valid_uuid(identity.meta.command_id.value())) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id is not a safe file name",
+        });
+  }
+  auto tree = validate_managed_bundle_tree(bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        tree.error());
+  }
+  auto lock_result = acquire_lock(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        tree.error());
+  }
+  auto loaded = load_project(bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        loaded.error());
+  }
+  const auto recovered = recover_uncommitted(bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        recovered.error());
+  }
+  const auto original =
+      loaded.value().commands.find(identity.meta.command_id);
+  if (original == loaded.value().commands.end()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::success(
+        std::nullopt);
+  }
+  const auto* record =
+      std::get_if<domain::RecordTake>(&original->second);
+  if (record == nullptr) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id belongs to a different command type",
+        });
+  }
+  if (record->meta.expected_revision != identity.meta.expected_revision ||
+      record->take.id != identity.take_id ||
+      record->pattern != identity.pattern) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "take commit replay identity does not match persisted RecordTake",
+        });
+  }
+  const auto receipt =
+      loaded.value().receipts.find(identity.meta.command_id);
+  if (receipt == loaded.value().receipts.end()) {
+    return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+        invalid_project(
+            "persisted RecordTake receipt is missing",
+            bundle / "manifest.json"));
+  }
+  const auto cleanup =
+      loaded.value().cleanup_obligations.find(identity.meta.command_id);
+  if (cleanup != loaded.value().cleanup_obligations.end()) {
+    const auto completed =
+        complete_journal_cleanup(bundle, cleanup->second);
+    if (!completed.has_value()) {
+      return foundation::Result<std::optional<RecordTakeReplay>>::failure(
+          completed.error());
+    }
+  }
+  return foundation::Result<std::optional<RecordTakeReplay>>::success(
+      RecordTakeReplay{
+          *record,
+          domain::AppliedCommand{
+              std::move(loaded.value().state),
+              receipt->second.event,
+              true,
+          },
+      });
+}
+
+foundation::Result<ImportArtifactExecution>
+ProjectStore::import_artifact_with_identity(
     const std::filesystem::path& bundle,
     const ImportArtifactRequest& request) {
   if (!domain::is_valid_uuid(request.meta.command_id.value())) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         Error{
             ErrorCode::invalid_argument,
             "command id must be a lowercase UUID",
         });
   }
   if (!domain::is_valid_uuid(request.asset_id.value())) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         Error{
             ErrorCode::invalid_argument,
             "asset id must be a lowercase UUID",
         });
   }
   if (request.media_type.empty()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         Error{
             ErrorCode::invalid_argument,
             "artifact media type must not be empty",
@@ -2083,51 +2349,94 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
   }
   auto tree = validate_managed_bundle_tree(bundle);
   if (!tree.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    return foundation::Result<ImportArtifactExecution>::failure(
+        tree.error());
   }
   auto lock_result = acquire_lock(bundle);
   if (!lock_result.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
   tree = validate_managed_bundle_tree(bundle);
   if (!tree.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    return foundation::Result<ImportArtifactExecution>::failure(
+        tree.error());
   }
   auto loaded = load_project(bundle);
   if (!loaded.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         loaded.error());
   }
   const auto recovered = recover_uncommitted(bundle, loaded.value());
   if (!recovered.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         recovered.error());
   }
 
-  const auto receipt =
-      loaded.value().receipts.find(request.meta.command_id);
-  if (receipt != loaded.value().receipts.end()) {
-    return foundation::Result<domain::AppliedCommand>::success(
-        domain::AppliedCommand{
-            loaded.value().state,
-            receipt->second.event,
-            true,
+  const auto original =
+      loaded.value().commands.find(request.meta.command_id);
+  if (original != loaded.value().commands.end()) {
+    const auto* import =
+        std::get_if<domain::ImportAsset>(&original->second);
+    if (import == nullptr) {
+      return foundation::Result<ImportArtifactExecution>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "command id belongs to a different command type",
+          });
+    }
+    if (import->meta.expected_revision !=
+            request.meta.expected_revision ||
+        import->asset.id != request.asset_id ||
+        import->asset.artifact.media_type != request.media_type) {
+      return foundation::Result<ImportArtifactExecution>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "asset import replay identity does not match persisted ImportAsset",
+          });
+    }
+    const auto described = foundation::describe_artifact(
+        request.source, request.media_type);
+    if (described.has_value() &&
+        described.value() != import->asset.artifact) {
+      return foundation::Result<ImportArtifactExecution>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "asset import source bytes do not match persisted ImportAsset",
+          });
+    }
+    const auto receipt =
+        loaded.value().receipts.find(request.meta.command_id);
+    if (receipt == loaded.value().receipts.end()) {
+      return foundation::Result<ImportArtifactExecution>::failure(
+          invalid_project(
+              "persisted ImportAsset receipt is missing",
+              bundle / "manifest.json"));
+    }
+    return foundation::Result<ImportArtifactExecution>::success(
+        ImportArtifactExecution{
+            *import,
+            domain::AppliedCommand{
+                std::move(loaded.value().state),
+                receipt->second.event,
+                true,
+            },
         });
   }
   const auto described =
       foundation::describe_artifact(request.source, request.media_type);
   if (!described.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
+    return foundation::Result<ImportArtifactExecution>::failure(
         described.error());
   }
   const domain::Command command = domain::ImportAsset{
       request.meta,
       domain::Asset{request.asset_id, described.value()},
   };
-  return commit_loaded(
+  auto persisted_identity = command;
+  auto outcome = commit_loaded(
       bundle,
       std::move(loaded.value()),
       command,
@@ -2135,7 +2444,214 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
           request.source,
           described.value(),
           request.meta.command_id,
+      },
+      &persisted_identity);
+  if (!outcome.has_value()) {
+    return foundation::Result<ImportArtifactExecution>::failure(
+        outcome.error());
+  }
+  const auto* import =
+      std::get_if<domain::ImportAsset>(&persisted_identity);
+  if (import == nullptr) {
+    return foundation::Result<ImportArtifactExecution>::failure(
+        invalid_project(
+            "persisted import outcome has the wrong command type",
+            bundle / "manifest.json"));
+  }
+  return foundation::Result<ImportArtifactExecution>::success(
+      ImportArtifactExecution{
+          *import,
+          std::move(outcome.value()),
       });
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
+    const std::filesystem::path& bundle,
+    const ImportArtifactRequest& request) {
+  auto imported = import_artifact_with_identity(bundle, request);
+  if (!imported.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        imported.error());
+  }
+  return foundation::Result<domain::AppliedCommand>::success(
+      std::move(imported.value().outcome));
+}
+
+foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(
+    const std::filesystem::path& bundle,
+    const foundation::ArtifactRef& artifact) const {
+  if (!valid_sha256(artifact.sha256) || artifact.media_type.empty()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact reference is invalid",
+        });
+  }
+  if (artifact.byte_length > kMaximumArtifactBytes) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact exceeds the Project read limit",
+            {{"maximum_byte_length", kMaximumArtifactBytes}},
+        });
+  }
+
+  if (bundle.extension() != ".lmdj") {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        invalid_project("project bundle extension is invalid", bundle));
+  }
+  auto bundle_result = open_directory_without_symlinks(bundle);
+  if (!bundle_result.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        bundle_result.error());
+  }
+  auto bundle_descriptor = std::move(bundle_result.value());
+  auto lock_result = acquire_lock_at(bundle_descriptor.get(), bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+
+  const int manifest_value = ::openat(
+      bundle_descriptor.get(),
+      "manifest.json",
+      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (manifest_value < 0) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        invalid_project(
+            "project manifest could not be opened through bundle handle",
+            bundle / "manifest.json"));
+  }
+  OwnedDescriptor manifest(manifest_value);
+  struct stat manifest_metadata {};
+  if (::fstat(manifest.get(), &manifest_metadata) != 0 ||
+      !S_ISREG(manifest_metadata.st_mode)) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        invalid_project(
+            "project manifest is not a regular file",
+            bundle / "manifest.json"));
+  }
+
+  const int assets_value = ::openat(
+      bundle_descriptor.get(),
+      "assets",
+      O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+  if (assets_value < 0) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        invalid_project(
+            "project assets directory could not be opened through bundle handle",
+            bundle / "assets"));
+  }
+  OwnedDescriptor assets(assets_value);
+
+  const auto path =
+      bundle / "assets" / (artifact.sha256 + ".wav");
+  const auto filename = artifact.sha256 + ".wav";
+  const int artifact_value = ::openat(
+      assets.get(),
+      filename.c_str(),
+      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
+  if (artifact_value < 0) {
+    if (errno == ENOENT) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          Error{
+              ErrorCode::not_found,
+              "project artifact does not exist",
+              {{"path", path.generic_string()}},
+          });
+    }
+    if (errno == ELOOP) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          invalid_project(
+              "project artifact must not be a symbolic link",
+              path));
+    }
+    return foundation::Result<std::vector<std::byte>>::failure(
+        io_error("project artifact could not be opened", path));
+  }
+  OwnedDescriptor descriptor(artifact_value);
+
+  struct stat before {};
+  if (::fstat(descriptor.get(), &before) != 0) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        io_error("project artifact metadata could not be read", path));
+  }
+  if (!S_ISREG(before.st_mode) || before.st_size < 0 ||
+      static_cast<std::uint64_t>(before.st_size) != artifact.byte_length) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact byte length does not match its reference",
+            {{"path", path.generic_string()}},
+        });
+  }
+
+  std::vector<std::byte> bytes(
+      static_cast<std::size_t>(artifact.byte_length));
+  std::size_t offset = 0;
+  while (offset < bytes.size()) {
+    const auto count = ::read(
+        descriptor.get(),
+        bytes.data() + offset,
+        bytes.size() - offset);
+    if (count < 0) {
+      if (errno == EINTR) {
+        continue;
+      }
+      return foundation::Result<std::vector<std::byte>>::failure(
+          io_error(
+              "project artifact could not be read completely",
+              path));
+    }
+    if (count == 0) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          Error{
+              ErrorCode::cook_failed,
+              "project artifact ended before its declared byte length",
+              {{"path", path.generic_string()}},
+          });
+    }
+    offset += static_cast<std::size_t>(count);
+  }
+
+  struct stat after {};
+  if (::fstat(descriptor.get(), &after) != 0) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        io_error(
+            "project artifact metadata could not be verified after reading",
+            path));
+  }
+  if (!S_ISREG(after.st_mode) || after.st_dev != before.st_dev ||
+      after.st_ino != before.st_ino || after.st_size != before.st_size ||
+      after.st_size < 0 ||
+      static_cast<std::uint64_t>(after.st_size) != artifact.byte_length) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact changed while it was being read",
+            {{"path", path.generic_string()}},
+        });
+  }
+
+  picosha2::hash256_one_by_one hasher;
+  if (!bytes.empty()) {
+    const auto* hash_begin =
+        reinterpret_cast<const unsigned char*>(bytes.data());
+    hasher.process(hash_begin, hash_begin + bytes.size());
+  }
+  hasher.finish();
+  if (picosha2::get_hash_hex_string(hasher) != artifact.sha256) {
+    return foundation::Result<std::vector<std::byte>>::failure(
+        Error{
+            ErrorCode::cook_failed,
+            "project artifact hash does not match its reference",
+            {{"path", path.generic_string()}},
+        });
+  }
+  return foundation::Result<std::vector<std::byte>>::success(
+      std::move(bytes));
 }
 
 }  // namespace lmdj::project_io

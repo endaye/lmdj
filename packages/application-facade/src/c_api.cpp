@@ -1,0 +1,323 @@
+#include <lmdj/facade/c_api.h>
+
+#include <algorithm>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <filesystem>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <unordered_map>
+#include <utility>
+#include <vector>
+
+#include <nlohmann/json.hpp>
+
+#include <lmdj/facade/application.hpp>
+#include <lmdj/foundation/error.hpp>
+
+struct lmdj_engine {
+  std::uint64_t sequence;
+};
+
+namespace {
+
+constexpr std::size_t kMaximumConfigBytes = 64U * 1024U;
+constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
+
+struct EngineState {
+  explicit EngineState(std::shared_ptr<lmdj::facade::Application> value)
+      : application(std::move(value)) {}
+
+  std::mutex serial;
+  std::shared_ptr<lmdj::facade::Application> application;
+};
+
+std::mutex engines_mutex;
+std::unordered_map<lmdj_engine*, std::shared_ptr<EngineState>> live_engines;
+std::vector<std::unique_ptr<lmdj_engine>> tombstone_shells;
+std::uint64_t engine_sequence = 0;
+
+bool valid_utf8(std::string_view value) {
+  std::size_t offset = 0;
+  while (offset < value.size()) {
+    const auto first = static_cast<unsigned char>(value[offset]);
+    if (first <= 0x7fU) {
+      ++offset;
+      continue;
+    }
+    std::size_t length = 0;
+    std::uint32_t code_point = 0;
+    if (first >= 0xc2U && first <= 0xdfU) {
+      length = 2;
+      code_point = first & 0x1fU;
+    } else if (first >= 0xe0U && first <= 0xefU) {
+      length = 3;
+      code_point = first & 0x0fU;
+    } else if (first >= 0xf0U && first <= 0xf4U) {
+      length = 4;
+      code_point = first & 0x07U;
+    } else {
+      return false;
+    }
+    if (offset + length > value.size()) {
+      return false;
+    }
+    for (std::size_t index = 1; index < length; ++index) {
+      const auto byte =
+          static_cast<unsigned char>(value[offset + index]);
+      if ((byte & 0xc0U) != 0x80U) {
+        return false;
+      }
+      code_point = (code_point << 6U) | (byte & 0x3fU);
+    }
+    if ((length == 3 && code_point < 0x800U) ||
+        (length == 4 && code_point < 0x10000U) ||
+        code_point > 0x10ffffU ||
+        (code_point >= 0xd800U && code_point <= 0xdfffU)) {
+      return false;
+    }
+    offset += length;
+  }
+  return true;
+}
+
+std::optional<std::string_view> bounded_c_string(
+    const char* value,
+    std::size_t maximum) {
+  if (value == nullptr) {
+    return std::nullopt;
+  }
+  const auto length = ::strnlen(value, maximum + 1U);
+  if (length > maximum) {
+    return std::nullopt;
+  }
+  return std::string_view(value, length);
+}
+
+nlohmann::json internal_error_envelope() {
+  return {
+      {"ok", false},
+      {"error",
+       {
+           {"code", "INTERNAL_ERROR"},
+           {"message", "unexpected C ABI failure"},
+           {"details", nlohmann::json::object()},
+       }},
+  };
+}
+
+int copy_string(const std::string& value, char** output) {
+  auto* allocation =
+      static_cast<char*>(std::malloc(value.size() + 1U));
+  if (allocation == nullptr) {
+    return LMDJ_STATUS_ALLOCATION_FAILURE;
+  }
+  std::memcpy(allocation, value.data(), value.size());
+  allocation[value.size()] = '\0';
+  *output = allocation;
+  return LMDJ_STATUS_OK;
+}
+
+struct EngineGuard {
+  std::shared_ptr<EngineState> state;
+  std::unique_lock<std::mutex> serial;
+};
+
+std::optional<EngineGuard> acquire_engine(lmdj_engine* engine) {
+  std::shared_ptr<EngineState> state;
+  {
+    std::lock_guard registry_lock(engines_mutex);
+    const auto found = live_engines.find(engine);
+    if (found == live_engines.end()) {
+      return std::nullopt;
+    }
+    state = found->second;
+  }
+  std::unique_lock serial_lock(state->serial);
+  if (!state->application) {
+    return std::nullopt;
+  }
+  return EngineGuard{
+      std::move(state),
+      std::move(serial_lock),
+  };
+}
+
+template <typename Invoke>
+int invoke_application(
+    lmdj_engine* engine,
+    const char* request_json,
+    char** out_response_json,
+    Invoke invoke) noexcept {
+  if (out_response_json != nullptr) {
+    *out_response_json = nullptr;
+  }
+  if (engine == nullptr || request_json == nullptr ||
+      out_response_json == nullptr) {
+    return LMDJ_STATUS_INVALID_ARGUMENT;
+  }
+  try {
+    auto guard = acquire_engine(engine);
+    if (!guard.has_value()) {
+      return LMDJ_STATUS_INVALID_HANDLE;
+    }
+    const auto bytes =
+        bounded_c_string(request_json, kMaximumRequestBytes);
+    if (!bytes.has_value() || !valid_utf8(*bytes)) {
+      return LMDJ_STATUS_INVALID_ARGUMENT;
+    }
+    auto request = nlohmann::json::parse(
+        bytes->begin(), bytes->end(), nullptr, false);
+    if (request.is_discarded() || !request.is_object()) {
+      return LMDJ_STATUS_INVALID_ARGUMENT;
+    }
+    nlohmann::json response;
+    try {
+      response = invoke(*guard->state->application, request);
+    } catch (...) {
+      response = internal_error_envelope();
+    }
+    return copy_string(response.dump(), out_response_json);
+  } catch (const std::bad_alloc&) {
+    return LMDJ_STATUS_ALLOCATION_FAILURE;
+  } catch (...) {
+    try {
+      return copy_string(
+          internal_error_envelope().dump(), out_response_json);
+    } catch (...) {
+      return LMDJ_STATUS_ALLOCATION_FAILURE;
+    }
+  }
+}
+
+}  // namespace
+
+extern "C" {
+
+int lmdj_engine_create(
+    const char* config_json,
+    lmdj_engine** out_engine,
+    char** out_error_json) {
+  if (out_engine != nullptr) {
+    *out_engine = nullptr;
+  }
+  if (out_error_json != nullptr) {
+    *out_error_json = nullptr;
+  }
+  if (config_json == nullptr || out_engine == nullptr ||
+      out_error_json == nullptr) {
+    return LMDJ_STATUS_INVALID_ARGUMENT;
+  }
+  try {
+    const auto bytes =
+        bounded_c_string(config_json, kMaximumConfigBytes);
+    if (!bytes.has_value() || !valid_utf8(*bytes)) {
+      return LMDJ_STATUS_INVALID_ARGUMENT;
+    }
+    auto config = nlohmann::json::parse(
+        bytes->begin(), bytes->end(), nullptr, false);
+    if (config.is_discarded() || !config.is_object() ||
+        config.size() != 1 ||
+        !config.contains("workspace_root") ||
+        !config.at("workspace_root").is_string()) {
+      return LMDJ_STATUS_INVALID_ARGUMENT;
+    }
+    const auto workspace_value =
+        config.at("workspace_root").get<std::string>();
+    if (!valid_utf8(workspace_value) ||
+        workspace_value.find('\0') != std::string::npos) {
+      return LMDJ_STATUS_INVALID_ARGUMENT;
+    }
+    const auto workspace_root =
+        std::filesystem::path(workspace_value);
+    if (!workspace_root.is_absolute() ||
+        workspace_root.lexically_normal() != workspace_root) {
+      return LMDJ_STATUS_INVALID_ARGUMENT;
+    }
+    auto application =
+        std::make_shared<lmdj::facade::Application>(
+            lmdj::facade::ApplicationConfig{
+                workspace_root,
+                std::make_shared<lmdj::provider::Registry>(),
+                lmdj::provider::ProviderPolicy{},
+                {},
+            });
+    auto state = std::make_shared<EngineState>(std::move(application));
+    auto shell = std::make_unique<lmdj_engine>();
+    std::lock_guard lock(engines_mutex);
+    shell->sequence = ++engine_sequence;
+    auto* handle = shell.get();
+    tombstone_shells.push_back(std::move(shell));
+    live_engines.emplace(handle, std::move(state));
+    *out_engine = handle;
+    return LMDJ_STATUS_OK;
+  } catch (const std::bad_alloc&) {
+    return LMDJ_STATUS_ALLOCATION_FAILURE;
+  } catch (...) {
+    try {
+      return copy_string(
+          internal_error_envelope().dump(), out_error_json);
+    } catch (...) {
+      return LMDJ_STATUS_ALLOCATION_FAILURE;
+    }
+  }
+}
+
+int lmdj_engine_command(
+    lmdj_engine* engine,
+    const char* request_json,
+    char** out_response_json) {
+  return invoke_application(
+      engine,
+      request_json,
+      out_response_json,
+      [](lmdj::facade::Application& application,
+         const nlohmann::json& request) {
+        return application.command(request);
+      });
+}
+
+int lmdj_engine_query(
+    lmdj_engine* engine,
+    const char* request_json,
+    char** out_response_json) {
+  return invoke_application(
+      engine,
+      request_json,
+      out_response_json,
+      [](lmdj::facade::Application& application,
+         const nlohmann::json& request) {
+        return application.query(request);
+      });
+}
+
+void lmdj_string_free(char* value) {
+  std::free(value);
+}
+
+void lmdj_engine_free(lmdj_engine* engine) {
+  if (engine == nullptr) {
+    return;
+  }
+  try {
+    std::shared_ptr<EngineState> state;
+    {
+      std::lock_guard registry_lock(engines_mutex);
+      const auto found = live_engines.find(engine);
+      if (found == live_engines.end()) {
+        return;
+      }
+      state = found->second;
+      live_engines.erase(found);
+    }
+    std::unique_lock serial_lock(state->serial);
+    state->application.reset();
+  } catch (...) {
+  }
+}
+
+}  // extern "C"

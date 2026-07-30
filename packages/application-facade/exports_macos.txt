@@ -1,0 +1,5 @@
+_lmdj_engine_create
+_lmdj_engine_command
+_lmdj_engine_query
+_lmdj_string_free
+_lmdj_engine_free
