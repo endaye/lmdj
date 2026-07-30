@@ -21,15 +21,26 @@ class StrongId {
   std::string value_;
 };
 
-template <typename Tag>
-void to_json(nlohmann::json& output, const StrongId<Tag>& id) {
-  output = id.value();
-}
+}  // namespace lmdj::foundation
+
+namespace nlohmann {
 
 template <typename Tag>
-void from_json(const nlohmann::json& input, StrongId<Tag>& id) {
-  id = StrongId<Tag>(input.get<std::string>());
-}
+struct adl_serializer<lmdj::foundation::StrongId<Tag>> {
+  using Id = lmdj::foundation::StrongId<Tag>;
+
+  static void to_json(json& output, const Id& id) {
+    output = id.value();
+  }
+
+  static Id from_json(const json& input) {
+    return Id(input.get<std::string>());
+  }
+};
+
+}  // namespace nlohmann
+
+namespace lmdj::foundation {
 
 struct ProjectIdTag;
 struct CommandIdTag;

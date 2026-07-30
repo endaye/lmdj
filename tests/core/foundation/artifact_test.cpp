@@ -164,6 +164,20 @@ void test_ids_are_strong_types() {
       "00000000-0000-4000-8000-000000000001");
 }
 
+void test_ids_round_trip_through_json() {
+  const lmdj::foundation::ProjectId original{
+      "00000000-0000-4000-8000-000000000001"};
+
+  const nlohmann::json encoded = original;
+  LMDJ_CHECK(
+      encoded ==
+      "00000000-0000-4000-8000-000000000001");
+
+  const auto decoded =
+      encoded.get<lmdj::foundation::ProjectId>();
+  LMDJ_CHECK(decoded == original);
+}
+
 }  // namespace
 
 int main() {
@@ -175,6 +189,7 @@ int main() {
     test_public_error_codes_have_stable_names();
     test_void_result_preserves_typed_failure();
     test_ids_are_strong_types();
+    test_ids_round_trip_through_json();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
