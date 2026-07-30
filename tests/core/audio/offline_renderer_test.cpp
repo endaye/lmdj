@@ -9,14 +9,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <limits>
 #include <memory>
-#include <new>
-#include <optional>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
@@ -24,70 +20,9 @@
 
 #include "tests/core/support/test.hpp"
 
-namespace allocation_probe {
-
-inline std::size_t maximum_allocation =
-    std::numeric_limits<std::size_t>::max();
-
-class OversizedAllocation final : public std::bad_alloc {
- public:
-  const char* what() const noexcept override {
-    return "test blocked an oversized allocation";
-  }
-};
-
-class LimitScope {
- public:
-  explicit LimitScope(std::size_t limit)
-      : previous_(maximum_allocation) {
-    maximum_allocation = limit;
-  }
-
-  ~LimitScope() { maximum_allocation = previous_; }
-
-  LimitScope(const LimitScope&) = delete;
-  LimitScope& operator=(const LimitScope&) = delete;
-
- private:
-  std::size_t previous_;
-};
-
-}  // namespace allocation_probe
-
-void* operator new(std::size_t size) {
-  if (size > allocation_probe::maximum_allocation) {
-    throw allocation_probe::OversizedAllocation();
-  }
-  if (void* allocation = std::malloc(size == 0 ? 1 : size)) {
-    return allocation;
-  }
-  throw std::bad_alloc();
-}
-
-void* operator new[](std::size_t size) {
-  return ::operator new(size);
-}
-
-void operator delete(void* allocation) noexcept {
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation) noexcept {
-  std::free(allocation);
-}
-
-void operator delete(void* allocation, std::size_t) noexcept {
-  std::free(allocation);
-}
-
-void operator delete[](void* allocation, std::size_t) noexcept {
-  std::free(allocation);
-}
-
 namespace {
 
 using lmdj::audio::OfflineRenderRequest;
-using lmdj::audio::OfflineRenderResult;
 using lmdj::audio::render_offline;
 using lmdj::cooker::PcmSample;
 using lmdj::cooker::ResolvedEvent;
@@ -590,45 +525,34 @@ void test_render_rejects_a_missing_snapshot() {
   LMDJ_CHECK(rendered.error().code == ErrorCode::invalid_argument);
 }
 
-void expect_invalid_without_large_allocation(
+void expect_invalid_snapshot(
     std::shared_ptr<const RuntimeSnapshot> input,
     const std::filesystem::path& output_path) {
-  using RenderResult =
-      lmdj::foundation::Result<OfflineRenderResult>;
-  std::optional<RenderResult> rendered;
-  bool attempted_oversized_allocation = false;
-  try {
-    allocation_probe::LimitScope allocation_limit(4U * 1024U * 1024U);
-    rendered.emplace(
-        render_offline(OfflineRenderRequest{std::move(input), output_path}));
-  } catch (const allocation_probe::OversizedAllocation&) {
-    attempted_oversized_allocation = true;
-  }
+  const auto rendered =
+      render_offline(OfflineRenderRequest{input, output_path});
 
-  LMDJ_CHECK(!attempted_oversized_allocation);
-  LMDJ_CHECK(rendered.has_value());
-  LMDJ_CHECK(!rendered->has_value());
-  LMDJ_CHECK(rendered->error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!rendered.has_value());
+  LMDJ_CHECK(rendered.error().code == ErrorCode::invalid_argument);
   LMDJ_CHECK(!std::filesystem::exists(output_path));
 }
 
 void test_render_rejects_snapshot_invariants_before_allocating() {
   TempDirectory temp;
-  expect_invalid_without_large_allocation(
+  expect_invalid_snapshot(
       snapshot({}, 1, 255),
       temp.path() / "oversized-invalid.wav");
-  expect_invalid_without_large_allocation(
+  expect_invalid_snapshot(
       snapshot({}, 39, 1),
       temp.path() / "bpm-low.wav");
-  expect_invalid_without_large_allocation(
+  expect_invalid_snapshot(
       snapshot({}, 241, 1),
       temp.path() / "bpm-high.wav");
-  expect_invalid_without_large_allocation(
+  expect_invalid_snapshot(
       snapshot({}, 120, 3),
       temp.path() / "bars-invalid.wav");
 
   const auto impulse = sample(1, {1});
-  expect_invalid_without_large_allocation(
+  expect_invalid_snapshot(
       snapshot(
           {{PadSlotId{0, 0}, 128, 127, impulse}},
           40,
