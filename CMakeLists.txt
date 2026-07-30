@@ -13,6 +13,8 @@ include(cmake/LmdjDependencies.cmake)
 include(cmake/LmdjWarnings.cmake)
 
 add_subdirectory(packages/foundation)
+add_subdirectory(packages/authoring-domain)
+add_subdirectory(packages/project-io)
 
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)

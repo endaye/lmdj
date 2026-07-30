@@ -1,0 +1,9 @@
+{
+  "contract": "lmdj.module.v1",
+  "module": "authoring-domain",
+  "version": "0.1.0",
+  "api_version": 1,
+  "dependencies": {
+    "foundation": "0.1.0"
+  }
+}
