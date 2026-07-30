@@ -22,8 +22,7 @@
       "const": "lmdj.capability.v1"
     },
     "capability_id": {
-      "type": "string",
-      "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+(\\.v[1-9][0-9]*)?$"
+      "$ref": "#/$defs/id"
     },
     "contract_version": {
       "$ref": "#/$defs/semver"
@@ -56,8 +55,7 @@
     "errors": {
       "type": "array",
       "items": {
-        "type": "string",
-        "pattern": "^[A-Z][A-Z0-9_]*$"
+        "$ref": "#/$defs/error_code"
       },
       "uniqueItems": true
     },
@@ -73,13 +71,23 @@
   },
   "additionalProperties": false,
   "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+(\\.v[1-9][0-9]*)?$"
+    },
     "semver": {
       "type": "string",
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
     },
     "artifact_port": {
       "type": "object",
-      "required": ["name", "media_types", "required"],
+      "required": [
+        "name",
+        "media_types",
+        "schema_id",
+        "schema_version",
+        "required"
+      ],
       "properties": {
         "name": {
           "type": "string",
@@ -94,11 +102,34 @@
           },
           "uniqueItems": true
         },
+        "schema_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/semver"
+        },
         "required": {
           "type": "boolean"
         }
       },
       "additionalProperties": false
+    },
+    "error_code": {
+      "enum": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "REVISION_CONFLICT",
+        "DUPLICATE_ID",
+        "UNSUPPORTED_AUDIO",
+        "MISSING_ASSET",
+        "INVALID_PROJECT",
+        "COOK_FAILED",
+        "PROVIDER_NOT_FOUND",
+        "PROVIDER_FAILED",
+        "PERMISSION_DENIED",
+        "IO_ERROR",
+        "INTERNAL_ERROR"
+      ]
     },
     "resources": {
       "type": "object",

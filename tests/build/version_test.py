@@ -1,11 +1,14 @@
+import hashlib
+import json
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
 
-from scripts.version import ProductVersion, load_version
+from scripts.version import ProductVersion, load_version, verify
 
 
 version = load_version("products/lmdj/version.json")
@@ -79,5 +82,102 @@ verified = subprocess.run(
 )
 assert verified.stdout == "version verification: PASS (1.0.1.0)\n"
 assert verified.stderr == ""
+
+
+def write_json(path: Path, value: dict) -> None:
+    path.write_text(
+        json.dumps(value, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+
+with tempfile.TemporaryDirectory() as temp_dir:
+    temp_root = Path(temp_dir)
+    assembly_path = temp_root / "assembly.json"
+    lock_path = temp_root / "assembly.lock.json"
+    assembly = {
+        "contract": "lmdj.assembly.v1",
+        "product": {"id": "lmdj", "version": "1.0.1.0"},
+        "modules": [{"id": "foundation", "version": "0.1.0"}],
+        "hosts": [{"id": "core-cli", "version": "0.1.0"}],
+        "providers": [
+            {
+                "id": "local.proof",
+                "version": "0.1.0",
+                "capabilities": [],
+                "model_identity": None,
+            }
+        ],
+        "contracts": [
+            {"id": "lmdj.project.v1", "version": "1.0.0"}
+        ],
+    }
+    write_json(assembly_path, assembly)
+    assembly_sha256 = hashlib.sha256(
+        assembly_path.read_bytes()
+    ).hexdigest()
+
+    def locked_component(component: dict) -> dict:
+        return {
+            "id": component["id"],
+            "version": component["version"],
+            "sha256": "a" * 64,
+        }
+
+    lock = {
+        "product": {"id": "lmdj", "version": "1.0.1.0"},
+        "assembly_sha256": assembly_sha256,
+        "modules": [
+            locked_component(component)
+            for component in assembly["modules"]
+        ],
+        "hosts": [
+            locked_component(component)
+            for component in assembly["hosts"]
+        ],
+        "providers": [
+            locked_component(component)
+            for component in assembly["providers"]
+        ],
+        "contracts": [
+            locked_component(component)
+            for component in assembly["contracts"]
+        ],
+    }
+    write_json(lock_path, lock)
+    assert verify(
+        "products/lmdj/version.json",
+        assembly_path=assembly_path,
+        lock_path=lock_path,
+    ) == version
+
+    for assembly_arg, lock_arg in (
+        (assembly_path, None),
+        (None, lock_path),
+    ):
+        try:
+            verify(
+                "products/lmdj/version.json",
+                assembly_path=assembly_arg,
+                lock_path=lock_arg,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("accepted an unpaired assembly/lock")
+
+    incomplete_lock = dict(lock)
+    incomplete_lock["modules"] = []
+    write_json(lock_path, incomplete_lock)
+    try:
+        verify(
+            "products/lmdj/version.json",
+            assembly_path=assembly_path,
+            lock_path=lock_path,
+        )
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("accepted an incomplete assembly lock")
 
 print("product version tests: PASS")

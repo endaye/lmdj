@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import dataclass
+import hashlib
 import json
 from pathlib import Path
 import re
@@ -98,8 +99,10 @@ def _git_revision() -> str:
 def _verify_assembly(
     version: ProductVersion,
     assembly_path: str | Path,
-) -> None:
+) -> dict[str, Any]:
     assembly = _load_object(assembly_path, "assembly")
+    if assembly.get("contract") != "lmdj.assembly.v1":
+        raise ValueError("unsupported assembly contract")
     product = assembly.get("product")
     if not isinstance(product, dict):
         raise ValueError("assembly.product must be an object")
@@ -109,10 +112,43 @@ def _verify_assembly(
         raise ValueError(
             "assembly product version does not match product version"
         )
+    for field in ("modules", "hosts", "providers", "contracts"):
+        _component_inventory(assembly, field, "assembly")
+    return assembly
+
+
+def _component_inventory(
+    document: dict[str, Any],
+    field: str,
+    label: str,
+) -> dict[str, str]:
+    components = document.get(field)
+    if not isinstance(components, list):
+        raise ValueError(f"{label} {field} must be an array")
+    inventory: dict[str, str] = {}
+    for component in components:
+        if not isinstance(component, dict):
+            raise ValueError(f"{label} {field} entries must be objects")
+        component_id = component.get("id")
+        component_version = component.get("version")
+        if not isinstance(component_id, str) or not component_id:
+            raise ValueError(f"{label} {field} entry requires an id")
+        if not isinstance(component_version, str) or not component_version:
+            raise ValueError(
+                f"{label} {field} entry requires a version"
+            )
+        if component_id in inventory:
+            raise ValueError(
+                f"{label} {field} contains duplicate id {component_id}"
+            )
+        inventory[component_id] = component_version
+    return inventory
 
 
 def _verify_lock(
     version: ProductVersion,
+    assembly_path: str | Path,
+    assembly: dict[str, Any],
     lock_path: str | Path,
 ) -> None:
     lock = _load_object(lock_path, "assembly lock")
@@ -126,10 +162,27 @@ def _verify_lock(
         r"[0-9a-f]{64}", assembly_sha256
     ):
         raise ValueError("assembly lock requires a lowercase assembly SHA-256")
-    for field in ("modules", "contracts", "providers"):
-        value = lock.get(field)
-        if not isinstance(value, (dict, list)):
-            raise ValueError(f"assembly lock {field} must be a collection")
+    actual_assembly_sha256 = hashlib.sha256(
+        Path(assembly_path).read_bytes()
+    ).hexdigest()
+    if assembly_sha256 != actual_assembly_sha256:
+        raise ValueError("assembly lock SHA-256 does not match assembly")
+
+    for field in ("modules", "hosts", "providers", "contracts"):
+        expected = _component_inventory(assembly, field, "assembly")
+        locked = _component_inventory(lock, field, "assembly lock")
+        if locked != expected:
+            raise ValueError(
+                f"assembly lock {field} inventory does not match assembly"
+            )
+        for component in lock[field]:
+            component_sha256 = component.get("sha256")
+            if not isinstance(component_sha256, str) or not re.fullmatch(
+                r"[0-9a-f]{64}", component_sha256
+            ):
+                raise ValueError(
+                    f"assembly lock {field} entry requires a SHA-256"
+                )
 
 
 def verify(
@@ -139,10 +192,11 @@ def verify(
 ) -> ProductVersion:
     version = load_version(version_file)
     _git_revision()
-    if assembly_path is not None:
-        _verify_assembly(version, assembly_path)
-    if lock_path is not None:
-        _verify_lock(version, lock_path)
+    if (assembly_path is None) != (lock_path is None):
+        raise ValueError("assembly and lock must be supplied together")
+    if assembly_path is not None and lock_path is not None:
+        assembly = _verify_assembly(version, assembly_path)
+        _verify_lock(version, assembly_path, assembly, lock_path)
     return version
 
 

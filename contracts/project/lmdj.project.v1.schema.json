@@ -411,6 +411,100 @@
           }
         }
       },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 1
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 15
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 2
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 31
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 4
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 63
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 8
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 127
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "additionalProperties": false
     }
   }

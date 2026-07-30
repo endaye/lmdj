@@ -110,6 +110,18 @@ assert set(capability["required"]) == {
     "policy",
 }
 assert capability["properties"]["contract"]["const"] == "lmdj.capability.v1"
+artifact_port = capability["$defs"]["artifact_port"]
+assert set(artifact_port["required"]) == {
+    "name",
+    "media_types",
+    "schema_id",
+    "schema_version",
+    "required",
+}
+assert artifact_port["properties"]["schema_id"]["$ref"] == "#/$defs/id"
+assert artifact_port["properties"]["schema_version"]["$ref"] == (
+    "#/$defs/semver"
+)
 
 assembly = schemas["assembly"]
 assert set(assembly["required"]) == {
@@ -127,7 +139,7 @@ for collection in ("modules", "hosts", "providers", "contracts"):
 
 error_schema = schemas["error"]
 assert error_schema["properties"]["contract"]["const"] == "lmdj.error.v1"
-assert set(error_schema["properties"]["code"]["enum"]) == {
+public_error_codes = {
     "INVALID_ARGUMENT",
     "NOT_FOUND",
     "REVISION_CONFLICT",
@@ -142,6 +154,19 @@ assert set(error_schema["properties"]["code"]["enum"]) == {
     "IO_ERROR",
     "INTERNAL_ERROR",
 }
+assert set(error_schema["properties"]["code"]["enum"]) == public_error_codes
+assert capability["properties"]["errors"]["items"]["$ref"] == (
+    "#/$defs/error_code"
+)
+assert set(capability["$defs"]["error_code"]["enum"]) == public_error_codes
+
+pattern = project["$defs"]["pattern"]
+step_limits = {}
+for rule in pattern["allOf"]:
+    bars = rule["if"]["properties"]["bars"]["const"]
+    step = rule["then"]["properties"]["events"]["items"]["properties"]["step"]
+    step_limits[bars] = step["maximum"]
+assert step_limits == {1: 15, 2: 31, 4: 63, 8: 127}
 
 module = schemas["module"]
 assert set(module["required"]) == {

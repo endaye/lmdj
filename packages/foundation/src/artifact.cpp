@@ -28,7 +28,30 @@ Result<ArtifactRef> describe_artifact(
     const std::filesystem::path& path,
     std::string media_type) {
   std::error_code status_error;
-  if (!std::filesystem::is_regular_file(path, status_error)) {
+  const bool is_regular_file =
+      std::filesystem::is_regular_file(path, status_error);
+  if (status_error) {
+    if (status_error ==
+        std::make_error_code(
+            std::errc::no_such_file_or_directory)) {
+      return Result<ArtifactRef>::failure(
+          Error{
+              ErrorCode::not_found,
+              "artifact path does not exist",
+              {{"path", path.generic_string()}},
+          });
+    }
+    return Result<ArtifactRef>::failure(
+        Error{
+            ErrorCode::io_error,
+            "artifact path could not be inspected",
+            {
+                {"path", path.generic_string()},
+                {"system_error", status_error.message()},
+            },
+        });
+  }
+  if (!is_regular_file) {
     return Result<ArtifactRef>::failure(
         Error{
             ErrorCode::not_found,

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <string>
 #include <type_traits>
+#include <utility>
 
 #include <nlohmann/json.hpp>
 
@@ -63,6 +64,26 @@ void test_describe_artifact_streams_sha256() {
   LMDJ_CHECK(described.value().byte_length == 3);
 }
 
+void test_describe_artifact_hashes_multiple_chunks() {
+  TempDirectory temp;
+  const auto artifact_path = temp.path() / "multi-chunk.bin";
+  std::string payload(64U * 1024U + 37U, '\0');
+  for (std::size_t index = 0; index < payload.size(); ++index) {
+    payload[index] = static_cast<char>(index % 251U);
+  }
+  writes_text(artifact_path, payload);
+
+  const auto described =
+      lmdj::foundation::describe_artifact(
+          artifact_path, "application/octet-stream");
+
+  LMDJ_CHECK(described.has_value());
+  LMDJ_CHECK(
+      described.value().sha256 ==
+      "f0da11e9bdac0f5804d9d10698fa4a9d16f1030180a4154cd82083e576b0b5ac");
+  LMDJ_CHECK(described.value().byte_length == payload.size());
+}
+
 void test_describe_artifact_rejects_non_files() {
   TempDirectory temp;
 
@@ -79,6 +100,20 @@ void test_describe_artifact_rejects_non_files() {
   LMDJ_CHECK(!directory.has_value());
   LMDJ_CHECK(
       directory.error().code == lmdj::foundation::ErrorCode::not_found);
+}
+
+void test_describe_artifact_reports_status_errors() {
+  TempDirectory temp;
+  const auto loop = temp.path() / "loop";
+  std::filesystem::create_symlink("loop", loop);
+
+  const auto result =
+      lmdj::foundation::describe_artifact(
+          loop, "application/octet-stream");
+
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(
+      result.error().code == lmdj::foundation::ErrorCode::io_error);
 }
 
 void test_canonical_json_recursively_sorts_keys() {
@@ -164,18 +199,25 @@ void test_ids_are_strong_types() {
       "00000000-0000-4000-8000-000000000001");
 }
 
-void test_ids_round_trip_through_json() {
-  const lmdj::foundation::ProjectId original{
-      "00000000-0000-4000-8000-000000000001"};
+template <typename Id>
+void check_id_json_round_trip(std::string value) {
+  const Id original{std::move(value)};
 
   const nlohmann::json encoded = original;
-  LMDJ_CHECK(
-      encoded ==
-      "00000000-0000-4000-8000-000000000001");
+  LMDJ_CHECK(encoded == original.value());
 
-  const auto decoded =
-      encoded.get<lmdj::foundation::ProjectId>();
+  const auto decoded = encoded.get<Id>();
   LMDJ_CHECK(decoded == original);
+}
+
+void test_ids_round_trip_through_json() {
+  check_id_json_round_trip<lmdj::foundation::ProjectId>("project-1");
+  check_id_json_round_trip<lmdj::foundation::CommandId>("command-1");
+  check_id_json_round_trip<lmdj::foundation::AssetId>("asset-1");
+  check_id_json_round_trip<lmdj::foundation::PatternId>("pattern-1");
+  check_id_json_round_trip<lmdj::foundation::TakeId>("take-1");
+  check_id_json_round_trip<lmdj::foundation::AttemptId>("attempt-1");
+  check_id_json_round_trip<lmdj::foundation::CandidateId>("candidate-1");
 }
 
 }  // namespace
@@ -183,7 +225,9 @@ void test_ids_round_trip_through_json() {
 int main() {
   try {
     test_describe_artifact_streams_sha256();
+    test_describe_artifact_hashes_multiple_chunks();
     test_describe_artifact_rejects_non_files();
+    test_describe_artifact_reports_status_errors();
     test_canonical_json_recursively_sorts_keys();
     test_artifact_ref_round_trips_through_json();
     test_public_error_codes_have_stable_names();
