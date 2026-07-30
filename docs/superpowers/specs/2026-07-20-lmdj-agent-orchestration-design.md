@@ -2,7 +2,12 @@
 
 日期：2026-07-20
 
-状态：待评审
+状态：已由
+[LMDJ Playable Beat Instrument 与新内核设计](./2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
+取代（2026-07-30）
+
+> 本文只保留为旧 `lmdj.patch.v1` 产品路线的历史设计记录。新产品不再以
+> `Patchify → patch.json` 为核心，也不继承本文的旧契约、部署和模块边界。
 
 首期范围：Idea → playable `Patch`
 

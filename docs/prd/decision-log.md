@@ -238,3 +238,37 @@
   仅属于此浏览器；这不是 Stage 2 Asset Library、账号级历史或跨设备同步。详细
   设计见
   [Stage 1「我的歌曲」与上传入口设计](../superpowers/specs/2026-07-27-stage1-my-songs-navigation-design.md)。
+
+## 2026-07-30
+
+### 已确认：LMDJ 重启为 64-Pad Playable Beat Instrument
+
+- 结论：产品核心是把任意声音或完整歌曲变成可演奏素材，由用户亲手录制 Beat，
+  并进入 Sequence、Perform、Export 和 Resample 闭环。AI 辅助分析、分轨、切片
+  和 Pattern Candidate，不替代用户演奏。
+- 原因：目标用户接近 Koala 用户但更偏新手，第一成功时刻应是三分钟内做出可演奏
+  Pads 并亲手录下 Beat，而不是等待 AI 生成成品歌曲。
+- 影响：Creator 使用 A–D 四个 16-Pad Bank，共 64 Pad；主结构固定为顶部全局
+  控制、中部状态化 Surface、底部 4×4 演奏面。详细设计见
+  [Playable Beat Instrument 与新内核设计](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)。
+
+### 已确认：新内核与 Patch / Materials 完全不兼容
+
+- 结论：`lmdj.patch.v1`、`lmdj.materials.v1` 和旧 Patchify 主链只保留为 Git
+  历史与研究素材。新内核采用独立的 Project、Runtime Snapshot、Capability I/O
+  和 Assembly Contract，不读取、不迁移、不提供旧契约 Adapter。
+- 原因：Project、实时 Runtime、Provider 和 Product Assembly 的生命周期不同，
+  继续扩展一份万能 JSON 会重新制造旧系统的耦合。
+- 影响：Authoring Domain 是唯一 Project Truth；Audio Runtime 只消费可丢弃的
+  Immutable Snapshot；UI、CLI、MCP 和测试 Host 统一通过 Application Facade。
+
+### 已确认：正式源码永久保持 Monorepo
+
+- 结论：模块可以由不同机器或 Agent 在独立目录、短分支和 Worktree 中平行开发，
+  最终由主 Agent 通过 Contract、PR、CI 和 Assembly Manifest 组装与调试。未来
+  可以独立发布 Package、SDK、Binary、Container 或 WASM，但不拆分正式源码仓库。
+- 原因：统一 Repo 可以保持契约、Fixture、版本、依赖和产品装配的一致性，同时
+  目录 Ownership 与 Worktree 已足以提供并行开发隔离。
+- 影响：主 Agent 是 Integration Owner，但同样不能直接修改 protected `main`；
+  Provider 或 Multi-Agent 只是满足 Capability Contract 的可替换实现，不能绕过
+  Command、Policy、Attempt 和事务边界修改 Project。
