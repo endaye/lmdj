@@ -27,6 +27,8 @@ add_subdirectory(packages/application-facade)
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+add_subdirectory(apps/core-cli)
+
 add_test(
   NAME build.active_tree
   COMMAND "${BASH_EXECUTABLE}" tests/build/test_active_tree.sh

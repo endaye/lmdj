@@ -1957,20 +1957,76 @@ git commit -m "feat(facade): expose unified application and c abi"
 - Modify: `products/lmdj/version.json`
 - Modify: `tests/build/version_test.py`
 - Modify: `CMakeLists.txt`
-- Modify: `scripts/core.sh`
 
 **Interfaces:**
 
 - Consumes only `application-facade`.
-- Outputs exactly one canonical JSON response to stdout.
-- Human diagnostics go to stderr; no color when stdout is not a terminal.
+- Uses exactly one of these position-sensitive five-token forms
+  (`argc == 6`, including the executable):
+
+  ```text
+  lmdj-core --workspace WORKSPACE command --request JSON
+  lmdj-core --workspace WORKSPACE query   --request JSON
+  lmdj-core --workspace WORKSPACE command --request-file FILE
+  lmdj-core --workspace WORKSPACE query   --request-file FILE
+  ```
+
+  Reordering, combined or duplicate flags, stdin, extra operands, and both
+  request sources are not supported.
+- A grammar-valid invocation writes exactly
+  `canonical_json(response) + "\n"` to stdout and nothing to stderr. Success
+  exits `0`; every structured Host or Facade failure exits `2`.
+- A grammar-invalid invocation writes no stdout, one plain usage diagnostic to
+  stderr, and exits `64`. Task 9 emits no ANSI color. A broken stdout exits
+  `2`.
+- `WORKSPACE` must be non-empty UTF-8, absolute, and lexically normalized. The
+  Host neither resolves it nor requires it to exist. Invalid workspace values
+  return `INVALID_ARGUMENT`.
+- Inline and file requests are bounded at 16,777,216 bytes before parsing.
+  On macOS/Linux, request files are opened once without blocking, validated as
+  regular through that same file descriptor, and read in bounded chunks.
+  `EINTR`, read failure, concurrent growth, and the 16 MiB + 1 sentinel are
+  handled without a fixed 16 MiB allocation. A non-POSIX build must use an
+  explicit unsupported-platform error path rather than a path-check/path-open
+  fallback. Missing, non-regular, unopenable, or failed file reads return
+  `IO_ERROR`; empty, oversized, invalid UTF-8, malformed JSON, and non-object
+  requests return `INVALID_ARGUMENT`.
+- Project, source, and output paths pass unchanged to Facade; the Host neither
+  parses a Project bundle nor requires Project containment in the Workspace.
+- Host exceptions never escape `main`. Unexpected construction, parsing,
+  serialization, or dispatch failures become a fixed `INTERNAL_ERROR`
+  envelope without exception text, with a predeclared ASCII fallback for the
+  final catch-all.
+- Dispatch depends only on the argv `command`/`query` token. The Host never
+  reads the request's `operation`.
 - `core-cli` starts at Module SemVer `0.1.0` with exact dependency
   `application-facade 0.1.0`.
+- It constructs an explicitly empty Provider Registry and does not link either
+  Proof Provider.
+- Version impact: Product Build advances from `1.0.4.0` to `1.0.5.0`;
+  `core-cli` is introduced at `0.1.0`; no existing Module, Provider, or
+  Contract version changes.
 
 - [ ] **Step 1: Advance the PR 5 Product Build**
 
-Set `products/lmdj/version.json` and `tests/build/version_test.py` to
-`1.0.5.0`, and declare `core-cli 0.1.0`.
+First update `tests/build/version_test.py` to require Product Build `1.0.5.0`
+and the real `apps/core-cli/module.json` to be exactly:
+
+```json
+{
+  "contract": "lmdj.module.v1",
+  "module": "core-cli",
+  "version": "0.1.0",
+  "api_version": 1,
+  "dependencies": {
+    "application-facade": "0.1.0"
+  }
+}
+```
+
+Run the test and observe failure against Product Build `1.0.4.0` and the
+missing real Host manifest. Then set `products/lmdj/version.json` to
+`1.0.5.0` and create the manifest.
 
 Run:
 
@@ -1984,24 +2040,50 @@ Expected: both report Product Build `1.0.5.0`.
 
 - [ ] **Step 2: Add failing black-box CLI tests**
 
-The CLI shape is:
+`cli_test.py` derives the repository root from `__file__`, resolves the
+supplied executable, uses only absolute fixture/workspace/Project/output
+paths, and invokes subprocesses with argv arrays and `shell=False`. Every
+grammar-valid helper additionally asserts one complete canonical JSON value
+plus LF on stdout and empty stderr. Every child process has an explicit
+timeout; timeout cleanup kills and reaps it. The registered `host.cli` CTest
+has an overall 60-second timeout.
 
-```text
-lmdj-core --workspace <dir> command --request '<json>'
-lmdj-core --workspace <dir> query --request '<json>'
-lmdj-core --workspace <dir> command --request-file <path>
-lmdj-core --workspace <dir> query --request-file <path>
-```
+Implement exactly nine fixtures:
 
-`cli_test.py` must run real subprocesses and assert:
+1. `usage_contract`: missing, unknown, reordered, duplicate, extra, and both
+   request-source forms return `64`, empty stdout, plain non-ANSI stderr.
+2. `workspace_contract`: relative/non-normalized Workspace returns canonical
+   `INVALID_ARGUMENT`/`2`; normalized absolute Workspace is accepted.
+3. `request_source_parity`: inline and file `provider.list` responses are
+   byte-identical and contain an empty Provider list.
+4. `request_validation`: empty, malformed, invalid UTF-8, non-object, and
+   16 MiB + 1 requests return `INVALID_ARGUMENT`/`2`; missing, directory, and
+   FIFO request files return `IO_ERROR`/`2` without blocking; a symlink that
+   resolves to a regular request file remains valid.
+5. `facade_routing_and_exit_mapping`: success returns `0`; unknown operation
+   and command/query mismatch preserve Facade `INVALID_ARGUMENT`/`2`.
+6. `separate_process_authoring`: create, import, assign, begin, each append,
+   commit, and inspect use separate processes; revisions are `0..5`; inspect
+   shows 64 Pads, two Assets, one Take, one Pattern, and four events; the
+   active Take journal is absent after commit.
+7. `fresh_process_replay`: replay after journal cleanup returns
+   `replayed:true`, original `committed_revision:5`, no active Take journal,
+   and no Project mutation.
+8. `fresh_process_snapshot_render_golden`: a new render process receives only
+   Project path, Pattern ID, and output path; no `snapshot_id`; output bytes
+   and SHA-256 equal committed Golden and manifest bytes do not change.
+9. `host_boundary_and_identity`: Product Build is `1.0.5.0`; CLI manifest is
+   exact; CLI links only `lmdj::application`; among `lmdj/...` headers
+   `main.cpp` includes only `lmdj/facade/application.hpp`; source contains no
+   `project_io`, managed bundle layout/recovery literals, or request-side
+   access to `operation`; CMake configure/generate emits read-only
+   `LINK_LIBRARIES` metadata reporting only the direct Application dependency;
+   CTest JSON reports the real executable and 60-second timeout. Do not pin
+   implementation spelling such as the argc
+   comparison or request-limit literal.
 
-- create → import → assign → begin/append/commit → inspect works across separate processes;
-- one CLI process runs the `snapshot.cook` Query, exits, and a new CLI process runs `render.offline` with `project_path` plus `pattern_id` and matches Golden Audio;
-- stdout parses as exactly one JSON value;
-- errors use the public error envelope and exit `2`;
-- successful operations exit `0`;
-- malformed CLI usage exits `64`;
-- CLI has no import of Project I/O and contains no bundle parsing code.
+Compare committed Golden files without regenerating them. The harness is
+path-portable, but Task 9 acceptance covers macOS/Linux CI only.
 
 - [ ] **Step 3: Observe the missing executable failure**
 
@@ -2025,6 +2107,15 @@ Expected: `FileNotFoundError` for `lmdj-core`.
 6. maps envelope success/failure to the defined exit codes.
 
 Task 9 tests core Project behavior with an empty Registry; Task 11 supplies the Product Assembly and proof Providers. The CLI does not inspect command names beyond selecting command versus query.
+
+Add `add_subdirectory(apps/core-cli)` after Application Facade. The target is
+`lmdj_core_cli`, has `OUTPUT_NAME lmdj-core`, links only
+`PRIVATE lmdj::application`, and uses repository warnings/sanitizers. Register
+`host.cli` in CTest with `${Python3_EXECUTABLE}` and
+`$<TARGET_FILE:lmdj_core_cli>`.
+
+Do not modify `scripts/core.sh`: its existing build/test commands already
+cover root targets and registered CTest tests.
 
 - [ ] **Step 5: Run CLI black-box tests**
 
@@ -2050,7 +2141,7 @@ git add \
   products/lmdj/version.json \
   tests/build/version_test.py \
   CMakeLists.txt \
-  scripts/core.sh
+  docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md
 git commit -m "feat(cli): add headless json host"
 ```
 
