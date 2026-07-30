@@ -20,6 +20,7 @@ source-materials.md  收外部输入和 demo 参考
 - [prd/source-materials.md](prd/source-materials.md)：素材索引。高嘉丰 PRD、demo 工具、外部参考都先放这里。
 - [prd/open-questions.md](prd/open-questions.md)：开放问题池。用于记录还没想清楚的产品、技术、内容和商业问题。
 - [prd/decision-log.md](prd/decision-log.md)：决策记录。只放已经确认的结论和原因。
+- [governance/version-management.md](governance/version-management.md)：Product Build、Release Channel、Tag、Module、Contract、Provider 与模型版本的唯一规范。
 - [lmdj-web-prototype-spec.md](lmdj-web-prototype-spec.md)：2026-07-02 收到的 V1 web prototype PRD 素材，当前仅作脑暴参考。
 
 ## 状态标签

@@ -50,16 +50,89 @@
 
 Do not accumulate all eleven Task commits into one final Pull Request. Use these six protected-main integration gates:
 
-| PR | Included Tasks | Squash result |
-| --- | --- | --- |
-| PR 1 — Build and Contracts | Tasks 1–2 | Active-tree reset, reproducible build, Foundation, schemas |
-| PR 2 — Project Truth | Tasks 3–4 | Authoring Domain, atomic Project I/O, Take recovery |
-| PR 3 — Derived Runtime | Tasks 5–6 | Cooker, PCM fixtures, deterministic offline render |
-| PR 4 — Extensibility Boundary | Tasks 7–8 | Provider SDK, Attempt isolation, Facade, C ABI |
-| PR 5 — Headless Hosts | Tasks 9–10 | CLI and MCP over the same Facade |
-| PR 6 — Product Proof | Task 11 | Assembly, cross-Host E2E, CI acceptance |
+| PR | Included Tasks | Squash result | Product Build / Channel |
+| --- | --- | --- | --- |
+| PR 1 — Build and Contracts | Tasks 1–2 | Active-tree reset, reproducible build, Foundation, schemas | `1.0.1.0` / `dev` |
+| PR 2 — Project Truth | Tasks 3–4 | Authoring Domain, atomic Project I/O, Take recovery | `1.0.2.0` / `dev` |
+| PR 3 — Derived Runtime | Tasks 5–6 | Cooker, PCM fixtures, deterministic offline render | `1.0.3.0` / `dev` |
+| PR 4 — Extensibility Boundary | Tasks 7–8 | Provider SDK, Attempt isolation, Facade, C ABI | `1.0.4.0` / `dev` |
+| PR 5 — Headless Hosts | Tasks 9–10 | CLI and MCP over the same Facade | `1.0.5.0` / `dev` |
+| PR 6 — Product Proof | Task 11 | Assembly, cross-Host E2E, CI acceptance | `1.0.6.0` / `dev` |
 
 Within a PR, preserve one local commit per Task for review. After that PR passes CI and review, squash-merge it, delete its short-lived branch, synchronize `main`, and branch the next PR from the merged head. An implementation worker stops at its PR boundary and returns evidence to the Integration Owner; it does not open one eleven-Task mega-PR.
+
+## Version Management
+
+Canonical policy: `docs/governance/version-management.md`.
+
+### Version domains affected
+
+| Domain | Start | M1 Proof target |
+| --- | --- | --- |
+| Plan stage | `lmdj-m1-plan.1` at `34236c062d5982d22701ad0482518a29bfaefa60` | immutable; later plan review uses `lmdj-m1-plan.2` |
+| Product Build | no runnable M1 Build | `1.0.6.0` / `dev` |
+| Core Modules | not created | each starts at `0.1.0` |
+| Contracts | not created | Contract ID `v1`, Schema version `1.0.0` |
+| Proof Providers | not created | each starts at `0.1.0` |
+| Proof model/rule identity | not created | immutable Artifact hash recorded by every Attempt |
+
+`M1` means only the Headless Core Proof defined in redesign spec §22. It is not
+SemVer Major 1 and does not imply a Stable user product.
+
+### Product Build rules
+
+- Product Builds use `MILESTONE.MINOR.BUILD.PATCH`.
+- This plan owns Build numbers `1` through `6`; abandoned numbers are not reused.
+- Branch candidates display the target Build plus `canary` and Git revision.
+- After a PR Gate is squash-merged to `main`, full CI and version conformance
+  pass, the Integration Owner creates the corresponding annotated
+  `lmdj-v1.0.<BUILD>.0` tag on the full merge SHA.
+- Product Build tags do not contain the Channel.
+- M1 cannot be promoted above `dev`; Beta requires the later first-user-value
+  milestone.
+- Tag creation does not authorize tag push, GitHub Release, Channel promotion,
+  publishing, deployment, or release verification.
+
+### Module, Contract and Provider rules
+
+- Every `module.json` declares its own SemVer and exact dependency versions.
+- Contract ID Major and full Schema SemVer are independent from Product Build.
+- Provider ID, Provider SemVer, Capability Contract and model/rule Artifact
+  identity are all recorded separately.
+- `products/lmdj/assembly.lock.json` locks the exact resolved versions and
+  hashes used by a Product Build.
+- Changing an internal module version does not mechanically change the Product
+  Build until a new Assembly is integrated.
+
+### Files and verification
+
+This plan creates and verifies:
+
+```text
+contracts/version/lmdj.product-version.v1.schema.json
+products/lmdj/version.json
+products/lmdj/assembly.lock.json
+scripts/version.py
+tests/build/version_test.py
+build/core/<preset>/build-manifest.json
+```
+
+Required gates:
+
+```bash
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json \
+  --assembly products/lmdj/assembly.json \
+  --lock products/lmdj/assembly.lock.json
+python3 tests/build/version_test.py
+version_tag="$(python3 scripts/version.py tag-name \
+  --version-file products/lmdj/version.json)"
+git rev-list -n 1 "$version_tag"
+git cat-file -t "$version_tag"
+```
+
+Rollback reuses the original immutable Product Build tag and Artifact hashes.
+It never moves the tag or creates a new version for identical bits.
 
 ## Accepted Proof Scaffolding and Recorded Debt (2026-07-30 architecture review)
 
@@ -160,9 +233,13 @@ The later full Provider Conformance Lab must extend this versioned error contrac
 - Create: `cmake/LmdjDependencies.cmake`
 - Create: `cmake/LmdjWarnings.cmake`
 - Create: `packages/foundation/CMakeLists.txt`
+- Create: `products/lmdj/version.json`
 - Create: `scripts/core.sh`
+- Create: `scripts/version.py`
 - Create: `scripts/verify-core-dependencies.sh`
 - Create: `tests/build/test_active_tree.sh`
+- Create: `tests/build/version_test.py`
+- Preserve: `docs/governance/version-management.md`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.gitignore`
 - Rewrite: `apps/README.md`
@@ -175,6 +252,7 @@ The later full Provider Conformance Lab must extend this versioned error contrac
 
 - Produces the root build/test entry point used by every later task.
 - Produces one active-source rule: formal code exists only under the new module layout.
+- Produces Product Build `1.0.1.0` identity and the version verification API used by all later PR gates.
 - Preserves `references/demos/` and all confirmed redesign documents.
 
 - [ ] **Step 1: Encode and run the immutable-dependency preflight**
@@ -254,6 +332,7 @@ done
 
 grep -Eq 'New Headless Core' "$repo_root/README.md"
 grep -Eq 'lmdj.patch.v1.*must not' "$repo_root/AGENTS.md"
+grep -Eq 'docs/governance/version-management.md' "$repo_root/AGENTS.md"
 cmp "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md"
 ```
 
@@ -278,6 +357,8 @@ New Headless Core is the only active product source.
 lmdj.patch.v1 and lmdj.materials.v1 must not be used by new code.
 Hosts use Application Facade; they must not parse Project bundles.
 Provider failure belongs to Attempt state, never Project Truth.
+docs/governance/version-management.md is the canonical version policy.
+Every implementation plan contains a Version Management section.
 ```
 
 Rewrite the three directory READMEs to match §13:
@@ -315,7 +396,7 @@ Create root `CMakeLists.txt`:
 
 ```cmake
 cmake_minimum_required(VERSION 3.24)
-project(lmdj_core VERSION 0.1.0 LANGUAGES CXX)
+project(lmdj_core LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -331,11 +412,151 @@ include(cmake/LmdjWarnings.cmake)
 add_subdirectory(packages/foundation)
 ```
 
-Create `packages/foundation/CMakeLists.txt` initially as an `INTERFACE` target so configure succeeds; Task 2 replaces it with the real library.
+Create `packages/foundation/CMakeLists.txt` initially as an `INTERFACE` target so configure succeeds; Task 2 replaces it with the real library. The root CMake Project intentionally has no Product version: `products/lmdj/version.json` owns Product Build identity, while each Module owns its own SemVer.
 
 `CMakePresets.json` must define `dev`, `release`, `test`, and `asan` presets under `build/core/<preset>`. `asan` enables AddressSanitizer and UndefinedBehaviorSanitizer on Clang/GCC.
 
-- [ ] **Step 6: Add one stable developer entry point**
+- [ ] **Step 6: Add failing Product Build version tests**
+
+Create `products/lmdj/version.json`:
+
+```json
+{
+  "contract": "lmdj.product-version.v1",
+  "product": "lmdj",
+  "milestone": 1,
+  "minor": 0,
+  "build": 1,
+  "patch": 0
+}
+```
+
+Create `tests/build/version_test.py` with these assertions:
+
+```python
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from scripts.version import ProductVersion, load_version
+
+version = load_version("products/lmdj/version.json")
+assert version == ProductVersion(1, 0, 1, 0)
+assert str(version) == "1.0.1.0"
+assert version.product_tag() == "lmdj-v1.0.1.0"
+assert version.display("dev", "a" * 40) == "1.0.1.0 · dev · gaaaaaaaa"
+
+for invalid in (
+    {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
+    {"milestone": 1, "minor": -1, "build": 1, "patch": 0},
+    {"milestone": 1, "minor": 0, "build": 0, "patch": 1},
+):
+    try:
+        ProductVersion(**invalid)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError(f"accepted invalid product version: {invalid}")
+```
+
+- [ ] **Step 7: Observe the missing version module failure**
+
+Run:
+
+```bash
+python3 tests/build/version_test.py
+```
+
+Expected: import failure because `scripts/version.py` does not exist.
+
+- [ ] **Step 8: Implement Product Build parsing and verification**
+
+Create `scripts/version.py` around this exact public API:
+
+```python
+from dataclasses import dataclass
+from pathlib import Path
+import argparse
+import json
+import re
+import subprocess
+
+
+@dataclass(frozen=True, order=True)
+class ProductVersion:
+    milestone: int
+    minor: int
+    build: int
+    patch: int
+
+    def __post_init__(self) -> None:
+        if self.milestone < 1:
+            raise ValueError("milestone must be >= 1")
+        if min(self.minor, self.build, self.patch) < 0:
+            raise ValueError("minor, build, and patch must be >= 0")
+        if self.build == 0 and self.patch != 0:
+            raise ValueError("patch requires a non-zero build")
+
+    def __str__(self) -> str:
+        return (
+            f"{self.milestone}.{self.minor}."
+            f"{self.build}.{self.patch}"
+        )
+
+    def product_tag(self) -> str:
+        return f"lmdj-v{self}"
+
+    def display(self, channel: str, revision: str) -> str:
+        if channel not in {"canary", "dev", "beta", "stable"}:
+            raise ValueError(f"invalid channel: {channel}")
+        if not re.fullmatch(r"[0-9a-f]{40}", revision):
+            raise ValueError("revision must be a full lowercase Git SHA")
+        return f"{self} · {channel} · g{revision[:8]}"
+
+def load_version(path: str | Path) -> ProductVersion:
+    data = json.loads(Path(path).read_text())
+    if data["contract"] != "lmdj.product-version.v1":
+        raise ValueError("unsupported product version contract")
+    if data["product"] != "lmdj":
+        raise ValueError("unexpected product id")
+    return ProductVersion(
+        data["milestone"],
+        data["minor"],
+        data["build"],
+        data["patch"],
+    )
+```
+
+The CLI supports:
+
+```text
+current --version-file PATH --channel CHANNEL --revision FULL_SHA
+verify --version-file PATH [--assembly PATH --lock PATH]
+tag-name --version-file PATH
+```
+
+`verify` checks exact integer fields, Product/Contract IDs, Assembly version
+equality when supplied, lock completeness when supplied, and validates the
+full lowercase SHA returned by `git rev-parse HEAD`. It never creates or moves
+a tag.
+
+Run:
+
+```bash
+python3 tests/build/version_test.py
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json
+```
+
+Expected:
+
+```text
+product version tests: PASS
+version verification: PASS (1.0.1.0)
+```
+
+- [ ] **Step 9: Add one stable developer entry point**
 
 `scripts/core.sh` accepts only:
 
@@ -349,13 +570,15 @@ clean
 
 `clean` may remove only the explicit repository path `build/core`; reject an empty or root path before removal.
 
-- [ ] **Step 7: Replace CI with the new build guard**
+- [ ] **Step 10: Replace CI with the new build guard**
 
 `.github/workflows/ci.yml` runs on Ubuntu and macOS:
 
 ```yaml
 - run: bash scripts/verify-core-dependencies.sh
 - run: bash tests/build/test_active_tree.sh
+- run: python3 tests/build/version_test.py
+- run: python3 scripts/version.py verify --version-file products/lmdj/version.json
 - run: scripts/core.sh configure release
 - run: scripts/core.sh build release
 - run: scripts/core.sh test release
@@ -363,13 +586,15 @@ clean
 
 There is no deploy job in this proof.
 
-- [ ] **Step 8: Verify the clean build lab**
+- [ ] **Step 11: Verify the clean build lab**
 
 Run:
 
 ```bash
 bash scripts/verify-core-dependencies.sh
 bash tests/build/test_active_tree.sh
+python3 tests/build/version_test.py
+python3 scripts/version.py verify --version-file products/lmdj/version.json
 scripts/core.sh configure dev
 scripts/core.sh build dev
 scripts/core.sh test dev
@@ -382,13 +607,14 @@ Expected:
 100% tests passed, 0 tests failed
 ```
 
-- [ ] **Step 9: Commit the retired boundary and build lab**
+- [ ] **Step 12: Commit the retired boundary and build lab**
 
 ```bash
 git add -A -- \
   .github .dockerignore .gitignore AGENTS.md CLAUDE.md README.md \
   CMakeLists.txt CMakePresets.json cmake scripts tests/build \
-  apps packages workers Dockerfile Caddyfile compose.yml compose.smoke.yml .env.example
+  apps packages products/lmdj/version.json workers \
+  Dockerfile Caddyfile compose.yml compose.smoke.yml .env.example
 git commit -m "chore(core): replace retired product with headless build lab"
 ```
 
@@ -402,6 +628,8 @@ git commit -m "chore(core): replace retired product with headless build lab"
 - Create: `contracts/capability/lmdj.capability.v1.schema.json`
 - Create: `contracts/assembly/lmdj.assembly.v1.schema.json`
 - Create: `contracts/error/lmdj.error.v1.schema.json`
+- Create: `contracts/module/lmdj.module.v1.schema.json`
+- Create: `contracts/version/lmdj.product-version.v1.schema.json`
 - Create: `packages/foundation/module.json`
 - Replace: `packages/foundation/CMakeLists.txt`
 - Create: `packages/foundation/include/lmdj/foundation/error.hpp`
@@ -420,6 +648,7 @@ git commit -m "chore(core): replace retired product with headless build lab"
 - `foundation` consumes no product module.
 - Produces typed IDs, `ArtifactRef`, stable errors, canonical JSON, and SHA-256 helpers.
 - Schemas are the versioned cross-language contract; C++ types must serialize into them.
+- Produces Module SemVer `0.1.0` and Contract Schema versions `1.0.0`, independent from Product Build `1.0.1.0`.
 
 - [ ] **Step 1: Add failing Foundation tests**
 
@@ -521,7 +750,7 @@ Use strong wrappers for `ProjectId`, `CommandId`, `AssetId`, `PatternId`, `TakeI
 3. calculate byte length without reading the whole file into memory;
 4. return `IO_ERROR` on read failure.
 
-- [ ] **Step 4: Add and validate all four schemas**
+- [ ] **Step 4: Add and validate all six schemas**
 
 The top-level portion of `lmdj.project.v1.schema.json` must contain:
 
@@ -552,7 +781,21 @@ The schema enforces exactly four Banks, exactly sixteen Pad Slots in each Bank, 
 
 They must not accept an `asset_id` field.
 
-`tests/conformance/schema_contract_test.py` uses Python standard library JSON to inspect all four schemas and assert the required keys, exact cardinalities, ID patterns, `additionalProperties` rules, and Pad Slot event shape. C++ serialization round-trip tests validate positive and negative Project instances against the same locked invariants. Do not add an unpinned Python package.
+Every Schema declares metadata version `1.0.0`. `lmdj.module.v1` requires Module ID, SemVer, integer `api_version`, and exact dependency versions. `lmdj.product-version.v1` requires Product `lmdj`, `milestone >= 1`, and non-negative `minor/build/patch`.
+
+Create `packages/foundation/module.json`:
+
+```json
+{
+  "contract": "lmdj.module.v1",
+  "module": "foundation",
+  "version": "0.1.0",
+  "api_version": 1,
+  "dependencies": {}
+}
+```
+
+`tests/conformance/schema_contract_test.py` uses Python standard library JSON to inspect all six schemas and assert the required keys, exact cardinalities, ID patterns, version metadata, `additionalProperties` rules, and Pad Slot event shape. C++ serialization round-trip tests validate positive and negative Project instances against the same locked invariants. Do not add an unpinned Python package.
 
 - [ ] **Step 5: Run Foundation and schema tests**
 
@@ -568,7 +811,7 @@ Expected:
 
 ```text
 foundation.artifact Passed
-schema contract checks: 4 passed
+schema contract checks: 6 passed
 ```
 
 - [ ] **Step 6: Commit contracts and Foundation**
@@ -593,6 +836,8 @@ git commit -m "feat(core): add versioned contracts and foundation"
 - Create: `packages/authoring-domain/src/command_handler.cpp`
 - Create: `tests/core/domain/project_test.cpp`
 - Create: `tests/core/domain/command_handler_test.cpp`
+- Modify: `products/lmdj/version.json`
+- Modify: `tests/build/version_test.py`
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
@@ -601,7 +846,25 @@ git commit -m "feat(core): add versioned contracts and foundation"
 - Produces: immutable-value Project state, Commands, typed command outcomes.
 - Does not perform file I/O, Provider calls, rendering, or Host parsing.
 
-- [ ] **Step 1: Add failing tests for the 64-pad and slot-reference invariants**
+- [ ] **Step 1: Advance the PR 2 Product Build and declare Module version**
+
+Set `products/lmdj/version.json` to Build `2`, Patch `0`; update
+`tests/build/version_test.py` to expect `1.0.2.0` and
+`lmdj-v1.0.2.0`.
+
+`packages/authoring-domain/module.json` declares version `0.1.0`,
+`api_version: 1`, and exact dependency `foundation: 0.1.0`.
+
+Run:
+
+```bash
+python3 tests/build/version_test.py
+python3 scripts/version.py verify --version-file products/lmdj/version.json
+```
+
+Expected: both pass and report `1.0.2.0`.
+
+- [ ] **Step 2: Add failing tests for the 64-pad and slot-reference invariants**
 
 The public state shape is:
 
@@ -670,7 +933,7 @@ Tests assert:
 - bars are one of `1, 2, 4, 8`;
 - an event step is `< bars * 16`.
 
-- [ ] **Step 2: Add failing command atomicity and idempotency tests**
+- [ ] **Step 3: Add failing command atomicity and idempotency tests**
 
 All mutations implement:
 
@@ -713,7 +976,7 @@ Tests assert:
 - Take events are retained unquantized while Pattern events use explicit step positions.
 - Domain never derives a Pattern step from `RawTakeEvent.frame_offset`; the Proof Host is responsible for supplying both representations.
 
-- [ ] **Step 3: Observe the expected failures**
+- [ ] **Step 4: Observe the expected failures**
 
 Run:
 
@@ -724,7 +987,7 @@ scripts/core.sh build dev
 
 Expected: missing Authoring Domain headers/targets.
 
-- [ ] **Step 4: Implement the Project factory and pure Command Handler**
+- [ ] **Step 5: Implement the Project factory and pure Command Handler**
 
 The new Project factory sets revision `0`, creates all 64 slots, and accepts BPM only from `40..240`.
 
@@ -743,7 +1006,7 @@ return the copy and one canonical command event
 
 No code in this module may reference a filesystem path.
 
-- [ ] **Step 5: Run Domain tests**
+- [ ] **Step 6: Run Domain tests**
 
 Run:
 
@@ -758,10 +1021,15 @@ Expected:
 100% tests passed, 0 tests failed
 ```
 
-- [ ] **Step 6: Commit the Authoring Domain**
+- [ ] **Step 7: Commit the Authoring Domain**
 
 ```bash
-git add packages/authoring-domain tests/core/domain CMakeLists.txt
+git add \
+  packages/authoring-domain \
+  products/lmdj/version.json \
+  tests/build/version_test.py \
+  tests/core/domain \
+  CMakeLists.txt
 git commit -m "feat(domain): add transactional 64-pad authoring model"
 ```
 
@@ -787,6 +1055,7 @@ git commit -m "feat(domain): add transactional 64-pad authoring model"
 - Consumes: `foundation`, `authoring-domain`.
 - Produces: atomic `.lmdj` save/load, deterministic replay, active Take Journal, sealed recovery Candidate.
 - No Host may call this package directly; Application Facade will own it.
+- `packages/project-io/module.json` declares version `0.1.0`, `api_version: 1`, and exact dependencies `foundation: 0.1.0`, `authoring-domain: 0.1.0`.
 
 - [ ] **Step 1: Add failing round-trip and replay tests**
 
@@ -976,6 +1245,8 @@ git commit -m "feat(project-io): add atomic bundle and take recovery"
 - Generate and add: `tests/fixtures/audio/snare.wav`
 - Generate and add: `tests/fixtures/audio/stereo.wav`
 - Create: `tests/fixtures/audio/hashes.json`
+- Modify: `products/lmdj/version.json`
+- Modify: `tests/build/version_test.py`
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
@@ -984,7 +1255,18 @@ git commit -m "feat(project-io): add atomic bundle and take recovery"
 - Reads Artifact bytes through an injected resolver; it does not know Project bundle layout.
 - Produces a fully validated immutable Snapshot with decoded PCM and resolved Pattern events.
 
-- [ ] **Step 1: Generate independent deterministic audio fixtures**
+- [ ] **Step 1: Advance the PR 3 Product Build and declare Module version**
+
+Set `products/lmdj/version.json` to Build `3`, Patch `0`; update the version
+test to expect `1.0.3.0` and `lmdj-v1.0.3.0`.
+
+`packages/project-cooker/module.json` declares version `0.1.0`,
+`api_version: 1`, and exact dependencies `foundation: 0.1.0`,
+`authoring-domain: 0.1.0`.
+
+Run the version test and verifier; both must report `1.0.3.0`.
+
+- [ ] **Step 2: Generate independent deterministic audio fixtures**
 
 `make_fixtures.py` uses only `math`, `struct`, `wave`, `hashlib`, and `json`. Generate:
 
@@ -994,7 +1276,7 @@ git commit -m "feat(project-io): add atomic bundle and take recovery"
 
 The script writes `hashes.json` and exits non-zero if regenerating existing fixtures changes hashes unexpectedly.
 
-- [ ] **Step 2: Add failing WAV and Cook tests**
+- [ ] **Step 3: Add failing WAV and Cook tests**
 
 Use:
 
@@ -1041,7 +1323,7 @@ Tests assert:
 - Snapshot retains Project revision and contains no mutable Project pointer;
 - cooking the same state twice produces equal Snapshot values.
 
-- [ ] **Step 3: Observe the expected failures**
+- [ ] **Step 4: Observe the expected failures**
 
 Run:
 
@@ -1052,7 +1334,7 @@ scripts/core.sh build dev
 
 Expected: fixture generation succeeds; compile fails before the Cooker exists.
 
-- [ ] **Step 4: Implement strict WAV decode and Project Cook**
+- [ ] **Step 5: Implement strict WAV decode and Project Cook**
 
 The decoder accepts only RIFF/WAVE with one `fmt ` and one `data` chunk, PCM format `1`, 16-bit, 48 kHz, one or two channels. Check all chunk bounds before reading.
 
@@ -1066,7 +1348,7 @@ The Cooker:
 6. creates a new immutable Snapshot;
 7. returns no partial Snapshot on failure.
 
-- [ ] **Step 5: Run Cooker tests**
+- [ ] **Step 6: Run Cooker tests**
 
 Run:
 
@@ -1077,10 +1359,16 @@ ctest --test-dir build/core/dev -R 'cooker\\.' --output-on-failure
 
 Expected: all WAV validation, slot resolution, hash, and determinism tests pass.
 
-- [ ] **Step 6: Commit Cooker and fixed fixtures**
+- [ ] **Step 7: Commit Cooker and fixed fixtures**
 
 ```bash
-git add packages/project-cooker tests/core/cooker tests/fixtures/audio CMakeLists.txt
+git add \
+  packages/project-cooker \
+  products/lmdj/version.json \
+  tests/build/version_test.py \
+  tests/core/cooker \
+  tests/fixtures/audio \
+  CMakeLists.txt
 git commit -m "feat(cooker): add immutable runtime snapshot cooking"
 ```
 
@@ -1108,6 +1396,7 @@ git commit -m "feat(cooker): add immutable runtime snapshot cooking"
 - Consumes only `foundation` and immutable `RuntimeSnapshot`.
 - Produces deterministic stereo PCM16 WAV.
 - Does not read Project files and does not mutate Authoring state.
+- `packages/audio-runtime/module.json` declares version `0.1.0`, `api_version: 1`, and exact dependencies `foundation: 0.1.0`, `project-cooker: 0.1.0`.
 
 - [ ] **Step 1: Add an independent Golden Audio reference renderer**
 
@@ -1247,6 +1536,8 @@ git commit -m "feat(audio): add deterministic offline wav renderer"
 - Create: `providers/local-proof-failure/src/provider.cpp`
 - Create: `tests/core/provider/conformance_test.cpp`
 - Create: `tests/core/provider/attempt_isolation_test.cpp`
+- Modify: `products/lmdj/version.json`
+- Modify: `tests/build/version_test.py`
 - Modify: `CMakeLists.txt`
 
 **Interfaces:**
@@ -1254,8 +1545,41 @@ git commit -m "feat(audio): add deterministic offline wav renderer"
 - `provider-sdk` consumes `foundation`, not LMDJ Product code or Project I/O.
 - Provider implementations consume only `provider-sdk`.
 - Produces Capability discovery, Provider selection, typed Attempt outcome, and Candidate metadata.
+- `provider-sdk` and both proof Provider implementations start at SemVer
+  `0.1.0`; every dependency in their `module.json` is exact.
+- Provider IDs are stable (`local.proof.success` and `local.proof.failure`);
+  implementation SemVer is stored separately.
+- Both Providers declare Capability `proof.candidate.v1` under
+  `lmdj.capability.v1` Schema version `1.0.0`.
 
-- [ ] **Step 1: Add failing Provider conformance tests**
+- [ ] **Step 1: Advance the PR 4 Product Build and declare Provider identities**
+
+Set `products/lmdj/version.json` and `tests/build/version_test.py` to
+`1.0.4.0`. Create the three `module.json` manifests with:
+
+```text
+provider-sdk                 0.1.0 -> foundation 0.1.0
+local.proof.success          0.1.0 -> provider-sdk 0.1.0
+local.proof.failure          0.1.0 -> provider-sdk 0.1.0
+Capability proof.candidate.v1       -> Contract Schema 1.0.0
+```
+
+These code-only proof Providers record `model_identity: none`, exact Provider
+SemVer, and the built Provider Artifact hash in every Attempt. A future
+Provider that uses model weights or a rule asset must additionally record that
+asset's immutable ID, version, and SHA-256.
+
+Run:
+
+```bash
+python3 tests/build/version_test.py
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json
+```
+
+Expected: both report Product Build `1.0.4.0`.
+
+- [ ] **Step 2: Add failing Provider conformance tests**
 
 Use:
 
@@ -1310,7 +1634,7 @@ Tests assert:
 - Project bundle path is not accepted by the Provider interface;
 - invalid region/data classification fails closed before Provider execution.
 
-- [ ] **Step 2: Add the mutation isolation test before implementation**
+- [ ] **Step 3: Add the mutation isolation test before implementation**
 
 The test hashes every file under a prepared `.lmdj` bundle, runs the failing Provider, then asserts:
 
@@ -1321,7 +1645,7 @@ same Project revision
 one new Workspace Attempt file
 ```
 
-- [ ] **Step 3: Observe the expected failures**
+- [ ] **Step 4: Observe the expected failures**
 
 Run:
 
@@ -1331,7 +1655,7 @@ scripts/core.sh build dev
 
 Expected: missing Provider SDK and proof Provider targets.
 
-- [ ] **Step 4: Implement Registry, policy gate, and Attempt persistence**
+- [ ] **Step 5: Implement Registry, policy gate, and Attempt persistence**
 
 `AttemptStore` writes only under the injected Workspace root:
 
@@ -1344,14 +1668,19 @@ Expected: missing Provider SDK and proof Provider targets.
 
 Provider selection writes `host-settings.json`, not `.lmdj`. An Attempt records request metadata, Provider ID/version, start/end timestamps, terminal status, typed error, Candidate IDs, and Artifact hashes. It does not store secrets or reasoning.
 
-- [ ] **Step 5: Implement two deterministic proof Providers**
+- [ ] **Step 6: Implement two deterministic proof Providers**
 
-- `local.proof.success.v1` writes zero bytes through the injected `ArtifactSink` and returns the resulting `application/x-lmdj-proof` Candidate Artifact with SHA-256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` and deterministic provenance.
-- `local.proof.failure.v1` returns `PROVIDER_FAILED` with message `intentional proof failure`.
+- `local.proof.success` version `0.1.0` writes zero bytes through the injected
+  `ArtifactSink` and returns the resulting `application/x-lmdj-proof`
+  Candidate Artifact with SHA-256
+  `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`
+  and deterministic provenance.
+- `local.proof.failure` version `0.1.0` returns `PROVIDER_FAILED` with message
+  `intentional proof failure`.
 
 The sink writes only inside the current Attempt workspace. Neither Provider receives a Project Store, Project bundle path, or mutable Project object.
 
-- [ ] **Step 6: Run all Provider conformance and isolation tests**
+- [ ] **Step 7: Run all Provider conformance and isolation tests**
 
 Run:
 
@@ -1362,10 +1691,16 @@ ctest --test-dir build/core/dev -R 'provider\\.' --output-on-failure
 
 Expected: both Providers pass the shared conformance suite; isolation test passes.
 
-- [ ] **Step 7: Commit Provider SDK**
+- [ ] **Step 8: Commit Provider SDK**
 
 ```bash
-git add packages/provider-sdk providers tests/core/provider CMakeLists.txt
+git add \
+  packages/provider-sdk \
+  providers \
+  tests/core/provider \
+  products/lmdj/version.json \
+  tests/build/version_test.py \
+  CMakeLists.txt
 git commit -m "feat(provider): add capability registry and isolated attempts"
 ```
 
@@ -1390,6 +1725,10 @@ git commit -m "feat(provider): add capability registry and isolated attempts"
 - Consumes: Domain, Project I/O, Cooker, Audio Runtime, Provider SDK.
 - Produces the only supported Host API.
 - C ABI owns opaque engine handles and caller-freed UTF-8 JSON responses.
+- `application-facade` starts at SemVer `0.1.0` and locks exact `0.1.0`
+  dependencies on `authoring-domain`, `project-io`, `project-cooker`,
+  `audio-runtime`, and `provider-sdk`.
+- Task 8 remains inside PR 4, so it does not allocate another Product Build.
 
 - [ ] **Step 1: Add failing Facade behavior tests**
 
@@ -1546,6 +1885,8 @@ git commit -m "feat(facade): expose unified application and c abi"
 - Create: `apps/core-cli/CMakeLists.txt`
 - Create: `apps/core-cli/src/main.cpp`
 - Create: `tests/host/cli_test.py`
+- Modify: `products/lmdj/version.json`
+- Modify: `tests/build/version_test.py`
 - Modify: `CMakeLists.txt`
 - Modify: `scripts/core.sh`
 
@@ -1554,8 +1895,25 @@ git commit -m "feat(facade): expose unified application and c abi"
 - Consumes only `application-facade`.
 - Outputs exactly one canonical JSON response to stdout.
 - Human diagnostics go to stderr; no color when stdout is not a terminal.
+- `core-cli` starts at Module SemVer `0.1.0` with exact dependency
+  `application-facade 0.1.0`.
 
-- [ ] **Step 1: Add failing black-box CLI tests**
+- [ ] **Step 1: Advance the PR 5 Product Build**
+
+Set `products/lmdj/version.json` and `tests/build/version_test.py` to
+`1.0.5.0`, and declare `core-cli 0.1.0`.
+
+Run:
+
+```bash
+python3 tests/build/version_test.py
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json
+```
+
+Expected: both report Product Build `1.0.5.0`.
+
+- [ ] **Step 2: Add failing black-box CLI tests**
 
 The CLI shape is:
 
@@ -1576,7 +1934,7 @@ lmdj-core --workspace <dir> query --request-file <path>
 - malformed CLI usage exits `64`;
 - CLI has no import of Project I/O and contains no bundle parsing code.
 
-- [ ] **Step 2: Observe the missing executable failure**
+- [ ] **Step 3: Observe the missing executable failure**
 
 Run:
 
@@ -1586,7 +1944,7 @@ python3 tests/host/cli_test.py build/core/dev/bin/lmdj-core
 
 Expected: `FileNotFoundError` for `lmdj-core`.
 
-- [ ] **Step 3: Implement the thin Host**
+- [ ] **Step 4: Implement the thin Host**
 
 `main.cpp`:
 
@@ -1599,7 +1957,7 @@ Expected: `FileNotFoundError` for `lmdj-core`.
 
 Task 9 tests core Project behavior with an empty Registry; Task 11 supplies the Product Assembly and proof Providers. The CLI does not inspect command names beyond selecting command versus query.
 
-- [ ] **Step 4: Run CLI black-box tests**
+- [ ] **Step 5: Run CLI black-box tests**
 
 Run:
 
@@ -1614,10 +1972,16 @@ Expected:
 cli behavior fixtures: 9 passed
 ```
 
-- [ ] **Step 5: Commit the CLI Host**
+- [ ] **Step 6: Commit the CLI Host**
 
 ```bash
-git add apps/core-cli tests/host/cli_test.py CMakeLists.txt scripts/core.sh
+git add \
+  apps/core-cli \
+  tests/host/cli_test.py \
+  products/lmdj/version.json \
+  tests/build/version_test.py \
+  CMakeLists.txt \
+  scripts/core.sh
 git commit -m "feat(cli): add headless json host"
 ```
 
@@ -1642,6 +2006,10 @@ git commit -m "feat(cli): add headless json host"
 - Consumes the C ABI shared library through `ctypes`.
 - Implements MCP `2025-11-25` lifecycle and Tools over stdio.
 - Emits no non-protocol bytes on stdout.
+- `core-mcp` starts at Module SemVer `0.1.0`, locks
+  `application-facade 0.1.0`, and declares C ABI compatibility
+  `lmdj_core_c@1`.
+- Task 10 remains inside PR 5, so it does not allocate another Product Build.
 
 - [ ] **Step 1: Add failing MCP lifecycle tests**
 
@@ -1766,11 +2134,13 @@ git commit -m "feat(mcp): expose core tools over stdio"
 **Files:**
 
 - Create: `products/lmdj/assembly.json`
+- Create: `products/lmdj/assembly.lock.json` (generated)
 - Create: `products/lmdj/README.md`
 - Create: `packages/application-facade/include/lmdj/facade/assembly_loader.hpp`
 - Create: `packages/application-facade/src/assembly_loader.cpp`
 - Create: `tests/core/facade/assembly_loader_test.cpp`
 - Create: `tests/conformance/module_graph_test.py`
+- Create: `tests/conformance/version_lock_test.py`
 - Create: `tests/e2e/headless_core_proof.py`
 - Create: `tests/e2e/requests/create-project.json`
 - Create: `tests/e2e/requests/import-kick.json`
@@ -1779,6 +2149,9 @@ git commit -m "feat(mcp): expose core tools over stdio"
 - Create: `tests/e2e/requests/assign-snare.json`
 - Create: `tests/e2e/requests/record-pattern.json`
 - Create: `tests/e2e/requests/run-failing-provider.json`
+- Modify: `products/lmdj/version.json`
+- Modify: `scripts/version.py`
+- Modify: `tests/build/version_test.py`
 - Modify: `scripts/core.sh`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `packages/application-facade/CMakeLists.txt`
@@ -1788,11 +2161,30 @@ git commit -m "feat(mcp): expose core tools over stdio"
 
 **Interfaces:**
 
-- Product Assembly names exact modules, contracts, and Provider implementations.
+- Product Assembly names exact Module, Host, Contract, and Provider versions.
+- The generated Assembly lock binds their manifest/schema/source hashes without
+  embedding a self-referential Git revision.
+- The generated Build Manifest binds the lock hash to Product Build `1.0.6.0`,
+  Channel, full Git revision, platform, and built Artifact hashes.
 - E2E uses public CLI and MCP surfaces only.
 - CI proves the same Assembly on macOS and Ubuntu.
 
-- [ ] **Step 1: Add the Assembly manifest and failing graph test**
+- [ ] **Step 1: Advance the PR 6 Product Build**
+
+Set `products/lmdj/version.json` and `tests/build/version_test.py` to
+`1.0.6.0`.
+
+Run:
+
+```bash
+python3 tests/build/version_test.py
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json
+```
+
+Expected: both report Product Build `1.0.6.0`.
+
+- [ ] **Step 2: Add the Assembly manifest and failing graph/lock tests**
 
 `products/lmdj/assembly.json`:
 
@@ -1801,35 +2193,46 @@ git commit -m "feat(mcp): expose core tools over stdio"
   "contract": "lmdj.assembly.v1",
   "product": {
     "id": "lmdj",
-    "version": "0.1.0-proof"
+    "version": "1.0.6.0"
   },
   "modules": [
-    "foundation",
-    "authoring-domain",
-    "project-io",
-    "project-cooker",
-    "audio-runtime",
-    "provider-sdk",
-    "application-facade"
+    {"id": "foundation", "version": "0.1.0"},
+    {"id": "authoring-domain", "version": "0.1.0"},
+    {"id": "project-io", "version": "0.1.0"},
+    {"id": "project-cooker", "version": "0.1.0"},
+    {"id": "audio-runtime", "version": "0.1.0"},
+    {"id": "provider-sdk", "version": "0.1.0"},
+    {"id": "application-facade", "version": "0.1.0"}
   ],
   "hosts": [
-    "core-cli",
-    "core-mcp"
+    {"id": "core-cli", "version": "0.1.0"},
+    {"id": "core-mcp", "version": "0.1.0"}
   ],
   "providers": [
     {
-      "id": "local.proof.success.v1",
-      "capabilities": ["proof.candidate.v1"]
+      "id": "local.proof.success",
+      "version": "0.1.0",
+      "capabilities": [
+        {"id": "proof.candidate.v1", "version": "1.0.0"}
+      ],
+      "model_identity": null
     },
     {
-      "id": "local.proof.failure.v1",
-      "capabilities": ["proof.candidate.v1"]
+      "id": "local.proof.failure",
+      "version": "0.1.0",
+      "capabilities": [
+        {"id": "proof.candidate.v1", "version": "1.0.0"}
+      ],
+      "model_identity": null
     }
   ],
   "contracts": [
-    "lmdj.project.v1",
-    "lmdj.capability.v1",
-    "lmdj.error.v1"
+    {"id": "lmdj.project.v1", "version": "1.0.0"},
+    {"id": "lmdj.capability.v1", "version": "1.0.0"},
+    {"id": "lmdj.assembly.v1", "version": "1.0.0"},
+    {"id": "lmdj.error.v1", "version": "1.0.0"},
+    {"id": "lmdj.module.v1", "version": "1.0.0"},
+    {"id": "lmdj.product-version.v1", "version": "1.0.0"}
   ]
 }
 ```
@@ -1846,7 +2249,13 @@ git commit -m "feat(mcp): expose core tools over stdio"
 
 The graph test explicitly permits the `lmdj::` C++ namespace, `lmdj.*` Contract IDs, and neutral LMDJ platform/module names. It enforces dependency direction and Product Assembly ownership, not a raw substring ban on `lmdj`.
 
-- [ ] **Step 2: Add the complete failing E2E proof**
+`version_lock_test.py` must fail until `scripts/version.py lock` generates
+`products/lmdj/assembly.lock.json`. The generated canonical JSON contains the
+Product Build, Assembly SHA-256, and exact versions plus SHA-256 values for
+every Module/Host manifest, Contract Schema, and Provider source manifest. It
+must not contain a Git revision, Channel, build time, or platform.
+
+- [ ] **Step 3: Add the complete failing E2E proof**
 
 `headless_core_proof.py` performs:
 
@@ -1871,7 +2280,7 @@ The graph test explicitly permits the `lmdj::` C++ namespace, `lmdj.*` Contract 
 19. assert one terminal failed Attempt exists outside `.lmdj`;
 20. start a Take, mutate the Project with another valid Command, attempt Take commit, assert `REVISION_CONFLICT`, and assert a recoverable sealed Take exists.
 
-- [ ] **Step 3: Observe the proof failure**
+- [ ] **Step 4: Observe the proof failure**
 
 Run:
 
@@ -1881,13 +2290,13 @@ scripts/core.sh proof
 
 Expected: failure because Assembly validation and proof wiring are not complete.
 
-- [ ] **Step 4: Wire Assembly loading without introducing a second implementation path**
+- [ ] **Step 5: Wire Assembly loading without introducing a second implementation path**
 
 The product-neutral Assembly loader validates a manifest and filters the compiled module/Provider registry by declared IDs. CLI and MCP accept `--assembly <path>` and use that loader; neither contains an `lmdj` product branch. Both still construct and call the same `Application` implementation.
 
 Validate the Assembly against `lmdj.assembly.v1.schema.json` before starting a Host. Fail closed on missing/unknown Provider or contract.
 
-- [ ] **Step 5: Document the Proof-scoped recording concurrency rule**
+- [ ] **Step 6: Document the Proof-scoped recording concurrency rule**
 
 Add this explicit scope note to `products/lmdj/README.md`:
 
@@ -1900,12 +2309,48 @@ to a Take or whether the user-facing product may selectively rebase.
 
 Do not add this rule to `docs/prd/decision-log.md` and do not close the product-level question in `docs/prd/open-questions.md`. Any product-level conflict classification or selective rebase requires the design review required by redesign spec §25.
 
-- [ ] **Step 6: Make `scripts/core.sh proof` the single acceptance command**
+- [ ] **Step 7: Generate the Assembly lock and make `scripts/core.sh proof` the single acceptance command**
+
+Extend `scripts/version.py` with:
+
+```text
+lock --version-file PATH --assembly PATH --output PATH
+manifest --version-file PATH --assembly PATH --lock PATH
+         --channel CHANNEL --artifacts-root PATH --output PATH
+```
+
+`lock` writes canonical deterministic JSON and hashes source manifests and
+Schemas only. `manifest` runs after checkout/build and records full
+`git rev-parse HEAD`, Channel, platform, build time, lock hash, and built
+Artifact hashes. This separation avoids a lock file that recursively contains
+the SHA of the commit containing that same lock.
+
+Run:
+
+```bash
+python3 scripts/version.py lock \
+  --version-file products/lmdj/version.json \
+  --assembly products/lmdj/assembly.json \
+  --output products/lmdj/assembly.lock.json
+python3 tests/conformance/version_lock_test.py
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json \
+  --assembly products/lmdj/assembly.json \
+  --lock products/lmdj/assembly.lock.json
+```
+
+Expected:
+
+```text
+version lock conformance: PASS
+version verification: PASS (1.0.6.0)
+```
 
 It runs, in order:
 
 ```text
 active tree guard
+Product Build and Assembly lock conformance
 configure release
 build release
 CTest unit/integration suite
@@ -1915,12 +2360,13 @@ CLI behavior fixtures
 MCP lifecycle fixtures
 CLI/MCP parity
 Headless Core E2E
+canary Build Manifest generation
 git diff --check
 ```
 
 It preserves failed proof artifacts under `build/core/proof-failures/<run-id>` and removes successful temporary projects.
 
-- [ ] **Step 7: Run the proof twice from a clean build**
+- [ ] **Step 8: Run the proof twice from a clean build**
 
 Run:
 
@@ -1939,6 +2385,9 @@ Expected:
 
 ```text
 Headless Core Proof: PASS
+Product Build: 1.0.6.0
+Channel: canary
+Assembly lock: MATCH
 Project pads: 64
 Golden audio: MATCH
 CLI/MCP state parity: MATCH
@@ -1946,7 +2395,7 @@ Failed attempt project mutation: NONE
 Conflicted take recovery: SEALED
 ```
 
-- [ ] **Step 8: Confirm the proof on both supported CI build hosts**
+- [ ] **Step 9: Confirm the proof on both supported CI build hosts**
 
 Update CI to run `scripts/core.sh proof` on:
 
@@ -1958,7 +2407,7 @@ strategy:
 
 Golden WAV must match exactly because the renderer uses documented integer rules. A platform mismatch is a failing gate, not an allowed rebaseline.
 
-- [ ] **Step 9: Update proof status documentation**
+- [ ] **Step 10: Update proof status documentation**
 
 `README.md` and `products/lmdj/README.md` must distinguish:
 
@@ -1969,7 +2418,7 @@ Not implemented: realtime audio, Web/PWA, Creator UI, Sample intelligence,
 Sequence editing, Perform, Sound Sets, production Providers, cloud deployment.
 ```
 
-- [ ] **Step 10: Commit the assembled proof**
+- [ ] **Step 11: Commit the assembled proof**
 
 ```bash
 git add \
@@ -1981,12 +2430,48 @@ git add \
   apps/core-mcp/lmdj_core_mcp/__main__.py \
   tests/core/facade/assembly_loader_test.cpp \
   tests/conformance/module_graph_test.py \
+  tests/conformance/version_lock_test.py \
   tests/e2e \
+  tests/build/version_test.py \
+  scripts/version.py \
   scripts/core.sh \
   .github/workflows/ci.yml \
   README.md
 git commit -m "feat(core): prove headless beat project end to end"
 ```
+
+- [ ] **Step 12: Complete the PR 6 integration and create the immutable Product tag**
+
+After PR 6 is squash-merged and required macOS/Ubuntu CI is green, the
+Integration Owner synchronizes `main`, verifies the full merge SHA, regenerates
+the Build Manifest with Channel `dev`, and creates a signed annotated tag:
+
+```bash
+merge_sha="$(git rev-parse HEAD)"
+test "$(git branch --show-current)" = "main"
+test "$(printf '%s' "$merge_sha" | wc -c | tr -d ' ')" = "40"
+python3 scripts/version.py verify \
+  --version-file products/lmdj/version.json \
+  --assembly products/lmdj/assembly.json \
+  --lock products/lmdj/assembly.lock.json
+python3 scripts/version.py manifest \
+  --version-file products/lmdj/version.json \
+  --assembly products/lmdj/assembly.json \
+  --lock products/lmdj/assembly.lock.json \
+  --channel dev \
+  --artifacts-root build/core/release \
+  --output build/core/release/build-manifest.json
+tag_name="$(python3 scripts/version.py tag-name \
+  --version-file products/lmdj/version.json)"
+git tag -s "$tag_name" "$merge_sha" \
+  -m "LMDJ M1 Headless Core Proof build 1.0.6.0"
+git tag -v "$tag_name"
+test "$(git rev-list -n 1 "$tag_name")" = "$merge_sha"
+```
+
+If signing is unavailable, stop and report the gate rather than silently
+creating an unsigned Product tag. This step does not push the tag, create a
+GitHub Release, promote beyond `dev`, publish, or deploy.
 
 ---
 
@@ -2012,6 +2497,10 @@ git commit -m "feat(core): prove headless beat project end to end"
 - [ ] Concurrent commits from two Host processes serialize through the bundle advisory lock; no reported-successful commit is lost.
 - [ ] Strict recording conflict is documented as Proof-only and the product-level concurrency question remains open.
 - [ ] Web realtime-audio latency remains explicitly outside this proof.
+- [ ] Product Build is `1.0.6.0`; every Module/Host/Provider is independently
+  locked at `0.1.0`; all six Contract Schemas are locked at `1.0.0`.
+- [ ] Assembly lock contains no self-referential revision; generated Build
+  Manifest binds its hash to the full Git revision and Channel.
 
 ## Spec Traceability
 

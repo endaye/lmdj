@@ -33,6 +33,26 @@ automatically without waiting for the user to ask.
   deployment, or publication; those remain separate actions under this
   repository's Git workflow.
 
+## Version management
+
+`docs/governance/version-management.md` is the canonical version policy for
+LMDJ Product Builds, Release Channels, Git revisions, Contracts, Core Modules,
+Providers, and model identities.
+
+- Product Builds use the Chrome-style
+  `MILESTONE.MINOR.BUILD.PATCH` scheme; this is not SemVer.
+- Core Modules and Provider implementations use their own SemVer and must not
+  inherit the Product Build Version.
+- Tags are immutable annotated tags. Creating a tag does not authorize pushing
+  it, creating a Release, promoting a Channel, publishing, or deploying.
+- Every future implementation plan must contain a `## Version Management`
+  section. It must state affected version domains, start/target versions, bump
+  rationale, per-PR Build/Channel gates, version files, compatibility impact,
+  exact tag rules, verification commands, and rollback behavior.
+- A plan with no version impact must still say `Version impact: none` and give
+  the reason.
+- Missing version management is a plan-review blocker.
+
 ## Repository layout
 
 The git root (`lmdj/`) started as a PRD, architecture, and reference-material workspace. The product stack is now built out across three source boundaries:

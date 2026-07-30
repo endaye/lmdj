@@ -1,0 +1,495 @@
+# LMDJ 版本管理规范
+
+日期：2026-07-30
+
+状态：已生效
+
+适用范围：LMDJ Monorepo 中的产品 Assembly、正式构建、Contract、Core Module、
+Provider、模型与所有后续实施计划。
+
+## 1. 目标
+
+LMDJ 使用一套受 Chromium 启发、但适合当前 Monorepo 的版本体系：
+
+```text
+产品构建：MILESTONE.MINOR.BUILD.PATCH
+发布渠道：canary | dev | beta | stable
+源码修订：完整 Git SHA
+模块实现：SemVer MAJOR.MINOR.PATCH
+公开契约：稳定 Contract ID + Contract SemVer
+Provider：Provider ID + Provider SemVer + Capability Contract + Model Identity
+```
+
+这几类版本回答不同问题，禁止互相替代：
+
+| 身份 | 回答的问题 |
+| --- | --- |
+| Product Build Version | 用户或测试者运行的是哪一个完整 LMDJ Assembly？ |
+| Release Channel | 这个完全相同的 Build 当前允许进入哪类人群？ |
+| Git Revision | 这个 Build 对应 Monorepo 的哪一个精确提交？ |
+| Module Version | 某个可复用 Package 的公开 API/ABI 处于哪个兼容版本？ |
+| Contract Version | 跨语言、跨进程数据能否被消费者正确理解？ |
+| Provider Version | 哪个 Provider 实现处理了请求？ |
+| Model Identity | Provider 实际使用了哪组模型、权重或规则资产？ |
+
+版本号不是功能完成度宣传，也不能代替测试、CI、真机验收、发布或部署证据。
+
+## 2. Product Build Version
+
+正式产品构建使用四段数字：
+
+```text
+MILESTONE.MINOR.BUILD.PATCH
+```
+
+示例：
+
+```text
+1.0.12.0
+```
+
+### 2.1 MILESTONE
+
+`MILESTONE` 是产品能力列车编号，不是 SemVer 的兼容性 Major。
+
+- 只有经确认的产品/架构设计才能分配新 Milestone。
+- Milestone 描述可独立验证的纵向能力边界。
+- Milestone 完成不等于 Stable；它仍需通过对应渠道门禁。
+- 新 Milestone 不要求重置 `BUILD`。
+
+当前定义：
+
+| Milestone | 定义 | 完成门禁 |
+| --- | --- | --- |
+| M1 | Headless 64-Pad Beat Project + Sampler + Pattern Playback + Offline WAV Render + Golden Audio + CLI/MCP + 测试 Provider 切换与失败隔离 | Headless Core Proof 计划 PR 1–6 全部合入，双平台 CI 通过，Proof E2E 通过 |
+
+M2 及以后必须由新的已批准设计分配，不能在实现过程中自行命名。
+
+### 2.2 MINOR
+
+`MINOR` 是同一 Milestone 内经设计批准的兼容子列车。
+
+- 默认值为 `0`。
+- 普通功能、修复、PR 或 Provider 更新不增加 `MINOR`。
+- 只有需要在同一 Milestone 内长期并行维护两个兼容产品列车时才增加。
+- 增加 `MINOR` 必须写明兼容范围、迁移策略和支持期限。
+
+M1 当前固定为 `1.0.*.*`。
+
+### 2.3 BUILD
+
+`BUILD` 是产品集成构建号。
+
+- 在同一正式产品版本线中单调递增，跨 Milestone 不重置。
+- 每个通过保护分支 PR Gate、值得被测试或分发的 Product Assembly 分配一个新
+  `BUILD`。
+- 新 Build 必须来自 `main` 上一个精确、CI 已验证的提交。
+- Build 可以有间断；失败或放弃的编号不得复用。
+- 纯文档提交默认不分配 Product Build，除非文档本身是版本、Contract 或发布
+  治理的正式产物。
+- 同一个 Git SHA 不得分配两个不同 Product Build Version。
+- 同一个 Product Build Version 不得指向两个 Git SHA。
+
+M1 的第一个可构建集成版本为 `1.0.1.0`。
+
+### 2.4 PATCH
+
+`PATCH` 是同一 Build 分支上的修订号。
+
+- 新 Build 的 `PATCH` 从 `0` 开始。
+- 只有从同一 Build 修复缺陷、且不增加公开能力或改变 Contract 语义时才增加。
+- Patch 必须保留原 Build 的 Milestone、Minor 和 Build 三段。
+- 功能增加、依赖升级、Contract 变化或 Assembly 变化必须分配新 Build，而不是
+  增加 Patch。
+- Patch 修复必须同时回到 `main`，避免 release branch 成为第二 Source of Truth。
+
+示例：
+
+```text
+1.0.12.0  原始 Build
+1.0.12.1  同一 Build 的第一个 hotfix
+1.0.13.0  后续新的集成 Build
+```
+
+## 3. Release Channel
+
+Channel 与四段数字版本分开记录：
+
+| Channel | 用途 | 最低门禁 |
+| --- | --- | --- |
+| `canary` | 每个可构建候选，供自动化和开发者快速发现问题 | 编译成功、基础单测通过 |
+| `dev` | 一个 PR Gate 或纵向开发阶段完成，供团队集成验证 | 全量 CI、对应 E2E、版本一致性检查通过 |
+| `beta` | 已具备真实用户价值，进入受控用户测试 | 用户流程、数据恢复、平台/设备验收通过 |
+| `stable` | 可正式交付的生产版本 | Release Checklist、回滚、签名、发布和生产验证通过 |
+
+Channel 不是版本号的一部分。同一 Build 可以从 `canary` 晋级到 `dev`、`beta` 或
+`stable`，晋级不会移动源码 tag，也不会生成一个伪造的新 Build。
+
+Channel 降级或撤回只改变发布记录，不删除原 Build、tag 或验证证据。
+
+M1 Headless Core Proof 最多进入 `dev`；它没有 Creator UI 和真实用户闭环，不能被
+标记为 `beta` 或 `stable`。
+
+## 4. Git Revision 与 Build Identity
+
+每个可运行 Build 必须同时显示：
+
+```text
+LMDJ 1.0.12.0 · dev · g34236c06
+```
+
+正式 Build Manifest 保存：
+
+- Product Build Version；
+- Channel；
+- 完整 40 字符 Git SHA；
+- Product Assembly lock hash；
+- 构建时间与构建平台；
+- 产物 hash。
+
+短 SHA 只用于显示，比较、部署、tag 和验证必须使用完整 SHA。
+
+Build Manifest 是 checkout 后由构建流程生成的产物，不能反向写回同一个源码
+commit。源码中的 `assembly.lock.json` 也不能保存包含它自身的 Git SHA，否则会形成
+无法收敛的自引用。
+
+## 5. Tag 规范
+
+### 5.1 总原则
+
+- 所有正式 tag 必须是 annotated tag；环境支持时使用签名 tag。
+- tag 是不可变身份，不得移动、覆盖或复用。
+- tag 创建前必须解析并记录完整目标 SHA。
+- 创建 tag 不代表获准 push、创建 GitHub Release、部署或发布。
+- push tag、Release、部署和渠道晋级都需要各自独立授权与证据。
+- 错误 tag 不移动；创建更正 tag，并在事故记录中说明旧 tag。
+- 不对普通工作分支的每个 commit 打 tag。
+
+验证命令：
+
+```bash
+git cat-file -t <tag>
+git rev-list -n 1 <tag>
+git for-each-ref "refs/tags/<tag>" \
+  --format='%(refname:short) %(objecttype) %(objectname) %(subject)'
+git tag -v <tag>
+```
+
+如果 tag 未签名，`git tag -v` 可以失败，但必须通过 annotated object、目标 SHA 和
+tag message 验证。正式 Beta/Stable tag 必须签名。
+
+### 5.2 计划与阶段 tag
+
+尚无可运行 Build 的设计、计划、Spike 或封存阶段使用：
+
+```text
+lmdj-m<MILESTONE>-<stage>.<revision>
+```
+
+允许的 `stage`：
+
+```text
+design
+plan
+spike
+parked
+```
+
+示例：
+
+```text
+lmdj-m1-plan.1
+lmdj-m1-plan.2
+lmdj-m2-spike.1
+```
+
+阶段 tag 不属于 Product Build Version，不得显示为用户产品版本。
+
+当前基线：
+
+| Tag | Target | 含义 |
+| --- | --- | --- |
+| `lmdj-m1-plan.1` | `34236c062d5982d22701ad0482518a29bfaefa60` | M1 Headless Core Proof 计划完成架构 Review，尚未实现 |
+
+### 5.3 Product Build tag
+
+已产生可运行 Product Assembly 的版本使用：
+
+```text
+lmdj-v<MILESTONE>.<MINOR>.<BUILD>.<PATCH>
+```
+
+示例：
+
+```text
+lmdj-v1.0.1.0
+lmdj-v1.0.12.1
+```
+
+Product tag 只指向已合入 `main`、CI 通过并生成匹配 Build Manifest 的提交。Channel
+不写入 tag 名称。
+
+### 5.4 Module、Contract 与 Provider tag
+
+只有需要独立发布、缓存或被 Assembly 锁定的单元才打独立 tag：
+
+```text
+module/<module-id>/v<semver>
+contract/<contract-id>/v<semver>
+provider/<provider-id>/v<semver>
+```
+
+示例：
+
+```text
+module/project-io/v0.1.0
+contract/lmdj.project/v1.0.0
+provider/local.proof.success/v0.1.0
+```
+
+这些 tag 只标记对应目录/Contract 的版本身份，不表示整个 LMDJ Product Build
+已经晋级。
+
+## 6. Module Package Version
+
+每个 Core Package、Host-neutral Module 和可独立构建 SDK 使用 SemVer：
+
+```text
+MAJOR.MINOR.PATCH
+```
+
+并在自己的 `module.json` 中声明：
+
+```json
+{
+  "contract": "lmdj.module.v1",
+  "module": "project-io",
+  "version": "0.1.0",
+  "api_version": 1,
+  "dependencies": {
+    "foundation": "0.1.0",
+    "authoring-domain": "0.1.0"
+  }
+}
+```
+
+版本变化规则：
+
+- `MAJOR`：公开 API/ABI 或持久化语义不兼容；
+- `MINOR`：向后兼容的新公开能力；
+- `PATCH`：不改变公开行为的修复；
+- 只改内部实现且不发布新 Package 时，可以不立即打 Module tag；
+- Assembly 必须锁定精确版本，不使用浮动范围；
+- 模块版本不能从 Product Build Version 推导。
+
+初始内部模块可以从 `0.1.0` 开始；一旦声明稳定公开接口，再进入 `1.0.0`。
+
+不对 Package 内每一个普通源码函数单独打版本。函数只有在成为可被其他模块、
+Host、MCP 或远程 Provider 独立调用和替换的公开 Capability 时，才获得独立
+Contract ID/version；其实现仍由所属 Module 或 Provider SemVer 管理。
+
+## 7. Contract Version
+
+Contract 同时具有稳定 ID 和 SemVer：
+
+```text
+Contract ID: lmdj.project.v1
+Contract version: 1.0.0
+```
+
+- ID 中的 `v1` 是兼容性 Major。
+- Schema metadata 保存完整 `1.0.0`。
+- 向后兼容的可选字段增加 Contract Minor。
+- 语义澄清或验证修复增加 Contract Patch。
+- 删除字段、改变字段含义或收紧到破坏合法旧数据时创建 `v2`。
+- Provider Capability Contract、Project Contract、Assembly Contract 和错误 Contract
+  分别演进，不能共享一个万能版本。
+- Contract tag 必须对应 Schema、正反例 Fixture 和 Conformance Test。
+
+## 8. Provider 与 Model Version
+
+Provider 必须分离四个身份：
+
+```text
+Provider ID
+Provider implementation version
+Capability Contract ID/version
+Model or rule asset identity
+```
+
+示例：
+
+```json
+{
+  "provider_id": "local.proof.success",
+  "provider_version": "0.1.0",
+  "capability": "proof.candidate.v1",
+  "capability_version": "1.0.0",
+  "model": {
+    "id": "deterministic-proof-rule",
+    "version": "1",
+    "artifact_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+}
+```
+
+Provider SemVer 规则：
+
+- 改变 Provider SDK 接口要求或同一输入的公开输出语义：Major；
+- 增加兼容 Capability、平台或可选参数：Minor；
+- 质量修复、性能修复或内部依赖修复且 Contract 不变：Patch；
+- 换模型权重必须更新 Model Identity，即使 Provider SemVer 只增加 Patch；
+- 使用外部模型或规则资产时，Provider Attempt 必须记录上述全部身份、参数和
+  输入/输出 Artifact hash；
+- 纯代码 Provider 明确记录 `model_identity: null`，并记录 Provider SemVer 和本次
+  加载的实现 Artifact hash，不能伪造一个模型版本；
+- 远程 Provider 不能只记录“latest”或云端别名。
+
+Provider Package、Capability Contract 和模型版本可以独立变化。Assembly 通过精确
+lock 把它们组合成一个可复现 Product Build。
+
+同一个 Provider 可以同时实现多个、各自演进的 Capability：
+
+```json
+{
+  "provider_id": "local.audio-intelligence",
+  "provider_version": "0.4.2",
+  "capabilities": [
+    {"id": "sample.slice.v1", "version": "1.2.0"},
+    {"id": "stem.separate.v1", "version": "1.0.1"}
+  ]
+}
+```
+
+只改变 `sample.slice.v1` 的兼容可选输出时，增加它的 Contract Minor 和 Provider
+实现版本；`stem.separate.v1` 不跟着改变。这样保留独立组合能力，同时避免给内部
+私有函数制造无意义的版本号。
+
+## 9. Product Assembly 与 Version Lock
+
+Product Assembly 声明想要的模块和 Provider；生成的 lock 声明实际解析结果：
+
+```text
+products/lmdj/
+  version.json
+  assembly.json
+  assembly.lock.json
+```
+
+`version.json` 是四段 Product Build Version 的源码真相：
+
+```json
+{
+  "contract": "lmdj.product-version.v1",
+  "product": "lmdj",
+  "milestone": 1,
+  "minor": 0,
+  "build": 1,
+  "patch": 0
+}
+```
+
+`assembly.lock.json` 必须包含：
+
+- Product Build Version；
+- 每个 Module 的精确版本；
+- 每个 Contract 的 ID、版本和 schema hash；
+- 每个 Provider 的精确版本；
+- 模型/规则 Artifact hash；
+- Assembly hash。
+
+lock 文件由工具生成，不手工编辑。Build Manifest 在 checkout 之后把 lock hash 与完整
+Git revision、Channel、构建平台和产物 hash 绑定起来。
+
+## 10. M1 开发版本表
+
+M1 采用六个顺序 PR Gate；Build 编号已经分配，失败或取消也不复用：
+
+| Gate | 范围 | Product Build | Channel |
+| --- | --- | --- | --- |
+| Plan baseline | 已 Review 的实施计划 | 无 Product Build；`lmdj-m1-plan.1` | 无 |
+| PR 1 | Build Lab + Contracts | `1.0.1.0` | `dev` |
+| PR 2 | Authoring Domain + Project I/O | `1.0.2.0` | `dev` |
+| PR 3 | Cooker + Offline Runtime | `1.0.3.0` | `dev` |
+| PR 4 | Provider SDK + Facade/C ABI | `1.0.4.0` | `dev` |
+| PR 5 | CLI + MCP | `1.0.5.0` | `dev` |
+| PR 6 | Product Assembly + Headless Proof | `1.0.6.0` | `dev` |
+
+分支内未合并构建显示候选 Build 加 SHA：
+
+```text
+1.0.3.0 · canary · g<short-sha>
+```
+
+只有对应 PR squash-merge、CI 和 Build Manifest 校验通过后，Integration Owner 才能
+创建 `lmdj-v1.0.<BUILD>.0` tag。
+
+## 11. 每份未来实施计划的强制章节
+
+每一份 LMDJ 实施计划必须包含 `## Version Management`，并明确：
+
+1. 影响哪种版本域：Product、Module、Contract、Provider、Model；
+2. 起始版本和目标版本；
+3. bump 原因；
+4. 每个 PR/阶段对应的 Product Build 和 Channel；
+5. 要修改的 `version.json`、`module.json`、Schema 或 Provider Manifest；
+6. Contract/Project 兼容性与迁移影响；
+7. tag 名称、目标 SHA 条件和 tag message；
+8. 哪些验证通过后才能打 tag；
+9. 是否允许发布、push、渠道晋级或部署；
+10. rollback 时复用哪个不可变版本。
+
+如果计划不产生版本变化，也必须写：
+
+```text
+Version impact: none
+Reason: <为什么不影响任何公开产品、模块、Contract、Provider 或模型身份>
+```
+
+缺少该章节的计划不得进入实施。
+
+## 12. 操作边界
+
+以下状态必须分别报告：
+
+```text
+designed
+planned
+implemented
+committed
+merged
+tagged
+built
+channel-promoted
+released
+deployed
+release-verified
+```
+
+前一状态不自动授权后一状态。尤其：
+
+- commit 不授权 tag；
+- tag 不授权 push；
+- push 不授权 Release；
+- Release 不授权部署；
+- 部署不等于生产验证。
+
+## 13. 当前状态
+
+截至 2026-07-30：
+
+| 项目 | 状态 |
+| --- | --- |
+| M1 产品与内核设计 | 已确认 |
+| M1 Headless Core 实施计划 | 已 Review |
+| 当前阶段 tag | 本地 signed annotated tag `lmdj-m1-plan.1` |
+| Tag target | `34236c062d5982d22701ad0482518a29bfaefa60` |
+| Product Build | 尚未产生 |
+| 当前 Channel | 无 |
+| Tag push / GitHub Release / 部署 | 未授权、未执行 |
+
+## 14. 规范来源
+
+- [Chromium Version Numbers](https://chromium.googlesource.com/playground/chromium-org-site/+/refs/heads/main/developers/version-numbers.md)：四段 Product Build 版本的参考。
+- [Chrome Release Channels](https://www.chromium.org/chrome-release-channels/)：Channel 与 Build 身份分离的参考。
+- [Semantic Versioning 2.0.0](https://semver.org/spec/v2.0.0.html)：Module 与 Provider 实现版本规则。

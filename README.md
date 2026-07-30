@@ -25,6 +25,7 @@ lmdj/
 - [docs/prd/source-materials.md](docs/prd/source-materials.md)：外部输入、demo、参考资料和素材索引。
 - [docs/prd/open-questions.md](docs/prd/open-questions.md)：待讨论问题池。
 - [docs/prd/decision-log.md](docs/prd/decision-log.md)：已经确认的产品/技术决策。
+- [docs/governance/version-management.md](docs/governance/version-management.md)：Product Build、Channel、Tag、Module、Contract 与 Provider 的统一版本规范。
 - [docs/deploy/staging.md](docs/deploy/staging.md)：单服务器 staging 的部署、回滚与运维。
 - [references/README.md](references/README.md)：参考素材和 demo 的边界说明。
 - [references/demos/lmdj-song-pipeline/README.md](references/demos/lmdj-song-pipeline/README.md)：高嘉丰参考项目的快速上手和接口说明。
