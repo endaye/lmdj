@@ -22,9 +22,13 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          lfs: true
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
       - run: bash tests/build/test_active_tree.sh
       - run: python3 tests/build/version_test.py

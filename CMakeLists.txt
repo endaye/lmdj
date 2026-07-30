@@ -15,6 +15,8 @@ include(cmake/LmdjWarnings.cmake)
 add_subdirectory(packages/foundation)
 add_subdirectory(packages/authoring-domain)
 add_subdirectory(packages/project-io)
+add_subdirectory(packages/project-cooker)
+add_subdirectory(packages/audio-runtime)
 
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
