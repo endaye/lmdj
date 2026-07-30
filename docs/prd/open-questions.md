@@ -1,8 +1,18 @@
 # 开放问题
 
-更新时间：2026-07-24
+更新时间：2026-07-30
 
 这里记录 2026-07-18 Stage Memo 和 2026-07-24 本地决策之后仍未确认的问题。已经解决的旧问题已转入 [decision-log.md](decision-log.md)，不继续以“待决”状态保留。
+
+## 新内核（Playable Beat Instrument）
+
+来自 [2026-07-30 新内核设计](../superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)评审。
+
+| 问题 | 为什么重要 | 处理时点 | 状态 |
+| --- | --- | --- | --- |
+| 素材 BPM ≠ Project BPM 时，Loop 类素材是否/如何 Time-stretch 跟随全局 BPM（含 Pitch-shift）？ | “完整歌曲变成可演奏素材”+ 全局 BPM/Key 几乎必然遇到速度不匹配；决定 Audio Runtime 的 DSP 范围和 Capability 清单（Koala 有 Time-stretch 作为对照）。 | Audio Runtime Contract 定稿前的设计评审。 | 待决 |
+| 录音进行中的并发 Command 与 Expected Project Revision 如何交互（如录音时更换被录 Pad 的音色、清空目标 Pattern）？ | 决定 Command 原子性、录音 Journal 与 Take 提交语义（设计 §6.5 已定 Take 直接进 Project Truth，但并发窗口语义未定）。 | Headless Core 实施计划。 | 待决 |
+| Web 实时音频 Spike 的延迟验收阈值是多少（Touch-to-Sound）？ | 阈值决定 Spike 结论是否触发“回评审重议首发平台”；不能事后按实测结果倒推。 | Spike 启动前定阈值。 | 待决 |
 
 ## Stage 1 首条切片
 

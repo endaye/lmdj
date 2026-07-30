@@ -4,6 +4,12 @@
 
 状态：用户已逐节确认；设计完成，尚未实现
 
+修订：2026-07-30 评审后补充 §6.5 Raw Take 持久化边界、§6.6 Pattern 引用
+语义、§13 `apps/` 目录边界说明、§22 Proof 范围说明、§23 交付顺序（第 0 步
+旧产品处置、Web 实时音频 Spike、首个用户价值里程碑）；素材 BPM 与
+Project BPM 的关系（Time-stretch）记入
+[open-questions.md](../../prd/open-questions.md)
+
 优先级：本设计在冲突处取代旧 Stage 1 Creator、`lmdj.patch.v1`、
 `lmdj.materials.v1` 与 Agent Orchestration 产品假设
 
@@ -220,6 +226,26 @@ Sequence 阶段可以生成候选：
 - Discard。
 
 它不得覆盖 Raw Take。
+
+### 6.5 Raw Take 持久化边界
+
+用户演奏不可再现，Take 的丢失成本与可重跑的 AI Job 不对称，因此 Take 不走
+Candidate → Commit 流程：
+
+- `RecordTake` 完成即作为 Command 原子进入 Project Truth；
+- 录音进行中，演奏事件必须尽早写入本地 Journal，不允许只存在内存；
+- 录音中断按 §18.1 封存为可恢复 Candidate，下次打开 Project 时提示恢复；
+- Workspace Cache 的清理策略不得清除尚未恢复的中断录音；
+- 录音进行中的并发 Command 与 Expected Revision 的具体交互语义见
+  [open-questions.md](../../prd/open-questions.md)，在实施计划中确定。
+
+### 6.6 Pattern 引用语义
+
+Pattern 事件引用 Pad Slot（Bank + Pad 位置），不直接引用 Asset：
+
+- 更换 Pad 音色后，既有 Pattern 以新音色回放（Sampler 惯例）；
+- 需要冻结当前声音时，使用 Resample 产生新 Asset；
+- Lineage 记录 Asset 派生关系，不记录 Pattern 与音色的历史组合。
 
 ## 7. Perform
 
@@ -499,6 +525,10 @@ tests/
 `packages/`、`providers/` 和 Host-neutral Contract 必须保持产品无关，不能依赖
 LMDJ Creator UI。LMDJ 只是通过 `products/lmdj/` 组合这些能力；未来其他产品可以
 在同一 Monorepo 中建立自己的 Product Assembly 并复用相同模块。
+
+`apps/` 不整体承担产品无关约束：`core-cli`、`core-mcp`、`native-test-host` 和
+`web-runtime-lab` 是内核 Host，必须保持产品中立；`creator-web` 是 LMDJ 产品
+UI，允许依赖 `products/lmdj/` 的 Assembly，但同样不得绕过 Application Facade。
 
 目录名称可以在实施计划中做机械调整，但依赖方向不能改变：
 
@@ -870,8 +900,15 @@ Headless Test 代替。
 - Marketplace；
 - 云部署。
 
+第一 Proof 验证的是确定性与事务边界，不覆盖实时演奏延迟。实时延迟由 §23 中
+提前启动的 Web 实时音频 Spike 单独验证，两者互不替代。
+
 ## 23. 交付顺序
 
+0. 旧产品处置与仓库指南重写：确定旧 `apps/` / `packages/` / `workers/` 代码
+   的去向（删除或移入 `references/`），并重写 CLAUDE.md / AGENTS.md，使其
+   描述新内核而非旧 `lmdj.patch.v1` 链路——否则后续每个开发 Agent 都会被
+   过时指令误导；
 1. Foundation、Contract 和 Build Lab；
 2. Headless Project / Runtime / Offline Render；
 3. CLI + MCP；
@@ -884,6 +921,16 @@ Headless Test 代替。
 10. Perform；
 11. Sound Set；
 12. Stem / Slice / Pattern Intelligence Providers。
+
+与第 1 步同期启动 **Web 实时音频 Spike**：最小化验证
+AudioWorklet + WASM 线程、SharedArrayBuffer 所需的 Cross-Origin Isolation、
+iPad Safari 音频生命周期，并实测 Touch-to-Sound 延迟。它不依赖 Facade 和
+Provider SDK，是"Web/PWA 首发"决定的最早验证点；若延迟不可接受，必须回到
+设计评审重议首发平台，而不是在实施中静默降级体验。
+
+第 9 步完成即构成**首个用户价值里程碑**：真实用户可以导入声音、手动裁剪、
+分配 Pad 并亲手录出 Beat（不含 Stem / Slice 智能）。三分钟核心承诺的
+"亲手演奏"部分在此验证，不等待第 12 步的 Intelligence Providers。
 
 UI 与内核可以独立开发，但 Creator Editor 只能依赖已经通过 Facade 和 Conformance
 验证的能力。
