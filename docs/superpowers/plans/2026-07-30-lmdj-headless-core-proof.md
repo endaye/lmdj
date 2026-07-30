@@ -61,6 +61,29 @@ Do not accumulate all eleven Task commits into one final Pull Request. Use these
 
 Within a PR, preserve one local commit per Task for review. After that PR passes CI and review, squash-merge it, delete its short-lived branch, synchronize `main`, and branch the next PR from the merged head. An implementation worker stops at its PR boundary and returns evidence to the Integration Owner; it does not open one eleven-Task mega-PR.
 
+## Accepted Proof Scaffolding and Recorded Debt (2026-07-30 architecture review)
+
+These positions are deliberate. Implementers must not "fix" them inside this
+proof, and later plans must not inherit them silently:
+
+- **The integer renderer is scaffolding.** Byte-exact Golden Audio exists to
+  prove determinism cheaply. Product DSP (filters, FX, time-stretch) will be
+  floating-point, and the cross-platform gate then becomes the tolerance-based
+  Golden comparison of redesign spec §21.2. Do not extend the integer mixer
+  beyond this proof.
+- **The Facade is the control plane, not the realtime data plane.**
+  `take.begin/append/commit` over JSON proves transactional semantics only.
+  Realtime Hosts must feed recording through the §11.4 lock-free Capture Ring;
+  they must not reuse the per-event JSON path.
+- **`project-io` writes `std::filesystem` directly.** The §9 Storage Provider
+  abstraction is deferred on purpose; Web/OPFS has no fsync and different
+  rename semantics, so porting to Web requires introducing that interface
+  first. Recorded as debt, not an oversight.
+- **`nlohmann::json` appears in public C++ headers** (`Error.details`, Facade
+  request/response types). Accepted inside the monorepo because the C ABI
+  isolates external consumers; it must never leak across the C ABI, the JSON
+  Schemas, or any published SDK header.
+
 ## Public Error Codes
 
 All Facade, CLI, C ABI, and MCP failures map to this stable proof set:
@@ -817,7 +840,11 @@ Tests assert:
 - replaying committed transaction files from revision `0` yields the checkpoint named by the manifest head;
 - imported assets are named by SHA-256 and duplicate import does not duplicate bytes;
 - write failure leaves the previous valid Project loadable;
-- a duplicate command after reopen remains idempotent.
+- a duplicate command after reopen remains idempotent;
+- while the test holds an exclusive advisory lock on `<bundle>/.lock` through
+  an independent file descriptor, `execute` does not commit; after the lock is
+  released it completes at the next revision — proving cross-process
+  serialization without relying on an in-process mutex.
 
 - [ ] **Step 2: Add failing recording journal tests**
 
@@ -870,7 +897,10 @@ Expected: missing Project I/O target and headers.
 
 For every Project commit:
 
-1. hold a per-bundle process mutex;
+1. acquire an exclusive OS advisory file lock (`flock`/`fcntl`) on
+   `<bundle>/.lock`, creating the file if missing — a process-local mutex is
+   insufficient because the one-shot CLI and the long-lived MCP Host can
+   commit to the same bundle concurrently;
 2. load and validate current state;
 3. call the pure Command Handler;
 4. write and fsync immutable transaction and checkpoint temp files;
@@ -881,6 +911,13 @@ For every Project commit:
 9. return the committed revision.
 
 The manifest rename is the only commit point. Revision-scoped files beyond the manifest head are ignored after a crash and removed during verified recovery. Never report success before the new manifest head is durable.
+
+The advisory lock is held from before state load until after the manifest
+rename and directory fsync. A concurrent Host therefore blocks, then loads the
+new revision and fails its own `expected_revision` check honestly. Without the
+lock, two processes could both validate against the same revision and the
+later manifest rename would silently discard a commit already reported as
+successful — a violation of the never-lie-about-success rule.
 
 `import_artifact` performs the same revision transaction: it hashes and stages the blob, constructs the Domain `ImportAsset` command, and publishes the blob plus new manifest head as one logical commit. A staged or unreferenced blob from a crash is outside the manifest head and is removed during verified recovery.
 
@@ -1643,7 +1680,7 @@ lmdj.provider.run
 lmdj.attempt.inspect
 ```
 
-Each tool forwards one Facade request. A success returns both:
+Each tool forwards one Facade request. A static tool table declares whether a tool maps to the Facade `command` or `query` surface, matching the Task 8 lists (`lmdj.project.inspect`, `lmdj.snapshot.cook`, `lmdj.provider.list`, and `lmdj.attempt.inspect` are Queries; the rest are Commands). A success returns both:
 
 ```json
 {
@@ -1972,6 +2009,7 @@ git commit -m "feat(core): prove headless beat project end to end"
 - [ ] Full proof passes twice from clean builds.
 - [ ] `git diff --check` passes.
 - [ ] Each task commit contains only its declared paths.
+- [ ] Concurrent commits from two Host processes serialize through the bundle advisory lock; no reported-successful commit is lost.
 - [ ] Strict recording conflict is documented as Proof-only and the product-level concurrency question remains open.
 - [ ] Web realtime-audio latency remains explicitly outside this proof.
 
