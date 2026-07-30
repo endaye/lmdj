@@ -1,0 +1,64 @@
+set(
+  lmdj_local_proof_failure_package_files
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/lmdj/providers/local_proof_failure/factory.hpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/module.json"
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/provider.cpp"
+)
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS
+    ${lmdj_local_proof_failure_package_files}
+)
+file(
+  SHA256
+  "${CMAKE_CURRENT_SOURCE_DIR}/include/lmdj/providers/local_proof_failure/factory.hpp"
+  lmdj_local_proof_failure_factory_sha256
+)
+file(
+  SHA256
+  "${CMAKE_CURRENT_SOURCE_DIR}/module.json"
+  lmdj_local_proof_failure_module_sha256
+)
+file(
+  SHA256
+  "${CMAKE_CURRENT_SOURCE_DIR}/src/provider.cpp"
+  lmdj_local_proof_failure_source_sha256
+)
+set(
+  lmdj_local_proof_failure_manifest
+  "{\"files\":[{\"path\":\"providers/local-proof-failure/include/lmdj/providers/local_proof_failure/factory.hpp\",\"sha256\":\"${lmdj_local_proof_failure_factory_sha256}\"},{\"path\":\"providers/local-proof-failure/module.json\",\"sha256\":\"${lmdj_local_proof_failure_module_sha256}\"},{\"path\":\"providers/local-proof-failure/src/provider.cpp\",\"sha256\":\"${lmdj_local_proof_failure_source_sha256}\"}],\"format\":\"provider-source-package\",\"provider_id\":\"local.proof.failure\",\"provider_version\":\"0.1.0\"}\n"
+)
+file(
+  WRITE
+  "${CMAKE_CURRENT_BINARY_DIR}/local.proof.failure.source-package.json"
+  "${lmdj_local_proof_failure_manifest}"
+)
+string(
+  SHA256
+  lmdj_local_proof_failure_package_sha256
+  "${lmdj_local_proof_failure_manifest}"
+)
+
+add_library(
+  lmdj_provider_local_proof_failure
+  STATIC
+    src/provider.cpp
+)
+target_include_directories(
+  lmdj_provider_local_proof_failure
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+)
+target_link_libraries(
+  lmdj_provider_local_proof_failure
+  PUBLIC
+    lmdj::provider_sdk
+)
+target_compile_definitions(
+  lmdj_provider_local_proof_failure
+  PRIVATE
+    LMDJ_LOCAL_PROOF_FAILURE_SOURCE_PACKAGE_SHA256="${lmdj_local_proof_failure_package_sha256}"
+)
+lmdj_target_warnings(lmdj_provider_local_proof_failure)
+lmdj_target_sanitizers(lmdj_provider_local_proof_failure)
