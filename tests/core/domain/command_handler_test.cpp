@@ -1,0 +1,379 @@
+#include <exception>
+#include <iostream>
+#include <map>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include <lmdj/domain/command_handler.hpp>
+
+#include "tests/core/support/test.hpp"
+
+namespace {
+
+using lmdj::domain::AppliedCommand;
+using lmdj::domain::AssignPad;
+using lmdj::domain::Command;
+using lmdj::domain::CommandMeta;
+using lmdj::domain::CommandReceipt;
+using lmdj::domain::CreatePattern;
+using lmdj::domain::ImportAsset;
+using lmdj::domain::PadSlotId;
+using lmdj::domain::Pattern;
+using lmdj::domain::PatternEvent;
+using lmdj::domain::RawTake;
+using lmdj::domain::RawTakeEvent;
+using lmdj::domain::RecordTake;
+using lmdj::foundation::ArtifactRef;
+using lmdj::foundation::AssetId;
+using lmdj::foundation::CommandId;
+using lmdj::foundation::ErrorCode;
+using lmdj::foundation::PatternId;
+using lmdj::foundation::ProjectId;
+using lmdj::foundation::TakeId;
+
+constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
+constexpr auto kImportCommand1 = "10000000-0000-4000-8000-000000000001";
+constexpr auto kImportCommand2 = "10000000-0000-4000-8000-000000000002";
+constexpr auto kAssignCommand1 = "10000000-0000-4000-8000-000000000003";
+constexpr auto kPatternCommand = "10000000-0000-4000-8000-000000000004";
+constexpr auto kAssignCommand2 = "10000000-0000-4000-8000-000000000005";
+constexpr auto kRecordCommand = "10000000-0000-4000-8000-000000000006";
+constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
+constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
+constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
+constexpr auto kPattern2 = "30000000-0000-4000-8000-000000000002";
+constexpr auto kTake1 = "40000000-0000-4000-8000-000000000001";
+constexpr auto kValidSha256 =
+    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+CommandMeta meta(std::string id, std::uint64_t revision) {
+  return CommandMeta{CommandId{std::move(id)}, revision};
+}
+
+lmdj::domain::ProjectState new_project() {
+  const auto result = lmdj::domain::create_project(ProjectId{kProjectId}, 120);
+  LMDJ_CHECK(result.has_value());
+  return result.value();
+}
+
+ImportAsset import_asset(std::string command_id, std::uint64_t revision,
+                         std::string asset_id,
+                         ArtifactRef artifact =
+                             ArtifactRef{kValidSha256, "audio/wav", 1}) {
+  return ImportAsset{
+      meta(std::move(command_id), revision),
+      {AssetId{std::move(asset_id)}, std::move(artifact)},
+  };
+}
+
+AssignPad assign_pad(std::string command_id, std::uint64_t revision,
+                     PadSlotId slot, AssetId asset_id) {
+  return AssignPad{
+      meta(std::move(command_id), revision), slot, std::move(asset_id)};
+}
+
+AppliedCommand apply_or_throw(const lmdj::domain::ProjectState& state,
+                              const Command& command) {
+  const auto result = lmdj::domain::apply(state, command, {});
+  LMDJ_CHECK(result.has_value());
+  return result.value();
+}
+
+void check_invalid_without_state_change(
+    const lmdj::domain::ProjectState& state,
+    const Command& command,
+    const std::map<CommandId, CommandReceipt>& receipts = {}) {
+  const auto before = state;
+  const auto result = lmdj::domain::apply(state, command, receipts);
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(state == before);
+}
+
+void test_valid_command_increments_revision_once() {
+  const auto initial = new_project();
+  const auto applied = apply_or_throw(
+      initial, Command{import_asset(kImportCommand1, 0, kAsset1)});
+
+  LMDJ_CHECK(applied.state.revision == 1);
+  LMDJ_CHECK(applied.state.assets.size() == 1);
+  LMDJ_CHECK(!applied.replayed);
+  LMDJ_CHECK(applied.event.at("command_id") == kImportCommand1);
+}
+
+void test_wrong_revision_returns_conflict_without_changing_state() {
+  const auto initial = new_project();
+  const auto command =
+      Command{import_asset(kImportCommand1, 1, kAsset1)};
+  const auto result = lmdj::domain::apply(initial, command, {});
+
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(result.error().code == ErrorCode::revision_conflict);
+  LMDJ_CHECK(initial.revision == 0);
+  LMDJ_CHECK(initial.assets.empty());
+  LMDJ_CHECK(initial.takes.empty());
+  LMDJ_CHECK(initial.patterns.empty());
+}
+
+void test_duplicate_command_id_replays_original_successful_outcome() {
+  const auto initial = new_project();
+  const auto command =
+      Command{import_asset(kImportCommand1, 0, kAsset1)};
+  const auto first = apply_or_throw(initial, command);
+  const std::map<CommandId, CommandReceipt> receipts{
+      {CommandId{kImportCommand1}, {first.state.revision, first.event}},
+  };
+
+  const auto replay = lmdj::domain::apply(first.state, command, receipts);
+  LMDJ_CHECK(replay.has_value());
+  LMDJ_CHECK(replay.value().replayed);
+  LMDJ_CHECK(replay.value().state == first.state);
+  LMDJ_CHECK(replay.value().event == first.event);
+}
+
+void test_invalid_command_leaves_state_unchanged() {
+  const auto initial = new_project();
+  const auto invalid = Command{assign_pad(
+      kAssignCommand1, 0, PadSlotId{4, 0}, AssetId{kAsset1})};
+  const auto result = lmdj::domain::apply(initial, invalid, {});
+
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(initial == new_project());
+}
+
+void test_invalid_command_id_is_rejected_before_receipt_lookup() {
+  const auto initial = new_project();
+  for (const std::string_view invalid : {
+           "10000000.0000.4000.8000.000000000001",
+           "10000000-0000-4000-8000-00000000000A",
+           "10000000-0000-4000-8000-00000000001",
+           "10000000-0000-6000-8000-000000000001",
+       }) {
+    const Command command{
+        import_asset(std::string(invalid), 0, kAsset1)};
+    const std::map<CommandId, CommandReceipt> receipts{
+        {CommandId{std::string(invalid)},
+         {1, {{"command_id", invalid}, {"type", "asset.imported"}}}},
+    };
+    check_invalid_without_state_change(initial, command, receipts);
+  }
+}
+
+void test_import_asset_validates_id_and_complete_artifact_reference() {
+  const auto initial = new_project();
+  for (const std::string_view invalid : {
+           "20000000.0000.4000.8000.000000000001",
+           "20000000-0000-4000-8000-00000000000A",
+           "20000000-0000-4000-8000-00000000001",
+           "20000000-0000-6000-8000-000000000001",
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{import_asset(kImportCommand1, 0, std::string(invalid))});
+  }
+
+  std::string uppercase_sha(64, 'A');
+  std::string non_hex_sha(64, 'a');
+  non_hex_sha.back() = 'g';
+  for (ArtifactRef invalid : {
+           ArtifactRef{"a", "audio/wav", 1},
+           ArtifactRef{uppercase_sha, "audio/wav", 1},
+           ArtifactRef{non_hex_sha, "audio/wav", 1},
+           ArtifactRef{kValidSha256, "", 1},
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{import_asset(
+            kImportCommand1, 0, kAsset1, std::move(invalid))});
+  }
+
+  const auto zero_length = lmdj::domain::apply(
+      initial,
+      Command{import_asset(
+          kImportCommand1,
+          0,
+          kAsset1,
+          ArtifactRef{kValidSha256, "audio/wav", 0})},
+      {});
+  LMDJ_CHECK(zero_length.has_value());
+  LMDJ_CHECK(zero_length.value().state.assets.at(AssetId{kAsset1})
+                 .artifact.byte_length == 0);
+}
+
+void test_assign_pad_rejects_invalid_asset_id_before_lookup() {
+  const auto initial = new_project();
+  for (const std::string_view invalid : {
+           "20000000.0000.4000.8000.000000000001",
+           "20000000-0000-4000-8000-00000000000A",
+           "20000000-0000-4000-8000-00000000001",
+           "20000000-0000-6000-8000-000000000001",
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{assign_pad(
+            kAssignCommand1,
+            0,
+            PadSlotId{0, 0},
+            AssetId{std::string(invalid)})});
+  }
+}
+
+void test_pattern_events_keep_slot_reference_through_pad_reassignment() {
+  auto state = new_project();
+  state = apply_or_throw(
+      state, Command{import_asset(kImportCommand1, 0, kAsset1)}).state;
+  state = apply_or_throw(
+      state, Command{import_asset(kImportCommand2, 1, kAsset2)}).state;
+  state = apply_or_throw(
+      state,
+      Command{assign_pad(
+          kAssignCommand1, 2, PadSlotId{0, 0}, AssetId{kAsset1})})
+              .state;
+  state = apply_or_throw(
+      state,
+      Command{CreatePattern{
+          meta(kPatternCommand, 3),
+          {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 0, 100}}},
+      }})
+              .state;
+  state = apply_or_throw(
+      state,
+      Command{assign_pad(
+          kAssignCommand2, 4, PadSlotId{0, 0}, AssetId{kAsset2})})
+              .state;
+
+  const auto& event = state.patterns.at(PatternId{kPattern1}).events.at(0);
+  LMDJ_CHECK((event.slot == PadSlotId{0, 0}));
+  const auto resolved = lmdj::domain::resolve_slot_asset(state, event.slot);
+  LMDJ_CHECK(resolved.has_value());
+  LMDJ_CHECK(resolved->id == AssetId{kAsset2});
+}
+
+void test_pattern_validation_enforces_velocity_bars_and_explicit_steps() {
+  const auto state = new_project();
+  const auto invalid_velocity = Command{CreatePattern{
+      meta(kPatternCommand, 0),
+      {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 0, 0}}},
+  }};
+  const auto invalid_bars = Command{CreatePattern{
+      meta(kPatternCommand, 0),
+      {PatternId{kPattern1}, 3, {{PadSlotId{0, 0}, 0, 100}}},
+  }};
+  const auto invalid_step = Command{CreatePattern{
+      meta(kPatternCommand, 0),
+      {PatternId{kPattern1}, 1, {{PadSlotId{0, 0}, 16, 100}}},
+  }};
+
+  for (const auto& command : {invalid_velocity, invalid_bars, invalid_step}) {
+    const auto result = lmdj::domain::apply(state, command, {});
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(result.error().code != ErrorCode::revision_conflict);
+  }
+}
+
+void test_create_pattern_rejects_invalid_pattern_id() {
+  const auto initial = new_project();
+  for (const std::string_view invalid : {
+           "30000000.0000.4000.8000.000000000001",
+           "30000000-0000-4000-8000-00000000000A",
+           "30000000-0000-4000-8000-00000000001",
+           "30000000-0000-6000-8000-000000000001",
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{CreatePattern{
+            meta(kPatternCommand, 0),
+            {PatternId{std::string(invalid)}, 1, {}},
+        }});
+  }
+}
+
+void test_record_take_commits_unquantized_take_and_explicit_pattern_atomically() {
+  const auto initial = new_project();
+  const auto command = Command{RecordTake{
+      meta(kRecordCommand, 0),
+      {TakeId{kTake1}, 48000, {{PadSlotId{0, 1}, 12345, 96}}},
+      {PatternId{kPattern1}, 1, {{PadSlotId{0, 1}, 7, 96}}},
+  }};
+
+  const auto result = lmdj::domain::apply(initial, command, {});
+  LMDJ_CHECK(result.has_value());
+  const auto& committed = result.value().state;
+  LMDJ_CHECK(committed.revision == 1);
+  LMDJ_CHECK(committed.takes.size() == 1);
+  LMDJ_CHECK(committed.patterns.size() == 1);
+  LMDJ_CHECK(
+      committed.takes.at(TakeId{kTake1}).events.at(0).frame_offset == 12345);
+  LMDJ_CHECK(
+      committed.patterns.at(PatternId{kPattern1}).events.at(0).step == 7);
+}
+
+void test_record_take_validates_ids_and_requires_48_khz_atomically() {
+  const auto initial = new_project();
+  for (const std::string_view invalid : {
+           "40000000.0000.4000.8000.000000000001",
+           "40000000-0000-4000-8000-00000000000A",
+           "40000000-0000-4000-8000-00000000001",
+           "40000000-0000-6000-8000-000000000001",
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{RecordTake{
+            meta(kRecordCommand, 0),
+            {TakeId{std::string(invalid)}, 48000, {}},
+            {PatternId{kPattern1}, 1, {}},
+        }});
+  }
+
+  for (const std::string_view invalid : {
+           "30000000.0000.4000.8000.000000000001",
+           "30000000-0000-4000-8000-00000000000A",
+           "30000000-0000-4000-8000-00000000001",
+           "30000000-0000-6000-8000-000000000001",
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{RecordTake{
+            meta(kRecordCommand, 0),
+            {TakeId{kTake1}, 48000, {}},
+            {PatternId{std::string(invalid)}, 1, {}},
+        }});
+  }
+
+  for (const std::uint32_t invalid_rate : {0U, 44100U, 96000U}) {
+    check_invalid_without_state_change(
+        initial,
+        Command{RecordTake{
+            meta(kRecordCommand, 0),
+            {TakeId{kTake1}, invalid_rate, {}},
+            {PatternId{kPattern2}, 1, {}},
+        }});
+  }
+}
+
+}  // namespace
+
+int main() {
+  try {
+    test_valid_command_increments_revision_once();
+    test_wrong_revision_returns_conflict_without_changing_state();
+    test_duplicate_command_id_replays_original_successful_outcome();
+    test_invalid_command_leaves_state_unchanged();
+    test_invalid_command_id_is_rejected_before_receipt_lookup();
+    test_import_asset_validates_id_and_complete_artifact_reference();
+    test_assign_pad_rejects_invalid_asset_id_before_lookup();
+    test_pattern_events_keep_slot_reference_through_pad_reassignment();
+    test_pattern_validation_enforces_velocity_bars_and_explicit_steps();
+    test_create_pattern_rejects_invalid_pattern_id();
+    test_record_take_commits_unquantized_take_and_explicit_pattern_atomically();
+    test_record_take_validates_ids_and_requires_48_khz_atomically();
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+  std::cout << "domain command handler tests: PASS\n";
+  return 0;
+}
