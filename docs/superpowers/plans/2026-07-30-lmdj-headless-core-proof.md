@@ -19,9 +19,10 @@
 - `core-cli`, `core-mcp`, tests, and future Hosts use only `application-facade`; they never parse `.lmdj` files.
 - Pattern events reference `PadSlotId {bank, pad}`. They never reference an Asset directly.
 - Every successful Project command carries `expected_revision`, is atomic, and increments revision exactly once.
-- `RecordTake` captures `expected_revision` when recording begins. A changed revision returns `REVISION_CONFLICT`; there is no auto-rebase. The sealed Take remains recoverable and Project Truth remains unchanged.
+- For this Proof only, `RecordTake` captures `expected_revision` when recording begins. Any changed revision returns `REVISION_CONFLICT`; there is no auto-rebase. The sealed Take remains recoverable and Project Truth remains unchanged. Product-level selective conflict/rebase semantics remain a design-review question.
 - Provider failure mutates only an Attempt record in Workspace State; it never mutates Project Truth.
 - Runtime Snapshot is immutable and derived. Runtime transport, voice, cache, buffer, and telemetry state is never persisted as Project Truth.
+- This Proof does not implement Quantize. A Host supplies explicit Pattern steps alongside unquantized Raw Take frame offsets; Domain validates both and never derives one from the other.
 - Use Test-Driven Development: add a failing test, observe the expected failure, add the minimum implementation, then observe the pass.
 - Each task is one reviewable commit. Stage only the paths listed for that task.
 - No implementation step may add unfinished-work markers, empty handlers, fake success results, or skipped assertions.
@@ -41,8 +42,24 @@
 | Pattern length | 1, 2, 4, or 8 bars; the proof fixture uses 1 bar at 120 BPM. |
 | Project revision | Unsigned 64-bit integer serialized as a JSON integer. |
 | Command identity | UUID-shaped lowercase string supplied by the Host; duplicate command IDs are idempotent. |
+| Recording concurrency | Proof-scoped strict revision match with sealed recovery on conflict; it does not settle product-level irrelevant-Command or selective-rebase semantics. |
 | Provider selection | Workspace/Host setting, not Project Truth. |
 | MCP transport | JSON-RPC 2.0 over stdio, one UTF-8 JSON message per line; stdout is protocol-only and logs go to stderr. |
+
+## Integration PR Boundaries
+
+Do not accumulate all eleven Task commits into one final Pull Request. Use these six protected-main integration gates:
+
+| PR | Included Tasks | Squash result |
+| --- | --- | --- |
+| PR 1 — Build and Contracts | Tasks 1–2 | Active-tree reset, reproducible build, Foundation, schemas |
+| PR 2 — Project Truth | Tasks 3–4 | Authoring Domain, atomic Project I/O, Take recovery |
+| PR 3 — Derived Runtime | Tasks 5–6 | Cooker, PCM fixtures, deterministic offline render |
+| PR 4 — Extensibility Boundary | Tasks 7–8 | Provider SDK, Attempt isolation, Facade, C ABI |
+| PR 5 — Headless Hosts | Tasks 9–10 | CLI and MCP over the same Facade |
+| PR 6 — Product Proof | Task 11 | Assembly, cross-Host E2E, CI acceptance |
+
+Within a PR, preserve one local commit per Task for review. After that PR passes CI and review, squash-merge it, delete its short-lived branch, synchronize `main`, and branch the next PR from the merged head. An implementation worker stops at its PR boundary and returns evidence to the Integration Owner; it does not open one eleven-Task mega-PR.
 
 ## Public Error Codes
 
@@ -80,6 +97,17 @@ Every structured failure has:
 }
 ```
 
+The names above are the only public Proof error enum. The broader design’s §18 labels are diagnostic categories, not a second enum:
+
+| Proof error | §18 diagnostic category |
+| --- | --- |
+| `UNSUPPORTED_AUDIO` | `DECODE_FAILED` |
+| `INVALID_PROJECT`, `MISSING_ASSET`, `COOK_FAILED` | `SNAPSHOT_REJECTED`, preserving the Proof code as the cause |
+| `PROVIDER_NOT_FOUND`, `PROVIDER_FAILED`, `PERMISSION_DENIED` | Provider selection/execution failure |
+| `IO_ERROR` | Project or Artifact persistence failure |
+
+The later full Provider Conformance Lab must extend this versioned error contract through design review instead of introducing parallel codes.
+
 ---
 
 ### Task 1: Remove the stopped product from the active tree and establish the new build lab
@@ -110,6 +138,7 @@ Every structured failure has:
 - Create: `cmake/LmdjWarnings.cmake`
 - Create: `packages/foundation/CMakeLists.txt`
 - Create: `scripts/core.sh`
+- Create: `scripts/verify-core-dependencies.sh`
 - Create: `tests/build/test_active_tree.sh`
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.gitignore`
@@ -125,7 +154,56 @@ Every structured failure has:
 - Produces one active-source rule: formal code exists only under the new module layout.
 - Preserves `references/demos/` and all confirmed redesign documents.
 
-- [ ] **Step 1: Write the active-tree guard before removing anything**
+- [ ] **Step 1: Encode and run the immutable-dependency preflight**
+
+Create `scripts/verify-core-dependencies.sh`:
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+json_sha="42f6e95cad6ec532fd372391373363b62a14af6d771056dbfc86160e6dfff7aa"
+pico_commit="161cb3fc4170fa7a3eca9e582cebd27cc4d1fe29"
+verify_root="$(mktemp -d)"
+trap 'rm -rf "$verify_root"' EXIT
+
+curl --proto '=https' --tlsv1.2 -fsSL \
+  https://github.com/nlohmann/json/releases/download/v3.12.0/json.tar.xz \
+  -o "$verify_root/json.tar.xz"
+
+if command -v sha256sum >/dev/null 2>&1; then
+  actual_json_sha="$(sha256sum "$verify_root/json.tar.xz" | awk '{print $1}')"
+else
+  actual_json_sha="$(shasum -a 256 "$verify_root/json.tar.xz" | awk '{print $1}')"
+fi
+test "$actual_json_sha" = "$json_sha"
+
+mkdir "$verify_root/PicoSHA2"
+git -C "$verify_root/PicoSHA2" init --quiet
+git -C "$verify_root/PicoSHA2" fetch --quiet --depth 1 \
+  https://github.com/okdshin/PicoSHA2.git "$pico_commit"
+git -C "$verify_root/PicoSHA2" checkout --quiet FETCH_HEAD
+test "$(git -C "$verify_root/PicoSHA2" rev-parse HEAD)" = "$pico_commit"
+grep -Eq '^project\(picosha2\)' "$verify_root/PicoSHA2/CMakeLists.txt"
+grep -Eq '^add_library\(\$\{PROJECT_NAME\} INTERFACE\)' \
+  "$verify_root/PicoSHA2/CMakeLists.txt"
+cmake -S "$verify_root/PicoSHA2" -B "$verify_root/pico-build" \
+  -DPICOSHA2_TEST=OFF -DPICOSHA2_EXAMPLE=OFF
+
+echo "core dependency verification: PASS"
+```
+
+Run:
+
+```bash
+bash scripts/verify-core-dependencies.sh
+```
+
+Expected: `core dependency verification: PASS`.
+
+The pinned PicoSHA2 commit is known to define `project(picosha2)` and `add_library(${PROJECT_NAME} INTERFACE)`, so the imported target name is `picosha2`. The preflight and CMake configuration both fail closed if the fetched sources disagree. The nlohmann/json `URL_HASH` repeats the tarball integrity check during `FetchContent`.
+
+- [ ] **Step 2: Write the active-tree guard before removing anything**
 
 Create `tests/build/test_active_tree.sh`:
 
@@ -151,12 +229,12 @@ do
   fi
 done
 
-rg -q 'New Headless Core' "$repo_root/README.md"
-rg -q 'lmdj.patch.v1.*must not' "$repo_root/AGENTS.md"
+grep -Eq 'New Headless Core' "$repo_root/README.md"
+grep -Eq 'lmdj.patch.v1.*must not' "$repo_root/AGENTS.md"
 cmp "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md"
 ```
 
-- [ ] **Step 2: Run the guard and Observe the expected failure**
+- [ ] **Step 3: Observe the active-tree guard failure**
 
 Run:
 
@@ -166,7 +244,7 @@ bash tests/build/test_active_tree.sh
 
 Expected: exit `1` and `retired active path still exists: apps/api`.
 
-- [ ] **Step 3: Remove the stopped product source and deployment surface**
+- [ ] **Step 4: Remove the stopped product source and deployment surface**
 
 Use `git rm` only on the listed tracked paths. Do not remove `references/demos/`, redesign specs, PRD decision records, or Git history.
 
@@ -185,7 +263,7 @@ Rewrite the three directory READMEs to match §13:
 - `packages/README.md`: product-neutral Core modules only.
 - `workers/README.md`: future out-of-process `provider-host`; no active Patch/Materials worker.
 
-- [ ] **Step 4: Add the root CMake configuration with immutable dependencies**
+- [ ] **Step 5: Add the root CMake configuration with immutable dependencies**
 
 Create `cmake/LmdjDependencies.cmake`:
 
@@ -234,7 +312,7 @@ Create `packages/foundation/CMakeLists.txt` initially as an `INTERFACE` target s
 
 `CMakePresets.json` must define `dev`, `release`, `test`, and `asan` presets under `build/core/<preset>`. `asan` enables AddressSanitizer and UndefinedBehaviorSanitizer on Clang/GCC.
 
-- [ ] **Step 5: Add one stable developer entry point**
+- [ ] **Step 6: Add one stable developer entry point**
 
 `scripts/core.sh` accepts only:
 
@@ -248,11 +326,12 @@ clean
 
 `clean` may remove only the explicit repository path `build/core`; reject an empty or root path before removal.
 
-- [ ] **Step 6: Replace CI with the new build guard**
+- [ ] **Step 7: Replace CI with the new build guard**
 
 `.github/workflows/ci.yml` runs on Ubuntu and macOS:
 
 ```yaml
+- run: bash scripts/verify-core-dependencies.sh
 - run: bash tests/build/test_active_tree.sh
 - run: scripts/core.sh configure release
 - run: scripts/core.sh build release
@@ -261,11 +340,12 @@ clean
 
 There is no deploy job in this proof.
 
-- [ ] **Step 7: Verify the clean build lab**
+- [ ] **Step 8: Verify the clean build lab**
 
 Run:
 
 ```bash
+bash scripts/verify-core-dependencies.sh
 bash tests/build/test_active_tree.sh
 scripts/core.sh configure dev
 scripts/core.sh build dev
@@ -279,7 +359,7 @@ Expected:
 100% tests passed, 0 tests failed
 ```
 
-- [ ] **Step 8: Commit the retired boundary and build lab**
+- [ ] **Step 9: Commit the retired boundary and build lab**
 
 ```bash
 git add -A -- \
@@ -608,6 +688,7 @@ Tests assert:
 - invalid command changes no state;
 - `RecordTake` adds Raw Take and user Pattern atomically;
 - Take events are retained unquantized while Pattern events use explicit step positions.
+- Domain never derives a Pattern step from `RawTakeEvent.frame_offset`; the Proof Host is responsible for supplying both representations.
 
 - [ ] **Step 3: Observe the expected failures**
 
@@ -803,7 +884,7 @@ The manifest rename is the only commit point. Revision-scoped files beyond the m
 
 `import_artifact` performs the same revision transaction: it hashes and stages the blob, constructs the Domain `ImportAsset` command, and publishes the blob plus new manifest head as one logical commit. A staged or unreferenced blob from a crash is outside the manifest head and is removed during verified recovery.
 
-- [ ] **Step 5: Implement the locked recording concurrency rule**
+- [ ] **Step 5: Implement the Proof-scoped strict recording rule**
 
 `begin` stores the Project revision captured when recording starts. On completion:
 
@@ -818,6 +899,8 @@ else:
 ```
 
 The recovery Candidate contains Raw Take events and metadata, not a fabricated Pattern. Adoption is a later explicit command.
+
+This branch deliberately handles every changed revision the same way. It must not classify unrelated Commands or add selective rebase behavior inside the Proof.
 
 - [ ] **Step 6: Run persistence and recovery tests**
 
@@ -854,6 +937,7 @@ git commit -m "feat(project-io): add atomic bundle and take recovery"
 - Create: `tests/fixtures/audio/make_fixtures.py`
 - Generate and add: `tests/fixtures/audio/kick.wav`
 - Generate and add: `tests/fixtures/audio/snare.wav`
+- Generate and add: `tests/fixtures/audio/stereo.wav`
 - Create: `tests/fixtures/audio/hashes.json`
 - Modify: `CMakeLists.txt`
 
@@ -869,6 +953,7 @@ git commit -m "feat(project-io): add atomic bundle and take recovery"
 
 - `kick.wav`: 48 kHz mono PCM16, 4,800 frames, decaying 60 Hz sine.
 - `snare.wav`: 48 kHz mono PCM16, 2,400 frames, deterministic xorshift32 noise with decay.
+- `stereo.wav`: 48 kHz stereo PCM16 with four frames whose left samples are `[32767, -32768, 123, -456]` and right samples are `[-32768, 32767, -789, 1011]`.
 
 The script writes `hashes.json` and exits non-zero if regenerating existing fixtures changes hashes unexpectedly.
 
@@ -910,7 +995,8 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
 
 Tests assert:
 
-- mono/stereo PCM16 48 kHz fixtures decode correctly;
+- mono PCM16 fixtures decode correctly;
+- `stereo.wav` decodes to exactly four frames and preserves the declared left/right interleave;
 - unsupported sample rate or bit depth returns `UNSUPPORTED_AUDIO`;
 - every event resolves through its current Pad Slot;
 - unassigned event slots return `MISSING_ASSET`;
@@ -969,6 +1055,7 @@ git commit -m "feat(cooker): add immutable runtime snapshot cooking"
 
 - Create: `packages/audio-runtime/module.json`
 - Create: `packages/audio-runtime/CMakeLists.txt`
+- Create: `packages/audio-runtime/include/lmdj/audio/mix_math.hpp`
 - Create: `packages/audio-runtime/include/lmdj/audio/offline_renderer.hpp`
 - Create: `packages/audio-runtime/include/lmdj/audio/wav_writer.hpp`
 - Create: `packages/audio-runtime/src/offline_renderer.cpp`
@@ -990,9 +1077,39 @@ git commit -m "feat(cooker): add immutable runtime snapshot cooking"
 The Python renderer uses the same documented integer rules, but no production C++ code:
 
 ```python
+def floor_div(numerator: int, denominator: int) -> int:
+    return numerator // denominator
+
 step_frame = (step * sample_rate * 60) // (bpm * 4)
-scaled = (sample_value * velocity + 63) // 127
+scaled = floor_div(sample_value * velocity + 63, 127)
 mixed = max(-32768, min(32767, current + scaled))
+```
+
+Velocity scaling uses mathematical floor division in every language. C++ must not use its default signed division directly because it truncates toward zero. `mix_math.hpp` defines:
+
+```cpp
+namespace lmdj::audio::detail {
+
+constexpr std::int64_t floor_div(
+    std::int64_t numerator,
+    std::int64_t denominator) {
+  const auto quotient = numerator / denominator;
+  const auto remainder = numerator % denominator;
+  return remainder != 0 && ((remainder < 0) != (denominator < 0))
+      ? quotient - 1
+      : quotient;
+}
+
+constexpr std::int32_t scale_velocity(
+    std::int16_t sample,
+    std::uint8_t velocity) {
+  return static_cast<std::int32_t>(
+      floor_div(
+          static_cast<std::int64_t>(sample) * velocity + 63,
+          127));
+}
+
+}  // namespace lmdj::audio::detail
 ```
 
 For stereo output, duplicate mono input; preserve left/right for stereo input. Render exactly:
@@ -1030,6 +1147,7 @@ Tests assert:
 - step positions are `0`, `24,000`, `48,000`, `72,000`;
 - output is 48 kHz stereo PCM16;
 - velocities scale deterministically;
+- `floor_div(-64, 127) == -1`, `scale_velocity(-1, 127) == -1`, `scale_velocity(1, 127) == 1`, and `scale_velocity(-2, 64) == -1`;
 - saturating mix never wraps;
 - input Snapshot is unchanged;
 - output SHA-256 equals `one_bar_120bpm.sha256`.
@@ -1047,7 +1165,7 @@ Expected: Golden fixture is generated; compile fails before Audio Runtime exists
 
 - [ ] **Step 4: Implement the deterministic renderer**
 
-Use integer scheduling and mixing only. Do not use platform floating-point DSP, threads, devices, locks, network, logging, or allocation in the inner per-frame mix loop. Allocate the destination buffer before mixing.
+Use integer scheduling and mixing only. All velocity scaling must call the shared `scale_velocity` helper so Golden Python floor division and C++ negative-sample behavior are identical. Do not use platform floating-point DSP, threads, devices, locks, network, logging, or allocation in the inner per-frame mix loop. Allocate the destination buffer before mixing.
 
 Write the WAV header explicitly in little-endian order. Hash the final file through Foundation and return its `ArtifactRef`.
 
@@ -1263,7 +1381,6 @@ pad.assign
 take.begin
 take.append
 take.commit
-snapshot.cook
 render.offline
 provider.select
 provider.run
@@ -1274,12 +1391,24 @@ Supported proof queries:
 ```text
 project.inspect
 take.recoverable.list
+snapshot.cook
 provider.list
 provider.selected
 attempt.inspect
 ```
 
-Tests call only these methods and assert stable success/error envelopes, revision propagation, and no exception crossing the public boundary.
+Tests call only these methods and assert stable success/error envelopes, revision propagation, and no exception crossing the public boundary. `snapshot.cook` is a non-persisting diagnostic Query. `render.offline` is a self-contained Command with this request shape:
+
+```json
+{
+  "operation": "render.offline",
+  "project_path": "/absolute/path/proof-beat.lmdj",
+  "pattern_id": "00000000-0000-4000-8000-000000000010",
+  "output_path": "/absolute/path/beat.wav"
+}
+```
+
+The Facade test must construct one `Application`, call `snapshot.cook`, destroy it, construct a fresh `Application`, and successfully call `render.offline` using only `project_path` and `pattern_id`. No public request or response contains `snapshot_id`.
 
 - [ ] **Step 2: Add failing C ABI tests**
 
@@ -1341,7 +1470,9 @@ Each command handler validates its request contract, invokes one module operatio
 }
 ```
 
-Queries never increment revision. `snapshot.cook` holds the Snapshot in an in-process handle registry keyed by opaque `snapshot_id`; the ID is Runtime state, not Project Truth. `render.offline` consumes that handle.
+Queries never increment revision. `snapshot.cook` loads the requested Project revision, cooks a Snapshot, returns a diagnostic summary (`project_revision`, `pattern_id`, `event_count`, resolved Artifact hashes), and then releases it.
+
+`render.offline` loads the Project and Pattern named in the same request, performs Cook and Render inside that one Facade call, and returns the output Artifact. There is no public Snapshot handle registry. A long-lived Host may later cache immutable Snapshots as a private optimization, but cache identity can never become required public input.
 
 - [ ] **Step 5: Implement exception-safe C ABI ownership**
 
@@ -1401,6 +1532,7 @@ lmdj-core --workspace <dir> query --request-file <path>
 `cli_test.py` must run real subprocesses and assert:
 
 - create → import → assign → begin/append/commit → inspect works across separate processes;
+- one CLI process runs the `snapshot.cook` Query, exits, and a new CLI process runs `render.offline` with `project_path` plus `pattern_id` and matches Golden Audio;
 - stdout parses as exactly one JSON value;
 - errors use the public error envelope and exit `2`;
 - successful operations exit `0`;
@@ -1442,7 +1574,7 @@ python3 tests/host/cli_test.py build/core/dev/bin/lmdj-core
 Expected:
 
 ```text
-cli behavior fixtures: 8 passed
+cli behavior fixtures: 9 passed
 ```
 
 - [ ] **Step 5: Commit the CLI Host**
@@ -1616,8 +1748,6 @@ git commit -m "feat(mcp): expose core tools over stdio"
 - Modify: `apps/core-cli/src/main.cpp`
 - Modify: `apps/core-mcp/lmdj_core_mcp/__main__.py`
 - Modify: `README.md`
-- Modify: `docs/prd/decision-log.md`
-- Modify: `docs/prd/open-questions.md`
 
 **Interfaces:**
 
@@ -1673,7 +1803,11 @@ git commit -m "feat(mcp): expose core tools over stdio"
 - dependency cycles;
 - Host dependencies on Project I/O;
 - Provider dependencies on Authoring Domain or Product Assembly;
-- product-specific strings in neutral package manifests.
+- a `packages/*/module.json` containing `product` or `product_id` keys;
+- a neutral package dependency outside the allow-listed neutral package IDs;
+- an include/source path under `packages/` that references `products/lmdj/` or `apps/creator-web/`.
+
+The graph test explicitly permits the `lmdj::` C++ namespace, `lmdj.*` Contract IDs, and neutral LMDJ platform/module names. It enforces dependency direction and Product Assembly ownership, not a raw substring ban on `lmdj`.
 
 - [ ] **Step 2: Add the complete failing E2E proof**
 
@@ -1687,8 +1821,8 @@ git commit -m "feat(mcp): expose core tools over stdio"
 6. append user event timing plus velocities;
 7. atomically commit Raw Take and one-bar Pattern;
 8. inspect Project and assert 64 Pads;
-9. cook Snapshot;
-10. render WAV;
+9. use one CLI process to query `snapshot.cook`, assert its diagnostic summary, and let that process exit;
+10. use a new CLI process to call `render.offline` with Project path plus Pattern ID and render WAV;
 11. compare output hash with Golden Audio;
 12. query the same Project through CLI and MCP and compare canonical state;
 13. list Providers, select success Provider, and run one successful Attempt;
@@ -1716,17 +1850,18 @@ The product-neutral Assembly loader validates a manifest and filters the compile
 
 Validate the Assembly against `lmdj.assembly.v1.schema.json` before starting a Host. Fail closed on missing/unknown Provider or contract.
 
-- [ ] **Step 5: Close the recording concurrency decision**
+- [ ] **Step 5: Document the Proof-scoped recording concurrency rule**
 
-Add a dated entry to `docs/prd/decision-log.md`:
+Add this explicit scope note to `products/lmdj/README.md`:
 
 ```text
-RecordTake captures expected_revision at recording start. If Project revision
-changes before commit, the command returns REVISION_CONFLICT without rebase or
-Project mutation, and the Take is sealed as a recoverable Candidate.
+The Headless Core Proof intentionally treats every revision change during a
+recording as REVISION_CONFLICT and seals the Take for recovery. This is a
+Proof-only safety rule. It does not decide which product Commands are irrelevant
+to a Take or whether the user-facing product may selectively rebase.
 ```
 
-Remove the corresponding row from `docs/prd/open-questions.md`. Leave the Web latency and Take audio-Bounce questions open.
+Do not add this rule to `docs/prd/decision-log.md` and do not close the product-level question in `docs/prd/open-questions.md`. Any product-level conflict classification or selective rebase requires the design review required by redesign spec §25.
 
 - [ ] **Step 6: Make `scripts/core.sh proof` the single acceptance command**
 
@@ -1812,9 +1947,7 @@ git add \
   tests/e2e \
   scripts/core.sh \
   .github/workflows/ci.yml \
-  README.md \
-  docs/prd/decision-log.md \
-  docs/prd/open-questions.md
+  README.md
 git commit -m "feat(core): prove headless beat project end to end"
 ```
 
@@ -1830,6 +1963,7 @@ git commit -m "feat(core): prove headless beat project end to end"
 - [ ] Recording revision conflict seals a recoverable Take and changes no Project Truth.
 - [ ] Project save/load and command replay are deterministic.
 - [ ] Runtime Snapshot is immutable, complete, and derived from one Project revision.
+- [ ] A CLI process can exit after `snapshot.cook`; a fresh CLI process can render from Project path plus Pattern ID with no `snapshot_id`.
 - [ ] Offline WAV matches independent Golden Audio on macOS and Ubuntu.
 - [ ] CLI and MCP query the same Facade state.
 - [ ] MCP conforms to the locked `2025-11-25` stdio lifecycle and Tools behavior.
@@ -1838,6 +1972,7 @@ git commit -m "feat(core): prove headless beat project end to end"
 - [ ] Full proof passes twice from clean builds.
 - [ ] `git diff --check` passes.
 - [ ] Each task commit contains only its declared paths.
+- [ ] Strict recording conflict is documented as Proof-only and the product-level concurrency question remains open.
 - [ ] Web realtime-audio latency remains explicitly outside this proof.
 
 ## Spec Traceability

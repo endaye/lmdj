@@ -11,7 +11,7 @@
 | 问题 | 为什么重要 | 处理时点 | 状态 |
 | --- | --- | --- | --- |
 | 素材 BPM ≠ Project BPM 时，Loop 类素材是否/如何 Time-stretch 跟随全局 BPM（含 Pitch-shift）？ | “完整歌曲变成可演奏素材”+ 全局 BPM/Key 几乎必然遇到速度不匹配；决定 Audio Runtime 的 DSP 范围和 Capability 清单（Koala 有 Time-stretch 作为对照）。 | Audio Runtime Contract 定稿前的设计评审。 | 待决 |
-| 录音进行中的并发 Command 与 Expected Project Revision 如何交互（如录音时更换被录 Pad 的音色、清空目标 Pattern）？ | 决定 Command 原子性、录音 Journal 与 Take 提交语义（设计 §6.5 已定 Take 直接进 Project Truth，但并发窗口语义未定）。 | Headless Core 实施计划。 | 待决 |
+| 产品级录音并发语义如何定义：哪些无关 Command 不应触发冲突，是否允许选择性 rebase？ | Headless Core Proof 为保证确定性，暂用“任何 revision 变化均冲突并封存 Take”的严格规则；该规则不能替代用户产品中的冲突分类，仍会影响录音 Journal、Take 提交体验与公开 Contract。 | Sequence / Take Contract 进入用户产品实现前单独设计评审（新内核设计 §25）。 | 待设计评审 |
 | Web 实时音频 Spike 的延迟验收阈值是多少（Touch-to-Sound）？ | 阈值决定 Spike 结论是否触发“回评审重议首发平台”；不能事后按实测结果倒推。 | Spike 启动前定阈值。 | 待决 |
 
 ## Stage 1 首条切片
