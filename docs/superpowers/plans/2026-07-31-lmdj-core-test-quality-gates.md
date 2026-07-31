@@ -594,6 +594,82 @@ git commit -m "fix(core): union coverage topology variants"
 
 ---
 
+### Task 2B: Support LLVM 18 Topology Export
+
+The exact Task 6 Ubuntu 24.04/amd64 preflight with LLVM 18.1.3 reaches
+33/33 passing CTests, then fails during topology export because LLVM 18 does
+not recognize `llvm-cov export --empty-profile` and requires an instrumented
+profile. This follow-up preserves the per-object topology union from Task 2A
+while making its export interface compatible with the pinned Linux toolchain.
+
+**Files:**
+
+- Modify: `scripts/core-coverage.sh`
+- Modify: `tests/quality/core_coverage_runner_test.py`
+
+**Version Management:**
+
+Version impact: none. This changes only an internal coverage runner and its
+regression test. It does not change a Product Build, Core Module or Provider
+API/ABI, Contract, persisted format, or published package.
+
+- [ ] **Step 1: Add the failing LLVM 18 runner contract**
+
+Add a focused contract fixture to `core_coverage_runner_test.py` that isolates
+the topology-export loop. Require it to contain no `--empty-profile` argument
+and to use the corresponding
+`$module_profiles_root/$object_number.profdata` for every object.
+
+Run:
+
+```bash
+python3 tests/quality/core_coverage_runner_test.py
+```
+
+Expected before the fix: FAIL because the topology-export loop still contains
+`--empty-profile`.
+
+- [ ] **Step 2: Export topology with each object's matching profile**
+
+Keep the measured fragment export unchanged. Perform an independent second
+`llvm-cov export -format=lcov` for every coverage object, passing that object's
+existing matching module profile with
+`-instr-profile="$module_profiles_root/$object_number.profdata"`. Do not reuse
+the measured fragment file and do not combine objects into one topology
+export. Continue treating all `llvm-cov` stderr diagnostics as fatal, pass each
+topology independently to the physical-identity union, and retain the existing
+missing-region, extra-region, and duplicate-identity checks.
+
+- [ ] **Step 3: Verify unit contracts and the real Mac report**
+
+Run:
+
+```bash
+python3 tests/quality/core_coverage_runner_test.py
+python3 tests/quality/coverage_union_test.py
+python3 tests/quality/coverage_gate_test.py
+scripts/core-coverage.sh report
+```
+
+Expected: runner 3/3, union 3/3, and gate 6/6 pass; the Mac report runs 33/33
+registered tests, maps all 20 coverage objects and 20 module signatures, and
+contains 26 unique first-party sources without LLVM diagnostics. The physical
+topology denominator remains unchanged before and after the export-interface
+fix at 8,666 lines and 3,262 branches. The exact Ubuntu 24.04/amd64 LLVM 18.1.3
+run remains the definitive cross-toolchain acceptance in Task 6.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add \
+  scripts/core-coverage.sh \
+  tests/quality/core_coverage_runner_test.py
+git diff --cached --check
+git commit -m "fix(core): export LLVM 18 coverage topology"
+```
+
+---
+
 ### Task 3: Add Deterministic Domain and Cooker Invariant Matrices
 
 **Files:**
