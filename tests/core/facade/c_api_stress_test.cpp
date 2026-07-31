@@ -13,18 +13,14 @@
 #include <utility>
 #include <vector>
 
-#include <fcntl.h>
 #include <nlohmann/json.hpp>
-#include <sys/file.h>
-#include <unistd.h>
 
 #include <lmdj/facade/c_api.h>
 
+#include "packages/application-facade/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
-
-using namespace std::chrono_literals;
 
 class TempDirectory {
  public:
@@ -71,36 +67,40 @@ lmdj_engine* create_engine(const std::string& config) {
   return engine;
 }
 
-nlohmann::json command(
-    lmdj_engine* engine,
-    const nlohmann::json& request) {
-  const auto encoded = request.dump();
-  char* response = nullptr;
-  const auto status =
-      lmdj_engine_command(engine, encoded.c_str(), &response);
-  LMDJ_CHECK(status == LMDJ_STATUS_OK);
-  LMDJ_CHECK(response != nullptr);
-  const auto parsed = nlohmann::json::parse(response);
-  lmdj_string_free(response);
-  return parsed;
-}
-
-bool wait_until_true(
-    const std::atomic<bool>& value,
-    std::chrono::steady_clock::duration timeout) {
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  while (!value.load(std::memory_order_acquire) &&
-         std::chrono::steady_clock::now() < deadline) {
-    std::this_thread::yield();
+class InvokeGateRegistration {
+ public:
+  explicit InvokeGateRegistration(
+      lmdj::facade::testing::InvokeGate& gate) noexcept {
+    lmdj::facade::testing::set_invoke_gate(&gate);
   }
-  return value.load(std::memory_order_acquire);
-}
 
-std::string uuid(std::uint32_t suffix) {
-  auto tail = std::to_string(suffix);
-  return "00000000-0000-4000-8000-" +
-         std::string(12 - tail.size(), '0') + tail;
-}
+  ~InvokeGateRegistration() {
+    lmdj::facade::testing::set_invoke_gate(nullptr);
+  }
+
+  InvokeGateRegistration(const InvokeGateRegistration&) = delete;
+  InvokeGateRegistration& operator=(const InvokeGateRegistration&) = delete;
+};
+
+class InvokeGateRelease {
+ public:
+  explicit InvokeGateRelease(
+      lmdj::facade::testing::InvokeGate& gate) noexcept
+      : gate_(gate) {}
+
+  ~InvokeGateRelease() { release(); }
+
+  InvokeGateRelease(const InvokeGateRelease&) = delete;
+  InvokeGateRelease& operator=(const InvokeGateRelease&) = delete;
+
+  void release() noexcept {
+    gate_.release.store(true, std::memory_order_release);
+    gate_.release.notify_all();
+  }
+
+ private:
+  lmdj::facade::testing::InvokeGate& gate_;
+};
 
 void test_32_independent_engines_make_progress_concurrently() {
   constexpr std::size_t kEngineCount = 32;
@@ -239,101 +239,56 @@ void test_blocked_engine_does_not_block_unrelated_engine_lifetimes() {
   TempDirectory temp;
   const auto config = config_json(temp.path());
   auto* blocked_engine = create_engine(config);
-  const auto project = temp.path() / "blocked-engine.lmdj";
-  LMDJ_CHECK(
-      command(
-          blocked_engine,
-          {
-              {"operation", "project.create"},
-              {"project_path", project.generic_string()},
-              {"project_id", uuid(1)},
-              {"bpm", 120},
-          })
-          .at("ok") == true);
-
-  const int lock_fd =
-      ::open((project / ".lock").c_str(), O_RDWR | O_CLOEXEC);
-  LMDJ_CHECK(lock_fd >= 0);
-  LMDJ_CHECK(::flock(lock_fd, LOCK_EX) == 0);
-
-  const auto blocked_request =
-      nlohmann::json{
-          {"operation", "pad.assign"},
-          {"project_path", project.generic_string()},
-          {"command_id", uuid(91)},
-          {"expected_revision", 0},
-          {"slot", {{"bank", 0}, {"pad", 0}}},
-          {"asset_id", nullptr},
-      }
-          .dump();
-  const auto query_request =
+  const auto request =
       nlohmann::json{{"operation", "provider.list"}}.dump();
 
+  lmdj::facade::testing::InvokeGate gate{blocked_engine};
+  InvokeGateRegistration registration(gate);
   CallResult blocked_result;
-  std::atomic<bool> blocked_entered{false};
   std::atomic<bool> blocked_completed{false};
-  std::barrier<> blocked_start(2);
   std::jthread blocked_worker([&]() noexcept {
-    blocked_start.arrive_and_wait();
-    blocked_entered.store(true, std::memory_order_release);
     char* response = nullptr;
-    const auto status = lmdj_engine_command(
-        blocked_engine, blocked_request.c_str(), &response);
+    const auto status = lmdj_engine_query(
+        blocked_engine, request.c_str(), &response);
     blocked_result = CallResult{status, response != nullptr};
     lmdj_string_free(response);
     blocked_completed.store(true, std::memory_order_release);
+    blocked_completed.notify_all();
   });
-  blocked_start.arrive_and_wait();
-  const bool observed_entry = wait_until_true(blocked_entered, 2s);
-  const bool observed_block =
-      observed_entry && !wait_until_true(blocked_completed, 100ms);
+  InvokeGateRelease release_guard(gate);
+  gate.entered.wait(false, std::memory_order_acquire);
+  const bool observed_entry = gate.entered.load(std::memory_order_acquire);
 
-  CallResult unrelated_create;
+  lmdj_engine* unrelated_engine = nullptr;
+  char* error = nullptr;
+  const auto unrelated_create_status =
+      lmdj_engine_create(config.c_str(), &unrelated_engine, &error);
+  const bool unrelated_error_present = error != nullptr;
+  lmdj_string_free(error);
   CallResult unrelated_query;
-  std::atomic<bool> unrelated_completed{false};
-  std::barrier<> unrelated_start(2);
-  std::jthread unrelated_worker([&]() noexcept {
-    unrelated_start.arrive_and_wait();
-    lmdj_engine* engine = nullptr;
-    char* error = nullptr;
-    const auto create_status =
-        lmdj_engine_create(config.c_str(), &engine, &error);
-    unrelated_create =
-        CallResult{create_status, error != nullptr};
-    lmdj_string_free(error);
-    if (create_status == LMDJ_STATUS_OK && engine != nullptr) {
-      char* response = nullptr;
-      const auto query_status = lmdj_engine_query(
-          engine, query_request.c_str(), &response);
-      unrelated_query =
-          CallResult{query_status, response != nullptr};
-      lmdj_string_free(response);
-      lmdj_engine_free(engine);
-    }
-    unrelated_completed.store(true, std::memory_order_release);
-  });
-  unrelated_start.arrive_and_wait();
-  const bool unrelated_made_progress =
-      wait_until_true(unrelated_completed, 5s);
-  const bool blocked_while_lock_held =
+  if (unrelated_create_status == LMDJ_STATUS_OK &&
+      unrelated_engine != nullptr) {
+    char* response = nullptr;
+    const auto status = lmdj_engine_query(
+        unrelated_engine, request.c_str(), &response);
+    unrelated_query = CallResult{status, response != nullptr};
+    lmdj_string_free(response);
+    lmdj_engine_free(unrelated_engine);
+  }
+  const bool blocked_while_gate_held =
       !blocked_completed.load(std::memory_order_acquire);
 
-  const bool unlock_succeeded = ::flock(lock_fd, LOCK_UN) == 0;
-  const bool close_succeeded = ::close(lock_fd) == 0;
+  release_guard.release();
   blocked_worker.join();
-  unrelated_worker.join();
   lmdj_engine_free(blocked_engine);
 
   LMDJ_CHECK(observed_entry);
-  LMDJ_CHECK(observed_block);
-  LMDJ_CHECK(unrelated_made_progress);
-  LMDJ_CHECK(blocked_while_lock_held);
-  LMDJ_CHECK(unlock_succeeded);
-  LMDJ_CHECK(close_succeeded);
+  LMDJ_CHECK(blocked_while_gate_held);
   LMDJ_CHECK(blocked_result.status == LMDJ_STATUS_OK);
   LMDJ_CHECK(blocked_result.response_present);
-  LMDJ_CHECK(unrelated_create.status == LMDJ_STATUS_OK);
-  LMDJ_CHECK(!unrelated_create.response_present);
+  LMDJ_CHECK(unrelated_create_status == LMDJ_STATUS_OK);
+  LMDJ_CHECK(unrelated_engine != nullptr);
+  LMDJ_CHECK(!unrelated_error_present);
   LMDJ_CHECK(unrelated_query.status == LMDJ_STATUS_OK);
   LMDJ_CHECK(unrelated_query.response_present);
 }

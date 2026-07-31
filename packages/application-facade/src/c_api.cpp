@@ -20,9 +20,38 @@
 #include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/foundation/error.hpp>
 
+#if defined(LMDJ_C_API_TESTING)
+#include "testing_hooks.hpp"
+#endif
+
 struct lmdj_engine {
   std::uint64_t sequence;
 };
+
+#if defined(LMDJ_C_API_TESTING)
+namespace lmdj::facade::testing {
+namespace {
+
+std::atomic<InvokeGate*> active_invoke_gate{nullptr};
+
+}  // namespace
+
+void set_invoke_gate(InvokeGate* gate) noexcept {
+  active_invoke_gate.store(gate, std::memory_order_release);
+}
+
+void block_invoke_if_selected(lmdj_engine* engine) noexcept {
+  auto* gate = active_invoke_gate.load(std::memory_order_acquire);
+  if (gate == nullptr || gate->engine != engine) {
+    return;
+  }
+  gate->entered.store(true, std::memory_order_release);
+  gate->entered.notify_all();
+  gate->release.wait(false, std::memory_order_acquire);
+}
+
+}  // namespace lmdj::facade::testing
+#endif
 
 namespace {
 
@@ -166,6 +195,9 @@ int invoke_application(
     if (!guard.has_value()) {
       return LMDJ_STATUS_INVALID_HANDLE;
     }
+#if defined(LMDJ_C_API_TESTING)
+    lmdj::facade::testing::block_invoke_if_selected(engine);
+#endif
     const auto bytes =
         bounded_c_string(request_json, kMaximumRequestBytes);
     if (!bytes.has_value() || !valid_utf8(*bytes)) {

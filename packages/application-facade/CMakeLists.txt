@@ -153,6 +153,7 @@ if(BUILD_TESTING)
 
   add_executable(
     lmdj_application_c_api_stress_tests
+    src/c_api.cpp
     "${CMAKE_SOURCE_DIR}/tests/core/facade/c_api_stress_test.cpp"
   )
   target_include_directories(
@@ -163,9 +164,15 @@ if(BUILD_TESTING)
   target_link_libraries(
     lmdj_application_c_api_stress_tests
     PRIVATE
-      lmdj_core_c
+      lmdj::application
       nlohmann_json::nlohmann_json
       Threads::Threads
+  )
+  target_compile_definitions(
+    lmdj_application_c_api_stress_tests
+    PRIVATE
+      LMDJ_CORE_C_BUILD=1
+      LMDJ_C_API_TESTING=1
   )
   lmdj_target_warnings(lmdj_application_c_api_stress_tests)
   lmdj_target_sanitizers(lmdj_application_c_api_stress_tests)
