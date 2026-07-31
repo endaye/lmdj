@@ -132,22 +132,22 @@ class CoverageUnionTest(unittest.TestCase):
     ) -> None:
         topologies = [
             lcov_record(
-                lines={10: 0},
-                branches={(10, 0, 0): None},
+                lines={10: 0, 20: 0},
+                branches={(10, 0, 0): None, (20, 0, 1): None},
             ),
             lcov_record(
-                lines={20: 0},
-                branches={(20, 0, 1): None},
+                lines={10: 0, 30: 0},
+                branches={(10, 0, 0): None, (30, 0, 2): None},
             ),
         ]
         fragments = [
             lcov_record(
-                lines={10: 3},
-                branches={(10, 0, 0): 1},
+                lines={10: 3, 20: 4},
+                branches={(10, 0, 0): 1, (20, 0, 1): 2},
             ),
             lcov_record(
-                lines={20: 4},
-                branches={(20, 0, 1): 2},
+                lines={10: 5, 30: 6},
+                branches={(10, 0, 0): 3, (30, 0, 2): 4},
             ),
         ]
 
@@ -167,11 +167,11 @@ class CoverageUnionTest(unittest.TestCase):
             file_summary = summary["data"][0]["files"][0]["summary"]
             self.assertEqual(
                 file_summary["lines"],
-                {"count": 2, "covered": 2, "notcovered": 0, "percent": 100.0},
+                {"count": 3, "covered": 3, "notcovered": 0, "percent": 100.0},
             )
             self.assertEqual(
                 file_summary["branches"],
-                {"count": 2, "covered": 2, "notcovered": 0, "percent": 100.0},
+                {"count": 3, "covered": 3, "notcovered": 0, "percent": 100.0},
             )
 
     def test_incomplete_fragment_union_fails_without_stale_outputs(
