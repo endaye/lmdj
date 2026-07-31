@@ -527,6 +527,66 @@ git commit -m "test(core): measure source coverage"
 
 ---
 
+### Task 2A: Union Coverage Topologies Across Compile Variants
+
+Task 4 compiles `project_store.cpp` and `take_journal.cpp` both as production
+code and with private test-only fault interception. The source-based coverage
+mappings are intentionally different. A single multi-object
+`llvm-cov export --empty-profile` drops physical regions when duplicate source
+paths have different mappings, so it is not an authoritative topology union.
+
+**Files:**
+
+- Modify: `scripts/core-coverage.sh`
+- Modify: `tests/quality/coverage_union.py`
+- Modify: `tests/quality/coverage_union_test.py`
+
+- [ ] **Step 1: Add a failing duplicate-source topology fixture**
+
+Pass two `--topology` LCOV fixtures for one physical source. Give each fixture
+at least one unique line or branch identity and provide measured fragments for
+both. The union must retain every identity exactly once. Expected before the
+fix: FAIL because the CLI accepts only one topology and reports the other
+variant's measured region as extra.
+
+- [ ] **Step 2: Union per-object empty-profile exports**
+
+Make `--topology` repeatable. Parse every topology fragment and union its
+physical line and branch identities before validating measured fragments.
+Counts in empty profiles remain zero; duplicate identities must not inflate the
+denominator.
+
+Change the runner to export one warning-free empty-profile LCOV file per
+coverage object. Pass every file as a separate `--topology` argument. Do not
+use object ordering or a combined `llvm-cov` export to select one compile
+variant.
+
+- [ ] **Step 3: Verify the real production/testable topology**
+
+Run:
+
+```bash
+python3 tests/quality/coverage_union_test.py
+scripts/core-coverage.sh report
+```
+
+Expected: all registered tests pass; all 19 Task 4 coverage objects and module
+signatures map exactly once; the union contains 26 unique first-party sources
+with no missing/extra region or LLVM diagnostic.
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add \
+  scripts/core-coverage.sh \
+  tests/quality/coverage_union.py \
+  tests/quality/coverage_union_test.py
+git diff --cached --check
+git commit -m "fix(core): union coverage topology variants"
+```
+
+---
+
 ### Task 3: Add Deterministic Domain and Cooker Invariant Matrices
 
 **Files:**
