@@ -9,6 +9,7 @@ objects_path="$build_root/coverage-objects.txt"
 merged_profile="$coverage_root/merged.profdata"
 summary_path="$coverage_root/summary.json"
 report_path="$coverage_root/report.txt"
+coverage_union="$repo_root/tests/quality/coverage_union.py"
 
 usage() {
   echo "usage: scripts/core-coverage.sh [report|check]" >&2
@@ -55,11 +56,13 @@ llvm_profdata="$(resolve_llvm_tool llvm-profdata)"
 llvm_cov="$(resolve_llvm_tool llvm-cov)"
 
 cd "$repo_root"
+cmake -E make_directory "$coverage_root"
+rm -f -- "$merged_profile" "$summary_path" "$report_path"
+
 cmake --preset coverage
 cmake --build --preset coverage
 
 cmake -E make_directory "$profiles_root"
-cmake -E make_directory "$coverage_root"
 find "$profiles_root" -maxdepth 1 -type f -name '*.profraw' -delete
 
 LLVM_PROFILE_FILE="$profiles_root/%p-%m.profraw" ctest --preset coverage
@@ -75,8 +78,6 @@ if [[ ${#raw_profiles[@]} -eq 0 ]]; then
   echo "coverage run produced no raw profiles" >&2
   exit 1
 fi
-
-"$llvm_profdata" merge -sparse "${raw_profiles[@]}" -o "$merged_profile"
 
 if [[ ! -f "$objects_path" ]]; then
   echo "coverage object list is missing: $objects_path" >&2
@@ -97,59 +98,254 @@ if [[ ${#objects[@]} -eq 0 ]]; then
   exit 1
 fi
 
-source_roots=(
-  "$repo_root/packages"
-  "$repo_root/providers"
-  "$repo_root/products/lmdj"
-  "$repo_root/apps/core-cli"
-)
-source_args=()
-while IFS= read -r source_path; do
-  source_args+=(--sources "$source_path")
-done < <(
-  find "${source_roots[@]}" \
-    -type f \
-    \( -name '*.cpp' -o \( -name '*.hpp' -path '*/include/*' \) \) \
-    -print |
-    LC_ALL=C sort
-)
-if [[ ${#source_args[@]} -eq 0 ]]; then
-  echo "no first-party coverage source is present" >&2
+if [[ ! -f "$coverage_union" ]]; then
+  echo "coverage union helper is missing: $coverage_union" >&2
   exit 1
 fi
+
+run_root="$(mktemp -d "$coverage_root/.run.XXXXXX")"
+cleanup() {
+  rm -rf -- "$run_root"
+}
+trap cleanup EXIT
+
+tool_stderr="$run_root/tool.stderr"
+run_profdata_merge() {
+  local output_path="$1"
+  shift
+
+  : >"$tool_stderr"
+  if ! "$llvm_profdata" merge -sparse "$@" -o "$output_path" \
+    2>"$tool_stderr"; then
+    cat "$tool_stderr" >&2
+    echo "llvm-profdata merge failed" >&2
+    return 1
+  fi
+  if [[ -s "$tool_stderr" ]]; then
+    cat "$tool_stderr" >&2
+    echo "llvm-profdata merge emitted unexpected diagnostics" >&2
+    return 1
+  fi
+}
+
+run_cov_export() {
+  local output_path="$1"
+  shift
+
+  : >"$tool_stderr"
+  if ! "$llvm_cov" export "$@" >"$output_path" 2>"$tool_stderr"; then
+    cat "$tool_stderr" >&2
+    echo "llvm-cov export failed" >&2
+    return 1
+  fi
+  if [[ -s "$tool_stderr" ]]; then
+    cat "$tool_stderr" >&2
+    echo "llvm-cov export emitted unexpected diagnostics" >&2
+    return 1
+  fi
+}
+
+merged_profile_candidate="$run_root/merged.profdata"
+run_profdata_merge "$merged_profile_candidate" "${raw_profiles[@]}"
+
+raw_signatures_path="$run_root/raw-signatures.txt"
+for profile_path in "${raw_profiles[@]}"; do
+  profile_name="$(basename "$profile_path")"
+  signature="${profile_name#*-}"
+  signature="${signature%.profraw}"
+  if [[ ! "$signature" =~ ^[0-9]+_[0-9]+$ ]]; then
+    echo "coverage profile has an unexpected module signature: $profile_name" >&2
+    exit 1
+  fi
+  printf '%s\n' "$signature"
+done | LC_ALL=C sort -u >"$raw_signatures_path"
+
+signature_count="$(wc -l <"$raw_signatures_path" | tr -d ' ')"
+if [[ "$signature_count" -ne "${#objects[@]}" ]]; then
+  echo \
+    "coverage module signature count does not match object count: " \
+    "$signature_count != ${#objects[@]}" \
+    >&2
+  exit 1
+fi
+
+probe_root="$run_root/probes"
+cmake -E make_directory "$probe_root"
+shared_object_count=0
+for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
+  object_path="${objects[$object_index]}"
+  object_number=$((object_index + 1))
+  case "$object_path" in
+    *.dylib|*.so|*.so.*|*.dll)
+      shared_object_count=$((shared_object_count + 1))
+      continue
+      ;;
+  esac
+
+  probe_stdout="$probe_root/$object_number.stdout"
+  probe_stderr="$probe_root/$object_number.stderr"
+  set +e
+  LLVM_PROFILE_FILE="$probe_root/$object_number-%m.profraw" \
+    "$object_path" >"$probe_stdout" 2>"$probe_stderr"
+  probe_status=$?
+  set -e
+  if grep -Eq 'LLVM Profile (Error|Warning)' "$probe_stderr"; then
+    cat "$probe_stderr" >&2
+    echo "coverage object probe reported a profile diagnostic: $object_path" >&2
+    exit 1
+  fi
+
+  object_probe_signatures="$probe_root/$object_number.signatures"
+  while IFS= read -r probe_profile; do
+    probe_name="$(basename "$probe_profile")"
+    probe_signature="${probe_name#"$object_number-"}"
+    probe_signature="${probe_signature%.profraw}"
+    if grep -Fqx "$probe_signature" "$raw_signatures_path"; then
+      printf '%s\n' "$probe_signature"
+    fi
+  done < <(
+    find "$probe_root" \
+      -maxdepth 1 \
+      -type f \
+      -name "$object_number-*.profraw" \
+      -print |
+      LC_ALL=C sort
+  ) | LC_ALL=C sort -u >"$object_probe_signatures"
+  if [[ ! -s "$object_probe_signatures" ]]; then
+    echo \
+      "coverage object probe produced no matching module signature " \
+      "(status $probe_status): $object_path" \
+      >&2
+    exit 1
+  fi
+done
+
+if [[ "$shared_object_count" -ne 1 ]]; then
+  echo \
+    "coverage signature mapping requires exactly one shared coverage object; " \
+    "found $shared_object_count" \
+    >&2
+  exit 1
+fi
+
+signature_occurrences="$probe_root/signature-occurrences.txt"
+cat "$probe_root"/*.signatures |
+  LC_ALL=C sort |
+  uniq -c >"$signature_occurrences"
+
+assigned_signatures="$probe_root/assigned-signatures.txt"
+: >"$assigned_signatures"
+for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
+  object_path="${objects[$object_index]}"
+  object_number=$((object_index + 1))
+  case "$object_path" in
+    *.dylib|*.so|*.so.*|*.dll)
+      continue
+      ;;
+  esac
+
+  own_signatures="$probe_root/$object_number.own-signatures"
+  while read -r occurrence signature; do
+    if [[ "$occurrence" -eq 1 ]] &&
+      grep -Fqx "$signature" "$probe_root/$object_number.signatures"; then
+      printf '%s\n' "$signature"
+    fi
+  done <"$signature_occurrences" >"$own_signatures"
+
+  own_signature_count="$(wc -l <"$own_signatures" | tr -d ' ')"
+  if [[ "$own_signature_count" -ne 1 ]]; then
+    echo \
+      "coverage object does not have one unique module signature: " \
+      "$object_path (found $own_signature_count)" \
+      >&2
+    exit 1
+  fi
+  cat "$own_signatures" >>"$assigned_signatures"
+done
+
+shared_signatures="$probe_root/shared-signatures.txt"
+grep -Fvx -f "$assigned_signatures" "$raw_signatures_path" >"$shared_signatures" ||
+  true
+shared_signature_count="$(wc -l <"$shared_signatures" | tr -d ' ')"
+if [[ "$shared_signature_count" -ne 1 ]]; then
+  echo \
+    "coverage shared object does not have one remaining module signature " \
+    "(found $shared_signature_count)" \
+    >&2
+  exit 1
+fi
+shared_signature="$(cat "$shared_signatures")"
+
+module_profiles_root="$run_root/module-profiles"
+fragments_root="$run_root/fragments"
+cmake -E make_directory "$module_profiles_root"
+cmake -E make_directory "$fragments_root"
+for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
+  object_path="${objects[$object_index]}"
+  object_number=$((object_index + 1))
+  case "$object_path" in
+    *.dylib|*.so|*.so.*|*.dll)
+      object_signature="$shared_signature"
+      ;;
+    *)
+      object_signature="$(
+        cat "$probe_root/$object_number.own-signatures"
+      )"
+      ;;
+  esac
+
+  module_raw_profiles=()
+  for profile_path in "${raw_profiles[@]}"; do
+    profile_name="$(basename "$profile_path")"
+    profile_signature="${profile_name#*-}"
+    profile_signature="${profile_signature%.profraw}"
+    if [[ "$profile_signature" == "$object_signature" ]]; then
+      module_raw_profiles+=("$profile_path")
+    fi
+  done
+  if [[ ${#module_raw_profiles[@]} -eq 0 ]]; then
+    echo "coverage object has no raw module profiles: $object_path" >&2
+    exit 1
+  fi
+
+  module_profile="$module_profiles_root/$object_number.profdata"
+  run_profdata_merge "$module_profile" "${module_raw_profiles[@]}"
+  run_cov_export \
+    "$fragments_root/$object_number.lcov" \
+    -format=lcov \
+    -instr-profile="$module_profile" \
+    "$object_path"
+done
 
 coverage_objects=("${objects[0]}")
 for ((object_index = 1; object_index < ${#objects[@]}; object_index++)); do
   coverage_objects+=(--object "${objects[$object_index]}")
 done
 
-"$llvm_cov" export \
-  -instr-profile="$merged_profile" \
-  --summary-only \
-  "${coverage_objects[@]}" \
-  "${source_args[@]}" >"$summary_path"
+topology_path="$run_root/topology.lcov"
+run_cov_export \
+  "$topology_path" \
+  -format=lcov \
+  --empty-profile \
+  "${coverage_objects[@]}"
 
-python3 - "$summary_path" <<'PY'
-import json
-import sys
-from pathlib import Path
+summary_candidate="$run_root/summary.json"
+report_candidate="$run_root/report.txt"
+union_args=(
+  --repo-root "$repo_root"
+  --topology "$topology_path"
+)
+for fragment_path in "$fragments_root"/*.lcov; do
+  union_args+=(--fragment "$fragment_path")
+done
+python3 "$coverage_union" \
+  "${union_args[@]}" \
+  --summary "$summary_candidate" \
+  --report "$report_candidate"
 
-summary_path = Path(sys.argv[1])
-summary = json.loads(summary_path.read_text(encoding="utf-8"))
-files = [
-    file_
-    for data in summary.get("data", [])
-    for file_ in data.get("files", [])
-]
-if not files:
-    raise SystemExit("coverage export contains no first-party source")
-PY
-
-"$llvm_cov" report \
-  -instr-profile="$merged_profile" \
-  -show-branch-summary \
-  "${coverage_objects[@]}" \
-  "${source_args[@]}" >"$report_path"
+mv -f -- "$merged_profile_candidate" "$merged_profile"
+mv -f -- "$summary_candidate" "$summary_path"
+mv -f -- "$report_candidate" "$report_path"
 
 if [[ "$mode" == "check" ]]; then
   python3 tests/quality/coverage_gate.py \
