@@ -1532,6 +1532,121 @@ created or modified.
 
 ---
 
+### Task 6B: Declare Final Whole-Branch Review Remediation
+
+**Files:**
+
+- Modify: `scripts/core.sh`
+- Modify: `tests/build/core_script_test.py`
+- Modify: `CMakeLists.txt`
+- Modify: `docs/quality/core-test-policy.md`
+
+**Measured RED and review findings:**
+
+- Product Proof's Release CTest filters only by name and therefore still
+  selects the `stress`-labelled `facade.c_api_stress`; retain the existing name
+  exclusion and add the exact label exclusion `-LE '^stress$'`.
+- `e2e.headless_core_proof` redundantly owns `TIMEOUT 180` in both
+  `lmdj_add_test` and an adjacent `set_tests_properties`; remove only the
+  latter timeout while preserving that call's environment property.
+- The durable policy omits the actual risk labels `domain` and `generated`,
+  and it omits this plan's eight Test Selection Rules.
+
+**Interfaces and boundaries:**
+
+- Preserve the public CLI, its existing Proof name exclusions, full/stress
+  routing, and all version, Contract, Product, Provider, Assembly, and model
+  behavior.
+- Provider selection and test routing remain host/workspace concerns; this
+  Task changes only test command selection, test metadata ownership, and the
+  durable test policy.
+
+- [ ] **Step 1: Add a focused runner regression and prove RED**
+
+First add a real assertion in `tests/build/core_script_test.py` that fails
+against the current Product Proof command and requires the exact argument
+`-LE '^stress$'`. The assertion must cover the Release Proof command rather
+than a helper-only reconstruction, so it proves the user-facing runner cannot
+select a stress-labelled test through name filtering alone.
+
+Run:
+
+```bash
+python3 tests/build/core_script_test.py
+```
+
+Expected: the new assertion fails before the runner fix because the Product
+Proof command lacks exact stress-label exclusion.
+
+- [ ] **Step 2: Make the minimal runner and registration corrections**
+
+After the RED is observed, add only `-LE '^stress$'` to the existing Product
+Proof Release CTest invocation, retaining its existing name exclusion exactly.
+Remove only the adjacent duplicate `TIMEOUT 180` ownership for
+`e2e.headless_core_proof`; preserve its `ENVIRONMENT` property and leave
+`lmdj_add_test` as the timeout owner. Do not change the public CLI, full/stress
+routing, Product behavior, version behavior, or Contract behavior.
+
+- [ ] **Step 3: Make the policy durable and complete**
+
+Update `docs/quality/core-test-policy.md` to list all actual risk labels:
+`persistence`, `audio`, `provider`, `assembly`, `abi`, `concurrency`,
+`domain`, and `generated`. Persist these Test Selection Rules with wording
+consistent with this plan:
+
+1. valid result;
+2. stable public errors;
+3. failed mutation leaves state unchanged;
+4. replay/idempotency;
+5. persisted restart/recovery;
+6. audio/frame boundaries including overflow/underflow;
+7. C ABI ownership/stale handle/concurrent lifetime;
+8. cross-module behavior belongs in host/e2e.
+
+- [ ] **Step 4: Verify the repaired boundary**
+
+Run:
+
+```bash
+python3 tests/build/core_script_test.py
+ctest --test-dir build/core/dev -R '^build\\.core_script$' --output-on-failure
+ctest --test-dir build/core/dev -R '^build\\.test_taxonomy$' --output-on-failure
+bash -n scripts/core.sh
+ctest --test-dir build/core/release -N \\
+  -R '^e2e\\.headless_core_proof$' \\
+  -LE '^stress$'
+scripts/core.sh proof
+```
+
+The Release `ctest -N`/show-only selection must demonstrate that no
+stress-labelled test is selected. Record its observed count as evidence if
+useful, but do not turn that count into a hard-coded long-term gate. The
+policy review must confirm all eight labels and all eight Test Selection Rules
+are present. The registered `build.core_script` test and the registered
+`build.test_taxonomy` test must both pass.
+
+- [ ] **Step 5: Commit**
+
+Stage only the four declared implementation files. Inspect the staged names
+and `git diff --cached --check`, then commit the implementation as:
+
+```text
+fix(test): preserve proof tier boundaries
+```
+
+Verify the branch is not `main` before committing. Do not push, open a PR,
+merge, tag, or edit Product implementation outside the declared files.
+
+**Version Management**
+
+Version impact: none
+
+Reason: this is test routing, metadata, and policy only. It changes no Product,
+Module, Contract, Provider, Assembly, or model identity, and creates or changes
+no version or tag.
+
+---
+
 ## Completion Evidence
 
 Implementation is complete only when all of the following are true:
