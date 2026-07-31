@@ -30,11 +30,4 @@ jobs:
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - run: bash tests/build/test_active_tree.sh
-      - run: python3 tests/build/version_test.py
-      - run: >-
-          python3 scripts/version.py verify
-          --version-file products/lmdj/version.json
-      - run: scripts/core.sh configure release
-      - run: scripts/core.sh build release
-      - run: scripts/core.sh test release
+      - run: scripts/core.sh proof

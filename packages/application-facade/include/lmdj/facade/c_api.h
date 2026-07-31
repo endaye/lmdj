@@ -23,6 +23,11 @@ extern "C" {
 
 typedef struct lmdj_engine lmdj_engine;
 
+/*
+ * config_json requires normalized absolute "workspace_root". Optional
+ * normalized absolute "assembly_path" composes only the Providers declared by
+ * that validated Product Assembly.
+ */
 LMDJ_CORE_C_EXPORT int lmdj_engine_create(
     const char* config_json,
     lmdj_engine** out_engine,

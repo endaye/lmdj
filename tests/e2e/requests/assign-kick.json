@@ -1,0 +1,11 @@
+{
+  "operation": "pad.assign",
+  "project_path": "$PROJECT_PATH",
+  "command_id": "00000000-0000-4000-8000-000000000003",
+  "expected_revision": 2,
+  "slot": {
+    "bank": 0,
+    "pad": 0
+  },
+  "asset_id": "00000000-0000-4000-8000-000000000101"
+}

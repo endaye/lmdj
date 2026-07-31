@@ -48,6 +48,15 @@ std::string config_json(const std::filesystem::path& root) {
   return nlohmann::json{{"workspace_root", root.generic_string()}}.dump();
 }
 
+std::string assembly_config_json(
+    const std::filesystem::path& root,
+    const std::filesystem::path& assembly) {
+  return nlohmann::json{
+      {"workspace_root", root.generic_string()},
+      {"assembly_path", assembly.generic_string()},
+  }.dump();
+}
+
 nlohmann::json command(
     lmdj_engine* engine,
     const nlohmann::json& request) {
@@ -143,6 +152,45 @@ void test_create_command_query_and_owned_strings() {
   lmdj_string_free(nullptr);
   lmdj_engine_free(engine);
   lmdj_engine_free(engine);
+}
+
+void test_assembly_composition_through_c_abi() {
+  TempDirectory temp;
+  const auto assembly =
+      std::filesystem::absolute("products/lmdj/assembly.json");
+  const auto config = assembly_config_json(temp.path(), assembly);
+  lmdj_engine* engine = nullptr;
+  char* error = nullptr;
+  LMDJ_CHECK(
+      lmdj_engine_create(config.c_str(), &engine, &error) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(engine != nullptr);
+  LMDJ_CHECK(error == nullptr);
+
+  const auto provider_list =
+      nlohmann::json{{"operation", "provider.list"}}.dump();
+  char* response = nullptr;
+  LMDJ_CHECK(
+      lmdj_engine_query(engine, provider_list.c_str(), &response) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(response != nullptr);
+  const auto parsed = nlohmann::json::parse(response);
+  lmdj_string_free(response);
+  const auto& providers = parsed.at("result").at("providers");
+  LMDJ_CHECK(providers.size() == 2);
+  LMDJ_CHECK(providers.at(0).at("id") == "local.proof.failure");
+  LMDJ_CHECK(providers.at(1).at("id") == "local.proof.success");
+  lmdj_engine_free(engine);
+
+  const auto invalid = assembly_config_json(
+      temp.path(), temp.path() / "missing-assembly.json");
+  engine = reinterpret_cast<lmdj_engine*>(0x1);
+  error = reinterpret_cast<char*>(0x1);
+  LMDJ_CHECK(
+      lmdj_engine_create(invalid.c_str(), &engine, &error) ==
+      LMDJ_STATUS_INVALID_ARGUMENT);
+  LMDJ_CHECK(engine == nullptr);
+  LMDJ_CHECK(error == nullptr);
 }
 
 void test_take_replay_identity_is_enforced_through_c_abi() {
@@ -647,6 +695,7 @@ int main() {
   try {
     LMDJ_CHECK(LMDJ_CORE_C_API_VERSION == 1);
     test_create_command_query_and_owned_strings();
+    test_assembly_composition_through_c_abi();
     test_take_replay_identity_is_enforced_through_c_abi();
     test_asset_and_pad_replay_identity_through_c_abi();
     test_transport_failures_null_outputs_and_valid_facade_errors();

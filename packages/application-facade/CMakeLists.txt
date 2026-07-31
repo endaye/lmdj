@@ -2,6 +2,7 @@ add_library(
   lmdj_application
   STATIC
     src/application.cpp
+    src/assembly_loader.cpp
 )
 add_library(lmdj::application ALIAS lmdj_application)
 
@@ -100,6 +101,28 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_assembly_loader_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/assembly_loader_test.cpp"
+  )
+  target_include_directories(
+    lmdj_assembly_loader_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_assembly_loader_tests
+    PRIVATE
+      lmdj::application
+  )
+  lmdj_target_warnings(lmdj_assembly_loader_tests)
+  lmdj_target_sanitizers(lmdj_assembly_loader_tests)
+  add_test(NAME facade.assembly_loader COMMAND lmdj_assembly_loader_tests)
+  set_tests_properties(
+    facade.assembly_loader
+    PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
     lmdj_application_c_api_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/c_api_test.cpp"
   )
@@ -118,6 +141,10 @@ if(BUILD_TESTING)
   lmdj_target_warnings(lmdj_application_c_api_tests)
   lmdj_target_sanitizers(lmdj_application_c_api_tests)
   add_test(NAME facade.c_api COMMAND lmdj_application_c_api_tests)
+  set_tests_properties(
+    facade.c_api
+    PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
 
   add_executable(
     lmdj_application_dynamic_load_tests

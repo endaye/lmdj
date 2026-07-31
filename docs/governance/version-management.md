@@ -401,6 +401,12 @@ products/lmdj/
 lock 文件由工具生成，不手工编辑。Build Manifest 在 checkout 之后把 lock hash 与完整
 Git revision、Channel、构建平台和产物 hash 绑定起来。
 
+M1 PR 6 完成 Assembly Policy 边界时创建 `lmdj.assembly.v2` Contract
+`2.0.0`：Region、数据分类和权限策略成为必填 Assembly 字段。该必填字段会拒绝
+旧形状，因此保留 `lmdj.assembly.v1` `1.0.0`，并按 breaking change 创建 `v2`。
+Provider lock 必须绑定与运行时 `ProviderRegistration.artifact_sha256` 一致的
+确定性 source-package identity，不能只绑定 `module.json`。
+
 ## 10. M1 开发版本表
 
 M1 采用六个顺序 PR Gate；Build 编号已经分配，失败或取消也不复用：
