@@ -673,6 +673,9 @@ void set_fault_hook(FaultHook hook);
 
 - Production builds do not declare, link, or branch through this hook.
 - A failing hook returns the existing typed I/O error; it does not introduce a public error code.
+- Append `lmdj_project_io_fault_matrix_tests` to the root coverage object list
+  without removing any of the 18 existing objects; the authoritative count
+  becomes 19.
 
 - [ ] **Step 1: Write the 12-point failing matrix**
 
@@ -733,7 +736,8 @@ statement sequence when `LMDJ_PROJECT_IO_TESTING` is undefined.
 Register `project_io.fault_matrix` as tier `component`, labels `persistence`,
 timeout 30 seconds. It is a deterministic Project Truth regression and must run
 in every full pull-request gate, not only nightly. Link only
-`lmdj_project_io_testable`.
+`lmdj_project_io_testable`. Add the executable to `lmdj_coverage_targets` so
+its testable Project I/O objects contribute to the physical-source union.
 
 Run:
 
@@ -821,6 +825,9 @@ git commit -m "test(project-io): inject persistence publish faults"
 - `thread` enables `-fsanitize=thread`.
 - Coverage, AddressSanitizer, and ThreadSanitizer modes are mutually exclusive.
 - `facade.c_api_stress` is tier `stress`, labels `abi;concurrency`, timeout 180 seconds.
+- Append `lmdj_application_c_api_stress_tests` to the root coverage object list
+  without removing any of the 19 existing objects; the authoritative count
+  becomes 20.
 
 - [ ] **Step 1: Document the existing Proof-scoped C ABI concurrency baseline**
 
@@ -895,6 +902,11 @@ The new `tsan` preset sets:
 ```
 
 - [ ] **Step 5: Register and run the stress target**
+
+Register the target and append it to `lmdj_coverage_targets`. The coverage
+runner executes all registered tests directly through its preset, so every
+instrumented executable that emits a `%m` profile must have a matching object
+entry even though ordinary `full` mode later excludes the `stress` tier.
 
 Run without sanitizer first:
 
@@ -1159,7 +1171,10 @@ scripts/core-coverage.sh check
 ```
 
 Expected: PASS after the deterministic, persistence-fault, and C ABI Tasks
-without line-execution-only assertions.
+without line-execution-only assertions. `coverage-objects.txt` must contain
+exactly 20 unique paths, the runner must map every emitted signature
+successfully, and the report must retain the complete first-party source
+topology.
 
 - [ ] **Step 6: Run the final local acceptance matrix**
 
