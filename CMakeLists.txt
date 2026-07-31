@@ -32,6 +32,26 @@ find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 add_subdirectory(apps/core-cli)
 add_subdirectory(products/lmdj)
 
+lmdj_add_test(
+  NAME build.project_io_test_hook_symbols
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${CMAKE_SOURCE_DIR}/tests/build/project_io_test_hook_symbols_test.py"
+    "${CMAKE_NM}"
+    "$<TARGET_FILE:lmdj_project_io>"
+  LABELS persistence
+)
+
+lmdj_add_test(
+  NAME build.project_io_test_hook_symbols_unit
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    "${CMAKE_SOURCE_DIR}/tests/build/project_io_test_hook_symbols_unit_test.py"
+  LABELS persistence
+)
+
 if(LMDJ_ENABLE_COVERAGE)
   set(
     lmdj_coverage_targets
@@ -53,6 +73,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_dynamic_load_tests
     lmdj_core_cli
     lmdj_core_c
+    lmdj_project_io_fault_matrix_tests
   )
   set(lmdj_coverage_objects)
   foreach(lmdj_coverage_target IN LISTS lmdj_coverage_targets)

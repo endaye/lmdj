@@ -16,16 +16,8 @@
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 
+#include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
-
-namespace lmdj::project_io::testing {
-
-using ActiveDirectorySyncHook =
-    foundation::Result<void> (*)(const std::filesystem::path&);
-
-void set_active_directory_sync_hook(ActiveDirectorySyncHook hook);
-
-}  // namespace lmdj::project_io::testing
 
 namespace {
 
@@ -49,7 +41,12 @@ using lmdj::project_io::TakeJournal;
 int active_directory_sync_calls = 0;
 
 lmdj::foundation::Result<void> fail_active_directory_sync(
+    lmdj::project_io::testing::FaultPoint point,
     const std::filesystem::path& path) {
+  if (point !=
+      lmdj::project_io::testing::FaultPoint::active_directory_sync) {
+    return lmdj::foundation::Result<void>::success();
+  }
   ++active_directory_sync_calls;
   return lmdj::foundation::Result<void>::failure(
       lmdj::foundation::Error{
@@ -60,25 +57,29 @@ lmdj::foundation::Result<void> fail_active_directory_sync(
 }
 
 lmdj::foundation::Result<void> count_active_directory_sync(
+    lmdj::project_io::testing::FaultPoint point,
     const std::filesystem::path&) {
+  if (point !=
+      lmdj::project_io::testing::FaultPoint::active_directory_sync) {
+    return lmdj::foundation::Result<void>::success();
+  }
   ++active_directory_sync_calls;
   return lmdj::foundation::Result<void>::success();
 }
 
-class ActiveDirectorySyncHookGuard {
+class FaultHookGuard {
  public:
-  explicit ActiveDirectorySyncHookGuard(
-      lmdj::project_io::testing::ActiveDirectorySyncHook hook) {
-    lmdj::project_io::testing::set_active_directory_sync_hook(hook);
+  explicit FaultHookGuard(
+      lmdj::project_io::testing::FaultHook hook) {
+    lmdj::project_io::testing::set_fault_hook(hook);
   }
 
-  ~ActiveDirectorySyncHookGuard() {
-    lmdj::project_io::testing::set_active_directory_sync_hook(nullptr);
+  ~FaultHookGuard() {
+    lmdj::project_io::testing::set_fault_hook(nullptr);
   }
 
-  ActiveDirectorySyncHookGuard(const ActiveDirectorySyncHookGuard&) = delete;
-  ActiveDirectorySyncHookGuard& operator=(
-      const ActiveDirectorySyncHookGuard&) = delete;
+  FaultHookGuard(const FaultHookGuard&) = delete;
+  FaultHookGuard& operator=(const FaultHookGuard&) = delete;
 };
 
 class TempDirectory {
@@ -481,7 +482,7 @@ void test_nonmatching_record_never_runs_active_directory_cleanup() {
               "test did not execute",
           });
   {
-    ActiveDirectorySyncHookGuard hook(fail_active_directory_sync);
+    FaultHookGuard hook(fail_active_directory_sync);
     committed = store.execute(
         bundle,
         Command{RecordTake{
@@ -568,7 +569,7 @@ void test_fsync_failure_after_remove_replays_persisted_cleanup_obligation() {
               "test did not execute",
           });
   {
-    ActiveDirectorySyncHookGuard hook(fail_active_directory_sync);
+    FaultHookGuard hook(fail_active_directory_sync);
     cleanup_failed = store.execute(bundle, command);
   }
 
@@ -590,7 +591,7 @@ void test_fsync_failure_after_remove_replays_persisted_cleanup_obligation() {
               "test did not execute",
           });
   {
-    ActiveDirectorySyncHookGuard hook(count_active_directory_sync);
+    FaultHookGuard hook(count_active_directory_sync);
     replayed = store.execute(bundle, command);
   }
 

@@ -90,6 +90,11 @@ if(BUILD_TESTING)
       lmdj_project_io_testable
       nlohmann_json::nlohmann_json
   )
+  target_compile_definitions(
+    lmdj_take_journal_tests
+    PRIVATE
+      LMDJ_PROJECT_IO_TESTING=1
+  )
   lmdj_target_warnings(lmdj_take_journal_tests)
   lmdj_target_sanitizers(lmdj_take_journal_tests)
   lmdj_add_test(
@@ -97,5 +102,35 @@ if(BUILD_TESTING)
     TIER component
     COMMAND lmdj_take_journal_tests
     LABELS persistence
+  )
+
+  add_executable(
+    lmdj_project_io_fault_matrix_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/fault_matrix_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_io_fault_matrix_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_io_fault_matrix_tests
+    PRIVATE
+      lmdj_project_io_testable
+      nlohmann_json::nlohmann_json
+  )
+  target_compile_definitions(
+    lmdj_project_io_fault_matrix_tests
+    PRIVATE
+      LMDJ_PROJECT_IO_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_project_io_fault_matrix_tests)
+  lmdj_target_sanitizers(lmdj_project_io_fault_matrix_tests)
+  lmdj_add_test(
+    NAME project_io.fault_matrix
+    TIER component
+    COMMAND lmdj_project_io_fault_matrix_tests
+    LABELS persistence
+    TIMEOUT 30
   )
 endif()

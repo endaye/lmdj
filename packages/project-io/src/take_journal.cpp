@@ -7,6 +7,7 @@
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <optional>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -18,6 +19,10 @@
 #include <nlohmann/json.hpp>
 
 #include <lmdj/foundation/json.hpp>
+
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+#include "testing_hooks.hpp"
+#endif
 
 namespace lmdj::project_io {
 namespace {
@@ -483,7 +488,12 @@ foundation::Result<JournalDocument> read_journal(
 
 foundation::Result<void> write_new_file(
     const std::filesystem::path& path,
-    std::string_view bytes) {
+    std::string_view bytes
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    ,
+    std::optional<testing::FaultPoint> sync_fault = std::nullopt
+#endif
+    ) {
   const int descriptor =
       ::open(
           path.c_str(),
@@ -494,9 +504,17 @@ foundation::Result<void> write_new_file(
         io_error("journal file could not be created", path));
   }
   const auto written = write_all(descriptor, bytes, path);
-  const auto synced = written.has_value()
-                          ? fsync_descriptor(descriptor, path)
-                          : foundation::Result<void>::success();
+  auto synced = foundation::Result<void>::success();
+  if (written.has_value()) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    if (sync_fault.has_value()) {
+      synced = testing::detail::invoke_fault(*sync_fault, path);
+    }
+#endif
+    if (synced.has_value()) {
+      synced = fsync_descriptor(descriptor, path);
+    }
+  }
   const int close_result = ::close(descriptor);
   if (!written.has_value()) {
     return written;
@@ -569,7 +587,14 @@ foundation::Result<void> TakeJournal::begin(
       {"take_id", take_id.value()},
   };
   const auto created =
-      write_new_file(path, foundation::canonical_json(header) + "\n");
+      write_new_file(
+          path,
+          foundation::canonical_json(header) + "\n"
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+          ,
+          testing::FaultPoint::active_journal_sync
+#endif
+      );
   if (!created.has_value()) {
     if (std::filesystem::exists(path)) {
       return foundation::Result<void>::failure(
@@ -621,9 +646,16 @@ foundation::Result<void> TakeJournal::append(
   }
   const auto line = foundation::canonical_json(event_json(event)) + "\n";
   const auto written = write_all(descriptor, line, path);
-  const auto synced = written.has_value()
-                          ? fsync_descriptor(descriptor, path)
-                          : foundation::Result<void>::success();
+  auto synced = foundation::Result<void>::success();
+  if (written.has_value()) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    synced = testing::detail::invoke_fault(
+        testing::FaultPoint::active_journal_sync, path);
+#endif
+    if (synced.has_value()) {
+      synced = fsync_descriptor(descriptor, path);
+    }
+  }
   const int close_result = ::close(descriptor);
   if (!written.has_value()) {
     return written;
@@ -720,6 +752,14 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
             final_path,
             rename_error.value()));
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto sealed_sync_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::sealed_directory_sync, sealed_directory);
+  if (!sealed_sync_intercepted.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        sealed_sync_intercepted.error());
+  }
+#endif
   const auto sealed_sync = fsync_directory(sealed_directory);
   if (!sealed_sync.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
@@ -727,6 +767,14 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
   }
 
   const auto active = active_path(bundle, take_id);
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto remove_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::active_journal_remove, active);
+  if (!remove_intercepted.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        remove_intercepted.error());
+  }
+#endif
   std::error_code remove_error;
   const bool removed = std::filesystem::remove(active, remove_error);
   if (remove_error || !removed) {
@@ -736,6 +784,14 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
             active,
             remove_error ? remove_error.value() : ENOENT));
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto active_sync_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::active_directory_sync, active.parent_path());
+  if (!active_sync_intercepted.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        active_sync_intercepted.error());
+  }
+#endif
   const auto active_sync = fsync_directory(active.parent_path());
   if (!active_sync.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(

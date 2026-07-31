@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <cerrno>
 #include <charconv>
 #include <cctype>
@@ -31,31 +30,11 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 
-namespace lmdj::project_io {
-
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-namespace testing {
-
-using ActiveDirectorySyncHook =
-    foundation::Result<void> (*)(const std::filesystem::path&);
-
-namespace {
-
-std::atomic<ActiveDirectorySyncHook> active_directory_sync_hook{nullptr};
-
-}  // namespace
-
-void set_active_directory_sync_hook(ActiveDirectorySyncHook hook) {
-  active_directory_sync_hook.store(hook, std::memory_order_release);
-}
-
-ActiveDirectorySyncHook get_active_directory_sync_hook() {
-  return active_directory_sync_hook.load(std::memory_order_acquire);
-}
-
-}  // namespace testing
+#include "testing_hooks.hpp"
 #endif
 
+namespace lmdj::project_io {
 namespace {
 
 using foundation::Error;
@@ -478,9 +457,10 @@ foundation::Result<void> fsync_directory(
 foundation::Result<void> fsync_active_directory(
     const std::filesystem::path& directory) {
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto hook = testing::get_active_directory_sync_hook();
-  if (hook != nullptr) {
-    return hook(directory);
+  const auto intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::active_directory_sync, directory);
+  if (!intercepted.has_value()) {
+    return intercepted;
   }
 #endif
   return fsync_directory(directory);
@@ -488,7 +468,12 @@ foundation::Result<void> fsync_active_directory(
 
 foundation::Result<void> write_new_file(
     const std::filesystem::path& path,
-    std::string_view bytes) {
+    std::string_view bytes
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    ,
+    std::optional<testing::FaultPoint> sync_fault = std::nullopt
+#endif
+    ) {
   const int descriptor =
       ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
   if (descriptor < 0) {
@@ -496,9 +481,17 @@ foundation::Result<void> write_new_file(
         io_error("project file could not be created", path));
   }
   const auto written = write_all(descriptor, bytes, path);
-  const auto synced = written.has_value()
-                          ? fsync_descriptor(descriptor, path)
-                          : foundation::Result<void>::success();
+  auto synced = foundation::Result<void>::success();
+  if (written.has_value()) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    if (sync_fault.has_value()) {
+      synced = testing::detail::invoke_fault(*sync_fault, path);
+    }
+#endif
+    if (synced.has_value()) {
+      synced = fsync_descriptor(descriptor, path);
+    }
+  }
   const int close_result = ::close(descriptor);
   if (!written.has_value()) {
     return written;
@@ -1681,6 +1674,12 @@ foundation::Result<void> publish_artifact(
         temp_path);
   }
   if (copied.has_value()) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    copied = testing::detail::invoke_fault(
+        testing::FaultPoint::artifact_temp_sync, temp_path);
+#endif
+  }
+  if (copied.has_value()) {
     copied = fsync_descriptor(destination, temp_path);
   }
   const int source_close = ::close(source);
@@ -1703,6 +1702,13 @@ foundation::Result<void> publish_artifact(
             {{"path", stage.source.generic_string()}},
         });
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto publish_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::artifact_publish, final_path);
+  if (!publish_intercepted.has_value()) {
+    return publish_intercepted;
+  }
+#endif
   const auto renamed = rename_file(temp_path, final_path);
   if (!renamed.has_value()) {
     return renamed;
@@ -1759,6 +1765,13 @@ foundation::Result<void> complete_journal_cleanup(
   const auto path =
       bundle / "recovery/active" /
       (cleanup_take_id->value() + ".jsonl");
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto remove_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::active_journal_remove, path);
+  if (!remove_intercepted.has_value()) {
+    return remove_intercepted;
+  }
+#endif
   std::error_code error;
   std::filesystem::remove(path, error);
   if (error) {
@@ -1926,7 +1939,12 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   }
   auto written = write_new_file(
       transaction_temp,
-      foundation::canonical_json(transaction) + "\n");
+      foundation::canonical_json(transaction) + "\n"
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+      ,
+      testing::FaultPoint::transaction_temp_sync
+#endif
+  );
   if (!written.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
@@ -1934,16 +1952,37 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   written = write_new_file(
       checkpoint_temp,
       foundation::canonical_json(project_json(applied.value().state)) +
-          "\n");
+          "\n"
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+      ,
+      testing::FaultPoint::checkpoint_temp_sync
+#endif
+  );
   if (!written.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  auto publish_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::transaction_publish, transaction_final);
+  if (!publish_intercepted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        publish_intercepted.error());
+  }
+#endif
   auto renamed = rename_file(transaction_temp, transaction_final);
   if (!renamed.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         renamed.error());
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  publish_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::checkpoint_publish, checkpoint_final);
+  if (!publish_intercepted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        publish_intercepted.error());
+  }
+#endif
   renamed = rename_file(checkpoint_temp, checkpoint_final);
   if (!renamed.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -1968,11 +2007,24 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       manifest_temp,
       foundation::canonical_json(
           manifest_json(revision, loaded.transactions)) +
-          "\n");
+          "\n"
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+      ,
+      testing::FaultPoint::manifest_temp_sync
+#endif
+  );
   if (!written.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  publish_intercepted = testing::detail::invoke_fault(
+      testing::FaultPoint::manifest_publish, bundle / "manifest.json");
+  if (!publish_intercepted.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        publish_intercepted.error());
+  }
+#endif
   renamed = rename_file(manifest_temp, bundle / "manifest.json");
   if (!renamed.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
