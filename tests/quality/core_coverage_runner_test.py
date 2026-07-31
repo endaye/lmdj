@@ -21,6 +21,23 @@ def write_executable(path: Path, content: str) -> None:
 
 
 class CoreCoverageRunnerTest(unittest.TestCase):
+    def test_each_topology_export_uses_its_matching_module_profile(
+        self,
+    ) -> None:
+        runner = runner_path.read_text(encoding="utf-8")
+        topology_start = runner.index('topologies_root="$run_root/topologies"')
+        topology_end = runner.index(
+            'for fragment_path in "$fragments_root"/*.lcov',
+            topology_start,
+        )
+        topology_block = runner[topology_start:topology_end]
+
+        self.assertNotIn("--empty-profile", topology_block)
+        self.assertIn(
+            '-instr-profile="$module_profiles_root/$object_number.profdata"',
+            topology_block,
+        )
+
     def test_missing_llvm_tools_cannot_leave_documented_stale_artifacts(
         self,
     ) -> None:

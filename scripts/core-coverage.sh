@@ -331,7 +331,7 @@ for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
   run_cov_export \
     "$topology_path" \
     -format=lcov \
-    --empty-profile \
+    -instr-profile="$module_profiles_root/$object_number.profdata" \
     "$object_path"
   union_args+=(--topology "$topology_path")
 done
