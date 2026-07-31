@@ -40,6 +40,14 @@
         "CMAKE_BUILD_TYPE": "Debug",
         "LMDJ_ENABLE_SANITIZERS": "ON"
       }
+    },
+    {
+      "name": "coverage",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LMDJ_ENABLE_COVERAGE": "ON"
+      }
     }
   ],
   "buildPresets": [
@@ -58,6 +66,10 @@
     {
       "name": "asan",
       "configurePreset": "asan"
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage"
     }
   ],
   "testPresets": [
@@ -85,6 +97,13 @@
     {
       "name": "asan",
       "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "coverage",
+      "configurePreset": "coverage",
       "output": {
         "outputOnFailure": true
       }

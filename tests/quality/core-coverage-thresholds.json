@@ -1,0 +1,12 @@
+{
+  "overall": {"lines": 80, "branches": 70},
+  "paths": {
+    "packages/foundation/": {"lines": 85, "branches": 75},
+    "packages/authoring-domain/": {"lines": 90, "branches": 80},
+    "packages/project-io/": {"lines": 85, "branches": 75},
+    "packages/project-cooker/": {"lines": 90, "branches": 80},
+    "packages/audio-runtime/": {"lines": 90, "branches": 80},
+    "packages/provider-sdk/": {"lines": 85, "branches": 75},
+    "packages/application-facade/": {"lines": 90, "branches": 80}
+  }
+}

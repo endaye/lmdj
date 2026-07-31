@@ -11,6 +11,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 include(CTest)
 include(cmake/LmdjDependencies.cmake)
+include(cmake/LmdjCoverage.cmake)
 include(cmake/LmdjTesting.cmake)
 include(cmake/LmdjWarnings.cmake)
 
@@ -30,6 +31,47 @@ find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
 add_subdirectory(apps/core-cli)
 add_subdirectory(products/lmdj)
+
+if(LMDJ_ENABLE_COVERAGE)
+  set(
+    lmdj_coverage_targets
+    lmdj_foundation_tests
+    lmdj_domain_project_tests
+    lmdj_domain_command_handler_tests
+    lmdj_project_store_tests
+    lmdj_take_journal_tests
+    lmdj_project_cooker_tests
+    lmdj_audio_runtime_tests
+    lmdj_provider_conformance_tests
+    lmdj_provider_attempt_isolation_tests
+    lmdj_provider_spec_regression_tests
+    lmdj_application_facade_tests
+    lmdj_assembly_loader_tests
+    lmdj_application_c_api_tests
+    lmdj_application_dynamic_load_tests
+    lmdj_core_cli
+    lmdj_core_c
+  )
+  set(lmdj_coverage_objects)
+  foreach(lmdj_coverage_target IN LISTS lmdj_coverage_targets)
+    if(NOT TARGET "${lmdj_coverage_target}")
+      message(
+        FATAL_ERROR
+        "Coverage target is missing: ${lmdj_coverage_target}"
+      )
+    endif()
+    string(
+      APPEND
+      lmdj_coverage_objects
+      "$<TARGET_FILE:${lmdj_coverage_target}>\n"
+    )
+  endforeach()
+  file(
+    GENERATE
+    OUTPUT "${CMAKE_BINARY_DIR}/coverage-objects.txt"
+    CONTENT "${lmdj_coverage_objects}"
+  )
+endif()
 
 set(
   lmdj_mcp_test_environment

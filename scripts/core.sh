@@ -10,6 +10,7 @@ usage:
   scripts/core.sh configure [dev|release|asan]
   scripts/core.sh build [dev|release|asan]
   scripts/core.sh test [dev|release|asan]
+  scripts/core.sh coverage [report|check]
   scripts/core.sh proof
   scripts/core.sh clean
 EOF
@@ -61,6 +62,13 @@ case "$command_name" in
     }
     require_preset "$1"
     ctest --preset "$1"
+    ;;
+  coverage)
+    [[ $# -eq 1 ]] || {
+      usage
+      exit 64
+    }
+    exec "$repo_root/scripts/core-coverage.sh" "$1"
     ;;
   proof)
     [[ $# -eq 0 ]] || {
