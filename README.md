@@ -12,12 +12,10 @@ from the active tree and remains recoverable from Git history.
 ## Current status
 
 - Designed: full product and Core architecture.
-- In implementation: M1 Headless Core Proof.
-- Current branch candidate: `1.0.1.0` / `canary`; PR 1 targets `dev` after
-  merge and CI.
-- Not yet implemented: realtime audio, Web/PWA, Creator UI, Sample
-  intelligence, Sequence editor, Perform view, Sound Sets, production
-  Providers, or cloud deployment.
+- Implemented by this plan: M1 Headless Core Proof only (`1.0.6.0` candidate).
+- Not implemented: realtime audio, Web/PWA, Creator UI, Sample intelligence,
+  Sequence editing, Perform, Sound Sets, production Providers, or cloud
+  deployment.
 
 ## Architecture
 
@@ -57,9 +55,14 @@ bash scripts/verify-core-dependencies.sh
 scripts/core.sh configure dev
 scripts/core.sh build dev
 scripts/core.sh test dev
+scripts/core.sh proof
 ```
 
-`scripts/core.sh clean` removes only `build/core`.
+`scripts/core.sh proof` is the single vertical-slice acceptance command. It
+builds Release, exercises CLI and MCP over the same Product Assembly, renders
+the Golden Beat, verifies Provider failure isolation and Take recovery, and
+generates a canary Build Manifest. `scripts/core.sh clean` removes only
+`build/core`.
 
 ## Source of truth
 

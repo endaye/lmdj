@@ -1,0 +1,13 @@
+{
+  "operation": "provider.run",
+  "attempt_id": "attempt-proof-failure",
+  "capability": "proof.candidate.v1",
+  "inputs": [],
+  "parameters": {},
+  "data_classification": "public",
+  "platform": "test",
+  "region": "local",
+  "required_permissions": [
+    "proof.execute"
+  ]
+}

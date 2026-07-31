@@ -297,22 +297,26 @@ class MCPProcess:
         library: Path,
         workspace: Path,
         *,
+        assembly: Path | None = None,
         stdout=None,
         environment: dict[str, str] | None = None,
     ) -> None:
         env = host_environment()
         if environment:
             env.update(environment)
+        arguments = [
+            sys.executable,
+            "-m",
+            "lmdj_core_mcp",
+            "--library",
+            str(library),
+            "--workspace",
+            str(workspace),
+        ]
+        if assembly is not None:
+            arguments.extend(["--assembly", str(assembly)])
         self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "lmdj_core_mcp",
-                "--library",
-                str(library),
-                "--workspace",
-                str(workspace),
-            ],
+            arguments,
             cwd=REPO_ROOT,
             env=env,
             stdin=subprocess.PIPE,
@@ -520,7 +524,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 5,
+        "build": 6,
         "patch": 0,
     }
 
@@ -602,6 +606,25 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
 
     empty_eof = MCPProcess(library, workspace)
     assert empty_eof.close() == (0, b"", b"")
+
+    assembly = (REPO_ROOT / "products/lmdj/assembly.json").resolve()
+    assembled_workspace = temp_root / "assembled-workspace"
+    assembled_workspace.mkdir()
+    assembled = MCPProcess(
+        library,
+        assembled_workspace,
+        assembly=assembly,
+    )
+    assembled.initialize()
+    result = assert_tool_result(
+        assembled.tool_call(2, "lmdj.provider.list", {}),
+        2,
+    )["structuredContent"]["result"]
+    assert [provider["id"] for provider in result["providers"]] == [
+        "local.proof.failure",
+        "local.proof.success",
+    ]
+    assert assembled.close() == (0, b"", b"")
 
 
 def lifecycle(library: Path, temp_root: Path) -> None:

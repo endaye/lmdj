@@ -1,4 +1,3 @@
-import hashlib
 import json
 from pathlib import Path
 import subprocess
@@ -24,10 +23,10 @@ assert core_cli_manifest == {
 }
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 5, 0)
-assert str(version) == "1.0.5.0"
-assert version.product_tag() == "lmdj-v1.0.5.0"
-assert version.display("dev", "a" * 40) == "1.0.5.0 · dev · gaaaaaaaa"
+assert version == ProductVersion(1, 0, 6, 0)
+assert str(version) == "1.0.6.0"
+assert version.product_tag() == "lmdj-v1.0.6.0"
+assert version.display("dev", "a" * 40) == "1.0.6.0 · dev · gaaaaaaaa"
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
@@ -56,7 +55,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.5.0\n"
+assert tag_name.stdout == "lmdj-v1.0.6.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -76,7 +75,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.5.0 · dev · gaaaaaaaa\n"
+assert current.stdout == "1.0.6.0 · dev · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -92,7 +91,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.5.0)\n"
+assert verified.stdout == "version verification: PASS (1.0.6.0)\n"
 assert verified.stderr == ""
 
 
@@ -103,59 +102,18 @@ def write_json(path: Path, value: dict) -> None:
     )
 
 
+assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
+tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
+assert verify(
+    "products/lmdj/version.json",
+    assembly_path=assembly_path,
+    lock_path=tracked_lock_path,
+) == version
+
 with tempfile.TemporaryDirectory() as temp_dir:
     temp_root = Path(temp_dir)
-    assembly_path = temp_root / "assembly.json"
     lock_path = temp_root / "assembly.lock.json"
-    assembly = {
-        "contract": "lmdj.assembly.v1",
-        "product": {"id": "lmdj", "version": "1.0.5.0"},
-        "modules": [{"id": "foundation", "version": "0.1.0"}],
-        "hosts": [{"id": "core-cli", "version": "0.1.0"}],
-        "providers": [
-            {
-                "id": "local.proof",
-                "version": "0.1.0",
-                "capabilities": [],
-                "model_identity": None,
-            }
-        ],
-        "contracts": [
-            {"id": "lmdj.project.v1", "version": "1.0.0"}
-        ],
-    }
-    write_json(assembly_path, assembly)
-    assembly_sha256 = hashlib.sha256(
-        assembly_path.read_bytes()
-    ).hexdigest()
-
-    def locked_component(component: dict) -> dict:
-        return {
-            "id": component["id"],
-            "version": component["version"],
-            "sha256": "a" * 64,
-        }
-
-    lock = {
-        "product": {"id": "lmdj", "version": "1.0.5.0"},
-        "assembly_sha256": assembly_sha256,
-        "modules": [
-            locked_component(component)
-            for component in assembly["modules"]
-        ],
-        "hosts": [
-            locked_component(component)
-            for component in assembly["hosts"]
-        ],
-        "providers": [
-            locked_component(component)
-            for component in assembly["providers"]
-        ],
-        "contracts": [
-            locked_component(component)
-            for component in assembly["contracts"]
-        ],
-    }
+    lock = json.loads(tracked_lock_path.read_text(encoding="utf-8"))
     write_json(lock_path, lock)
     assert verify(
         "products/lmdj/version.json",

@@ -13,7 +13,10 @@ schema_paths = {
     "capability": (
         contract_root / "capability" / "lmdj.capability.v1.schema.json"
     ),
-    "assembly": contract_root / "assembly" / "lmdj.assembly.v1.schema.json",
+    "assembly_v1": (
+        contract_root / "assembly" / "lmdj.assembly.v1.schema.json"
+    ),
+    "assembly": contract_root / "assembly" / "lmdj.assembly.v2.schema.json",
     "error": contract_root / "error" / "lmdj.error.v1.schema.json",
     "module": contract_root / "module" / "lmdj.module.v1.schema.json",
     "product_version": (
@@ -41,9 +44,13 @@ def contained_constants(rules: list[dict], property_name: str) -> set[int]:
 
 schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
+contract_versions = {
+    name: ("2.0.0" if name == "assembly" else "1.0.0")
+    for name in schemas
+}
 for name, schema in schemas.items():
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
-    assert schema["x-lmdj-contract-version"] == "1.0.0"
+    assert schema["x-lmdj-contract-version"] == contract_versions[name]
     assert schema["type"] == "object"
     assert schema["additionalProperties"] is False
     assert schema["$id"].endswith(schema_paths[name].name)
@@ -131,11 +138,19 @@ assert set(assembly["required"]) == {
     "hosts",
     "providers",
     "contracts",
+    "provider_policy",
 }
-assert assembly["properties"]["contract"]["const"] == "lmdj.assembly.v1"
+assert assembly["properties"]["contract"]["const"] == "lmdj.assembly.v2"
 for collection in ("modules", "hosts", "providers", "contracts"):
     assert assembly["properties"][collection]["type"] == "array"
     assert assembly["properties"][collection]["uniqueItems"] is True
+provider_policy = assembly["$defs"]["provider_policy"]
+assert set(provider_policy["required"]) == {
+    "allowed_regions",
+    "allowed_data_classifications",
+    "granted_permissions",
+}
+assert provider_policy["additionalProperties"] is False
 
 error_schema = schemas["error"]
 assert error_schema["properties"]["contract"]["const"] == "lmdj.error.v1"
@@ -207,4 +222,4 @@ assert foundation_manifest == {
     "dependencies": {},
 }
 
-print("schema contract checks: 6 passed")
+print("schema contract checks: 7 passed")

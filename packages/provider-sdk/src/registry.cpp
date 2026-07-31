@@ -209,7 +209,10 @@ foundation::Result<void> Registry::add(
   if (!valid_token(provider_id) || !valid_semver(registration.version) ||
       !valid_sha256(registration.artifact_sha256) ||
       (registration.model_identity.has_value() &&
-       registration.model_identity->empty()) ||
+       (!valid_token(registration.model_identity->id) ||
+        registration.model_identity->version.empty() ||
+        !valid_sha256(
+            registration.model_identity->artifact_sha256))) ||
       registration.capabilities.empty()) {
     return foundation::Result<void>::failure(
         invalid_registration("provider registration metadata is invalid"));

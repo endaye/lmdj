@@ -64,6 +64,18 @@ bool valid_sha256(std::string_view value) {
              });
 }
 
+nlohmann::json model_identity_json(
+    const std::optional<ModelIdentity>& identity) {
+  if (!identity.has_value()) {
+    return nullptr;
+  }
+  return {
+      {"id", identity->id},
+      {"version", identity->version},
+      {"artifact_sha256", identity->artifact_sha256},
+  };
+}
+
 bool valid_media_type(std::string_view value) {
   return !value.empty() && value.size() <= 128 &&
          value.find('/') != std::string_view::npos &&
@@ -755,9 +767,7 @@ foundation::Result<void> persist_attempt(
            {"artifact_sha256", provider.artifact_sha256},
            {"id", provider.id},
            {"model_identity",
-            provider.model_identity.has_value()
-                ? nlohmann::json(*provider.model_identity)
-                : nlohmann::json(nullptr)},
+            model_identity_json(provider.model_identity)},
            {"version", provider.version},
        }},
       {"request",
@@ -1095,11 +1105,32 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
         encoded.at("provider").at("version").get<std::string>();
     const auto provider_sha =
         encoded.at("provider").at("artifact_sha256").get<std::string>();
-    std::optional<std::string> model_identity;
-    if (!encoded.at("provider").at("model_identity").is_null()) {
-      model_identity = encoded.at("provider")
-                           .at("model_identity")
-                           .get<std::string>();
+    std::optional<ModelIdentity> model_identity;
+    const auto& encoded_model_identity =
+        encoded.at("provider").at("model_identity");
+    if (!encoded_model_identity.is_null()) {
+      if (!exact_keys(
+              encoded_model_identity,
+              {"artifact_sha256", "id", "version"}) ||
+          !encoded_model_identity.at("id").is_string() ||
+          !encoded_model_identity.at("version").is_string() ||
+          !encoded_model_identity.at("artifact_sha256").is_string()) {
+        return foundation::Result<TerminalAttempt>::failure(
+            invalid_argument(
+                "terminal Attempt model identity is invalid"));
+      }
+      model_identity = ModelIdentity{
+          encoded_model_identity.at("id").get<std::string>(),
+          encoded_model_identity.at("version").get<std::string>(),
+          encoded_model_identity.at("artifact_sha256").get<std::string>(),
+      };
+      if (!valid_file_id(model_identity->id) ||
+          model_identity->version.empty() ||
+          !valid_sha256(model_identity->artifact_sha256)) {
+        return foundation::Result<TerminalAttempt>::failure(
+            invalid_argument(
+                "terminal Attempt model identity is invalid"));
+      }
     }
     const auto capability_id =
         encoded.at("capability").at("id").get<std::string>();
@@ -1479,10 +1510,8 @@ foundation::Result<AttemptResult> AttemptStore::execute(
           {"contract", "lmdj.capability.v1"},
           {"contract_version", capability.contract_version},
           {"model_identity",
-           selected.value().descriptor.model_identity.has_value()
-               ? nlohmann::json(
-                     *selected.value().descriptor.model_identity)
-               : nlohmann::json(nullptr)},
+           model_identity_json(
+               selected.value().descriptor.model_identity)},
           {"provider",
            {
                {"artifact_sha256",

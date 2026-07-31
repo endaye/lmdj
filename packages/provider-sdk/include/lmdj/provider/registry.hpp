@@ -12,13 +12,21 @@
 
 namespace lmdj::provider {
 
+struct ModelIdentity {
+  std::string id;
+  std::string version;
+  std::string artifact_sha256;
+
+  bool operator==(const ModelIdentity&) const = default;
+};
+
 struct ProviderRegistration {
   std::shared_ptr<Provider> implementation;
   std::string version;
   // In this Proof, this identifies the reproducible Provider source-package
   // manifest compiled into its factory. It is not a binary hash.
   std::string artifact_sha256;
-  std::optional<std::string> model_identity;
+  std::optional<ModelIdentity> model_identity;
   std::vector<CapabilityDescriptor> capabilities;
 };
 
@@ -27,7 +35,7 @@ struct ProviderDescriptor {
   std::string version;
   // Same source-package identity supplied by ProviderRegistration.
   std::string artifact_sha256;
-  std::optional<std::string> model_identity;
+  std::optional<ModelIdentity> model_identity;
   std::vector<CapabilityDescriptor> capabilities;
 };
 

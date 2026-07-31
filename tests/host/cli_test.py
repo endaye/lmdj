@@ -197,6 +197,53 @@ def workspace_contract(executable: Path, temp_root: Path) -> None:
     check_success(response, None)
 
 
+def assembly_contract(executable: Path, temp_root: Path) -> None:
+    workspace = temp_root / "assembly-workspace"
+    workspace.mkdir()
+    assembly = (REPO_ROOT / "products/lmdj/assembly.json").resolve()
+    completed = run_raw(
+        executable,
+        [
+            "--workspace",
+            str(workspace),
+            "--assembly",
+            str(assembly),
+            "query",
+            "--request",
+            encoded_request({"operation": "provider.list"}),
+        ],
+    )
+    assert completed.returncode == 0, (
+        completed.stdout,
+        completed.stderr,
+    )
+    assert completed.stderr == b""
+    response = json.loads(completed.stdout)
+    check_success(response, None)
+    assert [
+        provider["id"] for provider in response["result"]["providers"]
+    ] == ["local.proof.failure", "local.proof.success"]
+
+    invalid = temp_root / "invalid-assembly.json"
+    invalid.write_text("{}", encoding="utf-8")
+    completed = run_raw(
+        executable,
+        [
+            "--workspace",
+            str(workspace),
+            "--assembly",
+            str(invalid),
+            "query",
+            "--request",
+            encoded_request({"operation": "provider.list"}),
+        ],
+    )
+    assert completed.returncode == 2
+    assert completed.stderr == b""
+    response = json.loads(completed.stdout)
+    check_error(response, "INVALID_ARGUMENT")
+
+
 def request_source_parity(
     executable: Path, workspace: Path, temp_root: Path
 ) -> None:
@@ -612,7 +659,7 @@ def host_boundary_and_identity(executable: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 5,
+        "build": 6,
         "patch": 0,
     }
     manifest = json.loads(
@@ -640,10 +687,17 @@ def host_boundary_and_identity(executable: Path) -> None:
         build_directory
         / "apps/core-cli/lmdj_core_cli.link-libraries.txt"
     )
-    direct_dependencies = link_metadata.read_text(
-        encoding="utf-8"
-    ).splitlines()
-    assert direct_dependencies == ["lmdj::application"]
+    direct_dependencies = [
+        dependency
+        for dependency in link_metadata.read_text(
+            encoding="utf-8"
+        ).strip().split(";")
+        if dependency and not dependency.startswith("::@")
+    ]
+    assert direct_dependencies == [
+        "lmdj::application",
+        "lmdj_product_lmdj_assembly",
+    ]
 
     ctest = subprocess.run(
         [
@@ -675,7 +729,10 @@ def host_boundary_and_identity(executable: Path) -> None:
         "#include <vector>\n"
     ) == ["lmdj/angle.hpp", "lmdj/quoted.hpp"]
     lmdj_headers = lmdj_include_headers(source)
-    assert lmdj_headers == ["lmdj/facade/application.hpp"]
+    assert lmdj_headers == [
+        "lmdj/facade/application.hpp",
+        "lmdj/facade/assembly_loader.hpp",
+    ]
     for forbidden in (
         "project_io",
         "manifest.json",
@@ -704,6 +761,8 @@ def main() -> int:
         passed += 1
         workspace_contract(executable, temp_root)
         passed += 1
+        assembly_contract(executable, temp_root)
+        passed += 1
         request_source_parity(executable, workspace, temp_root)
         passed += 1
         request_validation(executable, workspace, temp_root)
@@ -727,8 +786,8 @@ def main() -> int:
         host_boundary_and_identity(executable)
         passed += 1
 
-    assert passed == 9
-    print("cli behavior fixtures: 9 passed")
+    assert passed == 10
+    print("cli behavior fixtures: 10 passed")
     return 0
 
 

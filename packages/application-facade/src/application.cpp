@@ -433,6 +433,18 @@ nlohmann::json internal_error() {
       });
 }
 
+nlohmann::json model_identity_json(
+    const std::optional<provider::ModelIdentity>& identity) {
+  if (!identity.has_value()) {
+    return nullptr;
+  }
+  return {
+      {"id", identity->id},
+      {"version", identity->version},
+      {"artifact_sha256", identity->artifact_sha256},
+  };
+}
+
 nlohmann::json provider_descriptor_json(
     const provider::ProviderDescriptor& descriptor) {
   auto capabilities = nlohmann::json::array();
@@ -443,10 +455,7 @@ nlohmann::json provider_descriptor_json(
       {"id", descriptor.id},
       {"version", descriptor.version},
       {"artifact_sha256", descriptor.artifact_sha256},
-      {"model_identity",
-       descriptor.model_identity.has_value()
-           ? nlohmann::json(*descriptor.model_identity)
-           : nlohmann::json(nullptr)},
+      {"model_identity", model_identity_json(descriptor.model_identity)},
       {"capabilities", std::move(capabilities)},
   };
 }
@@ -487,9 +496,7 @@ nlohmann::json terminal_attempt_json(
            {"version", attempt.provider.version},
            {"artifact_sha256", attempt.provider.artifact_sha256},
            {"model_identity",
-            attempt.provider.model_identity.has_value()
-                ? nlohmann::json(*attempt.provider.model_identity)
-                : nlohmann::json(nullptr)},
+            model_identity_json(attempt.provider.model_identity)},
        }},
       {"capability",
        {

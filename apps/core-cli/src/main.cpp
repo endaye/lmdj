@@ -13,6 +13,7 @@
 #include <utility>
 
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/assembly_loader.hpp>
 
 #if defined(__APPLE__) || defined(__linux__)
 #define LMDJ_CLI_HAS_POSIX_REQUEST_FILES 1
@@ -28,6 +29,7 @@ namespace {
 constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
 constexpr std::string_view kUsage =
     "usage: lmdj-core --workspace WORKSPACE "
+    "[--assembly ASSEMBLY] "
     "(command|query) (--request JSON|--request-file FILE)\n";
 constexpr std::string_view kInternalErrorFallback =
     "{\"error\":{\"code\":\"INTERNAL_ERROR\",\"details\":{},"
@@ -40,6 +42,7 @@ enum class Mode {
 
 struct Invocation {
   std::string_view workspace;
+  std::optional<std::string_view> assembly;
   Mode mode;
   bool request_file;
   std::string_view request_source;
@@ -116,28 +119,38 @@ bool valid_utf8(std::string_view value) {
 std::optional<Invocation> parse_invocation(
     int argc,
     char** argv) {
-  if (argc != 6 ||
+  if ((argc != 6 && argc != 8) ||
       std::string_view(argv[1]) != "--workspace") {
     return std::nullopt;
   }
+  int mode_index = 3;
+  std::optional<std::string_view> assembly;
+  if (argc == 8) {
+    if (std::string_view(argv[3]) != "--assembly") {
+      return std::nullopt;
+    }
+    assembly = std::string_view(argv[4]);
+    mode_index = 5;
+  }
   Mode mode;
-  if (std::string_view(argv[3]) == "command") {
+  if (std::string_view(argv[mode_index]) == "command") {
     mode = Mode::command;
-  } else if (std::string_view(argv[3]) == "query") {
+  } else if (std::string_view(argv[mode_index]) == "query") {
     mode = Mode::query;
   } else {
     return std::nullopt;
   }
-  const auto request_flag = std::string_view(argv[4]);
+  const auto request_flag = std::string_view(argv[mode_index + 1]);
   if (request_flag != "--request" &&
       request_flag != "--request-file") {
     return std::nullopt;
   }
   return Invocation{
       std::string_view(argv[2]),
+      assembly,
       mode,
       request_flag == "--request-file",
-      std::string_view(argv[5]),
+      std::string_view(argv[mode_index + 2]),
   };
 }
 
@@ -306,11 +319,31 @@ int run(const Invocation& invocation) {
   if (!request.has_value()) {
     return write_response(host_error);
   }
+  auto providers = std::make_shared<lmdj::provider::Registry>();
+  lmdj::provider::ProviderPolicy provider_policy;
+  if (invocation.assembly.has_value()) {
+    std::filesystem::path assembly;
+    if (!valid_workspace(*invocation.assembly, &assembly)) {
+      return write_response(
+          error_response(
+              "INVALID_ARGUMENT",
+              "assembly must be non-empty UTF-8, absolute, and normalized"));
+    }
+    auto loaded = lmdj::facade::load_installed_assembly(assembly);
+    if (!loaded.has_value()) {
+      return write_response(
+          error_response(
+              "INVALID_ARGUMENT",
+              "assembly validation or composition failed"));
+    }
+    providers = std::move(loaded.value().providers);
+    provider_policy = std::move(loaded.value().provider_policy);
+  }
   lmdj::facade::Application application(
       lmdj::facade::ApplicationConfig{
           std::move(workspace),
-          std::make_shared<lmdj::provider::Registry>(),
-          lmdj::provider::ProviderPolicy{},
+          std::move(providers),
+          std::move(provider_policy),
           {},
       });
   if (invocation.mode == Mode::command) {

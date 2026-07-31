@@ -1,0 +1,9 @@
+{
+  "operation": "asset.import",
+  "project_path": "$PROJECT_PATH",
+  "command_id": "00000000-0000-4000-8000-000000000002",
+  "expected_revision": 1,
+  "asset_id": "00000000-0000-4000-8000-000000000102",
+  "source_path": "$SNARE_PATH",
+  "media_type": "audio/wav"
+}
