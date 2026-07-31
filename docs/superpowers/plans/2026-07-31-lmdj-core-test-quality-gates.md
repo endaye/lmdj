@@ -26,14 +26,14 @@
 
 ## Current Baseline and Target
 
-The verified `1.0.5.0` baseline on 2026-07-31 has:
+The verified `1.0.6.0` baseline on 2026-07-31 has:
 
-- 19 registered CTest suites, all passing in the Dev preset in 16.51 seconds;
-- 116 explicitly named C++ `test_*` scenarios plus Python Host, Contract, Build, and Version checks;
-- approximately 6,759 nonblank test C++ lines against 9,532 nonblank first-party product C++ lines;
+- 25 registered CTest suites, all passing in the Dev preset in 15.32 seconds;
+- 118 explicitly named C++ `test_*` scenarios plus Assembly Loader and Python Host, Contract, Build, Version, and E2E checks;
+- approximately 7,197 nonblank test C++ lines against 10,134 nonblank first-party product C++ lines;
 - ASan/UBSan support in a local preset, but no sanitizer CI job;
 - no source coverage report or coverage threshold;
-- no Product Assembly or complete Headless Core E2E before Task 11 of the active Proof plan.
+- Product Assembly, Assembly lock, CLI/MCP parity, deterministic Golden WAV, Provider failure isolation, conflicted Take recovery, and the complete Headless Core Proof implemented and passing.
 
 The target is not “N tests per version.” The target is:
 
@@ -62,7 +62,7 @@ Every CTest entry has exactly one tier label:
 | `component` | One public Module surface with temporary filesystem or linked collaborators | Project Store, Cooker, Audio, Provider SDK, Application Facade | Yes |
 | `contract` | Public schema, ABI symbols, module/version/build constraints | Schema conformance, dynamic load, active-tree guard | Yes |
 | `host` | CLI or MCP in a child process through Application Facade/C ABI | CLI behavior, MCP lifecycle, CLI/MCP parity | Yes |
-| `e2e` | Product Assembly through public Host surfaces | Task 11 Headless Core Proof | Yes after Task 11 |
+| `e2e` | Product Assembly through public Host surfaces | Headless Core Proof | Yes |
 | `stress` | Repeated or concurrent execution intended for sanitizer/nightly lanes | C ABI lifetime race, persistence interruption matrix | Sanitizer/nightly |
 
 Additional non-tier labels such as `audio`, `persistence`, `provider`, and `abi` may select a risk area. They never replace the required tier.
@@ -122,12 +122,12 @@ Pure refactors need no artificial scenario count, but all existing relevant test
 
 Version impact: none
 
-Reason: this plan changes tests, test-only hooks, build instrumentation, documentation, and CI gates without changing a public Product behavior, Module API/ABI, persisted Project semantics, Contract, Provider result, or model identity. Release binaries are built with coverage and test hooks disabled.
+Reason: this plan adds post-`1.0.6.0` tests, test-only hooks, build instrumentation, documentation, and CI gates without changing a public Product behavior, Module API/ABI, persisted Project semantics, Contract, Provider result, Assembly, or model identity. Release binaries are built with coverage and test hooks disabled.
 
-- Product Build remains `1.0.5.0` until the separately approved Product Assembly Task advances it to `1.0.6.0`.
+- Product Build remains `1.0.6.0`.
 - Module, Contract, Provider, and Model versions remain unchanged.
 - No `version.json`, `module.json`, Schema, Provider manifest, Assembly lock, or model identity file is modified.
-- No tag is created. If the implementation is merged before Product Assembly, it is ordinary test-infrastructure history and does not consume the already allocated `1.0.6.0` Product Build.
+- The existing immutable `lmdj-v1.0.6.0` tag remains at the completed Core Proof commit; no tag is created or moved for this test-infrastructure work.
 - Commit does not authorize push, PR creation, merge, tag, Channel promotion, release, or deployment.
 - Rollback is the Git revert of the individual Task commit; no published identity changes.
 
@@ -213,7 +213,7 @@ if(NOT TEST_TIER IN_LIST lmdj_test_tiers)
 endif()
 ```
 
-- [ ] **Step 4: Migrate all 19 existing registrations**
+- [ ] **Step 4: Migrate all 25 existing registrations**
 
 Use these tier assignments:
 
@@ -223,6 +223,11 @@ host.mcp_stdio                   host
 host.mcp_facade_parity           host
 build.version                    contract
 contract.schemas                 contract
+conformance.module_graph         contract
+conformance.version_lock         contract
+build.proof_failure_artifacts    contract + persistence
+e2e.proof_path_safety            contract + persistence
+e2e.headless_core_proof          e2e + assembly
 foundation.artifact              unit
 domain.project                   unit
 domain.command_handler           unit
@@ -234,6 +239,7 @@ provider.conformance             component + provider
 provider.attempt_isolation       component + provider
 provider.spec_regression         component + provider
 facade.application               component
+facade.assembly_loader           component + assembly
 facade.c_api                     component + abi
 facade.dynamic_load              contract + abi
 host.cli                         host
@@ -253,7 +259,7 @@ scripts/core.sh build dev
 scripts/core.sh test dev
 ```
 
-Expected: 20/20 CTest suites pass and the taxonomy sentinel appears.
+Expected: 26/26 CTest suites pass and the taxonomy sentinel appears.
 
 - [ ] **Step 6: Document the policy**
 
@@ -307,7 +313,7 @@ build/core/coverage/coverage/report.txt
 ```
 
 - `scripts/core-coverage.sh check` creates the same artifacts and applies `tests/quality/core-coverage-thresholds.json`.
-- Reports include first-party `.cpp` and public `.hpp` files under `packages/`, `providers/`, and `apps/core-cli/`; they exclude `tests/`, `build/`, `_deps/`, and frozen references.
+- Reports include first-party `.cpp` and public `.hpp` files under `packages/`, `providers/`, `products/lmdj/`, and `apps/core-cli/`; they exclude `tests/`, `build/`, `_deps/`, and frozen references.
 - Root CMake generates `build/core/coverage/coverage-objects.txt` with one absolute `$<TARGET_FILE:...>` path per coverage object:
 
 ```text
@@ -322,6 +328,7 @@ lmdj_provider_conformance_tests
 lmdj_provider_attempt_isolation_tests
 lmdj_provider_spec_regression_tests
 lmdj_application_facade_tests
+lmdj_assembly_loader_tests
 lmdj_application_c_api_tests
 lmdj_application_dynamic_load_tests
 lmdj_core_cli
@@ -839,10 +846,10 @@ Register `build.core_script` as tier `contract`, timeout 10 seconds.
 
 - [ ] **Step 3: Add pull-request CI jobs**
 
-Keep the existing Ubuntu/macOS Release matrix and change its test command to:
+Keep the existing Ubuntu/macOS Release matrix and its canonical command:
 
 ```text
-scripts/core.sh test release full
+scripts/core.sh proof
 ```
 
 Add:
@@ -852,7 +859,7 @@ core-asan: Ubuntu, configure/build ASan, full suite
 core-coverage: Ubuntu with clang, scripts/core-coverage.sh check
 ```
 
-Upload `build/core/coverage/coverage/report.txt` and `summary.json` only on coverage failure. Artifacts contain no Project bundles or user data.
+The existing Proof remains the functional and Product Assembly gate; the new jobs supplement it. Upload `build/core/coverage/coverage/report.txt` and `summary.json` only on coverage failure. Artifacts contain no Project bundles or user data.
 
 - [ ] **Step 4: Add bounded nightly jobs**
 
@@ -915,7 +922,7 @@ Expected: every functional suite and threshold passes with zero sanitizer report
 
 - [ ] **Step 7: Keep Product Proof acceptance separate**
 
-Update the policy to state that these gates do not prove Product Assembly, CLI/MCP Product-provider wiring, browser realtime audio, physical MIDI/controller behavior, deployment, or release acceptance. Task 11’s public-surface Headless Core E2E remains a separate mandatory gate.
+Update the policy to state that coverage and sanitizer gates do not replace the existing `scripts/core.sh proof` evidence for Product Assembly, CLI/MCP Product-provider wiring, Golden WAV, Provider isolation, and Take recovery. Neither automated gate proves browser realtime audio, physical MIDI/controller behavior, deployment, or release acceptance.
 
 - [ ] **Step 8: Commit**
 
@@ -948,7 +955,7 @@ ASan/UBSan full suite passes
 TSan C ABI stress passes on Linux
 overall and per-module coverage thresholds pass
 coverage artifacts remain under build/core
-Task 11 Product Proof status is still reported separately
+the existing Headless Core Product Proof still passes and is reported separately
 tracked worktree contains only intentional commits
 no Product, Module, Contract, Provider, or Model version changed
 ```
