@@ -1401,6 +1401,137 @@ build output, version files, unrelated product code, or pre-existing changes.
 
 ---
 
+### Task 6A: Cover Provider Capability Trait Variants Before Locking the Ratchet
+
+**Files:**
+
+- Modify: `tests/core/provider/spec_regression_test.cpp`
+
+**Interfaces:**
+
+- `lmdj::provider::capability_contract_json` continues to expose the existing
+  `lmdj.capability.v1` JSON shape; this Task changes no public API or production
+  implementation.
+- The regression suite verifies exact stable encodings for
+  `Determinism::seeded`, `Determinism::nondeterministic`,
+  `ResourceClass::cpu`, `ResourceClass::gpu`, and `ResourceClass::remote`.
+- When `ResourceRequirements::memory_mib` is `std::nullopt`, the serialized
+  `resources` object contains only its exact `class` field and does not emit a
+  `memory_mib` member.
+- The definitive ratchet remains Task 6's exact Ubuntu 24.04/amd64,
+  Clang/LLVM 18 preflight. No threshold may be lowered to make that gate pass.
+
+**Measured RED:** Task 6's exact Linux preflight passed all 33 registered tests
+and every other candidate floor, but Provider SDK branch coverage was
+`496/816 = 60.78%`, below the unchanged `61%` candidate. Provider SDK line
+coverage was already `1391/1788 = 77.80%`, above its `77%` candidate.
+
+- [ ] **Step 1: Register the missing Provider contract scenario and prove RED**
+
+Add this call to `main()` before defining the new scenario:
+
+```cpp
+test_capability_contract_encodes_supported_execution_traits();
+```
+
+Run:
+
+```bash
+cmake --build build/core/dev \
+  --target lmdj_provider_spec_regression_tests
+```
+
+Expected: compilation fails because
+`test_capability_contract_encodes_supported_execution_traits` is not yet
+declared. This RED proves the new regression scenario is part of the executable
+test path rather than an uncalled helper.
+
+- [ ] **Step 2: Implement the minimal exact-contract assertions**
+
+Add the scenario above `main()` using a fixed table with these rows:
+
+```text
+seeded          cpu       -> "seeded",          "cpu"
+nondeterministic gpu      -> "nondeterministic", "gpu"
+seeded          remote    -> "seeded",          "remote"
+```
+
+For each row, start from `proof_capability()`, replace `determinism` and
+`resources` with the row values and `std::nullopt`, call
+`capability_contract_json`, and assert:
+
+```cpp
+LMDJ_CHECK(encoded.at("determinism") == expected_determinism);
+LMDJ_CHECK(
+    encoded.at("resources") ==
+    nlohmann::json{{"class", expected_resource_class}});
+LMDJ_CHECK(!encoded.at("resources").contains("memory_mib"));
+```
+
+Do not change production code, add an empty execution call, or duplicate
+already-covered deterministic/light/16-MiB assertions solely for coverage.
+
+- [ ] **Step 3: Verify focused Dev and ASan/UBSan suites**
+
+Run:
+
+```bash
+cmake --build build/core/dev \
+  --target lmdj_provider_spec_regression_tests
+ctest --test-dir build/core/dev \
+  -R '^provider\.spec_regression$' \
+  --output-on-failure
+cmake --build build/core/asan \
+  --target lmdj_provider_spec_regression_tests
+ctest --test-dir build/core/asan \
+  -R '^provider\.spec_regression$' \
+  --output-on-failure
+```
+
+Expected: both focused suites pass with no sanitizer report.
+
+- [ ] **Step 4: Verify the reference Mac coverage moves above the floor**
+
+Run:
+
+```bash
+scripts/core-coverage.sh report
+python3 tests/quality/coverage_gate.py \
+  --summary build/core/coverage/coverage/summary.json \
+  --thresholds tests/quality/core-coverage-thresholds.json
+```
+
+Expected: all 33 registered tests pass, all 20 coverage objects and signatures
+map without LLVM diagnostics, and Provider SDK branch coverage is at least
+`61%` without increasing the first-party production-source denominator.
+Task 6 must rerun its exact Linux preflight before the seven-file CI gate
+commit; the Mac measurement is not a substitute for that definitive gate.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add tests/core/provider/spec_regression_test.cpp
+git diff --cached --name-only
+git diff --cached --check
+git commit -m "test(provider): cover capability trait variants"
+```
+
+Before committing, verify the staged list contains only
+`tests/core/provider/spec_regression_test.cpp`. Do not stage the seven pending
+Task 6 CI, runner, registration, shell, policy, and threshold files.
+
+**Version Management**
+
+Version impact: none
+
+Reason: this Task adds assertions for already-public capability JSON values and
+an optional-field omission rule. It changes no Product behavior, Module API or
+ABI, persisted Project semantics, Contract Schema, Provider identity, Assembly,
+or model identity. Product Build remains `1.0.6.0`; no version file or tag is
+created or modified.
+
+---
+
 ## Completion Evidence
 
 Implementation is complete only when all of the following are true:
