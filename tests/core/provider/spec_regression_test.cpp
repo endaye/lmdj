@@ -11,6 +11,7 @@
 #include <iterator>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <string>
 #include <string_view>
@@ -270,6 +271,56 @@ void test_capability_discovery_matches_public_schema_shape() {
       lmdj::provider::canonical_capability_json(descriptor));
   LMDJ_CHECK(!encoded.contains("platforms"));
   LMDJ_CHECK(!encoded.contains("max_output_bytes"));
+}
+
+void test_capability_contract_encodes_supported_execution_traits() {
+  struct TraitCase {
+    Determinism determinism;
+    ResourceClass resource_class;
+    std::string_view expected_determinism;
+    std::string_view expected_resource_class;
+  };
+
+  constexpr std::array cases{
+      TraitCase{
+          Determinism::seeded,
+          ResourceClass::cpu,
+          "seeded",
+          "cpu",
+      },
+      TraitCase{
+          Determinism::nondeterministic,
+          ResourceClass::gpu,
+          "nondeterministic",
+          "gpu",
+      },
+      TraitCase{
+          Determinism::seeded,
+          ResourceClass::remote,
+          "seeded",
+          "remote",
+      },
+  };
+
+  for (const auto& test_case : cases) {
+    auto capability = proof_capability();
+    capability.determinism = test_case.determinism;
+    capability.resources =
+        ResourceRequirements{test_case.resource_class, std::nullopt};
+
+    const auto encoded =
+        lmdj::provider::capability_contract_json(capability);
+
+    LMDJ_CHECK(
+        encoded.at("determinism") ==
+        test_case.expected_determinism);
+    LMDJ_CHECK((
+        encoded.at("resources") ==
+        nlohmann::json{
+            {"class", test_case.expected_resource_class}}));
+    LMDJ_CHECK(
+        !encoded.at("resources").contains("memory_mib"));
+  }
 }
 
 void verify_source_package(
@@ -991,6 +1042,7 @@ void test_proof_failure_result_remains_exact_but_record_is_redacted() {
 int main() {
   try {
     test_capability_discovery_matches_public_schema_shape();
+    test_capability_contract_encodes_supported_execution_traits();
     test_provider_identity_is_generated_from_source_package();
     test_failed_provider_outputs_are_removed_before_terminal_persistence();
     test_optional_output_candidate_succeeds_without_staging();
