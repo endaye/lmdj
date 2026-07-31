@@ -871,8 +871,11 @@ git commit -m "test(project-io): inject persistence publish faults"
 **Files:**
 
 - Create: `tests/core/facade/c_api_stress_test.cpp`
+- Create: `packages/application-facade/src/testing_hooks.hpp`
 - Modify: `packages/application-facade/CMakeLists.txt`
+- Modify: `packages/application-facade/src/c_api.cpp`
 - Modify: `CMakeLists.txt`
+- Modify: `cmake/LmdjCoverage.cmake`
 - Modify: `cmake/LmdjWarnings.cmake`
 - Modify: `CMakePresets.json`
 - Modify: `scripts/core.sh`
@@ -924,6 +927,16 @@ test_blocked_engine_does_not_block_unrelated_engine_lifetimes
 
 Use `std::barrier`, `std::jthread`, atomics, and fixed iteration counts. Every worker records its result into an indexed slot; only the parent thread performs `LMDJ_CHECK`, so exception transport cannot terminate a worker.
 
+The blocked-engine scenario uses a deterministic private invoke gate compiled
+only when `LMDJ_C_API_TESTING=1`. The hook is reached only after
+`acquire_engine` holds the selected engine's per-engine serial lock, atomically
+notifies the parent that the operation is blocked, and waits on an atomic
+release signal. The parent then completes an unrelated create/query/free
+lifecycle, proves the blocked operation has not completed, releases the gate,
+and joins the worker. CTest's timeout is only a hang guard and never
+participates in a passing assertion. Exception cleanup must release and notify
+the gate before any `std::jthread` destructor can join the blocked worker.
+
 - [ ] **Step 3: Prove current ThreadSanitizer mode is unsupported**
 
 Run:
@@ -968,6 +981,14 @@ runner executes all registered tests directly through its preset, so every
 instrumented executable that emits a `%m` profile must have a matching object
 entry even though ordinary `full` mode later excludes the `stress` tier.
 
+Build the stress executable with the same `src/c_api.cpp` directly and define
+`LMDJ_CORE_C_BUILD=1` plus `LMDJ_C_API_TESTING=1`; link it to
+`lmdj::application` rather than to the production `lmdj_core_c` shared
+library. The production shared library neither compiles nor exports the private
+invoke gate. Because the testable C ABI implementation is part of the stress
+executable, it adds no extra runtime coverage object: the authoritative object
+and module-signature count remains 20.
+
 Run without sanitizer first:
 
 ```bash
@@ -1005,8 +1026,11 @@ Expected: all non-TSan tests pass with no AddressSanitizer or UndefinedBehaviorS
 ```bash
 git add \
   tests/core/facade/c_api_stress_test.cpp \
+  packages/application-facade/src/testing_hooks.hpp \
   packages/application-facade/CMakeLists.txt \
+  packages/application-facade/src/c_api.cpp \
   CMakeLists.txt \
+  cmake/LmdjCoverage.cmake \
   cmake/LmdjWarnings.cmake \
   CMakePresets.json \
   scripts/core.sh \
