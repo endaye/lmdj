@@ -33,7 +33,7 @@ struct AttemptProviderIdentity {
   std::string id;
   std::string version;
   std::string artifact_sha256;
-  std::optional<std::string> model_identity;
+  std::optional<ModelIdentity> model_identity;
 };
 
 struct AttemptCapabilityIdentity {

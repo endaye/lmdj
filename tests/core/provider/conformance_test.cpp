@@ -35,6 +35,7 @@ using lmdj::foundation::ErrorCode;
 using lmdj::provider::AttemptResult;
 using lmdj::provider::AttemptStore;
 using lmdj::provider::CapabilityRequest;
+using lmdj::provider::ModelIdentity;
 using lmdj::provider::Provider;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::ProviderRegistration;
@@ -379,6 +380,48 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
        std::filesystem::directory_iterator(temp.path())) {
     LMDJ_CHECK(entry.path().filename() == ".lmdj-workspace");
   }
+}
+
+void test_structured_model_identity_is_preserved_in_attempt_provenance() {
+  const auto model = ModelIdentity{
+      "proof.model",
+      "weights-v1",
+      std::string(64, 'b'),
+  };
+  auto registration =
+      lmdj::providers::local_proof_success_registration();
+  registration.model_identity = model;
+  Registry registry;
+  LMDJ_CHECK(registry.add(std::move(registration)).has_value());
+  const auto descriptors = registry.list();
+  LMDJ_CHECK(descriptors.size() == 1);
+  LMDJ_CHECK(descriptors.front().model_identity == model);
+
+  TempDirectory temp;
+  auto store = store_at(temp.path());
+  select(store, registry, "local.proof.success");
+  const auto executed = store.execute(
+      AttemptId{"attempt-model-identity"}, valid_request(), registry);
+  LMDJ_CHECK(executed.has_value());
+  LMDJ_CHECK(executed.value().candidate.has_value());
+  const auto model_json = nlohmann::json{
+      {"id", model.id},
+      {"version", model.version},
+      {"artifact_sha256", model.artifact_sha256},
+  };
+  LMDJ_CHECK(
+      executed.value().candidate->provenance.at("model_identity") ==
+      model_json);
+
+  const auto inspected =
+      store.inspect(AttemptId{"attempt-model-identity"});
+  LMDJ_CHECK(inspected.has_value());
+  LMDJ_CHECK(inspected.value().provider.model_identity == model);
+  const auto persisted = read_json(
+      temp.path() /
+      ".lmdj-workspace/attempts/attempt-model-identity.json");
+  LMDJ_CHECK(
+      persisted.at("provider").at("model_identity") == model_json);
 }
 
 void test_failure_provider_records_typed_terminal_attempt() {
@@ -769,6 +812,7 @@ int main() {
     test_module_manifests_are_exact();
     test_registry_lists_capabilities_and_rejects_unknown_provider();
     test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt();
+    test_structured_model_identity_is_preserved_in_attempt_provenance();
     test_failure_provider_records_typed_terminal_attempt();
     test_untrusted_provider_outcomes_are_rejected_as_typed_failures();
     test_policy_and_invalid_requests_fail_closed_before_provider_execution();

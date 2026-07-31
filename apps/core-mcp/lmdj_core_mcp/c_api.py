@@ -55,7 +55,12 @@ def _is_lexically_normal_absolute(path: Path) -> bool:
 class Engine:
     """One owned lmdj_engine handle and its five bound ABI functions."""
 
-    def __init__(self, library_path: Path, workspace_root: Path) -> None:
+    def __init__(
+        self,
+        library_path: Path,
+        workspace_root: Path,
+        assembly_path: Path | None = None,
+    ) -> None:
         library_path = Path(library_path)
         workspace_root = Path(workspace_root)
         if not library_path.is_absolute() or not library_path.is_file():
@@ -64,6 +69,15 @@ class Engine:
             raise CApiError(
                 "workspace path must be absolute and lexically normalized"
             )
+        if assembly_path is not None:
+            assembly_path = Path(assembly_path)
+            if (
+                not _is_lexically_normal_absolute(assembly_path)
+                or not assembly_path.is_file()
+            ):
+                raise CApiError(
+                    "assembly path must be an existing normalized absolute file"
+                )
 
         try:
             self._library = ctypes.CDLL(os.fspath(library_path))
@@ -73,9 +87,10 @@ class Engine:
 
         self._engine = ctypes.c_void_p()
         error_pointer = ctypes.c_void_p()
-        config = _canonical_bytes(
-            {"workspace_root": os.fspath(workspace_root)}
-        )
+        config_value = {"workspace_root": os.fspath(workspace_root)}
+        if assembly_path is not None:
+            config_value["assembly_path"] = os.fspath(assembly_path)
+        config = _canonical_bytes(config_value)
         diagnostic = None
         try:
             try:

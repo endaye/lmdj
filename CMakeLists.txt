@@ -28,6 +28,7 @@ find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
 add_subdirectory(apps/core-cli)
+add_subdirectory(products/lmdj)
 
 set(
   lmdj_mcp_test_environment
@@ -119,4 +120,51 @@ add_test(
   COMMAND
     "${Python3_EXECUTABLE}" tests/conformance/schema_contract_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME conformance.module_graph
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/conformance/module_graph_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME conformance.version_lock
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/conformance/version_lock_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME build.proof_failure_artifacts
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/build/proof_failure_artifacts_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME e2e.proof_path_safety
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/e2e/proof_path_safety_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME e2e.headless_core_proof
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/e2e/headless_core_proof.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "$<TARGET_FILE:lmdj_core_c>"
+    "${CMAKE_SOURCE_DIR}/products/lmdj/assembly.json"
+    "${CMAKE_BINARY_DIR}/proof-ctest/run"
+    "${CMAKE_BINARY_DIR}/proof-ctest/beat.wav"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(
+  e2e.headless_core_proof
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+    TIMEOUT 180
 )

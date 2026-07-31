@@ -24,13 +24,18 @@ def arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="lmdj-core-mcp")
     parser.add_argument("--library", required=True, type=lexical_absolute)
     parser.add_argument("--workspace", required=True, type=lexical_absolute)
+    parser.add_argument("--assembly", type=lexical_absolute)
     return parser.parse_args()
 
 
 def main() -> int:
     options = arguments()
     try:
-        engine = Engine(options.library, options.workspace)
+        engine = Engine(
+            options.library,
+            options.workspace,
+            options.assembly,
+        )
     except CApiError:
         print("lmdj-core-mcp: startup failed", file=sys.stderr)
         return 2

@@ -1,0 +1,108 @@
+{
+  "contract": "lmdj.assembly.v2",
+  "product": {
+    "id": "lmdj",
+    "version": "1.0.6.0"
+  },
+  "provider_policy": {
+    "allowed_regions": [
+      "local"
+    ],
+    "allowed_data_classifications": [
+      "public"
+    ],
+    "granted_permissions": [
+      "proof.execute"
+    ]
+  },
+  "modules": [
+    {
+      "id": "foundation",
+      "version": "0.1.0"
+    },
+    {
+      "id": "authoring-domain",
+      "version": "0.1.0"
+    },
+    {
+      "id": "project-io",
+      "version": "0.2.0"
+    },
+    {
+      "id": "project-cooker",
+      "version": "0.1.0"
+    },
+    {
+      "id": "audio-runtime",
+      "version": "0.1.0"
+    },
+    {
+      "id": "provider-sdk",
+      "version": "0.1.0"
+    },
+    {
+      "id": "application-facade",
+      "version": "0.1.0"
+    }
+  ],
+  "hosts": [
+    {
+      "id": "core-cli",
+      "version": "0.1.0"
+    },
+    {
+      "id": "core-mcp",
+      "version": "0.1.0"
+    }
+  ],
+  "providers": [
+    {
+      "id": "local.proof.success",
+      "version": "0.1.0",
+      "capabilities": [
+        {
+          "id": "proof.candidate.v1",
+          "version": "1.0.0"
+        }
+      ],
+      "model_identity": null
+    },
+    {
+      "id": "local.proof.failure",
+      "version": "0.1.0",
+      "capabilities": [
+        {
+          "id": "proof.candidate.v1",
+          "version": "1.0.0"
+        }
+      ],
+      "model_identity": null
+    }
+  ],
+  "contracts": [
+    {
+      "id": "lmdj.project.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.capability.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.assembly.v2",
+      "version": "2.0.0"
+    },
+    {
+      "id": "lmdj.error.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.module.v1",
+      "version": "1.0.0"
+    },
+    {
+      "id": "lmdj.product-version.v1",
+      "version": "1.0.0"
+    }
+  ]
+}

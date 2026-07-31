@@ -17,6 +17,7 @@
 #include <nlohmann/json.hpp>
 
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/foundation/error.hpp>
 
 struct lmdj_engine {
@@ -221,9 +222,12 @@ int lmdj_engine_create(
     auto config = nlohmann::json::parse(
         bytes->begin(), bytes->end(), nullptr, false);
     if (config.is_discarded() || !config.is_object() ||
-        config.size() != 1 ||
+        config.empty() || config.size() > 2 ||
         !config.contains("workspace_root") ||
-        !config.at("workspace_root").is_string()) {
+        !config.at("workspace_root").is_string() ||
+        (config.size() == 2 && !config.contains("assembly_path")) ||
+        (config.contains("assembly_path") &&
+         !config.at("assembly_path").is_string())) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
     const auto workspace_value =
@@ -238,14 +242,36 @@ int lmdj_engine_create(
         workspace_root.lexically_normal() != workspace_root) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
-    auto application =
-        std::make_shared<lmdj::facade::Application>(
-            lmdj::facade::ApplicationConfig{
-                workspace_root,
-                std::make_shared<lmdj::provider::Registry>(),
-                lmdj::provider::ProviderPolicy{},
-                {},
-            });
+    auto providers = std::make_shared<lmdj::provider::Registry>();
+    lmdj::provider::ProviderPolicy provider_policy;
+    if (config.contains("assembly_path")) {
+      const auto assembly_value =
+          config.at("assembly_path").get<std::string>();
+      if (!valid_utf8(assembly_value) ||
+          assembly_value.find('\0') != std::string::npos) {
+        return LMDJ_STATUS_INVALID_ARGUMENT;
+      }
+      const auto assembly_path =
+          std::filesystem::path(assembly_value);
+      if (!assembly_path.is_absolute() ||
+          assembly_path.lexically_normal() != assembly_path) {
+        return LMDJ_STATUS_INVALID_ARGUMENT;
+      }
+      auto loaded =
+          lmdj::facade::load_installed_assembly(assembly_path);
+      if (!loaded.has_value()) {
+        return LMDJ_STATUS_INVALID_ARGUMENT;
+      }
+      providers = std::move(loaded.value().providers);
+      provider_policy = std::move(loaded.value().provider_policy);
+    }
+    auto application = std::make_shared<lmdj::facade::Application>(
+        lmdj::facade::ApplicationConfig{
+            workspace_root,
+            std::move(providers),
+            std::move(provider_policy),
+            {},
+        });
     auto state = std::make_shared<EngineState>(std::move(application));
     auto shell = std::make_unique<lmdj_engine>();
     std::lock_guard lock(engines_mutex);

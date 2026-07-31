@@ -72,7 +72,7 @@ Canonical policy: `docs/governance/version-management.md`.
 | Plan stage | `lmdj-m1-plan.1` at `34236c062d5982d22701ad0482518a29bfaefa60` | immutable; later plan review uses `lmdj-m1-plan.2` |
 | Product Build | no runnable M1 Build | `1.0.6.0` / `dev` |
 | Core Modules | not created | each starts at `0.1.0` |
-| Contracts | not created | Contract ID `v1`, Schema version `1.0.0` |
+| Contracts | not created | six retained Contract IDs at `v1` / `1.0.0`; completed Assembly target is `lmdj.assembly.v2` / `2.0.0` |
 | Proof Providers | not created | each starts at `0.1.0` |
 | Proof model/rule identity | not created | immutable Artifact hash recorded by every Attempt |
 
@@ -2475,13 +2475,18 @@ git commit -m "feat(mcp): expose core tools over stdio"
 
 - Create: `products/lmdj/assembly.json`
 - Create: `products/lmdj/assembly.lock.json` (generated)
+- Create: `products/lmdj/CMakeLists.txt`
 - Create: `products/lmdj/README.md`
+- Create: `products/lmdj/src/compiled_assembly.cpp`
+- Create: `contracts/assembly/lmdj.assembly.v2.schema.json`
 - Create: `packages/application-facade/include/lmdj/facade/assembly_loader.hpp`
 - Create: `packages/application-facade/src/assembly_loader.cpp`
+- Create: `tests/build/proof_failure_artifacts_test.py`
 - Create: `tests/core/facade/assembly_loader_test.cpp`
 - Create: `tests/conformance/module_graph_test.py`
 - Create: `tests/conformance/version_lock_test.py`
 - Create: `tests/e2e/headless_core_proof.py`
+- Create: `tests/e2e/proof_path_safety_test.py`
 - Create: `tests/e2e/requests/create-project.json`
 - Create: `tests/e2e/requests/import-kick.json`
 - Create: `tests/e2e/requests/import-snare.json`
@@ -2490,15 +2495,29 @@ git commit -m "feat(mcp): expose core tools over stdio"
 - Create: `tests/e2e/requests/record-pattern.json`
 - Create: `tests/e2e/requests/run-failing-provider.json`
 - Modify: `products/lmdj/version.json`
+- Modify: `CMakeLists.txt`
 - Modify: `scripts/version.py`
 - Modify: `tests/build/version_test.py`
+- Modify: `tests/conformance/schema_contract_test.py`
+- Modify: `tests/core/facade/c_api_test.cpp`
 - Modify: `scripts/core.sh`
 - Modify: `.github/workflows/ci.yml`
+- Modify: `docs/governance/version-management.md`
+- Modify: `docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md`
 - Modify: `packages/application-facade/CMakeLists.txt`
+- Modify: `packages/application-facade/src/application.cpp`
 - Modify: `packages/application-facade/src/c_api.cpp`
 - Modify: `packages/application-facade/include/lmdj/facade/c_api.h`
+- Modify: `packages/provider-sdk/include/lmdj/provider/attempt_store.hpp`
+- Modify: `packages/provider-sdk/include/lmdj/provider/registry.hpp`
+- Modify: `packages/provider-sdk/src/attempt_store.cpp`
+- Modify: `packages/provider-sdk/src/registry.cpp`
 - Modify: `apps/core-cli/src/main.cpp`
 - Modify: `apps/core-mcp/lmdj_core_mcp/__main__.py`
+- Modify: `apps/core-mcp/lmdj_core_mcp/c_api.py`
+- Modify: `tests/host/cli_test.py`
+- Modify: `tests/host/mcp_stdio_test.py`
+- Modify: `tests/core/provider/conformance_test.cpp`
 - Modify: `README.md`
 
 **Interfaces:**
@@ -2508,6 +2527,13 @@ git commit -m "feat(mcp): expose core tools over stdio"
   embedding a self-referential Git revision.
 - The generated Build Manifest binds the lock hash to Product Build `1.0.6.0`,
   Channel, full Git revision, platform, and built Artifact hashes.
+- The completed Assembly Contract is `lmdj.assembly.v2` Contract SemVer
+  `2.0.0`: PR 6 adds the required Provider Selection region,
+  data-classification, and permission policy that the redesign already assigns
+  to `products/lmdj/assembly.*`. This required field is a breaking Contract
+  completion, so it is not mislabeled as `1.0.0`.
+- The lock binds each Provider's deterministic source-package identity and the
+  versioned Product Assembly wiring source, not only their `module.json` files.
 - E2E uses public CLI and MCP surfaces only.
 - CI proves the same Assembly on macOS and Ubuntu.
 - Task 11 explicitly extends the Task 8 C ABI configuration/composition so MCP
@@ -2515,6 +2541,10 @@ git commit -m "feat(mcp): expose core tools over stdio"
   completion of the still-unreleased `application-facade 0.1.0` Proof surface;
   if `0.1.0` has been published before Task 11, advance the Module SemVer
   instead of silently changing it.
+- The still-unreleased Provider SDK `0.1.0` Proof surface carries structured
+  model identity (`id`, `version`, `artifact_sha256`) through registration,
+  selection, Candidate provenance, and terminal Attempt inspection. Assembly,
+  compiled catalog, and registration must match all three fields.
 
 - [ ] **Step 1: Advance the PR 6 Product Build**
 
@@ -2537,10 +2567,15 @@ Expected: both report Product Build `1.0.6.0`.
 
 ```json
 {
-  "contract": "lmdj.assembly.v1",
+  "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
     "version": "1.0.6.0"
+  },
+  "provider_policy": {
+    "allowed_regions": ["local"],
+    "allowed_data_classifications": ["public"],
+    "granted_permissions": ["proof.execute"]
   },
   "modules": [
     {"id": "foundation", "version": "0.1.0"},
@@ -2576,7 +2611,7 @@ Expected: both report Product Build `1.0.6.0`.
   "contracts": [
     {"id": "lmdj.project.v1", "version": "1.0.0"},
     {"id": "lmdj.capability.v1", "version": "1.0.0"},
-    {"id": "lmdj.assembly.v1", "version": "1.0.0"},
+    {"id": "lmdj.assembly.v2", "version": "2.0.0"},
     {"id": "lmdj.error.v1", "version": "1.0.0"},
     {"id": "lmdj.module.v1", "version": "1.0.0"},
     {"id": "lmdj.product-version.v1", "version": "1.0.0"}
@@ -2639,9 +2674,13 @@ Expected: failure because Assembly validation and proof wiring are not complete.
 
 - [ ] **Step 5: Wire Assembly loading without introducing a second implementation path**
 
-The product-neutral Assembly loader validates a manifest and filters the compiled module/Provider registry by declared IDs. CLI and MCP accept `--assembly <path>` and use that loader; neither contains an `lmdj` product branch. Both still construct and call the same `Application` implementation.
+The product-neutral Assembly loader validates a manifest, reads its effective
+Provider policy, and filters the compiled module/Provider registry by declared
+IDs. CLI and MCP accept `--assembly <path>` and use that loader; neither
+contains an `lmdj` product branch. Both still construct and call the same
+`Application` implementation.
 
-Validate the Assembly against `lmdj.assembly.v1.schema.json` before starting a Host. Fail closed on missing/unknown Provider or contract.
+Validate the Assembly against `lmdj.assembly.v2.schema.json` before starting a Host. Fail closed on missing/unknown Provider or contract.
 
 - [ ] **Step 6: Document the Proof-scoped recording concurrency rule**
 
@@ -2769,17 +2808,35 @@ Sequence editing, Perform, Sound Sets, production Providers, cloud deployment.
 
 ```bash
 git add \
+  CMakeLists.txt \
+  contracts/assembly/lmdj.assembly.v2.schema.json \
+  docs/governance/version-management.md \
+  docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md \
   products/lmdj \
   packages/application-facade/include/lmdj/facade/assembly_loader.hpp \
+  packages/application-facade/include/lmdj/facade/c_api.h \
+  packages/application-facade/src/application.cpp \
   packages/application-facade/src/assembly_loader.cpp \
+  packages/application-facade/src/c_api.cpp \
   packages/application-facade/CMakeLists.txt \
+  packages/provider-sdk/include/lmdj/provider/attempt_store.hpp \
+  packages/provider-sdk/include/lmdj/provider/registry.hpp \
+  packages/provider-sdk/src/attempt_store.cpp \
+  packages/provider-sdk/src/registry.cpp \
   apps/core-cli/src/main.cpp \
   apps/core-mcp/lmdj_core_mcp/__main__.py \
+  apps/core-mcp/lmdj_core_mcp/c_api.py \
   tests/core/facade/assembly_loader_test.cpp \
+  tests/core/facade/c_api_test.cpp \
+  tests/core/provider/conformance_test.cpp \
+  tests/build/proof_failure_artifacts_test.py \
   tests/conformance/module_graph_test.py \
+  tests/conformance/schema_contract_test.py \
   tests/conformance/version_lock_test.py \
   tests/e2e \
   tests/build/version_test.py \
+  tests/host/cli_test.py \
+  tests/host/mcp_stdio_test.py \
   scripts/version.py \
   scripts/core.sh \
   .github/workflows/ci.yml \
@@ -2845,7 +2902,9 @@ GitHub Release, promote beyond `dev`, publish, or deploy.
 - [ ] Strict recording conflict is documented as Proof-only and the product-level concurrency question remains open.
 - [ ] Web realtime-audio latency remains explicitly outside this proof.
 - [ ] Product Build is `1.0.6.0`; every Module/Host/Provider is independently
-  locked at `0.1.0`; all six Contract Schemas are locked at `1.0.0`.
+  locked at `0.1.0`; the six retained v1 Contract Schemas are locked at
+  `1.0.0`, and the completed Assembly Contract is independently locked as
+  `lmdj.assembly.v2` / `2.0.0`.
 - [ ] Assembly lock contains no self-referential revision; generated Build
   Manifest binds its hash to the full Git revision and Channel.
 
