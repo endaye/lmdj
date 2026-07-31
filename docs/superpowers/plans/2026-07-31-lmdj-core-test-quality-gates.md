@@ -1612,18 +1612,20 @@ python3 tests/build/core_script_test.py
 ctest --test-dir build/core/dev -R '^build\\.core_script$' --output-on-failure
 ctest --test-dir build/core/dev -R '^build\\.test_taxonomy$' --output-on-failure
 bash -n scripts/core.sh
-ctest --test-dir build/core/release -N \\
-  -R '^e2e\\.headless_core_proof$' \\
+ctest --test-dir build/core/release -N \
+  -E '^(build\.active_tree|build\.version|contract\.schemas|conformance\.|host\.|e2e\.)' \
   -LE '^stress$'
 scripts/core.sh proof
 ```
 
-The Release `ctest -N`/show-only selection must demonstrate that no
-stress-labelled test is selected. Record its observed count as evidence if
-useful, but do not turn that count into a hard-coded long-term gate. The
-policy review must confirm all eight labels and all eight Test Selection Rules
-are present. The registered `build.core_script` test and the registered
-`build.test_taxonomy` test must both pass.
+The Release `ctest -N`/show-only selection must mirror Product Proof's full
+CTest selection: retain its exact existing name exclusion and add only the
+exact stress-label exclusion. Inspect the selected names and labels to
+demonstrate that no stress-labelled test is selected. Record its observed count
+as evidence if useful, but do not turn that count into a hard-coded long-term
+gate. The policy review must confirm all eight labels and all eight Test
+Selection Rules are present. The registered `build.core_script` test and the
+registered `build.test_taxonomy` test must both pass.
 
 - [ ] **Step 5: Commit**
 
