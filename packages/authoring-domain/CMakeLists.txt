@@ -63,4 +63,28 @@ if(BUILD_TESTING)
     TIER unit
     COMMAND lmdj_domain_command_handler_tests
   )
+
+  add_executable(
+    lmdj_domain_model_sequence_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/domain/model_sequence_test.cpp"
+  )
+  target_include_directories(
+    lmdj_domain_model_sequence_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_domain_model_sequence_tests
+    PRIVATE
+      lmdj::authoring_domain
+  )
+  lmdj_target_warnings(lmdj_domain_model_sequence_tests)
+  lmdj_target_sanitizers(lmdj_domain_model_sequence_tests)
+  lmdj_add_test(
+    NAME domain.model_sequence
+    TIER unit
+    COMMAND lmdj_domain_model_sequence_tests
+    TIMEOUT 10
+    LABELS domain generated
+  )
 endif()

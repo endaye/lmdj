@@ -43,4 +43,28 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio
   )
+
+  add_executable(
+    lmdj_project_cooker_determinism_matrix_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/cooker/determinism_matrix_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_cooker_determinism_matrix_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_cooker_determinism_matrix_tests
+    PRIVATE
+      lmdj::project_cooker
+  )
+  lmdj_target_warnings(lmdj_project_cooker_determinism_matrix_tests)
+  lmdj_target_sanitizers(lmdj_project_cooker_determinism_matrix_tests)
+  lmdj_add_test(
+    NAME cooker.determinism_matrix
+    TIER unit
+    COMMAND lmdj_project_cooker_determinism_matrix_tests
+    TIMEOUT 10
+    LABELS audio generated
+  )
 endif()

@@ -38,9 +38,11 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_foundation_tests
     lmdj_domain_project_tests
     lmdj_domain_command_handler_tests
+    lmdj_domain_model_sequence_tests
     lmdj_project_store_tests
     lmdj_take_journal_tests
     lmdj_project_cooker_tests
+    lmdj_project_cooker_determinism_matrix_tests
     lmdj_audio_runtime_tests
     lmdj_provider_conformance_tests
     lmdj_provider_attempt_isolation_tests

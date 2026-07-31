@@ -1,0 +1,479 @@
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <iomanip>
+#include <iostream>
+#include <map>
+#include <optional>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include <lmdj/cooker/project_cooker.hpp>
+#include <lmdj/domain/command_handler.hpp>
+
+#include "tests/core/support/deterministic_rng.hpp"
+#include "tests/core/support/test.hpp"
+
+namespace {
+
+using lmdj::cooker::ArtifactResolver;
+using lmdj::cooker::RuntimeSnapshot;
+using lmdj::domain::AssignPad;
+using lmdj::domain::Command;
+using lmdj::domain::CommandMeta;
+using lmdj::domain::CreatePattern;
+using lmdj::domain::ImportAsset;
+using lmdj::domain::PadSlotId;
+using lmdj::domain::Pattern;
+using lmdj::domain::PatternEvent;
+using lmdj::domain::ProjectState;
+using lmdj::foundation::ArtifactRef;
+using lmdj::foundation::AssetId;
+using lmdj::foundation::CommandId;
+using lmdj::foundation::Error;
+using lmdj::foundation::ErrorCode;
+using lmdj::foundation::PatternId;
+using lmdj::foundation::ProjectId;
+using lmdj::foundation::Result;
+using lmdj::test::DeterministicRng;
+
+constexpr std::string_view kMonoSha =
+    "b921463fe1cb521fa6734fe8f04a002bd4b99faf44c811d2b833b21ee7e7a5e9";
+constexpr std::string_view kStereoSha =
+    "8ed906292be8d7ecd66263e66187af80719a79e6b2934759c3d0f06b4c02421b";
+constexpr std::string_view kUnsupportedSha =
+    "e1bfa728d85c1034701e9bf80c6bc99aa40dd8eb713c576b53ea4fd6aa5d9635";
+constexpr std::array<std::int16_t, 4> kMonoSamples{
+    32767, -32768, 123, -456};
+constexpr std::array<std::int16_t, 8> kStereoSamples{
+    32767, -32768, -32768, 32767, 123, -789, -456, 1011};
+
+std::string generated_uuid(char family, std::uint64_t seed,
+                           std::uint64_t ordinal) {
+  std::ostringstream value;
+  value << family << "0000000-0000-4000-8000-"
+        << std::hex << std::nouppercase << std::setfill('0')
+        << std::setw(4) << seed
+        << std::setw(8) << ordinal;
+  return value.str();
+}
+
+void append_u16(std::vector<std::byte>& bytes, std::uint16_t value) {
+  bytes.push_back(static_cast<std::byte>(value & 0xffU));
+  bytes.push_back(static_cast<std::byte>(value >> 8U));
+}
+
+void append_u32(std::vector<std::byte>& bytes, std::uint32_t value) {
+  for (std::uint32_t shift = 0; shift < 32U; shift += 8U) {
+    bytes.push_back(static_cast<std::byte>(value >> shift));
+  }
+}
+
+void append_ascii(std::vector<std::byte>& bytes, std::string_view value) {
+  for (const char character : value) {
+    bytes.push_back(
+        static_cast<std::byte>(static_cast<unsigned char>(character)));
+  }
+}
+
+template <std::size_t SampleCount>
+std::vector<std::byte> pcm16_wav(
+    std::uint16_t channels,
+    const std::array<std::int16_t, SampleCount>& samples) {
+  const auto data_size =
+      static_cast<std::uint32_t>(samples.size() * sizeof(std::int16_t));
+  std::vector<std::byte> bytes;
+  bytes.reserve(44U + data_size);
+  append_ascii(bytes, "RIFF");
+  append_u32(bytes, 36U + data_size);
+  append_ascii(bytes, "WAVEfmt ");
+  append_u32(bytes, 16);
+  append_u16(bytes, 1);
+  append_u16(bytes, channels);
+  append_u32(bytes, 48000);
+  append_u32(bytes, 48000U * channels * sizeof(std::int16_t));
+  append_u16(
+      bytes,
+      static_cast<std::uint16_t>(channels * sizeof(std::int16_t)));
+  append_u16(bytes, 16);
+  append_ascii(bytes, "data");
+  append_u32(bytes, data_size);
+  for (const auto sample : samples) {
+    append_u16(bytes, static_cast<std::uint16_t>(sample));
+  }
+  return bytes;
+}
+
+struct Fixtures {
+  std::vector<std::byte> mono = pcm16_wav(1, kMonoSamples);
+  std::vector<std::byte> stereo = pcm16_wav(2, kStereoSamples);
+
+  ArtifactRef mono_artifact() const {
+    return ArtifactRef{
+        std::string(kMonoSha), "audio/wav", mono.size()};
+  }
+
+  ArtifactRef stereo_artifact() const {
+    return ArtifactRef{
+        std::string(kStereoSha), "audio/wav", stereo.size()};
+  }
+};
+
+struct ResolverTrace {
+  std::uint32_t calls{};
+  std::map<std::string, std::uint32_t> calls_by_sha;
+};
+
+enum class InvalidArtifactMode {
+  none,
+  corrupt_bytes,
+  unavailable,
+  unsupported_bytes,
+};
+
+ArtifactResolver resolver_for(
+    const Fixtures& fixtures,
+    ResolverTrace& trace,
+    InvalidArtifactMode invalid_mode = InvalidArtifactMode::none) {
+  const std::map<std::string, std::vector<std::byte>> bytes_by_sha{
+      {std::string(kMonoSha), fixtures.mono},
+      {std::string(kStereoSha), fixtures.stereo},
+      {
+          std::string(kUnsupportedSha),
+          {
+              std::byte{'B'},
+              std::byte{'A'},
+              std::byte{'D'},
+              std::byte{'!'},
+          },
+      },
+  };
+  return [
+      bytes_by_sha,
+      &trace,
+      invalid_mode
+  ](const ArtifactRef& artifact) -> Result<std::vector<std::byte>> {
+    ++trace.calls;
+    ++trace.calls_by_sha[artifact.sha256];
+    if (
+        invalid_mode == InvalidArtifactMode::unavailable &&
+        artifact.sha256 == kStereoSha) {
+      return Result<std::vector<std::byte>>::failure(
+          Error{ErrorCode::not_found, "in-memory PCM fixture is unavailable"});
+    }
+    const auto found = bytes_by_sha.find(artifact.sha256);
+    if (found == bytes_by_sha.end()) {
+      return Result<std::vector<std::byte>>::failure(
+          Error{ErrorCode::not_found, "in-memory PCM fixture is unavailable"});
+    }
+    auto bytes = found->second;
+    if (
+        invalid_mode == InvalidArtifactMode::corrupt_bytes &&
+        artifact.sha256 == kStereoSha) {
+      bytes.back() ^= std::byte{0x01};
+    }
+    return Result<std::vector<std::byte>>::success(std::move(bytes));
+  };
+}
+
+ProjectState apply_or_throw(
+    const ProjectState& project,
+    const Command& command) {
+  const auto applied = lmdj::domain::apply(project, command, {});
+  LMDJ_CHECK(applied.has_value());
+  LMDJ_CHECK(applied.value().state.revision == project.revision + 1U);
+  return applied.value().state;
+}
+
+struct GeneratedProject {
+  ProjectState state;
+  PatternId pattern_id;
+  AssetId stereo_asset;
+  PadSlotId reassigned_slot;
+  PadSlotId mono_slot;
+  PadSlotId stereo_slot;
+};
+
+GeneratedProject generated_project(
+    std::uint64_t seed,
+    DeterministicRng& rng,
+    const Fixtures& fixtures) {
+  const auto created = lmdj::domain::create_project(
+      ProjectId{generated_uuid('0', seed, 1)},
+      static_cast<std::uint16_t>(40U + rng.bounded(201)));
+  LMDJ_CHECK(created.has_value());
+  auto project = created.value();
+
+  const AssetId mono_first{generated_uuid('2', seed, 1)};
+  const AssetId mono_second{generated_uuid('2', seed, 2)};
+  const AssetId stereo{generated_uuid('2', seed, 3)};
+  const PadSlotId reassigned_slot{
+      static_cast<std::uint8_t>(seed % 4U),
+      static_cast<std::uint8_t>(seed % 16U),
+  };
+  const PadSlotId mono_slot{
+      static_cast<std::uint8_t>((seed + 1U) % 4U),
+      static_cast<std::uint8_t>((seed + 5U) % 16U),
+  };
+  const PadSlotId stereo_slot{
+      static_cast<std::uint8_t>((seed + 2U) % 4U),
+      static_cast<std::uint8_t>((seed + 9U) % 16U),
+  };
+  const PadSlotId duplicate_mono_slot{
+      static_cast<std::uint8_t>((seed + 3U) % 4U),
+      static_cast<std::uint8_t>((seed + 13U) % 16U),
+  };
+  const PatternId pattern_id{generated_uuid('3', seed, 1)};
+  std::uint64_t command = 1;
+  const auto meta = [&]() {
+    return CommandMeta{
+        CommandId{generated_uuid('1', seed, command++)},
+        project.revision,
+    };
+  };
+
+  project = apply_or_throw(
+      project,
+      Command{ImportAsset{
+          meta(), {mono_first, fixtures.mono_artifact()}}});
+  project = apply_or_throw(
+      project,
+      Command{ImportAsset{
+          meta(), {mono_second, fixtures.mono_artifact()}}});
+  project = apply_or_throw(
+      project,
+      Command{ImportAsset{
+          meta(), {stereo, fixtures.stereo_artifact()}}});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{meta(), reassigned_slot, mono_first}});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{meta(), mono_slot, mono_second}});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{meta(), stereo_slot, stereo}});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{meta(), duplicate_mono_slot, mono_first}});
+
+  std::vector<PatternEvent> events{
+      {mono_slot, 0, 127},
+      {reassigned_slot, 1, 126},
+      {stereo_slot, 2, 125},
+      {duplicate_mono_slot, 3, 124},
+  };
+  for (std::uint32_t step = 4; step < 16; ++step) {
+    const std::array slots{reassigned_slot, mono_slot, stereo_slot};
+    events.push_back(PatternEvent{
+        slots.at(rng.bounded(slots.size())),
+        step,
+        static_cast<std::uint8_t>(1U + rng.bounded(127)),
+    });
+  }
+  project = apply_or_throw(
+      project,
+      Command{CreatePattern{
+          meta(), Pattern{pattern_id, 1, std::move(events)}}});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{meta(), reassigned_slot, stereo}});
+
+  return GeneratedProject{
+      std::move(project),
+      pattern_id,
+      stereo,
+      reassigned_slot,
+      mono_slot,
+      stereo_slot,
+  };
+}
+
+void check_snapshots_equal(
+    const RuntimeSnapshot& first,
+    const RuntimeSnapshot& second) {
+  LMDJ_CHECK(first.project_id == second.project_id);
+  LMDJ_CHECK(first.project_revision == second.project_revision);
+  LMDJ_CHECK(first.bpm == second.bpm);
+  LMDJ_CHECK(first.bars == second.bars);
+  LMDJ_CHECK(first.events.size() == second.events.size());
+  for (std::size_t index = 0; index < first.events.size(); ++index) {
+    const auto& left = first.events.at(index);
+    const auto& right = second.events.at(index);
+    LMDJ_CHECK(left.slot == right.slot);
+    LMDJ_CHECK(left.step == right.step);
+    LMDJ_CHECK(left.velocity == right.velocity);
+    LMDJ_CHECK(left.sample != nullptr);
+    LMDJ_CHECK(right.sample != nullptr);
+    LMDJ_CHECK(left.sample->sample_rate == right.sample->sample_rate);
+    LMDJ_CHECK(left.sample->channels == right.sample->channels);
+    LMDJ_CHECK(
+        left.sample->interleaved.size() ==
+        right.sample->interleaved.size());
+    for (std::size_t sample = 0;
+         sample < left.sample->interleaved.size();
+         ++sample) {
+      LMDJ_CHECK(
+          left.sample->interleaved.at(sample) ==
+          right.sample->interleaved.at(sample));
+    }
+  }
+}
+
+template <typename Scenario>
+void for_each_seed(Scenario&& scenario) {
+  for (std::uint64_t seed = 0; seed <= 255; ++seed) {
+    try {
+      scenario(seed);
+    } catch (const std::exception& error) {
+      throw std::runtime_error(
+          "seed " + std::to_string(seed) + ": " + error.what());
+    }
+  }
+}
+
+struct MatrixEvidence {
+  std::uint64_t deterministic_cooks{};
+  std::uint64_t deduplicated_resolutions{};
+  std::uint64_t rejected_partial_snapshots{};
+  std::uint64_t current_slot_resolutions{};
+};
+
+MatrixEvidence run_determinism_matrix() {
+  MatrixEvidence evidence;
+  const Fixtures fixtures;
+  LMDJ_CHECK(fixtures.mono.size() == 52);
+  LMDJ_CHECK(fixtures.stereo.size() == 60);
+
+  for_each_seed([&](std::uint64_t seed) {
+    DeterministicRng rng(seed);
+    const auto generated = generated_project(seed, rng, fixtures);
+    const auto immutable_project = generated.state;
+
+    ResolverTrace first_trace;
+    ResolverTrace second_trace;
+    const auto first = lmdj::cooker::cook(
+        generated.state,
+        generated.pattern_id,
+        resolver_for(fixtures, first_trace));
+    const auto second = lmdj::cooker::cook(
+        generated.state,
+        generated.pattern_id,
+        resolver_for(fixtures, second_trace));
+    LMDJ_CHECK(first.has_value());
+    LMDJ_CHECK(second.has_value());
+    LMDJ_CHECK(generated.state == immutable_project);
+    check_snapshots_equal(*first.value(), *second.value());
+    ++evidence.deterministic_cooks;
+
+    for (const auto* trace : {&first_trace, &second_trace}) {
+      LMDJ_CHECK(trace->calls == 2);
+      LMDJ_CHECK(trace->calls_by_sha.at(std::string(kMonoSha)) == 1);
+      LMDJ_CHECK(trace->calls_by_sha.at(std::string(kStereoSha)) == 1);
+    }
+    const auto& events = first.value()->events;
+    LMDJ_CHECK(events.at(0).sample != events.at(1).sample);
+    LMDJ_CHECK(events.at(1).sample == events.at(2).sample);
+    LMDJ_CHECK(events.at(0).sample == events.at(3).sample);
+    ++evidence.deduplicated_resolutions;
+
+    LMDJ_CHECK(events.at(1).slot == generated.reassigned_slot);
+    LMDJ_CHECK(events.at(1).sample->channels == 2);
+    LMDJ_CHECK(events.at(1).sample->interleaved.size() == kStereoSamples.size());
+    for (std::size_t index = 0; index < kStereoSamples.size(); ++index) {
+      LMDJ_CHECK(
+          events.at(1).sample->interleaved.at(index) ==
+          kStereoSamples.at(index));
+    }
+    ++evidence.current_slot_resolutions;
+
+    auto invalid_project = generated.state;
+    const auto invalid_mode = seed % 5U;
+    auto resolver_mode = InvalidArtifactMode::none;
+    auto expected_error = ErrorCode::invalid_project;
+    std::uint32_t expected_calls = 1;
+    if (invalid_mode == 0U) {
+      resolver_mode = InvalidArtifactMode::corrupt_bytes;
+      expected_error = ErrorCode::cook_failed;
+      expected_calls = 2;
+    } else if (invalid_mode == 1U) {
+      resolver_mode = InvalidArtifactMode::unavailable;
+      expected_error = ErrorCode::not_found;
+      expected_calls = 2;
+    } else if (invalid_mode == 2U) {
+      resolver_mode = InvalidArtifactMode::unsupported_bytes;
+      expected_error = ErrorCode::unsupported_audio;
+      expected_calls = 2;
+      invalid_project.assets.at(generated.stereo_asset).artifact =
+          ArtifactRef{
+              std::string(kUnsupportedSha),
+              "audio/wav",
+              4,
+          };
+    } else if (invalid_mode == 3U) {
+      invalid_project.assets.at(generated.stereo_asset).artifact.sha256 =
+          "invalid";
+    } else {
+      invalid_project.assets.at(generated.stereo_asset).artifact.sha256 =
+          std::string(64, 'g');
+    }
+
+    ResolverTrace invalid_trace;
+    const auto invalid = lmdj::cooker::cook(
+        invalid_project,
+        generated.pattern_id,
+        resolver_for(fixtures, invalid_trace, resolver_mode));
+    LMDJ_CHECK(!invalid.has_value());
+    LMDJ_CHECK(invalid.error().code == expected_error);
+    LMDJ_CHECK(invalid_trace.calls == expected_calls);
+    LMDJ_CHECK(generated.state == immutable_project);
+    ++evidence.rejected_partial_snapshots;
+  });
+
+  return evidence;
+}
+
+const MatrixEvidence& determinism_matrix_evidence() {
+  static const MatrixEvidence evidence = run_determinism_matrix();
+  return evidence;
+}
+
+void test_generated_projects_cook_to_identical_snapshots() {
+  LMDJ_CHECK(
+      determinism_matrix_evidence().deterministic_cooks == 256);
+}
+
+void test_generated_artifact_resolution_is_content_deduplicated() {
+  LMDJ_CHECK(
+      determinism_matrix_evidence().deduplicated_resolutions == 256);
+}
+
+void test_generated_invalid_artifacts_never_publish_partial_snapshot() {
+  LMDJ_CHECK(
+      determinism_matrix_evidence().rejected_partial_snapshots == 256);
+}
+
+void test_generated_slot_reassignment_resolves_current_asset() {
+  LMDJ_CHECK(
+      determinism_matrix_evidence().current_slot_resolutions == 256);
+}
+
+}  // namespace
+
+int main() {
+  try {
+    test_generated_projects_cook_to_identical_snapshots();
+    test_generated_artifact_resolution_is_content_deduplicated();
+    test_generated_invalid_artifacts_never_publish_partial_snapshot();
+    test_generated_slot_reassignment_resolves_current_asset();
+  } catch (const std::exception& error) {
+    std::cerr << error.what() << '\n';
+    return 1;
+  }
+  std::cout << "cooker determinism matrix tests: PASS\n";
+  return 0;
+}
