@@ -481,9 +481,11 @@ Add a `coverage` configure/build/test preset with:
 7. associate raw profiles with their `%m` module-signature groups, merge and
    export each coverage object only with its matching group, and treat any
    `llvm-profdata` or `llvm-cov` stderr diagnostic as fatal;
-8. use an empty-profile export to enumerate the full first-party topology, then
-   form the exact union of physical source line and branch identities across
-   all object exports without double counting common headers;
+8. export each coverage object's full first-party topology with that object's
+   matching module profile, then form the exact union of physical source line
+   and branch identities across all object exports without double counting
+   common headers; LLVM 18 has no `--empty-profile` option, and profile counts
+   do not change the exported physical topology identities;
 9. write bounded `summary.json` and `report.txt` artifacts and invoke the gate
    only in `check` mode.
 
@@ -531,9 +533,12 @@ git commit -m "test(core): measure source coverage"
 
 Task 4 compiles `project_store.cpp` and `take_journal.cpp` both as production
 code and with private test-only fault interception. The source-based coverage
-mappings are intentionally different. A single multi-object
-`llvm-cov export --empty-profile` drops physical regions when duplicate source
-paths have different mappings, so it is not an authoritative topology union.
+mappings are intentionally different. A single multi-object `llvm-cov export`
+can drop physical regions when duplicate source paths have different mappings,
+so it is not an authoritative topology union. LLVM 18 also has no
+`--empty-profile` option. The portable topology source is therefore one
+independent export per object using that object's already generated matching
+module profile; profile counts do not change physical topology identities.
 
 **Files:**
 
@@ -549,17 +554,19 @@ both. The union must retain every identity exactly once. Expected before the
 fix: FAIL because the CLI accepts only one topology and reports the other
 variant's measured region as extra.
 
-- [ ] **Step 2: Union per-object empty-profile exports**
+- [ ] **Step 2: Union per-object matching-profile topology exports**
 
 Make `--topology` repeatable. Parse every topology fragment and union its
 physical line and branch identities before validating measured fragments.
-Counts in empty profiles remain zero; duplicate identities must not inflate the
-denominator.
+Counts in matching profiles may be non-zero but do not change physical
+identities; duplicate identities must not inflate the denominator.
 
-Change the runner to export one warning-free empty-profile LCOV file per
-coverage object. Pass every file as a separate `--topology` argument. Do not
-use object ordering or a combined `llvm-cov` export to select one compile
-variant.
+Change the runner to export one warning-free topology LCOV file per coverage
+object with the object's existing matching
+`module_profiles_root/$object_number.profdata`. Pass every file as a separate
+`--topology` argument. Keep topology export independent from the measured
+fragment export. Do not use object ordering or a combined `llvm-cov` export to
+select one compile variant.
 
 - [ ] **Step 3: Verify the real production/testable topology**
 
