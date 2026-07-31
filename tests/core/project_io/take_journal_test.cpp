@@ -39,7 +39,24 @@ using lmdj::project_io::ProjectStore;
 using lmdj::project_io::TakeJournal;
 
 int active_directory_sync_calls = 0;
+int active_journal_remove_calls = 0;
 int active_journal_sync_calls = 0;
+
+lmdj::foundation::Result<void> fail_active_journal_remove(
+    lmdj::project_io::testing::FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point !=
+      lmdj::project_io::testing::FaultPoint::active_journal_remove) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  ++active_journal_remove_calls;
+  return lmdj::foundation::Result<void>::failure(
+      lmdj::foundation::Error{
+          ErrorCode::io_error,
+          "injected active-journal removal failure",
+          {{"path", path.generic_string()}},
+      });
+}
 
 lmdj::foundation::Result<void> fail_active_journal_sync(
     lmdj::project_io::testing::FaultPoint point,
@@ -569,17 +586,18 @@ void test_cleanup_failure_is_reported_and_replay_finishes_cleanup() {
       recorded_pattern("pattern-1"),
   }};
 
-  const auto active_directory = bundle / "recovery/active";
-  std::filesystem::permissions(
-      active_directory,
-      std::filesystem::perms::owner_read |
-          std::filesystem::perms::owner_exec,
-      std::filesystem::perm_options::replace);
-  const auto cleanup_failed = store.execute(bundle, command);
-  std::filesystem::permissions(
-      active_directory,
-      std::filesystem::perms::owner_all,
-      std::filesystem::perm_options::replace);
+  active_journal_remove_calls = 0;
+  lmdj::foundation::Result<lmdj::domain::AppliedCommand> cleanup_failed =
+      lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error,
+              "test did not execute",
+          });
+  {
+    FaultHookGuard hook(fail_active_journal_remove);
+    cleanup_failed = store.execute(bundle, command);
+    LMDJ_CHECK(active_journal_remove_calls == 1);
+  }
 
   LMDJ_CHECK(!cleanup_failed.has_value());
   LMDJ_CHECK(cleanup_failed.error().code == ErrorCode::io_error);
