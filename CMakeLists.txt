@@ -27,10 +27,85 @@ add_subdirectory(packages/application-facade)
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+add_subdirectory(apps/core-cli)
+
+set(
+  lmdj_mcp_test_environment
+  "PYTHONPATH=${CMAKE_SOURCE_DIR}/apps/core-mcp"
+)
+if(LMDJ_ENABLE_SANITIZERS)
+  if(APPLE)
+    set(lmdj_asan_runtime_name libclang_rt.asan_osx_dynamic.dylib)
+  elseif(UNIX)
+    set(lmdj_asan_runtime_name libasan.so)
+  endif()
+  if(DEFINED lmdj_asan_runtime_name)
+    execute_process(
+      COMMAND
+        "${CMAKE_CXX_COMPILER}"
+        "--print-file-name=${lmdj_asan_runtime_name}"
+      RESULT_VARIABLE lmdj_asan_runtime_status
+      OUTPUT_VARIABLE lmdj_asan_runtime
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    if(
+      NOT lmdj_asan_runtime_status EQUAL 0
+      OR NOT IS_ABSOLUTE "${lmdj_asan_runtime}"
+      OR NOT EXISTS "${lmdj_asan_runtime}"
+    )
+      message(
+        FATAL_ERROR
+        "Unable to locate the AddressSanitizer runtime for MCP Host tests"
+      )
+    endif()
+    list(
+      APPEND lmdj_mcp_test_environment
+      "LMDJ_ASAN_RUNTIME=${lmdj_asan_runtime}"
+    )
+    if(APPLE)
+      list(
+        APPEND lmdj_mcp_test_environment
+        "ASAN_OPTIONS=verify_interceptors=0"
+      )
+    endif()
+  endif()
+endif()
+
 add_test(
   NAME build.active_tree
   COMMAND "${BASH_EXECUTABLE}" tests/build/test_active_tree.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+add_test(
+  NAME host.mcp_stdio
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/mcp_stdio_test.py
+    "$<TARGET_FILE:lmdj_core_c>"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(
+  host.mcp_stdio
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+    TIMEOUT 60
+)
+
+add_test(
+  NAME host.mcp_facade_parity
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/host/mcp_facade_parity_test.py
+    "$<TARGET_FILE:lmdj_core_cli>"
+    "$<TARGET_FILE:lmdj_core_c>"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+set_tests_properties(
+  host.mcp_facade_parity
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+    TIMEOUT 120
 )
 
 add_test(

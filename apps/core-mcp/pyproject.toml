@@ -1,0 +1,9 @@
+[project]
+name = "lmdj-core-mcp"
+version = "0.1.0"
+description = "LMDJ Headless Core MCP stdio Host"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.lmdj]
+c-abi = "lmdj_core_c@1"

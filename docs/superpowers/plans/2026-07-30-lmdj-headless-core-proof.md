@@ -1957,20 +1957,76 @@ git commit -m "feat(facade): expose unified application and c abi"
 - Modify: `products/lmdj/version.json`
 - Modify: `tests/build/version_test.py`
 - Modify: `CMakeLists.txt`
-- Modify: `scripts/core.sh`
 
 **Interfaces:**
 
 - Consumes only `application-facade`.
-- Outputs exactly one canonical JSON response to stdout.
-- Human diagnostics go to stderr; no color when stdout is not a terminal.
+- Uses exactly one of these position-sensitive five-token forms
+  (`argc == 6`, including the executable):
+
+  ```text
+  lmdj-core --workspace WORKSPACE command --request JSON
+  lmdj-core --workspace WORKSPACE query   --request JSON
+  lmdj-core --workspace WORKSPACE command --request-file FILE
+  lmdj-core --workspace WORKSPACE query   --request-file FILE
+  ```
+
+  Reordering, combined or duplicate flags, stdin, extra operands, and both
+  request sources are not supported.
+- A grammar-valid invocation writes exactly
+  `canonical_json(response) + "\n"` to stdout and nothing to stderr. Success
+  exits `0`; every structured Host or Facade failure exits `2`.
+- A grammar-invalid invocation writes no stdout, one plain usage diagnostic to
+  stderr, and exits `64`. Task 9 emits no ANSI color. A broken stdout exits
+  `2`.
+- `WORKSPACE` must be non-empty UTF-8, absolute, and lexically normalized. The
+  Host neither resolves it nor requires it to exist. Invalid workspace values
+  return `INVALID_ARGUMENT`.
+- Inline and file requests are bounded at 16,777,216 bytes before parsing.
+  On macOS/Linux, request files are opened once without blocking, validated as
+  regular through that same file descriptor, and read in bounded chunks.
+  `EINTR`, read failure, concurrent growth, and the 16 MiB + 1 sentinel are
+  handled without a fixed 16 MiB allocation. A non-POSIX build must use an
+  explicit unsupported-platform error path rather than a path-check/path-open
+  fallback. Missing, non-regular, unopenable, or failed file reads return
+  `IO_ERROR`; empty, oversized, invalid UTF-8, malformed JSON, and non-object
+  requests return `INVALID_ARGUMENT`.
+- Project, source, and output paths pass unchanged to Facade; the Host neither
+  parses a Project bundle nor requires Project containment in the Workspace.
+- Host exceptions never escape `main`. Unexpected construction, parsing,
+  serialization, or dispatch failures become a fixed `INTERNAL_ERROR`
+  envelope without exception text, with a predeclared ASCII fallback for the
+  final catch-all.
+- Dispatch depends only on the argv `command`/`query` token. The Host never
+  reads the request's `operation`.
 - `core-cli` starts at Module SemVer `0.1.0` with exact dependency
   `application-facade 0.1.0`.
+- It constructs an explicitly empty Provider Registry and does not link either
+  Proof Provider.
+- Version impact: Product Build advances from `1.0.4.0` to `1.0.5.0`;
+  `core-cli` is introduced at `0.1.0`; no existing Module, Provider, or
+  Contract version changes.
 
 - [ ] **Step 1: Advance the PR 5 Product Build**
 
-Set `products/lmdj/version.json` and `tests/build/version_test.py` to
-`1.0.5.0`, and declare `core-cli 0.1.0`.
+First update `tests/build/version_test.py` to require Product Build `1.0.5.0`
+and the real `apps/core-cli/module.json` to be exactly:
+
+```json
+{
+  "contract": "lmdj.module.v1",
+  "module": "core-cli",
+  "version": "0.1.0",
+  "api_version": 1,
+  "dependencies": {
+    "application-facade": "0.1.0"
+  }
+}
+```
+
+Run the test and observe failure against Product Build `1.0.4.0` and the
+missing real Host manifest. Then set `products/lmdj/version.json` to
+`1.0.5.0` and create the manifest.
 
 Run:
 
@@ -1984,24 +2040,50 @@ Expected: both report Product Build `1.0.5.0`.
 
 - [ ] **Step 2: Add failing black-box CLI tests**
 
-The CLI shape is:
+`cli_test.py` derives the repository root from `__file__`, resolves the
+supplied executable, uses only absolute fixture/workspace/Project/output
+paths, and invokes subprocesses with argv arrays and `shell=False`. Every
+grammar-valid helper additionally asserts one complete canonical JSON value
+plus LF on stdout and empty stderr. Every child process has an explicit
+timeout; timeout cleanup kills and reaps it. The registered `host.cli` CTest
+has an overall 60-second timeout.
 
-```text
-lmdj-core --workspace <dir> command --request '<json>'
-lmdj-core --workspace <dir> query --request '<json>'
-lmdj-core --workspace <dir> command --request-file <path>
-lmdj-core --workspace <dir> query --request-file <path>
-```
+Implement exactly nine fixtures:
 
-`cli_test.py` must run real subprocesses and assert:
+1. `usage_contract`: missing, unknown, reordered, duplicate, extra, and both
+   request-source forms return `64`, empty stdout, plain non-ANSI stderr.
+2. `workspace_contract`: relative/non-normalized Workspace returns canonical
+   `INVALID_ARGUMENT`/`2`; normalized absolute Workspace is accepted.
+3. `request_source_parity`: inline and file `provider.list` responses are
+   byte-identical and contain an empty Provider list.
+4. `request_validation`: empty, malformed, invalid UTF-8, non-object, and
+   16 MiB + 1 requests return `INVALID_ARGUMENT`/`2`; missing, directory, and
+   FIFO request files return `IO_ERROR`/`2` without blocking; a symlink that
+   resolves to a regular request file remains valid.
+5. `facade_routing_and_exit_mapping`: success returns `0`; unknown operation
+   and command/query mismatch preserve Facade `INVALID_ARGUMENT`/`2`.
+6. `separate_process_authoring`: create, import, assign, begin, each append,
+   commit, and inspect use separate processes; revisions are `0..5`; inspect
+   shows 64 Pads, two Assets, one Take, one Pattern, and four events; the
+   active Take journal is absent after commit.
+7. `fresh_process_replay`: replay after journal cleanup returns
+   `replayed:true`, original `committed_revision:5`, no active Take journal,
+   and no Project mutation.
+8. `fresh_process_snapshot_render_golden`: a new render process receives only
+   Project path, Pattern ID, and output path; no `snapshot_id`; output bytes
+   and SHA-256 equal committed Golden and manifest bytes do not change.
+9. `host_boundary_and_identity`: Product Build is `1.0.5.0`; CLI manifest is
+   exact; CLI links only `lmdj::application`; among `lmdj/...` headers
+   `main.cpp` includes only `lmdj/facade/application.hpp`; source contains no
+   `project_io`, managed bundle layout/recovery literals, or request-side
+   access to `operation`; CMake configure/generate emits read-only
+   `LINK_LIBRARIES` metadata reporting only the direct Application dependency;
+   CTest JSON reports the real executable and 60-second timeout. Do not pin
+   implementation spelling such as the argc
+   comparison or request-limit literal.
 
-- create → import → assign → begin/append/commit → inspect works across separate processes;
-- one CLI process runs the `snapshot.cook` Query, exits, and a new CLI process runs `render.offline` with `project_path` plus `pattern_id` and matches Golden Audio;
-- stdout parses as exactly one JSON value;
-- errors use the public error envelope and exit `2`;
-- successful operations exit `0`;
-- malformed CLI usage exits `64`;
-- CLI has no import of Project I/O and contains no bundle parsing code.
+Compare committed Golden files without regenerating them. The harness is
+path-portable, but Task 9 acceptance covers macOS/Linux CI only.
 
 - [ ] **Step 3: Observe the missing executable failure**
 
@@ -2025,6 +2107,15 @@ Expected: `FileNotFoundError` for `lmdj-core`.
 6. maps envelope success/failure to the defined exit codes.
 
 Task 9 tests core Project behavior with an empty Registry; Task 11 supplies the Product Assembly and proof Providers. The CLI does not inspect command names beyond selecting command versus query.
+
+Add `add_subdirectory(apps/core-cli)` after Application Facade. The target is
+`lmdj_core_cli`, has `OUTPUT_NAME lmdj-core`, links only
+`PRIVATE lmdj::application`, and uses repository warnings/sanitizers. Register
+`host.cli` in CTest with `${Python3_EXECUTABLE}` and
+`$<TARGET_FILE:lmdj_core_cli>`.
+
+Do not modify `scripts/core.sh`: its existing build/test commands already
+cover root targets and registered CTest tests.
 
 - [ ] **Step 5: Run CLI black-box tests**
 
@@ -2050,7 +2141,7 @@ git add \
   products/lmdj/version.json \
   tests/build/version_test.py \
   CMakeLists.txt \
-  scripts/core.sh
+  docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md
 git commit -m "feat(cli): add headless json host"
 ```
 
@@ -2068,7 +2159,7 @@ git commit -m "feat(cli): add headless json host"
 - Create: `apps/core-mcp/pyproject.toml`
 - Create: `tests/host/mcp_stdio_test.py`
 - Create: `tests/host/mcp_facade_parity_test.py`
-- Modify: `scripts/core.sh`
+- Modify: `CMakeLists.txt`
 
 **Interfaces:**
 
@@ -2077,75 +2168,212 @@ git commit -m "feat(cli): add headless json host"
 - Emits no non-protocol bytes on stdout.
 - `core-mcp` starts at Module SemVer `0.1.0`, locks
   `application-facade 0.1.0`, and declares C ABI compatibility
-  `lmdj_core_c@1`.
+  `lmdj_core_c@1` in package metadata. Its schema-conforming Module manifest
+  has exactly the `application-facade 0.1.0` dependency.
 - Task 10 remains inside PR 5, so it does not allocate another Product Build.
+- Python code is standard-library-only. It dynamically loads the explicit
+  current-target C ABI library path and never imports or parses a Project
+  bundle.
+- Workspace is Host configuration supplied by required `--workspace`; it is
+  never a Tool argument. The invocation is:
+
+```bash
+python3 -m lmdj_core_mcp \
+  --library /absolute/path/to/liblmdj_core_c.dylib \
+  --workspace /absolute/lexically/normalized/workspace
+```
+
+The shared library and Workspace arguments must be absolute. Workspace is
+lexically normalized without resolving symlinks and is passed only to
+`lmdj_engine_create`.
+
+**Locked lifecycle:**
+
+```text
+NEW
+  initialize request -> response -> AWAIT_INITIALIZED
+
+AWAIT_INITIALIZED
+  notifications/initialized -> no response -> READY
+
+READY
+  tools/list and tools/call available
+```
+
+- `ping` is valid in all states and returns `{}`.
+- Before `READY`, valid `tools/list` and `tools/call` requests return
+  `-32002`, message `Server not initialized`.
+- Known Tool methods validate their request shape before the lifecycle gate:
+  malformed params return `-32602` even before `READY`; only a structurally
+  valid Tool request reaches the `-32002` state response.
+- `initialize` is a request with required object params. An initialize
+  notification has no response and does not advance state.
+- Premature `notifications/initialized` has no response and does not advance
+  state.
+- Duplicate `initialize` after the first accepted request returns `-32600`
+  without resetting state.
+- The only server protocol version is `2025-11-25`. A different client version
+  receives server-selected `2025-11-25` and leaves the server in
+  `AWAIT_INITIALIZED`.
+- Initialization returns exact server identity
+  `{"name":"lmdj-core-mcp","version":"0.1.0"}` and advertises exactly
+  `{"tools":{"listChanged":false}}`.
+- Standard MCP request `_meta` objects are accepted for `initialize`, `ping`,
+  `tools/list`, `tools/call`, and `notifications/initialized`, but are never
+  forwarded into Facade arguments. `clientInfo` requires `name` and `version`
+  and accepts the standard optional `title`, `description`, `websiteUrl`, and
+  `icons` Implementation metadata.
+
+**Locked JSON-RPC and transport contract:**
+
+- Read bounded binary stdin, one newline-delimited message at a time. The
+  maximum line/request is 16 MiB. Drain an oversized line through its
+  delimiter, return deterministic `-32600`, and never call C for it.
+- Strict UTF-8 decode and malformed JSON return `-32700`. Non-standard Python
+  JSON constants (`NaN`/`Infinity`) are rejected, and excessive nesting is
+  contained without terminating the Host. Requests containing escaped lone
+  UTF-16 surrogates are not Unicode scalar data and return `-32600` without
+  terminating the Host; notifications with the same invalid data remain
+  silent. Arrays/batches and other non-object JSON return one `-32600` with no
+  partial dispatch.
+- Missing/wrong `jsonrpc`, missing/non-string `method`, non-object `params`,
+  or `id` equal to null, Boolean, float, object, or array return `-32600`.
+  Valid IDs are strings or integers, including integer `0`.
+- Valid unknown requests return `-32601`; known methods with malformed params
+  return `-32602`; both echo the valid ID.
+- Unknown or malformed notifications never receive a response.
+- Empty EOF exits `0` with no extra output. A final unterminated nonempty line
+  is rejected deterministically and then the process exits.
+- Every response is one compact UTF-8 JSON line, flushed immediately. stdout
+  contains protocol only; diagnostics and injected logging use stderr only.
+  Broken stdout is contained without a traceback or non-protocol stdout.
+
+**Locked Tool boundary:**
+
+Publish exactly this immutable table:
+
+| MCP Tool | Injected Facade operation | Surface |
+| --- | --- | --- |
+| `lmdj.project.create` | `project.create` | command |
+| `lmdj.project.inspect` | `project.inspect` | query |
+| `lmdj.asset.import` | `asset.import` | command |
+| `lmdj.pad.assign` | `pad.assign` | command |
+| `lmdj.take.begin` | `take.begin` | command |
+| `lmdj.take.append` | `take.append` | command |
+| `lmdj.take.commit` | `take.commit` | command |
+| `lmdj.snapshot.cook` | `snapshot.cook` | query |
+| `lmdj.render.offline` | `render.offline` | command |
+| `lmdj.provider.list` | `provider.list` | query |
+| `lmdj.provider.select` | `provider.select` | command |
+| `lmdj.provider.run` | `provider.run` | command |
+| `lmdj.attempt.inspect` | `attempt.inspect` | query |
+
+Each row owns `tool_name`, injected operation, command/query kind,
+`inputSchema`, and the shared `outputSchema`. `operation` is neither published
+nor accepted. The Host validates arguments and constructs a new Facade request:
+
+```text
+{"operation": <table operation>, ...validated arguments}
+```
+
+Every `inputSchema` is a Draft 2020-12-compatible root object with the exact
+Task 8 fields after `operation`, exact required fields, and
+`additionalProperties:false`. `lmdj.provider.list` uses an empty object schema.
+Omitted `arguments` normalizes to `{}` only for that tool. Use a small
+deterministic validator for the required schema subset; do not add MCP or JSON
+Schema dependencies. Unknown Tools and invalid arguments return `-32602`.
+
+The shared `outputSchema` is itself a JSON Schema object with root
+`type:"object"` and describes exactly `structuredContent`, using one schema
+for these closed Facade envelopes:
+
+```text
+success: {ok:true, result:object, project_revision:(unsigned integer|null)}
+error:   {ok:false, error:{code:string,message:string,details:object}}
+```
+
+Both variants reject additional properties. `content` contains one text item
+whose text is the compact JSON serialization of exactly `structuredContent`.
+`isError` is false for success and true for a Facade error. A Facade error is
+still a successful JSON-RPC `tools/call` result. Protocol/schema failures use
+JSON-RPC errors.
+
+**Locked ctypes ownership and failure translation:**
+
+- `ctypes.CDLL` receives the explicit absolute library path. Bind `argtypes`
+  and `restype` for all five C ABI functions at startup; missing symbols fail
+  closed.
+- Engine and returned strings are `c_void_p`. Copy returned bytes with
+  `ctypes.string_at`; free every non-null returned string in `finally`.
+- Free the engine exactly once in an outer `finally`, including EOF and
+  `BrokenPipeError`.
+- Engine creation requires status `0`, non-null engine, and no contradictory
+  error string. Create/load failure is startup failure: diagnostic on stderr,
+  nonzero exit, empty stdout.
+- Command/query requires status `0` plus a non-null, strict UTF-8 JSON object
+  Facade envelope whose strings contain only Unicode scalar data. A
+  null/status mismatch, malformed response, escaped lone surrogate, or
+  Python/C exception returns JSON-RPC `-32603`; do not invent a Facade
+  envelope.
+- Preflight compact encoded Facade requests against the C ABI 16 MiB maximum.
+- Windows `.dll` remains outside this Proof. CTest supplies the real `.dylib`
+  on macOS and `.so` on Linux through `$<TARGET_FILE:lmdj_core_c>`.
 
 - [ ] **Step 1: Add failing MCP lifecycle tests**
 
-The test spawns:
+`tests/host/mcp_stdio_test.py` is Python stdlib-only and receives the explicit
+shared-library path. It spawns:
 
 ```bash
 python3 -m lmdj_core_mcp --library <shared-library> --workspace <dir>
 ```
 
-It sends newline-delimited JSON-RPC and asserts:
+Implement ten fixture groups:
 
-1. `initialize` returns protocol version `2025-11-25`, server info, and `tools` capability;
-2. `notifications/initialized` receives no response;
-3. `tools/list` returns all proof tools with `inputSchema` and the shared success/error `outputSchema`;
-4. unknown method returns JSON-RPC `-32601`;
-5. malformed JSON returns `-32700`;
-6. stderr logging never appears on stdout.
+1. `startup_and_platform`: explicit library only; missing/wrong library fails
+   with empty stdout; normalized absolute Workspace; exact Module/package
+   identity; Product Build remains `1.0.5.0`.
+2. `lifecycle`: `ping` in all states; initialize and alternate-version
+   selection; Tool requests blocked before `READY`; initialized notification
+   silence; premature notification; duplicate initialize; initialize
+   notification; clean EOF.
+3. `request_shape`: string/integer/zero IDs and every invalid ID/request shape.
+4. `parse_and_batch`: malformed UTF-8/JSON, escaped lone surrogate, non-object,
+   batch with no dispatch, and post-error liveness.
+5. `method_and_notification`: unknown request, malformed known params, and
+   silence for unknown/malformed notifications.
+6. `tools_list`: exact capabilities, server identity, 13 Tool names, exact
+   schemas, no `operation`, shared output schema.
+7. `tools_call_validation`: all 13 static routes plus omitted, extra, wrong,
+   and unknown Tool arguments; no request operation/name passthrough.
+8. `result_contract`: one real success, one Facade error, one contained C
+   internal error; exact text/structured equality and `isError`.
+9. `bounded_transport`: exact 16 MiB boundary, oversized drain/no C dispatch,
+   final unterminated line, immediate flush.
+10. `stdout_purity_and_shutdown`: byte-level compact newline responses,
+    stderr-only diagnostics/logging, clean EOF, and contained broken stdout.
 
 - [ ] **Step 2: Add failing tool parity tests**
 
-Expose:
+`tests/host/mcp_facade_parity_test.py` receives both explicit target paths and
+proves both directions across fresh processes:
 
-```text
-lmdj.project.create
-lmdj.project.inspect
-lmdj.asset.import
-lmdj.pad.assign
-lmdj.take.begin
-lmdj.take.append
-lmdj.take.commit
-lmdj.snapshot.cook
-lmdj.render.offline
-lmdj.provider.list
-lmdj.provider.select
-lmdj.provider.run
-lmdj.attempt.inspect
-```
+1. CLI authors Project revision 5 and exits. MCP inspects, cooks, and renders
+   it; result/revision match CLI and WAV bytes/SHA-256 equal committed Golden.
+2. MCP creates and authors a second Project through revision 5 and exits. A
+   fresh CLI process inspects, cooks, and renders it; result/revision match MCP
+   and WAV bytes/SHA-256 equal committed Golden.
 
-Each tool forwards one Facade request. A static tool table declares whether a tool maps to the Facade `command` or `query` surface, matching the Task 8 lists (`lmdj.project.inspect`, `lmdj.snapshot.cook`, `lmdj.provider.list`, and `lmdj.attempt.inspect` are Queries; the rest are Commands). A success returns both:
-
-```json
-{
-  "content": [
-    {
-      "type": "text",
-      "text": "{\"ok\":true,\"result\":{\"revision\":4},\"project_revision\":4}"
-    }
-  ],
-  "structuredContent": {
-    "ok": true,
-    "result": {"revision": 4},
-    "project_revision": 4
-  },
-  "isError": false
-}
-```
-
-A Facade error remains a successful JSON-RPC response but sets `isError: true` in the MCP tool result.
-
-The parity test creates one Project via CLI, queries it via MCP, and compares canonical `result` and `project_revision`.
+No public request contains `snapshot_id`. Both flows assert no Project mutation
+from inspect/cook/render and no active Take journal after commit.
 
 - [ ] **Step 3: Observe the expected module failure**
 
 Run:
 
 ```bash
-PYTHONPATH=apps/core-mcp python3 tests/host/mcp_stdio_test.py
+PYTHONPATH=apps/core-mcp python3 tests/host/mcp_stdio_test.py \
+  /absolute/path/to/current/liblmdj_core_c
 ```
 
 Expected: import or startup failure because the MCP Host does not exist.
@@ -2166,20 +2394,54 @@ Expected: import or startup failure because the MCP Host does not exist.
 
 Do not add a third-party MCP framework in this proof.
 
-- [ ] **Step 5: Run lifecycle, error, and parity tests**
+- [ ] **Step 5: Register the canonical CTest gate**
+
+Root CMake registers:
+
+```text
+host.mcp_stdio
+host.mcp_facade_parity
+```
+
+Pass `$<TARGET_FILE:lmdj_core_c>` and
+`$<TARGET_FILE:lmdj_core_cli>` directly. Set `PYTHONPATH` to
+`apps/core-mcp`, set a 60-second timeout for stdio and 120-second timeout for
+cross-host parity, and make both tests depend on the real CLI/library targets.
+Existing `scripts/core.sh test <preset>` needs no modification.
+
+For sanitizer presets, an unsanitized Python executable must load the current
+compiler's ASan runtime before `ctypes` opens the sanitized C ABI. CMake locates
+that runtime exactly once and passes its absolute path to the test harness in a
+stable environment variable. The harness adds `DYLD_INSERT_LIBRARIES` on
+macOS or `LD_PRELOAD` on Linux only when it spawns the MCP Python child. On
+Apple, use the verified embedding option `ASAN_OPTIONS=verify_interceptors=0`;
+the default interceptor verification rejects this otherwise valid embedded
+runtime even when dyld loads it before the Python framework.
+
+- [ ] **Step 6: Run lifecycle, error, parity, and full tests**
 
 Run:
 
 ```bash
 scripts/core.sh build dev
-core_library="$(find build/core/dev/lib -maxdepth 1 -type f \
-  \( -name 'liblmdj_core_c.so' -o -name 'liblmdj_core_c.dylib' -o -name 'lmdj_core_c.dll' \) \
-  -print -quit)"
-test -n "$core_library"
-PYTHONPATH=apps/core-mcp python3 tests/host/mcp_stdio_test.py
+core_library="$(python3 - <<'PY'
+from pathlib import Path
+candidates = [
+    *Path("build/core/dev/lib").glob("liblmdj_core_c.dylib"),
+    *Path("build/core/dev/lib").glob("liblmdj_core_c.so"),
+]
+if len(candidates) != 1:
+    raise SystemExit(f"expected exactly one Core C library, got {candidates}")
+print(candidates[0].resolve())
+PY
+)"
+PYTHONPATH=apps/core-mcp python3 tests/host/mcp_stdio_test.py \
+  "$core_library"
 PYTHONPATH=apps/core-mcp python3 tests/host/mcp_facade_parity_test.py \
   build/core/dev/bin/lmdj-core \
   "$core_library"
+ctest --test-dir build/core/dev \
+  -R '^host\.mcp_(stdio|facade_parity)$' --output-on-failure
 ```
 
 Expected:
@@ -2187,12 +2449,21 @@ Expected:
 ```text
 mcp stdio fixtures: 10 passed
 cli/mcp facade parity: passed
+100% tests passed, 0 tests failed out of 2
 ```
 
-- [ ] **Step 6: Commit the MCP Host**
+Then run the complete Dev, Release, and ASan/UBSan matrices. Both registered
+tests must run through all three canonical `scripts/core.sh test` invocations.
+
+- [ ] **Step 7: Commit the MCP Host**
 
 ```bash
-git add apps/core-mcp tests/host/mcp_stdio_test.py tests/host/mcp_facade_parity_test.py scripts/core.sh
+git add \
+  apps/core-mcp \
+  tests/host/mcp_stdio_test.py \
+  tests/host/mcp_facade_parity_test.py \
+  CMakeLists.txt \
+  docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md
 git commit -m "feat(mcp): expose core tools over stdio"
 ```
 

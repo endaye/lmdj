@@ -11,11 +11,23 @@ sys.path.insert(0, str(repo_root))
 from scripts.version import ProductVersion, load_version, verify
 
 
+core_cli_manifest_path = repo_root / "apps" / "core-cli" / "module.json"
+core_cli_manifest = json.loads(
+    core_cli_manifest_path.read_text(encoding="utf-8")
+)
+assert core_cli_manifest == {
+    "contract": "lmdj.module.v1",
+    "module": "core-cli",
+    "version": "0.1.0",
+    "api_version": 1,
+    "dependencies": {"application-facade": "0.1.0"},
+}
+
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 4, 0)
-assert str(version) == "1.0.4.0"
-assert version.product_tag() == "lmdj-v1.0.4.0"
-assert version.display("dev", "a" * 40) == "1.0.4.0 · dev · gaaaaaaaa"
+assert version == ProductVersion(1, 0, 5, 0)
+assert str(version) == "1.0.5.0"
+assert version.product_tag() == "lmdj-v1.0.5.0"
+assert version.display("dev", "a" * 40) == "1.0.5.0 · dev · gaaaaaaaa"
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
@@ -44,7 +56,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.4.0\n"
+assert tag_name.stdout == "lmdj-v1.0.5.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -64,7 +76,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.4.0 · dev · gaaaaaaaa\n"
+assert current.stdout == "1.0.5.0 · dev · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -80,7 +92,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.4.0)\n"
+assert verified.stdout == "version verification: PASS (1.0.5.0)\n"
 assert verified.stderr == ""
 
 
@@ -97,7 +109,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     lock_path = temp_root / "assembly.lock.json"
     assembly = {
         "contract": "lmdj.assembly.v1",
-        "product": {"id": "lmdj", "version": "1.0.4.0"},
+        "product": {"id": "lmdj", "version": "1.0.5.0"},
         "modules": [{"id": "foundation", "version": "0.1.0"}],
         "hosts": [{"id": "core-cli", "version": "0.1.0"}],
         "providers": [
@@ -125,7 +137,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
         }
 
     lock = {
-        "product": {"id": "lmdj", "version": "1.0.4.0"},
+        "product": {"id": "lmdj", "version": "1.0.5.0"},
         "assembly_sha256": assembly_sha256,
         "modules": [
             locked_component(component)
