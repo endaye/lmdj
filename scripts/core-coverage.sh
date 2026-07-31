@@ -52,13 +52,13 @@ case "$mode" in
     ;;
 esac
 
+mkdir -p -- "$coverage_root"
+rm -f -- "$merged_profile" "$summary_path" "$report_path"
+
 llvm_profdata="$(resolve_llvm_tool llvm-profdata)"
 llvm_cov="$(resolve_llvm_tool llvm-cov)"
 
 cd "$repo_root"
-cmake -E make_directory "$coverage_root"
-rm -f -- "$merged_profile" "$summary_path" "$report_path"
-
 cmake --preset coverage
 cmake --build --preset coverage
 

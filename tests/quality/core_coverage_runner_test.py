@@ -21,6 +21,52 @@ def write_executable(path: Path, content: str) -> None:
 
 
 class CoreCoverageRunnerTest(unittest.TestCase):
+    def test_missing_llvm_tools_cannot_leave_documented_stale_artifacts(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            scripts_root = temp_root / "scripts"
+            coverage_root = temp_root / "build" / "core" / "coverage" / "coverage"
+            fake_bin = temp_root / "fake-bin"
+            scripts_root.mkdir()
+            coverage_root.mkdir(parents=True)
+            fake_bin.mkdir()
+            shutil.copy2(runner_path, scripts_root / runner_path.name)
+
+            artifact_paths = [
+                coverage_root / "merged.profdata",
+                coverage_root / "summary.json",
+                coverage_root / "report.txt",
+            ]
+            for artifact_path in artifact_paths:
+                artifact_path.write_text("stale evidence", encoding="utf-8")
+
+            write_executable(
+                fake_bin / "uname",
+                "#!/bin/sh\nprintf 'Linux\\n'\n",
+            )
+            environment = os.environ.copy()
+            environment["PATH"] = (
+                f"{fake_bin}:/usr/bin:/bin:/usr/sbin:/sbin"
+            )
+            result = subprocess.run(
+                [str(scripts_root / runner_path.name), "report"],
+                cwd=temp_root,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("unable to locate llvm-profdata", result.stderr)
+            for artifact_path in artifact_paths:
+                self.assertFalse(
+                    artifact_path.exists(),
+                    f"stale artifact survived missing tool: {artifact_path.name}",
+                )
+
     def test_failed_run_cannot_leave_documented_stale_artifacts(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_root = Path(temp_dir)
