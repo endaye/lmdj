@@ -38,11 +38,11 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_audio_runtime_tests)
   lmdj_target_sanitizers(lmdj_audio_runtime_tests)
-  add_test(
+  lmdj_add_test(
     NAME audio.offline_renderer
+    TIER component
     COMMAND lmdj_audio_runtime_tests
-  )
-  set_tests_properties(audio.offline_renderer PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio
   )
 endif()

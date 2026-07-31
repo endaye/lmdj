@@ -36,11 +36,11 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_project_cooker_tests)
   lmdj_target_sanitizers(lmdj_project_cooker_tests)
-  add_test(
+  lmdj_add_test(
     NAME cooker.project
+    TIER component
     COMMAND lmdj_project_cooker_tests
-  )
-  set_tests_properties(cooker.project PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio
   )
 endif()

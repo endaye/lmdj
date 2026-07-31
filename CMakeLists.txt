@@ -11,6 +11,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 include(CTest)
 include(cmake/LmdjDependencies.cmake)
+include(cmake/LmdjTesting.cmake)
 include(cmake/LmdjWarnings.cmake)
 
 add_subdirectory(packages/foundation)
@@ -72,19 +73,22 @@ if(LMDJ_ENABLE_SANITIZERS)
   endif()
 endif()
 
-add_test(
+lmdj_add_test(
   NAME build.active_tree
+  TIER contract
   COMMAND "${BASH_EXECUTABLE}" tests/build/test_active_tree.sh
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
-add_test(
+lmdj_add_test(
   NAME host.mcp_stdio
+  TIER host
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/host/mcp_stdio_test.py
     "$<TARGET_FILE:lmdj_core_c>"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 60
 )
 set_tests_properties(
   host.mcp_stdio
@@ -93,14 +97,16 @@ set_tests_properties(
     TIMEOUT 60
 )
 
-add_test(
+lmdj_add_test(
   NAME host.mcp_facade_parity
+  TIER host
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/host/mcp_facade_parity_test.py
     "$<TARGET_FILE:lmdj_core_cli>"
     "$<TARGET_FILE:lmdj_core_c>"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 120
 )
 set_tests_properties(
   host.mcp_facade_parity
@@ -109,49 +115,58 @@ set_tests_properties(
     TIMEOUT 120
 )
 
-add_test(
+lmdj_add_test(
   NAME build.version
+  TIER contract
   COMMAND "${Python3_EXECUTABLE}" tests/build/version_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
-add_test(
+lmdj_add_test(
   NAME contract.schemas
+  TIER contract
   COMMAND
     "${Python3_EXECUTABLE}" tests/conformance/schema_contract_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
-add_test(
+lmdj_add_test(
   NAME conformance.module_graph
+  TIER contract
   COMMAND
     "${Python3_EXECUTABLE}" tests/conformance/module_graph_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
-add_test(
+lmdj_add_test(
   NAME conformance.version_lock
+  TIER contract
   COMMAND
     "${Python3_EXECUTABLE}" tests/conformance/version_lock_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
 
-add_test(
+lmdj_add_test(
   NAME build.proof_failure_artifacts
+  TIER contract
   COMMAND
     "${Python3_EXECUTABLE}" tests/build/proof_failure_artifacts_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS persistence
 )
 
-add_test(
+lmdj_add_test(
   NAME e2e.proof_path_safety
+  TIER contract
   COMMAND
     "${Python3_EXECUTABLE}" tests/e2e/proof_path_safety_test.py
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS persistence
 )
 
-add_test(
+lmdj_add_test(
   NAME e2e.headless_core_proof
+  TIER e2e
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/e2e/headless_core_proof.py
@@ -161,10 +176,22 @@ add_test(
     "${CMAKE_BINARY_DIR}/proof-ctest/run"
     "${CMAKE_BINARY_DIR}/proof-ctest/beat.wav"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS assembly
+  TIMEOUT 180
 )
 set_tests_properties(
   e2e.headless_core_proof
   PROPERTIES
     ENVIRONMENT "${lmdj_mcp_test_environment}"
     TIMEOUT 180
+)
+
+lmdj_add_test(
+  NAME build.test_taxonomy
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/test_test_taxonomy.py
+    "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )

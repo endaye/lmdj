@@ -39,5 +39,9 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_foundation_tests)
   lmdj_target_sanitizers(lmdj_foundation_tests)
-  add_test(NAME foundation.artifact COMMAND lmdj_foundation_tests)
+  lmdj_add_test(
+    NAME foundation.artifact
+    TIER unit
+    COMMAND lmdj_foundation_tests
+  )
 endif()

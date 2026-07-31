@@ -18,9 +18,12 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_provider_conformance_tests)
   lmdj_target_sanitizers(lmdj_provider_conformance_tests)
-  add_test(NAME provider.conformance COMMAND lmdj_provider_conformance_tests)
-  set_tests_properties(provider.conformance PROPERTIES
+  lmdj_add_test(
+    NAME provider.conformance
+    TIER component
+    COMMAND lmdj_provider_conformance_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS provider
   )
 
   add_executable(
@@ -39,12 +42,12 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_provider_attempt_isolation_tests)
   lmdj_target_sanitizers(lmdj_provider_attempt_isolation_tests)
-  add_test(
+  lmdj_add_test(
     NAME provider.attempt_isolation
+    TIER component
     COMMAND lmdj_provider_attempt_isolation_tests
-  )
-  set_tests_properties(provider.attempt_isolation PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS provider
   )
 
   add_executable(
@@ -71,11 +74,11 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_provider_spec_regression_tests)
   lmdj_target_sanitizers(lmdj_provider_spec_regression_tests)
-  add_test(
+  lmdj_add_test(
     NAME provider.spec_regression
+    TIER component
     COMMAND lmdj_provider_spec_regression_tests
-  )
-  set_tests_properties(provider.spec_regression PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS provider
   )
 endif()

@@ -94,10 +94,11 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_application_facade_tests)
   lmdj_target_sanitizers(lmdj_application_facade_tests)
-  add_test(NAME facade.application COMMAND lmdj_application_facade_tests)
-  set_tests_properties(
-    facade.application
-    PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  lmdj_add_test(
+    NAME facade.application
+    TIER component
+    COMMAND lmdj_application_facade_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
 
   add_executable(
@@ -116,10 +117,12 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_assembly_loader_tests)
   lmdj_target_sanitizers(lmdj_assembly_loader_tests)
-  add_test(NAME facade.assembly_loader COMMAND lmdj_assembly_loader_tests)
-  set_tests_properties(
-    facade.assembly_loader
-    PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  lmdj_add_test(
+    NAME facade.assembly_loader
+    TIER component
+    COMMAND lmdj_assembly_loader_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS assembly
   )
 
   add_executable(
@@ -140,10 +143,12 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_application_c_api_tests)
   lmdj_target_sanitizers(lmdj_application_c_api_tests)
-  add_test(NAME facade.c_api COMMAND lmdj_application_c_api_tests)
-  set_tests_properties(
-    facade.c_api
-    PROPERTIES WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  lmdj_add_test(
+    NAME facade.c_api
+    TIER component
+    COMMAND lmdj_application_c_api_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi
   )
 
   add_executable(
@@ -168,8 +173,10 @@ if(BUILD_TESTING)
   add_dependencies(lmdj_application_dynamic_load_tests lmdj_core_c)
   lmdj_target_warnings(lmdj_application_dynamic_load_tests)
   lmdj_target_sanitizers(lmdj_application_dynamic_load_tests)
-  add_test(
+  lmdj_add_test(
     NAME facade.dynamic_load
+    TIER contract
     COMMAND lmdj_application_dynamic_load_tests
+    LABELS abi
   )
 endif()

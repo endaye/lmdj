@@ -36,7 +36,11 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_domain_project_tests)
   lmdj_target_sanitizers(lmdj_domain_project_tests)
-  add_test(NAME domain.project COMMAND lmdj_domain_project_tests)
+  lmdj_add_test(
+    NAME domain.project
+    TIER unit
+    COMMAND lmdj_domain_project_tests
+  )
 
   add_executable(
     lmdj_domain_command_handler_tests
@@ -54,5 +58,9 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_domain_command_handler_tests)
   lmdj_target_sanitizers(lmdj_domain_command_handler_tests)
-  add_test(NAME domain.command_handler COMMAND lmdj_domain_command_handler_tests)
+  lmdj_add_test(
+    NAME domain.command_handler
+    TIER unit
+    COMMAND lmdj_domain_command_handler_tests
+  )
 endif()

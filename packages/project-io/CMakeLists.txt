@@ -68,7 +68,12 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_project_store_tests)
   lmdj_target_sanitizers(lmdj_project_store_tests)
-  add_test(NAME project_io.project_store COMMAND lmdj_project_store_tests)
+  lmdj_add_test(
+    NAME project_io.project_store
+    TIER component
+    COMMAND lmdj_project_store_tests
+    LABELS persistence
+  )
 
   add_executable(
     lmdj_take_journal_tests
@@ -87,5 +92,10 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_take_journal_tests)
   lmdj_target_sanitizers(lmdj_take_journal_tests)
-  add_test(NAME project_io.take_journal COMMAND lmdj_take_journal_tests)
+  lmdj_add_test(
+    NAME project_io.take_journal
+    TIER component
+    COMMAND lmdj_take_journal_tests
+    LABELS persistence
+  )
 endif()
