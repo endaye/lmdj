@@ -488,7 +488,8 @@ foundation::Result<JournalDocument> read_journal(
 
 foundation::Result<void> write_new_file(
     const std::filesystem::path& path,
-    std::string_view bytes
+    std::string_view bytes,
+    std::optional<Error> already_exists_error = std::nullopt
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
     ,
     std::optional<testing::FaultPoint> sync_fault = std::nullopt
@@ -500,8 +501,13 @@ foundation::Result<void> write_new_file(
           O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
           0644);
   if (descriptor < 0) {
+    const int open_error = errno;
+    if (open_error == EEXIST && already_exists_error.has_value()) {
+      return foundation::Result<void>::failure(
+          std::move(*already_exists_error));
+    }
     return foundation::Result<void>::failure(
-        io_error("journal file could not be created", path));
+        io_error("journal file could not be created", path, open_error));
   }
   const auto written = write_all(descriptor, bytes, path);
   auto synced = foundation::Result<void>::success();
@@ -516,15 +522,20 @@ foundation::Result<void> write_new_file(
     }
   }
   const int close_result = ::close(descriptor);
+  const int close_error = close_result == 0 ? 0 : errno;
+  if (!written.has_value() || !synced.has_value() || close_error != 0) {
+    std::error_code remove_error;
+    std::filesystem::remove(path, remove_error);
+  }
   if (!written.has_value()) {
     return written;
   }
   if (!synced.has_value()) {
     return synced;
   }
-  if (close_result != 0) {
+  if (close_error != 0) {
     return foundation::Result<void>::failure(
-        io_error("journal file could not be closed", path));
+        io_error("journal file could not be closed", path, close_error));
   }
   return foundation::Result<void>::success();
 }
@@ -589,21 +600,18 @@ foundation::Result<void> TakeJournal::begin(
   const auto created =
       write_new_file(
           path,
-          foundation::canonical_json(header) + "\n"
+          foundation::canonical_json(header) + "\n",
+          Error{
+              ErrorCode::duplicate_id,
+              "active take journal already exists",
+              {{"path", path.generic_string()}},
+          }
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
           ,
           testing::FaultPoint::active_journal_sync
 #endif
       );
   if (!created.has_value()) {
-    if (std::filesystem::exists(path)) {
-      return foundation::Result<void>::failure(
-          Error{
-              ErrorCode::duplicate_id,
-              "active take journal already exists",
-              {{"path", path.generic_string()}},
-          });
-    }
     return created;
   }
   return fsync_directory(directory);
@@ -737,7 +745,8 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
       {"take", take_json(journal.value().take)},
   };
   const auto written = write_new_file(
-      temp_path, foundation::canonical_json(candidate) + "\n");
+      temp_path,
+      foundation::canonical_json(candidate) + "\n");
   if (!written.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
         written.error());
@@ -767,14 +776,6 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
   }
 
   const auto active = active_path(bundle, take_id);
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto remove_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::active_journal_remove, active);
-  if (!remove_intercepted.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(
-        remove_intercepted.error());
-  }
-#endif
   std::error_code remove_error;
   const bool removed = std::filesystem::remove(active, remove_error);
   if (remove_error || !removed) {
@@ -784,14 +785,6 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
             active,
             remove_error ? remove_error.value() : ENOENT));
   }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto active_sync_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::active_directory_sync, active.parent_path());
-  if (!active_sync_intercepted.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(
-        active_sync_intercepted.error());
-  }
-#endif
   const auto active_sync = fsync_directory(active.parent_path());
   if (!active_sync.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(

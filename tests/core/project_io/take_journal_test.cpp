@@ -39,6 +39,23 @@ using lmdj::project_io::ProjectStore;
 using lmdj::project_io::TakeJournal;
 
 int active_directory_sync_calls = 0;
+int active_journal_sync_calls = 0;
+
+lmdj::foundation::Result<void> fail_active_journal_sync(
+    lmdj::project_io::testing::FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point !=
+      lmdj::project_io::testing::FaultPoint::active_journal_sync) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  ++active_journal_sync_calls;
+  return lmdj::foundation::Result<void>::failure(
+      lmdj::foundation::Error{
+          ErrorCode::io_error,
+          "injected active-journal sync failure",
+          {{"path", path.generic_string()}},
+      });
+}
 
 lmdj::foundation::Result<void> fail_active_directory_sync(
     lmdj::project_io::testing::FaultPoint point,
@@ -273,6 +290,45 @@ void test_take_journal_requires_uuid_and_48000_metadata() {
       journal.seal(bundle, take_id, "interrupted");
   LMDJ_CHECK(!unsealable.has_value());
   LMDJ_CHECK(unsealable.error().code == ErrorCode::invalid_project);
+}
+
+void test_begin_sync_failure_preserves_io_error_and_can_retry() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "begin-sync-failure.lmdj";
+  ProjectStore store;
+  TakeJournal journal;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto take = recorded_take("begin-sync-failure");
+  const auto active =
+      bundle / "recovery/active" / (take.id.value() + ".jsonl");
+  active_journal_sync_calls = 0;
+
+  lmdj::foundation::Result<void> failed =
+      lmdj::foundation::Result<void>::success();
+  {
+    FaultHookGuard hook(fail_active_journal_sync);
+    failed = journal.begin(bundle, take.id, 0, take.sample_rate);
+  }
+
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(active_journal_sync_calls == 1);
+  LMDJ_CHECK(!std::filesystem::exists(active));
+
+  const auto retried =
+      journal.begin(bundle, take.id, 0, take.sample_rate);
+  LMDJ_CHECK(retried.has_value());
+  const auto recovered = journal.read_active_journal(bundle, take.id);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().take.id == take.id);
+  LMDJ_CHECK(recovered.value().take.events.empty());
+  LMDJ_CHECK(recovered.value().expected_revision == 0);
+
+  const auto duplicate =
+      journal.begin(bundle, take.id, 0, take.sample_rate);
+  LMDJ_CHECK(!duplicate.has_value());
+  LMDJ_CHECK(duplicate.error().code == ErrorCode::duplicate_id);
+  LMDJ_CHECK(std::filesystem::is_regular_file(active));
 }
 
 void test_invalid_command_id_is_rejected_before_journal_matching() {
@@ -709,6 +765,7 @@ int main() {
   try {
     test_typed_active_journal_preserves_captured_revision();
     test_take_journal_requires_uuid_and_48000_metadata();
+    test_begin_sync_failure_preserves_io_error_and_can_retry();
     test_invalid_command_id_is_rejected_before_journal_matching();
     test_append_flushes_each_event_and_restart_reads_acknowledged_data();
     test_torn_final_record_is_ignored_and_repaired_before_append();
