@@ -9,7 +9,7 @@ usage() {
 usage:
   scripts/core.sh configure [dev|release|asan|tsan]
   scripts/core.sh build [dev|release|asan|tsan]
-  scripts/core.sh test [dev|release|asan|tsan]
+  scripts/core.sh test [dev|release|asan|tsan] [fast|full|stress]
   scripts/core.sh coverage [report|check]
   scripts/core.sh proof
   scripts/core.sh clean
@@ -56,12 +56,29 @@ case "$command_name" in
     cmake --build --preset "$1"
     ;;
   test)
-    [[ $# -eq 1 ]] || {
+    [[ $# -ge 1 && $# -le 2 ]] || {
       usage
       exit 64
     }
-    require_preset "$1"
-    ctest --preset "$1"
+    test_preset="$1"
+    test_mode="${2:-full}"
+    require_preset "$test_preset"
+    case "$test_mode" in
+      fast)
+        ctest --preset "$test_preset" -L '^(unit|component)$'
+        ;;
+      full)
+        ctest --preset "$test_preset" -LE '^stress$'
+        ;;
+      stress)
+        ctest --preset "$test_preset" -L '^stress$'
+        ;;
+      *)
+        echo "unsupported Core test mode: $test_mode" >&2
+        usage
+        exit 64
+        ;;
+    esac
     ;;
   coverage)
     [[ $# -eq 1 ]] || {

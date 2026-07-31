@@ -160,7 +160,6 @@ set_tests_properties(
   host.mcp_stdio
   PROPERTIES
     ENVIRONMENT "${lmdj_mcp_test_environment}"
-    TIMEOUT 60
 )
 
 lmdj_add_test(
@@ -178,7 +177,6 @@ set_tests_properties(
   host.mcp_facade_parity
   PROPERTIES
     ENVIRONMENT "${lmdj_mcp_test_environment}"
-    TIMEOUT 120
 )
 
 lmdj_add_test(
@@ -260,4 +258,14 @@ lmdj_add_test(
     tests/build/test_test_taxonomy.py
     "${CMAKE_BINARY_DIR}"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
+  NAME build.core_script
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/core_script_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
 )

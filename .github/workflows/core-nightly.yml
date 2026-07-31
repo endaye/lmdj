@@ -1,0 +1,52 @@
+name: Core Nightly
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-nightly-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  core-tsan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: scripts/core.sh configure tsan
+      - run: scripts/core.sh build tsan
+      - run: scripts/core.sh test tsan stress
+
+  core-stress:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: scripts/core.sh configure release
+      - run: scripts/core.sh build release
+      - run: >-
+          ctest --test-dir build/core/release
+          -L '^stress$'
+          --repeat until-fail:20
+          --output-on-failure

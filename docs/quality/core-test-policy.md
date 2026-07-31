@@ -34,6 +34,37 @@ assembly change needs its focused host or end-to-end proof in addition to the
 lower-tier coverage that owns its behavior. Coverage percentages are a review
 signal, not a substitute for these behavior thresholds.
 
+The long-term first-party C++ coverage targets are:
+
+| Scope | Lines | Branches |
+| --- | ---: | ---: |
+| Overall | 80% | 70% |
+| Authoring Domain and Application Facade/C ABI | 90% | 80% |
+| Project I/O | 85% | 75% |
+| Project Cooker and Audio Runtime | 90% | 80% |
+| Provider SDK | 85% | 75% |
+
+The enforced first ratchet is deliberately separate from those targets. It was
+measured on both the reference Mac and the pinned CI-equivalent Ubuntu 24.04,
+Clang 18, and LLVM 18 toolchain after the deterministic, persistence-fault, and
+C ABI concurrency suites landed:
+
+| Scope | Line floor | Branch floor |
+| --- | ---: | ---: |
+| Overall | 76% | 64% |
+| Foundation | 87% | 92% |
+| Authoring Domain | 88% | 85% |
+| Project I/O | 65% | 61% |
+| Project Cooker | 89% | 71% |
+| Audio Runtime | 80% | 67% |
+| Provider SDK | 77% | 61% |
+| Application Facade | 84% | 64% |
+
+These floors may rise after sustained behavioral coverage lands. They must not
+be lowered merely to make CI green. A toolchain or source-topology change that
+invalidates a floor requires a reviewed measurement and policy update, not an
+ad hoc threshold edit.
+
 ## Deterministic Seeds
 
 Tests that use randomness must take an explicit seed and print it on failure.
@@ -46,6 +77,10 @@ substitutes and must be controlled or injected.
 An automated test runs once per requested command. A failure is evidence to
 diagnose, not a reason to retry until it passes. A deliberate rerun after a
 code or environment correction must be recorded as a new result.
+
+The nightly Release stress lane is bounded stability sampling: it runs at most
+20 consecutive successful repetitions and stops on the first failure. It does
+not retry a failed execution.
 
 ## Proof-Scoped C ABI Concurrency Baseline
 
@@ -70,9 +105,15 @@ response strings may be transferred across threads. A future change to
 tombstone lifetime or stable external threading semantics requires its own
 approved design and C ABI version review.
 
-## Evidence Boundaries
+## Product Proof and Evidence Boundaries
 
-Automated tests provide reproducible evidence for the configured Core build.
-They do not establish physical-device behavior, store sandbox acceptance,
-release signing, deployment promotion, or production-service acceptance. Those
-gates require their own device, release, or deployment evidence.
+Coverage and sanitizer gates supplement but do not replace
+`scripts/core.sh proof`. Product Proof remains the acceptance evidence for the
+Product Assembly, CLI/MCP Product-provider wiring, Golden WAV, Provider
+isolation, and Take recovery.
+
+Automated Core gates do not establish browser realtime-audio behavior,
+physical MIDI or controller behavior, store sandbox acceptance, release
+signing, deployment promotion, or production-service acceptance. Those gates
+require their own browser, device, release, deployment, and production
+evidence.

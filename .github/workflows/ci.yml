@@ -31,3 +31,49 @@ jobs:
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
       - run: scripts/core.sh proof
+
+  core-asan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: scripts/core.sh configure asan
+      - run: scripts/core.sh build asan
+      - run: scripts/core.sh test asan full
+
+  core-coverage:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-18 llvm-18
+      - run: |
+          env \
+            PATH="/usr/lib/llvm-18/bin:$PATH" \
+            CC=clang-18 \
+            CXX=clang++-18 \
+            scripts/core-coverage.sh check
+      - name: Upload failed coverage evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-coverage-failure
+          path: |
+            build/core/coverage/coverage/report.txt
+            build/core/coverage/coverage/summary.json

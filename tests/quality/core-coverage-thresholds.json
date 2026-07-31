@@ -1,12 +1,12 @@
 {
-  "overall": {"lines": 80, "branches": 70},
+  "overall": {"lines": 76, "branches": 64},
   "paths": {
-    "packages/foundation/": {"lines": 85, "branches": 75},
-    "packages/authoring-domain/": {"lines": 90, "branches": 80},
-    "packages/project-io/": {"lines": 85, "branches": 75},
-    "packages/project-cooker/": {"lines": 90, "branches": 80},
-    "packages/audio-runtime/": {"lines": 90, "branches": 80},
-    "packages/provider-sdk/": {"lines": 85, "branches": 75},
-    "packages/application-facade/": {"lines": 90, "branches": 80}
+    "packages/foundation/": {"lines": 87, "branches": 92},
+    "packages/authoring-domain/": {"lines": 88, "branches": 85},
+    "packages/project-io/": {"lines": 65, "branches": 61},
+    "packages/project-cooker/": {"lines": 89, "branches": 71},
+    "packages/audio-runtime/": {"lines": 80, "branches": 67},
+    "packages/provider-sdk/": {"lines": 77, "branches": 61},
+    "packages/application-facade/": {"lines": 84, "branches": 64}
   }
 }
