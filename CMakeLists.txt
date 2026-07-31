@@ -11,9 +11,9 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
 include(CTest)
 include(cmake/LmdjDependencies.cmake)
+include(cmake/LmdjWarnings.cmake)
 include(cmake/LmdjCoverage.cmake)
 include(cmake/LmdjTesting.cmake)
-include(cmake/LmdjWarnings.cmake)
 
 add_subdirectory(packages/foundation)
 add_subdirectory(packages/authoring-domain)
@@ -74,6 +74,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_core_cli
     lmdj_core_c
     lmdj_project_io_fault_matrix_tests
+    lmdj_application_c_api_stress_tests
   )
   set(lmdj_coverage_objects)
   foreach(lmdj_coverage_target IN LISTS lmdj_coverage_targets)
@@ -100,7 +101,7 @@ set(
   lmdj_mcp_test_environment
   "PYTHONPATH=${CMAKE_SOURCE_DIR}/apps/core-mcp"
 )
-if(LMDJ_ENABLE_SANITIZERS)
+if(LMDJ_SANITIZER STREQUAL "address")
   if(APPLE)
     set(lmdj_asan_runtime_name libclang_rt.asan_osx_dynamic.dylib)
   elseif(UNIX)

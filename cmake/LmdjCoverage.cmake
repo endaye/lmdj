@@ -4,10 +4,10 @@ if(NOT LMDJ_ENABLE_COVERAGE)
   return()
 endif()
 
-if(LMDJ_ENABLE_SANITIZERS)
+if(NOT LMDJ_SANITIZER STREQUAL "none")
   message(
     FATAL_ERROR
-    "LMDJ_ENABLE_COVERAGE and LMDJ_ENABLE_SANITIZERS are mutually exclusive"
+    "LMDJ_ENABLE_COVERAGE and LMDJ_SANITIZER are mutually exclusive"
   )
 endif()
 

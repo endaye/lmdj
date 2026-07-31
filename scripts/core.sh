@@ -7,9 +7,9 @@ build_root="$repo_root/build/core"
 usage() {
   cat >&2 <<'EOF'
 usage:
-  scripts/core.sh configure [dev|release|asan]
-  scripts/core.sh build [dev|release|asan]
-  scripts/core.sh test [dev|release|asan]
+  scripts/core.sh configure [dev|release|asan|tsan]
+  scripts/core.sh build [dev|release|asan|tsan]
+  scripts/core.sh test [dev|release|asan|tsan]
   scripts/core.sh coverage [report|check]
   scripts/core.sh proof
   scripts/core.sh clean
@@ -18,7 +18,7 @@ EOF
 
 require_preset() {
   case "$1" in
-    dev|release|asan)
+    dev|release|asan|tsan)
       ;;
     *)
       echo "unsupported Core preset: $1" >&2

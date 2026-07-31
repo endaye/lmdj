@@ -152,6 +152,33 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_application_c_api_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/c_api_stress_test.cpp"
+  )
+  target_include_directories(
+    lmdj_application_c_api_stress_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_application_c_api_stress_tests
+    PRIVATE
+      lmdj_core_c
+      nlohmann_json::nlohmann_json
+      Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_application_c_api_stress_tests)
+  lmdj_target_sanitizers(lmdj_application_c_api_stress_tests)
+  lmdj_add_test(
+    NAME facade.c_api_stress
+    TIER stress
+    COMMAND lmdj_application_c_api_stress_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS abi concurrency
+    TIMEOUT 180
+  )
+
+  add_executable(
     lmdj_application_dynamic_load_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/dynamic_load_test.cpp"
   )

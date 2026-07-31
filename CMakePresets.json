@@ -38,7 +38,15 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "LMDJ_ENABLE_SANITIZERS": "ON"
+        "LMDJ_SANITIZER": "address"
+      }
+    },
+    {
+      "name": "tsan",
+      "inherits": "base",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LMDJ_SANITIZER": "thread"
       }
     },
     {
@@ -66,6 +74,10 @@
     {
       "name": "asan",
       "configurePreset": "asan"
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan"
     },
     {
       "name": "coverage",
@@ -97,6 +109,18 @@
     {
       "name": "asan",
       "configurePreset": "asan",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "tsan",
+      "configurePreset": "tsan",
+      "filter": {
+        "include": {
+          "name": "^facade\\.c_api_stress$"
+        }
+      },
       "output": {
         "outputOnFailure": true
       }
