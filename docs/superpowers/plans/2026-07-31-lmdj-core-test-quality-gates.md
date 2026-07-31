@@ -35,11 +35,11 @@ The verified `1.0.6.0` baseline on 2026-07-31 has:
 - no source coverage report or coverage threshold;
 - Product Assembly, Assembly lock, CLI/MCP parity, deterministic Golden WAV, Provider failure isolation, conflicted Take recovery, and the complete Headless Core Proof implemented and passing.
 
-The target is not “N tests per version.” The target is:
+The target is not “N tests per version.” The long-term target is:
 
 | Gate | Target |
 | --- | --- |
-| Pull-request functional gate | 100% registered tests pass on Ubuntu and macOS |
+| Pull-request functional gate | 100% non-stress registered tests pass on Ubuntu and macOS |
 | Fast local feedback | `unit` + `component` tiers finish within 30 seconds on the reference Mac |
 | Overall first-party C++ coverage | Lines >= 80%, branches >= 70% |
 | Domain, Facade/C ABI coverage | Lines >= 90%, branches >= 80% |
@@ -49,6 +49,29 @@ The target is not “N tests per version.” The target is:
 | Sanitizers | ASan/UBSan full suite passes; TSan C ABI concurrency suite passes |
 | Flake policy | 20 consecutive bounded stress repetitions pass with zero retry |
 | Determinism | Identical Project inputs yield identical canonical state, snapshot values, and golden WAV hash |
+
+The first CI coverage gate is a measured ratchet floor, not the long-term
+target. Task 2 established these warning-free physical-source values on the
+reference Mac; they are candidate floors until Task 6 reproduces the report on
+the pinned Ubuntu 24.04/Clang 18 CI toolchain:
+
+| Prefix | Candidate line floor | Candidate branch floor |
+| --- | ---: | ---: |
+| Overall | 76% | 64% |
+| Foundation | 87% | 92% |
+| Authoring Domain | 88% | 85% |
+| Project I/O | 65% | 61% |
+| Project Cooker | 89% | 71% |
+| Audio Runtime | 80% | 67% |
+| Provider SDK | 77% | 61% |
+| Application Facade | 84% | 64% |
+
+Task 6 may lock these candidate values only after every one passes unchanged on
+the CI-equivalent toolchain. If any candidate fails there, implementation stops
+for an explicit plan revision based on the Linux report; it must not silently
+lower a floor or add line-execution-only assertions. Once locked, floors may
+only rise after new behavioral coverage lands. The higher table above remains
+the direction for future focused coverage Tasks.
 
 The expected Proof-stage suite size is approximately 180–250 focused C++ scenarios, 15–25 Contract/Host integration scenarios, and 3–5 complete E2E journeys. These ranges are planning capacity, not acceptance gates. A change is accepted because its behavior and risk branches are covered, not because a counter increased.
 
@@ -63,7 +86,7 @@ Every CTest entry has exactly one tier label:
 | `contract` | Public schema, ABI symbols, module/version/build constraints | Schema conformance, dynamic load, active-tree guard | Yes |
 | `host` | CLI or MCP in a child process through Application Facade/C ABI | CLI behavior, MCP lifecycle, CLI/MCP parity | Yes |
 | `e2e` | Product Assembly through public Host surfaces | Headless Core Proof | Yes |
-| `stress` | Repeated or concurrent execution intended for sanitizer/nightly lanes | C ABI lifetime race, persistence interruption matrix | Sanitizer/nightly |
+| `stress` | Repeated or concurrent execution intended for sanitizer/nightly lanes | C ABI lifetime race | Sanitizer/nightly |
 
 Additional non-tier labels such as `audio`, `persistence`, `provider`, and `abi` may select a risk area. They never replace the required tier.
 
@@ -107,6 +130,12 @@ Pure refactors need no artificial scenario count, but all existing relevant test
 - Create `tests/core/cooker/determinism_matrix_test.cpp`: generated Project-to-Snapshot determinism.
 - Create `packages/project-io/src/testing_hooks.hpp`: test-build-only persistence fault points.
 - Create `tests/core/project_io/fault_matrix_test.cpp`: restart and no-mutation assertions for publish failures.
+- Modify `tests/core/project_io/take_journal_test.cpp`: migrate the existing
+  test-only directory-sync failure to the consolidated private fault hook.
+- Create `tests/build/project_io_test_hook_symbols_test.py`: permanently reject
+  test-hook symbols in the production Project I/O archive.
+- Create `tests/build/project_io_test_hook_symbols_unit_test.py`: fixture-test
+  the production-symbol validator.
 - Create `tests/core/facade/c_api_stress_test.cpp`: independent-engine, stale-handle, and lifetime races.
 
 ### CI
@@ -167,6 +196,12 @@ lmdj_add_test(
 
 - Every registered test exposes exactly one tier through CTest JSON.
 - Default timeouts are `unit=10`, `component=30`, `contract=30`, `host=120`, `e2e=180`, and `stress=300` seconds.
+- `lmdj_add_test` owns tier labels, timeout, command, and working directory.
+  Tests whose environment is computed after target/toolchain discovery may use
+  one immediately adjacent `set_tests_properties(... ENVIRONMENT ...)` call
+  after registration. This exception is required for MCP `PYTHONPATH`,
+  `LMDJ_ASAN_RUNTIME`, and `ASAN_OPTIONS`; it must not overwrite the helper's
+  labels or timeout.
 
 - [ ] **Step 1: Write the failing taxonomy validator**
 
@@ -245,7 +280,10 @@ facade.dynamic_load              contract + abi
 host.cli                         host
 ```
 
-Preserve current commands, environment properties, target dependencies, and working directories.
+Preserve current commands, environment properties, target dependencies, and
+working directories. Keep the two MCP environment lists in immediately
+adjacent post-registration `set_tests_properties(... ENVIRONMENT ...)` calls;
+all other properties remain owned by `lmdj_add_test`.
 
 - [ ] **Step 5: Register and pass the taxonomy test**
 
@@ -313,6 +351,9 @@ build/core/coverage/coverage/report.txt
 ```
 
 - `scripts/core-coverage.sh check` creates the same artifacts and applies `tests/quality/core-coverage-thresholds.json`.
+- The repeated `coverage/coverage` path is an already implemented artifact
+  contract from Task 2. This plan keeps it stable rather than combining a
+  cosmetic migration with quality-gate work.
 - Reports include first-party `.cpp` and public `.hpp` files under `packages/`, `providers/`, `products/lmdj/`, and `apps/core-cli/`; they exclude `tests/`, `build/`, `_deps/`, and frozen references.
 - Root CMake generates `build/core/coverage/coverage-objects.txt` with one absolute `$<TARGET_FILE:...>` path per coverage object:
 
@@ -374,7 +415,7 @@ Core coverage gate: PASS
 
 Exit `1` lists every failed prefix and its actual/required percentages.
 
-- [ ] **Step 3: Check in the final thresholds**
+- [ ] **Step 3: Check in the pre-measurement target thresholds**
 
 Create `tests/quality/core-coverage-thresholds.json`:
 
@@ -393,7 +434,10 @@ Create `tests/quality/core-coverage-thresholds.json`:
 }
 ```
 
-Providers and CLI contribute to `overall` until they grow enough to warrant independent thresholds.
+Providers and CLI contribute to `overall` until they grow enough to warrant
+independent thresholds. These values express the long-term target before the
+reference-Mac measurement; Task 6 replaces them with two-toolchain-validated
+non-regression floors before enabling the first CI gate.
 
 - [ ] **Step 4: Add coverage instrumentation**
 
@@ -425,15 +469,23 @@ Add a `coverage` configure/build/test preset with:
 
 `scripts/core-coverage.sh` must:
 
-1. resolve `llvm-profdata` and `llvm-cov` from `PATH`, falling back to `xcrun --find` on macOS;
-2. configure and build the coverage preset;
-3. remove only `build/core/coverage/profiles/*.profraw`;
-4. run CTest with `LLVM_PROFILE_FILE=.../%p-%m.profraw`;
-5. merge profiles with `llvm-profdata merge -sparse`;
-6. read each existing executable/shared-library path from `coverage-objects.txt` and fail on a missing entry;
-7. export JSON with `llvm-cov export`;
-8. write a readable `llvm-cov report`;
-9. invoke the gate only in `check` mode.
+1. remove stale final artifacts before tool discovery or bootstrap so a failed
+   run can never leave a previous `summary.json` or `report.txt` looking valid;
+2. resolve `llvm-profdata` and `llvm-cov` from `PATH`, falling back to
+   `xcrun --find` on macOS;
+3. configure and build the coverage preset;
+4. remove only `build/core/coverage/profiles/*.profraw`;
+5. run CTest with `LLVM_PROFILE_FILE=.../%p-%m.profraw`;
+6. read each existing executable/shared-library path from
+   `coverage-objects.txt` and fail on a missing or duplicate entry;
+7. associate raw profiles with their `%m` module-signature groups, merge and
+   export each coverage object only with its matching group, and treat any
+   `llvm-profdata` or `llvm-cov` stderr diagnostic as fatal;
+8. use an empty-profile export to enumerate the full first-party topology, then
+   form the exact union of physical source line and branch identities across
+   all object exports without double counting common headers;
+9. write bounded `summary.json` and `report.txt` artifacts and invoke the gate
+   only in `check` mode.
 
 The script fails if no raw profile, object, or first-party source is present.
 
@@ -446,7 +498,11 @@ python3 tests/quality/coverage_gate_test.py
 scripts/core-coverage.sh report
 ```
 
-Expected: gate unit tests pass and a real summary/report is generated. Record the actual module percentages in the Task commit message body; do not lower the checked-in final thresholds to match the baseline.
+Expected: gate unit tests pass and a warning-free real summary/report is
+generated. Record the actual module percentages in the Task commit message
+body. Leave the pre-measurement target file unchanged in this Task; Task 6
+converts this reference measurement into candidate floors, validates them on
+the pinned Linux toolchain, and only then enables the first CI ratchet.
 
 - [ ] **Step 7: Protect the active tree**
 
@@ -478,6 +534,7 @@ git commit -m "test(core): measure source coverage"
 - Create: `tests/core/support/deterministic_rng.hpp`
 - Create: `tests/core/domain/model_sequence_test.cpp`
 - Create: `tests/core/cooker/determinism_matrix_test.cpp`
+- Modify: `CMakeLists.txt`
 - Modify: `packages/authoring-domain/CMakeLists.txt`
 - Modify: `packages/project-cooker/CMakeLists.txt`
 
@@ -520,6 +577,12 @@ Expected: FAIL because the target has not been registered.
 
 Register `domain.model_sequence` as tier `unit`, labels `domain;generated`, timeout 10 seconds. Do not add parallel mutation semantics, command auto-rebase, or Quantize behavior.
 
+Measure the focused runtime before keeping that timeout. The reference Mac
+must complete the Domain matrix within 8 seconds, leaving at least 20% headroom
+under the 10-second CTest limit. Optimize duplicate serialization/state copies
+without reducing seeds or the required 64 total command attempts per seed; if
+that bound cannot be met, stop for an explicit timeout/tier plan amendment.
+
 - [ ] **Step 5: Add failing Cooker determinism scenarios**
 
 Add:
@@ -537,6 +600,11 @@ For each seed, cook the same immutable Project twice with fresh resolvers and co
 
 Register `cooker.determinism_matrix` as tier `unit`, labels `audio;generated`, timeout 10 seconds.
 
+Append `lmdj_domain_model_sequence_tests` and
+`lmdj_project_cooker_determinism_matrix_tests` to the root
+`lmdj_coverage_targets` list. Preserve every existing coverage object; the
+authoritative object count becomes 18.
+
 Run:
 
 ```bash
@@ -553,6 +621,7 @@ git add \
   tests/core/support/deterministic_rng.hpp \
   tests/core/domain/model_sequence_test.cpp \
   tests/core/cooker/determinism_matrix_test.cpp \
+  CMakeLists.txt \
   packages/authoring-domain/CMakeLists.txt \
   packages/project-cooker/CMakeLists.txt
 git diff --cached --check
@@ -567,9 +636,13 @@ git commit -m "test(core): exercise deterministic state invariants"
 
 - Create: `packages/project-io/src/testing_hooks.hpp`
 - Create: `tests/core/project_io/fault_matrix_test.cpp`
+- Create: `tests/build/project_io_test_hook_symbols_test.py`
+- Create: `tests/build/project_io_test_hook_symbols_unit_test.py`
 - Modify: `packages/project-io/src/project_store.cpp`
 - Modify: `packages/project-io/src/take_journal.cpp`
+- Modify: `CMakeLists.txt`
 - Modify: `packages/project-io/CMakeLists.txt`
+- Modify: `tests/core/project_io/take_journal_test.cpp`
 
 **Interfaces:**
 
@@ -603,17 +676,29 @@ void set_fault_hook(FaultHook hook);
 
 - [ ] **Step 1: Write the 12-point failing matrix**
 
-Create one table-driven test that injects each `FaultPoint` exactly once and asserts:
+Create one table-driven test that injects each `FaultPoint` exactly once. The
+matrix records the expected authoritative revision and recovery obligation at
+the actual persistence boundary; it must not apply one old-manifest assertion
+to both pre-commit and post-commit cleanup failures.
 
 ```text
 the operation reports failure
-the previous manifest remains loadable
-Project revision is unchanged unless the manifest commit completed
-restart either completes the committed transaction or removes its orphan
+before manifest publish completes: the previous revision remains authoritative
+after manifest publish completes: the new revision remains loadable
+post-commit cleanup failure: restart replays the remaining cleanup obligation
+Take active/sealed failure: the last durably completed state remains authoritative
+restart never rolls a committed revision backward
+restart removes only an uncommitted orphan
 no temporary file is interpreted as Project Truth
 no symlink outside the bundle is followed
 the hook invocation count is exactly one
 ```
+
+The case table must name which persistence boundary has completed before each
+fault. In particular, `active_journal_remove` and `active_directory_sync` are
+post-manifest cleanup points: their failure must preserve the newly committed
+Project Truth and leave a replayable cleanup obligation, not pretend the old
+revision is still authoritative.
 
 Split the public scenarios by invariant, not by fault point:
 
@@ -621,7 +706,7 @@ Split the public scenarios by invariant, not by fault point:
 test_publish_faults_preserve_previous_project_truth
 test_restart_classifies_committed_and_uncommitted_files
 test_take_cleanup_faults_leave_replayable_obligation
-test_fault_hooks_are_absent_from_release_library_symbols
+test_every_fault_point_is_observed_exactly_once
 ```
 
 - [ ] **Step 2: Prove the tests fail before hooks exist**
@@ -636,11 +721,19 @@ Expected: build fails because `testing_hooks.hpp` and the target do not exist.
 
 - [ ] **Step 3: Implement private fault interception**
 
-Route existing test-only active-directory synchronization through the new hook and add interception immediately before each named filesystem operation. The production code path remains the same statement sequence when `LMDJ_PROJECT_IO_TESTING` is undefined.
+Route existing test-only active-directory synchronization through the new hook
+and add interception immediately before each named filesystem operation.
+Migrate `tests/core/project_io/take_journal_test.cpp` from
+`set_active_directory_sync_hook` to `set_fault_hook`, preserving its existing
+cleanup-obligation assertions. The production code path remains the same
+statement sequence when `LMDJ_PROJECT_IO_TESTING` is undefined.
 
 - [ ] **Step 4: Register and pass the matrix**
 
-Register `project_io.fault_matrix` as tier `stress`, labels `persistence`, timeout 120 seconds. Link only `lmdj_project_io_testable`.
+Register `project_io.fault_matrix` as tier `component`, labels `persistence`,
+timeout 30 seconds. It is a deterministic Project Truth regression and must run
+in every full pull-request gate, not only nightly. Link only
+`lmdj_project_io_testable`.
 
 Run:
 
@@ -652,18 +745,43 @@ ctest --test-dir build/core/dev \
 
 Expected: all three persistence suites pass.
 
-- [ ] **Step 5: Verify release symbol isolation**
+- [ ] **Step 5: Add a permanent production-symbol isolation test**
 
-Build Release and confirm neither `FaultPoint` nor `set_fault_hook` is present:
+Create `tests/build/project_io_test_hook_symbols_test.py`. It accepts
+`<nm-executable> <production-library>`, runs the supplied CMake-discovered
+symbol tool, and fails if global symbols contain `FaultPoint`,
+`set_fault_hook`, or the old `set_active_directory_sync_hook`. Register
+`build.project_io_test_hook_symbols` as tier `contract`, label `persistence`,
+with:
+
+```cmake
+COMMAND
+  "${Python3_EXECUTABLE}"
+  "${CMAKE_SOURCE_DIR}/tests/build/project_io_test_hook_symbols_test.py"
+  "${CMAKE_NM}"
+  "$<TARGET_FILE:lmdj_project_io>"
+```
+
+This test runs against the production `lmdj_project_io` target in Dev, Release,
+ASan, and CI; it does not inspect the testable library. The CLI runs
+`<nm-executable> -g <production-library>` and delegates its output to a pure
+`validate_symbols(text: str) -> list[str]` function.
+`project_io_test_hook_symbols_unit_test.py` imports it and proves a clean
+listing passes while each forbidden symbol returns one finding. Register the
+unit fixture as `build.project_io_test_hook_symbols_unit`, tier `contract`,
+label `persistence`.
+
+Run:
 
 ```bash
 scripts/core.sh configure release
 scripts/core.sh build release
-nm -g build/core/release/lib/liblmdj_project_io.a \
-  | rg 'FaultPoint|set_fault_hook'
+ctest --test-dir build/core/release \
+  -R '^build\\.project_io_test_hook_symbols$' \
+  --output-on-failure
 ```
 
-Expected: `rg` exits `1` with no matches.
+Expected: PASS with no test-hook symbol in the production archive.
 
 - [ ] **Step 6: Commit**
 
@@ -672,8 +790,12 @@ git add \
   packages/project-io/src/testing_hooks.hpp \
   packages/project-io/src/project_store.cpp \
   packages/project-io/src/take_journal.cpp \
+  CMakeLists.txt \
   packages/project-io/CMakeLists.txt \
-  tests/core/project_io/fault_matrix_test.cpp
+  tests/core/project_io/fault_matrix_test.cpp \
+  tests/core/project_io/take_journal_test.cpp \
+  tests/build/project_io_test_hook_symbols_test.py \
+  tests/build/project_io_test_hook_symbols_unit_test.py
 git diff --cached --check
 git commit -m "test(project-io): inject persistence publish faults"
 ```
@@ -690,6 +812,7 @@ git commit -m "test(project-io): inject persistence publish faults"
 - Modify: `cmake/LmdjWarnings.cmake`
 - Modify: `CMakePresets.json`
 - Modify: `scripts/core.sh`
+- Modify: `docs/quality/core-test-policy.md`
 
 **Interfaces:**
 
@@ -699,7 +822,29 @@ git commit -m "test(project-io): inject persistence publish faults"
 - Coverage, AddressSanitizer, and ThreadSanitizer modes are mutually exclusive.
 - `facade.c_api_stress` is tier `stress`, labels `abi;concurrency`, timeout 180 seconds.
 
-- [ ] **Step 1: Write failing C ABI stress scenarios**
+- [ ] **Step 1: Document the existing Proof-scoped C ABI concurrency baseline**
+
+Before adding stress coverage, extend `docs/quality/core-test-policy.md` with
+the already approved Task 8 behavior from the Headless Core Proof plan:
+
+```text
+the live-engine registry is synchronized
+operations on one live engine are serialized
+different live engines may make progress independently
+free racing with an in-flight call is safe because the call retains shared state
+null, unknown, freed, double-freed, and ABA handles remain invalid and safe
+opaque handle shells are retained for process lifetime to prevent address reuse
+one shell per successful create is an intentional Proof-stage memory tradeoff
+```
+
+State explicitly that this Task tests the existing Proof implementation; it
+does not create a new cross-language product Contract, promise ordering between
+concurrent calls on one engine, or promise that caller-owned response strings
+may be transferred across threads. A future change to tombstone lifetime or
+stable external threading semantics requires its own approved design and C ABI
+version review.
+
+- [ ] **Step 2: Write failing C ABI stress scenarios**
 
 Add:
 
@@ -707,13 +852,12 @@ Add:
 test_32_independent_engines_make_progress_concurrently
 test_query_and_free_race_never_reuses_stale_handle
 test_10000_create_free_cycles_keep_all_stale_handles_invalid
-test_response_strings_can_be_freed_in_reverse_thread_order
 test_blocked_engine_does_not_block_unrelated_engine_lifetimes
 ```
 
 Use `std::barrier`, `std::jthread`, atomics, and fixed iteration counts. Every worker records its result into an indexed slot; only the parent thread performs `LMDJ_CHECK`, so exception transport cannot terminate a worker.
 
-- [ ] **Step 2: Prove current ThreadSanitizer mode is unsupported**
+- [ ] **Step 3: Prove current ThreadSanitizer mode is unsupported**
 
 Run:
 
@@ -723,7 +867,7 @@ cmake --preset tsan
 
 Expected: FAIL because the preset and sanitizer selection do not exist.
 
-- [ ] **Step 3: Split sanitizer selection**
+- [ ] **Step 4: Split sanitizer selection**
 
 Replace the boolean sanitizer branch with the exact modes above. Reject an unknown value and reject ThreadSanitizer on MSVC. Preserve `-fno-omit-frame-pointer` for both modes.
 
@@ -750,7 +894,7 @@ The new `tsan` preset sets:
 }
 ```
 
-- [ ] **Step 4: Register and run the stress target**
+- [ ] **Step 5: Register and run the stress target**
 
 Run without sanitizer first:
 
@@ -772,7 +916,7 @@ ctest --test-dir build/core/tsan \
 
 Expected: PASS with no ThreadSanitizer report.
 
-- [ ] **Step 5: Confirm ASan/UBSan remains green**
+- [ ] **Step 6: Confirm ASan/UBSan remains green**
 
 Run:
 
@@ -784,7 +928,7 @@ scripts/core.sh test asan
 
 Expected: all non-TSan tests pass with no AddressSanitizer or UndefinedBehaviorSanitizer report.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add \
@@ -793,7 +937,8 @@ git add \
   CMakeLists.txt \
   cmake/LmdjWarnings.cmake \
   CMakePresets.json \
-  scripts/core.sh
+  scripts/core.sh \
+  docs/quality/core-test-policy.md
 git diff --cached --check
 git commit -m "test(facade): stress C ABI concurrency"
 ```
@@ -810,10 +955,12 @@ git commit -m "test(facade): stress C ABI concurrency"
 - Modify: `CMakeLists.txt`
 - Modify: `scripts/core.sh`
 - Modify: `docs/quality/core-test-policy.md`
+- Modify: `tests/quality/core-coverage-thresholds.json`
 
 **Interfaces:**
 
-- `scripts/core.sh test <preset> fast` runs only tiers `unit|component`.
+- `scripts/core.sh test <preset> fast` runs only tiers whose complete label is
+  `unit` or `component`, using `-L '^(unit|component)$'`.
 - `scripts/core.sh test <preset> full` runs everything except `stress`.
 - `scripts/core.sh test <preset> stress` runs only tier `stress`.
 - Existing `scripts/core.sh test <preset>` remains an alias of `full`.
@@ -823,10 +970,10 @@ git commit -m "test(facade): stress C ABI concurrency"
 Create `tests/build/core_script_test.py`. It places a temporary executable named `ctest` first in `PATH`, invokes `scripts/core.sh`, and asserts the recorded arguments:
 
 ```text
-test dev fast -> ctest --preset dev -L unit|component
-test dev full -> ctest --preset dev -LE stress
-test dev stress -> ctest --preset dev -L stress
-test dev -> ctest --preset dev -LE stress
+test dev fast -> ctest --preset dev -L ^(unit|component)$
+test dev full -> ctest --preset dev -LE ^stress$
+test dev stress -> ctest --preset dev -L ^stress$
+test dev -> ctest --preset dev -LE ^stress$
 unknown mode -> exit 64
 ```
 
@@ -840,9 +987,17 @@ Expected: FAIL until `scripts/core.sh` supports the modes.
 
 - [ ] **Step 2: Implement the runner modes**
 
-Preserve all existing configure/build/test calls and usage errors. Pass the regular expression `unit|component` as one argument after `-L`. Do not make `full` include `stress`; the nightly and sanitizer lanes own repeated concurrency/fault tests.
+Preserve all existing configure/build/test calls and usage errors. Pass each
+anchored regular expression as one argument. Anchoring prevents risk labels
+such as `provider` or `persistence` from selecting the wrong execution tier.
+Do not make `full` include `stress`; the nightly and sanitizer lanes own
+repeated concurrency tests.
 
 Register `build.core_script` as tier `contract`, timeout 10 seconds.
+
+While modifying root registration, remove the duplicate `TIMEOUT` assignments
+from the two post-registration MCP property calls. Those calls retain only
+their computed `ENVIRONMENT`; `lmdj_add_test` remains the single timeout owner.
 
 - [ ] **Step 3: Add pull-request CI jobs**
 
@@ -855,11 +1010,36 @@ scripts/core.sh proof
 Add:
 
 ```text
-core-asan: Ubuntu, configure/build ASan, full suite
-core-coverage: Ubuntu with clang, scripts/core-coverage.sh check
+core-asan: Ubuntu 24.04, configure/build ASan, full suite
+core-coverage: Ubuntu 24.04 with Clang 18, scripts/core-coverage.sh check
 ```
 
-The existing Proof remains the functional and Product Assembly gate; the new jobs supplement it. Upload `build/core/coverage/coverage/report.txt` and `summary.json` only on coverage failure. Artifacts contain no Project bundles or user data.
+Each independent job uses `actions/checkout@v6` with `lfs: true`, sets up
+Python 3.11, and regenerates the same deterministic audio and Golden fixtures
+as the existing matrix before running CTest:
+
+```bash
+python3 tests/fixtures/audio/make_fixtures.py
+python3 tests/fixtures/golden/reference_render.py
+```
+
+The coverage job pins `ubuntu-24.04`, installs, and selects one explicit LLVM
+version so it does not depend on unversioned tool aliases:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y clang-18 llvm-18
+env \
+  PATH="/usr/lib/llvm-18/bin:$PATH" \
+  CC=clang-18 \
+  CXX=clang++-18 \
+  scripts/core-coverage.sh check
+```
+
+The existing Proof remains the functional and Product Assembly gate; the new
+jobs supplement it. Upload
+`build/core/coverage/coverage/report.txt` and `summary.json` only on coverage
+failure. Artifacts contain no Project bundles or user data.
 
 - [ ] **Step 4: Add bounded nightly jobs**
 
@@ -874,14 +1054,103 @@ Use:
 
 ```bash
 ctest --test-dir build/core/release \
-  -L stress \
+  -L '^stress$' \
   --repeat until-fail:20 \
   --output-on-failure
 ```
 
 A failure is reported directly; the workflow performs no automatic retry.
 
-- [ ] **Step 5: Enforce the final coverage thresholds**
+- [ ] **Step 5: Validate and lock the first CI ratchet**
+
+Temporarily replace the threshold file with the candidate values below, then
+run the exact Linux/amd64 preflight from the worktree. It mounts the repository
+at the same absolute path so the Git worktree metadata and active-tree test
+remain valid:
+
+```bash
+run_linux_coverage() {
+  worktree_root="$(git rev-parse --show-toplevel)"
+  repo_mount="$(dirname "$(git rev-parse --path-format=absolute --git-common-dir)")"
+  coverage_dir="$worktree_root/build/core/coverage"
+  evidence_dir="$worktree_root/build/core/coverage-linux-evidence"
+  test "$coverage_dir" = "$worktree_root/build/core/coverage" || return 64
+  test "$evidence_dir" = \
+    "$worktree_root/build/core/coverage-linux-evidence" || return 64
+  rm -rf "$coverage_dir" "$evidence_dir"
+
+  docker run --rm --platform linux/amd64 \
+    -e DEBIAN_FRONTEND=noninteractive \
+    -e HOST_UID="$(id -u)" \
+    -e HOST_GID="$(id -g)" \
+    -e LMDJ_WORKTREE="$worktree_root" \
+    -v "$repo_mount:$repo_mount" \
+    -w "$worktree_root" \
+    ubuntu:24.04 \
+    bash -lc '
+      set -euo pipefail
+      preserve_evidence() {
+        evidence="$LMDJ_WORKTREE/build/core/coverage-linux-evidence"
+        mkdir -p "$evidence"
+        for artifact in summary.json report.txt; do
+          source="$LMDJ_WORKTREE/build/core/coverage/coverage/$artifact"
+          test ! -f "$source" || cp "$source" "$evidence/$artifact"
+        done
+        chown -R "$HOST_UID:$HOST_GID" \
+          "$LMDJ_WORKTREE/build/core/coverage" \
+          "$evidence" 2>/dev/null || true
+      }
+      trap preserve_evidence EXIT
+      apt-get update
+      apt-get install -y \
+        build-essential ca-certificates clang-18 cmake git llvm-18 python3
+      git config --global --add safe.directory "$LMDJ_WORKTREE"
+      python3 tests/fixtures/audio/make_fixtures.py
+      python3 tests/fixtures/golden/reference_render.py
+      env PATH="/usr/lib/llvm-18/bin:$PATH" CC=clang-18 CXX=clang++-18 \
+        scripts/core-coverage.sh check
+    '
+  coverage_status=$?
+  rm -rf "$coverage_dir"
+  test ! -e "$coverage_dir" || return 65
+  return "$coverage_status"
+}
+run_linux_coverage
+```
+
+Docker Desktop must be running; this preflight does not require a push or
+remote Actions authorization. It removes the macOS coverage cache before the
+container run, preserves Linux `summary.json` and `report.txt` under
+`build/core/coverage-linux-evidence/` even on a gate failure, restores host
+ownership, and removes the Linux CMake cache before returning. If Docker is
+unavailable, or any candidate is below its proposed integer floor, stop Task 6
+before commit and report the preserved Linux evidence. Do not lower a floor
+during implementation. After a later authorized push, the first
+`core-coverage` Actions run remains the external acceptance gate and must pass
+before merge.
+
+Only after all candidates pass unchanged, retain the tentative threshold edit
+as the locked gate:
+
+```json
+{
+  "overall": {"lines": 76, "branches": 64},
+  "paths": {
+    "packages/foundation/": {"lines": 87, "branches": 92},
+    "packages/authoring-domain/": {"lines": 88, "branches": 85},
+    "packages/project-io/": {"lines": 65, "branches": 61},
+    "packages/project-cooker/": {"lines": 89, "branches": 71},
+    "packages/audio-runtime/": {"lines": 80, "branches": 67},
+    "packages/provider-sdk/": {"lines": 77, "branches": 61},
+    "packages/application-facade/": {"lines": 84, "branches": 64}
+  }
+}
+```
+
+This is the first enforcement after two-toolchain measurement, not a decrease
+of an existing CI gate. Document the separate long-term targets and the pinned
+ratchet measurement toolchain in the policy. Future changes may raise these
+floors but may not lower them merely to make CI green.
 
 Run:
 
@@ -889,7 +1158,8 @@ Run:
 scripts/core-coverage.sh check
 ```
 
-Expected: PASS after the deterministic, persistence-fault, and C ABI Tasks. If a threshold still fails, stop without lowering it or adding line-execution-only assertions. Return the exact failing path and uncovered branch report so the plan can be amended with named behavior scenarios before implementation continues.
+Expected: PASS after the deterministic, persistence-fault, and C ABI Tasks
+without line-execution-only assertions.
 
 - [ ] **Step 6: Run the final local acceptance matrix**
 
@@ -898,6 +1168,7 @@ Run:
 ```bash
 scripts/core.sh configure dev
 scripts/core.sh build dev
+/usr/bin/time -p scripts/core.sh test dev fast
 scripts/core.sh test dev full
 scripts/core.sh test dev stress
 scripts/core.sh configure release
@@ -918,7 +1189,9 @@ scripts/core.sh build tsan
 scripts/core.sh test tsan stress
 ```
 
-Expected: every functional suite and threshold passes with zero sanitizer report.
+Expected: the reference Mac reports `real` no greater than 30 seconds for the
+fast lane; every functional suite and threshold passes with zero sanitizer
+report.
 
 - [ ] **Step 7: Keep Product Proof acceptance separate**
 
@@ -933,13 +1206,16 @@ git add \
   tests/build/core_script_test.py \
   CMakeLists.txt \
   scripts/core.sh \
-  docs/quality/core-test-policy.md
+  docs/quality/core-test-policy.md \
+  tests/quality/core-coverage-thresholds.json
 git diff --cached --name-only
 git diff --cached --check
 git commit -m "ci(core): enforce test quality gates"
 ```
 
-Before committing, verify the staged list contains exactly the six declared CI, runner, registration, shell, and policy files. Do not stage build output, version files, unrelated product code, or pre-existing changes.
+Before committing, verify the staged list contains exactly the seven declared
+CI, runner, registration, shell, policy, and threshold files. Do not stage
+build output, version files, unrelated product code, or pre-existing changes.
 
 ---
 
@@ -953,7 +1229,7 @@ Dev and Release full suites pass
 stress tier passes without retry
 ASan/UBSan full suite passes
 TSan C ABI stress passes on Linux
-overall and per-module coverage thresholds pass
+overall and per-module coverage ratchet floors pass
 coverage artifacts remain under build/core
 the existing Headless Core Product Proof still passes and is reported separately
 tracked worktree contains only intentional commits
