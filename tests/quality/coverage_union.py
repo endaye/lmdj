@@ -123,14 +123,7 @@ def validate_and_union(
     if not fragments:
         raise CoverageError("coverage union requires at least one fragment")
 
-    measured: dict[str, FileCoverage] = {}
-    for fragment in fragments:
-        for path, coverage in fragment.items():
-            destination = measured.setdefault(path, FileCoverage())
-            for line, count in coverage.lines.items():
-                destination.add_line(line, count)
-            for branch, count in coverage.branches.items():
-                destination.add_branch(branch, count)
+    measured = union_coverage(fragments)
 
     missing: list[str] = []
     extra: list[str] = []
@@ -164,6 +157,20 @@ def validate_and_union(
         )
 
     return measured
+
+
+def union_coverage(
+    inputs: list[dict[str, FileCoverage]],
+) -> dict[str, FileCoverage]:
+    combined: dict[str, FileCoverage] = {}
+    for input_coverage in inputs:
+        for path, coverage in input_coverage.items():
+            destination = combined.setdefault(path, FileCoverage())
+            for line, count in coverage.lines.items():
+                destination.add_line(line, count)
+            for branch, count in coverage.branches.items():
+                destination.add_branch(branch, count)
+    return combined
 
 
 def build_summary(
@@ -286,7 +293,12 @@ def atomic_write(path: Path, content: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--repo-root", type=Path, required=True)
-    parser.add_argument("--topology", type=Path, required=True)
+    parser.add_argument(
+        "--topology",
+        type=Path,
+        action="append",
+        required=True,
+    )
     parser.add_argument("--fragment", type=Path, action="append", default=[])
     parser.add_argument("--summary", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)
@@ -296,7 +308,12 @@ def main() -> int:
     args.report.unlink(missing_ok=True)
     try:
         repo_root = args.repo_root.resolve()
-        topology = parse_lcov(args.topology, repo_root)
+        topology = union_coverage(
+            [
+                parse_lcov(topology_variant, repo_root)
+                for topology_variant in args.topology
+            ]
+        )
         fragments = [
             parse_lcov(fragment, repo_root) for fragment in args.fragment
         ]

@@ -317,24 +317,24 @@ for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
     "$object_path"
 done
 
-coverage_objects=("${objects[0]}")
-for ((object_index = 1; object_index < ${#objects[@]}; object_index++)); do
-  coverage_objects+=(--object "${objects[$object_index]}")
-done
-
-topology_path="$run_root/topology.lcov"
-run_cov_export \
-  "$topology_path" \
-  -format=lcov \
-  --empty-profile \
-  "${coverage_objects[@]}"
-
 summary_candidate="$run_root/summary.json"
 report_candidate="$run_root/report.txt"
 union_args=(
   --repo-root "$repo_root"
-  --topology "$topology_path"
 )
+topologies_root="$run_root/topologies"
+cmake -E make_directory "$topologies_root"
+for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
+  object_path="${objects[$object_index]}"
+  object_number=$((object_index + 1))
+  topology_path="$topologies_root/$object_number.lcov"
+  run_cov_export \
+    "$topology_path" \
+    -format=lcov \
+    --empty-profile \
+    "$object_path"
+  union_args+=(--topology "$topology_path")
+done
 for fragment_path in "$fragments_root"/*.lcov; do
   union_args+=(--fragment "$fragment_path")
 done
