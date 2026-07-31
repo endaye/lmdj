@@ -15,8 +15,8 @@ The tier determines the maximum timeout and the kind of behavior it proves:
 | `stress` | A bounded reliability or load scenario. | 300 seconds |
 
 Risk labels describe a cross-cutting concern without creating another tier. The
-current labels are `persistence`, `audio`, `provider`, `assembly`, `abi`, and
-`concurrency`.
+current labels are `persistence`, `audio`, `provider`, `assembly`, `abi`,
+`concurrency`, `domain`, and `generated`.
 
 ## Test Selection Rule
 
@@ -24,6 +24,17 @@ Select the lowest tier that can exercise the changed behavior through its
 public boundary. Promote a test only when the behavior depends on a real
 cross-module, host, or assembled-product collaboration. Do not use an `e2e`
 test to replace missing unit, component, or contract coverage.
+
+The required Test Selection Rules are:
+
+1. valid result;
+2. stable public errors;
+3. failed mutation leaves state unchanged;
+4. replay/idempotency;
+5. persisted restart/recovery;
+6. audio/frame boundaries including overflow/underflow;
+7. C ABI ownership/stale handle/concurrent lifetime;
+8. cross-module behavior belongs in host/e2e.
 
 ## Coverage Thresholds
 

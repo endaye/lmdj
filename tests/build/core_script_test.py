@@ -87,6 +87,20 @@ class CoreScriptTest(unittest.TestCase):
             ["--preset", "dev", "-LE", "^stress$"],
         )
 
+    def test_proof_release_ctest_excludes_stress_label(self) -> None:
+        script_source = CORE_SCRIPT.read_text(encoding="utf-8")
+        proof_source = script_source.split("  proof)\n", maxsplit=1)[1].split(
+            "  clean)\n", maxsplit=1
+        )[0]
+        self.assertIn(
+            """ctest \\
+      --test-dir "$release_root" \\
+      --output-on-failure \\
+      -E '^(build\\.active_tree|build\\.version|contract\\.schemas|conformance\\.|host\\.|e2e\\.)' \\
+      -LE '^stress$'""",
+            proof_source,
+        )
+
     def test_unknown_test_mode_is_a_usage_error(self) -> None:
         completed = self.run_core("test", "dev", "unknown")
         self.assertEqual(completed.returncode, 64)

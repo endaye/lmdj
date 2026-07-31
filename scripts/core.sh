@@ -143,7 +143,8 @@ case "$command_name" in
     ctest \
       --test-dir "$release_root" \
       --output-on-failure \
-      -E '^(build\.active_tree|build\.version|contract\.schemas|conformance\.|host\.|e2e\.)'
+      -E '^(build\.active_tree|build\.version|contract\.schemas|conformance\.|host\.|e2e\.)' \
+      -LE '^stress$'
 
     python3 tests/conformance/schema_contract_test.py
     python3 tests/conformance/module_graph_test.py

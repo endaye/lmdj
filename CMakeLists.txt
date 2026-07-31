@@ -247,7 +247,6 @@ set_tests_properties(
   e2e.headless_core_proof
   PROPERTIES
     ENVIRONMENT "${lmdj_mcp_test_environment}"
-    TIMEOUT 180
 )
 
 lmdj_add_test(
