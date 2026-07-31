@@ -419,40 +419,46 @@ MatrixEvidence run_generated_matrix() {
     };
     auto selected_asset = assets.at(0);
     std::optional<Command> last_successful_command;
+    std::optional<std::string> failure_baseline;
     std::uint64_t successful_count = 0;
 
     for (std::size_t index = 0; index < kCommandCount; ++index) {
-      Command command = generated_valid_command(
-          state, rng, seed, index, std::nullopt, 0);
-      if (index < 2U) {
-        command = generated_valid_command(
-            state, rng, seed, index, std::nullopt, 0);
-      } else if (index == 2U) {
-        command = Command{AssignPad{
-            CommandMeta{
-                CommandId{generated_uuid('1', seed, index + 1U)},
-                state.revision,
-            },
-            observed_slot,
-            assets.at(0),
-        }};
-      } else if (index == 3U) {
-        command = Command{CreatePattern{
-            CommandMeta{
-                CommandId{generated_uuid('1', seed, index + 1U)},
-                state.revision,
-            },
-            Pattern{
-                observed_pattern,
-                1,
-                {PatternEvent{observed_slot, 0, 127}},
-            },
-        }};
-      } else if (index == 4U) {
-        command = generated_valid_command(
-            state, rng, seed, index, std::nullopt, 3);
-      } else {
-        command = Command{AssignPad{
+      // Preserve the established generated sequence without constructing the
+      // forced ImportAsset that every branch immediately replaced.
+      static_cast<void>(rng.bounded(4096));
+      Command command = [&]() -> Command {
+        if (index < 2U) {
+          return generated_valid_command(
+              state, rng, seed, index, std::nullopt, 0);
+        }
+        if (index == 2U) {
+          return Command{AssignPad{
+              CommandMeta{
+                  CommandId{generated_uuid('1', seed, index + 1U)},
+                  state.revision,
+              },
+              observed_slot,
+              assets.at(0),
+          }};
+        }
+        if (index == 3U) {
+          return Command{CreatePattern{
+              CommandMeta{
+                  CommandId{generated_uuid('1', seed, index + 1U)},
+                  state.revision,
+              },
+              Pattern{
+                  observed_pattern,
+                  1,
+                  {PatternEvent{observed_slot, 0, 127}},
+              },
+          }};
+        }
+        if (index == 4U) {
+          return generated_valid_command(
+              state, rng, seed, index, std::nullopt, 3);
+        }
+        return Command{AssignPad{
             CommandMeta{
                 CommandId{generated_uuid('1', seed, index + 1U)},
                 state.revision,
@@ -460,7 +466,7 @@ MatrixEvidence run_generated_matrix() {
             observed_slot,
             selected_asset,
         }};
-      }
+      }();
 
       const auto scenario =
           index < 5U ? 0U : static_cast<unsigned>((index - 5U) % 5U);
@@ -481,16 +487,19 @@ MatrixEvidence run_generated_matrix() {
         LMDJ_CHECK(state.revision == successful_count);
         LMDJ_CHECK(receipts.size() == successful_count);
         last_successful_command = command;
+        failure_baseline.reset();
         ++evidence.valid_commands;
       } else if (scenario == 1U) {
-        const auto expected_canonical = canonical_state(state);
+        if (!failure_baseline.has_value()) {
+          failure_baseline = canonical_state(state);
+        }
         set_expected_revision(command, state.revision + 1U);
         check_failed_without_state_change(
             state,
             command,
             receipts,
             ErrorCode::revision_conflict,
-            expected_canonical);
+            *failure_baseline);
         ++evidence.stale_failures;
       } else if (scenario == 2U) {
         LMDJ_CHECK(last_successful_command.has_value());
@@ -507,7 +516,9 @@ MatrixEvidence run_generated_matrix() {
         check_pattern_slots(replay.value().state);
         ++evidence.duplicate_replays;
       } else {
-        const auto expected_canonical = canonical_state(state);
+        if (!failure_baseline.has_value()) {
+          failure_baseline = canonical_state(state);
+        }
         auto invalid_id = command_meta(command).command_id.value();
         invalid_id.back() = 'A';
         set_command_id(command, CommandId{invalid_id});
@@ -529,7 +540,7 @@ MatrixEvidence run_generated_matrix() {
             command,
             invalid_receipt,
             ErrorCode::invalid_argument,
-            expected_canonical);
+            *failure_baseline);
         ++evidence.invalid_id_failures;
       }
 
