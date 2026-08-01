@@ -179,6 +179,7 @@ bool valid_capability(const CapabilityDescriptor& capability) {
   return valid_contract_id(capability.id) &&
          valid_semver(capability.contract_version) &&
          valid_ports(capability.input_artifacts) &&
+         !capability.output_artifacts.empty() &&
          valid_ports(capability.output_artifacts) &&
          unique_nonempty(capability.progress_events) &&
          unique_nonempty(capability.error_codes) &&

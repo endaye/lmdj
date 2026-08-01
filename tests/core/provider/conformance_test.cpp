@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <concepts>
 #include <cstddef>
@@ -32,6 +33,7 @@ namespace {
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::AttemptId;
 using lmdj::foundation::ErrorCode;
+using lmdj::provider::ArtifactBinding;
 using lmdj::provider::AttemptResult;
 using lmdj::provider::AttemptStore;
 using lmdj::provider::CapabilityRequest;
@@ -41,9 +43,10 @@ using lmdj::provider::ProviderPolicy;
 using lmdj::provider::ProviderRegistration;
 using lmdj::provider::Registry;
 
-constexpr std::string_view kCapability = "proof.candidate.v1";
-constexpr std::string_view kContract = "lmdj.capability.v1";
-constexpr std::string_view kSchemaVersion = "1.0.0";
+constexpr std::string_view kCapability = "proof.candidate.v2";
+constexpr std::string_view kContract = "lmdj.capability.v2";
+constexpr std::string_view kSchemaVersion = "2.0.0";
+constexpr std::string_view kMultiPortCapability = "proof.multi-port.v2";
 constexpr std::string_view kEmptySha256 =
     "e3b0c44298fc1c149afbf4c8996fb924"
     "27ae41e4649b934ca495991b7852b855";
@@ -94,7 +97,7 @@ ProviderRegistration proof_registration(
     std::string artifact_sha256) {
   return ProviderRegistration{
       std::move(implementation),
-      "0.1.0",
+      "1.0.0",
       std::move(artifact_sha256),
       std::nullopt,
       {
@@ -162,11 +165,14 @@ CapabilityRequest valid_request() {
   return CapabilityRequest{
       std::string(kCapability),
       {
-          ArtifactRef{
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-              "audio/wav",
-              12,
+          ArtifactBinding{
+              "inputs",
+              ArtifactRef{
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                  "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                  "audio/wav",
+                  12,
+              },
           },
       },
       {
@@ -197,6 +203,16 @@ void select(
   LMDJ_CHECK(selected.has_value());
 }
 
+void select_capability(
+    AttemptStore& store,
+    const Registry& registry,
+    std::string capability,
+    std::string provider_id) {
+  const auto selected = store.set_provider_selection(
+      std::move(capability), std::move(provider_id), registry);
+  LMDJ_CHECK(selected.has_value());
+}
+
 void check_canonical_file(const std::filesystem::path& path) {
   const auto bytes = read_bytes(path);
   const auto decoded = nlohmann::json::parse(bytes);
@@ -210,20 +226,20 @@ void test_module_manifests_are_exact() {
   LMDJ_CHECK(
       (sdk ==
        nlohmann::json{
-           {"api_version", 1},
+           {"api_version", 2},
            {"contract", "lmdj.module.v1"},
            {"dependencies", {{"foundation", "0.1.0"}}},
            {"module", "provider-sdk"},
-           {"version", "0.1.0"},
+           {"version", "1.0.0"},
        }));
   for (const auto& manifest : {success, failure}) {
     LMDJ_CHECK(manifest.size() == 5);
-    LMDJ_CHECK(manifest.at("api_version") == 1);
+    LMDJ_CHECK(manifest.at("api_version") == 2);
     LMDJ_CHECK(manifest.at("contract") == "lmdj.module.v1");
     LMDJ_CHECK(
         (manifest.at("dependencies") ==
-         nlohmann::json{{"provider-sdk", "0.1.0"}}));
-    LMDJ_CHECK(manifest.at("version") == "0.1.0");
+         nlohmann::json{{"provider-sdk", "1.0.0"}}));
+    LMDJ_CHECK(manifest.at("version") == "1.0.0");
   }
   LMDJ_CHECK(success.at("module") == "local.proof.success");
   LMDJ_CHECK(failure.at("module") == "local.proof.failure");
@@ -245,7 +261,7 @@ void test_registry_lists_capabilities_and_rejects_unknown_provider() {
   LMDJ_CHECK(success != providers.end());
   LMDJ_CHECK(failure != providers.end());
   for (const auto* descriptor : {&*success, &*failure}) {
-    LMDJ_CHECK(descriptor->version == "0.1.0");
+    LMDJ_CHECK(descriptor->version == "1.0.0");
     LMDJ_CHECK(descriptor->model_identity == std::nullopt);
     LMDJ_CHECK(descriptor->capabilities.size() == 1);
     LMDJ_CHECK(descriptor->capabilities.front().id == kCapability);
@@ -314,9 +330,12 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
       selected.value().descriptor.artifact_sha256;
   LMDJ_CHECK(candidate.id.value() == "attempt-success");
   LMDJ_CHECK(candidate.outputs.size() == 1);
-  LMDJ_CHECK(candidate.outputs.front().sha256 == kEmptySha256);
-  LMDJ_CHECK(candidate.outputs.front().media_type == "application/x-lmdj-proof");
-  LMDJ_CHECK(candidate.outputs.front().byte_length == 0);
+  LMDJ_CHECK(candidate.outputs.front().port == "candidate");
+  LMDJ_CHECK(candidate.outputs.front().artifact.sha256 == kEmptySha256);
+  LMDJ_CHECK(
+      candidate.outputs.front().artifact.media_type ==
+      "application/x-lmdj-proof");
+  LMDJ_CHECK(candidate.outputs.front().artifact.byte_length == 0);
   const auto expected_provenance = nlohmann::json{
       {"capability", kCapability},
       {"contract", kContract},
@@ -325,7 +344,7 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
        {
            {"artifact_sha256", provider_sha256},
            {"id", "local.proof.success"},
-           {"version", "0.1.0"},
+           {"version", "1.0.0"},
        }},
       {"contract_version", kSchemaVersion},
   };
@@ -342,14 +361,14 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
   check_canonical_file(attempt_path);
 
   const auto attempt = read_json(attempt_path);
-  LMDJ_CHECK(attempt.at("format") == "terminal-attempt");
+  LMDJ_CHECK(attempt.at("format") == "terminal-attempt-v2");
   LMDJ_CHECK(!attempt.contains("contract"));
   LMDJ_CHECK(attempt.at("status") == "succeeded");
   LMDJ_CHECK(attempt.at("candidate_ids") ==
              nlohmann::json::array({"attempt-success"}));
   LMDJ_CHECK(attempt.at("artifacts").size() == 2);
   LMDJ_CHECK(attempt.at("provider").at("id") == "local.proof.success");
-  LMDJ_CHECK(attempt.at("provider").at("version") == "0.1.0");
+  LMDJ_CHECK(attempt.at("provider").at("version") == "1.0.0");
   LMDJ_CHECK(
       attempt.at("provider").at("artifact_sha256") ==
       provider_sha256);
@@ -508,10 +527,13 @@ class InvalidOutcomeProvider final : public Provider {
         lmdj::foundation::CandidateId{
             "candidate-" + attempt_id.value()},
         {
-            ArtifactRef{
-                std::string(kEmptySha256),
-                "application/x-lmdj-proof",
-                0,
+            ArtifactBinding{
+                "candidate",
+                ArtifactRef{
+                    std::string(kEmptySha256),
+                    "application/x-lmdj-proof",
+                    0,
+                },
             },
         },
         nlohmann::json::object(),
@@ -545,10 +567,10 @@ class InvalidOutcomeProvider final : public Provider {
             std::nullopt,
         };
       case Mode::sink_failure: {
-        const auto sink_result = output({}, "");
+        const auto sink_result = output("candidate", {}, "");
         if (sink_result.has_value()) {
           auto minted = candidate;
-          minted.outputs = {sink_result.value()};
+          minted.outputs = {{"candidate", sink_result.value()}};
           return AttemptResult{
               std::move(attempt_id),
               std::move(minted),
@@ -569,6 +591,508 @@ class InvalidOutcomeProvider final : public Provider {
 
   Mode mode = Mode::both;
 };
+
+class MultiPortProvider final : public Provider {
+ public:
+  enum class Mode {
+    success,
+    missing_required_output,
+    secondary_overflow,
+    unknown_sink_port,
+    unknown_candidate_port,
+    candidate_port_mismatch,
+    duplicate_mint,
+    empty_candidate,
+  };
+
+  std::string id() const override { return "local.proof.multi-port"; }
+
+  std::vector<std::string> capabilities() const override {
+    return {std::string(kMultiPortCapability)};
+  }
+
+  AttemptResult run(
+      AttemptId attempt_id,
+      const CapabilityRequest&,
+      lmdj::provider::ArtifactSink output) override {
+    ++run_count;
+    if (mode == Mode::empty_candidate) {
+      return AttemptResult{
+          attempt_id,
+          lmdj::provider::Candidate{
+              lmdj::foundation::CandidateId{attempt_id.value()},
+              {},
+              nlohmann::json::object(),
+          },
+          std::nullopt,
+      };
+    }
+
+    const std::array primary_bytes{std::byte{0x01}};
+    const auto primary = output(
+        "primary", primary_bytes, "application/x-lmdj-proof");
+    LMDJ_CHECK(primary.has_value());
+
+    if (mode == Mode::unknown_sink_port) {
+      const auto unknown = output(
+          "unknown", primary_bytes, "application/x-lmdj-proof");
+      unknown_sink_rejected = !unknown.has_value();
+      return AttemptResult{
+          std::move(attempt_id),
+          std::nullopt,
+          lmdj::foundation::Error{
+              ErrorCode::provider_failed,
+              "unknown sink port rejected",
+          },
+      };
+    }
+
+    if (mode == Mode::duplicate_mint) {
+      const auto duplicate = output(
+          "secondary", primary_bytes, "application/x-lmdj-proof");
+      duplicate_mint_rejected = !duplicate.has_value();
+      return AttemptResult{
+          std::move(attempt_id),
+          std::nullopt,
+          lmdj::foundation::Error{
+              ErrorCode::provider_failed,
+              "duplicate mint rejected",
+          },
+      };
+    }
+
+    if (mode == Mode::missing_required_output) {
+      return AttemptResult{
+          attempt_id,
+          lmdj::provider::Candidate{
+              lmdj::foundation::CandidateId{attempt_id.value()},
+              {{"primary", primary.value()}},
+              nlohmann::json::object(),
+          },
+          std::nullopt,
+      };
+    }
+
+    if (mode == Mode::unknown_candidate_port) {
+      return AttemptResult{
+          attempt_id,
+          lmdj::provider::Candidate{
+              lmdj::foundation::CandidateId{attempt_id.value()},
+              {{"unknown", primary.value()}},
+              nlohmann::json::object(),
+          },
+          std::nullopt,
+      };
+    }
+
+    if (mode == Mode::candidate_port_mismatch) {
+      return AttemptResult{
+          attempt_id,
+          lmdj::provider::Candidate{
+              lmdj::foundation::CandidateId{attempt_id.value()},
+              {{"secondary", primary.value()}},
+              nlohmann::json::object(),
+          },
+          std::nullopt,
+      };
+    }
+
+    const std::array secondary_bytes{std::byte{0x02}};
+    const auto secondary = output(
+        "secondary", secondary_bytes, "application/x-lmdj-proof");
+    LMDJ_CHECK(secondary.has_value());
+    auto outputs = std::vector<ArtifactBinding>{
+        {"secondary", secondary.value()},
+        {"primary", primary.value()},
+    };
+    if (mode == Mode::secondary_overflow) {
+      const std::array overflow_bytes{std::byte{0x03}};
+      const auto overflow = output(
+          "secondary", overflow_bytes, "application/x-lmdj-proof");
+      LMDJ_CHECK(overflow.has_value());
+      outputs.push_back({"secondary", overflow.value()});
+    }
+    return AttemptResult{
+        attempt_id,
+        lmdj::provider::Candidate{
+            lmdj::foundation::CandidateId{attempt_id.value()},
+            std::move(outputs),
+            nlohmann::json::object(),
+        },
+        std::nullopt,
+    };
+  }
+
+  Mode mode = Mode::success;
+  int run_count = 0;
+  bool unknown_sink_rejected = false;
+  bool duplicate_mint_rejected = false;
+};
+
+std::vector<lmdj::provider::ArtifactPortDescriptor> multi_input_ports() {
+  return {
+      {
+          "source",
+          {"application/x-lmdj-proof"},
+          "lmdj.artifact.proof-source.v1",
+          "1.0.0",
+          true,
+          1,
+      },
+      {
+          "reference",
+          {"application/x-lmdj-proof"},
+          "lmdj.artifact.proof-reference.v1",
+          "1.0.0",
+          true,
+          1,
+      },
+  };
+}
+
+std::vector<lmdj::provider::ArtifactPortDescriptor> multi_output_ports(
+    bool required = true) {
+  return {
+      {
+          "primary",
+          {"application/x-lmdj-proof"},
+          "lmdj.artifact.proof-primary.v1",
+          "1.0.0",
+          required,
+          1,
+      },
+      {
+          "secondary",
+          {"application/x-lmdj-proof"},
+          "lmdj.artifact.proof-secondary.v1",
+          "1.0.0",
+          required,
+          1,
+      },
+  };
+}
+
+ProviderRegistration multi_port_registration(
+    const std::shared_ptr<MultiPortProvider>& implementation,
+    std::vector<lmdj::provider::ArtifactPortDescriptor> input_ports,
+    std::vector<lmdj::provider::ArtifactPortDescriptor> output_ports) {
+  return ProviderRegistration{
+      implementation,
+      "1.0.0",
+      std::string(64, 'f'),
+      std::nullopt,
+      {
+          lmdj::provider::CapabilityDescriptor{
+              std::string(kMultiPortCapability),
+              "2.0.0",
+              std::move(input_ports),
+              std::move(output_ports),
+              lmdj::provider::Determinism::deterministic,
+              {},
+              {"PROVIDER_FAILED"},
+              lmdj::provider::ResourceRequirements{
+                  lmdj::provider::ResourceClass::light,
+                  16,
+              },
+              lmdj::provider::ExecutionPolicy{1000, 1},
+              lmdj::provider::CapabilityPolicy{
+                  {"public"},
+                  {"local"},
+                  {"proof.execute"},
+              },
+              {"test"},
+              16,
+          },
+      },
+  };
+}
+
+CapabilityRequest multi_port_request() {
+  return CapabilityRequest{
+      std::string(kMultiPortCapability),
+      {
+          ArtifactBinding{
+              "reference",
+              ArtifactRef{
+                  std::string(64, 'b'),
+                  "application/x-lmdj-proof",
+                  2,
+              },
+          },
+          ArtifactBinding{
+              "source",
+              ArtifactRef{
+                  std::string(64, 'a'),
+                  "application/x-lmdj-proof",
+                  1,
+              },
+          },
+      },
+      nlohmann::json::object(),
+      "public",
+      "test",
+      "local",
+      {"proof.execute"},
+  };
+}
+
+Registry multi_port_registry(
+    const std::shared_ptr<MultiPortProvider>& implementation,
+    bool outputs_required = true) {
+  Registry registry;
+  LMDJ_CHECK(
+      registry
+          .add(multi_port_registration(
+              implementation,
+              multi_input_ports(),
+              multi_output_ports(outputs_required)))
+          .has_value());
+  return registry;
+}
+
+void check_provider_failure(const AttemptResult& result) {
+  LMDJ_CHECK(!result.candidate.has_value());
+  LMDJ_CHECK(result.error.has_value());
+  LMDJ_CHECK(result.error->code == ErrorCode::provider_failed);
+}
+
+void test_v2_registry_rejects_empty_output_descriptors() {
+  auto provider = std::make_shared<MultiPortProvider>();
+  Registry registry;
+  const auto added = registry.add(multi_port_registration(
+      provider, multi_input_ports(), {}));
+  LMDJ_CHECK(!added.has_value());
+  LMDJ_CHECK(added.error().code == ErrorCode::invalid_argument);
+}
+
+void test_v2_request_bindings_fail_closed_before_provider_execution() {
+  TempDirectory temp;
+  auto provider = std::make_shared<MultiPortProvider>();
+  const auto registry = multi_port_registry(provider);
+  auto store = store_at(temp.path());
+  select_capability(
+      store,
+      registry,
+      std::string(kMultiPortCapability),
+      provider->id());
+
+  auto missing_required = multi_port_request();
+  missing_required.inputs.erase(missing_required.inputs.begin());
+  const auto missing = store.execute(
+      AttemptId{"attempt-v2-missing-input"}, missing_required, registry);
+  LMDJ_CHECK(missing.has_value());
+  LMDJ_CHECK(missing.value().error.has_value());
+  LMDJ_CHECK(missing.value().error->code == ErrorCode::invalid_argument);
+
+  auto unknown_port = multi_port_request();
+  unknown_port.inputs.front().port = "unknown";
+  const auto unknown = store.execute(
+      AttemptId{"attempt-v2-unknown-input"}, unknown_port, registry);
+  LMDJ_CHECK(unknown.has_value());
+  LMDJ_CHECK(unknown.value().error.has_value());
+  LMDJ_CHECK(unknown.value().error->code == ErrorCode::invalid_argument);
+
+  auto duplicate_artifact = multi_port_request();
+  duplicate_artifact.inputs.front().artifact =
+      duplicate_artifact.inputs.back().artifact;
+  const auto duplicate = store.execute(
+      AttemptId{"attempt-v2-duplicate-input"}, duplicate_artifact, registry);
+  LMDJ_CHECK(duplicate.has_value());
+  LMDJ_CHECK(duplicate.value().error.has_value());
+  LMDJ_CHECK(duplicate.value().error->code == ErrorCode::invalid_argument);
+
+  auto secondary_overflow = multi_port_request();
+  secondary_overflow.inputs.push_back(ArtifactBinding{
+      "reference",
+      ArtifactRef{
+          std::string(64, 'c'),
+          "application/x-lmdj-proof",
+          3,
+      },
+  });
+  const auto overflow = store.execute(
+      AttemptId{"attempt-v2-input-overflow"}, secondary_overflow, registry);
+  LMDJ_CHECK(overflow.has_value());
+  LMDJ_CHECK(overflow.value().error.has_value());
+  LMDJ_CHECK(overflow.value().error->code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(provider->run_count == 0);
+}
+
+void test_v2_output_bindings_are_validated_per_port() {
+  TempDirectory temp;
+  auto provider = std::make_shared<MultiPortProvider>();
+  const auto registry = multi_port_registry(provider);
+  auto store = store_at(temp.path());
+  select_capability(
+      store,
+      registry,
+      std::string(kMultiPortCapability),
+      provider->id());
+
+  provider->mode = MultiPortProvider::Mode::success;
+  const auto success = store.execute(
+      AttemptId{"attempt-v2-success"}, multi_port_request(), registry);
+  LMDJ_CHECK(success.has_value());
+  LMDJ_CHECK(success.value().candidate.has_value());
+  LMDJ_CHECK(success.value().candidate->outputs.size() == 2);
+  LMDJ_CHECK(success.value().candidate->outputs.at(0).port == "secondary");
+  LMDJ_CHECK(success.value().candidate->outputs.at(1).port == "primary");
+  const auto persisted = read_json(
+      temp.path() / ".lmdj-workspace/attempts/attempt-v2-success.json");
+  LMDJ_CHECK(persisted.at("format") == "terminal-attempt-v2");
+  LMDJ_CHECK(
+      persisted.at("capability").at("contract") == "lmdj.capability.v2");
+  LMDJ_CHECK(
+      persisted.at("request").at("inputs").at(0).at("port") ==
+      "reference");
+  LMDJ_CHECK(
+      persisted.at("request").at("inputs").at(1).at("port") == "source");
+  LMDJ_CHECK(persisted.at("minted_outputs").at(0).at("port") == "primary");
+  LMDJ_CHECK(
+      persisted.at("minted_outputs").at(1).at("port") == "secondary");
+  LMDJ_CHECK(
+      persisted.at("candidate_outputs") == persisted.at("minted_outputs"));
+
+  const std::vector invalid_modes{
+      MultiPortProvider::Mode::missing_required_output,
+      MultiPortProvider::Mode::secondary_overflow,
+      MultiPortProvider::Mode::unknown_candidate_port,
+      MultiPortProvider::Mode::candidate_port_mismatch,
+  };
+  for (std::size_t index = 0; index < invalid_modes.size(); ++index) {
+    provider->mode = invalid_modes.at(index);
+    const auto attempt_id =
+        "attempt-v2-invalid-output-" + std::to_string(index);
+    const auto result = store.execute(
+        AttemptId{attempt_id}, multi_port_request(), registry);
+    LMDJ_CHECK(result.has_value());
+    check_provider_failure(result.value());
+    LMDJ_CHECK(!std::filesystem::exists(
+        temp.path() / ".lmdj-workspace/attempts" / attempt_id));
+  }
+
+  provider->mode = MultiPortProvider::Mode::unknown_sink_port;
+  const auto unknown_sink = store.execute(
+      AttemptId{"attempt-v2-unknown-sink"}, multi_port_request(), registry);
+  LMDJ_CHECK(unknown_sink.has_value());
+  check_provider_failure(unknown_sink.value());
+  LMDJ_CHECK(provider->unknown_sink_rejected);
+  LMDJ_CHECK(!std::filesystem::exists(
+      temp.path() /
+      ".lmdj-workspace/attempts/attempt-v2-unknown-sink"));
+
+  provider->mode = MultiPortProvider::Mode::duplicate_mint;
+  const auto duplicate_mint = store.execute(
+      AttemptId{"attempt-v2-duplicate-mint"}, multi_port_request(), registry);
+  LMDJ_CHECK(duplicate_mint.has_value());
+  check_provider_failure(duplicate_mint.value());
+  LMDJ_CHECK(provider->duplicate_mint_rejected);
+  LMDJ_CHECK(!std::filesystem::exists(
+      temp.path() /
+      ".lmdj-workspace/attempts/attempt-v2-duplicate-mint"));
+}
+
+void test_v2_all_optional_outputs_allow_empty_candidate() {
+  TempDirectory temp;
+  auto provider = std::make_shared<MultiPortProvider>();
+  provider->mode = MultiPortProvider::Mode::empty_candidate;
+  const auto registry = multi_port_registry(provider, false);
+  auto store = store_at(temp.path());
+  select_capability(
+      store,
+      registry,
+      std::string(kMultiPortCapability),
+      provider->id());
+  const auto result = store.execute(
+      AttemptId{"attempt-v2-empty"}, multi_port_request(), registry);
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value().candidate.has_value());
+  LMDJ_CHECK(result.value().candidate->outputs.empty());
+  const auto persisted = read_json(
+      temp.path() / ".lmdj-workspace/attempts/attempt-v2-empty.json");
+  LMDJ_CHECK(persisted.at("minted_outputs").empty());
+  LMDJ_CHECK(persisted.at("candidate_outputs").empty());
+}
+
+void test_v2_input_order_is_canonical_in_attempt_evidence() {
+  TempDirectory temp;
+  auto provider = std::make_shared<MultiPortProvider>();
+  const auto registry = multi_port_registry(provider);
+  auto store = store_at(temp.path());
+  select_capability(
+      store,
+      registry,
+      std::string(kMultiPortCapability),
+      provider->id());
+
+  auto reversed = multi_port_request();
+  auto descriptor_order = multi_port_request();
+  std::reverse(descriptor_order.inputs.begin(), descriptor_order.inputs.end());
+  const auto first = store.execute(
+      AttemptId{"attempt-v2-order-a"}, reversed, registry);
+  const auto second = store.execute(
+      AttemptId{"attempt-v2-order-b"}, descriptor_order, registry);
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(second.has_value());
+  const auto first_json = read_json(
+      temp.path() / ".lmdj-workspace/attempts/attempt-v2-order-a.json");
+  const auto second_json = read_json(
+      temp.path() / ".lmdj-workspace/attempts/attempt-v2-order-b.json");
+  LMDJ_CHECK(
+      first_json.at("request").at("inputs") ==
+      second_json.at("request").at("inputs"));
+  LMDJ_CHECK(
+      first_json.at("candidate_outputs") ==
+      second_json.at("candidate_outputs"));
+}
+
+void test_v2_inspection_preserves_and_rejects_v1_attempt_files() {
+  TempDirectory temp;
+  const auto attempts = temp.path() / ".lmdj-workspace/attempts";
+  std::filesystem::create_directories(attempts);
+  const auto legacy_path = attempts / "attempt-v1.json";
+  const auto legacy = nlohmann::json{
+      {"capability", {{"contract", "lmdj.capability.v1"}}},
+      {"format", "terminal-attempt"},
+  };
+  {
+    std::ofstream stream(legacy_path, std::ios::binary | std::ios::trunc);
+    stream << lmdj::foundation::canonical_json(legacy) << '\n';
+  }
+  const auto original = read_bytes(legacy_path);
+  auto store = store_at(temp.path());
+  const auto inspected = store.inspect(AttemptId{"attempt-v1"});
+  LMDJ_CHECK(!inspected.has_value());
+  LMDJ_CHECK(inspected.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(read_bytes(legacy_path) == original);
+}
+
+void test_v2_inspection_rejects_binding_compatibility_shorthands() {
+  TempDirectory temp;
+  auto registry = proof_registry();
+  auto store = store_at(temp.path());
+  select(store, registry, "local.proof.success");
+  const auto result = store.execute(
+      AttemptId{"attempt-v2-extra-binding-key"},
+      valid_request(),
+      registry);
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value().candidate.has_value());
+
+  const auto path =
+      temp.path() /
+      ".lmdj-workspace/attempts/attempt-v2-extra-binding-key.json";
+  auto encoded = read_json(path);
+  encoded["candidate_outputs"][0]["compatibility"] = "forbidden";
+  {
+    std::ofstream stream(path, std::ios::binary | std::ios::trunc);
+    stream << lmdj::foundation::canonical_json(encoded) << '\n';
+  }
+  const auto inspected =
+      store.inspect(AttemptId{"attempt-v2-extra-binding-key"});
+  LMDJ_CHECK(!inspected.has_value());
+  LMDJ_CHECK(inspected.error().code == ErrorCode::invalid_argument);
+}
 
 void test_untrusted_provider_outcomes_are_rejected_as_typed_failures() {
   TempDirectory temp;
@@ -710,7 +1234,7 @@ void test_policy_and_invalid_requests_fail_closed_before_provider_execution() {
   LMDJ_CHECK(counting->run_count == 0);
 
   auto malformed_input = valid_request();
-  malformed_input.inputs.front().sha256 = "../project";
+  malformed_input.inputs.front().artifact.sha256 = "../project";
   const auto malformed_result = store.execute(
       AttemptId{"attempt-malformed-input"}, malformed_input, registry);
   LMDJ_CHECK(malformed_result.has_value());
@@ -818,6 +1342,13 @@ int main() {
     test_policy_and_invalid_requests_fail_closed_before_provider_execution();
     test_duplicate_attempt_and_registration_inputs_are_rejected();
     test_provenance_is_deterministic_across_attempts();
+    test_v2_registry_rejects_empty_output_descriptors();
+    test_v2_request_bindings_fail_closed_before_provider_execution();
+    test_v2_output_bindings_are_validated_per_port();
+    test_v2_all_optional_outputs_allow_empty_candidate();
+    test_v2_input_order_is_canonical_in_attempt_evidence();
+    test_v2_inspection_preserves_and_rejects_v1_attempt_files();
+    test_v2_inspection_rejects_binding_compatibility_shorthands();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

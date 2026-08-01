@@ -19,7 +19,7 @@ from .c_api import (
 
 PROTOCOL_VERSION = "2025-11-25"
 SERVER_NAME = "lmdj-core-mcp"
-SERVER_VERSION = "0.1.1"
+SERVER_VERSION = "1.0.0"
 UUID_PATTERN = (
     "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
@@ -137,6 +137,13 @@ def input_schemas() -> dict[str, dict]:
         },
         ["sha256", "media_type", "byte_length"],
     )
+    artifact_binding = object_schema(
+        {
+            "port": file_id,
+            "artifact": artifact,
+        },
+        ["port", "artifact"],
+    )
     return {
         "lmdj.project.create": object_schema(
             {
@@ -247,7 +254,10 @@ def input_schemas() -> dict[str, dict]:
             {
                 "attempt_id": file_id,
                 "capability": file_id,
-                "inputs": {"type": "array", "items": artifact},
+                "inputs": {
+                    "type": "array",
+                    "items": artifact_binding,
+                },
                 "parameters": {"type": "object"},
                 "data_classification": file_id,
                 "platform": file_id,

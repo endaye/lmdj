@@ -187,16 +187,24 @@ def cli_request(
     workspace: Path,
     surface: str,
     request: dict,
+    assembly: Path | None = None,
 ) -> dict:
-    completed = subprocess.run(
+    command = [
+        str(executable),
+        "--workspace",
+        str(workspace),
+    ]
+    if assembly is not None:
+        command.extend(["--assembly", str(assembly)])
+    command.extend(
         [
-            str(executable),
-            "--workspace",
-            str(workspace),
             surface,
             "--request",
             canonical_json(request),
-        ],
+        ]
+    )
+    completed = subprocess.run(
+        command,
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
@@ -216,7 +224,12 @@ def cli_request(
 
 
 class MCP:
-    def __init__(self, library: Path, workspace: Path) -> None:
+    def __init__(
+        self,
+        library: Path,
+        workspace: Path,
+        assembly: Path | None = None,
+    ) -> None:
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(REPO_ROOT / "apps/core-mcp")
         sanitizer_runtime = environment.get("LMDJ_ASAN_RUNTIME")
@@ -225,16 +238,19 @@ class MCP:
                 environment["DYLD_INSERT_LIBRARIES"] = sanitizer_runtime
             elif sys.platform.startswith("linux"):
                 environment["LD_PRELOAD"] = sanitizer_runtime
+        command = [
+            sys.executable,
+            "-m",
+            "lmdj_core_mcp",
+            "--library",
+            str(library),
+            "--workspace",
+            str(workspace),
+        ]
+        if assembly is not None:
+            command.extend(["--assembly", str(assembly)])
         self.process = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "lmdj_core_mcp",
-                "--library",
-                str(library),
-                "--workspace",
-                str(workspace),
-            ],
+            command,
             cwd=REPO_ROOT,
             env=environment,
             stdin=subprocess.PIPE,
@@ -445,6 +461,79 @@ def assert_golden(output: Path, rendered: dict) -> None:
     assert rendered["result"]["artifact"]["sha256"] == expected_sha
 
 
+def provider_binding_parity(
+    cli: Path,
+    library: Path,
+    temp_root: Path,
+) -> None:
+    assembly = REPO_ROOT / "products/lmdj/assembly.json"
+    capability = "proof.candidate.v2"
+    provider_id = "local.proof.success"
+    arguments = {
+        "attempt_id": "attempt-binding-parity",
+        "capability": capability,
+        "inputs": [
+            {
+                "port": "inputs",
+                "artifact": {
+                    "sha256": "a" * 64,
+                    "media_type": "application/octet-stream",
+                    "byte_length": 1,
+                },
+            }
+        ],
+        "parameters": {},
+        "data_classification": "public",
+        "platform": "test",
+        "region": "local",
+        "required_permissions": ["proof.execute"],
+    }
+
+    cli_workspace = temp_root / "provider-cli-workspace"
+    cli_workspace.mkdir()
+    check_success(
+        cli_request(
+            cli,
+            cli_workspace,
+            "command",
+            {
+                "operation": "provider.select",
+                "capability": capability,
+                "provider_id": provider_id,
+            },
+            assembly,
+        ),
+        None,
+    )
+    cli_result = cli_request(
+        cli,
+        cli_workspace,
+        "command",
+        {"operation": "provider.run", **arguments},
+        assembly,
+    )
+
+    mcp_workspace = temp_root / "provider-mcp-workspace"
+    mcp_workspace.mkdir()
+    mcp = MCP(library, mcp_workspace, assembly)
+    check_success(
+        mcp.tool(
+            "lmdj.provider.select",
+            {"capability": capability, "provider_id": provider_id},
+        ),
+        None,
+    )
+    mcp_result = mcp.tool("lmdj.provider.run", arguments)
+    mcp.close()
+
+    assert mcp_result == cli_result
+    assert cli_result["result"]["outputs"][0]["port"] == "candidate"
+    assert set(cli_result["result"]["outputs"][0]) == {
+        "port",
+        "artifact",
+    }
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         raise SystemExit(
@@ -465,6 +554,7 @@ def main() -> int:
         mcp_author_cli_consume(
             cli, library, workspace, temp_root
         )
+        provider_binding_parity(cli, library, temp_root)
     print("cli/mcp facade parity: passed")
     return 0
 

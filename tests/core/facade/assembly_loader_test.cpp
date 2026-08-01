@@ -68,7 +68,7 @@ class ProofProvider final : public Provider {
   std::string id() const override { return provider_id_; }
 
   std::vector<std::string> capabilities() const override {
-    return {"proof.candidate.v1"};
+    return {"proof.candidate.v2"};
   }
 
   AttemptResult run(
@@ -91,8 +91,8 @@ class ProofProvider final : public Provider {
 
 CapabilityDescriptor proof_capability() {
   return CapabilityDescriptor{
-      "proof.candidate.v1",
-      "1.0.0",
+      "proof.candidate.v2",
+      "2.0.0",
       {{
           "inputs",
           {"*/*"},
@@ -132,7 +132,7 @@ ProviderRegistration registration(
     std::optional<ModelIdentity> model_identity = std::nullopt) {
   return ProviderRegistration{
       std::make_shared<ProofProvider>(std::move(id)),
-      "0.1.0",
+      "1.0.0",
       std::string(64, 'a'),
       std::move(model_identity),
       {proof_capability()},
@@ -172,7 +172,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       declared_model_identity(assembly.at("providers").at(1));
   return CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.7.0",
+      "1.0.8.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       components(assembly, "modules"),
       components(assembly, "hosts"),
@@ -180,7 +180,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       {
           CompiledProvider{
               "local.proof.success",
-              "0.1.0",
+              "1.0.0",
               [success_model] {
                 return registration(
                     "local.proof.success", success_model);
@@ -189,7 +189,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
           },
           CompiledProvider{
               "local.proof.failure",
-              "0.1.0",
+              "1.0.0",
               [failure_model] {
                 return registration(
                     "local.proof.failure", failure_model);
@@ -288,7 +288,7 @@ void rejects_invalid_and_unavailable_components() {
   expect_failure(value, "additional-property");
 
   value = assembly;
-  value["product"]["version"] = "1.0.8.0";
+  value["product"]["version"] = "1.0.7.0";
   expect_failure(value, "product-version");
 
   value = assembly;
@@ -304,7 +304,7 @@ void rejects_invalid_and_unavailable_components() {
   expect_failure(value, "unknown-provider");
 
   value = assembly;
-  value["providers"][0]["capabilities"][0]["version"] = "2.0.0";
+  value["providers"][0]["capabilities"][0]["version"] = "1.0.0";
   expect_failure(value, "capability-version");
 
   auto model_assembly = assembly;

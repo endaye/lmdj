@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.7.0"
+    "version": "1.0.8.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -38,42 +38,42 @@
     },
     {
       "id": "provider-sdk",
-      "version": "0.1.0"
+      "version": "1.0.0"
     },
     {
       "id": "application-facade",
-      "version": "0.1.1"
+      "version": "1.0.0"
     }
   ],
   "hosts": [
     {
       "id": "core-cli",
-      "version": "0.1.1"
+      "version": "1.0.0"
     },
     {
       "id": "core-mcp",
-      "version": "0.1.1"
+      "version": "1.0.0"
     }
   ],
   "providers": [
     {
       "id": "local.proof.success",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "capabilities": [
         {
-          "id": "proof.candidate.v1",
-          "version": "1.0.0"
+          "id": "proof.candidate.v2",
+          "version": "2.0.0"
         }
       ],
       "model_identity": null
     },
     {
       "id": "local.proof.failure",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "capabilities": [
         {
-          "id": "proof.candidate.v1",
-          "version": "1.0.0"
+          "id": "proof.candidate.v2",
+          "version": "2.0.0"
         }
       ],
       "model_identity": null
@@ -85,8 +85,8 @@
       "version": "1.0.0"
     },
     {
-      "id": "lmdj.capability.v1",
-      "version": "1.0.0"
+      "id": "lmdj.capability.v2",
+      "version": "2.0.0"
     },
     {
       "id": "lmdj.assembly.v2",

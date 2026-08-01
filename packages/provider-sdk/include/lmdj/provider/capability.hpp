@@ -82,9 +82,19 @@ nlohmann::json capability_contract_json(
 std::string canonical_capability_json(
     const CapabilityDescriptor& capability);
 
+struct ArtifactBinding {
+  std::string port;
+  foundation::ArtifactRef artifact;
+
+  auto operator<=>(const ArtifactBinding&) const = default;
+};
+
+void to_json(nlohmann::json& output, const ArtifactBinding& binding);
+void from_json(const nlohmann::json& input, ArtifactBinding& binding);
+
 struct CapabilityRequest {
   std::string capability;
-  std::vector<foundation::ArtifactRef> inputs;
+  std::vector<ArtifactBinding> inputs;
   nlohmann::json parameters;
   std::string data_classification;
   std::string platform;
@@ -94,7 +104,7 @@ struct CapabilityRequest {
 
 struct Candidate {
   foundation::CandidateId id;
-  std::vector<foundation::ArtifactRef> outputs;
+  std::vector<ArtifactBinding> outputs;
   nlohmann::json provenance;
 };
 

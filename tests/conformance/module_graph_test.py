@@ -38,7 +38,11 @@ def load_manifests(paths: list[Path]) -> dict[str, tuple[Path, dict]]:
         assert isinstance(module_id, str) and module_id, path
         assert module_id not in loaded, module_id
         assert isinstance(manifest["version"], str), path
-        assert manifest["api_version"] == 1, path
+        assert (
+            isinstance(manifest["api_version"], int)
+            and not isinstance(manifest["api_version"], bool)
+            and manifest["api_version"] >= 1
+        ), path
         assert isinstance(manifest["dependencies"], dict), path
         loaded[module_id] = (path, manifest)
     return loaded

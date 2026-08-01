@@ -18,7 +18,7 @@ PATTERN_ID = "00000000-0000-4000-8000-000000000010"
 CONFLICT_TAKE_ID = "00000000-0000-4000-8000-000000000301"
 CONFLICT_PATTERN_ID = "00000000-0000-4000-8000-000000000310"
 KICK_ASSET_ID = "00000000-0000-4000-8000-000000000101"
-CAPABILITY = "proof.candidate.v1"
+CAPABILITY = "proof.candidate.v2"
 
 
 def canonical_json(value: object) -> str:
@@ -458,10 +458,23 @@ def proof(
         **provider_arguments,
         "attempt_id": "attempt-proof-success",
     }
-    assert_success(
+    success_candidate = assert_success(
         mcp.tool("lmdj.provider.run", success_attempt),
         None,
     )
+    assert success_candidate["outputs"] == [
+        {
+            "port": "candidate",
+            "artifact": {
+                "sha256": (
+                    "e3b0c44298fc1c149afbf4c8996fb924"
+                    "27ae41e4649b934ca495991b7852b855"
+                ),
+                "media_type": "application/x-lmdj-proof",
+                "byte_length": 0,
+            },
+        }
+    ]
     mcp.close()
 
     providers = assert_success(

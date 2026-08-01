@@ -48,6 +48,7 @@ using lmdj::foundation::AttemptId;
 using lmdj::foundation::Error;
 using lmdj::foundation::ErrorCode;
 using lmdj::provider::ArtifactPortDescriptor;
+using lmdj::provider::ArtifactBinding;
 using lmdj::provider::AttemptResult;
 using lmdj::provider::AttemptStatus;
 using lmdj::provider::AttemptStore;
@@ -63,7 +64,7 @@ using lmdj::provider::Registry;
 using lmdj::provider::ResourceClass;
 using lmdj::provider::ResourceRequirements;
 
-constexpr std::string_view kCapability = "proof.candidate.v1";
+constexpr std::string_view kCapability = "proof.candidate.v2";
 constexpr std::string_view kSuccessProviderShaPath =
     LMDJ_SUCCESS_SOURCE_PACKAGE_MANIFEST;
 constexpr std::string_view kFailureProviderShaPath =
@@ -134,7 +135,7 @@ std::set<std::string> string_set(const nlohmann::json& array) {
 CapabilityDescriptor proof_capability() {
   return CapabilityDescriptor{
       std::string(kCapability),
-      "1.0.0",
+      "2.0.0",
       {
           ArtifactPortDescriptor{
               "inputs",
@@ -236,13 +237,13 @@ void test_capability_discovery_matches_public_schema_shape() {
   const auto encoded =
       lmdj::provider::capability_contract_json(descriptor);
   const auto schema =
-      read_json("contracts/capability/lmdj.capability.v1.schema.json");
+      read_json("contracts/capability/lmdj.capability.v2.schema.json");
 
   LMDJ_CHECK(object_keys(encoded) == string_set(schema.at("required")));
   LMDJ_CHECK(encoded.size() == schema.at("properties").size());
-  LMDJ_CHECK(encoded.at("contract") == "lmdj.capability.v1");
+  LMDJ_CHECK(encoded.at("contract") == "lmdj.capability.v2");
   LMDJ_CHECK(encoded.at("capability_id") == kCapability);
-  LMDJ_CHECK(encoded.at("contract_version") == "1.0.0");
+  LMDJ_CHECK(encoded.at("contract_version") == "2.0.0");
   LMDJ_CHECK(encoded.at("determinism") == "deterministic");
   LMDJ_CHECK(encoded.at("progress_events").empty());
   LMDJ_CHECK(
@@ -333,7 +334,7 @@ void verify_source_package(
       bytes == lmdj::foundation::canonical_json(manifest) + "\n");
   LMDJ_CHECK(manifest.at("format") == "provider-source-package");
   LMDJ_CHECK(manifest.at("provider_id") == expected_provider_id);
-  LMDJ_CHECK(manifest.at("provider_version") == "0.1.0");
+  LMDJ_CHECK(manifest.at("provider_version") == "1.0.0");
   LMDJ_CHECK(manifest.at("files").size() == 3);
   for (const auto& file : manifest.at("files")) {
     const auto source_path =
@@ -429,7 +430,7 @@ class SinkThenFailProvider final : public Provider {
       lmdj::provider::ArtifactSink output) override {
     const std::array payload{std::byte{0x2a}};
     const auto artifact =
-        output(payload, "application/x-lmdj-proof");
+        output("candidate", payload, "application/x-lmdj-proof");
     if (!artifact.has_value()) {
       throw std::runtime_error("test sink unexpectedly failed");
     }
@@ -451,7 +452,7 @@ class SinkThenFailProvider final : public Provider {
         attempt_id,
         lmdj::provider::Candidate{
             lmdj::foundation::CandidateId{attempt_id.value()},
-            {artifact.value()},
+            {{"candidate", artifact.value()}},
             nlohmann::json::object(),
         },
         error,
@@ -571,7 +572,7 @@ void test_failed_provider_outputs_are_removed_before_terminal_persistence() {
       registry
           .add(ProviderRegistration{
               implementation,
-              "0.1.0",
+              "1.0.0",
               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
               "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
               std::nullopt,
@@ -588,11 +589,14 @@ void test_failed_provider_outputs_are_removed_before_terminal_persistence() {
           .has_value());
   auto request = proof_request();
   request.inputs = {
-      ArtifactRef{
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-          "audio/wav",
-          12,
+      ArtifactBinding{
+          "inputs",
+          ArtifactRef{
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+              "audio/wav",
+              12,
+          },
       },
   };
 
@@ -614,7 +618,9 @@ void test_failed_provider_outputs_are_removed_before_terminal_persistence() {
     const auto inspected = store.inspect(AttemptId{attempt_id});
     LMDJ_CHECK(inspected.has_value());
     LMDJ_CHECK(inspected.value().status == AttemptStatus::failed);
-    LMDJ_CHECK(inspected.value().artifacts == request.inputs);
+    LMDJ_CHECK(
+        inspected.value().artifacts ==
+        std::vector<ArtifactRef>{request.inputs.front().artifact});
     LMDJ_CHECK(
         !std::filesystem::exists(
             temp.path() / ".lmdj-workspace/attempts" / attempt_id));
@@ -631,7 +637,7 @@ void test_optional_output_candidate_succeeds_without_staging() {
       registry
           .add(ProviderRegistration{
               implementation,
-              "0.1.0",
+              "1.0.0",
               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
               "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
               std::nullopt,
@@ -688,7 +694,7 @@ void test_attempt_id_is_reserved_before_provider_invocation() {
         registry
             .add(ProviderRegistration{
                 implementation,
-                "0.1.0",
+                "1.0.0",
                 "cccccccccccccccccccccccccccccccc"
                 "cccccccccccccccccccccccccccccccc",
                 std::nullopt,
@@ -736,7 +742,7 @@ void test_provider_selection_updates_are_serialized() {
       registry
           .add(ProviderRegistration{
               implementation,
-              "0.1.0",
+              "1.0.0",
               "dddddddddddddddddddddddddddddddd"
               "dddddddddddddddddddddddddddddddd",
               std::nullopt,
@@ -850,7 +856,7 @@ void test_provider_error_persistence_is_redacted() {
       registry
           .add(ProviderRegistration{
               leaking,
-              "0.1.0",
+              "1.0.0",
               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
               "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               std::nullopt,
@@ -935,9 +941,9 @@ void test_attempt_store_read_api_validates_private_terminal_formats() {
       inspected.value().provider.id == "local.proof.success");
   LMDJ_CHECK(
       inspected.value().capability.contract ==
-      "lmdj.capability.v1");
+      "lmdj.capability.v2");
   LMDJ_CHECK(
-      inspected.value().capability.version == "1.0.0");
+      inspected.value().capability.version == "2.0.0");
   LMDJ_CHECK(inspected.value().candidate_ids.size() == 1);
   LMDJ_CHECK(!inspected.value().error.has_value());
 
@@ -949,7 +955,7 @@ void test_attempt_store_read_api_validates_private_terminal_formats() {
   const auto attempt = read_json(attempt_path);
   LMDJ_CHECK(settings.at("format") == "provider-selections");
   LMDJ_CHECK(!settings.contains("contract"));
-  LMDJ_CHECK(attempt.at("format") == "terminal-attempt");
+  LMDJ_CHECK(attempt.at("format") == "terminal-attempt-v2");
   LMDJ_CHECK(!attempt.contains("contract"));
 
   const auto original = read_bytes(attempt_path);
@@ -971,7 +977,7 @@ void test_attempt_store_read_api_validates_private_terminal_formats() {
   LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
 
   auto mismatched = nlohmann::json::parse(original);
-  mismatched["request"]["capability"] = "proof.other.v1";
+  mismatched["request"]["capability"] = "proof.other.v2";
   write_bytes(
       attempt_path,
       lmdj::foundation::canonical_json(mismatched) + "\n");

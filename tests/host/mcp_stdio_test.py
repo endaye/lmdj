@@ -121,6 +121,13 @@ def expected_schemas() -> dict[str, dict]:
         },
         ["sha256", "media_type", "byte_length"],
     )
+    artifact_binding = object_schema(
+        {
+            "port": file_id,
+            "artifact": artifact,
+        },
+        ["port", "artifact"],
+    )
 
     return {
         "lmdj.project.create": object_schema(
@@ -232,7 +239,10 @@ def expected_schemas() -> dict[str, dict]:
             {
                 "attempt_id": file_id,
                 "capability": file_id,
-                "inputs": {"type": "array", "items": artifact},
+                "inputs": {
+                    "type": "array",
+                    "items": artifact_binding,
+                },
                 "parameters": {"type": "object"},
                 "data_classification": file_id,
                 "platform": file_id,
@@ -470,9 +480,9 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     assert module == {
         "contract": "lmdj.module.v1",
         "module": "core-mcp",
-        "version": "0.1.1",
-        "api_version": 1,
-        "dependencies": {"application-facade": "0.1.1"},
+        "version": "1.0.0",
+        "api_version": 2,
+        "dependencies": {"application-facade": "1.0.0"},
     }
     pyproject = tomllib.loads(
         (REPO_ROOT / "apps/core-mcp/pyproject.toml").read_text(
@@ -480,7 +490,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         )
     )
     assert pyproject["project"]["name"] == "lmdj-core-mcp"
-    assert pyproject["project"]["version"] == "0.1.1"
+    assert pyproject["project"]["version"] == "1.0.0"
     assert pyproject["project"]["dependencies"] == []
     assert pyproject["tool"]["lmdj"]["c-abi"] == "lmdj_core_c@1"
     host_paths = sorted(
@@ -524,7 +534,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 7,
+        "build": 8,
         "patch": 0,
     }
 
@@ -653,7 +663,7 @@ def lifecycle(library: Path, temp_root: Path) -> None:
         "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "lmdj-core-mcp", "version": "0.1.1"},
+            "serverInfo": {"name": "lmdj-core-mcp", "version": "1.0.0"},
         },
     }
     assert host.request(4, "ping")["result"] == {}
@@ -1072,12 +1082,12 @@ def valid_arguments(temp_root: Path) -> dict[str, dict]:
         },
         "lmdj.provider.list": {},
         "lmdj.provider.select": {
-            "capability": "proof.candidate.v1",
+            "capability": "proof.candidate.v2",
             "provider_id": "provider",
         },
         "lmdj.provider.run": {
             "attempt_id": "attempt-1",
-            "capability": "proof.candidate.v1",
+            "capability": "proof.candidate.v2",
             "inputs": [],
             "parameters": {},
             "data_classification": "local",
@@ -1169,6 +1179,26 @@ def tools_call_validation(library: Path, temp_root: Path) -> None:
     assert_error(
         host.request(36, "tools/list", {"_meta": []}),
         36,
+        -32602,
+        "Invalid params",
+    )
+    flat_provider_arguments = valid_arguments(temp_root)[
+        "lmdj.provider.run"
+    ]
+    flat_provider_arguments["inputs"] = [
+        {
+            "sha256": "a" * 64,
+            "media_type": "application/octet-stream",
+            "byte_length": 1,
+        }
+    ]
+    assert_error(
+        host.tool_call(
+            37,
+            "lmdj.provider.run",
+            flat_provider_arguments,
+        ),
+        37,
         -32602,
         "Invalid params",
     )

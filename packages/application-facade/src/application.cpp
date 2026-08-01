@@ -474,6 +474,14 @@ nlohmann::json terminal_attempt_json(
   for (const auto& input : attempt.request.inputs) {
     inputs.push_back(input);
   }
+  auto minted_outputs = nlohmann::json::array();
+  for (const auto& output : attempt.minted_outputs) {
+    minted_outputs.push_back(output);
+  }
+  auto candidate_outputs = nlohmann::json::array();
+  for (const auto& output : attempt.candidate_outputs) {
+    candidate_outputs.push_back(output);
+  }
   auto error = nlohmann::json(nullptr);
   if (attempt.error.has_value()) {
     error = {
@@ -515,6 +523,8 @@ nlohmann::json terminal_attempt_json(
            {"required_permissions", attempt.request.required_permissions},
        }},
       {"candidate_ids", std::move(candidate_ids)},
+      {"candidate_outputs", std::move(candidate_outputs)},
+      {"minted_outputs", std::move(minted_outputs)},
       {"artifacts", std::move(artifacts)},
       {"error", std::move(error)},
   };
@@ -1431,20 +1441,29 @@ struct Application::Impl {
     const auto region = file_id_field(request, "region");
     const auto& encoded_inputs = request.at("inputs");
     require(encoded_inputs.is_array(), "inputs must be an array");
-    std::vector<foundation::ArtifactRef> inputs;
+    std::vector<provider::ArtifactBinding> inputs;
     std::set<std::string> input_hashes;
     for (const auto& input : encoded_inputs) {
       require(
-          exact_keys(input, {"sha256", "media_type", "byte_length"}),
+          exact_keys(input, {"port", "artifact"}),
+          "input Artifact binding shape is invalid");
+      require(input.at("port").is_string(), "input port is invalid");
+      const auto port = string_field(input, "port");
+      require(safe_file_id(port), "input port is invalid");
+      const auto& encoded_artifact = input.at("artifact");
+      require(
+          exact_keys(
+              encoded_artifact,
+              {"sha256", "media_type", "byte_length"}),
           "input Artifact shape is invalid");
       require(
-          input.at("sha256").is_string() &&
-              input.at("media_type").is_string(),
+          encoded_artifact.at("sha256").is_string() &&
+              encoded_artifact.at("media_type").is_string(),
           "input Artifact strings are invalid");
       foundation::ArtifactRef artifact{
-          string_field(input, "sha256"),
-          string_field(input, "media_type"),
-          unsigned_field(input, "byte_length"),
+          string_field(encoded_artifact, "sha256"),
+          string_field(encoded_artifact, "media_type"),
+          unsigned_field(encoded_artifact, "byte_length"),
       };
       require(
           artifact.sha256.size() == 64 &&
@@ -1462,7 +1481,10 @@ struct Application::Impl {
       require(
           input_hashes.insert(artifact.sha256).second,
           "input Artifact hashes must be unique");
-      inputs.push_back(std::move(artifact));
+      inputs.push_back(provider::ArtifactBinding{
+          port,
+          std::move(artifact),
+      });
     }
     const auto& encoded_permissions = request.at("required_permissions");
     require(

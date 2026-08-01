@@ -127,7 +127,7 @@ void test_failing_provider_cannot_mutate_project_truth() {
   LMDJ_CHECK(
       store
           .set_provider_selection(
-              "proof.candidate.v1", "local.proof.failure", registry)
+              "proof.candidate.v2", "local.proof.failure", registry)
           .has_value());
   const auto workspace = workspace_root / ".lmdj-workspace";
   const auto before_workspace_file_count = regular_file_count(workspace);
@@ -135,7 +135,7 @@ void test_failing_provider_cannot_mutate_project_truth() {
   const auto executed = store.execute(
       AttemptId{"attempt-isolation"},
       CapabilityRequest{
-          "proof.candidate.v1",
+          "proof.candidate.v2",
           {},
           nlohmann::json::object(),
           "public",

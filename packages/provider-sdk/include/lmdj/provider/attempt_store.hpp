@@ -44,7 +44,7 @@ struct AttemptCapabilityIdentity {
 
 struct AttemptRequestMetadata {
   std::string capability;
-  std::vector<foundation::ArtifactRef> inputs;
+  std::vector<ArtifactBinding> inputs;
   std::string parameters_sha256;
   std::string data_classification;
   std::string platform;
@@ -61,6 +61,8 @@ struct TerminalAttempt {
   AttemptCapabilityIdentity capability;
   AttemptRequestMetadata request;
   std::vector<foundation::CandidateId> candidate_ids;
+  std::vector<ArtifactBinding> minted_outputs;
+  std::vector<ArtifactBinding> candidate_outputs;
   std::vector<foundation::ArtifactRef> artifacts;
   std::optional<foundation::Error> error;
 };

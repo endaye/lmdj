@@ -143,17 +143,24 @@ bool unique_nonempty(const std::vector<std::string>& values) {
   return std::adjacent_find(sorted.begin(), sorted.end()) == sorted.end();
 }
 
-bool media_type_allowed(
+const ArtifactPortDescriptor* find_port(
     const std::vector<ArtifactPortDescriptor>& ports,
+    std::string_view name) {
+  const auto found = std::find_if(
+      ports.begin(), ports.end(), [name](const auto& port) {
+        return port.name == name;
+      });
+  return found == ports.end() ? nullptr : &*found;
+}
+
+bool media_type_allowed(
+    const ArtifactPortDescriptor& port,
     std::string_view media_type) {
   return std::any_of(
-      ports.begin(), ports.end(), [media_type](const auto& port) {
-        return std::any_of(
-            port.media_types.begin(),
-            port.media_types.end(),
-            [media_type](const auto& allowed) {
-              return allowed == "*/*" || allowed == media_type;
-            });
+      port.media_types.begin(),
+      port.media_types.end(),
+      [media_type](const auto& allowed) {
+        return allowed == "*/*" || allowed == media_type;
       });
 }
 
@@ -614,19 +621,24 @@ Error validate_request(
   }
   std::set<std::string> input_hashes;
   for (const auto& input : request.inputs) {
-    if (!valid_artifact(input) ||
-        !media_type_allowed(
-            capability.input_artifacts, input.media_type) ||
-        !input_hashes.insert(input.sha256).second) {
+    const auto* port = find_port(
+        capability.input_artifacts, input.port);
+    if (port == nullptr || !valid_artifact(input.artifact) ||
+        !media_type_allowed(*port, input.artifact.media_type) ||
+        !input_hashes.insert(input.artifact.sha256).second) {
       return invalid_argument("capability request artifacts are invalid");
     }
   }
-  if (!capability.input_artifacts.empty()) {
-    const auto& port = capability.input_artifacts.front();
+  for (const auto& port : capability.input_artifacts) {
+    const auto count = static_cast<std::size_t>(std::count_if(
+        request.inputs.begin(),
+        request.inputs.end(),
+        [&port](const auto& input) {
+          return input.port == port.name;
+        }));
     const auto minimum =
         port.required ? std::size_t{1} : std::size_t{0};
-    if (request.inputs.size() < minimum ||
-        request.inputs.size() > port.max_count) {
+    if (count < minimum || count > port.max_count) {
       return invalid_argument("capability request input count is invalid");
     }
   }
@@ -700,6 +712,34 @@ void sort_artifacts(std::vector<ArtifactRef>& artifacts) {
       });
 }
 
+bool binding_less(
+    const ArtifactBinding& left,
+    const ArtifactBinding& right) {
+  return std::tie(
+             left.port,
+             left.artifact.sha256,
+             left.artifact.media_type,
+             left.artifact.byte_length) <
+         std::tie(
+             right.port,
+             right.artifact.sha256,
+             right.artifact.media_type,
+             right.artifact.byte_length);
+}
+
+void sort_bindings(std::vector<ArtifactBinding>& bindings) {
+  std::sort(bindings.begin(), bindings.end(), binding_less);
+}
+
+nlohmann::json binding_array(std::vector<ArtifactBinding> bindings) {
+  sort_bindings(bindings);
+  auto output = nlohmann::json::array();
+  for (const auto& binding : bindings) {
+    output.push_back(binding);
+  }
+  return output;
+}
+
 nlohmann::json artifact_array(std::vector<ArtifactRef> artifacts) {
   sort_artifacts(artifacts);
   auto output = nlohmann::json::array();
@@ -737,14 +777,27 @@ foundation::Result<void> persist_attempt(
     std::string parameters_sha256,
     std::string started_at,
     std::string ended_at,
-    const std::vector<ArtifactRef>& minted,
+    const std::vector<ArtifactBinding>& minted,
     bool redact_provider_error) {
   auto permissions = request.required_permissions;
   std::sort(permissions.begin(), permissions.end());
   auto inputs = request.inputs;
-  sort_artifacts(inputs);
-  auto artifacts = inputs;
-  artifacts.insert(artifacts.end(), minted.begin(), minted.end());
+  sort_bindings(inputs);
+  auto candidate_outputs = result.candidate.has_value()
+                               ? result.candidate->outputs
+                               : std::vector<ArtifactBinding>{};
+  sort_bindings(candidate_outputs);
+  auto artifacts = std::vector<ArtifactRef>{};
+  for (const auto& binding : inputs) {
+    if (!contains(artifacts, binding.artifact)) {
+      artifacts.push_back(binding.artifact);
+    }
+  }
+  for (const auto& binding : minted) {
+    if (!contains(artifacts, binding.artifact)) {
+      artifacts.push_back(binding.artifact);
+    }
+  }
   auto candidate_ids = nlohmann::json::array();
   if (result.candidate.has_value()) {
     candidate_ids.push_back(result.candidate->id.value());
@@ -753,15 +806,17 @@ foundation::Result<void> persist_attempt(
       {"artifacts", artifact_array(std::move(artifacts))},
       {"attempt_id", result.attempt_id.value()},
       {"candidate_ids", std::move(candidate_ids)},
+      {"candidate_outputs", binding_array(std::move(candidate_outputs))},
       {"capability",
        {
-           {"contract", "lmdj.capability.v1"},
+           {"contract", "lmdj.capability.v2"},
            {"id", capability.id},
            {"version", capability.contract_version},
        }},
       {"ended_at", std::move(ended_at)},
       {"error", error_json(result.error, redact_provider_error)},
-      {"format", "terminal-attempt"},
+      {"format", "terminal-attempt-v2"},
+      {"minted_outputs", binding_array(minted)},
       {"provider",
        {
            {"artifact_sha256", provider.artifact_sha256},
@@ -774,7 +829,7 @@ foundation::Result<void> persist_attempt(
        {
            {"capability", request.capability},
            {"data_classification", request.data_classification},
-           {"inputs", artifact_array(std::move(inputs))},
+           {"inputs", binding_array(std::move(inputs))},
            {"parameters_sha256", std::move(parameters_sha256)},
            {"platform", request.platform},
            {"region", request.region},
@@ -798,12 +853,37 @@ Error invalid_provider_outcome() {
   };
 }
 
-bool same_artifacts(
-    std::vector<ArtifactRef> left,
-    std::vector<ArtifactRef> right) {
-  sort_artifacts(left);
-  sort_artifacts(right);
+bool same_bindings(
+    std::vector<ArtifactBinding> left,
+    std::vector<ArtifactBinding> right) {
+  sort_bindings(left);
+  sort_bindings(right);
   return left == right;
+}
+
+bool valid_output_bindings(
+    const std::vector<ArtifactBinding>& bindings,
+    const std::vector<ArtifactPortDescriptor>& ports) {
+  std::set<std::string> artifact_hashes;
+  for (const auto& binding : bindings) {
+    const auto* port = find_port(ports, binding.port);
+    if (port == nullptr || !valid_artifact(binding.artifact) ||
+        !media_type_allowed(*port, binding.artifact.media_type) ||
+        !artifact_hashes.insert(binding.artifact.sha256).second) {
+      return false;
+    }
+  }
+  return std::all_of(
+      ports.begin(), ports.end(), [&bindings](const auto& port) {
+        const auto count = static_cast<std::size_t>(std::count_if(
+            bindings.begin(),
+            bindings.end(),
+            [&port](const auto& binding) {
+              return binding.port == port.name;
+            }));
+        const auto minimum = port.required ? std::size_t{1} : std::size_t{0};
+        return count >= minimum && count <= port.max_count;
+      });
 }
 
 foundation::Result<std::filesystem::path> existing_attempts_root(
@@ -846,6 +926,22 @@ bool exact_keys(
       expected.begin(), expected.end(), [&value](const auto key) {
         return value.contains(std::string(key));
       });
+}
+
+bool exact_artifact_shape(const nlohmann::json& encoded) {
+  return exact_keys(
+      encoded, {"byte_length", "media_type", "sha256"});
+}
+
+bool exact_binding_shape(const nlohmann::json& encoded) {
+  return exact_keys(encoded, {"artifact", "port"}) &&
+         exact_artifact_shape(encoded.at("artifact"));
+}
+
+bool all_exact_shapes(
+    const nlohmann::json& encoded,
+    bool (*predicate)(const nlohmann::json&)) {
+  return std::all_of(encoded.begin(), encoded.end(), predicate);
 }
 
 bool valid_semver(std::string_view value) {
@@ -935,6 +1031,16 @@ std::vector<ArtifactRef> decode_artifacts(
     artifacts.push_back(artifact.get<ArtifactRef>());
   }
   return artifacts;
+}
+
+std::vector<ArtifactBinding> decode_bindings(
+    const nlohmann::json& encoded) {
+  std::vector<ArtifactBinding> bindings;
+  bindings.reserve(encoded.size());
+  for (const auto& binding : encoded) {
+    bindings.push_back(binding.get<ArtifactBinding>());
+  }
+  return bindings;
 }
 
 }  // namespace
@@ -1045,22 +1151,24 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
                 "artifacts",
                 "attempt_id",
                 "candidate_ids",
+                "candidate_outputs",
                 "capability",
                 "ended_at",
                 "error",
                 "format",
+                "minted_outputs",
                 "provider",
                 "request",
                 "started_at",
                 "status",
             }) ||
-        encoded.at("format") != "terminal-attempt" ||
+        encoded.at("format") != "terminal-attempt-v2" ||
         encoded.at("attempt_id") != attempt_id.value() ||
         !exact_keys(
             encoded.at("capability"),
             {"contract", "id", "version"}) ||
         encoded.at("capability").at("contract") !=
-            "lmdj.capability.v1" ||
+            "lmdj.capability.v2" ||
         !exact_keys(
             encoded.at("provider"),
             {
@@ -1082,8 +1190,18 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
             }) ||
         !encoded.at("artifacts").is_array() ||
         !encoded.at("candidate_ids").is_array() ||
+        !encoded.at("candidate_outputs").is_array() ||
+        !encoded.at("minted_outputs").is_array() ||
         !encoded.at("request").at("inputs").is_array() ||
-        !encoded.at("request").at("required_permissions").is_array()) {
+        !encoded.at("request").at("required_permissions").is_array() ||
+        !all_exact_shapes(
+            encoded.at("artifacts"), exact_artifact_shape) ||
+        !all_exact_shapes(
+            encoded.at("candidate_outputs"), exact_binding_shape) ||
+        !all_exact_shapes(
+            encoded.at("minted_outputs"), exact_binding_shape) ||
+        !all_exact_shapes(
+            encoded.at("request").at("inputs"), exact_binding_shape)) {
       return foundation::Result<TerminalAttempt>::failure(
           invalid_argument("terminal Attempt has an invalid private shape"));
     }
@@ -1169,10 +1287,39 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
 
     auto artifacts = decode_artifacts(encoded.at("artifacts"));
     auto inputs =
-        decode_artifacts(encoded.at("request").at("inputs"));
+        decode_bindings(encoded.at("request").at("inputs"));
+    auto minted_outputs =
+        decode_bindings(encoded.at("minted_outputs"));
+    auto candidate_outputs =
+        decode_bindings(encoded.at("candidate_outputs"));
     if (!std::all_of(
             artifacts.begin(), artifacts.end(), valid_artifact) ||
-        !std::all_of(inputs.begin(), inputs.end(), valid_artifact)) {
+        !std::all_of(
+            inputs.begin(), inputs.end(), [](const auto& binding) {
+              return valid_file_id(binding.port) &&
+                     valid_artifact(binding.artifact);
+            }) ||
+        !std::all_of(
+            minted_outputs.begin(),
+            minted_outputs.end(),
+            [](const auto& binding) {
+              return valid_file_id(binding.port) &&
+                     valid_artifact(binding.artifact);
+            }) ||
+        !std::all_of(
+            candidate_outputs.begin(),
+            candidate_outputs.end(),
+            [](const auto& binding) {
+              return valid_file_id(binding.port) &&
+                     valid_artifact(binding.artifact);
+            }) ||
+        !std::is_sorted(inputs.begin(), inputs.end(), binding_less) ||
+        !std::is_sorted(
+            minted_outputs.begin(), minted_outputs.end(), binding_less) ||
+        !std::is_sorted(
+            candidate_outputs.begin(),
+            candidate_outputs.end(),
+            binding_less)) {
       return foundation::Result<TerminalAttempt>::failure(
           invalid_argument("terminal Attempt artifacts are invalid"));
     }
@@ -1218,9 +1365,11 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
       };
     }
     if ((status == AttemptStatus::succeeded &&
-         (candidate_ids.empty() || error.has_value())) ||
+         (candidate_ids.empty() || error.has_value() ||
+          !same_bindings(candidate_outputs, minted_outputs))) ||
         (status == AttemptStatus::failed &&
-         (!candidate_ids.empty() || !error.has_value()))) {
+         (!candidate_ids.empty() || !error.has_value() ||
+          !candidate_outputs.empty() || !minted_outputs.empty()))) {
       return foundation::Result<TerminalAttempt>::failure(
           invalid_argument("terminal Attempt outcome is inconsistent"));
     }
@@ -1239,7 +1388,7 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
             },
             AttemptCapabilityIdentity{
                 capability_id,
-                "lmdj.capability.v1",
+                "lmdj.capability.v2",
                 capability_version,
             },
             AttemptRequestMetadata{
@@ -1252,6 +1401,8 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
                 std::move(permissions),
             },
             std::move(candidate_ids),
+            std::move(minted_outputs),
+            std::move(candidate_outputs),
             std::move(artifacts),
             std::move(error),
         });
@@ -1308,7 +1459,7 @@ foundation::Result<AttemptResult> AttemptStore::execute(
   }
   const auto started_at = timestamp_source_();
 
-  std::vector<ArtifactRef> minted;
+  std::vector<ArtifactBinding> minted;
   const auto request_error =
       validate_request(request, capability, policy_);
   const auto reservation =
@@ -1331,15 +1482,21 @@ foundation::Result<AttemptResult> AttemptStore::execute(
                             &attempt_root,
                             &capability,
                             &minted](
+                            std::string port_name,
                             std::span<const std::byte> bytes,
                             std::string media_type)
         -> foundation::Result<ArtifactRef> {
+      const auto* port = find_port(
+          capability.output_artifacts, port_name);
+      if (port == nullptr) {
+        return foundation::Result<ArtifactRef>::failure(
+            invalid_argument("output port is not declared by capability"));
+      }
       if (!valid_media_type(media_type)) {
         return foundation::Result<ArtifactRef>::failure(
             invalid_argument("output media type is invalid"));
       }
-      if (!media_type_allowed(
-              capability.output_artifacts, media_type)) {
+      if (!media_type_allowed(*port, media_type)) {
         return foundation::Result<ArtifactRef>::failure(
             invalid_argument(
                 "output media type is not declared by capability"));
@@ -1398,6 +1555,17 @@ foundation::Result<AttemptResult> AttemptStore::execute(
         return foundation::Result<ArtifactRef>::failure(
             described.error());
       }
+      if (std::any_of(
+              minted.begin(),
+              minted.end(),
+              [&described](const auto& binding) {
+                return binding.artifact.sha256 == described.value().sha256;
+              })) {
+        std::error_code cleanup_error;
+        std::filesystem::remove(temp_path, cleanup_error);
+        return foundation::Result<ArtifactRef>::failure(
+            invalid_argument("output Artifact was already minted"));
+      }
       const auto final_path =
           attempt_root / "staging/artifacts" /
           described.value().sha256;
@@ -1452,9 +1620,10 @@ foundation::Result<AttemptResult> AttemptStore::execute(
                   rename_error));
         }
       }
-      if (!contains(minted, described.value())) {
-        minted.push_back(described.value());
-      }
+      minted.push_back(ArtifactBinding{
+          std::move(port_name),
+          described.value(),
+      });
       return foundation::Result<ArtifactRef>::success(described.value());
     };
 
@@ -1482,21 +1651,12 @@ foundation::Result<AttemptResult> AttemptStore::execute(
           minted.empty();
     }
     if (valid && terminal.candidate.has_value()) {
-      const auto output_count = terminal.candidate->outputs.size();
-      const bool output_count_valid =
-          !capability.output_artifacts.empty() &&
-          output_count >=
-              (capability.output_artifacts.front().required ? 1U : 0U) &&
-          output_count <=
-              capability.output_artifacts.front().max_count;
       valid =
           valid_file_id(terminal.candidate->id.value()) &&
-          output_count_valid &&
-          std::all_of(
-              terminal.candidate->outputs.begin(),
-              terminal.candidate->outputs.end(),
-              valid_artifact) &&
-          same_artifacts(terminal.candidate->outputs, minted);
+          valid_output_bindings(
+              terminal.candidate->outputs,
+              capability.output_artifacts) &&
+          same_bindings(terminal.candidate->outputs, minted);
     }
     if (!valid) {
       terminal = AttemptResult{
@@ -1507,7 +1667,7 @@ foundation::Result<AttemptResult> AttemptStore::execute(
     } else if (terminal.candidate.has_value()) {
       terminal.candidate->provenance = {
           {"capability", capability.id},
-          {"contract", "lmdj.capability.v1"},
+          {"contract", "lmdj.capability.v2"},
           {"contract_version", capability.contract_version},
           {"model_identity",
            model_identity_json(

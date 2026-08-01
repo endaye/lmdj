@@ -25,7 +25,7 @@ class LocalProofSuccessProvider final : public provider::Provider {
   std::string id() const override { return "local.proof.success"; }
 
   std::vector<std::string> capabilities() const override {
-    return {"proof.candidate.v1"};
+    return {"proof.candidate.v2"};
   }
 
   provider::AttemptResult run(
@@ -33,7 +33,7 @@ class LocalProofSuccessProvider final : public provider::Provider {
       const provider::CapabilityRequest&,
       provider::ArtifactSink output) override {
     const auto artifact =
-        output({}, "application/x-lmdj-proof");
+        output("candidate", {}, "application/x-lmdj-proof");
     if (!artifact.has_value()) {
       return provider::AttemptResult{
           std::move(attempt_id),
@@ -48,7 +48,7 @@ class LocalProofSuccessProvider final : public provider::Provider {
         attempt_id,
         provider::Candidate{
             foundation::CandidateId{attempt_id.value()},
-            {artifact.value()},
+            {{"candidate", artifact.value()}},
             nlohmann::json::object(),
         },
         std::nullopt,
@@ -58,8 +58,8 @@ class LocalProofSuccessProvider final : public provider::Provider {
 
 provider::CapabilityDescriptor proof_capability() {
   return provider::CapabilityDescriptor{
-      "proof.candidate.v1",
-      "1.0.0",
+      "proof.candidate.v2",
+      "2.0.0",
       {{
           "inputs",
           {"*/*"},
@@ -99,7 +99,7 @@ provider::CapabilityDescriptor proof_capability() {
 provider::ProviderRegistration local_proof_success_registration() {
   return provider::ProviderRegistration{
       std::make_shared<LocalProofSuccessProvider>(),
-      "0.1.0",
+      "1.0.0",
       LMDJ_LOCAL_PROOF_SUCCESS_SOURCE_PACKAGE_SHA256,
       std::nullopt,
       {proof_capability()},

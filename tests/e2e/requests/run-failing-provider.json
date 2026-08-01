@@ -1,7 +1,7 @@
 {
   "operation": "provider.run",
   "attempt_id": "attempt-proof-failure",
-  "capability": "proof.candidate.v1",
+  "capability": "proof.candidate.v2",
   "inputs": [],
   "parameters": {},
   "data_classification": "public",

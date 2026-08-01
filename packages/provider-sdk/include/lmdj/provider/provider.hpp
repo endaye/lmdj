@@ -15,6 +15,7 @@ namespace lmdj::provider {
 
 using ArtifactSink =
     std::function<foundation::Result<foundation::ArtifactRef>(
+        std::string port,
         std::span<const std::byte> bytes,
         std::string media_type)>;
 

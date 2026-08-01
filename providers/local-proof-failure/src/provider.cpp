@@ -21,7 +21,7 @@ class LocalProofFailureProvider final : public provider::Provider {
   std::string id() const override { return "local.proof.failure"; }
 
   std::vector<std::string> capabilities() const override {
-    return {"proof.candidate.v1"};
+    return {"proof.candidate.v2"};
   }
 
   provider::AttemptResult run(
@@ -41,8 +41,8 @@ class LocalProofFailureProvider final : public provider::Provider {
 
 provider::CapabilityDescriptor proof_capability() {
   return provider::CapabilityDescriptor{
-      "proof.candidate.v1",
-      "1.0.0",
+      "proof.candidate.v2",
+      "2.0.0",
       {{
           "inputs",
           {"*/*"},
@@ -82,7 +82,7 @@ provider::CapabilityDescriptor proof_capability() {
 provider::ProviderRegistration local_proof_failure_registration() {
   return provider::ProviderRegistration{
       std::make_shared<LocalProofFailureProvider>(),
-      "0.1.0",
+      "1.0.0",
       LMDJ_LOCAL_PROOF_FAILURE_SOURCE_PACKAGE_SHA256,
       std::nullopt,
       {proof_capability()},

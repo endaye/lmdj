@@ -47,6 +47,7 @@ nlohmann::json port_json(ArtifactPortDescriptor port) {
   std::sort(port.media_types.begin(), port.media_types.end());
   return {
       {"media_types", std::move(port.media_types)},
+      {"max_count", port.max_count},
       {"name", std::move(port.name)},
       {"required", port.required},
       {"schema_id", std::move(port.schema_id)},
@@ -79,7 +80,7 @@ nlohmann::json capability_contract_json(
   }
   return {
       {"capability_id", capability.id},
-      {"contract", "lmdj.capability.v1"},
+      {"contract", "lmdj.capability.v2"},
       {"contract_version", capability.contract_version},
       {"determinism", determinism_name(capability.determinism)},
       {"errors", sorted_strings(capability.error_codes)},
@@ -101,6 +102,18 @@ nlohmann::json capability_contract_json(
       {"progress_events", sorted_strings(capability.progress_events)},
       {"resources", std::move(resources)},
   };
+}
+
+void to_json(nlohmann::json& output, const ArtifactBinding& binding) {
+  output = {
+      {"artifact", binding.artifact},
+      {"port", binding.port},
+  };
+}
+
+void from_json(const nlohmann::json& input, ArtifactBinding& binding) {
+  input.at("port").get_to(binding.port);
+  input.at("artifact").get_to(binding.artifact);
 }
 
 std::string canonical_capability_json(

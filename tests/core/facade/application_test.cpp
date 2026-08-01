@@ -35,7 +35,7 @@ constexpr std::string_view kTakeId =
     "00000000-0000-4000-8000-000000000201";
 constexpr std::string_view kPatternId =
     "00000000-0000-4000-8000-000000000010";
-constexpr std::string_view kCapability = "proof.candidate.v1";
+constexpr std::string_view kCapability = "proof.candidate.v2";
 constexpr std::string_view kGoldenSha =
     "d276060107ab2479126c4f66919b799593a852fe624720f03e7be3b70bcfe867";
 
@@ -167,8 +167,8 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "0.1.1"},
-           {"api_version", 1},
+           {"version", "1.0.0"},
+           {"api_version", 2},
            {"dependencies",
             {
                 {"foundation", "0.1.0"},
@@ -176,7 +176,7 @@ void test_module_versions_and_dependencies_are_exact() {
                 {"project-io", "0.2.0"},
                 {"project-cooker", "0.1.0"},
                 {"audio-runtime", "0.1.0"},
-                {"provider-sdk", "0.1.0"},
+                {"provider-sdk", "1.0.0"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
@@ -383,7 +383,18 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           {"operation", "provider.run"},
           {"attempt_id", "attempt-facade-success"},
           {"capability", kCapability},
-          {"inputs", nlohmann::json::array()},
+          {"inputs",
+           nlohmann::json::array({
+               {
+                   {"port", "inputs"},
+                   {"artifact",
+                    {
+                        {"sha256", std::string(64, 'a')},
+                        {"media_type", "application/octet-stream"},
+                        {"byte_length", 1},
+                    }},
+               },
+           })},
           {"parameters", nlohmann::json::object()},
           {"data_classification", "public"},
           {"platform", "test"},
@@ -400,6 +411,19 @@ void test_all_operations_share_one_facade_and_revision_contract() {
           "outputs",
           "provenance",
       });
+  const auto expected_outputs = nlohmann::json::array({
+      {
+          {"port", "candidate"},
+          {"artifact",
+           {
+               {"sha256",
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+               {"media_type", "application/x-lmdj-proof"},
+               {"byte_length", 0},
+           }},
+      },
+  });
+  LMDJ_CHECK(response.at("result").at("outputs") == expected_outputs);
 
   response = application.query(
       {
@@ -410,6 +434,13 @@ void test_all_operations_share_one_facade_and_revision_contract() {
   LMDJ_CHECK(response.at("result").at("attempt_id") ==
              "attempt-facade-success");
   LMDJ_CHECK(response.at("result").at("status") == "succeeded");
+  LMDJ_CHECK(
+      response.at("result").at("request").at("inputs").at(0).at("port") ==
+      "inputs");
+  LMDJ_CHECK(
+      response.at("result").at("minted_outputs") == expected_outputs);
+  LMDJ_CHECK(
+      response.at("result").at("candidate_outputs") == expected_outputs);
 }
 
 void test_render_recooks_after_restart_and_publishes_golden_atomically() {
