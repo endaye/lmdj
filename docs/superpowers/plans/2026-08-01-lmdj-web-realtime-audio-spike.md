@@ -220,7 +220,7 @@ Expected: all tests pass with no warnings.
 - Consumes: `--bind`, `--port`, optional `--cert-file`, optional `--key-file`.
 - Produces: a static server rooted only at `apps/web-runtime-lab/`, with mandatory isolation headers and optional TLS.
 
-- [ ] **Step 1: Write the failing server test**
+- [x] **Step 1: Write the failing server test**
 
 Start an ephemeral server subprocess with `--port 0 --write-port <temp-file>`. Assert:
 
@@ -237,7 +237,7 @@ assert json.loads(urlopen(base_url + "/health.json").read()) == {
 
 Also require traversal attempts to return 404 and incomplete TLS arguments to exit `2` with `server error:`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -247,7 +247,7 @@ python3 apps/web-runtime-lab/test/server_test.py
 
 Expected: failure because `server.py` is absent.
 
-- [ ] **Step 3: Implement the strict server**
+- [x] **Step 3: Implement the strict server**
 
 Subclass `SimpleHTTPRequestHandler`, pass an explicit lab directory, add headers in `end_headers`, suppress request logs unless `--verbose`, expose the in-memory health response, and wrap the server socket with `ssl.SSLContext(PROTOCOL_TLS_SERVER)` only when both TLS files are supplied. Reject non-files, symlinks escaping the root, incomplete TLS arguments, and invalid ports.
 
@@ -260,7 +260,7 @@ scripts/web-runtime-lab.sh serve --port 4173
 scripts/web-runtime-lab.sh serve-lan --bind 0.0.0.0 --cert-file PATH --key-file PATH
 ```
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run:
 
