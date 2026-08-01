@@ -272,3 +272,26 @@
 - 影响：主 Agent 是 Integration Owner，但同样不能直接修改 protected `main`；
   Provider 或 Multi-Agent 只是满足 Capability Contract 的可替换实现，不能绕过
   Command、Policy、Attempt 和事务边界修改 Project。
+
+## 2026-08-01
+
+### 已确认：Provider Artifact 采用显式端口绑定并进入 Capability Contract v2
+
+- 结论：采用显式 `ArtifactBinding {port, artifact}`。Request inputs、Artifact
+  Sink、Candidate outputs 和 Attempt evidence 都保存稳定端口名；新建
+  `lmdj.capability.v2`，不原地改变 `lmdj.capability.v1`，也不使用数组位置、
+  media type 或 Schema 推断端口。
+- 验证：每个端口独立执行 required、`max_count` 和 media type 门禁；拒绝未知
+  端口、重复 Artifact Ref 和无输出端口的 Candidate-producing Descriptor。
+  所有输出端口均可选时允许零 Artifact 成功；初始 v2 禁止同一 Artifact Ref
+  绑定多个端口。
+- 原因：当前 Descriptor 已有端口名，但 Request、Sink、Candidate 和 Attempt
+  仍是扁平 Artifact 数组；两个端口允许相同类型或可选/多值时，顺序和类型推断
+  都无法提供无歧义语义。
+- 影响：Project Truth、Provider 选择和失败隔离边界不变。实现按
+  [Capability v2 端口绑定实施计划](../superpowers/plans/2026-08-01-lmdj-capability-v2-port-bindings.md)
+  独立进入新 Product Build；完整决策与实施门禁见
+  [Provider 多端口 Capability Contract 决策](../architecture/2026-08-01-provider-multi-port-contract-decision.md)。
+- 限制：当前 `ArtifactRef` 没有 Schema provenance，v2 先验证 binding 选择的
+  端口和该端口声明的 Schema 身份，不宣称已做输入 bytes 的 Schema 校验；
+  Artifact resolver 与字节级验证器仍是独立开放问题。
