@@ -12,7 +12,7 @@ from the active tree and remains recoverable from Git history.
 ## Current status
 
 - Designed: full product and Core architecture.
-- Implemented by this plan: M1 Headless Core Proof only (`1.0.6.0` candidate).
+- Implemented by this plan: M1 Headless Core Proof only (`1.0.7.0` candidate).
 - Not implemented: realtime audio, Web/PWA, Creator UI, Sample intelligence,
   Sequence editing, Perform, Sound Sets, production Providers, or cloud
   deployment.

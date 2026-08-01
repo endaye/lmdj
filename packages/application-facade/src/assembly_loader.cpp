@@ -21,6 +21,7 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uintmax_t kMaximumAssemblyBytes = 4U * 1024U * 1024U;
+constexpr int kMaximumJsonContainerDepth = 64;
 
 std::mutex installed_catalog_mutex;
 std::optional<CompiledAssemblyCatalog> installed_catalog;
@@ -49,8 +50,22 @@ std::optional<nlohmann::json> read_object(
   if (!input.good()) {
     return std::nullopt;
   }
-  auto value = nlohmann::json::parse(input, nullptr, false);
-  if (value.is_discarded() || !value.is_object()) {
+  bool depth_exceeded = false;
+  const auto callback = [&depth_exceeded](
+                            int depth,
+                            nlohmann::json::parse_event_t event,
+                            nlohmann::json&) {
+    const bool container_start =
+        event == nlohmann::json::parse_event_t::object_start ||
+        event == nlohmann::json::parse_event_t::array_start;
+    if (container_start && depth >= kMaximumJsonContainerDepth) {
+      depth_exceeded = true;
+      return false;
+    }
+    return true;
+  };
+  auto value = nlohmann::json::parse(input, callback, false);
+  if (depth_exceeded || value.is_discarded() || !value.is_object()) {
     return std::nullopt;
   }
   return value;

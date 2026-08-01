@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.6.0"
+    "version": "1.0.7.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -42,17 +42,17 @@
     },
     {
       "id": "application-facade",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ],
   "hosts": [
     {
       "id": "core-cli",
-      "version": "0.1.0"
+      "version": "0.1.1"
     },
     {
       "id": "core-mcp",
-      "version": "0.1.0"
+      "version": "0.1.1"
     }
   ],
   "providers": [

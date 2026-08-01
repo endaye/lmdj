@@ -172,7 +172,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       declared_model_identity(assembly.at("providers").at(1));
   return CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.6.0",
+      "1.0.7.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       components(assembly, "modules"),
       components(assembly, "hosts"),
@@ -288,7 +288,7 @@ void rejects_invalid_and_unavailable_components() {
   expect_failure(value, "additional-property");
 
   value = assembly;
-  value["product"]["version"] = "1.0.7.0";
+  value["product"]["version"] = "1.0.8.0";
   expect_failure(value, "product-version");
 
   value = assembly;
