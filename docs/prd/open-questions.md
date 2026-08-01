@@ -12,6 +12,7 @@
 | --- | --- | --- | --- |
 | 素材 BPM ≠ Project BPM 时，Loop 类素材是否/如何 Time-stretch 跟随全局 BPM（含 Pitch-shift）？ | “完整歌曲变成可演奏素材”+ 全局 BPM/Key 几乎必然遇到速度不匹配；决定 Audio Runtime 的 DSP 范围和 Capability 清单（Koala 有 Time-stretch 作为对照）。 | Audio Runtime Contract 定稿前的设计评审。 | 待决 |
 | 产品级录音并发语义如何定义：哪些无关 Command 不应触发冲突，是否允许选择性 rebase？ | Headless Core Proof 为保证确定性，暂用“任何 revision 变化均冲突并封存 Take”的严格规则；该规则不能替代用户产品中的冲突分类，仍会影响录音 Journal、Take 提交体验与公开 Contract。 | Sequence / Take Contract 进入用户产品实现前单独设计评审（新内核设计 §25）。 | 待设计评审 |
+| Provider 多端口 Artifact 如何显式绑定并逐端口校验？ | 当前 Descriptor 有命名端口，但 Request、Sink 和 Candidate 只有扁平 Artifact 数组，无法无歧义表达多端口；详见 [Contract 决策提案](../architecture/2026-08-01-provider-multi-port-contract-decision.md)。 | Stem、Slice、Export 等首个多端口 Capability 实现前批准 v2 Contract。 | 待架构批准 |
 | Web 实时音频 Spike 的延迟验收阈值是多少（Touch-to-Sound）？ | 阈值决定 Spike 结论是否触发“回评审重议首发平台”；不能事后按实测结果倒推。 | Spike 启动前定阈值。 | 待决 |
 
 ## Stage 1 首条切片
