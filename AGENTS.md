@@ -6,8 +6,13 @@ is the only active product source.
 ## Git workflow
 
 `main` is protected and must remain deployable. Work only on a short-lived
-branch in an isolated worktree. Codex-created branches use the `codex/` prefix
-unless the user explicitly chooses another prefix.
+branch in an isolated worktree. Branch names must use `feat/<task>`,
+`fix/<task>`, or `docs/<task>`; this applies equally to people and coding
+agents. Do not create long-lived `develop`, `release/*`, or `hotfix/*` branches.
+
+[`docs/governance/git-workflow.md`](docs/governance/git-workflow.md) is the
+canonical workflow, including task start, PR, squash merge, release, and cleanup
+rules.
 
 Each implementation Task is one reviewable Conventional Commit. Before every
 commit:

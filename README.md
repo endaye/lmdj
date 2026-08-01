@@ -68,6 +68,7 @@ generates a canary Build Manifest. `scripts/core.sh clean` removes only
 
 - [Core redesign](docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md)
 - [Headless Core implementation plan](docs/superpowers/plans/2026-07-30-lmdj-headless-core-proof.md)
+- [Git workflow](docs/governance/git-workflow.md)
 - [Version management](docs/governance/version-management.md)
 - [Product decision log](docs/prd/decision-log.md)
 - [Open product questions](docs/prd/open-questions.md)
