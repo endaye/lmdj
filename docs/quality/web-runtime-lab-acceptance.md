@@ -1,0 +1,124 @@
+# Web Runtime Lab Acceptance and Evidence Policy
+
+## Purpose
+
+`apps/web-runtime-lab/` is a product-neutral feasibility Host. It measures
+browser realtime-audio capability and prepares physical device evidence. It
+does not implement Creator UI, use Product Assembly, or change Core behavior.
+
+The current Touch-to-Sound recommendation is documented in
+[`2026-08-01-web-realtime-audio-threshold-decision.md`](../architecture/2026-08-01-web-realtime-audio-threshold-decision.md).
+Its status is Proposed. Until the Product Owner approves it, the lab records
+observations but does not report product pass or fail.
+
+## Automated Gate
+
+The repository gate proves:
+
+- pure capability, percentile, and report behavior;
+- stable report fields with `decisionStatus: "pending-threshold-approval"`;
+- absence of a product pass/fail field;
+- loopback-only default serving;
+- COOP, COEP, CORP, and no-store response headers;
+- explicit and complete TLS arguments for LAN mode;
+- presence of AudioWorklet, WebAssembly, SharedArrayBuffer/Atomics, Web MIDI,
+  lifecycle, dynamic render-quantum, and privacy guards in the active lab;
+- no dependency on retired Contracts, Product Assembly, Facade, or Core source.
+
+It does not prove a browser can acquire a physical audio route, that an iPad
+can recover from interruption, that a MIDI controller works, or that acoustic
+latency is acceptable.
+
+## Desktop Browser Smoke
+
+The desktop Chromium smoke must start the loopback server, open the page in a
+real browser, activate audio through the Start button, trigger the pad, and
+export a report. The visible result must show:
+
+- secure context and `crossOriginIsolated === true`;
+- `AudioContext.state === "running"`;
+- WebAssembly initialized inside the AudioWorklet;
+- SharedArrayBuffer trigger and acknowledgement counts increase together;
+- at least one non-zero observed render quantum size;
+- physical measurement not recorded;
+- decision pending threshold approval.
+
+This smoke is current Chromium evidence only. It is not Safari, iPad, physical
+MIDI, underrun, or acoustic evidence.
+
+## Physical Matrix
+
+Run all rows before making a Web/PWA launch-platform conclusion:
+
+| Platform | Browser | Input | Output | Runs |
+| --- | --- | --- | --- | --- |
+| macOS | Safari | Pointer | Built-in or wired | 500 triggers plus 10-minute foreground run |
+| macOS | Chrome | Pointer | Built-in or wired | 500 triggers plus 10-minute foreground run |
+| macOS | Chrome | Physical MIDI | Built-in or wired | 500 MIDI events plus physical timing sample |
+| iPadOS | Safari | Touch | Built-in or wired | 500 triggers plus 10-minute foreground run |
+| iPadOS | Safari | Touch | Built-in or wired | background, foreground, lock, unlock, and route interruption |
+
+Bluetooth may be measured in a separate row but is never substituted for a
+required built-in or wired result.
+
+## Physical Measurement Method
+
+Use one of:
+
+1. high-speed video at 240 fps or faster, with pad contact and acoustic onset
+   visible/audible in the same recording; or
+2. a calibrated wired electrical/loopback rig whose trigger marker and output
+   onset share one clock.
+
+For high-speed video, retain frame rate, frame index of contact, frame index of
+onset, and any calibration offset. For loopback, retain sample rate, marker
+sample, onset sample, and calibration offset. Record every excluded sample and
+reason; do not remove slow observations merely to satisfy a percentile.
+
+## Lifecycle Protocol
+
+For each Safari/iPad run:
+
+1. start audio with one explicit tap;
+2. trigger one audible onset;
+3. send Safari to background for 30 seconds and return;
+4. lock the screen for 30 seconds and unlock;
+5. perform one available route interruption, such as connecting/disconnecting
+   a wired route or another system audio session;
+6. record every `AudioContext` and document lifecycle transition;
+7. if needed, use exactly one explicit recovery activation;
+8. trigger once and require exactly one onset.
+
+Unsupported or unreproducible interruption steps remain unverified; they are
+not silently omitted or called passed.
+
+## Report Privacy
+
+Allowed:
+
+- random per-session UUID;
+- OS/browser version and broad device class;
+- route category;
+- sample rate and exposed latency estimates;
+- note and velocity values;
+- relative timing, lifecycle, counts, and errors.
+
+Forbidden:
+
+- persistent local identity;
+- device serials or stable hardware identifiers;
+- MIDI input name, manufacturer, or browser device ID;
+- SysEx or raw MIDI message bytes;
+- automatic upload or persistence;
+- Product pass/fail before threshold approval.
+
+## Evidence States
+
+- `automated-pass`: repository-only checks passed.
+- `browser-smoke-pass`: one named browser completed the live smoke.
+- `physical-measured`: a matrix row has retained physical observations.
+- `unverified`: required evidence is absent or unsupported.
+- `decision-pending`: the Product Owner has not approved the threshold.
+
+These states are cumulative and non-substitutable. In particular,
+`automated-pass` plus `browser-smoke-pass` is still not physical acceptance.

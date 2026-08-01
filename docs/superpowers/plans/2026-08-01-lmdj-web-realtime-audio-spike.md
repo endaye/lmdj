@@ -49,7 +49,7 @@
 - Consumes: Core redesign §23 and the still-open Touch-to-Sound question.
 - Produces: one explicitly proposed threshold set and one acceptance protocol without changing the decision log.
 
-- [ ] **Step 1: Write the proposal without marking it approved**
+- [x] **Step 1: Write the proposal without marking it approved**
 
 Create a decision document with `Status: Proposed - awaiting Product Owner approval`. Record the recommendation exactly:
 
@@ -67,11 +67,11 @@ Lifecycle recovery:
 
 State that Bluetooth is reported separately and never used to pass or fail the launch-platform gate. Define three evidence layers: capability/runtime telemetry, browser-estimated event-to-render timing, and physical touch/acoustic onset.
 
-- [ ] **Step 2: Link the open question without resolving it**
+- [x] **Step 2: Link the open question without resolving it**
 
 Keep status `待决`; add the proposal path and state that approval must precede pass/fail logic. Do not add anything to `docs/prd/decision-log.md`.
 
-- [ ] **Step 3: Specify the physical matrix**
+- [x] **Step 3: Specify the physical matrix**
 
 Require at minimum:
 
@@ -84,7 +84,7 @@ iPadOS Safari lifecycle: background/foreground, screen lock/unlock, route interr
 
 For every run record OS/browser version, device class, output route category, sample rate, base/output latency if exposed, 500-trigger CSV/JSON, lifecycle transitions, and high-speed-video or loopback measurement method. Do not record device serials or MIDI identifiers.
 
-- [ ] **Step 4: Verify documentation boundaries**
+- [x] **Step 4: Verify documentation boundaries**
 
 Run:
 

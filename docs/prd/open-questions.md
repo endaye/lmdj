@@ -13,7 +13,7 @@
 | 素材 BPM ≠ Project BPM 时，Loop 类素材是否/如何 Time-stretch 跟随全局 BPM（含 Pitch-shift）？ | “完整歌曲变成可演奏素材”+ 全局 BPM/Key 几乎必然遇到速度不匹配；决定 Audio Runtime 的 DSP 范围和 Capability 清单（Koala 有 Time-stretch 作为对照）。 | Audio Runtime Contract 定稿前的设计评审。 | 待决 |
 | 产品级录音并发语义如何定义：哪些无关 Command 不应触发冲突，是否允许选择性 rebase？ | Headless Core Proof 为保证确定性，暂用“任何 revision 变化均冲突并封存 Take”的严格规则；该规则不能替代用户产品中的冲突分类，仍会影响录音 Journal、Take 提交体验与公开 Contract。 | Sequence / Take Contract 进入用户产品实现前单独设计评审（新内核设计 §25）。 | 待设计评审 |
 | Provider 输入 Artifact 的字节级 Schema 校验由谁解析与验证？ | 已批准的 `lmdj.capability.v2` 能用显式端口确定声明的 Schema 身份，但 `ArtifactRef` 不携带 Schema provenance，AttemptStore 也没有输入 Artifact resolver，不能把端口身份校验伪装成字节级 Schema 校验。 | 首个需要解析结构化 Artifact bytes 的正式 Capability 实现前单独设计 resolver 与验证器边界。 | 待架构设计 |
-| Web 实时音频 Spike 的延迟验收阈值是多少（Touch-to-Sound）？ | 阈值决定 Spike 结论是否触发“回评审重议首发平台”；不能事后按实测结果倒推。 | Spike 启动前定阈值。 | 待决 |
+| Web 实时音频 Spike 的延迟验收阈值是多少（Touch-to-Sound）？ | 阈值决定 Spike 结论是否触发“回评审重议首发平台”；不能事后按实测结果倒推。推荐门槛已形成[待批准提案](../architecture/2026-08-01-web-realtime-audio-threshold-decision.md)，实验室在批准前只记录原始证据，不判断通过/失败。 | Spike 启动前定阈值；Product Owner 明确批准后再写入 decision log 与门禁配置。 | 待决 |
 
 ## Stage 1 首条切片
 
