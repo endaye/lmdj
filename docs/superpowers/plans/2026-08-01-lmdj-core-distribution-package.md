@@ -53,7 +53,7 @@ Canonical policy: `docs/governance/version-management.md`.
 - Consumes: build root containing `bin/lmdj-core` and the C ABI shared library.
 - Produces: `package.acceptance` CTest and direct `--build-root` test entrypoint.
 
-- [ ] **Step 1: Write the acceptance test before the packager exists**
+- [x] **Step 1: Write the acceptance test before the packager exists**
 
 The test invokes:
 
@@ -84,6 +84,7 @@ README.md
 bin/lmdj-core
 bin/lmdj-core-mcp
 build-manifest.json
+share/lmdj/contracts/assembly/lmdj.assembly.v2.schema.json
 lib/liblmdj_core_c.dylib | lib/liblmdj_core_c.so
 libexec/lmdj-core
 python/lmdj_core_mcp/__init__.py
@@ -97,7 +98,7 @@ share/lmdj/version.json
 
 Run the extracted CLI from the extraction parent with `PYTHONPATH` removed and `PYTHONNOUSERSITE=1`; create a Project and query `provider.list`. Start the extracted MCP launcher with the same environment, initialize MCP `2025-11-25`, call `lmdj.provider.list`, and require the same structured result.
 
-- [ ] **Step 2: Register the test in CTest**
+- [x] **Step 2: Register the test in CTest**
 
 ```cmake
 lmdj_add_test(
@@ -108,12 +109,12 @@ lmdj_add_test(
     tests/distribution/package_acceptance_test.py
     --build-root "${CMAKE_BINARY_DIR}"
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  LABELS abi assembly generated host
+  LABELS abi assembly generated
   TIMEOUT 180
 )
 ```
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
 Run:
 
@@ -138,7 +139,7 @@ Expected: non-zero exit because `scripts/package-core.py` is absent, before Host
 - Consumes: `--build-root PATH` and `--output-dir PATH`.
 - Produces: absolute `lmdj-core-<version>-<platform>-<architecture>.zip` path on stdout.
 
-- [ ] **Step 1: Implement strict discovery and staging**
+- [x] **Step 1: Implement strict discovery and staging**
 
 Use:
 
@@ -151,9 +152,9 @@ version = verify(
 )
 ```
 
-Require regular non-symlink inputs for CLI, platform library, four MCP Python files, Assembly, lock, version, and README. Reject unsupported systems/architectures with exit `2` and `package error:`. Stage under `tempfile.TemporaryDirectory` below the output directory; copy only Task 1's inventory.
+Require regular non-symlink inputs for CLI, platform library, four MCP Python files, Assembly, Assembly Schema, lock, version, and README. Reject unsupported systems/architectures with exit `2` and `package error:`. Stage under `tempfile.TemporaryDirectory` below the output directory; copy only Task 1's inventory.
 
-- [ ] **Step 2: Generate relocation-safe launchers**
+- [x] **Step 2: Generate relocation-safe launchers**
 
 `bin/lmdj-core` is a POSIX shell launcher resolving its physical package root. If any argument is `--assembly`, execute `libexec/lmdj-core` unchanged; otherwise inject the bundled Assembly before caller arguments.
 
@@ -173,11 +174,11 @@ runpy.run_module("lmdj_core_mcp", run_name="__main__")
 
 Modes: launchers and real CLI `0755`; all other files `0644`.
 
-- [ ] **Step 3: Generate manifest and ZIP**
+- [x] **Step 3: Generate manifest and ZIP**
 
 Use the existing version manifest implementation against the staged root. Require current Product version, staged Assembly lock digest, and full Git SHA. Create the ZIP in lexicographic order below one root; preserve file modes through `ZipInfo.external_attr`; write a temporary archive then atomically replace the exact final path.
 
-- [ ] **Step 4: Add stable commands**
+- [x] **Step 4: Add stable commands**
 
 Add `scripts/core.sh package`. It configures/builds Release and runs:
 
@@ -189,7 +190,7 @@ python3 scripts/package-core.py \
 
 Extend `scripts/core.sh proof` to run clean-package acceptance against Release before its Proof Build Manifest.
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 ```bash
 python3 tests/distribution/package_acceptance_test.py --build-root build/core/dev
@@ -216,7 +217,7 @@ Expected: both print `core distribution package acceptance: PASS` and exit `0`.
 - Consumes: package behavior from Tasks 1–2.
 - Produces: consistent Product Build `1.0.9.0` and full Proof evidence.
 
-- [ ] **Step 1: Change exact version assertions first**
+- [x] **Step 1: Change exact version assertions first**
 
 ```python
 assert version == ProductVersion(1, 0, 9, 0)
@@ -226,13 +227,13 @@ assert version.product_tag() == "lmdj-v1.0.9.0"
 
 Change Product Assembly source identity expectations to `1.0.9.0`.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run `python3 tests/build/version_test.py`.
 
 Expected: failure because Product still identifies `1.0.8.0`.
 
-- [ ] **Step 3: Update identity and regenerate lock**
+- [x] **Step 3: Update identity and regenerate lock**
 
 Set Build `9` and `1.0.9.0` in version, Assembly, compiled Assembly, Product README, and Proof output. Run:
 
@@ -247,7 +248,7 @@ python3 scripts/version.py verify \
   --lock products/lmdj/assembly.lock.json
 ```
 
-- [ ] **Step 4: Run complete acceptance**
+- [x] **Step 4: Run complete acceptance**
 
 ```bash
 scripts/core.sh proof
@@ -258,7 +259,7 @@ git diff --check
 
 Expected: 23 Release tests pass; Schema, graph, CLI, MCP, parity, Headless E2E, package acceptance, Product `1.0.9.0`, and lock pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 Stage only files declared by Tasks 1–3 plus this plan, verify staged paths and `git diff --cached --check`, then commit:
 
@@ -293,12 +294,12 @@ Only then may the Integration Owner create annotated `lmdj-v1.0.9.0`. Tag push a
 
 ## Final Review Checklist
 
-- [ ] Fresh extraction runs outside repository and build tree.
-- [ ] Caller has no usable `PYTHONPATH` or source checkout.
-- [ ] CLI and MCP use the bundled Assembly and return identical Provider inventory.
+- [x] Fresh extraction runs outside repository and build tree.
+- [x] Caller has no usable `PYTHONPATH` or source checkout.
+- [x] CLI and MCP use the bundled Assembly and return identical Provider inventory.
 - [ ] Shared library loads on macOS and Ubuntu.
-- [ ] Inventory is exact, normalized, single-rooted, and symlink-free.
-- [ ] Executable modes survive `unzip`.
-- [ ] Build Manifest covers every shipped file and matches Product/Assembly identity.
-- [ ] All Product identity sources say `1.0.9.0`.
+- [x] Inventory is exact, normalized, single-rooted, and symlink-free.
+- [x] Executable modes survive `unzip`.
+- [x] Build Manifest covers every shipped file and matches Product/Assembly identity.
+- [x] All Product identity sources say `1.0.9.0`.
 - [ ] Local Proof, package acceptance, four CI jobs, and squash merge pass before tag consideration.

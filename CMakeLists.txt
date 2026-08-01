@@ -258,6 +258,18 @@ set_tests_properties(
 )
 
 lmdj_add_test(
+  NAME package.acceptance
+  TIER e2e
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/distribution/package_acceptance_test.py
+    --build-root "${CMAKE_BINARY_DIR}"
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  LABELS abi assembly generated
+  TIMEOUT 180
+)
+
+lmdj_add_test(
   NAME build.test_taxonomy
   TIER contract
   COMMAND

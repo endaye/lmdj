@@ -12,6 +12,7 @@ usage:
   scripts/core.sh test [dev|release|asan|tsan] [fast|full|stress]
   scripts/core.sh coverage [report|check]
   scripts/core.sh proof
+  scripts/core.sh package
   scripts/core.sh clean
 EOF
 }
@@ -166,6 +167,9 @@ case "$command_name" in
       "$proof_e2e_root" \
       "$proof_output_wav"
 
+    python3 tests/distribution/package_acceptance_test.py \
+      --build-root "$release_root"
+
     python3 scripts/version.py manifest \
       --version-file products/lmdj/version.json \
       --assembly "$assembly_path" \
@@ -183,9 +187,20 @@ case "$command_name" in
     cmake -E remove_directory "$proof_run_root"
     trap - EXIT
     echo "Headless Core Proof: PASS"
-    echo "Product Build: 1.0.8.0"
+    echo "Product Build: 1.0.9.0"
     echo "Channel: canary"
     echo "Assembly lock: MATCH"
+    ;;
+  package)
+    [[ $# -eq 0 ]] || {
+      usage
+      exit 64
+    }
+    cmake --preset release
+    cmake --build --preset release
+    python3 scripts/package-core.py \
+      --build-root "$build_root/release" \
+      --output-dir "$build_root/dist"
     ;;
   clean)
     [[ $# -eq 0 ]] || {
