@@ -1,8 +1,10 @@
-# Provider 多端口 Capability Contract 决策提案
+# Provider 多端口 Capability Contract 决策
 
 日期：2026-08-01
 
-状态：待架构批准，禁止据此实施
+状态：已批准
+
+批准记录：2026-08-01，四项决策全部确认。
 
 ## 要决定什么
 
@@ -10,8 +12,9 @@
 属于哪个命名端口，以及 Request、Artifact Sink、Candidate、Attempt 记录如何保存并
 校验该绑定。
 
-本提案不修改现有 Contract、Provider SDK 或 Product Assembly。批准后仍需独立实施
-计划、Contract Review、版本分配和迁移评审。
+本决策本身不修改现有 Contract、Provider SDK 或 Product Assembly。实现必须按
+[Capability v2 端口绑定实施计划](../superpowers/plans/2026-08-01-lmdj-capability-v2-port-bindings.md)
+独立执行、验证和分配版本。
 
 ## 当前事实
 
@@ -42,13 +45,13 @@
 
 | 选项 | 说明 | 结论 |
 | --- | --- | --- |
-| A. 数组位置隐式对应端口 | 用 Descriptor 顺序切分扁平 Artifact 数组 | 不推荐；可选端口和多 Artifact 端口会使边界不唯一，重排也会改变语义。 |
-| B. 按 media type 或 Schema 推断 | Artifact 自动匹配第一个兼容端口 | 不推荐；端口允许重叠类型，推断会把 Provider 错误伪装成合法结果。 |
-| C. 每个 Artifact 显式绑定端口 | Request、Sink、Candidate 和 Attempt 都携带稳定端口名 | 推荐；语义明确，可逐端口验证，也能稳定 canonicalize。 |
+| A. 数组位置隐式对应端口 | 用 Descriptor 顺序切分扁平 Artifact 数组 | 否决；可选端口和多 Artifact 端口会使边界不唯一，重排也会改变语义。 |
+| B. 按 media type 或 Schema 推断 | Artifact 自动匹配第一个兼容端口 | 否决；端口允许重叠类型，推断会把 Provider 错误伪装成合法结果。 |
+| C. 每个 Artifact 显式绑定端口 | Request、Sink、Candidate 和 Attempt 都携带稳定端口名 | 批准；语义明确，可逐端口验证，也能稳定 canonicalize。 |
 
-## 推荐的 v2 形态
+## 已批准的 v2 形态
 
-建议新建 `lmdj.capability.v2`，不要原地改变 `lmdj.capability.v1`：
+新建 `lmdj.capability.v2`，不原地改变 `lmdj.capability.v1`：
 
 ```text
 ArtifactBinding {
@@ -65,7 +68,7 @@ Attempt evidence 同时保存 Request input bindings、minted output bindings �
 Candidate output bindings。Canonical 顺序按 `port`，再按 Artifact 的
 `sha256`、`media_type`、`byte_length` 排序；调用方输入顺序不影响身份。
 
-## 推荐的验证语义
+## 已批准的验证语义
 
 ### Descriptor 注册
 
@@ -77,8 +80,8 @@ Candidate output bindings。Canonical 顺序按 `port`，再按 Artifact 的
 
 ### Request
 
-- 每个 binding 必须引用已声明输入端口，且 Artifact 必须满足该端口的 media type
-  和 Artifact Schema。
+- 每个 binding 必须引用已声明输入端口，且 Artifact 必须满足该端口的 media type；
+  binding 同时选择该端口声明的 Artifact Schema 身份，字节级验证边界见下文。
 - 每个端口独立计算数量，缺少 required 端口、超过 `max_count`、未知端口和未绑定
   Artifact 均返回 `INVALID_ARGUMENT`，Provider 不得被调用。
 - 初始 v2 保留当前全局输入 Artifact 唯一性：同一 Artifact Ref 不得重复绑定；若
@@ -92,6 +95,14 @@ Candidate output bindings。Canonical 顺序按 `port`，再按 Artifact 的
   Candidate 不得引用未 mint、重复或未知端口 Artifact。
 - 无输出端口 Descriptor 在注册期拒绝，消除“注册成功、执行期必失败”的不一致。
 
+### Schema 验证边界
+
+`ArtifactRef` 当前只携带 hash、media type 和 byte length，不携带 Schema provenance，
+AttemptStore 也没有可解析输入 bytes 的 Artifact resolver。因此本次 v2 实现必须验证
+binding 选中的端口及其声明的 `schema_id` / `schema_version`，但不得声称已经完成
+输入 Artifact 字节级 Schema 校验。后者保留为独立架构问题；在 resolver 和具体
+Artifact Schema 验证器获批前，不阻塞显式端口、逐端口数量和 media type 门禁。
+
 ## 不在本次决定内
 
 - `Partial` Attempt 的用户产品语义、恢复和 Commit 策略；
@@ -99,31 +110,32 @@ Candidate output bindings。Canonical 顺序按 `port`，再按 Artifact 的
 - 具体 Stem、Slice、Export Capability 的端口名称和 Schema；
 - Project 如何采用一个或多个 Candidate Artifact。
 
-## 批准后实施门禁
+## 实施门禁
 
 - 两个端口接受相同 media type 时仍能按显式端口正确区分；
 - 第二个 required 输入或输出缺失时失败；
 - 任一非首端口超过 `max_count` 时失败；
-- 未知端口、重复绑定、错误 Schema、错误 media type 均有负向测试；
+- 未知端口、重复绑定、错误 Schema 端口、错误 media type 均有负向测试；
 - Sink 端口与 Candidate 端口不一致时失败并清理 staged Artifact；
 - 所有可选输出端口均为空时有明确成功测试；
 - 输入顺序和输出顺序变化不改变 canonical evidence；
-- v1 单端口回归、Attempt 隔离和 Project bundle 不变性继续通过。
+- v1 Schema 不变性、Attempt 隔离和 Project bundle 不变性继续通过。
 
-## 待批准项
+## 已确认项
 
-1. 是否采用选项 C，并以 `lmdj.capability.v2` 表达显式端口绑定？
-2. 是否拒绝无输出端口的 Candidate-producing Capability？
-3. 是否允许所有可选输出端口均为空的成功 Candidate？
-4. 初始 v2 是否继续禁止同一 Artifact Ref 绑定多个端口？
+1. 采用选项 C，并以 `lmdj.capability.v2` 表达显式端口绑定。
+2. 拒绝无输出端口的 Candidate-producing Capability。
+3. 允许所有可选输出端口均为空的成功 Candidate。
+4. 初始 v2 继续禁止同一 Artifact Ref 绑定多个端口。
 
-四项全部确认后，才可将结果写入 `docs/prd/decision-log.md` 并创建实现计划。
+四项已于 2026-08-01 全部确认。决策同步写入
+[`docs/prd/decision-log.md`](../prd/decision-log.md)，多端口开放问题不再保留为待决。
 
 ## Version Management
 
 Version impact: none
 
-Reason: 本提交只记录待批准的 Contract 决策，不修改 Product、Module、Contract、
-Provider 或 Model 身份。若提案获批，后续实现预计新建
-`lmdj.capability.v2` `2.0.0`，并为 `provider-sdk`、受影响 Provider、Assembly 和
-Product Build 在独立实施计划中分配版本；本提案不预分配 Product Build 或 tag。
+Reason: 本提交只确认 Contract 决策并新增实施计划，不修改 Product、Module、
+Contract、Provider 或 Model 身份。实施计划分配 `lmdj.capability.v2` `2.0.0`、
+受影响 Module / Provider 版本和 Product Build `1.0.8.0`；这些身份只在后续实现
+提交中生效，本决策提交不创建 Product Build 或 tag。
