@@ -113,7 +113,7 @@ Expected: proposal and pending status are both explicit; no whitespace errors.
 - Consumes: raw browser capability values, AudioContext metadata, trigger acknowledgements, lifecycle events, and MIDI summaries.
 - Produces: `preflight(capabilities)`, `percentile(values, percentileValue)`, and `createReport(session)`.
 
-- [ ] **Step 1: Write failing pure tests**
+- [x] **Step 1: Write failing pure tests**
 
 Use `node:test` and `node:assert/strict`. Cover:
 
@@ -160,7 +160,7 @@ test("report keeps estimates separate and has no pass field", () => {
 });
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -170,7 +170,7 @@ node --test apps/web-runtime-lab/test/probe-core.test.mjs
 
 Expected: module-not-found for `src/probe-core.mjs`.
 
-- [ ] **Step 3: Implement the minimal pure module**
+- [x] **Step 3: Implement the minimal pure module**
 
 Implement fixed preflight key ordering, nearest-rank percentile, strict finite/non-negative validation, and a JSON-safe report builder. The report fields are exactly:
 
@@ -195,7 +195,7 @@ errors
 
 `physicalMeasurement` defaults to `null`; `decisionStatus` is always `pending-threshold-approval` in this Task.
 
-- [ ] **Step 4: Run GREEN**
+- [x] **Step 4: Run GREEN**
 
 Run:
 

@@ -1,0 +1,12 @@
+{
+  "name": "@lmdj/web-runtime-lab",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test test/probe-core.test.mjs"
+  }
+}
