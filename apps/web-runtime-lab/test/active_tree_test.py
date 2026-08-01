@@ -32,6 +32,7 @@ def main() -> int:
     main_source = read("src/main.js")
     worklet_source = read("src/worklet.js")
     probe_core = read("src/probe-core.mjs")
+    run_guidance = read("src/physical-run-guidance.mjs")
     physical_gate = read("src/physical-gate.mjs")
     evaluator = read("src/evaluate-physical-evidence.mjs")
     preparer = read("src/physical-evidence-preparer.mjs")
@@ -48,6 +49,7 @@ def main() -> int:
             main_source,
             worklet_source,
             probe_core,
+            run_guidance,
             physical_gate,
             evaluator,
             preparer,
@@ -76,6 +78,7 @@ def main() -> int:
             'id="resume-audio"',
             'id="export-report"',
             'id="decision-status"',
+            'id="run-guidance-output"',
             '<link rel="icon" href="data:,">',
             'type="module"',
         ),
@@ -105,6 +108,10 @@ def main() -> int:
             'decisionStatus: "threshold-approved"',
             "event.pointerType",
             "triggerDispatches",
+            "evaluateBrowserRunGuidance",
+            "browser-target-ready",
+            "restart-required",
+            "window.setInterval(render, 1000)",
         ),
         "main",
     )
@@ -157,6 +164,24 @@ def main() -> int:
         "probe core",
     )
     assert re.search(r"\bpass\s*:", probe_core) is None
+
+    require(
+        run_guidance,
+        (
+            "triggerCount: 500",
+            "foregroundDurationMs: 600_000",
+            'status: "not-started"',
+            '"collecting"',
+            '"browser-target-ready"',
+            'status: "restart-required"',
+            '"trigger-count-above-500"',
+            '"acknowledgement-loss"',
+            '"foreground-interrupted"',
+        ),
+        "physical run guidance",
+    )
+    for forbidden in ("passed", "physicalMeasurement", "localStorage"):
+        assert forbidden not in run_guidance, forbidden
 
     require(
         physical_gate,
@@ -250,6 +275,8 @@ def main() -> int:
             "MIDI input names",
             "raw MIDI messages",
             "persistent browser storage",
+            "browser-target-ready",
+            "restart-required",
         ),
         "lab README",
     )

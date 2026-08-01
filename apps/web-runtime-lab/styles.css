@@ -164,6 +164,15 @@ pre,
   word-break: break-word;
 }
 
+.run-guidance {
+  grid-column: 1 / -1;
+  border-color: #66523b;
+}
+
+.run-guidance pre {
+  color: #ffdca0;
+}
+
 .physical {
   border-color: #5d4930;
 }

@@ -1,4 +1,8 @@
 import { createReport, preflight } from "./probe-core.mjs";
+import {
+  BROWSER_RUN_TARGETS,
+  evaluateBrowserRunGuidance,
+} from "./physical-run-guidance.mjs";
 
 const HEADER_LENGTH = 8;
 const RING_CAPACITY = 1024;
@@ -29,6 +33,7 @@ const suspendButton = byId("suspend-audio");
 const resumeButton = byId("resume-audio");
 const exportButton = byId("export-report");
 const routeCategory = byId("route-category");
+const runGuidanceOutput = byId("run-guidance-output");
 
 const AudioContextConstructor = window.AudioContext || window.webkitAudioContext;
 const capabilities = {
@@ -79,6 +84,10 @@ const session = {
   lifecycle: [],
   triggerDispatches: [],
   triggerAcknowledgements: [],
+  browserRun: {
+    startedAtMs: null,
+    interrupted: false,
+  },
   errors: [],
   ...INITIAL_DECISION,
 };
@@ -95,6 +104,45 @@ const observedQuantumSizes = new Set();
 function recordLifecycle(type, state) {
   session.lifecycle.push({ type, state, atMs: performance.now() });
   render();
+}
+
+
+function interruptBrowserRun() {
+  if (session.browserRun.startedAtMs !== null) {
+    session.browserRun.interrupted = true;
+  }
+}
+
+
+function formatDuration(durationMs) {
+  const totalSeconds = Math.floor(durationMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+
+function browserRunGuidance() {
+  const pendingTimes = [...pendingTriggers.values()].map(
+    ({ eventAtMs }) => eventAtMs,
+  );
+  return evaluateBrowserRunGuidance({
+    startedAtMs: session.browserRun.startedAtMs,
+    nowMs: performance.now(),
+    dispatchedCount: session.sharedControl.dispatchedCount,
+    acknowledgedCount: session.sharedControl.acknowledgedCount,
+    duplicateAcknowledgements: session.sharedControl.duplicateAcknowledgements,
+    droppedCount: session.sharedControl.droppedCount,
+    processorErrors: session.errors.filter((error) => (
+      error.toLowerCase().includes("processorerror")
+    )).length,
+    oldestPendingAtMs: pendingTimes.length === 0
+      ? null
+      : Math.min(...pendingTimes),
+    audioState: session.audioContext.state,
+    visibilityState: document.visibilityState,
+    interrupted: session.browserRun.interrupted,
+  });
 }
 
 
@@ -189,9 +237,26 @@ function render() {
   byId("error-output").textContent = session.errors.length === 0
     ? "none"
     : session.errors.slice(-6).join("\n");
+  const guidance = browserRunGuidance();
+  const guidanceDetail = guidance.status === "not-started"
+    ? "Select an eligible route, then start audio once."
+    : guidance.status === "restart-required"
+      ? `Reload before recording: ${guidance.reasons.join(", ")}`
+      : guidance.status === "browser-target-ready"
+        ? "Browser target ready. Export the report and retain the external capture."
+        : "Keep this page visible and AudioContext running.";
+  runGuidanceOutput.textContent = [
+    `status: ${guidance.status}`,
+    `triggers: ${session.sharedControl.dispatchedCount} / ${BROWSER_RUN_TARGETS.triggerCount}`,
+    `foreground: ${formatDuration(guidance.elapsedMs)} / ${formatDuration(BROWSER_RUN_TARGETS.foregroundDurationMs)}`,
+    guidanceDetail,
+    "240 fps-or-faster video or calibrated wired-loopback evidence is still required.",
+  ].join("\n");
 
   const running = audioContext?.state === "running";
-  triggerButton.disabled = !running || !session.wasm.ready;
+  triggerButton.disabled = !running
+    || !session.wasm.ready
+    || session.sharedControl.dispatchedCount >= BROWSER_RUN_TARGETS.triggerCount;
   midiButton.disabled = !running || !session.midi.supported;
   suspendButton.disabled = !running;
   resumeButton.disabled = !audioContext || running;
@@ -278,6 +343,12 @@ async function startAudio() {
   }
   audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
   audioContext.addEventListener("statechange", () => {
+    if (
+      session.browserRun.startedAtMs !== null
+      && audioContext.state !== "running"
+    ) {
+      interruptBrowserRun();
+    }
     recordLifecycle("audio-state", audioContext.state);
   });
   await audioContext.audioWorklet.addModule("./src/worklet.js");
@@ -313,6 +384,9 @@ async function startAudio() {
   workletNode.port.start();
   workletNode.connect(audioContext.destination);
   await audioContext.resume();
+  if (audioContext.state === "running") {
+    session.browserRun.startedAtMs = performance.now();
+  }
   recordLifecycle("audio-state", audioContext.state);
   render();
 }
@@ -411,19 +485,25 @@ resumeButton.addEventListener("click", async () => {
 });
 exportButton.addEventListener("click", exportReport);
 routeCategory.addEventListener("change", () => {
+  interruptBrowserRun();
   session.environment.routeCategory = routeCategory.value;
 });
 
 document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "visible") {
+    interruptBrowserRun();
+  }
   recordLifecycle("visibility", document.visibilityState);
 });
 window.addEventListener("pagehide", () => {
+  interruptBrowserRun();
   recordLifecycle("pagehide", document.visibilityState);
 });
 window.addEventListener("pageshow", () => {
   recordLifecycle("pageshow", document.visibilityState);
 });
 document.addEventListener("freeze", () => {
+  interruptBrowserRun();
   recordLifecycle("freeze", document.visibilityState);
 });
 document.addEventListener("resume", () => {
@@ -435,3 +515,4 @@ byId("decision-status").textContent = (
   "Threshold approved · physical gate unverified"
 );
 render();
+window.setInterval(render, 1000);

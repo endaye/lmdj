@@ -68,6 +68,24 @@ Run all rows before making a Web/PWA launch-platform conclusion:
 Bluetooth may be measured in a separate row but is never substituted for a
 required built-in or wired result.
 
+### Performance-run browser guidance
+
+For each performance row, reload the lab to create a fresh session, select the
+eligible route, start audio once, and use the visible guidance card. It tracks
+exactly 500 dispatches and 600,000 milliseconds of visible/running foreground
+time. The Pointer/Touch pad disables after dispatch 500; stop a physical MIDI
+source after its 500th dispatch.
+
+Any acknowledgement still missing after a one-second grace window, duplicate
+acknowledgement, ring-full drop, processor error, 501st dispatch,
+AudioContext suspension, hidden/frozen/pagehide
+transition, or route-category change after start produces `restart-required`.
+Reload and repeat the complete run; do not splice two sessions together.
+
+`browser-target-ready` is an operator cue only. It is not written to report v2
+or evidence v1 and never replaces the retained high-speed-video or wired-
+loopback measurement required below.
+
 ## Physical Measurement Method
 
 Use one of:

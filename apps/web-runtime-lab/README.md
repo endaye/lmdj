@@ -38,6 +38,26 @@ acknowledgement does not erase the original trigger.
 The server sets COOP, COEP, CORP, and `no-store` headers. A visible page or a
 successful automated browser smoke is not physical Touch-to-Sound evidence.
 
+## Guided physical browser run
+
+The **Physical run guidance** card starts only after AudioContext reaches
+`running` and displays exact progress toward 500 dispatches and 10:00 of
+uninterrupted visible foreground time. At 500 Pointer/Touch dispatches the pad
+button disables to prevent an accidental 501st dispatch. MIDI remains under
+the physical controller's control.
+
+The card shows `restart-required` after an acknowledgement remains missing
+beyond a one-second grace window, duplicate acknowledgement, ring-full drop,
+processor error, more than 500 dispatches,
+AudioContext suspension, page hiding/freezing/pagehide, or a route-category
+change after start. Reload the page before retaining another run; recovery does
+not turn an interrupted performance run back into a valid foreground run.
+
+`browser-target-ready` means only that the browser-side 500/10-minute target
+was observed. It is ephemeral, is not exported in report v2, and is not a
+physical pass. Retained 240 fps-or-faster high-speed video or calibrated wired
+loopback evidence is still required.
+
 ## Evaluate retained physical evidence
 
 ### Prepare one run from an exported browser report
