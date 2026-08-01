@@ -77,6 +77,7 @@ const session = {
     lastVelocity: null,
   },
   lifecycle: [],
+  triggerDispatches: [],
   triggerAcknowledgements: [],
   errors: [],
   ...INITIAL_DECISION,
@@ -198,7 +199,7 @@ function render() {
 }
 
 
-function enqueueTrigger(source, note, velocity) {
+function enqueueTrigger(source, note, velocity, pointerType = "pointer") {
   if (!controlView || audioContext?.state !== "running") {
     return false;
   }
@@ -215,12 +216,24 @@ function enqueueTrigger(source, note, velocity) {
     + (writeIndex % RING_CAPACITY) * RECORD_LENGTH;
   const sequence = writeIndex + 1;
   const eventAtMs = performance.now();
+  const resolvedSource = source === SOURCE_MIDI
+    ? "midi"
+    : pointerType === "touch"
+      ? "touch"
+      : "pointer";
   Atomics.store(controlView, recordOffset + SOURCE_OFFSET, source);
   Atomics.store(controlView, recordOffset + NOTE_OFFSET, note);
   Atomics.store(controlView, recordOffset + VELOCITY_OFFSET, velocity);
+  session.triggerDispatches.push({
+    sequence,
+    source: resolvedSource,
+    note,
+    velocity,
+    eventAtMs,
+  });
   pendingTriggers.set(sequence, {
     eventAtMs,
-    source: source === SOURCE_POINTER ? "pointer" : "midi",
+    source: resolvedSource,
     note,
     velocity,
   });
@@ -384,8 +397,8 @@ startButton.addEventListener("click", async () => {
   }
   render();
 });
-triggerButton.addEventListener("pointerdown", () => {
-  enqueueTrigger(SOURCE_POINTER, 36, 100);
+triggerButton.addEventListener("pointerdown", (event) => {
+  enqueueTrigger(SOURCE_POINTER, 36, 100, event.pointerType);
 });
 midiButton.addEventListener("click", enableMidi);
 suspendButton.addEventListener("click", async () => {

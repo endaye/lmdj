@@ -34,6 +34,8 @@ def main() -> int:
     probe_core = read("src/probe-core.mjs")
     physical_gate = read("src/physical-gate.mjs")
     evaluator = read("src/evaluate-physical-evidence.mjs")
+    preparer = read("src/physical-evidence-preparer.mjs")
+    prepare_cli = read("src/prepare-physical-evidence.mjs")
     lab_readme = read("README.md")
     apps_readme = read_repository("apps/README.md")
     ci_workflow = read_repository(".github/workflows/ci.yml")
@@ -48,6 +50,8 @@ def main() -> int:
             probe_core,
             physical_gate,
             evaluator,
+            preparer,
+            prepare_cli,
         )
     )
     for forbidden in (
@@ -99,6 +103,8 @@ def main() -> int:
             "getOutputTimestamp",
             "createReport",
             'decisionStatus: "threshold-approved"',
+            "event.pointerType",
+            "triggerDispatches",
         ),
         "main",
     )
@@ -142,7 +148,10 @@ def main() -> int:
     require(
         probe_core,
         (
+            "reportVersion: 2",
             'decisionStatus: "threshold-approved"',
+            "triggerDispatches: dispatches",
+            "touchAcknowledgements",
             "physicalMeasurement: null",
         ),
         "probe core",
@@ -185,10 +194,43 @@ def main() -> int:
         "physical evaluator",
     )
     require(
+        preparer,
+        (
+            "preparePhysicalEvidence",
+            "REQUIRED_ROWS",
+            "report.reportVersion !== 2",
+            "exactly 500 dispatches",
+            "acknowledgementAtMs: null",
+            "report.physicalMeasurement !== null",
+        ),
+        "physical evidence preparer",
+    )
+    for forbidden in (
+        "report.environment.userAgent",
+        "report.environment.platform",
+        "report.environment.language",
+        "report.midi.name",
+        "report.midi.manufacturer",
+        "report.midi.id",
+    ):
+        assert forbidden not in preparer, forbidden
+    require(
+        prepare_cli,
+        (
+            "preparePhysicalEvidence",
+            "--os-version",
+            "--browser-version",
+            "process.stdout.write",
+        ),
+        "physical evidence prepare CLI",
+    )
+    require(
         lab_script,
         (
             "scripts/web-runtime-lab.sh evaluate EVIDENCE.json",
+            "scripts/web-runtime-lab.sh prepare ROW_KEY REPORT.json",
             'node "$lab_root/src/evaluate-physical-evidence.mjs" "$1"',
+            'node "$lab_root/src/prepare-physical-evidence.mjs" "$@"',
         ),
         "lab script",
     )
@@ -200,6 +242,7 @@ def main() -> int:
             "scripts/web-runtime-lab.sh serve --port 4173",
             "scripts/web-runtime-lab.sh serve-lan",
             "scripts/web-runtime-lab.sh evaluate",
+            "scripts/web-runtime-lab.sh prepare",
             "trusted-cert.pem",
             "Approved",
             "Unverified",

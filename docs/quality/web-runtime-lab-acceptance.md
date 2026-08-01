@@ -17,6 +17,8 @@ evaluated by the separate local evaluator.
 The repository gate proves:
 
 - pure capability, percentile, and report behavior;
+- report v2 touch/pointer/MIDI source separation and retained dispatches;
+- privacy-bounded report-to-dossier draft preparation;
 - stable browser-report fields with `decisionStatus: "threshold-approved"`;
 - absence of a physical result field in the browser report;
 - exact approved thresholds and five required physical-evidence rows;
@@ -99,6 +101,27 @@ not silently omitted or called passed.
 
 ## Physical Evidence Evaluation
 
+Prepare each run from its exported v2 browser report with:
+
+```bash
+scripts/web-runtime-lab.sh prepare \
+  ROW_KEY REPORT.json \
+  --os-version "exact installed OS version" \
+  --browser-version "exact installed browser version"
+```
+
+The preparer emits one run to stdout and never writes or uploads it. It rejects
+v1 reports, non-approved status, non-null browser physical fields, ineligible
+routes, incomplete runtime records, wrong input source, and incomplete
+performance dispatch sets. It strips user-agent, raw platform/language, MIDI
+identity, local paths, and unknown fields. For a missing acknowledgement it
+joins the retained dispatch to explicit `null` acknowledgement/quantum values
+and preserves the loss count, so a measured failure is not silently omitted.
+
+Prepared physical, foreground, and lifecycle observations remain incomplete;
+preparation alone must evaluate as `unverified`. Exact OS/browser versions are
+operator inputs because user-agent parsing is not accepted as exact evidence.
+
 Use `scripts/web-runtime-lab.sh evaluate EVIDENCE.json` only after retaining
 the raw physical measurement record. The input is a local lab format with
 `evidenceVersion: 1`; it is not a product or cross-language Contract and is not
@@ -109,8 +132,9 @@ exact OS/browser versions, fixed platform/browser/device/input identity,
 built-in or wired route, sample rate, AudioContext state history, exposed
 latency values, observed render quantum sizes, processor callback count, and
 explicit error/unsupported-capability arrays. A performance row additionally
-requires exactly 500 unique privacy-bounded trigger/acknowledgement records
-whose input source and quantum size match the required row and runtime record.
+requires exactly 500 unique privacy-bounded dispatch records whose input source
+matches the required row. A missing acknowledgement retains `null` time and
+quantum values and must match the recorded acknowledgement-loss count.
 
 Physical summaries require p50/p95/p99, trigger/miss/duplicate counts,
 calibration offset, and either a high-speed-video method at 240 fps or faster,

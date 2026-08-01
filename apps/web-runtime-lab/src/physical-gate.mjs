@@ -237,31 +237,40 @@ function evaluateTriggerRecords(run, row) {
   let recordInvalid = false;
   let sourceMismatch = false;
   let quantumUnobserved = false;
+  let missingAcknowledgements = 0;
   const observedQuantumSizes = new Set(
     Array.isArray(run.runtime?.observedQuantumSizes)
       ? run.runtime.observedQuantumSizes
       : [],
   );
   for (const record of records) {
+    const acknowledgementMissing = record?.acknowledgementAtMs === null
+      && record?.quantumSize === null;
     if (
       !isObject(record)
       || !Number.isInteger(record.sequence)
       || record.sequence <= 0
       || !isMeasurement(record.eventAtMs)
-      || !isMeasurement(record.acknowledgementAtMs)
-      || record.acknowledgementAtMs < record.eventAtMs
-      || !Number.isInteger(record.quantumSize)
-      || record.quantumSize <= 0
+      || (!acknowledgementMissing && (
+        !isMeasurement(record.acknowledgementAtMs)
+        || record.acknowledgementAtMs < record.eventAtMs
+        || !Number.isInteger(record.quantumSize)
+        || record.quantumSize <= 0
+      ))
     ) {
       recordInvalid = true;
       continue;
+    }
+    if (acknowledgementMissing) {
+      missingAcknowledgements += 1;
     }
     validSequences.push(record.sequence);
     if (record.source !== row.inputSource) {
       sourceMismatch = true;
     }
     if (
-      observedQuantumSizes.size > 0
+      !acknowledgementMissing
+      && observedQuantumSizes.size > 0
       && !observedQuantumSizes.has(record.quantumSize)
     ) {
       quantumUnobserved = true;
@@ -278,6 +287,15 @@ function evaluateTriggerRecords(run, row) {
   }
   if (quantumUnobserved) {
     unverified.push("trigger-quantum-unobserved");
+  }
+  const retainedLostAcknowledgements = row.requiresForeground
+    ? run.foreground?.lostAcknowledgements
+    : run.acknowledgements?.lostAcknowledgements;
+  if (
+    isCount(retainedLostAcknowledgements)
+    && retainedLostAcknowledgements !== missingAcknowledgements
+  ) {
+    unverified.push("acknowledgement-loss-count-mismatch");
   }
   if (
     isObject(run.physical)
@@ -354,39 +372,59 @@ function evaluateForeground(foreground) {
   if (!isObject(foreground)) {
     return { failed: [], unverified: ["foreground-evidence-missing"] };
   }
-  if (
-    !isMeasurement(foreground.durationMs)
-    || !isCount(foreground.underruns)
-    || !isCount(foreground.processorErrors)
-    || !isCount(foreground.lostAcknowledgements)
-    || !isCount(foreground.duplicateAcknowledgements)
-  ) {
-    return { failed: [], unverified: ["foreground-evidence-invalid"] };
-  }
-
+  const unverified = [];
   const failed = [];
-  if (foreground.durationMs < APPROVED_GATE.foreground.durationMs) {
+  const durationValid = isMeasurement(foreground.durationMs);
+  const underrunsValid = isCount(foreground.underruns);
+  const processorErrorsValid = isCount(foreground.processorErrors);
+  const lostAcknowledgementsValid = isCount(
+    foreground.lostAcknowledgements,
+  );
+  const duplicateAcknowledgementsValid = isCount(
+    foreground.duplicateAcknowledgements,
+  );
+  if (
+    !durationValid
+    || !underrunsValid
+    || !processorErrorsValid
+    || !lostAcknowledgementsValid
+    || !duplicateAcknowledgementsValid
+  ) {
+    unverified.push("foreground-evidence-invalid");
+  }
+  if (
+    durationValid
+    && foreground.durationMs < APPROVED_GATE.foreground.durationMs
+  ) {
     failed.push("foreground-duration-below-600000-ms");
   }
-  if (foreground.underruns > APPROVED_GATE.foreground.underruns) {
+  if (
+    underrunsValid
+    && foreground.underruns > APPROVED_GATE.foreground.underruns
+  ) {
     failed.push("audio-underrun");
   }
-  if (foreground.processorErrors > APPROVED_GATE.foreground.processorErrors) {
+  if (
+    processorErrorsValid
+    && foreground.processorErrors > APPROVED_GATE.foreground.processorErrors
+  ) {
     failed.push("processor-error");
   }
   if (
-    foreground.lostAcknowledgements
+    lostAcknowledgementsValid
+    && foreground.lostAcknowledgements
     > APPROVED_GATE.foreground.lostAcknowledgements
   ) {
     failed.push("acknowledgement-loss");
   }
   if (
-    foreground.duplicateAcknowledgements
+    duplicateAcknowledgementsValid
+    && foreground.duplicateAcknowledgements
     > APPROVED_GATE.foreground.duplicateAcknowledgements
   ) {
     failed.push("duplicate-acknowledgement");
   }
-  return { failed, unverified: [] };
+  return { failed, unverified };
 }
 
 

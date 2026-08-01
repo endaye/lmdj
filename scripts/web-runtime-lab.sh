@@ -10,6 +10,9 @@ usage() {
 usage:
   scripts/web-runtime-lab.sh test
   scripts/web-runtime-lab.sh evaluate EVIDENCE.json
+  scripts/web-runtime-lab.sh prepare ROW_KEY REPORT.json \
+    --os-version VERSION \
+    --browser-version VERSION
   scripts/web-runtime-lab.sh serve [--port PORT]
   scripts/web-runtime-lab.sh serve-lan \
     --bind ADDRESS \
@@ -59,6 +62,9 @@ case "$command_name" in
       exit 64
     }
     node "$lab_root/src/evaluate-physical-evidence.mjs" "$1"
+    ;;
+  prepare)
+    node "$lab_root/src/prepare-physical-evidence.mjs" "$@"
     ;;
   serve)
     python3 "$lab_root/server.py" --bind 127.0.0.1 "$@"

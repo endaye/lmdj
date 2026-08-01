@@ -24,7 +24,10 @@
 - Core Module SemVer impact: none.
 - Provider SemVer impact: none.
 - Contract SemVer impact: none. The physical-evidence JSON is a local lab input format, not a cross-language Contract.
-- Lab report version: remains `1`; the existing report shape is unchanged and only its decision status moves from pending approval to approved/unverified.
+- Lab report version: remained `1` for this approval Task because only the
+  decision status changed. The later physical-evidence preparer Task upgrades
+  it to `2` to retain touch identity and every dispatch; see
+  `2026-08-01-web-physical-evidence-preparer.md`.
 - Physical evidence input version: `1`, local to the lab evaluator.
 
 ## Task 1: Formalize and Implement the Approved Physical Gate

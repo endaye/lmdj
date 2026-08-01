@@ -201,6 +201,39 @@ function lifecycleReport(lifecycle) {
 }
 
 
+function triggerDispatchReport(dispatches) {
+  if (!Array.isArray(dispatches)) {
+    throw new TypeError("triggerDispatches must be an array");
+  }
+  const records = dispatches.map((dispatch, index) => {
+    const source = dispatch?.source;
+    if (source !== "pointer" && source !== "touch" && source !== "midi") {
+      throw new TypeError(`dispatch ${index} source is invalid`);
+    }
+    return {
+      sequence: nonNegativeInteger(
+        dispatch?.sequence,
+        `dispatch ${index} sequence`,
+      ),
+      source,
+      note: nonNegativeInteger(dispatch?.note, `dispatch ${index} note`),
+      velocity: nonNegativeInteger(
+        dispatch?.velocity,
+        `dispatch ${index} velocity`,
+      ),
+      eventAtMs: finiteNonNegative(
+        dispatch?.eventAtMs,
+        `dispatch ${index} eventAtMs`,
+      ),
+    };
+  });
+  if (new Set(records.map(({ sequence }) => sequence)).size !== records.length) {
+    throw new Error("dispatch sequences must be unique");
+  }
+  return records;
+}
+
+
 function acknowledgementEstimates(acknowledgements) {
   if (!Array.isArray(acknowledgements)) {
     throw new TypeError("triggerAcknowledgements must be an array");
@@ -211,7 +244,7 @@ function acknowledgementEstimates(acknowledgements) {
       `acknowledgement ${index} sequence`,
     );
     const source = acknowledgement?.source;
-    if (source !== "pointer" && source !== "midi") {
+    if (source !== "pointer" && source !== "touch" && source !== "midi") {
       throw new TypeError(`acknowledgement ${index} source is invalid`);
     }
     const eventAtMs = finiteNonNegative(
@@ -273,7 +306,10 @@ function acknowledgementEstimates(acknowledgements) {
 }
 
 
-function triggerSummary(sharedControl, acknowledgements) {
+function triggerSummary(sharedControl, dispatches, acknowledgements) {
+  if (sharedControl.dispatchedCount !== dispatches.length) {
+    throw new Error("dispatched count does not match records");
+  }
   if (sharedControl.acknowledgedCount !== acknowledgements.length) {
     throw new Error("acknowledgement count does not match records");
   }
@@ -281,14 +317,30 @@ function triggerSummary(sharedControl, acknowledgements) {
     throw new Error("acknowledgement count exceeds dispatched count");
   }
   let pointerAcknowledgements = 0;
+  let touchAcknowledgements = 0;
   let midiAcknowledgements = 0;
+  const dispatchesBySequence = new Map(
+    dispatches.map((dispatch) => [dispatch.sequence, dispatch]),
+  );
   for (const [index, acknowledgement] of acknowledgements.entries()) {
     nonNegativeInteger(
       acknowledgement?.sequence,
       `acknowledgement ${index} sequence`,
     );
+    const dispatch = dispatchesBySequence.get(acknowledgement.sequence);
+    if (
+      dispatch === undefined
+      || dispatch.source !== acknowledgement.source
+      || dispatch.note !== acknowledgement.note
+      || dispatch.velocity !== acknowledgement.velocity
+      || dispatch.eventAtMs !== acknowledgement.eventAtMs
+    ) {
+      throw new Error("acknowledgement does not match dispatch");
+    }
     if (acknowledgement?.source === "pointer") {
       pointerAcknowledgements += 1;
+    } else if (acknowledgement?.source === "touch") {
+      touchAcknowledgements += 1;
     } else if (acknowledgement?.source === "midi") {
       midiAcknowledgements += 1;
     } else {
@@ -302,6 +354,7 @@ function triggerSummary(sharedControl, acknowledgements) {
       sharedControl.dispatchedCount - sharedControl.acknowledgedCount,
     duplicateAcknowledgements: sharedControl.duplicateAcknowledgements,
     pointerAcknowledgements,
+    touchAcknowledgements,
     midiAcknowledgements,
   };
 }
@@ -309,6 +362,7 @@ function triggerSummary(sharedControl, acknowledgements) {
 
 export function createReport(session) {
   const sharedControl = sharedControlReport(session?.sharedControl);
+  const dispatches = triggerDispatchReport(session?.triggerDispatches);
   const acknowledgements = session?.triggerAcknowledgements;
   const estimates = acknowledgementEstimates(acknowledgements);
   const errors = session?.errors;
@@ -317,7 +371,7 @@ export function createReport(session) {
   }
 
   return {
-    reportVersion: 1,
+    reportVersion: 2,
     decisionStatus: "threshold-approved",
     sessionId: requiredString(session?.sessionId, "sessionId"),
     startedAt: requiredString(session?.startedAt, "startedAt"),
@@ -329,7 +383,8 @@ export function createReport(session) {
     sharedControl,
     midi: midiReport(session?.midi),
     lifecycle: lifecycleReport(session?.lifecycle),
-    triggerSummary: triggerSummary(sharedControl, acknowledgements),
+    triggerDispatches: dispatches,
+    triggerSummary: triggerSummary(sharedControl, dispatches, acknowledgements),
     browserEstimates: estimates,
     physicalMeasurement: null,
     errors: [...errors],

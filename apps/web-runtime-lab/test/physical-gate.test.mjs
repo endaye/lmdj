@@ -283,6 +283,9 @@ test("missing foreground, MIDI parity, and lifecycle actions are explicit", () =
   const evidence = passingEvidence();
   delete evidence.runs[0].foreground;
   evidence.runs[2].acknowledgements.lostAcknowledgements = 1;
+  evidence.runs[2].acknowledgements.acknowledgedCount = 499;
+  evidence.runs[2].triggerRecords[499].acknowledgementAtMs = null;
+  evidence.runs[2].triggerRecords[499].quantumSize = null;
   evidence.runs[4].lifecycle.actions.pop();
   const evaluation = evaluatePhysicalMatrix(evidence);
 
@@ -291,6 +294,7 @@ test("missing foreground, MIDI parity, and lifecycle actions are explicit", () =
     "foreground-evidence-missing",
   ]);
   assert.deepEqual(evaluation.requiredRows[2].reasons, [
+    "acknowledgement-parity-mismatch",
     "acknowledgement-loss",
   ]);
   assert.deepEqual(evaluation.requiredRows[4].reasons, [
@@ -382,6 +386,20 @@ test("performance rows require exactly 500 valid unique trigger records", () => 
   const sourceEvaluation = evaluatePhysicalMatrix(wrongSource);
   assert.deepEqual(sourceEvaluation.requiredRows[0].reasons, [
     "trigger-source-mismatch",
+  ]);
+});
+
+
+test("a retained trigger may explicitly record a missing acknowledgement", () => {
+  const evidence = passingEvidence();
+  evidence.runs[0].triggerRecords[499].acknowledgementAtMs = null;
+  evidence.runs[0].triggerRecords[499].quantumSize = null;
+  evidence.runs[0].foreground.lostAcknowledgements = 1;
+  const evaluation = evaluatePhysicalMatrix(evidence);
+
+  assert.equal(evaluation.status, "failed");
+  assert.deepEqual(evaluation.requiredRows[0].reasons, [
+    "acknowledgement-loss",
   ]);
 });
 

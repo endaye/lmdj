@@ -29,10 +29,51 @@ Open <http://127.0.0.1:4173>, choose the output route category, and select
 buttons. **Trigger pad** uses the same bounded shared ring as MIDI note-on
 events. **Export report** downloads one local JSON report.
 
+Browser reports use local `reportVersion: 2`. Pointer Events with
+`pointerType: "touch"` are retained as `touch`; desktop mouse/pen input remains
+`pointer`, and MIDI remains `midi`. The report retains every privacy-bounded
+dispatch separately from acknowledgement estimates, so a missing
+acknowledgement does not erase the original trigger.
+
 The server sets COOP, COEP, CORP, and `no-store` headers. A visible page or a
 successful automated browser smoke is not physical Touch-to-Sound evidence.
 
 ## Evaluate retained physical evidence
+
+### Prepare one run from an exported browser report
+
+After a browser run, convert its local report into one physical-dossier draft:
+
+```bash
+scripts/web-runtime-lab.sh prepare \
+  macos-safari-pointer-performance \
+  /absolute/path/to/browser-report.json \
+  --os-version "macOS exact installed version" \
+  --browser-version "Safari exact installed version" \
+  > /absolute/path/to/physical-run-draft.json
+```
+
+The command accepts only report v2 with an approved decision, built-in/wired
+route, retained running AudioContext state, and complete runtime evidence. A
+performance report must contain exactly 500 dispatches from the required
+source. Missing acknowledgements remain explicit `null` values and retain
+their loss count; they are not removed or synthesized. A MIDI row additionally
+requires supported, granted, non-empty physical MIDI input evidence.
+
+The preparer copies only the random session/time, fixed row identity, the two
+explicit version strings, route/sample rate, runtime state, diagnostics, and
+privacy-bounded trigger fields. It never copies user-agent, raw platform,
+language, MIDI name/manufacturer/ID, arbitrary report fields, or local paths.
+It writes JSON only to stdout; file redirection above is an explicit operator
+choice.
+
+Physical method, capture rate, calibration, physical percentiles, foreground
+duration/underrun observations, and lifecycle recovery actions remain
+`null`/empty. Therefore every prepared draft is `unverified` until retained
+real-device observations are added. Old report v1 is rejected because it
+cannot distinguish iPad touch from desktop pointer.
+
+### Evaluate the completed five-row matrix
 
 After all physical runs have been recorded, create a local JSON file with
 `evidenceVersion: 1` and one entry in `runs` for each required key:
@@ -56,8 +97,10 @@ Every run is a complete dossier, not only a threshold summary. It contains:
 
 Every performance row contains exactly 500 privacy-bounded `triggerRecords`.
 Each record has a unique positive `sequence`, the required `source`, finite
-non-negative `eventAtMs` and `acknowledgementAtMs`, and a positive observed
-`quantumSize`. It retains no MIDI device identity or raw message bytes.
+non-negative `eventAtMs`, and either a non-negative `acknowledgementAtMs` plus
+positive observed `quantumSize`, or explicit `null` values for both when the
+acknowledgement was lost. It retains no MIDI device identity or raw message
+bytes.
 
 The `physical` object contains `method` (`high-speed-video` or
 `wired-loopback`), `captureRateHz`, finite `calibrationOffsetMs`,
@@ -116,7 +159,7 @@ route category, AudioContext metadata, observed render quantum sizes,
 privacy-bounded trigger acknowledgements, aggregate MIDI counts, lifecycle
 events, and diagnostics. `physicalMeasurement` remains `null`.
 
-The browser report excludes:
+The browser report and prepared draft exclude:
 
 - MIDI input names, manufacturers, serials, and stable IDs;
 - SysEx data and raw MIDI messages;

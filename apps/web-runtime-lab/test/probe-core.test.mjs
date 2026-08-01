@@ -69,6 +69,29 @@ function fixtureSession() {
       { type: "audio-state", state: "running", atMs: 10 },
       { type: "visibility", state: "visible", atMs: 20 },
     ],
+    triggerDispatches: [
+      {
+        sequence: 1,
+        source: "pointer",
+        note: 36,
+        velocity: 100,
+        eventAtMs: 100,
+      },
+      {
+        sequence: 2,
+        source: "midi",
+        note: 38,
+        velocity: 90,
+        eventAtMs: 200,
+      },
+      {
+        sequence: 3,
+        source: "pointer",
+        note: 36,
+        velocity: 100,
+        eventAtMs: 300,
+      },
+    ],
     triggerAcknowledgements: [
       {
         sequence: 1,
@@ -140,7 +163,7 @@ test("percentile uses nearest-rank over finite non-negative values", () => {
 test("report separates browser estimates from physical measurement", () => {
   const report = createReport(fixtureSession());
 
-  assert.equal(report.reportVersion, 1);
+  assert.equal(report.reportVersion, 2);
   assert.equal(report.decisionStatus, "threshold-approved");
   assert.deepEqual(report.triggerSummary, {
     dispatchedCount: 3,
@@ -148,6 +171,7 @@ test("report separates browser estimates from physical measurement", () => {
     missedAcknowledgements: 1,
     duplicateAcknowledgements: 0,
     pointerAcknowledgements: 1,
+    touchAcknowledgements: 0,
     midiAcknowledgements: 1,
   });
   assert.deepEqual(report.browserEstimates, {
@@ -182,6 +206,29 @@ test("report separates browser estimates from physical measurement", () => {
     p95Ms: 15,
     p99Ms: 15,
   });
+  assert.deepEqual(report.triggerDispatches, [
+    {
+      sequence: 1,
+      source: "pointer",
+      note: 36,
+      velocity: 100,
+      eventAtMs: 100,
+    },
+    {
+      sequence: 2,
+      source: "midi",
+      note: 38,
+      velocity: 90,
+      eventAtMs: 200,
+    },
+    {
+      sequence: 3,
+      source: "pointer",
+      note: 36,
+      velocity: 100,
+      eventAtMs: 300,
+    },
+  ]);
   assert.deepEqual(report.audioContext.lastOutputTimestamp, {
     contextTime: 0.19,
     performanceTime: 199,
@@ -189,6 +236,25 @@ test("report separates browser estimates from physical measurement", () => {
   assert.equal(report.sharedControl.droppedCount, 1);
   assert.equal(report.physicalMeasurement, null);
   assert.equal("pass" in report, false);
+});
+
+
+test("report keeps touch separate from desktop pointer", () => {
+  const session = fixtureSession();
+  session.triggerDispatches[0].source = "touch";
+  session.triggerAcknowledgements[0].source = "touch";
+  const report = createReport(session);
+
+  assert.equal(report.browserEstimates.records[0].source, "touch");
+  assert.deepEqual(report.triggerSummary, {
+    dispatchedCount: 3,
+    acknowledgedCount: 2,
+    missedAcknowledgements: 1,
+    duplicateAcknowledgements: 0,
+    pointerAcknowledgements: 0,
+    touchAcknowledgements: 1,
+    midiAcknowledgements: 1,
+  });
 });
 
 
