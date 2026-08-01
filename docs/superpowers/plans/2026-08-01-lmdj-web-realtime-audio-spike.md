@@ -473,7 +473,7 @@ decision remains Pending threshold approval
 
 This smoke may use Chromium automation and does not count as Safari, iPad, MIDI-device, or acoustic evidence.
 
-- [ ] **Step 3: Commit and publish review branch**
+- [x] **Step 3: Commit and publish review branch**
 
 Verify the branch is not `main`, stage only the files declared in Tasks 1-5 plus this plan, inspect staged paths and `git diff --cached --check`, then commit with:
 
@@ -485,15 +485,15 @@ Push `feat/web-runtime-lab`, create a ready PR to `main`, require every configur
 
 ## Final Review Checklist
 
-- [ ] The threshold proposal is explicit and remains unapproved in the open-question record.
-- [ ] No Product Build, Module, Provider, Contract, Assembly, Facade, or Core source changed.
-- [ ] Start/resume occurs only from explicit user activation.
-- [ ] AudioWorklet instantiates and calls WebAssembly on the rendering thread.
-- [ ] Pointer and MIDI use the same SharedArrayBuffer/Atomics trigger path.
-- [ ] Render quantum size is observed dynamically and never hard-coded.
-- [ ] Reports separate browser estimates from physical measurements and contain no pass/fail field.
-- [ ] Reports exclude MIDI/device identifiers and do not persist locally.
-- [ ] Loopback server is isolated by default; LAN mode requires explicit trusted TLS inputs.
-- [ ] Automated lab tests and Core Proof pass.
-- [ ] Desktop Chromium smoke passes without being misreported as Safari/iPad/acoustic evidence.
-- [ ] Physical macOS Safari/Chrome, MIDI, iPad Safari, lifecycle, and acoustic gates remain visibly pending.
+- [x] The threshold proposal is explicit and remains unapproved in the open-question record.
+- [x] No Product Build, Module, Provider, Contract, Assembly, Facade, or Core source changed.
+- [x] Start/resume occurs only from explicit user activation.
+- [x] AudioWorklet instantiates and calls WebAssembly on the rendering thread.
+- [x] Pointer and MIDI use the same SharedArrayBuffer/Atomics trigger path.
+- [x] Render quantum size is observed dynamically and never hard-coded.
+- [x] Reports separate browser estimates from physical measurements and contain no pass/fail field.
+- [x] Reports exclude MIDI/device identifiers and do not persist locally.
+- [x] Loopback server is isolated by default; LAN mode requires explicit trusted TLS inputs.
+- [x] Automated lab tests and Core Proof pass.
+- [x] Desktop Chromium smoke passes without being misreported as Safari/iPad/acoustic evidence.
+- [x] Physical macOS Safari/Chrome, MIDI, iPad Safari, lifecycle, and acoustic gates remain visibly pending.
