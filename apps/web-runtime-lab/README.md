@@ -24,8 +24,9 @@ Start the loopback-only server:
 scripts/web-runtime-lab.sh serve --port 4173
 ```
 
-Open <http://127.0.0.1:4173>, choose the output route category, and select
-**Start audio**. Audio creation and resume are intentionally tied to explicit
+Open <http://127.0.0.1:4173> and choose **Built-in** or **Wired** before
+selecting **Start audio**; Start remains disabled for Unknown, USB, and
+Bluetooth. Audio creation and resume are intentionally tied to explicit
 buttons. **Trigger pad** uses the same bounded shared ring as MIDI note-on
 events. **Export report** downloads one local JSON report.
 
@@ -43,8 +44,9 @@ successful automated browser smoke is not physical Touch-to-Sound evidence.
 The **Physical run guidance** card starts only after AudioContext reaches
 `running` and displays exact progress toward 500 dispatches and 10:00 of
 uninterrupted visible foreground time. At 500 Pointer/Touch dispatches the pad
-button disables to prevent an accidental 501st dispatch. MIDI remains under
-the physical controller's control.
+button disables, and the enqueue path independently rejects every attempt after
+dispatch 500; HTML disabled state is not the authoritative boundary. MIDI
+remains under the physical controller's control.
 
 The card shows `restart-required` after an acknowledgement remains missing
 beyond a one-second grace window, duplicate acknowledgement, ring-full drop,
@@ -56,7 +58,8 @@ not turn an interrupted performance run back into a valid foreground run.
 `browser-target-ready` means only that the browser-side 500/10-minute target
 was observed. It is ephemeral, is not exported in report v2, and is not a
 physical pass. Retained 240 fps-or-faster high-speed video or calibrated wired
-loopback evidence is still required.
+loopback evidence is still required. Export the report before leaving Safari;
+switching applications before export records a foreground interruption.
 
 ## Evaluate retained physical evidence
 

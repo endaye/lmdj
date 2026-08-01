@@ -109,6 +109,8 @@ def main() -> int:
             "event.pointerType",
             "triggerDispatches",
             "evaluateBrowserRunGuidance",
+            "canDispatchBrowserTrigger",
+            "isEligiblePhysicalRoute",
             "browser-target-ready",
             "restart-required",
             "window.setInterval(render, 1000)",
@@ -177,11 +179,22 @@ def main() -> int:
             '"trigger-count-above-500"',
             '"acknowledgement-loss"',
             '"foreground-interrupted"',
+            "canDispatchBrowserTrigger",
+            "isEligiblePhysicalRoute",
         ),
         "physical run guidance",
     )
     for forbidden in ("passed", "physicalMeasurement", "localStorage"):
         assert forbidden not in run_guidance, forbidden
+    hard_cap_position = main_source.index(
+        "canDispatchBrowserTrigger(session.sharedControl.dispatchedCount)"
+    )
+    ring_write_position = main_source.index(
+        "Atomics.store(controlView, recordOffset + SOURCE_OFFSET, source)"
+    )
+    assert hard_cap_position < ring_write_position, (
+        "the 500-dispatch boundary must run before writing the shared ring"
+    )
 
     require(
         physical_gate,

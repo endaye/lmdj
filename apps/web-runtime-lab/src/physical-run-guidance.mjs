@@ -4,6 +4,7 @@ export const BROWSER_RUN_TARGETS = Object.freeze({
 });
 
 const ACKNOWLEDGEMENT_GRACE_MS = 1_000;
+const ELIGIBLE_PHYSICAL_ROUTES = new Set(["built-in", "wired"]);
 
 
 function isObject(value) {
@@ -24,6 +25,17 @@ function nonNegativeInteger(value, label) {
     throw new TypeError(`${label} must be a non-negative safe integer`);
   }
   return value;
+}
+
+
+export function isEligiblePhysicalRoute(routeCategory) {
+  return ELIGIBLE_PHYSICAL_ROUTES.has(routeCategory);
+}
+
+
+export function canDispatchBrowserTrigger(dispatchedCount) {
+  return nonNegativeInteger(dispatchedCount, "dispatchedCount")
+    < BROWSER_RUN_TARGETS.triggerCount;
 }
 
 

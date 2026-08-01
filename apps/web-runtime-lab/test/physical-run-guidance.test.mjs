@@ -3,7 +3,9 @@ import test from "node:test";
 
 import {
   BROWSER_RUN_TARGETS,
+  canDispatchBrowserTrigger,
   evaluateBrowserRunGuidance,
+  isEligiblePhysicalRoute,
 } from "../src/physical-run-guidance.mjs";
 
 
@@ -31,6 +33,26 @@ test("approved browser-run targets are exact and frozen", () => {
     foregroundDurationMs: 600_000,
   });
   assert.equal(Object.isFrozen(BROWSER_RUN_TARGETS), true);
+});
+
+
+test("only built-in and wired routes are eligible", () => {
+  assert.equal(isEligiblePhysicalRoute("built-in"), true);
+  assert.equal(isEligiblePhysicalRoute("wired"), true);
+  assert.equal(isEligiblePhysicalRoute("unknown"), false);
+  assert.equal(isEligiblePhysicalRoute("usb"), false);
+  assert.equal(isEligiblePhysicalRoute("bluetooth"), false);
+  assert.equal(isEligiblePhysicalRoute("Built-in"), false);
+});
+
+
+test("browser dispatch has an authoritative hard limit of 500", () => {
+  assert.equal(canDispatchBrowserTrigger(0), true);
+  assert.equal(canDispatchBrowserTrigger(499), true);
+  assert.equal(canDispatchBrowserTrigger(500), false);
+  assert.equal(canDispatchBrowserTrigger(501), false);
+  assert.throws(() => canDispatchBrowserTrigger(-1), /dispatchedCount/);
+  assert.throws(() => canDispatchBrowserTrigger(1.5), /dispatchedCount/);
 });
 
 

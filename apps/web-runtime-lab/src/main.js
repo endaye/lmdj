@@ -1,7 +1,9 @@
 import { createReport, preflight } from "./probe-core.mjs";
 import {
   BROWSER_RUN_TARGETS,
+  canDispatchBrowserTrigger,
   evaluateBrowserRunGuidance,
+  isEligiblePhysicalRoute,
 } from "./physical-run-guidance.mjs";
 
 const HEADER_LENGTH = 8;
@@ -254,6 +256,9 @@ function render() {
   ].join("\n");
 
   const running = audioContext?.state === "running";
+  startButton.disabled = !readiness.ready
+    || audioContext !== null
+    || !isEligiblePhysicalRoute(routeCategory.value);
   triggerButton.disabled = !running
     || !session.wasm.ready
     || session.sharedControl.dispatchedCount >= BROWSER_RUN_TARGETS.triggerCount;
@@ -266,6 +271,9 @@ function render() {
 
 function enqueueTrigger(source, note, velocity, pointerType = "pointer") {
   if (!controlView || audioContext?.state !== "running") {
+    return false;
+  }
+  if (!canDispatchBrowserTrigger(session.sharedControl.dispatchedCount)) {
     return false;
   }
   const writeIndex = Atomics.load(controlView, WRITE_INDEX);
@@ -338,7 +346,11 @@ function handleAcknowledgement(message) {
 
 
 async function startAudio() {
-  if (!readiness.ready || audioContext) {
+  if (
+    !readiness.ready
+    || audioContext
+    || !isEligiblePhysicalRoute(routeCategory.value)
+  ) {
     return;
   }
   audioContext = new AudioContextConstructor({ latencyHint: "interactive" });
@@ -487,6 +499,7 @@ exportButton.addEventListener("click", exportReport);
 routeCategory.addEventListener("change", () => {
   interruptBrowserRun();
   session.environment.routeCategory = routeCategory.value;
+  render();
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -510,7 +523,6 @@ document.addEventListener("resume", () => {
   recordLifecycle("resume", document.visibilityState);
 });
 
-startButton.disabled = !readiness.ready;
 byId("decision-status").textContent = (
   "Threshold approved · physical gate unverified"
 );

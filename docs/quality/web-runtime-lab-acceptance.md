@@ -70,11 +70,14 @@ required built-in or wired result.
 
 ### Performance-run browser guidance
 
-For each performance row, reload the lab to create a fresh session, select the
-eligible route, start audio once, and use the visible guidance card. It tracks
+For each performance row, reload the lab to create a fresh session, select
+**Built-in** or **Wired** (Start is disabled for every other category), start
+audio once, and use the visible guidance card. It tracks
 exactly 500 dispatches and 600,000 milliseconds of visible/running foreground
 time. The Pointer/Touch pad disables after dispatch 500; stop a physical MIDI
-source after its 500th dispatch.
+source after its 500th dispatch. The enqueue path also rejects every attempt
+after dispatch 500 before it can write the ring or report, so queued Safari
+`pointerdown` events cannot create record 501.
 
 Any acknowledgement still missing after a one-second grace window, duplicate
 acknowledgement, ring-full drop, processor error, 501st dispatch,
@@ -84,7 +87,8 @@ Reload and repeat the complete run; do not splice two sessions together.
 
 `browser-target-ready` is an operator cue only. It is not written to report v2
 or evidence v1 and never replaces the retained high-speed-video or wired-
-loopback measurement required below.
+loopback measurement required below. Export while Safari is still foreground,
+then transfer the report and external capture.
 
 ## Physical Measurement Method
 
