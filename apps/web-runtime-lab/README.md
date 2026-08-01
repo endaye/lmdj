@@ -43,13 +43,32 @@ After all physical runs have been recorded, create a local JSON file with
 - `ipados-safari-touch-performance`;
 - `ipados-safari-touch-lifecycle`.
 
-Performance rows use an eligible `routeCategory` of `built-in` or `wired` and
-a `physical` object containing `triggerCount`, `p95Ms`, `p99Ms`,
-`missedOnsets`, and `duplicateOnsets`. Pointer/Touch rows also include a
-`foreground` object with `durationMs`, `underruns`, `processorErrors`,
-`lostAcknowledgements`, and `duplicateAcknowledgements`. The MIDI row instead
-adds `acknowledgements` with trigger/acknowledgement counts plus lost and
-duplicate counts.
+Every run is a complete dossier, not only a threshold summary. It contains:
+
+- a distinct random v4 `sessionId` and UTC `recordedAt`;
+- `environment` with exact `platform`, `browser`, `osVersion`,
+  `browserVersion`, broad `deviceClass`, `inputSource`, eligible
+  `routeCategory` (`built-in` or `wired`), and positive `sampleRate`;
+- `runtime` with `audioContextStateHistory`, nullable exposed latency values,
+  non-empty `observedQuantumSizes`, and positive `processorCallbackCount`;
+- explicit `errors` and `unsupportedCapabilities` arrays, both empty for a
+  passing row.
+
+Every performance row contains exactly 500 privacy-bounded `triggerRecords`.
+Each record has a unique positive `sequence`, the required `source`, finite
+non-negative `eventAtMs` and `acknowledgementAtMs`, and a positive observed
+`quantumSize`. It retains no MIDI device identity or raw message bytes.
+
+The `physical` object contains `method` (`high-speed-video` or
+`wired-loopback`), `captureRateHz`, finite `calibrationOffsetMs`,
+`triggerCount`, `p50Ms`, `p95Ms`, `p99Ms`, `missedOnsets`, and
+`duplicateOnsets`. High-speed video must be at least 240 fps. The aggregate
+trigger count must match the 500 retained trigger records.
+
+Pointer/Touch performance rows also include a `foreground` object with
+`durationMs`, `underruns`, `processorErrors`, `lostAcknowledgements`, and
+`duplicateAcknowledgements`. The MIDI row instead adds `acknowledgements` with
+trigger/acknowledgement counts plus lost and duplicate counts.
 
 The lifecycle row contains all five actions (`background`, `foreground`,
 `lock`, `unlock`, and `route-interruption`), a non-empty
@@ -64,8 +83,15 @@ The command prints deterministic JSON and exits `0` for `passed`, `1` for
 `failed`, `2` for `unverified`, or `64` for invalid command/file/JSON input.
 Only all five passing rows produce `passed`. A measured threshold violation
 produces `failed`; missing, duplicate, ineligible-route, unsupported, or
-invalid evidence remains `unverified`. Bluetooth rows may be retained outside
-the required keys as informational evidence but cannot satisfy a required row.
+invalid evidence remains `unverified`. Aggregate-only threshold values without
+the retained dossier also remain `unverified`. Bluetooth rows may be retained
+outside the required keys as informational evidence but cannot satisfy a
+required row.
+
+The evaluation JSON is a privacy-bounded index and summary of the retained
+run. Keep original high-speed-video frames or wired-loopback captures and the
+source browser report separately under operator control; the evaluator does
+not persist or upload them and a hash/path is not treated as proof of content.
 
 ## Trusted HTTPS for a physical device
 

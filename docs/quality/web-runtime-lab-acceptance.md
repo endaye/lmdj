@@ -104,6 +104,20 @@ the raw physical measurement record. The input is a local lab format with
 `evidenceVersion: 1`; it is not a product or cross-language Contract and is not
 Project Truth. The evaluator never reads a browser report as physical evidence.
 
+Each required row must carry a distinct random v4 session ID, UTC timestamp,
+exact OS/browser versions, fixed platform/browser/device/input identity,
+built-in or wired route, sample rate, AudioContext state history, exposed
+latency values, observed render quantum sizes, processor callback count, and
+explicit error/unsupported-capability arrays. A performance row additionally
+requires exactly 500 unique privacy-bounded trigger/acknowledgement records
+whose input source and quantum size match the required row and runtime record.
+
+Physical summaries require p50/p95/p99, trigger/miss/duplicate counts,
+calibration offset, and either a high-speed-video method at 240 fps or faster,
+or a positive-rate calibrated wired-loopback method. Aggregate threshold values
+without the complete dossier remain `unverified`; a file path or hash does not
+substitute for retained source frames/captures.
+
 The command exits `0` only when all five required rows pass. A threshold
 violation in any eligible required row exits `1` and returns `failed`, even if
 other evidence is missing. Missing, duplicated, invalid, unsupported, or

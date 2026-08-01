@@ -6,6 +6,7 @@ const REQUIRED_LIFECYCLE_ACTIONS = Object.freeze([
   "unlock",
   "route-interruption",
 ]);
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 
 function deepFreeze(value) {
@@ -47,26 +48,46 @@ export const REQUIRED_ROWS = deepFreeze([
   {
     key: "macos-safari-pointer-performance",
     kind: "performance",
+    platform: "macos",
+    browser: "safari",
+    deviceClass: "mac",
+    inputSource: "pointer",
     requiresForeground: true,
   },
   {
     key: "macos-chrome-pointer-performance",
     kind: "performance",
+    platform: "macos",
+    browser: "chrome",
+    deviceClass: "mac",
+    inputSource: "pointer",
     requiresForeground: true,
   },
   {
     key: "macos-chrome-midi-performance",
     kind: "performance",
+    platform: "macos",
+    browser: "chrome",
+    deviceClass: "mac",
+    inputSource: "midi",
     requiresMidiAcknowledgements: true,
   },
   {
     key: "ipados-safari-touch-performance",
     kind: "performance",
+    platform: "ipados",
+    browser: "safari",
+    deviceClass: "ipad",
+    inputSource: "touch",
     requiresForeground: true,
   },
   {
     key: "ipados-safari-touch-lifecycle",
     kind: "lifecycle",
+    platform: "ipados",
+    browser: "safari",
+    deviceClass: "ipad",
+    inputSource: "touch",
   },
 ]);
 
@@ -86,9 +107,186 @@ function isMeasurement(value) {
 }
 
 
+function isFiniteNumber(value) {
+  return Number.isFinite(value);
+}
+
+
+function isNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+
 function percentile(values, proportion) {
   const sorted = [...values].sort((left, right) => left - right);
   return sorted[Math.ceil(sorted.length * proportion) - 1];
+}
+
+
+function evaluateRunEnvelope(run, row, duplicateSessionIds) {
+  const unverified = [];
+  if (!isNonEmptyString(run.sessionId) || !UUID_V4.test(run.sessionId)) {
+    unverified.push("session-id-invalid");
+  } else if (duplicateSessionIds.has(run.sessionId)) {
+    unverified.push("duplicate-session-id");
+  }
+
+  if (
+    !isNonEmptyString(run.recordedAt)
+    || !run.recordedAt.endsWith("Z")
+    || !Number.isFinite(Date.parse(run.recordedAt))
+  ) {
+    unverified.push("recorded-at-invalid");
+  }
+
+  const environment = run.environment;
+  if (!isObject(environment)) {
+    unverified.push("environment-evidence-missing");
+  } else if (
+    !isNonEmptyString(environment.osVersion)
+    || !isNonEmptyString(environment.browserVersion)
+    || !isNonEmptyString(environment.routeCategory)
+    || !isMeasurement(environment.sampleRate)
+    || environment.sampleRate === 0
+  ) {
+    unverified.push("environment-evidence-invalid");
+  } else {
+    if (environment.platform !== row.platform) {
+      unverified.push("platform-mismatch");
+    }
+    if (environment.browser !== row.browser) {
+      unverified.push("browser-mismatch");
+    }
+    if (environment.deviceClass !== row.deviceClass) {
+      unverified.push("device-class-mismatch");
+    }
+    if (environment.inputSource !== row.inputSource) {
+      unverified.push("input-source-mismatch");
+    }
+    if (!ELIGIBLE_ROUTES.has(environment.routeCategory)) {
+      unverified.push("route-not-eligible");
+    }
+  }
+
+  const runtime = run.runtime;
+  if (!isObject(runtime)) {
+    unverified.push("runtime-evidence-missing");
+  } else {
+    const states = runtime.audioContextStateHistory;
+    const quantumSizes = runtime.observedQuantumSizes;
+    const stateHistoryValid = Array.isArray(states)
+      && states.length > 0
+      && states.every((entry) => (
+        isObject(entry)
+        && isNonEmptyString(entry.state)
+        && isMeasurement(entry.atMs)
+      ))
+      && states.some((entry) => entry.state === "running");
+    const quantumSizesValid = Array.isArray(quantumSizes)
+      && quantumSizes.length > 0
+      && quantumSizes.every((size) => Number.isInteger(size) && size > 0)
+      && new Set(quantumSizes).size === quantumSizes.length;
+    const nullableLatency = (value) => value === null || isMeasurement(value);
+    if (
+      !stateHistoryValid
+      || !nullableLatency(runtime.baseLatency)
+      || !nullableLatency(runtime.outputLatency)
+      || !quantumSizesValid
+      || !Number.isInteger(runtime.processorCallbackCount)
+      || runtime.processorCallbackCount <= 0
+    ) {
+      unverified.push("runtime-evidence-invalid");
+    }
+  }
+
+  if (!Array.isArray(run.errors) || run.errors.some(
+    (error) => typeof error !== "string",
+  )) {
+    unverified.push("errors-evidence-missing");
+  } else if (run.errors.length > 0) {
+    unverified.push("run-errors-present");
+  }
+
+  if (
+    !Array.isArray(run.unsupportedCapabilities)
+    || run.unsupportedCapabilities.some((capability) => (
+      typeof capability !== "string"
+    ))
+  ) {
+    unverified.push("unsupported-capabilities-evidence-missing");
+  } else if (run.unsupportedCapabilities.length > 0) {
+    unverified.push("unsupported-capabilities-present");
+  }
+
+  return { failed: [], unverified };
+}
+
+
+function evaluateTriggerRecords(run, row) {
+  const records = run.triggerRecords;
+  if (!Array.isArray(records)) {
+    return { failed: [], unverified: ["trigger-records-missing"] };
+  }
+
+  const unverified = [];
+  if (records.length !== APPROVED_GATE.touchToSound.triggerCount) {
+    unverified.push("trigger-record-count-not-500");
+  }
+
+  const validSequences = [];
+  let recordInvalid = false;
+  let sourceMismatch = false;
+  let quantumUnobserved = false;
+  const observedQuantumSizes = new Set(
+    Array.isArray(run.runtime?.observedQuantumSizes)
+      ? run.runtime.observedQuantumSizes
+      : [],
+  );
+  for (const record of records) {
+    if (
+      !isObject(record)
+      || !Number.isInteger(record.sequence)
+      || record.sequence <= 0
+      || !isMeasurement(record.eventAtMs)
+      || !isMeasurement(record.acknowledgementAtMs)
+      || record.acknowledgementAtMs < record.eventAtMs
+      || !Number.isInteger(record.quantumSize)
+      || record.quantumSize <= 0
+    ) {
+      recordInvalid = true;
+      continue;
+    }
+    validSequences.push(record.sequence);
+    if (record.source !== row.inputSource) {
+      sourceMismatch = true;
+    }
+    if (
+      observedQuantumSizes.size > 0
+      && !observedQuantumSizes.has(record.quantumSize)
+    ) {
+      quantumUnobserved = true;
+    }
+  }
+  if (recordInvalid) {
+    unverified.push("trigger-record-invalid");
+  }
+  if (new Set(validSequences).size !== validSequences.length) {
+    unverified.push("trigger-sequence-duplicate");
+  }
+  if (sourceMismatch) {
+    unverified.push("trigger-source-mismatch");
+  }
+  if (quantumUnobserved) {
+    unverified.push("trigger-quantum-unobserved");
+  }
+  if (
+    isObject(run.physical)
+    && isCount(run.physical.triggerCount)
+    && run.physical.triggerCount !== records.length
+  ) {
+    unverified.push("physical-trigger-count-mismatch");
+  }
+  return { failed: [], unverified };
 }
 
 
@@ -96,6 +294,8 @@ function evaluatePhysical(physical) {
   if (!isObject(physical)) {
     return { failed: [], unverified: ["physical-evidence-missing"] };
   }
+  const failed = [];
+  const unverified = [];
   if (
     !isCount(physical.triggerCount)
     || !isMeasurement(physical.p95Ms)
@@ -104,26 +304,49 @@ function evaluatePhysical(physical) {
     || !isCount(physical.duplicateOnsets)
     || physical.p99Ms < physical.p95Ms
   ) {
-    return { failed: [], unverified: ["physical-evidence-invalid"] };
+    unverified.push("physical-evidence-invalid");
+  } else {
+    if (physical.triggerCount < APPROVED_GATE.touchToSound.triggerCount) {
+      failed.push("trigger-count-below-500");
+    }
+    if (physical.p95Ms > APPROVED_GATE.touchToSound.p95Ms) {
+      failed.push("p95-above-50-ms");
+    }
+    if (physical.p99Ms > APPROVED_GATE.touchToSound.p99Ms) {
+      failed.push("p99-above-80-ms");
+    }
+    if (physical.missedOnsets > APPROVED_GATE.touchToSound.missedOnsets) {
+      failed.push("missed-onset");
+    }
+    if (physical.duplicateOnsets > APPROVED_GATE.touchToSound.duplicateOnsets) {
+      failed.push("duplicate-onset");
+    }
   }
 
-  const failed = [];
-  if (physical.triggerCount < APPROVED_GATE.touchToSound.triggerCount) {
-    failed.push("trigger-count-below-500");
+  const methodFields = [
+    physical.method,
+    physical.captureRateHz,
+    physical.calibrationOffsetMs,
+    physical.p50Ms,
+  ];
+  if (methodFields.some((value) => value === undefined)) {
+    unverified.push("physical-method-missing");
+  } else if (
+    !["high-speed-video", "wired-loopback"].includes(physical.method)
+    || !isMeasurement(physical.captureRateHz)
+    || physical.captureRateHz === 0
+    || !isFiniteNumber(physical.calibrationOffsetMs)
+    || !isMeasurement(physical.p50Ms)
+    || (isMeasurement(physical.p95Ms) && physical.p50Ms > physical.p95Ms)
+  ) {
+    unverified.push("physical-method-invalid");
+  } else if (
+    physical.method === "high-speed-video"
+    && physical.captureRateHz < 240
+  ) {
+    unverified.push("physical-video-rate-below-240-hz");
   }
-  if (physical.p95Ms > APPROVED_GATE.touchToSound.p95Ms) {
-    failed.push("p95-above-50-ms");
-  }
-  if (physical.p99Ms > APPROVED_GATE.touchToSound.p99Ms) {
-    failed.push("p99-above-80-ms");
-  }
-  if (physical.missedOnsets > APPROVED_GATE.touchToSound.missedOnsets) {
-    failed.push("missed-onset");
-  }
-  if (physical.duplicateOnsets > APPROVED_GATE.touchToSound.duplicateOnsets) {
-    failed.push("duplicate-onset");
-  }
-  return { failed, unverified: [] };
+  return { failed, unverified };
 }
 
 
@@ -258,7 +481,7 @@ function evaluateLifecycle(lifecycle) {
 }
 
 
-function rowResult(row, runsByKey) {
+function rowResult(row, runsByKey, duplicateSessionIds) {
   const matches = runsByKey.get(row.key) ?? [];
   if (matches.length === 0) {
     return {
@@ -276,17 +499,21 @@ function rowResult(row, runsByKey) {
   }
 
   const run = matches[0];
-  if (!isObject(run) || !ELIGIBLE_ROUTES.has(run.routeCategory)) {
+  if (!isObject(run)) {
     return {
       key: row.key,
       status: "unverified",
-      reasons: ["route-not-eligible"],
+      reasons: ["physical-run-invalid"],
     };
   }
 
-  const checks = row.kind === "lifecycle"
-    ? [evaluateLifecycle(run.lifecycle)]
-    : [evaluatePhysical(run.physical)];
+  const checks = [evaluateRunEnvelope(run, row, duplicateSessionIds)];
+  if (row.kind === "lifecycle") {
+    checks.push(evaluateLifecycle(run.lifecycle));
+  } else {
+    checks.push(evaluateTriggerRecords(run, row));
+    checks.push(evaluatePhysical(run.physical));
+  }
   if (row.requiresForeground) {
     checks.push(evaluateForeground(run.foreground));
   }
@@ -335,6 +562,7 @@ export function evaluatePhysicalMatrix(evidence) {
   }
 
   const runsByKey = new Map();
+  const sessionIdCounts = new Map();
   for (const run of evidence.runs) {
     const key = isObject(run) && typeof run.key === "string" ? run.key : null;
     if (key === null) {
@@ -343,9 +571,23 @@ export function evaluatePhysicalMatrix(evidence) {
     const matches = runsByKey.get(key) ?? [];
     matches.push(run);
     runsByKey.set(key, matches);
+    if (isNonEmptyString(run.sessionId) && UUID_V4.test(run.sessionId)) {
+      sessionIdCounts.set(
+        run.sessionId,
+        (sessionIdCounts.get(run.sessionId) ?? 0) + 1,
+      );
+    }
   }
 
-  const requiredRows = REQUIRED_ROWS.map((row) => rowResult(row, runsByKey));
+  const duplicateSessionIds = new Set(
+    [...sessionIdCounts.entries()]
+      .filter(([, count]) => count > 1)
+      .map(([sessionId]) => sessionId),
+  );
+
+  const requiredRows = REQUIRED_ROWS.map((row) => (
+    rowResult(row, runsByKey, duplicateSessionIds)
+  ));
   const failedRows = requiredRows
     .filter(({ status }) => status === "failed")
     .map(({ key }) => key);
