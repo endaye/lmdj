@@ -5,12 +5,19 @@ import re
 
 
 LAB_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = LAB_ROOT.parents[1]
 
 
 def read(relative: str) -> str:
     path = LAB_ROOT / relative
     assert path.is_file(), f"missing active Web Runtime Lab file: {relative}"
     assert not path.is_symlink(), f"active file must not be a symlink: {relative}"
+    return path.read_text(encoding="utf-8")
+
+
+def read_repository(relative: str) -> str:
+    path = REPOSITORY_ROOT / relative
+    assert path.is_file(), f"missing repository file: {relative}"
     return path.read_text(encoding="utf-8")
 
 
@@ -25,6 +32,9 @@ def main() -> int:
     main_source = read("src/main.js")
     worklet_source = read("src/worklet.js")
     probe_core = read("src/probe-core.mjs")
+    lab_readme = read("README.md")
+    apps_readme = read_repository("apps/README.md")
+    ci_workflow = read_repository(".github/workflows/ci.yml")
 
     combined = "\n".join((index, styles, main_source, worklet_source, probe_core))
     for forbidden in (
@@ -124,6 +134,37 @@ def main() -> int:
         "probe core",
     )
     assert re.search(r"\bpass\s*:", probe_core) is None
+
+    require(
+        lab_readme,
+        (
+            "scripts/web-runtime-lab.sh test",
+            "scripts/web-runtime-lab.sh serve --port 4173",
+            "scripts/web-runtime-lab.sh serve-lan",
+            "trusted-cert.pem",
+            "Pending threshold approval",
+            "not physical Touch-to-Sound evidence",
+            "MIDI input names",
+            "raw MIDI messages",
+            "persistent browser storage",
+        ),
+        "lab README",
+    )
+    require(
+        apps_readme,
+        ("web-runtime-lab", "product-neutral", "experimental Host"),
+        "apps README",
+    )
+    require(
+        ci_workflow,
+        (
+            "web-runtime-lab:",
+            'python-version: "3.11"',
+            'node-version: "22"',
+            "run: scripts/web-runtime-lab.sh test",
+        ),
+        "CI workflow",
+    )
 
     print("web runtime lab active tree: PASS")
     return 0

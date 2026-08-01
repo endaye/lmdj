@@ -386,6 +386,7 @@ Expected: Node, Python server, active-tree, and shell tests all pass.
 **Files:**
 
 - Create: `apps/web-runtime-lab/README.md`
+- Modify: `apps/web-runtime-lab/test/active_tree_test.py`
 - Modify: `apps/README.md`
 - Modify: `.github/workflows/ci.yml`
 
@@ -394,7 +395,7 @@ Expected: Node, Python server, active-tree, and shell tests all pass.
 - Consumes: stable lab scripts and acceptance protocol.
 - Produces: reproducible local/CI test commands and honest browser/device evidence boundaries.
 
-- [ ] **Step 1: Document local and device operation**
+- [x] **Step 1: Document local and device operation**
 
 Document:
 
@@ -410,7 +411,7 @@ scripts/web-runtime-lab.sh serve-lan \
 
 State that a visible page or a successful automated browser smoke is not physical latency evidence. Include the exact report privacy exclusions and the threshold-pending state.
 
-- [ ] **Step 2: Add the CI job**
+- [x] **Step 2: Add the CI job**
 
 Add one `web-runtime-lab` job using Ubuntu, Python 3.11, and Node 22. It runs only:
 
@@ -420,7 +421,7 @@ scripts/web-runtime-lab.sh test
 
 Do not install browser binaries in Core CI; physical and real-browser matrices remain separate acceptance evidence.
 
-- [ ] **Step 3: Run complete automated verification**
+- [x] **Step 3: Run complete automated verification**
 
 Run:
 
