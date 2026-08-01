@@ -32,11 +32,24 @@ def main() -> int:
     main_source = read("src/main.js")
     worklet_source = read("src/worklet.js")
     probe_core = read("src/probe-core.mjs")
+    physical_gate = read("src/physical-gate.mjs")
+    evaluator = read("src/evaluate-physical-evidence.mjs")
     lab_readme = read("README.md")
     apps_readme = read_repository("apps/README.md")
     ci_workflow = read_repository(".github/workflows/ci.yml")
+    lab_script = read_repository("scripts/web-runtime-lab.sh")
 
-    combined = "\n".join((index, styles, main_source, worklet_source, probe_core))
+    combined = "\n".join(
+        (
+            index,
+            styles,
+            main_source,
+            worklet_source,
+            probe_core,
+            physical_gate,
+            evaluator,
+        )
+    )
     for forbidden in (
         "lmdj.patch.v1",
         "lmdj.materials.v1",
@@ -85,7 +98,7 @@ def main() -> int:
             "processorerror",
             "getOutputTimestamp",
             "createReport",
-            'decisionStatus: "pending-threshold-approval"',
+            'decisionStatus: "threshold-approved"',
         ),
         "main",
     )
@@ -129,7 +142,7 @@ def main() -> int:
     require(
         probe_core,
         (
-            'decisionStatus: "pending-threshold-approval"',
+            'decisionStatus: "threshold-approved"',
             "physicalMeasurement: null",
         ),
         "probe core",
@@ -137,13 +150,53 @@ def main() -> int:
     assert re.search(r"\bpass\s*:", probe_core) is None
 
     require(
+        physical_gate,
+        (
+            "p95Ms: 50",
+            "p99Ms: 80",
+            "triggerCount: 500",
+            "durationMs: 600_000",
+            "p95ActivationToRunningMs: 500",
+            '"macos-safari-pointer-performance"',
+            '"macos-chrome-pointer-performance"',
+            '"macos-chrome-midi-performance"',
+            '"ipados-safari-touch-performance"',
+            '"ipados-safari-touch-lifecycle"',
+            '"route-not-eligible"',
+            '"failed"',
+            '"unverified"',
+            '"passed"',
+        ),
+        "physical gate",
+    )
+    require(
+        evaluator,
+        (
+            "evaluatePhysicalMatrix",
+            "readFileSync",
+            "process.exitCode",
+        ),
+        "physical evaluator",
+    )
+    require(
+        lab_script,
+        (
+            "scripts/web-runtime-lab.sh evaluate EVIDENCE.json",
+            'node "$lab_root/src/evaluate-physical-evidence.mjs" "$1"',
+        ),
+        "lab script",
+    )
+
+    require(
         lab_readme,
         (
             "scripts/web-runtime-lab.sh test",
             "scripts/web-runtime-lab.sh serve --port 4173",
             "scripts/web-runtime-lab.sh serve-lan",
+            "scripts/web-runtime-lab.sh evaluate",
             "trusted-cert.pem",
-            "Pending threshold approval",
+            "Approved",
+            "Unverified",
             "not physical Touch-to-Sound evidence",
             "MIDI input names",
             "raw MIDI messages",

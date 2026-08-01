@@ -18,7 +18,7 @@ const NOTE_OFFSET = 1;
 const VELOCITY_OFFSET = 2;
 
 const INITIAL_DECISION = Object.freeze({
-  decisionStatus: "pending-threshold-approval",
+  decisionStatus: "threshold-approved",
 });
 
 const byId = (id) => document.getElementById(id);
@@ -418,5 +418,7 @@ document.addEventListener("resume", () => {
 });
 
 startButton.disabled = !readiness.ready;
-byId("decision-status").textContent = "Pending threshold approval";
+byId("decision-status").textContent = (
+  "Threshold approved · physical gate unverified"
+);
 render();

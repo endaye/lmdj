@@ -7,6 +7,6 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test test/probe-core.test.mjs"
+    "test": "node --test test/*.test.mjs"
   }
 }

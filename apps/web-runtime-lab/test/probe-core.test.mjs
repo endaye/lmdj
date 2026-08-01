@@ -141,7 +141,7 @@ test("report separates browser estimates from physical measurement", () => {
   const report = createReport(fixtureSession());
 
   assert.equal(report.reportVersion, 1);
-  assert.equal(report.decisionStatus, "pending-threshold-approval");
+  assert.equal(report.decisionStatus, "threshold-approved");
   assert.deepEqual(report.triggerSummary, {
     dispatchedCount: 3,
     acknowledgedCount: 2,

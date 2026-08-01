@@ -6,18 +6,23 @@
 browser realtime-audio capability and prepares physical device evidence. It
 does not implement Creator UI, use Product Assembly, or change Core behavior.
 
-The current Touch-to-Sound recommendation is documented in
+The approved Touch-to-Sound threshold is documented in
 [`2026-08-01-web-realtime-audio-threshold-decision.md`](../architecture/2026-08-01-web-realtime-audio-threshold-decision.md).
-Its status is Proposed. Until the Product Owner approves it, the lab records
-observations but does not report product pass or fail.
+Approval freezes the threshold but does not pass the Spike. The physical gate
+remains unverified until retained evidence for all five required rows is
+evaluated by the separate local evaluator.
 
 ## Automated Gate
 
 The repository gate proves:
 
 - pure capability, percentile, and report behavior;
-- stable report fields with `decisionStatus: "pending-threshold-approval"`;
-- absence of a product pass/fail field;
+- stable browser-report fields with `decisionStatus: "threshold-approved"`;
+- absence of a physical result field in the browser report;
+- exact approved thresholds and five required physical-evidence rows;
+- deterministic `passed`, `failed`, and `unverified` evaluator outcomes;
+- Bluetooth, browser estimates, invalid data, and incomplete evidence cannot
+  produce `passed`;
 - loopback-only default serving;
 - COOP, COEP, CORP, and no-store response headers;
 - explicit and complete TLS arguments for LAN mode;
@@ -41,7 +46,7 @@ export a report. The visible result must show:
 - SharedArrayBuffer trigger and acknowledgement counts increase together;
 - at least one non-zero observed render quantum size;
 - physical measurement not recorded;
-- decision pending threshold approval.
+- decision threshold approved and physical gate unverified.
 
 This smoke is current Chromium evidence only. It is not Safari, iPad, physical
 MIDI, underrun, or acoustic evidence.
@@ -92,6 +97,19 @@ For each Safari/iPad run:
 Unsupported or unreproducible interruption steps remain unverified; they are
 not silently omitted or called passed.
 
+## Physical Evidence Evaluation
+
+Use `scripts/web-runtime-lab.sh evaluate EVIDENCE.json` only after retaining
+the raw physical measurement record. The input is a local lab format with
+`evidenceVersion: 1`; it is not a product or cross-language Contract and is not
+Project Truth. The evaluator never reads a browser report as physical evidence.
+
+The command exits `0` only when all five required rows pass. A threshold
+violation in any eligible required row exits `1` and returns `failed`, even if
+other evidence is missing. Missing, duplicated, invalid, unsupported, or
+ineligible-route evidence exits `2` and returns `unverified` when no measured
+failure exists. Invalid command, file, or JSON input exits `64`.
+
 ## Report Privacy
 
 Allowed:
@@ -110,7 +128,7 @@ Forbidden:
 - MIDI input name, manufacturer, or browser device ID;
 - SysEx or raw MIDI message bytes;
 - automatic upload or persistence;
-- Product pass/fail before threshold approval.
+- a physical result derived automatically from browser estimates or telemetry.
 
 ## Evidence States
 
@@ -118,7 +136,11 @@ Forbidden:
 - `browser-smoke-pass`: one named browser completed the live smoke.
 - `physical-measured`: a matrix row has retained physical observations.
 - `unverified`: required evidence is absent or unsupported.
-- `decision-pending`: the Product Owner has not approved the threshold.
+- `decision-approved`: the Product Owner approved the threshold before the
+  physical runs.
+- `physical-gate-passed`: all five required rows passed the approved gate.
+- `physical-gate-failed`: at least one eligible required row violated the
+  approved gate and requires product and architecture review.
 
 These states are cumulative and non-substitutable. In particular,
 `automated-pass` plus `browser-smoke-pass` is still not physical acceptance.

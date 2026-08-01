@@ -9,6 +9,7 @@ usage() {
   cat <<'EOF'
 usage:
   scripts/web-runtime-lab.sh test
+  scripts/web-runtime-lab.sh evaluate EVIDENCE.json
   scripts/web-runtime-lab.sh serve [--port PORT]
   scripts/web-runtime-lab.sh serve-lan \
     --bind ADDRESS \
@@ -51,6 +52,13 @@ case "$command_name" in
     if [[ -f "$lab_root/test/active_tree_test.py" ]]; then
       python3 "$lab_root/test/active_tree_test.py"
     fi
+    ;;
+  evaluate)
+    [[ $# -eq 1 ]] || {
+      usage
+      exit 64
+    }
+    node "$lab_root/src/evaluate-physical-evidence.mjs" "$1"
     ;;
   serve)
     python3 "$lab_root/server.py" --bind 127.0.0.1 "$@"

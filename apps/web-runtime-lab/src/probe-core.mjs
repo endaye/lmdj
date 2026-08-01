@@ -318,7 +318,7 @@ export function createReport(session) {
 
   return {
     reportVersion: 1,
-    decisionStatus: "pending-threshold-approval",
+    decisionStatus: "threshold-approved",
     sessionId: requiredString(session?.sessionId, "sessionId"),
     startedAt: requiredString(session?.startedAt, "startedAt"),
     endedAt: requiredString(session?.endedAt, "endedAt"),

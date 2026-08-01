@@ -1,6 +1,6 @@
 # Web Realtime Audio Touch-to-Sound Threshold Decision
 
-Status: Proposed - awaiting Product Owner approval
+Status: Approved
 
 Date: 2026-08-01
 
@@ -8,17 +8,18 @@ Decision owner: Product Owner
 
 Implementation owner: Core / Host engineering
 
-## Decision Needed
+## Decision
 
-The Web realtime-audio Spike needs a physical Touch-to-Sound threshold before
-device measurements begin. The threshold decides whether Web/PWA remains a
-credible launch platform or returns to product and architecture review. It
-must not be derived retrospectively from observed results.
+The Web realtime-audio Spike uses the physical Touch-to-Sound threshold below.
+The threshold decides whether Web/PWA remains a credible launch platform or
+returns to product and architecture review. It was approved before physical
+device measurements and must not be altered retrospectively from observed
+results.
 
-This document is a proposal. It does not update the product decision log and
-must not be used to report the Spike as passed.
+Approval of the threshold does not report the Spike as passed. The physical
+device matrix remains unverified until eligible retained evidence is evaluated.
 
-## Recommended Gate
+## Approved Gate
 
 ### Physical non-Bluetooth Touch-to-Sound
 
@@ -101,7 +102,7 @@ Each run records:
 MIDI input names, manufacturers, IDs, serials, SysEx bytes, and raw messages are
 not retained.
 
-## Outcomes After Approval
+## Outcomes
 
 - All required runs satisfy the approved gate: Web/PWA remains eligible for the
   next design stage.
@@ -113,14 +114,13 @@ not retained.
 
 ## Approval Record
 
-The proposal becomes effective only after the Product Owner explicitly
-approves it. At that point a separate change will:
+Product Owner approval was given explicitly in the Codex task on 2026-08-01.
+This approval follow-up records the decision in `docs/prd/decision-log.md`,
+removes the resolved question from `docs/prd/open-questions.md`, and adds the
+approved threshold configuration and physical-evidence evaluation to the lab.
 
-1. add the decision to `docs/prd/decision-log.md`;
-2. change the matching row in `docs/prd/open-questions.md` from `待决`;
-3. add approved threshold configuration and pass/fail evaluation to the lab;
-4. allocate Product or Host version impact only if that later change affects a
-   shipped product surface.
+There is no Product Build, Core Module, Provider, or Contract version impact:
+the change affects an experimental lab and governance documentation only.
 
 ## Primary References
 
