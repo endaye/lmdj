@@ -159,7 +159,10 @@ nlohmann::json canonical_state_value(const ProjectState& state) {
 }
 
 std::string canonical_state(const ProjectState& state) {
-  return lmdj::foundation::canonical_json(canonical_state_value(state));
+  // canonical_state_value deliberately contains arrays and scalars only, so
+  // nlohmann's compact dump is already canonical and avoids rebuilding the
+  // entire generated state for every failed-operation invariant check.
+  return canonical_state_value(state).dump();
 }
 
 void check_pattern_slots(const ProjectState& state) {
@@ -569,6 +572,9 @@ const MatrixEvidence& generated_matrix_evidence() {
 }
 
 void test_deterministic_rng_contract() {
+  const auto state_value = canonical_state_value(new_project(1));
+  LMDJ_CHECK(
+      state_value.dump() == lmdj::foundation::canonical_json(state_value));
   DeterministicRng rng(1);
   LMDJ_CHECK(rng.seed() == 1);
   for (const auto expected : kSeedOneValues) {

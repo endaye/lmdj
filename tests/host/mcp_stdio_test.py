@@ -1493,6 +1493,11 @@ def main() -> int:
                 "ASAN_OPTIONS",
                 "",
             )
+        elif sys.platform.startswith("linux"):
+            assert "detect_leaks=0" in os.environ.get(
+                "ASAN_OPTIONS",
+                "",
+            ).split(":")
 
     fixtures = (
         startup_and_platform,

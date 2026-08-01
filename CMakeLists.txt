@@ -135,6 +135,14 @@ if(LMDJ_SANITIZER STREQUAL "address")
         APPEND lmdj_mcp_test_environment
         "ASAN_OPTIONS=verify_interceptors=0"
       )
+    elseif(UNIX)
+      # libasan is preloaded into an otherwise uninstrumented CPython process
+      # for ctypes coverage. Ignore CPython's process-lifetime allocations in
+      # these Host tests only; native C++ sanitizer tests retain leak checks.
+      list(
+        APPEND lmdj_mcp_test_environment
+        "ASAN_OPTIONS=detect_leaks=0"
+      )
     endif()
   endif()
 endif()
