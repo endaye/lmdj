@@ -127,6 +127,18 @@ function audioContextReport(audioContext) {
         nonNegativeInteger(value, `observed quantum size ${index}`),
       )),
     ].sort((left, right) => left - right),
+    lastOutputTimestamp: audioContext?.lastOutputTimestamp == null
+      ? null
+      : {
+          contextTime: finiteNonNegative(
+            audioContext.lastOutputTimestamp.contextTime,
+            "output timestamp contextTime",
+          ),
+          performanceTime: finiteNonNegative(
+            audioContext.lastOutputTimestamp.performanceTime,
+            "output timestamp performanceTime",
+          ),
+        },
   };
 }
 
@@ -152,6 +164,10 @@ function sharedControlReport(sharedControl) {
     duplicateAcknowledgements: nonNegativeInteger(
       sharedControl?.duplicateAcknowledgements,
       "duplicate acknowledgements",
+    ),
+    droppedCount: nonNegativeInteger(
+      sharedControl?.droppedCount,
+      "dropped count",
     ),
   };
 }
@@ -189,7 +205,15 @@ function acknowledgementEstimates(acknowledgements) {
   if (!Array.isArray(acknowledgements)) {
     throw new TypeError("triggerAcknowledgements must be an array");
   }
-  const acknowledgementMs = acknowledgements.map((acknowledgement, index) => {
+  const records = acknowledgements.map((acknowledgement, index) => {
+    const sequence = nonNegativeInteger(
+      acknowledgement?.sequence,
+      `acknowledgement ${index} sequence`,
+    );
+    const source = acknowledgement?.source;
+    if (source !== "pointer" && source !== "midi") {
+      throw new TypeError(`acknowledgement ${index} source is invalid`);
+    }
     const eventAtMs = finiteNonNegative(
       acknowledgement?.eventAtMs,
       `acknowledgement ${index} eventAtMs`,
@@ -201,10 +225,38 @@ function acknowledgementEstimates(acknowledgements) {
     if (acknowledgementAtMs < eventAtMs) {
       throw new RangeError("acknowledgement time precedes event time");
     }
-    return acknowledgementAtMs - eventAtMs;
+    return {
+      sequence,
+      source,
+      note: nonNegativeInteger(
+        acknowledgement?.note,
+        `acknowledgement ${index} note`,
+      ),
+      velocity: nonNegativeInteger(
+        acknowledgement?.velocity,
+        `acknowledgement ${index} velocity`,
+      ),
+      eventAtMs,
+      acknowledgementAtMs,
+      acknowledgementMs: acknowledgementAtMs - eventAtMs,
+      renderFrame: nonNegativeInteger(
+        acknowledgement?.renderFrame,
+        `acknowledgement ${index} renderFrame`,
+      ),
+      contextTime: finiteNonNegative(
+        acknowledgement?.contextTime,
+        `acknowledgement ${index} contextTime`,
+      ),
+      quantumSize: nonNegativeInteger(
+        acknowledgement?.quantumSize,
+        `acknowledgement ${index} quantumSize`,
+      ),
+    };
   });
+  const acknowledgementMs = records.map((record) => record.acknowledgementMs);
   if (acknowledgementMs.length === 0) {
     return {
+      records,
       acknowledgementMs: [],
       p50Ms: null,
       p95Ms: null,
@@ -212,6 +264,7 @@ function acknowledgementEstimates(acknowledgements) {
     };
   }
   return {
+    records,
     acknowledgementMs,
     p50Ms: percentile(acknowledgementMs, 0.5),
     p95Ms: percentile(acknowledgementMs, 0.95),

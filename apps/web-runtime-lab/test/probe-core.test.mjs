@@ -39,6 +39,10 @@ function fixtureSession() {
       baseLatency: 0.01,
       outputLatency: 0.02,
       observedQuantumSizes: [128],
+      lastOutputTimestamp: {
+        contextTime: 0.19,
+        performanceTime: 199,
+      },
     },
     wasm: {
       ready: true,
@@ -48,6 +52,7 @@ function fixtureSession() {
       dispatchedCount: 3,
       acknowledgedCount: 2,
       duplicateAcknowledgements: 0,
+      droppedCount: 1,
     },
     midi: {
       supported: true,
@@ -146,11 +151,42 @@ test("report separates browser estimates from physical measurement", () => {
     midiAcknowledgements: 1,
   });
   assert.deepEqual(report.browserEstimates, {
+    records: [
+      {
+        sequence: 1,
+        source: "pointer",
+        note: 36,
+        velocity: 100,
+        eventAtMs: 100,
+        acknowledgementAtMs: 109,
+        acknowledgementMs: 9,
+        renderFrame: 4800,
+        contextTime: 0.1,
+        quantumSize: 128,
+      },
+      {
+        sequence: 2,
+        source: "midi",
+        note: 38,
+        velocity: 90,
+        eventAtMs: 200,
+        acknowledgementAtMs: 215,
+        acknowledgementMs: 15,
+        renderFrame: 9600,
+        contextTime: 0.2,
+        quantumSize: 128,
+      },
+    ],
     acknowledgementMs: [9, 15],
     p50Ms: 9,
     p95Ms: 15,
     p99Ms: 15,
   });
+  assert.deepEqual(report.audioContext.lastOutputTimestamp, {
+    contextTime: 0.19,
+    performanceTime: 199,
+  });
+  assert.equal(report.sharedControl.droppedCount, 1);
   assert.equal(report.physicalMeasurement, null);
   assert.equal("pass" in report, false);
 });

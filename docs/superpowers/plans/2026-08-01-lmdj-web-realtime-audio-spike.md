@@ -4,7 +4,7 @@
 
 **Goal:** Build a product-neutral browser lab that proves AudioWorklet, WebAssembly, SharedArrayBuffer, MIDI dispatch, and audio lifecycle measurement without changing Core behavior or claiming a physical Touch-to-Sound pass before the threshold is approved.
 
-**Architecture:** A dependency-free ES module app sends pointer and MIDI triggers through one SharedArrayBuffer/Atomics control path to an AudioWorkletProcessor. The processor instantiates and calls a minimal WebAssembly module on the rendering thread, emits a short bounded tone, and returns raw render-frame acknowledgements; pure report code records browser estimates separately from later acoustic measurements. A loopback-first Python server supplies COOP/COEP and optional trusted TLS for physical iPad testing.
+**Architecture:** A dependency-free ES module app sends pointer and MIDI triggers through one bounded SharedArrayBuffer/Atomics single-producer/single-consumer ring to an AudioWorkletProcessor. The processor instantiates and calls a minimal WebAssembly module on the rendering thread, emits a short bounded tone, and returns one raw render-frame acknowledgement per accepted record; pure report code retains every privacy-bounded browser estimate separately from later acoustic measurements. A loopback-first Python server supplies COOP/COEP and optional trusted TLS for physical iPad testing.
 
 **Tech Stack:** HTML, CSS, ES2022 modules, Web Audio API, AudioWorklet, WebAssembly, SharedArrayBuffer/Atomics, Web MIDI, Node.js 22 built-in test runner, Python 3.11 standard library, Playwright CLI.
 
@@ -22,6 +22,7 @@
 - Require `crossOriginIsolated`, `SharedArrayBuffer`, `Atomics`, `AudioWorkletNode`, and WebAssembly before enabling triggers.
 - Create/resume `AudioContext` only inside the explicit Start button activation.
 - Never assume a 128-frame render quantum; report the observed output length on every processor callback and fail the automated invariant if it is zero or changes without being recorded.
+- Use a fixed 1024-record ring with monotonic write/read counters. Reject and report overflow; never overwrite an unread trigger.
 - Use one bounded oscillator voice and clamp output below `0.15` peak to avoid unsafe playback.
 - Do not store MIDI input names, manufacturers, serials, IDs, SysEx data, or raw messages. Record only support, permission result, input count, event count, note, velocity, and relative timing.
 - Version impact: none. This is isolated measurement tooling and does not change Product Build, Module SemVer, Provider SemVer, or Contract SemVer.
@@ -288,7 +289,7 @@ Expected: server tests pass and shell syntax is clean.
 - Consumes: `probe-core.mjs`, user activation, pointer/MIDI events, browser lifecycle events.
 - Produces: audible bounded trigger, live raw metrics, privacy-bounded downloadable JSON report.
 
-- [ ] **Step 1: Write the failing active-tree test**
+- [x] **Step 1: Write the failing active-tree test**
 
 Require the exact five browser files, scan them for forbidden retired Contract IDs and absolute repository paths, and assert:
 
@@ -306,7 +307,7 @@ assert "decisionStatus" in main_source
 assert "pass" not in report_field_names
 ```
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 Run:
 
@@ -316,35 +317,41 @@ python3 apps/web-runtime-lab/test/active_tree_test.py
 
 Expected: missing browser files.
 
-- [ ] **Step 3: Implement the processor**
+- [x] **Step 3: Implement the processor**
 
 Inside `AudioWorkletProcessor`:
 
 - instantiate a valid minimal WebAssembly module exporting `level(): i32` and call it on every active render callback;
-- receive one `SharedArrayBuffer`, expose an `Int32Array`, and read trigger sequence/source/note/velocity through `Atomics.load`;
-- on a new sequence, record `currentFrame`, begin a fixed-duration sine burst, and post an acknowledgement containing sequence, source, note, velocity, render frame, current time, observed quantum length, and cumulative processor call count;
+- receive one `SharedArrayBuffer`, expose an `Int32Array`, and drain every published trigger record between monotonic write/read counters through `Atomics.load`;
+- for every accepted record, record `currentFrame`, begin or retrigger a fixed-duration sine burst, and post an acknowledgement containing sequence, source, note, velocity, render frame, current time, observed quantum length, and cumulative processor call count;
 - derive quantum length only from `outputs[0][0].length`;
 - clamp every sample to `[-0.15, 0.15]`;
 - report `processorerror` through the node-side listener.
 
-- [ ] **Step 4: Implement the user-activation and control path**
+- [x] **Step 4: Implement the user-activation and control path**
 
 The Start button must:
 
 ```javascript
 const context = new AudioContext({ latencyHint: "interactive" });
 await context.audioWorklet.addModule("./src/worklet.js");
-const control = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * 8);
+const headerLength = 8;
+const ringCapacity = 1024;
+const recordLength = 3;
+const control = new SharedArrayBuffer(
+  Int32Array.BYTES_PER_ELEMENT
+    * (headerLength + ringCapacity * recordLength),
+);
 const node = new AudioWorkletNode(context, "lmdj-web-runtime-probe", {
-  processorOptions: { control },
+  processorOptions: { control, headerLength, ringCapacity, recordLength },
 });
 node.connect(context.destination);
 await context.resume();
 ```
 
-Pointer and MIDI handlers write source/note/velocity first and increment the sequence last with `Atomics.add`. Do not send raw MIDI messages to the report. Record AudioContext `statechange`, document `visibilitychange`, `pagehide`, `pageshow`, `freeze`, and `resume` where supported.
+Pointer and MIDI handlers share one producer path: reject when the ring is full, write source/note/velocity into the next record, and publish it last with `Atomics.add`. Do not send raw MIDI messages to the report. Record AudioContext `statechange`, document `visibilitychange`, `pagehide`, `pageshow`, `freeze`, and `resume` where supported.
 
-- [ ] **Step 5: Implement measurement display and export**
+- [x] **Step 5: Implement measurement display and export**
 
 Display separate cards for:
 
@@ -360,9 +367,9 @@ Physical measurement: Not recorded in browser
 Decision: Pending threshold approval
 ```
 
-Export only canonical JSON created by `createReport`; use a random per-session UUID and timestamps, with no persistent local storage.
+Export only canonical JSON created by `createReport`; retain every privacy-bounded acknowledgement record plus the latest `getOutputTimestamp()` mapping, use a random per-session UUID and timestamps, and use no persistent local storage.
 
-- [ ] **Step 6: Run GREEN**
+- [x] **Step 6: Run GREEN**
 
 Run:
 
