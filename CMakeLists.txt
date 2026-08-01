@@ -268,6 +268,11 @@ lmdj_add_test(
   LABELS abi assembly generated
   TIMEOUT 180
 )
+set_tests_properties(
+  package.acceptance
+  PROPERTIES
+    ENVIRONMENT "${lmdj_mcp_test_environment}"
+)
 
 lmdj_add_test(
   NAME build.test_taxonomy

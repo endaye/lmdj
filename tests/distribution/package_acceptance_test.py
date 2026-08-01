@@ -38,6 +38,12 @@ def clean_environment() -> dict[str, str]:
     environment = os.environ.copy()
     environment.pop("PYTHONPATH", None)
     environment["PYTHONNOUSERSITE"] = "1"
+    sanitizer_runtime = environment.get("LMDJ_ASAN_RUNTIME")
+    if sanitizer_runtime:
+        if sys.platform == "darwin":
+            environment["DYLD_INSERT_LIBRARIES"] = sanitizer_runtime
+        elif sys.platform.startswith("linux"):
+            environment["LD_PRELOAD"] = sanitizer_runtime
     return environment
 
 
