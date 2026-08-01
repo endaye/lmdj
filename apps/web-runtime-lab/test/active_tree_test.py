@@ -59,6 +59,7 @@ def main() -> int:
             'id="resume-audio"',
             'id="export-report"',
             'id="decision-status"',
+            '<link rel="icon" href="data:,">',
             'type="module"',
         ),
         "index",

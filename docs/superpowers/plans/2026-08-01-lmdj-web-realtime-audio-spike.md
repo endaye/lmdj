@@ -437,14 +437,18 @@ Expected: lab tests pass, Core Proof remains 23/23 with Product Build `1.0.9.0`,
 
 ### Task 6: Perform a Real Desktop Browser Smoke and Prepare Review
 
-**Files:** none
+**Files:**
+
+- Modify: `apps/web-runtime-lab/index.html`
+- Modify: `apps/web-runtime-lab/test/active_tree_test.py`
+- Modify: `docs/superpowers/plans/2026-08-01-lmdj-web-realtime-audio-spike.md`
 
 **Interfaces:**
 
 - Consumes: the local isolated server and implemented UI.
 - Produces: current-browser evidence for capability startup and report export; no physical latency conclusion.
 
-- [ ] **Step 1: Start the isolated server**
+- [x] **Step 1: Start the isolated server**
 
 Run:
 
@@ -454,7 +458,7 @@ scripts/web-runtime-lab.sh serve --port 4173
 
 Expected: loopback URL printed once; COOP/COEP enabled.
 
-- [ ] **Step 2: Run Playwright CLI smoke**
+- [x] **Step 2: Run Playwright CLI smoke**
 
 Use the bundled Playwright CLI wrapper to open `http://127.0.0.1:4173`, snapshot, click Start, trigger the pad, snapshot again, and export a report. Require visible evidence that:
 
