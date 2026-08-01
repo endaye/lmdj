@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cstdint>
 #include <exception>
 #include <iomanip>
@@ -159,7 +160,135 @@ nlohmann::json canonical_state_value(const ProjectState& state) {
 }
 
 std::string canonical_state(const ProjectState& state) {
-  return lmdj::foundation::canonical_json(canonical_state_value(state));
+  std::string encoded;
+  encoded.reserve(4096);
+
+  const auto append_integer = [&encoded](auto value) {
+    std::array<char, 32> buffer{};
+    const auto [end, error] =
+        std::to_chars(buffer.data(), buffer.data() + buffer.size(), value);
+    LMDJ_CHECK(error == std::errc{});
+    encoded.append(buffer.data(), end);
+  };
+  const auto append_string = [&encoded](std::string_view value) {
+    encoded += nlohmann::json(value).dump();
+  };
+
+  encoded.push_back('[');
+  append_string(state.id.value());
+  encoded.push_back(',');
+  append_integer(state.revision);
+  encoded.push_back(',');
+  append_integer(state.bpm);
+  encoded += ",[";
+  bool first = true;
+  for (const auto& bank : state.banks) {
+    for (const auto& pad : bank) {
+      if (!first) {
+        encoded.push_back(',');
+      }
+      first = false;
+      encoded.push_back('[');
+      append_integer(pad.id.bank);
+      encoded.push_back(',');
+      append_integer(pad.id.pad);
+      encoded.push_back(',');
+      if (pad.asset_id.has_value()) {
+        append_string(pad.asset_id->value());
+      } else {
+        encoded += "null";
+      }
+      encoded.push_back(']');
+    }
+  }
+
+  encoded += "],[";
+  first = true;
+  for (const auto& [id, asset] : state.assets) {
+    if (!first) {
+      encoded.push_back(',');
+    }
+    first = false;
+    encoded.push_back('[');
+    append_string(id.value());
+    encoded.push_back(',');
+    append_string(asset.id.value());
+    encoded.push_back(',');
+    append_string(asset.artifact.sha256);
+    encoded.push_back(',');
+    append_string(asset.artifact.media_type);
+    encoded.push_back(',');
+    append_integer(asset.artifact.byte_length);
+    encoded.push_back(']');
+  }
+
+  encoded += "],[";
+  first = true;
+  for (const auto& [id, take] : state.takes) {
+    if (!first) {
+      encoded.push_back(',');
+    }
+    first = false;
+    encoded.push_back('[');
+    append_string(id.value());
+    encoded.push_back(',');
+    append_string(take.id.value());
+    encoded.push_back(',');
+    append_integer(take.sample_rate);
+    encoded += ",[";
+    bool first_event = true;
+    for (const auto& event : take.events) {
+      if (!first_event) {
+        encoded.push_back(',');
+      }
+      first_event = false;
+      encoded.push_back('[');
+      append_integer(event.slot.bank);
+      encoded.push_back(',');
+      append_integer(event.slot.pad);
+      encoded.push_back(',');
+      append_integer(event.frame_offset);
+      encoded.push_back(',');
+      append_integer(event.velocity);
+      encoded.push_back(']');
+    }
+    encoded += "]]";
+  }
+
+  encoded += "],[";
+  first = true;
+  for (const auto& [id, pattern] : state.patterns) {
+    if (!first) {
+      encoded.push_back(',');
+    }
+    first = false;
+    encoded.push_back('[');
+    append_string(id.value());
+    encoded.push_back(',');
+    append_string(pattern.id.value());
+    encoded.push_back(',');
+    append_integer(pattern.bars);
+    encoded += ",[";
+    bool first_event = true;
+    for (const auto& event : pattern.events) {
+      if (!first_event) {
+        encoded.push_back(',');
+      }
+      first_event = false;
+      encoded.push_back('[');
+      append_integer(event.slot.bank);
+      encoded.push_back(',');
+      append_integer(event.slot.pad);
+      encoded.push_back(',');
+      append_integer(event.step);
+      encoded.push_back(',');
+      append_integer(event.velocity);
+      encoded.push_back(']');
+    }
+    encoded += "]]";
+  }
+  encoded += "]]";
+  return encoded;
 }
 
 void check_pattern_slots(const ProjectState& state) {
@@ -559,6 +688,9 @@ MatrixEvidence run_generated_matrix() {
       check_receipt_identity(receipts);
       check_pattern_slots(state);
     }
+    LMDJ_CHECK(
+        canonical_state(state) ==
+        lmdj::foundation::canonical_json(canonical_state_value(state)));
   });
   return evidence;
 }
