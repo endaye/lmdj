@@ -57,6 +57,7 @@ namespace {
 
 constexpr std::size_t kMaximumConfigBytes = 64U * 1024U;
 constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
+constexpr int kMaximumJsonContainerDepth = 64;
 
 struct EngineState {
   explicit EngineState(std::shared_ptr<lmdj::facade::Application> value)
@@ -113,6 +114,30 @@ bool valid_utf8(std::string_view value) {
     offset += length;
   }
   return true;
+}
+
+std::optional<nlohmann::json> parse_bounded_json(
+    std::string_view bytes) {
+  bool depth_exceeded = false;
+  const auto callback = [&depth_exceeded](
+                            int depth,
+                            nlohmann::json::parse_event_t event,
+                            nlohmann::json&) {
+    const bool container_start =
+        event == nlohmann::json::parse_event_t::object_start ||
+        event == nlohmann::json::parse_event_t::array_start;
+    if (container_start && depth >= kMaximumJsonContainerDepth) {
+      depth_exceeded = true;
+      return false;
+    }
+    return true;
+  };
+  auto value = nlohmann::json::parse(
+      bytes.begin(), bytes.end(), callback, false);
+  if (depth_exceeded || value.is_discarded()) {
+    return std::nullopt;
+  }
+  return value;
 }
 
 std::optional<std::string_view> bounded_c_string(
@@ -203,14 +228,13 @@ int invoke_application(
     if (!bytes.has_value() || !valid_utf8(*bytes)) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
-    auto request = nlohmann::json::parse(
-        bytes->begin(), bytes->end(), nullptr, false);
-    if (request.is_discarded() || !request.is_object()) {
+    auto request = parse_bounded_json(*bytes);
+    if (!request.has_value() || !request->is_object()) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
     nlohmann::json response;
     try {
-      response = invoke(*guard->state->application, request);
+      response = invoke(*guard->state->application, *request);
     } catch (...) {
       response = internal_error_envelope();
     }
@@ -251,19 +275,18 @@ int lmdj_engine_create(
     if (!bytes.has_value() || !valid_utf8(*bytes)) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
-    auto config = nlohmann::json::parse(
-        bytes->begin(), bytes->end(), nullptr, false);
-    if (config.is_discarded() || !config.is_object() ||
-        config.empty() || config.size() > 2 ||
-        !config.contains("workspace_root") ||
-        !config.at("workspace_root").is_string() ||
-        (config.size() == 2 && !config.contains("assembly_path")) ||
-        (config.contains("assembly_path") &&
-         !config.at("assembly_path").is_string())) {
+    auto config = parse_bounded_json(*bytes);
+    if (!config.has_value() || !config->is_object() ||
+        config->empty() || config->size() > 2 ||
+        !config->contains("workspace_root") ||
+        !config->at("workspace_root").is_string() ||
+        (config->size() == 2 && !config->contains("assembly_path")) ||
+        (config->contains("assembly_path") &&
+         !config->at("assembly_path").is_string())) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
     const auto workspace_value =
-        config.at("workspace_root").get<std::string>();
+        config->at("workspace_root").get<std::string>();
     if (!valid_utf8(workspace_value) ||
         workspace_value.find('\0') != std::string::npos) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
@@ -276,9 +299,9 @@ int lmdj_engine_create(
     }
     auto providers = std::make_shared<lmdj::provider::Registry>();
     lmdj::provider::ProviderPolicy provider_policy;
-    if (config.contains("assembly_path")) {
+    if (config->contains("assembly_path")) {
       const auto assembly_value =
-          config.at("assembly_path").get<std::string>();
+          config->at("assembly_path").get<std::string>();
       if (!valid_utf8(assembly_value) ||
           assembly_value.find('\0') != std::string::npos) {
         return LMDJ_STATUS_INVALID_ARGUMENT;

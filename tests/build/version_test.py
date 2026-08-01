@@ -17,16 +17,16 @@ core_cli_manifest = json.loads(
 assert core_cli_manifest == {
     "contract": "lmdj.module.v1",
     "module": "core-cli",
-    "version": "0.1.0",
+    "version": "0.1.1",
     "api_version": 1,
-    "dependencies": {"application-facade": "0.1.0"},
+    "dependencies": {"application-facade": "0.1.1"},
 }
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 6, 0)
-assert str(version) == "1.0.6.0"
-assert version.product_tag() == "lmdj-v1.0.6.0"
-assert version.display("dev", "a" * 40) == "1.0.6.0 · dev · gaaaaaaaa"
+assert version == ProductVersion(1, 0, 7, 0)
+assert str(version) == "1.0.7.0"
+assert version.product_tag() == "lmdj-v1.0.7.0"
+assert version.display("dev", "a" * 40) == "1.0.7.0 · dev · gaaaaaaaa"
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
@@ -55,7 +55,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.6.0\n"
+assert tag_name.stdout == "lmdj-v1.0.7.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -75,7 +75,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.6.0 · dev · gaaaaaaaa\n"
+assert current.stdout == "1.0.7.0 · dev · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -91,7 +91,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.6.0)\n"
+assert verified.stdout == "version verification: PASS (1.0.7.0)\n"
 assert verified.stderr == ""
 
 

@@ -41,6 +41,10 @@ def encoded_request(value: object) -> str:
     return canonical_json(value)
 
 
+def deeply_nested_field(prefix: str, depth: int) -> str:
+    return prefix + "[" * depth + "0" + "]" * depth + "}"
+
+
 def run_raw(executable: Path, arguments: list[str]) -> subprocess.CompletedProcess:
     return subprocess.run(
         [str(executable), *arguments],
@@ -243,6 +247,27 @@ def assembly_contract(executable: Path, temp_root: Path) -> None:
     response = json.loads(completed.stdout)
     check_error(response, "INVALID_ARGUMENT")
 
+    deep_assembly = temp_root / "deep-assembly.json"
+    deep_assembly.write_text(
+        deeply_nested_field('{"contract":"lmdj.assembly.v2","nested":', 200_000),
+        encoding="utf-8",
+    )
+    completed = run_raw(
+        executable,
+        [
+            "--workspace",
+            str(workspace),
+            "--assembly",
+            str(deep_assembly),
+            "query",
+            "--request",
+            encoded_request({"operation": "provider.list"}),
+        ],
+    )
+    assert completed.returncode == 2
+    assert completed.stderr == b""
+    check_error(json.loads(completed.stdout), "INVALID_ARGUMENT")
+
 
 def request_source_parity(
     executable: Path, workspace: Path, temp_root: Path
@@ -294,6 +319,57 @@ def request_validation(
         "query",
         "--request-file",
         str(invalid_utf8),
+        2,
+    )
+    check_error(response, "INVALID_ARGUMENT")
+
+    accepted_depth_request = temp_root / "accepted-depth-request.json"
+    accepted_depth_request.write_text(
+        deeply_nested_field('{"operation":"provider.list","nested":', 63),
+        encoding="utf-8",
+    )
+    response, _ = run_valid(
+        executable,
+        str(workspace),
+        "query",
+        "--request-file",
+        str(accepted_depth_request),
+        2,
+    )
+    check_error(response, "INVALID_ARGUMENT")
+    assert response["error"]["message"] == (
+        "provider.list request shape is invalid"
+    )
+
+    excessive_depth_request = temp_root / "excessive-depth-request.json"
+    excessive_depth_request.write_text(
+        deeply_nested_field('{"operation":"provider.list","nested":', 64),
+        encoding="utf-8",
+    )
+    response, _ = run_valid(
+        executable,
+        str(workspace),
+        "query",
+        "--request-file",
+        str(excessive_depth_request),
+        2,
+    )
+    check_error(response, "INVALID_ARGUMENT")
+    assert response["error"]["message"] == (
+        "request must be a UTF-8 JSON object no larger than 16777216 bytes"
+    )
+
+    crash_depth_request = temp_root / "crash-depth-request.json"
+    crash_depth_request.write_text(
+        deeply_nested_field('{"operation":"provider.list","nested":', 200_000),
+        encoding="utf-8",
+    )
+    response, _ = run_valid(
+        executable,
+        str(workspace),
+        "query",
+        "--request-file",
+        str(crash_depth_request),
         2,
     )
     check_error(response, "INVALID_ARGUMENT")
@@ -659,7 +735,7 @@ def host_boundary_and_identity(executable: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 6,
+        "build": 7,
         "patch": 0,
     }
     manifest = json.loads(
@@ -670,9 +746,9 @@ def host_boundary_and_identity(executable: Path) -> None:
     assert manifest == {
         "contract": "lmdj.module.v1",
         "module": "core-cli",
-        "version": "0.1.0",
+        "version": "0.1.1",
         "api_version": 1,
-        "dependencies": {"application-facade": "0.1.0"},
+        "dependencies": {"application-facade": "0.1.1"},
     }
 
     root_cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

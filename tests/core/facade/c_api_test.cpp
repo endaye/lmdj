@@ -15,6 +15,7 @@
 #include <fcntl.h>
 #include <nlohmann/json.hpp>
 #include <sys/file.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include <lmdj/facade/c_api.h>
@@ -689,6 +690,72 @@ void test_repeated_create_free_keeps_stale_handles_dead() {
   }
 }
 
+std::string deeply_nested_request(std::size_t depth) {
+  constexpr std::string_view prefix =
+      R"({"operation":"provider.list","nested":)";
+  std::string request;
+  request.reserve(prefix.size() + depth * 2U + 2U);
+  request += prefix;
+  request.append(depth, '[');
+  request.push_back('0');
+  request.append(depth, ']');
+  request.push_back('}');
+  return request;
+}
+
+void test_excessive_json_depth_is_rejected_without_crashing() {
+  TempDirectory temp;
+  const auto config = config_json(temp.path());
+  lmdj_engine* engine = nullptr;
+  char* error = nullptr;
+  LMDJ_CHECK(lmdj_engine_create(config.c_str(), &engine, &error) == 0);
+  LMDJ_CHECK(error == nullptr);
+  char* accepted_response = nullptr;
+  const auto accepted_request = deeply_nested_request(63U);
+  LMDJ_CHECK(
+      lmdj_engine_query(engine, accepted_request.c_str(), &accepted_response) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(accepted_response != nullptr);
+  lmdj_string_free(accepted_response);
+  lmdj_engine_free(engine);
+
+  bool all_children_rejected = true;
+  for (const std::size_t depth : {64U, 200000U}) {
+    const auto child = ::fork();
+    LMDJ_CHECK(child >= 0);
+    if (child == 0) {
+      lmdj_engine* child_engine = nullptr;
+      char* child_error = nullptr;
+      const auto created =
+          lmdj_engine_create(config.c_str(), &child_engine, &child_error);
+      if (child_error != nullptr) {
+        lmdj_string_free(child_error);
+      }
+      if (created != LMDJ_STATUS_OK || child_engine == nullptr) {
+        ::_exit(1);
+      }
+      char* response = reinterpret_cast<char*>(0x1);
+      const auto request = deeply_nested_request(depth);
+      const auto status =
+          lmdj_engine_query(child_engine, request.c_str(), &response);
+      const bool rejected =
+          status == LMDJ_STATUS_INVALID_ARGUMENT && response == nullptr;
+      if (response != nullptr) {
+        lmdj_string_free(response);
+      }
+      lmdj_engine_free(child_engine);
+      ::_exit(rejected ? 0 : 1);
+    }
+
+    int child_status = 0;
+    LMDJ_CHECK(::waitpid(child, &child_status, 0) == child);
+    all_children_rejected =
+        all_children_rejected && WIFEXITED(child_status) &&
+        WEXITSTATUS(child_status) == 0;
+  }
+  LMDJ_CHECK(all_children_rejected);
+}
+
 }  // namespace
 
 int main() {
@@ -702,6 +769,7 @@ int main() {
     test_stale_unknown_aba_and_racing_free_are_safe();
     test_blocked_engine_does_not_serialize_other_engines();
     test_repeated_create_free_keeps_stale_handles_dead();
+    test_excessive_json_depth_is_rejected_without_crashing();
   } catch (const std::exception& exception) {
     std::cerr << exception.what() << '\n';
     return 1;

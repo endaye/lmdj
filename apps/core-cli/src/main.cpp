@@ -27,6 +27,7 @@
 namespace {
 
 constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
+constexpr int kMaximumJsonContainerDepth = 64;
 constexpr std::string_view kUsage =
     "usage: lmdj-core --workspace WORKSPACE "
     "[--assembly ASSEMBLY] "
@@ -114,6 +115,30 @@ bool valid_utf8(std::string_view value) {
     offset += length;
   }
   return true;
+}
+
+std::optional<nlohmann::json> parse_bounded_json(
+    std::string_view bytes) {
+  bool depth_exceeded = false;
+  const auto callback = [&depth_exceeded](
+                            int depth,
+                            nlohmann::json::parse_event_t event,
+                            nlohmann::json&) {
+    const bool container_start =
+        event == nlohmann::json::parse_event_t::object_start ||
+        event == nlohmann::json::parse_event_t::array_start;
+    if (container_start && depth >= kMaximumJsonContainerDepth) {
+      depth_exceeded = true;
+      return false;
+    }
+    return true;
+  };
+  auto value = nlohmann::json::parse(
+      bytes.begin(), bytes.end(), callback, false);
+  if (depth_exceeded || value.is_discarded()) {
+    return std::nullopt;
+  }
+  return value;
 }
 
 std::optional<Invocation> parse_invocation(
@@ -271,13 +296,12 @@ std::optional<nlohmann::json> decode_request(
     *error = invalid_request_response();
     return std::nullopt;
   }
-  auto parsed =
-      nlohmann::json::parse(bytes.begin(), bytes.end(), nullptr, false);
-  if (parsed.is_discarded() || !parsed.is_object()) {
+  auto parsed = parse_bounded_json(bytes);
+  if (!parsed.has_value() || !parsed->is_object()) {
     *error = invalid_request_response();
     return std::nullopt;
   }
-  return parsed;
+  return std::move(*parsed);
 }
 
 bool valid_workspace(

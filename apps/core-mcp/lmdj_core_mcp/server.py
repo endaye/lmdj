@@ -19,7 +19,7 @@ from .c_api import (
 
 PROTOCOL_VERSION = "2025-11-25"
 SERVER_NAME = "lmdj-core-mcp"
-SERVER_VERSION = "0.1.0"
+SERVER_VERSION = "0.1.1"
 UUID_PATTERN = (
     "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
