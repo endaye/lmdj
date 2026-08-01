@@ -1,0 +1,55 @@
+{
+  "descriptor": {
+    "contract": "lmdj.capability.v2",
+    "capability_id": "proof.invalid.v2",
+    "contract_version": "2.0.0",
+    "input_artifacts": [
+      {
+        "name": "source",
+        "media_types": ["application/x-lmdj-proof"],
+        "schema_id": "lmdj.artifact.proof-source.v1",
+        "schema_version": "1.0.0",
+        "required": true,
+        "max_count": 0
+      }
+    ],
+    "output_artifacts": [],
+    "determinism": "deterministic",
+    "progress_events": [],
+    "errors": ["PROVIDER_FAILED"],
+    "resources": {
+      "class": "light"
+    },
+    "execution": {
+      "timeout_ms": 1000,
+      "max_attempts": 1
+    },
+    "policy": {
+      "data_classifications": ["public"],
+      "regions": ["local"],
+      "required_permissions": ["proof.execute"]
+    }
+  },
+  "request": {
+    "capability": "proof.invalid.v2",
+    "inputs": [
+      {
+        "artifact": {
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "media_type": "application/x-lmdj-proof",
+          "byte_length": 1
+        }
+      }
+    ],
+    "parameters": {},
+    "data_classification": "public",
+    "platform": "test",
+    "region": "local",
+    "required_permissions": ["proof.execute"]
+  },
+  "candidate": {
+    "candidate_id": "candidate-v2",
+    "outputs": [],
+    "provenance": {}
+  }
+}

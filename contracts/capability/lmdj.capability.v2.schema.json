@@ -1,0 +1,305 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/capability/lmdj.capability.v2.schema.json",
+  "x-lmdj-contract-version": "2.0.0",
+  "title": "LMDJ Capability Contract v2",
+  "type": "object",
+  "required": [
+    "contract",
+    "capability_id",
+    "contract_version",
+    "input_artifacts",
+    "output_artifacts",
+    "determinism",
+    "progress_events",
+    "errors",
+    "resources",
+    "execution",
+    "policy"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.capability.v2"
+    },
+    "capability_id": {
+      "$ref": "#/$defs/id"
+    },
+    "contract_version": {
+      "$ref": "#/$defs/semver"
+    },
+    "input_artifacts": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/artifact_port"
+      },
+      "uniqueItems": true
+    },
+    "output_artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/artifact_port"
+      },
+      "uniqueItems": true
+    },
+    "determinism": {
+      "enum": ["deterministic", "seeded", "nondeterministic"]
+    },
+    "progress_events": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "uniqueItems": true
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/error_code"
+      },
+      "uniqueItems": true
+    },
+    "resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "execution": {
+      "$ref": "#/$defs/execution"
+    },
+    "policy": {
+      "$ref": "#/$defs/policy"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(\\.[a-z][a-z0-9-]*)+(\\.v[1-9][0-9]*)?$"
+    },
+    "token": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"
+    },
+    "port_name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "artifact_ref": {
+      "type": "object",
+      "required": ["sha256", "media_type", "byte_length"],
+      "properties": {
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact_binding": {
+      "type": "object",
+      "required": ["port", "artifact"],
+      "properties": {
+        "port": {
+          "$ref": "#/$defs/port_name"
+        },
+        "artifact": {
+          "$ref": "#/$defs/artifact_ref"
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact_port": {
+      "type": "object",
+      "required": [
+        "name",
+        "media_types",
+        "schema_id",
+        "schema_version",
+        "required",
+        "max_count"
+      ],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/port_name"
+        },
+        "media_types": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          },
+          "uniqueItems": true
+        },
+        "schema_id": {
+          "$ref": "#/$defs/id"
+        },
+        "schema_version": {
+          "$ref": "#/$defs/semver"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "max_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "capability_request": {
+      "type": "object",
+      "required": [
+        "capability",
+        "inputs",
+        "parameters",
+        "data_classification",
+        "platform",
+        "region",
+        "required_permissions"
+      ],
+      "properties": {
+        "capability": {
+          "$ref": "#/$defs/id"
+        },
+        "inputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact_binding"
+          },
+          "uniqueItems": true
+        },
+        "parameters": {
+          "type": "object"
+        },
+        "data_classification": {
+          "$ref": "#/$defs/token"
+        },
+        "platform": {
+          "$ref": "#/$defs/token"
+        },
+        "region": {
+          "$ref": "#/$defs/token"
+        },
+        "required_permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "candidate": {
+      "type": "object",
+      "required": ["candidate_id", "outputs", "provenance"],
+      "properties": {
+        "candidate_id": {
+          "$ref": "#/$defs/token"
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/artifact_binding"
+          },
+          "uniqueItems": true
+        },
+        "provenance": {
+          "type": "object"
+        }
+      },
+      "additionalProperties": false
+    },
+    "error_code": {
+      "enum": [
+        "INVALID_ARGUMENT",
+        "NOT_FOUND",
+        "REVISION_CONFLICT",
+        "DUPLICATE_ID",
+        "UNSUPPORTED_AUDIO",
+        "MISSING_ASSET",
+        "INVALID_PROJECT",
+        "COOK_FAILED",
+        "PROVIDER_NOT_FOUND",
+        "PROVIDER_FAILED",
+        "PERMISSION_DENIED",
+        "IO_ERROR",
+        "INTERNAL_ERROR"
+      ]
+    },
+    "resources": {
+      "type": "object",
+      "required": ["class"],
+      "properties": {
+        "class": {
+          "enum": ["light", "cpu", "gpu", "remote"]
+        },
+        "memory_mib": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "execution": {
+      "type": "object",
+      "required": ["timeout_ms", "max_attempts"],
+      "properties": {
+        "timeout_ms": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_attempts": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "policy": {
+      "type": "object",
+      "required": [
+        "data_classifications",
+        "regions",
+        "required_permissions"
+      ],
+      "properties": {
+        "data_classifications": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true
+        },
+        "regions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true
+        },
+        "required_permissions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/token"
+          },
+          "uniqueItems": true
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

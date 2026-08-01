@@ -1,0 +1,107 @@
+{
+  "descriptor": {
+    "contract": "lmdj.capability.v2",
+    "capability_id": "proof.multi-port.v2",
+    "contract_version": "2.0.0",
+    "input_artifacts": [
+      {
+        "name": "source",
+        "media_types": ["application/x-lmdj-proof"],
+        "schema_id": "lmdj.artifact.proof-source.v1",
+        "schema_version": "1.0.0",
+        "required": true,
+        "max_count": 1
+      },
+      {
+        "name": "reference",
+        "media_types": ["application/x-lmdj-proof"],
+        "schema_id": "lmdj.artifact.proof-reference.v1",
+        "schema_version": "1.0.0",
+        "required": true,
+        "max_count": 1
+      }
+    ],
+    "output_artifacts": [
+      {
+        "name": "drums",
+        "media_types": ["application/x-lmdj-proof"],
+        "schema_id": "lmdj.artifact.proof-drums.v1",
+        "schema_version": "1.0.0",
+        "required": false,
+        "max_count": 1
+      },
+      {
+        "name": "bass",
+        "media_types": ["application/x-lmdj-proof"],
+        "schema_id": "lmdj.artifact.proof-bass.v1",
+        "schema_version": "1.0.0",
+        "required": false,
+        "max_count": 1
+      }
+    ],
+    "determinism": "deterministic",
+    "progress_events": [],
+    "errors": ["PROVIDER_FAILED"],
+    "resources": {
+      "class": "light",
+      "memory_mib": 16
+    },
+    "execution": {
+      "timeout_ms": 1000,
+      "max_attempts": 1
+    },
+    "policy": {
+      "data_classifications": ["public"],
+      "regions": ["local"],
+      "required_permissions": ["proof.execute"]
+    }
+  },
+  "request": {
+    "capability": "proof.multi-port.v2",
+    "inputs": [
+      {
+        "port": "reference",
+        "artifact": {
+          "sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+          "media_type": "application/x-lmdj-proof",
+          "byte_length": 2
+        }
+      },
+      {
+        "port": "source",
+        "artifact": {
+          "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "media_type": "application/x-lmdj-proof",
+          "byte_length": 1
+        }
+      }
+    ],
+    "parameters": {},
+    "data_classification": "public",
+    "platform": "test",
+    "region": "local",
+    "required_permissions": ["proof.execute"]
+  },
+  "candidate": {
+    "candidate_id": "candidate-v2",
+    "outputs": [
+      {
+        "port": "bass",
+        "artifact": {
+          "sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+          "media_type": "application/x-lmdj-proof",
+          "byte_length": 3
+        }
+      },
+      {
+        "port": "drums",
+        "artifact": {
+          "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+          "media_type": "application/x-lmdj-proof",
+          "byte_length": 4
+        }
+      }
+    ],
+    "provenance": {}
+  }
+}

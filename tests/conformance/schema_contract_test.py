@@ -13,6 +13,9 @@ schema_paths = {
     "capability": (
         contract_root / "capability" / "lmdj.capability.v1.schema.json"
     ),
+    "capability_v2": (
+        contract_root / "capability" / "lmdj.capability.v2.schema.json"
+    ),
     "assembly_v1": (
         contract_root / "assembly" / "lmdj.assembly.v1.schema.json"
     ),
@@ -45,7 +48,11 @@ def contained_constants(rules: list[dict], property_name: str) -> set[int]:
 schemas = {name: load_json(path) for name, path in schema_paths.items()}
 
 contract_versions = {
-    name: ("2.0.0" if name == "assembly" else "1.0.0")
+    name: (
+        "2.0.0"
+        if name in {"assembly", "capability_v2"}
+        else "1.0.0"
+    )
     for name in schemas
 }
 for name, schema in schemas.items():
@@ -129,6 +136,83 @@ assert artifact_port["properties"]["schema_id"]["$ref"] == "#/$defs/id"
 assert artifact_port["properties"]["schema_version"]["$ref"] == (
     "#/$defs/semver"
 )
+
+capability_v2 = schemas["capability_v2"]
+assert capability_v2["properties"]["contract"]["const"] == (
+    "lmdj.capability.v2"
+)
+assert capability_v2["properties"]["output_artifacts"]["minItems"] == 1
+artifact_port_v2 = capability_v2["$defs"]["artifact_port"]
+assert set(artifact_port_v2["required"]) == {
+    "name",
+    "media_types",
+    "schema_id",
+    "schema_version",
+    "required",
+    "max_count",
+}
+assert artifact_port_v2["properties"]["max_count"] == {
+    "type": "integer",
+    "minimum": 1,
+}
+binding = capability_v2["$defs"]["artifact_binding"]
+assert set(binding["required"]) == {"port", "artifact"}
+assert binding["additionalProperties"] is False
+assert binding["properties"]["artifact"]["$ref"] == (
+    "#/$defs/artifact_ref"
+)
+request_v2 = capability_v2["$defs"]["capability_request"]
+assert set(request_v2["required"]) == {
+    "capability",
+    "inputs",
+    "parameters",
+    "data_classification",
+    "platform",
+    "region",
+    "required_permissions",
+}
+assert request_v2["properties"]["inputs"]["items"]["$ref"] == (
+    "#/$defs/artifact_binding"
+)
+assert request_v2["properties"]["inputs"]["uniqueItems"] is True
+candidate_v2 = capability_v2["$defs"]["candidate"]
+assert set(candidate_v2["required"]) == {"candidate_id", "outputs", "provenance"}
+assert candidate_v2["properties"]["outputs"]["items"]["$ref"] == (
+    "#/$defs/artifact_binding"
+)
+assert candidate_v2["properties"]["outputs"]["uniqueItems"] is True
+
+fixture_root = repo_root / "tests" / "fixtures" / "contracts"
+valid_capability_v2 = load_json(
+    fixture_root / "capability-v2-valid.json"
+)
+valid_descriptor = valid_capability_v2["descriptor"]
+assert valid_descriptor["contract"] == "lmdj.capability.v2"
+assert [
+    port["name"] for port in valid_descriptor["input_artifacts"]
+] == ["source", "reference"]
+assert [
+    binding["port"] for binding in valid_capability_v2["request"]["inputs"]
+] == ["reference", "source"]
+assert [
+    port["name"] for port in valid_descriptor["output_artifacts"]
+] == ["drums", "bass"]
+assert [
+    binding["port"]
+    for binding in valid_capability_v2["candidate"]["outputs"]
+] == ["bass", "drums"]
+assert {
+    port["media_types"][0]
+    for port in valid_descriptor["output_artifacts"]
+} == {"application/x-lmdj-proof"}
+
+invalid_capability_v2 = load_json(
+    fixture_root / "capability-v2-invalid.json"
+)
+invalid_descriptor = invalid_capability_v2["descriptor"]
+assert invalid_descriptor["output_artifacts"] == []
+assert invalid_descriptor["input_artifacts"][0]["max_count"] == 0
+assert "port" not in invalid_capability_v2["request"]["inputs"][0]
 
 assembly = schemas["assembly"]
 assert set(assembly["required"]) == {
@@ -222,4 +306,4 @@ assert foundation_manifest == {
     "dependencies": {},
 }
 
-print("schema contract checks: 7 passed")
+print("schema contract checks: 8 passed")
