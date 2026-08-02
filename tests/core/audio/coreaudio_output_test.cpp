@@ -106,6 +106,13 @@ class FakeCoreAudioServices final : public CoreAudioServices {
     failures.insert(std::move(operation));
   }
 
+  AURenderCallback captured_render() const { return render_; }
+  void* captured_render_context() const { return render_context_; }
+  AudioObjectPropertyListenerProc captured_overload_listener() const {
+    return overload_listener_;
+  }
+  void* captured_overload_context() const { return overload_context_; }
+
   OSStatus render(UInt32 frames, AudioBufferList* buffers) {
     LMDJ_CHECK(render_ != nullptr);
     AudioUnitRenderActionFlags flags = 0;
@@ -187,6 +194,7 @@ OSStatus raw_test_overload(
 struct RawCoreAudioTrace {
   std::vector<std::string> calls;
   std::map<std::string, OSStatus> failures;
+  std::map<std::string, std::vector<OSStatus>> failure_sequences;
   AudioComponentDescription component_description{};
   AudioUnit callback_unit = nullptr;
   AudioUnitScope callback_scope = 0;
@@ -342,7 +350,14 @@ class FakeRawCoreAudioApi final : public CoreAudioApi {
   }
 
  private:
-  OSStatus failure(const std::string& operation) const {
+  OSStatus failure(const std::string& operation) {
+    auto sequence = trace_->failure_sequences.find(operation);
+    if (sequence != trace_->failure_sequences.end() &&
+        !sequence->second.empty()) {
+      const auto status = sequence->second.front();
+      sequence->second.erase(sequence->second.begin());
+      return status;
+    }
     const auto found = trace_->failures.find(operation);
     return found == trace_->failures.end() ? noErr : found->second;
   }
@@ -362,6 +377,21 @@ struct RawServiceHarness {
       std::make_shared<RawCoreAudioTrace>();
   std::unique_ptr<CoreAudioServices> services = make_coreaudio_services(
       std::make_unique<FakeRawCoreAudioApi>(trace));
+};
+
+struct ConcreteStateHarness {
+  std::shared_ptr<RawCoreAudioTrace> trace =
+      std::make_shared<RawCoreAudioTrace>();
+  RealtimeEngine engine;
+  std::unique_ptr<CoreAudioOutputStateMachine> output;
+
+  ConcreteStateHarness() {
+    output = std::make_unique<CoreAudioOutputStateMachine>(
+        engine,
+        make_coreaudio_services(
+            std::make_unique<FakeRawCoreAudioApi>(trace)),
+        std::make_unique<FakeClock>());
+  }
 };
 
 struct StereoBufferList {
@@ -411,6 +441,111 @@ void check_framework_error(
   LMDJ_CHECK(result.error().details.at("operation") == operation);
   LMDJ_CHECK(result.error().details.at("os_status") ==
              static_cast<std::int64_t>(status));
+}
+
+std::size_t call_count(
+    const RawCoreAudioTrace& trace, const std::string& operation) {
+  return static_cast<std::size_t>(std::count(
+      trace.calls.begin(), trace.calls.end(), operation));
+}
+
+void create_rollback_retry_success_allows_restart_without_handle_overwrite() {
+  constexpr OSStatus kPropertyFailure = -20'001;
+  constexpr OSStatus kDisposeFailure = -20'002;
+  ConcreteStateHarness harness;
+  harness.trace->failure_sequences["set_render_callback"] = {
+      kPropertyFailure, noErr};
+  harness.trace->failure_sequences["instance_dispose"] = {
+      kDisposeFailure, noErr};
+
+  const auto failed = harness.output->start();
+  check_framework_error(
+      failed, "AudioUnitSetProperty.render_callback", kPropertyFailure);
+  LMDJ_CHECK(harness.output->state() == CoreAudioState::stopped);
+  LMDJ_CHECK(harness.engine.telemetry().state == RealtimeState::stopped);
+  LMDJ_CHECK(call_count(*harness.trace, "instance_new") == 1);
+  LMDJ_CHECK(call_count(*harness.trace, "instance_dispose") == 2);
+
+  LMDJ_CHECK(harness.output->start().has_value());
+  LMDJ_CHECK(call_count(*harness.trace, "instance_new") == 2);
+  LMDJ_CHECK(harness.output->stop().has_value());
+}
+
+void repeated_create_rollback_failure_is_terminal_and_rejects_restart() {
+  constexpr OSStatus kPropertyFailure = -21'001;
+  constexpr OSStatus kDisposeFailure = -21'002;
+  ConcreteStateHarness harness;
+  harness.trace->failure_sequences["set_render_callback"] = {
+      kPropertyFailure};
+  harness.trace->failures["instance_dispose"] = kDisposeFailure;
+
+  const auto failed = harness.output->start();
+  check_framework_error(
+      failed, "AudioUnitSetProperty.render_callback", kPropertyFailure);
+  LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
+  LMDJ_CHECK(call_count(*harness.trace, "instance_new") == 1);
+  LMDJ_CHECK(call_count(*harness.trace, "instance_dispose") == 2);
+
+  const auto terminal = harness.output->start();
+  LMDJ_CHECK(!terminal.has_value());
+  LMDJ_CHECK(terminal.error().details.at("reason") ==
+             "callback_termination_unproven");
+  LMDJ_CHECK(call_count(*harness.trace, "instance_new") == 1);
+}
+
+void terminal_destruction_keeps_disabled_callback_refcon_alive() {
+  AURenderCallback render = nullptr;
+  void* render_context = nullptr;
+  AudioObjectPropertyListenerProc overload = nullptr;
+  void* overload_context = nullptr;
+  {
+    auto engine = std::make_unique<RealtimeEngine>();
+    auto services = std::make_unique<FakeCoreAudioServices>();
+    auto* observed_services = services.get();
+    auto output = std::make_unique<CoreAudioOutputStateMachine>(
+        *engine, std::move(services), std::make_unique<FakeClock>());
+    LMDJ_CHECK(output->start().has_value());
+    render = observed_services->captured_render();
+    render_context = observed_services->captured_render_context();
+    overload = observed_services->captured_overload_listener();
+    overload_context = observed_services->captured_overload_context();
+    LMDJ_CHECK(render != nullptr);
+    LMDJ_CHECK(overload != nullptr);
+
+    observed_services->fail_once("dispose");
+    const auto failed_stop = output->stop();
+    LMDJ_CHECK(!failed_stop.has_value());
+    LMDJ_CHECK(output->state() == CoreAudioState::failed);
+    output.reset();
+    engine.reset();
+  }
+
+  std::array<float, 2> left{0.75F, 0.75F};
+  std::array<float, 2> right{-0.75F, -0.75F};
+  StereoBufferList storage{
+      2,
+      {{1, static_cast<UInt32>(sizeof(left)), left.data()},
+       {1, static_cast<UInt32>(sizeof(right)), right.data()}},
+  };
+  AudioUnitRenderActionFlags flags = 0;
+  AudioTimeStamp timestamp{};
+  LMDJ_CHECK(
+      render(
+          render_context,
+          &flags,
+          &timestamp,
+          0,
+          static_cast<UInt32>(left.size()),
+          reinterpret_cast<AudioBufferList*>(&storage)) == noErr);
+  LMDJ_CHECK((left == std::array<float, 2>{0.0F, 0.0F}));
+  LMDJ_CHECK((right == std::array<float, 2>{0.0F, 0.0F}));
+
+  const AudioObjectPropertyAddress address{
+      kAudioDeviceProcessorOverload,
+      kAudioObjectPropertyScopeGlobal,
+      kAudioObjectPropertyElementMain,
+  };
+  LMDJ_CHECK(overload(0, 1, &address, overload_context) == noErr);
 }
 
 void concrete_services_forward_exact_coreaudio_arguments() {
@@ -743,7 +878,7 @@ void start_failures_unwind_and_allow_restart() {
     std::vector<std::string> expected;
   };
   const std::array<FailureCase, 5> cases{
-      FailureCase{"create", {"create"}},
+      FailureCase{"create", {"create", "dispose"}},
       FailureCase{"configure", {"create", "configure", "dispose"}},
       FailureCase{
           "add_overload_listener",
@@ -818,7 +953,7 @@ void start_unwind_is_terminal_when_listener_removal_fails() {
   LMDJ_CHECK(failed.error().details.at("operation") == "initialize");
   LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
   harness.services->notify_overload();
-  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
   LMDJ_CHECK(!harness.output->start().has_value());
   LMDJ_CHECK(!harness.output->stop().has_value());
 }
@@ -885,7 +1020,7 @@ void failed_listener_removal_is_terminal() {
   LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
   LMDJ_CHECK(harness.engine.telemetry().state == RealtimeState::running);
   harness.services->notify_overload();
-  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
 }
 
 void failed_disposal_is_terminal_and_preserves_engine_samples() {
@@ -1022,6 +1157,9 @@ void successful_restart_resets_adapter_telemetry() {
 }  // namespace
 
 int main() {
+  create_rollback_retry_success_allows_restart_without_handle_overwrite();
+  repeated_create_rollback_failure_is_terminal_and_rejects_restart();
+  terminal_destruction_keeps_disabled_callback_refcon_alive();
   concrete_services_forward_exact_coreaudio_arguments();
   concrete_services_map_signed_framework_errors();
   concrete_services_retain_owned_resources_for_destructor_cleanup();

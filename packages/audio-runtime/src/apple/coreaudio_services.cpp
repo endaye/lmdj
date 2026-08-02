@@ -281,6 +281,9 @@ class DefaultCoreAudioServices final : public CoreAudioServices {
   }
 
   foundation::Result<void> dispose() override {
+    if (unit_ == nullptr) {
+      return foundation::Result<void>::success();
+    }
     const auto status = api_->instance_dispose(unit_);
     if (status != noErr) {
       return coreaudio_failure("AudioComponentInstanceDispose", status);
