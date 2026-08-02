@@ -21,6 +21,7 @@ inline constexpr std::size_t kRealtimeQueueCapacity = 1'024;
 inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
+inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 
 enum class RealtimeState : std::uint8_t { stopped, running };
 enum class EnqueueResult : std::uint8_t {
@@ -40,10 +41,25 @@ enum class PublishResult : std::uint8_t {
   publish_queue_full,
 };
 
+enum class CaptureState : std::uint8_t {
+  idle,
+  arm_pending,
+  active,
+  disarm_pending,
+  corrupted,
+};
+
 struct TriggerEvent {
   std::uint64_t sequence;
   std::uint8_t slot;
   std::uint8_t velocity;
+};
+
+struct CapturedTriggerEvent {
+  std::uint64_t sequence;
+  std::uint8_t slot;
+  std::uint8_t velocity;
+  std::uint32_t frame_offset;
 };
 
 struct RealtimeTelemetry {
@@ -75,6 +91,14 @@ struct BankTelemetry {
   std::uint64_t publish_queue_drops;
 };
 
+struct CaptureTelemetry {
+  CaptureState state;
+  std::uint64_t captured_events;
+  std::uint64_t drained_events;
+  std::uint64_t capture_drops;
+  std::uint64_t capture_origin_frame;
+};
+
 class RealtimeEngine final {
  public:
   foundation::Result<void> load_sample(
@@ -83,6 +107,10 @@ class RealtimeEngine final {
   // Publication and enqueue share one serialized control-thread producer.
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
   std::size_t reclaim_retired_banks() noexcept;
+  foundation::Result<void> arm_capture() noexcept;
+  foundation::Result<void> disarm_capture() noexcept;
+  std::size_t drain_capture(
+      std::span<CapturedTriggerEvent> output) noexcept;
   foundation::Result<void> start();
   void stop() noexcept;
   EnqueueResult enqueue(TriggerEvent event) noexcept;
@@ -90,6 +118,7 @@ class RealtimeEngine final {
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
   BankTelemetry bank_telemetry() const noexcept;
+  CaptureTelemetry capture_telemetry() const noexcept;
 
  private:
   enum class BankState : std::uint8_t {
@@ -100,6 +129,7 @@ class RealtimeEngine final {
     reclaimable,
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
+  static_assert(std::atomic<CaptureState>::is_always_lock_free);
 
   static constexpr std::uint8_t kLegacyBankSlot = 0xff;
 
@@ -124,6 +154,9 @@ class RealtimeEngine final {
   void retire_current_bank() noexcept;
   void apply_published_bank(std::uint8_t slot) noexcept;
   void release_voice_bank(Voice& voice) noexcept;
+  void capture_voice_start(
+      const TriggerEvent& event,
+      std::uint64_t absolute_start_frame) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
   detail::FixedSpscQueue<TriggerEvent, kRealtimeQueueCapacity> queue_;
@@ -132,6 +165,10 @@ class RealtimeEngine final {
       std::uint8_t,
       kRealtimePublishQueueCapacity>
       publish_queue_;
+  detail::FixedSpscQueue<
+      CapturedTriggerEvent,
+      kRealtimeCaptureCapacity>
+      capture_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
   std::atomic<std::uint64_t> availability_mask_{0};
   std::atomic<std::uint8_t> current_bank_slot_{kLegacyBankSlot};
@@ -158,6 +195,11 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> reclaimed_banks_{0};
   std::atomic<std::uint64_t> bank_slot_rejections_{0};
   std::atomic<std::uint64_t> publish_queue_drops_{0};
+  std::atomic<CaptureState> capture_state_{CaptureState::idle};
+  std::atomic<std::uint64_t> captured_events_{0};
+  std::atomic<std::uint64_t> drained_events_{0};
+  std::atomic<std::uint64_t> capture_drops_{0};
+  std::atomic<std::uint64_t> capture_origin_frame_{0};
 };
 
 }  // namespace lmdj::audio

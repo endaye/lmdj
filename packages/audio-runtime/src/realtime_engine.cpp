@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <iterator>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -88,6 +89,34 @@ void RealtimeEngine::release_voice_bank(Voice& voice) noexcept {
       slot.state.load(std::memory_order_relaxed) == BankState::retiring) {
     slot.state.store(BankState::reclaimable, std::memory_order_release);
   }
+}
+
+void RealtimeEngine::capture_voice_start(
+    const TriggerEvent& event,
+    std::uint64_t absolute_start_frame) noexcept {
+  const auto state = capture_state_.load(std::memory_order_acquire);
+  if (state != CaptureState::active &&
+      state != CaptureState::disarm_pending) {
+    return;
+  }
+
+  const auto origin =
+      capture_origin_frame_.load(std::memory_order_relaxed);
+  const auto offset = absolute_start_frame - origin;
+  if (absolute_start_frame < origin ||
+      offset > std::numeric_limits<std::uint32_t>::max() ||
+      !capture_ring_.try_push(CapturedTriggerEvent{
+          event.sequence,
+          event.slot,
+          event.velocity,
+          static_cast<std::uint32_t>(offset),
+      })) {
+    capture_drops_.fetch_add(1, std::memory_order_relaxed);
+    capture_state_.store(CaptureState::corrupted,
+                         std::memory_order_release);
+    return;
+  }
+  captured_events_.fetch_add(1, std::memory_order_relaxed);
 }
 
 foundation::Result<void> RealtimeEngine::load_sample(
@@ -188,6 +217,53 @@ std::size_t RealtimeEngine::reclaim_retired_banks() noexcept {
   return reclaimed;
 }
 
+foundation::Result<void> RealtimeEngine::arm_capture() noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    return invalid_argument(
+        "realtime capture may only be armed while running");
+  }
+  auto expected = CaptureState::idle;
+  if (!capture_state_.compare_exchange_strong(
+          expected,
+          CaptureState::arm_pending,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return invalid_argument("realtime capture is not idle");
+  }
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> RealtimeEngine::disarm_capture() noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
+    return invalid_argument(
+        "realtime capture may only be disarmed while running");
+  }
+  auto expected = CaptureState::active;
+  if (!capture_state_.compare_exchange_strong(
+          expected,
+          CaptureState::disarm_pending,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    if (expected == CaptureState::corrupted ||
+        expected == CaptureState::disarm_pending) {
+      return foundation::Result<void>::success();
+    }
+    return invalid_argument("realtime capture is not active");
+  }
+  return foundation::Result<void>::success();
+}
+
+std::size_t RealtimeEngine::drain_capture(
+    std::span<CapturedTriggerEvent> output) noexcept {
+  std::size_t drained = 0;
+  while (drained < output.size() &&
+         capture_ring_.try_pop(output[drained])) {
+    ++drained;
+  }
+  drained_events_.fetch_add(drained, std::memory_order_relaxed);
+  return drained;
+}
+
 foundation::Result<void> RealtimeEngine::start() {
   if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
     return invalid_argument("realtime engine is already running");
@@ -195,6 +271,7 @@ foundation::Result<void> RealtimeEngine::start() {
 
   queue_.clear_quiescent();
   publish_queue_.clear_quiescent();
+  capture_ring_.clear_quiescent();
   pending_publications_.store(0, std::memory_order_relaxed);
   std::fill(voices_.begin(), voices_.end(), Voice{});
   enqueued_events_.store(0, std::memory_order_relaxed);
@@ -211,6 +288,11 @@ foundation::Result<void> RealtimeEngine::start() {
   callback_count_.store(0, std::memory_order_relaxed);
   rendered_frames_.store(0, std::memory_order_relaxed);
   max_callback_frames_.store(0, std::memory_order_relaxed);
+  capture_state_.store(CaptureState::idle, std::memory_order_relaxed);
+  captured_events_.store(0, std::memory_order_relaxed);
+  drained_events_.store(0, std::memory_order_relaxed);
+  capture_drops_.store(0, std::memory_order_relaxed);
+  capture_origin_frame_.store(0, std::memory_order_relaxed);
   state_.store(RealtimeState::running, std::memory_order_release);
   return foundation::Result<void>::success();
 }
@@ -236,6 +318,10 @@ void RealtimeEngine::stop() noexcept {
     bank_slots_[pending_slot].state.store(
         BankState::reclaimable, std::memory_order_release);
     pending_publications_.fetch_sub(1, std::memory_order_relaxed);
+  }
+  if (capture_state_.load(std::memory_order_relaxed) !=
+      CaptureState::corrupted) {
+    capture_state_.store(CaptureState::idle, std::memory_order_release);
   }
 }
 
@@ -274,8 +360,21 @@ void RealtimeEngine::render(
   std::fill_n(left, frames, 0.0F);
   std::fill_n(right, frames, 0.0F);
   callback_count_.fetch_add(1, std::memory_order_relaxed);
-  rendered_frames_.fetch_add(frames, std::memory_order_relaxed);
+  const auto absolute_start_frame =
+      rendered_frames_.fetch_add(frames, std::memory_order_relaxed);
   update_max(max_callback_frames_, frames);
+
+  auto capture_state = CaptureState::arm_pending;
+  if (capture_state_.load(std::memory_order_acquire) ==
+      CaptureState::arm_pending) {
+    capture_origin_frame_.store(
+        absolute_start_frame, std::memory_order_relaxed);
+    capture_state_.compare_exchange_strong(
+        capture_state,
+        CaptureState::active,
+        std::memory_order_release,
+        std::memory_order_relaxed);
+  }
 
   std::uint8_t published_slot = 0;
   while (publish_queue_.try_pop(published_slot)) {
@@ -312,6 +411,7 @@ void RealtimeEngine::render(
     }
     started_voices_.fetch_add(1, std::memory_order_relaxed);
     active_voices_.fetch_add(1, std::memory_order_relaxed);
+    capture_voice_start(event, absolute_start_frame);
   }
 
   for (auto& voice : voices_) {
@@ -337,6 +437,13 @@ void RealtimeEngine::render(
     left[frame] = std::clamp(left[frame], -1.0F, 1.0F);
     right[frame] = std::clamp(right[frame], -1.0F, 1.0F);
   }
+
+  capture_state = CaptureState::disarm_pending;
+  capture_state_.compare_exchange_strong(
+      capture_state,
+      CaptureState::idle,
+      std::memory_order_release,
+      std::memory_order_relaxed);
 }
 
 RealtimeTelemetry RealtimeEngine::telemetry() const noexcept {
@@ -369,6 +476,16 @@ BankTelemetry RealtimeEngine::bank_telemetry() const noexcept {
       reclaimed_banks_.load(std::memory_order_relaxed),
       bank_slot_rejections_.load(std::memory_order_relaxed),
       publish_queue_drops_.load(std::memory_order_relaxed),
+  };
+}
+
+CaptureTelemetry RealtimeEngine::capture_telemetry() const noexcept {
+  return CaptureTelemetry{
+      capture_state_.load(std::memory_order_acquire),
+      captured_events_.load(std::memory_order_relaxed),
+      drained_events_.load(std::memory_order_relaxed),
+      capture_drops_.load(std::memory_order_relaxed),
+      capture_origin_frame_.load(std::memory_order_relaxed),
   };
 }
 
