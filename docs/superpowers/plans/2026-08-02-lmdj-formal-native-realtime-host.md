@@ -101,7 +101,7 @@ Canonical policy: `docs/governance/version-management.md`.
 - Consumes: `domain::ProjectState`, selected `PatternId`, and existing verified `ArtifactResolver`.
 - Produces: `RuntimeSnapshot::pads` as a unique global-slot-sorted `std::vector<ResolvedPad>` sharing decoded `PcmSample` instances with `events`.
 
-- [ ] **Step 1: Write failing Snapshot shape and all-Pad tests**
+- [x] **Step 1: Write failing Snapshot shape and all-Pad tests**
 
 Add the public type and member to the test-side aggregate expectation:
 
@@ -137,7 +137,7 @@ LMDJ_CHECK(resolver_calls == 2);
 
 Add separate tests proving an unused assigned Pad with missing bytes, wrong hash, and unsupported WAV causes `missing_asset`, `cook_failed`, and `unsupported_audio` respectively.
 
-- [ ] **Step 2: Run RED**
+- [x] **Step 2: Run RED**
 
 ```bash
 scripts/core.sh configure dev
@@ -149,7 +149,7 @@ cmake --build build/core/dev --target \
 
 Expected: compilation fails because `ResolvedPad` and `RuntimeSnapshot::pads` do not exist.
 
-- [ ] **Step 3: Implement one deduplicated all-Pad decode pass**
+- [x] **Step 3: Implement one deduplicated all-Pad decode pass**
 
 Declare the types exactly as specified and replace event-only decode with a local resolver that caches by SHA-256:
 
@@ -185,11 +185,11 @@ auto resolve_sample = [&](const foundation::ArtifactRef& artifact)
 
 Iterate banks 0..3 and pads 0..15, resolve only assigned assets, append `ResolvedPad`, then build Pattern events by finding the resolved Pad. Do not call the Artifact resolver again from the event loop.
 
-- [ ] **Step 4: Update aggregate consumers and determinism comparison**
+- [x] **Step 4: Update aggregate consumers and determinism comparison**
 
 Insert the empty or expected `pads` vector before `events` in every `RuntimeSnapshot{}` construction. Compare Pad slot, Artifact metadata, Sample format, Sample bytes, and shared identity invariants in the determinism matrix.
 
-- [ ] **Step 5: Run GREEN**
+- [x] **Step 5: Run GREEN**
 
 ```bash
 cmake --build build/core/dev --target \
@@ -202,7 +202,7 @@ ctest --test-dir build/core/dev --output-on-failure \
 
 Expected: selected Cooker and renderer tests pass.
 
-- [ ] **Step 6: Commit Task 1**
+- [x] **Step 6: Commit Task 1**
 
 Stage only the five Task files, run `git diff --cached --check`, and commit. Module versions and all exact downstream dependencies remain unchanged until the single consistent Product integration in Task 6:
 
@@ -226,7 +226,7 @@ git commit -m "feat(cooker): resolve playable pads in runtime snapshots"
 - Consumes: typed absolute Project path, Pattern ID, Take ID, and background-thread `span<const RawTakeEvent>`.
 - Produces: `TakeJournal::append_batch`, `Application::prepare_runtime_snapshot`, `Application::append_realtime_take_events`, and the fixed-reason `Application::seal_realtime_take` without adding JSON/C ABI operations.
 
-- [ ] **Step 1: Write failing Project I/O batch tests**
+- [x] **Step 1: Write failing Project I/O batch tests**
 
 Declare:
 
@@ -239,7 +239,7 @@ foundation::Result<void> TakeJournal::append_batch(
 
 Test a three-event batch and assert exact order after `read_active`. Test an empty span and a batch whose second event has velocity 0; both return `INVALID_ARGUMENT` and leave the journal event count unchanged. Inject `active_journal_sync` failure and assert the journal remains recoverable by existing unterminated-tail repair.
 
-- [ ] **Step 2: Run Project I/O RED**
+- [x] **Step 2: Run Project I/O RED**
 
 ```bash
 cmake --build build/core/dev --target lmdj_take_journal_tests
@@ -247,7 +247,7 @@ cmake --build build/core/dev --target lmdj_take_journal_tests
 
 Expected: compilation fails because `append_batch` is missing.
 
-- [ ] **Step 3: Implement validate-before-open batch append**
+- [x] **Step 3: Implement validate-before-open batch append**
 
 Make `append` delegate to a one-element span. `append_batch` must validate Take ID, non-empty batch, every slot, velocity, and nondecreasing `frame_offset` before opening the file. Encode all lines before the first write:
 
@@ -261,7 +261,7 @@ for (const auto& event : events) {
 
 Then reuse the existing safe open, `truncate_unterminated_tail`, `write_all`, one fault hook, one `fsync_descriptor`, and close sequence. No event may be written if validation or encoding fails.
 
-- [ ] **Step 4: Write failing typed Facade tests**
+- [x] **Step 4: Write failing typed Facade tests**
 
 Add these public declarations:
 
@@ -289,7 +289,7 @@ The test must call typed prepare, assert Project revision and all resolved Pads,
 
 Begin a second Take, call `seal_realtime_take` with `capture_incomplete`, and assert existing `take.recoverable.list` returns that reason and all appended events. Reject any other reason before Journal mutation.
 
-- [ ] **Step 5: Run Facade RED**
+- [x] **Step 5: Run Facade RED**
 
 ```bash
 cmake --build build/core/dev --target \
@@ -298,7 +298,7 @@ cmake --build build/core/dev --target \
 
 Expected: compilation fails because the typed methods do not exist.
 
-- [ ] **Step 6: Implement typed methods with boundary exception mapping**
+- [x] **Step 6: Implement typed methods with boundary exception mapping**
 
 Validate paths with the same absolute/normalized policy as JSON requests and IDs with `domain::is_valid_uuid`. Call the existing `ProjectStore::load`, `cook_project`, new `journals.append_batch`, and `journals.seal`. `seal_realtime_take` accepts only `capture_incomplete`. All public typed methods catch implementation exceptions and return:
 
@@ -311,7 +311,7 @@ foundation::Error{
 
 Do not add an operation name, JSON branch, C symbol, snapshot registry, or mutable Snapshot handle.
 
-- [ ] **Step 7: Run GREEN and ABI checks**
+- [x] **Step 7: Run GREEN and ABI checks**
 
 ```bash
 cmake --build build/core/dev --target \
@@ -325,7 +325,7 @@ ctest --test-dir build/core/dev --output-on-failure \
 
 Expected: Project I/O, Facade, C ABI, and dynamic-load checks pass.
 
-- [ ] **Step 8: Commit Task 2**
+- [x] **Step 8: Commit Task 2**
 
 Stage only Task implementation/test files, inspect staged list/check, and commit. Defer Module manifests and exact dependency identities to Task 6 so no intermediate commit publishes a partially updated version graph:
 
@@ -353,7 +353,7 @@ git commit -m "feat(facade): add realtime snapshot and take batch APIs"
 - Consumes: immutable Cooker Snapshot or validated mono float32 Probe data on one serialized control thread.
 - Produces: move-only `PreparedSampleBank`, four fixed Engine Bank Slots, callback-boundary publication, old-Voice pinning, and control-thread reclamation.
 
-- [ ] **Step 1: Write failing Sample Bank conversion tests**
+- [x] **Step 1: Write failing Sample Bank conversion tests**
 
 Define the public control-thread API:
 
@@ -380,7 +380,7 @@ class PreparedSampleBank final {
 
 Test mono PCM16 values `{-32768, -16384, 0, 16384, 32767}` and stereo frames `{32767,-32768}`, `{16384,16384}`. Assert finite mono float output through an Engine render, duplicate/out-of-range/empty Samples reject, and all 64 bits can be set.
 
-- [ ] **Step 2: Run Sample Bank RED**
+- [x] **Step 2: Run Sample Bank RED**
 
 ```bash
 scripts/core.sh configure dev
@@ -389,7 +389,7 @@ cmake --build build/core/dev --target lmdj_prepared_sample_bank_tests
 
 Expected: target/header/symbols are missing.
 
-- [ ] **Step 3: Implement move-only Bank preparation**
+- [x] **Step 3: Implement move-only Bank preparation**
 
 Store Project ID/revision, `std::array<std::vector<float>, 64>`, and `uint64_t availability_mask_` privately. Use:
 
@@ -402,7 +402,7 @@ constexpr float pcm16_to_float(std::int16_t value) noexcept {
 
 For stereo, convert each channel then average with `0.5F`. Validate all source dimensions before allocating destination vectors; `set_sample` copies only finite non-empty mono spans while Bank is still owned by the control thread.
 
-- [ ] **Step 4: Write failing publication/old-Voice tests**
+- [x] **Step 4: Write failing publication/old-Voice tests**
 
 Add:
 
@@ -433,7 +433,7 @@ BankTelemetry bank_telemetry() const noexcept;
 
 Tests must prove: publish while stopped; running publish rejects with `events_pending` until the Trigger Queue drains; accepted running publish makes `enqueue` return `bank_transition` until the next render boundary; new Sample after apply starts from the new Bank; a long old Voice finishes from old bytes after swap; current Bank is never reclaimed; four Slot backpressure is explicit; callback completion makes retired Slot reclaimable; failed publish leaves old Bank available.
 
-- [ ] **Step 5: Run Engine RED**
+- [x] **Step 5: Run Engine RED**
 
 ```bash
 cmake --build build/core/dev --target lmdj_realtime_engine_tests
@@ -441,7 +441,7 @@ cmake --build build/core/dev --target lmdj_realtime_engine_tests
 
 Expected: compilation fails because publication methods and storage do not exist.
 
-- [ ] **Step 6: Refactor Engine into fixed Bank Slots**
+- [x] **Step 6: Refactor Engine into fixed Bank Slots**
 
 Each Slot owns one moved `PreparedSampleBank`, an atomic state, and an audio-thread-only active Voice count. Each Voice gains `std::uint8_t bank_slot`. `render` begins with:
 
@@ -466,7 +466,7 @@ Every successful publish-queue push increments atomic `pending_publications`; `e
 
 Keep existing `load_sample`/`clear_sample` as stopped-time compatibility wrappers over a private prepared legacy Bank so 5A public behavior and tests remain valid; migrate the Probe to explicit Bank publication to exercise the new path.
 
-- [ ] **Step 7: Prove render allocation/deallocation safety and GREEN**
+- [x] **Step 7: Prove render allocation/deallocation safety and GREEN**
 
 Extend the existing global allocation counter so the measured region covers Bank apply, old Voice completion, `retiring → reclaimable`, and mixing. Then run:
 
@@ -482,7 +482,7 @@ ctest --test-dir build/core/dev --output-on-failure \
 
 Expected: all selected tests pass and measured render allocations remain zero.
 
-- [ ] **Step 8: Commit Task 3**
+- [x] **Step 8: Commit Task 3**
 
 Register the new source/test/coverage target. Stage only Task implementation/test/build files, inspect check/list, and commit. Task 6 updates all Module versions and exact dependencies together:
 
@@ -504,7 +504,7 @@ git commit -m "feat(audio): publish immutable sample banks at render boundaries"
 - Consumes: successful Voice starts inside `render` and serialized control arm/disarm requests.
 - Produces: fixed 4,096-event audio-to-writer Capture Ring, exact Runtime frame offsets, corruption state, and background-thread drain.
 
-- [ ] **Step 1: Write failing Capture API tests**
+- [x] **Step 1: Write failing Capture API tests**
 
 Add:
 
@@ -543,7 +543,7 @@ CaptureTelemetry capture_telemetry() const noexcept;
 
 Test `arm_pending → active` at next render, two callbacks before first Trigger, exact frame offset, disarm after current callback, only successful Voice starts captured, 4,096 exact capacity, one overflow sets `corrupted`, drain FIFO, and restart clears stale Capture without replay.
 
-- [ ] **Step 2: Run Capture RED**
+- [x] **Step 2: Run Capture RED**
 
 ```bash
 cmake --build build/core/dev --target lmdj_realtime_engine_tests
@@ -551,7 +551,7 @@ cmake --build build/core/dev --target lmdj_realtime_engine_tests
 
 Expected: Capture types/methods are missing.
 
-- [ ] **Step 3: Implement callback-owned Capture state**
+- [x] **Step 3: Implement callback-owned Capture state**
 
 Use `FixedSpscQueue<CapturedTriggerEvent, 4096>`. Control methods use atomic CAS to publish pending transitions. At render entry, `arm_pending` saves current cumulative rendered frame as origin and becomes active. Immediately after a Voice is successfully allocated, write:
 
@@ -574,11 +574,11 @@ if (offset > std::numeric_limits<std::uint32_t>::max() ||
 
 Do not capture invalid events or voice drops. Process `disarm_pending` only after voices/events for the current callback are handled. `drain_capture` is a bounded pop loop with no allocation.
 
-- [ ] **Step 4: Extend stress to simultaneous Trigger and Capture transport**
+- [x] **Step 4: Extend stress to simultaneous Trigger and Capture transport**
 
 Run one producer thread enqueuing 100,000 monotonically sequenced events, one render consumer, and one Capture drain consumer. The consumer records sequences in a preallocated vector. Assert FIFO, no duplicate/loss while the writer keeps up, all counters reconcile, and the test remains labeled only `stress`.
 
-- [ ] **Step 5: Run GREEN, stress, and TSan**
+- [x] **Step 5: Run GREEN, stress, and TSan**
 
 ```bash
 cmake --build build/core/dev --target \
@@ -594,7 +594,7 @@ ctest --test-dir build/core/tsan --output-on-failure \
 
 Expected: component and stress tests pass with no ThreadSanitizer report.
 
-- [ ] **Step 6: Commit Task 4**
+- [x] **Step 6: Commit Task 4**
 
 Stage only the four Audio Runtime/test files, inspect staged list/check, and commit:
 
@@ -622,7 +622,7 @@ git commit -m "feat(audio): capture realtime voice starts without locks"
 - Consumes: typed Facade Snapshot/batch APIs, Audio Runtime Bank/Capture APIs, existing CoreAudio adapter, and installed compiled Assembly.
 - Produces: `lmdj-native-host` with strict invocation, JSONL control protocol, serialized Facade gate, sole Trigger producer, background Capture Writer, and deterministic driver.
 
-- [ ] **Step 1: Create failing source-boundary and invocation tests**
+- [x] **Step 1: Create failing source-boundary and invocation tests**
 
 The source test recursively reads `apps/native-test-host` and fails on:
 
@@ -641,7 +641,7 @@ It also reads the generated link-libraries file and requires exactly direct logi
 
 The black-box test first invokes no args and asserts exit 64 plus the exact usage string from design §10.1.
 
-- [ ] **Step 2: Register a minimal failing Host target**
+- [x] **Step 2: Register a minimal failing Host target**
 
 Add:
 
@@ -667,7 +667,7 @@ file(GENERATE
 
 Register `host.native_source_boundary` on all platforms and `host.native` using the target plus `--no-device` fixture path.
 
-- [ ] **Step 3: Run Host RED**
+- [x] **Step 3: Run Host RED**
 
 ```bash
 scripts/core.sh configure dev
@@ -678,7 +678,7 @@ ctest --test-dir build/core/dev --output-on-failure \
 
 Expected: target source and Host tests fail because the implementation/protocol is absent.
 
-- [ ] **Step 4: Implement strict invocation and installed Assembly setup**
+- [x] **Step 4: Implement strict invocation and installed Assembly setup**
 
 Parse exactly the four required flag/value pairs plus optional `--no-device`; reject duplicates, relative/non-normalized paths, invalid UTF-8, or invalid Pattern UUID before creating Application. Always call `load_installed_assembly`, then construct:
 
@@ -694,7 +694,7 @@ lmdj::facade::Application application(
 
 Prepare Snapshot, prepare/publish Bank, start Engine, then either CoreAudio or the deterministic driver. Output `ready` only after all selected backend steps succeed.
 
-- [ ] **Step 5: Implement bounded JSONL and single Trigger producer**
+- [x] **Step 5: Implement bounded JSONL and single Trigger producer**
 
 Read at most 65,537 bytes per line so a 64 KiB command plus newline is accepted and an overlong line is drained/rejected. Parse UTF-8 object depth at most 32. Use exact-key checks per operation. Convert Pad slot using:
 
@@ -706,7 +706,7 @@ const auto result = engine.enqueue(
 
 Only this main loop calls `enqueue`. `--no-device` renders 128-frame blocks after accepted Trigger until active voices return to zero. All responses are one-line JSON written/flushed by the main thread.
 
-- [ ] **Step 6: Implement CaptureWriter with serialized Facade access**
+- [x] **Step 6: Implement CaptureWriter with serialized Facade access**
 
 The writer owns references to Engine, Application, a Host `std::mutex&`, Project path, Take ID, one `std::jthread`, and atomic stop/failure counters. Its loop is:
 
@@ -743,17 +743,17 @@ while (!observed_final_empty_drain) {
 
 Exit occurs only after stop requested, Capture is idle/corrupted, and one final zero-count drain. The Writer may allocate, sleep, and lock because it is never the Audio Thread.
 
-- [ ] **Step 7: Implement record and reload lifecycle**
+- [x] **Step 7: Implement record and reload lifecycle**
 
 `record.begin` calls existing `take.begin` while holding the Facade mutex, starts Writer, calls `arm_capture`, waits for `active` with a two-second monotonic deadline, then accepts triggers. `record.stop` calls `disarm_capture`, waits for `idle` or `corrupted`, requests Writer stop, joins, drains final events, and reports counts. On corruption/failure it calls the typed `Application::seal_realtime_take` from Task 2 with reason `capture_incomplete`; Host never includes or calls `TakeJournal`.
 
 `record.commit` is rejected unless stop was complete and clean, then forwards the exact existing `take.commit` request under the Facade mutex. `snapshot.reload` prepares a full Snapshot/Bank under the same mutex and publishes only after success.
 
-- [ ] **Step 8: Complete black-box behavior tests**
+- [x] **Step 8: Complete black-box behavior tests**
 
 Create a real fixture bundle through `lmdj-core`, import two deterministic WAVs, assign two Pads, and create a Pattern. Start Host with `--no-device`, then assert ready → two triggers → status → record begin → 20+1 triggers → record stop → explicit Pattern commit → Project inspect shows RawTake/Pattern → snapshot reload → stop/rejected trigger/start → quit. Add negative cases for invalid/oversized JSON, failed reload retaining the old Bank, writer failure sealing recovery, and non-Apple real-device mode returning `UNSUPPORTED_AUDIO`.
 
-- [ ] **Step 9: Run Host GREEN and Apple state smoke**
+- [x] **Step 9: Run Host GREEN and Apple state smoke**
 
 ```bash
 cmake --build build/core/dev --target lmdj_native_host lmdj_core_cli
@@ -767,7 +767,7 @@ fi
 
 Expected: source boundary, portable Host E2E, and platform behavior pass. Apple smoke proves startup/lifecycle only, not audibility. The complete versioned module graph is verified after Task 6 updates every exact identity together.
 
-- [ ] **Step 10: Commit Task 5**
+- [x] **Step 10: Commit Task 5**
 
 Set Host manifest to:
 
@@ -818,11 +818,11 @@ git commit -m "feat(host): add formal native realtime project host"
 - Consumes: completed Module/Host versions and `lmdj_native_host` target.
 - Produces: exact Product Build `1.0.11.0`, matching compiled/locked Assembly, package inventory, and Proof output.
 
-- [ ] **Step 1: Write failing version/lock/package expectations**
+- [x] **Step 1: Write failing version/lock/package expectations**
 
 Update tests first to require Product `1.0.11.0`, Cooker `0.2.0`, Project I/O `0.3.0`, Audio `0.3.0`, Facade `1.1.0`, CLI/MCP `1.0.2`, and Host `1.0.0`. The package test must require `bin/lmdj-native-host` in addition to `bin/lmdj-core`; the module graph must read the Host manifest and reject `project-io` as a direct dependency.
 
-- [ ] **Step 2: Run identity RED**
+- [x] **Step 2: Run identity RED**
 
 ```bash
 python3 tests/build/version_test.py
@@ -832,15 +832,15 @@ python3 tests/conformance/module_graph_test.py
 
 Expected: assertions fail against the old Product/Assembly/Host inventory.
 
-- [ ] **Step 3: Update all exact identities**
+- [x] **Step 3: Update all exact identities**
 
 Change Product version to `{milestone:1, minor:0, build:11, patch:0}`. Update Assembly modules/hosts and compiled catalog to the table above. Bump CLI/MCP manifests to `1.0.2`, exact Facade dependency `1.1.0`, and MCP Python package identity `1.0.2`. Link `lmdj_product_lmdj_assembly` into `lmdj_native_host` from `products/lmdj/CMakeLists.txt`.
 
-- [ ] **Step 4: Package the formal Host**
+- [x] **Step 4: Package the formal Host**
 
 In `scripts/package-core.py`, resolve and require `build_root/bin/lmdj-native-host`, copy it to package `bin/`, preserve executable mode, include its SHA-256 in the package artifact manifest, and make package acceptance invoke `--no-device` usage without opening a real device.
 
-- [ ] **Step 5: Generate and verify the Assembly lock**
+- [x] **Step 5: Generate and verify the Assembly lock**
 
 ```bash
 python3 scripts/version.py lock \
@@ -855,11 +855,11 @@ python3 scripts/version.py verify \
 
 Expected: `assembly lock generated` then `version verification: PASS (1.0.11.0)`.
 
-- [ ] **Step 6: Update Product status and Proof output**
+- [x] **Step 6: Update Product status and Proof output**
 
 README status must say 5A Probe and 5B Formal Native Host are implemented, while GUI, physical input adapters/tests, product concurrency, Creator/Web product, Sample intelligence, Sequence editing, production Providers, and deployment remain incomplete. Change only Proof's final Product line to `1.0.11.0`; keep Channel `canary` and stress exclusion unchanged.
 
-- [ ] **Step 7: Run version, assembly, build, package, and Proof GREEN**
+- [x] **Step 7: Run version, assembly, build, package, and Proof GREEN**
 
 ```bash
 python3 tests/build/version_test.py
@@ -874,7 +874,7 @@ scripts/core.sh proof
 
 Expected: all identity/graph/package tests pass; Proof ends with Product Build `1.0.11.0`, Channel `canary`, Assembly lock `MATCH`.
 
-- [ ] **Step 8: Commit Task 6**
+- [x] **Step 8: Commit Task 6**
 
 Stage only the listed identity/assembly/package files, inspect list/check, and commit:
 
@@ -894,7 +894,7 @@ git commit -m "build(lmdj): assemble product build 1.0.11.0"
 - Consumes: the complete 5B branch and real current Mac default built-in or wired output.
 - Produces: reproducible automated logs, requirement-by-requirement review, physical Project playback/live-reload/20+1 Capture evidence, and a final completion audit.
 
-- [ ] **Step 1: Run fresh dev/full and stress gates**
+- [x] **Step 1: Run fresh dev/full and stress gates**
 
 ```bash
 scripts/core.sh configure dev
@@ -905,7 +905,7 @@ scripts/core.sh test dev stress
 
 Expected: all non-stress and stress CTests pass; no stale build result is accepted.
 
-- [ ] **Step 2: Run ASan full and stress gates**
+- [x] **Step 2: Run ASan full and stress gates**
 
 ```bash
 scripts/core.sh configure asan
@@ -916,7 +916,7 @@ scripts/core.sh test asan stress
 
 Expected: all tests pass with no AddressSanitizer or LeakSanitizer defect.
 
-- [ ] **Step 3: Run TSan full and stress gates**
+- [x] **Step 3: Run TSan full and stress gates**
 
 ```bash
 scripts/core.sh configure tsan
@@ -927,7 +927,7 @@ scripts/core.sh test tsan stress
 
 Expected: all tests pass with no ThreadSanitizer report.
 
-- [ ] **Step 4: Run coverage and integrated Proof**
+- [x] **Step 4: Run coverage and integrated Proof**
 
 ```bash
 scripts/core.sh coverage report
@@ -937,7 +937,7 @@ scripts/core.sh proof
 
 Expected: coverage policy passes and the fresh integrated Proof passes for `1.0.11.0`.
 
-- [ ] **Step 5: Run direct architecture and repository gates**
+- [x] **Step 5: Run direct architecture and repository gates**
 
 ```bash
 bash scripts/verify-core-dependencies.sh
@@ -966,7 +966,7 @@ Design requirement | Automated evidence | Physical evidence | Result
 
 It must state that stdin/no-device is not Keyboard/MIDI/Pointer latency proof, current Channel remains canary, and no tag/release/deploy occurred.
 
-- [ ] **Step 8: Self-review realtime and failure paths**
+- [x] **Step 8: Self-review realtime and failure paths**
 
 Inspect every call reachable from `RealtimeEngine::render`, Bank apply, Voice completion, Capture push/drop, and CoreAudio callback. Record explicit evidence for no allocation/deallocation/lock/I/O/JSON/log/Facade. Inspect overflow, Writer failure, failed reload, revision conflict, stop, restart, and terminal CoreAudio cleanup behavior. A test pass without this source audit is insufficient.
 
