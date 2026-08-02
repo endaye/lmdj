@@ -91,6 +91,10 @@ class FakeCoreAudioServices final : public CoreAudioServices {
 
   Result<void> remove_overload_listener() override {
     const auto result = record("remove_overload_listener");
+    auto callback = std::move(before_remove_listener_return);
+    if (callback) {
+      callback();
+    }
     if (result.has_value()) {
       overload_listener_ = nullptr;
       overload_context_ = nullptr;
@@ -146,6 +150,7 @@ class FakeCoreAudioServices final : public CoreAudioServices {
   std::vector<std::string> calls;
   std::uint32_t configured_sample_rate = 0;
   std::uint16_t configured_channels = 0;
+  std::function<void()> before_remove_listener_return;
   std::function<void()> before_dispose_return;
 
  private:
@@ -684,6 +689,87 @@ void cleanup_paths_wait_for_late_inert_render() {
   cleanup_final_drains_late_inert_render(CleanupPath::terminal_quarantine);
 }
 
+enum class OverloadCleanupPath {
+  stop,
+  destructor,
+  terminal_remove_failure,
+};
+
+void listener_removal_cleanup_drains_late_overload_lease(
+    OverloadCleanupPath path) {
+  Harness harness;
+  LateCallbackLease late_overload;
+  LMDJ_CHECK(harness.output->start().has_value());
+  if (path == OverloadCleanupPath::terminal_remove_failure) {
+    harness.services->fail_once("remove_overload_listener");
+  }
+
+  std::uint64_t overloads_during_cleanup = 1;
+  std::thread late_overload_callback;
+  harness.services->before_remove_listener_return = [&] {
+    auto* const callback_context = static_cast<CoreAudioCallbackContext*>(
+        harness.services->captured_overload_context());
+    LMDJ_CHECK(callback_context != nullptr);
+    late_overload_callback = std::thread([&] {
+      late_overload.hold(*callback_context);
+    });
+    late_overload.wait_until_entered();
+    harness.services->notify_overload();
+    overloads_during_cleanup =
+        callback_context->telemetry().device_overloads;
+  };
+
+  bool lifecycle_succeeded = false;
+  std::promise<void> lifecycle_complete;
+  auto completion = lifecycle_complete.get_future();
+  std::thread lifecycle([&] {
+    if (path == OverloadCleanupPath::destructor) {
+      harness.output.reset();
+      lifecycle_succeeded = true;
+    } else {
+      lifecycle_succeeded = harness.output->stop().has_value();
+    }
+    lifecycle_complete.set_value();
+  });
+
+  late_overload.wait_until_entered();
+  const auto completion_before_release =
+      completion.wait_for(std::chrono::milliseconds(250));
+  late_overload.release();
+  completion.wait();
+  lifecycle.join();
+  late_overload_callback.join();
+
+  LMDJ_CHECK(completion_before_release == std::future_status::timeout);
+  LMDJ_CHECK(
+      lifecycle_succeeded ==
+      (path != OverloadCleanupPath::terminal_remove_failure));
+  LMDJ_CHECK(!late_overload.was_enabled());
+  LMDJ_CHECK(overloads_during_cleanup == 0);
+  if (path == OverloadCleanupPath::destructor) {
+    LMDJ_CHECK(harness.output == nullptr);
+  } else if (path == OverloadCleanupPath::terminal_remove_failure) {
+    LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
+    harness.output.reset();
+  } else {
+    LMDJ_CHECK(harness.output->state() == CoreAudioState::stopped);
+  }
+  LMDJ_CHECK(
+      harness.engine.telemetry().state ==
+      (path == OverloadCleanupPath::terminal_remove_failure
+           ? RealtimeState::running
+           : RealtimeState::stopped));
+}
+
+void listener_removal_cleanup_drains_late_overload_leases() {
+  listener_removal_cleanup_drains_late_overload_lease(
+      OverloadCleanupPath::stop);
+  listener_removal_cleanup_drains_late_overload_lease(
+      OverloadCleanupPath::destructor);
+  listener_removal_cleanup_drains_late_overload_lease(
+      OverloadCleanupPath::terminal_remove_failure);
+}
+
 void concrete_services_forward_exact_coreaudio_arguments() {
   RawServiceHarness harness;
   auto* context = harness.trace.get();
@@ -1089,7 +1175,7 @@ void start_unwind_is_terminal_when_listener_removal_fails() {
   LMDJ_CHECK(failed.error().details.at("operation") == "initialize");
   LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
   harness.services->notify_overload();
-  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
   LMDJ_CHECK(!harness.output->start().has_value());
   LMDJ_CHECK(!harness.output->stop().has_value());
 }
@@ -1156,7 +1242,7 @@ void failed_listener_removal_is_terminal() {
   LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
   LMDJ_CHECK(harness.engine.telemetry().state == RealtimeState::running);
   harness.services->notify_overload();
-  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
 }
 
 void failed_disposal_is_terminal_and_preserves_engine_samples() {
@@ -1296,6 +1382,7 @@ int main() {
   create_rollback_retry_success_allows_restart_without_handle_overwrite();
   repeated_create_rollback_failure_is_terminal_and_rejects_restart();
   terminal_destruction_keeps_disabled_callback_refcon_alive();
+  listener_removal_cleanup_drains_late_overload_leases();
   cleanup_paths_wait_for_late_inert_render();
   concrete_services_forward_exact_coreaudio_arguments();
   concrete_services_map_signed_framework_errors();

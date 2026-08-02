@@ -172,11 +172,15 @@ Apple 实现使用 Default Output Audio Unit：
 - stop 必须幂等；成功 stop 后允许再次 start；running 时重复 start 返回固定
   `already_running` 状态，不重置设备或 telemetry。
 
-适配层在控制线程注册默认输出设备的 processor-overload 通知，并只通过 atomic
-counter 记录 `device_overloads`。它同时记录 callback count、rendered frames、
-最大 callback frame count、callback failures 和 deadline overruns。时间测量只能
-使用无分配的单调时钟；如果 callback 执行时间超过本 buffer 的音频时长，增加
-`deadline_overruns`。
+适配层在控制线程注册默认输出设备的 processor-overload 通知。该 listener callback
+先进入与 render callback 共用的 lock-free 生命周期 gate，仅在 enabled 时用一次
+relaxed atomic increment 记录 `device_overloads`，然后离开 gate 并返回；禁止分配、
+锁、I/O、日志或其他工作。`AudioObjectRemovePropertyListener` 只证明取消后续通知，
+不证明正在执行的 I/O-thread listener 已退出，因此成功移除 listener 和 dispose 后仍
+必须最终 drain 共用 gate，才能进入 stopped、停止 Engine 或释放 callback context。
+适配层同时记录 callback count、rendered frames、最大 callback frame count、callback
+failures 和 deadline overruns。时间测量只能使用无分配的单调时钟；如果 callback
+执行时间超过本 buffer 的音频时长，增加 `deadline_overruns`。
 
 CoreAudio 与 Engine 控制面错误复用现有 `foundation::Result` / `foundation::Error`；
 本切片不新增错误 Contract 或从 callback 传播异常。Probe 的 `status` 固定输出：

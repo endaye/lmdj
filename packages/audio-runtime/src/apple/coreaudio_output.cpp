@@ -355,7 +355,13 @@ OSStatus CoreAudioOutputStateMachine::overload_callback(
     UInt32,
     const AudioObjectPropertyAddress*,
     void* context) noexcept {
-  static_cast<CoreAudioCallbackContext*>(context)->record_device_overload();
+  auto* const callback_context =
+      static_cast<CoreAudioCallbackContext*>(context);
+  const bool enabled = callback_context->enter();
+  if (enabled) {
+    callback_context->record_device_overload();
+  }
+  callback_context->leave();
   return noErr;
 }
 

@@ -865,8 +865,10 @@ Resolve `kAudioHardwarePropertyDefaultOutputDevice`, add/remove a
 precomputed `mach_timebase_info`, and convert each non-zero OSStatus to
 `foundation::ErrorCode::io_error` details containing `operation` and the signed
 numeric `os_status`. No new Foundation error enum or Contract is allowed.
-This is the processor-overload telemetry source; the listener callback performs
-only one relaxed atomic increment.
+This is the processor-overload telemetry source. The listener callback enters
+the same lock-free `CoreAudioCallbackContext` lifetime gate as render, records
+one relaxed `device_overloads` increment only while enabled, leaves the gate,
+and returns. It performs no allocation, lock, I/O, logging, or other work.
 
 - [ ] **Step 4: Implement the callback and lifecycle**
 
@@ -880,10 +882,13 @@ disposes while retaining the first error; only after callbacks cannot recur does
 it call `engine.stop()`. A cleanup failure that leaves callback termination
 unproven enters terminal `failed`; `start` and `stop` then return the same fixed
 terminal-state error. A second successful stopped-state stop succeeds without
-framework calls. The render callback accepts exactly two one-channel float
-buffers with enough bytes, measures elapsed monotonic time around `engine.render`,
-and returns `kAudio_ParamError` plus one `callback_failures` increment for invalid
-buffers.
+framework calls. `AudioObjectRemovePropertyListener` unregisters future
+notifications but does not document draining an already-running listener, so
+successful listener removal and Audio Unit disposal are followed by a final
+shared-context drain before stopped state, Engine stop, or context release. The
+render callback accepts exactly two one-channel float buffers with enough bytes,
+measures elapsed monotonic time around `engine.render`, and returns
+`kAudio_ParamError` plus one `callback_failures` increment for invalid buffers.
 
 - [ ] **Step 5: Register Apple-only targets and run GREEN**
 
