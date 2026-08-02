@@ -22,6 +22,25 @@ lmdj_target_sanitizers(lmdj_audio_runtime)
 
 if(BUILD_TESTING)
   add_executable(
+    lmdj_audio_realtime_queue_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/fixed_spsc_queue_test.cpp"
+  )
+  target_include_directories(
+    lmdj_audio_realtime_queue_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_audio_realtime_queue_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_audio_realtime_queue_tests)
+  lmdj_target_sanitizers(lmdj_audio_realtime_queue_tests)
+  lmdj_add_test(
+    NAME audio.realtime_queue
+    TIER unit
+    COMMAND lmdj_audio_realtime_queue_tests
+    LABELS audio concurrency
+  )
+
+  add_executable(
     lmdj_audio_runtime_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/offline_renderer_test.cpp"
   )
