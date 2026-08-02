@@ -212,6 +212,7 @@ def main() -> int:
             "README.md",
             "bin/lmdj-core",
             "bin/lmdj-core-mcp",
+            "bin/lmdj-native-host",
             "build-manifest.json",
             f"lib/{library_name}",
             "libexec/lmdj-core",
@@ -235,6 +236,7 @@ def main() -> int:
         for relative in (
             "bin/lmdj-core",
             "bin/lmdj-core-mcp",
+            "bin/lmdj-native-host",
             "libexec/lmdj-core",
         ):
             mode = (package_root / relative).stat().st_mode
@@ -308,6 +310,17 @@ def main() -> int:
             environment,
         )
         assert mcp_providers == cli_providers
+        native_usage = subprocess.run(
+            [str(package_root / "bin/lmdj-native-host"), "--no-device"],
+            cwd=workspace.parent,
+            env=environment,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        assert native_usage.returncode == 64
+        assert native_usage.stdout == ""
+        assert native_usage.stderr.startswith("usage: lmdj-native-host ")
         for launcher in (
             package_root / "bin/lmdj-core",
             package_root / "bin/lmdj-core-mcp",

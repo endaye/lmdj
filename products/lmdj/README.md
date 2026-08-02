@@ -1,7 +1,7 @@
 # LMDJ Product Assembly
 
 `assembly.json` and its generated `assembly.lock.json` are the Product Assembly
-source of truth for Product Build `1.0.10.0`. The lock binds every declared
+source of truth for Product Build `1.0.11.0`. The lock binds every declared
 Module, Host, Provider, and Contract to its exact version and
 source-package/schema hash. `assembly.json` declares the effective Region,
 data-classification, and permission policy; the lock binds both that declaration
@@ -18,12 +18,12 @@ rebase.
 ## Status
 
 - Designed: full new product/core architecture.
-- Implemented by this plan: Headless Core Proof and the 5A native audio Probe.
-  Automated Probe acceptance remains device-free and does not establish
-  physical audible output.
-- Not implemented: Formal Native Host, Project/Snapshot integration, MIDI,
-  capture, Creator UI, Web product, Sample intelligence, Sequence editing,
-  Perform, Sound Sets, production Providers, or cloud deployment.
+- Implemented: Headless Core Proof, the 5A realtime engine, and the 5B Formal
+  Native Host with Project/Snapshot integration and Take capture.
+- Not implemented: product GUI and MIDI/keyboard/pointer input adapters,
+  Creator UI, Web product, Sample intelligence, Sequence editing, production
+  Providers, or cloud deployment. Physical audible acceptance remains a
+  separate device gate.
 
 Run the complete Proof from the repository root:
 
