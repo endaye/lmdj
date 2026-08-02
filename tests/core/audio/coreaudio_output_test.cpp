@@ -2,13 +2,19 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <condition_variable>
+#include <functional>
+#include <future>
 #include <memory>
 #include <map>
+#include <mutex>
 #include <set>
 #include <span>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -23,6 +29,7 @@ using lmdj::audio::TriggerEvent;
 using lmdj::audio::apple::CoreAudioState;
 using lmdj::audio::apple::CoreAudioOutput;
 using lmdj::audio::apple::detail::CoreAudioApi;
+using lmdj::audio::apple::detail::CoreAudioCallbackContext;
 using lmdj::audio::apple::detail::CoreAudioOutputStateMachine;
 using lmdj::audio::apple::detail::CoreAudioServices;
 using lmdj::audio::apple::detail::MonotonicClock;
@@ -44,11 +51,11 @@ class FakeCoreAudioServices final : public CoreAudioServices {
  public:
   Result<void> create(AURenderCallback render, void* context) override {
     calls.emplace_back("create");
+    render_ = render;
+    render_context_ = context;
     if (should_fail("create")) {
       return fake_failure("create");
     }
-    render_ = render;
-    render_context_ = context;
     return Result<void>::success();
   }
 
@@ -96,6 +103,10 @@ class FakeCoreAudioServices final : public CoreAudioServices {
   Result<void> dispose() override {
     const auto result = record("dispose");
     if (result.has_value()) {
+      auto callback = std::move(before_dispose_return);
+      if (callback) {
+        callback();
+      }
       render_ = nullptr;
       render_context_ = nullptr;
     }
@@ -135,6 +146,7 @@ class FakeCoreAudioServices final : public CoreAudioServices {
   std::vector<std::string> calls;
   std::uint32_t configured_sample_rate = 0;
   std::uint16_t configured_channels = 0;
+  std::function<void()> before_dispose_return;
 
  private:
   bool should_fail(const std::string& operation) {
@@ -415,6 +427,42 @@ struct Harness {
   }
 };
 
+class LateCallbackLease final {
+ public:
+  void hold(CoreAudioCallbackContext& callback_context) noexcept {
+    enabled_ = callback_context.enter();
+    {
+      std::unique_lock lock(mutex_);
+      entered_ = true;
+      condition_.notify_all();
+      condition_.wait(lock, [this] { return released_; });
+    }
+    callback_context.leave();
+  }
+
+  void wait_until_entered() {
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] { return entered_; });
+  }
+
+  void release() {
+    {
+      std::lock_guard lock(mutex_);
+      released_ = true;
+    }
+    condition_.notify_all();
+  }
+
+  bool was_enabled() const noexcept { return enabled_; }
+
+ private:
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  bool entered_ = false;
+  bool released_ = false;
+  bool enabled_ = true;
+};
+
 void check_calls(
     const FakeCoreAudioServices& services,
     std::span<const std::string> expected) {
@@ -546,6 +594,94 @@ void terminal_destruction_keeps_disabled_callback_refcon_alive() {
       kAudioObjectPropertyElementMain,
   };
   LMDJ_CHECK(overload(0, 1, &address, overload_context) == noErr);
+}
+
+enum class CleanupPath {
+  create_rollback,
+  start_unwind,
+  stop,
+  destructor,
+  terminal_quarantine,
+};
+
+void cleanup_final_drains_late_inert_render(CleanupPath path) {
+  Harness harness;
+  LateCallbackLease late_callback;
+
+  if (path == CleanupPath::create_rollback) {
+    harness.services->fail_once("create");
+  } else if (path == CleanupPath::start_unwind) {
+    harness.services->fail_once("start");
+  } else {
+    LMDJ_CHECK(harness.output->start().has_value());
+    if (path == CleanupPath::terminal_quarantine) {
+      harness.services->fail_once("remove_overload_listener");
+    }
+  }
+
+  std::thread late_render_callback;
+  harness.services->before_dispose_return = [&] {
+    auto* const callback_context = static_cast<CoreAudioCallbackContext*>(
+        harness.services->captured_render_context());
+    LMDJ_CHECK(callback_context != nullptr);
+    late_render_callback = std::thread([&] {
+      late_callback.hold(*callback_context);
+    });
+    late_callback.wait_until_entered();
+  };
+
+  bool lifecycle_succeeded = false;
+  std::promise<void> lifecycle_complete;
+  auto completion = lifecycle_complete.get_future();
+  std::thread lifecycle([&] {
+    if (path == CleanupPath::destructor) {
+      harness.output.reset();
+      lifecycle_succeeded = true;
+    } else {
+      const auto result =
+          path == CleanupPath::stop ||
+                  path == CleanupPath::terminal_quarantine
+              ? harness.output->stop()
+              : harness.output->start();
+      lifecycle_succeeded = result.has_value();
+    }
+    lifecycle_complete.set_value();
+  });
+
+  late_callback.wait_until_entered();
+  const auto completion_before_release =
+      completion.wait_for(std::chrono::milliseconds(250));
+  late_callback.release();
+  completion.wait();
+  lifecycle.join();
+  late_render_callback.join();
+
+  LMDJ_CHECK(completion_before_release == std::future_status::timeout);
+  LMDJ_CHECK(
+      lifecycle_succeeded ==
+      (path == CleanupPath::stop || path == CleanupPath::destructor));
+  LMDJ_CHECK(!late_callback.was_enabled());
+  if (path == CleanupPath::destructor) {
+    LMDJ_CHECK(harness.output == nullptr);
+  } else if (path == CleanupPath::terminal_quarantine) {
+    LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
+    harness.output.reset();
+  } else {
+    LMDJ_CHECK(harness.output->state() == CoreAudioState::stopped);
+  }
+  LMDJ_CHECK(
+      harness.engine.telemetry().state ==
+      (path == CleanupPath::terminal_quarantine
+           ? RealtimeState::running
+           : RealtimeState::stopped));
+}
+
+void cleanup_paths_wait_for_late_inert_render() {
+  cleanup_final_drains_late_inert_render(CleanupPath::create_rollback);
+  cleanup_final_drains_late_inert_render(CleanupPath::start_unwind);
+  cleanup_final_drains_late_inert_render(CleanupPath::stop);
+  cleanup_final_drains_late_inert_render(CleanupPath::destructor);
+  cleanup_final_drains_late_inert_render(CleanupPath::terminal_quarantine);
 }
 
 void concrete_services_forward_exact_coreaudio_arguments() {
@@ -953,7 +1089,7 @@ void start_unwind_is_terminal_when_listener_removal_fails() {
   LMDJ_CHECK(failed.error().details.at("operation") == "initialize");
   LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
   harness.services->notify_overload();
-  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
   LMDJ_CHECK(!harness.output->start().has_value());
   LMDJ_CHECK(!harness.output->stop().has_value());
 }
@@ -1020,7 +1156,7 @@ void failed_listener_removal_is_terminal() {
   LMDJ_CHECK(harness.output->state() == CoreAudioState::failed);
   LMDJ_CHECK(harness.engine.telemetry().state == RealtimeState::running);
   harness.services->notify_overload();
-  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
 }
 
 void failed_disposal_is_terminal_and_preserves_engine_samples() {
@@ -1160,6 +1296,7 @@ int main() {
   create_rollback_retry_success_allows_restart_without_handle_overwrite();
   repeated_create_rollback_failure_is_terminal_and_rejects_restart();
   terminal_destruction_keeps_disabled_callback_refcon_alive();
+  cleanup_paths_wait_for_late_inert_render();
   concrete_services_forward_exact_coreaudio_arguments();
   concrete_services_map_signed_framework_errors();
   concrete_services_retain_owned_resources_for_destructor_cleanup();

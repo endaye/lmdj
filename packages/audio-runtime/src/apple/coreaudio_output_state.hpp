@@ -4,6 +4,33 @@
 
 namespace lmdj::audio::apple::detail {
 
+class CoreAudioCallbackContext final {
+ public:
+  CoreAudioCallbackContext(RealtimeEngine& engine, MonotonicClock& clock);
+  void reset_telemetry() noexcept;
+  void enable() noexcept;
+  bool enter() noexcept;
+  void leave() noexcept;
+  void disable_and_drain() noexcept;
+  void quarantine() noexcept;
+  RealtimeEngine& engine() noexcept;
+  MonotonicClock& clock() noexcept;
+  void record_device_overload() noexcept;
+  void record_callback_failure() noexcept;
+  void record_deadline_overrun() noexcept;
+  CoreAudioTelemetry telemetry() const noexcept;
+
+ private:
+  RealtimeEngine* engine_;
+  MonotonicClock* clock_;
+  std::atomic<bool> enabled_{false};
+  std::atomic<std::uint64_t> in_flight_{0};
+  std::atomic<std::uint64_t> device_overloads_{0};
+  std::atomic<std::uint64_t> callback_failures_{0};
+  std::atomic<std::uint64_t> deadline_overruns_{0};
+  CoreAudioCallbackContext* quarantine_next_ = nullptr;
+};
+
 class CoreAudioOutputStateMachine final {
  public:
   CoreAudioOutputStateMachine(
@@ -17,8 +44,6 @@ class CoreAudioOutputStateMachine final {
   CoreAudioTelemetry telemetry() const noexcept;
 
  private:
-  class CallbackContext;
-
   static OSStatus render_callback(
       void* context,
       AudioUnitRenderActionFlags* flags,
@@ -35,7 +60,7 @@ class CoreAudioOutputStateMachine final {
   RealtimeEngine& engine_;
   std::unique_ptr<CoreAudioServices> services_;
   std::unique_ptr<MonotonicClock> clock_;
-  std::unique_ptr<CallbackContext> callback_context_;
+  std::unique_ptr<CoreAudioCallbackContext> callback_context_;
   CoreAudioState state_{CoreAudioState::stopped};
   bool created_ = false;
   bool listener_added_ = false;

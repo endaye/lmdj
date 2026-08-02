@@ -11,82 +11,75 @@
 namespace lmdj::audio::apple {
 namespace detail {
 
-class CoreAudioOutputStateMachine::CallbackContext final {
- public:
-  CallbackContext(RealtimeEngine& engine, MonotonicClock& clock)
-      : engine_(&engine), clock_(&clock) {}
+CoreAudioCallbackContext::CoreAudioCallbackContext(
+    RealtimeEngine& engine, MonotonicClock& clock)
+    : engine_(&engine), clock_(&clock) {}
 
-  void reset_telemetry() noexcept {
-    device_overloads_.store(0, std::memory_order_relaxed);
-    callback_failures_.store(0, std::memory_order_relaxed);
-    deadline_overruns_.store(0, std::memory_order_relaxed);
+void CoreAudioCallbackContext::reset_telemetry() noexcept {
+  device_overloads_.store(0, std::memory_order_relaxed);
+  callback_failures_.store(0, std::memory_order_relaxed);
+  deadline_overruns_.store(0, std::memory_order_relaxed);
+}
+
+void CoreAudioCallbackContext::enable() noexcept {
+  enabled_.store(true, std::memory_order_seq_cst);
+}
+
+bool CoreAudioCallbackContext::enter() noexcept {
+  in_flight_.fetch_add(1, std::memory_order_seq_cst);
+  return enabled_.load(std::memory_order_seq_cst);
+}
+
+void CoreAudioCallbackContext::leave() noexcept {
+  in_flight_.fetch_sub(1, std::memory_order_seq_cst);
+}
+
+void CoreAudioCallbackContext::disable_and_drain() noexcept {
+  enabled_.store(false, std::memory_order_seq_cst);
+  while (in_flight_.load(std::memory_order_seq_cst) != 0) {
+    std::this_thread::yield();
   }
+}
 
-  void enable() noexcept {
-    enabled_.store(true, std::memory_order_seq_cst);
-  }
+void CoreAudioCallbackContext::quarantine() noexcept {
+  static std::atomic<CoreAudioCallbackContext*> quarantine_head{nullptr};
+  auto* observed = quarantine_head.load(std::memory_order_relaxed);
+  do {
+    quarantine_next_ = observed;
+  } while (!quarantine_head.compare_exchange_weak(
+      observed,
+      this,
+      std::memory_order_release,
+      std::memory_order_relaxed));
+}
 
-  bool enter() noexcept {
-    in_flight_.fetch_add(1, std::memory_order_seq_cst);
-    return enabled_.load(std::memory_order_seq_cst);
-  }
+RealtimeEngine& CoreAudioCallbackContext::engine() noexcept {
+  return *engine_;
+}
 
-  void leave() noexcept {
-    in_flight_.fetch_sub(1, std::memory_order_seq_cst);
-  }
+MonotonicClock& CoreAudioCallbackContext::clock() noexcept {
+  return *clock_;
+}
 
-  void disable_and_drain() noexcept {
-    enabled_.store(false, std::memory_order_seq_cst);
-    while (in_flight_.load(std::memory_order_seq_cst) != 0) {
-      std::this_thread::yield();
-    }
-  }
+void CoreAudioCallbackContext::record_device_overload() noexcept {
+  device_overloads_.fetch_add(1, std::memory_order_relaxed);
+}
 
-  void quarantine() noexcept {
-    static std::atomic<CallbackContext*> quarantine_head{nullptr};
-    auto* observed = quarantine_head.load(std::memory_order_relaxed);
-    do {
-      quarantine_next_ = observed;
-    } while (!quarantine_head.compare_exchange_weak(
-        observed,
-        this,
-        std::memory_order_release,
-        std::memory_order_relaxed));
-  }
+void CoreAudioCallbackContext::record_callback_failure() noexcept {
+  callback_failures_.fetch_add(1, std::memory_order_relaxed);
+}
 
-  RealtimeEngine& engine() noexcept { return *engine_; }
-  MonotonicClock& clock() noexcept { return *clock_; }
+void CoreAudioCallbackContext::record_deadline_overrun() noexcept {
+  deadline_overruns_.fetch_add(1, std::memory_order_relaxed);
+}
 
-  void record_device_overload() noexcept {
-    device_overloads_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  void record_callback_failure() noexcept {
-    callback_failures_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  void record_deadline_overrun() noexcept {
-    deadline_overruns_.fetch_add(1, std::memory_order_relaxed);
-  }
-
-  CoreAudioTelemetry telemetry() const noexcept {
-    return CoreAudioTelemetry{
-        device_overloads_.load(std::memory_order_relaxed),
-        callback_failures_.load(std::memory_order_relaxed),
-        deadline_overruns_.load(std::memory_order_relaxed),
-    };
-  }
-
- private:
-  RealtimeEngine* engine_;
-  MonotonicClock* clock_;
-  std::atomic<bool> enabled_{false};
-  std::atomic<std::uint64_t> in_flight_{0};
-  std::atomic<std::uint64_t> device_overloads_{0};
-  std::atomic<std::uint64_t> callback_failures_{0};
-  std::atomic<std::uint64_t> deadline_overruns_{0};
-  CallbackContext* quarantine_next_ = nullptr;
-};
+CoreAudioTelemetry CoreAudioCallbackContext::telemetry() const noexcept {
+  return CoreAudioTelemetry{
+      device_overloads_.load(std::memory_order_relaxed),
+      callback_failures_.load(std::memory_order_relaxed),
+      deadline_overruns_.load(std::memory_order_relaxed),
+  };
+}
 
 namespace {
 
@@ -144,7 +137,7 @@ CoreAudioOutputStateMachine::CoreAudioOutputStateMachine(
       services_(std::move(services)),
       clock_(std::move(clock)),
       callback_context_(
-          std::make_unique<CallbackContext>(engine_, *clock_)) {}
+          std::make_unique<CoreAudioCallbackContext>(engine_, *clock_)) {}
 
 CoreAudioOutputStateMachine::~CoreAudioOutputStateMachine() {
   if (state_ == CoreAudioState::running) {
@@ -174,6 +167,7 @@ foundation::Result<void> CoreAudioOutputStateMachine::start() {
     callback_context_->disable_and_drain();
     const auto cleanup = services_->dispose();
     if (cleanup.has_value()) {
+      callback_context_->disable_and_drain();
       engine_.stop();
       state_ = CoreAudioState::stopped;
     } else {
@@ -232,6 +226,9 @@ foundation::Result<void> CoreAudioOutputStateMachine::start() {
     }
   }
 
+  if (disposed) {
+    callback_context_->disable_and_drain();
+  }
   if (disposed && !listener_added_) {
     engine_.stop();
     state_ = CoreAudioState::stopped;
@@ -286,6 +283,7 @@ foundation::Result<void> CoreAudioOutputStateMachine::stop() {
     created_ = false;
     initialized_ = false;
     unit_started_ = false;
+    callback_context_->disable_and_drain();
   }
 
   if (disposed && !listener_added_) {
@@ -316,13 +314,13 @@ OSStatus CoreAudioOutputStateMachine::render_callback(
     UInt32,
     UInt32 frames,
     AudioBufferList* buffers) noexcept {
-  auto* callback_context = static_cast<CallbackContext*>(context);
+  auto* callback_context = static_cast<CoreAudioCallbackContext*>(context);
   if (callback_context == nullptr) {
     return kAudio_ParamError;
   }
   const bool enabled = callback_context->enter();
   struct CallbackExit final {
-    CallbackContext& context;
+    CoreAudioCallbackContext& context;
     ~CallbackExit() { context.leave(); }
   } callback_exit{*callback_context};
   if (!enabled) {
@@ -357,15 +355,7 @@ OSStatus CoreAudioOutputStateMachine::overload_callback(
     UInt32,
     const AudioObjectPropertyAddress*,
     void* context) noexcept {
-  auto* callback_context = static_cast<CallbackContext*>(context);
-  if (callback_context == nullptr) {
-    return noErr;
-  }
-  const bool enabled = callback_context->enter();
-  if (enabled) {
-    callback_context->record_device_overload();
-  }
-  callback_context->leave();
+  static_cast<CoreAudioCallbackContext*>(context)->record_device_overload();
   return noErr;
 }
 
