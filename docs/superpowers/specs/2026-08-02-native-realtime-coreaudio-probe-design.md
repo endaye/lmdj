@@ -165,10 +165,10 @@ Apple 实现使用 Default Output Audio Unit：
 - render callback 直接把 AudioBufferList 的左右声道交给 Realtime Engine；
 - start 顺序为 create → configure → initialize → start；
 - stop 顺序为 stop → remove overload listener → uninitialize → dispose；
-- 任一步失败都返回结构化错误并清理已取得的资源；只有确认 callback 不会再进入时
-  才恢复到 stopped。如果 cleanup 本身失败而无法证明 callback 已终止，适配器进入
-  terminal failed、保留 Engine/Sample 存储、拒绝 restart；Probe 刷新结构化错误后
-  以 2 立即结束进程，不执行可能释放 callback 状态的 stack unwinding；
+- 任一步失败都返回结构化错误并清理已取得的资源；只有已计数 callback drain 完成且
+  暴露过的 context 被 disabled 并 retired 后才恢复到 stopped。如果 cleanup 本身失败，
+  适配器进入 terminal failed、保留 Engine/Sample 存储、拒绝 restart；Probe 刷新结构化
+  错误后以 2 立即结束进程，不执行可能释放 callback 状态的 stack unwinding；
 - stop 必须幂等；成功 stop 后允许再次 start；running 时重复 start 返回固定
   `already_running` 状态，不重置设备或 telemetry。
 
@@ -177,10 +177,15 @@ Apple 实现使用 Default Output Audio Unit：
 relaxed atomic increment 记录 `device_overloads`，然后离开 gate 并返回；禁止分配、
 锁、I/O、日志或其他工作。`AudioObjectRemovePropertyListener` 只证明取消后续通知，
 不证明正在执行的 I/O-thread listener 已退出，因此成功移除 listener 和 dispose 后仍
-必须最终 drain 共用 gate，才能进入 stopped、停止 Engine 或释放 callback context。
-适配层同时记录 callback count、rendered frames、最大 callback frame count、callback
-failures 和 deadline overruns。时间测量只能使用无分配的单调时钟；如果 callback
-执行时间超过本 buffer 的音频时长，增加 `deadline_overruns`。
+必须最终 drain 共用 gate。drain 无法观察已进入 C callback 但在首个 atomic 之前暂停的
+执行，因此每次 start/registration 都分配全新 context；任何可能暴露给 CoreAudio 的
+context 都不得在后续 run 中重新 enabled，也不得回收。cleanup 保存 telemetry、disable
+并 drain 已计数 callback 后，无论 framework cleanup 成功或失败都把旧 context 放进
+process-lifetime quarantine。此方案刻意用每次 start 保留一块小型固定 context 的内存
+增长，换取迟到 callback 只能访问 disabled inert 存储，不能跨 run 污染 telemetry，
+也不能在析构后 UAF。适配层同时记录 callback count、rendered frames、最大 callback
+frame count、callback failures 和 deadline overruns。时间测量只能使用无分配的单调
+时钟；如果 callback 执行时间超过本 buffer 的音频时长，增加 `deadline_overruns`。
 
 CoreAudio 与 Engine 控制面错误复用现有 `foundation::Result` / `foundation::Error`；
 本切片不新增错误 Contract 或从 callback 传播异常。Probe 的 `status` 固定输出：

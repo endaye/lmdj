@@ -869,6 +869,11 @@ This is the processor-overload telemetry source. The listener callback enters
 the same lock-free `CoreAudioCallbackContext` lifetime gate as render, records
 one relaxed `device_overloads` increment only while enabled, leaves the gate,
 and returns. It performs no allocation, lock, I/O, logging, or other work.
+Each start/registration uses a fresh shared render/listener context. Once a
+context may have been exposed to CoreAudio it is never enabled for another run
+and is never reclaimed: cleanup preserves its telemetry, disables and drains
+counted callbacks, then places it in process-lifetime quarantine even when all
+framework cleanup operations succeed.
 
 - [ ] **Step 4: Implement the callback and lifecycle**
 
@@ -883,12 +888,17 @@ it call `engine.stop()`. A cleanup failure that leaves callback termination
 unproven enters terminal `failed`; `start` and `stop` then return the same fixed
 terminal-state error. A second successful stopped-state stop succeeds without
 framework calls. `AudioObjectRemovePropertyListener` unregisters future
-notifications but does not document draining an already-running listener, so
-successful listener removal and Audio Unit disposal are followed by a final
-shared-context drain before stopped state, Engine stop, or context release. The
-render callback accepts exactly two one-channel float buffers with enough bytes,
-measures elapsed monotonic time around `engine.render`, and returns
-`kAudio_ParamError` plus one `callback_failures` increment for invalid buffers.
+notifications but does not document draining an already-running listener, and
+no drain can observe a callback preempted before its first gate atomic.
+Successful listener removal and Audio Unit disposal are therefore followed by
+a final drain of counted callbacks and unconditional retirement/quarantine of
+the exposed context before stopped state or Engine stop. A later start allocates
+a different context. This deliberately retains one small fixed-size context per
+start attempt for process lifetime so a stale callback can resume only against
+disabled inert storage. The render callback accepts exactly two one-channel
+float buffers with enough bytes, measures elapsed monotonic time around
+`engine.render`, and returns `kAudio_ParamError` plus one `callback_failures`
+increment for invalid buffers.
 
 - [ ] **Step 5: Register Apple-only targets and run GREEN**
 

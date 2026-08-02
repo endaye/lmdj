@@ -135,19 +135,23 @@ CoreAudioOutputStateMachine::CoreAudioOutputStateMachine(
     std::unique_ptr<MonotonicClock> clock)
     : engine_(engine),
       services_(std::move(services)),
-      clock_(std::move(clock)),
-      callback_context_(
-          std::make_unique<CoreAudioCallbackContext>(engine_, *clock_)) {}
+      clock_(std::move(clock)) {}
 
 CoreAudioOutputStateMachine::~CoreAudioOutputStateMachine() {
   if (state_ == CoreAudioState::running) {
     (void)stop();
   }
-  if (state_ == CoreAudioState::failed) {
-    callback_context_->disable_and_drain();
-    auto* context = callback_context_.release();
-    context->quarantine();
+  retire_callback_context();
+}
+
+void CoreAudioOutputStateMachine::retire_callback_context() noexcept {
+  if (callback_context_ == nullptr) {
+    return;
   }
+  callback_context_->disable_and_drain();
+  preserved_telemetry_ = callback_context_->telemetry();
+  auto* const context = callback_context_.release();
+  context->quarantine();
 }
 
 foundation::Result<void> CoreAudioOutputStateMachine::start() {
@@ -158,6 +162,10 @@ foundation::Result<void> CoreAudioOutputStateMachine::start() {
     return already_running_error();
   }
 
+  retire_callback_context();
+  callback_context_ =
+      std::make_unique<CoreAudioCallbackContext>(engine_, *clock_);
+  preserved_telemetry_ = {};
   callback_context_->reset_telemetry();
 
   auto result =
@@ -168,9 +176,11 @@ foundation::Result<void> CoreAudioOutputStateMachine::start() {
     const auto cleanup = services_->dispose();
     if (cleanup.has_value()) {
       callback_context_->disable_and_drain();
+      retire_callback_context();
       engine_.stop();
       state_ = CoreAudioState::stopped;
     } else {
+      retire_callback_context();
       state_ = CoreAudioState::failed;
     }
     return foundation::Result<void>::failure(first_error);
@@ -229,6 +239,7 @@ foundation::Result<void> CoreAudioOutputStateMachine::start() {
   if (disposed) {
     callback_context_->disable_and_drain();
   }
+  retire_callback_context();
   if (disposed && !listener_added_) {
     engine_.stop();
     state_ = CoreAudioState::stopped;
@@ -285,6 +296,7 @@ foundation::Result<void> CoreAudioOutputStateMachine::stop() {
     unit_started_ = false;
     callback_context_->disable_and_drain();
   }
+  retire_callback_context();
 
   if (disposed && !listener_added_) {
     engine_.stop();
@@ -304,7 +316,8 @@ CoreAudioState CoreAudioOutputStateMachine::state() const noexcept {
 }
 
 CoreAudioTelemetry CoreAudioOutputStateMachine::telemetry() const noexcept {
-  return callback_context_->telemetry();
+  return callback_context_ == nullptr ? preserved_telemetry_
+                                      : callback_context_->telemetry();
 }
 
 OSStatus CoreAudioOutputStateMachine::render_callback(

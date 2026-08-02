@@ -56,11 +56,13 @@ class CoreAudioOutputStateMachine final {
       UInt32 address_count,
       const AudioObjectPropertyAddress* addresses,
       void* context) noexcept;
+  void retire_callback_context() noexcept;
 
   RealtimeEngine& engine_;
   std::unique_ptr<CoreAudioServices> services_;
   std::unique_ptr<MonotonicClock> clock_;
   std::unique_ptr<CoreAudioCallbackContext> callback_context_;
+  CoreAudioTelemetry preserved_telemetry_{};
   CoreAudioState state_{CoreAudioState::stopped};
   bool created_ = false;
   bool listener_added_ = false;

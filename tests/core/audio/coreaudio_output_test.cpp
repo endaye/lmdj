@@ -502,6 +502,28 @@ std::size_t call_count(
       trace.calls.begin(), trace.calls.end(), operation));
 }
 
+OSStatus invoke_render_callback(
+    AURenderCallback render,
+    void* context,
+    UInt32 frames,
+    AudioBufferList* buffers) {
+  LMDJ_CHECK(render != nullptr);
+  AudioUnitRenderActionFlags flags = 0;
+  AudioTimeStamp timestamp{};
+  return render(context, &flags, &timestamp, 0, frames, buffers);
+}
+
+void invoke_overload_callback(
+    AudioObjectPropertyListenerProc overload, void* context) {
+  LMDJ_CHECK(overload != nullptr);
+  const AudioObjectPropertyAddress address{
+      kAudioDeviceProcessorOverload,
+      kAudioObjectPropertyScopeGlobal,
+      kAudioObjectPropertyElementMain,
+  };
+  LMDJ_CHECK(overload(0, 1, &address, context) == noErr);
+}
+
 void create_rollback_retry_success_allows_restart_without_handle_overwrite() {
   constexpr OSStatus kPropertyFailure = -20'001;
   constexpr OSStatus kDisposeFailure = -20'002;
@@ -599,6 +621,95 @@ void terminal_destruction_keeps_disabled_callback_refcon_alive() {
       kAudioObjectPropertyElementMain,
   };
   LMDJ_CHECK(overload(0, 1, &address, overload_context) == noErr);
+}
+
+void retired_callbacks_stay_inert_across_restart() {
+  Harness harness;
+  const std::array<float, 1> sample{0.625F};
+  LMDJ_CHECK(harness.engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(harness.output->start().has_value());
+
+  const auto old_render = harness.services->captured_render();
+  auto* const old_render_context = harness.services->captured_render_context();
+  const auto old_overload = harness.services->captured_overload_listener();
+  auto* const old_overload_context =
+      harness.services->captured_overload_context();
+  LMDJ_CHECK(old_render_context == old_overload_context);
+
+  LMDJ_CHECK(harness.output->stop().has_value());
+  LMDJ_CHECK(harness.output->start().has_value());
+  LMDJ_CHECK(harness.engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 1> left{0.75F};
+  std::array<float, 1> right{-0.75F};
+  StereoBufferList storage{
+      2,
+      {{1, static_cast<UInt32>(sizeof(left)), left.data()},
+       {1, static_cast<UInt32>(sizeof(right)), right.data()}},
+  };
+  auto* const buffers = reinterpret_cast<AudioBufferList*>(&storage);
+  LMDJ_CHECK(
+      invoke_render_callback(old_render, old_render_context, 1, buffers) ==
+      noErr);
+  LMDJ_CHECK((left == std::array<float, 1>{0.0F}));
+  LMDJ_CHECK((right == std::array<float, 1>{0.0F}));
+  LMDJ_CHECK(harness.engine.telemetry().callback_count == 0);
+
+  invoke_overload_callback(old_overload, old_overload_context);
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 0);
+  LMDJ_CHECK(
+      harness.services->captured_render_context() != old_render_context);
+  LMDJ_CHECK(
+      harness.services->captured_overload_context() != old_overload_context);
+
+  left.fill(0.0F);
+  right.fill(0.0F);
+  LMDJ_CHECK(harness.services->render(1, buffers) == noErr);
+  LMDJ_CHECK(left == sample && right == sample);
+  harness.services->notify_overload();
+  LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
+  LMDJ_CHECK(harness.output->stop().has_value());
+}
+
+void clean_destruction_keeps_retired_callback_refcon_alive() {
+  AURenderCallback old_render = nullptr;
+  void* old_render_context = nullptr;
+  AudioObjectPropertyListenerProc old_overload = nullptr;
+  void* old_overload_context = nullptr;
+  {
+    auto engine = std::make_unique<RealtimeEngine>();
+    auto services = std::make_unique<FakeCoreAudioServices>();
+    auto* const observed_services = services.get();
+    auto output = std::make_unique<CoreAudioOutputStateMachine>(
+        *engine, std::move(services), std::make_unique<FakeClock>());
+    LMDJ_CHECK(output->start().has_value());
+    old_render = observed_services->captured_render();
+    old_render_context = observed_services->captured_render_context();
+    old_overload = observed_services->captured_overload_listener();
+    old_overload_context = observed_services->captured_overload_context();
+    LMDJ_CHECK(old_render_context == old_overload_context);
+    LMDJ_CHECK(output->stop().has_value());
+    output.reset();
+    engine.reset();
+  }
+
+  std::array<float, 1> left{0.75F};
+  std::array<float, 1> right{-0.75F};
+  StereoBufferList storage{
+      2,
+      {{1, static_cast<UInt32>(sizeof(left)), left.data()},
+       {1, static_cast<UInt32>(sizeof(right)), right.data()}},
+  };
+  LMDJ_CHECK(
+      invoke_render_callback(
+          old_render,
+          old_render_context,
+          1,
+          reinterpret_cast<AudioBufferList*>(&storage)) == noErr);
+  LMDJ_CHECK((left == std::array<float, 1>{0.0F}));
+  LMDJ_CHECK((right == std::array<float, 1>{0.0F}));
+  invoke_overload_callback(old_overload, old_overload_context);
 }
 
 enum class CleanupPath {
@@ -1379,6 +1490,8 @@ void successful_restart_resets_adapter_telemetry() {
 }  // namespace
 
 int main() {
+  retired_callbacks_stay_inert_across_restart();
+  clean_destruction_keeps_retired_callback_refcon_alive();
   create_rollback_retry_success_allows_restart_without_handle_overwrite();
   repeated_create_rollback_failure_is_terminal_and_rejects_restart();
   terminal_destruction_keeps_disabled_callback_refcon_alive();
