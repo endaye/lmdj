@@ -61,6 +61,28 @@ if(BUILD_TESTING)
     LABELS audio concurrency
   )
 
+  find_package(Threads REQUIRED)
+  add_executable(
+    lmdj_realtime_engine_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/realtime_engine_stress_test.cpp"
+  )
+  target_include_directories(
+    lmdj_realtime_engine_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_realtime_engine_stress_tests
+    PRIVATE lmdj::audio_runtime Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_realtime_engine_stress_tests)
+  lmdj_target_sanitizers(lmdj_realtime_engine_stress_tests)
+  lmdj_add_test(
+    NAME audio.realtime_spsc_stress
+    TIER stress
+    COMMAND lmdj_realtime_engine_stress_tests
+    LABELS audio concurrency
+    TIMEOUT 180
+  )
+
   add_executable(
     lmdj_audio_runtime_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/offline_renderer_test.cpp"
