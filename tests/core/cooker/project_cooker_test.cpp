@@ -25,6 +25,7 @@ namespace {
 using lmdj::cooker::ArtifactResolver;
 using lmdj::cooker::PcmSample;
 using lmdj::cooker::ResolvedEvent;
+using lmdj::cooker::ResolvedPad;
 using lmdj::cooker::RuntimeSnapshot;
 using lmdj::domain::AssignPad;
 using lmdj::domain::Command;
@@ -49,11 +50,15 @@ constexpr auto kAssetKick = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAssetSnare = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPatternId = "30000000-0000-4000-8000-000000000001";
 constexpr auto kMissingPatternId = "30000000-0000-4000-8000-000000000002";
+constexpr auto kUnsupportedSha =
+    "e1bfa728d85c1034701e9bf80c6bc99aa40dd8eb713c576b53ea4fd6aa5d9635";
 constexpr auto kImportKick = "10000000-0000-4000-8000-000000000001";
 constexpr auto kImportSnare = "10000000-0000-4000-8000-000000000002";
 constexpr auto kAssignKick = "10000000-0000-4000-8000-000000000003";
 constexpr auto kPatternCommand = "10000000-0000-4000-8000-000000000004";
 constexpr auto kAssignSnare = "10000000-0000-4000-8000-000000000005";
+constexpr auto kAssignKickDuplicate =
+    "10000000-0000-4000-8000-000000000006";
 
 using CookResult = decltype(lmdj::cooker::cook(
     std::declval<const ProjectState&>(),
@@ -61,13 +66,14 @@ using CookResult = decltype(lmdj::cooker::cook(
     std::declval<ArtifactResolver>()));
 
 using RuntimeSnapshotMemberTypes = decltype([] {
-  auto [project_id, project_revision, bpm, bars, events] = RuntimeSnapshot{
-      ProjectId{kProjectId}, 0, 0, 0, {}};
+  auto [project_id, project_revision, bpm, bars, pads, events] =
+      RuntimeSnapshot{ProjectId{kProjectId}, 0, 0, 0, {}, {}};
   return std::tuple{
       std::type_identity<decltype(project_id)>{},
       std::type_identity<decltype(project_revision)>{},
       std::type_identity<decltype(bpm)>{},
       std::type_identity<decltype(bars)>{},
+      std::type_identity<decltype(pads)>{},
       std::type_identity<decltype(events)>{},
   };
 }());
@@ -80,12 +86,16 @@ static_assert(std::is_same_v<
               decltype(ResolvedEvent::sample),
               std::shared_ptr<const PcmSample>>);
 static_assert(std::is_same_v<
+              decltype(ResolvedPad::sample),
+              std::shared_ptr<const PcmSample>>);
+static_assert(std::is_same_v<
               RuntimeSnapshotMemberTypes,
               std::tuple<
                   std::type_identity<ProjectId>,
                   std::type_identity<std::uint64_t>,
                   std::type_identity<std::uint16_t>,
                   std::type_identity<std::uint8_t>,
+                  std::type_identity<std::vector<ResolvedPad>>,
                   std::type_identity<std::vector<ResolvedEvent>>>>);
 
 std::vector<std::byte> fixture_bytes(const std::string& name) {
@@ -348,6 +358,111 @@ void test_cooker_resolves_events_through_current_pad_slot() {
   LMDJ_CHECK(result.value()->events.at(0).sample->interleaved.size() == 2'400);
 }
 
+void test_cooker_resolves_every_assigned_pad_in_global_slot_order() {
+  const auto kick = fixture_artifact("kick.wav");
+  const auto stereo = fixture_artifact("stereo.wav");
+  auto project = project_with_pattern(kick);
+  project = apply_or_throw(
+      project,
+      Command{ImportAsset{
+          meta(kImportSnare, project.revision),
+          {AssetId{kAssetSnare}, stereo},
+      }});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{
+          meta(kAssignSnare, project.revision),
+          PadSlotId{1, 2},
+          AssetId{kAssetSnare},
+      }});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{
+          meta(kAssignKickDuplicate, project.revision),
+          PadSlotId{3, 15},
+          AssetId{kAssetKick},
+      }});
+  std::uint32_t resolve_count = 0;
+
+  const auto result = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for(
+          {
+              {kick.sha256, fixture_bytes("kick.wav")},
+              {stereo.sha256, fixture_bytes("stereo.wav")},
+          },
+          &resolve_count));
+
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value()->pads.size() == 3);
+  LMDJ_CHECK((result.value()->pads.at(0).slot == PadSlotId{0, 0}));
+  LMDJ_CHECK((result.value()->pads.at(1).slot == PadSlotId{1, 2}));
+  LMDJ_CHECK((result.value()->pads.at(2).slot == PadSlotId{3, 15}));
+  LMDJ_CHECK(result.value()->pads.at(0).artifact.sha256 == kick.sha256);
+  LMDJ_CHECK(result.value()->pads.at(1).artifact.sha256 == stereo.sha256);
+  LMDJ_CHECK(
+      result.value()->pads.at(0).sample ==
+      result.value()->pads.at(2).sample);
+  LMDJ_CHECK(
+      result.value()->events.at(0).sample ==
+      result.value()->pads.at(0).sample);
+  LMDJ_CHECK(resolve_count == 2);
+}
+
+void test_cooker_rejects_invalid_unused_assigned_pad_artifacts() {
+  const auto kick = fixture_artifact("kick.wav");
+  const auto stereo = fixture_artifact("stereo.wav");
+  auto project = project_with_pattern(kick);
+  project = apply_or_throw(
+      project,
+      Command{ImportAsset{
+          meta(kImportSnare, project.revision),
+          {AssetId{kAssetSnare}, stereo},
+      }});
+  project = apply_or_throw(
+      project,
+      Command{AssignPad{
+          meta(kAssignSnare, project.revision),
+          PadSlotId{3, 15},
+          AssetId{kAssetSnare},
+      }});
+
+  const auto missing = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for({{kick.sha256, fixture_bytes("kick.wav")}}));
+
+  auto corrupt_project = project;
+  corrupt_project.assets.at(AssetId{kAssetSnare}).artifact.byte_length += 1;
+  const auto corrupt = lmdj::cooker::cook(
+      corrupt_project,
+      PatternId{kPatternId},
+      resolver_for({
+          {kick.sha256, fixture_bytes("kick.wav")},
+          {stereo.sha256, fixture_bytes("stereo.wav")},
+      }));
+
+  auto unsupported_project = project;
+  unsupported_project.assets.at(AssetId{kAssetSnare}).artifact = ArtifactRef{
+      kUnsupportedSha, "audio/wav", 4};
+  const auto unsupported = lmdj::cooker::cook(
+      unsupported_project,
+      PatternId{kPatternId},
+      resolver_for({
+          {kick.sha256, fixture_bytes("kick.wav")},
+          {kUnsupportedSha,
+           {std::byte{'B'}, std::byte{'A'}, std::byte{'D'}, std::byte{'!'}}},
+      }));
+
+  LMDJ_CHECK(!missing.has_value());
+  LMDJ_CHECK(missing.error().code == ErrorCode::not_found);
+  LMDJ_CHECK(!corrupt.has_value());
+  LMDJ_CHECK(corrupt.error().code == ErrorCode::cook_failed);
+  LMDJ_CHECK(!unsupported.has_value());
+  LMDJ_CHECK(unsupported.error().code == ErrorCode::unsupported_audio);
+}
+
 void test_cooker_rejects_unassigned_slot() {
   auto project = new_project();
   project = apply_or_throw(
@@ -486,6 +601,14 @@ void test_cooker_returns_immutable_deterministic_snapshot_values() {
   LMDJ_CHECK(first.value()->project_revision == second.value()->project_revision);
   LMDJ_CHECK(first.value()->bpm == second.value()->bpm);
   LMDJ_CHECK(first.value()->bars == second.value()->bars);
+  LMDJ_CHECK(first.value()->pads.size() == second.value()->pads.size());
+  LMDJ_CHECK(first.value()->pads.at(0).slot == second.value()->pads.at(0).slot);
+  LMDJ_CHECK(
+      first.value()->pads.at(0).artifact ==
+      second.value()->pads.at(0).artifact);
+  LMDJ_CHECK(
+      first.value()->pads.at(0).sample->interleaved ==
+      second.value()->pads.at(0).sample->interleaved);
   LMDJ_CHECK(first.value()->events.size() == second.value()->events.size());
   LMDJ_CHECK(first.value()->events.at(0).slot == second.value()->events.at(0).slot);
   LMDJ_CHECK(first.value()->events.at(0).step == second.value()->events.at(0).step);
@@ -503,6 +626,8 @@ int main() {
     test_unsupported_sample_rate_and_bit_depth_return_unsupported_audio();
     test_malformed_wav_layouts_return_unsupported_audio();
     test_cooker_resolves_events_through_current_pad_slot();
+    test_cooker_resolves_every_assigned_pad_in_global_slot_order();
+    test_cooker_rejects_invalid_unused_assigned_pad_artifacts();
     test_cooker_rejects_unassigned_slot();
     test_cooker_rejects_missing_pattern();
     test_cooker_rejects_artifact_byte_length_or_hash_mismatch();

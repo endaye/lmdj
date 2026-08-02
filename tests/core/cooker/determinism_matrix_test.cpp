@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -6,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <optional>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
@@ -300,6 +302,18 @@ void check_snapshots_equal(
   LMDJ_CHECK(first.project_revision == second.project_revision);
   LMDJ_CHECK(first.bpm == second.bpm);
   LMDJ_CHECK(first.bars == second.bars);
+  LMDJ_CHECK(first.pads.size() == second.pads.size());
+  for (std::size_t index = 0; index < first.pads.size(); ++index) {
+    const auto& left = first.pads.at(index);
+    const auto& right = second.pads.at(index);
+    LMDJ_CHECK(left.slot == right.slot);
+    LMDJ_CHECK(left.artifact == right.artifact);
+    LMDJ_CHECK(left.sample != nullptr);
+    LMDJ_CHECK(right.sample != nullptr);
+    LMDJ_CHECK(left.sample->sample_rate == right.sample->sample_rate);
+    LMDJ_CHECK(left.sample->channels == right.sample->channels);
+    LMDJ_CHECK(left.sample->interleaved == right.sample->interleaved);
+  }
   LMDJ_CHECK(first.events.size() == second.events.size());
   for (std::size_t index = 0; index < first.events.size(); ++index) {
     const auto& left = first.events.at(index);
@@ -375,10 +389,31 @@ MatrixEvidence run_determinism_matrix() {
       LMDJ_CHECK(trace->calls_by_sha.at(std::string(kMonoSha)) == 1);
       LMDJ_CHECK(trace->calls_by_sha.at(std::string(kStereoSha)) == 1);
     }
+    const auto& pads = first.value()->pads;
+    LMDJ_CHECK(pads.size() == 4);
+    for (std::size_t index = 1; index < pads.size(); ++index) {
+      const auto left = static_cast<std::uint16_t>(
+                            pads.at(index - 1).slot.bank) *
+                            16U +
+                        pads.at(index - 1).slot.pad;
+      const auto right = static_cast<std::uint16_t>(
+                             pads.at(index).slot.bank) *
+                             16U +
+                         pads.at(index).slot.pad;
+      LMDJ_CHECK(left < right);
+    }
     const auto& events = first.value()->events;
     LMDJ_CHECK(events.at(0).sample != events.at(1).sample);
     LMDJ_CHECK(events.at(1).sample == events.at(2).sample);
     LMDJ_CHECK(events.at(0).sample == events.at(3).sample);
+    for (const auto& event : events) {
+      const auto pad = std::find_if(
+          pads.begin(), pads.end(), [&](const auto& candidate) {
+            return candidate.slot == event.slot;
+          });
+      LMDJ_CHECK(pad != pads.end());
+      LMDJ_CHECK(pad->sample == event.sample);
+    }
     ++evidence.deduplicated_resolutions;
 
     LMDJ_CHECK(events.at(1).slot == generated.reassigned_slot);
@@ -395,19 +430,15 @@ MatrixEvidence run_determinism_matrix() {
     const auto invalid_mode = seed % 5U;
     auto resolver_mode = InvalidArtifactMode::none;
     auto expected_error = ErrorCode::invalid_project;
-    std::uint32_t expected_calls = 1;
     if (invalid_mode == 0U) {
       resolver_mode = InvalidArtifactMode::corrupt_bytes;
       expected_error = ErrorCode::cook_failed;
-      expected_calls = 2;
     } else if (invalid_mode == 1U) {
       resolver_mode = InvalidArtifactMode::unavailable;
       expected_error = ErrorCode::not_found;
-      expected_calls = 2;
     } else if (invalid_mode == 2U) {
       resolver_mode = InvalidArtifactMode::unsupported_bytes;
       expected_error = ErrorCode::unsupported_audio;
-      expected_calls = 2;
       invalid_project.assets.at(generated.stereo_asset).artifact =
           ArtifactRef{
               std::string(kUnsupportedSha),
@@ -421,6 +452,31 @@ MatrixEvidence run_determinism_matrix() {
       invalid_project.assets.at(generated.stereo_asset).artifact.sha256 =
           std::string(64, 'g');
     }
+
+    std::set<std::string> resolver_hashes_before_failure;
+    for (const auto& bank : invalid_project.banks) {
+      bool reached_invalid_asset = false;
+      for (const auto& pad : bank) {
+        if (!pad.asset_id.has_value()) {
+          continue;
+        }
+        if (*pad.asset_id == generated.stereo_asset) {
+          if (invalid_mode <= 2U) {
+            resolver_hashes_before_failure.insert(
+                invalid_project.assets.at(*pad.asset_id).artifact.sha256);
+          }
+          reached_invalid_asset = true;
+          break;
+        }
+        resolver_hashes_before_failure.insert(
+            invalid_project.assets.at(*pad.asset_id).artifact.sha256);
+      }
+      if (reached_invalid_asset) {
+        break;
+      }
+    }
+    const auto expected_calls = static_cast<std::uint32_t>(
+        resolver_hashes_before_failure.size());
 
     ResolverTrace invalid_trace;
     const auto invalid = lmdj::cooker::cook(

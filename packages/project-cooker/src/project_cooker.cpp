@@ -207,54 +207,97 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
   }
 
   std::map<std::string, DecodedArtifact> decoded;
+  const auto resolve_sample = [&](const foundation::ArtifactRef& artifact)
+      -> foundation::Result<std::shared_ptr<const PcmSample>> {
+    if (!valid_sha256(artifact.sha256)) {
+      return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+          foundation::Error{
+              foundation::ErrorCode::invalid_project,
+              "asset artifact hash is invalid",
+          });
+    }
+    const auto cached = decoded.find(artifact.sha256);
+    if (cached != decoded.end()) {
+      if (cached->second.byte_length != artifact.byte_length) {
+        return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+            foundation::Error{
+                foundation::ErrorCode::cook_failed,
+                "cached artifact bytes do not match declared metadata",
+            });
+      }
+      return foundation::Result<std::shared_ptr<const PcmSample>>::success(
+          cached->second.sample);
+    }
+    const auto resolved = resolve(artifact);
+    if (!resolved.has_value()) {
+      return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+          resolved.error());
+    }
+    const auto& bytes = resolved.value();
+    const auto actual_byte_length = static_cast<std::uint64_t>(bytes.size());
+    if (actual_byte_length != artifact.byte_length ||
+        sha256_hex(bytes) != artifact.sha256) {
+      return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+          foundation::Error{
+              foundation::ErrorCode::cook_failed,
+              "artifact bytes do not match declared metadata",
+          });
+    }
+    const auto decoded_sample = decode_wav(bytes);
+    if (!decoded_sample.has_value()) {
+      return decoded_sample;
+    }
+    decoded.emplace(
+        artifact.sha256,
+        DecodedArtifact{actual_byte_length, decoded_sample.value()});
+    return decoded_sample;
+  };
+
+  std::vector<ResolvedPad> pads;
+  pads.reserve(64);
+  std::map<domain::PadSlotId, std::shared_ptr<const PcmSample>> pad_samples;
+  for (std::uint8_t bank = 0; bank < project.banks.size(); ++bank) {
+    for (std::uint8_t pad = 0; pad < project.banks.at(bank).size(); ++pad) {
+      const domain::PadSlotId slot{bank, pad};
+      const auto& assignment = project.banks.at(bank).at(pad);
+      if (assignment.id != slot) {
+        return failure(
+            foundation::ErrorCode::invalid_project,
+            "project pad slot identity is invalid");
+      }
+      if (!assignment.asset_id.has_value()) {
+        continue;
+      }
+      const auto asset = domain::resolve_slot_asset(project, slot);
+      if (!asset.has_value()) {
+        return failure(
+            foundation::ErrorCode::missing_asset,
+            "assigned pad references a missing asset");
+      }
+      const auto sample = resolve_sample(asset->artifact);
+      if (!sample.has_value()) {
+        return foundation::Result<
+            std::shared_ptr<const RuntimeSnapshot>>::failure(sample.error());
+      }
+      pads.push_back(ResolvedPad{slot, asset->artifact, sample.value()});
+      pad_samples.emplace(slot, sample.value());
+    }
+  }
+
   std::vector<ResolvedEvent> events;
   events.reserve(pattern->second.events.size());
   for (const auto& event : pattern->second.events) {
-    const auto asset = domain::resolve_slot_asset(project, event.slot);
-    if (!asset.has_value()) {
+    const auto sample = pad_samples.find(event.slot);
+    if (sample == pad_samples.end()) {
       return failure(
           foundation::ErrorCode::missing_asset,
           "pattern event references an unassigned pad slot");
-    }
-    const auto& artifact = asset->artifact;
-    if (!valid_sha256(artifact.sha256)) {
-      return failure(
-          foundation::ErrorCode::invalid_project,
-          "asset artifact hash is invalid");
-    }
-    auto decoded_artifact = decoded.find(artifact.sha256);
-    if (decoded_artifact == decoded.end()) {
-      const auto resolved = resolve(artifact);
-      if (!resolved.has_value()) {
-        return foundation::Result<std::shared_ptr<const RuntimeSnapshot>>::failure(
-            resolved.error());
-      }
-      const auto& bytes = resolved.value();
-      const auto actual_byte_length = static_cast<std::uint64_t>(bytes.size());
-      if (actual_byte_length != artifact.byte_length ||
-          sha256_hex(bytes) != artifact.sha256) {
-        return failure(
-            foundation::ErrorCode::cook_failed,
-            "artifact bytes do not match declared metadata");
-      }
-      const auto decoded_sample = decode_wav(bytes);
-      if (!decoded_sample.has_value()) {
-        return foundation::Result<std::shared_ptr<const RuntimeSnapshot>>::failure(
-            decoded_sample.error());
-      }
-      decoded_artifact = decoded.emplace(
-          artifact.sha256,
-          DecodedArtifact{actual_byte_length, decoded_sample.value()}).first;
-    } else if (decoded_artifact->second.byte_length != artifact.byte_length) {
-      return failure(
-          foundation::ErrorCode::cook_failed,
-          "cached artifact bytes do not match declared metadata");
     }
     events.push_back(ResolvedEvent{
         event.slot,
         event.step,
         event.velocity,
-        decoded_artifact->second.sample,
+        sample->second,
     });
   }
 
@@ -264,6 +307,7 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
           project.revision,
           project.bpm,
           pattern->second.bars,
+          std::move(pads),
           std::move(events),
       }));
 }
