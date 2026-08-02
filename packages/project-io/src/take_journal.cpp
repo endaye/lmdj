@@ -621,15 +621,40 @@ foundation::Result<void> TakeJournal::append(
     const std::filesystem::path& bundle,
     foundation::TakeId take_id,
     const domain::RawTakeEvent& event) {
-  if (!domain::is_valid_uuid(take_id.value()) ||
-      !domain::is_valid_slot(event.slot) || event.velocity < 1 ||
-      event.velocity > 127) {
+  return append_batch(
+      bundle,
+      std::move(take_id),
+      std::span<const domain::RawTakeEvent>{&event, 1});
+}
+
+foundation::Result<void> TakeJournal::append_batch(
+    const std::filesystem::path& bundle,
+    foundation::TakeId take_id,
+    std::span<const domain::RawTakeEvent> events) {
+  if (!domain::is_valid_uuid(take_id.value()) || events.empty()) {
     return foundation::Result<void>::failure(
-        Error{ErrorCode::invalid_argument, "take journal event is invalid"});
+        Error{ErrorCode::invalid_argument, "take journal batch is invalid"});
+  }
+  std::uint32_t previous_frame = 0;
+  bool has_previous_frame = false;
+  for (const auto& event : events) {
+    if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
+        event.velocity > 127 ||
+        (has_previous_frame && event.frame_offset < previous_frame)) {
+      return foundation::Result<void>::failure(
+          Error{ErrorCode::invalid_argument, "take journal batch is invalid"});
+    }
+    previous_frame = event.frame_offset;
+    has_previous_frame = true;
   }
   const auto tree = validate_journal_bundle_tree(bundle);
   if (!tree.has_value()) {
     return tree;
+  }
+  std::string payload;
+  for (const auto& event : events) {
+    payload += foundation::canonical_json(event_json(event));
+    payload.push_back('\n');
   }
   const auto path = active_path(bundle, take_id);
   const int descriptor =
@@ -652,8 +677,7 @@ foundation::Result<void> TakeJournal::append(
     ::close(descriptor);
     return repaired;
   }
-  const auto line = foundation::canonical_json(event_json(event)) + "\n";
-  const auto written = write_all(descriptor, line, path);
+  const auto written = write_all(descriptor, payload, path);
   auto synced = foundation::Result<void>::success();
   if (written.has_value()) {
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING

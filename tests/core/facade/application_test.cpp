@@ -5,6 +5,7 @@
 #include <iostream>
 #include <iterator>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -22,6 +23,11 @@ namespace {
 
 using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
+using lmdj::facade::RuntimeSnapshotRequest;
+using lmdj::domain::PadSlotId;
+using lmdj::domain::RawTakeEvent;
+using lmdj::foundation::PatternId;
+using lmdj::foundation::TakeId;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
 
@@ -507,6 +513,153 @@ void test_render_recooks_after_restart_and_publishes_golden_atomically() {
   }
 }
 
+void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
+  TempDirectory temp;
+  const auto project = temp.path() / "typed-snapshot.lmdj";
+  Application application(config(temp.path()));
+  create_golden_project(application, project);
+  const auto manifest_before = read_bytes(project / "manifest.json");
+
+  const auto prepared = application.prepare_runtime_snapshot(
+      RuntimeSnapshotRequest{project, PatternId{std::string(kPatternId)}});
+
+  LMDJ_CHECK(prepared.has_value());
+  LMDJ_CHECK(prepared.value()->project_revision == 5);
+  LMDJ_CHECK(prepared.value()->pads.size() == 2);
+  LMDJ_CHECK(prepared.value()->events.size() == 4);
+  LMDJ_CHECK(read_bytes(project / "manifest.json") == manifest_before);
+  const auto inspected = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", project.generic_string()},
+      });
+  check_success(inspected, 5);
+
+  const auto invalid_path = application.prepare_runtime_snapshot(
+      RuntimeSnapshotRequest{
+          std::filesystem::path{"relative.lmdj"},
+          PatternId{std::string(kPatternId)},
+      });
+  LMDJ_CHECK(!invalid_path.has_value());
+  LMDJ_CHECK(
+      invalid_path.error().code ==
+      lmdj::foundation::ErrorCode::invalid_argument);
+
+  const auto capture_project = temp.path() / "typed-capture.lmdj";
+  check_success(
+      application.command(create_request(capture_project)), 0);
+  const TakeId capture_take{uuid(202)};
+  check_success(
+      application.command(
+          {
+              {"operation", "take.begin"},
+              {"project_path", capture_project.generic_string()},
+              {"take_id", capture_take.value()},
+              {"expected_revision", 0},
+              {"sample_rate", 48000},
+          }),
+      0);
+  const std::vector<RawTakeEvent> events{
+      RawTakeEvent{PadSlotId{0, 0}, 0, 127},
+      RawTakeEvent{PadSlotId{1, 2}, 128, 96},
+      RawTakeEvent{PadSlotId{3, 15}, 256, 64},
+  };
+
+  const auto appended = application.append_realtime_take_events(
+      capture_project, capture_take, events);
+
+  LMDJ_CHECK(appended.has_value());
+  const auto committed = application.command(
+      {
+          {"operation", "take.commit"},
+          {"project_path", capture_project.generic_string()},
+          {"command_id", uuid(203)},
+          {"expected_revision", 0},
+          {"take_id", capture_take.value()},
+          {"pattern",
+           {
+               {"pattern_id", uuid(204)},
+               {"bars", 1},
+               {"events",
+                nlohmann::json::array(
+                    {
+                        {{"slot", slot(0, 0)},
+                         {"step", 0},
+                         {"velocity", 127}},
+                        {{"slot", slot(1, 2)},
+                         {"step", 1},
+                         {"velocity", 96}},
+                        {{"slot", slot(3, 15)},
+                         {"step", 2},
+                         {"velocity", 64}},
+                    })},
+           }},
+      });
+  check_success(committed, 1);
+  const auto captured = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", capture_project.generic_string()},
+      });
+  check_success(captured, 1);
+  const auto& persisted = captured.at("result")
+                              .at("project")
+                              .at("takes")
+                              .at(capture_take.value())
+                              .at("events");
+  LMDJ_CHECK(persisted.size() == events.size());
+  LMDJ_CHECK(persisted.at(0).at("frame_offset") == 0);
+  LMDJ_CHECK(persisted.at(1).at("frame_offset") == 128);
+  LMDJ_CHECK(persisted.at(2).at("frame_offset") == 256);
+
+  const auto recovery_project = temp.path() / "typed-recovery.lmdj";
+  check_success(application.command(create_request(recovery_project)), 0);
+  const TakeId recovery_take{uuid(205)};
+  check_success(
+      application.command(
+          {
+              {"operation", "take.begin"},
+              {"project_path", recovery_project.generic_string()},
+              {"take_id", recovery_take.value()},
+              {"expected_revision", 0},
+              {"sample_rate", 48000},
+          }),
+      0);
+  LMDJ_CHECK(
+      application.append_realtime_take_events(
+                     recovery_project,
+                     recovery_take,
+                     std::span<const RawTakeEvent>{events}.first(1))
+          .has_value());
+  const auto invalid_reason = application.seal_realtime_take(
+      recovery_project, recovery_take, "revision_conflict");
+  LMDJ_CHECK(!invalid_reason.has_value());
+  LMDJ_CHECK(
+      invalid_reason.error().code ==
+      lmdj::foundation::ErrorCode::invalid_argument);
+  const auto sealed = application.seal_realtime_take(
+      recovery_project, recovery_take, "capture_incomplete");
+  LMDJ_CHECK(sealed.has_value());
+  const auto candidates = application.query(
+      {
+          {"operation", "take.recoverable.list"},
+          {"project_path", recovery_project.generic_string()},
+      });
+  check_success(candidates, 0);
+  LMDJ_CHECK(candidates.at("result").at("candidates").size() == 1);
+  LMDJ_CHECK(
+      candidates.at("result")
+              .at("candidates")
+              .at(0)
+              .at("reason") == "capture_incomplete");
+  LMDJ_CHECK(
+      candidates.at("result")
+              .at("candidates")
+              .at(0)
+              .at("events")
+              .size() == 1);
+}
+
 void test_render_rejects_symlinked_parent_and_never_reuses_crash_residue() {
   TempDirectory temp;
   const auto project = temp.path() / "proof-beat.lmdj";
@@ -989,6 +1142,7 @@ int main() {
     test_all_operations_share_one_facade_and_revision_contract();
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
+    test_typed_realtime_host_api_prepares_and_persists_take_batches();
     test_take_commit_uses_captured_revision_and_replays_after_cleanup();
     test_asset_and_pad_replay_identity_is_enforced();
     test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation();

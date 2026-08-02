@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -36,6 +37,10 @@ class TakeJournal {
       const std::filesystem::path& bundle,
       foundation::TakeId take_id,
       const domain::RawTakeEvent& event);
+  foundation::Result<void> append_batch(
+      const std::filesystem::path& bundle,
+      foundation::TakeId take_id,
+      std::span<const domain::RawTakeEvent> events);
   foundation::Result<domain::RawTake> read_active(
       const std::filesystem::path& bundle,
       foundation::TakeId take_id) const;
