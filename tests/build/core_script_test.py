@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -85,6 +86,20 @@ class CoreScriptTest(unittest.TestCase):
         self.assert_test_arguments(
             ("test", "dev"),
             ["--preset", "dev", "-LE", "^stress$"],
+        )
+
+    def test_tsan_preset_selects_all_native_tests(self) -> None:
+        presets = json.loads(
+            (REPO_ROOT / "CMakePresets.json").read_text(encoding="utf-8")
+        )
+        tsan = next(
+            preset
+            for preset in presets["testPresets"]
+            if preset["name"] == "tsan"
+        )
+        self.assertEqual(
+            tsan["filter"],
+            {"include": {"label": "^native$"}},
         )
 
     def test_proof_release_ctest_excludes_stress_label(self) -> None:

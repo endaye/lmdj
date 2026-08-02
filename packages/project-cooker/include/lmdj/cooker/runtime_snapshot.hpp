@@ -22,11 +22,18 @@ struct ResolvedEvent {
   std::shared_ptr<const PcmSample> sample;
 };
 
+struct ResolvedPad {
+  domain::PadSlotId slot;
+  foundation::ArtifactRef artifact;
+  std::shared_ptr<const PcmSample> sample;
+};
+
 struct RuntimeSnapshot {
   foundation::ProjectId project_id;
   std::uint64_t project_revision;
   std::uint16_t bpm;
   std::uint8_t bars;
+  std::vector<ResolvedPad> pads;
   std::vector<ResolvedEvent> events;
 };
 

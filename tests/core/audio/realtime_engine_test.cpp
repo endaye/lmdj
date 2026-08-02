@@ -1,4 +1,5 @@
 #include <lmdj/audio/realtime_engine.hpp>
+#include <lmdj/audio/prepared_sample_bank.hpp>
 
 #include <array>
 #include <atomic>
@@ -7,6 +8,8 @@
 #include <cstdlib>
 #include <limits>
 #include <new>
+#include <span>
+#include <utility>
 
 #include "tests/core/support/test.hpp"
 
@@ -14,11 +17,19 @@ namespace {
 
 std::atomic<bool> g_track_allocations{false};
 std::atomic<std::uint64_t> g_allocations{0};
+std::atomic<std::uint64_t> g_deallocations{0};
 
 void count_allocation() noexcept {
   if (g_track_allocations.load(std::memory_order_relaxed)) {
     g_allocations.fetch_add(1, std::memory_order_relaxed);
   }
+}
+
+void ordinary_deallocation(void* memory) noexcept {
+  if (g_track_allocations.load(std::memory_order_relaxed)) {
+    g_deallocations.fetch_add(1, std::memory_order_relaxed);
+  }
+  std::free(memory);
 }
 
 void* ordinary_allocation(std::size_t size) {
@@ -39,10 +50,26 @@ void* aligned_allocation(std::size_t size, std::size_t alignment) {
 }
 
 using lmdj::audio::EnqueueResult;
+using lmdj::audio::CapturedTriggerEvent;
+using lmdj::audio::CaptureState;
+using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RealtimeState;
 using lmdj::audio::TriggerEvent;
 using lmdj::foundation::ErrorCode;
+using lmdj::foundation::ProjectId;
+
+constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
+
+PreparedSampleBank bank_with_sample(
+    std::uint64_t revision,
+    std::span<const float> sample,
+    std::uint8_t slot = 0) {
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, revision);
+  LMDJ_CHECK(bank.set_sample(slot, sample).has_value());
+  return bank;
+}
 
 void plays_a_sample_and_reports_render_telemetry() {
   RealtimeEngine engine;
@@ -233,6 +260,214 @@ void completes_a_sample_across_callback_blocks() {
   LMDJ_CHECK(engine.telemetry().max_callback_frames == 3);
 }
 
+void publishes_sample_banks_only_at_safe_render_boundaries() {
+  static_assert(lmdj::audio::kRealtimeBankCapacity == 4);
+  static_assert(lmdj::audio::kRealtimePublishQueueCapacity == 4);
+  RealtimeEngine engine;
+  const std::array<float, 3> old_sample{0.1F, 0.2F, 0.1F};
+  auto first = bank_with_sample(10, old_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(first)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.bank_telemetry().current_generation == 1);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.1F);
+
+  const std::array<float, 1> new_sample{0.4F};
+  auto second = bank_with_sample(11, new_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(second)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.bank_telemetry().pending_publications == 1);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 0, 127}) ==
+             EnqueueResult::bank_transition);
+
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.2F);
+  LMDJ_CHECK(engine.bank_telemetry().current_generation == 2);
+  LMDJ_CHECK(engine.bank_telemetry().pending_publications == 0);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{3, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.5F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 1);
+  LMDJ_CHECK(engine.bank_telemetry().reclaimed_banks == 1);
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 0);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{4, 0, 127}) ==
+             EnqueueResult::accepted);
+}
+
+void rejects_publication_until_trigger_queue_is_empty() {
+  RealtimeEngine engine;
+  const std::array<float, 1> first_sample{0.25F};
+  auto first = bank_with_sample(20, first_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(first)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  const std::array<float, 1> second_sample{0.75F};
+  auto second = bank_with_sample(21, second_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(second)) ==
+             PublishResult::events_pending);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.25F);
+
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(second)) ==
+             PublishResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.75F);
+}
+
+void applies_explicit_bank_slot_backpressure_until_reclaimed() {
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.125F};
+  for (std::uint64_t revision = 1; revision <= 4; ++revision) {
+    auto bank = bank_with_sample(revision, sample);
+    LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+               PublishResult::accepted);
+    if (revision == 1) {
+      LMDJ_CHECK(engine.start().has_value());
+    } else {
+      std::array<float, 1> left{};
+      std::array<float, 1> right{};
+      engine.render(left.data(), right.data(), 1);
+    }
+  }
+  auto fifth = bank_with_sample(5, sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(fifth)) ==
+             PublishResult::bank_slots_full);
+  LMDJ_CHECK(engine.bank_telemetry().bank_slot_rejections == 1);
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 3);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(fifth)) ==
+             PublishResult::accepted);
+}
+
+void captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end() {
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.25F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  LMDJ_CHECK(engine.capture_telemetry().state == CaptureState::arm_pending);
+
+  std::array<float, 6> left{};
+  std::array<float, 6> right{};
+  engine.render(left.data(), right.data(), 4);
+  LMDJ_CHECK(engine.capture_telemetry().state == CaptureState::active);
+  LMDJ_CHECK(engine.capture_telemetry().capture_origin_frame == 0);
+  engine.render(left.data(), right.data(), 6);
+
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{7, 0, 100}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 3);
+  LMDJ_CHECK(engine.disarm_capture().has_value());
+  LMDJ_CHECK(engine.capture_telemetry().state ==
+             CaptureState::disarm_pending);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{8, 0, 110}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 2);
+  LMDJ_CHECK(engine.capture_telemetry().state == CaptureState::idle);
+
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{9, 0, 120}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  std::array<CapturedTriggerEvent, 3> captured{};
+  LMDJ_CHECK(engine.drain_capture(captured) == 2);
+  LMDJ_CHECK(captured.at(0).sequence == 7);
+  LMDJ_CHECK(captured.at(0).slot == 0);
+  LMDJ_CHECK(captured.at(0).velocity == 100);
+  LMDJ_CHECK(captured.at(0).frame_offset == 10);
+  LMDJ_CHECK(captured.at(1).sequence == 8);
+  LMDJ_CHECK(captured.at(1).velocity == 110);
+  LMDJ_CHECK(captured.at(1).frame_offset == 13);
+  const auto telemetry = engine.capture_telemetry();
+  LMDJ_CHECK(telemetry.captured_events == 2);
+  LMDJ_CHECK(telemetry.drained_events == 2);
+  LMDJ_CHECK(telemetry.capture_drops == 0);
+}
+
+void captures_only_successfully_allocated_voices() {
+  RealtimeEngine engine;
+  const std::array<float, 2> sample{0.1F, 0.2F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  for (std::uint64_t sequence = 0; sequence < 128; ++sequence) {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
+               EnqueueResult::accepted);
+  }
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{128, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+
+  std::array<CapturedTriggerEvent, 129> captured{};
+  LMDJ_CHECK(engine.drain_capture(captured) == 128);
+  for (std::uint64_t sequence = 0; sequence < 128; ++sequence) {
+    LMDJ_CHECK(captured.at(sequence).sequence == sequence);
+  }
+  LMDJ_CHECK(engine.capture_telemetry().captured_events == 128);
+  LMDJ_CHECK(engine.telemetry().voice_drops == 1);
+}
+
+void capture_overflow_corrupts_and_restart_clears_stale_events() {
+  static_assert(lmdj::audio::kRealtimeCaptureCapacity == 4'096);
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.arm_capture().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeCaptureCapacity;
+       ++sequence) {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
+               EnqueueResult::accepted);
+    engine.render(left.data(), right.data(), 1);
+  }
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{4'097, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  const auto corrupted = engine.capture_telemetry();
+  LMDJ_CHECK(corrupted.state == CaptureState::corrupted);
+  LMDJ_CHECK(corrupted.captured_events == 4'096);
+  LMDJ_CHECK(corrupted.capture_drops == 1);
+
+  std::array<CapturedTriggerEvent, 4'095> captured{};
+  LMDJ_CHECK(engine.drain_capture(captured) == captured.size());
+  for (std::uint64_t index = 0; index < captured.size(); ++index) {
+    LMDJ_CHECK(captured.at(index).sequence == index + 1);
+    LMDJ_CHECK(captured.at(index).frame_offset == index + 1);
+  }
+
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  const auto reset = engine.capture_telemetry();
+  LMDJ_CHECK(reset.state == CaptureState::idle);
+  LMDJ_CHECK(reset.captured_events == 0);
+  LMDJ_CHECK(reset.drained_events == 0);
+  LMDJ_CHECK(reset.capture_drops == 0);
+  LMDJ_CHECK(engine.drain_capture(captured) == 0);
+}
+
 void stop_cancels_queued_events_and_active_voices() {
   RealtimeEngine engine;
   const std::array<float, 3> sample{0.1F, 0.2F, 0.3F};
@@ -348,21 +583,39 @@ void restart_resets_counters_retains_samples_and_replays_no_event() {
   LMDJ_CHECK(left[0] == 0.75F && right[0] == 0.75F);
 }
 
-void render_does_not_allocate() {
+void render_does_not_allocate_or_deallocate() {
   RealtimeEngine engine;
-  const std::array<float, 1> sample{0.5F};
-  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  const std::array<float, 2> old_sample{0.25F, 0.5F};
+  auto first = bank_with_sample(30, old_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(first)) ==
+             PublishResult::accepted);
   LMDJ_CHECK(engine.start().has_value());
-  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
-             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.arm_capture().has_value());
   std::array<float, 1> left{};
   std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
 
   g_allocations.store(0, std::memory_order_relaxed);
+  g_deallocations.store(0, std::memory_order_relaxed);
+  g_track_allocations.store(true, std::memory_order_relaxed);
+  engine.render(left.data(), right.data(), 1);
+  g_track_allocations.store(false, std::memory_order_relaxed);
+
+  const std::array<float, 1> new_sample{0.75F};
+  auto second = bank_with_sample(31, new_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(second)) ==
+             PublishResult::accepted);
+
   g_track_allocations.store(true, std::memory_order_relaxed);
   engine.render(left.data(), right.data(), 1);
   g_track_allocations.store(false, std::memory_order_relaxed);
   LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
+  LMDJ_CHECK(left.at(0) == 0.5F);
+  LMDJ_CHECK(engine.capture_telemetry().captured_events == 1);
+  LMDJ_CHECK(engine.reclaim_retired_banks() == 1);
 }
 
 }  // namespace
@@ -375,25 +628,29 @@ void* operator new(std::size_t size, std::align_val_t alignment) {
 void* operator new[](std::size_t size, std::align_val_t alignment) {
   return aligned_allocation(size, static_cast<std::size_t>(alignment));
 }
-void operator delete(void* memory) noexcept { std::free(memory); }
-void operator delete[](void* memory) noexcept { std::free(memory); }
-void operator delete(void* memory, std::size_t) noexcept { std::free(memory); }
+void operator delete(void* memory) noexcept { ordinary_deallocation(memory); }
+void operator delete[](void* memory) noexcept {
+  ordinary_deallocation(memory);
+}
+void operator delete(void* memory, std::size_t) noexcept {
+  ordinary_deallocation(memory);
+}
 void operator delete[](void* memory, std::size_t) noexcept {
-  std::free(memory);
+  ordinary_deallocation(memory);
 }
 void operator delete(void* memory, std::align_val_t) noexcept {
-  std::free(memory);
+  ordinary_deallocation(memory);
 }
 void operator delete[](void* memory, std::align_val_t) noexcept {
-  std::free(memory);
+  ordinary_deallocation(memory);
 }
 void operator delete(
     void* memory, std::size_t, std::align_val_t) noexcept {
-  std::free(memory);
+  ordinary_deallocation(memory);
 }
 void operator delete[](
     void* memory, std::size_t, std::align_val_t) noexcept {
-  std::free(memory);
+  ordinary_deallocation(memory);
 }
 
 int main() {
@@ -405,7 +662,13 @@ int main() {
   reports_queue_capacity_and_drops();
   caps_simultaneous_voices_and_mixes_each_admitted_voice();
   completes_a_sample_across_callback_blocks();
+  publishes_sample_banks_only_at_safe_render_boundaries();
+  rejects_publication_until_trigger_queue_is_empty();
+  applies_explicit_bank_slot_backpressure_until_reclaimed();
+  captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end();
+  captures_only_successfully_allocated_voices();
+  capture_overflow_corrupts_and_restart_clears_stale_events();
   stop_cancels_queued_events_and_active_voices();
   restart_resets_counters_retains_samples_and_replays_no_event();
-  render_does_not_allocate();
+  render_does_not_allocate_or_deallocate();
 }

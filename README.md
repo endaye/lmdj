@@ -12,10 +12,10 @@ from the active tree and remains recoverable from Git history.
 ## Current status
 
 - Designed: full product and Core architecture.
-- Implemented by this plan: M1 Headless Core Proof only (`1.0.7.0` candidate).
-- Not implemented: realtime audio, Web/PWA, Creator UI, Sample intelligence,
-  Sequence editing, Perform, Sound Sets, production Providers, or cloud
-  deployment.
+- Implemented: M1 Headless Core Proof plus the 5A realtime engine and 5B
+  Formal Native Host (`1.0.11.0` canary candidate).
+- Not implemented: product GUI and input adapters, Web/PWA, Creator UI, Sample
+  intelligence, Sequence editing, production Providers, or cloud deployment.
 
 ## Architecture
 

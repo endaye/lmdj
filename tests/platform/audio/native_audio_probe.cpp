@@ -20,17 +20,21 @@
 namespace {
 
 using lmdj::audio::EnqueueResult;
+using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RealtimeState;
 using lmdj::audio::TriggerEvent;
 using lmdj::audio::apple::CoreAudioOutput;
 using lmdj::audio::apple::CoreAudioState;
+using lmdj::foundation::ProjectId;
 using nlohmann::json;
 
 constexpr int kOperationalFailure = 2;
 constexpr int kUsageFailure = 64;
 constexpr std::uint32_t kRenderFrames = 128;
 constexpr std::size_t kRenderBlocks = 10;
+constexpr auto kProbeProjectId = "00000000-0000-4000-8000-000000000005";
 
 std::string_view realtime_state_name(RealtimeState state) noexcept {
   return state == RealtimeState::running ? "running" : "stopped";
@@ -60,8 +64,24 @@ std::string_view enqueue_result_name(EnqueueResult result) noexcept {
       return "sample_unavailable";
     case EnqueueResult::not_running:
       return "not_running";
+    case EnqueueResult::bank_transition:
+      return "bank_transition";
     case EnqueueResult::queue_full:
       return "queue_full";
+  }
+  return "unknown";
+}
+
+std::string_view publish_result_name(PublishResult result) noexcept {
+  switch (result) {
+    case PublishResult::accepted:
+      return "accepted";
+    case PublishResult::events_pending:
+      return "events_pending";
+    case PublishResult::bank_slots_full:
+      return "bank_slots_full";
+    case PublishResult::publish_queue_full:
+      return "publish_queue_full";
   }
   return "unknown";
 }
@@ -120,9 +140,16 @@ class NativeAudioProbe final {
           0.12);
     }
 
-    const auto loaded = engine_.load_sample(0, sample);
-    if (!loaded.has_value()) {
-      write_response(operation_error("startup", loaded.error()));
+    auto bank = PreparedSampleBank::empty(ProjectId{kProbeProjectId}, 0);
+    const auto prepared = bank.set_sample(0, sample);
+    if (!prepared.has_value()) {
+      write_response(operation_error("startup", prepared.error()));
+      return kOperationalFailure;
+    }
+    const auto published = engine_.publish_sample_bank(std::move(bank));
+    if (published != PublishResult::accepted) {
+      write_response(
+          command_error("startup", publish_result_name(published)));
       return kOperationalFailure;
     }
 

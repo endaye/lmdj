@@ -153,6 +153,7 @@ std::shared_ptr<const RuntimeSnapshot> snapshot(
           17,
           bpm,
           bars,
+          {},
           std::move(events),
       });
 }

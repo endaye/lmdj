@@ -1,0 +1,10 @@
+{
+  "contract": "lmdj.module.v1",
+  "module": "native-test-host",
+  "version": "1.0.0",
+  "api_version": 1,
+  "dependencies": {
+    "application-facade": "1.1.0",
+    "audio-runtime": "0.3.0"
+  }
+}

@@ -354,6 +354,23 @@ void test_record_take_validates_ids_and_requires_48_khz_atomically() {
   }
 }
 
+void test_record_take_rejects_invalid_events_atomically() {
+  const auto initial = new_project();
+  for (const RawTakeEvent invalid : {
+           RawTakeEvent{PadSlotId{4, 0}, 0, 100},
+           RawTakeEvent{PadSlotId{0, 0}, 0, 0},
+           RawTakeEvent{PadSlotId{0, 0}, 0, 128},
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        Command{RecordTake{
+            meta(kRecordCommand, 0),
+            {TakeId{kTake1}, 48000, {invalid}},
+            {PatternId{kPattern1}, 1, {}},
+        }});
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -370,6 +387,7 @@ int main() {
     test_create_pattern_rejects_invalid_pattern_id();
     test_record_take_commits_unquantized_take_and_explicit_pattern_atomically();
     test_record_take_validates_ids_and_requires_48_khz_atomically();
+    test_record_take_rejects_invalid_events_atomically();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
