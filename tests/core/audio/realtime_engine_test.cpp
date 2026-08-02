@@ -93,6 +93,36 @@ void rejects_invalid_samples_and_running_time_mutation() {
   LMDJ_CHECK(!engine.start().has_value());
 }
 
+void supports_exact_64_slot_boundary() {
+  static_assert(lmdj::audio::kRealtimeSampleSlots == 64);
+
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.625F};
+  LMDJ_CHECK(engine.load_sample(63, sample).has_value());
+  const auto invalid_load = engine.load_sample(64, sample);
+  LMDJ_CHECK(!invalid_load.has_value());
+  LMDJ_CHECK(invalid_load.error().code == ErrorCode::invalid_argument);
+
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 63, 127}) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 64, 127}) ==
+             EnqueueResult::invalid_slot);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left[0] == 0.625F && right[0] == 0.625F);
+
+  engine.stop();
+  LMDJ_CHECK(engine.clear_sample(63).has_value());
+  const auto invalid_clear = engine.clear_sample(64);
+  LMDJ_CHECK(!invalid_clear.has_value());
+  LMDJ_CHECK(invalid_clear.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{3, 63, 127}) ==
+             EnqueueResult::sample_unavailable);
+}
+
 void validates_events_and_cleared_slots() {
   RealtimeEngine engine;
   const std::array<float, 1> sample{1.0F};
@@ -369,6 +399,7 @@ void operator delete[](
 int main() {
   plays_a_sample_and_reports_render_telemetry();
   rejects_invalid_samples_and_running_time_mutation();
+  supports_exact_64_slot_boundary();
   validates_events_and_cleared_slots();
   applies_velocity_gain_and_clamps_after_mixing();
   reports_queue_capacity_and_drops();
