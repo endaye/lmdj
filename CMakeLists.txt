@@ -78,6 +78,9 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests
   )
+  if(APPLE)
+    list(APPEND lmdj_coverage_targets lmdj_audio_coreaudio_tests)
+  endif()
   set(lmdj_coverage_objects)
   foreach(lmdj_coverage_target IN LISTS lmdj_coverage_targets)
     if(NOT TARGET "${lmdj_coverage_target}")

@@ -108,3 +108,52 @@ if(BUILD_TESTING)
     LABELS audio
   )
 endif()
+
+if(APPLE)
+  find_library(LMDJ_AUDIO_UNIT_FRAMEWORK AudioUnit REQUIRED)
+  find_library(LMDJ_CORE_AUDIO_FRAMEWORK CoreAudio REQUIRED)
+  find_library(LMDJ_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+  add_library(
+    lmdj_audio_coreaudio STATIC
+    src/apple/coreaudio_services.cpp
+    src/apple/coreaudio_output.cpp
+  )
+  add_library(lmdj::audio_coreaudio ALIAS lmdj_audio_coreaudio)
+  target_include_directories(
+    lmdj_audio_coreaudio
+    PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/apple"
+  )
+  target_link_libraries(
+    lmdj_audio_coreaudio
+    PUBLIC lmdj::audio_runtime
+    PRIVATE
+      "${LMDJ_AUDIO_UNIT_FRAMEWORK}"
+      "${LMDJ_CORE_AUDIO_FRAMEWORK}"
+      "${LMDJ_CORE_FOUNDATION_FRAMEWORK}"
+  )
+  lmdj_target_warnings(lmdj_audio_coreaudio)
+  lmdj_target_sanitizers(lmdj_audio_coreaudio)
+
+  if(BUILD_TESTING)
+    add_executable(
+      lmdj_audio_coreaudio_tests
+      "${CMAKE_SOURCE_DIR}/tests/core/audio/coreaudio_output_test.cpp"
+    )
+    target_include_directories(
+      lmdj_audio_coreaudio_tests
+      PRIVATE "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/src/apple"
+    )
+    target_link_libraries(
+      lmdj_audio_coreaudio_tests PRIVATE lmdj::audio_coreaudio
+    )
+    lmdj_target_warnings(lmdj_audio_coreaudio_tests)
+    lmdj_target_sanitizers(lmdj_audio_coreaudio_tests)
+    lmdj_add_test(
+      NAME audio.coreaudio_output
+      TIER component
+      COMMAND lmdj_audio_coreaudio_tests
+      LABELS audio
+    )
+  endif()
+endif()
