@@ -6,7 +6,12 @@ add_library(
 )
 add_library(lmdj::audio_runtime ALIAS lmdj_audio_runtime)
 
-target_sources(lmdj_audio_runtime PRIVATE src/realtime_engine.cpp)
+target_sources(
+  lmdj_audio_runtime
+  PRIVATE
+    src/prepared_sample_bank.cpp
+    src/realtime_engine.cpp
+)
 
 target_include_directories(
   lmdj_audio_runtime
@@ -23,6 +28,25 @@ lmdj_target_warnings(lmdj_audio_runtime)
 lmdj_target_sanitizers(lmdj_audio_runtime)
 
 if(BUILD_TESTING)
+  add_executable(
+    lmdj_prepared_sample_bank_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/prepared_sample_bank_test.cpp"
+  )
+  target_include_directories(
+    lmdj_prepared_sample_bank_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_prepared_sample_bank_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_prepared_sample_bank_tests)
+  lmdj_target_sanitizers(lmdj_prepared_sample_bank_tests)
+  lmdj_add_test(
+    NAME audio.prepared_sample_bank
+    TIER component
+    COMMAND lmdj_prepared_sample_bank_tests
+    LABELS audio
+  )
+
   add_executable(
     lmdj_realtime_engine_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/realtime_engine_test.cpp"

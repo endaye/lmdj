@@ -23,6 +23,8 @@
 namespace {
 
 using lmdj::audio::EnqueueResult;
+using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RealtimeState;
 using lmdj::audio::TriggerEvent;
@@ -37,6 +39,7 @@ using lmdj::audio::apple::detail::make_coreaudio_services;
 using lmdj::audio::apple::detail::make_mach_monotonic_clock;
 using lmdj::foundation::Error;
 using lmdj::foundation::ErrorCode;
+using lmdj::foundation::ProjectId;
 using lmdj::foundation::Result;
 
 Result<void> fake_failure(const std::string& operation) {
@@ -1409,7 +1412,11 @@ void failed_stop_disposal_is_terminal_and_preserves_engine_samples() {
 void renders_engine_output_and_reports_callback_telemetry() {
   Harness harness;
   const std::array<float, 2> sample{0.25F, -0.5F};
-  LMDJ_CHECK(harness.engine.load_sample(0, sample).has_value());
+  auto bank = PreparedSampleBank::empty(
+      ProjectId{"00000000-0000-4000-8000-000000000006"}, 1);
+  LMDJ_CHECK(bank.set_sample(0, sample).has_value());
+  LMDJ_CHECK(harness.engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
   LMDJ_CHECK(harness.output->start().has_value());
   LMDJ_CHECK(harness.engine.enqueue(TriggerEvent{1, 0, 127}) ==
              EnqueueResult::accepted);

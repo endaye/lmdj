@@ -77,6 +77,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests
     lmdj_audio_runtime_tests
+    lmdj_prepared_sample_bank_tests
     lmdj_realtime_engine_tests
     lmdj_audio_realtime_queue_tests
     lmdj_provider_conformance_tests
