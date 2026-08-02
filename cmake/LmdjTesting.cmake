@@ -31,10 +31,17 @@ function(lmdj_add_test)
   if(NOT TEST_TIMEOUT)
     set(TEST_TIMEOUT "${lmdj_test_timeout_${TEST_TIER}}")
   endif()
+  if(LMDJ_SANITIZER STREQUAL "thread")
+    math(EXPR TEST_TIMEOUT "${TEST_TIMEOUT} * 4")
+  endif()
 
   add_test(NAME "${TEST_NAME}" COMMAND ${TEST_COMMAND})
 
   set(lmdj_test_labels "${TEST_TIER};${TEST_LABELS}")
+  list(GET TEST_COMMAND 0 lmdj_test_executable)
+  if(TARGET "${lmdj_test_executable}")
+    list(APPEND lmdj_test_labels native)
+  endif()
   set(lmdj_test_working_directory_property)
   if(TEST_WORKING_DIRECTORY)
     list(APPEND lmdj_test_working_directory_property

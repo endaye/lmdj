@@ -118,7 +118,7 @@
       "configurePreset": "tsan",
       "filter": {
         "include": {
-          "name": "^(facade\\.c_api_stress|audio\\.realtime_spsc_stress)$"
+          "label": "^native$"
         }
       },
       "output": {
