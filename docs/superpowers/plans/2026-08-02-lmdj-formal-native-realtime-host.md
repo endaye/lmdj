@@ -426,12 +426,12 @@ struct BankTelemetry {
   std::uint64_t publish_queue_drops;
 };
 
-PublishResult publish_sample_bank(PreparedSampleBank bank) noexcept;
+PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
 std::size_t reclaim_retired_banks() noexcept;
 BankTelemetry bank_telemetry() const noexcept;
 ```
 
-Tests must prove: publish while stopped; running publish rejects with `events_pending` until the Trigger Queue drains; new Sample after accepted running publish starts only after next render boundary; a long old Voice finishes from old bytes after swap; new Voice reads new bytes; current Bank is never reclaimed; four Slot backpressure is explicit; callback completion makes retired Slot reclaimable; failed publish leaves old Bank available.
+Tests must prove: publish while stopped; running publish rejects with `events_pending` until the Trigger Queue drains; accepted running publish makes `enqueue` return `bank_transition` until the next render boundary; new Sample after apply starts from the new Bank; a long old Voice finishes from old bytes after swap; current Bank is never reclaimed; four Slot backpressure is explicit; callback completion makes retired Slot reclaimable; failed publish leaves old Bank available.
 
 - [ ] **Step 5: Run Engine RED**
 
@@ -461,6 +461,8 @@ while (publish_queue_.try_pop(pending)) {
 Voice creation reads Sample address/length from the current Slot and increments its audio-thread count. Voice completion decrements the exact Slot count and marks a `retiring` Slot `reclaimable` when zero. `reclaim_retired_banks` is the only function that clears vectors. `enqueue` validates availability through the atomic mask and never reads a vector.
 
 Before claiming an empty Slot, `publish_sample_bank` checks `queue_.size_approx() == 0`; otherwise it returns `events_pending` without moving the input Bank or changing any Slot. This is the safe boundary required because the stable public `TriggerEvent` intentionally has no Bank generation field.
+
+Every successful publish-queue push increments atomic `pending_publications`; `enqueue` returns the new fixed enum value `bank_transition` while the count is nonzero. Audio Thread decrements once per applied Bank. This count, rather than an independently stored boolean, prevents a producer push racing a callback drain from reopening Trigger input early.
 
 Keep existing `load_sample`/`clear_sample` as stopped-time compatibility wrappers over a private prepared legacy Bank so 5A public behavior and tests remain valid; migrate the Probe to explicit Bank publication to exercise the new path.
 

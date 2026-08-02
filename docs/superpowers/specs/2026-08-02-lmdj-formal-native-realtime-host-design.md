@@ -188,6 +188,9 @@ empty → prepared → pending → current → retiring → reclaimable → empt
   `events_pending`，避免不携带 Bank generation 的旧格式 Trigger 被错误地用新 Bank
   播放；Host reload 在主控制线程停止产生新 Trigger，并等待该短暂边界；
 - running 时控制线程把 Bank 放入 empty Slot，并把 Slot index 写入固定 SPSC 发布队列；
+- 每个成功入队的 Bank 增加 atomic `pending_publications`；该值非零期间
+  `enqueue` 返回 `bank_transition`，Host 等待 callback 应用完成，不能让新 Trigger
+  跨越尚未完成的 Bank 边界；Audio Thread 每应用一个 Bank 减少一次计数；
 - Audio Thread 在 callback frame 0 消费 pending Slot，原子切换 `current`；
 - 新 Trigger 从切换后的 Bank 起音；已起音 Voice 继续引用旧 Bank；
 - 每个 Voice 保存 Bank Slot index，结束时减少该 Slot 的 audio-thread voice count；
