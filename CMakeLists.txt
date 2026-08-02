@@ -43,6 +43,7 @@ if(APPLE AND TARGET lmdj_native_audio_probe)
 endif()
 
 add_subdirectory(apps/core-cli)
+add_subdirectory(apps/native-test-host)
 add_subdirectory(products/lmdj)
 
 lmdj_add_test(
@@ -88,6 +89,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_application_c_api_tests
     lmdj_application_dynamic_load_tests
     lmdj_core_cli
+    lmdj_native_host
     lmdj_core_c
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests

@@ -29,3 +29,8 @@ target_link_libraries(
   PRIVATE
     lmdj_product_lmdj_assembly
 )
+target_link_libraries(
+  lmdj_native_host
+  PRIVATE
+    lmdj_product_lmdj_assembly
+)
