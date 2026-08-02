@@ -412,6 +412,7 @@ inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 
 enum class PublishResult : std::uint8_t {
   accepted,
+  events_pending,
   bank_slots_full,
   publish_queue_full,
 };
@@ -430,7 +431,7 @@ std::size_t reclaim_retired_banks() noexcept;
 BankTelemetry bank_telemetry() const noexcept;
 ```
 
-Tests must prove: publish while stopped; new Sample after running publish starts only after next render boundary; a long old Voice finishes from old bytes after swap; new Voice reads new bytes; current Bank is never reclaimed; four Slot backpressure is explicit; callback completion makes retired Slot reclaimable; failed publish leaves old Bank available.
+Tests must prove: publish while stopped; running publish rejects with `events_pending` until the Trigger Queue drains; new Sample after accepted running publish starts only after next render boundary; a long old Voice finishes from old bytes after swap; new Voice reads new bytes; current Bank is never reclaimed; four Slot backpressure is explicit; callback completion makes retired Slot reclaimable; failed publish leaves old Bank available.
 
 - [ ] **Step 5: Run Engine RED**
 
@@ -458,6 +459,8 @@ while (publish_queue_.try_pop(pending)) {
 ```
 
 Voice creation reads Sample address/length from the current Slot and increments its audio-thread count. Voice completion decrements the exact Slot count and marks a `retiring` Slot `reclaimable` when zero. `reclaim_retired_banks` is the only function that clears vectors. `enqueue` validates availability through the atomic mask and never reads a vector.
+
+Before claiming an empty Slot, `publish_sample_bank` checks `queue_.size_approx() == 0`; otherwise it returns `events_pending` without moving the input Bank or changing any Slot. This is the safe boundary required because the stable public `TriggerEvent` intentionally has no Bank generation field.
 
 Keep existing `load_sample`/`clear_sample` as stopped-time compatibility wrappers over a private prepared legacy Bank so 5A public behavior and tests remain valid; migrate the Probe to explicit Bank publication to exercise the new path.
 

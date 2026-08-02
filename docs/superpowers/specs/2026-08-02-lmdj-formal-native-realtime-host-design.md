@@ -184,6 +184,9 @@ empty → prepared → pending → current → retiring → reclaimable → empt
 ```
 
 - stopped 时 publish 直接安装完整 Bank；
+- running 时只有 Trigger Event Queue 已空才接受 publish；Queue 非空返回
+  `events_pending`，避免不携带 Bank generation 的旧格式 Trigger 被错误地用新 Bank
+  播放；Host reload 在主控制线程停止产生新 Trigger，并等待该短暂边界；
 - running 时控制线程把 Bank 放入 empty Slot，并把 Slot index 写入固定 SPSC 发布队列；
 - Audio Thread 在 callback frame 0 消费 pending Slot，原子切换 `current`；
 - 新 Trigger 从切换后的 Bank 起音；已起音 Voice 继续引用旧 Bank；
