@@ -9,6 +9,7 @@ import os
 import re
 from typing import BinaryIO, Iterator
 
+from . import __version__
 from .c_api import (
     CApiError,
     Engine,
@@ -19,7 +20,7 @@ from .c_api import (
 
 PROTOCOL_VERSION = "2025-11-25"
 SERVER_NAME = "lmdj-core-mcp"
-SERVER_VERSION = "1.0.0"
+SERVER_VERSION = __version__
 UUID_PATTERN = (
     "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$"

@@ -182,11 +182,19 @@ for ((object_index = 0; object_index < ${#objects[@]}; object_index++)); do
       ;;
   esac
 
+  probe_arguments=()
+  case "$(basename "$object_path")" in
+    lmdj-native-audio-probe)
+      probe_arguments+=(--no-device)
+      ;;
+  esac
+
   probe_stdout="$probe_root/$object_number.stdout"
   probe_stderr="$probe_root/$object_number.stderr"
   set +e
   LLVM_PROFILE_FILE="$probe_root/$object_number-%m.profraw" \
-    "$object_path" >"$probe_stdout" 2>"$probe_stderr"
+    "$object_path" ${probe_arguments[@]+"${probe_arguments[@]}"} \
+    >"$probe_stdout" 2>"$probe_stderr" </dev/null
   probe_status=$?
   set -e
   if grep -Eq 'LLVM Profile (Error|Warning)' "$probe_stderr"; then

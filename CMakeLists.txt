@@ -29,6 +29,19 @@ add_subdirectory(packages/application-facade)
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+if(APPLE AND TARGET lmdj_native_audio_probe)
+  lmdj_add_test(
+    NAME audio.native_probe_no_device
+    TIER component
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      tests/platform/audio/native_audio_probe_smoke.py
+      "$<TARGET_FILE:lmdj_native_audio_probe>"
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio
+  )
+endif()
+
 add_subdirectory(apps/core-cli)
 add_subdirectory(products/lmdj)
 
@@ -64,6 +77,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests
     lmdj_audio_runtime_tests
+    lmdj_realtime_engine_tests
+    lmdj_audio_realtime_queue_tests
     lmdj_provider_conformance_tests
     lmdj_provider_attempt_isolation_tests
     lmdj_provider_spec_regression_tests
@@ -76,6 +91,14 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_io_fault_matrix_tests
     lmdj_application_c_api_stress_tests
   )
+  if(APPLE)
+    list(
+      APPEND
+      lmdj_coverage_targets
+      lmdj_audio_coreaudio_tests
+      lmdj_native_audio_probe
+    )
+  endif()
   set(lmdj_coverage_objects)
   foreach(lmdj_coverage_target IN LISTS lmdj_coverage_targets)
     if(NOT TARGET "${lmdj_coverage_target}")
