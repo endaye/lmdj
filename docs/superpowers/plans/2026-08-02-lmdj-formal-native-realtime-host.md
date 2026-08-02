@@ -95,7 +95,6 @@ Canonical policy: `docs/governance/version-management.md`.
 - Modify: `tests/core/cooker/project_cooker_test.cpp`
 - Modify: `tests/core/cooker/determinism_matrix_test.cpp`
 - Modify: `tests/core/audio/offline_renderer_test.cpp`
-- Modify: `packages/project-cooker/module.json`
 
 **Interfaces:**
 
@@ -190,7 +189,7 @@ Iterate banks 0..3 and pads 0..15, resolve only assigned assets, append `Resolve
 
 Insert the empty or expected `pads` vector before `events` in every `RuntimeSnapshot{}` construction. Compare Pad slot, Artifact metadata, Sample format, Sample bytes, and shared identity invariants in the determinism matrix.
 
-- [ ] **Step 5: Run GREEN and module gate**
+- [ ] **Step 5: Run GREEN**
 
 ```bash
 cmake --build build/core/dev --target \
@@ -199,14 +198,13 @@ cmake --build build/core/dev --target \
   lmdj_audio_runtime_tests
 ctest --test-dir build/core/dev --output-on-failure \
   -R '^(cooker\.|audio\.offline_renderer$)'
-python3 tests/conformance/module_graph_test.py
 ```
 
-Expected: selected Cooker/renderer tests and module graph pass.
+Expected: selected Cooker and renderer tests pass.
 
-- [ ] **Step 6: Set Cooker version and commit Task 1**
+- [ ] **Step 6: Commit Task 1**
 
-Change `packages/project-cooker/module.json` version to `0.2.0`, stage only the six Task files, run `git diff --cached --check`, and commit:
+Stage only the five Task files, run `git diff --cached --check`, and commit. Module versions and all exact downstream dependencies remain unchanged until the single consistent Product integration in Task 6:
 
 ```bash
 git commit -m "feat(cooker): resolve playable pads in runtime snapshots"
@@ -222,8 +220,6 @@ git commit -m "feat(cooker): resolve playable pads in runtime snapshots"
 - Modify: `packages/application-facade/include/lmdj/facade/application.hpp`
 - Modify: `packages/application-facade/src/application.cpp`
 - Modify: `tests/core/facade/application_test.cpp`
-- Modify: `packages/project-io/module.json`
-- Modify: `packages/application-facade/module.json`
 
 **Interfaces:**
 
@@ -315,7 +311,7 @@ foundation::Error{
 
 Do not add an operation name, JSON branch, C symbol, snapshot registry, or mutable Snapshot handle.
 
-- [ ] **Step 7: Run GREEN, ABI, and dependency checks**
+- [ ] **Step 7: Run GREEN and ABI checks**
 
 ```bash
 cmake --build build/core/dev --target \
@@ -325,14 +321,13 @@ cmake --build build/core/dev --target \
   lmdj_application_dynamic_load_tests
 ctest --test-dir build/core/dev --output-on-failure \
   -R '^(project_io\.take_journal|facade\.)'
-python3 tests/conformance/module_graph_test.py
 ```
 
-Expected: Project I/O, Facade, C ABI, dynamic-load, and module graph checks pass.
+Expected: Project I/O, Facade, C ABI, and dynamic-load checks pass.
 
-- [ ] **Step 8: Set Module versions and commit Task 2**
+- [ ] **Step 8: Commit Task 2**
 
-Set `project-io` to `0.3.0`. Set `application-facade` to `1.1.0` with exact dependencies `project-io: 0.3.0`, `project-cooker: 0.2.0`, and current `audio-runtime: 0.2.0`; Task 3 will update the audio dependency. Stage only Task files, inspect staged list/check, and commit:
+Stage only Task implementation/test files, inspect staged list/check, and commit. Defer Module manifests and exact dependency identities to Task 6 so no intermediate commit publishes a partially updated version graph:
 
 ```bash
 git commit -m "feat(facade): add realtime snapshot and take batch APIs"
@@ -352,8 +347,6 @@ git commit -m "feat(facade): add realtime snapshot and take batch APIs"
 - Modify: `tests/platform/audio/native_audio_probe.cpp`
 - Modify: `packages/audio-runtime/CMakeLists.txt`
 - Modify: `CMakeLists.txt`
-- Modify: `packages/audio-runtime/module.json`
-- Modify: `packages/application-facade/module.json`
 
 **Interfaces:**
 
@@ -484,9 +477,9 @@ ctest --test-dir build/core/dev --output-on-failure \
 
 Expected: all selected tests pass and measured render allocations remain zero.
 
-- [ ] **Step 8: Set versions and commit Task 3**
+- [ ] **Step 8: Commit Task 3**
 
-Set `audio-runtime` to `0.3.0` with `project-cooker: 0.2.0`. Update the Facade exact audio dependency to `0.3.0`. Register the new source/test/coverage target. Stage only Task files, inspect check/list, and commit:
+Register the new source/test/coverage target. Stage only Task implementation/test/build files, inspect check/list, and commit. Task 6 updates all Module versions and exact dependencies together:
 
 ```bash
 git commit -m "feat(audio): publish immutable sample banks at render boundaries"
@@ -765,10 +758,9 @@ if [[ "$(uname -s)" == "Darwin" ]]; then
   python3 tests/host/native_host_apple_smoke.py \
     build/core/dev/bin/lmdj-native-host
 fi
-python3 tests/conformance/module_graph_test.py
 ```
 
-Expected: source boundary, portable Host E2E, platform behavior, and module graph pass. Apple smoke proves startup/lifecycle only, not audibility.
+Expected: source boundary, portable Host E2E, and platform behavior pass. Apple smoke proves startup/lifecycle only, not audibility. The complete versioned module graph is verified after Task 6 updates every exact identity together.
 
 - [ ] **Step 10: Commit Task 5**
 
@@ -806,6 +798,9 @@ git commit -m "feat(host): add formal native realtime project host"
 - Modify: `apps/core-mcp/module.json`
 - Modify: `apps/core-mcp/pyproject.toml`
 - Modify: `apps/core-mcp/lmdj_core_mcp/__init__.py`
+- Modify: `packages/project-cooker/module.json`
+- Modify: `packages/audio-runtime/module.json`
+- Modify: `packages/project-io/module.json`
 - Modify: `packages/application-facade/module.json`
 - Modify: `tests/build/version_test.py`
 - Modify: `tests/conformance/version_lock_test.py`
