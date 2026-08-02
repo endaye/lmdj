@@ -100,8 +100,9 @@ struct TriggerEvent {
 
 `sequence` 是供上层关联诊断的 opaque value；Engine 保留并消费它，但不要求单调、
 不排序也不去重。Probe 自己使用从 1 开始的递增值。Engine 只在 running 时接受
-Trigger；无效 slot/velocity、stopped/stopping 状态和 queue full 分别返回固定枚举
-结果，不通过字符串或异常报告。只有 queue full 增加 `queue_drops`。
+Trigger；无效 slot/velocity、未加载 Sample、stopped/stopping 状态和 queue full
+分别返回固定枚举结果，不通过字符串或异常报告。未加载 Sample 与无效字段增加
+`invalid_events`；只有 queue full 增加 `queue_drops`。
 
 第一切片不承诺事件的 sample-accurate frame offset。所有已消费事件从当前 callback
 的 frame 0 起音；带 callback 内 frame offset 的事件格式留给 Snapshot/Transport
@@ -164,7 +165,10 @@ Apple 实现使用 Default Output Audio Unit：
 - render callback 直接把 AudioBufferList 的左右声道交给 Realtime Engine；
 - start 顺序为 create → configure → initialize → start；
 - stop 顺序为 stop → remove overload listener → uninitialize → dispose；
-- 任一步失败都返回结构化错误，并保持或恢复到 stopped；
+- 任一步失败都返回结构化错误并清理已取得的资源；只有确认 callback 不会再进入时
+  才恢复到 stopped。如果 cleanup 本身失败而无法证明 callback 已终止，适配器进入
+  terminal failed、保留 Engine/Sample 存储、拒绝 restart；Probe 刷新结构化错误后
+  以 2 立即结束进程，不执行可能释放 callback 状态的 stack unwinding；
 - stop 必须幂等；成功 stop 后允许再次 start；running 时重复 start 返回固定
   `already_running` 状态，不重置设备或 telemetry。
 
@@ -177,7 +181,8 @@ counter 记录 `device_overloads`。它同时记录 callback count、rendered fr
 CoreAudio 与 Engine 控制面错误复用现有 `foundation::Result` / `foundation::Error`；
 本切片不新增错误 Contract 或从 callback 传播异常。Probe 的 `status` 固定输出：
 
-- `state`、`sample_rate`、`channels`、`queue_capacity`、`voice_capacity`；
+- `state`（`stopped` / `running` / `failed`）、`sample_rate`、`channels`、
+  `queue_capacity`、`voice_capacity`；
 - `enqueued_events`、`dequeued_events`、`queued_events`、`cancelled_events`；
 - `started_voices`、`completed_voices`、`active_voices`、`cancelled_voices`；
 - `invalid_events`、`stopped_rejections`、`queue_drops`、`voice_drops`；
@@ -226,6 +231,7 @@ Realtime Engine component test 覆盖：
 
 - 64-slot 加载边界与 running 时不可变；
 - velocity 和 slot 验证；
+- 未加载或已清除 Sample 的 Trigger 拒绝；
 - SPSC FIFO、1,024 条边界和 queue drop；
 - 单 Voice 的精确 float 输出和结束释放；
 - 多 Voice 累加与输出限制；
