@@ -155,5 +155,19 @@ if(APPLE)
       COMMAND lmdj_audio_coreaudio_tests
       LABELS audio
     )
+
+    add_executable(
+      lmdj_native_audio_probe
+      "${CMAKE_SOURCE_DIR}/tests/platform/audio/native_audio_probe.cpp"
+    )
+    set_target_properties(
+      lmdj_native_audio_probe PROPERTIES OUTPUT_NAME lmdj-native-audio-probe
+    )
+    target_link_libraries(
+      lmdj_native_audio_probe
+      PRIVATE lmdj::audio_coreaudio lmdj::foundation
+    )
+    lmdj_target_warnings(lmdj_native_audio_probe)
+    lmdj_target_sanitizers(lmdj_native_audio_probe)
   endif()
 endif()
