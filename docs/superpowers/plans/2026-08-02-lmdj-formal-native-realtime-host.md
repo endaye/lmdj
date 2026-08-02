@@ -952,11 +952,11 @@ git diff --check
 
 Expected: dependencies, active tree, version, Assembly lock, and whitespace all pass.
 
-- [ ] **Step 6: Perform the Apple physical Gate**
+- [x] **Step 6: Perform the Apple physical Gate**
 
 Use the exact seven-step design §12.4 flow with a real fixture Project and default built-in or wired output. Export the Host JSONL transcript and record: Mac model, macOS version, output route, target SHA, Project revision, Pattern ID, Pad artifacts, 20+1 counts, Take/Pattern IDs, zero-drop telemetry, reload observation, restart observation, and quit exit status. If any audible mapping, reload, Capture, commit, restart, or telemetry requirement fails, 5B is incomplete.
 
-- [ ] **Step 7: Write acceptance evidence and completion matrix**
+- [x] **Step 7: Write acceptance evidence and completion matrix**
 
 The acceptance document must separate:
 
@@ -970,7 +970,7 @@ It must state that stdin/no-device is not Keyboard/MIDI/Pointer latency proof, c
 
 Inspect every call reachable from `RealtimeEngine::render`, Bank apply, Voice completion, Capture push/drop, and CoreAudio callback. Record explicit evidence for no allocation/deallocation/lock/I/O/JSON/log/Facade. Inspect overflow, Writer failure, failed reload, revision conflict, stop, restart, and terminal CoreAudio cleanup behavior. A test pass without this source audit is insufficient.
 
-- [ ] **Step 9: Commit Task 7**
+- [x] **Step 9: Commit Task 7**
 
 Mark only actually completed plan checkboxes, stage the acceptance document and plan, run staged list/check, and commit:
 
@@ -978,7 +978,7 @@ Mark only actually completed plan checkboxes, stage the acceptance document and 
 git commit -m "test(host): record formal native host acceptance"
 ```
 
-- [ ] **Step 10: Final branch audit without remote mutation**
+- [x] **Step 10: Final branch audit without remote mutation**
 
 ```bash
 git log --oneline --decorate origin/main..HEAD
