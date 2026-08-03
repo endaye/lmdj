@@ -82,6 +82,12 @@ nlohmann::json capability_contract_json(
 std::string canonical_capability_json(
     const CapabilityDescriptor& capability);
 
+// The single definition of the Capability Contract's `port_name` rule,
+// `^[a-z][a-z0-9_]*$`. Every boundary that accepts a port name must use this
+// so a name that cannot be registered is also rejected on arrival. A port name
+// is not a file name; do not validate one with file-identifier rules.
+bool valid_port_name(std::string_view value) noexcept;
+
 struct ArtifactBinding {
   std::string port;
   foundation::ArtifactRef artifact;

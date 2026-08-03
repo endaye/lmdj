@@ -104,6 +104,19 @@ nlohmann::json capability_contract_json(
   };
 }
 
+bool valid_port_name(std::string_view value) noexcept {
+  return !value.empty() &&
+         value.front() >= 'a' && value.front() <= 'z' &&
+         std::all_of(
+             value.begin() + 1,
+             value.end(),
+             [](unsigned char character) {
+               return (character >= 'a' && character <= 'z') ||
+                      (character >= '0' && character <= '9') ||
+                      character == '_';
+             });
+}
+
 void to_json(nlohmann::json& output, const ArtifactBinding& binding) {
   output = {
       {"artifact", binding.artifact},

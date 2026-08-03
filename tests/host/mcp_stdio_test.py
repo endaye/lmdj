@@ -21,6 +21,9 @@ UUID_PATTERN = (
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 FILE_ID_PATTERN = "^[A-Za-z0-9._-]{1,128}$"
+# Held independently of server.py on purpose: a change to the advertised port
+# domain must be mirrored here deliberately, not inherited silently.
+PORT_NAME_PATTERN = "^[a-z][a-z0-9_]*$"
 
 
 def canonical_json(value: object) -> str:
@@ -121,9 +124,10 @@ def expected_schemas() -> dict[str, dict]:
         },
         ["sha256", "media_type", "byte_length"],
     )
+    port_name = {"type": "string", "pattern": PORT_NAME_PATTERN}
     artifact_binding = object_schema(
         {
-            "port": file_id,
+            "port": port_name,
             "artifact": artifact,
         },
         ["port", "artifact"],
@@ -480,9 +484,9 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     assert module == {
         "contract": "lmdj.module.v1",
         "module": "core-mcp",
-        "version": "1.0.2",
+        "version": "1.1.0",
         "api_version": 2,
-        "dependencies": {"application-facade": "1.1.0"},
+        "dependencies": {"application-facade": "1.1.1"},
     }
     pyproject = tomllib.loads(
         (REPO_ROOT / "apps/core-mcp/pyproject.toml").read_text(
@@ -490,7 +494,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         )
     )
     assert pyproject["project"]["name"] == "lmdj-core-mcp"
-    assert pyproject["project"]["version"] == "1.0.2"
+    assert pyproject["project"]["version"] == "1.1.0"
     assert pyproject["project"]["dependencies"] == []
     assert pyproject["tool"]["lmdj"]["c-abi"] == "lmdj_core_c@1"
     host_paths = sorted(
@@ -534,7 +538,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 11,
+        "build": 12,
         "patch": 0,
     }
 
@@ -663,7 +667,7 @@ def lifecycle(library: Path, temp_root: Path) -> None:
         "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "lmdj-core-mcp", "version": "1.0.2"},
+            "serverInfo": {"name": "lmdj-core-mcp", "version": "1.1.0"},
         },
     }
     assert host.request(4, "ping")["result"] == {}

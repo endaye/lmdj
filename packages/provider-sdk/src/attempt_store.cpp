@@ -621,9 +621,16 @@ Error validate_request(
   }
   std::set<std::string> input_hashes;
   for (const auto& input : request.inputs) {
+    if (!valid_port_name(input.port)) {
+      return invalid_argument("capability request port name is invalid");
+    }
     const auto* port = find_port(
         capability.input_artifacts, input.port);
-    if (port == nullptr || !valid_artifact(input.artifact) ||
+    if (port == nullptr) {
+      return invalid_argument(
+          "capability request names a port the Capability does not declare");
+    }
+    if (!valid_artifact(input.artifact) ||
         !media_type_allowed(*port, input.artifact.media_type) ||
         !input_hashes.insert(input.artifact.sha256).second) {
       return invalid_argument("capability request artifacts are invalid");
@@ -1296,21 +1303,21 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
             artifacts.begin(), artifacts.end(), valid_artifact) ||
         !std::all_of(
             inputs.begin(), inputs.end(), [](const auto& binding) {
-              return valid_file_id(binding.port) &&
+              return valid_port_name(binding.port) &&
                      valid_artifact(binding.artifact);
             }) ||
         !std::all_of(
             minted_outputs.begin(),
             minted_outputs.end(),
             [](const auto& binding) {
-              return valid_file_id(binding.port) &&
+              return valid_port_name(binding.port) &&
                      valid_artifact(binding.artifact);
             }) ||
         !std::all_of(
             candidate_outputs.begin(),
             candidate_outputs.end(),
             [](const auto& binding) {
-              return valid_file_id(binding.port) &&
+              return valid_port_name(binding.port) &&
                      valid_artifact(binding.artifact);
             }) ||
         !std::is_sorted(inputs.begin(), inputs.end(), binding_less) ||

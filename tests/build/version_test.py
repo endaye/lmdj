@@ -28,30 +28,30 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.1.0",
+        "1.1.1",
         {
             "foundation": "0.1.0",
             "authoring-domain": "0.1.0",
             "project-io": "0.3.0",
             "project-cooker": "0.2.0",
             "audio-runtime": "0.3.0",
-            "provider-sdk": "1.0.0",
+            "provider-sdk": "1.1.0",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.2",
-        {"application-facade": "1.1.0"},
+        "1.0.3",
+        {"application-facade": "1.1.1"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.0.2",
-        {"application-facade": "1.1.0"},
+        "1.1.0",
+        {"application-facade": "1.1.1"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.0",
-        {"application-facade": "1.1.0", "audio-runtime": "0.3.0"},
+        "1.0.1",
+        {"application-facade": "1.1.1", "audio-runtime": "0.3.0"},
     ),
 }
 for relative, (module_id, module_version, dependencies) in expected_modules.items():
@@ -62,10 +62,10 @@ for relative, (module_id, module_version, dependencies) in expected_modules.item
     assert manifest["dependencies"] == dependencies
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 11, 0)
-assert str(version) == "1.0.11.0"
-assert version.product_tag() == "lmdj-v1.0.11.0"
-assert version.display("dev", "a" * 40) == "1.0.11.0 · dev · gaaaaaaaa"
+assert version == ProductVersion(1, 0, 12, 0)
+assert str(version) == "1.0.12.0"
+assert version.product_tag() == "lmdj-v1.0.12.0"
+assert version.display("dev", "a" * 40) == "1.0.12.0 · dev · gaaaaaaaa"
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
@@ -94,7 +94,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.11.0\n"
+assert tag_name.stdout == "lmdj-v1.0.12.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -114,7 +114,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.11.0 · dev · gaaaaaaaa\n"
+assert current.stdout == "1.0.12.0 · dev · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -130,7 +130,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.11.0)\n"
+assert verified.stdout == "version verification: PASS (1.0.12.0)\n"
 assert verified.stderr == ""
 
 

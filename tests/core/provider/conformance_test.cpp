@@ -230,7 +230,7 @@ void test_module_manifests_are_exact() {
            {"contract", "lmdj.module.v1"},
            {"dependencies", {{"foundation", "0.1.0"}}},
            {"module", "provider-sdk"},
-           {"version", "1.0.0"},
+           {"version", "1.1.0"},
        }));
   for (const auto& manifest : {success, failure}) {
     LMDJ_CHECK(manifest.size() == 5);
@@ -238,8 +238,8 @@ void test_module_manifests_are_exact() {
     LMDJ_CHECK(manifest.at("contract") == "lmdj.module.v1");
     LMDJ_CHECK(
         (manifest.at("dependencies") ==
-         nlohmann::json{{"provider-sdk", "1.0.0"}}));
-    LMDJ_CHECK(manifest.at("version") == "1.0.0");
+         nlohmann::json{{"provider-sdk", "1.1.0"}}));
+    LMDJ_CHECK(manifest.at("version") == "1.0.1");
   }
   LMDJ_CHECK(success.at("module") == "local.proof.success");
   LMDJ_CHECK(failure.at("module") == "local.proof.failure");
@@ -261,7 +261,7 @@ void test_registry_lists_capabilities_and_rejects_unknown_provider() {
   LMDJ_CHECK(success != providers.end());
   LMDJ_CHECK(failure != providers.end());
   for (const auto* descriptor : {&*success, &*failure}) {
-    LMDJ_CHECK(descriptor->version == "1.0.0");
+    LMDJ_CHECK(descriptor->version == "1.0.1");
     LMDJ_CHECK(descriptor->model_identity == std::nullopt);
     LMDJ_CHECK(descriptor->capabilities.size() == 1);
     LMDJ_CHECK(descriptor->capabilities.front().id == kCapability);
@@ -344,7 +344,7 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
        {
            {"artifact_sha256", provider_sha256},
            {"id", "local.proof.success"},
-           {"version", "1.0.0"},
+           {"version", "1.0.1"},
        }},
       {"contract_version", kSchemaVersion},
   };
@@ -368,7 +368,7 @@ void test_success_provider_emits_scoped_empty_artifact_and_canonical_attempt() {
              nlohmann::json::array({"attempt-success"}));
   LMDJ_CHECK(attempt.at("artifacts").size() == 2);
   LMDJ_CHECK(attempt.at("provider").at("id") == "local.proof.success");
-  LMDJ_CHECK(attempt.at("provider").at("version") == "1.0.0");
+  LMDJ_CHECK(attempt.at("provider").at("version") == "1.0.1");
   LMDJ_CHECK(
       attempt.at("provider").at("artifact_sha256") ==
       provider_sha256);
@@ -865,6 +865,34 @@ void test_v2_registry_rejects_empty_output_descriptors() {
   LMDJ_CHECK(added.error().code == ErrorCode::invalid_argument);
 }
 
+void test_v2_registry_rejects_duplicate_port_names() {
+  // The Capability Schema cannot express this rule: `uniqueItems` only rejects
+  // identical port objects, so two ports sharing a name but differing
+  // elsewhere satisfy the Schema. `valid_ports()` is its only enforcer.
+  auto ports = multi_input_ports();
+  ports[1].name = ports[0].name;
+  LMDJ_CHECK(ports[0].schema_id != ports[1].schema_id);
+
+  auto provider = std::make_shared<MultiPortProvider>();
+  Registry registry;
+  const auto added = registry.add(multi_port_registration(
+      provider, ports, multi_output_ports()));
+  LMDJ_CHECK(!added.has_value());
+  LMDJ_CHECK(added.error().code == ErrorCode::invalid_argument);
+}
+
+void test_v2_registry_rejects_non_lowercase_port_names() {
+  auto ports = multi_input_ports();
+  ports[0].name = "Source";
+
+  auto provider = std::make_shared<MultiPortProvider>();
+  Registry registry;
+  const auto added = registry.add(multi_port_registration(
+      provider, ports, multi_output_ports()));
+  LMDJ_CHECK(!added.has_value());
+  LMDJ_CHECK(added.error().code == ErrorCode::invalid_argument);
+}
+
 void test_v2_request_bindings_fail_closed_before_provider_execution() {
   TempDirectory temp;
   auto provider = std::make_shared<MultiPortProvider>();
@@ -1343,6 +1371,8 @@ int main() {
     test_duplicate_attempt_and_registration_inputs_are_rejected();
     test_provenance_is_deterministic_across_attempts();
     test_v2_registry_rejects_empty_output_descriptors();
+    test_v2_registry_rejects_duplicate_port_names();
+    test_v2_registry_rejects_non_lowercase_port_names();
     test_v2_request_bindings_fail_closed_before_provider_execution();
     test_v2_output_bindings_are_validated_per_port();
     test_v2_all_optional_outputs_allow_empty_candidate();

@@ -1,6 +1,6 @@
 # 开放问题
 
-更新时间：2026-08-01
+更新时间：2026-08-03
 
 这里记录 2026-07-18 Stage Memo 和 2026-07-24 本地决策之后仍未确认的问题。已经解决的旧问题已转入 [decision-log.md](decision-log.md)，不继续以“待决”状态保留。
 
@@ -13,6 +13,8 @@
 | 素材 BPM ≠ Project BPM 时，Loop 类素材是否/如何 Time-stretch 跟随全局 BPM（含 Pitch-shift）？ | “完整歌曲变成可演奏素材”+ 全局 BPM/Key 几乎必然遇到速度不匹配；决定 Audio Runtime 的 DSP 范围和 Capability 清单（Koala 有 Time-stretch 作为对照）。 | Audio Runtime Contract 定稿前的设计评审。 | 待决 |
 | 产品级录音并发语义如何定义：哪些无关 Command 不应触发冲突，是否允许选择性 rebase？ | Headless Core Proof 为保证确定性，暂用“任何 revision 变化均冲突并封存 Take”的严格规则；该规则不能替代用户产品中的冲突分类，仍会影响录音 Journal、Take 提交体验与公开 Contract。 | Sequence / Take Contract 进入用户产品实现前单独设计评审（新内核设计 §25）。 | 待设计评审 |
 | Provider 输入 Artifact 的字节级 Schema 校验由谁解析与验证？ | 已批准的 `lmdj.capability.v2` 能用显式端口确定声明的 Schema 身份，但 `ArtifactRef` 不携带 Schema provenance，AttemptStore 也没有输入 Artifact resolver，不能把端口身份校验伪装成字节级 Schema 校验。 | 首个需要解析结构化 Artifact bytes 的正式 Capability 实现前单独设计 resolver 与验证器边界。 | 待架构设计 |
+| Build Manifest 是随归档内嵌，还是与归档并列 detached 发布？ | `create_zip()` 已固定时间戳、排序与文件模式以求可复现，但 `build-manifest.json` 在归档内且含 `build_time`，于是同一源码每次打包的 ZIP 字节都不同，"下载方自行重建并比对 hash"无法实现。`build_time` 是 version-management.md §4 明文要求的，所以这不是实现缺陷，而是两个都正确的要求装进了同一个容器。选项：manifest 改为 detached 并列发布；或从归档内剔除可变字段并保留 detached 副本；或接受不可复现并明确放弃该验证手段。这会改变已发布产物的形态。 | 首个对外分发（进入 `dev` 及以上 Channel）之前的发行治理评审。 | 待决 |
+| `native-test-host` 属于产品面组件还是验收工具？ | 它已进入 `products/lmdj/assembly.json` 的 `hosts` 并随每个分发包发出，但 module id 含 "test"。`CLAUDE.md` 对 `apps/` 的定义是 "thin Core Hosts"，没有"测试 Host"这一类，二者必有一错。选项：承认它是产品面组件并改名 `native-host`（Module 重命名 + Assembly 变更，属 breaking）；或从 Assembly 与发行包移出、退回 `tests/`。同时缺一条"什么可以进分发包"的书面准则——包内容已从 CLI + MCP + 库扩张到含该 Host，全程无准则约束。 | 下一次触及 Assembly 成员或发行包清单的 Task 之前。 | 待决 |
 
 ## Stage 1 首条切片
 
