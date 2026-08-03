@@ -9,6 +9,10 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
 
+if(EMSCRIPTEN)
+  add_compile_options(-pthread)
+endif()
+
 include(CTest)
 include(cmake/LmdjDependencies.cmake)
 include(cmake/LmdjWarnings.cmake)
@@ -44,6 +48,7 @@ endif()
 
 add_subdirectory(apps/core-cli)
 add_subdirectory(apps/native-test-host)
+add_subdirectory(apps/web-runtime-host)
 add_subdirectory(products/lmdj)
 
 lmdj_add_test(
@@ -87,6 +92,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_attempt_isolation_tests
     lmdj_provider_spec_regression_tests
     lmdj_application_facade_tests
+    lmdj_web_control_runtime_tests
     lmdj_assembly_loader_tests
     lmdj_application_c_api_tests
     lmdj_application_dynamic_load_tests

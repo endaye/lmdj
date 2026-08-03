@@ -108,6 +108,56 @@ test("audio.suspend is idempotent only in audio-suspended", () => {
   }
 });
 
+test("audio.suspend seals an active Take before audio-suspended is observable", () => {
+  const observations = [];
+  let machine;
+  machine = createHostStateMachine({
+    initialState: "running",
+    sealTake: (take) => {
+      observations.push({
+        step: "seal",
+        state: machine.state,
+        activeTake: machine.activeTake,
+        take,
+      });
+    },
+    notify: (event, payload) => {
+      observations.push({
+        step: `notify:${event}`,
+        state: machine.state,
+        activeTake: machine.activeTake,
+        payload,
+      });
+    },
+  });
+  machine.beginTake("take-suspend");
+
+  assert.deepEqual(machine.handleOperation("audio.suspend"), {
+    state: "audio-suspended",
+    changed: true,
+  });
+
+  assert.equal(machine.activeTake, null);
+  assert.deepEqual(observations[0], {
+    step: "seal",
+    state: "running",
+    activeTake: null,
+    take: {
+      take_id: "take-suspend",
+      outcome: "capture_incomplete",
+      reason: "audio.suspend",
+    },
+  });
+  assert.deepEqual(
+    observations.slice(1).map(({ step }) => step),
+    ["notify:capture.sealed", "notify:host.state_changed"],
+  );
+  for (const observation of observations.slice(1)) {
+    assert.equal(observation.state, "audio-suspended", observation.step);
+    assert.equal(observation.activeTake, null, observation.step);
+  }
+});
+
 test("Trigger and take.begin are accepted only while running", () => {
   for (const state of HOST_STATES) {
     const machine = createHostStateMachine({ initialState: state });

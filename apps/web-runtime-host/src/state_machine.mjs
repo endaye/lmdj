@@ -113,7 +113,10 @@ export function createHostStateMachine({
         nextState === "interrupted" ||
         nextState === "failed" ||
         nextState === "closed";
-      const sealed = requiresCleanup ? sealActiveTake(reason) : null;
+      const requiresCaptureSeal =
+        requiresCleanup ||
+        (previousState === "running" && nextState === "audio-suspended");
+      const sealed = requiresCaptureSeal ? sealActiveTake(reason) : null;
       if (requiresCleanup) {
         cleanup(nextState, { reason });
       }

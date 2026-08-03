@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <memory>
 #include <optional>
@@ -30,6 +31,13 @@ struct RuntimeSnapshotRequest {
   std::filesystem::path project_path;
   foundation::PatternId pattern_id;
   std::optional<audio::RuntimePreparationLimits> limits = std::nullopt;
+};
+
+struct InitialProjectRequest {
+  std::filesystem::path project_path;
+  foundation::ProjectId project_id;
+  std::uint16_t bpm;
+  domain::Pattern initial_pattern;
 };
 
 class RuntimeProjectWriterLease final {
@@ -75,6 +83,8 @@ class Application {
   prepare_runtime_snapshot(const RuntimeSnapshotRequest& request);
   foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(
       const std::filesystem::path& project_path);
+  foundation::Result<domain::ProjectState> create_initial_project(
+      const InitialProjectRequest& request);
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(
       const ArtifactBytesImportRequest& request);
   foundation::Result<void> append_realtime_take_events(

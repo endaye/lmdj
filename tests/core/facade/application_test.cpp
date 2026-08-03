@@ -31,6 +31,7 @@ namespace {
 using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::facade::ArtifactBytesImportRequest;
+using lmdj::facade::InitialProjectRequest;
 using lmdj::facade::RuntimeProjectWriterLease;
 using lmdj::facade::RuntimeSnapshotRequest;
 using lmdj::audio::EnqueueResult;
@@ -41,6 +42,7 @@ using lmdj::audio::RuntimePreparationLimits;
 using lmdj::audio::TriggerEvent;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::PadSlotId;
+using lmdj::domain::Pattern;
 using lmdj::domain::RawTakeEvent;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -793,6 +795,78 @@ void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
               .at(0)
               .at("events")
               .size() == 1);
+}
+
+void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
+  TempDirectory temp;
+  const auto project = temp.path() / "initial-pattern.lmdj";
+  Application application(config(temp.path()));
+  const Pattern initial_pattern{
+      PatternId{std::string(kPatternId)},
+      1,
+      {},
+  };
+
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{std::string(kProjectId)},
+          120,
+          initial_pattern,
+      });
+
+  LMDJ_CHECK(created.has_value());
+  LMDJ_CHECK(created.value().revision == 0);
+  LMDJ_CHECK(created.value().patterns.size() == 1);
+  LMDJ_CHECK(
+      created.value().patterns.at(initial_pattern.id) == initial_pattern);
+  const auto inspected = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", project.generic_string()},
+      });
+  check_success(inspected, 0);
+  LMDJ_CHECK(
+      inspected.at("result").at("project").at("project_id") ==
+      kProjectId);
+  LMDJ_CHECK(
+      inspected.at("result")
+          .at("project")
+          .at("patterns")
+          .at(kPatternId)
+          .at("events")
+          .empty());
+
+  const auto duplicate = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{uuid(999)},
+          90,
+          Pattern{PatternId{uuid(998)}, 1, {}},
+      });
+  LMDJ_CHECK(!duplicate.has_value());
+  LMDJ_CHECK(duplicate.error().code == ErrorCode::duplicate_id);
+  const auto unchanged = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", project.generic_string()},
+      });
+  check_success(unchanged, 0);
+  LMDJ_CHECK(
+      unchanged.at("result").at("project").at("project_id") ==
+      kProjectId);
+
+  const auto invalid_project = temp.path() / "invalid-initial.lmdj";
+  const auto invalid = application.create_initial_project(
+      InitialProjectRequest{
+          invalid_project,
+          ProjectId{uuid(997)},
+          120,
+          Pattern{PatternId{uuid(996)}, 3, {}},
+      });
+  LMDJ_CHECK(!invalid.has_value());
+  LMDJ_CHECK(invalid.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!std::filesystem::exists(invalid_project));
 }
 
 void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
@@ -1561,6 +1635,7 @@ int main() {
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();
+    test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank();
     test_take_commit_uses_captured_revision_and_replays_after_cleanup();

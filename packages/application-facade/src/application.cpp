@@ -935,6 +935,38 @@ bool valid_host_project_path(const std::filesystem::path& path) {
          path.lexically_normal() == path;
 }
 
+foundation::Result<void> validate_initial_pattern(
+    const domain::Pattern& pattern) {
+  if (!domain::is_valid_uuid(pattern.id.value())) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "pattern id must be a lowercase UUID",
+        });
+  }
+  if (pattern.bars != 1 && pattern.bars != 2 &&
+      pattern.bars != 4 && pattern.bars != 8) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "pattern bars must be one of 1, 2, 4, or 8",
+        });
+  }
+  const auto step_limit =
+      static_cast<std::uint32_t>(pattern.bars) * 16U;
+  for (const auto& event : pattern.events) {
+    if (!domain::is_valid_slot(event.slot) || event.velocity < 1 ||
+        event.velocity > 127 || event.step >= step_limit) {
+      return foundation::Result<void>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "pattern event is invalid",
+          });
+    }
+  }
+  return foundation::Result<void>::success();
+}
+
 }  // namespace
 
 struct RuntimeProjectWriterLease::Impl {
@@ -1080,6 +1112,35 @@ struct Application::Impl {
             error.code,
             "project writer could not be acquired",
         });
+  }
+
+  foundation::Result<domain::ProjectState> create_initial_project(
+      const InitialProjectRequest& request) {
+    if (!valid_host_project_path(request.project_path)) {
+      return foundation::Result<domain::ProjectState>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "initial project request is invalid",
+          });
+    }
+    auto initial = domain::create_project(request.project_id, request.bpm);
+    if (!initial.has_value()) {
+      return initial;
+    }
+    const auto pattern_validation =
+        validate_initial_pattern(request.initial_pattern);
+    if (!pattern_validation.has_value()) {
+      return foundation::Result<domain::ProjectState>::failure(
+          pattern_validation.error());
+    }
+    initial.value().patterns.emplace(
+        request.initial_pattern.id, request.initial_pattern);
+    const auto created = projects.create(request.project_path, initial.value());
+    if (!created.has_value()) {
+      return foundation::Result<domain::ProjectState>::failure(
+          created.error());
+    }
+    return initial;
   }
 
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(
@@ -1975,6 +2036,20 @@ Application::acquire_project_writer(
                 std::move(acquired.value()))});
   } catch (...) {
     return foundation::Result<RuntimeProjectWriterLease>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<domain::ProjectState>
+Application::create_initial_project(
+    const InitialProjectRequest& request) {
+  try {
+    return impl_->create_initial_project(request);
+  } catch (...) {
+    return foundation::Result<domain::ProjectState>::failure(
         Error{
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
