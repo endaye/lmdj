@@ -306,4 +306,193 @@ assert foundation_manifest == {
     "dependencies": {},
 }
 
-print("schema contract checks: 8 passed")
+# --------------------------------------------------------------------------
+# Execute the Contracts.
+#
+# Everything above inspects the schema documents. Nothing above ever ran a
+# schema against an instance, so a Contract could disagree with the code that
+# implements it and no gate would notice. The checks below close that.
+# --------------------------------------------------------------------------
+
+import json_schema  # noqa: E402  (sibling module in tests/conformance)
+
+_DELETE = object()
+
+capability_v2_defs = capability_v2["$defs"]
+
+
+def as_root(definition: dict) -> dict:
+    """Make a $defs entry validatable on its own, keeping local references."""
+    return {**definition, "$defs": capability_v2_defs}
+
+
+def mutated(base: dict, pointer: list, value) -> dict:
+    """Deep-copy base and set one location, or delete it when value is _DELETE."""
+    clone = json.loads(json.dumps(base))
+    node = clone
+    for token in pointer[:-1]:
+        node = node[token]
+    if value is _DELETE:
+        del node[pointer[-1]]
+    else:
+        node[pointer[-1]] = value
+    return clone
+
+
+request_schema = as_root(capability_v2_defs["capability_request"])
+candidate_schema = as_root(capability_v2_defs["candidate"])
+
+# The valid fixture must satisfy every part of the Contract it claims.
+json_schema.check(
+    valid_descriptor, capability_v2, "capability-v2-valid descriptor"
+)
+json_schema.check(
+    valid_capability_v2["request"], request_schema, "capability-v2-valid request"
+)
+json_schema.check(
+    valid_capability_v2["candidate"],
+    candidate_schema,
+    "capability-v2-valid candidate",
+)
+
+# Every shipped Product artifact must satisfy its Contract.
+json_schema.check(
+    load_json(repo_root / "products" / "lmdj" / "assembly.json"),
+    assembly,
+    "products/lmdj/assembly.json",
+)
+json_schema.check(
+    load_json(repo_root / "products" / "lmdj" / "version.json"),
+    product_version,
+    "products/lmdj/version.json",
+)
+module_manifests = sorted(repo_root.glob("*/*/module.json"))
+assert len(module_manifests) >= 11, module_manifests
+for manifest_path in module_manifests:
+    json_schema.check(
+        load_json(manifest_path),
+        module,
+        manifest_path.relative_to(repo_root).as_posix(),
+    )
+
+# One named negative case per rule. The bundled invalid fixture mixes several
+# violations into one document, so no test could show which rule fired.
+negative_cases = [
+    (
+        "descriptor: max_count below one",
+        capability_v2,
+        mutated(valid_descriptor, ["input_artifacts", 0, "max_count"], 0),
+        "below minimum 1",
+    ),
+    (
+        "descriptor: no output ports",
+        capability_v2,
+        mutated(valid_descriptor, ["output_artifacts"], []),
+        "fewer than minItems 1",
+    ),
+    (
+        "descriptor: port name is not lowercase",
+        capability_v2,
+        mutated(valid_descriptor, ["input_artifacts", 0, "name"], "Source"),
+        "does not match pattern",
+    ),
+    (
+        "descriptor: port drops a required field",
+        capability_v2,
+        mutated(valid_descriptor, ["input_artifacts", 0, "required"], _DELETE),
+        "missing required property 'required'",
+    ),
+    (
+        "descriptor: port carries an unknown field",
+        capability_v2,
+        mutated(valid_descriptor, ["input_artifacts", 0, "compat"], True),
+        "'compat' is not allowed",
+    ),
+    (
+        "descriptor: contract identifies v1",
+        capability_v2,
+        mutated(valid_descriptor, ["contract"], "lmdj.capability.v1"),
+        "expected const",
+    ),
+    (
+        "request: binding omits its port",
+        request_schema,
+        mutated(valid_capability_v2["request"], ["inputs", 0, "port"], _DELETE),
+        "missing required property 'port'",
+    ),
+    (
+        "request: binding port is not lowercase",
+        request_schema,
+        mutated(valid_capability_v2["request"], ["inputs", 0, "port"], "Source"),
+        "does not match pattern",
+    ),
+    (
+        "request: binding uses a compatibility shorthand",
+        request_schema,
+        mutated(
+            valid_capability_v2["request"], ["inputs", 0, "compatibility"], "x"
+        ),
+        "'compatibility' is not allowed",
+    ),
+    (
+        "request: artifact hash is not a sha256",
+        request_schema,
+        mutated(
+            valid_capability_v2["request"],
+            ["inputs", 0, "artifact", "sha256"],
+            "abc",
+        ),
+        "does not match pattern",
+    ),
+    (
+        "candidate: output binding omits its port",
+        candidate_schema,
+        mutated(valid_capability_v2["candidate"], ["outputs", 0, "port"], _DELETE),
+        "missing required property 'port'",
+    ),
+]
+
+for case_name, case_schema, case_instance, expected in negative_cases:
+    violations = json_schema.validate(case_instance, case_schema)
+    assert violations, f"{case_name}: expected the Contract to reject this"
+    assert any(expected in violation for violation in violations), (
+        case_name,
+        expected,
+        violations,
+    )
+
+# The retained bundled fixture must still be rejected as a whole.
+assert json_schema.validate(invalid_descriptor, capability_v2)
+assert json_schema.validate(invalid_capability_v2["request"], request_schema)
+
+# Rules the Contract cannot express, recorded so they are not assumed covered.
+#
+# Unique port names: `uniqueItems` only rejects identical port objects, so two
+# ports sharing a name but differing elsewhere satisfy the Schema. Enforced by
+# `valid_ports()` in packages/provider-sdk/src/registry.cpp.
+duplicate_named_ports = mutated(
+    valid_descriptor,
+    ["input_artifacts", 1, "name"],
+    valid_descriptor["input_artifacts"][0]["name"],
+)
+assert json_schema.validate(duplicate_named_ports, capability_v2) == [], (
+    "expected the Schema to accept duplicate port names; if this now fails the "
+    "Schema gained the rule and registry.cpp is no longer its only enforcer"
+)
+
+# Candidate outputs satisfying the descriptor's required ports is a
+# cross-document rule; the candidate Schema alone cannot see the descriptor.
+# Enforced by `valid_output_bindings()` in provider-sdk/src/attempt_store.cpp.
+assert (
+    json_schema.validate(
+        mutated(valid_capability_v2["candidate"], ["outputs"], []),
+        candidate_schema,
+    )
+    == []
+), "expected the Schema to accept empty candidate outputs"
+
+print(
+    "schema contract checks: 8 passed, "
+    f"{len(negative_cases)} negative cases, "
+    f"{len(module_manifests) + 2} Product artifacts validated"
+)

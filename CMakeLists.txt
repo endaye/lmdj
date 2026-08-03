@@ -221,6 +221,14 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME contract.schema_validator
+  TIER unit
+  COMMAND
+    "${Python3_EXECUTABLE}" tests/conformance/json_schema_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)
+
+lmdj_add_test(
   NAME contract.schemas
   TIER contract
   COMMAND
