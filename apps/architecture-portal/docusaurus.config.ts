@@ -5,6 +5,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 const config: Config = {
   title: 'LMDJ Product Manual',
   tagline: 'LMDJ 产品、架构与交付说明书',
+  favicon: 'img/logo.svg',
   url: 'https://lmdj.netlify.app',
   baseUrl: '/',
   future: {v4: true},
@@ -33,6 +34,8 @@ const config: Config = {
       logo: {alt: 'LMDJ', src: 'img/logo.svg'},
       items: [
         {type: 'docSidebar', sidebarId: 'manual', label: '产品说明书', position: 'left'},
+        {to: '/product/capability-map', label: '能力地图', position: 'left'},
+        {to: '/assembly/lmdj', label: '当前装配', position: 'left'},
         {type: 'docsVersionDropdown', position: 'right'},
         {href: 'https://github.com/endaye/lmdj', label: 'Repository', position: 'right'},
       ],

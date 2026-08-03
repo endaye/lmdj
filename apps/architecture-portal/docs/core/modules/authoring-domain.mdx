@@ -1,0 +1,32 @@
+---
+title: Authoring Domain
+area: core
+status: implemented
+owners: [core, product]
+source_paths: [packages/authoring-domain, tests/core/domain]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="modules" id="authoring-domain" />
+
+## 1. 目的与非职责
+维护 Project Truth、序列与命令语义；不执行存储、Cook、音频或 Provider 调用。
+## 2. 当前实现状态
+Project 与 Command Handler 已实现并覆盖模型序列测试。
+## 3. 所有权与依赖
+Core/产品共同维护语义，仅依赖 Foundation。
+## 4. 架构与数据流
+命令进入 Handler，经验证后产生新的权威创作状态；Pattern event 引用 Pad Slot。
+## 5. API 与 Contract 边界
+领域对象遵循 active Project Contract，不接受 Host 私有 JSON 形状。
+## 6. 状态、错误与生命周期
+Project Truth 可演进但不包含 Runtime Snapshot、Provider 选择或 Attempt failure。
+## 7. 产品使用方
+Project I/O、Project Cooker 和 Application Facade 使用领域模型。
+## 8. 测试与证据
+`project_test.cpp`、`command_handler_test.cpp`、`model_sequence_test.cpp`。
+## 9. 限制与下一门禁
+产品 UI 操作映射与协同编辑不在当前实现声明内。
+## 10. 版本身份
+版本和依赖由模块清单及 Assembly Lock 生成。

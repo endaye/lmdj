@@ -1,0 +1,32 @@
+---
+title: Foundation
+area: core
+status: implemented
+owners: [core]
+source_paths: [packages/foundation, tests/core/foundation]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="modules" id="foundation" />
+
+## 1. 目的与非职责
+提供 Artifact、JSON 和共享基础类型；不拥有 Project 规则、持久化或产品接线。
+## 2. 当前实现状态
+active source 已实现，Artifact 与 JSON 有单元测试。
+## 3. 所有权与依赖
+Core 团队所有；模块清单无下游依赖。
+## 4. 架构与数据流
+字节/文件输入被包装为 Artifact，JSON 在 Contract 边界解析并返回 typed result。
+## 5. API 与 Artifact 边界
+公开头文件位于 `packages/foundation/include`，实现不暴露可变产品对象。
+## 6. 状态、错误与生命周期
+错误采用 typed error；Artifact 身份在跨模块传递期间保持稳定。
+## 7. 产品使用方
+其余六个 Core Module 直接或间接依赖 Foundation。
+## 8. 测试与证据
+`artifact_test.cpp` 与 `json_test.cpp` 覆盖核心行为。
+## 9. 限制与下一门禁
+不声明平台 I/O 或实时线程安全；这些责任属于消费模块。
+## 10. 版本身份
+版本从 `packages/foundation/module.json` 与 Assembly Lock 自动显示。

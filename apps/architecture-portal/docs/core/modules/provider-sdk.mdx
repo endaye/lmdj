@@ -1,0 +1,32 @@
+---
+title: Provider SDK
+area: core
+status: implemented
+owners: [core, providers]
+source_paths: [packages/provider-sdk, tests/core/provider]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="modules" id="provider-sdk" />
+
+## 1. 目的与非职责
+定义 Capability、Registry、Attempt Store 与 Provider 边界；不选择产品 Provider。
+## 2. 当前实现状态
+Capability v2 路径、Registry 与 Attempt isolation 已实现。
+## 3. 所有权与依赖
+仅依赖 Foundation；Provider 实现位于 `providers/`。
+## 4. 架构与数据流
+Host/Workspace 选择 → Registry 解析能力 → Attempt → Artifact 输入/输出 sink → 结果。
+## 5. API 与 Artifact 边界
+Provider 从不接收可变 Project 或 bundle path，只接收 Artifact。
+## 6. 状态、错误与生命周期
+Provider failure 属于 Attempt；取消、失败和输出身份均有隔离边界。
+## 7. 产品使用方
+Application Facade 和两个本地 Proof Provider 使用 SDK。
+## 8. 测试与证据
+Conformance、attempt isolation 与 spec regression 测试。
+## 9. 限制与下一门禁
+生产/云 Provider、鉴权和隐私政策尚未实现。
+## 10. 版本身份
+SDK 与 Provider 各自独立 SemVer，由 Assembly Lock 组合。
