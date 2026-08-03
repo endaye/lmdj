@@ -12,12 +12,13 @@
     "validate:docs": "node scripts/validate-docs.mjs",
     "diagrams": "node scripts/render-diagrams.mjs",
     "validate:diagrams": "node scripts/validate-diagrams.mjs",
+    "check:build": "node scripts/check-build.mjs",
     "build": "npm run facts && docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
-    "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run typecheck && npm run build"
+    "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run typecheck && npm run build && npm run check:build"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",
@@ -34,6 +35,7 @@
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",
     "@types/react": "19.2.18",
+    "cheerio": "1.2.0",
     "glob": "13.0.6",
     "gray-matter": "4.0.3",
     "typescript": "6.0.2",
