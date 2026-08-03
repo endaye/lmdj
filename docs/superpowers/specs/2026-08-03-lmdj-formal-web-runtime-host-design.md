@@ -2,7 +2,9 @@
 
 Date: 2026-08-03
 
-Status: Approved for implementation planning
+Status: Approved for implementation planning. Three blocking items recorded in
+[Design Review Outcome](#design-review-outcome-2026-08-03) must be resolved
+inside the implementation plan before Task 1 begins.
 
 Approvals:
 
@@ -10,6 +12,23 @@ Approvals:
 - Runtime and persistence design approved by the product owner on 2026-08-03.
 - Host, input, and lifecycle design approved by the product owner on 2026-08-03.
 - Acceptance and version design approved by the product owner on 2026-08-03.
+
+## Design Review Outcome (2026-08-03)
+
+A design review against the active Core source recorded three blocking items.
+They do not reopen the approved architecture. Each names an assumption this
+document previously asserted without evidence, and each is now resolved in the
+section listed below with a concrete answer required in the implementation plan
+before Task 1.
+
+| ID | Blocking item | Resolved in |
+| --- | --- | --- |
+| B1 | The Core accepts only 48 kHz PCM, but a browser `AudioContext` rate is not guaranteed to be 48 kHz | §6.5 |
+| B2 | Project I/O depends on POSIX primitives that OPFS does not provide | §6.3 |
+| B3 | The `-pthread` plus Wasm Workers plus WasmFS flag combination is unproven, and the pinned emsdk identity is unverified | §7.1 |
+
+Non-blocking review corrections are applied in §7.3, §9.2, §9.4, §10, §11, §12,
+§13.2, §14, §15, §16.3, §18, §19, §20, and §21.
 
 ## 1. Purpose
 
@@ -188,10 +207,48 @@ The platform boundary owns:
 - removal and deterministic directory iteration;
 - typed platform error conversion.
 
+#### Primitive availability (B2)
+
+The active Native implementation in `packages/project-io/src/` depends on
+`fsync`, `flock`, `openat` with `O_DIRECTORY`, `O_NOFOLLOW`, `O_EXCL`, `rename`,
+`fcntl`, and explicit symlink rejection. OPFS provides none of these under those
+names, and some have no equivalent at all.
+
+A rule that any missing OPFS primitive fails the Web build is therefore not
+implementable as written: it would fail the build for primitives whose absence
+is harmless, and it would hide the one case that genuinely has no substitute.
+Each platform obligation is instead classified, and the classification is part
+of this design:
+
+| Obligation | Class | Web realization |
+| --- | --- | --- |
+| complete read and complete write | native | `FileSystemSyncAccessHandle` read/write |
+| durable file flush | native | `FileSystemSyncAccessHandle.flush()` |
+| exclusive file creation | native | create-if-absent plus handle acquisition |
+| deterministic directory iteration | native | directory handle iteration ordered by the platform |
+| removal | native | `removeEntry` |
+| typed platform error conversion | native | typed mapping from `DOMException` |
+| opening paths without following symlinks | vacuous | OPFS has no symlinks; the obligation is satisfied by absence, which is stronger than the Native guarantee, not weaker |
+| bundle writer acquisition and release | equivalent | the exclusive `createSyncAccessHandle` lock replaces `flock`; §8.2 owns the lease protocol |
+| atomic publication and rename | equivalent | `FileSystemFileHandle.move()`; the plan must record the observed overwrite and atomicity semantics per target browser, because `move()` is not specified as POSIX `rename` |
+| directory durability barrier | absent | no OPFS equivalent exists |
+
+The rules that follow from the classification are:
+
+- A `native` or `equivalent` obligation that cannot be realized fails the Web
+  build or Web Proof. It is never downgraded to a weaker guarantee.
+- A `vacuous` obligation is recorded as satisfied by absence, with the reason,
+  so that it is never mistaken for an unimplemented gap.
+- An `absent` obligation requires a written recovery argument in the
+  implementation plan explaining why the Project Store and Take Journal
+  transaction and checkpoint rules still hold without it. If no such argument
+  can be written, the affected transaction step is redesigned rather than
+  relaxed.
+
 The Web platform must pass the same Project Store, Take Journal, replay,
-recovery, and fault-conformance cases that are meaningful in the browser. A
-missing OPFS primitive must fail the Web build or Web Proof; it must not weaken
-the common transaction semantics.
+recovery, and fault-conformance cases that are meaningful in the browser. The
+common transaction semantics above the platform boundary are never weakened to
+accommodate a browser limitation.
 
 ### 6.4 Audio Runtime Web adapter
 
@@ -208,6 +265,42 @@ The Web adapter creates the Wasm AudioWorklet and binds it to the existing
 It may not allocate, lock, access files, call the Facade, perform network I/O,
 log, throw, or wait.
 
+### 6.5 Sample rate and render quantum (B1)
+
+The active Core is fixed at 48 kHz and does not resample anywhere.
+`packages/project-cooker/src/wav_reader.cpp` rejects any WAV whose sample rate
+is not `48'000`, and `packages/audio-runtime/src/prepared_sample_bank.cpp`
+rejects any Runtime Snapshot PCM whose `sample_rate` is not `48'000`.
+
+A browser `AudioContext` does not guarantee that rate. Its rate follows the
+output device unless a rate is requested at construction, and the observed
+device rate differs across macOS, iPadOS, and Bluetooth output. A Prepared
+Sample Bank cooked at 48 kHz and rendered by a Worklet running at another rate
+is a pitch and duration defect, not a tolerance.
+
+This is a locked constraint, not an implementation detail. The implementation
+plan must select exactly one resolution and record it here:
+
+- **A. Host-forced rate.** The Host constructs the context as
+  `new AudioContext({ sampleRate: 48000 })` and the browser resamples to the
+  device. The plan must state the typed Host failure used when a target browser
+  refuses the requested rate or silently returns a different
+  `AudioContext.sampleRate`, and the Host must verify the realized rate before
+  leaving `core-ready`.
+- **B. Runtime resampling.** Audio Runtime gains rate conversion. This changes
+  the §18 justification for Audio Runtime `0.4.0` from a compatible adapter
+  addition into a behavior change, and requires native tests at non-48 kHz
+  rates.
+
+Resolution A is the smaller change and is the expected choice, but it is not
+settled by this document, because it can fail on a required physical target and
+that failure is exactly what §17 defers.
+
+Independently of that choice, the Host runs at the AudioWorklet render quantum
+of 128 frames. `RealtimeEngine::render(left, right, frames)` must be proven
+correct at `frames == 128` by a native test before the Web Proof depends on it.
+The Formal Native Host does not exercise that block size.
+
 ## 7. Toolchain and Execution Topology
 
 ### 7.1 Toolchain identity
@@ -215,6 +308,13 @@ log, throw, or wait.
 The Web build pins emsdk tag `6.0.5` at Git revision
 `dfb9d1a46c3bb8f52e1e6324be23123b9d73c190`. Build and CI must reject a
 different active `emcc` version.
+
+Neither the tag nor the revision is verified by this document (B3). The first
+implementation Task must confirm against the upstream emsdk repository that the
+tag exists, that the revision exists, and that the tag resolves to that
+revision. If either is wrong, the corrected identity is recorded here before any
+Web source is written. A Web build against an unpinned or guessed toolchain is
+not a Stage 6 artifact.
 
 The minimum required build features are:
 
@@ -226,10 +326,36 @@ The minimum required build features are:
 -sALLOW_MEMORY_GROWTH=0
 ```
 
+This flag set is provisional. It loads three threading mechanisms into one
+program: POSIX threads for the Control Worker, Wasm Workers for the Audio
+Worklet, and the WasmFS OPFS backend's own proxying. §5.1 deliberately writes
+"Dedicated Control Worker / pthread" because that layer is not yet decided.
+
+Task 0 of the implementation plan is therefore a throwaway toolchain spike. It
+produces no product source and must prove all of:
+
+1. a program built with the exact flag set above loads and runs;
+2. shared `WebAssembly.Memory` written by the Control Worker is observed by the
+   Audio Worklet;
+3. WasmFS OPFS synchronous file access succeeds from the thread that owns the
+   Application Facade;
+4. no main-thread proxying call deadlocks while the Worklet is rendering.
+
+§5.1 and §7.1 are locked only after Task 0 passes. If the spike fails, the
+Control Worker thread model returns to architecture review; it is not patched
+inside a later Task.
+
 The implementation plan must select and test a fixed initial/maximum shared
 memory value. Memory cannot grow after the AudioWorklet shares it. An
 out-of-memory condition is a typed Host failure, not permission to change the
 memory topology at runtime.
+
+Because the heap is fixed, the plan must publish a memory budget computed from
+the known Core constants rather than a guessed total. It accounts at minimum for
+`kRealtimeBankCapacity` Prepared Sample Banks of decoded mono float data across
+64 Pad Slots, `kRealtimeQueueCapacity` and `kRealtimeCaptureCapacity` ring
+storage, `kRealtimeVoiceCapacity` voice state, Asset import staging buffers, and
+WasmFS OPFS buffers.
 
 ### 7.2 Worker ownership
 
@@ -248,8 +374,12 @@ The Host server must return at least:
 Cross-Origin-Opener-Policy: same-origin
 Cross-Origin-Embedder-Policy: require-corp
 Content-Type: application/wasm
-Cache-Control: no-store
 ```
+
+`Cache-Control: no-store` applies to `index.html` and the Product/Host manifest
+only. Content-hashed assets are served immutable, which is what makes the §15
+asset-hash inventory meaningful; a blanket `no-store` would contradict that
+inventory and slow the Proof without adding a guarantee.
 
 The Host must verify `crossOriginIsolated === true` and the availability of
 SharedArrayBuffer before loading the shared-memory runtime.
@@ -326,8 +456,16 @@ DOM or Web MIDI event
   → Host adapter validates slot and velocity
   → bounded Shared Event Queue
   → RealtimeEngine consumes on next render quantum
-  → exactly one Voice starts or a typed enqueue result is reported
+  → exactly one Voice starts, a Voice is stolen, or a typed enqueue result
+    is reported
 ```
+
+An accepted Trigger has three possible runtime outcomes, not two. `EnqueueResult`
+already enumerates the rejection cases, including `queue_full` and
+`bank_transition`. Voice stealing is different: it happens inside `render()`
+once `kRealtimeVoiceCapacity` active voices are exceeded, and it has no
+`EnqueueResult` value. The Host must expose voice stealing as counted telemetry
+so that a stolen voice is never silently counted as a normal Voice start.
 
 The Host acknowledges acceptance into the Event Queue. It does not report an
 audible onset as a browser fact. Physical onset remains external evidence.
@@ -346,7 +484,7 @@ take.begin through Facade
   → render callback records actual Voice starts
   → Control Worker drains bounded batches
   → Facade appends realtime Take events
-  → record.stop disarms and drains the final batch
+  → take.stop disarms and drains the final batch
   → explicit take.commit writes Pattern and Project revision
 ```
 
@@ -361,6 +499,18 @@ All input adapters call one Host route:
 ```text
 trigger(slot: 0..63, velocity: 1..127)
 ```
+
+Two Pad addressing forms exist, and the Host protocol must not blur them.
+Project Truth addresses a Pad as `bank` plus `pad`; the domain model is four
+Banks of sixteen Pad Slots
+(`packages/authoring-domain/include/lmdj/domain/project.hpp`). The realtime
+`TriggerEvent` carries one flat `slot` in `0..63`.
+
+Facade-delegated operations such as `pad.assign` use the Project Truth form.
+`trigger` uses the flat realtime form. The flattening happens once, in the Host
+adapter, immediately before enqueue, and it must use the same ordering the Core
+applies when building a Prepared Sample Bank. No other layer converts between
+the two forms, and neither form is translated inside the Facade.
 
 ### 10.1 Pointer
 
@@ -403,10 +553,21 @@ cold
   → audio-suspended
   → running
   → interrupted
+  → recovering
   → audio-suspended
   → running
-  → failed | closed
+  → closed
+
+any state → failed
 ```
+
+`failed` is reachable from every state, including `preflight`, `storage-ready`,
+and `core-ready`. A preflight rejection is a `failed` runtime instance, not an
+undrawn edge.
+
+`recovering` is a distinct state because the §11.2 recovery test has three
+conditions and takes observable time. The Host is not `running` while those
+conditions are still being satisfied.
 
 ### 11.1 State rules
 
@@ -415,8 +576,9 @@ cold
 - `audio-suspended` means the Core and Project may be ready while user
   activation is still required.
 - `interrupted` stops new Trigger acceptance immediately.
-- a lifecycle recovery requires at most one explicit activation before
-  returning to `running`;
+- each interruption requires at most one explicit activation before returning
+  to `running`; a session may be interrupted and reactivated any number of
+  times, which is the normal iPadOS Safari pattern;
 - `failed` is terminal for the current runtime instance;
 - Project data remains reopenable after a runtime failure unless Project I/O
   itself reports corruption.
@@ -446,17 +608,25 @@ Every request contains:
 
 ```json
 {
+  "protocol_version": 1,
   "request_id": "lowercase-uuid",
   "operation": "host.operation",
   "payload": {}
 }
 ```
 
-Every response echoes `request_id` and uses the existing success/error envelope
-shape. Notifications have an `event` field and no `request_id`.
+Every response echoes `request_id` and `protocol_version` and uses the existing
+success/error envelope shape. Notifications have an `event` field and no
+`request_id`.
 
 The transport rejects malformed UTF-8, duplicate request IDs, unknown fields,
 oversized messages, unsupported operations, and wrong-state operations.
+
+Strict unknown-field rejection removes forward compatibility, so
+`protocol_version` is mandatory rather than decorative. It is the only
+sanctioned way for a later Host to detect an incompatible peer instead of
+failing on an unrecognized field. A mismatched `protocol_version` is a typed
+rejection, never a best-effort parse.
 
 ### 12.2 Required operations
 
@@ -473,12 +643,17 @@ snapshot.reload
 audio.activate
 audio.suspend
 trigger
-record.begin
-record.stop
-record.commit
+take.begin
+take.stop
+take.commit
 take.recoverable.list
 host.close
 ```
+
+Capture operations use the `take.` prefix throughout this document and in the
+implemented Host. `record.begin`, `record.stop`, and `record.commit` are not
+alternative spellings; they do not exist. Like the §15 command names, these
+operation names are part of the Stage 6 operator contract.
 
 Project mutations and queries are delegated to the Application Facade. Host
 operations only orchestrate browser/runtime state.
@@ -496,6 +671,12 @@ midi.disconnected
 runtime.warning
 capture.sealed
 ```
+
+`snapshot.published` carries the Runtime generation identifier, and
+`host.status` reports both the current control-side generation and the
+generation last acknowledged by the Worklet. Without an exposed generation the
+§11.2 recovery test cannot be evaluated by the Host or asserted by the Browser
+Proof.
 
 Notifications are diagnostic facts, not persisted Project events.
 
@@ -532,6 +713,9 @@ remote Project, or Bluetooth.
 | Worklet `processorerror` | enter `failed`; seal active Take |
 | Capture Ring drop | seal active Take as `capture_incomplete` |
 | Worker crash | stop accepting input; restart requires Project reopen |
+| Worker unresponsive | typed request timeout, then `failed`; a Worker blocked on an OPFS handle held elsewhere does not crash and must not hang the Host indefinitely |
+| shared heap exhausted | typed Host failure; never grow memory and never silently shrink the published Bank |
+| realized `AudioContext.sampleRate` is not 48 kHz | fail before leaving `core-ready`; never render a 48 kHz Bank at another rate |
 | audio suspended/interrupted | enter `interrupted`; require activation |
 | MIDI permission denied | Pointer/Keyboard remain available; report denial |
 | MIDI disconnected | clear MIDI state; do not synthesize Note Off events |
@@ -549,7 +733,14 @@ remote Project, or Bluetooth.
 - The diagnostic server exposes only the built distribution root and rejects
   path traversal, directory listing, range abuse, and unknown methods.
 - Content Security Policy must permit only the exact worker/worklet/WASM assets
-  required by the built Host; no remote script dependency is allowed.
+  required by the built Host; no remote script dependency is allowed. The policy
+  is recorded as concrete directives rather than as an intent, because a policy
+  that reads correctly as prose can still break the runtime: WebAssembly
+  compilation requires `'wasm-unsafe-eval'` in `script-src` on Chromium, and the
+  Emscripten worker and worklet bootstrap may require `worker-src 'self' blob:`.
+  The implementation plan records the exact directive set, and the Browser Proof
+  runs with that policy applied. A Host that passes only when CSP is absent is
+  not a passing Host.
 
 ## 15. Build and Distribution
 
@@ -581,6 +772,10 @@ WebAssembly module
 Product/Host manifest
 asset hashes
 ```
+
+The cross-origin-isolated server named in §6.1 is a development and Proof tool.
+It is not part of the distribution. The inventory check asserts its absence as
+positively as it asserts the presence of the runtime assets.
 
 No source tree, absolute local path, development dependency, source map,
 unapproved fixture audio, or secret is shipped in the canary package.
@@ -626,13 +821,25 @@ Chromium executes the complete automated journey:
 4. import deterministic WAV fixtures and assign Pads;
 5. Cook and publish a Runtime Snapshot;
 6. activate audio through a real page gesture;
-7. dispatch 500 valid Trigger events and prove zero lost/duplicate runtime
-   acknowledgements;
-8. begin a Take, dispatch `20+1` events, stop, drain, and commit;
+7. dispatch 500 valid Trigger events and prove zero lost and zero duplicate
+   runtime acknowledgements;
+8. begin a Take, dispatch 20 Trigger events inside the Take and one further
+   Trigger after `take.stop`, drain, and commit, proving the committed Take
+   contains exactly the 20 in-Take events;
 9. inspect the committed Project revision and Pattern;
 10. restart page and Worker, reopen the same OPFS Project, and republish;
 11. exercise suspend/recovery and failure injection;
 12. close cleanly with zero runtime queue/capture drops.
+
+Step 7 is bounded by Core constants and must be written against them rather than
+against a round number. `kRealtimeQueueCapacity` is 1024, so 500 undrained
+events fit. `kRealtimeVoiceCapacity` is 128, so the fixture length and dispatch
+pacing must keep concurrent voices below that bound; otherwise the run steals
+voices and the zero-loss assertion becomes timing-dependent rather than
+deterministic. The Proof records the fixture duration and pacing it relies on,
+and asserts zero `bank_transition` results and zero voice-steal events for the
+duration of the step. If a Core constant later changes, this step is re-derived
+from the new constants, not re-tuned until it passes.
 
 Playwright WebKit executes capability, OPFS, restart, protocol, and lifecycle
 smoke wherever the automation runtime exposes the required APIs. WebKit
@@ -690,6 +897,11 @@ This deferral means:
 | Contracts | current | unchanged | no wire Contract change |
 | Providers | current | unchanged | no Provider behavior change |
 
+The Audio Runtime reason above assumes B1 resolves to option A, the Host-forced
+48 kHz `AudioContext`. If B1 resolves to option B, Audio Runtime gains
+resampling behavior, and its reason — and possibly its target — must be
+restated here before the implementation plan is approved.
+
 The implementation plan must update every exact dependency and regenerate
 `products/lmdj/assembly.lock.json` through `scripts/version.py lock`.
 
@@ -713,13 +925,26 @@ Rollback reuses immutable Product Build `1.0.11.0`; tags are never moved.
 
 OPFS data written by `1.0.12.0` must remain valid `lmdj.project.v1` Project
 Truth. If the Host is withdrawn, users can reopen the same Project through a
-compatible later Host. Stage 6 may add storage metadata outside Project Truth,
-but it must be versioned, disposable, and reconstructible.
+compatible later Host.
+
+That guarantee is about format, not reachability. Product Build `1.0.11.0` has
+no Web Host, and §4 excludes export, so a rollback leaves origin-private Project
+data in place with no Host able to open it until a later Web Host ships. For a
+canary diagnostic Host this is accepted, and it is stated here rather than left
+implied by the format guarantee. If the implementation plan chooses to remove
+the hazard, a bundle download is the only sanctioned escape hatch: the Host
+hands the already serialized bundle bytes to the browser as a download and still
+does not parse them, so the §6.1 boundary holds.
+
+Stage 6 may add storage metadata outside Project Truth, but it must be
+versioned, disposable, and reconstructible.
 
 ## 20. Definition of Stage 6 Complete
 
 Stage 6 implementation is complete only when all of these are true:
 
+- B1, B2, and B3 are resolved, and the resolutions are recorded in §6.5, §6.3,
+  and §7.1 of this document rather than only in the plan;
 - the approved implementation plan is fully executed;
 - the Formal Web Runtime Host exists in active `apps/` source;
 - the Product Assembly lists exact target identities for `1.0.12.0`;
@@ -750,6 +975,13 @@ physical-pass, `beta`, or `stable` claim.
 - Version identities are exact and independent.
 - Automated WebKit is not represented as physical Safari.
 - Deferred physical evidence is not represented as passed.
+- The 48 kHz Core constraint is stated and resolved rather than assumed away
+  (B1).
+- Absent OPFS primitives are classified rather than promised (B2).
+- The Emscripten flag combination and emsdk identity are marked provisional
+  until Task 0 (B3).
+- Capture operations use one `take.` naming, and Pad addressing distinguishes
+  Project Truth `bank`/`pad` from the flat realtime slot.
 
 ## 22. References
 
