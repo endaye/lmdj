@@ -8,12 +8,14 @@
   "scripts": {
     "docusaurus": "docusaurus",
     "start": "docusaurus start",
-    "build": "docusaurus build",
+    "facts": "node scripts/generate-facts.mjs",
+    "validate:docs": "node scripts/validate-docs.mjs",
+    "build": "npm run facts && docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
-    "check": "npm test && npm run typecheck && npm run build"
+    "check": "npm test && npm run validate:docs && npm run typecheck && npm run build"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",
@@ -30,7 +32,10 @@
     "@docusaurus/tsconfig": "3.10.2",
     "@docusaurus/types": "3.10.2",
     "@types/react": "19.2.18",
-    "typescript": "6.0.2"
+    "glob": "13.0.6",
+    "gray-matter": "4.0.3",
+    "typescript": "6.0.2",
+    "yaml": "2.9.0"
   },
   "browserslist": {
     "production": [
