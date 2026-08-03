@@ -132,7 +132,7 @@ ProviderRegistration registration(
     std::optional<ModelIdentity> model_identity = std::nullopt) {
   return ProviderRegistration{
       std::make_shared<ProofProvider>(std::move(id)),
-      "1.0.1",
+      "1.0.2",
       std::string(64, 'a'),
       std::move(model_identity),
       {proof_capability()},
@@ -172,7 +172,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       declared_model_identity(assembly.at("providers").at(1));
   return CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.12.0",
+      "1.0.13.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       components(assembly, "modules"),
       components(assembly, "hosts"),
@@ -180,7 +180,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       {
           CompiledProvider{
               "local.proof.success",
-              "1.0.1",
+              "1.0.2",
               [success_model] {
                 return registration(
                     "local.proof.success", success_model);
@@ -189,7 +189,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
           },
           CompiledProvider{
               "local.proof.failure",
-              "1.0.1",
+              "1.0.2",
               [failure_model] {
                 return registration(
                     "local.proof.failure", failure_model);

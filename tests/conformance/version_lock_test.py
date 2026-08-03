@@ -105,7 +105,7 @@ def product_assembly_source_identity(root: Path = REPO_ROOT) -> str:
         format_name="product-assembly-source-package",
         identity={
             "product_id": "lmdj",
-            "product_version": "1.0.12.0",
+            "product_version": "1.0.13.0",
         },
         paths=[
             root / "products/lmdj/CMakeLists.txt",
@@ -183,7 +183,7 @@ assert lock["product"] == assembly["product"]
 assert lock["assembly_sha256"] == sha256(ASSEMBLY_PATH)
 assert lock["product_assembly"] == {
     "id": "lmdj",
-    "version": "1.0.12.0",
+    "version": "1.0.13.0",
     "sha256": product_assembly_source_identity(),
 }
 
@@ -268,7 +268,7 @@ with tempfile.TemporaryDirectory(prefix="lmdj-version-lock-") as temp:
         "providers": [
             {
                 "id": "local.proof.success",
-                "version": "1.0.1",
+                "version": "1.0.2",
                 "capabilities": [],
                 "model_identity": None,
             }

@@ -11,6 +11,7 @@
 #include <optional>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
@@ -26,6 +27,20 @@
 
 namespace lmdj::project_io {
 namespace {
+// Every JSON document below arrives from disk and is therefore external input.
+// Deep nesting is a stack-overflow vector that a try/catch cannot contain, so
+// parse through the depth-bounded Foundation entry point. These paths already
+// convert exceptions into typed failures, so signalling by exception keeps the
+// existing error contract intact.
+template <typename Source>
+nlohmann::json parse_bounded_or_throw(Source&& source) {
+  auto parsed = foundation::parse_bounded_json(std::forward<Source>(source));
+  if (!parsed.has_value()) {
+    throw std::runtime_error(
+        "JSON is malformed or exceeds the maximum container depth");
+  }
+  return std::move(*parsed);
+}
 
 using foundation::Error;
 using foundation::ErrorCode;
@@ -157,7 +172,7 @@ foundation::Result<nlohmann::json> read_json(
   }
   try {
     return foundation::Result<nlohmann::json>::success(
-        nlohmann::json::parse(bytes.value()));
+        parse_bounded_or_throw(std::string_view(bytes.value())));
   } catch (const std::exception& exception) {
     return foundation::Result<nlohmann::json>::failure(
         invalid_project(
@@ -1354,7 +1369,7 @@ foundation::Result<bool> matching_active_journal(
         invalid_project("active take journal could not be read", path));
   }
   try {
-    const auto header = nlohmann::json::parse(
+    const auto header = parse_bounded_or_throw(
         bytes.value().substr(0, line_end));
     TakeJournal journal{platform};
     const auto take =

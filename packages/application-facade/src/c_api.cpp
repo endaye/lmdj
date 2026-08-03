@@ -19,6 +19,7 @@
 #include <lmdj/facade/application.hpp>
 #include <lmdj/facade/assembly_loader.hpp>
 #include <lmdj/foundation/error.hpp>
+#include <lmdj/foundation/json.hpp>
 
 #if defined(LMDJ_C_API_TESTING)
 #include "testing_hooks.hpp"
@@ -57,7 +58,6 @@ namespace {
 
 constexpr std::size_t kMaximumConfigBytes = 64U * 1024U;
 constexpr std::size_t kMaximumRequestBytes = 16U * 1024U * 1024U;
-constexpr int kMaximumJsonContainerDepth = 64;
 
 struct EngineState {
   explicit EngineState(std::shared_ptr<lmdj::facade::Application> value)
@@ -71,74 +71,6 @@ std::mutex engines_mutex;
 std::unordered_map<lmdj_engine*, std::shared_ptr<EngineState>> live_engines;
 std::vector<std::unique_ptr<lmdj_engine>> tombstone_shells;
 std::uint64_t engine_sequence = 0;
-
-bool valid_utf8(std::string_view value) {
-  std::size_t offset = 0;
-  while (offset < value.size()) {
-    const auto first = static_cast<unsigned char>(value[offset]);
-    if (first <= 0x7fU) {
-      ++offset;
-      continue;
-    }
-    std::size_t length = 0;
-    std::uint32_t code_point = 0;
-    if (first >= 0xc2U && first <= 0xdfU) {
-      length = 2;
-      code_point = first & 0x1fU;
-    } else if (first >= 0xe0U && first <= 0xefU) {
-      length = 3;
-      code_point = first & 0x0fU;
-    } else if (first >= 0xf0U && first <= 0xf4U) {
-      length = 4;
-      code_point = first & 0x07U;
-    } else {
-      return false;
-    }
-    if (offset + length > value.size()) {
-      return false;
-    }
-    for (std::size_t index = 1; index < length; ++index) {
-      const auto byte =
-          static_cast<unsigned char>(value[offset + index]);
-      if ((byte & 0xc0U) != 0x80U) {
-        return false;
-      }
-      code_point = (code_point << 6U) | (byte & 0x3fU);
-    }
-    if ((length == 3 && code_point < 0x800U) ||
-        (length == 4 && code_point < 0x10000U) ||
-        code_point > 0x10ffffU ||
-        (code_point >= 0xd800U && code_point <= 0xdfffU)) {
-      return false;
-    }
-    offset += length;
-  }
-  return true;
-}
-
-std::optional<nlohmann::json> parse_bounded_json(
-    std::string_view bytes) {
-  bool depth_exceeded = false;
-  const auto callback = [&depth_exceeded](
-                            int depth,
-                            nlohmann::json::parse_event_t event,
-                            nlohmann::json&) {
-    const bool container_start =
-        event == nlohmann::json::parse_event_t::object_start ||
-        event == nlohmann::json::parse_event_t::array_start;
-    if (container_start && depth >= kMaximumJsonContainerDepth) {
-      depth_exceeded = true;
-      return false;
-    }
-    return true;
-  };
-  auto value = nlohmann::json::parse(
-      bytes.begin(), bytes.end(), callback, false);
-  if (depth_exceeded || value.is_discarded()) {
-    return std::nullopt;
-  }
-  return value;
-}
 
 std::optional<std::string_view> bounded_c_string(
     const char* value,
@@ -225,10 +157,10 @@ int invoke_application(
 #endif
     const auto bytes =
         bounded_c_string(request_json, kMaximumRequestBytes);
-    if (!bytes.has_value() || !valid_utf8(*bytes)) {
+    if (!bytes.has_value() || !lmdj::foundation::valid_utf8(*bytes)) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
-    auto request = parse_bounded_json(*bytes);
+    auto request = lmdj::foundation::parse_bounded_json(*bytes);
     if (!request.has_value() || !request->is_object()) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
@@ -272,10 +204,10 @@ int lmdj_engine_create(
   try {
     const auto bytes =
         bounded_c_string(config_json, kMaximumConfigBytes);
-    if (!bytes.has_value() || !valid_utf8(*bytes)) {
+    if (!bytes.has_value() || !lmdj::foundation::valid_utf8(*bytes)) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
-    auto config = parse_bounded_json(*bytes);
+    auto config = lmdj::foundation::parse_bounded_json(*bytes);
     if (!config.has_value() || !config->is_object() ||
         config->empty() || config->size() > 2 ||
         !config->contains("workspace_root") ||
@@ -287,7 +219,7 @@ int lmdj_engine_create(
     }
     const auto workspace_value =
         config->at("workspace_root").get<std::string>();
-    if (!valid_utf8(workspace_value) ||
+    if (!lmdj::foundation::valid_utf8(workspace_value) ||
         workspace_value.find('\0') != std::string::npos) {
       return LMDJ_STATUS_INVALID_ARGUMENT;
     }
@@ -302,7 +234,7 @@ int lmdj_engine_create(
     if (config->contains("assembly_path")) {
       const auto assembly_value =
           config->at("assembly_path").get<std::string>();
-      if (!valid_utf8(assembly_value) ||
+      if (!lmdj::foundation::valid_utf8(assembly_value) ||
           assembly_value.find('\0') != std::string::npos) {
         return LMDJ_STATUS_INVALID_ARGUMENT;
       }
