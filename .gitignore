@@ -63,6 +63,11 @@ __pycache__/
 # Headless Core build outputs
 build/core/
 
+# Formal Web toolchain and browser proof outputs
+build/web/
+tests/platform/web/test-results/
+tests/platform/web/playwright-report/
+
 # Reference demo run artifacts (pipeline output packages)
 references/demos/lmdj-song-pipeline/output/
 
