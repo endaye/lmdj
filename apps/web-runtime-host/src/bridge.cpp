@@ -39,6 +39,7 @@ enum class RequestState : std::uint8_t {
   queued,
   processing,
   awaiting_response,
+  response_consumed,
 };
 
 enum class MessageState : std::uint8_t { free, reserved, ready };
@@ -137,6 +138,11 @@ struct ControlBridge::Impl {
     bool has_request_id = false;
   };
 
+  struct ProcessReservations {
+    MessageSlot* response = nullptr;
+    MessageSlot* notification = nullptr;
+  };
+
   Impl(ControlRuntime& owned_runtime, BridgeHooks owned_hooks)
       : runtime(owned_runtime), hooks(owned_hooks) {
     for (auto& request : requests) {
@@ -153,34 +159,38 @@ struct ControlBridge::Impl {
     static_cast<Impl*>(argument)->fail_control();
   }
 
-  bool publish_internal_fallback_noexcept(RequestSlot& request) noexcept {
+  static void release_thunk(void* argument) noexcept {
+    auto& request = *static_cast<RequestSlot*>(argument);
+    request.owner->release_consumed_request(request);
+  }
+
+  bool publish_internal_fallback_noexcept(
+      RequestSlot& request, MessageSlot& message) noexcept {
     static constexpr std::string_view prefix =
         R"({"error":{"code":"INTERNAL_ERROR","details":{},"message":"unexpected Web Host failure"},"ok":false,"protocol_version":1,"request_id":")";
     static constexpr std::string_view suffix = R"("})";
-    if (!request.has_request_id || request.request_id.size() != 36) {
-      return false;
-    }
-    auto* message = reserve_message();
-    if (message == nullptr) {
+    if (!request.has_request_id || request.request_id.size() != 36 ||
+        message.state.load(std::memory_order_acquire) !=
+            MessageState::reserved) {
       return false;
     }
     const auto total =
         prefix.size() + request.request_id.size() + suffix.size();
-    std::memcpy(message->bytes.data(), prefix.data(), prefix.size());
+    std::memcpy(message.bytes.data(), prefix.data(), prefix.size());
     std::memcpy(
-        message->bytes.data() + prefix.size(),
+        message.bytes.data() + prefix.size(),
         request.request_id.data(),
         request.request_id.size());
     std::memcpy(
-        message->bytes.data() + prefix.size() + request.request_id.size(),
+        message.bytes.data() + prefix.size() + request.request_id.size(),
         suffix.data(),
         suffix.size());
-    message->size = total;
-    message->origin = &request;
-    message->releases_request = true;
+    message.size = total;
+    message.origin = &request;
+    message.releases_request = true;
     request.state.store(
         RequestState::awaiting_response, std::memory_order_release);
-    message->state.store(MessageState::ready, std::memory_order_release);
+    message.state.store(MessageState::ready, std::memory_order_release);
     return true;
   }
 
@@ -211,7 +221,6 @@ struct ControlBridge::Impl {
     try {
       const auto encoded = foundation::canonical_json(value);
       if (encoded.size() > message.bytes.size()) {
-        message.state.store(MessageState::free, std::memory_order_release);
         fail_control();
         return false;
       }
@@ -222,7 +231,6 @@ struct ControlBridge::Impl {
       message.state.store(MessageState::ready, std::memory_order_release);
       return true;
     } catch (...) {
-      message.state.store(MessageState::free, std::memory_order_release);
       fail_control();
       return false;
     }
@@ -237,6 +245,20 @@ struct ControlBridge::Impl {
     request.envelope_size = 0;
     request.sidecar_size = 0;
     request.state.store(RequestState::free, std::memory_order_release);
+  }
+
+  void release_consumed_request(RequestSlot& request) noexcept {
+    if (hooks.on_control == nullptr ||
+        !hooks.on_control(hooks.context)) {
+      failed.store(true, std::memory_order_release);
+      return;
+    }
+    if (request.state.load(std::memory_order_acquire) !=
+        RequestState::response_consumed) {
+      fail_control();
+      return;
+    }
+    release_request(request);
   }
 
   void fail_control() noexcept {
@@ -266,15 +288,39 @@ struct ControlBridge::Impl {
   }
 
   void process(RequestSlot& request) noexcept {
+    ProcessReservations reservations;
     try {
-      process_throwing(request);
+      process_throwing(request, reservations);
     } catch (...) {
+      if (reservations.notification != nullptr &&
+          reservations.notification->state.load(std::memory_order_acquire) ==
+              MessageState::reserved) {
+        reservations.notification->state.store(
+            MessageState::free, std::memory_order_release);
+      }
       fail_control();
-      publish_internal_fallback_noexcept(request);
+      if (reservations.response != nullptr &&
+          publish_internal_fallback_noexcept(
+              request, *reservations.response)) {
+        return;
+      }
+      if (reservations.response != nullptr &&
+          reservations.response->state.load(std::memory_order_acquire) ==
+              MessageState::reserved) {
+        reservations.response->state.store(
+            MessageState::free, std::memory_order_release);
+      }
+      const auto state = request.state.load(std::memory_order_acquire);
+      if (state != RequestState::free &&
+          state != RequestState::awaiting_response &&
+          state != RequestState::response_consumed) {
+        release_request(request);
+      }
     }
   }
 
-  void process_throwing(RequestSlot& request) {
+  void process_throwing(
+      RequestSlot& request, ProcessReservations& reservations) {
     auto expected = RequestState::queued;
     if (!request.state.compare_exchange_strong(
             expected,
@@ -292,6 +338,7 @@ struct ControlBridge::Impl {
     }
 
     auto* response_slot = reserve_message();
+    reservations.response = response_slot;
     if (response_slot == nullptr) {
       release_request(request);
       fail_control();
@@ -338,6 +385,7 @@ struct ControlBridge::Impl {
         if (operation == "project.open" ||
             operation == "snapshot.reload") {
           notification_slot = reserve_message();
+          reservations.notification = notification_slot;
           if (notification_slot == nullptr) {
             response_slot->state.store(
                 MessageState::free, std::memory_order_release);
@@ -371,6 +419,7 @@ struct ControlBridge::Impl {
             notification_slot->state.store(
                 MessageState::free, std::memory_order_release);
             notification_slot = nullptr;
+            reservations.notification = nullptr;
           } else {
             notification = Json{
                 {"protocol_version", 1},
@@ -398,6 +447,11 @@ struct ControlBridge::Impl {
     } else {
       bridge_response["error"] = response.at("error");
     }
+#if !defined(__EMSCRIPTEN__)
+    if (hooks.before_response_serialization != nullptr) {
+      hooks.before_response_serialization(hooks.context);
+    }
+#endif
     request.state.store(
         RequestState::awaiting_response, std::memory_order_release);
     if (!publish_message(*response_slot, bridge_response, &request, true)) {
@@ -405,7 +459,10 @@ struct ControlBridge::Impl {
         notification_slot->state.store(
             MessageState::free, std::memory_order_release);
       }
-      if (!publish_internal_fallback_noexcept(request)) {
+      reservations.notification = nullptr;
+      if (!publish_internal_fallback_noexcept(request, *response_slot)) {
+        response_slot->state.store(
+            MessageState::free, std::memory_order_release);
         release_request(request);
       }
       return;
@@ -413,6 +470,9 @@ struct ControlBridge::Impl {
     if (notification_slot != nullptr &&
         !publish_message(
             *notification_slot, notification, nullptr, false)) {
+      notification_slot->state.store(
+          MessageState::free, std::memory_order_release);
+      reservations.notification = nullptr;
       return;
     }
   }
@@ -508,7 +568,19 @@ BridgePollStatus ControlBridge::poll(
   const auto releases_request = selected->releases_request;
   selected->state.store(MessageState::free, std::memory_order_release);
   if (releases_request && origin != nullptr) {
-    impl_->release_request(*origin);
+    auto expected = RequestState::awaiting_response;
+    if (!origin->state.compare_exchange_strong(
+            expected,
+            RequestState::response_consumed,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire) ||
+        impl_->hooks.schedule == nullptr ||
+        !impl_->hooks.schedule(
+            impl_->hooks.context,
+            &ControlBridge::Impl::release_thunk,
+            origin)) {
+      impl_->failed.store(true, std::memory_order_release);
+    }
   }
   return BridgePollStatus::message;
 }

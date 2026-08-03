@@ -30,6 +30,11 @@
 
 #include "tests/core/support/test.hpp"
 
+namespace lmdj::web_host::detail {
+nlohmann::json normalize_error_for_testing(
+    const foundation::Error& error);
+}
+
 namespace {
 
 using Json = nlohmann::json;
@@ -317,14 +322,41 @@ struct FakeCoordinator final {
     auto& self = *static_cast<FakeCoordinator*>(context);
     self.called = true;
     self.timeout_ms = timeout_ms;
-    if (self.driver != nullptr) {
+    if (self.engine != nullptr) {
+      self.observed_capture_idle =
+          self.engine->capture_telemetry().state == CaptureState::idle;
+      self.observed_engine_running =
+          self.engine->telemetry().state ==
+          lmdj::audio::RealtimeState::running;
+    }
+    if (!self.workspace_root.empty() && !self.expected_take_id.empty()) {
+      try {
+        const auto sealed_directory =
+            self.workspace_root / "projects" /
+            (std::string(kProjectId) + ".lmdj") / "recovery/sealed";
+        const auto prefix = self.expected_take_id + "-capture_incomplete";
+        for (const auto& entry :
+             std::filesystem::directory_iterator(sealed_directory)) {
+          if (entry.is_regular_file() &&
+              entry.path().filename().string().starts_with(prefix)) {
+            self.observed_take_sealed = true;
+            break;
+          }
+        }
+      } catch (...) {
+        self.observed_take_sealed = false;
+      }
+    }
+    if (self.succeed && self.driver != nullptr) {
       self.driver->stop();
     }
     if (!self.succeed) {
       return lmdj::foundation::Result<void>::failure(
           lmdj::foundation::Error{
               lmdj::foundation::ErrorCode::internal_error,
-              "native coordinator failure must not escape",
+              self.timeout
+                  ? "native coordinator timeout must not escape"
+                  : "native coordinator failure must not escape",
           });
     }
     return lmdj::foundation::Result<void>::success();
@@ -335,8 +367,15 @@ struct FakeCoordinator final {
   }
 
   ContinuousAudioDriver* driver = nullptr;
+  RealtimeEngine* engine = nullptr;
+  std::filesystem::path workspace_root;
+  std::string expected_take_id;
   bool succeed = true;
+  bool timeout = false;
   bool called = false;
+  bool observed_capture_idle = false;
+  bool observed_engine_running = false;
+  bool observed_take_sealed = false;
   std::uint32_t timeout_ms = 0;
 };
 
@@ -423,6 +462,56 @@ Json inspect_project(
             (std::string(project_id) + ".lmdj"))
                .generic_string()},
       });
+}
+
+void test_facade_error_details_follow_an_explicit_safe_schema() {
+  static constexpr std::string_view kDetailMarker =
+      "detail leaked /private/project-storage";
+  static constexpr std::string_view kPathMarker =
+      "/private/project-storage/manifest.json";
+  static constexpr std::string_view kSystemMarker =
+      "system error 13 from native storage";
+  static constexpr std::string_view kStorageMarker =
+      "backend_volume_offline";
+  const auto normalized =
+      lmdj::web_host::detail::normalize_error_for_testing(
+      lmdj::foundation::Error{
+          lmdj::foundation::ErrorCode::revision_conflict,
+          "source message must not escape",
+          {
+              {"actual_revision", std::uint64_t{9}},
+              {"expected_revision", std::uint64_t{8}},
+              {"detail", kDetailMarker},
+              {"path", kPathMarker},
+              {"system_error", kSystemMarker},
+              {"storage_condition", kStorageMarker},
+              {"nested",
+               {
+                   {"captured_revision", std::uint64_t{7}},
+                   {"detail", kDetailMarker},
+               }},
+              {"history",
+               Json::array(
+                   {{{"expected_revision", std::uint64_t{6}},
+                     {"path", kPathMarker}},
+                    kSystemMarker})},
+          },
+      });
+  const auto& error = check_error(normalized, "REVISION_CONFLICT");
+  LMDJ_CHECK(error.at("message") == "project revision conflict");
+  LMDJ_CHECK((
+      error.at("details") ==
+      Json{
+          {"actual_revision", 9},
+          {"expected_revision", 8},
+          {"nested", {{"captured_revision", 7}}},
+          {"history", Json::array({{{"expected_revision", 6}}})},
+      }));
+  const auto encoded = normalized.dump();
+  for (const auto marker :
+       {kDetailMarker, kPathMarker, kSystemMarker, kStorageMarker}) {
+    LMDJ_CHECK(encoded.find(marker) == std::string::npos);
+  }
 }
 
 void test_exact_payloads_and_facade_owned_project_journey() {
@@ -651,6 +740,71 @@ void test_exact_payloads_and_facade_owned_project_journey() {
       {}));
 }
 
+void test_take_stop_drains_the_final_disarm_quantum() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(8);
+  import_and_assign(*runtime, wav, kAssetId, 751, 752, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "take.begin",
+      {{"take_id", kTakeId}, {"expected_revision", 2}},
+      {}));
+  audio.render_one();
+  LMDJ_CHECK(
+      runtime->engine().capture_telemetry().state == CaptureState::active);
+
+  // This event is admitted before the stop boundary but is not rendered until
+  // capture has entered disarm_pending.
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 101}}, {}));
+  LMDJ_CHECK(
+      runtime->engine().capture_telemetry().captured_events == 0);
+  Json stopped;
+  std::thread stop_thread([&] {
+    stopped = runtime->dispatch("take.stop", Json::object(), {});
+  });
+  wait_until([&] {
+    return runtime->engine().capture_telemetry().state ==
+           CaptureState::disarm_pending;
+  });
+  audio.render_one();
+  stop_thread.join();
+  LMDJ_CHECK((
+      check_exact_success(
+          stopped, {"take_id", "project_revision", "status"}) ==
+      Json{{"take_id", kTakeId},
+           {"project_revision", 2},
+           {"status", "committable"}}));
+
+  // Events admitted after take.stop returns still play, but capture is idle
+  // and they must not enter the committable Take.
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 102}}, {}));
+  audio.render_one();
+  check_success(runtime->dispatch(
+      "take.commit",
+      {
+          {"command_id", uuid(753)},
+          {"expected_revision", 2},
+          {"pattern", empty_pattern(kCommittedPatternId)},
+      },
+      {}));
+
+  const auto inspected = inspect_project(temp.path(), kProjectId);
+  const auto& events = inspected.at("result")
+                           .at("project")
+                           .at("takes")
+                           .at(kTakeId)
+                           .at("events");
+  LMDJ_CHECK(events.size() == 1);
+  LMDJ_CHECK(events.at(0).at("velocity") == 101);
+}
+
 void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
   {
     TempDirectory temp;
@@ -668,6 +822,9 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
         lmdj::audio::RealtimeState::running);
+    check_error(
+        runtime->dispatch("host.status", Json::object(), {}),
+        "HOST_STATE_INVALID");
   }
 
   {
@@ -691,6 +848,9 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
         lmdj::audio::RealtimeState::running);
+    check_error(
+        runtime->dispatch("host.status", Json::object(), {}),
+        "HOST_STATE_INVALID");
   }
 
   {
@@ -741,6 +901,119 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     LMDJ_CHECK(
         candidates.at("candidates").at(0).at("reason") ==
         "capture_incomplete");
+  }
+}
+
+void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
+  {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(2'400);
+    import_and_assign(*runtime, wav, kAssetId, 831, 832, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    ContinuousAudioDriver driver(runtime->engine());
+    FakeCoordinator coordinator;
+    coordinator.driver = &driver;
+    coordinator.engine = &runtime->engine();
+    coordinator.workspace_root = temp.path();
+    coordinator.expected_take_id = kTakeId;
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+            .has_value());
+    check_success(runtime->dispatch(
+        "take.begin",
+        {{"take_id", kTakeId}, {"expected_revision", 2}},
+        {}));
+    wait_until([&] {
+      return runtime->engine().capture_telemetry().state ==
+             CaptureState::active;
+    });
+    check_success(runtime->dispatch(
+        "trigger", {{"slot", 0}, {"velocity", 103}}, {}));
+    wait_until([&] {
+      return runtime->engine().capture_telemetry().captured_events == 1;
+    });
+
+    const auto& closed = check_exact_success(
+        runtime->dispatch("host.close", Json::object(), {}),
+        {"state", "sealed_take_id"});
+    LMDJ_CHECK((
+        closed ==
+        Json{{"state", "closed"}, {"sealed_take_id", kTakeId}}));
+    LMDJ_CHECK(coordinator.called);
+    LMDJ_CHECK(coordinator.timeout_ms == 10'000);
+    LMDJ_CHECK(coordinator.observed_capture_idle);
+    LMDJ_CHECK(coordinator.observed_take_sealed);
+    LMDJ_CHECK(coordinator.observed_engine_running);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().state ==
+        lmdj::audio::RealtimeState::stopped);
+    check_error(
+        runtime->dispatch("host.status", Json::object(), {}),
+        "HOST_STATE_INVALID");
+
+    runtime.reset();
+    auto reopened = make_runtime(temp.path());
+    check_success(reopened->dispatch(
+        "project.open",
+        {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
+        {}));
+    const auto& recoverable = check_exact_success(
+        reopened->dispatch("take.recoverable.list", Json::object(), {}),
+        {"candidates", "project_revision"});
+    LMDJ_CHECK(recoverable.at("candidates").size() == 1);
+    LMDJ_CHECK(
+        recoverable.at("candidates").at(0).at("take_id") == kTakeId);
+  }
+
+  {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(2'400);
+    import_and_assign(*runtime, wav, kAssetId, 841, 842, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    ContinuousAudioDriver driver(runtime->engine());
+    FakeCoordinator timeout;
+    timeout.succeed = false;
+    timeout.timeout = true;
+    timeout.engine = &runtime->engine();
+    timeout.workspace_root = temp.path();
+    timeout.expected_take_id = kTakeId;
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, timeout.seam())
+            .has_value());
+    check_success(runtime->dispatch(
+        "take.begin",
+        {{"take_id", kTakeId}, {"expected_revision", 2}},
+        {}));
+    wait_until([&] {
+      return runtime->engine().capture_telemetry().state ==
+             CaptureState::active;
+    });
+
+    check_error(
+        runtime->dispatch("host.close", Json::object(), {}),
+        "INTERNAL_ERROR");
+    LMDJ_CHECK(timeout.called);
+    LMDJ_CHECK(timeout.timeout_ms == 10'000);
+    LMDJ_CHECK(timeout.observed_capture_idle);
+    LMDJ_CHECK(timeout.observed_take_sealed);
+    LMDJ_CHECK(timeout.observed_engine_running);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().state ==
+        lmdj::audio::RealtimeState::running);
+    check_error(
+        runtime->dispatch("host.status", Json::object(), {}),
+        "HOST_STATE_INVALID");
+    check_error(
+        runtime->dispatch("audio.activate", Json::object(), {}),
+        "HOST_STATE_INVALID");
   }
 }
 
@@ -840,12 +1113,20 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
   const auto large_project = uuid(2);
   const auto large_pattern = uuid(20);
   const auto large_asset = uuid(102);
-  check_success(runtime->dispatch(
-      "project.create",
-      create_payload(large_project, large_pattern),
-      {}));
-  const auto large = mono_pcm16_wav(2);
-  import_and_assign(*runtime, large, large_asset, 503, 504, 0);
+  {
+    // Author the oversized Project through a separate Facade/Runtime. The
+    // Runtime under test must switch directly from the live small Project via
+    // project.open; no same-Runtime project.create may pre-disable its Bank.
+    auto builder = make_runtime(temp.path());
+    check_success(builder->dispatch(
+        "project.create",
+        create_payload(large_project, large_pattern),
+        {}));
+    const auto large = mono_pcm16_wav(2);
+    import_and_assign(*builder, large, large_asset, 503, 504, 0);
+    check_success(builder->dispatch("host.close", Json::object(), {}));
+  }
+  LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 1);
   const auto& opened = check_exact_success(
       runtime->dispatch(
           "project.open",
@@ -868,7 +1149,18 @@ void test_oversized_project_switch_is_inspectable_but_not_runnable() {
           {"observed", 2},
           {"limit", 1},
       }));
-  check_success(runtime->dispatch("project.inspect", Json::object(), {}));
+  const auto& inspected = check_exact_success(
+      runtime->dispatch("project.inspect", Json::object(), {}),
+      {"project", "project_revision"});
+  LMDJ_CHECK(
+      inspected.at("project").at("project_id") == large_project);
+  const auto& status = check_exact_success(
+      runtime->dispatch("host.status", Json::object(), {}),
+      {"state", "project_id", "project_revision", "pattern_id",
+       "runtime_ready", "control_generation", "acknowledged_generation",
+       "limits", "audio_state", "capture_state"});
+  LMDJ_CHECK(status.at("project_id") == large_project);
+  LMDJ_CHECK(status.at("runtime_ready") == false);
   check_error(
       runtime->dispatch("audio.activate", Json::object(), {}),
       "HOST_STATE_INVALID");
@@ -901,6 +1193,13 @@ struct FakeProxy final {
     return static_cast<FakeProxy*>(context)->is_control;
   }
 
+  static void before_response_serialization(void* context) {
+    auto& self = *static_cast<FakeProxy*>(context);
+    if (std::exchange(self.throw_before_response_serialization, false)) {
+      throw std::runtime_error("injected response serialization failure");
+    }
+  }
+
   void pump_one() {
     LMDJ_CHECK(!tasks.empty());
     auto task = tasks.front();
@@ -912,6 +1211,7 @@ struct FakeProxy final {
 
   bool accept = true;
   bool is_control = false;
+  bool throw_before_response_serialization = false;
   std::vector<Task> tasks;
 };
 
@@ -938,7 +1238,11 @@ std::unique_ptr<ControlBridge> make_bridge(
     FakeProxy& proxy) {
   return std::make_unique<ControlBridge>(
       runtime,
-      BridgeHooks{&proxy, FakeProxy::schedule, FakeProxy::on_control});
+      BridgeHooks{
+          &proxy,
+          FakeProxy::schedule,
+          FakeProxy::on_control,
+          FakeProxy::before_response_serialization});
 }
 
 Json poll_message(ControlBridge& bridge) {
@@ -1011,13 +1315,21 @@ void test_bridge_rejects_duplicates_until_response_consumption() {
   LMDJ_CHECK(
       bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
   proxy.pump_one();
-  proxy.pump_one();
   LMDJ_CHECK(poll_message(*bridge).at("ok") == true);
+
+  // B was admitted before A completed. Consuming A's response must enqueue
+  // A's ID release behind B on the same Control FIFO, so B still observes the
+  // duplicate even though the browser-main thread has already polled A.
+  proxy.pump_one();
   const auto duplicate = poll_message(*bridge);
   LMDJ_CHECK(duplicate.at("ok") == false);
   LMDJ_CHECK(
       duplicate.at("error").at("code") == "HOST_PROTOCOL_MISMATCH");
 
+  // Once the FIFO reaches both completed-request release tasks, the same ID
+  // can be admitted again without an unbounded tombstone set.
+  proxy.pump_one();
+  proxy.pump_one();
   LMDJ_CHECK(
       bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
   proxy.pump_one();
@@ -1051,6 +1363,70 @@ void test_bridge_response_backpressure_fails_before_mutation() {
       (std::string(kProjectId) + ".lmdj")));
 }
 
+void test_bridge_exception_reuses_the_reserved_response_slot() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+
+  // Leave exactly one message slot free. The injected exception occurs only
+  // after that final response slot has been reserved.
+  for (std::size_t index = 0; index + 1 < kBridgeMessageSlotCount; ++index) {
+    const auto bytes = encode(request(
+        uuid(static_cast<std::uint32_t>(730 + index)),
+        "host.status",
+        Json::object()));
+    LMDJ_CHECK(
+        bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
+    proxy.pump_one();
+  }
+
+  const auto failed_request_id = uuid(740);
+  const auto failed_request = encode(request(
+      failed_request_id, "host.status", Json::object()));
+  proxy.throw_before_response_serialization = true;
+  LMDJ_CHECK(
+      bridge->submit(failed_request, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+
+  for (std::size_t index = 0; index + 1 < kBridgeMessageSlotCount; ++index) {
+    LMDJ_CHECK(poll_message(*bridge).at("ok") == true);
+  }
+  const auto fallback = poll_message(*bridge);
+  LMDJ_CHECK(fallback.at("request_id") == failed_request_id);
+  LMDJ_CHECK(fallback.at("ok") == false);
+  LMDJ_CHECK(fallback.at("error").at("code") == "INTERNAL_ERROR");
+  LMDJ_CHECK(bridge->failed());
+}
+
+void test_bridge_release_proxy_failure_is_a_terminal_transport_signal() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto bytes = encode(request(
+      uuid(741), "host.status", Json::object()));
+
+  LMDJ_CHECK(
+      bridge->submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  proxy.accept = false;
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(bridge->failed());
+  LMDJ_CHECK(proxy.tasks.empty());
+  LMDJ_CHECK(
+      bridge->submit(bytes, {}) == BridgeSubmitStatus::queue_full);
+
+  std::array<std::byte, kBridgeMaximumEnvelopeBytes> output{};
+  std::size_t required = 1;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+  LMDJ_CHECK(required == 0);
+  // Control is unreachable, so Task 8 must terminate the Worker; this
+  // browser-main failure path deliberately performs no Facade cleanup here.
+}
+
 void test_bridge_emits_only_real_snapshot_notifications_after_response() {
   {
     TempDirectory temp;
@@ -1071,6 +1447,7 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
         malformed_response.at("error").at("code") ==
         "HOST_PROTOCOL_MISMATCH");
     check_no_bridge_message(*bridge);
+    proxy.pump_one();
 
     const auto wrong_state = encode(request(
         uuid(902),
@@ -1155,13 +1532,18 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
 
 int main() {
   try {
+    test_facade_error_details_follow_an_explicit_safe_schema();
     test_exact_payloads_and_facade_owned_project_journey();
+    test_take_stop_drains_the_final_disarm_quantum();
     test_audio_suspend_requires_and_honors_quiescence_coordinator();
+    test_host_close_orders_capture_seal_quiescence_and_engine_stop();
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
     test_oversized_project_switch_is_inspectable_but_not_runnable();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();
     test_bridge_response_backpressure_fails_before_mutation();
+    test_bridge_exception_reuses_the_reserved_response_slot();
+    test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

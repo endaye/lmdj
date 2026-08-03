@@ -86,6 +86,9 @@ struct BridgeHooks {
       void (*function)(void*) noexcept,
       void* argument) noexcept;
   bool (*on_control)(void* context) noexcept;
+#if !defined(__EMSCRIPTEN__)
+  void (*before_response_serialization)(void* context);
+#endif
 };
 
 class ControlBridge final {

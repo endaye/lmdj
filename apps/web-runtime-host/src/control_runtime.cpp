@@ -152,35 +152,74 @@ Json internal_error() {
   return host_error("INTERNAL_ERROR", "unexpected Web Host failure");
 }
 
-bool sensitive_detail_key(std::string key) {
-  std::transform(
-      key.begin(), key.end(), key.begin(), [](unsigned char character) {
-        return static_cast<char>(std::tolower(character));
-      });
-  return key.find("path") != std::string::npos ||
-         key.find("system_error") != std::string::npos ||
-         key.find("storage") != std::string::npos ||
-         key == "errno";
-}
-
 Json sanitize_details(const Json& value) {
-  if (value.is_object()) {
-    auto result = Json::object();
-    for (auto iterator = value.begin(); iterator != value.end(); ++iterator) {
-      if (!sensitive_detail_key(iterator.key())) {
-        result[iterator.key()] = sanitize_details(iterator.value());
+  static constexpr std::array<std::string_view, 3> revision_fields{
+      "actual_revision",
+      "expected_revision",
+      "captured_revision",
+  };
+  const auto sensitive_container_key = [](std::string key) {
+    std::transform(
+        key.begin(), key.end(), key.begin(), [](unsigned char character) {
+          return static_cast<char>(std::tolower(character));
+        });
+    return key.find("detail") != std::string::npos ||
+           key.find("path") != std::string::npos ||
+           key.find("system") != std::string::npos ||
+           key.find("storage") != std::string::npos ||
+           key == "errno";
+  };
+  const auto sanitize_node = [&](const auto& self, const Json& node)
+      -> std::optional<Json> {
+    if (node.is_object()) {
+      auto result = Json::object();
+      for (auto iterator = node.begin(); iterator != node.end(); ++iterator) {
+        const auto approved_revision = std::find(
+            revision_fields.begin(),
+            revision_fields.end(),
+            std::string_view(iterator.key()));
+        if (approved_revision != revision_fields.end() &&
+            iterator.value().is_number_unsigned()) {
+          result[iterator.key()] = iterator.value();
+          continue;
+        }
+        if (sensitive_container_key(iterator.key()) ||
+            (!iterator.value().is_object() &&
+             !iterator.value().is_array())) {
+          continue;
+        }
+        const auto nested = self(self, iterator.value());
+        if (nested.has_value()) {
+          result[iterator.key()] = *nested;
+        }
       }
+      if (!result.empty()) {
+        return result;
+      }
+      return std::nullopt;
     }
-    return result;
-  }
-  if (value.is_array()) {
-    auto result = Json::array();
-    for (const auto& item : value) {
-      result.push_back(sanitize_details(item));
+    if (node.is_array()) {
+      auto result = Json::array();
+      for (const auto& item : node) {
+        if (!item.is_object() && !item.is_array()) {
+          continue;
+        }
+        const auto nested = self(self, item);
+        if (nested.has_value()) {
+          result.push_back(*nested);
+        }
+      }
+      if (!result.empty()) {
+        return result;
+      }
+      return std::nullopt;
     }
-    return result;
-  }
-  return value;
+    return std::nullopt;
+  };
+  const auto sanitized = sanitize_node(sanitize_node, value);
+  return sanitized.has_value() && sanitized->is_object()
+             ? *sanitized
+             : Json::object();
 }
 
 std::string safe_message(std::string_view code) {
@@ -208,22 +247,46 @@ Json normalized_error(
     std::string code,
     const Json& details,
     std::string_view source_message = {}) {
-  if (details.is_object() &&
-      details.value("storage_condition", std::string{}) == "project_busy") {
+  const auto storage_condition =
+      details.is_object() ? details.find("storage_condition") : details.end();
+  if (code == "IO_ERROR" && details.is_object() &&
+      storage_condition != details.end() &&
+      storage_condition->is_string() &&
+      *storage_condition == "project_busy") {
     return host_error(
         "PROJECT_BUSY",
         "project is already open for writing");
   }
-  if (source_message == "runtime preparation limit exceeded" &&
-      details.is_object() && details.contains("resource") &&
-      details.contains("observed") && details.contains("limit")) {
+  static constexpr std::array<std::string_view, 4> resource_names{
+      "artifact_bytes",
+      "decoded_frames_per_pad",
+      "prepared_bank_bytes",
+      "live_bank_bytes",
+  };
+  const auto resource =
+      details.is_object() ? details.find("resource") : details.end();
+  const auto observed =
+      details.is_object() ? details.find("observed") : details.end();
+  const auto limit =
+      details.is_object() ? details.find("limit") : details.end();
+  const auto valid_resource =
+      resource != details.end() && resource->is_string() &&
+      std::find(
+          resource_names.begin(),
+          resource_names.end(),
+          resource->get<std::string_view>()) != resource_names.end();
+  if (code == "COOK_FAILED" &&
+      source_message == "runtime preparation limit exceeded" &&
+      valid_resource && observed != details.end() &&
+      observed->is_number_unsigned() && limit != details.end() &&
+      limit->is_number_unsigned()) {
     return host_error(
         "WEB_RUNTIME_RESOURCE_LIMIT",
         "runtime preparation limit exceeded",
         {
-            {"resource", details.at("resource")},
-            {"observed", details.at("observed")},
-            {"limit", details.at("limit")},
+            {"resource", *resource},
+            {"observed", *observed},
+            {"limit", *limit},
         });
   }
   if (source_message == "capture barrier timed out") {
@@ -1225,6 +1288,14 @@ void ControlRuntime::fail_and_seal(std::string_view) noexcept {
 audio::RealtimeEngine& ControlRuntime::engine() noexcept {
   return impl_->engine;
 }
+
+#if !defined(__EMSCRIPTEN__)
+namespace detail {
+nlohmann::json normalize_error_for_testing(const foundation::Error& error) {
+  return normalized_error(error);
+}
+}  // namespace detail
+#endif
 
 foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
     ControlRuntime& runtime,
