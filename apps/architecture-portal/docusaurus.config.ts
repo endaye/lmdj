@@ -1,6 +1,19 @@
 import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
+import {existsSync, readFileSync} from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+
+const portalRoot = path.dirname(fileURLToPath(import.meta.url));
+const versionsPath = path.join(portalRoot, 'versions.json');
+const frozenVersions: string[] = existsSync(versionsPath)
+  ? JSON.parse(readFileSync(versionsPath, 'utf8'))
+  : [];
+const versions = Object.fromEntries([
+  ['current', {label: '当前 main', path: ''}],
+  ...frozenVersions.map((version) => [version, {label: `Product Build ${version}`, path: `versions/${version}`}]),
+]);
 
 const config: Config = {
   title: 'LMDJ Product Manual',
@@ -20,7 +33,7 @@ const config: Config = {
           sidebarPath: './sidebars.ts',
           includeCurrentVersion: true,
           lastVersion: 'current',
-          versions: {current: {label: '当前 main', path: ''}},
+          versions,
         },
         blog: false,
         theme: {customCss: './src/css/custom.css'},

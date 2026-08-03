@@ -13,6 +13,7 @@
     "diagrams": "node scripts/render-diagrams.mjs",
     "validate:diagrams": "node scripts/validate-diagrams.mjs",
     "check:build": "node scripts/check-build.mjs",
+    "version:docs": "node scripts/version-docs.mjs",
     "build": "npm run facts && docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
