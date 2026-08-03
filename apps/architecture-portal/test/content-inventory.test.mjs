@@ -5,6 +5,7 @@ import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../docs');
+const versionedDocsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../versioned_docs');
 const requiredRoutes = [
   'overview/index', 'product/positioning', 'product/capability-map', 'product/workflows',
   'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
@@ -24,4 +25,10 @@ test('every approved route has a non-placeholder page', async () => {
     assert.doesNotMatch(body, /\b(TBD|TODO|FIXME)\b/);
     assert.match(body, /## /);
   }
+});
+
+test('formal snapshot does not describe itself as current main documentation', async () => {
+  const body = await readFile(path.join(versionedDocsRoot, 'version-1.0.13.0/overview/index.mdx'), 'utf8');
+  assert.doesNotMatch(body, /(?:随 `main` 演进|current 文档|当前文档)/);
+  assert.match(body, /正式快照/);
 });
