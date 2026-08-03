@@ -1,5 +1,8 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
+#include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -9,10 +12,14 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <vector>
 
 #include <nlohmann/json.hpp>
 
+#include <lmdj/audio/prepared_sample_bank.hpp>
+#include <lmdj/audio/realtime_engine.hpp>
+#include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
 #include <lmdj/providers/local_proof_failure/factory.hpp>
 #include <lmdj/providers/local_proof_success/factory.hpp>
@@ -23,10 +30,23 @@ namespace {
 
 using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
+using lmdj::facade::ArtifactBytesImportRequest;
+using lmdj::facade::RuntimeProjectWriterLease;
 using lmdj::facade::RuntimeSnapshotRequest;
+using lmdj::audio::EnqueueResult;
+using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PublishResult;
+using lmdj::audio::RealtimeEngine;
+using lmdj::audio::RuntimePreparationLimits;
+using lmdj::audio::TriggerEvent;
+using lmdj::domain::CommandMeta;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::RawTakeEvent;
+using lmdj::foundation::AssetId;
+using lmdj::foundation::CommandId;
+using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
+using lmdj::foundation::ProjectId;
 using lmdj::foundation::TakeId;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
@@ -154,6 +174,54 @@ void write_bytes(
   }
 }
 
+void write_u16(
+    std::vector<std::byte>& bytes,
+    std::size_t offset,
+    std::uint16_t value) {
+  bytes.at(offset) = static_cast<std::byte>(value & 0xffU);
+  bytes.at(offset + 1) = static_cast<std::byte>(value >> 8U);
+}
+
+void write_u32(
+    std::vector<std::byte>& bytes,
+    std::size_t offset,
+    std::uint32_t value) {
+  for (std::size_t index = 0; index < 4; ++index) {
+    bytes.at(offset + index) =
+        static_cast<std::byte>(value >> (index * 8U));
+  }
+}
+
+void write_tag(
+    std::vector<std::byte>& bytes,
+    std::size_t offset,
+    std::string_view tag) {
+  LMDJ_CHECK(tag.size() == 4);
+  for (std::size_t index = 0; index < tag.size(); ++index) {
+    bytes.at(offset + index) =
+        static_cast<std::byte>(static_cast<unsigned char>(tag.at(index)));
+  }
+}
+
+std::vector<std::byte> mono_pcm16_wav(std::uint32_t frames) {
+  const auto data_bytes = frames * 2U;
+  std::vector<std::byte> bytes(44U + data_bytes);
+  write_tag(bytes, 0, "RIFF");
+  write_u32(bytes, 4, 36U + data_bytes);
+  write_tag(bytes, 8, "WAVE");
+  write_tag(bytes, 12, "fmt ");
+  write_u32(bytes, 16, 16);
+  write_u16(bytes, 20, 1);
+  write_u16(bytes, 22, 1);
+  write_u32(bytes, 24, 48'000);
+  write_u32(bytes, 28, 96'000);
+  write_u16(bytes, 32, 2);
+  write_u16(bytes, 34, 16);
+  write_tag(bytes, 36, "data");
+  write_u32(bytes, 40, data_bytes);
+  return bytes;
+}
+
 nlohmann::json create_request(const std::filesystem::path& project) {
   return {
       {"operation", "project.create"},
@@ -220,6 +288,73 @@ nlohmann::json assign_request(
       {"slot", slot(0, pad)},
       {"asset_id", asset_id},
   };
+}
+
+void create_single_asset_project(
+    Application& application,
+    const std::filesystem::path& project,
+    std::span<const std::byte> bytes,
+    std::uint32_t command_base,
+    std::string asset_id,
+    std::string pattern_id) {
+  check_success(application.command(create_request(project)), 0);
+  const auto imported = application.import_artifact_bytes(
+      ArtifactBytesImportRequest{
+          project,
+          CommandMeta{CommandId{uuid(command_base)}, 0},
+          AssetId{asset_id},
+          "audio/wav",
+          bytes,
+      });
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(imported.value().state.revision == 1);
+  check_success(
+      application.command(
+          assign_request(
+              project,
+              command_base + 1U,
+              0,
+              asset_id,
+              1)),
+      2);
+
+  const TakeId take_id{uuid(command_base + 2U)};
+  check_success(
+      application.command(
+          {
+              {"operation", "take.begin"},
+              {"project_path", project.generic_string()},
+              {"take_id", take_id.value()},
+              {"expected_revision", 2},
+              {"sample_rate", 48000},
+          }),
+      2);
+  const std::array events{
+      RawTakeEvent{PadSlotId{0, 0}, 0, 127},
+  };
+  LMDJ_CHECK(
+      application.append_realtime_take_events(project, take_id, events)
+          .has_value());
+  check_success(
+      application.command(
+          {
+              {"operation", "take.commit"},
+              {"project_path", project.generic_string()},
+              {"command_id", uuid(command_base + 3U)},
+              {"expected_revision", 2},
+              {"take_id", take_id.value()},
+              {"pattern",
+               {
+                   {"pattern_id", pattern_id},
+                   {"bars", 1},
+                   {"events",
+                    nlohmann::json::array(
+                        {{{"slot", slot(0, 0)},
+                          {"step", 0},
+                          {"velocity", 127}}})},
+               }},
+          }),
+      3);
 }
 
 nlohmann::json pattern_json() {
@@ -658,6 +793,260 @@ void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
               .at(0)
               .at("events")
               .size() == 1);
+}
+
+void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
+  static_assert(!std::is_copy_constructible_v<RuntimeProjectWriterLease>);
+  static_assert(!std::is_copy_assignable_v<RuntimeProjectWriterLease>);
+  static_assert(std::is_nothrow_move_constructible_v<
+                RuntimeProjectWriterLease>);
+  static_assert(std::is_nothrow_move_assignable_v<
+                RuntimeProjectWriterLease>);
+
+  TempDirectory temp;
+  const auto project = temp.path() / "leased.lmdj";
+  Application application(config(temp.path()));
+  Application competitor(config(temp.path()));
+
+  const auto bytes = mono_pcm16_wav(2);
+  {
+    auto acquired = application.acquire_project_writer(project);
+    LMDJ_CHECK(acquired.has_value());
+    RuntimeProjectWriterLease lease = std::move(acquired.value());
+
+    auto nested = application.acquire_project_writer(project);
+    LMDJ_CHECK(nested.has_value());
+    check_success(application.command(create_request(project)), 0);
+    const auto imported = application.import_artifact_bytes(
+        ArtifactBytesImportRequest{
+            project,
+            CommandMeta{CommandId{uuid(300)}, 0},
+            AssetId{uuid(301)},
+            "audio/wav",
+            bytes,
+        });
+    LMDJ_CHECK(imported.has_value());
+    LMDJ_CHECK(imported.value().state.revision == 1);
+
+    check_success(
+        application.command(
+            {
+                {"operation", "take.begin"},
+                {"project_path", project.generic_string()},
+                {"take_id", uuid(302)},
+                {"expected_revision", 1},
+                {"sample_rate", 48000},
+            }),
+        1);
+
+    const auto busy = competitor.acquire_project_writer(project);
+    LMDJ_CHECK(!busy.has_value());
+    LMDJ_CHECK(busy.error().code == ErrorCode::io_error);
+    LMDJ_CHECK(
+        (busy.error().details ==
+         nlohmann::json{{"storage_condition", "project_busy"}}));
+    LMDJ_CHECK(
+        busy.error().message.find(project.generic_string()) ==
+        std::string::npos);
+    (void)lease;
+  }
+
+  {
+    auto acquired_after_release = competitor.acquire_project_writer(project);
+    LMDJ_CHECK(acquired_after_release.has_value());
+  }
+  const auto invalid = application.acquire_project_writer("relative.lmdj");
+  LMDJ_CHECK(!invalid.has_value());
+  LMDJ_CHECK(invalid.error().code == ErrorCode::invalid_argument);
+
+  const auto inspected = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", project.generic_string()},
+      });
+  check_success(inspected, 1);
+  LMDJ_CHECK(
+      inspected.at("result").at("project").at("assets").contains(uuid(301)));
+}
+
+void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+
+  auto prior = PreparedSampleBank::empty(ProjectId{std::string(kProjectId)}, 9);
+  const std::array<float, 1> prior_pcm{0.5F};
+  LMDJ_CHECK(prior.set_sample(0, prior_pcm).has_value());
+  RealtimeEngine engine;
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(prior)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  const auto check_prior = [&engine]() {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{99, 0, 127}) ==
+               EnqueueResult::accepted);
+    std::array<float, 1> left{};
+    std::array<float, 1> right{};
+    engine.render(left.data(), right.data(), 1);
+    LMDJ_CHECK(left.at(0) == 0.5F);
+    LMDJ_CHECK(right.at(0) == 0.5F);
+  };
+  const auto check_limit = [&check_prior](
+                               const auto& rejected,
+                               std::string_view resource,
+                               std::uint64_t observed,
+                               std::uint64_t limit) {
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::cook_failed);
+    LMDJ_CHECK(rejected.error().details.at("resource") == resource);
+    LMDJ_CHECK(rejected.error().details.at("observed") == observed);
+    LMDJ_CHECK(rejected.error().details.at("limit") == limit);
+    check_prior();
+  };
+
+  constexpr std::uint32_t kArtifactBoundaryFrames =
+      (1'048'576U - 44U) / 2U;
+  auto artifact_boundary = mono_pcm16_wav(kArtifactBoundaryFrames);
+  LMDJ_CHECK(artifact_boundary.size() == 1'048'576);
+  const auto artifact_project = temp.path() / "artifact-boundary.lmdj";
+  const auto artifact_pattern = uuid(403);
+  create_single_asset_project(
+      application,
+      artifact_project,
+      artifact_boundary,
+      400,
+      uuid(404),
+      artifact_pattern);
+  const RuntimePreparationLimits artifact_limits{
+      1'048'576,
+      kArtifactBoundaryFrames,
+      static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
+      static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
+  };
+  const auto exact_artifact = application.prepare_runtime_snapshot(
+      RuntimeSnapshotRequest{
+          artifact_project,
+          PatternId{artifact_pattern},
+          artifact_limits,
+      });
+  LMDJ_CHECK(exact_artifact.has_value());
+
+  artifact_boundary.push_back(std::byte{0});
+  LMDJ_CHECK(artifact_boundary.size() == 1'048'577);
+  const auto oversized_project = temp.path() / "artifact-oversized.lmdj";
+  const auto oversized_pattern = uuid(413);
+  create_single_asset_project(
+      application,
+      oversized_project,
+      artifact_boundary,
+      410,
+      uuid(414),
+      oversized_pattern);
+  const auto inspected = application.query(
+      {
+          {"operation", "project.inspect"},
+          {"project_path", oversized_project.generic_string()},
+      });
+  check_success(inspected, 3);
+  LMDJ_CHECK(
+      inspected.at("result")
+              .at("project")
+              .at("assets")
+              .at(uuid(414))
+              .at("artifact")
+              .at("byte_length") == 1'048'577);
+  check_limit(
+      application.prepare_runtime_snapshot(
+          RuntimeSnapshotRequest{
+              oversized_project,
+              PatternId{oversized_pattern},
+              artifact_limits,
+          }),
+      "artifact_bytes",
+      1'048'577,
+      1'048'576);
+
+  auto decoded_boundary = mono_pcm16_wav(240'000);
+  const auto decoded_project = temp.path() / "decoded-boundary.lmdj";
+  const auto decoded_pattern = uuid(423);
+  create_single_asset_project(
+      application,
+      decoded_project,
+      decoded_boundary,
+      420,
+      uuid(424),
+      decoded_pattern);
+  const RuntimePreparationLimits decoded_limits{
+      1'048'576,
+      240'000,
+      960'000,
+      960'000,
+  };
+  const auto exact_decoded = application.prepare_runtime_snapshot(
+      RuntimeSnapshotRequest{
+          decoded_project,
+          PatternId{decoded_pattern},
+          decoded_limits,
+      });
+  LMDJ_CHECK(exact_decoded.has_value());
+
+  const auto decoded_plus_one = mono_pcm16_wav(240'001);
+  const auto decoded_oversized_project =
+      temp.path() / "decoded-oversized.lmdj";
+  const auto decoded_oversized_pattern = uuid(433);
+  create_single_asset_project(
+      application,
+      decoded_oversized_project,
+      decoded_plus_one,
+      430,
+      uuid(434),
+      decoded_oversized_pattern);
+  check_success(
+      application.query(
+          {
+              {"operation", "project.inspect"},
+              {"project_path", decoded_oversized_project.generic_string()},
+          }),
+      3);
+  check_limit(
+      application.prepare_runtime_snapshot(
+          RuntimeSnapshotRequest{
+              decoded_oversized_project,
+              PatternId{decoded_oversized_pattern},
+              decoded_limits,
+          }),
+      "decoded_frames_per_pad",
+      240'001,
+      240'000);
+
+  check_limit(
+      application.prepare_runtime_snapshot(
+          RuntimeSnapshotRequest{
+              decoded_project,
+              PatternId{decoded_pattern},
+              RuntimePreparationLimits{
+                  1'048'576,
+                  240'000,
+                  959'999,
+                  960'000,
+              },
+          }),
+      "prepared_bank_bytes",
+      960'000,
+      959'999);
+  check_limit(
+      application.prepare_runtime_snapshot(
+          RuntimeSnapshotRequest{
+              decoded_project,
+              PatternId{decoded_pattern},
+              RuntimePreparationLimits{
+                  1'048'576,
+                  240'000,
+                  960'000,
+                  959'999,
+              },
+          }),
+      "live_bank_bytes",
+      960'000,
+      959'999);
 }
 
 void test_render_rejects_symlinked_parent_and_never_reuses_crash_residue() {
@@ -1172,6 +1561,8 @@ int main() {
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();
+    test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
+    test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank();
     test_take_commit_uses_captured_revision_and_replays_after_cleanup();
     test_asset_and_pad_replay_identity_is_enforced();
     test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation();

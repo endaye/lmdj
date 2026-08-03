@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cmath>
+#include <limits>
 #include <string>
 #include <utility>
 
@@ -25,6 +26,21 @@ foundation::Result<PreparedSampleBank> invalid_bank(std::string message) {
   });
 }
 
+foundation::Result<PreparedSampleBank> preparation_limit(
+    std::string resource,
+    std::uint64_t observed,
+    std::uint64_t limit) {
+  return foundation::Result<PreparedSampleBank>::failure(foundation::Error{
+      foundation::ErrorCode::cook_failed,
+      "runtime preparation limit exceeded",
+      {
+          {"resource", std::move(resource)},
+          {"observed", observed},
+          {"limit", limit},
+      },
+  });
+}
+
 float pcm16_to_float(std::int16_t value) noexcept {
   return value < 0 ? static_cast<float>(value) / 32768.0F
                    : static_cast<float>(value) / 32767.0F;
@@ -42,12 +58,26 @@ PreparedSampleBank::PreparedSampleBank(foundation::ProjectId project_id,
 
 foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
     const cooker::RuntimeSnapshot& snapshot) {
+  constexpr auto unbounded = std::numeric_limits<std::uint64_t>::max();
+  return from_snapshot(
+      snapshot,
+      RuntimePreparationLimits{
+          unbounded,
+          unbounded,
+          unbounded,
+          unbounded,
+      });
+}
+
+foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
+    const cooker::RuntimeSnapshot& snapshot,
+    const RuntimePreparationLimits& limits) {
   if (!domain::is_valid_uuid(snapshot.project_id.value())) {
     return invalid_bank("runtime snapshot Project ID is invalid");
   }
-  PreparedSampleBank bank(snapshot.project_id, snapshot.project_revision);
   std::uint8_t previous_slot = 0;
   bool has_previous_slot = false;
+  std::uint64_t prospective_bank_bytes = 0;
   for (const auto& pad : snapshot.pads) {
     if (!domain::is_valid_slot(pad.slot) || pad.sample == nullptr) {
       return invalid_bank("runtime snapshot Pad is invalid");
@@ -56,6 +86,12 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
     if (has_previous_slot && slot <= previous_slot) {
       return invalid_bank("runtime snapshot Pads are not unique and ordered");
     }
+    if (!limits.allows_artifact_bytes(pad.artifact.byte_length)) {
+      return preparation_limit(
+          "artifact_bytes",
+          pad.artifact.byte_length,
+          limits.maximum_artifact_bytes);
+    }
     const auto& source = *pad.sample;
     if (source.sample_rate != 48'000 ||
         (source.channels != 1 && source.channels != 2) ||
@@ -63,6 +99,44 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
         source.interleaved.size() % source.channels != 0) {
       return invalid_bank("runtime snapshot PCM shape is invalid");
     }
+    const auto frames = static_cast<std::uint64_t>(
+        source.interleaved.size() / source.channels);
+    if (!limits.allows_decoded_frames_per_pad(frames)) {
+      return preparation_limit(
+          "decoded_frames_per_pad",
+          frames,
+          limits.maximum_decoded_frames_per_pad);
+    }
+    const auto sample_bytes = checked_mono_float_bytes(frames);
+    if (!sample_bytes.has_value()) {
+      return invalid_bank("runtime snapshot PCM byte length overflowed");
+    }
+    const auto total = checked_runtime_byte_sum(
+        prospective_bank_bytes, sample_bytes.value());
+    if (!total.has_value()) {
+      return invalid_bank("runtime snapshot Bank byte length overflowed");
+    }
+    prospective_bank_bytes = total.value();
+    previous_slot = slot;
+    has_previous_slot = true;
+  }
+  if (!limits.allows_prepared_bank_bytes(prospective_bank_bytes)) {
+    return preparation_limit(
+        "prepared_bank_bytes",
+        prospective_bank_bytes,
+        limits.maximum_prepared_bank_bytes);
+  }
+  if (!limits.allows_live_bank_bytes(prospective_bank_bytes)) {
+    return preparation_limit(
+        "live_bank_bytes",
+        prospective_bank_bytes,
+        limits.maximum_live_bank_bytes);
+  }
+
+  PreparedSampleBank bank(snapshot.project_id, snapshot.project_revision);
+  for (const auto& pad : snapshot.pads) {
+    const auto slot = global_slot(pad.slot);
+    const auto& source = *pad.sample;
     std::vector<float> mono;
     mono.reserve(source.interleaved.size() / source.channels);
     if (source.channels == 1) {
@@ -81,8 +155,6 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
     if (!assigned.has_value()) {
       return invalid_bank(assigned.error().message);
     }
-    previous_slot = slot;
-    has_previous_slot = true;
   }
   return foundation::Result<PreparedSampleBank>::success(std::move(bank));
 }
@@ -100,8 +172,18 @@ foundation::Result<void> PreparedSampleBank::set_sample(
                    [](float value) { return std::isfinite(value); })) {
     return invalid_argument("prepared Sample Bank input is invalid");
   }
+  const auto sample_bytes = checked_mono_float_bytes(mono_pcm.size());
+  if (!sample_bytes.has_value()) {
+    return invalid_argument("prepared Sample Bank byte length overflowed");
+  }
+  const auto prospective = checked_runtime_byte_sum(
+      decoded_pcm_bytes_, sample_bytes.value());
+  if (!prospective.has_value()) {
+    return invalid_argument("prepared Sample Bank byte length overflowed");
+  }
   samples_.at(slot).assign(mono_pcm.begin(), mono_pcm.end());
   availability_mask_ |= std::uint64_t{1} << slot;
+  decoded_pcm_bytes_ = prospective.value();
   return foundation::Result<void>::success();
 }
 
@@ -119,6 +201,10 @@ std::uint64_t PreparedSampleBank::availability_mask() const noexcept {
 
 std::size_t PreparedSampleBank::sample_count() const noexcept {
   return static_cast<std::size_t>(std::popcount(availability_mask_));
+}
+
+std::uint64_t PreparedSampleBank::decoded_pcm_bytes() const noexcept {
+  return decoded_pcm_bytes_;
 }
 
 const std::vector<float>& PreparedSampleBank::sample(

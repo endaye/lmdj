@@ -43,6 +43,8 @@ struct LoadedProject {
 struct ArtifactStage {
   std::filesystem::path source;
   foundation::ArtifactRef artifact;
+  std::span<const std::byte> bytes;
+  bool byte_backed = false;
 };
 
 bool valid_sha256(std::string_view value) {
@@ -1294,6 +1296,19 @@ foundation::Result<void> publish_artifact(
     return foundation::Result<void>::success();
   }
 
+  if (stage.byte_backed) {
+    const auto described = describe_bytes(
+        stage.bytes, stage.artifact.media_type);
+    if (described != stage.artifact) {
+      return foundation::Result<void>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "byte-backed artifact changed while it was imported",
+          });
+    }
+    return platform.create_immutable(final_path, stage.bytes);
+  }
+
   auto source_bytes = platform.read_complete(stage.source);
   if (!source_bytes.has_value()) {
     return foundation::Result<void>::failure(source_bytes.error());
@@ -1982,6 +1997,8 @@ ProjectStore::import_artifact_with_identity(
       ArtifactStage{
           request.source,
           described.value(),
+          {},
+          false,
       },
       &persisted_identity);
   if (!outcome.has_value()) {
@@ -2013,6 +2030,127 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact(
   }
   return foundation::Result<domain::AppliedCommand>::success(
       std::move(imported.value().outcome));
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
+    const std::filesystem::path& bundle,
+    const ImportArtifactBytesRequest& request) {
+  if (!domain::is_valid_uuid(request.meta.command_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id must be a lowercase UUID",
+        });
+  }
+  if (!domain::is_valid_uuid(request.asset_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "asset id must be a lowercase UUID",
+        });
+  }
+  if (request.media_type.empty()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact media type must not be empty",
+        });
+  }
+  if (request.bytes.size() > kMaximumArtifactBytes) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact exceeds the Project import limit",
+            {{"maximum_byte_length", kMaximumArtifactBytes}},
+        });
+  }
+  const auto artifact = describe_bytes(request.bytes, request.media_type);
+
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto lock_result = platform_->acquire_writer(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        loaded.error());
+  }
+  const auto recovered = recover_uncommitted(
+      *platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        recovered.error());
+  }
+
+  const auto original =
+      loaded.value().commands.find(request.meta.command_id);
+  if (original != loaded.value().commands.end()) {
+    const auto* import =
+        std::get_if<domain::ImportAsset>(&original->second);
+    if (import == nullptr) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "command id belongs to a different command type",
+          });
+    }
+    if (import->meta.expected_revision != request.meta.expected_revision ||
+        import->asset.id != request.asset_id ||
+        import->asset.artifact != artifact) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "asset import replay identity does not match persisted ImportAsset",
+          });
+    }
+    const auto receipt =
+        loaded.value().receipts.find(request.meta.command_id);
+    if (receipt == loaded.value().receipts.end()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          invalid_project(
+              "persisted ImportAsset receipt is missing",
+              bundle / "manifest.json"));
+    }
+    return foundation::Result<domain::AppliedCommand>::success(
+        domain::AppliedCommand{
+            std::move(loaded.value().state),
+            receipt->second.event,
+            true,
+        });
+  }
+
+  const domain::Command command = domain::ImportAsset{
+      request.meta,
+      domain::Asset{request.asset_id, artifact},
+  };
+  auto outcome = commit_loaded(
+      platform_,
+      bundle,
+      std::move(loaded.value()),
+      command,
+      ArtifactStage{
+          {},
+          artifact,
+          request.bytes,
+          true,
+      },
+      nullptr);
+  if (!outcome.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        outcome.error());
+  }
+  return outcome;
 }
 
 foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(

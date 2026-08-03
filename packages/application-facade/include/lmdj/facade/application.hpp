@@ -1,14 +1,18 @@
 #pragma once
 
+#include <cstddef>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include <nlohmann/json.hpp>
 
+#include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/cooker/runtime_snapshot.hpp>
-#include <lmdj/domain/project.hpp>
+#include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
@@ -25,6 +29,34 @@ struct ApplicationConfig {
 struct RuntimeSnapshotRequest {
   std::filesystem::path project_path;
   foundation::PatternId pattern_id;
+  std::optional<audio::RuntimePreparationLimits> limits = std::nullopt;
+};
+
+class RuntimeProjectWriterLease final {
+ public:
+  ~RuntimeProjectWriterLease();
+  RuntimeProjectWriterLease(RuntimeProjectWriterLease&&) noexcept;
+  RuntimeProjectWriterLease& operator=(
+      RuntimeProjectWriterLease&&) noexcept;
+
+  RuntimeProjectWriterLease(const RuntimeProjectWriterLease&) = delete;
+  RuntimeProjectWriterLease& operator=(
+      const RuntimeProjectWriterLease&) = delete;
+
+ private:
+  struct Impl;
+  explicit RuntimeProjectWriterLease(std::unique_ptr<Impl> impl);
+
+  std::unique_ptr<Impl> impl_;
+  friend class Application;
+};
+
+struct ArtifactBytesImportRequest {
+  std::filesystem::path project_path;
+  domain::CommandMeta meta;
+  foundation::AssetId asset_id;
+  std::string media_type;
+  std::span<const std::byte> bytes;
 };
 
 class Application {
@@ -41,6 +73,10 @@ class Application {
   nlohmann::json query(const nlohmann::json& request) const;
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
   prepare_runtime_snapshot(const RuntimeSnapshotRequest& request);
+  foundation::Result<RuntimeProjectWriterLease> acquire_project_writer(
+      const std::filesystem::path& project_path);
+  foundation::Result<domain::AppliedCommand> import_artifact_bytes(
+      const ArtifactBytesImportRequest& request);
   foundation::Result<void> append_realtime_take_events(
       const std::filesystem::path& project_path,
       foundation::TakeId take_id,

@@ -1,5 +1,6 @@
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -8,6 +9,7 @@
 #include <map>
 #include <memory>
 #include <set>
+#include <span>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -127,6 +129,11 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
       const std::filesystem::path& path,
       std::span<const std::byte> input) override {
     const auto normalized = key(path);
+    if (fail_next_asset_create &&
+        path.parent_path().filename() == "assets") {
+      fail_next_asset_create = false;
+      return lmdj::foundation::Result<void>::failure(error(path));
+    }
     if (files_.contains(normalized) || directories_.contains(normalized)) {
       auto collision = error(path);
       collision.details["storage_condition"] = "already_exists";
@@ -210,6 +217,7 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
 
   std::vector<std::string> operation_log;
   std::size_t writer_acquisitions = 0;
+  bool fail_next_asset_create = false;
 
  private:
   static std::string key(const std::filesystem::path& path) {
@@ -754,6 +762,145 @@ void test_imported_assets_are_content_addressed_and_deduplicated() {
       first.value().state.assets.at(
           AssetId{test_uuid("asset-1")}).artifact ==
       artifact);
+}
+
+void test_byte_backed_import_publishes_immutable_artifact_without_staging() {
+  const auto bundle = std::filesystem::path{"memory/bytes.lmdj"};
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore store{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  platform->operation_log.clear();
+
+  std::array bytes{
+      std::byte{'R'},
+      std::byte{'I'},
+      std::byte{'F'},
+      std::byte{'F'},
+      std::byte{0x00},
+      std::byte{0x01},
+  };
+  const auto asset_id = AssetId{test_uuid("byte-backed-asset")};
+  const ProjectStore::ImportArtifactBytesRequest request{
+      meta("byte-backed-command", 0),
+      asset_id,
+      "audio/wav",
+      bytes,
+  };
+
+  const auto imported = store.import_artifact_bytes(bundle, request);
+
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(imported.value().state.revision == 1);
+  const auto& artifact =
+      imported.value().state.assets.at(asset_id).artifact;
+  LMDJ_CHECK(artifact.byte_length == bytes.size());
+  const auto artifact_path =
+      bundle / "assets" / (artifact.sha256 + ".wav");
+  const auto transaction =
+      bundle / "history/transactions" /
+      ("1-" + request.meta.command_id.value() + ".json");
+  const std::vector<std::string> expected_operations{
+      "create_immutable:" + artifact_path.generic_string(),
+      "create_immutable:" + transaction.generic_string(),
+      "create_immutable:" +
+          (bundle / "history/checkpoints/1.json").generic_string(),
+      "replace_complete:" + (bundle / "manifest.json").generic_string(),
+  };
+  LMDJ_CHECK(platform->operation_log == expected_operations);
+  const auto expected_bytes =
+      std::vector<std::byte>(bytes.begin(), bytes.end());
+  bytes.back() = std::byte{0x02};
+  const auto stored = store.read_artifact(bundle, artifact);
+  LMDJ_CHECK(stored.has_value());
+  LMDJ_CHECK(stored.value() == expected_bytes);
+  bytes.back() = std::byte{0x01};
+
+  platform->operation_log.clear();
+  const auto replayed = store.import_artifact_bytes(bundle, request);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state.revision == 1);
+  LMDJ_CHECK(platform->operation_log.empty());
+
+  const std::array changed_identity_requests{
+      ProjectStore::ImportArtifactBytesRequest{
+          CommandMeta{request.meta.command_id, 1},
+          request.asset_id,
+          request.media_type,
+          bytes,
+      },
+      ProjectStore::ImportArtifactBytesRequest{
+          request.meta,
+          AssetId{test_uuid("byte-backed-changed-asset")},
+          request.media_type,
+          bytes,
+      },
+      ProjectStore::ImportArtifactBytesRequest{
+          request.meta,
+          request.asset_id,
+          "application/octet-stream",
+          bytes,
+      },
+  };
+  for (const auto& changed_identity : changed_identity_requests) {
+    const auto rejected_identity =
+        store.import_artifact_bytes(bundle, changed_identity);
+    LMDJ_CHECK(!rejected_identity.has_value());
+    LMDJ_CHECK(
+        rejected_identity.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(platform->operation_log.empty());
+  }
+
+  auto changed_bytes = bytes;
+  changed_bytes.back() = std::byte{0x02};
+  const auto rejected = store.import_artifact_bytes(
+      bundle,
+      ProjectStore::ImportArtifactBytesRequest{
+          request.meta,
+          request.asset_id,
+          request.media_type,
+          changed_bytes,
+      });
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(platform->operation_log.empty());
+
+  auto unpublished_bytes = bytes;
+  unpublished_bytes.front() = std::byte{'X'};
+  platform->fail_next_asset_create = true;
+  const auto write_failed = store.import_artifact_bytes(
+      bundle,
+      ProjectStore::ImportArtifactBytesRequest{
+          meta("byte-backed-write-failure", 1),
+          AssetId{test_uuid("byte-backed-write-failure-asset")},
+          "audio/wav",
+          unpublished_bytes,
+      });
+  LMDJ_CHECK(!write_failed.has_value());
+  LMDJ_CHECK(write_failed.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(platform->operation_log.empty());
+  const auto after_write_failure = store.load(bundle);
+  LMDJ_CHECK(after_write_failure.has_value());
+  LMDJ_CHECK(after_write_failure.value().revision == 1);
+
+  const auto duplicate_content = store.import_artifact_bytes(
+      bundle,
+      ProjectStore::ImportArtifactBytesRequest{
+          meta("byte-backed-deduplicated-command", 1),
+          AssetId{test_uuid("byte-backed-deduplicated-asset")},
+          "audio/wav",
+          bytes,
+      });
+  LMDJ_CHECK(duplicate_content.has_value());
+  LMDJ_CHECK(duplicate_content.value().state.revision == 2);
+  LMDJ_CHECK(
+      std::none_of(
+          platform->operation_log.begin(),
+          platform->operation_log.end(),
+          [&artifact_path](const std::string& operation) {
+            return operation ==
+                   "create_immutable:" + artifact_path.generic_string();
+          }));
 }
 
 void test_duplicate_command_ids_require_complete_persisted_identity() {
@@ -1343,6 +1490,7 @@ int main() {
     test_create_rejects_mismatched_existing_initial_checkpoint();
     test_committed_transactions_replay_to_manifest_head();
     test_imported_assets_are_content_addressed_and_deduplicated();
+    test_byte_backed_import_publishes_immutable_artifact_without_staging();
     test_duplicate_command_ids_require_complete_persisted_identity();
     test_import_rejects_invalid_command_before_receipt_and_source_io();
     test_import_rejects_invalid_asset_before_source_io();

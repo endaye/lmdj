@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <vector>
 
@@ -46,6 +47,13 @@ class ProjectStore {
     std::string media_type;
   };
 
+  struct ImportArtifactBytesRequest {
+    domain::CommandMeta meta;
+    foundation::AssetId asset_id;
+    std::string media_type;
+    std::span<const std::byte> bytes;
+  };
+
   foundation::Result<void> create(
       const std::filesystem::path& bundle,
       const domain::ProjectState& initial);
@@ -60,6 +68,9 @@ class ProjectStore {
   foundation::Result<domain::AppliedCommand> import_artifact(
       const std::filesystem::path& bundle,
       const ImportArtifactRequest& request);
+  foundation::Result<domain::AppliedCommand> import_artifact_bytes(
+      const std::filesystem::path& bundle,
+      const ImportArtifactBytesRequest& request);
   foundation::Result<ImportArtifactExecution>
   import_artifact_with_identity(
       const std::filesystem::path& bundle,

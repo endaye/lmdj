@@ -914,7 +914,35 @@ provider::TimestampSource default_timestamp_source() {
   };
 }
 
+Error runtime_preparation_limit_error(
+    std::string resource,
+    std::uint64_t observed,
+    std::uint64_t limit) {
+  return Error{
+      ErrorCode::cook_failed,
+      "runtime preparation limit exceeded",
+      {
+          {"resource", std::move(resource)},
+          {"observed", observed},
+          {"limit", limit},
+      },
+  };
+}
+
+bool valid_host_project_path(const std::filesystem::path& path) {
+  const auto encoded = path.generic_string();
+  return valid_utf8(encoded) && path.is_absolute() &&
+         path.lexically_normal() == path;
+}
+
 }  // namespace
+
+struct RuntimeProjectWriterLease::Impl {
+  explicit Impl(std::unique_ptr<project_io::ProjectWriterLease> owned)
+      : owned(std::move(owned)) {}
+
+  std::unique_ptr<project_io::ProjectWriterLease> owned;
+};
 
 struct Application::Impl {
   explicit Impl(ApplicationConfig config)
@@ -923,6 +951,10 @@ struct Application::Impl {
             config.providers
                 ? std::move(config.providers)
                 : std::make_shared<provider::Registry>()),
+        storage_platform(
+            project_io::make_default_project_storage_platform()),
+        projects(storage_platform),
+        journals(storage_platform),
         attempts(
             workspace_root,
             std::move(config.provider_policy),
@@ -994,9 +1026,7 @@ struct Application::Impl {
 
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
   prepare_runtime_snapshot(const RuntimeSnapshotRequest& request) {
-    const auto encoded_path = request.project_path.generic_string();
-    if (!valid_utf8(encoded_path) || !request.project_path.is_absolute() ||
-        request.project_path.lexically_normal() != request.project_path ||
+    if (!valid_host_project_path(request.project_path) ||
         !domain::is_valid_uuid(request.pattern_id.value())) {
       return foundation::Result<
           std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
@@ -1012,7 +1042,66 @@ struct Application::Impl {
           loaded.error());
     }
     return cook_project(
-        request.project_path, loaded.value(), request.pattern_id);
+        request.project_path,
+        loaded.value(),
+        request.pattern_id,
+        request.limits);
+  }
+
+  foundation::Result<std::unique_ptr<project_io::ProjectWriterLease>>
+  acquire_project_writer(const std::filesystem::path& project_path) {
+    if (!valid_host_project_path(project_path)) {
+      return foundation::Result<
+          std::unique_ptr<project_io::ProjectWriterLease>>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "project writer request is invalid",
+          });
+    }
+    auto acquired = storage_platform->acquire_writer(project_path);
+    if (acquired.has_value()) {
+      return acquired;
+    }
+    const auto& error = acquired.error();
+    if (error.details.is_object() &&
+        error.details.value("storage_condition", std::string{}) ==
+            project_io::kStorageConditionProjectBusy) {
+      return foundation::Result<
+          std::unique_ptr<project_io::ProjectWriterLease>>::failure(
+          Error{
+              ErrorCode::io_error,
+              "project writer is already acquired",
+              {{"storage_condition", "project_busy"}},
+          });
+    }
+    return foundation::Result<
+        std::unique_ptr<project_io::ProjectWriterLease>>::failure(
+        Error{
+            error.code,
+            "project writer could not be acquired",
+        });
+  }
+
+  foundation::Result<domain::AppliedCommand> import_artifact_bytes(
+      const ArtifactBytesImportRequest& request) {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.meta.command_id.value()) ||
+        !domain::is_valid_uuid(request.asset_id.value()) ||
+        request.media_type.empty() || !valid_utf8(request.media_type)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "byte-backed artifact import request is invalid",
+          });
+    }
+    return projects.import_artifact_bytes(
+        request.project_path,
+        project_io::ProjectStore::ImportArtifactBytesRequest{
+            request.meta,
+            request.asset_id,
+            request.media_type,
+            request.bytes,
+        });
   }
 
   foundation::Result<void> append_realtime_take_events(
@@ -1365,13 +1454,85 @@ struct Application::Impl {
   cook_project(
       const std::filesystem::path& path,
       const domain::ProjectState& project,
-      const foundation::PatternId& pattern_id) {
-    return cooker::cook(
+      const foundation::PatternId& pattern_id,
+      std::optional<audio::RuntimePreparationLimits> limits = std::nullopt) {
+    auto cooked = cooker::cook(
         project,
         pattern_id,
-        [this, path](const foundation::ArtifactRef& artifact) {
+        [this, path, limits](const foundation::ArtifactRef& artifact) {
+          if (limits.has_value() &&
+              !limits->allows_artifact_bytes(artifact.byte_length)) {
+            return foundation::Result<std::vector<std::byte>>::failure(
+                runtime_preparation_limit_error(
+                    "artifact_bytes",
+                    artifact.byte_length,
+                    limits->maximum_artifact_bytes));
+          }
           return projects.read_artifact(path, artifact);
         });
+    if (!cooked.has_value() || !limits.has_value()) {
+      return cooked;
+    }
+
+    std::uint64_t prospective_bank_bytes = 0;
+    for (const auto& pad : cooked.value()->pads) {
+      if (pad.sample == nullptr || pad.sample->channels == 0 ||
+          pad.sample->interleaved.size() % pad.sample->channels != 0) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            Error{
+                ErrorCode::cook_failed,
+                "cooked runtime Snapshot PCM shape is invalid",
+            });
+      }
+      const auto frames = static_cast<std::uint64_t>(
+          pad.sample->interleaved.size() / pad.sample->channels);
+      if (!limits->allows_decoded_frames_per_pad(frames)) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            runtime_preparation_limit_error(
+                "decoded_frames_per_pad",
+                frames,
+                limits->maximum_decoded_frames_per_pad));
+      }
+      const auto sample_bytes = audio::checked_mono_float_bytes(frames);
+      if (!sample_bytes.has_value()) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            Error{
+                ErrorCode::invalid_argument,
+                "runtime preparation PCM byte length overflowed",
+            });
+      }
+      const auto total = audio::checked_runtime_byte_sum(
+          prospective_bank_bytes, sample_bytes.value());
+      if (!total.has_value()) {
+        return foundation::Result<
+            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+            Error{
+                ErrorCode::invalid_argument,
+                "runtime preparation Bank byte length overflowed",
+            });
+      }
+      prospective_bank_bytes = total.value();
+    }
+    if (!limits->allows_prepared_bank_bytes(prospective_bank_bytes)) {
+      return foundation::Result<
+          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+          runtime_preparation_limit_error(
+              "prepared_bank_bytes",
+              prospective_bank_bytes,
+              limits->maximum_prepared_bank_bytes));
+    }
+    if (!limits->allows_live_bank_bytes(prospective_bank_bytes)) {
+      return foundation::Result<
+          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+          runtime_preparation_limit_error(
+              "live_bank_bytes",
+              prospective_bank_bytes,
+              limits->maximum_live_bank_bytes));
+    }
+    return cooked;
   }
 
   nlohmann::json render_offline(const nlohmann::json& request) {
@@ -1738,6 +1899,7 @@ struct Application::Impl {
 
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> registry;
+  std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform;
   project_io::ProjectStore projects;
   project_io::TakeJournal journals;
   provider::AttemptStore attempts;
@@ -1745,6 +1907,16 @@ struct Application::Impl {
 
 Application::Application(ApplicationConfig config)
     : impl_(std::make_unique<Impl>(std::move(config))) {}
+
+RuntimeProjectWriterLease::RuntimeProjectWriterLease(
+    std::unique_ptr<Impl> impl)
+    : impl_(std::move(impl)) {}
+
+RuntimeProjectWriterLease::~RuntimeProjectWriterLease() = default;
+RuntimeProjectWriterLease::RuntimeProjectWriterLease(
+    RuntimeProjectWriterLease&&) noexcept = default;
+RuntimeProjectWriterLease& RuntimeProjectWriterLease::operator=(
+    RuntimeProjectWriterLease&&) noexcept = default;
 
 Application::~Application() = default;
 Application::Application(Application&&) noexcept = default;
@@ -1781,6 +1953,42 @@ Application::prepare_runtime_snapshot(
   } catch (...) {
     return foundation::Result<
         std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<RuntimeProjectWriterLease>
+Application::acquire_project_writer(
+    const std::filesystem::path& project_path) {
+  try {
+    auto acquired = impl_->acquire_project_writer(project_path);
+    if (!acquired.has_value()) {
+      return foundation::Result<RuntimeProjectWriterLease>::failure(
+          acquired.error());
+    }
+    return foundation::Result<RuntimeProjectWriterLease>::success(
+        RuntimeProjectWriterLease{
+            std::make_unique<RuntimeProjectWriterLease::Impl>(
+                std::move(acquired.value()))});
+  } catch (...) {
+    return foundation::Result<RuntimeProjectWriterLease>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<domain::AppliedCommand>
+Application::import_artifact_bytes(
+    const ArtifactBytesImportRequest& request) {
+  try {
+    return impl_->import_artifact_bytes(request);
+  } catch (...) {
+    return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
