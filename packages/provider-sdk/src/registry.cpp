@@ -60,19 +60,6 @@ bool valid_contract_id(std::string_view value) {
   return false;
 }
 
-bool valid_port_name(std::string_view value) {
-  return !value.empty() &&
-         value.front() >= 'a' && value.front() <= 'z' &&
-         std::all_of(
-             value.begin() + 1,
-             value.end(),
-             [](unsigned char character) {
-               return (character >= 'a' && character <= 'z') ||
-                      (character >= '0' && character <= '9') ||
-                      character == '_';
-             });
-}
-
 bool valid_sha256(std::string_view value) {
   return value.size() == 64 &&
          std::all_of(
