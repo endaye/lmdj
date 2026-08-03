@@ -71,10 +71,23 @@ The stable Core entry point is:
 ```bash
 scripts/core.sh configure dev
 scripts/core.sh build dev
-scripts/core.sh test dev
+scripts/core.sh test dev [fast|full|stress]
+scripts/core.sh coverage [report|check]
 scripts/core.sh proof
+scripts/core.sh package
 scripts/core.sh clean
 ```
+
+`test` selects by execution tier and defaults to `full`. `full` runs every tier
+except `stress`, `fast` runs only `unit` and `component`, and `stress` runs only
+the `stress` tier. Running `scripts/core.sh test dev` therefore does not run the
+stress tier; run it explicitly when changing lock-free or concurrent code.
+`proof` also excludes the stress tier. The `core-asan` and `core-asan-macos` CI
+jobs run `full` and `stress` in sequence, so both stress tests block a Pull
+Request. `docs/quality/core-test-policy.md` is the canonical tier definition.
+
+`package` produces a distributable Core archive. It builds Release and packages
+it; it does not run tests.
 
 Direct verification commands:
 

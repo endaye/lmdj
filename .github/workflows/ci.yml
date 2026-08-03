@@ -83,6 +83,34 @@ jobs:
       - run: scripts/core.sh configure asan
       - run: scripts/core.sh build asan
       - run: scripts/core.sh test asan full
+      - run: scripts/core.sh test asan stress
+
+  core-asan-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: scripts/core.sh configure asan
+      - run: scripts/core.sh build asan
+      - name: Verify Apple-only audio targets are built under the sanitizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in lmdj_audio_coreaudio lmdj_audio_coreaudio_tests; do
+            if ! cmake --build build/core/asan --target "$target"; then
+              echo "Apple-only target missing from the macOS sanitizer build: $target" >&2
+              exit 1
+            fi
+          done
+      - run: scripts/core.sh test asan full
+      - run: scripts/core.sh test asan stress
 
   core-coverage:
     runs-on: ubuntu-24.04
