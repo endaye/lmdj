@@ -173,7 +173,7 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "1.1.0"},
+           {"version", "1.1.1"},
            {"api_version", 2},
            {"dependencies",
             {
@@ -182,7 +182,7 @@ void test_module_versions_and_dependencies_are_exact() {
                 {"project-io", "0.3.0"},
                 {"project-cooker", "0.2.0"},
                 {"audio-runtime", "0.3.0"},
-                {"provider-sdk", "1.0.0"},
+                {"provider-sdk", "1.1.0"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
@@ -1062,6 +1062,35 @@ void test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation() {
       {"snapshot_id", "forbidden"},
   };
   check_error(application.query(with_snapshot_id), "INVALID_ARGUMENT");
+
+  // A port name is not a file identifier. Names that no Capability could ever
+  // declare must be rejected at the Host boundary, not accepted here and
+  // rejected later as a generic artifact problem.
+  for (const auto& port : {"Source", "in-put", "with.dot", "_leading", ""}) {
+    auto bad_port = nlohmann::json{
+        {"operation", "provider.run"},
+        {"attempt_id", "attempt-port-shape"},
+        {"capability", kCapability},
+        {"inputs",
+         nlohmann::json::array({
+             {
+                 {"port", port},
+                 {"artifact",
+                  {
+                      {"sha256", std::string(64, 'a')},
+                      {"media_type", "application/octet-stream"},
+                      {"byte_length", 1},
+                  }},
+             },
+         })},
+        {"parameters", nlohmann::json::object()},
+        {"data_classification", "public"},
+        {"platform", "test"},
+        {"region", "local"},
+        {"required_permissions", nlohmann::json::array({"proof.execute"})},
+    };
+    check_error(application.command(bad_port), "INVALID_ARGUMENT");
+  }
 }
 
 void test_provider_failures_are_errors_but_attempts_remain_queryable() {

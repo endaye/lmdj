@@ -26,6 +26,11 @@ UUID_PATTERN = (
     "[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
 )
 FILE_ID_PATTERN = "^[A-Za-z0-9._-]{1,128}$"
+# A port name is not a file identifier. This mirrors the `port_name` rule in
+# contracts/capability/lmdj.capability.v2.schema.json and the C++
+# lmdj::provider::valid_port_name, so the advertised tool Schema describes the
+# domain the Core actually accepts.
+PORT_NAME_PATTERN = "^[a-z][a-z0-9_]*$"
 
 
 def canonical_json(value: object) -> str:
@@ -138,9 +143,10 @@ def input_schemas() -> dict[str, dict]:
         },
         ["sha256", "media_type", "byte_length"],
     )
+    port_name = {"type": "string", "pattern": PORT_NAME_PATTERN}
     artifact_binding = object_schema(
         {
-            "port": file_id,
+            "port": port_name,
             "artifact": artifact,
         },
         ["port", "artifact"],

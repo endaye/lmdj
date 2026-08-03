@@ -187,7 +187,7 @@ case "$command_name" in
     cmake -E remove_directory "$proof_run_root"
     trap - EXIT
     echo "Headless Core Proof: PASS"
-    echo "Product Build: 1.0.11.0"
+    echo "Product Build: 1.0.12.0"
     echo "Channel: canary"
     echo "Assembly lock: MATCH"
     ;;

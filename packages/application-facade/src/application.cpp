@@ -1508,7 +1508,7 @@ struct Application::Impl {
           "input Artifact binding shape is invalid");
       require(input.at("port").is_string(), "input port is invalid");
       const auto port = string_field(input, "port");
-      require(safe_file_id(port), "input port is invalid");
+      require(provider::valid_port_name(port), "input port is invalid");
       const auto& encoded_artifact = input.at("artifact");
       require(
           exact_keys(
