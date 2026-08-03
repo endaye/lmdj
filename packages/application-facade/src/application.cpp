@@ -992,6 +992,65 @@ struct Application::Impl {
     return attempt_inspect(request);
   }
 
+  foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
+  prepare_runtime_snapshot(const RuntimeSnapshotRequest& request) {
+    const auto encoded_path = request.project_path.generic_string();
+    if (!valid_utf8(encoded_path) || !request.project_path.is_absolute() ||
+        request.project_path.lexically_normal() != request.project_path ||
+        !domain::is_valid_uuid(request.pattern_id.value())) {
+      return foundation::Result<
+          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "runtime snapshot request is invalid",
+          });
+    }
+    const auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<
+          std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+          loaded.error());
+    }
+    return cook_project(
+        request.project_path, loaded.value(), request.pattern_id);
+  }
+
+  foundation::Result<void> append_realtime_take_events(
+      const std::filesystem::path& project_path,
+      foundation::TakeId take_id,
+      std::span<const domain::RawTakeEvent> events) {
+    const auto encoded_path = project_path.generic_string();
+    if (!valid_utf8(encoded_path) || !project_path.is_absolute() ||
+        project_path.lexically_normal() != project_path ||
+        !domain::is_valid_uuid(take_id.value())) {
+      return foundation::Result<void>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "realtime take append request is invalid",
+          });
+    }
+    return journals.append_batch(project_path, std::move(take_id), events);
+  }
+
+  foundation::Result<std::filesystem::path> seal_realtime_take(
+      const std::filesystem::path& project_path,
+      foundation::TakeId take_id,
+      std::string_view reason) {
+    const auto encoded_path = project_path.generic_string();
+    if (!valid_utf8(encoded_path) || !project_path.is_absolute() ||
+        project_path.lexically_normal() != project_path ||
+        !domain::is_valid_uuid(take_id.value()) ||
+        reason != "capture_incomplete") {
+      return foundation::Result<std::filesystem::path>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "realtime take seal request is invalid",
+          });
+    }
+    return journals.seal(
+        project_path, std::move(take_id), std::string(reason));
+  }
+
   nlohmann::json project_create(const nlohmann::json& request) {
     require(
         exact_keys(
@@ -1711,6 +1770,54 @@ nlohmann::json Application::query(
         Error{ErrorCode::invalid_argument, error.what()});
   } catch (...) {
     return internal_error();
+  }
+}
+
+foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
+Application::prepare_runtime_snapshot(
+    const RuntimeSnapshotRequest& request) {
+  try {
+    return impl_->prepare_runtime_snapshot(request);
+  } catch (...) {
+    return foundation::Result<
+        std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<void> Application::append_realtime_take_events(
+    const std::filesystem::path& project_path,
+    foundation::TakeId take_id,
+    std::span<const domain::RawTakeEvent> events) {
+  try {
+    return impl_->append_realtime_take_events(
+        project_path, std::move(take_id), events);
+  } catch (...) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<std::filesystem::path>
+Application::seal_realtime_take(
+    const std::filesystem::path& project_path,
+    foundation::TakeId take_id,
+    std::string_view reason) {
+  try {
+    return impl_->seal_realtime_take(
+        project_path, std::move(take_id), reason);
+  } catch (...) {
+    return foundation::Result<std::filesystem::path>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
   }
 }
 

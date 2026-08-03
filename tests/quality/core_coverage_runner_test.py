@@ -21,6 +21,122 @@ def write_executable(path: Path, content: str) -> None:
 
 
 class CoreCoverageRunnerTest(unittest.TestCase):
+    def test_object_probe_keeps_native_audio_device_free(self) -> None:
+        runner = runner_path.read_text(encoding="utf-8")
+        probe_start = runner.index('probe_root="$run_root/probes"')
+        probe_end = runner.index(
+            'if [[ "$shared_object_count" -ne 1 ]]',
+            probe_start,
+        )
+        probe_block = runner[probe_start:probe_end]
+
+        argument_start = probe_block.index("  probe_arguments=()")
+        argument_end = probe_block.index(
+            '  probe_stdout="$probe_root/$object_number.stdout"',
+            argument_start,
+        )
+        argument_block = probe_block[argument_start:argument_end]
+        harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+for object_path in \
+  /tmp/lmdj-native-audio-probe \
+  /tmp/lmdj-foundation-tests; do
+{argument_block}
+  printf '%s:%s\\n' \
+    "$(basename "$object_path")" \
+    "${{probe_arguments[*]-}}"
+done
+"""
+        completed = subprocess.run(
+            ["/bin/bash"],
+            input=harness,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout.splitlines(),
+            [
+                "lmdj-native-audio-probe:--no-device",
+                "lmdj-foundation-tests:",
+            ],
+        )
+
+        invocation_start = probe_block.index(
+            '  probe_stdout="$probe_root/$object_number.stdout"'
+        )
+        invocation_end = probe_block.index(
+            "  if grep -Eq 'LLVM Profile (Error|Warning)'",
+            invocation_start,
+        )
+        invocation_block = probe_block[invocation_start:invocation_end]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_root = Path(temp_dir)
+            capture_root = temp_root / "capture"
+            probe_root = temp_root / "probes"
+            capture_root.mkdir()
+            probe_root.mkdir()
+            native_probe = temp_root / "lmdj-native-audio-probe"
+            ordinary_probe = temp_root / "lmdj-foundation-tests"
+            executable = """#!/bin/sh
+printf '%s\\n' "$*" >"$CAPTURE_ROOT/$(basename "$0").args"
+if IFS= read -r input; then
+  printf 'data:%s\\n' "$input" >"$CAPTURE_ROOT/$(basename "$0").stdin"
+else
+  printf 'eof\\n' >"$CAPTURE_ROOT/$(basename "$0").stdin"
+fi
+"""
+            write_executable(native_probe, executable)
+            write_executable(ordinary_probe, executable)
+            invocation_harness = f"""#!/usr/bin/env bash
+set -euo pipefail
+probe_root={probe_root!s}
+object_number=0
+for object_path in {native_probe!s} {ordinary_probe!s}; do
+  object_number=$((object_number + 1))
+{argument_block}{invocation_block}done
+"""
+            environment = os.environ.copy()
+            environment["CAPTURE_ROOT"] = str(capture_root)
+            invoked = subprocess.run(
+                ["/bin/bash"],
+                input=invocation_harness,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+
+            self.assertEqual(invoked.returncode, 0, invoked.stderr)
+            self.assertEqual(
+                (capture_root / "lmdj-native-audio-probe.args").read_text(
+                    encoding="utf-8"
+                ),
+                "--no-device\n",
+            )
+            self.assertEqual(
+                (capture_root / "lmdj-foundation-tests.args").read_text(
+                    encoding="utf-8"
+                ),
+                "\n",
+            )
+            for stdin_capture in capture_root.glob("*.stdin"):
+                self.assertEqual(
+                    stdin_capture.read_text(encoding="utf-8"),
+                    "eof\n",
+                )
+
+        self.assertIn(
+            '"$object_path" ${probe_arguments[@]+"${probe_arguments[@]}"}',
+            probe_block,
+        )
+        self.assertIn(
+            '>"$probe_stdout" 2>"$probe_stderr" </dev/null',
+            probe_block,
+        )
+
     def test_each_topology_export_uses_its_matching_module_profile(
         self,
     ) -> None:

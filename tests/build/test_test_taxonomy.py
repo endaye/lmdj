@@ -28,6 +28,8 @@ def properties_by_name(test: dict[str, object]) -> dict[str, object]:
 
 
 def validate(build_dir: Path) -> tuple[list[str], int]:
+    cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    is_tsan = "LMDJ_SANITIZER:STRING=thread" in cache.splitlines()
     result = subprocess.run(
         ["ctest", "--test-dir", str(build_dir), "--show-only=json-v1"],
         check=False,
@@ -41,6 +43,7 @@ def validate(build_dir: Path) -> tuple[list[str], int]:
     tests = test_info.get("tests", [])
     errors: list[str] = []
     names: set[str] = set()
+    resolved_build_dir = build_dir.resolve()
 
     if not tests:
         errors.append("no registered tests")
@@ -62,15 +65,35 @@ def validate(build_dir: Path) -> tuple[list[str], int]:
             )
             continue
 
+        command = test.get("command", [])
+        executable = Path(command[0]) if command else None
+        is_native = bool(
+            executable
+            and executable.is_absolute()
+            and executable.resolve().is_relative_to(resolved_build_dir)
+        )
+        if is_native != ("native" in labels):
+            errors.append(
+                f"{name}: native label does not match executable ownership"
+            )
+
         tier = next(iter(tiers))
         timeout = properties.get("TIMEOUT")
         if timeout is None:
             errors.append(f"{name}: missing timeout")
             continue
-        if float(timeout) > MAX_TIMEOUT[tier]:
+        timeout_limit = MAX_TIMEOUT[tier] * (4.0 if is_tsan else 1.0)
+        if is_tsan and is_native and tier != "stress":
+            expected_timeout = MAX_TIMEOUT[tier] * 4.0
+            if float(timeout) != expected_timeout:
+                errors.append(
+                    f"{name}: TSan timeout {timeout} must be "
+                    f"{expected_timeout}"
+                )
+        if float(timeout) > timeout_limit:
             errors.append(
                 f"{name}: timeout {timeout} exceeds {tier} limit "
-                f"{MAX_TIMEOUT[tier]}"
+                f"{timeout_limit}"
             )
 
     return errors, len(tests)

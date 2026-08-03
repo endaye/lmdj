@@ -43,6 +43,30 @@ jobs:
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
       - run: scripts/core.sh proof
+      - name: Verify Apple-only audio targets are absent on Ubuntu
+        if: matrix.os == 'ubuntu-latest'
+        shell: bash
+        run: |
+          set -euo pipefail
+          scripts/core.sh configure dev
+          scripts/core.sh build dev
+
+          evidence_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$evidence_dir"' EXIT
+          cmake --build build/core/dev --target help >"$evidence_dir/targets.txt"
+
+          for target in lmdj_audio_coreaudio lmdj_native_audio_probe; do
+            if grep -Fq "$target" "$evidence_dir/targets.txt"; then
+              echo "unexpected Apple-only target on Ubuntu: $target" >&2
+              exit 1
+            fi
+            if cmake --build build/core/dev --target "$target" \
+              >"$evidence_dir/$target.log" 2>&1; then
+              echo "unexpected Apple-only target built on Ubuntu: $target" >&2
+              exit 1
+            fi
+            cat "$evidence_dir/$target.log"
+          done
 
   core-asan:
     runs-on: ubuntu-24.04

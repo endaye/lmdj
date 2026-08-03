@@ -74,6 +74,16 @@ lmdj::foundation::Result<void> fail_active_journal_sync(
       });
 }
 
+lmdj::foundation::Result<void> count_active_journal_sync(
+    lmdj::project_io::testing::FaultPoint point,
+    const std::filesystem::path&) {
+  if (point ==
+      lmdj::project_io::testing::FaultPoint::active_journal_sync) {
+    ++active_journal_sync_calls;
+  }
+  return lmdj::foundation::Result<void>::success();
+}
+
 lmdj::foundation::Result<void> fail_active_directory_sync(
     lmdj::project_io::testing::FaultPoint point,
     const std::filesystem::path& path) {
@@ -411,6 +421,93 @@ void test_append_flushes_each_event_and_restart_reads_acknowledged_data() {
   const auto complete = second_restart.read_active(bundle, take.id);
   LMDJ_CHECK(complete.has_value());
   LMDJ_CHECK(complete.value() == take);
+}
+
+void test_append_batch_validates_before_one_durable_append() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "batch-append.lmdj";
+  ProjectStore store;
+  TakeJournal journal;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  auto take = recorded_take("batch-append-take");
+  take.events.push_back(RawTakeEvent{PadSlotId{3, 15}, 9'000, 127});
+  LMDJ_CHECK(
+      journal.begin(bundle, take.id, 0, take.sample_rate).has_value());
+  active_journal_sync_calls = 0;
+
+  lmdj::foundation::Result<void> appended =
+      lmdj::foundation::Result<void>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error,
+              "batch append did not run",
+          });
+  {
+    FaultHookGuard hook(count_active_journal_sync);
+    appended = journal.append_batch(bundle, take.id, take.events);
+  }
+
+  LMDJ_CHECK(appended.has_value());
+  LMDJ_CHECK(active_journal_sync_calls == 1);
+  const auto persisted = journal.read_active(bundle, take.id);
+  LMDJ_CHECK(persisted.has_value());
+  LMDJ_CHECK(persisted.value() == take);
+  const auto active_path =
+      bundle / "recovery/active" / (take.id.value() + ".jsonl");
+  const auto acknowledged = read_bytes(active_path);
+
+  const std::vector<RawTakeEvent> empty;
+  const auto rejected_empty =
+      journal.append_batch(bundle, take.id, empty);
+  auto invalid_events = take.events;
+  invalid_events.at(1).velocity = 0;
+  const auto rejected_invalid =
+      journal.append_batch(bundle, take.id, invalid_events);
+  auto descending_events = take.events;
+  descending_events.at(1).frame_offset = 1;
+  const auto rejected_descending =
+      journal.append_batch(bundle, take.id, descending_events);
+
+  LMDJ_CHECK(!rejected_empty.has_value());
+  LMDJ_CHECK(rejected_empty.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!rejected_invalid.has_value());
+  LMDJ_CHECK(rejected_invalid.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!rejected_descending.has_value());
+  LMDJ_CHECK(rejected_descending.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(read_bytes(active_path) == acknowledged);
+}
+
+void test_append_batch_sync_failure_preserves_recoverable_events() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "batch-sync-failure.lmdj";
+  ProjectStore store;
+  TakeJournal journal;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto take = recorded_take("batch-sync-failure-take");
+  LMDJ_CHECK(
+      journal.begin(bundle, take.id, 0, take.sample_rate).has_value());
+  active_journal_sync_calls = 0;
+
+  lmdj::foundation::Result<void> failed =
+      lmdj::foundation::Result<void>::success();
+  {
+    FaultHookGuard hook(fail_active_journal_sync);
+    failed = journal.append_batch(bundle, take.id, take.events);
+  }
+
+  LMDJ_CHECK(!failed.has_value());
+  LMDJ_CHECK(failed.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(active_journal_sync_calls == 1);
+  const auto recovered = journal.read_active(bundle, take.id);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value() == take);
+  const auto sealed =
+      journal.seal(bundle, take.id, "capture_incomplete");
+  LMDJ_CHECK(sealed.has_value());
+  const auto candidates = journal.list_recoverable(bundle);
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().size() == 1);
+  LMDJ_CHECK(candidates.value().at(0).take == take);
+  LMDJ_CHECK(candidates.value().at(0).reason == "capture_incomplete");
 }
 
 void test_torn_final_record_is_ignored_and_repaired_before_append() {
@@ -786,6 +883,8 @@ int main() {
     test_begin_sync_failure_preserves_io_error_and_can_retry();
     test_invalid_command_id_is_rejected_before_journal_matching();
     test_append_flushes_each_event_and_restart_reads_acknowledged_data();
+    test_append_batch_validates_before_one_durable_append();
+    test_append_batch_sync_failure_preserves_recoverable_events();
     test_torn_final_record_is_ignored_and_repaired_before_append();
     test_record_take_keeps_journal_until_manifest_commit_then_cleans_it();
     test_direct_record_take_without_matching_journal_remains_valid();

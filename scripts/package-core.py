@@ -142,6 +142,11 @@ def stage_package(
         package_root / "lib" / library_name,
         0o644,
     )
+    copy_file(
+        build_root / "bin/lmdj-native-host",
+        package_root / "bin/lmdj-native-host",
+        0o755,
+    )
     write_file(package_root / "bin/lmdj-core", cli_launcher(), 0o755)
     write_file(
         package_root / "bin/lmdj-core-mcp",
