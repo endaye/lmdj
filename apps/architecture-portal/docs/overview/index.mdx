@@ -1,0 +1,34 @@
+---
+id: index
+slug: /
+title: LMDJ 产品说明书
+area: overview
+status: partial
+owners:
+  - product
+  - core
+source_paths:
+  - products/lmdj
+  - packages
+  - apps
+  - providers
+  - contracts
+---
+
+# LMDJ 产品说明书
+
+<div className="portal-intro">
+  这是 LMDJ 团队共同维护的产品、架构与交付说明书。当前骨架已经进入仓库，后续页面会从实际 Manifest、Contract、源码和验证证据生成并校验身份。
+</div>
+
+## 当前边界
+
+- Headless Core 是唯一活跃产品源。
+- Authoring Domain 保存唯一 Project Truth。
+- Runtime Snapshot 是只读、可丢弃的派生状态。
+- Host 通过 Application Facade 使用 Core。
+- Provider 只通过不可变 Artifact 与 Candidate / Attempt 边界工作。
+
+## 建设状态
+
+门户骨架已建立；产品、模块、平台、发布与历史页面将在后续原子 Task 中补齐，并由 CI 与 Netlify 自动验证。
