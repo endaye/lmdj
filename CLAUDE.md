@@ -82,9 +82,12 @@ scripts/core.sh clean
 except `stress`, `fast` runs only `unit` and `component`, and `stress` runs only
 the `stress` tier. Running `scripts/core.sh test dev` therefore does not run the
 stress tier; run it explicitly when changing lock-free or concurrent code.
-`proof` also excludes the stress tier. The `core-asan` and `core-asan-macos` CI
-jobs run `full` and `stress` in sequence, so both stress tests block a Pull
-Request. `docs/quality/core-test-policy.md` is the canonical tier definition.
+`proof` also excludes the stress tier. The `core-asan` CI job runs `full` then
+`stress`, and `core-asan-macos` selects the `native` label, so both stress tests
+block a Pull Request. `core-asan-macos` covers native tests only: the
+Python-hosted tests preload the sanitizer runtime into CPython, which does not
+work on arm64 macOS, so Linux `core-asan` owns that coverage.
+`docs/quality/core-test-policy.md` is the canonical tier definition.
 
 `package` produces a distributable Core archive. It builds Release and packages
 it; it does not run tests.

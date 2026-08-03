@@ -109,8 +109,17 @@ jobs:
               exit 1
             fi
           done
-      - run: scripts/core.sh test asan full
-      - run: scripts/core.sh test asan stress
+      # Native tests only, which is every test whose command is a built target
+      # and therefore all of the Apple-only audio coverage this job exists for.
+      # It also covers both stress tests, since they are native.
+      #
+      # The Python-hosted tests are deliberately excluded here. They dlopen the
+      # instrumented C ABI dylib from an uninstrumented CPython, which needs
+      # DYLD_INSERT_LIBRARIES to preload the ASan runtime; that does not
+      # interpose into the runner's Python on arm64 macOS, so they die with
+      # DEADLYSIGNAL before reaching any assertion. The Linux core-asan job
+      # keeps that coverage via LD_PRELOAD.
+      - run: ctest --preset asan -L '^native$' --output-on-failure
 
   core-coverage:
     runs-on: ubuntu-24.04
