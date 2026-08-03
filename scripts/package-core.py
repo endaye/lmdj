@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
 import platform
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -26,6 +28,12 @@ def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--build-root", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
+    # Packaging a modified tree is refused by default because the recorded Git
+    # revision would not describe the contents. The acceptance test exercises
+    # packaging mechanics rather than release provenance, so it opts out.
+    parser.add_argument(
+        "--allow-modified-worktree", action="store_true"
+    )
     return parser.parse_args()
 
 
@@ -222,7 +230,40 @@ def create_zip(package_root: Path, archive: Path) -> None:
     os.replace(temporary_archive, archive)
 
 
-def package(build_root_arg: Path, output_dir_arg: Path) -> Path:
+def require_clean_worktree() -> None:
+    """A package records HEAD as the revision it was built from.
+
+    On a modified tree HEAD does not describe the contents, so the Build
+    Manifest would attest to something untrue. This is enforced here rather
+    than in generate_manifest() because `core.sh proof` legitimately builds a
+    Manifest from a working tree, while a distributable artifact must not.
+    """
+    result = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise PackageError(
+            "git status failed, so package provenance cannot be established"
+        )
+    if result.stdout.strip():
+        raise PackageError(
+            "refusing to package a modified working tree; the recorded Git "
+            "revision would not describe the packaged contents:\n"
+            + result.stdout.rstrip()
+        )
+
+
+def package(
+    build_root_arg: Path,
+    output_dir_arg: Path,
+    require_clean: bool = True,
+) -> Path:
+    if require_clean:
+        require_clean_worktree()
     build_root = require_directory(
         build_root_arg.expanduser(), "build root"
     )
@@ -259,13 +300,24 @@ def package(build_root_arg: Path, output_dir_arg: Path) -> Path:
         (package_root / "build-manifest.json").chmod(0o644)
         validate_manifest(manifest, package_root, str(version))
         create_zip(package_root, archive)
+    # A detached digest is the only out-of-band integrity signal a consumer
+    # gets: build-manifest.json lives inside the archive, so anyone who can
+    # rewrite the archive can rewrite it too.
+    digest = hashlib.sha256(archive.read_bytes()).hexdigest()
+    checksum = archive.with_name(archive.name + ".sha256")
+    checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
+    checksum.chmod(0o644)
     return archive.resolve(strict=True)
 
 
 def main() -> int:
     options = parse_arguments()
     try:
-        archive = package(options.build_root, options.output_dir)
+        archive = package(
+            options.build_root,
+            options.output_dir,
+            require_clean=not options.allow_modified_worktree,
+        )
     except (OSError, PackageError, ValueError, zipfile.BadZipFile) as error:
         print(f"package error: {error}", file=sys.stderr)
         return 2

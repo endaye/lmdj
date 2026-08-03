@@ -198,6 +198,10 @@ case "$command_name" in
     }
     cmake --preset release
     cmake --build --preset release
+    # A package is stamped `canary`, and version-management.md requires basic
+    # unit tests to pass for that Channel. Without this the command could emit
+    # an artifact claiming a gate it never ran.
+    ctest --preset release -L '^(unit|component)$'
     python3 scripts/package-core.py \
       --build-root "$build_root/release" \
       --output-dir "$build_root/dist"
