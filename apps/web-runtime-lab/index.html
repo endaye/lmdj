@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>Web Realtime Audio Lab</title>
+    <link rel="icon" href="data:,">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <main>
+      <header class="hero">
+        <p class="eyebrow">LMDJ · Product-neutral experiment</p>
+        <h1>Web Realtime Audio Lab</h1>
+        <p class="lede">
+          Browser runtime telemetry only. This page does not measure physical
+          touch-to-sound latency.
+        </p>
+        <div class="decision">
+          Decision: <strong id="decision-status">Threshold approved · physical gate unverified</strong>
+        </div>
+      </header>
+
+      <section class="controls" aria-labelledby="control-heading">
+        <h2 id="control-heading">Session controls</h2>
+        <label>
+          Output route category
+          <select id="route-category">
+            <option value="unknown">Unknown</option>
+            <option value="built-in">Built-in</option>
+            <option value="wired">Wired</option>
+            <option value="usb">USB</option>
+            <option value="bluetooth">Bluetooth</option>
+          </select>
+        </label>
+        <div class="button-row">
+          <button id="start-audio" type="button">Start audio</button>
+          <button id="trigger-pad" type="button" disabled>Trigger pad</button>
+          <button id="enable-midi" type="button" disabled>Enable MIDI</button>
+          <button id="suspend-audio" type="button" disabled>Suspend</button>
+          <button id="resume-audio" type="button" disabled>Resume</button>
+          <button id="export-report" type="button" disabled>Export report</button>
+        </div>
+      </section>
+
+      <section class="grid" aria-label="Runtime telemetry">
+        <article class="run-guidance">
+          <h2>Physical run guidance</h2>
+          <pre id="run-guidance-output"></pre>
+        </article>
+        <article><h2>Preflight</h2><pre id="preflight-output"></pre></article>
+        <article><h2>AudioContext</h2><pre id="audio-output"></pre></article>
+        <article><h2>WASM / Worklet</h2><pre id="runtime-output"></pre></article>
+        <article><h2>Shared control</h2><pre id="control-output"></pre></article>
+        <article><h2>MIDI summary</h2><pre id="midi-output"></pre></article>
+        <article><h2>Browser estimates</h2><pre id="estimate-output"></pre></article>
+        <article><h2>Lifecycle</h2><pre id="lifecycle-output"></pre></article>
+        <article><h2>Diagnostics</h2><pre id="error-output"></pre></article>
+        <article class="physical">
+          <h2>Physical measurement</h2>
+          <p>
+            Not recorded in browser. Use the real-device acoustic protocol and
+            evaluate the retained evidence separately.
+          </p>
+        </article>
+      </section>
+    </main>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>

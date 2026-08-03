@@ -1,0 +1,317 @@
+#!/usr/bin/env python3
+
+from pathlib import Path
+import re
+
+
+LAB_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = LAB_ROOT.parents[1]
+
+
+def read(relative: str) -> str:
+    path = LAB_ROOT / relative
+    assert path.is_file(), f"missing active Web Runtime Lab file: {relative}"
+    assert not path.is_symlink(), f"active file must not be a symlink: {relative}"
+    return path.read_text(encoding="utf-8")
+
+
+def read_repository(relative: str) -> str:
+    path = REPOSITORY_ROOT / relative
+    assert path.is_file(), f"missing repository file: {relative}"
+    return path.read_text(encoding="utf-8")
+
+
+def require(source: str, patterns: tuple[str, ...], label: str) -> None:
+    for pattern in patterns:
+        assert pattern in source, f"{label} is missing {pattern!r}"
+
+
+def main() -> int:
+    index = read("index.html")
+    styles = read("styles.css")
+    main_source = read("src/main.js")
+    worklet_source = read("src/worklet.js")
+    probe_core = read("src/probe-core.mjs")
+    run_guidance = read("src/physical-run-guidance.mjs")
+    physical_gate = read("src/physical-gate.mjs")
+    evaluator = read("src/evaluate-physical-evidence.mjs")
+    preparer = read("src/physical-evidence-preparer.mjs")
+    prepare_cli = read("src/prepare-physical-evidence.mjs")
+    lab_readme = read("README.md")
+    apps_readme = read_repository("apps/README.md")
+    ci_workflow = read_repository(".github/workflows/ci.yml")
+    lab_script = read_repository("scripts/web-runtime-lab.sh")
+
+    combined = "\n".join(
+        (
+            index,
+            styles,
+            main_source,
+            worklet_source,
+            probe_core,
+            run_guidance,
+            physical_gate,
+            evaluator,
+            preparer,
+            prepare_cli,
+        )
+    )
+    for forbidden in (
+        "lmdj.patch.v1",
+        "lmdj.materials.v1",
+        "/Users/",
+        "products/lmdj",
+        "application-facade",
+        "localStorage",
+        "sessionStorage",
+        "indexedDB",
+    ):
+        assert forbidden not in combined, forbidden
+
+    require(
+        index,
+        (
+            'id="start-audio"',
+            'id="trigger-pad"',
+            'id="enable-midi"',
+            'id="suspend-audio"',
+            'id="resume-audio"',
+            'id="export-report"',
+            'id="decision-status"',
+            'id="run-guidance-output"',
+            '<link rel="icon" href="data:,">',
+            'type="module"',
+        ),
+        "index",
+    )
+    require(
+        main_source,
+        (
+            "new SharedArrayBuffer",
+            "Atomics.add",
+            "RING_CAPACITY = 1024",
+            "WRITE_INDEX",
+            "READ_INDEX",
+            "DROPPED_COUNT",
+            "ring-full",
+            "audioWorklet.addModule",
+            "new AudioWorkletNode",
+            "requestMIDIAccess",
+            'addEventListener("visibilitychange"',
+            'addEventListener("pagehide"',
+            'addEventListener("pageshow"',
+            'addEventListener("freeze"',
+            'addEventListener("resume"',
+            "processorerror",
+            "getOutputTimestamp",
+            "createReport",
+            'decisionStatus: "threshold-approved"',
+            "event.pointerType",
+            "triggerDispatches",
+            "evaluateBrowserRunGuidance",
+            "canDispatchBrowserTrigger",
+            "isEligiblePhysicalRoute",
+            "browser-target-ready",
+            "restart-required",
+            "window.setInterval(render, 1000)",
+        ),
+        "main",
+    )
+    for forbidden in (
+        ".manufacturer",
+        ".name",
+        "sysex: true",
+        "data[3]",
+    ):
+        assert forbidden not in main_source, forbidden
+    pending_position = main_source.index("pendingTriggers.set(sequence")
+    publish_position = main_source.index(
+        "Atomics.add(controlView, WRITE_INDEX, 1)"
+    )
+    assert pending_position < publish_position, (
+        "pending trigger metadata must exist before the record is published"
+    )
+
+    require(
+        worklet_source,
+        (
+            "class RuntimeProbeProcessor extends AudioWorkletProcessor",
+            "WebAssembly.Module",
+            "WebAssembly.Instance",
+            "Atomics.load",
+            "WRITE_INDEX",
+            "READ_INDEX",
+            "while (readIndex < writeIndex)",
+            "currentFrame",
+            "outputs[0][0].length",
+            'registerProcessor("lmdj-web-runtime-probe"',
+            "Math.min(0.15",
+            "Math.max(-0.15",
+        ),
+        "worklet",
+    )
+    assert re.search(r"\b128\b", worklet_source) is None, (
+        "worklet must not hard-code a 128-frame render quantum"
+    )
+
+    require(
+        probe_core,
+        (
+            "reportVersion: 2",
+            'decisionStatus: "threshold-approved"',
+            "triggerDispatches: dispatches",
+            "touchAcknowledgements",
+            "physicalMeasurement: null",
+        ),
+        "probe core",
+    )
+    assert re.search(r"\bpass\s*:", probe_core) is None
+
+    require(
+        run_guidance,
+        (
+            "triggerCount: 500",
+            "foregroundDurationMs: 600_000",
+            'status: "not-started"',
+            '"collecting"',
+            '"browser-target-ready"',
+            'status: "restart-required"',
+            '"trigger-count-above-500"',
+            '"acknowledgement-loss"',
+            '"foreground-interrupted"',
+            "canDispatchBrowserTrigger",
+            "isEligiblePhysicalRoute",
+        ),
+        "physical run guidance",
+    )
+    for forbidden in ("passed", "physicalMeasurement", "localStorage"):
+        assert forbidden not in run_guidance, forbidden
+    hard_cap_position = main_source.index(
+        "canDispatchBrowserTrigger(session.sharedControl.dispatchedCount)"
+    )
+    ring_write_position = main_source.index(
+        "Atomics.store(controlView, recordOffset + SOURCE_OFFSET, source)"
+    )
+    assert hard_cap_position < ring_write_position, (
+        "the 500-dispatch boundary must run before writing the shared ring"
+    )
+
+    require(
+        physical_gate,
+        (
+            "p95Ms: 50",
+            "p99Ms: 80",
+            "triggerCount: 500",
+            "durationMs: 600_000",
+            "p95ActivationToRunningMs: 500",
+            '"macos-safari-pointer-performance"',
+            '"macos-chrome-pointer-performance"',
+            '"macos-chrome-midi-performance"',
+            '"ipados-safari-touch-performance"',
+            '"ipados-safari-touch-lifecycle"',
+            '"route-not-eligible"',
+            '"session-id-invalid"',
+            '"duplicate-session-id"',
+            '"trigger-record-count-not-500"',
+            '"physical-method-missing"',
+            '"physical-video-rate-below-240-hz"',
+            '"run-errors-present"',
+            '"failed"',
+            '"unverified"',
+            '"passed"',
+        ),
+        "physical gate",
+    )
+    require(
+        evaluator,
+        (
+            "evaluatePhysicalMatrix",
+            "readFileSync",
+            "process.exitCode",
+        ),
+        "physical evaluator",
+    )
+    require(
+        preparer,
+        (
+            "preparePhysicalEvidence",
+            "REQUIRED_ROWS",
+            "report.reportVersion !== 2",
+            "exactly 500 dispatches",
+            "acknowledgementAtMs: null",
+            "report.physicalMeasurement !== null",
+        ),
+        "physical evidence preparer",
+    )
+    for forbidden in (
+        "report.environment.userAgent",
+        "report.environment.platform",
+        "report.environment.language",
+        "report.midi.name",
+        "report.midi.manufacturer",
+        "report.midi.id",
+    ):
+        assert forbidden not in preparer, forbidden
+    require(
+        prepare_cli,
+        (
+            "preparePhysicalEvidence",
+            "--os-version",
+            "--browser-version",
+            "process.stdout.write",
+        ),
+        "physical evidence prepare CLI",
+    )
+    require(
+        lab_script,
+        (
+            "scripts/web-runtime-lab.sh evaluate EVIDENCE.json",
+            "scripts/web-runtime-lab.sh prepare ROW_KEY REPORT.json",
+            'node "$lab_root/src/evaluate-physical-evidence.mjs" "$1"',
+            'node "$lab_root/src/prepare-physical-evidence.mjs" "$@"',
+        ),
+        "lab script",
+    )
+
+    require(
+        lab_readme,
+        (
+            "scripts/web-runtime-lab.sh test",
+            "scripts/web-runtime-lab.sh serve --port 4173",
+            "scripts/web-runtime-lab.sh serve-lan",
+            "scripts/web-runtime-lab.sh evaluate",
+            "scripts/web-runtime-lab.sh prepare",
+            "trusted-cert.pem",
+            "Approved",
+            "Unverified",
+            "not physical Touch-to-Sound evidence",
+            "MIDI input names",
+            "raw MIDI messages",
+            "persistent browser storage",
+            "browser-target-ready",
+            "restart-required",
+        ),
+        "lab README",
+    )
+    require(
+        apps_readme,
+        ("web-runtime-lab", "product-neutral", "experimental Host"),
+        "apps README",
+    )
+    require(
+        ci_workflow,
+        (
+            "web-runtime-lab:",
+            'python-version: "3.11"',
+            'node-version: "22"',
+            "run: scripts/web-runtime-lab.sh test",
+        ),
+        "CI workflow",
+    )
+
+    print("web runtime lab active tree: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

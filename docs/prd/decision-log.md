@@ -295,3 +295,21 @@
 - 限制：当前 `ArtifactRef` 没有 Schema provenance，v2 先验证 binding 选择的
   端口和该端口声明的 Schema 身份，不宣称已做输入 bytes 的 Schema 校验；
   Artifact resolver 与字节级验证器仍是独立开放问题。
+
+### 已确认：Web 实时音频 Spike 采用物理 Touch-to-Sound 门槛
+
+- 结论：非蓝牙物理 Touch-to-Sound 要求 p95 不高于 50 ms、p99 不高于
+  80 ms，并在 500 次触发中零漏发、零重复起音。前台稳定性要求连续 10 分钟
+  零 underrun、零 `processorerror`、零 SharedArrayBuffer acknowledgement
+  丢失或重复。生命周期恢复至多允许一次明确用户激活，激活到
+  `AudioContext.state === "running"` 的 p95 不高于 500 ms，恢复后首次触发
+  必须恰好产生一次起音。
+- 证据边界：只有要求的 macOS Safari/Chrome Pointer、macOS Chrome 实体
+  MIDI、iPadOS Safari Touch 与 iPadOS Safari 生命周期真机矩阵可以判定门槛；
+  输出必须是内置或有线。浏览器估算、自动化、桌面模拟和 Bluetooth 结果均不
+  能替代真机证据，Bluetooth 只作信息记录。
+- 结果：五个必需行全部通过才可进入下一设计阶段；任一必需行失败即返回产品与
+  架构评审；证据缺失、不支持、格式无效或没有物理测量时保持 `unverified`。
+- 影响：批准只冻结门槛，不代表 Spike 已通过。实验室只判定显式提供的本地物理
+  证据，不用浏览器报告推导物理结论。完整门槛见
+  [Web Realtime Audio Touch-to-Sound Threshold Decision](../architecture/2026-08-01-web-realtime-audio-threshold-decision.md)。
