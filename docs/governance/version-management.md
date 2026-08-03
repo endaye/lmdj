@@ -407,6 +407,20 @@ M1 PR 6 完成 Assembly Policy 边界时创建 `lmdj.assembly.v2` Contract
 Provider lock 必须绑定与运行时 `ProviderRegistration.artifact_sha256` 一致的
 确定性 source-package identity，不能只绑定 `module.json`。
 
+### 9.1 Product Build 文档快照门禁
+
+正式 Product Build 在 tag/Release 前必须冻结匹配的架构门户快照：
+
+```bash
+scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH
+```
+
+快照必须来自干净工作区，Product Build 与 `version.json` 精确一致，并记录完整 Git
+revision 和 Assembly Lock hash。`/versions/PRODUCT_BUILD/` 是不可变说明书；current
+文档继续跟随 `main`。冻结说明书不产生新的 Product、Module、Provider 或 Contract
+版本，也不授权 tag、push、Release 或部署。具体规则见
+`docs/governance/architecture-portal.md`。
+
 ## 10. M1 开发版本表
 
 M1 采用六个顺序 PR Gate；Build 编号已经分配，失败或取消也不复用：
@@ -449,7 +463,7 @@ M1 采用六个顺序 PR Gate；Build 编号已经分配，失败或取消也不
 
 ```text
 Version impact: none
-Reason: <为什么不影响任何公开产品、模块、Contract、Provider 或模型身份>
+Reason: 该计划只重构测试夹具，不改变公开产品行为、Module API、Contract、Provider、模型身份或 Product Assembly
 ```
 
 缺少该章节的计划不得进入实施。

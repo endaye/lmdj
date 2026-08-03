@@ -1,11 +1,13 @@
 ---
 title: Documentation Governance
 area: operations
-status: designed
+status: implemented
 owners: [docs, release, product]
 source_paths:
   - docs/superpowers/specs/2026-08-03-lmdj-architecture-portal-design.md
   - docs/superpowers/plans/2026-08-04-lmdj-architecture-portal.md
+  - docs/governance/architecture-portal.md
+  - .github/workflows/architecture-portal.yml
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -22,3 +24,6 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 正式 Product Build 冻结不可变文档快照；current main 始终标明非正式快照。
 ## 发布规则
 Git 合并触发 Netlify 构建，构建必须先通过事实、元数据、链接、路由和 smoke 门禁；手工 API 上传仅用于诊断。
+
+## CI 影响检查
+Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。

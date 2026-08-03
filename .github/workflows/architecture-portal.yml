@@ -1,0 +1,66 @@
+name: Architecture Portal
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - ".github/pull_request_template.md"
+      - ".github/workflows/architecture-portal.yml"
+      - "apps/**"
+      - "packages/**"
+      - "providers/**"
+      - "workers/**"
+      - "contracts/**"
+      - "products/lmdj/**"
+      - "docs/governance/**"
+      - "scripts/architecture-portal.sh"
+  push:
+    branches: [main]
+    paths:
+      - "AGENTS.md"
+      - "CLAUDE.md"
+      - ".github/pull_request_template.md"
+      - ".github/workflows/architecture-portal.yml"
+      - "apps/**"
+      - "packages/**"
+      - "providers/**"
+      - "workers/**"
+      - "contracts/**"
+      - "products/lmdj/**"
+      - "docs/governance/**"
+      - "scripts/architecture-portal.sh"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: architecture-portal-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portal:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/architecture-portal/package-lock.json
+      - name: Install locked portal dependencies
+        run: scripts/architecture-portal.sh install
+      - name: Check Pull Request documentation impact
+        if: github.event_name == 'pull_request'
+        env:
+          PORTAL_PR_BODY: ${{ github.event.pull_request.body }}
+          PORTAL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PORTAL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          changed_files="$(git diff --name-only "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA")"
+          PORTAL_CHANGED_FILES="$changed_files" npm --prefix apps/architecture-portal run check:impact
+      - name: Verify architecture portal
+        run: scripts/architecture-portal.sh check
