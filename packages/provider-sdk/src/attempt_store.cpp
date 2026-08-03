@@ -11,6 +11,7 @@
 #include <mutex>
 #include <set>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <system_error>
 #include <tuple>
@@ -25,6 +26,21 @@
 
 namespace lmdj::provider {
 namespace {
+
+// Every JSON document below arrives from disk and is therefore external input.
+// Deep nesting is a stack-overflow vector that a try/catch cannot contain, so
+// parse through the depth-bounded Foundation entry point. These paths already
+// convert exceptions into typed failures, so signalling by exception keeps the
+// existing error contract intact.
+template <typename Source>
+nlohmann::json parse_bounded_or_throw(Source&& source) {
+  auto parsed = foundation::parse_bounded_json(std::forward<Source>(source));
+  if (!parsed.has_value()) {
+    throw std::runtime_error(
+        "JSON is malformed or exceeds the maximum container depth");
+  }
+  return std::move(*parsed);
+}
 
 using foundation::ArtifactRef;
 using foundation::Error;
@@ -576,7 +592,7 @@ foundation::Result<nlohmann::json> read_host_settings(
         std::istreambuf_iterator<char>(stream),
         std::istreambuf_iterator<char>(),
     };
-    const auto settings = nlohmann::json::parse(bytes);
+    const auto settings = parse_bounded_or_throw(bytes);
     if (settings.size() != 2 ||
         settings.at("format") != "provider-selections" ||
         !settings.at("provider_selections").is_object() ||
@@ -1150,7 +1166,7 @@ foundation::Result<TerminalAttempt> AttemptStore::inspect(
     return foundation::Result<TerminalAttempt>::failure(loaded.error());
   }
   try {
-    const auto encoded = nlohmann::json::parse(loaded.value());
+    const auto encoded = parse_bounded_or_throw(loaded.value());
     if (loaded.value() != foundation::canonical_json(encoded) + "\n" ||
         !exact_keys(
             encoded,

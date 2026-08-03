@@ -301,7 +301,7 @@ foundation_manifest = load_json(
 assert foundation_manifest == {
     "contract": "lmdj.module.v1",
     "module": "foundation",
-    "version": "0.1.0",
+    "version": "0.2.0",
     "api_version": 1,
     "dependencies": {},
 }

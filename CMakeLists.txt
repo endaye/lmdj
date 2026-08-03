@@ -70,6 +70,7 @@ if(LMDJ_ENABLE_COVERAGE)
   set(
     lmdj_coverage_targets
     lmdj_foundation_tests
+    lmdj_foundation_json_tests
     lmdj_domain_project_tests
     lmdj_domain_command_handler_tests
     lmdj_domain_model_sequence_tests

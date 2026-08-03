@@ -1205,6 +1205,34 @@ void test_symlinked_managed_directory_is_rejected_before_recovery() {
       regular_file_count(bundle / "history/transactions") == 0);
 }
 
+void test_json_reads_reject_excessive_nesting() {
+  // This locks in that a deeply nested document is refused rather than
+  // accepted. It does not isolate the depth guard: with the guard disabled the
+  // document is still refused, by checkpoint contract validation, because
+  // nlohmann 3.12.0 parses and destroys iteratively and therefore does not
+  // crash on depth. The guard itself is proven in tests/core/foundation.
+  //
+  // Symlink handling is not asserted here: read_json() goes through the storage
+  // platform, so O_NOFOLLOW belongs to the platform implementation rather than
+  // to this module. A symlink already in the bundle is refused by the recursive
+  // symlink scan that runs before any read.
+  TempDirectory temp;
+  const auto bundle = temp.path() / "beat-proof.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(store.load(bundle).has_value());
+
+  const auto checkpoint = bundle / "history/checkpoints/0.json";
+  std::string deep = R"({"contract":"lmdj.project.checkpoint.v1","nested":)";
+  deep.append(200000, '[');
+  deep.append(200000, ']');
+  deep.push_back('}');
+  write_bytes(checkpoint, deep);
+  const auto nested = store.load(bundle);
+  LMDJ_CHECK(!nested.has_value());
+  LMDJ_CHECK(nested.error().code == ErrorCode::invalid_project);
+}
+
 void test_independent_platform_reports_busy_until_release() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
@@ -1353,6 +1381,7 @@ int main() {
     test_recovery_removes_only_exact_opaque_temp_grammars();
     test_public_commands_reject_unsafe_ids_before_publishing();
     test_symlinked_managed_directory_is_rejected_before_recovery();
+    test_json_reads_reject_excessive_nesting();
     test_independent_platform_reports_busy_until_release();
     test_artifact_reads_are_bounded_symlink_safe_and_integrity_verified();
     test_artifact_read_rejects_symlinked_intermediate_directory();
