@@ -27,7 +27,7 @@ file(
 )
 set(
   lmdj_local_proof_failure_manifest
-  "{\"files\":[{\"path\":\"providers/local-proof-failure/include/lmdj/providers/local_proof_failure/factory.hpp\",\"sha256\":\"${lmdj_local_proof_failure_factory_sha256}\"},{\"path\":\"providers/local-proof-failure/module.json\",\"sha256\":\"${lmdj_local_proof_failure_module_sha256}\"},{\"path\":\"providers/local-proof-failure/src/provider.cpp\",\"sha256\":\"${lmdj_local_proof_failure_source_sha256}\"}],\"format\":\"provider-source-package\",\"provider_id\":\"local.proof.failure\",\"provider_version\":\"1.0.1\"}\n"
+  "{\"files\":[{\"path\":\"providers/local-proof-failure/include/lmdj/providers/local_proof_failure/factory.hpp\",\"sha256\":\"${lmdj_local_proof_failure_factory_sha256}\"},{\"path\":\"providers/local-proof-failure/module.json\",\"sha256\":\"${lmdj_local_proof_failure_module_sha256}\"},{\"path\":\"providers/local-proof-failure/src/provider.cpp\",\"sha256\":\"${lmdj_local_proof_failure_source_sha256}\"}],\"format\":\"provider-source-package\",\"provider_id\":\"local.proof.failure\",\"provider_version\":\"1.0.2\"}\n"
 )
 file(
   WRITE

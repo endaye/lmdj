@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.12.0"
+    "version": "1.0.13.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -18,51 +18,51 @@
   "modules": [
     {
       "id": "foundation",
-      "version": "0.1.0"
-    },
-    {
-      "id": "authoring-domain",
-      "version": "0.1.0"
-    },
-    {
-      "id": "project-io",
-      "version": "0.3.0"
-    },
-    {
-      "id": "project-cooker",
       "version": "0.2.0"
     },
     {
+      "id": "authoring-domain",
+      "version": "0.1.1"
+    },
+    {
+      "id": "project-io",
+      "version": "0.3.1"
+    },
+    {
+      "id": "project-cooker",
+      "version": "0.2.1"
+    },
+    {
       "id": "audio-runtime",
-      "version": "0.3.0"
+      "version": "0.3.1"
     },
     {
       "id": "provider-sdk",
-      "version": "1.1.0"
+      "version": "1.1.1"
     },
     {
       "id": "application-facade",
-      "version": "1.1.1"
+      "version": "1.1.2"
     }
   ],
   "hosts": [
     {
       "id": "core-cli",
-      "version": "1.0.3"
+      "version": "1.0.4"
     },
     {
       "id": "core-mcp",
-      "version": "1.1.0"
+      "version": "1.1.1"
     },
     {
       "id": "native-test-host",
-      "version": "1.0.1"
+      "version": "1.0.2"
     }
   ],
   "providers": [
     {
       "id": "local.proof.success",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "capabilities": [
         {
           "id": "proof.candidate.v2",
@@ -73,7 +73,7 @@
     },
     {
       "id": "local.proof.failure",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "capabilities": [
         {
           "id": "proof.candidate.v2",

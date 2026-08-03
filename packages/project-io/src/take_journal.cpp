@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <unordered_map>
 #include <utility>
@@ -17,6 +18,20 @@
 
 namespace lmdj::project_io {
 namespace {
+// Every JSON document below arrives from disk and is therefore external input.
+// Deep nesting is a stack-overflow vector that a try/catch cannot contain, so
+// parse through the depth-bounded Foundation entry point. These paths already
+// convert exceptions into typed failures, so signalling by exception keeps the
+// existing error contract intact.
+template <typename Source>
+nlohmann::json parse_bounded_or_throw(Source&& source) {
+  auto parsed = foundation::parse_bounded_json(std::forward<Source>(source));
+  if (!parsed.has_value()) {
+    throw std::runtime_error(
+        "JSON is malformed or exceeds the maximum container depth");
+  }
+  return std::move(*parsed);
+}
 
 using foundation::Error;
 using foundation::ErrorCode;
@@ -362,7 +377,7 @@ foundation::Result<JournalDocument> read_journal(
 
   try {
     const auto line = bytes.substr(0, header_end);
-    const auto header = nlohmann::json::parse(line);
+    const auto header = parse_bounded_or_throw(line);
     if (header.at("contract") != "lmdj.take.journal.v1" ||
         header.at("take_id").get<std::string>() != take_id.value()) {
       return foundation::Result<JournalDocument>::failure(
@@ -403,7 +418,7 @@ foundation::Result<JournalDocument> read_journal(
         continue;
       }
       auto parsed =
-          parse_event(nlohmann::json::parse(event_line), path);
+          parse_event(parse_bounded_or_throw(event_line), path);
       if (!parsed.has_value()) {
         return foundation::Result<JournalDocument>::failure(parsed.error());
       }
@@ -765,7 +780,7 @@ TakeJournal::list_recoverable(
           bytes.error());
     }
     try {
-      const auto encoded = nlohmann::json::parse(byte_string(bytes.value()));
+      const auto encoded = parse_bounded_or_throw(byte_string(bytes.value()));
       if (encoded.at("contract") != "lmdj.take.recovery.v1") {
         return foundation::Result<std::vector<RecoveryCandidate>>::failure(
             Error{
