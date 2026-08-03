@@ -27,3 +27,12 @@ test('build checker reports missing routes, broken internal links, and identity 
     'index identity does not contain Product Build 1.0.13.0',
   ]);
 });
+
+test('build checker rejects visible MDX container source', async () => {
+  const errors = await checkBuild({
+    buildRoot: path.join(fixtures, 'build-invalid-admonition'),
+    requiredRoutes: ['/'],
+    expectedIdentity: {productBuild: '1.0.13.0', revision: 'abcdef1'},
+  });
+  assert.deepEqual(errors, ['visible MDX directive :::warning in /index.html']);
+});

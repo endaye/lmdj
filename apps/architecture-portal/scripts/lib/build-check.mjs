@@ -53,11 +53,13 @@ export async function checkBuild({buildRoot, requiredRoutes, expectedIdentity}) 
   for (const [route, file] of [...pages].sort(([left], [right]) => left.localeCompare(right))) {
     const html = await readFile(file, 'utf8');
     const $ = load(html);
+    const from = `/${path.relative(buildRoot, file).split(path.sep).join('/')}`;
+    const visibleDirective = $('body').text().match(/:::(warning|note|tip|danger|info)\b/i)?.[0];
+    if (visibleDirective) broken.add(`visible MDX directive ${visibleDirective} in ${from}`);
     for (const element of $('[href], [src]').toArray()) {
       for (const attribute of ['href', 'src']) {
         const pathname = internalPath($(element).attr(attribute), route);
         if (pathname && !await existsAny(routeCandidates(buildRoot, pathname))) {
-          const from = `/${path.relative(buildRoot, file).split(path.sep).join('/')}`;
           broken.add(`broken internal link ${pathname} from ${from}`);
         }
       }
