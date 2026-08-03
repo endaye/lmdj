@@ -1,9 +1,11 @@
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <memory>
 #include <set>
 #include <string>
 #include <string_view>
@@ -12,6 +14,7 @@
 
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
@@ -121,6 +124,46 @@ constexpr std::size_t point_index(FaultPoint point) {
 std::array<int, kCases.size()> matrix_observations{};
 FaultPoint injected_point = FaultPoint::artifact_temp_sync;
 int injected_point_calls = 0;
+std::filesystem::path injected_residue_path;
+
+bool lowercase_hex(std::string_view value) {
+  return std::all_of(
+      value.begin(),
+      value.end(),
+      [](unsigned char character) {
+        return (character >= '0' && character <= '9') ||
+               (character >= 'a' && character <= 'f');
+      });
+}
+
+bool opaque_sibling_for(
+    const std::filesystem::path& sibling,
+    const std::filesystem::path& destination) {
+  const auto sibling_name = sibling.filename().string();
+  const auto prefix = destination.filename().string() + ".tmp.";
+  return sibling.parent_path() == destination.parent_path() &&
+         sibling_name.starts_with(prefix) &&
+         sibling_name.size() == prefix.size() + 32 &&
+         lowercase_hex(std::string_view{sibling_name}.substr(prefix.size()));
+}
+
+std::filesystem::path crash_residue_path(
+    FaultPoint point,
+    const std::filesystem::path& callback_path) {
+  if (point == FaultPoint::artifact_temp_sync ||
+      point == FaultPoint::transaction_temp_sync ||
+      point == FaultPoint::checkpoint_temp_sync ||
+      point == FaultPoint::manifest_temp_sync) {
+    return callback_path;
+  }
+  for (const auto& entry :
+       std::filesystem::directory_iterator(callback_path.parent_path())) {
+    if (opaque_sibling_for(entry.path(), callback_path)) {
+      return entry.path();
+    }
+  }
+  return {};
+}
 
 lmdj::foundation::Result<void> inject_selected_fault(
     FaultPoint point,
@@ -130,6 +173,7 @@ lmdj::foundation::Result<void> inject_selected_fault(
   }
   ++injected_point_calls;
   ++matrix_observations.at(point_index(point));
+  injected_residue_path = crash_residue_path(point, path);
   return lmdj::foundation::Result<void>::failure(
       lmdj::foundation::Error{
           ErrorCode::io_error,
@@ -146,6 +190,7 @@ class FaultGuard {
   explicit FaultGuard(FaultPoint point) {
     injected_point = point;
     injected_point_calls = 0;
+    injected_residue_path.clear();
     lmdj::project_io::testing::set_fault_hook(inject_selected_fault);
   }
 
@@ -292,7 +337,8 @@ void test_publish_faults_preserve_previous_project_truth() {
     }
     TempDirectory temp(fault.name);
     const auto bundle = temp.path() / "project.lmdj";
-    ProjectStore store;
+    auto platform = lmdj::project_io::make_default_project_storage_platform();
+    ProjectStore store{platform};
     LMDJ_CHECK(store.create(bundle, new_project()).has_value());
 
     lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
@@ -329,12 +375,18 @@ void test_publish_faults_preserve_previous_project_truth() {
     LMDJ_CHECK(!result.has_value());
     LMDJ_CHECK(result.error().code == ErrorCode::io_error);
     LMDJ_CHECK(manifest_revision(bundle) == 0);
+    LMDJ_CHECK(!injected_residue_path.empty());
+    LMDJ_CHECK(!std::filesystem::exists(injected_residue_path));
+    write_bytes(injected_residue_path, "seeded-exact-crash-residue");
+    LMDJ_CHECK(std::filesystem::is_regular_file(injected_residue_path));
+
     ProjectStore restarted;
     const auto loaded = restarted.load(bundle);
     LMDJ_CHECK(loaded.has_value());
     LMDJ_CHECK(loaded.value().revision == 0);
     LMDJ_CHECK(loaded.value().patterns.empty());
     LMDJ_CHECK(loaded.value().assets.empty());
+    LMDJ_CHECK(std::filesystem::is_regular_file(injected_residue_path));
     const auto recovery_probe = restarted.execute(
         bundle,
         Command{CreatePattern{
@@ -345,6 +397,7 @@ void test_publish_faults_preserve_previous_project_truth() {
     LMDJ_CHECK(
         recovery_probe.error().code == ErrorCode::revision_conflict);
     LMDJ_CHECK(manifest_revision(bundle) == 0);
+    LMDJ_CHECK(!std::filesystem::exists(injected_residue_path));
     check_no_uncommitted_revision_one(bundle);
   }
 }
@@ -375,8 +428,9 @@ void test_take_cleanup_faults_leave_replayable_obligation() {
     }
     TempDirectory temp(fault.name);
     const auto bundle = temp.path() / "project.lmdj";
-    ProjectStore store;
-    TakeJournal journal;
+    auto platform = lmdj::project_io::make_default_project_storage_platform();
+    ProjectStore store{platform};
+    TakeJournal journal{platform};
     LMDJ_CHECK(store.create(bundle, new_project()).has_value());
     const auto recorded = take("cleanup-take");
     begin_take(journal, bundle, recorded);
@@ -435,8 +489,9 @@ void test_take_cleanup_faults_leave_replayable_obligation() {
     }
     TempDirectory temp(fault.name);
     const auto bundle = temp.path() / "project.lmdj";
-    ProjectStore store;
-    TakeJournal journal;
+    auto platform = lmdj::project_io::make_default_project_storage_platform();
+    ProjectStore store{platform};
+    TakeJournal journal{platform};
     LMDJ_CHECK(store.create(bundle, new_project()).has_value());
     const auto recorded = take("journal-take");
     begin_take(journal, bundle, recorded);

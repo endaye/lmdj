@@ -2,27 +2,18 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <cctype>
-#include <cstring>
-#include <fstream>
-#include <iterator>
+#include <memory>
+#include <mutex>
 #include <optional>
+#include <span>
 #include <string_view>
-#include <system_error>
+#include <unordered_map>
 #include <utility>
-
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
 #include <nlohmann/json.hpp>
 
 #include <lmdj/foundation/json.hpp>
-
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-#include "testing_hooks.hpp"
-#endif
 
 namespace lmdj::project_io {
 namespace {
@@ -33,36 +24,25 @@ using foundation::ErrorCode;
 struct JournalDocument {
   domain::RawTake take;
   std::uint64_t expected_revision;
+  std::uint64_t valid_prefix_length;
 };
 
-Error io_error(
-    std::string message,
-    const std::filesystem::path& path,
-    int system_error = errno) {
-  return Error{
-      ErrorCode::io_error,
-      std::move(message),
-      {
-          {"path", path.generic_string()},
-          {"system_error", std::strerror(system_error)},
-      },
-  };
-}
-
 foundation::Result<void> validate_journal_bundle_tree(
+    const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
-  std::error_code status_error;
-  const auto bundle_status =
-      std::filesystem::symlink_status(bundle, status_error);
-  if (status_error || std::filesystem::is_symlink(bundle_status) ||
-      !std::filesystem::is_directory(bundle_status)) {
+  const auto no_symlinks = platform.validate_managed_tree(bundle);
+  if (!no_symlinks.has_value()) {
+    return no_symlinks;
+  }
+  const auto root_names = platform.list_names(bundle);
+  if (!root_names.has_value()) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_project,
             "journal bundle root is missing, invalid, or symbolic",
             {
                 {"path", bundle.generic_string()},
-                {"system_error", status_error.message()},
+                {"detail", root_names.error().message},
             },
         });
   }
@@ -76,206 +56,162 @@ foundation::Result<void> validate_journal_bundle_tree(
       bundle / "recovery/sealed",
   };
   for (const auto& directory : required_directories) {
-    const auto status =
-        std::filesystem::symlink_status(directory, status_error);
-    if (status_error || std::filesystem::is_symlink(status) ||
-        !std::filesystem::is_directory(status)) {
+    const auto names = platform.list_names(directory);
+    if (!names.has_value()) {
       return foundation::Result<void>::failure(
           Error{
               ErrorCode::invalid_project,
               "journal managed directory is missing, invalid, or symbolic",
               {
                   {"path", directory.generic_string()},
-                  {"system_error", status_error.message()},
+                  {"detail", names.error().message},
               },
           });
     }
   }
   const auto manifest = bundle / "manifest.json";
-  const auto manifest_status =
-      std::filesystem::symlink_status(manifest, status_error);
-  if (status_error || std::filesystem::is_symlink(manifest_status) ||
-      !std::filesystem::is_regular_file(manifest_status)) {
+  const auto manifest_length = platform.byte_length(manifest);
+  if (!manifest_length.has_value()) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_project,
             "journal project manifest is missing, invalid, or symbolic",
             {
                 {"path", manifest.generic_string()},
-                {"system_error", status_error.message()},
+                {"detail", manifest_length.error().message},
             },
         });
   }
-
-  std::error_code iterator_error;
-  std::filesystem::recursive_directory_iterator iterator(
-      bundle, std::filesystem::directory_options::none, iterator_error);
-  const std::filesystem::recursive_directory_iterator end;
-  while (iterator != end) {
-    if (iterator_error) {
-      return foundation::Result<void>::failure(
-          io_error(
-              "journal bundle tree could not be inspected",
-              bundle,
-              iterator_error.value()));
-    }
-    const auto entry_status =
-        std::filesystem::symlink_status(iterator->path(), status_error);
-    if (status_error) {
-      return foundation::Result<void>::failure(
-          io_error(
-              "journal bundle entry could not be inspected",
-              iterator->path(),
-              status_error.value()));
-    }
-    if (std::filesystem::is_symlink(entry_status)) {
-      return foundation::Result<void>::failure(
-          Error{
-              ErrorCode::invalid_project,
-              "journal bundle contains a symbolic link",
-              {{"path", iterator->path().generic_string()}},
-          });
-    }
-    iterator.increment(iterator_error);
-  }
-  if (iterator_error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "journal bundle tree could not be inspected",
-            bundle,
-            iterator_error.value()));
-  }
   return foundation::Result<void>::success();
 }
 
-foundation::Result<void> write_all(
-    int descriptor,
-    std::string_view bytes,
-    const std::filesystem::path& path) {
-  std::size_t offset = 0;
-  while (offset < bytes.size()) {
-    const auto written = ::write(
-        descriptor,
-        bytes.data() + offset,
-        bytes.size() - offset);
-    if (written < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return foundation::Result<void>::failure(
-          io_error("journal bytes could not be written", path));
-    }
-    offset += static_cast<std::size_t>(written);
-  }
-  return foundation::Result<void>::success();
+std::span<const std::byte> byte_span(std::string_view bytes) {
+  return {
+      reinterpret_cast<const std::byte*>(bytes.data()),
+      bytes.size(),
+  };
 }
 
-foundation::Result<void> fsync_descriptor(
-    int descriptor,
-    const std::filesystem::path& path) {
-  while (::fsync(descriptor) != 0) {
-    if (errno == EINTR) {
+std::string byte_string(std::span<const std::byte> bytes) {
+  if (bytes.empty()) {
+    return {};
+  }
+  return {
+      reinterpret_cast<const char*>(bytes.data()),
+      bytes.size(),
+  };
+}
+
+std::shared_ptr<std::mutex> journal_append_mutex(
+    const std::shared_ptr<ProjectStoragePlatform>& platform) {
+  static std::mutex registry_mutex;
+  static std::unordered_map<
+      const ProjectStoragePlatform*,
+      std::weak_ptr<std::mutex>> registry;
+
+  std::lock_guard lock(registry_mutex);
+  for (auto entry = registry.begin(); entry != registry.end();) {
+    if (entry->second.expired()) {
+      entry = registry.erase(entry);
+    } else {
+      ++entry;
+    }
+  }
+  const auto found = registry.find(platform.get());
+  if (found != registry.end()) {
+    if (auto existing = found->second.lock()) {
+      return existing;
+    }
+  }
+  auto created = std::make_shared<std::mutex>();
+  registry[platform.get()] = created;
+  return created;
+}
+
+std::optional<std::string_view> opaque_temp_destination(
+    std::string_view name) {
+  constexpr std::string_view marker = ".tmp.";
+  const auto marker_position = name.rfind(marker);
+  if (marker_position == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto token = name.substr(marker_position + marker.size());
+  if (token.size() != 32 ||
+      !std::all_of(
+          token.begin(),
+          token.end(),
+          [](unsigned char character) {
+            return (character >= '0' && character <= '9') ||
+                   (character >= 'a' && character <= 'f');
+          })) {
+    return std::nullopt;
+  }
+  return name.substr(0, marker_position);
+}
+
+bool is_file_reason_character(unsigned char character) {
+  return std::isalnum(character) != 0 || character == '-' ||
+         character == '_';
+}
+
+bool is_generated_sealed_destination(std::string_view destination) {
+  constexpr std::size_t uuid_length = 36;
+  constexpr std::string_view extension = ".json";
+  if (!destination.ends_with(extension)) {
+    return false;
+  }
+  const auto stem = destination.substr(
+      0, destination.size() - extension.size());
+  if (stem.size() <= uuid_length + 1 || stem.at(uuid_length) != '-' ||
+      !domain::is_valid_uuid(stem.substr(0, uuid_length))) {
+    return false;
+  }
+  const auto reason = stem.substr(uuid_length + 1);
+  return std::all_of(
+      reason.begin(), reason.end(), is_file_reason_character);
+}
+
+foundation::Result<void> remove_temporary_destination(
+    ProjectStoragePlatform& platform,
+    const std::filesystem::path& directory,
+    std::string_view destination) {
+  auto names = platform.list_names(directory);
+  if (!names.has_value()) {
+    return foundation::Result<void>::failure(names.error());
+  }
+  for (const auto& name : names.value()) {
+    const auto recovered_destination = opaque_temp_destination(name);
+    if (!recovered_destination.has_value() ||
+        *recovered_destination != destination) {
       continue;
     }
-    return foundation::Result<void>::failure(
-        io_error("journal bytes could not be flushed", path));
+    const auto removed = platform.remove(directory / name);
+    if (!removed.has_value()) {
+      return removed;
+    }
   }
   return foundation::Result<void>::success();
 }
 
-foundation::Result<void> fsync_directory(
+foundation::Result<void> remove_sealed_temporary_files(
+    ProjectStoragePlatform& platform,
     const std::filesystem::path& directory) {
-  const int descriptor =
-      ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (descriptor < 0) {
-    return foundation::Result<void>::failure(
-        io_error("journal directory could not be opened for flush", directory));
+  auto names = platform.list_names(directory);
+  if (!names.has_value()) {
+    return foundation::Result<void>::failure(names.error());
   }
-  int sync_error = 0;
-  while (::fsync(descriptor) != 0) {
-    if (errno == EINTR) {
+  for (const auto& name : names.value()) {
+    const auto destination = opaque_temp_destination(name);
+    if (!destination.has_value() ||
+        !is_generated_sealed_destination(*destination)) {
       continue;
     }
-    sync_error = errno;
-    break;
-  }
-  const int close_result = ::close(descriptor);
-  const int close_error = close_result == 0 ? 0 : errno;
-  const bool sync_unsupported =
-      sync_error == EINVAL || sync_error == ENOTSUP ||
-      sync_error == EOPNOTSUPP;
-  if (sync_error != 0 && !sync_unsupported) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "journal directory could not be flushed",
-            directory,
-            sync_error));
-  }
-  if (close_error != 0) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "journal directory could not be closed",
-            directory,
-            close_error));
+    const auto removed = platform.remove(directory / name);
+    if (!removed.has_value()) {
+      return removed;
+    }
   }
   return foundation::Result<void>::success();
-}
-
-foundation::Result<void> truncate_unterminated_tail(
-    int descriptor,
-    const std::filesystem::path& path) {
-  struct stat status {};
-  if (::fstat(descriptor, &status) != 0) {
-    return foundation::Result<void>::failure(
-        io_error("active journal size could not be inspected", path));
-  }
-  if (status.st_size <= 0) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "active journal has no durable metadata record",
-            {{"path", path.generic_string()}},
-        });
-  }
-  std::string bytes(static_cast<std::size_t>(status.st_size), '\0');
-  std::size_t offset = 0;
-  while (offset < bytes.size()) {
-    const auto read_count = ::pread(
-        descriptor,
-        bytes.data() + offset,
-        bytes.size() - offset,
-        static_cast<off_t>(offset));
-    if (read_count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return foundation::Result<void>::failure(
-          io_error("active journal tail could not be inspected", path));
-    }
-    if (read_count == 0) {
-      return foundation::Result<void>::failure(
-          io_error("active journal changed while inspecting its tail", path));
-    }
-    offset += static_cast<std::size_t>(read_count);
-  }
-  if (bytes.back() == '\n') {
-    return foundation::Result<void>::success();
-  }
-  const auto last_newline = bytes.find_last_of('\n');
-  if (last_newline == std::string::npos) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "active journal metadata record is unterminated",
-            {{"path", path.generic_string()}},
-        });
-  }
-  if (::ftruncate(
-          descriptor, static_cast<off_t>(last_newline + 1)) != 0) {
-    return foundation::Result<void>::failure(
-        io_error("torn active journal tail could not be truncated", path));
-  }
-  return fsync_descriptor(descriptor, path);
 }
 
 nlohmann::json slot_json(domain::PadSlotId slot) {
@@ -384,38 +320,36 @@ std::filesystem::path active_path(
 }
 
 foundation::Result<JournalDocument> read_journal(
+    const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     const foundation::TakeId& take_id) {
   if (!domain::is_valid_uuid(take_id.value())) {
     return foundation::Result<JournalDocument>::failure(
         Error{ErrorCode::invalid_argument, "take id is not a safe file name"});
   }
-  const auto tree = validate_journal_bundle_tree(bundle);
+  const auto tree = validate_journal_bundle_tree(platform, bundle);
   if (!tree.has_value()) {
     return foundation::Result<JournalDocument>::failure(tree.error());
   }
   const auto path = active_path(bundle, take_id);
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    const auto code = std::filesystem::exists(path)
-                          ? ErrorCode::io_error
-                          : ErrorCode::not_found;
+  auto existing = platform.exists(path);
+  if (!existing.has_value()) {
+    return foundation::Result<JournalDocument>::failure(existing.error());
+  }
+  if (!existing.value()) {
     return foundation::Result<JournalDocument>::failure(
         Error{
-            code,
+            ErrorCode::not_found,
             "active take journal could not be opened",
             {{"path", path.generic_string()}},
         });
   }
-
-  const std::string bytes{
-      std::istreambuf_iterator<char>(stream),
-      std::istreambuf_iterator<char>(),
-  };
-  if (stream.bad()) {
+  auto read = platform.read_complete(path);
+  if (!read.has_value()) {
     return foundation::Result<JournalDocument>::failure(
-        io_error("active take journal could not be read completely", path));
+        read.error());
   }
+  const auto bytes = byte_string(read.value());
   const auto header_end = bytes.find('\n');
   if (header_end == std::string::npos) {
     return foundation::Result<JournalDocument>::failure(
@@ -445,6 +379,7 @@ foundation::Result<JournalDocument> read_journal(
             {},
         },
         header.at("expected_revision").get<std::uint64_t>(),
+        static_cast<std::uint64_t>(header_end + 1),
     };
     if (document.take.sample_rate != 48000) {
       return foundation::Result<JournalDocument>::failure(
@@ -462,6 +397,8 @@ foundation::Result<JournalDocument> read_journal(
       }
       const auto event_line = bytes.substr(cursor, line_end - cursor);
       cursor = line_end + 1;
+      document.valid_prefix_length =
+          static_cast<std::uint64_t>(cursor);
       if (event_line.empty()) {
         continue;
       }
@@ -486,67 +423,12 @@ foundation::Result<JournalDocument> read_journal(
   }
 }
 
-foundation::Result<void> write_new_file(
-    const std::filesystem::path& path,
-    std::string_view bytes,
-    std::optional<Error> already_exists_error = std::nullopt
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-    ,
-    std::optional<testing::FaultPoint> sync_fault = std::nullopt
-#endif
-    ) {
-  const int descriptor =
-      ::open(
-          path.c_str(),
-          O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-          0644);
-  if (descriptor < 0) {
-    const int open_error = errno;
-    if (open_error == EEXIST && already_exists_error.has_value()) {
-      return foundation::Result<void>::failure(
-          std::move(*already_exists_error));
-    }
-    return foundation::Result<void>::failure(
-        io_error("journal file could not be created", path, open_error));
-  }
-  const auto written = write_all(descriptor, bytes, path);
-  auto synced = foundation::Result<void>::success();
-  if (written.has_value()) {
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-    if (sync_fault.has_value()) {
-      synced = testing::detail::invoke_fault(*sync_fault, path);
-    }
-#endif
-    if (synced.has_value()) {
-      synced = fsync_descriptor(descriptor, path);
-    }
-  }
-  const int close_result = ::close(descriptor);
-  const int close_error = close_result == 0 ? 0 : errno;
-  if (!written.has_value() || !synced.has_value() || close_error != 0) {
-    std::error_code remove_error;
-    std::filesystem::remove(path, remove_error);
-  }
-  if (!written.has_value()) {
-    return written;
-  }
-  if (!synced.has_value()) {
-    return synced;
-  }
-  if (close_error != 0) {
-    return foundation::Result<void>::failure(
-        io_error("journal file could not be closed", path, close_error));
-  }
-  return foundation::Result<void>::success();
-}
-
 std::string file_reason(std::string_view reason) {
   std::string result;
   result.reserve(reason.size());
   for (const unsigned char character : reason) {
     result.push_back(
-        std::isalnum(character) != 0 || character == '-' ||
-                character == '_'
+        is_file_reason_character(character)
             ? static_cast<char>(character)
             : '_');
   }
@@ -554,6 +436,14 @@ std::string file_reason(std::string_view reason) {
 }
 
 }  // namespace
+
+TakeJournal::TakeJournal()
+    : TakeJournal(make_default_project_storage_platform()) {}
+
+TakeJournal::TakeJournal(std::shared_ptr<ProjectStoragePlatform> platform)
+    : platform_(platform != nullptr
+                    ? std::move(platform)
+                    : make_default_project_storage_platform()) {}
 
 foundation::Result<void> TakeJournal::begin(
     const std::filesystem::path& bundle,
@@ -568,53 +458,70 @@ foundation::Result<void> TakeJournal::begin(
             "take journal metadata is invalid",
         });
   }
-  const auto tree = validate_journal_bundle_tree(bundle);
+  auto tree = validate_journal_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return tree;
   }
-  if (!std::filesystem::is_regular_file(bundle / "manifest.json")) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::not_found,
-            "project bundle does not have a manifest",
-            {{"path", bundle.generic_string()}},
-        });
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  tree = validate_journal_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return tree;
   }
   const auto directory = bundle / "recovery/active";
-  std::error_code directory_error;
-  std::filesystem::create_directories(directory, directory_error);
-  if (directory_error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "active journal directory could not be created",
-            directory,
-            directory_error.value()));
+  const auto ensured = platform_->ensure_directory(directory);
+  if (!ensured.has_value()) {
+    return ensured;
   }
   const auto path = active_path(bundle, take_id);
+  const auto recovered_temporary = remove_temporary_destination(
+      *platform_,
+      directory,
+      path.filename().string());
+  if (!recovered_temporary.has_value()) {
+    return recovered_temporary;
+  }
+  auto existing = platform_->exists(path);
+  if (!existing.has_value()) {
+    return foundation::Result<void>::failure(existing.error());
+  }
+  if (existing.value()) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::duplicate_id,
+            "active take journal already exists",
+            {{"path", path.generic_string()}},
+        });
+  }
   const nlohmann::json header = {
       {"contract", "lmdj.take.journal.v1"},
       {"expected_revision", expected_revision},
       {"sample_rate", sample_rate},
       {"take_id", take_id.value()},
   };
+  const auto header_bytes = foundation::canonical_json(header) + "\n";
   const auto created =
-      write_new_file(
-          path,
-          foundation::canonical_json(header) + "\n",
+      platform_->create_immutable(path, byte_span(header_bytes));
+  if (!created.has_value()) {
+    const auto condition = created.error().details.find("storage_condition");
+    if (condition != created.error().details.end() &&
+        condition->is_string() &&
+        condition->get<std::string>() ==
+            std::string{kStorageConditionAlreadyExists}) {
+      return foundation::Result<void>::failure(
           Error{
               ErrorCode::duplicate_id,
               "active take journal already exists",
               {{"path", path.generic_string()}},
-          }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-          ,
-          testing::FaultPoint::active_journal_sync
-#endif
-      );
-  if (!created.has_value()) {
+          });
+    }
     return created;
   }
-  return fsync_directory(directory);
+  return foundation::Result<void>::success();
 }
 
 foundation::Result<void> TakeJournal::append(
@@ -647,57 +554,50 @@ foundation::Result<void> TakeJournal::append_batch(
     previous_frame = event.frame_offset;
     has_previous_frame = true;
   }
-  const auto tree = validate_journal_bundle_tree(bundle);
-  if (!tree.has_value()) {
-    return tree;
-  }
   std::string payload;
   for (const auto& event : events) {
     payload += foundation::canonical_json(event_json(event));
     payload.push_back('\n');
   }
+  auto append_mutex = journal_append_mutex(platform_);
+  std::lock_guard append_operation(*append_mutex);
+  auto tree = validate_journal_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return tree;
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  tree = validate_journal_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return tree;
+  }
   const auto path = active_path(bundle, take_id);
-  const int descriptor =
-      ::open(path.c_str(), O_RDWR | O_APPEND | O_CLOEXEC | O_NOFOLLOW);
-  if (descriptor < 0) {
-    const auto code = errno == ENOENT ? ErrorCode::not_found
-                                     : ErrorCode::io_error;
+  auto existing = platform_->exists(path);
+  if (!existing.has_value()) {
+    return foundation::Result<void>::failure(existing.error());
+  }
+  if (!existing.value()) {
     return foundation::Result<void>::failure(
         Error{
-            code,
+            ErrorCode::not_found,
             "active take journal could not be opened for append",
-            {
-                {"path", path.generic_string()},
-                {"system_error", std::strerror(errno)},
-            },
+            {{"path", path.generic_string()}},
         });
   }
-  const auto repaired = truncate_unterminated_tail(descriptor, path);
-  if (!repaired.has_value()) {
-    ::close(descriptor);
-    return repaired;
+  auto journal = read_journal(*platform_, bundle, take_id);
+  if (!journal.has_value()) {
+    return foundation::Result<void>::failure(journal.error());
   }
-  const auto written = write_all(descriptor, payload, path);
-  auto synced = foundation::Result<void>::success();
-  if (written.has_value()) {
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-    synced = testing::detail::invoke_fault(
-        testing::FaultPoint::active_journal_sync, path);
-#endif
-    if (synced.has_value()) {
-      synced = fsync_descriptor(descriptor, path);
-    }
-  }
-  const int close_result = ::close(descriptor);
-  if (!written.has_value()) {
-    return written;
-  }
-  if (!synced.has_value()) {
-    return synced;
-  }
-  if (close_result != 0) {
-    return foundation::Result<void>::failure(
-        io_error("active take journal could not be closed", path));
+  const auto appended = platform_->append_durable(
+      path,
+      journal.value().valid_prefix_length,
+      byte_span(payload));
+  if (!appended.has_value()) {
+    return appended;
   }
   return foundation::Result<void>::success();
 }
@@ -716,7 +616,7 @@ foundation::Result<domain::RawTake> TakeJournal::read_active(
 foundation::Result<ActiveTakeJournal> TakeJournal::read_active_journal(
     const std::filesystem::path& bundle,
     foundation::TakeId take_id) const {
-  auto document = read_journal(bundle, take_id);
+  auto document = read_journal(*platform_, bundle, take_id);
   if (!document.has_value()) {
     return foundation::Result<ActiveTakeJournal>::failure(document.error());
   }
@@ -731,7 +631,21 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
     const std::filesystem::path& bundle,
     foundation::TakeId take_id,
     std::string reason) {
-  auto journal = read_journal(bundle, take_id);
+  auto tree = validate_journal_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  tree = validate_journal_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(tree.error());
+  }
+  auto journal = read_journal(*platform_, bundle, take_id);
   if (!journal.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
         journal.error());
@@ -742,77 +656,62 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
   }
 
   const auto sealed_directory = bundle / "recovery/sealed";
-  std::error_code directory_error;
-  std::filesystem::create_directories(sealed_directory, directory_error);
-  if (directory_error) {
+  const auto ensured = platform_->ensure_directory(sealed_directory);
+  if (!ensured.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
-        io_error(
-            "sealed recovery directory could not be created",
-            sealed_directory,
-            directory_error.value()));
+        ensured.error());
   }
 
   const auto base_name =
       take_id.value() + "-" + file_reason(reason);
   auto final_path = sealed_directory / (base_name + ".json");
   std::uint64_t suffix = 1;
-  while (std::filesystem::exists(final_path)) {
+  auto candidate_exists = platform_->exists(final_path);
+  if (!candidate_exists.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        candidate_exists.error());
+  }
+  while (candidate_exists.value()) {
     final_path =
         sealed_directory /
         (base_name + "-" + std::to_string(suffix++) + ".json");
+    candidate_exists = platform_->exists(final_path);
+    if (!candidate_exists.has_value()) {
+      return foundation::Result<std::filesystem::path>::failure(
+          candidate_exists.error());
+    }
   }
-  const auto temp_path = final_path.string() + ".tmp";
   const nlohmann::json candidate = {
       {"contract", "lmdj.take.recovery.v1"},
       {"expected_revision", journal.value().expected_revision},
       {"reason", reason},
       {"take", take_json(journal.value().take)},
   };
-  const auto written = write_new_file(
-      temp_path,
-      foundation::canonical_json(candidate) + "\n");
+  const auto candidate_bytes = foundation::canonical_json(candidate) + "\n";
+  const auto written = platform_->create_immutable(
+      final_path, byte_span(candidate_bytes));
   if (!written.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
         written.error());
   }
-  std::error_code rename_error;
-  std::filesystem::rename(temp_path, final_path, rename_error);
-  if (rename_error) {
-    std::filesystem::remove(temp_path);
-    return foundation::Result<std::filesystem::path>::failure(
-        io_error(
-            "sealed recovery file could not be published",
-            final_path,
-            rename_error.value()));
-  }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto sealed_sync_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::sealed_directory_sync, sealed_directory);
-  if (!sealed_sync_intercepted.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(
-        sealed_sync_intercepted.error());
-  }
-#endif
-  const auto sealed_sync = fsync_directory(sealed_directory);
-  if (!sealed_sync.has_value()) {
-    return foundation::Result<std::filesystem::path>::failure(
-        sealed_sync.error());
-  }
-
   const auto active = active_path(bundle, take_id);
-  std::error_code remove_error;
-  const bool removed = std::filesystem::remove(active, remove_error);
-  if (remove_error || !removed) {
+  auto active_exists = platform_->exists(active);
+  if (!active_exists.has_value()) {
     return foundation::Result<std::filesystem::path>::failure(
-        io_error(
-            "active journal could not be removed after sealing",
-            active,
-            remove_error ? remove_error.value() : ENOENT));
+        active_exists.error());
   }
-  const auto active_sync = fsync_directory(active.parent_path());
-  if (!active_sync.has_value()) {
+  if (!active_exists.value()) {
     return foundation::Result<std::filesystem::path>::failure(
-        active_sync.error());
+        Error{
+            ErrorCode::io_error,
+            "active journal could not be removed after sealing",
+            {{"path", active.generic_string()}},
+        });
+  }
+  const auto removed = platform_->remove(active);
+  if (!removed.has_value()) {
+    return foundation::Result<std::filesystem::path>::failure(
+        removed.error());
   }
   return foundation::Result<std::filesystem::path>::success(
       std::move(final_path));
@@ -821,41 +720,52 @@ foundation::Result<std::filesystem::path> TakeJournal::seal(
 foundation::Result<std::vector<RecoveryCandidate>>
 TakeJournal::list_recoverable(
     const std::filesystem::path& bundle) const {
-  const auto tree = validate_journal_bundle_tree(bundle);
+  auto tree = validate_journal_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<std::vector<RecoveryCandidate>>::failure(
+        tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<std::vector<RecoveryCandidate>>::failure(
+        lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  tree = validate_journal_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<std::vector<RecoveryCandidate>>::failure(
         tree.error());
   }
   const auto directory = bundle / "recovery/sealed";
-  std::error_code status_error;
-  if (!std::filesystem::is_directory(directory, status_error)) {
-    if (!status_error) {
-      return foundation::Result<std::vector<RecoveryCandidate>>::success({});
-    }
+  const auto recovered = remove_sealed_temporary_files(*platform_, directory);
+  if (!recovered.has_value()) {
     return foundation::Result<std::vector<RecoveryCandidate>>::failure(
-        io_error(
-            "sealed recovery directory could not be inspected",
-            directory,
-            status_error.value()));
+        recovered.error());
+  }
+  auto names = platform_->list_names(directory);
+  if (!names.has_value()) {
+    return foundation::Result<std::vector<RecoveryCandidate>>::failure(
+        names.error());
   }
 
   std::vector<std::filesystem::path> paths;
-  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-    if (entry.is_regular_file() && entry.path().extension() == ".json") {
-      paths.push_back(entry.path());
+  for (const auto& name : names.value()) {
+    const auto path = directory / name;
+    if (path.extension() == ".json") {
+      paths.push_back(path);
     }
   }
-  std::sort(paths.begin(), paths.end());
 
   std::vector<RecoveryCandidate> candidates;
   for (const auto& path : paths) {
-    std::ifstream stream(path, std::ios::binary);
-    if (!stream) {
+    auto bytes = platform_->read_complete(path);
+    if (!bytes.has_value()) {
       return foundation::Result<std::vector<RecoveryCandidate>>::failure(
-          io_error("sealed recovery file could not be opened", path));
+          bytes.error());
     }
     try {
-      const auto encoded = nlohmann::json::parse(stream);
+      const auto encoded = nlohmann::json::parse(byte_string(bytes.value()));
       if (encoded.at("contract") != "lmdj.take.recovery.v1") {
         return foundation::Result<std::vector<RecoveryCandidate>>::failure(
             Error{

@@ -2,12 +2,14 @@
 
 #include <cstddef>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
 
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/artifact.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 
 namespace lmdj::project_io {
 
@@ -34,6 +36,9 @@ struct ImportArtifactExecution {
 
 class ProjectStore {
  public:
+  ProjectStore();
+  explicit ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform);
+
   struct ImportArtifactRequest {
     domain::CommandMeta meta;
     foundation::AssetId asset_id;
@@ -65,6 +70,9 @@ class ProjectStore {
   foundation::Result<std::vector<std::byte>> read_artifact(
       const std::filesystem::path& bundle,
       const foundation::ArtifactRef& artifact) const;
+
+ private:
+  std::shared_ptr<ProjectStoragePlatform> platform_;
 };
 
 }  // namespace lmdj::project_io

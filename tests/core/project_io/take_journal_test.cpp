@@ -1,19 +1,25 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <condition_variable>
 #include <exception>
 #include <filesystem>
 #include <fstream>
+#include <future>
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
@@ -41,6 +47,20 @@ using lmdj::project_io::TakeJournal;
 int active_directory_sync_calls = 0;
 int active_journal_remove_calls = 0;
 int active_journal_sync_calls = 0;
+
+lmdj::foundation::Result<void> fail_manifest_publish(
+    lmdj::project_io::testing::FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point != lmdj::project_io::testing::FaultPoint::manifest_publish) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  return lmdj::foundation::Result<void>::failure(
+      lmdj::foundation::Error{
+          ErrorCode::io_error,
+          "injected manifest publication failure",
+          {{"path", path.generic_string()}},
+      });
+}
 
 lmdj::foundation::Result<void> fail_active_journal_remove(
     lmdj::project_io::testing::FaultPoint point,
@@ -124,6 +144,296 @@ class FaultHookGuard {
 
   FaultHookGuard(const FaultHookGuard&) = delete;
   FaultHookGuard& operator=(const FaultHookGuard&) = delete;
+};
+
+enum class ForcedCreateOutcome {
+  collision,
+  post_publication_error,
+};
+
+class ForcedCreatePlatform final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  ForcedCreatePlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner,
+      ForcedCreateOutcome outcome)
+      : inner_(std::move(inner)), outcome_(outcome) {}
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner_->read_complete(path);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    if (outcome_ == ForcedCreateOutcome::collision) {
+      return lmdj::foundation::Result<void>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::io_error,
+              "forced immutable collision",
+              {
+                  {"path", path.generic_string()},
+                  {"storage_condition", "already_exists"},
+              },
+          });
+    }
+    const auto published = inner_->create_immutable(path, input);
+    if (!published.has_value()) {
+      return published;
+    }
+    return lmdj::foundation::Result<void>::failure(
+        lmdj::foundation::Error{
+            ErrorCode::io_error,
+            "forced post-publication durability failure",
+            {{"path", path.generic_string()}},
+        });
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    return inner_->replace_complete(path, input);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> input) override {
+    return inner_->append_durable(path, valid_prefix_length, input);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return inner_->validate_managed_tree(path);
+  }
+
+ private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
+  ForcedCreateOutcome outcome_;
+};
+
+class RecordingPlatform final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  explicit RecordingPlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner)
+      : inner_(std::move(inner)) {}
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner_->read_complete(path);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    operation_log.push_back(
+        "create_immutable:" + path.lexically_normal().generic_string());
+    return inner_->create_immutable(path, input);
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    operation_log.push_back(
+        "replace_complete:" + path.lexically_normal().generic_string());
+    return inner_->replace_complete(path, input);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> input) override {
+    operation_log.push_back(
+        "append_durable:" + path.lexically_normal().generic_string());
+    append_valid_prefix_lengths.push_back(valid_prefix_length);
+    return inner_->append_durable(path, valid_prefix_length, input);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    operation_log.push_back(
+        "remove:" + path.lexically_normal().generic_string());
+    return inner_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return inner_->validate_managed_tree(path);
+  }
+
+  std::vector<std::string> operation_log;
+  std::vector<std::uint64_t> append_valid_prefix_lengths;
+
+ private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
+};
+
+class CoordinatedJournalReadPlatform final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  explicit CoordinatedJournalReadPlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner)
+      : inner_(std::move(inner)) {}
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    auto read = inner_->read_complete(path);
+    if (!read.has_value()) {
+      return read;
+    }
+    std::unique_lock lock(mutex_);
+    if (!armed_ || path.lexically_normal() != target_) {
+      return read;
+    }
+    ++target_read_count_;
+    condition_.notify_all();
+    if (target_read_count_ == 1) {
+      condition_.wait_for(
+          lock,
+          std::chrono::milliseconds{250},
+          [this]() { return target_read_count_ >= 2; });
+    }
+    return read;
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    return inner_->create_immutable(path, input);
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    return inner_->replace_complete(path, input);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> input) override {
+    return inner_->append_durable(path, valid_prefix_length, input);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    return inner_->validate_managed_tree(path);
+  }
+
+  void arm(const std::filesystem::path& path) {
+    std::lock_guard lock(mutex_);
+    target_ = path.lexically_normal();
+    target_read_count_ = 0;
+    armed_ = true;
+  }
+
+  bool wait_for_first_target_read() const {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(
+        lock,
+        std::chrono::seconds{2},
+        [this]() { return target_read_count_ >= 1; });
+  }
+
+  void disarm() {
+    std::lock_guard lock(mutex_);
+    armed_ = false;
+  }
+
+ private:
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
+  mutable std::mutex mutex_;
+  mutable std::condition_variable condition_;
+  std::filesystem::path target_;
+  mutable std::size_t target_read_count_ = 0;
+  bool armed_ = false;
 };
 
 class TempDirectory {
@@ -263,8 +573,9 @@ void begin_and_append(
 void test_typed_active_journal_preserves_captured_revision() {
   TempDirectory temp;
   const auto bundle = temp.path() / "typed-active.lmdj";
-  ProjectStore store;
-  TakeJournal journal;
+  auto platform = lmdj::project_io::make_default_project_storage_platform();
+  ProjectStore store{platform};
+  TakeJournal journal{platform};
   LMDJ_CHECK(store.create(bundle, new_project()).has_value());
   const auto take = recorded_take("typed-active-take");
   begin_and_append(journal, bundle, take, 7);
@@ -358,6 +669,82 @@ void test_begin_sync_failure_preserves_io_error_and_can_retry() {
   LMDJ_CHECK(std::filesystem::is_regular_file(active));
 }
 
+void test_begin_maps_only_explicit_storage_collision_to_duplicate_id() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "begin-create-outcomes.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+
+  auto collision_platform = std::make_shared<ForcedCreatePlatform>(
+      lmdj::project_io::make_default_project_storage_platform(),
+      ForcedCreateOutcome::collision);
+  TakeJournal collision_journal{collision_platform};
+  const auto collision_take = recorded_take("forced-collision");
+  const auto collision = collision_journal.begin(
+      bundle,
+      collision_take.id,
+      0,
+      collision_take.sample_rate);
+  LMDJ_CHECK(!collision.has_value());
+  LMDJ_CHECK(collision.error().code == ErrorCode::duplicate_id);
+
+  auto published_platform = std::make_shared<ForcedCreatePlatform>(
+      lmdj::project_io::make_default_project_storage_platform(),
+      ForcedCreateOutcome::post_publication_error);
+  TakeJournal published_journal{published_platform};
+  const auto published_take = recorded_take("post-publication-error");
+  const auto published = published_journal.begin(
+      bundle,
+      published_take.id,
+      0,
+      published_take.sample_rate);
+  LMDJ_CHECK(!published.has_value());
+  LMDJ_CHECK(published.error().code == ErrorCode::io_error);
+  const auto published_path =
+      bundle / "recovery/active" /
+      (published_take.id.value() + ".jsonl");
+  LMDJ_CHECK(std::filesystem::is_regular_file(published_path));
+}
+
+void test_default_journal_remains_copy_list_initializable() {
+  TakeJournal journal = {};
+  (void)journal;
+}
+
+void test_journal_routes_mutations_through_semantic_operations_in_order() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "semantic-journal-routing.lmdj";
+  auto platform = std::make_shared<RecordingPlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  ProjectStore store{platform};
+  TakeJournal journal{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  platform->operation_log.clear();
+
+  const auto take = recorded_take("semantic-journal-routing");
+  LMDJ_CHECK(
+      journal.begin(bundle, take.id, 0, take.sample_rate).has_value());
+  const auto active =
+      bundle / "recovery/active" / (take.id.value() + ".jsonl");
+  const auto clean_prefix_length =
+      static_cast<std::uint64_t>(read_bytes(active).size());
+  LMDJ_CHECK(
+      journal.append_batch(bundle, take.id, take.events).has_value());
+  const auto sealed = journal.seal(bundle, take.id, "interrupted");
+  LMDJ_CHECK(sealed.has_value());
+
+  const std::vector<std::string> expected{
+      "create_immutable:" + active.generic_string(),
+      "append_durable:" + active.generic_string(),
+      "create_immutable:" + sealed.value().generic_string(),
+      "remove:" + active.generic_string(),
+  };
+  LMDJ_CHECK(platform->operation_log == expected);
+  LMDJ_CHECK(
+      platform->append_valid_prefix_lengths ==
+      std::vector<std::uint64_t>{clean_prefix_length});
+}
+
 void test_invalid_command_id_is_rejected_before_journal_matching() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
@@ -421,6 +808,42 @@ void test_append_flushes_each_event_and_restart_reads_acknowledged_data() {
   const auto complete = second_restart.read_active(bundle, take.id);
   LMDJ_CHECK(complete.has_value());
   LMDJ_CHECK(complete.value() == take);
+}
+
+void test_same_platform_concurrent_appends_do_not_lose_acknowledged_events() {
+  using namespace std::chrono_literals;
+  TempDirectory temp;
+  const auto bundle = temp.path() / "concurrent-append.lmdj";
+  auto platform = std::make_shared<CoordinatedJournalReadPlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  ProjectStore store{platform};
+  TakeJournal first_journal{platform};
+  TakeJournal second_journal{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto take = recorded_take("concurrent-append-take");
+  LMDJ_CHECK(
+      first_journal.begin(bundle, take.id, 0, take.sample_rate).has_value());
+  const auto active =
+      bundle / "recovery/active" / (take.id.value() + ".jsonl");
+  platform->arm(active);
+
+  auto first = std::async(
+      std::launch::async,
+      [&]() { return first_journal.append(bundle, take.id, take.events.at(0)); });
+  LMDJ_CHECK(platform->wait_for_first_target_read());
+  auto second = std::async(
+      std::launch::async,
+      [&]() { return second_journal.append(bundle, take.id, take.events.at(1)); });
+
+  LMDJ_CHECK(first.wait_for(2s) == std::future_status::ready);
+  LMDJ_CHECK(second.wait_for(2s) == std::future_status::ready);
+  LMDJ_CHECK(first.get().has_value());
+  LMDJ_CHECK(second.get().has_value());
+  platform->disarm();
+
+  const auto complete = first_journal.read_active(bundle, take.id);
+  LMDJ_CHECK(complete.has_value());
+  LMDJ_CHECK(complete.value().events == take.events);
 }
 
 void test_append_batch_validates_before_one_durable_append() {
@@ -513,8 +936,10 @@ void test_append_batch_sync_failure_preserves_recoverable_events() {
 void test_torn_final_record_is_ignored_and_repaired_before_append() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
-  ProjectStore store;
-  TakeJournal journal;
+  auto platform = std::make_shared<RecordingPlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  ProjectStore store{platform};
+  TakeJournal journal{platform};
   LMDJ_CHECK(store.create(bundle, new_project()).has_value());
   const auto take = recorded_take("take-1");
   LMDJ_CHECK(
@@ -523,6 +948,9 @@ void test_torn_final_record_is_ignored_and_repaired_before_append() {
   const auto active_path =
       bundle / "recovery/active" /
       (test_uuid("take-1") + ".jsonl");
+  const auto complete_prefix_length =
+      static_cast<std::uint64_t>(read_bytes(active_path).size());
+  platform->append_valid_prefix_lengths.clear();
   {
     std::ofstream torn(
         active_path, std::ios::binary | std::ios::app);
@@ -537,7 +965,10 @@ void test_torn_final_record_is_ignored_and_repaired_before_append() {
   LMDJ_CHECK(recovered.value().events.at(0) == take.events.at(0));
 
   LMDJ_CHECK(
-      restarted.append(bundle, take.id, take.events.at(1)).has_value());
+      journal.append(bundle, take.id, take.events.at(1)).has_value());
+  LMDJ_CHECK(
+      platform->append_valid_prefix_lengths ==
+      std::vector<std::uint64_t>{complete_prefix_length});
   const auto repaired_bytes = read_bytes(active_path);
   LMDJ_CHECK(repaired_bytes.find("\"frame_offset\":999") == std::string::npos);
   TakeJournal second_restart;
@@ -555,17 +986,22 @@ void test_record_take_keeps_journal_until_manifest_commit_then_cleans_it() {
   const auto take = recorded_take("take-1");
   begin_and_append(journal, bundle, take, 0);
 
-  const auto manifest_temp_blocker =
-      bundle /
-      ("manifest.json.tmp." + test_uuid("record-1"));
-  std::filesystem::create_directory(manifest_temp_blocker);
-  const auto failed = store.execute(
-      bundle,
-      Command{RecordTake{
-          meta("record-1", 0),
-          take,
-          recorded_pattern("pattern-1"),
-      }});
+  lmdj::foundation::Result<lmdj::domain::AppliedCommand> failed =
+      lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error,
+              "test command did not run",
+          });
+  {
+    FaultHookGuard hook(fail_manifest_publish);
+    failed = store.execute(
+        bundle,
+        Command{RecordTake{
+            meta("record-1", 0),
+            take,
+            recorded_pattern("pattern-1"),
+        }});
+  }
   LMDJ_CHECK(!failed.has_value());
   LMDJ_CHECK(failed.error().code == ErrorCode::io_error);
   LMDJ_CHECK(std::filesystem::is_regular_file(
@@ -576,7 +1012,6 @@ void test_record_take_keeps_journal_until_manifest_commit_then_cleans_it() {
   LMDJ_CHECK(before_commit.value().revision == 0);
   LMDJ_CHECK(before_commit.value().takes.empty());
 
-  std::filesystem::remove(manifest_temp_blocker);
   const auto committed = store.execute(
       bundle,
       Command{RecordTake{
@@ -843,6 +1278,68 @@ void test_sealed_candidates_survive_workspace_cleanup_and_project_load() {
   LMDJ_CHECK(candidates.value().at(0).reason == "interrupted");
 }
 
+void test_reopened_journal_recovers_only_generated_sealed_temp_residue() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "sealed-temp-recovery.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto opaque = std::string{"0123456789abcdef0123456789abcdef"};
+  const auto sealed_directory = bundle / "recovery/sealed";
+  const auto take_id = test_uuid("sealed-residue");
+  const std::array valid_destinations{
+      take_id + "-interrupted.json",
+      take_id + "-interrupted-1.json",
+      take_id + "-interrupted-42.json",
+  };
+  std::vector<std::filesystem::path> valid_residue;
+  for (const auto& destination : valid_destinations) {
+    auto residue = sealed_directory / (destination + ".tmp." + opaque);
+    write_bytes(residue, "valid-crash-residue");
+    valid_residue.push_back(std::move(residue));
+  }
+  const std::map<std::filesystem::path, std::string> invalid_residue{
+      {
+          sealed_directory / ("notes.json.tmp." + opaque),
+          "unmanaged-json",
+      },
+      {
+          sealed_directory / (take_id + ".json.tmp." + opaque),
+          "missing-reason",
+      },
+      {
+          sealed_directory /
+              (take_id + "-interrupted!.json.tmp." + opaque),
+          "unsanitized-reason",
+      },
+      {
+          sealed_directory /
+              (take_id + "-interrupted.txt.tmp." + opaque),
+          "wrong-destination-extension",
+      },
+      {
+          sealed_directory /
+              (take_id + "-interrupted.json.tmp." + opaque + ".keep"),
+          "near-token",
+      },
+  };
+  for (const auto& [path, content] : invalid_residue) {
+    write_bytes(path, content);
+  }
+
+  TakeJournal reopened;
+  const auto candidates = reopened.list_recoverable(bundle);
+
+  LMDJ_CHECK(candidates.has_value());
+  LMDJ_CHECK(candidates.value().empty());
+  for (const auto& path : valid_residue) {
+    LMDJ_CHECK(!std::filesystem::exists(path));
+  }
+  for (const auto& [path, content] : invalid_residue) {
+    LMDJ_CHECK(std::filesystem::is_regular_file(path));
+    LMDJ_CHECK(read_bytes(path) == content);
+  }
+}
+
 void test_symlinked_recovery_directory_is_rejected_before_seal() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
@@ -881,8 +1378,12 @@ int main() {
     test_typed_active_journal_preserves_captured_revision();
     test_take_journal_requires_uuid_and_48000_metadata();
     test_begin_sync_failure_preserves_io_error_and_can_retry();
+    test_begin_maps_only_explicit_storage_collision_to_duplicate_id();
+    test_default_journal_remains_copy_list_initializable();
+    test_journal_routes_mutations_through_semantic_operations_in_order();
     test_invalid_command_id_is_rejected_before_journal_matching();
     test_append_flushes_each_event_and_restart_reads_acknowledged_data();
+    test_same_platform_concurrent_appends_do_not_lose_acknowledged_events();
     test_append_batch_validates_before_one_durable_append();
     test_append_batch_sync_failure_preserves_recoverable_events();
     test_torn_final_record_is_ignored_and_repaired_before_append();
@@ -893,6 +1394,7 @@ int main() {
     test_fsync_failure_after_remove_replays_persisted_cleanup_obligation();
     test_revision_conflict_seals_candidate_without_changing_project_truth();
     test_sealed_candidates_survive_workspace_cleanup_and_project_load();
+    test_reopened_journal_recovers_only_generated_sealed_temp_residue();
     test_symlinked_recovery_directory_is_rejected_before_seal();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -2,11 +2,13 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <memory>
 #include <span>
 #include <string>
 #include <vector>
 
 #include <lmdj/domain/project.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 
 namespace lmdj::project_io {
 
@@ -28,6 +30,9 @@ struct RecoveryCandidate {
 
 class TakeJournal {
  public:
+  TakeJournal();
+  explicit TakeJournal(std::shared_ptr<ProjectStoragePlatform> platform);
+
   foundation::Result<void> begin(
       const std::filesystem::path& bundle,
       foundation::TakeId take_id,
@@ -53,6 +58,9 @@ class TakeJournal {
       std::string reason);
   foundation::Result<std::vector<RecoveryCandidate>> list_recoverable(
       const std::filesystem::path& bundle) const;
+
+ private:
+  std::shared_ptr<ProjectStoragePlatform> platform_;
 };
 
 }  // namespace lmdj::project_io

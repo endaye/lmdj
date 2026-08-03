@@ -3,24 +3,24 @@
 #include <exception>
 #include <filesystem>
 #include <fstream>
-#include <future>
 #include <iostream>
 #include <iterator>
 #include <map>
+#include <memory>
+#include <set>
 #include <string>
 #include <string_view>
 #include <utility>
-
-#include <fcntl.h>
-#include <sys/file.h>
-#include <unistd.h>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/project_store.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 
+#include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -40,6 +40,194 @@ using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
 using lmdj::project_io::ProjectStore;
+using lmdj::project_io::ProjectStoragePlatform;
+using lmdj::project_io::ProjectWriterLease;
+
+lmdj::foundation::Result<void> fail_manifest_publish(
+    lmdj::project_io::testing::FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point != lmdj::project_io::testing::FaultPoint::manifest_publish) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  return lmdj::foundation::Result<void>::failure(
+      lmdj::foundation::Error{
+          ErrorCode::io_error,
+          "injected manifest publication failure",
+          {{"path", path.generic_string()}},
+      });
+}
+
+class ProjectStoreFaultGuard {
+ public:
+  ProjectStoreFaultGuard() {
+    lmdj::project_io::testing::set_fault_hook(fail_manifest_publish);
+  }
+
+  ~ProjectStoreFaultGuard() {
+    lmdj::project_io::testing::set_fault_hook(nullptr);
+  }
+
+  ProjectStoreFaultGuard(const ProjectStoreFaultGuard&) = delete;
+  ProjectStoreFaultGuard& operator=(const ProjectStoreFaultGuard&) = delete;
+};
+
+class MemoryWriterLease final : public ProjectWriterLease {};
+
+class MemoryStoragePlatform final : public ProjectStoragePlatform {
+ public:
+  lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(
+      const std::filesystem::path&) override {
+    ++writer_acquisitions;
+    return lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>>::success(
+        std::make_unique<MemoryWriterLease>());
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    auto current = path.lexically_normal();
+    while (!current.empty()) {
+      directories_.insert(key(current));
+      const auto parent = current.parent_path();
+      if (parent == current) {
+        break;
+      }
+      current = parent;
+    }
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return lmdj::foundation::Result<bool>::success(
+        files_.contains(key(path)) || directories_.contains(key(path)));
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    const auto found = files_.find(key(path));
+    if (found == files_.end()) {
+      return lmdj::foundation::Result<std::uint64_t>::failure(error(path));
+    }
+    return lmdj::foundation::Result<std::uint64_t>::success(
+        found->second.size());
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    const auto found = files_.find(key(path));
+    if (found == files_.end()) {
+      return lmdj::foundation::Result<std::vector<std::byte>>::failure(
+          error(path));
+    }
+    return lmdj::foundation::Result<std::vector<std::byte>>::success(
+        found->second);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    const auto normalized = key(path);
+    if (files_.contains(normalized) || directories_.contains(normalized)) {
+      auto collision = error(path);
+      collision.details["storage_condition"] = "already_exists";
+      return lmdj::foundation::Result<void>::failure(std::move(collision));
+    }
+    files_[normalized] = {input.begin(), input.end()};
+    operation_log.push_back("create_immutable:" + normalized);
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    files_[key(path)] = {input.begin(), input.end()};
+    operation_log.push_back(
+        "replace_complete:" + path.lexically_normal().generic_string());
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> input) override {
+    const auto found = files_.find(key(path));
+    if (found == files_.end()) {
+      return lmdj::foundation::Result<void>::failure(error(path));
+    }
+    if (valid_prefix_length > found->second.size()) {
+      return lmdj::foundation::Result<void>::failure(error(path));
+    }
+    found->second.resize(static_cast<std::size_t>(valid_prefix_length));
+    found->second.insert(found->second.end(), input.begin(), input.end());
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    files_.erase(key(path));
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    if (!directories_.contains(key(path))) {
+      return lmdj::foundation::Result<std::vector<std::string>>::failure(
+          error(path));
+    }
+    std::vector<std::string> names;
+    const auto collect = [&path, &names](const std::string& encoded) {
+      const auto candidate = std::filesystem::path{encoded};
+      if (candidate.parent_path() == path.lexically_normal()) {
+        names.push_back(candidate.filename().string());
+      }
+    };
+    for (const auto& [encoded, ignored] : files_) {
+      (void)ignored;
+      collect(encoded);
+    }
+    std::sort(
+        names.begin(),
+        names.end(),
+        [](const std::string& left, const std::string& right) {
+          return std::lexicographical_compare(
+              left.begin(),
+              left.end(),
+              right.begin(),
+              right.end(),
+              [](unsigned char left_byte, unsigned char right_byte) {
+                return left_byte < right_byte;
+              });
+        });
+    names.erase(std::unique(names.begin(), names.end()), names.end());
+    return lmdj::foundation::Result<std::vector<std::string>>::success(
+        std::move(names));
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path&) const override {
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  std::vector<std::string> operation_log;
+  std::size_t writer_acquisitions = 0;
+
+ private:
+  static std::string key(const std::filesystem::path& path) {
+    return path.lexically_normal().generic_string();
+  }
+
+  static lmdj::foundation::Error error(
+      const std::filesystem::path& path) {
+    return {
+        ErrorCode::io_error,
+        "in-memory storage operation failed",
+        {{"path", path.generic_string()}},
+    };
+  }
+
+  std::set<std::string> directories_;
+  std::map<std::string, std::vector<std::byte>> files_;
+};
 
 class TempDirectory {
  public:
@@ -195,6 +383,41 @@ Command decode_create_pattern(const nlohmann::json& input) {
       },
       decode_pattern(input.at("pattern")),
   }};
+}
+
+void test_common_transactions_use_semantic_storage_obligations() {
+  const auto bundle = std::filesystem::path{"memory/project.lmdj"};
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore store{platform};
+
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(
+      platform->ensure_directory(bundle / "ignored-directory").has_value());
+  const std::vector<std::string> root_file_names{"manifest.json"};
+  LMDJ_CHECK(platform->list_names(bundle).value() == root_file_names);
+  platform->operation_log.clear();
+  const auto executed = store.execute(
+      bundle,
+      Command{create_pattern("semantic-command", 0, "semantic-pattern")});
+  LMDJ_CHECK(executed.has_value());
+  LMDJ_CHECK(executed.value().state.revision == 1);
+  LMDJ_CHECK(platform->writer_acquisitions >= 2);
+
+  const auto transaction =
+      bundle / "history/transactions" /
+      ("1-" + test_uuid("semantic-command") + ".json");
+  const auto checkpoint = bundle / "history/checkpoints/1.json";
+  const std::vector<std::string> expected_operations{
+      "create_immutable:" + transaction.generic_string(),
+      "create_immutable:" + checkpoint.generic_string(),
+      "replace_complete:" + (bundle / "manifest.json").generic_string(),
+  };
+  LMDJ_CHECK(platform->operation_log == expected_operations);
+}
+
+void test_default_store_remains_copy_list_initializable() {
+  ProjectStore store = {};
+  (void)store;
 }
 
 void test_canonical_checkpoint_round_trip_and_bundle_shape() {
@@ -369,10 +592,11 @@ void test_create_removes_exact_stale_checkpoint_temp() {
   const auto checkpoint_directory =
       bundle / "history/checkpoints";
   std::filesystem::create_directories(checkpoint_directory);
+  const auto opaque = std::string{"0123456789abcdef0123456789abcdef"};
   const auto exact_temp =
-      checkpoint_directory / "0.json.tmp.create";
+      checkpoint_directory / ("0.json.tmp." + opaque);
   const auto near_temp =
-      checkpoint_directory / "0.json.tmp.create.keep";
+      checkpoint_directory / ("0.json.tmp." + opaque + ".keep");
   write_bytes(exact_temp, "stale-checkpoint-temp");
   write_bytes(near_temp, "must-survive");
   ProjectStore store;
@@ -402,10 +626,11 @@ void test_create_resumes_manifest_after_valid_checkpoint_publish() {
       bundle / "history/checkpoints");
   const auto checkpoint =
       bundle / "history/checkpoints/0.json";
+  const auto opaque = std::string{"0123456789abcdef0123456789abcdef"};
   const auto exact_manifest_temp =
-      bundle / "manifest.json.tmp.create";
+      bundle / ("manifest.json.tmp." + opaque);
   const auto near_manifest_temp =
-      bundle / "manifest.json.tmp.create.keep";
+      bundle / ("manifest.json.tmp." + opaque + ".keep");
   write_bytes(checkpoint, checkpoint_bytes);
   write_bytes(exact_manifest_temp, "stale-manifest-temp");
   write_bytes(near_manifest_temp, "must-survive");
@@ -734,13 +959,18 @@ void test_write_failure_preserves_previous_manifest_and_recovers_orphans() {
           .has_value());
   const auto manifest_before = read_bytes(bundle / "manifest.json");
 
-  const auto manifest_temp_blocker =
-      bundle /
-      ("manifest.json.tmp." + test_uuid("command-fail"));
-  std::filesystem::create_directory(manifest_temp_blocker);
-  const auto failed = store.execute(
-      bundle,
-      Command{create_pattern("command-fail", 1, "pattern-fail")});
+  lmdj::foundation::Result<lmdj::domain::AppliedCommand> failed =
+      lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error,
+              "test command did not run",
+          });
+  {
+    ProjectStoreFaultGuard guard;
+    failed = store.execute(
+        bundle,
+        Command{create_pattern("command-fail", 1, "pattern-fail")});
+  }
 
   LMDJ_CHECK(!failed.has_value());
   LMDJ_CHECK(failed.error().code == ErrorCode::io_error);
@@ -751,7 +981,6 @@ void test_write_failure_preserves_previous_manifest_and_recovers_orphans() {
   LMDJ_CHECK(!survived.value().patterns.contains(
       PatternId{test_uuid("pattern-fail")}));
 
-  std::filesystem::remove(manifest_temp_blocker);
   const auto next = store.execute(
       bundle,
       Command{create_pattern("command-2", 1, "pattern-2")});
@@ -813,31 +1042,35 @@ void test_non_uuid_command_ids_are_rejected_before_publishing() {
   }
 }
 
-void test_recovery_removes_only_exact_uuid_temp_grammars() {
+void test_recovery_removes_only_exact_opaque_temp_grammars() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
   ProjectStore store;
   LMDJ_CHECK(store.create(bundle, new_project()).has_value());
 
+  const auto opaque = std::string{"0123456789abcdef0123456789abcdef"};
   const auto exact_checkpoint =
-      bundle / "history/checkpoints/99.json.tmp";
+      bundle / "history/checkpoints" / ("99.json.tmp." + opaque);
   const auto near_checkpoint =
-      bundle / "history/checkpoints/checkpoint-99.json.tmp";
+      bundle / "history/checkpoints" /
+      ("checkpoint-99.json.tmp." + opaque);
   const auto exact_transaction =
       bundle / "history/transactions" /
-      ("99-" + test_uuid("orphan-command") + ".json.tmp");
+      ("99-" + test_uuid("orphan-command") + ".json.tmp." + opaque);
   const auto near_transaction =
-      bundle / "history/transactions/transaction-99-foo.tmp.bar.json.tmp";
+      bundle / "history/transactions" /
+      ("transaction-99-" + test_uuid("orphan-command") + ".json.tmp." +
+       opaque);
   const auto exact_manifest =
-      bundle / ("manifest.json.tmp." + test_uuid("orphan-command"));
+      bundle / ("manifest.json.tmp." + opaque);
   const auto near_manifest =
-      bundle / "manifest.json.tmp.foo.tmp.bar";
+      bundle / ("manifest.json.tmp." + opaque + ".keep");
   const auto sha256 = std::string(64, 'a');
   const auto exact_asset =
       bundle / "assets" /
-      (sha256 + ".wav.tmp." + test_uuid("orphan-command"));
+      (sha256 + ".wav.tmp." + opaque);
   const auto near_asset =
-      bundle / "assets" / (sha256 + ".wav.tmp.foo.tmp.bar");
+      bundle / "assets" / (sha256 + ".wav.tmp." + opaque + ".keep");
   const std::array exact_paths{
       exact_checkpoint,
       exact_transaction,
@@ -972,31 +1205,31 @@ void test_symlinked_managed_directory_is_rejected_before_recovery() {
       regular_file_count(bundle / "history/transactions") == 0);
 }
 
-void test_independent_advisory_lock_blocks_execute_until_release() {
-  using namespace std::chrono_literals;
+void test_independent_platform_reports_busy_until_release() {
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
   ProjectStore store;
   LMDJ_CHECK(store.create(bundle, new_project()).has_value());
 
-  const int lock_fd =
-      ::open((bundle / ".lock").c_str(), O_RDWR | O_CLOEXEC);
-  LMDJ_CHECK(lock_fd >= 0);
-  LMDJ_CHECK(::flock(lock_fd, LOCK_EX) == 0);
-
-  auto pending = std::async(
-      std::launch::async,
-      [&store, &bundle]() {
-        return store.execute(
-            bundle,
-            Command{create_pattern("command-locked", 0, "pattern-locked")});
-      });
-  LMDJ_CHECK(pending.wait_for(150ms) == std::future_status::timeout);
+  auto holder_platform =
+      lmdj::project_io::make_default_project_storage_platform();
+  auto held = holder_platform->acquire_writer(bundle);
+  LMDJ_CHECK(held.has_value());
+  auto competing_platform =
+      lmdj::project_io::make_default_project_storage_platform();
+  ProjectStore competing_store{competing_platform};
+  const auto busy = competing_store.execute(
+      bundle,
+      Command{create_pattern("command-locked", 0, "pattern-locked")});
+  LMDJ_CHECK(!busy.has_value());
+  LMDJ_CHECK(busy.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(busy.error().details.at("storage_condition") == "project_busy");
   LMDJ_CHECK(read_json(bundle / "manifest.json").at("head_revision") == 0);
 
-  LMDJ_CHECK(::flock(lock_fd, LOCK_UN) == 0);
-  LMDJ_CHECK(::close(lock_fd) == 0);
-  const auto committed = pending.get();
+  held.value().reset();
+  const auto committed = competing_store.execute(
+      bundle,
+      Command{create_pattern("command-locked", 0, "pattern-locked")});
   LMDJ_CHECK(committed.has_value());
   LMDJ_CHECK(committed.value().state.revision == 1);
   LMDJ_CHECK(
@@ -1101,6 +1334,8 @@ void test_artifact_read_rejects_symlinked_intermediate_directory() {
 
 int main() {
   try {
+    test_common_transactions_use_semantic_storage_obligations();
+    test_default_store_remains_copy_list_initializable();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
     test_persisted_checkpoints_reject_non_contract_shapes();
     test_create_removes_exact_stale_checkpoint_temp();
@@ -1115,10 +1350,10 @@ int main() {
     test_write_failure_preserves_previous_manifest_and_recovers_orphans();
     test_duplicate_command_replays_after_reopen_without_new_files();
     test_non_uuid_command_ids_are_rejected_before_publishing();
-    test_recovery_removes_only_exact_uuid_temp_grammars();
+    test_recovery_removes_only_exact_opaque_temp_grammars();
     test_public_commands_reject_unsafe_ids_before_publishing();
     test_symlinked_managed_directory_is_rejected_before_recovery();
-    test_independent_advisory_lock_blocks_execute_until_release();
+    test_independent_platform_reports_busy_until_release();
     test_artifact_reads_are_bounded_symlink_safe_and_integrity_verified();
     test_artifact_read_rejects_symlinked_intermediate_directory();
   } catch (const std::exception& error) {

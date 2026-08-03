@@ -2,16 +2,15 @@
 
 #include <algorithm>
 #include <array>
-#include <cerrno>
 #include <charconv>
 #include <cctype>
-#include <cstring>
-#include <fstream>
 #include <initializer_list>
 #include <limits>
 #include <map>
+#include <memory>
 #include <optional>
 #include <set>
+#include <span>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
@@ -19,20 +18,11 @@
 #include <variant>
 #include <vector>
 
-#include <fcntl.h>
-#include <sys/file.h>
-#include <sys/stat.h>
-#include <unistd.h>
-
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/take_journal.hpp>
-
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-#include "testing_hooks.hpp"
-#endif
 
 namespace lmdj::project_io {
 namespace {
@@ -41,68 +31,6 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uint64_t kMaximumArtifactBytes = 64U * 1024U * 1024U;
-
-class BundleLock {
- public:
-  explicit BundleLock(int descriptor) : descriptor_(descriptor) {}
-
-  BundleLock(const BundleLock&) = delete;
-  BundleLock& operator=(const BundleLock&) = delete;
-
-  BundleLock(BundleLock&& other) noexcept
-      : descriptor_(std::exchange(other.descriptor_, -1)) {}
-
-  BundleLock& operator=(BundleLock&& other) noexcept {
-    if (this != &other) {
-      release();
-      descriptor_ = std::exchange(other.descriptor_, -1);
-    }
-    return *this;
-  }
-
-  ~BundleLock() { release(); }
-
- private:
-  void release() {
-    if (descriptor_ < 0) {
-      return;
-    }
-    ::flock(descriptor_, LOCK_UN);
-    ::close(descriptor_);
-    descriptor_ = -1;
-  }
-
-  int descriptor_;
-};
-
-class OwnedDescriptor {
- public:
-  explicit OwnedDescriptor(int descriptor) : descriptor_(descriptor) {}
-  OwnedDescriptor(const OwnedDescriptor&) = delete;
-  OwnedDescriptor& operator=(const OwnedDescriptor&) = delete;
-  OwnedDescriptor(OwnedDescriptor&& other) noexcept
-      : descriptor_(std::exchange(other.descriptor_, -1)) {}
-  OwnedDescriptor& operator=(OwnedDescriptor&& other) noexcept {
-    if (this != &other) {
-      close();
-      descriptor_ = std::exchange(other.descriptor_, -1);
-    }
-    return *this;
-  }
-  ~OwnedDescriptor() { close(); }
-
-  int get() const noexcept { return descriptor_; }
-
- private:
-  void close() noexcept {
-    if (descriptor_ >= 0) {
-      ::close(descriptor_);
-      descriptor_ = -1;
-    }
-  }
-
-  int descriptor_;
-};
 
 struct LoadedProject {
   domain::ProjectState state;
@@ -115,7 +43,6 @@ struct LoadedProject {
 struct ArtifactStage {
   std::filesystem::path source;
   foundation::ArtifactRef artifact;
-  foundation::CommandId command_id;
 };
 
 bool valid_sha256(std::string_view value) {
@@ -127,20 +54,6 @@ bool valid_sha256(std::string_view value) {
                return (character >= '0' && character <= '9') ||
                       (character >= 'a' && character <= 'f');
              });
-}
-
-Error io_error(
-    std::string message,
-    const std::filesystem::path& path,
-    int system_error = errno) {
-  return Error{
-      ErrorCode::io_error,
-      std::move(message),
-      {
-          {"path", path.generic_string()},
-          {"system_error", std::strerror(system_error)},
-      },
-  };
 }
 
 Error invalid_project(
@@ -158,74 +71,10 @@ Error invalid_project(
   };
 }
 
-foundation::Result<void> reject_symlinks_in_existing_tree(
-    const std::filesystem::path& root) {
-  std::error_code status_error;
-  const auto root_status = std::filesystem::symlink_status(root, status_error);
-  if (status_error) {
-    if (status_error ==
-        std::make_error_code(std::errc::no_such_file_or_directory)) {
-      return foundation::Result<void>::success();
-    }
-    return foundation::Result<void>::failure(
-        io_error(
-            "project path could not be inspected without following links",
-            root,
-            status_error.value()));
-  }
-  if (root_status.type() == std::filesystem::file_type::not_found) {
-    return foundation::Result<void>::success();
-  }
-  if (std::filesystem::is_symlink(root_status)) {
-    return foundation::Result<void>::failure(
-        invalid_project("project bundle contains a symbolic link", root));
-  }
-  if (!std::filesystem::is_directory(root_status)) {
-    return foundation::Result<void>::success();
-  }
-
-  std::error_code iterator_error;
-  std::filesystem::recursive_directory_iterator iterator(
-      root, std::filesystem::directory_options::none, iterator_error);
-  const std::filesystem::recursive_directory_iterator end;
-  while (iterator != end) {
-    if (iterator_error) {
-      return foundation::Result<void>::failure(
-          io_error(
-              "project tree could not be inspected without following links",
-              root,
-              iterator_error.value()));
-    }
-    const auto entry_status =
-        std::filesystem::symlink_status(iterator->path(), status_error);
-    if (status_error) {
-      return foundation::Result<void>::failure(
-          io_error(
-              "project entry could not be inspected without following links",
-              iterator->path(),
-              status_error.value()));
-    }
-    if (std::filesystem::is_symlink(entry_status)) {
-      return foundation::Result<void>::failure(
-          invalid_project(
-              "project bundle contains a symbolic link",
-              iterator->path()));
-    }
-    iterator.increment(iterator_error);
-  }
-  if (iterator_error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "project tree could not be inspected without following links",
-            root,
-            iterator_error.value()));
-  }
-  return foundation::Result<void>::success();
-}
-
 foundation::Result<void> validate_managed_bundle_tree(
+    const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
-  const auto no_symlinks = reject_symlinks_in_existing_tree(bundle);
+  const auto no_symlinks = platform.validate_managed_tree(bundle);
   if (!no_symlinks.has_value()) {
     return no_symlinks;
   }
@@ -240,304 +89,73 @@ foundation::Result<void> validate_managed_bundle_tree(
       bundle / "recovery/sealed",
   };
   for (const auto& directory : managed_directories) {
-    std::error_code status_error;
-    const auto status =
-        std::filesystem::symlink_status(directory, status_error);
-    if (status_error || !std::filesystem::is_directory(status)) {
+    const auto names = platform.list_names(directory);
+    if (!names.has_value()) {
       return foundation::Result<void>::failure(
           invalid_project(
               "project managed directory is missing or invalid",
               directory,
-              status_error.message()));
+              names.error().message));
     }
   }
-  std::error_code manifest_error;
-  const auto manifest_status = std::filesystem::symlink_status(
-      bundle / "manifest.json", manifest_error);
-  if (manifest_error ||
-      !std::filesystem::is_regular_file(manifest_status)) {
+  const auto manifest = platform.byte_length(bundle / "manifest.json");
+  if (!manifest.has_value()) {
     return foundation::Result<void>::failure(
         invalid_project(
             "project manifest is missing or invalid",
             bundle / "manifest.json",
-            manifest_error.message()));
+            manifest.error().message));
   }
   return foundation::Result<void>::success();
 }
 
-foundation::Result<BundleLock> acquire_lock(
-    const std::filesystem::path& bundle) {
-  std::error_code status_error;
-  if (!std::filesystem::is_directory(bundle, status_error)) {
-    return foundation::Result<BundleLock>::failure(
-        Error{
-            status_error ? ErrorCode::io_error : ErrorCode::not_found,
-            "project bundle directory does not exist",
-            {
-                {"path", bundle.generic_string()},
-                {"system_error", status_error.message()},
-            },
-        });
-  }
-  const auto path = bundle / ".lock";
-  const int descriptor =
-      ::open(
-          path.c_str(),
-          O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
-          0644);
-  if (descriptor < 0) {
-    return foundation::Result<BundleLock>::failure(
-        io_error("project lock file could not be opened", path));
-  }
-  while (::flock(descriptor, LOCK_EX) != 0) {
-    if (errno == EINTR) {
-      continue;
-    }
-    const auto error =
-        io_error("project lock could not be acquired", path);
-    ::close(descriptor);
-    return foundation::Result<BundleLock>::failure(error);
-  }
-  return foundation::Result<BundleLock>::success(BundleLock{descriptor});
+std::span<const std::byte> byte_span(std::string_view bytes) {
+  return {
+      reinterpret_cast<const std::byte*>(bytes.data()),
+      bytes.size(),
+  };
 }
 
-foundation::Result<OwnedDescriptor> open_directory_without_symlinks(
+std::string byte_string(std::span<const std::byte> bytes) {
+  if (bytes.empty()) {
+    return {};
+  }
+  return {
+      reinterpret_cast<const char*>(bytes.data()),
+      bytes.size(),
+  };
+}
+
+foundation::Result<std::string> read_file_bytes(
+    const ProjectStoragePlatform& platform,
     const std::filesystem::path& path) {
-  auto normalized = path.lexically_normal();
-#if defined(__APPLE__)
-  const auto relative = normalized.relative_path();
-  if (normalized.is_absolute() && !relative.empty()) {
-    const auto first = *relative.begin();
-    if (first == "var" || first == "tmp") {
-      normalized = std::filesystem::path("/private") / relative;
-    }
+  auto bytes = platform.read_complete(path);
+  if (!bytes.has_value()) {
+    return foundation::Result<std::string>::failure(bytes.error());
   }
-#endif
-  if (normalized.empty()) {
-    return foundation::Result<OwnedDescriptor>::failure(
-        invalid_project("directory path is empty", path));
-  }
-  const int start = ::open(
-      normalized.is_absolute() ? "/" : ".",
-      O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (start < 0) {
-    return foundation::Result<OwnedDescriptor>::failure(
-        io_error("directory traversal root could not be opened", path));
-  }
-  OwnedDescriptor current(start);
-  for (const auto& component : normalized.relative_path()) {
-    if (component.empty() || component == ".") {
-      continue;
-    }
-    if (component == "..") {
-      return foundation::Result<OwnedDescriptor>::failure(
-          invalid_project(
-              "directory traversal cannot contain parent components",
-              path));
-    }
-    const int next = ::openat(
-        current.get(),
-        component.c_str(),
-        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-    if (next < 0) {
-      if (errno == ELOOP || errno == ENOTDIR) {
-        return foundation::Result<OwnedDescriptor>::failure(
-            invalid_project(
-                "directory traversal encountered a symbolic or invalid component",
-                path,
-                component.generic_string()));
-      }
-      return foundation::Result<OwnedDescriptor>::failure(
-          io_error(
-              "directory traversal component could not be opened",
-              path));
-    }
-    current = OwnedDescriptor(next);
-  }
-  return foundation::Result<OwnedDescriptor>::success(std::move(current));
-}
-
-foundation::Result<BundleLock> acquire_lock_at(
-    int bundle_descriptor,
-    const std::filesystem::path& bundle) {
-  const int descriptor = ::openat(
-      bundle_descriptor,
-      ".lock",
-      O_RDWR | O_CLOEXEC | O_NOFOLLOW);
-  if (descriptor < 0) {
-    return foundation::Result<BundleLock>::failure(
-        io_error(
-            "project lock file could not be opened through bundle handle",
-            bundle / ".lock"));
-  }
-  struct stat metadata {};
-  if (::fstat(descriptor, &metadata) != 0 ||
-      !S_ISREG(metadata.st_mode)) {
-    const auto error = invalid_project(
-        "project lock is not a regular file",
-        bundle / ".lock");
-    ::close(descriptor);
-    return foundation::Result<BundleLock>::failure(error);
-  }
-  while (::flock(descriptor, LOCK_EX) != 0) {
-    if (errno == EINTR) {
-      continue;
-    }
-    const auto error =
-        io_error("project lock could not be acquired", bundle / ".lock");
-    ::close(descriptor);
-    return foundation::Result<BundleLock>::failure(error);
-  }
-  return foundation::Result<BundleLock>::success(BundleLock{descriptor});
-}
-
-foundation::Result<void> write_all(
-    int descriptor,
-    std::string_view bytes,
-    const std::filesystem::path& path) {
-  std::size_t offset = 0;
-  while (offset < bytes.size()) {
-    const auto written = ::write(
-        descriptor,
-        bytes.data() + offset,
-        bytes.size() - offset);
-    if (written < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return foundation::Result<void>::failure(
-          io_error("project bytes could not be written", path));
-    }
-    offset += static_cast<std::size_t>(written);
-  }
-  return foundation::Result<void>::success();
-}
-
-foundation::Result<void> fsync_descriptor(
-    int descriptor,
-    const std::filesystem::path& path) {
-  while (::fsync(descriptor) != 0) {
-    if (errno == EINTR) {
-      continue;
-    }
-    return foundation::Result<void>::failure(
-        io_error("project bytes could not be flushed", path));
-  }
-  return foundation::Result<void>::success();
-}
-
-foundation::Result<void> fsync_directory(
-    const std::filesystem::path& directory) {
-  const int descriptor =
-      ::open(directory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-  if (descriptor < 0) {
-    return foundation::Result<void>::failure(
-        io_error("project directory could not be opened for flush", directory));
-  }
-  while (::fsync(descriptor) != 0) {
-    if (errno == EINTR) {
-      continue;
-    }
-    if (errno == EINVAL || errno == ENOTSUP) {
-      ::close(descriptor);
-      return foundation::Result<void>::success();
-    }
-    const auto error =
-        io_error("project directory could not be flushed", directory);
-    ::close(descriptor);
-    return foundation::Result<void>::failure(error);
-  }
-  if (::close(descriptor) != 0) {
-    return foundation::Result<void>::failure(
-        io_error("project directory could not be closed", directory));
-  }
-  return foundation::Result<void>::success();
-}
-
-foundation::Result<void> fsync_active_directory(
-    const std::filesystem::path& directory) {
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::active_directory_sync, directory);
-  if (!intercepted.has_value()) {
-    return intercepted;
-  }
-#endif
-  return fsync_directory(directory);
-}
-
-foundation::Result<void> write_new_file(
-    const std::filesystem::path& path,
-    std::string_view bytes
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-    ,
-    std::optional<testing::FaultPoint> sync_fault = std::nullopt
-#endif
-    ) {
-  const int descriptor =
-      ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0644);
-  if (descriptor < 0) {
-    return foundation::Result<void>::failure(
-        io_error("project file could not be created", path));
-  }
-  const auto written = write_all(descriptor, bytes, path);
-  auto synced = foundation::Result<void>::success();
-  if (written.has_value()) {
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-    if (sync_fault.has_value()) {
-      synced = testing::detail::invoke_fault(*sync_fault, path);
-    }
-#endif
-    if (synced.has_value()) {
-      synced = fsync_descriptor(descriptor, path);
-    }
-  }
-  const int close_result = ::close(descriptor);
-  if (!written.has_value()) {
-    return written;
-  }
-  if (!synced.has_value()) {
-    return synced;
-  }
-  if (close_result != 0) {
-    return foundation::Result<void>::failure(
-        io_error("project file could not be closed", path));
-  }
-  return foundation::Result<void>::success();
-}
-
-foundation::Result<void> rename_file(
-    const std::filesystem::path& source,
-    const std::filesystem::path& destination) {
-  std::error_code error;
-  std::filesystem::rename(source, destination, error);
-  if (error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "project file could not be published",
-            destination,
-            error.value()));
-  }
-  return foundation::Result<void>::success();
+  return foundation::Result<std::string>::success(
+      byte_string(bytes.value()));
 }
 
 foundation::Result<nlohmann::json> read_json(
+    const ProjectStoragePlatform& platform,
     const std::filesystem::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    const auto code = std::filesystem::exists(path)
-                          ? ErrorCode::io_error
-                          : ErrorCode::not_found;
-    return foundation::Result<nlohmann::json>::failure(
-        Error{
-            code,
-            "project JSON file could not be opened",
-            {{"path", path.generic_string()}},
-        });
+  auto bytes = read_file_bytes(platform, path);
+  if (!bytes.has_value()) {
+    auto existing = platform.exists(path);
+    if (existing.has_value() && !existing.value()) {
+      return foundation::Result<nlohmann::json>::failure(
+          Error{
+              ErrorCode::not_found,
+              "project JSON file could not be opened",
+              {{"path", path.generic_string()}},
+          });
+    }
+    return foundation::Result<nlohmann::json>::failure(bytes.error());
   }
   try {
     return foundation::Result<nlohmann::json>::success(
-        nlohmann::json::parse(stream));
+        nlohmann::json::parse(bytes.value()));
   } catch (const std::exception& exception) {
     return foundation::Result<nlohmann::json>::failure(
         invalid_project(
@@ -547,22 +165,42 @@ foundation::Result<nlohmann::json> read_json(
   }
 }
 
-foundation::Result<std::string> read_file_bytes(
-    const std::filesystem::path& path) {
-  std::ifstream stream(path, std::ios::binary);
-  if (!stream) {
-    return foundation::Result<std::string>::failure(
-        io_error("project file could not be opened", path));
+foundation::ArtifactRef describe_bytes(
+    std::span<const std::byte> bytes,
+    std::string media_type) {
+  picosha2::hash256_one_by_one hasher;
+  if (!bytes.empty()) {
+    const auto* begin =
+        reinterpret_cast<const unsigned char*>(bytes.data());
+    hasher.process(begin, begin + bytes.size());
   }
-  std::string bytes{
-      std::istreambuf_iterator<char>(stream),
-      std::istreambuf_iterator<char>(),
+  hasher.finish();
+  return foundation::ArtifactRef{
+      picosha2::get_hash_hex_string(hasher),
+      std::move(media_type),
+      bytes.size(),
   };
-  if (stream.bad()) {
-    return foundation::Result<std::string>::failure(
-        io_error("project file could not be read completely", path));
+}
+
+foundation::Result<foundation::ArtifactRef> describe_artifact(
+    const ProjectStoragePlatform& platform,
+    const std::filesystem::path& path,
+    std::string media_type) {
+  auto bytes = platform.read_complete(path);
+  if (!bytes.has_value()) {
+    auto existing = platform.exists(path);
+    if (existing.has_value() && !existing.value()) {
+      return foundation::Result<foundation::ArtifactRef>::failure(
+          Error{
+              ErrorCode::not_found,
+              "artifact path does not exist",
+              {{"path", path.generic_string()}},
+          });
+    }
+    return foundation::Result<foundation::ArtifactRef>::failure(bytes.error());
   }
-  return foundation::Result<std::string>::success(std::move(bytes));
+  return foundation::Result<foundation::ArtifactRef>::success(
+      describe_bytes(bytes.value(), std::move(media_type)));
 }
 
 nlohmann::json slot_json(domain::PadSlotId slot) {
@@ -1255,9 +893,10 @@ bool safe_relative_path(
 }
 
 foundation::Result<LoadedProject> load_project(
+    const ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
   const auto manifest_path = bundle / "manifest.json";
-  auto manifest_result = read_json(manifest_path);
+  auto manifest_result = read_json(platform, manifest_path);
   if (!manifest_result.has_value()) {
     return foundation::Result<LoadedProject>::failure(
         manifest_result.error());
@@ -1285,7 +924,7 @@ foundation::Result<LoadedProject> load_project(
     }
 
     auto initial_json =
-        read_json(bundle / "history/checkpoints/0.json");
+        read_json(platform, bundle / "history/checkpoints/0.json");
     if (!initial_json.has_value()) {
       return foundation::Result<LoadedProject>::failure(initial_json.error());
     }
@@ -1315,7 +954,7 @@ foundation::Result<LoadedProject> load_project(
         return foundation::Result<LoadedProject>::failure(
             invalid_project("project transaction path is invalid", manifest_path));
       }
-      auto transaction = read_json(bundle / relative);
+      auto transaction = read_json(platform, bundle / relative);
       if (!transaction.has_value()) {
         return foundation::Result<LoadedProject>::failure(
             transaction.error());
@@ -1376,7 +1015,7 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    auto checkpoint_json = read_json(bundle / head_checkpoint);
+    auto checkpoint_json = read_json(platform, bundle / head_checkpoint);
     if (!checkpoint_json.has_value()) {
       return foundation::Result<LoadedProject>::failure(
           checkpoint_json.error());
@@ -1400,7 +1039,7 @@ foundation::Result<LoadedProject> load_project(
       const auto blob =
           bundle / "assets" / (asset.artifact.sha256 + ".wav");
       const auto described =
-          foundation::describe_artifact(blob, asset.artifact.media_type);
+          describe_artifact(platform, blob, asset.artifact.media_type);
       if (!described.has_value() ||
           described.value() != asset.artifact) {
         return foundation::Result<LoadedProject>::failure(
@@ -1434,12 +1073,35 @@ std::optional<std::uint64_t> leading_revision(std::string_view name) {
   return value;
 }
 
+std::optional<std::string_view> opaque_temp_destination(
+    std::string_view name) {
+  constexpr std::string_view marker = ".tmp.";
+  const auto marker_position = name.rfind(marker);
+  if (marker_position == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const auto token = name.substr(marker_position + marker.size());
+  if (token.size() != 32 ||
+      !std::all_of(
+          token.begin(),
+          token.end(),
+          [](unsigned char character) {
+            return (character >= '0' && character <= '9') ||
+                   (character >= 'a' && character <= 'f');
+          })) {
+    return std::nullopt;
+  }
+  return name.substr(0, marker_position);
+}
+
 bool checkpoint_temp_name(std::string_view name) {
-  constexpr std::string_view suffix = ".json.tmp";
-  if (!name.ends_with(suffix)) {
+  const auto destination = opaque_temp_destination(name);
+  constexpr std::string_view suffix = ".json";
+  if (!destination.has_value() || !destination->ends_with(suffix)) {
     return false;
   }
-  const auto revision = name.substr(0, name.size() - suffix.size());
+  const auto revision =
+      destination->substr(0, destination->size() - suffix.size());
   std::uint64_t parsed_revision = 0;
   const auto parsed = std::from_chars(
       revision.data(), revision.data() + revision.size(), parsed_revision);
@@ -1448,11 +1110,13 @@ bool checkpoint_temp_name(std::string_view name) {
 }
 
 bool transaction_temp_name(std::string_view name) {
-  constexpr std::string_view suffix = ".json.tmp";
-  if (!name.ends_with(suffix)) {
+  const auto destination = opaque_temp_destination(name);
+  constexpr std::string_view suffix = ".json";
+  if (!destination.has_value() || !destination->ends_with(suffix)) {
     return false;
   }
-  const auto stem = name.substr(0, name.size() - suffix.size());
+  const auto stem =
+      destination->substr(0, destination->size() - suffix.size());
   const auto separator = stem.find('-');
   if (separator == std::string_view::npos || separator == 0) {
     return false;
@@ -1466,74 +1130,94 @@ bool transaction_temp_name(std::string_view name) {
 }
 
 bool asset_temp_name(std::string_view name) {
-  constexpr std::string_view marker = ".wav.tmp.";
-  return name.size() > 64 + marker.size() &&
-         valid_sha256(name.substr(0, 64)) &&
-         name.substr(64, marker.size()) == marker &&
-         domain::is_valid_uuid(name.substr(64 + marker.size()));
+  const auto destination = opaque_temp_destination(name);
+  constexpr std::string_view suffix = ".wav";
+  return destination.has_value() &&
+         destination->size() == 64 + suffix.size() &&
+         destination->ends_with(suffix) &&
+         valid_sha256(destination->substr(0, 64));
 }
 
 bool manifest_temp_name(std::string_view name) {
-  constexpr std::string_view prefix = "manifest.json.tmp.";
-  return name.starts_with(prefix) &&
-         domain::is_valid_uuid(name.substr(prefix.size()));
+  const auto destination = opaque_temp_destination(name);
+  return destination.has_value() && *destination == "manifest.json";
+}
+
+foundation::Result<void> recover_initial_create_residue(
+    ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle) {
+  const auto checkpoints = bundle / "history/checkpoints";
+  auto checkpoint_names = platform.list_names(checkpoints);
+  if (!checkpoint_names.has_value()) {
+    return foundation::Result<void>::failure(checkpoint_names.error());
+  }
+  for (const auto& name : checkpoint_names.value()) {
+    if (!checkpoint_temp_name(name) || leading_revision(name) != 0) {
+      continue;
+    }
+    const auto removed = platform.remove(checkpoints / name);
+    if (!removed.has_value()) {
+      return removed;
+    }
+  }
+  auto bundle_names = platform.list_names(bundle);
+  if (!bundle_names.has_value()) {
+    return foundation::Result<void>::failure(bundle_names.error());
+  }
+  for (const auto& name : bundle_names.value()) {
+    if (!manifest_temp_name(name)) {
+      continue;
+    }
+    const auto removed = platform.remove(bundle / name);
+    if (!removed.has_value()) {
+      return removed;
+    }
+  }
+  return foundation::Result<void>::success();
 }
 
 foundation::Result<void> recover_uncommitted(
+    ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     const LoadedProject& loaded) {
   const auto checkpoints = bundle / "history/checkpoints";
   const auto transactions = bundle / "history/transactions";
   const auto assets = bundle / "assets";
-  bool checkpoints_changed = false;
-  bool transactions_changed = false;
-  bool assets_changed = false;
-  bool bundle_changed = false;
   const std::set<std::string> committed_transactions(
       loaded.transactions.begin(), loaded.transactions.end());
 
-  std::error_code error;
-  for (const auto& entry : std::filesystem::directory_iterator(checkpoints)) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    const auto name = entry.path().filename().string();
+  auto checkpoint_names = platform.list_names(checkpoints);
+  if (!checkpoint_names.has_value()) {
+    return foundation::Result<void>::failure(checkpoint_names.error());
+  }
+  for (const auto& name : checkpoint_names.value()) {
     const auto revision = leading_revision(name);
     if (checkpoint_temp_name(name) ||
         (revision.has_value() && *revision > loaded.state.revision)) {
-      std::filesystem::remove(entry.path(), error);
-      if (error) {
-        return foundation::Result<void>::failure(
-            io_error(
-                "orphan checkpoint could not be removed",
-                entry.path(),
-                error.value()));
+      const auto removed = platform.remove(checkpoints / name);
+      if (!removed.has_value()) {
+        return removed;
       }
-      checkpoints_changed = true;
     }
   }
-  for (const auto& entry : std::filesystem::directory_iterator(transactions)) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    const auto name = entry.path().filename().string();
+  auto transaction_names = platform.list_names(transactions);
+  if (!transaction_names.has_value()) {
+    return foundation::Result<void>::failure(transaction_names.error());
+  }
+  for (const auto& name : transaction_names.value()) {
     const auto relative =
-        std::filesystem::relative(entry.path(), bundle).generic_string();
+        (std::filesystem::path{"history/transactions"} / name)
+            .generic_string();
     if (committed_transactions.contains(relative)) {
       continue;
     }
     const auto revision = leading_revision(name);
     if (transaction_temp_name(name) ||
         (revision.has_value() && *revision > loaded.state.revision)) {
-      std::filesystem::remove(entry.path(), error);
-      if (error) {
-        return foundation::Result<void>::failure(
-            io_error(
-                "orphan transaction could not be removed",
-                entry.path(),
-                error.value()));
+      const auto removed = platform.remove(transactions / name);
+      if (!removed.has_value()) {
+        return removed;
       }
-      transactions_changed = true;
     }
   }
 
@@ -1542,62 +1226,34 @@ foundation::Result<void> recover_uncommitted(
     (void)asset_id;
     referenced_assets.insert(asset.artifact.sha256);
   }
-  for (const auto& entry : std::filesystem::directory_iterator(assets)) {
-    if (!entry.is_regular_file()) {
-      continue;
-    }
-    const auto name = entry.path().filename().string();
-    const auto stem = entry.path().stem().string();
+  auto asset_names = platform.list_names(assets);
+  if (!asset_names.has_value()) {
+    return foundation::Result<void>::failure(asset_names.error());
+  }
+  for (const auto& name : asset_names.value()) {
+    const auto path = assets / name;
+    const auto stem = path.stem().string();
     if (asset_temp_name(name) ||
-        (entry.path().extension() == ".wav" &&
+        (path.extension() == ".wav" &&
          valid_sha256(stem) &&
          !referenced_assets.contains(stem))) {
-      std::filesystem::remove(entry.path(), error);
-      if (error) {
-        return foundation::Result<void>::failure(
-            io_error(
-                "orphan asset could not be removed",
-                entry.path(),
-                error.value()));
+      const auto removed = platform.remove(path);
+      if (!removed.has_value()) {
+        return removed;
       }
-      assets_changed = true;
     }
   }
-  for (const auto& entry : std::filesystem::directory_iterator(bundle)) {
-    const auto name = entry.path().filename().string();
-    if (entry.is_regular_file() && manifest_temp_name(name)) {
-      std::filesystem::remove(entry.path(), error);
-      if (error) {
-        return foundation::Result<void>::failure(
-            io_error(
-                "orphan manifest temp file could not be removed",
-                entry.path(),
-                error.value()));
+  auto bundle_names = platform.list_names(bundle);
+  if (!bundle_names.has_value()) {
+    return foundation::Result<void>::failure(bundle_names.error());
+  }
+  for (const auto& name : bundle_names.value()) {
+    if (manifest_temp_name(name)) {
+      const auto removed = platform.remove(bundle / name);
+      if (!removed.has_value()) {
+        return removed;
       }
-      bundle_changed = true;
     }
-  }
-
-  if (checkpoints_changed) {
-    const auto synced = fsync_directory(checkpoints);
-    if (!synced.has_value()) {
-      return synced;
-    }
-  }
-  if (transactions_changed) {
-    const auto synced = fsync_directory(transactions);
-    if (!synced.has_value()) {
-      return synced;
-    }
-  }
-  if (assets_changed) {
-    const auto synced = fsync_directory(assets);
-    if (!synced.has_value()) {
-      return synced;
-    }
-  }
-  if (bundle_changed) {
-    return fsync_directory(bundle);
   }
   return foundation::Result<void>::success();
 }
@@ -1615,14 +1271,19 @@ nlohmann::json manifest_json(
 }
 
 foundation::Result<void> publish_artifact(
+    ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     const ArtifactStage& stage) {
   const auto directory = bundle / "assets";
   const auto final_path =
       directory / (stage.artifact.sha256 + ".wav");
-  if (std::filesystem::exists(final_path)) {
-    const auto described = foundation::describe_artifact(
-        final_path, stage.artifact.media_type);
+  auto final_exists = platform.exists(final_path);
+  if (!final_exists.has_value()) {
+    return foundation::Result<void>::failure(final_exists.error());
+  }
+  if (final_exists.value()) {
+    const auto described = describe_artifact(
+        platform, final_path, stage.artifact.media_type);
     if (!described.has_value() ||
         described.value() != stage.artifact) {
       return foundation::Result<void>::failure(
@@ -1633,68 +1294,13 @@ foundation::Result<void> publish_artifact(
     return foundation::Result<void>::success();
   }
 
-  const auto temp_path =
-      final_path.string() + ".tmp." + stage.command_id.value();
-  const int source =
-      ::open(stage.source.c_str(), O_RDONLY | O_CLOEXEC);
-  if (source < 0) {
-    return foundation::Result<void>::failure(
-        io_error("source artifact could not be opened", stage.source));
+  auto source_bytes = platform.read_complete(stage.source);
+  if (!source_bytes.has_value()) {
+    return foundation::Result<void>::failure(source_bytes.error());
   }
-  const int destination = ::open(
-      temp_path.c_str(),
-      O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC,
-      0644);
-  if (destination < 0) {
-    const auto error =
-        io_error("staged artifact could not be created", temp_path);
-    ::close(source);
-    return foundation::Result<void>::failure(error);
-  }
-
-  std::array<char, 64U * 1024U> buffer{};
-  foundation::Result<void> copied =
-      foundation::Result<void>::success();
-  while (copied.has_value()) {
-    const auto count = ::read(source, buffer.data(), buffer.size());
-    if (count == 0) {
-      break;
-    }
-    if (count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      copied = foundation::Result<void>::failure(
-          io_error("source artifact could not be read", stage.source));
-      break;
-    }
-    copied = write_all(
-        destination,
-        std::string_view(buffer.data(), static_cast<std::size_t>(count)),
-        temp_path);
-  }
-  if (copied.has_value()) {
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-    copied = testing::detail::invoke_fault(
-        testing::FaultPoint::artifact_temp_sync, temp_path);
-#endif
-  }
-  if (copied.has_value()) {
-    copied = fsync_descriptor(destination, temp_path);
-  }
-  const int source_close = ::close(source);
-  const int destination_close = ::close(destination);
-  if (!copied.has_value()) {
-    return copied;
-  }
-  if (source_close != 0 || destination_close != 0) {
-    return foundation::Result<void>::failure(
-        io_error("artifact file could not be closed", temp_path));
-  }
-  const auto described =
-      foundation::describe_artifact(temp_path, stage.artifact.media_type);
-  if (!described.has_value() ||
-      described.value() != stage.artifact) {
+  const auto described = describe_bytes(
+      source_bytes.value(), stage.artifact.media_type);
+  if (described != stage.artifact) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::io_error,
@@ -1702,42 +1308,40 @@ foundation::Result<void> publish_artifact(
             {{"path", stage.source.generic_string()}},
         });
   }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto publish_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::artifact_publish, final_path);
-  if (!publish_intercepted.has_value()) {
-    return publish_intercepted;
-  }
-#endif
-  const auto renamed = rename_file(temp_path, final_path);
-  if (!renamed.has_value()) {
-    return renamed;
-  }
-  return fsync_directory(directory);
+  return platform.create_immutable(final_path, source_bytes.value());
 }
 
 foundation::Result<bool> matching_active_journal(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
     const domain::RecordTake& record) {
   const auto path =
       bundle / "recovery/active" /
       (record.take.id.value() + ".jsonl");
-  if (!std::filesystem::exists(path)) {
+  auto exists = platform->exists(path);
+  if (!exists.has_value()) {
+    return foundation::Result<bool>::failure(exists.error());
+  }
+  if (!exists.value()) {
     return foundation::Result<bool>::success(false);
   }
   if (!domain::is_valid_uuid(record.take.id.value())) {
     return foundation::Result<bool>::failure(
         Error{ErrorCode::invalid_argument, "take id is not a safe file name"});
   }
-  std::ifstream stream(path, std::ios::binary);
-  std::string first_line;
-  if (!stream || !std::getline(stream, first_line)) {
+  auto bytes = read_file_bytes(*platform, path);
+  if (!bytes.has_value()) {
+    return foundation::Result<bool>::failure(bytes.error());
+  }
+  const auto line_end = bytes.value().find('\n');
+  if (line_end == std::string::npos) {
     return foundation::Result<bool>::failure(
         invalid_project("active take journal could not be read", path));
   }
   try {
-    const auto header = nlohmann::json::parse(first_line);
-    TakeJournal journal;
+    const auto header = nlohmann::json::parse(
+        bytes.value().substr(0, line_end));
+    TakeJournal journal{platform};
     const auto take =
         journal.read_active(bundle, record.take.id);
     if (!take.has_value()) {
@@ -1757,6 +1361,7 @@ foundation::Result<bool> matching_active_journal(
 }
 
 foundation::Result<void> complete_journal_cleanup(
+    ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     const std::optional<foundation::TakeId>& cleanup_take_id) {
   if (!cleanup_take_id.has_value()) {
@@ -1765,26 +1370,15 @@ foundation::Result<void> complete_journal_cleanup(
   const auto path =
       bundle / "recovery/active" /
       (cleanup_take_id->value() + ".jsonl");
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  const auto remove_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::active_journal_remove, path);
-  if (!remove_intercepted.has_value()) {
-    return remove_intercepted;
+  const auto removed = platform.remove(path);
+  if (!removed.has_value()) {
+    return removed;
   }
-#endif
-  std::error_code error;
-  std::filesystem::remove(path, error);
-  if (error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "active journal could not be removed after Project commit",
-            path,
-            error.value()));
-  }
-  return fsync_active_directory(path.parent_path());
+  return foundation::Result<void>::success();
 }
 
 foundation::Result<domain::AppliedCommand> commit_loaded(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
     LoadedProject loaded,
     const domain::Command& command,
@@ -1827,7 +1421,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   if (!replay_candidate) {
     const auto* record = std::get_if<domain::RecordTake>(&command);
     if (record != nullptr) {
-      const auto matching = matching_active_journal(bundle, *record);
+      const auto matching = matching_active_journal(platform, bundle, *record);
       if (!matching.has_value()) {
         return foundation::Result<domain::AppliedCommand>::failure(
             matching.error());
@@ -1845,7 +1439,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     if (applied.error().code == ErrorCode::revision_conflict &&
         journal_matches) {
       const auto& record = std::get<domain::RecordTake>(command);
-      TakeJournal journal;
+      TakeJournal journal{platform};
       const auto sealed =
           journal.seal(bundle, record.take.id, "revision_conflict");
       if (!sealed.has_value()) {
@@ -1863,7 +1457,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       cleanup_take_id = obligation->second;
     }
     const auto cleanup =
-        complete_journal_cleanup(bundle, cleanup_take_id);
+        complete_journal_cleanup(*platform, bundle, cleanup_take_id);
     if (!cleanup.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           cleanup.error());
@@ -1884,7 +1478,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   }
 
   if (artifact_stage.has_value()) {
-    const auto published = publish_artifact(bundle, *artifact_stage);
+    const auto published = publish_artifact(*platform, bundle, *artifact_stage);
     if (!published.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           published.error());
@@ -1901,8 +1495,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     const auto blob =
         bundle / "assets" /
         (import->asset.artifact.sha256 + ".wav");
-    const auto described = foundation::describe_artifact(
-        blob, import->asset.artifact.media_type);
+    const auto described = describe_artifact(
+        *platform, blob, import->asset.artifact.media_type);
     if (!described.has_value() ||
         described.value() != import->asset.artifact) {
       return foundation::Result<domain::AppliedCommand>::failure(
@@ -1924,10 +1518,6 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       (std::to_string(revision) + ".json");
   const auto transaction_final = bundle / transaction_relative;
   const auto checkpoint_final = bundle / checkpoint_relative;
-  const auto transaction_temp =
-      std::filesystem::path{transaction_final.string() + ".tmp"};
-  const auto checkpoint_temp =
-      std::filesystem::path{checkpoint_final.string() + ".tmp"};
 
   nlohmann::json transaction = {
       {"command", command_json(command)},
@@ -1937,107 +1527,37 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   if (cleanup_take_id.has_value()) {
     transaction["cleanup_take_id"] = cleanup_take_id->value();
   }
-  auto written = write_new_file(
-      transaction_temp,
-      foundation::canonical_json(transaction) + "\n"
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-      ,
-      testing::FaultPoint::transaction_temp_sync
-#endif
-  );
+  const auto transaction_bytes =
+      foundation::canonical_json(transaction) + "\n";
+  auto written = platform->create_immutable(
+      transaction_final, byte_span(transaction_bytes));
   if (!written.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
-  written = write_new_file(
-      checkpoint_temp,
-      foundation::canonical_json(project_json(applied.value().state)) +
-          "\n"
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-      ,
-      testing::FaultPoint::checkpoint_temp_sync
-#endif
-  );
+
+  const auto checkpoint_bytes =
+      foundation::canonical_json(project_json(applied.value().state)) + "\n";
+  written = platform->create_immutable(
+      checkpoint_final, byte_span(checkpoint_bytes));
   if (!written.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
-  }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  auto publish_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::transaction_publish, transaction_final);
-  if (!publish_intercepted.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        publish_intercepted.error());
-  }
-#endif
-  auto renamed = rename_file(transaction_temp, transaction_final);
-  if (!renamed.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        renamed.error());
-  }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  publish_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::checkpoint_publish, checkpoint_final);
-  if (!publish_intercepted.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        publish_intercepted.error());
-  }
-#endif
-  renamed = rename_file(checkpoint_temp, checkpoint_final);
-  if (!renamed.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        renamed.error());
-  }
-  auto synced = fsync_directory(transaction_final.parent_path());
-  if (!synced.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        synced.error());
-  }
-  synced = fsync_directory(checkpoint_final.parent_path());
-  if (!synced.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        synced.error());
   }
 
   loaded.transactions.push_back(transaction_relative.generic_string());
-  const auto manifest_temp =
-      bundle /
-      ("manifest.json.tmp." + meta.command_id.value());
-  written = write_new_file(
-      manifest_temp,
-      foundation::canonical_json(
-          manifest_json(revision, loaded.transactions)) +
-          "\n"
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-      ,
-      testing::FaultPoint::manifest_temp_sync
-#endif
-  );
+  const auto manifest_bytes = foundation::canonical_json(
+                                  manifest_json(revision, loaded.transactions)) +
+                              "\n";
+  written = platform->replace_complete(
+      bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
-#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-  publish_intercepted = testing::detail::invoke_fault(
-      testing::FaultPoint::manifest_publish, bundle / "manifest.json");
-  if (!publish_intercepted.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        publish_intercepted.error());
-  }
-#endif
-  renamed = rename_file(manifest_temp, bundle / "manifest.json");
-  if (!renamed.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        renamed.error());
-  }
-  synced = fsync_directory(bundle);
-  if (!synced.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(
-        synced.error());
-  }
 
   const auto cleanup =
-      complete_journal_cleanup(bundle, cleanup_take_id);
+      complete_journal_cleanup(*platform, bundle, cleanup_take_id);
   if (!cleanup.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         cleanup.error());
@@ -2046,6 +1566,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
 }
 
 foundation::Result<void> create_bundle_directories(
+    ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle) {
   const std::array paths{
       bundle,
@@ -2056,20 +1577,23 @@ foundation::Result<void> create_bundle_directories(
       bundle / "recovery/sealed",
   };
   for (const auto& path : paths) {
-    std::error_code error;
-    std::filesystem::create_directories(path, error);
-    if (error) {
-      return foundation::Result<void>::failure(
-          io_error(
-              "project bundle directory could not be created",
-              path,
-              error.value()));
+    const auto ensured = platform.ensure_directory(path);
+    if (!ensured.has_value()) {
+      return ensured;
     }
   }
   return foundation::Result<void>::success();
 }
 
 }  // namespace
+
+ProjectStore::ProjectStore()
+    : ProjectStore(make_default_project_storage_platform()) {}
+
+ProjectStore::ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform)
+    : platform_(platform != nullptr
+                    ? std::move(platform)
+                    : make_default_project_storage_platform()) {}
 
 foundation::Result<void> ProjectStore::create(
     const std::filesystem::path& bundle,
@@ -2090,25 +1614,29 @@ foundation::Result<void> ProjectStore::create(
             "initial project state is invalid",
         });
   }
-  const auto existing_tree = reject_symlinks_in_existing_tree(bundle);
+  const auto existing_tree = platform_->validate_managed_tree(bundle);
   if (!existing_tree.has_value()) {
     return existing_tree;
   }
-  auto directories = create_bundle_directories(bundle);
+  auto directories = create_bundle_directories(*platform_, bundle);
   if (!directories.has_value()) {
     return directories;
   }
-  auto lock_result = acquire_lock(bundle);
+  auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<void>::failure(lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
-  const auto locked_tree = reject_symlinks_in_existing_tree(bundle);
+  const auto locked_tree = platform_->validate_managed_tree(bundle);
   if (!locked_tree.has_value()) {
     return locked_tree;
   }
-  if (std::filesystem::exists(bundle / "manifest.json")) {
+  auto manifest_exists = platform_->exists(bundle / "manifest.json");
+  if (!manifest_exists.has_value()) {
+    return foundation::Result<void>::failure(manifest_exists.error());
+  }
+  if (manifest_exists.value()) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::duplicate_id,
@@ -2117,51 +1645,22 @@ foundation::Result<void> ProjectStore::create(
         });
   }
 
-  const auto checkpoint_temp =
-      bundle / "history/checkpoints/0.json.tmp.create";
   const auto checkpoint_final =
       bundle / "history/checkpoints/0.json";
-  const auto manifest_temp =
-      bundle / "manifest.json.tmp.create";
-  std::error_code remove_error;
-  const bool checkpoint_temp_removed =
-      std::filesystem::remove(checkpoint_temp, remove_error);
-  if (remove_error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "stale initial checkpoint temp could not be removed",
-            checkpoint_temp,
-            remove_error.value()));
-  }
-  if (checkpoint_temp_removed) {
-    const auto synced =
-        fsync_directory(checkpoint_temp.parent_path());
-    if (!synced.has_value()) {
-      return synced;
-    }
-  }
-  remove_error.clear();
-  const bool manifest_temp_removed =
-      std::filesystem::remove(manifest_temp, remove_error);
-  if (remove_error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "stale initial manifest temp could not be removed",
-            manifest_temp,
-            remove_error.value()));
-  }
-  if (manifest_temp_removed) {
-    const auto synced = fsync_directory(bundle);
-    if (!synced.has_value()) {
-      return synced;
-    }
+  const auto recovered = recover_initial_create_residue(*platform_, bundle);
+  if (!recovered.has_value()) {
+    return recovered;
   }
 
   const auto checkpoint_bytes =
       foundation::canonical_json(encoded) + "\n";
-  if (std::filesystem::exists(checkpoint_final)) {
-    auto existing_json = read_json(checkpoint_final);
-    auto existing_bytes = read_file_bytes(checkpoint_final);
+  auto checkpoint_exists = platform_->exists(checkpoint_final);
+  if (!checkpoint_exists.has_value()) {
+    return foundation::Result<void>::failure(checkpoint_exists.error());
+  }
+  if (checkpoint_exists.value()) {
+    auto existing_json = read_json(*platform_, checkpoint_final);
+    auto existing_bytes = read_file_bytes(*platform_, checkpoint_final);
     if (!existing_json.has_value() || !existing_bytes.has_value()) {
       return foundation::Result<void>::failure(
           invalid_project(
@@ -2179,44 +1678,30 @@ foundation::Result<void> ProjectStore::create(
               checkpoint_final));
     }
   } else {
-    auto written =
-        write_new_file(checkpoint_temp, checkpoint_bytes);
+    auto written = platform_->create_immutable(
+        checkpoint_final, byte_span(checkpoint_bytes));
     if (!written.has_value()) {
       return written;
     }
-    auto renamed =
-        rename_file(checkpoint_temp, checkpoint_final);
-    if (!renamed.has_value()) {
-      return renamed;
-    }
-    const auto synced =
-        fsync_directory(checkpoint_final.parent_path());
-    if (!synced.has_value()) {
-      return synced;
-    }
   }
 
-  auto written = write_new_file(
-      manifest_temp,
-      foundation::canonical_json(manifest_json(0, {})) + "\n");
+  const auto manifest_bytes =
+      foundation::canonical_json(manifest_json(0, {})) + "\n";
+  auto written = platform_->replace_complete(
+      bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
     return written;
   }
-  auto renamed =
-      rename_file(manifest_temp, bundle / "manifest.json");
-  if (!renamed.has_value()) {
-    return renamed;
-  }
-  return fsync_directory(bundle);
+  return foundation::Result<void>::success();
 }
 
 foundation::Result<domain::ProjectState> ProjectStore::load(
     const std::filesystem::path& bundle) const {
-  const auto tree = validate_managed_bundle_tree(bundle);
+  const auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<domain::ProjectState>::failure(tree.error());
   }
-  auto loaded = load_project(bundle);
+  auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) {
     return foundation::Result<domain::ProjectState>::failure(
         loaded.error());
@@ -2228,33 +1713,34 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
 foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     const std::filesystem::path& bundle,
     const domain::Command& command) {
-  auto tree = validate_managed_bundle_tree(bundle);
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<CommandExecution>::failure(tree.error());
   }
-  auto lock_result = acquire_lock(bundle);
+  auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
-  tree = validate_managed_bundle_tree(bundle);
+  tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<CommandExecution>::failure(tree.error());
   }
-  auto loaded = load_project(bundle);
+  auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         recovered.error());
   }
   auto persisted_identity = command;
   auto outcome = commit_loaded(
+      platform_,
       bundle,
       std::move(loaded.value()),
       command,
@@ -2294,29 +1780,29 @@ ProjectStore::replay_record_take(
             "command id is not a safe file name",
         });
   }
-  auto tree = validate_managed_bundle_tree(bundle);
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<std::optional<RecordTakeReplay>>::failure(
         tree.error());
   }
-  auto lock_result = acquire_lock(bundle);
+  auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<std::optional<RecordTakeReplay>>::failure(
         lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
-  tree = validate_managed_bundle_tree(bundle);
+  tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<std::optional<RecordTakeReplay>>::failure(
         tree.error());
   }
-  auto loaded = load_project(bundle);
+  auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) {
     return foundation::Result<std::optional<RecordTakeReplay>>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<std::optional<RecordTakeReplay>>::failure(
         recovered.error());
@@ -2357,7 +1843,7 @@ ProjectStore::replay_record_take(
       loaded.value().cleanup_obligations.find(identity.meta.command_id);
   if (cleanup != loaded.value().cleanup_obligations.end()) {
     const auto completed =
-        complete_journal_cleanup(bundle, cleanup->second);
+        complete_journal_cleanup(*platform_, bundle, cleanup->second);
     if (!completed.has_value()) {
       return foundation::Result<std::optional<RecordTakeReplay>>::failure(
           completed.error());
@@ -2399,29 +1885,29 @@ ProjectStore::import_artifact_with_identity(
             "artifact media type must not be empty",
         });
   }
-  auto tree = validate_managed_bundle_tree(bundle);
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         tree.error());
   }
-  auto lock_result = acquire_lock(bundle);
+  auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
-  tree = validate_managed_bundle_tree(bundle);
+  tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         tree.error());
   }
-  auto loaded = load_project(bundle);
+  auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         loaded.error());
   }
-  const auto recovered = recover_uncommitted(bundle, loaded.value());
+  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
   if (!recovered.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         recovered.error());
@@ -2449,8 +1935,8 @@ ProjectStore::import_artifact_with_identity(
               "asset import replay identity does not match persisted ImportAsset",
           });
     }
-    const auto described = foundation::describe_artifact(
-        request.source, request.media_type);
+    const auto described = describe_artifact(
+        *platform_, request.source, request.media_type);
     if (described.has_value() &&
         described.value() != import->asset.artifact) {
       return foundation::Result<ImportArtifactExecution>::failure(
@@ -2478,7 +1964,7 @@ ProjectStore::import_artifact_with_identity(
         });
   }
   const auto described =
-      foundation::describe_artifact(request.source, request.media_type);
+      describe_artifact(*platform_, request.source, request.media_type);
   if (!described.has_value()) {
     return foundation::Result<ImportArtifactExecution>::failure(
         described.error());
@@ -2489,13 +1975,13 @@ ProjectStore::import_artifact_with_identity(
   };
   auto persisted_identity = command;
   auto outcome = commit_loaded(
+      platform_,
       bundle,
       std::move(loaded.value()),
       command,
       ArtifactStage{
           request.source,
           described.value(),
-          request.meta.command_id,
       },
       &persisted_identity);
   if (!outcome.has_value()) {
@@ -2552,86 +2038,44 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(
     return foundation::Result<std::vector<std::byte>>::failure(
         invalid_project("project bundle extension is invalid", bundle));
   }
-  auto bundle_result = open_directory_without_symlinks(bundle);
-  if (!bundle_result.has_value()) {
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
     return foundation::Result<std::vector<std::byte>>::failure(
-        bundle_result.error());
+        tree.error());
   }
-  auto bundle_descriptor = std::move(bundle_result.value());
-  auto lock_result = acquire_lock_at(bundle_descriptor.get(), bundle);
+  auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<std::vector<std::byte>>::failure(
         lock_result.error());
   }
   auto lock = std::move(lock_result.value());
   (void)lock;
-
-  const int manifest_value = ::openat(
-      bundle_descriptor.get(),
-      "manifest.json",
-      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (manifest_value < 0) {
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
     return foundation::Result<std::vector<std::byte>>::failure(
-        invalid_project(
-            "project manifest could not be opened through bundle handle",
-            bundle / "manifest.json"));
+        tree.error());
   }
-  OwnedDescriptor manifest(manifest_value);
-  struct stat manifest_metadata {};
-  if (::fstat(manifest.get(), &manifest_metadata) != 0 ||
-      !S_ISREG(manifest_metadata.st_mode)) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        invalid_project(
-            "project manifest is not a regular file",
-            bundle / "manifest.json"));
-  }
-
-  const int assets_value = ::openat(
-      bundle_descriptor.get(),
-      "assets",
-      O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-  if (assets_value < 0) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        invalid_project(
-            "project assets directory could not be opened through bundle handle",
-            bundle / "assets"));
-  }
-  OwnedDescriptor assets(assets_value);
 
   const auto path =
       bundle / "assets" / (artifact.sha256 + ".wav");
-  const auto filename = artifact.sha256 + ".wav";
-  const int artifact_value = ::openat(
-      assets.get(),
-      filename.c_str(),
-      O_RDONLY | O_CLOEXEC | O_NOFOLLOW);
-  if (artifact_value < 0) {
-    if (errno == ENOENT) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          Error{
-              ErrorCode::not_found,
-              "project artifact does not exist",
-              {{"path", path.generic_string()}},
-          });
-    }
-    if (errno == ELOOP) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          invalid_project(
-              "project artifact must not be a symbolic link",
-              path));
-    }
+  auto existing = platform_->exists(path);
+  if (!existing.has_value()) {
     return foundation::Result<std::vector<std::byte>>::failure(
-        io_error("project artifact could not be opened", path));
+        existing.error());
   }
-  OwnedDescriptor descriptor(artifact_value);
-
-  struct stat before {};
-  if (::fstat(descriptor.get(), &before) != 0) {
+  if (!existing.value()) {
     return foundation::Result<std::vector<std::byte>>::failure(
-        io_error("project artifact metadata could not be read", path));
+        Error{
+            ErrorCode::not_found,
+            "project artifact does not exist",
+            {{"path", path.generic_string()}},
+        });
   }
-  if (!S_ISREG(before.st_mode) || before.st_size < 0 ||
-      static_cast<std::uint64_t>(before.st_size) != artifact.byte_length) {
+  auto length = platform_->byte_length(path);
+  if (!length.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(length.error());
+  }
+  if (length.value() != artifact.byte_length) {
     return foundation::Result<std::vector<std::byte>>::failure(
         Error{
             ErrorCode::cook_failed,
@@ -2639,50 +2083,16 @@ foundation::Result<std::vector<std::byte>> ProjectStore::read_artifact(
             {{"path", path.generic_string()}},
         });
   }
-
-  std::vector<std::byte> bytes(
-      static_cast<std::size_t>(artifact.byte_length));
-  std::size_t offset = 0;
-  while (offset < bytes.size()) {
-    const auto count = ::read(
-        descriptor.get(),
-        bytes.data() + offset,
-        bytes.size() - offset);
-    if (count < 0) {
-      if (errno == EINTR) {
-        continue;
-      }
-      return foundation::Result<std::vector<std::byte>>::failure(
-          io_error(
-              "project artifact could not be read completely",
-              path));
-    }
-    if (count == 0) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          Error{
-              ErrorCode::cook_failed,
-              "project artifact ended before its declared byte length",
-              {{"path", path.generic_string()}},
-          });
-    }
-    offset += static_cast<std::size_t>(count);
+  auto read = platform_->read_complete(path);
+  if (!read.has_value()) {
+    return foundation::Result<std::vector<std::byte>>::failure(read.error());
   }
-
-  struct stat after {};
-  if (::fstat(descriptor.get(), &after) != 0) {
-    return foundation::Result<std::vector<std::byte>>::failure(
-        io_error(
-            "project artifact metadata could not be verified after reading",
-            path));
-  }
-  if (!S_ISREG(after.st_mode) || after.st_dev != before.st_dev ||
-      after.st_ino != before.st_ino || after.st_size != before.st_size ||
-      after.st_size < 0 ||
-      static_cast<std::uint64_t>(after.st_size) != artifact.byte_length) {
+  auto bytes = std::move(read.value());
+  if (bytes.size() != artifact.byte_length) {
     return foundation::Result<std::vector<std::byte>>::failure(
         Error{
             ErrorCode::cook_failed,
-            "project artifact changed while it was being read",
+            "project artifact byte length changed while it was being read",
             {{"path", path.generic_string()}},
         });
   }

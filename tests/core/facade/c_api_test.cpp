@@ -2,10 +2,12 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -44,6 +46,56 @@ class TempDirectory {
  private:
   std::filesystem::path path_;
 };
+
+std::filesystem::path default_project_writer_lease_root() {
+#if defined(__APPLE__)
+  if (const char* home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    const std::filesystem::path home_path{home};
+    if (home_path.is_absolute()) {
+      return home_path / "Library/Application Support/LMDJ" /
+             "project-writer-leases";
+    }
+  }
+#else
+  if (const char* state = std::getenv("XDG_STATE_HOME");
+      state != nullptr && state[0] != '\0') {
+    const std::filesystem::path state_path{state};
+    if (state_path.is_absolute()) {
+      return state_path / "lmdj/project-writer-leases";
+    }
+  }
+  if (const char* home = std::getenv("HOME");
+      home != nullptr && home[0] != '\0') {
+    const std::filesystem::path home_path{home};
+    if (home_path.is_absolute()) {
+      return home_path / ".local/state/lmdj/project-writer-leases";
+    }
+  }
+#endif
+  std::error_code error;
+  auto temporary = std::filesystem::temp_directory_path(error);
+  if (error || !temporary.is_absolute()) {
+    temporary = "/tmp";
+  }
+  return temporary /
+         ("lmdj-" + std::to_string(static_cast<unsigned long>(::geteuid()))) /
+         "project-writer-leases";
+}
+
+std::set<std::string> regular_file_names(
+    const std::filesystem::path& directory) {
+  if (!std::filesystem::exists(directory)) {
+    return {};
+  }
+  std::set<std::string> names;
+  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
+    if (entry.is_regular_file()) {
+      names.insert(entry.path().filename().string());
+    }
+  }
+  return names;
+}
 
 std::string config_json(const std::filesystem::path& root) {
   return nlohmann::json{{"workspace_root", root.generic_string()}}.dump();
@@ -564,7 +616,7 @@ void test_stale_unknown_aba_and_racing_free_are_safe() {
   lmdj_engine_free(second);
 }
 
-void test_blocked_engine_does_not_serialize_other_engines() {
+void test_busy_project_fails_fast_without_serializing_engines() {
   using namespace std::chrono_literals;
   TempDirectory temp;
   const auto config = config_json(temp.path());
@@ -581,6 +633,8 @@ void test_blocked_engine_does_not_serialize_other_engines() {
   LMDJ_CHECK(error == nullptr);
 
   const auto project = temp.path() / "blocked-engine.lmdj";
+  const auto lease_root = default_project_writer_lease_root();
+  const auto lease_names_before = regular_file_names(lease_root);
   LMDJ_CHECK(
       command(
           blocked_engine,
@@ -591,13 +645,21 @@ void test_blocked_engine_does_not_serialize_other_engines() {
               {"bpm", 120},
           })
           .at("ok") == true);
+  const auto lease_names_after = regular_file_names(lease_root);
+  std::vector<std::string> created_lease_names;
+  std::set_difference(
+      lease_names_after.begin(),
+      lease_names_after.end(),
+      lease_names_before.begin(),
+      lease_names_before.end(),
+      std::back_inserter(created_lease_names));
+  LMDJ_CHECK(created_lease_names.size() == 1);
+  const auto lease_path = lease_root / created_lease_names.front();
+  const int lease_fd = ::open(lease_path.c_str(), O_RDWR | O_CLOEXEC);
+  LMDJ_CHECK(lease_fd >= 0);
+  LMDJ_CHECK(::flock(lease_fd, LOCK_EX) == 0);
 
-  const int lock_fd =
-      ::open((project / ".lock").c_str(), O_RDWR | O_CLOEXEC);
-  LMDJ_CHECK(lock_fd >= 0);
-  LMDJ_CHECK(::flock(lock_fd, LOCK_EX) == 0);
-
-  auto mutation = std::async(
+  auto busy_mutation = std::async(
       std::launch::async,
       [&]() {
         return command(
@@ -611,15 +673,14 @@ void test_blocked_engine_does_not_serialize_other_engines() {
                 {"asset_id", nullptr},
             });
       });
-  LMDJ_CHECK(mutation.wait_for(150ms) == std::future_status::timeout);
+  const bool busy_completed =
+      busy_mutation.wait_for(250ms) == std::future_status::ready;
 
   const auto provider_list =
       nlohmann::json{{"operation", "provider.list"}}.dump();
-  std::atomic<bool> queued_started{false};
-  auto queued_same_engine = std::async(
+  auto same_engine = std::async(
       std::launch::async,
       [&]() {
-        queued_started.store(true);
         char* response = nullptr;
         const auto status = lmdj_engine_query(
             blocked_engine, provider_list.c_str(), &response);
@@ -627,12 +688,6 @@ void test_blocked_engine_does_not_serialize_other_engines() {
         lmdj_string_free(response);
         return std::pair{status, std::move(value)};
       });
-  while (!queued_started.load()) {
-    std::this_thread::yield();
-  }
-  LMDJ_CHECK(
-      queued_same_engine.wait_for(150ms) == std::future_status::timeout);
-
   auto independent = std::async(
       std::launch::async,
       [&]() {
@@ -643,22 +698,31 @@ void test_blocked_engine_does_not_serialize_other_engines() {
         lmdj_string_free(response);
         return std::pair{status, std::move(value)};
       });
+  const bool same_engine_completed =
+      same_engine.wait_for(250ms) == std::future_status::ready;
   const bool independent_completed =
       independent.wait_for(250ms) == std::future_status::ready;
 
-  LMDJ_CHECK(::flock(lock_fd, LOCK_UN) == 0);
-  LMDJ_CHECK(::close(lock_fd) == 0);
-  const auto mutation_response = mutation.get();
-  const auto queued_response = queued_same_engine.get();
+  LMDJ_CHECK(::flock(lease_fd, LOCK_UN) == 0);
+  LMDJ_CHECK(::close(lease_fd) == 0);
+  const auto busy_response = busy_mutation.get();
+  const auto same_engine_response = same_engine.get();
   const auto independent_response = independent.get();
   lmdj_engine_free(independent_engine);
   lmdj_engine_free(blocked_engine);
 
+  LMDJ_CHECK(busy_completed);
+  LMDJ_CHECK(same_engine_completed);
   LMDJ_CHECK(independent_completed);
-  LMDJ_CHECK(mutation_response.at("ok") == true);
-  LMDJ_CHECK(queued_response.first == LMDJ_STATUS_OK);
+  LMDJ_CHECK(busy_response.at("ok") == false);
+  LMDJ_CHECK(busy_response.at("error").at("code") == "IO_ERROR");
   LMDJ_CHECK(
-      nlohmann::json::parse(queued_response.second).at("ok") == true);
+      busy_response.at("error")
+          .at("details")
+          .at("storage_condition") == "project_busy");
+  LMDJ_CHECK(same_engine_response.first == LMDJ_STATUS_OK);
+  LMDJ_CHECK(
+      nlohmann::json::parse(same_engine_response.second).at("ok") == true);
   LMDJ_CHECK(independent_response.first == LMDJ_STATUS_OK);
   LMDJ_CHECK(
       nlohmann::json::parse(independent_response.second).at("ok") == true);
@@ -767,7 +831,7 @@ int main() {
     test_asset_and_pad_replay_identity_through_c_abi();
     test_transport_failures_null_outputs_and_valid_facade_errors();
     test_stale_unknown_aba_and_racing_free_are_safe();
-    test_blocked_engine_does_not_serialize_other_engines();
+    test_busy_project_fails_fast_without_serializing_engines();
     test_repeated_create_free_keeps_stale_handles_dead();
     test_excessive_json_depth_is_rejected_without_crashing();
   } catch (const std::exception& exception) {
