@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="ea252d7f1402db75daef596f26ab09e5b9c2f8211c73baa9da6ac8fd4903e759">
+  <title id="title">LMDJ Headless Core</title><desc id="description">七个 Core Module、Host/Provider 隔离及不可变 Runtime Snapshot 数据流</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:28px;font-weight:750;fill:var(--text)}.page-summary{font-size:14px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:13px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:12px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:17px;font-weight:750}.node-detail{fill:var(--muted);font-size:12px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:15px;font-weight:750}.card-body{color:var(--muted);font-size:13px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">LMDJ Headless Core</text><text class="page-summary" x="40" y="68">七个 Core Module、Host/Provider 隔离及不可变 Runtime Snapshot 数据流</text>
+
+    <g class="boundary"><rect x="280" y="104" width="1236" height="458" rx="22"/><text x="300" y="134">packages/ · product-neutral modules</text></g>
+  <g class="connection"><path class="edge-mask" d="M 232 224 H 276 V 224 H 320"/><path class="edge" d="M 232 224 H 276 V 224 H 320" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 526 224 H 555 V 224 H 584"/><path class="edge" d="M 526 224 H 555 V 224 H 584" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 782 224 H 811 V 224 H 840"/><path class="edge" d="M 782 224 H 811 V 224 H 840" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 1028 224 H 1057 V 224 H 1086"/><path class="edge" d="M 1028 224 H 1057 V 224 H 1086" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 1280 224 H 1309 V 224 H 1338"/><path class="edge" d="M 1280 224 H 1309 V 224 H 1338" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 782 224 H 816 V 484 H 550 V 430 H 584"/><path class="edge" d="M 782 224 H 816 V 484 H 550 V 430 H 584" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 526 224 H 683 V 430 H 840"/><path class="edge" d="M 526 224 H 683 V 430 H 840" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 1028 430 H 1057 V 430 H 1086"/><path class="edge" d="M 1028 430 H 1057 V 430 H 1086" marker-end="url(#arrow)"/></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="38" y="174" width="198" height="100" rx="18"/>
+      <rect class="node" x="42" y="178" width="190" height="92" rx="14"/>
+      <text class="node-title" x="58" y="210">Hosts</text>
+      <text class="node-detail" x="58" y="236">只依赖 Facade</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="316" y="174" width="214" height="100" rx="18"/>
+      <rect class="node" x="320" y="178" width="206" height="92" rx="14"/>
+      <text class="node-title" x="336" y="210">Application Facade</text>
+      <text class="node-detail" x="336" y="236">orchestration</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="580" y="174" width="206" height="100" rx="18"/>
+      <rect class="node" x="584" y="178" width="198" height="92" rx="14"/>
+      <text class="node-title" x="600" y="210">Authoring Domain</text>
+      <text class="node-detail" x="600" y="236">Project Truth</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="836" y="174" width="196" height="100" rx="18"/>
+      <rect class="node" x="840" y="178" width="188" height="92" rx="14"/>
+      <text class="node-title" x="856" y="210">Project Cooker</text>
+      <text class="node-detail" x="856" y="236">deterministic</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1082" y="174" width="202" height="100" rx="18"/>
+      <rect class="node" x="1086" y="178" width="194" height="92" rx="14"/>
+      <text class="node-title" x="1102" y="210">Runtime Snapshot</text>
+      <text class="node-detail" x="1102" y="236">immutable</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1334" y="174" width="186" height="100" rx="18"/>
+      <rect class="node" x="1338" y="178" width="178" height="92" rx="14"/>
+      <text class="node-title" x="1354" y="210">Audio Runtime</text>
+      <text class="node-detail" x="1354" y="236">realtime</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="580" y="380" width="206" height="100" rx="18"/>
+      <rect class="node" x="584" y="384" width="198" height="92" rx="14"/>
+      <text class="node-title" x="600" y="416">Project I/O</text>
+      <text class="node-detail" x="600" y="442">Store · Journal</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="836" y="380" width="196" height="100" rx="18"/>
+      <rect class="node" x="840" y="384" width="188" height="92" rx="14"/>
+      <text class="node-title" x="856" y="416">Provider SDK</text>
+      <text class="node-detail" x="856" y="442">Attempt isolation</text>
+    </g>
+    <g class="component kind-provider">
+      <rect class="node-mask" x="1082" y="380" width="202" height="100" rx="18"/>
+      <rect class="node" x="1086" y="384" width="194" height="92" rx="14"/>
+      <text class="node-title" x="1102" y="416">Provider</text>
+      <text class="node-detail" x="1102" y="442">Artifact sink</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Foundation</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Artifact、JSON、typed error 为所有路径提供共同底座。</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Contracts</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project、Capability、Assembly、Error、Module、Product Version 固定跨边界语义。</div></foreignObject></g>
+<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">禁止路径</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 不解析 bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。</div></foreignObject></g>
+</svg>

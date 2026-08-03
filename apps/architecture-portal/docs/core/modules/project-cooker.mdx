@@ -7,8 +7,11 @@ source_paths: [packages/project-cooker, tests/core/cooker]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity kind="modules" id="project-cooker" />
+
+<DiagramFrame title="Project Cooker Module" html="/diagrams/project-cooker.html" svg="/diagrams/project-cooker.svg" />
 
 ## 1. 目的与非职责
 把 Project Truth 和 Artifact 确定性派生为 Runtime Snapshot；不保存 Project 或执行实时输出。

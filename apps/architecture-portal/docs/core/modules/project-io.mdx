@@ -7,8 +7,11 @@ source_paths: [packages/project-io, tests/core/project_io]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity kind="modules" id="project-io" />
+
+<DiagramFrame title="Project I/O Module" html="/diagrams/project-io.html" svg="/diagrams/project-io.svg" />
 
 ## 1. 目的与非职责
 事务式保存/加载 Project Truth 并维护 Take Journal；不 Cook 或渲染。

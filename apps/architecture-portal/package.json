@@ -10,12 +10,14 @@
     "start": "docusaurus start",
     "facts": "node scripts/generate-facts.mjs",
     "validate:docs": "node scripts/validate-docs.mjs",
+    "diagrams": "node scripts/render-diagrams.mjs",
+    "validate:diagrams": "node scripts/validate-diagrams.mjs",
     "build": "npm run facts && docusaurus build",
     "serve": "docusaurus serve",
     "clear": "docusaurus clear",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
-    "check": "npm test && npm run validate:docs && npm run typecheck && npm run build"
+    "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run typecheck && npm run build"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",

@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "meta": {"title": "LMDJ 全产品架构", "summary": "64-Pad 产品从 Host 到 Project Truth、Runtime、Provider 与 Product Assembly 的边界"},
+  "boundaries": [
+    {"id": "core", "label": "Product-neutral Headless Core", "x": 286, "y": 112, "width": 1218, "height": 442}
+  ],
+  "components": [
+    {"id": "hosts", "label": "Hosts", "detail": "CLI · MCP · Native", "kind": "host", "x": 44, "y": 182, "width": 196, "height": 92},
+    {"id": "facade", "label": "Application Facade", "detail": "唯一 Core 入口", "kind": "core", "x": 330, "y": 182, "width": 204, "height": 92},
+    {"id": "project", "label": "Project Truth", "detail": "权威创作状态", "kind": "core", "x": 594, "y": 182, "width": 188, "height": 92},
+    {"id": "cooker", "label": "Project Cooker", "detail": "确定性派生", "kind": "core", "x": 842, "y": 182, "width": 188, "height": 92},
+    {"id": "snapshot", "label": "Runtime Snapshot", "detail": "不可变运行态", "kind": "core", "x": 1090, "y": 182, "width": 194, "height": 92},
+    {"id": "audio", "label": "Audio Runtime", "detail": "离线 · 实时", "kind": "core", "x": 1344, "y": 182, "width": 172, "height": 92},
+    {"id": "storage", "label": "Project I/O", "detail": "Store · Journal", "kind": "core", "x": 594, "y": 382, "width": 188, "height": 92},
+    {"id": "provider-sdk", "label": "Provider SDK", "detail": "Capability · Attempt", "kind": "core", "x": 842, "y": 382, "width": 188, "height": 92},
+    {"id": "providers", "label": "Providers", "detail": "Artifact ports", "kind": "provider", "x": 1090, "y": 382, "width": 194, "height": 92}
+  ],
+  "connections": [
+    {"from": "hosts", "to": "facade", "label": "Facade API"},
+    {"from": "facade", "to": "project", "label": "commands"},
+    {"from": "project", "to": "cooker", "label": "Project"},
+    {"from": "cooker", "to": "snapshot", "label": "derive"},
+    {"from": "snapshot", "to": "audio", "label": "read-only"},
+    {"from": "project", "to": "storage", "label": "persist"},
+    {"from": "facade", "to": "provider-sdk", "label": "capability"},
+    {"from": "provider-sdk", "to": "providers", "label": "Artifact I/O"}
+  ],
+  "cards": [
+    {"title": "Project Truth", "body": "唯一权威创作状态；不保存 Provider 选择、Attempt failure 或 Runtime Snapshot。"},
+    {"title": "Product Assembly", "body": "LMDJ 专属 wiring 和 Product Build 只在 products/lmdj；Lock 固定全部身份。"},
+    {"title": "当前交付", "body": "Headless Proof 已实现；正式 Web Host、产品 GUI 与生产 Provider 尚未进入 Assembly。"}
+  ]
+}

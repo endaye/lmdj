@@ -7,8 +7,11 @@ source_paths: [packages/provider-sdk, tests/core/provider]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity kind="modules" id="provider-sdk" />
+
+<DiagramFrame title="Provider SDK Module" html="/diagrams/provider-sdk.html" svg="/diagrams/provider-sdk.svg" />
 
 ## 1. 目的与非职责
 定义 Capability、Registry、Attempt Store 与 Provider 边界；不选择产品 Provider。

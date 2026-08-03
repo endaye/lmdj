@@ -7,8 +7,11 @@ source_paths: [packages/application-facade, tests/core/facade]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity kind="modules" id="application-facade" />
+
+<DiagramFrame title="Application Facade Module" html="/diagrams/application-facade.html" svg="/diagrams/application-facade.svg" />
 
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。

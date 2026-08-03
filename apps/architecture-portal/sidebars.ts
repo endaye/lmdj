@@ -5,6 +5,7 @@ const sidebars: SidebarsConfig = {
     'overview/index',
     {type: 'category', label: '产品', items: ['product/positioning', 'product/capability-map', 'product/workflows']},
     {type: 'category', label: 'Core Modules', items: [
+      'core/overview',
       'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
       'core/modules/project-cooker', 'core/modules/audio-runtime', 'core/modules/provider-sdk',
       'core/modules/application-facade',

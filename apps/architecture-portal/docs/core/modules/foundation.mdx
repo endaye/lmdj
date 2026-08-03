@@ -7,8 +7,11 @@ source_paths: [packages/foundation, tests/core/foundation]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity kind="modules" id="foundation" />
+
+<DiagramFrame title="Foundation Module" html="/diagrams/foundation.html" svg="/diagrams/foundation.svg" />
 
 ## 1. 目的与非职责
 提供 Artifact、JSON 和共享基础类型；不拥有 Project 规则、持久化或产品接线。

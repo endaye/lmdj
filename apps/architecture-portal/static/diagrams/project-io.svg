@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="30967ada979ce97df5a552a3be598152db36025de07088da3c18dbc09871b591">
+  <title id="title">Project I/O Module</title><desc id="description">Project Store、Take Journal 与事务式发布</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:28px;font-weight:750;fill:var(--text)}.page-summary{font-size:14px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:13px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:12px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:17px;font-weight:750}.node-detail{fill:var(--muted);font-size:12px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:15px;font-weight:750}.card-body{color:var(--muted);font-size:13px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">Project I/O Module</text><text class="page-summary" x="40" y="68">Project Store、Take Journal 与事务式发布</text>
+
+  <g class="connection"><path class="edge-mask" d="M 300 238 H 375 V 238 H 450"/><path class="edge" d="M 300 238 H 375 V 238 H 450" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 700 238 H 775 V 238 H 850"/><path class="edge" d="M 700 238 H 775 V 238 H 850" marker-end="url(#arrow)"/></g>
+<g class="connection"><path class="edge-mask" d="M 1080 238 H 1155 V 238 H 1230"/><path class="edge" d="M 1080 238 H 1155 V 238 H 1230" marker-end="url(#arrow)"/></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="76" y="186" width="228" height="104" rx="18"/>
+      <rect class="node" x="80" y="190" width="220" height="96" rx="14"/>
+      <text class="node-title" x="96" y="222">Project Truth</text>
+      <text class="node-detail" x="96" y="248">domain input</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="446" y="186" width="258" height="104" rx="18"/>
+      <rect class="node" x="450" y="190" width="250" height="96" rx="14"/>
+      <text class="node-title" x="466" y="222">Project I/O</text>
+      <text class="node-detail" x="466" y="248">transaction boundary</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="846" y="186" width="238" height="104" rx="18"/>
+      <rect class="node" x="850" y="190" width="230" height="96" rx="14"/>
+      <text class="node-title" x="866" y="222">Temporary State</text>
+      <text class="node-detail" x="866" y="248">validate first</text>
+    </g>
+    <g class="component kind-host">
+      <rect class="node-mask" x="1226" y="186" width="258" height="104" rx="18"/>
+      <rect class="node" x="1230" y="190" width="250" height="96" rx="14"/>
+      <text class="node-title" x="1246" y="222">Store + Journal</text>
+      <text class="node-detail" x="1246" y="248">atomic publish</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Authoring Domain.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Failure model</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fault matrix prevents partial state becoming Project Truth.</div></foreignObject></g>
+<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Runtime Snapshot is never persisted as authoring truth.</div></foreignObject></g>
+</svg>
