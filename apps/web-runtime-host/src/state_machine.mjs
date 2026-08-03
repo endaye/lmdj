@@ -61,6 +61,15 @@ export function createHostStateMachine({
     throw new HostStateError(message, { state, ...details });
   }
 
+  function rejectMutationDuringTransition(operation) {
+    if (transitionInProgress) {
+      invalid("Host operation is blocked during a state transition", {
+        operation,
+        transition_in_progress: true,
+      });
+    }
+  }
+
   function isAllowedTransition(nextState) {
     if (!STATE_SET.has(nextState) || TERMINAL_STATES.has(state)) {
       return false;
@@ -89,6 +98,7 @@ export function createHostStateMachine({
     if (transitionInProgress) {
       invalid("Reentrant Host state transitions are not allowed", {
         next_state: nextState,
+        transition_in_progress: true,
       });
     }
     if (!isAllowedTransition(nextState)) {
@@ -129,6 +139,9 @@ export function createHostStateMachine({
   }
 
   function allowsOperation(operation) {
+    if (transitionInProgress) {
+      return false;
+    }
     if (operation === "trigger" || operation === "take.begin") {
       return state === "running";
     }
@@ -139,6 +152,7 @@ export function createHostStateMachine({
   }
 
   function handleOperation(operation) {
+    rejectMutationDuringTransition(operation);
     if (operation !== "audio.suspend") {
       invalid("State machine does not directly complete this operation", {
         operation,
@@ -157,6 +171,7 @@ export function createHostStateMachine({
   }
 
   function beginTake(takeId) {
+    rejectMutationDuringTransition("take.begin");
     if (state !== "running") {
       invalid("take.begin requires the running Host state", {
         operation: "take.begin",
@@ -173,6 +188,7 @@ export function createHostStateMachine({
   }
 
   function stopTake() {
+    rejectMutationDuringTransition("take.stop");
     if (state !== "running" || activeTakeId === null) {
       invalid("take.stop requires an active Take in running state", {
         operation: "take.stop",

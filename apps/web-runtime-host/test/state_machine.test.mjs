@@ -213,6 +213,85 @@ test("reentrant notification cannot recover during an interrupted transition", (
   assert.equal(reentrantErrors[0].code, "HOST_STATE_INVALID");
 });
 
+function exerciseAdmissionBarrier(callbackName, nextState) {
+  const sideEffects = {
+    trigger: 0,
+    beginTake: 0,
+    stopTake: 0,
+  };
+  const admissions = [];
+  const rejected = [];
+  let machine;
+
+  function probeAdmission() {
+    const triggerAllowed = machine.allowsOperation("trigger");
+    admissions.push({
+      trigger: triggerAllowed,
+      beginTake: machine.allowsOperation("take.begin"),
+      hostStatus: machine.allowsOperation("host.status"),
+    });
+    if (triggerAllowed) {
+      sideEffects.trigger += 1;
+    }
+    for (const [operation, mutate] of [
+      ["take.begin", () => machine.beginTake("take-reentrant")],
+      ["take.stop", () => machine.stopTake()],
+      ["audio.suspend", () => machine.handleOperation("audio.suspend")],
+    ]) {
+      try {
+        mutate();
+        if (operation === "take.begin") {
+          sideEffects.beginTake += 1;
+        } else if (operation === "take.stop") {
+          sideEffects.stopTake += 1;
+        }
+      } catch (error) {
+        rejected.push({ operation, error });
+      }
+    }
+  }
+
+  machine = createHostStateMachine({
+    initialState: "running",
+    sealTake: callbackName === "sealTake" ? probeAdmission : () => {},
+    cleanup: callbackName === "cleanup" ? probeAdmission : () => {},
+  });
+  machine.beginTake("take-active");
+  machine.transition(nextState);
+
+  assert.equal(machine.state, nextState);
+  assert.equal(machine.activeTake, null);
+  assert.deepEqual(admissions, [
+    { trigger: false, beginTake: false, hostStatus: false },
+  ]);
+  assert.deepEqual(sideEffects, {
+    trigger: 0,
+    beginTake: 0,
+    stopTake: 0,
+  });
+  assert.deepEqual(
+    rejected.map(({ operation }) => operation),
+    ["take.begin", "take.stop", "audio.suspend"],
+  );
+  for (const { error } of rejected) {
+    assert.equal(error instanceof HostStateError, true);
+    assert.equal(error.code, "HOST_STATE_INVALID");
+    assert.equal(error.details.transition_in_progress, true);
+  }
+}
+
+test("sealTake callback cannot admit Trigger or mutate Take state", () => {
+  for (const nextState of ["interrupted", "failed", "closed"]) {
+    exerciseAdmissionBarrier("sealTake", nextState);
+  }
+});
+
+test("cleanup callback cannot admit Trigger or mutate Take state", () => {
+  for (const nextState of ["interrupted", "failed", "closed"]) {
+    exerciseAdmissionBarrier("cleanup", nextState);
+  }
+});
+
 test("fatal failure seals an active Take and terminal states are immutable", () => {
   const sealed = [];
   const failed = createHostStateMachine({
