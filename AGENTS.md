@@ -89,8 +89,10 @@ Python-hosted tests preload the sanitizer runtime into CPython, which does not
 work on arm64 macOS, so Linux `core-asan` owns that coverage.
 `docs/quality/core-test-policy.md` is the canonical tier definition.
 
-`package` produces a distributable Core archive. It builds Release and packages
-it; it does not run tests.
+`package` produces a distributable Core archive. It builds Release, runs the
+`unit` and `component` tiers, then packages, and it refuses to package a
+modified working tree because the recorded Git revision would not describe the
+contents. It also writes a detached `<archive>.sha256`.
 
 Direct verification commands:
 

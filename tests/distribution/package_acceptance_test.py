@@ -169,6 +169,9 @@ def main() -> int:
                 str(build_root),
                 "--output-dir",
                 str(output_dir),
+                # This test exercises packaging mechanics, not release
+                # provenance, so it runs against a possibly modified tree.
+                "--allow-modified-worktree",
             ],
             cwd=REPO_ROOT,
             env=package_environment,
@@ -186,6 +189,14 @@ def main() -> int:
         archive = Path(lines[0]).resolve(strict=True)
         assert archive.parent == output_dir.resolve()
         assert archive.suffix == ".zip"
+
+        # A detached digest is the only out-of-band integrity signal a consumer
+        # has; build-manifest.json ships inside the archive.
+        checksum = archive.with_name(archive.name + ".sha256")
+        assert checksum.is_file(), checksum
+        assert checksum.read_text(encoding="utf-8") == (
+            f"{sha256(archive)}  {archive.name}\n"
+        )
 
         extraction = temporary_root / "fresh-extraction"
         extraction.mkdir()
