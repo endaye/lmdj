@@ -40,16 +40,22 @@ export function createHostStateMachine({
   initialState = "cold",
   notify = () => {},
   sealTake = () => {},
+  cleanup = () => {},
 } = {}) {
   if (!STATE_SET.has(initialState)) {
     throw new TypeError("Unknown initial Host state");
   }
-  if (typeof notify !== "function" || typeof sealTake !== "function") {
+  if (
+    typeof notify !== "function" ||
+    typeof sealTake !== "function" ||
+    typeof cleanup !== "function"
+  ) {
     throw new TypeError("Host state side effects must be injected functions");
   }
 
   let state = initialState;
   let activeTakeId = null;
+  let transitionInProgress = false;
 
   function invalid(message, details = {}) {
     throw new HostStateError(message, { state, ...details });
@@ -67,7 +73,7 @@ export function createHostStateMachine({
 
   function sealActiveTake(reason) {
     if (activeTakeId === null) {
-      return;
+      return null;
     }
     const sealed = Object.freeze({
       take_id: activeTakeId,
@@ -76,36 +82,50 @@ export function createHostStateMachine({
     });
     activeTakeId = null;
     sealTake(sealed);
-    notify("capture.sealed", sealed);
+    return sealed;
   }
 
   function transition(nextState, { reason = "host_lifecycle" } = {}) {
+    if (transitionInProgress) {
+      invalid("Reentrant Host state transitions are not allowed", {
+        next_state: nextState,
+      });
+    }
     if (!isAllowedTransition(nextState)) {
       invalid("Transition is not present in the locked Host state table", {
         next_state: nextState,
       });
     }
-    const previousState = state;
-    state = nextState;
-    notify("host.state_changed", {
-      previous_state: previousState,
-      state: nextState,
-    });
+    transitionInProgress = true;
+    try {
+      const previousState = state;
+      const requiresCleanup =
+        nextState === "interrupted" ||
+        nextState === "failed" ||
+        nextState === "closed";
+      const sealed = requiresCleanup ? sealActiveTake(reason) : null;
+      if (requiresCleanup) {
+        cleanup(nextState, { reason });
+      }
 
-    if (
-      nextState === "interrupted" ||
-      nextState === "failed" ||
-      nextState === "closed"
-    ) {
-      sealActiveTake(reason);
+      state = nextState;
+      if (sealed !== null) {
+        notify("capture.sealed", sealed);
+      }
+      notify("host.state_changed", {
+        previous_state: previousState,
+        state: nextState,
+      });
+      if (nextState === "interrupted") {
+        notify("audio.interrupted", { reason });
+      }
+      if (previousState === "recovering" && nextState === "running") {
+        notify("audio.recovered", {});
+      }
+      return state;
+    } finally {
+      transitionInProgress = false;
     }
-    if (nextState === "interrupted") {
-      notify("audio.interrupted", { reason });
-    }
-    if (previousState === "recovering" && nextState === "running") {
-      notify("audio.recovered", {});
-    }
-    return state;
   }
 
   function allowsOperation(operation) {

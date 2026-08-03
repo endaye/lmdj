@@ -45,6 +45,43 @@ function encodedRequestAtSize(size) {
   return bytes;
 }
 
+function responseAtSize(size) {
+  const value = {
+    protocol_version: PROTOCOL_VERSION,
+    request_id: REQUEST_ID,
+    ok: true,
+    result: { padding: "" },
+  };
+  const baseSize = encode(value).byteLength;
+  assert.ok(baseSize <= size);
+  const remainingBytes = size - baseSize;
+  value.result.padding =
+    "界".repeat(Math.floor(remainingBytes / 3)) +
+    "x".repeat(remainingBytes % 3);
+  assert.equal(encode(value).byteLength, size);
+  return value;
+}
+
+function notificationAtSize(size) {
+  const value = {
+    protocol_version: PROTOCOL_VERSION,
+    event: "runtime.warning",
+    payload: { padding: "" },
+  };
+  const baseSize = encode(value).byteLength;
+  assert.ok(baseSize <= size);
+  const remainingBytes = size - baseSize;
+  value.payload.padding =
+    "界".repeat(Math.floor(remainingBytes / 3)) +
+    "x".repeat(remainingBytes % 3);
+  assert.equal(encode(value).byteLength, size);
+  return value;
+}
+
+function requestIdFor(index) {
+  return `00000000-0000-0000-0000-${String(index).padStart(12, "0")}`;
+}
+
 async function sha256Hex(bytes) {
   const digest = await webcrypto.subtle.digest("SHA-256", bytes);
   return Array.from(new Uint8Array(digest), (byte) =>
@@ -213,6 +250,31 @@ test("validates closed response and notification envelopes", () => {
   );
 });
 
+test("bounds response envelopes by exact UTF-8 bytes", () => {
+  assert.equal(
+    validateResponseEnvelope(responseAtSize(MAX_ENVELOPE_BYTES)).ok,
+    true,
+  );
+  assert.throws(
+    () => validateResponseEnvelope(responseAtSize(MAX_ENVELOPE_BYTES + 1)),
+    expectCode("WEB_RUNTIME_RESOURCE_LIMIT"),
+  );
+});
+
+test("bounds notification envelopes by exact UTF-8 bytes", () => {
+  assert.equal(
+    validateNotificationEnvelope(notificationAtSize(MAX_ENVELOPE_BYTES)).event,
+    "runtime.warning",
+  );
+  assert.throws(
+    () =>
+      validateNotificationEnvelope(
+        notificationAtSize(MAX_ENVELOPE_BYTES + 1),
+      ),
+    expectCode("WEB_RUNTIME_RESOURCE_LIMIT"),
+  );
+});
+
 test("creates lowercase request IDs only through injected crypto", () => {
   const envelope = createRequestEnvelope({
     operation: "host.status",
@@ -332,6 +394,7 @@ test("a deadline terminates transport and ignores a later mutation response", as
     false,
   );
   assert.equal(transport.pendingCount, 0);
+  assert.equal(transport.activeRequestIdCount, 0);
 });
 
 test("a response arriving after its monotonic deadline fails closed", async () => {
@@ -361,4 +424,154 @@ test("a response arriving after its monotonic deadline fails closed", async () =
   );
   await assert.rejects(pending, expectCode("HOST_TIMEOUT"));
   assert.equal(terminateCalls, 1);
+  assert.equal(transport.activeRequestIdCount, 0);
+});
+
+test("a malformed response atomically fails closed and later replies have no effect", async () => {
+  let terminateCalls = 0;
+  let appliedMutations = 0;
+  let stateObservedByTerminate = null;
+  const timers = [];
+  let transport;
+  transport = createProtocolTransport({
+    send: () => {},
+    terminate: () => {
+      terminateCalls += 1;
+      stateObservedByTerminate = {
+        pendingCount: transport.pendingCount,
+        activeRequestIdCount: transport.activeRequestIdCount,
+        activeTimerCount: timers.filter(({ active }) => active).length,
+      };
+    },
+    now: () => 0,
+    setTimer: () => {
+      const timer = { active: true };
+      timers.push(timer);
+      return timer;
+    },
+    clearTimer: (timer) => {
+      timer.active = false;
+    },
+  });
+  const first = transport.request(
+    request({ request_id: requestIdFor(1), operation: "project.create" }),
+  );
+  const second = transport.request(
+    request({ request_id: requestIdFor(2), operation: "project.open" }),
+  );
+  first.then(
+    () => {
+      appliedMutations += 1;
+    },
+    () => {},
+  );
+  second.then(
+    () => {
+      appliedMutations += 1;
+    },
+    () => {},
+  );
+
+  assert.equal(
+    transport.receive({
+      protocol_version: PROTOCOL_VERSION,
+      request_id: requestIdFor(1),
+      ok: true,
+      result: { project_revision: 2 },
+      extra: true,
+    }),
+    false,
+  );
+  await assert.rejects(first, expectCode("HOST_PROTOCOL_MISMATCH"));
+  await assert.rejects(second, expectCode("HOST_PROTOCOL_MISMATCH"));
+  assert.equal(transport.terminated, true);
+  assert.equal(terminateCalls, 1);
+  assert.equal(transport.pendingCount, 0);
+  assert.equal(transport.activeRequestIdCount, 0);
+  assert.equal(timers.every(({ active }) => active === false), true);
+  assert.deepEqual(stateObservedByTerminate, {
+    pendingCount: 0,
+    activeRequestIdCount: 0,
+    activeTimerCount: 0,
+  });
+
+  assert.equal(
+    transport.receive({
+      protocol_version: PROTOCOL_VERSION,
+      request_id: requestIdFor(1),
+      ok: true,
+      result: { project_revision: 2 },
+    }),
+    false,
+  );
+  await Promise.resolve();
+  assert.equal(appliedMutations, 0);
+});
+
+test("request identity storage stays bounded and completed IDs may be reused", async () => {
+  const transport = createProtocolTransport({
+    send: () => {},
+    terminate: () => {},
+    now: () => 0,
+    setTimer: () => ({ active: true }),
+    clearTimer: (timer) => {
+      timer.active = false;
+    },
+  });
+
+  for (let index = 0; index < 512; index += 1) {
+    const request_id = requestIdFor(index);
+    const pending = transport.request(request({ request_id }));
+    assert.equal(
+      transport.receive({
+        protocol_version: PROTOCOL_VERSION,
+        request_id,
+        ok: true,
+        result: { index },
+      }),
+      true,
+    );
+    assert.deepEqual(await pending, { index });
+    assert.equal(transport.activeRequestIdCount, 0);
+  }
+
+  const reused = transport.request(request({ request_id: requestIdFor(0) }));
+  assert.equal(
+    transport.receive({
+      protocol_version: PROTOCOL_VERSION,
+      request_id: requestIdFor(0),
+      ok: true,
+      result: { reused: true },
+    }),
+    true,
+  );
+  assert.deepEqual(await reused, { reused: true });
+  assert.equal(transport.activeRequestIdCount, 0);
+});
+
+test("duplicate request IDs remain rejected while the first request is in flight", async () => {
+  const transport = createProtocolTransport({
+    send: () => {},
+    terminate: () => {},
+    now: () => 0,
+    setTimer: () => ({ active: true }),
+    clearTimer: (timer) => {
+      timer.active = false;
+    },
+  });
+  const pending = transport.request(request());
+  assert.throws(
+    () => transport.request(request()),
+    expectCode("HOST_PROTOCOL_MISMATCH"),
+  );
+  assert.equal(
+    transport.receive({
+      protocol_version: PROTOCOL_VERSION,
+      request_id: REQUEST_ID,
+      ok: true,
+      result: {},
+    }),
+    true,
+  );
+  await assert.doesNotReject(pending);
 });

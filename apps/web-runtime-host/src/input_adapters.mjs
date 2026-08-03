@@ -36,13 +36,22 @@ export function createPointerAdapter({
   trigger,
   velocity,
   isAvailable = () => true,
+  now,
+  compatibilityWindowMs = 500,
 }) {
   requireTrigger(trigger);
   requireVelocity(velocity);
   if (typeof isAvailable !== "function") {
     throw new TypeError("Pointer availability must be an injected function");
   }
-  let suppressCompatibilityMouse = false;
+  if (
+    typeof now !== "function" ||
+    !Number.isFinite(compatibilityWindowMs) ||
+    compatibilityWindowMs < 0
+  ) {
+    throw new TypeError("Pointer correlation requires an injected monotonic clock");
+  }
+  let compatibilityMarker = null;
 
   function canTrigger(slot, options) {
     return (
@@ -60,17 +69,35 @@ export function createPointerAdapter({
     ) {
       return false;
     }
-    suppressCompatibilityMouse = true;
+    compatibilityMarker = Object.freeze({
+      pointerId: event.pointerId,
+      flatSlot,
+      target: event.target,
+      clientX: event.clientX,
+      clientY: event.clientY,
+      expiresAt: now() + compatibilityWindowMs,
+    });
     trigger(flatSlot, velocity);
     return true;
+  }
+
+  function matchesCompatibilityMouse(event, flatSlot, marker) {
+    return (
+      now() <= marker.expiresAt &&
+      flatSlot === marker.flatSlot &&
+      event?.target === marker.target &&
+      event?.clientX === marker.clientX &&
+      event?.clientY === marker.clientY
+    );
   }
 
   function mouseDown(event, flatSlot, options = {}) {
     if (event?.button !== 0) {
       return false;
     }
-    if (suppressCompatibilityMouse) {
-      suppressCompatibilityMouse = false;
+    const marker = compatibilityMarker;
+    compatibilityMarker = null;
+    if (marker !== null && matchesCompatibilityMouse(event, flatSlot, marker)) {
       return false;
     }
     if (!canTrigger(flatSlot, options)) {
@@ -80,11 +107,24 @@ export function createPointerAdapter({
     return true;
   }
 
+  function pointerCancel(event) {
+    if (
+      compatibilityMarker === null ||
+      (event?.pointerId !== undefined &&
+        event.pointerId !== compatibilityMarker.pointerId)
+    ) {
+      return false;
+    }
+    compatibilityMarker = null;
+    return true;
+  }
+
   return Object.freeze({
     pointerDown,
     mouseDown,
+    pointerCancel,
     clearPressed() {
-      suppressCompatibilityMouse = false;
+      compatibilityMarker = null;
     },
   });
 }
@@ -194,6 +234,9 @@ export function createMidiAdapter({
   }
 
   function message(event, input) {
+    if (permission !== "granted" || !connectedInputs.has(input)) {
+      return false;
+    }
     const data = event?.data;
     if (!data || data.length < 3) {
       return false;
@@ -229,7 +272,13 @@ export function createMidiAdapter({
   }
 
   function attachInput(input) {
-    if (!input || input.type !== "input" || connectedInputs.has(input)) {
+    if (
+      permission !== "granted" ||
+      !input ||
+      input.type !== "input" ||
+      input.state !== "connected" ||
+      connectedInputs.has(input)
+    ) {
       return false;
     }
     connectedInputs.add(input);

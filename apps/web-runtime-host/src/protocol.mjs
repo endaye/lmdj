@@ -114,6 +114,25 @@ function asBytes(value) {
   throw protocolError("Protocol input must be a byte buffer");
 }
 
+function enforceEnvelopeByteLimit(envelope) {
+  let json;
+  try {
+    json = JSON.stringify(envelope);
+  } catch {
+    throw protocolError("Protocol envelope is not JSON serializable");
+  }
+  if (typeof json !== "string") {
+    throw protocolError("Protocol envelope is not a JSON value");
+  }
+  const byteLength = new TextEncoder().encode(json).byteLength;
+  if (byteLength > MAX_ENVELOPE_BYTES) {
+    throw resourceLimitError("JSON envelope exceeds the Web Host limit", {
+      limit: MAX_ENVELOPE_BYTES,
+      actual: byteLength,
+    });
+  }
+}
+
 function validateRequestObject(
   envelope,
   { seenRequestIds, allowOperation } = {},
@@ -193,6 +212,7 @@ export function createRequestEnvelope({ operation, payload, crypto }) {
 }
 
 export function validateResponseEnvelope(envelope) {
+  enforceEnvelopeByteLimit(envelope);
   if (!isPlainObject(envelope) || typeof envelope.ok !== "boolean") {
     throw protocolError("Response envelope is invalid");
   }
@@ -220,6 +240,7 @@ export function validateResponseEnvelope(envelope) {
 }
 
 export function validateNotificationEnvelope(envelope) {
+  enforceEnvelopeByteLimit(envelope);
   if (
     !hasExactKeys(envelope, ["protocol_version", "event", "payload"]) ||
     typeof envelope.event !== "string" ||
@@ -297,28 +318,28 @@ export function createProtocolTransport({
   }
 
   const pending = new Map();
-  const outboundRequestIds = new Set();
+  const activeRequestIds = new Set();
   let isTerminated = false;
 
-  function failClosed(timedOutRequestId) {
+  function failClosed(failure) {
     if (isTerminated) {
       return;
     }
     isTerminated = true;
-    terminate();
-    for (const [requestId, entry] of pending) {
-      clearTimer(entry.timer);
-      entry.reject(
-        new HostProtocolError(
-          "HOST_TIMEOUT",
-          requestId === timedOutRequestId
-            ? "Host request deadline expired"
-            : "Host transport terminated after a request timeout",
-          { request_id: requestId },
-        ),
-      );
-    }
+    const entries = [...pending.values()];
     pending.clear();
+    activeRequestIds.clear();
+    for (const entry of entries) {
+      if (entry.timer !== null) {
+        clearTimer(entry.timer);
+      }
+      entry.reject(failure);
+    }
+    try {
+      terminate();
+    } catch {
+      // Internal state is already failed closed; transport cleanup cannot reopen it.
+    }
   }
 
   function armTimer(requestId, delay) {
@@ -332,7 +353,13 @@ export function createProtocolTransport({
         entry.timer = armTimer(requestId, remaining);
         return;
       }
-      failClosed(requestId);
+      failClosed(
+        new HostProtocolError(
+          "HOST_TIMEOUT",
+          "Host request deadline expired",
+          { request_id: requestId },
+        ),
+      );
     }, delay);
   }
 
@@ -344,18 +371,31 @@ export function createProtocolTransport({
     }
     const bytes = new TextEncoder().encode(JSON.stringify(envelope));
     const validated = decodeRequestEnvelope(bytes, {
-      seenRequestIds: outboundRequestIds,
+      seenRequestIds: activeRequestIds,
     });
     const deadlineAt = now() + deadlineForOperation(validated.operation);
+    let resolveRequest;
+    let rejectRequest;
     const promise = new Promise((resolve, reject) => {
-      const entry = { resolve, reject, deadlineAt, timer: null };
-      pending.set(validated.request_id, entry);
+      resolveRequest = resolve;
+      rejectRequest = reject;
+    });
+    const entry = {
+      resolve: resolveRequest,
+      reject: rejectRequest,
+      deadlineAt,
+      timer: null,
+    };
+    pending.set(validated.request_id, entry);
+    try {
       entry.timer = armTimer(
         validated.request_id,
         deadlineForOperation(validated.operation),
       );
-    });
-    send(validated, sidecar);
+      send(validated, sidecar);
+    } catch {
+      failClosed(protocolError("Host transport dispatch failed"));
+    }
     return promise;
   }
 
@@ -363,17 +403,34 @@ export function createProtocolTransport({
     if (isTerminated) {
       return false;
     }
-    const validated = validateResponseEnvelope(envelope);
+    let validated;
+    try {
+      validated = validateResponseEnvelope(envelope);
+    } catch (error) {
+      failClosed(
+        error instanceof HostProtocolError
+          ? error
+          : protocolError("Host response validation failed"),
+      );
+      return false;
+    }
     const entry = pending.get(validated.request_id);
     if (!entry) {
       return false;
     }
     if (now() >= entry.deadlineAt) {
-      failClosed(validated.request_id);
+      failClosed(
+        new HostProtocolError(
+          "HOST_TIMEOUT",
+          "Host request deadline expired",
+          { request_id: validated.request_id },
+        ),
+      );
       return false;
     }
     clearTimer(entry.timer);
     pending.delete(validated.request_id);
+    activeRequestIds.delete(validated.request_id);
     if (validated.ok) {
       entry.resolve(validated.result);
     } else {
@@ -396,6 +453,9 @@ export function createProtocolTransport({
     },
     get pendingCount() {
       return pending.size;
+    },
+    get activeRequestIdCount() {
+      return activeRequestIds.size;
     },
   });
 }

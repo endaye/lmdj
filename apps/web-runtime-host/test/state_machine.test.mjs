@@ -137,8 +137,80 @@ test("interruption seals an active Take and emits exact notifications", () => {
   ]);
   assert.deepEqual(
     notifications.map(({ event }) => event),
-    ["host.state_changed", "capture.sealed", "audio.interrupted"],
+    ["capture.sealed", "host.state_changed", "audio.interrupted"],
   );
+});
+
+test("seals and cleans before interrupted, failed, or closed becomes observable", () => {
+  for (const nextState of ["interrupted", "failed", "closed"]) {
+    const observations = [];
+    let machine;
+    machine = createHostStateMachine({
+      initialState: "running",
+      sealTake: () => {
+        observations.push({
+          step: "seal",
+          state: machine.state,
+          activeTake: machine.activeTake,
+        });
+      },
+      cleanup: (targetState) => {
+        observations.push({
+          step: `cleanup:${targetState}`,
+          state: machine.state,
+          activeTake: machine.activeTake,
+        });
+      },
+      notify: (event) => {
+        observations.push({
+          step: `notify:${event}`,
+          state: machine.state,
+          activeTake: machine.activeTake,
+        });
+      },
+    });
+    machine.beginTake(`take-${nextState}`);
+    machine.transition(nextState);
+
+    assert.deepEqual(observations[0], {
+      step: "seal",
+      state: "running",
+      activeTake: null,
+    });
+    assert.deepEqual(observations[1], {
+      step: `cleanup:${nextState}`,
+      state: "running",
+      activeTake: null,
+    });
+    for (const observation of observations.slice(2)) {
+      assert.equal(observation.state, nextState, observation.step);
+      assert.equal(observation.activeTake, null, observation.step);
+    }
+  }
+});
+
+test("reentrant notification cannot recover during an interrupted transition", () => {
+  const reentrantErrors = [];
+  let machine;
+  machine = createHostStateMachine({
+    initialState: "running",
+    notify: (event) => {
+      if (event === "host.state_changed") {
+        assert.equal(machine.state, "interrupted");
+        assert.equal(machine.activeTake, null);
+        try {
+          machine.transition("recovering");
+        } catch (error) {
+          reentrantErrors.push(error);
+        }
+      }
+    },
+  });
+  machine.beginTake("take-reentrant");
+  machine.transition("interrupted");
+  assert.equal(machine.state, "interrupted");
+  assert.equal(reentrantErrors.length, 1);
+  assert.equal(reentrantErrors[0].code, "HOST_STATE_INVALID");
 });
 
 test("fatal failure seals an active Take and terminal states are immutable", () => {
