@@ -56,6 +56,8 @@ using lmdj::audio::PreparedSampleBank;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RealtimeState;
+using lmdj::audio::RuntimeTriggerOutcome;
+using lmdj::audio::RuntimeTriggerOutcomeEvent;
 using lmdj::audio::TriggerEvent;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::ProjectId;
@@ -86,6 +88,13 @@ void plays_a_sample_and_reports_render_telemetry() {
   engine.render(left.data(), right.data(), 1);
   LMDJ_CHECK(left[0] == -0.5F && right[0] == -0.5F);
 
+  std::array<RuntimeTriggerOutcomeEvent, 1> outcomes{};
+  LMDJ_CHECK(engine.drain_trigger_outcomes(outcomes) == 1);
+  LMDJ_CHECK(outcomes.at(0).sequence == 9);
+  LMDJ_CHECK(
+      outcomes.at(0).outcome == RuntimeTriggerOutcome::voice_started);
+  LMDJ_CHECK(outcomes.at(0).runtime_frame == 0);
+
   const auto telemetry = engine.telemetry();
   LMDJ_CHECK(telemetry.enqueued_events == 1);
   LMDJ_CHECK(telemetry.dequeued_events == 1);
@@ -95,6 +104,10 @@ void plays_a_sample_and_reports_render_telemetry() {
   LMDJ_CHECK(telemetry.callback_count == 2);
   LMDJ_CHECK(telemetry.rendered_frames == 2);
   LMDJ_CHECK(telemetry.max_callback_frames == 1);
+  const auto outcomes_telemetry = engine.trigger_outcome_telemetry();
+  LMDJ_CHECK(outcomes_telemetry.published_outcomes == 1);
+  LMDJ_CHECK(outcomes_telemetry.drained_outcomes == 1);
+  LMDJ_CHECK(outcomes_telemetry.runtime_outcome_drops == 0);
 }
 
 void rejects_invalid_samples_and_running_time_mutation() {
@@ -240,6 +253,94 @@ void caps_simultaneous_voices_and_mixes_each_admitted_voice() {
   LMDJ_CHECK(telemetry.started_voices == 128);
   LMDJ_CHECK(telemetry.active_voices == 128);
   LMDJ_CHECK(telemetry.voice_drops == 1);
+}
+
+void publishes_ordered_mixed_outcomes_at_128_frame_boundaries() {
+  RealtimeEngine engine;
+  const std::array<float, 256> sample{};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+
+  for (std::uint64_t sequence = 1; sequence <= 128; ++sequence) {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
+               EnqueueResult::accepted);
+  }
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  engine.render(left.data(), right.data(), 128);
+
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{129, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 128);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{130, 0, 127}) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 128);
+
+  std::array<RuntimeTriggerOutcomeEvent, 130> outcomes{};
+  LMDJ_CHECK(engine.drain_trigger_outcomes(outcomes) == outcomes.size());
+  for (std::uint64_t sequence = 1; sequence <= 128; ++sequence) {
+    const auto& outcome = outcomes.at(sequence - 1);
+    LMDJ_CHECK(outcome.sequence == sequence);
+    LMDJ_CHECK(outcome.outcome == RuntimeTriggerOutcome::voice_started);
+    LMDJ_CHECK(outcome.runtime_frame == 0);
+  }
+  LMDJ_CHECK(outcomes.at(128).sequence == 129);
+  LMDJ_CHECK(
+      outcomes.at(128).outcome == RuntimeTriggerOutcome::voice_capacity);
+  LMDJ_CHECK(outcomes.at(128).runtime_frame == 128);
+  LMDJ_CHECK(outcomes.at(129).sequence == 130);
+  LMDJ_CHECK(
+      outcomes.at(129).outcome == RuntimeTriggerOutcome::voice_started);
+  LMDJ_CHECK(outcomes.at(129).runtime_frame == 256);
+
+  const auto realtime = engine.telemetry();
+  const auto outcome_telemetry = engine.trigger_outcome_telemetry();
+  LMDJ_CHECK(realtime.dequeued_events == outcomes.size());
+  LMDJ_CHECK(realtime.started_voices == 129);
+  LMDJ_CHECK(realtime.voice_drops == 1);
+  LMDJ_CHECK(outcome_telemetry.published_outcomes == outcomes.size());
+  LMDJ_CHECK(outcome_telemetry.drained_outcomes == outcomes.size());
+  LMDJ_CHECK(outcome_telemetry.runtime_outcome_drops == 0);
+}
+
+void outcome_ring_reports_capacity_drop_and_restart_resets_it() {
+  static_assert(lmdj::audio::kRealtimeTriggerOutcomeCapacity == 4'096);
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeTriggerOutcomeCapacity + 1;
+       ++sequence) {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
+               EnqueueResult::accepted);
+    engine.render(left.data(), right.data(), 1);
+  }
+
+  const auto full = engine.trigger_outcome_telemetry();
+  LMDJ_CHECK(
+      full.published_outcomes == lmdj::audio::kRealtimeTriggerOutcomeCapacity);
+  LMDJ_CHECK(full.drained_outcomes == 0);
+  LMDJ_CHECK(full.runtime_outcome_drops == 1);
+  LMDJ_CHECK(engine.telemetry().dequeued_events ==
+             full.published_outcomes + full.runtime_outcome_drops);
+
+  std::array<RuntimeTriggerOutcomeEvent, 1> first{};
+  LMDJ_CHECK(engine.drain_trigger_outcomes(first) == 1);
+  LMDJ_CHECK(first.at(0).sequence == 1);
+  LMDJ_CHECK(first.at(0).outcome == RuntimeTriggerOutcome::voice_started);
+  LMDJ_CHECK(first.at(0).runtime_frame == 0);
+
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  const auto reset = engine.trigger_outcome_telemetry();
+  LMDJ_CHECK(reset.published_outcomes == 0);
+  LMDJ_CHECK(reset.drained_outcomes == 0);
+  LMDJ_CHECK(reset.runtime_outcome_drops == 0);
+  LMDJ_CHECK(engine.drain_trigger_outcomes(first) == 0);
 }
 
 void completes_a_sample_across_callback_blocks() {
@@ -661,6 +762,8 @@ int main() {
   applies_velocity_gain_and_clamps_after_mixing();
   reports_queue_capacity_and_drops();
   caps_simultaneous_voices_and_mixes_each_admitted_voice();
+  publishes_ordered_mixed_outcomes_at_128_frame_boundaries();
+  outcome_ring_reports_capacity_drop_and_restart_resets_it();
   completes_a_sample_across_callback_blocks();
   publishes_sample_banks_only_at_safe_render_boundaries();
   rejects_publication_until_trigger_queue_is_empty();

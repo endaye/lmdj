@@ -389,6 +389,14 @@ def happy_path(
     ready = process.read()
     assert ready["ok"] is True
     assert ready["operation"] == "ready"
+    assert set(ready["result"]) == {
+        "backend",
+        "host_version",
+        "product_build",
+        "project_id",
+        "project_revision",
+        "resolved_pad_count",
+    }
     assert ready["result"]["resolved_pad_count"] == 2
     assert ready["result"]["project_revision"] == 5
 
@@ -397,7 +405,26 @@ def happy_path(
             {"operation": "trigger", "slot": slot(0, pad), "velocity": 100}
         )
         assert triggered["ok"] is True, triggered
+        assert triggered["result"] == {
+            "sequence": pad + 1,
+            "status": "accepted",
+        }
     status = process.request({"operation": "status"})
+    assert status["ok"] is True, status
+    assert set(status["result"]["engine"]) == {
+        "active_voices",
+        "callback_count",
+        "cancelled_events",
+        "cancelled_voices",
+        "completed_voices",
+        "dequeued_events",
+        "enqueued_events",
+        "queue_drops",
+        "queued_events",
+        "rendered_frames",
+        "started_voices",
+        "voice_drops",
+    }
     assert status["result"]["engine"]["enqueued_events"] == 2
     assert status["result"]["engine"]["completed_voices"] == 2
     assert status["result"]["capture"]["captured_events"] == 0

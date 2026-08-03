@@ -22,6 +22,7 @@ inline constexpr std::size_t kRealtimeVoiceCapacity = 128;
 inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
+inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
 
 enum class RealtimeState : std::uint8_t { stopped, running };
 enum class EnqueueResult : std::uint8_t {
@@ -49,6 +50,11 @@ enum class CaptureState : std::uint8_t {
   corrupted,
 };
 
+enum class RuntimeTriggerOutcome : std::uint8_t {
+  voice_started,
+  voice_capacity,
+};
+
 struct TriggerEvent {
   std::uint64_t sequence;
   std::uint8_t slot;
@@ -60,6 +66,12 @@ struct CapturedTriggerEvent {
   std::uint8_t slot;
   std::uint8_t velocity;
   std::uint32_t frame_offset;
+};
+
+struct RuntimeTriggerOutcomeEvent {
+  std::uint64_t sequence;
+  RuntimeTriggerOutcome outcome;
+  std::uint64_t runtime_frame;
 };
 
 struct RealtimeTelemetry {
@@ -97,6 +109,12 @@ struct CaptureTelemetry {
   std::uint64_t drained_events;
   std::uint64_t capture_drops;
   std::uint64_t capture_origin_frame;
+};
+
+struct RuntimeTriggerOutcomeTelemetry {
+  std::uint64_t published_outcomes;
+  std::uint64_t drained_outcomes;
+  std::uint64_t runtime_outcome_drops;
 };
 
 // Threading contract. Violating it is undefined behavior, not a runtime error.
@@ -144,6 +162,9 @@ class RealtimeEngine final {
   // Control thread, concurrent with render. Sole consumer of the capture ring.
   std::size_t drain_capture(
       std::span<CapturedTriggerEvent> output) noexcept;
+  // Control thread, concurrent with render. Sole consumer of the outcome ring.
+  std::size_t drain_trigger_outcomes(
+      std::span<RuntimeTriggerOutcomeEvent> output) noexcept;
   // Control thread, quiescent. Resets Voice and queue state.
   foundation::Result<void> start();
   // Control thread, quiescent. Releases Voice bank references and consumes the
@@ -158,6 +179,7 @@ class RealtimeEngine final {
   RealtimeTelemetry telemetry() const noexcept;
   BankTelemetry bank_telemetry() const noexcept;
   CaptureTelemetry capture_telemetry() const noexcept;
+  RuntimeTriggerOutcomeTelemetry trigger_outcome_telemetry() const noexcept;
 
  private:
   enum class BankState : std::uint8_t {
@@ -208,6 +230,10 @@ class RealtimeEngine final {
       CapturedTriggerEvent,
       kRealtimeCaptureCapacity>
       capture_ring_;
+  detail::FixedSpscQueue<
+      RuntimeTriggerOutcomeEvent,
+      kRealtimeTriggerOutcomeCapacity>
+      trigger_outcome_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
   std::atomic<std::uint64_t> availability_mask_{0};
   std::atomic<std::uint8_t> current_bank_slot_{kLegacyBankSlot};
@@ -239,6 +265,9 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> drained_events_{0};
   std::atomic<std::uint64_t> capture_drops_{0};
   std::atomic<std::uint64_t> capture_origin_frame_{0};
+  std::atomic<std::uint64_t> published_outcomes_{0};
+  std::atomic<std::uint64_t> drained_outcomes_{0};
+  std::atomic<std::uint64_t> runtime_outcome_drops_{0};
 };
 
 }  // namespace lmdj::audio

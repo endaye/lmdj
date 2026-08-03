@@ -264,6 +264,17 @@ std::size_t RealtimeEngine::drain_capture(
   return drained;
 }
 
+std::size_t RealtimeEngine::drain_trigger_outcomes(
+    std::span<RuntimeTriggerOutcomeEvent> output) noexcept {
+  std::size_t drained = 0;
+  while (drained < output.size() &&
+         trigger_outcome_ring_.try_pop(output[drained])) {
+    ++drained;
+  }
+  drained_outcomes_.fetch_add(drained, std::memory_order_relaxed);
+  return drained;
+}
+
 foundation::Result<void> RealtimeEngine::start() {
   if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
     return invalid_argument("realtime engine is already running");
@@ -272,6 +283,7 @@ foundation::Result<void> RealtimeEngine::start() {
   queue_.clear_quiescent();
   publish_queue_.clear_quiescent();
   capture_ring_.clear_quiescent();
+  trigger_outcome_ring_.clear_quiescent();
   pending_publications_.store(0, std::memory_order_relaxed);
   std::fill(voices_.begin(), voices_.end(), Voice{});
   enqueued_events_.store(0, std::memory_order_relaxed);
@@ -293,6 +305,9 @@ foundation::Result<void> RealtimeEngine::start() {
   drained_events_.store(0, std::memory_order_relaxed);
   capture_drops_.store(0, std::memory_order_relaxed);
   capture_origin_frame_.store(0, std::memory_order_relaxed);
+  published_outcomes_.store(0, std::memory_order_relaxed);
+  drained_outcomes_.store(0, std::memory_order_relaxed);
+  runtime_outcome_drops_.store(0, std::memory_order_relaxed);
   state_.store(RealtimeState::running, std::memory_order_release);
   return foundation::Result<void>::success();
 }
@@ -391,6 +406,15 @@ void RealtimeEngine::render(
         });
     if (voice == voices_.end()) {
       voice_drops_.fetch_add(1, std::memory_order_relaxed);
+      if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
+              event.sequence,
+              RuntimeTriggerOutcome::voice_capacity,
+              absolute_start_frame,
+          })) {
+        published_outcomes_.fetch_add(1, std::memory_order_relaxed);
+      } else {
+        runtime_outcome_drops_.fetch_add(1, std::memory_order_relaxed);
+      }
       continue;
     }
     const auto bank_slot =
@@ -411,6 +435,15 @@ void RealtimeEngine::render(
     }
     started_voices_.fetch_add(1, std::memory_order_relaxed);
     active_voices_.fetch_add(1, std::memory_order_relaxed);
+    if (trigger_outcome_ring_.try_push(RuntimeTriggerOutcomeEvent{
+            event.sequence,
+            RuntimeTriggerOutcome::voice_started,
+            absolute_start_frame,
+        })) {
+      published_outcomes_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+      runtime_outcome_drops_.fetch_add(1, std::memory_order_relaxed);
+    }
     capture_voice_start(event, absolute_start_frame);
   }
 
@@ -486,6 +519,15 @@ CaptureTelemetry RealtimeEngine::capture_telemetry() const noexcept {
       drained_events_.load(std::memory_order_relaxed),
       capture_drops_.load(std::memory_order_relaxed),
       capture_origin_frame_.load(std::memory_order_relaxed),
+  };
+}
+
+RuntimeTriggerOutcomeTelemetry
+RealtimeEngine::trigger_outcome_telemetry() const noexcept {
+  return RuntimeTriggerOutcomeTelemetry{
+      published_outcomes_.load(std::memory_order_relaxed),
+      drained_outcomes_.load(std::memory_order_relaxed),
+      runtime_outcome_drops_.load(std::memory_order_relaxed),
   };
 }
 

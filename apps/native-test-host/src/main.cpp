@@ -40,6 +40,7 @@ using lmdj::audio::EnqueueResult;
 using lmdj::audio::PreparedSampleBank;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
+using lmdj::audio::RuntimeTriggerOutcomeEvent;
 using lmdj::facade::Application;
 using lmdj::foundation::Error;
 using lmdj::foundation::ErrorCode;
@@ -411,7 +412,14 @@ class NativeHost final {
     }
     snapshot_ = prepared.value();
     pattern_id_ = invocation_.pattern_id;
-    return start_backend();
+    auto started = start_backend();
+    if (started.has_value() && trigger_outcome_failed()) {
+      (void)stop_backend();
+      started = host_failure(
+          ErrorCode::internal_error,
+          "Realtime Trigger outcome ring dropped events during startup");
+    }
+    return started;
   }
 
   Json ready_response() const {
@@ -428,53 +436,79 @@ class NativeHost final {
   }
 
   Json handle(const Json& request) {
-    const auto operation = request.find("operation");
-    if (operation == request.end() || !operation->is_string()) {
-      return invalid_request("operation must be a string");
+    drain_trigger_outcomes_once();
+    if (trigger_outcome_failed()) {
+      return trigger_outcome_failure_response();
     }
-    const auto name = operation->get<std::string>();
-    if (name == "trigger") {
-      return trigger(request);
+    auto response = [&]() -> Json {
+      const auto operation = request.find("operation");
+      if (operation == request.end() || !operation->is_string()) {
+        return invalid_request("operation must be a string");
+      }
+      const auto name = operation->get<std::string>();
+      if (name == "trigger") {
+        return trigger(request);
+      }
+      if (name == "snapshot.reload") {
+        return reload_snapshot(request);
+      }
+      if (name == "record.begin") {
+        return record_begin(request);
+      }
+      if (name == "record.stop") {
+        return record_stop(request);
+      }
+      if (name == "record.commit") {
+        return record_commit(request);
+      }
+      if (name == "status") {
+        return status(request);
+      }
+      if (name == "stop") {
+        return stop(request);
+      }
+      if (name == "start") {
+        return start(request);
+      }
+      if (name == "quit") {
+        return quit(request);
+      }
+      return invalid_request("unknown Native Host operation");
+    }();
+    drain_trigger_outcomes_once();
+    if (trigger_outcome_failed()) {
+      return trigger_outcome_failure_response();
     }
-    if (name == "snapshot.reload") {
-      return reload_snapshot(request);
-    }
-    if (name == "record.begin") {
-      return record_begin(request);
-    }
-    if (name == "record.stop") {
-      return record_stop(request);
-    }
-    if (name == "record.commit") {
-      return record_commit(request);
-    }
-    if (name == "status") {
-      return status(request);
-    }
-    if (name == "stop") {
-      return stop(request);
-    }
-    if (name == "start") {
-      return start(request);
-    }
-    if (name == "quit") {
-      return quit(request);
-    }
-    return invalid_request("unknown Native Host operation");
+    return response;
   }
 
   bool quitting() const noexcept { return quitting_; }
 
   bool terminal_audio_failure() const noexcept {
 #if defined(__APPLE__)
-    return output_ != nullptr &&
-           output_->state() == lmdj::audio::apple::CoreAudioState::failed;
+    return trigger_outcome_failed() ||
+           (output_ != nullptr &&
+            output_->state() == lmdj::audio::apple::CoreAudioState::failed);
 #else
-    return false;
+    return trigger_outcome_failed();
 #endif
   }
 
  private:
+  void drain_trigger_outcomes_once() noexcept {
+    std::array<RuntimeTriggerOutcomeEvent, 64> outcomes{};
+    (void)engine_.drain_trigger_outcomes(outcomes);
+  }
+
+  bool trigger_outcome_failed() const noexcept {
+    return engine_.trigger_outcome_telemetry().runtime_outcome_drops != 0;
+  }
+
+  Json trigger_outcome_failure_response() const {
+    return error_response(
+        "INTERNAL_ERROR", "Realtime Trigger outcome ring dropped events");
+  }
+
   Result<std::shared_ptr<const lmdj::cooker::RuntimeSnapshot>>
   prepare_snapshot(const PatternId& pattern_id) {
     std::lock_guard lock(facade_mutex_);
