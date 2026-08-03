@@ -2,8 +2,7 @@
 
 Date: 2026-08-03
 
-Status: Revised after design review; awaiting product-owner reapproval for
-implementation planning.
+Status: Approved for implementation planning.
 
 Approvals:
 
@@ -11,6 +10,8 @@ Approvals:
 - Runtime and persistence design approved by the product owner on 2026-08-03.
 - Host, input, and lifecycle design approved by the product owner on 2026-08-03.
 - Acceptance and version design approved by the product owner on 2026-08-03.
+- The revised design review version was reapproved by the product owner on
+  2026-08-03.
 
 ## Design Review Outcome (2026-08-03)
 
@@ -962,8 +963,8 @@ Every Stage 6 integration candidate must pass:
 scripts/core.sh proof
 scripts/core.sh test asan full
 scripts/core.sh test tsan full
-scripts/core.sh test stress full
-scripts/core-coverage.sh
+scripts/core.sh test release stress
+scripts/core-coverage.sh check
 scripts/web-runtime-lab.sh test
 ```
 
