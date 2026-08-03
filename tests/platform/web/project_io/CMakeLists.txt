@@ -93,5 +93,8 @@ target_link_options(
 )
 set_target_properties(
   project_io_web_production_link
-  PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
+  PROPERTIES
+    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/.."
+    LINK_DEPENDS
+      "${LMDJ_REPO_ROOT}/packages/project-io/src/web/library_opfs_storage.js"
 )

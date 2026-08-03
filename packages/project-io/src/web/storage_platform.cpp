@@ -1,5 +1,6 @@
 #include <lmdj/project_io/storage_platform.hpp>
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -12,7 +13,7 @@ namespace lmdj::project_io {
 namespace {
 
 extern "C" {
-int lmdj_opfs_acquire_writer(const char*, int);
+int lmdj_opfs_acquire_writer(const char*, int, int);
 void lmdj_opfs_release_writer(int);
 int lmdj_opfs_ensure_directory(const char*, int);
 int lmdj_opfs_exists(const char*, int);
@@ -22,6 +23,7 @@ int lmdj_opfs_create_immutable(const char*, int, const void*, int);
 int lmdj_opfs_replace_complete(const char*, int, const void*, int);
 int lmdj_opfs_append_durable(const char*, int, double, const void*, int);
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+int lmdj_opfs_create_immutable_test(const char*, int, const void*, int);
 int lmdj_opfs_replace_complete_test(const char*, int, const void*, int);
 int lmdj_opfs_append_durable_test(const char*, int, double, const void*, int);
 #endif
@@ -65,10 +67,18 @@ class WebWriterLease final : public ProjectWriterLease {
 
 class WebProjectStoragePlatform final : public ProjectStoragePlatform {
  public:
+  explicit WebProjectStoragePlatform(bool mounted)
+      : mounted_(mounted), platform_identity_(next_platform_identity()) {}
+
   foundation::Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(
       const std::filesystem::path& project_path) override {
+    if (!mounted_) {
+      return failure<std::unique_ptr<ProjectWriterLease>>(
+          -1, "mount availability");
+    }
     const auto path = web_path(project_path);
-    const int identity = lmdj_opfs_acquire_writer(path.data(), path.size());
+    const int identity = lmdj_opfs_acquire_writer(
+        path.data(), path.size(), platform_identity_);
     if (identity < 0) {
       return failure<std::unique_ptr<ProjectWriterLease>>(identity, "writer acquisition");
     }
@@ -78,11 +88,15 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<void> ensure_directory(
       const std::filesystem::path& input) override {
+    if (!mounted_) return mount_failure();
     return call_path(input, lmdj_opfs_ensure_directory, "directory creation");
   }
 
   foundation::Result<bool> exists(
       const std::filesystem::path& input) const override {
+    if (!mounted_) {
+      return failure<bool>(-1, "mount availability");
+    }
     const auto path = web_path(input);
     const int status = lmdj_opfs_exists(path.data(), path.size());
     if (status < 0) return failure<bool>(status, "existence check");
@@ -91,6 +105,7 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<std::uint64_t> byte_length(
       const std::filesystem::path& input) const override {
+    if (!mounted_) return failure<std::uint64_t>(-1, "mount availability");
     const auto path = web_path(input);
     const double length = lmdj_opfs_byte_length(path.data(), path.size());
     if (length < 0.0 || length > static_cast<double>(std::numeric_limits<std::uint64_t>::max())) {
@@ -101,6 +116,9 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<std::vector<std::byte>> read_complete(
       const std::filesystem::path& input) const override {
+    if (!mounted_) {
+      return failure<std::vector<std::byte>>(-1, "mount availability");
+    }
     const auto path = web_path(input);
     void* data = nullptr;
     int length = 0;
@@ -114,11 +132,18 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<void> create_immutable(
       const std::filesystem::path& input, std::span<const std::byte> bytes) override {
+    if (!mounted_) return mount_failure();
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    return call_bytes(
+        input, bytes, lmdj_opfs_create_immutable_test, "immutable creation");
+#else
     return call_bytes(input, bytes, lmdj_opfs_create_immutable, "immutable creation");
+#endif
   }
 
   foundation::Result<void> replace_complete(
       const std::filesystem::path& input, std::span<const std::byte> bytes) override {
+    if (!mounted_) return mount_failure();
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
     return call_bytes(input, bytes, lmdj_opfs_replace_complete_test, "complete replacement");
 #else
@@ -129,6 +154,7 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
   foundation::Result<void> append_durable(
       const std::filesystem::path& input, std::uint64_t prefix,
       std::span<const std::byte> bytes) override {
+    if (!mounted_) return mount_failure();
     const auto path = web_path(input);
     const int status =
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
@@ -142,11 +168,15 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
   }
 
   foundation::Result<void> remove(const std::filesystem::path& input) override {
+    if (!mounted_) return mount_failure();
     return call_path(input, lmdj_opfs_remove, "removal");
   }
 
   foundation::Result<std::vector<std::string>> list_names(
       const std::filesystem::path& input) const override {
+    if (!mounted_) {
+      return failure<std::vector<std::string>>(-1, "mount availability");
+    }
     const auto path = web_path(input);
     char* data = nullptr;
     int length = 0;
@@ -166,12 +196,26 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<void> validate_managed_tree(
       const std::filesystem::path& input) const override {
+    if (!mounted_) return mount_failure();
     return call_path(input, lmdj_opfs_validate_tree, "tree validation");
   }
 
  private:
   using PathCall = int (*)(const char*, int);
   using ByteCall = int (*)(const char*, int, const void*, int);
+
+  bool mounted_;
+  int platform_identity_;
+
+  static int next_platform_identity() {
+    static std::atomic<int> next{1};
+    return next.fetch_add(1, std::memory_order_relaxed);
+  }
+
+  static foundation::Result<void> mount_failure() {
+    return foundation::Result<void>::failure(
+        web_error(-1, "mount availability"));
+  }
 
   static foundation::Result<void> call_path(
       const std::filesystem::path& input, PathCall call, std::string_view operation) {
@@ -199,9 +243,15 @@ std::shared_ptr<ProjectStoragePlatform> make_web_project_storage_platform() {
     return backend != nullptr &&
            wasmfs_create_directory("/lmdj-workspace", 0777, backend) == 0;
   }();
-  if (!mounted) return nullptr;
-  return std::make_shared<WebProjectStoragePlatform>();
+  return std::make_shared<WebProjectStoragePlatform>(mounted);
 }
+
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+std::shared_ptr<ProjectStoragePlatform>
+make_web_project_storage_platform_for_test(bool mounted) {
+  return std::make_shared<WebProjectStoragePlatform>(mounted);
+}
+#endif
 
 std::shared_ptr<ProjectStoragePlatform> make_default_project_storage_platform() {
   return make_web_project_storage_platform();

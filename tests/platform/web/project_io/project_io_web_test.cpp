@@ -22,13 +22,18 @@
 
 namespace lmdj::project_io {
 std::shared_ptr<ProjectStoragePlatform> make_web_project_storage_platform();
+std::shared_ptr<ProjectStoragePlatform>
+make_web_project_storage_platform_for_test(bool mounted);
 }
 
 extern "C" int lmdj_opfs_append_flush_count();
+extern "C" int lmdj_opfs_immutable_write_count();
 
 namespace {
 
 using lmdj::foundation::Result;
+
+std::unique_ptr<lmdj::project_io::ProjectWriterLease> held_lease;
 
 void require(bool condition, std::string message) {
   if (!condition) throw std::runtime_error(std::move(message));
@@ -70,6 +75,40 @@ nlohmann::json run_suite() {
   using namespace lmdj;
   auto platform = project_io::make_web_project_storage_platform();
   require(platform != nullptr, "Web platform factory returned null");
+  auto unavailable =
+      project_io::make_web_project_storage_platform_for_test(false);
+  require(unavailable != nullptr, "mount failure returned null platform");
+  const auto require_mount_error = [](const auto& result, std::string operation) {
+    require(
+        !result.has_value() &&
+            result.error().code == foundation::ErrorCode::io_error,
+        "mount failure did not return typed storage error for " + operation);
+  };
+  const auto unavailable_path =
+      std::filesystem::path{"/lmdj-workspace/unavailable"};
+  require_mount_error(
+      unavailable->acquire_writer(unavailable_path), "writer acquisition");
+  require_mount_error(
+      unavailable->ensure_directory(unavailable_path), "directory creation");
+  require_mount_error(unavailable->exists(unavailable_path), "existence check");
+  require_mount_error(
+      unavailable->byte_length(unavailable_path), "length query");
+  require_mount_error(
+      unavailable->read_complete(unavailable_path), "complete read");
+  require_mount_error(
+      unavailable->create_immutable(unavailable_path, bytes("x")),
+      "immutable creation");
+  require_mount_error(
+      unavailable->replace_complete(unavailable_path, bytes("x")),
+      "complete replacement");
+  require_mount_error(
+      unavailable->append_durable(unavailable_path, 0, bytes("x")),
+      "durable append");
+  require_mount_error(unavailable->remove(unavailable_path), "removal");
+  require_mount_error(
+      unavailable->list_names(unavailable_path), "directory iteration");
+  require_mount_error(
+      unavailable->validate_managed_tree(unavailable_path), "tree validation");
 
   const auto action = query("action");
   const auto requested_bundle = query("bundle");
@@ -77,6 +116,105 @@ nlohmann::json run_suite() {
     require(!requested_bundle.empty(), "fault bundle is missing");
     const auto fault_bundle = std::filesystem::path{"/lmdj-workspace"} /
         (requested_bundle + ".lmdj");
+    if (action == "hold_lease") {
+      auto acquired = platform->acquire_writer(fault_bundle);
+      if (!acquired.has_value()) {
+        return {
+            {"complete", true},
+            {"result",
+             {{"lease", "failed"},
+              {"errorCode", foundation::error_code_name(acquired.error().code)},
+              {"storageCondition",
+               acquired.error().details.value("storage_condition", "")}}},
+        };
+      }
+      held_lease = std::move(acquired.value());
+      return {{"complete", true}, {"result", {{"lease", "held"}}}};
+    }
+
+    const auto replacement_path = fault_bundle / "replacement.bin";
+    const auto immutable_path = fault_bundle / "immutable.bin";
+    const auto scenario = query("scenario");
+    if (action == "prepare_replacement") {
+      success(platform->ensure_directory(fault_bundle), "replacement directory");
+      auto lease = value(
+          platform->acquire_writer(fault_bundle), "replacement prepare lease");
+      success(platform->remove(replacement_path), "replacement cleanup");
+      if (scenario == "existing") {
+        success(platform->replace_complete(replacement_path, bytes("old")),
+                "existing replacement seed");
+      } else {
+        require(scenario == "absent", "replacement scenario is invalid");
+      }
+      return {{"complete", true}, {"result", {{"state", scenario}}}};
+    }
+    if (action == "replace") {
+      auto lease = value(
+          platform->acquire_writer(fault_bundle), "replacement fault lease");
+      success(platform->replace_complete(replacement_path, bytes("new")),
+              "replacement fault write");
+      return {{"complete", true}, {"result", {{"state", "new"}}}};
+    }
+    if (action == "reopen_replacement" || action == "recover") {
+      auto acquired = platform->acquire_writer(fault_bundle);
+      if (!acquired.has_value()) {
+        return {
+            {"complete", true},
+            {"result",
+             {{"recovery", "failed"},
+              {"errorCode", foundation::error_code_name(acquired.error().code)},
+              {"storageCondition",
+               acquired.error().details.value("storage_condition", "")}}},
+        };
+      }
+      if (action == "recover") {
+        return {{"complete", true}, {"result", {{"recovery", "pass"}}}};
+      }
+      const bool present = value(
+          platform->exists(replacement_path), "replacement reopen exists");
+      const std::string state = present
+          ? text(value(
+                platform->read_complete(replacement_path),
+                "replacement reopen read"))
+          : "absent";
+      return {{"complete", true}, {"result", {{"state", state}}}};
+    }
+    if (action == "prepare_immutable") {
+      success(platform->ensure_directory(fault_bundle), "immutable directory");
+      auto lease = value(
+          platform->acquire_writer(fault_bundle), "immutable prepare lease");
+      success(platform->remove(immutable_path), "immutable cleanup");
+      return {{"complete", true}, {"result", {{"state", "absent"}}}};
+    }
+    if (action == "create_immutable_fault") {
+      auto lease = value(
+          platform->acquire_writer(fault_bundle), "immutable fault lease");
+      success(
+          platform->create_immutable(
+              immutable_path, bytes("immutable-partial")),
+          "immutable fault write");
+      return {{"complete", true}, {"result", {{"state", "created"}}}};
+    }
+    if (action == "reopen_immutable") {
+      auto lease = value(
+          platform->acquire_writer(fault_bundle), "immutable recovery lease");
+      require(
+          !value(platform->exists(immutable_path), "immutable recovery exists"),
+          "partial immutable survived recovery");
+      success(
+          platform->create_immutable(
+              immutable_path, bytes("immutable-retry")),
+          "immutable retry");
+      return {
+          {"complete", true},
+          {"result",
+           {{"state",
+             text(value(
+                 platform->read_complete(immutable_path),
+                 "immutable retry read"))}}},
+      };
+    }
+
     project_io::ProjectStore fault_store{platform};
     if (action == "prepare") {
       const auto present = value(platform->exists(fault_bundle / "manifest.json"), "fault exists");
@@ -93,7 +231,11 @@ nlohmann::json run_suite() {
                           {domain::PatternEvent{domain::PadSlotId{0, 0}, 0, 100}}}};
       (void)value(fault_store.execute(fault_bundle, domain::Command{command}),
                   "fault advance execute");
-    } else if (action != "reopen") {
+    } else if (action == "reopen") {
+      auto recovery_lease = value(
+          platform->acquire_writer(fault_bundle), "fault recovery lease");
+      recovery_lease.reset();
+    } else {
       throw std::runtime_error("unknown fault action");
     }
     const auto reopened = value(fault_store.load(fault_bundle), "fault common reopen");
@@ -104,6 +246,33 @@ nlohmann::json run_suite() {
   const auto sequence = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto bundle = std::filesystem::path{"/lmdj-workspace"} /
       ("parity-" + std::to_string(sequence) + ".lmdj");
+
+  auto outer_lease = value(platform->acquire_writer(bundle), "outer lease");
+  auto nested_lease = value(
+      platform->acquire_writer(bundle / ".." / bundle.filename()),
+      "equivalent nested lease");
+  const auto distinct_platform =
+      project_io::make_web_project_storage_platform();
+  const auto competing_same_page = distinct_platform->acquire_writer(bundle);
+  require(
+      !competing_same_page.has_value() &&
+          competing_same_page.error().details.value("storage_condition", "") ==
+              project_io::kStorageConditionProjectBusy,
+      "distinct platform inherited a same-page writer lease");
+  outer_lease.reset();
+  const auto competing_while_nested =
+      distinct_platform->acquire_writer(bundle);
+  require(
+      !competing_while_nested.has_value() &&
+          competing_while_nested.error().details.value(
+              "storage_condition", "") ==
+              project_io::kStorageConditionProjectBusy,
+      "outer release dropped the nested writer reference");
+  nested_lease.reset();
+  auto distinct_lease = value(
+      distinct_platform->acquire_writer(bundle),
+      "distinct platform acquisition after final release");
+  distinct_lease.reset();
 
   project_io::ProjectStore store{platform};
   auto initial = value(domain::create_project(
@@ -154,9 +323,17 @@ nlohmann::json run_suite() {
           "concurrent append lost acknowledgement");
 
   const auto contract = bundle / "contract";
+  auto contract_lease = value(
+      platform->acquire_writer(bundle), "contract writer lease");
   success(platform->ensure_directory(contract), "contract directory");
+  success(platform->remove(contract / "missing.bin"), "missing remove");
+  success(platform->remove(contract / "missing.bin"), "idempotent missing remove");
   const auto bridge_file = contract / "bridge-visible.bin";
+  const int immutable_writes = lmdj_opfs_immutable_write_count();
   success(platform->create_immutable(bridge_file, bytes("bridge")), "bridge coherence seed");
+  require(
+      lmdj_opfs_immutable_write_count() >= immutable_writes + 3,
+      "immutable creation did not loop over short writes");
   std::ifstream mounted_read{bridge_file, std::ios::binary};
   require(std::string{std::istreambuf_iterator<char>{mounted_read}, {}} == "bridge",
           "platform write is not visible through WasmFS mount");
@@ -207,14 +384,7 @@ nlohmann::json run_suite() {
   const auto accented = std::find(names.begin(), names.end(), "\xc3\xa9");
   require(a < z && z < accented, "unsigned UTF-8 sorting");
 
-  auto first_lease = value(platform->acquire_writer(bundle), "first lease");
-  const auto competing = project_io::make_web_project_storage_platform()->acquire_writer(bundle);
-  require(!competing.has_value() &&
-              competing.error().details.value("storage_condition", "") == "project_busy",
-          "competing writer did not fail fast");
-  first_lease.reset();
-  auto reacquired = value(platform->acquire_writer(bundle), "lease reacquire");
-  reacquired.reset();
+  contract_lease.reset();
 
   return {
       {"complete", true},
@@ -222,6 +392,8 @@ nlohmann::json run_suite() {
           {"projectStore", "pass"}, {"takeJournal", "pass"},
           {"replay", "pass"}, {"recovery", "pass"},
           {"appendContracts", "pass"}, {"lease", "pass"},
+          {"mountFailure", "pass"}, {"idempotentRemove", "pass"},
+          {"immutableShortWrites", "pass"},
           {"directoryBarrier", "absent"},
           {"replacementFaultPoints", {"before_write", "during_write", "before_close",
                                         "after_close", "before_cleanup"}}

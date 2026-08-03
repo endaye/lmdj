@@ -232,10 +232,10 @@ observable result with OPFS:
 | complete read and complete write | native | `FileSystemSyncAccessHandle` read/write |
 | durable file flush | native | `FileSystemSyncAccessHandle.flush()` |
 | exclusive Project writer | equivalent | one dedicated lease file held by an exclusive `FileSystemSyncAccessHandle` for the writer lifetime |
-| collision-safe immutable file creation | equivalent | under the writer lease, reject an existing name before create; a collision selects a new opaque name and never overwrites |
+| collision-safe immutable file creation | equivalent | under the writer lease, persist a Project-neutral storage intent, reject an existing name, loop over short writes, verify final length and hash, flush, then acknowledge |
 | deterministic directory iteration | equivalent | collect the complete OPFS iterator and sort names by unsigned UTF-8 byte order before common logic observes them |
-| atomic whole-file replacement | equivalent | write a complete replacement through `createWritable({keepExistingData: false})`; publish only when `close()` succeeds |
-| removal | native | `removeEntry` |
+| recoverable whole-file replacement | equivalent | persist a Project-neutral storage intent before touching the destination, write through `createWritable({keepExistingData: false})`, and reconcile exact previous-or-next state after restart |
+| removal | native | idempotent `removeEntry`; a missing entry is already removed |
 | typed platform error conversion | native | typed mapping from `DOMException` |
 | opening paths without following symlinks | vacuous | OPFS has no symlinks; the obligation is satisfied by absence, which is stronger than the Native guarantee, not weaker |
 | directory durability barrier | absent | no OPFS equivalent exists |
@@ -263,33 +263,52 @@ oversized-prefix, and concurrent-append cases.
 The writer lease is stored below the Host workspace metadata root under the
 SHA-256 of the normalized Project virtual path. It is outside Project Truth.
 The first Control Worker creates or opens that stable lease file and holds its
-default exclusive SyncAccessHandle until Project close. A second Worker that
-cannot acquire the handle receives `PROJECT_BUSY`; it does not wait, steal, or
-fall back to a wall-clock stale timeout.
+default exclusive SyncAccessHandle until Project close. Acquisition is
+reference-counted and reentrant only for equivalent normalized paths on the
+same `ProjectStoragePlatform` instance, allowing a Host-lifetime lease to
+contain nested Store and Journal mutations. A distinct platform instance or
+page receives `PROJECT_BUSY`; it does not wait, steal, delete the stable lease
+entry, or fall back to a wall-clock stale timeout.
 
-The Web atomic-replacement recovery argument is:
+Web replacement and immutable creation use the versioned,
+Project-neutral `lmdj.storage.intent.v1` protocol. Intents live under
+`.lmdj-host/storage-intents/<sha256(normalized-project-path)>/`, keyed by the
+SHA-256 of the normalized destination, and never enter Project Truth. Each
+intent records the destination, operation, expected new hash and length, and
+the exact previous state as either absent or a hash and length. The intent is
+completely written, verified, flushed, and closed before the destination is
+touched.
 
-1. transaction and checkpoint payload files are immutable after a successful
-   close;
-2. a replacement is not visible through the destination handle until the
-   writable stream closes successfully;
-3. the manifest/checkpoint pointer is published last through the same
-   whole-file replacement obligation;
-4. after interruption, readers therefore observe either the previous complete
-   pointer or the next complete pointer, never a partially written pointer;
-5. orphaned immutable payloads and failed cleanup are unreachable and do not
-   change Project Truth;
-6. directory enumeration is used for recovery discovery only after complete
-   collection and deterministic sorting.
+Immediately after the external writer handle is acquired and before the lease
+is returned, recovery deterministically scans that lease's intents. An exact
+new or exact previous destination state is accepted and the intent is removed.
+For a previously absent destination, any unexpected partial destination is
+removed and absence is verified before retry. For a previously existing
+destination, an unexpected partial or missing destination fails closed with a
+typed storage error and preserves both destination and intent as evidence;
+recovery never invents prior bytes. The protocol parses no Project bundle,
+manifest, JSONL, or Journal semantics and uses neither `move()` nor a claimed
+directory durability primitive.
+
+`create_immutable` loops until every byte is written, verifies the final length
+and content hash, flushes exactly as required, and acknowledges only after the
+intent is removed. An interrupted partial immutable remains unacknowledged and
+is removed by the previously-absent recovery rule before retry.
 
 The directory durability barrier remains genuinely absent. Correctness does not
 claim a POSIX disk-order guarantee that OPFS cannot express; it depends on the
-whole-file visibility rule above. The committed Web storage conformance suite
-must inject interruption before write, during write, before close, after close,
-and before cleanup, then prove restart yields exactly the old or new committed
-revision. If either Chromium or an otherwise-capable WebKit target exposes a
-partial replacement, B2 fails and the storage algorithm returns to architecture
-review.
+intent reconciliation above. The committed Web storage conformance suite must
+inject real page termination before write, during write, before close, after
+close, and before cleanup for both absent and existing destinations, then reopen
+through the production bridge and prove exactly absent/old or new across all ten
+cases. It must also prove an unexpected partial destination with a recorded
+prior existing state fails closed and preserves evidence. If either Chromium or
+an otherwise-capable WebKit target violates these outcomes, B2 fails and the
+storage algorithm returns to architecture review.
+
+WasmFS mount failure still returns a non-null Web platform. Every operation on
+that unavailable platform returns a typed storage error, avoiding a Host-side
+null dereference.
 
 The rules that follow from the classification are:
 

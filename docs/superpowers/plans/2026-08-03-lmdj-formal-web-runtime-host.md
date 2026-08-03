@@ -400,8 +400,15 @@ git commit -m "refactor(project-io): isolate semantic storage platform"
 - normal complete file access is rooted in a WasmFS OPFS backend mounted at `/lmdj-workspace`;
 - the lease file is `/lmdj-workspace/.lmdj-host/leases/<sha256(normalized-project-path)>.lock`;
 - the lease owns an exclusive `FileSystemSyncAccessHandle` until the opaque C++ lease object is destroyed;
-- `replace_complete` uses `createWritable({keepExistingData: false})`, complete write, and successful `close()` as the publication point;
+- same-platform equivalent-path lease acquisition is reference-counted and reentrant, while a distinct platform or page remains fail-fast `project_busy`;
+- `replace_complete` and `create_immutable` persist `lmdj.storage.intent.v1` below `.lmdj-host/storage-intents/<sha256(normalized-project-path)>/` before touching the destination;
+- recovery runs after external lease acquisition and before lease return, and accepts only the exact previous or exact new destination state;
+- `create_immutable` loops over short writes, verifies final length and hash, flushes, and acknowledges only after intent cleanup;
 - directory iteration collects every name and sorts by unsigned UTF-8 bytes before returning to C++.
+
+**Approved B2-R1 correction:** Version impact: none. The already-planned
+`project-io` `0.4.0` target includes this pre-release correctness repair; no
+public Contract, API version, Product Build, Provider, or model identity changes.
 
 - [ ] **Step 1: Write failing Web parity and interruption tests**
 
@@ -433,11 +440,29 @@ Reject `QuotaExceededError`, `NotFoundError`, `InvalidStateError`, and `NoModifi
 
 - [ ] **Step 4: Implement old-or-new recovery and deterministic discovery**
 
-Each replacement fault hook terminates the Worker at the named point, restarts the page, opens through common ProjectStore logic, and asserts the exact previous or next revision. Orphan immutable payloads may remain but must be unreachable. Directory barrier is recorded as absent; no test may assert a fake POSIX ordering guarantee.
+Each replacement fault hook terminates the real page at the named point and
+reopens through the production platform bridge. Run before write, during write,
+before close, after close, and before cleanup against both absent and existing
+destinations, proving exactly absent/old or new across all ten cases. Inject an
+unexpected partial destination with a recorded prior existing state and require
+a typed `io_error` while preserving destination and intent evidence. Recovery
+must remain Project-neutral. Directory barrier is recorded as absent; no test
+may assert a fake POSIX ordering guarantee.
 
 - [ ] **Step 5: Prove writer lease lifetime and reacquisition**
 
-Open the same normalized Project path in two pages. The first holds the SyncAccessHandle; the second returns immediately. Terminate the first Worker, acquire from the second without deleting or modifying the stable lease file, and compare its file identity before/after.
+Use the actual C++/JavaScript platform bridge to open equivalent normalized
+Project paths reentrantly on one platform and prove reference-counted release.
+A distinct platform and a second page return immediately with
+`storage_condition: project_busy`. Terminate the holding page, reacquire through
+the bridge without deleting or modifying the stable lease file, and compare its
+identity before and after with `FileSystemHandle.isSameEntry()`; the test may
+inspect the entry but must not duplicate the acquisition algorithm.
+
+Also prove idempotent removal of a missing entry, short-write/final-length/flush
+handling for immutable creation, and a simulated mount failure that returns a
+non-null platform whose operations fail with typed storage errors. Production
+link output must contain no test-fault controls, counters, or test-only imports.
 
 - [ ] **Step 6: Run GREEN**
 
@@ -454,8 +479,11 @@ Expected: Chromium full Web Project I/O PASS; WebKit PASS or explicit missing pr
 
 - [ ] **Step 7: Commit Task 2**
 
+Because the original Task 2 commit is already published on `main`, record this
+approved recovery correction as a new atomic commit without rewriting history:
+
 ```bash
-git commit -m "feat(project-io): add opfs storage platform"
+git commit -m "fix(project-io): make opfs publication recoverable"
 ```
 
 ### Task 3: Add sequence-addressed Trigger outcomes to Audio Runtime

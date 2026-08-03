@@ -87,7 +87,7 @@ build_project_io() {
     echo "web toolchain error: production Project I/O link output is missing" >&2
     exit 2
   fi
-  if grep -Eq 'test-fault|lmdj_opfs_(replace_complete|append_durable)_test|append_flush_count' "$production_js"; then
+  if grep -Eq 'test-fault|LmdjOpfsTest|lmdj_opfs_(create_immutable|replace_complete|append_durable)_test|(append_flush|immutable_write)_count' "$production_js"; then
     echo "web toolchain error: production Project I/O link contains test hooks" >&2
     exit 2
   fi

@@ -46,16 +46,16 @@ async function waitForResult(page) {
   return page.evaluate(() => window.lmdjProjectIoWeb.result);
 }
 
-async function writeFaultControl(page, bundle, point) {
-  await page.evaluate(async ({bundle, point}) => {
+async function writeFaultControl(page, destination, point) {
+  await page.evaluate(async ({destination, point}) => {
     const root = await navigator.storage.getDirectory();
     const host = await root.getDirectoryHandle(".lmdj-host", {create: true});
     await host.removeEntry("test-fault-reached").catch(() => {});
     const control = await host.getFileHandle("test-fault.json", {create: true});
     const writable = await control.createWritable({keepExistingData: false});
-    await writable.write(JSON.stringify({bundle: `${bundle}.lmdj`, point}));
+    await writable.write(JSON.stringify({destination, point}));
     await writable.close();
-  }, {bundle, point});
+  }, {destination, point});
 }
 
 async function waitForFault(page, point) {
@@ -77,50 +77,42 @@ async function clearFaultControl(page) {
   });
 }
 
-async function acquireLeaseWorker(page, projectPath) {
-  return page.evaluate(async (path) => {
-    const source = `
-      let access;
-      const hex = (bytes) => [...bytes].map((value) => value.toString(16).padStart(2, "0")).join("");
-      onmessage = async ({data}) => {
-        try {
-          const parts = data.replaceAll("\\\\", "/").split("/").filter((part) => part && part !== ".");
-          if (parts[0] === "lmdj-workspace") parts.shift();
-          if (parts.includes("..")) throw new DOMException("", "InvalidStateError");
-          const canonical = "/lmdj-workspace/" + parts.join("/");
-          const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical)));
-          const name = hex(digest) + ".lock";
-          const origin = await navigator.storage.getDirectory();
-          const host = await origin.getDirectoryHandle(".lmdj-host", {create: true});
-          const leases = await host.getDirectoryHandle("leases", {create: true});
-          const file = await leases.getFileHandle(name, {create: true});
-          access = await file.createSyncAccessHandle();
-          if (access.getSize() === 0) {
-            const identity = crypto.getRandomValues(new Uint8Array(32));
-            access.write(identity, {at: 0});
-            access.flush();
-          }
-          const identity = new Uint8Array(access.getSize());
-          access.read(identity, {at: 0});
-          postMessage({status: "acquired", identity: hex(identity)});
-        } catch (error) {
-          postMessage({status: error?.name === "NoModificationAllowedError" ? "project_busy" : "io_error"});
-        }
-      };
-    `;
-    const worker = new Worker(URL.createObjectURL(new Blob([source], {type: "text/javascript"})));
-    window.__lmdjLeaseWorkers ??= [];
-    window.__lmdjLeaseWorkers.push(worker);
-    const result = await new Promise((resolve) => {
-      worker.onmessage = ({data}) => resolve(data);
-      worker.postMessage(path);
-    });
-    return {...result, workerIndex: window.__lmdjLeaseWorkers.length - 1};
-  }, projectPath);
+async function snapshotLeaseEntries(page) {
+  await page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host", {create: true});
+    const leases = await host.getDirectoryHandle("leases", {create: true});
+    window.__lmdjLeaseEntriesBefore = new Set();
+    for await (const entry of leases.values()) {
+      if (entry.kind === "file") window.__lmdjLeaseEntriesBefore.add(entry.name);
+    }
+  });
 }
 
-async function terminateLeaseWorker(page, workerIndex) {
-  await page.evaluate((index) => window.__lmdjLeaseWorkers[index].terminate(), workerIndex);
+async function captureNewLeaseEntry(page) {
+  return page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host");
+    const leases = await host.getDirectoryHandle("leases");
+    for await (const entry of leases.values()) {
+      if (entry.kind === "file" && !window.__lmdjLeaseEntriesBefore.has(entry.name)) {
+        window.__lmdjHeldLeaseEntry = entry;
+        window.__lmdjHeldLeaseName = entry.name;
+        return entry.name;
+      }
+    }
+    return "";
+  });
+}
+
+async function compareReacquiredLeaseEntry(page) {
+  return page.evaluate(async () => {
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host");
+    const leases = await host.getDirectoryHandle("leases");
+    const current = await leases.getFileHandle(window.__lmdjHeldLeaseName);
+    return window.__lmdjHeldLeaseEntry.isSameEntry(current);
+  });
 }
 
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
@@ -149,35 +141,45 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.recovery).toBe("pass");
   expect(result.appendContracts).toBe("pass");
   expect(result.lease).toBe("pass");
+  expect(result.mountFailure).toBe("pass");
+  expect(result.idempotentRemove).toBe("pass");
+  expect(result.immutableShortWrites).toBe("pass");
   expect(result.directoryBarrier).toBe("absent");
   expect(result.replacementFaultPoints).toEqual(REPLACEMENT_FAULT_POINTS);
 
+  const leaseInspector = await context.newPage();
   const firstLeasePage = await context.newPage();
   const competingLeasePage = await context.newPage();
-  await firstLeasePage.goto("/preflight.html");
-  await competingLeasePage.goto("/preflight.html");
+  await leaseInspector.goto("/preflight.html");
+  await snapshotLeaseEntries(leaseInspector);
   const leasePath = `lease-${Date.now()}.lmdj`;
-  const firstLease = await acquireLeaseWorker(firstLeasePage, `/lmdj-workspace/${leasePath}`);
-  expect(firstLease.status).toBe("acquired");
-  const busyLease = await acquireLeaseWorker(competingLeasePage, leasePath);
-  expect(busyLease.status).toBe("project_busy");
-  await terminateLeaseWorker(firstLeasePage, firstLease.workerIndex);
-  let reacquiredLease;
-  await expect.poll(async () => {
-    reacquiredLease = await acquireLeaseWorker(competingLeasePage, `/lmdj-workspace/${leasePath}`);
-    return reacquiredLease.status;
-  }).toBe("acquired");
-  expect(reacquiredLease.identity).toBe(firstLease.identity);
-  await terminateLeaseWorker(competingLeasePage, reacquiredLease.workerIndex);
+  await firstLeasePage.goto(
+      `/project_io/project_io_web_test.html?action=hold_lease&bundle=${leasePath.slice(0, -5)}`);
+  expect((await waitForResult(firstLeasePage)).lease).toBe("held");
+  expect(await captureNewLeaseEntry(leaseInspector)).not.toBe("");
+  await competingLeasePage.goto(
+      `/project_io/project_io_web_test.html?action=hold_lease&bundle=${leasePath.slice(0, -5)}`);
+  expect(await waitForResult(competingLeasePage)).toEqual({
+    lease: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "project_busy",
+  });
   await firstLeasePage.close();
+  await expect.poll(async () => {
+    await competingLeasePage.reload();
+    return (await waitForResult(competingLeasePage)).lease;
+  }).toBe("held");
+  expect(await compareReacquiredLeaseEntry(leaseInspector)).toBe(true);
   await competingLeasePage.close();
+  await leaseInspector.close();
 
   for (const [index, point] of REPLACEMENT_FAULT_POINTS.entries()) {
     const bundle = `fault-${index}-${Date.now()}`;
     const prepare = await context.newPage();
     await prepare.goto(`/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
     expect((await waitForResult(prepare)).revision).toBe(0);
-    await writeFaultControl(prepare, bundle, point);
+    await writeFaultControl(
+        prepare, `/lmdj-workspace/${bundle}.lmdj/manifest.json`, point);
 
     const interrupted = await context.newPage();
     await interrupted.goto(`/project_io/project_io_web_test.html?action=advance&bundle=${bundle}`);
@@ -192,4 +194,105 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     await restarted.close();
     await prepare.close();
   }
+
+  for (const [index, point] of REPLACEMENT_FAULT_POINTS.entries()) {
+    const bundle = `absent-fault-${index}-${Date.now()}`;
+    const prepare = await context.newPage();
+    await prepare.goto(
+        `/project_io/project_io_web_test.html?action=prepare_replacement&scenario=absent&bundle=${bundle}`);
+    expect((await waitForResult(prepare)).state).toBe("absent");
+    await writeFaultControl(
+        prepare, `/lmdj-workspace/${bundle}.lmdj/replacement.bin`, point);
+
+    const interrupted = await context.newPage();
+    await interrupted.goto(
+        `/project_io/project_io_web_test.html?action=replace&scenario=absent&bundle=${bundle}`);
+    await waitForFault(prepare, point);
+    await interrupted.close();
+    await clearFaultControl(prepare);
+
+    const restarted = await context.newPage();
+    await restarted.goto(
+        `/project_io/project_io_web_test.html?action=reopen_replacement&scenario=absent&bundle=${bundle}`);
+    const expectedState = ["after_close", "before_cleanup"].includes(point)
+      ? "new"
+      : "absent";
+    expect((await waitForResult(restarted)).state).toBe(expectedState);
+    await restarted.close();
+    await prepare.close();
+  }
+
+  const corruptBundle = `corrupt-existing-${Date.now()}`;
+  const corruptController = await context.newPage();
+  await corruptController.goto(
+      `/project_io/project_io_web_test.html?action=prepare_replacement&scenario=existing&bundle=${corruptBundle}`);
+  expect((await waitForResult(corruptController)).state).toBe("existing");
+  const corruptDestination =
+      `/lmdj-workspace/${corruptBundle}.lmdj/replacement.bin`;
+  await writeFaultControl(corruptController, corruptDestination, "before_write");
+  const corruptWriter = await context.newPage();
+  await corruptWriter.goto(
+      `/project_io/project_io_web_test.html?action=replace&scenario=existing&bundle=${corruptBundle}`);
+  await waitForFault(corruptController, "before_write");
+  await corruptController.evaluate(async ({bundle}) => {
+    const root = await navigator.storage.getDirectory();
+    const directory = await root.getDirectoryHandle(`${bundle}.lmdj`);
+    const file = await directory.getFileHandle("replacement.bin");
+    const writable = await file.createWritable({keepExistingData: false});
+    await writable.write("partial");
+    await writable.close();
+  }, {bundle: corruptBundle});
+  await corruptWriter.close();
+  await clearFaultControl(corruptController);
+
+  const recovery = await context.newPage();
+  await recovery.goto(
+      `/project_io/project_io_web_test.html?action=recover&scenario=existing&bundle=${corruptBundle}`);
+  expect(await waitForResult(recovery)).toEqual({
+    recovery: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "",
+  });
+  const preservedEvidence = await corruptController.evaluate(async ({bundle}) => {
+    const root = await navigator.storage.getDirectory();
+    const destination = await (await (
+      await root.getDirectoryHandle(`${bundle}.lmdj`)
+    ).getFileHandle("replacement.bin")).getFile();
+    const intents = await root.getDirectoryHandle(".lmdj-host")
+        .then((host) => host.getDirectoryHandle("storage-intents"));
+    let count = 0;
+    for await (const projectDirectory of intents.values()) {
+      if (projectDirectory.kind !== "directory") continue;
+      for await (const entry of projectDirectory.values()) {
+        if (entry.kind === "file") count += 1;
+      }
+    }
+    return {destination: await destination.text(), intentCount: count};
+  }, {bundle: corruptBundle});
+  expect(preservedEvidence.destination).toBe("partial");
+  expect(preservedEvidence.intentCount).toBeGreaterThan(0);
+  await recovery.close();
+  await corruptController.close();
+
+  const immutableBundle = `immutable-partial-${Date.now()}`;
+  const immutableController = await context.newPage();
+  await immutableController.goto(
+      `/project_io/project_io_web_test.html?action=prepare_immutable&bundle=${immutableBundle}`);
+  expect((await waitForResult(immutableController)).state).toBe("absent");
+  await writeFaultControl(
+      immutableController,
+      `/lmdj-workspace/${immutableBundle}.lmdj/immutable.bin`,
+      "during_write");
+  const immutableWriter = await context.newPage();
+  await immutableWriter.goto(
+      `/project_io/project_io_web_test.html?action=create_immutable_fault&bundle=${immutableBundle}`);
+  await waitForFault(immutableController, "during_write");
+  await immutableWriter.close();
+  await clearFaultControl(immutableController);
+  const immutableRestarted = await context.newPage();
+  await immutableRestarted.goto(
+      `/project_io/project_io_web_test.html?action=reopen_immutable&bundle=${immutableBundle}`);
+  expect((await waitForResult(immutableRestarted)).state).toBe("immutable-retry");
+  await immutableRestarted.close();
+  await immutableController.close();
 });
