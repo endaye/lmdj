@@ -1,9 +1,14 @@
+set(lmdj_project_io_platform_source src/native/storage_platform.cpp)
+if(EMSCRIPTEN)
+  set(lmdj_project_io_platform_source src/web/storage_platform.cpp)
+endif()
+
 add_library(
   lmdj_project_io
   STATIC
     src/project_store.cpp
     src/take_journal.cpp
-    src/native/storage_platform.cpp
+    ${lmdj_project_io_platform_source}
 )
 add_library(lmdj::project_io ALIAS lmdj_project_io)
 
@@ -19,6 +24,26 @@ target_link_libraries(
   PRIVATE
     lmdj_picosha2
 )
+if(EMSCRIPTEN)
+  set(
+    lmdj_project_io_async_imports
+    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+  )
+  if(LMDJ_PROJECT_IO_WEB_TESTING)
+    set(
+      lmdj_project_io_async_imports
+      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+    )
+  endif()
+  target_link_options(
+    lmdj_project_io
+    INTERFACE
+      "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/src/web/library_opfs_storage.js"
+      -sASYNCIFY=1
+      "-sASYNCIFY_IMPORTS=${lmdj_project_io_async_imports}"
+      -sWASMFS
+  )
+endif()
 lmdj_target_warnings(lmdj_project_io)
 lmdj_target_sanitizers(lmdj_project_io)
 

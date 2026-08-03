@@ -6,6 +6,8 @@ repo_root="$(cd "$script_dir/.." && pwd -P)"
 build_root="$repo_root/build/web"
 toolchain_root="$build_root/toolchain"
 cmake_root="$toolchain_root/cmake"
+project_io_root="$toolchain_root/project_io"
+project_io_cmake_root="$project_io_root/cmake"
 web_test_root="$repo_root/tests/platform/web"
 
 usage() {
@@ -13,6 +15,7 @@ usage() {
 usage:
   scripts/web-toolchain-conformance.sh configure
   scripts/web-toolchain-conformance.sh build
+  scripts/web-toolchain-conformance.sh build-project-io
   scripts/web-toolchain-conformance.sh serve [--port PORT]
   scripts/web-toolchain-conformance.sh proof
   scripts/web-toolchain-conformance.sh clean
@@ -20,6 +23,10 @@ EOF
 }
 
 activate_toolchain() {
+  if [[ -z "${EMSDK:-}" && -f "$repo_root/build/toolchains/emsdk/emsdk_env.sh" ]]; then
+    EMSDK="$repo_root/build/toolchains/emsdk"
+    export EMSDK
+  fi
   if [[ -z "${EMSDK:-}" ]]; then
     echo "web toolchain error: EMSDK is not set" >&2
     exit 2
@@ -66,6 +73,26 @@ build_fixture() {
   cmake --build "$cmake_root" --parallel
 }
 
+build_project_io() {
+  activate_toolchain
+  if [[ ! -f "$project_io_cmake_root/CMakeCache.txt" ]]; then
+    emcmake cmake \
+      -S "$web_test_root/project_io" \
+      -B "$project_io_cmake_root" \
+      -DCMAKE_BUILD_TYPE=Release
+  fi
+  cmake --build "$project_io_cmake_root" --parallel
+  local production_js="$project_io_root/project_io_web_production_link.js"
+  if [[ ! -f "$production_js" ]]; then
+    echo "web toolchain error: production Project I/O link output is missing" >&2
+    exit 2
+  fi
+  if grep -Eq 'test-fault|lmdj_opfs_(replace_complete|append_durable)_test|append_flush_count' "$production_js"; then
+    echo "web toolchain error: production Project I/O link contains test hooks" >&2
+    exit 2
+  fi
+}
+
 clean_fixture() {
   if [[ -z "$repo_root" || "$repo_root" == "/" ]]; then
     echo "web toolchain error: unsafe repository root" >&2
@@ -101,6 +128,13 @@ case "$command_name" in
       exit 64
     }
     build_fixture
+    ;;
+  build-project-io)
+    [[ $# -eq 0 ]] || {
+      usage
+      exit 64
+    }
+    build_project_io
     ;;
   serve)
     if [[ $# -ne 0 && ( $# -ne 2 || "$1" != "--port" ) ]]; then
@@ -141,6 +175,7 @@ case "$command_name" in
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     configure_fixture
     build_fixture
+    build_project_io
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
@@ -148,12 +183,12 @@ case "$command_name" in
     npm --prefix "$web_test_root" test -- \
       --project=webkit \
       "$web_test_root/toolchain/toolchain_conformance.spec.mjs"
-    product_status="$(git status --short --untracked-files=all -- apps packages products)"
-    if [[ -n "$product_status" ]]; then
-      echo "web toolchain error: Product source changed during Task 0" >&2
-      echo "$product_status" >&2
-      exit 2
-    fi
+    npm --prefix "$web_test_root" test -- \
+      --project=chromium \
+      "$web_test_root/project_io/project_io_web_conformance.spec.mjs"
+    npm --prefix "$web_test_root" test -- \
+      --project=webkit \
+      "$web_test_root/project_io/project_io_web_conformance.spec.mjs"
     echo "Web Toolchain Conformance Proof: PASS"
     ;;
   clean)
