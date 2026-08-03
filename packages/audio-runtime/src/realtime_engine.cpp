@@ -201,20 +201,26 @@ PublishResult RealtimeEngine::publish_sample_bank(
   return PublishResult::accepted;
 }
 
-std::size_t RealtimeEngine::reclaim_retired_banks() noexcept {
-  std::size_t reclaimed = 0;
+ReclaimedBankTelemetry
+RealtimeEngine::reclaim_retired_bank_telemetry() noexcept {
+  ReclaimedBankTelemetry reclaimed{};
   for (auto& slot : bank_slots_) {
     if (slot.state.load(std::memory_order_acquire) !=
         BankState::reclaimable) {
       continue;
     }
+    reclaimed.decoded_pcm_bytes += slot.bank->decoded_pcm_bytes();
     slot.bank.reset();
     slot.generation = 0;
     slot.state.store(BankState::empty, std::memory_order_release);
-    ++reclaimed;
+    ++reclaimed.count;
   }
-  reclaimed_banks_.fetch_add(reclaimed, std::memory_order_relaxed);
+  reclaimed_banks_.fetch_add(reclaimed.count, std::memory_order_relaxed);
   return reclaimed;
+}
+
+std::size_t RealtimeEngine::reclaim_retired_banks() noexcept {
+  return reclaim_retired_bank_telemetry().count;
 }
 
 foundation::Result<void> RealtimeEngine::arm_capture() noexcept {

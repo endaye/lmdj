@@ -454,6 +454,50 @@ void applies_explicit_bank_slot_backpressure_until_reclaimed() {
              PublishResult::accepted);
 }
 
+void reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim() {
+  RealtimeEngine engine;
+  const std::array<float, 512> older_large_sample{};
+  const std::array<float, 1> newer_small_sample{};
+  const std::array<float, 2> current_sample{};
+
+  auto older_large = bank_with_sample(40, older_large_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(older_large)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 512> left{};
+  std::array<float, 512> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+
+  auto newer_small = bank_with_sample(41, newer_small_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(newer_small)) ==
+             PublishResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+
+  auto current = bank_with_sample(42, current_sample);
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(current)) ==
+             PublishResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+
+  const auto out_of_order = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(out_of_order.count == 1);
+  LMDJ_CHECK(out_of_order.decoded_pcm_bytes == sizeof(float));
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+
+  engine.render(left.data(), right.data(), 509);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  const auto older_after_voice = engine.reclaim_retired_bank_telemetry();
+  LMDJ_CHECK(older_after_voice.count == 1);
+  LMDJ_CHECK(
+      older_after_voice.decoded_pcm_bytes ==
+      older_large_sample.size() * sizeof(float));
+  LMDJ_CHECK(engine.reclaim_retired_bank_telemetry().count == 0);
+  LMDJ_CHECK(engine.bank_telemetry().reclaimed_banks == 2);
+}
+
 void captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end() {
   RealtimeEngine engine;
   const std::array<float, 1> sample{0.25F};
@@ -768,6 +812,7 @@ int main() {
   publishes_sample_banks_only_at_safe_render_boundaries();
   rejects_publication_until_trigger_queue_is_empty();
   applies_explicit_bank_slot_backpressure_until_reclaimed();
+  reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim();
   captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end();
   captures_only_successfully_allocated_voices();
   capture_overflow_corrupts_and_restart_clears_stale_events();

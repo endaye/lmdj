@@ -103,6 +103,11 @@ struct BankTelemetry {
   std::uint64_t publish_queue_drops;
 };
 
+struct ReclaimedBankTelemetry {
+  std::size_t count;
+  std::uint64_t decoded_pcm_bytes;
+};
+
 struct CaptureTelemetry {
   CaptureState state;
   std::uint64_t captured_events;
@@ -155,6 +160,8 @@ class RealtimeEngine final {
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
   // which by construction hold no live Voice.
+  ReclaimedBankTelemetry reclaim_retired_bank_telemetry() noexcept;
+  // Compatibility count-only reclaim surface.
   std::size_t reclaim_retired_banks() noexcept;
   // Control thread, concurrent with render.
   foundation::Result<void> arm_capture() noexcept;
