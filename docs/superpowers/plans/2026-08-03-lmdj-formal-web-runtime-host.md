@@ -251,6 +251,7 @@ If Chromium does not pass every mandatory assertion, stop. Do not begin Task 1.
 - Modify: `tests/core/project_io/project_store_test.cpp`
 - Modify: `tests/core/project_io/take_journal_test.cpp`
 - Modify: `tests/core/project_io/fault_matrix_test.cpp`
+- Modify: `tests/core/facade/c_api_test.cpp`
 - Modify: `CMakeLists.txt`
 
 **Public semantic boundary:**
@@ -282,6 +283,7 @@ class ProjectStoragePlatform {
       std::span<const std::byte> bytes) = 0;
   virtual foundation::Result<void> append_durable(
       const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
       std::span<const std::byte> bytes) = 0;
   virtual foundation::Result<void> remove(
       const std::filesystem::path& path) = 0;
@@ -294,7 +296,13 @@ class ProjectStoragePlatform {
 
 - [ ] **Step 1: Write failing Native storage contract tests**
 
-Test exclusive writer acquisition, immutable create collision, complete read/write, durable append, atomic replacement, removal, unsigned-byte sorted names, symlink rejection, and typed `io_error` conversion. Re-run every existing fault hook against the default Native platform.
+Test exclusive writer acquisition, immutable create collision, complete
+read/write, repair-aware durable append, atomic replacement, removal,
+unsigned-byte sorted regular-file names, symlink rejection, and typed
+`io_error` conversion. Durable append coverage must include a clean prefix, a
+torn-tail prefix, an arbitrary binary prefix that has no record semantics, an
+oversized prefix that fails without mutation, and exactly one file flush.
+Re-run every existing fault hook against the default Native platform.
 
 - [ ] **Step 2: Run RED**
 
@@ -312,26 +320,41 @@ Expected: compilation fails because the semantic interface and contract target d
 
 Move `flock`, `openat`, `O_DIRECTORY`, `O_NOFOLLOW`, `O_EXCL`, `fcntl`, `fsync`, `rename`, and symlink traversal rejection into `src/native/storage_platform.cpp`. `project_store.cpp` and `take_journal.cpp` retain JSON shape, command identity, revision, transaction naming, checkpoint ordering, replay, and recovery decisions but call semantic methods only.
 
-`replace_complete()` on Native must write a collision-safe sibling, fsync it, rename it over the destination, and fsync the containing directory. `append_durable()` must validate/encode before opening, write all bytes, and fsync once.
+`replace_complete()` on Native must write an opaque collision-safe sibling,
+fsync it, rename it over the destination, and fail closed if syncing the
+containing directory fails. For
+`append_durable(path, valid_prefix_length, bytes)`, common `TakeJournal` reads
+and validates the Journal and computes the byte offset after the last complete
+durable record. Native holds the exclusive regular-file lock, rejects a prefix
+beyond the current length without mutation, truncates exactly to a shorter
+prefix, writes all bytes, and fsyncs exactly once. Native must not parse JSONL,
+inspect newlines, or choose the recovery boundary.
 
 Writer acquisition is reentrant only for the same normalized path on the same `ProjectStoragePlatform` instance. The outer Facade lease owns the platform handle for the Project lifetime; nested ProjectStore/TakeJournal operations receive reference-counted operation tokens. A separate platform instance always competes and must not inherit the lease.
 
 - [ ] **Step 4: Add constructor injection without changing default callers**
 
 ```cpp
-explicit ProjectStore(
-    std::shared_ptr<ProjectStoragePlatform> platform =
-        make_default_project_storage_platform());
-explicit TakeJournal(
-    std::shared_ptr<ProjectStoragePlatform> platform =
-        make_default_project_storage_platform());
+ProjectStore();
+explicit ProjectStore(std::shared_ptr<ProjectStoragePlatform> platform);
+TakeJournal();
+explicit TakeJournal(std::shared_ptr<ProjectStoragePlatform> platform);
 ```
 
 Application must later pass one shared platform instance to both classes. Existing default construction stays source-compatible.
 
 - [ ] **Step 5: Prove common transaction semantics remain unchanged**
 
-Run the full Native Store, Journal, replay, and fault matrix. Add a test that injects a deterministic in-memory fake platform and proves the common layer calls `create_immutable` for transaction/checkpoint payloads and `replace_complete` only for published pointers.
+Run the full Native Store, Journal, replay, and fault matrix. Add a test that
+injects a deterministic in-memory fake platform and proves the common layer
+calls `create_immutable` for transaction/checkpoint payloads and
+`replace_complete` only for published pointers. Use one ordered mutation log
+for Store and Journal routing. Prove two `TakeJournal` instances sharing one
+platform cannot both act on the same stale durable prefix; common code must
+serialize the complete read-boundary-and-append operation per platform without
+changing the fail-fast cross-platform writer lease. Recovery removes only
+sealed temporary files whose destination matches the generated
+`<take-uuid>-<sanitized-reason>(-N)?.json` grammar.
 
 - [ ] **Step 6: Run GREEN**
 
@@ -340,13 +363,18 @@ cmake --build build/core/dev --target \
   lmdj_project_storage_platform_tests \
   lmdj_project_store_tests \
   lmdj_take_journal_tests \
-  lmdj_project_io_fault_matrix_tests
+  lmdj_project_io_fault_matrix_tests \
+  lmdj_application_c_api_tests
 ctest --test-dir build/core/dev --output-on-failure \
-  -R '^project_io\.'
+  -R '^(project_io\.|facade\.c_api$)'
 bash tests/build/test_active_tree.sh
+scripts/core.sh proof
 ```
 
-Expected: all selected tests pass and no POSIX header remains in the common ProjectStore/TakeJournal sources.
+Expected: all selected tests and the complete Headless Core Proof pass; no POSIX
+header remains in the common ProjectStore/TakeJournal sources; the C API
+contention fixture proves the external fail-fast lease without depending on a
+retired in-Project `.lock` file.
 
 - [ ] **Step 7: Commit Task 1**
 

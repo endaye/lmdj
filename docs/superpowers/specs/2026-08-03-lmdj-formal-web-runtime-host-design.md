@@ -12,6 +12,8 @@ Approvals:
 - Acceptance and version design approved by the product owner on 2026-08-03.
 - The revised design review version was reapproved by the product owner on
   2026-08-03.
+- Durable Journal append Option A was approved by the product owner on
+  2026-08-03.
 
 ## Design Review Outcome (2026-08-03)
 
@@ -243,6 +245,20 @@ platform order is never treated as deterministic. `getFileHandle({create:
 true})` is not `O_EXCL`, and `FileSystemFileHandle.move()` is not part of the
 portable Stage 6 storage contract. Common transaction logic must call the
 semantic obligations above instead of depending on either behavior.
+
+Take Journal repair uses the approved semantic operation
+`append_durable(path, valid_prefix_length, bytes)`. Common `TakeJournal` logic
+reads and validates the Journal and supplies the byte offset immediately after
+the last complete durable record. The platform does not parse JSONL, inspect
+newlines, infer a repair boundary, or decide whether a record is complete.
+Under its exclusive regular-file operation, the platform rejects a prefix
+beyond the current file length without mutation, truncates exactly to a shorter
+valid prefix, appends all supplied bytes, and performs exactly one file flush
+after the truncate-and-append sequence. Same-platform Journal appends are
+serialized in common code across `TakeJournal` instances so that an
+acknowledged append cannot be removed by a later stale prefix. Native and Web
+implementations must pass the same clean-prefix, torn-tail, arbitrary-binary,
+oversized-prefix, and concurrent-append cases.
 
 The writer lease is stored below the Host workspace metadata root under the
 SHA-256 of the normalized Project virtual path. It is outside Project Truth.
