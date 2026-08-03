@@ -83,6 +83,43 @@ jobs:
       - run: scripts/core.sh configure asan
       - run: scripts/core.sh build asan
       - run: scripts/core.sh test asan full
+      - run: scripts/core.sh test asan stress
+
+  core-asan-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/fixtures/audio/make_fixtures.py
+      - run: python3 tests/fixtures/golden/reference_render.py
+      - run: bash scripts/verify-core-dependencies.sh
+      - run: scripts/core.sh configure asan
+      - run: scripts/core.sh build asan
+      - name: Verify Apple-only audio targets are built under the sanitizer
+        shell: bash
+        run: |
+          set -euo pipefail
+          for target in lmdj_audio_coreaudio lmdj_audio_coreaudio_tests; do
+            if ! cmake --build build/core/asan --target "$target"; then
+              echo "Apple-only target missing from the macOS sanitizer build: $target" >&2
+              exit 1
+            fi
+          done
+      # Native tests only, which is every test whose command is a built target
+      # and therefore all of the Apple-only audio coverage this job exists for.
+      # It also covers both stress tests, since they are native.
+      #
+      # The Python-hosted tests are deliberately excluded here. They dlopen the
+      # instrumented C ABI dylib from an uninstrumented CPython, which needs
+      # DYLD_INSERT_LIBRARIES to preload the ASan runtime; that does not
+      # interpose into the runner's Python on arm64 macOS, so they die with
+      # DEADLYSIGNAL before reaching any assertion. The Linux core-asan job
+      # keeps that coverage via LD_PRELOAD.
+      - run: ctest --preset asan -L '^native$' --output-on-failure
 
   core-coverage:
     runs-on: ubuntu-24.04

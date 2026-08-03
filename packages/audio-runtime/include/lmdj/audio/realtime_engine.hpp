@@ -99,22 +99,61 @@ struct CaptureTelemetry {
   std::uint64_t capture_origin_frame;
 };
 
+// Threading contract. Violating it is undefined behavior, not a runtime error.
+//
+// Exactly two threads may touch one RealtimeEngine:
+//
+//   Audio thread   calls `render` and nothing else.
+//   Control thread calls everything else, serialized against itself.
+//
+// `render` is the sole audio-thread entry point. It never allocates, frees,
+// locks, blocks, or throws, and it never destroys a PreparedSampleBank.
+//
+// The methods marked "quiescent" below reach non-atomic state that `render`
+// also touches: the Voice array, the trigger queue's consumer index, and the
+// publish queue's consumer side. The caller must guarantee that `render`
+// cannot be executing and cannot begin before calling them. Stopping the
+// device is not sufficient on its own; the caller must also observe that any
+// in-flight callback has returned. `apple::CoreAudioOutput` does this by
+// draining its callback gate before it calls `stop`.
+//
+// `load_sample` and `clear_sample` may reallocate sample storage, so calling
+// them while a Voice is live dangles that Voice's sample pointer. Their
+// `stopped` state check does not establish quiescence by itself.
+//
+// The remaining control-thread methods are safe to call while `render` runs.
+// See docs/superpowers/specs/2026-08-02-lmdj-formal-native-realtime-host-design.md
+// for the full model.
 class RealtimeEngine final {
  public:
+  // Control thread, quiescent. May reallocate sample storage.
   foundation::Result<void> load_sample(
       std::uint8_t slot, std::span<const float> mono_pcm);
+  // Control thread, quiescent. May free sample storage.
   foundation::Result<void> clear_sample(std::uint8_t slot);
+  // Control thread, concurrent with render while running.
   // Publication and enqueue share one serialized control-thread producer.
+  // Applies the bank directly, and so requires quiescence, when stopped.
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
+  // Control thread, concurrent with render. Frees only reclaimable banks,
+  // which by construction hold no live Voice.
   std::size_t reclaim_retired_banks() noexcept;
+  // Control thread, concurrent with render.
   foundation::Result<void> arm_capture() noexcept;
   foundation::Result<void> disarm_capture() noexcept;
+  // Control thread, concurrent with render. Sole consumer of the capture ring.
   std::size_t drain_capture(
       std::span<CapturedTriggerEvent> output) noexcept;
+  // Control thread, quiescent. Resets Voice and queue state.
   foundation::Result<void> start();
+  // Control thread, quiescent. Releases Voice bank references and consumes the
+  // publish queue, which makes it a second consumer of an SPSC queue.
   void stop() noexcept;
+  // Control thread, concurrent with render. Sole producer of the trigger queue.
   EnqueueResult enqueue(TriggerEvent event) noexcept;
+  // Audio thread only.
   void render(float* left, float* right, std::uint32_t frames) noexcept;
+  // Any thread.
   // Counters are exact after quiescence and a best-effort snapshot while running.
   RealtimeTelemetry telemetry() const noexcept;
   BankTelemetry bank_telemetry() const noexcept;
