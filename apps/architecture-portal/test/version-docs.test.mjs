@@ -10,18 +10,22 @@ const facts = {
   assembly_lock_sha256: 'lock-sha',
   modules: [], hosts: [], providers: [], contracts: [],
 };
+const revision = 'abcdef1234567890abcdef1234567890abcdef12';
 
 function fixture(overrides = {}) {
   return {
     portalRoot: '/portal',
     repoRoot: '/repo',
     requestedVersion: '1.0.13.0',
-    revision: 'abcdef123456',
+    revision,
     facts,
     getGitStatus: async () => '',
+    getHeadRevision: async () => revision,
     readVersions: async () => [],
     run: async () => {},
     writeMetadata: async () => {},
+    freezeAssets: async () => [],
+    createMetadata: async () => ({schema_version: 2, product_build: '1.0.13.0'}),
     now: () => new Date('2026-08-04T00:00:00.000Z'),
     ...overrides,
   };
@@ -31,41 +35,66 @@ test('freeze rejects syntax mismatch, dirty worktree, and existing version', asy
   await assert.rejects(() => freezeVersion(fixture({requestedVersion: '1.0.13'})), /four-part Product Build/);
   await assert.rejects(() => freezeVersion(fixture({requestedVersion: '1.0.12.0'})), /does not match 1.0.13.0/);
   await assert.rejects(() => freezeVersion(fixture({channel: 'preview'})), /channel must be canary, dev, beta, or stable/);
+  await assert.rejects(() => freezeVersion(fixture({getHeadRevision: async () => '1'.repeat(40)})), /source revision must equal HEAD/);
   await assert.rejects(() => freezeVersion(fixture({getGitStatus: async () => ' M docs/page.mdx'})), /clean worktree/);
   await assert.rejects(() => freezeVersion(fixture({readVersions: async () => ['1.0.13.0']})), /already exists/);
 });
 
 test('freeze runs both gates around Docusaurus and writes exact metadata', async () => {
   const commands = [];
+  const lifecycle = [];
   let metadata;
   await freezeVersion(fixture({
-    run: async (command, args) => commands.push([command, args]),
-    writeMetadata: async (_version, value) => { metadata = value; },
+    run: async (command, args) => { commands.push([command, args]); lifecycle.push(args[1] ?? args[0]); },
+    freezeAssets: async (options) => { lifecycle.push('freeze-assets'); assert.equal(options.version, '1.0.13.0'); },
+    createMetadata: async (options) => {
+      lifecycle.push('create-metadata');
+      assert.equal(options.revision, revision);
+      assert.deepEqual(options.facts, facts);
+      return {schema_version: 2, product_build: '1.0.13.0', revision};
+    },
+    writeMetadata: async (_version, value) => { lifecycle.push('write-metadata'); metadata = value; },
   }));
   assert.deepEqual(commands, [
     ['npm', ['run', 'check:current']],
     ['npm', ['run', 'docusaurus', '--', 'docs:version', '1.0.13.0']],
     ['npm', ['run', 'check']],
   ]);
-  assert.deepEqual(metadata, {
-    ...facts,
-    product_build: '1.0.13.0',
-    revision: 'abcdef123456',
-    frozen_at_utc: '2026-08-04T00:00:00.000Z',
-  });
+  assert.deepEqual(lifecycle, [
+    'check:current', 'docusaurus', 'freeze-assets', 'create-metadata', 'write-metadata', 'check',
+  ]);
+  assert.deepEqual(metadata, {schema_version: 2, product_build: '1.0.13.0', revision});
 });
 
 test('freeze stops before generation and metadata when current preflight fails', async () => {
   const commands = [];
   let metadataWritten = false;
+  let assetsFrozen = false;
   await assert.rejects(() => freezeVersion(fixture({
     run: async (command, args) => {
       commands.push([command, args]);
       throw new Error('current portal validation failed');
     },
     writeMetadata: async () => { metadataWritten = true; },
+    freezeAssets: async () => { assetsFrozen = true; },
   })), /current portal validation failed/);
   assert.deepEqual(commands, [['npm', ['run', 'check:current']]]);
+  assert.equal(metadataWritten, false);
+  assert.equal(assetsFrozen, false);
+});
+
+test('freeze does not write metadata when versioned diagram freezing fails', async () => {
+  const commands = [];
+  let metadataWritten = false;
+  await assert.rejects(() => freezeVersion(fixture({
+    run: async (command, args) => commands.push([command, args]),
+    freezeAssets: async () => { throw new Error('missing diagram asset'); },
+    writeMetadata: async () => { metadataWritten = true; },
+  })), /missing diagram asset/);
+  assert.deepEqual(commands, [
+    ['npm', ['run', 'check:current']],
+    ['npm', ['run', 'docusaurus', '--', 'docs:version', '1.0.13.0']],
+  ]);
   assert.equal(metadataWritten, false);
 });
 

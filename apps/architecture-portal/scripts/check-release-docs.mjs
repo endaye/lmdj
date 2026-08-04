@@ -5,6 +5,7 @@ import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {readRepoFacts} from './lib/repo-facts.mjs';
 import {validateReleaseSnapshot} from './lib/version-docs.mjs';
+import {verifySnapshotProvenance} from './lib/snapshot-provenance.mjs';
 
 const execFileAsync = promisify(execFile);
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,7 +21,15 @@ const metadata = await readFile(metadataPath, 'utf8').then(JSON.parse, (error) =
 });
 const snapshotPath = path.join(portalRoot, 'versioned_docs', `version-${productBuild}`, 'overview', 'index.mdx');
 const snapshotExists = await access(snapshotPath).then(() => true, () => false);
-const errors = validateReleaseSnapshot({facts, versions, metadata, snapshotExists});
+let errors = validateReleaseSnapshot({facts, versions, metadata, snapshotExists});
+if (!errors.length && metadata?.schema_version === 2) {
+  errors = await verifySnapshotProvenance({
+    repoRoot,
+    portalRoot,
+    metadata,
+    headRevision: stdout.trim(),
+  });
+}
 
 if (errors.length) {
   console.error(errors.join('\n'));

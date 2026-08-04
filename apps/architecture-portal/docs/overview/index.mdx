@@ -20,28 +20,28 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库已经实现可验证的 Headless Core Proof；Formal Web Runtime Host `1.0.0` 已进入 Product Assembly，并通过自动化 clean-distribution Web Proof。面向创作者的完整产品 GUI 与生产/云 Provider 仍需按各自页面标注的门禁推进。
 
-:::warning[当前文档]
-你正在查看随 `main` 演进的 current 文档，不是不可变的正式版本快照。版本下拉菜单中的 Product Build 快照才用于回看历史交付。
+:::info[构建身份]
+上方 Build Identity 会明确标出本页属于随 `main` 演进的 current 说明书，还是某个 Product Build 的不可变正式快照；版本下拉菜单用于在两类证据之间切换。
 :::
 
 ## 全产品架构
 
-<DiagramFrame title="LMDJ 全产品架构" html="/diagrams/lmdj-product.html" svg="/diagrams/lmdj-product.svg" />
+<DiagramFrame title="LMDJ 全产品架构" diagramId="lmdj-product" />
 
 Project Truth 是权威创作状态；Runtime Snapshot 是不可变派生状态；Host 只通过 Application Facade 使用 Core；Provider 只接收 Artifact 输入和输出 sink；产品专属装配只存在于 Product Assembly。
 
 ## 导览
 
 <SectionCards items={[
-  {title: '产品', description: '定位、能力边界与核心工作流。', to: '/product/positioning', status: 'partial'},
-  {title: 'Core Modules', description: '七个产品中立模块及其依赖。', to: '/core/modules/foundation', status: 'implemented'},
-  {title: 'Hosts', description: 'CLI、MCP、Native Test 与 Web Runtime。', to: '/hosts/overview', status: 'partial'},
-  {title: 'Providers', description: '能力发现、Attempt 与 Proof Provider。', to: '/providers/overview', status: 'partial'},
-  {title: 'Contracts', description: '跨语言边界和不可变运行态。', to: '/contracts/overview', status: 'implemented'},
-  {title: 'Assembly', description: 'LMDJ 产品组合与版本身份。', to: '/assembly/lmdj', status: 'implemented'},
-  {title: 'Platform', description: '音频、Web、存储和输入适配。', to: '/platform/native-audio', status: 'partial'},
-  {title: 'Operations', description: 'Proof、版本发布与文档治理。', to: '/operations/testing-and-proof', status: 'implemented'},
-  {title: 'History', description: '已退役架构，仅供迁移追溯。', to: '/history/legacy-patch-architecture', status: 'retired'},
+  {title: '产品', description: '定位、能力边界与核心工作流。', docId: 'product/positioning', status: 'partial'},
+  {title: 'Core Modules', description: '七个产品中立模块及其依赖。', docId: 'core/modules/foundation', status: 'implemented'},
+  {title: 'Hosts', description: 'CLI、MCP、Native Test 与 Web Runtime。', docId: 'hosts/overview', status: 'partial'},
+  {title: 'Providers', description: '能力发现、Attempt 与 Proof Provider。', docId: 'providers/overview', status: 'partial'},
+  {title: 'Contracts', description: '跨语言边界和不可变运行态。', docId: 'contracts/overview', status: 'implemented'},
+  {title: 'Assembly', description: 'LMDJ 产品组合与版本身份。', docId: 'assembly/lmdj', status: 'implemented'},
+  {title: 'Platform', description: '音频、Web、存储和输入适配。', docId: 'platform/native-audio', status: 'partial'},
+  {title: 'Operations', description: 'Proof、版本发布与文档治理。', docId: 'operations/testing-and-proof', status: 'implemented'},
+  {title: 'History', description: '已退役架构，仅供迁移追溯。', docId: 'history/legacy-patch-architecture', status: 'retired'},
 ]} />
 
 ## 当前交付状态

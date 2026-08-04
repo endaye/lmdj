@@ -12,7 +12,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity kind="modules" id="application-facade" />
 
-<DiagramFrame title="Application Facade Module" html="/diagrams/application-facade.html" svg="/diagrams/application-facade.svg" />
+<DiagramFrame title="Application Facade Module" diagramId="application-facade" />
 
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
@@ -27,7 +27,7 @@ C++/C API 保持跨 Host 边界；Assembly Loader 校验锁定身份。
 ## 6. 状态、错误与并发
 错误翻译保留公共类别；C API stress 验证并发生命周期。
 ## 7. 产品使用方
-CLI、MCP、Native Test Host 以及未来正式 Host。
+CLI、MCP、Native Test Host 与 Formal Web Runtime Host。
 ## 8. 测试与证据
 Application、assembly loader、C API、stress 与 dynamic-load 测试。
 ## 9. 限制与下一门禁

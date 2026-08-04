@@ -60,9 +60,9 @@ for (const kind of ['modules', 'hosts', 'providers', 'contracts']) {
       for (const extension of ['html', 'svg']) {
         const output = path.join(portalRoot, 'static/diagrams', `${id}.${extension}`);
         if (!existsSync(output)) errors.push(`current truth: module ${id} missing diagram ${extension}`);
-        if (!pages[0].body.includes(`/diagrams/${id}.${extension}`)) {
-          errors.push(`current truth: module ${id} page does not embed diagram ${extension}`);
-        }
+      }
+      if (!pages[0].body.includes(`diagramId="${id}"`)) {
+        errors.push(`current truth: module ${id} page does not embed validated diagram id`);
       }
     }
   }

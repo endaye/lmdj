@@ -83,9 +83,27 @@ scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 ```
 
 `CHANNEL` 只能是 `canary`、`dev`、`beta` 或 `stable`；省略时仅为兼容旧流程而按
-`canary` 处理。命令生成不可变 `/versions/PRODUCT_BUILD/`、sidebar 与冻结元数据，
+`canary` 处理。命令生成不可变 `/versions/PRODUCT_BUILD/`、sidebar、版本专属图表资产与冻结元数据，
 并要求版本精确匹配、工作区干净且快照不存在。已冻结版本不得重写；同一 Build
 后续 Channel 晋级复用该快照，在独立发布记录中追加晋级证据。
+
+新快照使用 metadata schema 2。元数据必须自认证完整 source commit，记录 source
+commit time/tree 与投影清单、34 个 source doc hash、source/sidebar 与 snapshot
+hash、九个 diagram ID 对应 18 个 current/versioned 路径、byte size 和 SHA-256、
+source revision 重建的 Product/Assembly facts，以及 freeze time。生成阶段只允许
+当前 HEAD 加精确生成边界；提交后和未来 HEAD 必须证明 introducing commit 是当前
+HEAD 的祖先、不可变路径从 introducing commit 起未变化、时间满足
+`source <= freeze <= introducing`，并满足 direct-parent 或已批准的
+squash-equivalent source projection。若 fresh clone 在 squash 后不再包含 source
+commit object，验证器仍须用冻结的 raw commit bytes 自认证 canonical revision、tree
+与 committer time，并从 introducing squash tree 重建和逐项核对 projection、facts、
+source docs/sidebar/diagrams；对象缺失本身不能放宽证据。`versions.json` 允许追加未来版本，但每个
+Product Build 条目必须唯一。既有 schema-1 快照保持只读兼容，不回写。
+
+版本页导航以 Docusaurus active doc ID 解析当前版本的实际 path；缺失或重复 ID
+必须 fail closed。九张架构图先通过 current diagram validation，再把精确 18 个
+HTML/SVG 输出复制到 `static/versions/PRODUCT_BUILD/diagrams/`。schema-2 版本页不得
+引用可变 `/diagrams/*`；缺失、符号链接、越界、重复或 hash 漂移必须阻断冻结或构建。
 
 快照 commit 不改变 Product/Module/Provider/Contract 的版本语义，只记录该 Product Build 对应的说明书。
 
@@ -94,8 +112,8 @@ scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 受影响 PR 和 `main` push 运行 Architecture Portal CI。PR 还会校验文档影响声明及
 changed files；Product Build/Assembly 变化不能选择 `none`。完整门户检查同时验证
 当前 Product Build 存在匹配的 `versions.json` 条目、快照源码和冻结元数据，并比对
-Product、Assembly Lock、Module、Host、Provider、Contract、Channel、完整 Git SHA
-与冻结时间。正常生产发布只能由合入后的 Git/Netlify 构建触发；禁止把本地目录或
+Product、Assembly Lock、Module、Host、Provider、Contract、Channel、完整 Git 来源、
+source projection、版本文档/sidebar/图表 inventory 与冻结/introducing 时间。正常生产发布只能由合入后的 Git/Netlify 构建触发；禁止把本地目录或
 单个 HTML 通过 API/拖拽手工上传到生产站点。手工 deploy 仅可用于明确标记的临时
 诊断站点。
 

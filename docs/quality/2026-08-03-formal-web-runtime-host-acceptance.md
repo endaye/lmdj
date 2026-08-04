@@ -9,10 +9,10 @@ the declared composition. Clean-distribution Web Proof, Web Runtime Lab, Core
 Proof, ASan, TSan, release stress, dependency, active-tree, and exact-identity
 gates pass locally.
 
-This record does not claim Pull Request CI or physical-device acceptance. The
-Architecture Portal check exits nonzero only for the three planned missing
-`1.0.14.0` snapshot artifacts; the immutable canary snapshot remains
-exclusively owned by Task 12B.
+This record does not claim Pull Request CI, physical-device acceptance, or an
+Architecture Portal snapshot outcome. Current Portal truth and immutable
+snapshot provenance are verified and reported by their own documentation
+gates, rather than inferred from this Host acceptance record.
 
 No push, Pull Request, merge, tag, Release, deployment, publication, or Channel
 promotion occurred. `lmdj-v1.0.14.0` is future tag text only.
@@ -68,7 +68,7 @@ identities are unchanged.
 | `scripts/core.sh configure tsan` / `build tsan` / `test tsan full` | PASS; 26/26 native-label tests; no TSan report |
 | `scripts/core.sh configure release` / `build release` / `test release stress` | PASS; 2/2 stress tests |
 | `scripts/core-coverage.sh check` | PASS; 48/48 tests; 31 module signatures match 31 coverage objects; overall lines `79.78%`, branches `68.40%`; Application Facade lines `84.02%`, branches `68.04%`; every module threshold passes |
-| `scripts/architecture-portal.sh check` | EXPECTED TASK 12B EXCEPTION; 26/26 unit tests, 34 current pages, 9 diagram sources/18 outputs, and `1.0.14.0` facts pass before the check reports only missing `versions.json`, snapshot source, and metadata entries |
+| Architecture Portal current gates | PASS at Task 12A acceptance; 34 current pages, 9 diagram sources/18 outputs, Product `1.0.14.0` facts, typecheck, optimized build, and current route/link checks. Immutable snapshot provenance is reported separately. |
 | `bash scripts/verify-core-dependencies.sh` | PASS |
 | `bash tests/build/test_active_tree.sh` | PASS |
 | Product version, module graph, Assembly Lock, and lock verification | PASS; Product `1.0.14.0` |
@@ -79,10 +79,9 @@ The WebKit result is a structured `UNSUPPORTED_WEB_RUNTIME` limitation for
 reported as WebKit product acceptance. The automated browser journey is also
 not acoustic, MIDI-device, latency-camera, or iPad evidence.
 
-Because the full Portal check intentionally stops at `check:release-docs`, its
-remaining current-page subcommands were run separately: typecheck, optimized
-build, and the 37-route/internal-link build check all pass. No snapshot command
-was run and no release-doc assertion was weakened.
+At this acceptance point, current-page typecheck, optimized build, and the
+37-route/internal-link build check passed. This record neither upgrades that
+local evidence to remote CI nor weakens the separate release-document gate.
 
 ## CI configuration boundary
 
@@ -114,8 +113,7 @@ canary implementation boundary, but they block physical-pass, `beta`, and
 
 ## Remaining boundary
 
-Task 12B alone may create
-`apps/architecture-portal/versioned_docs/version-1.0.14.0/`, the matching
-versioned sidebar and metadata, and the `versions.json` entry. Local Task 12A
-proof does not create that immutable snapshot, a signed tag, a Release, or any
-deployment artifact.
+Local Host proof does not create a signed tag, Release, deployment, Channel
+promotion, remote CI result, or physical-device evidence. Snapshot generation
+and provenance remain owned by the Architecture Portal workflow and its own
+acceptance report.

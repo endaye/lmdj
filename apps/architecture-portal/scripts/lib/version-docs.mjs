@@ -3,6 +3,7 @@ import {readFile, mkdir, writeFile} from 'node:fs/promises';
 import {execFile, spawn} from 'node:child_process';
 import {promisify} from 'node:util';
 import {readRepoFacts} from './repo-facts.mjs';
+import {createSnapshotMetadata, freezeDiagramAssets} from './snapshot-provenance.mjs';
 
 const execFileAsync = promisify(execFile);
 const RELEASE_CHANNELS = new Set(['canary', 'dev', 'beta', 'stable']);
@@ -59,6 +60,11 @@ async function defaultGitStatus(repoRoot) {
   return stdout;
 }
 
+async function defaultHeadRevision(repoRoot) {
+  const {stdout} = await execFileAsync('git', ['rev-parse', 'HEAD'], {cwd: repoRoot});
+  return stdout.trim();
+}
+
 async function defaultReadVersions(portalRoot) {
   try {
     return JSON.parse(await readFile(path.join(portalRoot, 'versions.json'), 'utf8'));
@@ -108,6 +114,8 @@ export async function freezeVersion(options) {
   if (requestedVersion !== facts.product.version) {
     throw new Error(`requested Product Build ${requestedVersion} does not match ${facts.product.version}`);
   }
+  const getHeadRevision = options.getHeadRevision ?? (() => defaultHeadRevision(repoRoot));
+  if (await getHeadRevision() !== revision) throw new Error('snapshot source revision must equal HEAD');
   const getGitStatus = options.getGitStatus ?? (() => defaultGitStatus(repoRoot));
   if ((await getGitStatus()).trim()) throw new Error('version freezing requires a clean worktree');
   const readVersions = options.readVersions ?? (() => defaultReadVersions(portalRoot));
@@ -116,14 +124,21 @@ export async function freezeVersion(options) {
   }
   const run = options.run ?? ((command, args) => defaultRun(portalRoot, command, args));
   const writeMetadata = options.writeMetadata ?? ((version, metadata) => defaultWriteMetadata(portalRoot, version, metadata));
+  const freezeAssets = options.freezeAssets ?? ((assetOptions) => freezeDiagramAssets(assetOptions));
+  const createMetadata = options.createMetadata ?? ((metadataOptions) => createSnapshotMetadata(metadataOptions));
 
   await run('npm', ['run', 'check:current']);
   await run('npm', ['run', 'docusaurus', '--', 'docs:version', requestedVersion]);
-  await writeMetadata(requestedVersion, {
-    ...facts,
-    product_build: requestedVersion,
+  await freezeAssets({portalRoot, version: requestedVersion});
+  const metadata = await createMetadata({
+    portalRoot,
+    repoRoot,
+    version: requestedVersion,
+    channel,
     revision,
-    frozen_at_utc: now().toISOString(),
+    facts,
+    now,
   });
+  await writeMetadata(requestedVersion, metadata);
   await run('npm', ['run', 'check']);
 }

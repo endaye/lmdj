@@ -5,6 +5,7 @@ import {checkBuild} from './lib/build-check.mjs';
 
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const facts = JSON.parse(await readFile(path.join(portalRoot, 'src/generated/site-facts.json'), 'utf8'));
+const versionFacts = JSON.parse(await readFile(path.join(portalRoot, 'src/generated/version-facts.json'), 'utf8'));
 const requiredRoutes = [
   '/', '/product/positioning/', '/product/capability-map/', '/product/workflows/',
   '/core/overview/', '/core/modules/foundation/', '/core/modules/authoring-domain/',
@@ -23,6 +24,9 @@ const errors = await checkBuild({
   buildRoot: path.join(portalRoot, 'build'),
   requiredRoutes,
   expectedIdentity: {productBuild: facts.product.version, revision: facts.revision.slice(0, 12)},
+  versionSchemas: Object.fromEntries(
+    Object.entries(versionFacts).map(([version, metadata]) => [version, metadata.schema_version]),
+  ),
 });
 
 if (errors.length) {

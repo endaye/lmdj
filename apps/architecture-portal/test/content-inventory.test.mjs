@@ -32,3 +32,52 @@ test('formal snapshot does not describe itself as current main documentation', a
   assert.doesNotMatch(body, /(?:随 `main` 演进|current 文档|当前文档)/);
   assert.match(body, /正式快照/);
 });
+
+test('current overview uses stable doc IDs and all nine diagram callers use validated IDs', async () => {
+  const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
+  const docIds = [...overview.matchAll(/docId:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
+  assert.equal(docIds.length, 9);
+  assert.equal(new Set(docIds).size, 9);
+  assert.doesNotMatch(overview, /\bto:\s*['"]/);
+
+  const callers = [
+    ['overview/index.mdx', 'lmdj-product'],
+    ['core/overview.mdx', 'lmdj-core'],
+    ['core/modules/foundation.mdx', 'foundation'],
+    ['core/modules/authoring-domain.mdx', 'authoring-domain'],
+    ['core/modules/project-io.mdx', 'project-io'],
+    ['core/modules/project-cooker.mdx', 'project-cooker'],
+    ['core/modules/audio-runtime.mdx', 'audio-runtime'],
+    ['core/modules/provider-sdk.mdx', 'provider-sdk'],
+    ['core/modules/application-facade.mdx', 'application-facade'],
+  ];
+  for (const [relative, diagramId] of callers) {
+    const body = await readFile(path.join(docsRoot, relative), 'utf8');
+    assert.match(body, new RegExp(`<DiagramFrame[^>]+diagramId=["']${diagramId}["']`));
+    assert.doesNotMatch(body, /<DiagramFrame[^>]+(?:html|svg)=/);
+  }
+});
+
+test('current truth is version-neutral about the formal Web Host, snapshot lifecycle, and evidence', async () => {
+  const currentPages = await Promise.all(requiredRoutes.map(async (route) => ({
+    route,
+    body: await readFile(path.join(docsRoot, `${route}.mdx`), 'utf8'),
+  })));
+  for (const {route, body} of currentPages) {
+    assert.doesNotMatch(body, /Task 12[AB]/, `${route} contains task-phase wording`);
+    assert.doesNotMatch(body, /(?:快照[^。\n]*尚未生成|当前缺少[^。\n]*快照)/, `${route} claims a transient missing snapshot`);
+    assert.doesNotMatch(body, /Web Runtime (?:目前是|仍是) Lab\/设计边界/, `${route} describes the formal Host as Lab-only`);
+    assert.doesNotMatch(body, /未来正式 Host/, `${route} describes an assembled Host as future`);
+  }
+
+  const capability = await readFile(path.join(docsRoot, 'product/capability-map.mdx'), 'utf8');
+  assert.match(capability, /Formal Web Runtime Host `1\.0\.0` 已装配/);
+  assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
+
+  const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
+  assert.match(proof, /Pull Request CI[^。]+pending/);
+  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 5);
+
+  const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
+  assert.match(overview, /Build Identity[^。]+current[^。]+不可变正式快照/);
+});

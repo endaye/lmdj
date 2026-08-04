@@ -98,3 +98,32 @@ The local branch is ready for review. Items 7–10 remain deliberately PENDING
 until separately authorized remote actions produce their own evidence. A local
 build or Netlify-ready configuration must not be reported as an updated
 `lmdj.netlify.app` production deployment.
+
+## 2026-08-04 schema-2 corrective hardening
+
+The Portal now resolves Overview cards by active Docusaurus document ID, so
+rendered current links remain current and rendered version links remain in the
+selected version. Nine current diagram callers use validated IDs; schema-2
+snapshots freeze the exact 18 HTML/SVG outputs below their Product Build asset
+root, while the existing `1.0.13.0` schema-1 snapshot remains unchanged and
+read-only compatible.
+
+Schema-2 metadata authenticates raw Git commit bytes and records the source
+commit time/tree, an exact source projection, 34 source/snapshot documents,
+source and versioned sidebar evidence, source-rebuilt Product/Assembly facts,
+and nine diagram IDs with 18 source/versioned paths, sizes and hashes. Temporary
+Git-repository tests cover exact precommit boundaries, direct-parent and future
+HEAD verification, approved squash-equivalent projection including a
+`--no-local` fresh clone with no reachable source object, fake revisions,
+tampered commit bytes/docs/sidebar/assets, reduced or duplicate inventories,
+bad introduction relationships and timestamp ordering.
+
+The R2.2 current-source/tooling boundary passed 40 Portal unit tests, 34-page
+validation, 9-source/18-output diagram validation, typecheck, optimized build,
+and the 37-route/link build check. The real rendered current homepage kept all
+nine cards outside `/versions/`; the rendered `1.0.13.0` homepage kept all nine
+cards inside `/versions/1.0.13.0/`. The full gate stopped only at the separately
+owned `1.0.14.0` generated boundary: `versions.json`, snapshot source, and
+metadata were absent. This hardening step generated no `1.0.14.0` snapshot or
+static version asset and makes no push, PR, CI, deployment, or physical-device
+claim.

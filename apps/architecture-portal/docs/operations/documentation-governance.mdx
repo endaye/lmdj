@@ -25,8 +25,9 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 任何改变产品能力、Module/Host/Provider/Contract/Assembly/平台/发布流程的版本 Task，都必须同步对应页面和图；Product Build 或 Assembly 变化不能声明文档无影响。
 ## 快照规则
 本地构建、普通 CI 和 PR Preview 只校验 current 页面，不创建永久快照。任何已分配并交付团队测试的 `canary`、`dev`、`beta` Product Build，以及 `stable` 发布，都必须冻结匹配的不可变快照；current main 始终标明非正式快照。
+schema-2 快照把 34 页 current source、versioned sidebar、九张图的 18 个 HTML/SVG 资产和自认证 Git/source projection 元数据作为一个生成边界。版本页的卡片按 active doc ID 解析，图表按版本资产根解析；缺失、重复、越界、符号链接或哈希漂移都 fail closed。已有 schema-1 快照保持只读兼容，不回写为 schema 2。
 ## 发布规则
 Git 合并触发 Netlify 构建，构建必须先通过事实、元数据、链接、路由和 smoke 门禁；手工 API 上传仅用于诊断。
 
 ## CI 影响检查
-Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 Product、Assembly Lock、组件版本、Channel 和冻结证据一致。
+Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 source revision、source-rebuilt Product/Assembly facts、34 页清单、sidebar、版本图表、Channel、freeze time 和 introducing commit 一致；direct-parent 与明确获准的 squash-equivalent source projection 是仅有的两种来源关系。

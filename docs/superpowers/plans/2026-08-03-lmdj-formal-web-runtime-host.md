@@ -1309,6 +1309,16 @@ git commit -m "feat(product): assemble formal web runtime host"
 
 **Version impact:** none. Snapshot creation changes no Product, Module, Host, Provider, or Contract version semantics.
 
+**Corrective R2 documentation impact:** required for exactly `/`, `/product/capability-map/`, `/core/overview/`, `/core/modules/foundation/`, `/core/modules/authoring-domain/`, `/core/modules/project-io/`, `/core/modules/project-cooker/`, `/core/modules/audio-runtime/`, `/core/modules/provider-sdk/`, `/core/modules/application-facade/`, `/hosts/overview/`, `/hosts/web-runtime/`, `/assembly/lmdj/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/operations/version-and-release/`, and `/operations/documentation-governance/`.
+
+The approved corrective roll-forward is three commits: remove the invalid unpublished generated boundary; harden current truth, active-version navigation, version-scoped diagrams, schema-2 provenance, governance and tests; then run one corrective authoritative re-freeze. The source/tooling commit must not create snapshot or static version assets and has Version impact: none because it changes documentation integrity rather than Product, Assembly, Module, Host, Provider, Contract, or Channel identity.
+
+Schema 2 records self-authenticating source commit bytes, source commit time/tree and a source projection, hashes all 34 source/snapshot docs and sidebar evidence, freezes nine diagram IDs as 18 version-scoped HTML/SVG assets with paths/sizes/SHA-256, and rebuilds facts from the recorded source rather than future current. Precommit verification permits only HEAD plus the exact generated boundary; postcommit/future-HEAD verification proves immutable introduction, `source <= freeze <= introducing`, and either direct-parent or the approved squash-equivalent source projection. The schema-1 `1.0.13.0` snapshot remains unchanged.
+
+For a fresh clone after an approved squash where the canonical source object is no longer reachable, verification must still authenticate the recorded raw commit bytes, tree and committer time against the canonical revision, then rebuild and match the complete projection, facts, source-doc/sidebar and diagram evidence from the immutable introducing squash tree. Missing source objects never bypass evidence checks.
+
+`SectionCards` resolves `docId` through the public active Docusaurus version and fails closed on missing/duplicate IDs. `DiagramFrame` selects current or version-scoped assets from active version metadata. Rendered-build and release checks enforce navigation scope and reject mutable diagram references or provenance drift.
+
 - [ ] **Step 1: Generate the clean-worktree snapshot**
 
 Run only after Task 12A is committed and the worktree is clean:
