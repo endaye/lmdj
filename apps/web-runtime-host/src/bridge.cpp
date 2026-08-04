@@ -5,6 +5,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -87,6 +88,7 @@ enum class PublicationState : std::uint8_t {
   cancelled,
   publish_claimed,
   committed,
+  aborted,
 };
 
 bool exact_keys(
@@ -204,10 +206,23 @@ struct ControlBridge::Impl {
     std::size_t sidecar_size = 0;
     std::chrono::steady_clock::time_point submitted_at{};
     std::chrono::steady_clock::time_point deadline{};
-    std::optional<std::chrono::milliseconds> caller_deadline;
+    std::optional<std::chrono::steady_clock::time_point> caller_deadline;
     std::string request_id;
     bool has_request_id = false;
     std::atomic<PublicationState> publication{PublicationState::open};
+  };
+
+  struct DeadlineProof {
+    mutable std::mutex request_id_mutex;
+    std::string request_id;
+    std::atomic<std::uint8_t> gate{0};
+    std::atomic<bool> force_publication_error{false};
+    std::atomic<bool> released{false};
+    std::atomic<bool> entered_facade{false};
+    std::atomic<bool> claim_attempted{false};
+    std::atomic<PublicationState> publication{PublicationState::open};
+    std::atomic<std::uint8_t> cancel_observation{0};
+    std::atomic<std::uint8_t> cancel_calls{0};
   };
 
   struct ProcessReservations {
@@ -242,8 +257,11 @@ struct ControlBridge::Impl {
 
   static bool claim_publication(void* context) noexcept {
     auto& request = *static_cast<RequestSlot*>(context);
+    request.owner->mark_claim_attempted(request);
+    request.owner->wait_for_deadline_proof(request, 3);
     auto state = request.publication.load(std::memory_order_acquire);
     if (state == PublicationState::committed ||
+        state == PublicationState::aborted ||
         state == PublicationState::publish_claimed) {
       return true;
     }
@@ -255,6 +273,8 @@ struct ControlBridge::Impl {
           PublicationState::cancelled,
           std::memory_order_acq_rel,
           std::memory_order_acquire);
+      request.publication.notify_all();
+      request.owner->mark_publication(request, PublicationState::cancelled);
       return false;
     }
     auto expected = PublicationState::open;
@@ -263,32 +283,126 @@ struct ControlBridge::Impl {
             PublicationState::publish_claimed,
             std::memory_order_acq_rel,
             std::memory_order_acquire)) {
+      request.owner->mark_publication(
+          request, PublicationState::publish_claimed);
+      request.owner->wait_for_deadline_proof(request, 2);
       return true;
     }
     return expected == PublicationState::publish_claimed ||
-           expected == PublicationState::committed;
+           expected == PublicationState::committed ||
+           expected == PublicationState::aborted;
   }
 
   static void commit_publication(void* context) noexcept {
     auto& request = *static_cast<RequestSlot*>(context);
     auto expected = PublicationState::publish_claimed;
-    request.publication.compare_exchange_strong(
+    if (request.publication.compare_exchange_strong(
         expected,
         PublicationState::committed,
         std::memory_order_acq_rel,
-        std::memory_order_acquire);
+        std::memory_order_acquire)) {
+      request.owner->mark_publication(request, PublicationState::committed);
+    }
   }
 
   static void abort_publication(void* context) noexcept {
     auto& request = *static_cast<RequestSlot*>(context);
     auto expected = PublicationState::publish_claimed;
-    request.publication.compare_exchange_strong(
+    if (request.publication.compare_exchange_strong(
         expected,
-        std::chrono::steady_clock::now() >= request.deadline
-            ? PublicationState::cancelled
-            : PublicationState::open,
+        PublicationState::aborted,
         std::memory_order_acq_rel,
-        std::memory_order_acquire);
+        std::memory_order_acquire)) {
+      request.owner->mark_publication(request, PublicationState::aborted);
+    }
+  }
+
+  static bool force_publication_failure(void* context) noexcept {
+    auto& request = *static_cast<RequestSlot*>(context);
+    return request.owner->proof_matches(request) &&
+           request.owner->deadline_proof.force_publication_error.load(
+               std::memory_order_acquire);
+  }
+
+  bool proof_matches(const RequestSlot& request) const noexcept {
+    if (deadline_proof.gate.load(std::memory_order_acquire) == 0) {
+      return false;
+    }
+    std::lock_guard lock(deadline_proof.request_id_mutex);
+    return request.has_request_id &&
+           deadline_proof.request_id == request.request_id;
+  }
+
+  bool proof_matches(std::string_view request_id) const noexcept {
+    if (deadline_proof.gate.load(std::memory_order_acquire) == 0) {
+      return false;
+    }
+    std::lock_guard lock(deadline_proof.request_id_mutex);
+    return deadline_proof.request_id == request_id;
+  }
+
+  void record_deadline_cancel(
+      std::string_view request_id, BridgeCancelStatus status) noexcept {
+    if (!proof_matches(request_id)) {
+      return;
+    }
+    deadline_proof.cancel_observation.store(
+        status == BridgeCancelStatus::publish_claimed
+            ? 1
+            : status == BridgeCancelStatus::cancelled ? 2 : 3,
+        std::memory_order_release);
+    auto calls = deadline_proof.cancel_calls.load(std::memory_order_acquire);
+    while (calls != std::numeric_limits<std::uint8_t>::max() &&
+           !deadline_proof.cancel_calls.compare_exchange_weak(
+               calls,
+               static_cast<std::uint8_t>(calls + 1),
+               std::memory_order_acq_rel,
+               std::memory_order_acquire)) {
+    }
+  }
+
+  void mark_entered_facade(const RequestSlot& request) noexcept {
+    if (proof_matches(request)) {
+      deadline_proof.entered_facade.store(true, std::memory_order_release);
+    }
+  }
+
+  void mark_claim_attempted(const RequestSlot& request) noexcept {
+    if (proof_matches(request)) {
+      deadline_proof.claim_attempted.store(true, std::memory_order_release);
+    }
+  }
+
+  void mark_publication(
+      const RequestSlot& request, PublicationState state) noexcept {
+    if (proof_matches(request)) {
+      deadline_proof.publication.store(state, std::memory_order_release);
+    }
+  }
+
+  void wait_for_deadline_proof(
+      const RequestSlot& request, std::uint8_t gate) noexcept {
+    if (!proof_matches(request) ||
+        deadline_proof.gate.load(std::memory_order_acquire) != gate) {
+      return;
+    }
+    while (!deadline_proof.released.load(std::memory_order_acquire)) {
+      deadline_proof.released.wait(false, std::memory_order_acquire);
+    }
+  }
+
+  void wait_for_responsive_cancellation_proof(
+      RequestSlot& request) noexcept {
+    if (!proof_matches(request) ||
+        deadline_proof.gate.load(std::memory_order_acquire) != 1) {
+      return;
+    }
+    auto publication = request.publication.load(std::memory_order_acquire);
+    while (publication == PublicationState::open) {
+      request.publication.wait(
+          PublicationState::open, std::memory_order_acquire);
+      publication = request.publication.load(std::memory_order_acquire);
+    }
   }
 
   void service_realtime() noexcept {
@@ -641,9 +755,7 @@ struct ControlBridge::Impl {
       } else {
         deadline = request.submitted_at + operation_deadline(operation);
         if (request.caller_deadline.has_value()) {
-          deadline = std::min(
-              deadline,
-              request.submitted_at + *request.caller_deadline);
+          deadline = std::min(deadline, *request.caller_deadline);
         }
         request.deadline = deadline;
         has_deadline = true;
@@ -674,7 +786,10 @@ struct ControlBridge::Impl {
               &claim_publication,
               &commit_publication,
               &abort_publication,
+              &force_publication_failure,
           });
+          mark_entered_facade(request);
+          wait_for_responsive_cancellation_proof(request);
           response = runtime.dispatch(
               operation,
               parsed->at("payload"),
@@ -732,14 +847,20 @@ struct ControlBridge::Impl {
       hooks.before_response_serialization(hooks.context);
     }
 #endif
-    if (has_deadline &&
-        request.publication.load(std::memory_order_acquire) !=
-            PublicationState::committed &&
-        (request.publication.load(std::memory_order_acquire) ==
-             PublicationState::cancelled ||
-         std::chrono::steady_clock::now() >= deadline)) {
-      request.publication.store(
-          PublicationState::cancelled, std::memory_order_release);
+    auto publication = request.publication.load(std::memory_order_acquire);
+    if (has_deadline && publication == PublicationState::open &&
+        std::chrono::steady_clock::now() >= deadline) {
+      auto expected = PublicationState::open;
+      request.publication.compare_exchange_strong(
+          expected,
+          PublicationState::cancelled,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire);
+      publication = request.publication.load(std::memory_order_acquire);
+    }
+    if (has_deadline && publication == PublicationState::cancelled) {
+      mark_publication(request, PublicationState::cancelled);
+      request.publication.notify_all();
       runtime.fail_and_seal("request_timeout");
       response = bridge_timeout_error();
       terminal_after_response = true;
@@ -792,6 +913,7 @@ struct ControlBridge::Impl {
   BridgeHooks hooks;
   std::array<RequestSlot, kBridgeRequestSlotCount> requests{};
   std::array<MessageSlot, kBridgeMessageSlotCount> messages{};
+  DeadlineProof deadline_proof;
   mutable std::mutex request_id_mutex;
   std::atomic<std::uint64_t> next_message_sequence{1};
   std::atomic<bool> realtime_service_enabled{false};
@@ -806,7 +928,9 @@ ControlBridge::ControlBridge(ControlRuntime& runtime, BridgeHooks hooks)
 BridgeSubmitStatus ControlBridge::submit(
     std::span<const std::byte> envelope,
     std::span<const std::byte> sidecar,
-    std::optional<std::chrono::milliseconds> caller_deadline) noexcept {
+    std::optional<std::chrono::steady_clock::time_point> caller_deadline)
+    noexcept {
+  const auto submitted_at = std::chrono::steady_clock::now();
   if (envelope.size() > kBridgeMaximumEnvelopeBytes) {
     return BridgeSubmitStatus::envelope_too_large;
   }
@@ -842,7 +966,7 @@ BridgeSubmitStatus ControlBridge::submit(
   std::copy(sidecar.begin(), sidecar.end(), selected->sidecar.begin());
   selected->envelope_size = envelope.size();
   selected->sidecar_size = sidecar.size();
-  selected->submitted_at = std::chrono::steady_clock::now();
+  selected->submitted_at = submitted_at;
   selected->caller_deadline = caller_deadline;
   selected->publication.store(
       PublicationState::open, std::memory_order_release);
@@ -901,11 +1025,101 @@ BridgeCancelStatus ControlBridge::cancel(
             std::memory_order_acq_rel,
             std::memory_order_acquire) ||
         expected == PublicationState::cancelled) {
+      impl_->mark_publication(request, PublicationState::cancelled);
+      request.publication.notify_all();
+      impl_->record_deadline_cancel(
+          request_id, BridgeCancelStatus::cancelled);
       return BridgeCancelStatus::cancelled;
     }
+    impl_->record_deadline_cancel(
+        request_id, BridgeCancelStatus::publish_claimed);
     return BridgeCancelStatus::publish_claimed;
   }
+  impl_->record_deadline_cancel(request_id, BridgeCancelStatus::not_found);
   return BridgeCancelStatus::not_found;
+}
+
+bool ControlBridge::configure_deadline_proof(
+    std::string_view request_id,
+    std::uint8_t gate,
+    bool force_publication_error) noexcept {
+  try {
+    if (!valid_request_id(Json(request_id)) || gate < 1 || gate > 3) {
+      return false;
+    }
+    impl_->deadline_proof.gate.store(0, std::memory_order_release);
+    {
+      std::lock_guard lock(impl_->deadline_proof.request_id_mutex);
+      impl_->deadline_proof.request_id = request_id;
+    }
+    impl_->deadline_proof.force_publication_error.store(
+        force_publication_error, std::memory_order_release);
+    impl_->deadline_proof.released.store(false, std::memory_order_release);
+    impl_->deadline_proof.entered_facade.store(false, std::memory_order_release);
+    impl_->deadline_proof.claim_attempted.store(false, std::memory_order_release);
+    impl_->deadline_proof.publication.store(
+        PublicationState::open, std::memory_order_release);
+    impl_->deadline_proof.cancel_observation.store(
+        0, std::memory_order_release);
+    impl_->deadline_proof.cancel_calls.store(0, std::memory_order_release);
+    impl_->deadline_proof.gate.store(gate, std::memory_order_release);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool ControlBridge::release_deadline_proof() noexcept {
+  if (impl_->deadline_proof.gate.load(std::memory_order_acquire) == 0) {
+    return false;
+  }
+  impl_->deadline_proof.released.store(true, std::memory_order_release);
+  impl_->deadline_proof.released.notify_all();
+  return true;
+}
+
+int ControlBridge::deadline_proof_state(
+    std::string_view request_id) const noexcept {
+  try {
+    {
+      std::lock_guard lock(impl_->deadline_proof.request_id_mutex);
+      if (impl_->deadline_proof.request_id != request_id) {
+        return -1;
+      }
+    }
+    auto state = static_cast<int>(
+        impl_->deadline_proof.publication.load(std::memory_order_acquire));
+    if (impl_->deadline_proof.entered_facade.load(std::memory_order_acquire)) {
+      state |= 1 << 8;
+    }
+    if (impl_->deadline_proof.claim_attempted.load(std::memory_order_acquire)) {
+      state |= 1 << 9;
+    }
+    state |= static_cast<int>(
+                 impl_->deadline_proof.gate.load(std::memory_order_acquire))
+             << 12;
+    state |= static_cast<int>(
+                 impl_->deadline_proof.cancel_observation.load(
+                     std::memory_order_acquire))
+             << 16;
+    state |= static_cast<int>(
+                 impl_->deadline_proof.cancel_calls.load(
+                     std::memory_order_acquire))
+             << 20;
+    return state;
+  } catch (...) {
+    return -1;
+  }
+}
+
+bool ControlBridge::terminal_release_ready() const noexcept {
+  for (const auto& request : impl_->requests) {
+    if (request.state.load(std::memory_order_acquire) ==
+        RequestState::processing) {
+      return false;
+    }
+  }
+  return true;
 }
 
 BridgePollStatus ControlBridge::poll(
@@ -993,7 +1207,17 @@ std::unique_ptr<ControlRuntime> web_runtime;
 std::unique_ptr<ControlBridge> web_bridge_owner;
 std::atomic<ControlBridge*> web_bridge{nullptr};
 std::array<char, 36> web_terminal_token{};
-std::atomic<std::uint8_t> web_terminal_token_state{0};
+enum class TerminalReleaseState : std::uint8_t {
+  unset,
+  writing,
+  ready,
+  authorized,
+  completed_not_released,
+  completed_released,
+  consumed,
+};
+std::atomic<TerminalReleaseState> web_terminal_release_state{
+    TerminalReleaseState::unset};
 std::atomic<bool> web_manifest_terminal_failure{false};
 std::atomic<bool> web_manifest_cleanup_reserved{false};
 std::unique_ptr<RealtimeAudioWorklet> web_audio_owner;
@@ -1256,7 +1480,7 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
     std::size_t envelope_size,
     const std::byte* sidecar,
     std::size_t sidecar_size,
-    std::uint32_t caller_deadline_ms) {
+    double caller_deadline_at_ms) {
   if (web_manifest_terminal_failure.load(std::memory_order_acquire)) {
     return 1;
   }
@@ -1265,13 +1489,21 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
     return -1;
   }
   auto* bridge = web_bridge.load(std::memory_order_acquire);
-  if (bridge == nullptr) {
+  if (bridge == nullptr || !std::isfinite(caller_deadline_at_ms) ||
+      caller_deadline_at_ms < 0.0) {
     return -1;
   }
+  const auto native_entry = std::chrono::steady_clock::now();
+  const auto remaining_ms =
+      std::max(0.0, caller_deadline_at_ms - emscripten_get_now());
+  const auto caller_cutoff =
+      native_entry +
+      std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+          std::chrono::duration<double, std::milli>(remaining_ms));
   return static_cast<int>(bridge->submit(
       std::span<const std::byte>(envelope, envelope_size),
       std::span<const std::byte>(sidecar, sidecar_size),
-      std::chrono::milliseconds(caller_deadline_ms)));
+      caller_cutoff));
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_request(
@@ -1290,26 +1522,62 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_request(
       std::string_view(request_id, request_id_size)));
 }
 
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_deadline_proof_configure(
+    const char* request_id,
+    std::size_t request_id_size,
+    std::uint8_t gate,
+    int force_publication_error) {
+  if (request_id == nullptr || request_id_size != 36) {
+    return 0;
+  }
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  return bridge != nullptr && bridge->configure_deadline_proof(
+                                  std::string_view(request_id, request_id_size),
+                                  gate,
+                                  force_publication_error != 0)
+             ? 1
+             : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_deadline_proof_release() {
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  return bridge != nullptr && bridge->release_deadline_proof() ? 1 : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_deadline_proof_state(
+    const char* request_id,
+    std::size_t request_id_size) {
+  if (request_id == nullptr || request_id_size != 36) {
+    return -1;
+  }
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  return bridge == nullptr
+             ? -1
+             : bridge->deadline_proof_state(
+                   std::string_view(request_id, request_id_size));
+}
+
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_set_terminal_token(
     const char* token,
     std::size_t token_size) {
   if (token == nullptr || token_size != web_terminal_token.size()) {
     return -1;
   }
-  std::uint8_t expected = 0;
-  if (web_terminal_token_state.compare_exchange_strong(
+  auto expected = TerminalReleaseState::unset;
+  if (web_terminal_release_state.compare_exchange_strong(
           expected,
-          1,
+          TerminalReleaseState::writing,
           std::memory_order_acq_rel,
           std::memory_order_acquire)) {
     std::copy_n(token, token_size, web_terminal_token.begin());
-    web_terminal_token_state.store(2, std::memory_order_release);
+    web_terminal_release_state.store(
+        TerminalReleaseState::ready, std::memory_order_release);
     return 0;
   }
-  while (expected == 1) {
-    expected = web_terminal_token_state.load(std::memory_order_acquire);
+  while (expected == TerminalReleaseState::writing) {
+    expected = web_terminal_release_state.load(std::memory_order_acquire);
   }
-  return expected == 2 &&
+  return expected == TerminalReleaseState::ready &&
                  std::equal(
                      web_terminal_token.begin(),
                      web_terminal_token.end(),
@@ -1322,16 +1590,78 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_authorize_terminal_release(
     const char* token,
     std::size_t token_size) {
   if (!on_control(nullptr) || token == nullptr ||
-      token_size != web_terminal_token.size() ||
-      web_terminal_token_state.load(std::memory_order_acquire) != 2) {
+      token_size != web_terminal_token.size()) {
     return 0;
   }
-  return std::equal(
-             web_terminal_token.begin(),
-             web_terminal_token.end(),
-             token)
+  const auto state =
+      web_terminal_release_state.load(std::memory_order_acquire);
+  if (state != TerminalReleaseState::ready) return 0;
+  if (!std::equal(
+          web_terminal_token.begin(), web_terminal_token.end(), token)) {
+    return 0;
+  }
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  if (bridge != nullptr && !bridge->terminal_release_ready()) return 2;
+  auto expected = TerminalReleaseState::ready;
+  return web_terminal_release_state.compare_exchange_strong(
+             expected,
+             TerminalReleaseState::authorized,
+             std::memory_order_acq_rel,
+             std::memory_order_acquire)
              ? 1
              : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_complete_terminal_release(
+    const char* token,
+    std::size_t token_size,
+    int released) {
+  if (!on_control(nullptr) || token == nullptr ||
+      token_size != web_terminal_token.size() ||
+      (released != 0 && released != 1) ||
+      web_terminal_release_state.load(std::memory_order_acquire) !=
+          TerminalReleaseState::authorized ||
+      !std::equal(
+          web_terminal_token.begin(), web_terminal_token.end(), token)) {
+    return 0;
+  }
+  auto expected = TerminalReleaseState::authorized;
+  return web_terminal_release_state.compare_exchange_strong(
+             expected,
+             released == 1
+                 ? TerminalReleaseState::completed_released
+                 : TerminalReleaseState::completed_not_released,
+             std::memory_order_acq_rel,
+             std::memory_order_acquire)
+             ? 1
+             : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_consume_terminal_release(
+    const char* token,
+    std::size_t token_size) {
+  if (!emscripten_is_main_browser_thread() || token == nullptr ||
+      token_size != web_terminal_token.size()) {
+    return -1;
+  }
+  auto expected =
+      web_terminal_release_state.load(std::memory_order_acquire);
+  if (expected != TerminalReleaseState::completed_not_released &&
+      expected != TerminalReleaseState::completed_released) {
+    return -1;
+  }
+  if (!std::equal(
+          web_terminal_token.begin(), web_terminal_token.end(), token)) {
+    return -1;
+  }
+  const auto released = expected == TerminalReleaseState::completed_released;
+  return web_terminal_release_state.compare_exchange_strong(
+             expected,
+             TerminalReleaseState::consumed,
+             std::memory_order_acq_rel,
+             std::memory_order_acquire)
+             ? (released ? 1 : 0)
+             : -1;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_poll(

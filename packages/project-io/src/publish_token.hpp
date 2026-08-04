@@ -7,6 +7,7 @@ struct PublishToken {
   bool (*claim)(void* context) noexcept = nullptr;
   void (*commit)(void* context) noexcept = nullptr;
   void (*abort)(void* context) noexcept = nullptr;
+  bool (*force_failure)(void* context) noexcept = nullptr;
 };
 
 inline thread_local const PublishToken* active_publish_token = nullptr;
@@ -45,6 +46,12 @@ inline void abort_publish() noexcept {
       active_publish_token->abort != nullptr) {
     active_publish_token->abort(active_publish_token->context);
   }
+}
+
+inline bool force_publish_failure() noexcept {
+  return active_publish_token != nullptr &&
+         active_publish_token->force_failure != nullptr &&
+         active_publish_token->force_failure(active_publish_token->context);
 }
 
 }  // namespace lmdj::project_io::detail

@@ -106,8 +106,13 @@ if(EMSCRIPTEN)
     _lmdj_web_host_submit
     _lmdj_web_host_poll
     _lmdj_web_host_cancel_request
+    _lmdj_web_host_deadline_proof_configure
+    _lmdj_web_host_deadline_proof_release
+    _lmdj_web_host_deadline_proof_state
     _lmdj_web_host_set_terminal_token
     _lmdj_web_host_authorize_terminal_release
+    _lmdj_web_host_complete_terminal_release
+    _lmdj_web_host_consume_terminal_release
     _lmdj_web_host_failed
     _lmdj_web_host_initialize_manifest
     _lmdj_web_audio_start
@@ -146,6 +151,10 @@ if(EMSCRIPTEN)
     )
   endif()
   list(JOIN lmdj_web_runtime_exports "," lmdj_web_runtime_exports_csv)
+  set_property(
+    DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/src/web-runtime-pre.js"
+  )
   file(
     READ "${CMAKE_CURRENT_SOURCE_DIR}/src/web-runtime-pre.js"
     lmdj_web_runtime_pre_js
@@ -203,6 +212,10 @@ if(EMSCRIPTEN)
     "${CMAKE_CURRENT_BINARY_DIR}/web-runtime-pre.js"
   )
   file(WRITE "${lmdj_web_runtime_pre_js_path}" "${lmdj_web_runtime_pre_js}")
+  set_property(
+    TARGET lmdj_web_runtime_host APPEND PROPERTY LINK_DEPENDS
+    "${lmdj_web_runtime_pre_js_path}"
+  )
   target_link_options(
     lmdj_web_runtime_host
     PRIVATE

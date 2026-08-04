@@ -1289,7 +1289,7 @@ nlohmann::json manifest_json(
   };
 }
 
-foundation::Result<void> publish_artifact(
+foundation::Result<bool> publish_artifact(
     ProjectStoragePlatform& platform,
     const std::filesystem::path& bundle,
     const ArtifactStage& stage) {
@@ -1298,49 +1298,55 @@ foundation::Result<void> publish_artifact(
       directory / (stage.artifact.sha256 + ".wav");
   auto final_exists = platform.exists(final_path);
   if (!final_exists.has_value()) {
-    return foundation::Result<void>::failure(final_exists.error());
+    return foundation::Result<bool>::failure(final_exists.error());
   }
   if (final_exists.value()) {
     const auto described = describe_artifact(
         platform, final_path, stage.artifact.media_type);
     if (!described.has_value() ||
         described.value() != stage.artifact) {
-      return foundation::Result<void>::failure(
+      return foundation::Result<bool>::failure(
           invalid_project(
               "content-addressed asset path contains different bytes",
               final_path));
     }
-    return foundation::Result<void>::success();
+    return foundation::Result<bool>::success(false);
   }
 
   if (stage.byte_backed) {
     const auto described = describe_bytes(
         stage.bytes, stage.artifact.media_type);
     if (described != stage.artifact) {
-      return foundation::Result<void>::failure(
+      return foundation::Result<bool>::failure(
           Error{
               ErrorCode::invalid_argument,
               "byte-backed artifact changed while it was imported",
           });
     }
-    return platform.create_immutable(final_path, stage.bytes);
+    auto created = platform.create_immutable(final_path, stage.bytes);
+    return created.has_value()
+               ? foundation::Result<bool>::success(true)
+               : foundation::Result<bool>::failure(created.error());
   }
 
   auto source_bytes = platform.read_complete(stage.source);
   if (!source_bytes.has_value()) {
-    return foundation::Result<void>::failure(source_bytes.error());
+    return foundation::Result<bool>::failure(source_bytes.error());
   }
   const auto described = describe_bytes(
       source_bytes.value(), stage.artifact.media_type);
   if (described != stage.artifact) {
-    return foundation::Result<void>::failure(
+    return foundation::Result<bool>::failure(
         Error{
             ErrorCode::io_error,
             "source artifact changed while it was imported",
             {{"path", stage.source.generic_string()}},
         });
   }
-  return platform.create_immutable(final_path, source_bytes.value());
+  auto created = platform.create_immutable(final_path, source_bytes.value());
+  return created.has_value()
+             ? foundation::Result<bool>::success(true)
+             : foundation::Result<bool>::failure(created.error());
 }
 
 foundation::Result<bool> matching_active_journal(
@@ -1509,11 +1515,16 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
         });
   }
 
+  std::optional<std::filesystem::path> newly_published_artifact;
   if (artifact_stage.has_value()) {
     const auto published = publish_artifact(*platform, bundle, *artifact_stage);
     if (!published.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
           published.error());
+    }
+    if (published.value()) {
+      newly_published_artifact =
+          bundle / "assets" / (artifact_stage->artifact.sha256 + ".wav");
     }
   } else if (const auto* import =
                  std::get_if<domain::ImportAsset>(&command)) {
@@ -1581,21 +1592,45 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   const auto manifest_bytes = foundation::canonical_json(
                                   manifest_json(revision, loaded.transactions)) +
                               "\n";
-  if (!detail::claim_publish()) {
-    const auto transaction_cleanup = platform->remove(transaction_final);
-    const auto checkpoint_cleanup = platform->remove(checkpoint_final);
-    if (!transaction_cleanup.has_value()) {
-      return foundation::Result<domain::AppliedCommand>::failure(
-          transaction_cleanup.error());
+  const auto cleanup_unpublished = [&]() -> foundation::Result<void> {
+    for (const auto& path : {transaction_final, checkpoint_final}) {
+      const auto removed = platform->remove(path);
+      if (!removed.has_value()) {
+        return removed;
+      }
     }
-    if (!checkpoint_cleanup.has_value()) {
+    if (newly_published_artifact.has_value()) {
+      const auto removed = platform->remove(*newly_published_artifact);
+      if (!removed.has_value()) {
+        return removed;
+      }
+    }
+    return foundation::Result<void>::success();
+  };
+  if (!detail::claim_publish()) {
+    const auto cleanup = cleanup_unpublished();
+    if (!cleanup.has_value()) {
       return foundation::Result<domain::AppliedCommand>::failure(
-          checkpoint_cleanup.error());
+          cleanup.error());
     }
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::internal_error,
             "Project mutation was cancelled before publication",
+        });
+  }
+  if (detail::force_publish_failure()) {
+    detail::abort_publish();
+    const auto cleanup = cleanup_unpublished();
+    if (!cleanup.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          cleanup.error());
+    }
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::io_error,
+            "Project manifest publication failed",
+            {{"stage", "manifest_settlement"}},
         });
   }
   written = platform->replace_complete(
@@ -1748,6 +1783,18 @@ foundation::Result<void> ProjectStore::create(
                      })
                : cleanup;
   }
+  if (detail::force_publish_failure()) {
+    detail::abort_publish();
+    const auto cleanup = platform_->remove(checkpoint_final);
+    return cleanup.has_value()
+               ? foundation::Result<void>::failure(
+                     Error{
+                         ErrorCode::io_error,
+                         "Project manifest publication failed",
+                         {{"stage", "manifest_settlement"}},
+                     })
+               : cleanup;
+  }
   auto written = platform_->replace_complete(
       bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
@@ -1760,14 +1807,39 @@ foundation::Result<void> ProjectStore::create(
 
 foundation::Result<domain::ProjectState> ProjectStore::load(
     const std::filesystem::path& bundle) const {
-  const auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<domain::ProjectState>::failure(tree.error());
+  }
+  auto lock_result = platform_->acquire_writer(bundle);
+  const auto writer_busy =
+      !lock_result.has_value() && lock_result.error().details.is_object() &&
+      lock_result.error().details.value("storage_condition", std::string{}) ==
+          kStorageConditionProjectBusy;
+  if (!lock_result.has_value() && !writer_busy) {
+    return foundation::Result<domain::ProjectState>::failure(
+        lock_result.error());
+  }
+  std::unique_ptr<ProjectWriterLease> lock;
+  if (lock_result.has_value()) {
+    lock = std::move(lock_result.value());
+    tree = validate_managed_bundle_tree(*platform_, bundle);
+    if (!tree.has_value()) {
+      return foundation::Result<domain::ProjectState>::failure(tree.error());
+    }
   }
   auto loaded = load_project(*platform_, bundle);
   if (!loaded.has_value()) {
     return foundation::Result<domain::ProjectState>::failure(
         loaded.error());
+  }
+  if (lock != nullptr) {
+    const auto recovered =
+        recover_uncommitted(*platform_, bundle, loaded.value());
+    if (!recovered.has_value()) {
+      return foundation::Result<domain::ProjectState>::failure(
+          recovered.error());
+    }
   }
   return foundation::Result<domain::ProjectState>::success(
       std::move(loaded.value().state));

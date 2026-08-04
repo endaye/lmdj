@@ -118,12 +118,19 @@ class ControlBridge final {
   BridgeSubmitStatus submit(
       std::span<const std::byte> envelope,
       std::span<const std::byte> sidecar,
-      std::optional<std::chrono::milliseconds> caller_deadline =
+      std::optional<std::chrono::steady_clock::time_point> caller_deadline =
           std::nullopt) noexcept;
   BridgePollStatus poll(
       std::span<std::byte> output,
       std::size_t& required) noexcept;
   BridgeCancelStatus cancel(std::string_view request_id) noexcept;
+  bool configure_deadline_proof(
+      std::string_view request_id,
+      std::uint8_t gate,
+      bool force_publication_error) noexcept;
+  bool release_deadline_proof() noexcept;
+  int deadline_proof_state(std::string_view request_id) const noexcept;
+  bool terminal_release_ready() const noexcept;
   bool failed() const noexcept;
 
  private:

@@ -9,6 +9,7 @@ struct MutationPublishToken {
   bool (*claim)(void* context) noexcept = nullptr;
   void (*commit)(void* context) noexcept = nullptr;
   void (*abort)(void* context) noexcept = nullptr;
+  bool (*force_failure)(void* context) noexcept = nullptr;
 };
 
 class MutationPublishScope final {

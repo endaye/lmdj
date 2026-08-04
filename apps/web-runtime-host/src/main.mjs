@@ -84,6 +84,7 @@ const ALLOWED_TYPED_ERROR_CODES = new Set([
   "WEB_RUNTIME_RESOURCE_LIMIT",
   "HOST_STATE_INVALID",
   "HOST_TIMEOUT",
+  "HOST_RESTART_REQUIRED",
   "HOST_PROTOCOL_MISMATCH",
 ]);
 
@@ -843,54 +844,21 @@ export function createWebRuntimeHostController(options = {}) {
     listenerDisposers.push(() => target.removeEventListener(type, listener));
   }
 
-  function boundedRequest(operation, payload) {
+  async function boundedRequest(operation, payload) {
     const request = createRequestEnvelope({ operation, payload, crypto });
     const deadlineMs = deadlineForOperation(operation);
-    return new Promise((resolvePromise, rejectPromise) => {
-      let settled = false;
-      const timeout = timers.setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          rejectPromise(typedError("HOST_TIMEOUT", "Host request timed out"));
-        }
-      }, deadlineMs);
-      Promise.resolve(transport.send(request, { deadlineMs })).then(
-        (rawResponse) => {
-          if (settled) {
-            return;
-          }
-          settled = true;
-          timers.clearTimeout(timeout);
-          let response;
-          try {
-            response = validateResponseEnvelope(rawResponse);
-          } catch (error) {
-            rejectPromise(error);
-            return;
-          }
-          if (response.request_id !== request.request_id) {
-            rejectPromise(
-              typedError("HOST_PROTOCOL_MISMATCH", "Response request_id mismatch"),
-            );
-            return;
-          }
-          if (!response.ok) {
-            rejectPromise(
-              typedError(response.error.code, "Host request was rejected"),
-            );
-            return;
-          }
-          resolvePromise(response.result);
-        },
-        (error) => {
-          if (!settled) {
-            settled = true;
-            timers.clearTimeout(timeout);
-            rejectPromise(error);
-          }
-        },
+    const response = validateResponseEnvelope(
+      await transport.send(request, { deadlineMs }),
+    );
+    if (response.request_id !== request.request_id) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH", "Response request_id mismatch",
       );
-    });
+    }
+    if (!response.ok) {
+      throw typedError(response.error.code, "Host request was rejected");
+    }
+    return response.result;
   }
 
   function retainAdmission(sequence, epochId, isProbe) {

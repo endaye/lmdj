@@ -386,7 +386,7 @@ void test_publish_faults_preserve_previous_project_truth() {
     LMDJ_CHECK(loaded.value().revision == 0);
     LMDJ_CHECK(loaded.value().patterns.empty());
     LMDJ_CHECK(loaded.value().assets.empty());
-    LMDJ_CHECK(std::filesystem::is_regular_file(injected_residue_path));
+    LMDJ_CHECK(!std::filesystem::exists(injected_residue_path));
     const auto recovery_probe = restarted.execute(
         bundle,
         Command{CreatePattern{

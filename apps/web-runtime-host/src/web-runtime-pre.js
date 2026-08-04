@@ -1,5 +1,14 @@
 if (typeof window !== "undefined") {
   globalThis.Module = Module;
+  const PUBLICATION_SETTLEMENT_WATCHDOG_MS = 1_000;
+  const deadlineProofConfig = window.__LMDJ_WEB_HOST_DEADLINE_PROOF__;
+  const publicationSettlementWatchdogMs =
+    Number.isInteger(deadlineProofConfig?.settlementWatchdogMs) &&
+    deadlineProofConfig.settlementWatchdogMs > 0 &&
+    deadlineProofConfig.settlementWatchdogMs <=
+      PUBLICATION_SETTLEMENT_WATCHDOG_MS
+      ? deadlineProofConfig.settlementWatchdogMs
+      : PUBLICATION_SETTLEMENT_WATCHDOG_MS;
   const NativeWorker = window.Worker;
   const runtimeWorkers = new Set();
   window.Worker = class LmdjWebRuntimeWorker extends NativeWorker {
@@ -195,10 +204,22 @@ if (typeof window !== "undefined") {
   let terminalAckTimeout = 0;
   let host;
 
-  function transportFailure(code, message) {
+  function transportFailure(code, message, details = {}) {
     const error = new Error(message);
     error.code = code;
+    error.details = Object.freeze({...details});
     return error;
+  }
+
+  function restartRequiredFailure() {
+    return transportFailure(
+      "HOST_RESTART_REQUIRED",
+      "Project publication settlement did not complete; restart and inspect before retrying",
+      {
+        terminal_state: "restart-required",
+        mutation_outcome: "unknown",
+      },
+    );
   }
 
   function cancelControlRequest(requestId) {
@@ -274,29 +295,62 @@ if (typeof window !== "undefined") {
     ) {
       return;
     }
-    terminalOwnerReleased = event.data.released === true;
+    let released;
+    try {
+      released = Module.ccall(
+        "lmdj_web_host_consume_terminal_release",
+        "number",
+        ["string", "number"],
+        [terminalToken, terminalToken.length],
+      );
+    } catch {
+      return;
+    }
+    if (released !== 0 && released !== 1) return;
+    terminalOwnerReleased = released === 1;
     window.clearTimeout(terminalAckTimeout);
     terminateRuntimeWorkers();
     terminalChannel.close();
     deliverTerminalFailure();
   });
 
-  function onRequestDeadline(requestId) {
-    const pending = pendingRequests.get(requestId);
-    if (!pending || transportTerminated) return;
+  function linearizeRequestDeadline(requestId, pending) {
     const remaining = pending.deadlineAt - performance.now();
     if (remaining > 0) {
       pending.timeout = window.setTimeout(
         () => onRequestDeadline(requestId), remaining);
-      return;
+      return true;
     }
-    if (cancelControlRequest(requestId) === 0) {
+    if (
+      pending.deadlineLinearized === true ||
+      cancelControlRequest(requestId) === 0
+    ) {
+      pending.deadlineLinearized = true;
+      if (pending.settlementDeadlineAt === null) {
+        pending.settlementDeadlineAt =
+          performance.now() + publicationSettlementWatchdogMs;
+      }
+      const settlementRemaining =
+        pending.settlementDeadlineAt - performance.now();
+      if (settlementRemaining <= 0) {
+        failClosed(restartRequiredFailure());
+        return false;
+      }
       pending.timeout = window.setTimeout(
-        () => onRequestDeadline(requestId), 2);
-      return;
+        () => onRequestDeadline(requestId),
+        Math.min(2, settlementRemaining),
+      );
+      return true;
     }
     failClosed(transportFailure(
       "HOST_TIMEOUT", "formal Web Host request timed out"));
+    return false;
+  }
+
+  function onRequestDeadline(requestId) {
+    const pending = pendingRequests.get(requestId);
+    if (!pending || transportTerminated) return;
+    linearizeRequestDeadline(requestId, pending);
   }
 
   function scheduleTransportPoll() {
@@ -318,6 +372,15 @@ if (typeof window !== "undefined") {
       scheduleTransportPoll();
       return;
     }
+    for (const [requestId, pending] of pendingRequests) {
+      if (
+        performance.now() >= pending.deadlineAt &&
+        pending.deadlineLinearized !== true &&
+        !linearizeRequestDeadline(requestId, pending)
+      ) {
+        return;
+      }
+    }
     const output = _malloc(65_536);
     const requiredPointer = _malloc(4);
     try {
@@ -329,14 +392,6 @@ if (typeof window !== "undefined") {
         if (typeof message.request_id === "string") {
           const pending = pendingRequests.get(message.request_id);
           if (pending) {
-            if (
-              performance.now() >= pending.deadlineAt &&
-              cancelControlRequest(message.request_id) !== 0
-            ) {
-              failClosed(transportFailure(
-                "HOST_TIMEOUT", "formal Web Host request timed out"));
-              return;
-            }
             pendingRequests.delete(message.request_id);
             window.clearTimeout(pending.timeout);
             pending.resolve(message);
@@ -392,7 +447,7 @@ if (typeof window !== "undefined") {
           envelope.byteLength,
           sidecar,
           sidecar.byteLength,
-          Math.floor(deadlineMs),
+          performance.timeOrigin + deadlineAt,
         ],
       );
       if (submitted !== 0) {
@@ -404,16 +459,16 @@ if (typeof window !== "undefined") {
         ));
       }
       return new Promise((resolve, reject) => {
-        const timeout = window.setTimeout(
-          () => onRequestDeadline(request.request_id),
-          deadlineMs,
-        );
-        pendingRequests.set(request.request_id, {
+        const pending = {
           resolve,
           reject,
-          timeout,
+          timeout: 0,
           deadlineAt,
-        });
+          deadlineLinearized: false,
+          settlementDeadlineAt: null,
+        };
+        pendingRequests.set(request.request_id, pending);
+        linearizeRequestDeadline(request.request_id, pending);
         scheduleTransportPoll();
       });
     },
@@ -452,12 +507,81 @@ if (typeof window !== "undefined") {
     },
   });
 
+  const deadlineProof = deadlineProofConfig === undefined
+    ? undefined
+    : Object.freeze({
+        arm({requestId, gate, forcePublicationError = false}) {
+          const gates = Object.freeze({
+            "responsive-cancellation": 1,
+            "after-claim": 2,
+            "unresponsive-cancellation": 3,
+          });
+          const selectedGate = gates[gate];
+          if (
+            typeof requestId !== "string" ||
+            !Number.isInteger(selectedGate) ||
+            Module.ccall(
+              "lmdj_web_host_deadline_proof_configure",
+              "number",
+              ["string", "number", "number", "number"],
+              [
+                requestId,
+                requestId.length,
+                selectedGate,
+                forcePublicationError === true ? 1 : 0,
+              ],
+            ) !== 1
+          ) {
+            throw new TypeError("deadline proof configuration is invalid");
+          }
+        },
+        release() {
+          return Module.ccall(
+            "lmdj_web_host_deadline_proof_release", "number", [], []) === 1;
+        },
+        state(requestId) {
+          const packed = Module.ccall(
+            "lmdj_web_host_deadline_proof_state",
+            "number",
+            ["string", "number"],
+            [requestId, requestId.length],
+          );
+          if (packed < 0) return null;
+          return Object.freeze({
+            entered_facade: (packed & (1 << 8)) !== 0,
+            claim_attempted: (packed & (1 << 9)) !== 0,
+            last_cancel_result: Object.freeze({
+              0: "none",
+              1: "publish-claimed",
+              2: "cancelled",
+              3: "not-found",
+            })[(packed >> 16) & 0x3] ?? "unknown",
+            cancel_calls: (packed >> 20) & 0xff,
+            gate: Object.freeze({
+              1: "responsive-cancellation",
+              2: "after-claim",
+              3: "unresponsive-cancellation",
+            })[
+              (packed >> 12) & 0xf
+            ] ?? "none",
+            publication: Object.freeze({
+              0: "open",
+              1: "cancelled",
+              2: "publish-claimed",
+              3: "committed",
+              4: "aborted",
+            })[packed & 0xff] ?? "unknown",
+          });
+        },
+      });
+
   host = {
     runtimeInitialized: false,
     manifestReady: false,
     registerAudioContext,
     startAudioWorklet,
     transport,
+    ...(deadlineProof === undefined ? {} : {deadlineProof}),
   };
   window.lmdjWebRuntimeHost = host;
 
@@ -480,7 +604,13 @@ if (typeof window !== "undefined") {
           "lmdj_web_host_submit",
           "number",
           ["array", "number", "array", "number", "number"],
-          [envelope, envelope.byteLength, sidecar, sidecar.byteLength, 30_000],
+          [
+            envelope,
+            envelope.byteLength,
+            sidecar,
+            sidecar.byteLength,
+            performance.timeOrigin + deadline,
+          ],
         );
         if (submitted === 0) {
           accepted = true;
@@ -868,28 +998,43 @@ if (ENVIRONMENT_IS_PTHREAD && typeof BroadcastChannel === "function") {
     const token = event.data?.token;
     if (
       event.data?.type !== "release-and-close" ||
-      typeof token !== "string" ||
-      Module.ccall(
+      typeof token !== "string"
+    ) {
+      return;
+    }
+    const releaseWhenReady = () => {
+      const authorization = Module.ccall(
         "lmdj_web_host_authorize_terminal_release",
         "number",
         ["string", "number"],
         [token, token.length],
-      ) !== 1
-    ) {
-      return;
-    }
-    let released = false;
-    try {
-      LmdjOpfs.releaseAllWriters();
-      released = true;
-    } finally {
-      terminalChannel.postMessage({
-        type: "released-and-closed",
-        token,
-        released,
-      });
-      terminalChannel.close();
-      globalThis.close();
-    }
+      );
+      if (authorization === 2) {
+        setTimeout(releaseWhenReady, 2);
+        return;
+      }
+      if (authorization !== 1) return;
+      let released = false;
+      try {
+        LmdjOpfs.releaseAllWriters();
+        released = true;
+      } finally {
+        const completed = Module.ccall(
+          "lmdj_web_host_complete_terminal_release",
+          "number",
+          ["string", "number", "number"],
+          [token, token.length, released ? 1 : 0],
+        );
+        if (completed === 1) {
+          terminalChannel.postMessage({
+            type: "released-and-closed",
+            token,
+          });
+        }
+        terminalChannel.close();
+        globalThis.close();
+      }
+    };
+    releaseWhenReady();
   });
 }

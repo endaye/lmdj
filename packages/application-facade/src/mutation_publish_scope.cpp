@@ -11,6 +11,7 @@ struct MutationPublishScope::Impl {
             facade_token.claim,
             facade_token.commit,
             facade_token.abort,
+            facade_token.force_failure,
         },
         scope(token) {}
 

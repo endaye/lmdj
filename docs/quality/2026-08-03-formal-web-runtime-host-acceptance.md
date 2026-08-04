@@ -1,6 +1,6 @@
 # Formal Web Runtime Host Local Acceptance — 2026-08-03
 
-## Outcome
+## Task 12A historical outcome
 
 Task 12A assembles Formal Web Runtime Host `1.0.0` into Product Build
 `1.0.14.0 · canary`. The packaged Host identifies itself as Product
@@ -17,7 +17,7 @@ gates, rather than inferred from this Host acceptance record.
 No push, Pull Request, merge, tag, Release, deployment, publication, or Channel
 promotion occurred. `lmdj-v1.0.14.0` is future tag text only.
 
-## Tested identity and environment
+## Task 12A historical identity and environment
 
 | Item | Evidence |
 | --- | --- |
@@ -35,7 +35,7 @@ The proof ran against the listed base revision plus the uncommitted Task 12A
 diff. The final atomic commit SHA is intentionally not invented inside its own
 pre-commit acceptance record.
 
-## Exact version propagation
+## Task 12A historical version propagation
 
 | Product, Module, or Host | Previous | Candidate | API |
 | --- | --- | --- | --- |
@@ -57,7 +57,7 @@ CLI/MCP/Native Host assertions, package manifest, and Core Proof agree on the
 candidate identities. Contracts, Providers, Capability declarations, and model
 identities are unchanged.
 
-## Automated evidence
+## Task 12A historical automated evidence
 
 | Gate | Local result |
 | --- | --- |
@@ -82,6 +82,83 @@ not acoustic, MIDI-device, latency-camera, or iPad evidence.
 At this acceptance point, current-page typecheck, optimized build, and the
 37-route/internal-link build check passed. This record neither upgrades that
 local evidence to remote CI nor weakens the separate release-document gate.
+
+## Task 13A reviewed deadline and transport follow-up
+
+The reviewed follow-up defines Project mutation publication claim as the
+deadline-cancellation cutoff. Responsive cancellation returns `HOST_TIMEOUT`,
+fails and seals the Host, removes staged transaction/checkpoint/artifact files,
+consumes the Control owner's native release completion, and reopens the
+unchanged Project on the first attempt. The caller cutoff starts before the
+synchronous JavaScript-to-Wasm envelope/sidecar copy and remains the native
+publication upper bound even while the main-thread timer is blocked. Forged and
+replayed BroadcastChannel ACKs plus duplicate release requests cannot
+manufacture native completion; the one-shot authorize/complete/consume state
+accepts at most one real completion and rejects later consumption. The
+separately forced-unresponsive case proves that channel ACKs without native
+completion cannot skip the retained 100 ms termination fallback; its non-Truth
+staging residue is removed by the first reopen before inspect and explicit
+retry.
+
+When publication claims before the caller deadline, the packaged production
+transport returns the real committed success or aborted `IO_ERROR` after the
+deadline instead of inventing `HOST_TIMEOUT`. A deadline-after-claim cancel call
+is observed once as `publish-claimed`. Claimed settlement is bounded by the
+exact 1,000 ms production watchdog; proof-only tests may inject 1–1,000 ms. A
+permanent claim hang returns typed `HOST_RESTART_REQUIRED` with
+`terminal_state: restart-required` and `mutation_outcome: unknown`, seals and
+terminates the Host, and permits old-or-new reopen truth plus inspect/retry.
+
+The source-shell controller delegates each operation deadline solely to
+`transport.send(request, {deadlineMs})`; it no longer races that authoritative
+transport result with a second generic timer. Late authoritative success and
+typed error remain observable. The independent 1,000 ms recovery-outcome timer
+and default runtime-terminator deadline remain separate and unchanged.
+
+This follow-up has version impact `none`: no public Contract, Product, Module,
+Host, Assembly, or Channel identity changes. Documentation impact is limited to
+current source/design/acceptance pages; the immutable `1.0.14.0` Portal snapshot
+and versioned assets remain unchanged.
+
+### Reviewed verification subject
+
+| Item | Evidence |
+| --- | --- |
+| Branch | `feat/formal-web-runtime-host` |
+| Review base | `8e8d542b4c25c3fee7c328808e3a7b744e51134a` |
+| Reviewed unit | The complete Task 13A staged tree prepared as the single direct-child commit of the review base |
+| Product / Host / protocol | `1.0.14.0` / `1.0.0` / `1` |
+| Assembly Lock SHA-256 | `26b34e56596dbb0b8ade7797ec8c1a201cb1e296320308e10e16742005760b1e` |
+| Machine | MacBook Pro `Mac16,8`, Apple M4 Pro, 48 GB |
+| OS | macOS `26.5.2` (`25F84`), arm64 |
+| Native toolchain | Apple Clang `21.0.0`; CMake `4.1.3`; Python `3.14.6` |
+| Web Proof toolchain | emsdk revision `dfb9d1a46c3bb8f52e1e6324be23123b9d73c190`; Emscripten `6.0.5`; releases revision `dbd755b5da399329c2576f6e3dfa7f419f5d8409`; emsdk runner Node `22.16.0`; runner npm `10.9.2`; locked Playwright `1.62.1` |
+
+The final Task 13A commit cannot embed its own SHA. After the local amend, the
+ignored Task report and review package bind the resulting SHA to this exact
+review base and complete staged tree. This identity does not imply remote CI,
+merge, tag, Release, deployment, publication, Channel promotion, or physical
+acceptance.
+
+### Task 13A current local evidence
+
+| Gate | Reviewed local result |
+| --- | --- |
+| `node --test apps/web-runtime-host/test/main_shell.test.mjs` | PASS; 33/33, including delegated late transport success/error, the unchanged 1,000 ms recovery-outcome timer, and default runtime termination |
+| `scripts/web-runtime-host.sh proof` | PASS; independent AudioWorklet Chromium 13/13, two clean builds/packages, byte reproducibility, Python package 13/13, server 7/7, Node 84/84, native Web CTest 3/3, distribution 6/6, packaged Chromium 14 passed/1 skipped, WebKit 1 passed/10 capability skips |
+| `scripts/web-runtime-lab.sh test` | PASS; 42/42 Node tests plus server and active-tree checks |
+| `scripts/core.sh proof` | PASS; 31/31 selected CTests; Product `1.0.14.0`, Channel `canary`, Assembly lock `MATCH` |
+| `scripts/core.sh configure asan` / `build asan`; ASAN native and stress | PASS; 26/26 non-stress native tests and 2/2 stress tests |
+| `scripts/core.sh configure tsan` / `build tsan` / `test tsan stress` | PASS; 2/2 stress tests; no TSan report |
+| `scripts/core.sh test dev stress` | PASS; 2/2 stress tests |
+| `scripts/core-coverage.sh check` | PASS; 48/48 tests; 31 module signatures match 31 coverage objects; overall lines `79.44%`, branches `68.20%`; Application Facade lines `84.25%`, branches `68.04%`; every module threshold passes |
+| `scripts/architecture-portal.sh check` | PASS on the reviewed Task 13A tree; 40/40 tests, 34 current pages, 9 diagram sources/18 outputs, Product `1.0.14.0` facts, typecheck, optimized build, and 37 routes/internal links. Immutable snapshot provenance remains separate. |
+| Dependency, active-tree, Product version, module graph, Assembly Lock, source-boundary, and diff checks | PASS; Product `1.0.14.0` |
+
+The current WebKit result is a structured `UNSUPPORTED_WEB_RUNTIME` limitation
+for `opfsSyncAccessHandle` and `opfsWritableReplace`; ten skipped tests are not
+WebKit product acceptance. The current automated browser journey is not
+acoustic, MIDI-device, latency-camera, or iPad evidence.
 
 ## CI configuration boundary
 

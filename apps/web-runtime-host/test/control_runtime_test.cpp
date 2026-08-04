@@ -2570,7 +2570,7 @@ void test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound() {
       request_id, "host.status", Json::object()));
 
   LMDJ_CHECK(
-      bridge->submit(status, {}, std::chrono::milliseconds(0)) ==
+      bridge->submit(status, {}, std::chrono::steady_clock::now()) ==
       BridgeSubmitStatus::accepted);
   proxy.pump_one();
   const auto response = poll_message(*bridge);
