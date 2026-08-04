@@ -14,8 +14,9 @@ test('wrapper rejects an unsupported command with usage status', () => {
   assert.match(result.stderr, /usage:/);
 });
 
-test('portal package is private and pins the Node floor', async () => {
+test('portal package is private and pins the Node and npm toolchain', async () => {
   const manifest = (await import('../package.json', {with: {type: 'json'}})).default;
   assert.equal(manifest.private, true);
   assert.equal(manifest.engines.node, '>=22.13.0');
+  assert.equal(manifest.packageManager, 'npm@10.9.3');
 });
