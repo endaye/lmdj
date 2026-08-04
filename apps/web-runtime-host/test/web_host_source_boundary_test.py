@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 from pathlib import Path
@@ -26,6 +27,7 @@ def main() -> int:
     host_cmake = host_root / "CMakeLists.txt"
     repo_root = host_root.parents[1]
     product_cmake = repo_root / "products" / "lmdj" / "CMakeLists.txt"
+    product_assembly = repo_root / "products" / "lmdj" / "assembly.json"
     root_cmake = repo_root / "CMakeLists.txt"
 
     required_files = [
@@ -34,6 +36,7 @@ def main() -> int:
         source_root / "control_runtime.cpp",
         source_root / "bridge.cpp",
         product_cmake,
+        product_assembly,
         root_cmake,
     ]
     for path in required_files:
@@ -85,14 +88,32 @@ def main() -> int:
         )
 
     product_cmake_text = product_cmake.read_text(encoding="utf-8")
+    product_assembly_data = json.loads(product_assembly.read_text(encoding="utf-8"))
+    require(
+        isinstance(product_assembly_data, dict),
+        "Product Assembly must contain a JSON object",
+    )
+    assembly_hosts = product_assembly_data.get("hosts")
+    require(
+        isinstance(assembly_hosts, list),
+        "Product Assembly hosts array is missing",
+    )
+    web_host_is_assembled = any(
+        isinstance(host, dict) and host.get("id") == "web-runtime-host"
+        for host in assembly_hosts
+    )
     web_product_links = re.findall(
         r"target_link_libraries\s*\(\s*lmdj_web_runtime_host\b(.*?)\)",
         product_cmake_text,
         re.DOTALL,
     )
     require(
-        web_product_links,
-        "Product Assembly Web Host link block is missing",
+        len(web_product_links) <= 1,
+        "Product Assembly has duplicate Web Host link blocks",
+    )
+    require(
+        bool(web_product_links) == web_host_is_assembled,
+        "Product Assembly Web Host link presence does not match Assembly membership",
     )
     for links in web_product_links:
         for pattern, description in forbidden_cmake.items():
@@ -136,10 +157,6 @@ def main() -> int:
         )
         is not None,
         "all Emscripten translation units must compile with -pthread",
-    )
-    require(
-        "lmdj_web_runtime_host" in product_cmake_text,
-        "Product Assembly does not own final Web Host wiring",
     )
     require(
         "src/control_runtime.cpp" in host_cmake_text
