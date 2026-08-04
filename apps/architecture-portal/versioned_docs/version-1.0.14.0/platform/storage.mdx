@@ -1,0 +1,22 @@
+---
+title: Storage Platform
+area: platform
+status: implemented
+owners: [core, platform]
+source_paths: [packages/project-io, tests/core/project_io/storage_platform_contract_test.cpp]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Contract
+平台存储为 Project I/O 提供文件与原子发布能力，不解释 Project 业务语义。
+## 事务模型
+写入先进入临时状态，完整校验后发布；故障不得留下被误认作权威 Project 的半成品。
+## Journal
+Take Journal 与 Project Store 生命周期分开，恢复规则由 Project I/O 统一执行。
+## 证据
+Storage platform contract、fault matrix、project store 和 journal 测试覆盖本地实现。
+## 限制
+云同步、冲突合并、协同与远程备份未在当前平台 Contract 中实现。
