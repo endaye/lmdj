@@ -119,6 +119,36 @@ require_playwright() {
   fi
 }
 
+verify_clean_room_playwright_config() {
+  local selected_base_url="$1"
+  LMDJ_WEB_HOST_CLEAN_ROOM=1 \
+    LMDJ_WEB_HOST_BASE_URL="$selected_base_url" \
+    node --input-type=module - \
+      "$web_test_root/playwright.config.mjs" \
+      "$repo_root" \
+      "$selected_base_url" <<'JS'
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+
+const configPath = process.argv[2];
+const repoRoot = process.argv[3];
+const expectedBaseURL = process.argv[4];
+const config = (await import(
+  `${pathToFileURL(configPath).href}?clean-room=${crypto.randomUUID()}`
+)).default;
+assert.equal(config.webServer, undefined);
+assert.equal(config.use.baseURL, expectedBaseURL);
+const serialized = JSON.stringify(config);
+for (const forbidden of [
+  `${repoRoot}/tests/platform/web/toolchain/server.py`,
+  `${repoRoot}/build/web/toolchain`,
+]) {
+  assert.equal(serialized.includes(forbidden), false, forbidden);
+}
+JS
+  echo "Web Runtime Host clean-room Playwright config: PASS"
+}
+
 configure_host() {
   activate_toolchain
   python3 "$repo_root/tools/web-runtime/verify_emscripten.py"
@@ -154,13 +184,14 @@ build_host() {
 run_browser_gate() {
   local selected_dist="$1"
   local selected_fixture_root="${2:-$fixture_source_root}"
+  local clean_room_mode="${3:-0}"
   local requested_port="${LMDJ_WEB_HOST_PORT:-0}"
   local log_path="$build_root/proof-server.log"
   local ready_file
   local ready_nonce
   local port=""
   require_playwright
-  cmake -E make_directory "$repo_root/build/web/toolchain"
+  verify_clean_room_playwright_config "http://127.0.0.1:9"
   cleanup_proof_server
   proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-server.XXXXXX")"
   ready_file="$proof_server_ready_root/ready.json"
@@ -215,13 +246,17 @@ PY
     return 2
   fi
   local status=0
-  LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
+  LMDJ_WEB_HOST_CLEAN_ROOM="$clean_room_mode" \
+    LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
+    LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_WEB_HOST_FIXTURE_ROOT="$selected_fixture_root" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
       host/web_runtime_host_manifest_gate.spec.mjs \
       host/web_runtime_host_browser.spec.mjs || status=$?
-  LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
+  LMDJ_WEB_HOST_CLEAN_ROOM="$clean_room_mode" \
+    LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
+    LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_WEB_HOST_FIXTURE_ROOT="$selected_fixture_root" \
     npm --prefix "$web_test_root" test -- \
       --project=webkit \
@@ -248,6 +283,86 @@ generate_browser_fixtures() {
   echo "Web Runtime Host browser fixtures: PASS"
 }
 
+verify_browser_fixture_generator() {
+  python3 - "$repo_root/tests/fixtures/audio/make_fixtures.py" <<'PY'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+generator = Path(sys.argv[1])
+with tempfile.TemporaryDirectory(prefix="lmdj-web-fixture-generator-") as root:
+    test_root = Path(root)
+    header = test_root / "realtime_engine.hpp"
+    output = test_root / "fixtures"
+    header.write_text(
+        """#pragma once
+#include <cstddef>
+namespace lmdj::audio {
+inline constexpr std::size_t kRealtimeQueueCapacity = (1u << 10);
+inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 2u * 2'048u;
+inline constexpr std::size_t kRealtimeVoiceCapacity = 256u / 2u;
+}
+""",
+        encoding="utf-8",
+    )
+    environment = os.environ.copy()
+    environment["LMDJ_REALTIME_CAPACITY_HEADER"] = str(header)
+    environment["LMDJ_AUDIO_FIXTURE_OUTPUT_DIRECTORY"] = str(output)
+    completed = subprocess.run(
+        [sys.executable, str(generator)],
+        check=False,
+        capture_output=True,
+        env=environment,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise SystemExit(
+            "pre-build fixture generator failed:\n"
+            + completed.stdout
+            + completed.stderr
+        )
+    metadata = json.loads(
+        (output / "web-runtime-host-fixture.json").read_text(encoding="utf-8")
+    )
+    capacities = metadata["trigger_proof"]["capacities"]
+    if capacities != {"queue": 1024, "trigger_outcome": 4096, "voice": 128}:
+        raise SystemExit(f"compiler-evaluated capacities are invalid: {capacities!r}")
+PY
+  echo "Web Runtime Host fixture generator pre-build regression: PASS"
+}
+
+verify_proof_fixture_inventory() {
+  local selected_fixture_root="$1"
+  python3 - "$selected_fixture_root" <<'PY'
+from pathlib import Path
+import sys
+
+root = Path(sys.argv[1])
+actual = sorted(
+    path.relative_to(root).as_posix()
+    for path in root.rglob("*")
+    if path.is_file()
+)
+expected = ["web-runtime-host-fixture.json", "web-runtime-host-short.wav"]
+if actual != expected:
+    raise SystemExit(
+        f"clean-room fixture inventory mismatch: expected={expected!r} actual={actual!r}"
+    )
+PY
+  echo "Web Runtime Host clean-room fixture inventory: PASS"
+}
+
+run_audio_worklet_conformance() {
+  "$repo_root/scripts/web-toolchain-conformance.sh" build-audio-runtime
+  npm --prefix "$web_test_root" test -- \
+    --project=chromium \
+    audio/realtime_audio_worklet.spec.mjs
+  echo "Web Runtime Host non-clean-room AudioWorklet conformance: PASS"
+}
+
 test_host() {
   if [[ ! -d "$dist_root" ]]; then
     echo "Web Runtime Host error: build the Host before testing" >&2
@@ -263,11 +378,13 @@ test_host() {
 proof_host() {
   activate_toolchain
   require_playwright
+  verify_browser_fixture_generator
   export npm_config_offline=true
   export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   unset NODE_PATH || true
   unset PYTHONPATH || true
+  run_audio_worklet_conformance
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-proof.XXXXXX")"
   clean_host
   configure_host
@@ -286,8 +403,13 @@ proof_host() {
   LMDJ_WEB_HOST_DIST_ROOT="$proof_root/dist" \
     python3 "$repo_root/apps/web-runtime-host/test/distribution_test.py"
   generate_browser_fixtures
-  cmake -E copy_directory "$fixture_source_root" "$proof_root/fixtures"
-  run_browser_gate "$proof_root/dist" "$proof_root/fixtures"
+  cmake -E make_directory "$proof_root/fixtures"
+  cmake -E copy \
+    "$fixture_source_root/web-runtime-host-short.wav" \
+    "$fixture_source_root/web-runtime-host-fixture.json" \
+    "$proof_root/fixtures"
+  verify_proof_fixture_inventory "$proof_root/fixtures"
+  run_browser_gate "$proof_root/dist" "$proof_root/fixtures" 1
   echo "Web Runtime Host Proof: PASS"
 }
 

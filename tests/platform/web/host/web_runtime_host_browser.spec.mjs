@@ -258,20 +258,70 @@ async function waitForCaptureState(page, expected) {
 }
 
 
-async function reopenProject(page, identity, patternId) {
-  const deadline = Date.now() + 10_000;
+async function reopenProject(
+  page,
+  identity,
+  patternId,
+  { overallDeadlineMs = 10_000, retryDelayMs = 25 } = {},
+) {
+  if (!Number.isFinite(overallDeadlineMs) || overallDeadlineMs <= 0) {
+    throw new TypeError("overallDeadlineMs must be positive");
+  }
+  if (!Number.isFinite(retryDelayMs) || retryDelayMs < 0) {
+    throw new TypeError("retryDelayMs must be non-negative");
+  }
+  const deadline = performance.now() + overallDeadlineMs;
+  const deadlineToken = Symbol("project.open deadline");
   let response;
-  do {
-    response = await hostRequest(page, "project.open", {
-      project_id: identity.projectId,
-      pattern_id: patternId,
-    });
+  async function closePendingPage() {
+    if (!page.isClosed()) {
+      await page.close({ runBeforeUnload: false }).catch(() => {});
+    }
+  }
+  async function failDeadline(cause) {
+    await closePendingPage();
+    throw new Error("project.open overall deadline elapsed", { cause });
+  }
+  while (performance.now() < deadline) {
+    const remaining = Math.max(1, Math.ceil(deadline - performance.now()));
+    let timer;
+    let boundedResponse;
+    try {
+      boundedResponse = await Promise.race([
+        hostRequest(page, "project.open", {
+          project_id: identity.projectId,
+          pattern_id: patternId,
+        }, { deadlineMs: remaining }),
+        new Promise((resolvePromise) => {
+          timer = setTimeout(() => resolvePromise(deadlineToken), remaining);
+        }),
+      ]);
+    } catch (error) {
+      await closePendingPage();
+      if (performance.now() >= deadline) {
+        throw new Error("project.open overall deadline elapsed", { cause: error });
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+    if (boundedResponse === deadlineToken || performance.now() >= deadline) {
+      return failDeadline();
+    }
+    response = boundedResponse;
     if (response.ok || response.error?.code !== "PROJECT_BUSY") {
       return response;
     }
-    await new Promise((resolvePromise) => setTimeout(resolvePromise, 25));
-  } while (Date.now() < deadline);
-  return response;
+    const retryBudget = deadline - performance.now();
+    if (retryBudget <= 0) {
+      break;
+    }
+    await new Promise((resolvePromise) => setTimeout(
+      resolvePromise,
+      Math.min(retryDelayMs, retryBudget),
+    ));
+  }
+  return failDeadline();
 }
 
 
@@ -732,6 +782,41 @@ test("Chromium rejects protocol mismatch before OPFS mutation", async ({
   expect(await opfsInventory(page)).toEqual(before);
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
     .toBe(true);
+});
+
+
+test("Chromium reopen helper enforces its overall deadline and closes late work", async ({
+  browserName,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  await page.goto("/__task11-reopen-deadline__");
+  await page.evaluate(() => {
+    window.lmdjWebRuntimeHost = {
+      transport: {
+        send(_request, { deadlineMs }) {
+          window.__task11ReopenDeadlineMs = deadlineMs;
+          return new Promise((resolvePromise) => {
+            window.setTimeout(() => {
+              resolvePromise({
+                ok: true,
+                result: { project_revision: 2 },
+              });
+            }, 150);
+          });
+        },
+      },
+    };
+  });
+  const startedAt = Date.now();
+  await expect(reopenProject(
+    page,
+    { projectId: crypto.randomUUID() },
+    crypto.randomUUID(),
+    { overallDeadlineMs: 40, retryDelayMs: 1 },
+  )).rejects.toThrow("project.open overall deadline elapsed");
+  expect(Date.now() - startedAt).toBeLessThan(500);
+  expect(page.isClosed()).toBe(true);
 });
 
 

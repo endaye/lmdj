@@ -1,14 +1,29 @@
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
-import re
+import shutil
 import struct
+import subprocess
+import tempfile
 import wave
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[3]
-FIXTURE_DIRECTORY = REPOSITORY_ROOT / "tests/fixtures/audio"
+FIXTURE_DIRECTORY = Path(
+    os.environ.get(
+        "LMDJ_AUDIO_FIXTURE_OUTPUT_DIRECTORY",
+        REPOSITORY_ROOT / "tests/fixtures/audio",
+    )
+).resolve()
+REALTIME_CAPACITY_HEADER = Path(
+    os.environ.get(
+        "LMDJ_REALTIME_CAPACITY_HEADER",
+        REPOSITORY_ROOT
+        / "packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp",
+    )
+).resolve()
 SAMPLE_RATE = 48_000
 WEB_RUNTIME_HOST_FRAME_COUNT = 240
 WEB_RUNTIME_HOST_TRIGGER_COUNT = 500
@@ -92,27 +107,122 @@ def write_fixture(name: str, contents: bytes) -> str:
 
 
 def realtime_capacities() -> dict[str, int]:
-    header_path = (
-        REPOSITORY_ROOT
-        / "packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp"
-    )
-    header = header_path.read_text(encoding="utf-8")
-    names = {
-        "queue": "kRealtimeQueueCapacity",
-        "trigger_outcome": "kRealtimeTriggerOutcomeCapacity",
-        "voice": "kRealtimeVoiceCapacity",
-    }
-    capacities = {}
-    for key, name in names.items():
-        match = re.search(
-            rf"inline\s+constexpr\s+std::size_t\s+{name}\s*=\s*([0-9']+)\s*;",
-            header,
+    compiler_name = os.environ.get("LMDJ_NATIVE_CXX", "c++")
+    compiler = shutil.which(compiler_name)
+    if compiler is None:
+        raise SystemExit(f"native C++ compiler is unavailable: {compiler_name}")
+    if not REALTIME_CAPACITY_HEADER.is_file():
+        raise SystemExit(
+            f"realtime capacity header is unavailable: {REALTIME_CAPACITY_HEADER}"
         )
-        if match is None:
-            raise SystemExit(
-                f"could not derive {name} from {header_path.relative_to(REPOSITORY_ROOT)}"
+
+    source = f"""
+#include <iostream>
+#include {json.dumps(str(REALTIME_CAPACITY_HEADER))}
+
+int main() {{
+  std::cout << "queue=" << lmdj::audio::kRealtimeQueueCapacity << '\\n'
+            << "trigger_outcome="
+            << lmdj::audio::kRealtimeTriggerOutcomeCapacity << '\\n'
+            << "voice=" << lmdj::audio::kRealtimeVoiceCapacity << '\\n';
+}}
+"""
+    nlohmann_shim = """#pragma once
+#include <string>
+#include <utility>
+namespace nlohmann {
+class json {
+ public:
+  static json object() { return {}; }
+  template <typename T> T get() const;
+  template <typename T> json& operator=(T&&) { return *this; }
+};
+template <typename ValueType, typename SFINAE = void>
+struct adl_serializer;
+}
+"""
+
+    with tempfile.TemporaryDirectory(prefix="lmdj-realtime-capacities-") as root:
+        temporary_root = Path(root)
+        shim_path = temporary_root / "nlohmann/json.hpp"
+        shim_path.parent.mkdir(parents=True)
+        shim_path.write_text(nlohmann_shim, encoding="utf-8", newline="\n")
+        executable = temporary_root / "realtime-capacities"
+        command = [
+            compiler,
+            "-std=c++20",
+            "-I",
+            str(temporary_root),
+            "-I",
+            str(REPOSITORY_ROOT / "packages/audio-runtime/include"),
+            "-I",
+            str(REPOSITORY_ROOT / "packages/foundation/include"),
+            "-I",
+            str(REPOSITORY_ROOT / "packages/project-cooker/include"),
+            "-I",
+            str(REPOSITORY_ROOT / "packages/authoring-domain/include"),
+            "-x",
+            "c++",
+            "-",
+            "-o",
+            str(executable),
+        ]
+        try:
+            compiled = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                input=source,
+                text=True,
+                timeout=30,
             )
-        capacities[key] = int(match.group(1).replace("'", ""))
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise SystemExit(
+                f"realtime capacity probe compilation failed: {error}"
+            ) from error
+        if compiled.returncode != 0:
+            raise SystemExit(
+                "realtime capacity probe compilation failed:\n"
+                + compiled.stderr[-4_096:]
+            )
+        try:
+            evaluated = subprocess.run(
+                [str(executable)],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise SystemExit(
+                f"realtime capacity probe execution failed: {error}"
+            ) from error
+        if evaluated.returncode != 0:
+            raise SystemExit(
+                "realtime capacity probe execution failed:\n"
+                + evaluated.stderr[-4_096:]
+            )
+
+    capacities = {}
+    for line in evaluated.stdout.splitlines():
+        name, separator, value = line.partition("=")
+        if separator != "=" or name in capacities:
+            raise SystemExit(
+                f"realtime capacity probe returned invalid output: {evaluated.stdout!r}"
+            )
+        try:
+            capacities[name] = int(value)
+        except ValueError:
+            raise SystemExit(
+                f"realtime capacity probe returned invalid output: {evaluated.stdout!r}"
+            ) from None
+    expected_names = {"queue", "trigger_outcome", "voice"}
+    if set(capacities) != expected_names or any(
+        value <= 0 for value in capacities.values()
+    ):
+        raise SystemExit(
+            f"realtime capacity probe returned invalid output: {evaluated.stdout!r}"
+        )
     return capacities
 
 
@@ -139,7 +249,7 @@ def write_web_runtime_host_metadata(wav_hash: str) -> None:
             "admission_count": WEB_RUNTIME_HOST_TRIGGER_COUNT,
             "capacities": capacities,
             "capacity_source": (
-                "active packages/audio-runtime/include/lmdj/audio/"
+                "compiler-evaluated packages/audio-runtime/include/lmdj/audio/"
                 "realtime_engine.hpp constants"
             ),
             "maximum_concurrent_voices": maximum_concurrent_voices,
@@ -164,6 +274,7 @@ def write_web_runtime_host_metadata(wav_hash: str) -> None:
 
 
 def main() -> None:
+    FIXTURE_DIRECTORY.mkdir(parents=True, exist_ok=True)
     fixtures = {
         "kick.wav": wav_bytes(1, kick_samples()),
         "snare.wav": wav_bytes(1, snare_samples()),

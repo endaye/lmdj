@@ -7,7 +7,7 @@
       "trigger_outcome": 4096,
       "voice": 128
     },
-    "capacity_source": "active packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp constants",
+    "capacity_source": "compiler-evaluated packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp constants",
     "maximum_concurrent_voices": 3,
     "pacing_ms": 2
   },
