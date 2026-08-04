@@ -827,19 +827,24 @@ struct ControlBridge::Impl {
           });
           mark_entered_facade(request);
           wait_for_responsive_cancellation_proof(request);
-          response = runtime.dispatch(
-              operation,
-              parsed->at("payload"),
-              std::span<const std::byte>(
-                  request.sidecar.data(), request.sidecar_size),
-              request.submitted_at);
-          if (!runtime_was_failed && runtime.failed()) {
-            terminal_after_response = true;
+          if (request.publication.load(std::memory_order_acquire) ==
+              PublicationState::cancelled) {
+            response = bridge_timeout_error();
+          } else {
+            response = runtime.dispatch(
+                operation,
+                parsed->at("payload"),
+                std::span<const std::byte>(
+                    request.sidecar.data(), request.sidecar_size),
+                request.submitted_at);
+            if (!runtime_was_failed && runtime.failed()) {
+              terminal_after_response = true;
+            }
+            realtime_service_enabled.store(
+                runtime.engine().telemetry().state ==
+                    audio::RealtimeState::running,
+                std::memory_order_release);
           }
-          realtime_service_enabled.store(
-              runtime.engine().telemetry().state ==
-                  audio::RealtimeState::running,
-              std::memory_order_release);
         }
         if (notification_slot != nullptr) {
           const auto has_result =

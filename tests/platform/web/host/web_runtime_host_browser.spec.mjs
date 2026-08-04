@@ -1277,7 +1277,7 @@ test("Chromium packaged responsive cancellation wins before mutation publication
     {
       name: "late-success asset.import",
       expectedRevision: 0,
-      claimAttempted: true,
+      claimAttempted: false,
     },
     {
       name: "late-error asset.import revision conflict",

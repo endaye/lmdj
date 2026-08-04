@@ -47,6 +47,7 @@ using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
 using lmdj::web_host::ControlRuntime;
 using lmdj::web_host::detail::AudioQuiescenceCoordinator;
+using lmdj::web_host::detail::BridgeCancelStatus;
 using lmdj::web_host::detail::BridgeHooks;
 using lmdj::web_host::detail::BridgePollStatus;
 using lmdj::web_host::detail::BridgeSubmitStatus;
@@ -2536,6 +2537,47 @@ void test_bridge_rejects_an_expired_control_request_without_late_success() {
       "HOST_STATE_INVALID");
 }
 
+void test_bridge_cancelled_before_dispatch_skips_facade_work() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch(
+      "project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(989);
+  const auto import = encode(request(
+      request_id,
+      "asset.import",
+      import_payload(989, 0, kAssetId, wav)));
+
+  LMDJ_CHECK(bridge->configure_deadline_proof(request_id, 1, false));
+  LMDJ_CHECK(
+      bridge->submit(import, wav) == BridgeSubmitStatus::accepted);
+  std::jthread control([&] { proxy.pump_one(); });
+  wait_until([&] {
+    return (bridge->deadline_proof_state(request_id) & (1 << 8)) != 0;
+  });
+  LMDJ_CHECK(
+      bridge->cancel(request_id) == BridgeCancelStatus::cancelled);
+  control.join();
+
+  const auto proof = bridge->deadline_proof_state(request_id);
+  LMDJ_CHECK((proof & (1 << 9)) == 0);
+  LMDJ_CHECK(bridge->terminal_release_ready());
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  LMDJ_CHECK(std::filesystem::is_empty(
+      temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj") / "assets"));
+  LMDJ_CHECK(std::filesystem::is_empty(
+      temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj") / "history/transactions"));
+}
+
 void test_bridge_rechecks_deadline_before_success_publication() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -2702,6 +2744,7 @@ int main() {
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
     test_bridge_rejects_an_expired_control_request_without_late_success();
+    test_bridge_cancelled_before_dispatch_skips_facade_work();
     test_bridge_rechecks_deadline_before_success_publication();
     test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
     test_bridge_rechecks_deadline_before_error_publication();
