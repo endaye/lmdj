@@ -49,12 +49,12 @@ Creator Editor or the public LMDJ product UI.
 The target Product Build is:
 
 ```text
-LMDJ 1.0.12.0 · canary
+LMDJ 1.0.14.0 · canary
 ```
 
 ## 2. Existing Baseline
 
-The implementation starts from Product Build `1.0.11.0`, which includes:
+The implementation starts from Product Build `1.0.13.0`, which includes:
 
 - the M1 Headless Core Proof;
 - the versioned Application Facade and narrow C ABI;
@@ -85,7 +85,7 @@ Stage 6 implements all of the following:
    capture, Take commit, restart, and recovery journeys;
 10. deterministic static distribution and a cross-origin-isolated local server;
 11. native Core regression gates plus Chromium and WebKit automation;
-12. Product and Module version propagation for `1.0.12.0`.
+12. Product and Module version propagation for `1.0.14.0`.
 
 ## 4. Explicit Non-goals
 
@@ -693,12 +693,14 @@ The externally visible Host states are:
 | `preflight` | mandatory capability checks pass | `storage-ready` |
 | `storage-ready` | OPFS mount and Facade construction pass | `core-ready` |
 | `core-ready` | Project open and Snapshot preparation pass | `audio-suspended` |
-| `audio-suspended` | explicit `audio.activate` succeeds and Worklet acknowledges the current generation | `running` |
+| `audio-suspended` | initial explicit `audio.activate` succeeds and Worklet acknowledges the current generation | `running` |
+| `audio-suspended` | explicit activation succeeds while a recovery epoch is pending | `recovering` |
 | `running` | explicit `audio.suspend` succeeds | `audio-suspended` |
 | `running` | browser or device interruption begins | `interrupted` |
 | `interrupted` | recovery attempt begins | `recovering` |
-| `recovering` | Context runs and Worklet acknowledges without another gesture | `running` |
+| `recovering` | Context runs, equal positive current/acknowledged generations are validated, and the one public recovery-probe sequence receives exactly one `voice_started` | `running` |
 | `recovering` | browser requires a new gesture | `audio-suspended` |
+| `recovering` | a new adverse edge follows a usable Context before probe completion | `interrupted` |
 | any nonterminal state | `host.close` completes cleanly | `closed` |
 | any nonterminal state | fatal capability, storage, Worker, Worklet, protocol, or resource failure | `failed` |
 
@@ -710,7 +712,8 @@ the §11.2 recovery test has three observable conditions and the Host is not
 
 ### 11.1 State rules
 
-- Trigger and `take.begin` are rejected before `running`.
+- Ordinary Trigger and every `take.begin` are rejected outside `running`. The
+  only exception is the one public recovery probe described below.
 - Rejected input is not queued for later replay.
 - `audio-suspended` means the Core and Project may be ready while user
   activation is still required.
@@ -726,6 +729,16 @@ the §11.2 recovery test has three observable conditions and the Host is not
   closes audio, releases the writer lease, and only then reports `closed`;
 - Project data remains reopenable after a runtime failure unless Project I/O
   itself reports corruption.
+- An interruption closes admission synchronously, clears all adapter pressed
+  state, seals the active Take, and sends exactly one Control suspend/seal
+  request for that monotonically identified recovery epoch.
+- Duplicate hidden, pagehide, or non-running Context observations for the same
+  active adverse condition coalesce. A new adverse edge after the Context
+  became usable invalidates the prior probe/window, starts a new epoch, and
+  cannot be completed by late readiness or outcomes from the prior epoch.
+- Explicit `audio.suspend` closes admission and seals before
+  `audio-suspended` is observable. Its expected Context statechange does not
+  create an interruption epoch or a duplicate Control request.
 
 ### 11.2 Lifecycle observations
 
@@ -739,10 +752,29 @@ The Host observes:
 - MIDI connect/disconnect;
 - storage mount, lease, flush, and quota failures.
 
-The Host must not claim recovery from visibility state alone. Recovery is
-complete only when the AudioContext is `running`, the Worklet acknowledges the
-current Runtime generation, and the first post-recovery Trigger has exactly one
-`voice_started` runtime outcome for its sequence.
+The Host must not claim recovery from visibility state alone. After the
+AudioContext is `running`, validated `host.status` must report equal positive
+integer current and acknowledged Runtime generations. Visible state remains
+`recovering` and exactly one public recovery-probe window opens. The next real
+Pointer, Keyboard, or MIDI Trigger reserves and closes that window
+synchronously; Main never emits an internal Trigger. Every additional Trigger
+and all `take.begin` requests remain rejected until that sequence receives one
+exact `voice_started`, which alone completes recovery.
+
+A valid unseen outcome for a known pre-epoch sequence remains diagnostics and
+cannot complete or fail the current epoch. `voice_capacity` for the current
+probe fails with `HOST_STATE_INVALID`; malformed, duplicate, unknown, or
+mismatched outcomes fail with `HOST_PROTOCOL_MISMATCH`. Transport rejection
+preserves its typed code, and a missing matching outcome after exactly 1,000 ms
+fails with `HOST_TIMEOUT`. All terminal paths share once-only runtime cleanup.
+
+Visibility hidden and persisted pagehide start or coalesce interruption;
+visibility visible and pageshow alone never complete recovery. Non-persisted
+pagehide reports `closed` only after `host.close` completes and otherwise
+fails terminally. Worker error/messageerror, Worklet `processorerror`,
+transport/protocol failure, and typed fatal storage/control observations are
+terminal. MIDI denial/connect/disconnect/device loss and nonfatal
+`runtime.warning` observations remain diagnostic only.
 
 ## 12. Host Protocol
 
@@ -1099,14 +1131,15 @@ This deferral means:
 
 | Identity | Baseline | Target | Reason |
 | --- | --- | --- | --- |
-| Product Build | `1.0.11.0` | `1.0.12.0` | adds an Assembly-listed Formal Web Runtime Host |
+| Product Build | `1.0.13.0` | `1.0.14.0` | adds an Assembly-listed Formal Web Runtime Host |
 | Web Runtime Host | absent | `1.0.0` | first formal Host surface |
-| Project I/O | `0.3.0` | `0.4.0` | adds compatible semantic storage obligations and a Web platform |
-| Audio Runtime | `0.3.0` | `0.4.0` | adds a compatible Web AudioWorklet adapter and Trigger Outcome Ring |
-| Application Facade | `1.1.0` | `1.2.0` | adds compatible realtime composition and immutable runtime-preparation limits |
-| Core CLI | `1.0.2` | `1.0.3` | exact Facade dependency update only |
-| Core MCP | `1.0.2` | `1.0.3` | exact Facade dependency update only |
-| Native Test Host | `1.0.0` | `1.0.1` | exact Facade/Audio dependency update only |
+| Project I/O | `0.3.1` | `0.4.0` | adds compatible semantic storage obligations and a Web platform |
+| Audio Runtime | `0.3.1` | `0.4.0` | adds a compatible Web AudioWorklet adapter and Trigger Outcome Ring |
+| Application Facade | `1.1.2` | `1.2.0` | adds compatible realtime composition and immutable runtime-preparation limits |
+| Core CLI | `1.0.4` | `1.0.5` | exact Facade dependency update only |
+| Core MCP | `1.1.1` | `1.1.2` | exact Facade dependency update only |
+| Native Test Host | `1.0.2` | `1.0.3` | exact Facade/Audio dependency update only |
+| Project Cooker | `0.2.1` | unchanged | no Project Cooker behavior change |
 | Contracts | current | unchanged | the same-build Host transport is private and no public wire Contract changes |
 | Providers | current | unchanged | no Provider behavior change |
 
@@ -1124,7 +1157,7 @@ CI, merged-main Proof, and exact identity verification, the Integration Owner
 may create signed annotated tag:
 
 ```text
-lmdj-v1.0.12.0
+lmdj-v1.0.14.0
 ```
 
 Tag creation, tag push, GitHub Release, deployment, publication, and Channel
@@ -1133,13 +1166,13 @@ them by itself.
 
 ## 19. Rollback
 
-Rollback reuses immutable Product Build `1.0.11.0`; tags are never moved.
+Rollback reuses immutable Product Build `1.0.13.0`; tags are never moved.
 
-OPFS data written by `1.0.12.0` must remain valid `lmdj.project.v1` Project
+OPFS data written by `1.0.14.0` must remain valid `lmdj.project.v1` Project
 Truth. If the Host is withdrawn, users can reopen the same Project through a
 compatible later Host.
 
-That guarantee is about format, not reachability. Product Build `1.0.11.0` has
+That guarantee is about format, not reachability. Product Build `1.0.13.0` has
 no Web Host, and §4 excludes export, so a rollback leaves origin-private Project
 data in place with no Host able to open it until a later Web Host ships. For a
 canary diagnostic Host this is accepted, and it is stated here rather than left
@@ -1159,7 +1192,7 @@ Stage 6 implementation is complete only when all of these are true:
   added;
 - the approved implementation plan is fully executed;
 - the Formal Web Runtime Host exists in active `apps/` source;
-- the Product Assembly lists exact target identities for `1.0.12.0`;
+- the Product Assembly lists exact target identities for `1.0.14.0`;
 - Emscripten `6.0.5` clean-build reproducibility is verified;
 - OPFS create/mutate/restart/recovery behavior is proven through the Facade;
 - C++ Audio Runtime renders inside the Wasm AudioWorklet;

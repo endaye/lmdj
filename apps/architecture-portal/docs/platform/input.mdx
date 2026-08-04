@@ -1,11 +1,13 @@
 ---
 title: Input Platform
 area: platform
-status: planned
+status: partial
 owners: [product, platform]
 source_paths:
   - docs/prd/open-questions.md
   - docs/superpowers/plans/2026-08-03-lmdj-foundation-input-hardening.md
+  - apps/web-runtime-host/src/input_adapters.mjs
+  - apps/web-runtime-host/src/main.mjs
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -14,12 +16,25 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 <BuildIdentity />
 
 ## 状态
-<StatusBadge status="planned" /> 64-Pad 产品需要触控、键盘与 MIDI adapter，但 active Product Assembly 尚无正式 Input Host/Provider。
+
+<StatusBadge status="partial" /> Web Runtime Host active source 已实现 64-Pad Pointer、Keyboard 与 Web MIDI adapter；Product Assembly 仍未列入 Web Host，Task 12 前不能把 source implementation 描述为 Assembly membership。
+
 ## 目标事件
-平台输入应规范化为 Pad Slot/transport/control 事件，不直接操作 Asset 或内部 Project 结构。
+
+Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)`。Project `{bank, pad}` 只在 Host 路由前按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
+
 ## 生命周期
-设备连接、focus、长按、取消、重复输入和所有权释放必须由 Host/adapter 明确管理。
+
+普通输入只在 `running` admitted；拒绝输入不重放。中断同步清除 Pointer/Keyboard/MIDI pressed state。恢复期只有 Context 与 generation 就绪后开启的一次真实用户 probe 例外，第二次输入继续拒绝；MIDI 断开清理状态，不合成 Trigger。
+
+## 自动化证据
+
+Node 回归覆盖 primary Pointer、compatibility mouse suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Chromium source-shell spec 覆盖实际 DOM Pad 与生命周期路由；它不替代 packaged journey 或物理设备测量。
+
 ## 非能力
-计划页不证明设备兼容、mapping UI、MIDI learn 或移动端触控已交付。
+
+当前不证明 mapping UI、MIDI Learn、Controller Profile、移动端触控质量或任何物理延迟阈值已经交付。
+
 ## 状态升级证据
-需要批准 Contract、active source、自动化回归和物理设备矩阵。
+
+五个物理行——macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome physical MIDI、iPadOS Safari Touch、iPadOS Safari lifecycle——全部仍为 `deferred / unverified`。

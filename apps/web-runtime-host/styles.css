@@ -1,0 +1,150 @@
+:root {
+  color-scheme: dark;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  background: #0b0c0f;
+  color: #f4f5f7;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  background:
+    radial-gradient(circle at 20% 0%, #202a32 0, transparent 36rem),
+    #0b0c0f;
+}
+
+button {
+  border: 1px solid #49515c;
+  border-radius: 0.45rem;
+  background: #171a20;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+button:focus-visible {
+  outline: 2px solid #d7ff64;
+  outline-offset: 2px;
+}
+
+.shell {
+  width: min(72rem, 100%);
+  margin: 0 auto;
+  padding: 2rem;
+}
+
+.shell__header,
+.section-heading,
+.controls {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.eyebrow,
+.section-heading p {
+  color: #9aa4b1;
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  margin-top: 0.25rem;
+  font-size: clamp(1.6rem, 4vw, 3rem);
+}
+
+h2 {
+  font-size: 1rem;
+}
+
+.state-line {
+  color: #9aa4b1;
+}
+
+#host-state {
+  display: inline-block;
+  min-width: 10rem;
+  margin-left: 0.5rem;
+  color: #d7ff64;
+  text-align: right;
+}
+
+.controls {
+  justify-content: flex-start;
+  margin: 2rem 0;
+}
+
+.controls button {
+  min-height: 2.75rem;
+  padding: 0.7rem 1rem;
+}
+
+.pad-grid {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(3rem, 1fr));
+  gap: 0.5rem;
+  margin-top: 0.75rem;
+}
+
+.pad {
+  aspect-ratio: 1;
+  border-color: #313841;
+  background: linear-gradient(145deg, #242932, #111318);
+}
+
+.pad[aria-pressed="true"] {
+  border-color: #d7ff64;
+  background: #9fbd42;
+  color: #0b0c0f;
+}
+
+#diagnostics {
+  min-height: 12rem;
+  margin: 0.75rem 0 0;
+  padding: 1rem;
+  overflow: auto;
+  border: 1px solid #252a31;
+  border-radius: 0.45rem;
+  background: #08090b;
+  color: #b9c3cf;
+  font-size: 0.75rem;
+  line-height: 1.5;
+}
+
+section + section {
+  margin-top: 2rem;
+}
+
+@media (max-width: 640px) {
+  .shell {
+    padding: 1rem;
+  }
+
+  .shell__header,
+  .section-heading,
+  .controls {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  #host-state {
+    min-width: 0;
+    text-align: left;
+  }
+
+  .pad-grid {
+    grid-template-columns: repeat(4, minmax(3rem, 1fr));
+  }
+}

@@ -38,6 +38,7 @@ export function createPointerAdapter({
   isAvailable = () => true,
   now,
   compatibilityWindowMs = 500,
+  onPressedChange = () => {},
 }) {
   requireTrigger(trigger);
   requireVelocity(velocity);
@@ -51,7 +52,15 @@ export function createPointerAdapter({
   ) {
     throw new TypeError("Pointer correlation requires an injected monotonic clock");
   }
+  if (typeof onPressedChange !== "function") {
+    throw new TypeError("Pointer pressed-state notification must be a function");
+  }
   let compatibilityMarker = null;
+  const pressed = new Set();
+
+  function publishPressed() {
+    onPressedChange(Object.freeze([...pressed]));
+  }
 
   function canTrigger(slot, options) {
     return (
@@ -77,6 +86,8 @@ export function createPointerAdapter({
       clientY: event.clientY,
       expiresAt: now() + compatibilityWindowMs,
     });
+    pressed.add(flatSlot);
+    publishPressed();
     trigger(flatSlot, velocity);
     return true;
   }
@@ -103,8 +114,18 @@ export function createPointerAdapter({
     if (!canTrigger(flatSlot, options)) {
       return false;
     }
+    pressed.add(flatSlot);
+    publishPressed();
     trigger(flatSlot, velocity);
     return true;
+  }
+
+  function pointerUp(_event, flatSlot) {
+    const changed = pressed.delete(flatSlot);
+    if (changed) {
+      publishPressed();
+    }
+    return changed;
   }
 
   function pointerCancel(event) {
@@ -115,16 +136,28 @@ export function createPointerAdapter({
     ) {
       return false;
     }
+    const flatSlot = compatibilityMarker.flatSlot;
     compatibilityMarker = null;
+    if (pressed.delete(flatSlot)) {
+      publishPressed();
+    }
     return true;
   }
 
   return Object.freeze({
     pointerDown,
     mouseDown,
+    pointerUp,
     pointerCancel,
     clearPressed() {
       compatibilityMarker = null;
+      const count = pressed.size;
+      pressed.clear();
+      publishPressed();
+      return count;
+    },
+    diagnostics() {
+      return Object.freeze({ pressed_count: pressed.size });
     },
   });
 }
@@ -134,11 +167,15 @@ export function createKeyboardAdapter({
   mapping,
   velocity,
   editable = isEditableTarget,
+  onPressedChange = () => {},
 }) {
   requireTrigger(trigger);
   requireVelocity(velocity);
   if (typeof editable !== "function") {
     throw new TypeError("Keyboard editable detection must be a function");
+  }
+  if (typeof onPressedChange !== "function") {
+    throw new TypeError("Keyboard pressed-state notification must be a function");
   }
   const entries = mapping instanceof Map ? [...mapping] : Object.entries(mapping ?? {});
   const codeToSlot = new Map(entries);
@@ -161,21 +198,34 @@ export function createKeyboardAdapter({
       return false;
     }
     pressed.add(code);
+    onPressedChange(pressed.size);
     trigger(codeToSlot.get(code), velocity);
     return true;
   }
 
   function keyUp(event) {
-    return pressed.delete(event?.code);
+    const changed = pressed.delete(event?.code);
+    if (changed) {
+      onPressedChange(pressed.size);
+    }
+    return changed;
   }
 
   function clearPressed() {
     const count = pressed.size;
     pressed.clear();
+    onPressedChange(0);
     return count;
   }
 
-  return Object.freeze({ keyDown, keyUp, clearPressed });
+  return Object.freeze({
+    keyDown,
+    keyUp,
+    clearPressed,
+    diagnostics() {
+      return Object.freeze({ pressed_count: pressed.size });
+    },
+  });
 }
 
 export function createMidiAdapter({
@@ -185,11 +235,13 @@ export function createMidiAdapter({
   noteStart,
   slotStart,
   slotCount,
+  onPressedChange = () => {},
 }) {
   requireTrigger(trigger);
   if (
     typeof requestMIDIAccess !== "function" ||
-    typeof notify !== "function"
+    typeof notify !== "function" ||
+    typeof onPressedChange !== "function"
   ) {
     throw new TypeError("MIDI access and notification sinks must be injected");
   }
@@ -222,6 +274,10 @@ export function createMidiAdapter({
       connected_input_count: connectedInputs.size,
       pressed_note_count: pressedNoteCount,
     });
+  }
+
+  function publishPressed() {
+    onPressedChange(diagnostics().pressed_note_count);
   }
 
   function pressedFor(input) {
@@ -257,6 +313,7 @@ export function createMidiAdapter({
     const pressed = pressedFor(input);
     if (status === 0x80 || (status === 0x90 && velocity === 0)) {
       pressed.delete(note);
+      publishPressed();
       return false;
     }
     if (status !== 0x90) {
@@ -267,6 +324,7 @@ export function createMidiAdapter({
       return false;
     }
     pressed.add(note);
+    publishPressed();
     trigger(slotStart + offset, velocity);
     return true;
   }
@@ -303,6 +361,7 @@ export function createMidiAdapter({
     connectedInputs.delete(input);
     const lostPressedNotes = pressedByInput.get(input)?.size ?? 0;
     pressedByInput.delete(input);
+    publishPressed();
     notify("midi.disconnected", {
       connected_input_count: connectedInputs.size,
       lost_pressed_note_count: lostPressedNotes,
@@ -349,6 +408,7 @@ export function createMidiAdapter({
     }
     connectedInputs.clear();
     pressedByInput.clear();
+    publishPressed();
     messageHandlers.clear();
     access = null;
   }
@@ -358,6 +418,15 @@ export function createMidiAdapter({
     message,
     stateChange,
     diagnostics,
+    clearPressed() {
+      let count = 0;
+      for (const notes of pressedByInput.values()) {
+        count += notes.size;
+        notes.clear();
+      }
+      publishPressed();
+      return count;
+    },
     dispose,
   });
 }

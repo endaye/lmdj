@@ -976,6 +976,8 @@ git commit -m "feat(web): persist realtime takes and failures"
 - Modify: `apps/web-runtime-host/src/state_machine.mjs`
 - Modify: `apps/architecture-portal/docs/hosts/web-runtime.mdx`
 - Modify: `apps/architecture-portal/docs/platform/input.mdx`
+- Modify: `docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md`
+- Modify: `docs/superpowers/plans/2026-08-03-lmdj-formal-web-runtime-host.md`
 
 **Documentation impact:** required for `/hosts/web-runtime/` and `/platform/input/`; update both current portal pages in this Task with the implemented lifecycle and unified-input behavior.
 
@@ -1002,6 +1004,12 @@ Main owns preflight, manifest verification, `AudioContext({sampleRate: 48000})`,
 
 Handle `AudioContext.statechange`, `visibilitychange`, `pagehide`, `pageshow`, Worker error/messageerror, Worklet `processorerror`, MIDI connect/disconnect, and storage/control notifications. Interruption seals the active Take and never resumes it.
 
+Interruption synchronously closes admission and clears pressed state. Duplicate
+observations for one adverse condition coalesce into one Control suspend/seal;
+a new adverse edge after a usable recovery Context starts a new monotonically
+identified epoch and invalidates the prior probe/window. Explicit suspend marks
+its expected Context statechange so it cannot create a duplicate epoch.
+
 - [ ] **Step 5: Route every input through one function**
 
 Pointer, Keyboard, and MIDI adapters call:
@@ -1011,6 +1019,22 @@ trigger(flatSlot, velocity)
 ```
 
 Flatten Project `{bank, pad}` exactly once as `bank * 16 + pad` immediately before realtime enqueue. Mapping, velocity setting, and pressed state remain Host/Workspace settings, never Project Truth.
+
+Ordinary Trigger and every `take.begin` require `running`. During recovery,
+equal positive current/acknowledged generations plus a running Context open one
+public probe window while state remains `recovering`. The next real user input
+reserves it synchronously; only its one exact `voice_started` outcome returns
+to `running`. A known unseen pre-epoch outcome is diagnostic only;
+`voice_capacity` fails with `HOST_STATE_INVALID`, malformed/duplicate/unknown/
+mismatched outcomes fail with `HOST_PROTOCOL_MISMATCH`, and 1,000 ms without
+the matching outcome fails with `HOST_TIMEOUT`. There is no internal Trigger,
+retry, replay, or second probe.
+
+Gesture-required recovery uses
+`interrupted -> recovering -> audio-suspended -> recovering`. Non-persisted pagehide reports `closed` only after
+`host.close`; all fatal Worker, Worklet, transport/protocol, and typed
+storage/control paths share once-only cleanup. MIDI and nonfatal warnings stay
+diagnostic and privacy-redacted.
 
 - [ ] **Step 6: Run GREEN**
 

@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="lmdj-host-manifest-sha256" content="8751198714fa0a46eb42c0740550d1baaecf465c7e63f5d1d1ddfa6a2d61d4ed">
+    <title>LMDJ Web Runtime Host</title>
+    <link rel="stylesheet" href="./styles.css">
+    <script type="module" src="./src/main.mjs"></script>
+  </head>
+  <body>
+    <main class="shell">
+      <header class="shell__header">
+        <div>
+          <p class="eyebrow">LMDJ / Diagnostic Host</p>
+          <h1>Web Runtime Host</h1>
+        </div>
+        <p class="state-line">Host state <output id="host-state">cold</output></p>
+      </header>
+
+      <section class="controls" aria-label="Runtime controls">
+        <button id="audio-activate" type="button">Activate audio</button>
+        <button id="audio-suspend" type="button">Suspend audio</button>
+        <button id="midi-enable" type="button">Enable MIDI</button>
+      </section>
+
+      <section aria-labelledby="pads-title">
+        <div class="section-heading">
+          <h2 id="pads-title">Pads</h2>
+          <p>4 banks / 64 stable slots</p>
+        </div>
+        <div class="pad-grid">
+        <button id="pad-0" class="pad" type="button" data-bank="0" data-pad="0" aria-pressed="false"><span>1</span></button>
+        <button id="pad-1" class="pad" type="button" data-bank="0" data-pad="1" aria-pressed="false"><span>2</span></button>
+        <button id="pad-2" class="pad" type="button" data-bank="0" data-pad="2" aria-pressed="false"><span>3</span></button>
+        <button id="pad-3" class="pad" type="button" data-bank="0" data-pad="3" aria-pressed="false"><span>4</span></button>
+        <button id="pad-4" class="pad" type="button" data-bank="0" data-pad="4" aria-pressed="false"><span>5</span></button>
+        <button id="pad-5" class="pad" type="button" data-bank="0" data-pad="5" aria-pressed="false"><span>6</span></button>
+        <button id="pad-6" class="pad" type="button" data-bank="0" data-pad="6" aria-pressed="false"><span>7</span></button>
+        <button id="pad-7" class="pad" type="button" data-bank="0" data-pad="7" aria-pressed="false"><span>8</span></button>
+        <button id="pad-8" class="pad" type="button" data-bank="0" data-pad="8" aria-pressed="false"><span>9</span></button>
+        <button id="pad-9" class="pad" type="button" data-bank="0" data-pad="9" aria-pressed="false"><span>10</span></button>
+        <button id="pad-10" class="pad" type="button" data-bank="0" data-pad="10" aria-pressed="false"><span>11</span></button>
+        <button id="pad-11" class="pad" type="button" data-bank="0" data-pad="11" aria-pressed="false"><span>12</span></button>
+        <button id="pad-12" class="pad" type="button" data-bank="0" data-pad="12" aria-pressed="false"><span>13</span></button>
+        <button id="pad-13" class="pad" type="button" data-bank="0" data-pad="13" aria-pressed="false"><span>14</span></button>
+        <button id="pad-14" class="pad" type="button" data-bank="0" data-pad="14" aria-pressed="false"><span>15</span></button>
+        <button id="pad-15" class="pad" type="button" data-bank="0" data-pad="15" aria-pressed="false"><span>16</span></button>
+        <button id="pad-16" class="pad" type="button" data-bank="1" data-pad="0" aria-pressed="false"><span>17</span></button>
+        <button id="pad-17" class="pad" type="button" data-bank="1" data-pad="1" aria-pressed="false"><span>18</span></button>
+        <button id="pad-18" class="pad" type="button" data-bank="1" data-pad="2" aria-pressed="false"><span>19</span></button>
+        <button id="pad-19" class="pad" type="button" data-bank="1" data-pad="3" aria-pressed="false"><span>20</span></button>
+        <button id="pad-20" class="pad" type="button" data-bank="1" data-pad="4" aria-pressed="false"><span>21</span></button>
+        <button id="pad-21" class="pad" type="button" data-bank="1" data-pad="5" aria-pressed="false"><span>22</span></button>
+        <button id="pad-22" class="pad" type="button" data-bank="1" data-pad="6" aria-pressed="false"><span>23</span></button>
+        <button id="pad-23" class="pad" type="button" data-bank="1" data-pad="7" aria-pressed="false"><span>24</span></button>
+        <button id="pad-24" class="pad" type="button" data-bank="1" data-pad="8" aria-pressed="false"><span>25</span></button>
+        <button id="pad-25" class="pad" type="button" data-bank="1" data-pad="9" aria-pressed="false"><span>26</span></button>
+        <button id="pad-26" class="pad" type="button" data-bank="1" data-pad="10" aria-pressed="false"><span>27</span></button>
+        <button id="pad-27" class="pad" type="button" data-bank="1" data-pad="11" aria-pressed="false"><span>28</span></button>
+        <button id="pad-28" class="pad" type="button" data-bank="1" data-pad="12" aria-pressed="false"><span>29</span></button>
+        <button id="pad-29" class="pad" type="button" data-bank="1" data-pad="13" aria-pressed="false"><span>30</span></button>
+        <button id="pad-30" class="pad" type="button" data-bank="1" data-pad="14" aria-pressed="false"><span>31</span></button>
+        <button id="pad-31" class="pad" type="button" data-bank="1" data-pad="15" aria-pressed="false"><span>32</span></button>
+        <button id="pad-32" class="pad" type="button" data-bank="2" data-pad="0" aria-pressed="false"><span>33</span></button>
+        <button id="pad-33" class="pad" type="button" data-bank="2" data-pad="1" aria-pressed="false"><span>34</span></button>
+        <button id="pad-34" class="pad" type="button" data-bank="2" data-pad="2" aria-pressed="false"><span>35</span></button>
+        <button id="pad-35" class="pad" type="button" data-bank="2" data-pad="3" aria-pressed="false"><span>36</span></button>
+        <button id="pad-36" class="pad" type="button" data-bank="2" data-pad="4" aria-pressed="false"><span>37</span></button>
+        <button id="pad-37" class="pad" type="button" data-bank="2" data-pad="5" aria-pressed="false"><span>38</span></button>
+        <button id="pad-38" class="pad" type="button" data-bank="2" data-pad="6" aria-pressed="false"><span>39</span></button>
+        <button id="pad-39" class="pad" type="button" data-bank="2" data-pad="7" aria-pressed="false"><span>40</span></button>
+        <button id="pad-40" class="pad" type="button" data-bank="2" data-pad="8" aria-pressed="false"><span>41</span></button>
+        <button id="pad-41" class="pad" type="button" data-bank="2" data-pad="9" aria-pressed="false"><span>42</span></button>
+        <button id="pad-42" class="pad" type="button" data-bank="2" data-pad="10" aria-pressed="false"><span>43</span></button>
+        <button id="pad-43" class="pad" type="button" data-bank="2" data-pad="11" aria-pressed="false"><span>44</span></button>
+        <button id="pad-44" class="pad" type="button" data-bank="2" data-pad="12" aria-pressed="false"><span>45</span></button>
+        <button id="pad-45" class="pad" type="button" data-bank="2" data-pad="13" aria-pressed="false"><span>46</span></button>
+        <button id="pad-46" class="pad" type="button" data-bank="2" data-pad="14" aria-pressed="false"><span>47</span></button>
+        <button id="pad-47" class="pad" type="button" data-bank="2" data-pad="15" aria-pressed="false"><span>48</span></button>
+        <button id="pad-48" class="pad" type="button" data-bank="3" data-pad="0" aria-pressed="false"><span>49</span></button>
+        <button id="pad-49" class="pad" type="button" data-bank="3" data-pad="1" aria-pressed="false"><span>50</span></button>
+        <button id="pad-50" class="pad" type="button" data-bank="3" data-pad="2" aria-pressed="false"><span>51</span></button>
+        <button id="pad-51" class="pad" type="button" data-bank="3" data-pad="3" aria-pressed="false"><span>52</span></button>
+        <button id="pad-52" class="pad" type="button" data-bank="3" data-pad="4" aria-pressed="false"><span>53</span></button>
+        <button id="pad-53" class="pad" type="button" data-bank="3" data-pad="5" aria-pressed="false"><span>54</span></button>
+        <button id="pad-54" class="pad" type="button" data-bank="3" data-pad="6" aria-pressed="false"><span>55</span></button>
+        <button id="pad-55" class="pad" type="button" data-bank="3" data-pad="7" aria-pressed="false"><span>56</span></button>
+        <button id="pad-56" class="pad" type="button" data-bank="3" data-pad="8" aria-pressed="false"><span>57</span></button>
+        <button id="pad-57" class="pad" type="button" data-bank="3" data-pad="9" aria-pressed="false"><span>58</span></button>
+        <button id="pad-58" class="pad" type="button" data-bank="3" data-pad="10" aria-pressed="false"><span>59</span></button>
+        <button id="pad-59" class="pad" type="button" data-bank="3" data-pad="11" aria-pressed="false"><span>60</span></button>
+        <button id="pad-60" class="pad" type="button" data-bank="3" data-pad="12" aria-pressed="false"><span>61</span></button>
+        <button id="pad-61" class="pad" type="button" data-bank="3" data-pad="13" aria-pressed="false"><span>62</span></button>
+        <button id="pad-62" class="pad" type="button" data-bank="3" data-pad="14" aria-pressed="false"><span>63</span></button>
+        <button id="pad-63" class="pad" type="button" data-bank="3" data-pad="15" aria-pressed="false"><span>64</span></button>
+        </div>
+      </section>
+
+      <section aria-labelledby="diagnostics-title">
+        <div class="section-heading">
+          <h2 id="diagnostics-title">Privacy-safe diagnostics</h2>
+          <p>Allowlisted runtime facts only</p>
+        </div>
+        <pre id="diagnostics" aria-live="polite"></pre>
+      </section>
+    </main>
+  </body>
+</html>

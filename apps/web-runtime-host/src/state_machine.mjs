@@ -24,7 +24,7 @@ const NEXT_STATES = Object.freeze({
   "audio-suspended": Object.freeze(["running"]),
   running: Object.freeze(["audio-suspended", "interrupted"]),
   interrupted: Object.freeze(["recovering"]),
-  recovering: Object.freeze(["running", "audio-suspended"]),
+  recovering: Object.freeze(["running", "audio-suspended", "interrupted"]),
 });
 
 export class HostStateError extends Error {
@@ -70,12 +70,18 @@ export function createHostStateMachine({
     }
   }
 
-  function isAllowedTransition(nextState) {
+  function isAllowedTransition(nextState, recoveryEpoch) {
     if (!STATE_SET.has(nextState) || TERMINAL_STATES.has(state)) {
       return false;
     }
     if (nextState === "closed" || nextState === "failed") {
       return NONTERMINAL_STATES.has(state);
+    }
+    if (
+      state === "audio-suspended" &&
+      nextState === "recovering"
+    ) {
+      return recoveryEpoch === true;
     }
     return NEXT_STATES[state]?.includes(nextState) ?? false;
   }
@@ -94,14 +100,17 @@ export function createHostStateMachine({
     return sealed;
   }
 
-  function transition(nextState, { reason = "host_lifecycle" } = {}) {
+  function transition(
+    nextState,
+    { reason = "host_lifecycle", recoveryEpoch = false } = {},
+  ) {
     if (transitionInProgress) {
       invalid("Reentrant Host state transitions are not allowed", {
         next_state: nextState,
         transition_in_progress: true,
       });
     }
-    if (!isAllowedTransition(nextState)) {
+    if (!isAllowedTransition(nextState, recoveryEpoch)) {
       invalid("Transition is not present in the locked Host state table", {
         next_state: nextState,
       });

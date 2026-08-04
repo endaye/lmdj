@@ -1,0 +1,612 @@
+import assert from "node:assert/strict";
+import { webcrypto } from "node:crypto";
+import { readFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import test from "node:test";
+import { fileURLToPath } from "node:url";
+
+const testRoot = dirname(fileURLToPath(import.meta.url));
+const hostRoot = resolve(testRoot, "..");
+
+async function mainModule() {
+  return import("../src/main.mjs");
+}
+
+class FakeTarget {
+  constructor() {
+    this.listeners = new Map();
+  }
+
+  addEventListener(type, listener) {
+    const listeners = this.listeners.get(type) ?? new Set();
+    listeners.add(listener);
+    this.listeners.set(type, listeners);
+  }
+
+  removeEventListener(type, listener) {
+    this.listeners.get(type)?.delete(listener);
+  }
+
+  dispatchEvent(event) {
+    Object.defineProperty(event, "target", {
+      configurable: true,
+      value: event.target ?? this,
+    });
+    for (const listener of this.listeners.get(event.type) ?? []) {
+      listener(event);
+    }
+    return true;
+  }
+}
+
+class FakeElement extends FakeTarget {
+  constructor(id, dataset = {}) {
+    super();
+    this.id = id;
+    this.dataset = dataset;
+    this.textContent = "";
+    this.attributes = new Map();
+  }
+
+  setAttribute(name, value) {
+    this.attributes.set(name, String(value));
+  }
+
+  getAttribute(name) {
+    return this.attributes.get(name) ?? null;
+  }
+}
+
+function fakeDom() {
+  const elements = new Map();
+  for (const id of [
+    "host-state",
+    "diagnostics",
+    "audio-activate",
+    "audio-suspend",
+    "midi-enable",
+  ]) {
+    elements.set(id, new FakeElement(id));
+  }
+  const pads = [];
+  for (let flatSlot = 0; flatSlot < 64; flatSlot += 1) {
+    const pad = new FakeElement(`pad-${flatSlot}`, {
+      bank: String(Math.floor(flatSlot / 16)),
+      pad: String(flatSlot % 16),
+    });
+    pad.setAttribute("aria-pressed", "false");
+    pads.push(pad);
+    elements.set(pad.id, pad);
+  }
+  const document = new FakeTarget();
+  document.visibilityState = "visible";
+  document.getElementById = (id) => elements.get(id) ?? null;
+  document.querySelectorAll = (selector) =>
+    selector === "button[data-bank][data-pad]" ? pads : [];
+  const window = new FakeTarget();
+  return { document, window, elements, pads };
+}
+
+class FakeAudioContext extends FakeTarget {
+  constructor(options) {
+    super();
+    this.options = options;
+    this.sampleRate = options.sampleRate;
+    this.state = "suspended";
+    this.closeCalls = 0;
+    this.suspendCalls = 0;
+  }
+
+  async resume() {
+    this.state = "running";
+    this.dispatchEvent(new Event("statechange"));
+  }
+
+  async suspend() {
+    this.suspendCalls += 1;
+    this.state = "suspended";
+    this.dispatchEvent(new Event("statechange"));
+  }
+
+  async close() {
+    this.closeCalls += 1;
+    this.state = "closed";
+  }
+}
+
+function uuidSource() {
+  let next = 1;
+  return {
+    randomUUID() {
+      const suffix = String(next).padStart(12, "0");
+      next += 1;
+      return `00000000-0000-0000-0000-${suffix}`;
+    },
+  };
+}
+
+function responseFor(request, result) {
+  return {
+    protocol_version: 1,
+    request_id: request.request_id,
+    ok: true,
+    result,
+  };
+}
+
+function harness({ status = { control_generation: 7, acknowledged_generation: 7 }, timers } = {}) {
+  const dom = fakeDom();
+  const calls = [];
+  const notifications = new Set();
+  const contexts = [];
+  const runtimeWorker = new FakeTarget();
+  const worklet = new FakeTarget();
+  let sequence = 1;
+  let currentStatus = status;
+  let cleanupCalls = 0;
+  const transport = {
+    async send(request, options) {
+      calls.push({ operation: request.operation, payload: request.payload, options });
+      switch (request.operation) {
+        case "audio.activate":
+          return responseFor(request, { state: "running", changed: true, generation: 7 });
+        case "audio.suspend":
+          return responseFor(request, { state: "audio-suspended", changed: true });
+        case "host.status":
+          return responseFor(request, currentStatus);
+        case "trigger": {
+          const admitted = sequence;
+          sequence += 1;
+          return responseFor(request, { sequence: admitted, status: "enqueued" });
+        }
+        case "take.begin":
+          return responseFor(request, { take_id: request.payload.take_id });
+        case "host.close":
+          return responseFor(request, { state: "closed" });
+        default:
+          throw new Error(`unexpected operation: ${request.operation}`);
+      }
+    },
+    subscribe(listener) {
+      notifications.add(listener);
+      return () => notifications.delete(listener);
+    },
+    emit(event, payload) {
+      for (const listener of notifications) {
+        listener({ protocol_version: 1, event, payload });
+      }
+    },
+  };
+  const capabilities = Object.fromEntries(
+    [
+      "secureContext",
+      "crossOriginIsolated",
+      "sharedArrayBuffer",
+      "webAssembly",
+      "audioWorklet",
+      "opfs",
+      "opfsSyncAccessHandle",
+      "opfsWritableReplace",
+    ].map((name) => [name, true]),
+  );
+  const options = {
+    ...dom,
+    navigator: { requestMIDIAccess: async () => ({ inputs: new Map() }) },
+    capabilities,
+    crypto: uuidSource(),
+    verifyManifest: async () => ({
+      product_build: "1.0.13.0",
+      host_version: "1.0.0",
+      protocol_version: 1,
+    }),
+    loadRuntime: async () => ({
+      registerAudioContext: () => 1,
+      startAudioWorklet: async () => ({ ok: true }),
+      workers: [runtimeWorker],
+      worklet,
+    }),
+    createAudioContext(options) {
+      const context = new FakeAudioContext(options);
+      contexts.push(context);
+      return context;
+    },
+    transport,
+    runtimeTerminator: async () => {
+      cleanupCalls += 1;
+    },
+    timers,
+  };
+  return {
+    options,
+    calls,
+    contexts,
+    runtimeWorker,
+    worklet,
+    transport,
+    dom,
+    setStatus(value) {
+      currentStatus = value;
+    },
+    get cleanupCalls() {
+      return cleanupCalls;
+    },
+  };
+}
+
+async function settle() {
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+}
+
+test("static shell has only local external assets and 64 exact Pad identities", async () => {
+  const html = await readFile(resolve(hostRoot, "index.html"), "utf8");
+  assert.equal(/<script(?![^>]*\bsrc=)[^>]*>/i.test(html), false);
+  assert.equal(/<style\b/i.test(html), false);
+  assert.equal(/(?:src|href)=["'](?:https?:)?\/\//i.test(html), false);
+  assert.equal(html.includes("\n+        <button"), false);
+  assert.match(html, /<link[^>]+href=["']\.\/styles\.css["']/i);
+  assert.match(html, /<script[^>]+src=["']\.\/src\/main\.mjs["']/i);
+
+  const pads = [...html.matchAll(/<button\b([^>]*)>/gi)].filter((match) =>
+    /\bid=["']pad-\d+["']/.test(match[1]),
+  );
+  assert.equal(pads.length, 64);
+  pads.forEach((match, flatSlot) => {
+    const attributes = match[1];
+    assert.match(attributes, new RegExp(`\\bid=["']pad-${flatSlot}["']`));
+    assert.match(attributes, new RegExp(`\\bdata-bank=["']${Math.floor(flatSlot / 16)}["']`));
+    assert.match(attributes, new RegExp(`\\bdata-pad=["']${flatSlot % 16}["']`));
+    assert.match(attributes, /\baria-pressed=["']false["']/);
+  });
+  for (const id of ["audio-activate", "audio-suspend", "midi-enable", "host-state", "diagnostics"]) {
+    assert.match(html, new RegExp(`\\bid=["']${id}["']`));
+  }
+  assert.match(html, /id=["']host-state["'][^>]*>cold</);
+});
+
+test("source shell verifies manifest before loading runtime and exposes exact Host state", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const order = [];
+  const fixture = harness();
+  fixture.options.verifyManifest = async () => {
+    order.push("manifest");
+    return { product_build: "1.0.13.0", host_version: "1.0.0", protocol_version: 1 };
+  };
+  fixture.options.loadRuntime = async () => {
+    order.push("runtime");
+    return {
+      registerAudioContext: () => 1,
+      startAudioWorklet: async () => ({ ok: true }),
+      workers: [fixture.runtimeWorker],
+      worklet: fixture.worklet,
+    };
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  assert.deepEqual(order, ["manifest", "runtime"]);
+  assert.equal(controller.state, "audio-suspended");
+  assert.equal(fixture.dom.elements.get("host-state").textContent, "audio-suspended");
+});
+
+test("default source-shell hash gate fails before runtime load on mismatch", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  for (const [digest, expectedState, expectedLoads] of [
+    ["8751198714fa0a46eb42c0740550d1baaecf465c7e63f5d1d1ddfa6a2d61d4ed", "audio-suspended", 1],
+    ["0".repeat(64), "failed", 0],
+  ]) {
+    const fixture = harness();
+    let loads = 0;
+    fixture.options.crypto = webcrypto;
+    delete fixture.options.verifyManifest;
+    fixture.options.document.querySelector = () => ({
+      getAttribute: () => digest,
+    });
+    fixture.options.loadRuntime = async () => {
+      loads += 1;
+      return {
+        registerAudioContext: () => 1,
+        startAudioWorklet: async () => ({ ok: true }),
+        workers: [],
+      };
+    };
+    const controller = createWebRuntimeHostController(fixture.options);
+    await controller.start();
+    assert.equal(controller.state, expectedState);
+    assert.equal(loads, expectedLoads);
+  }
+});
+
+test("flattens Project Pad address exactly once immediately before the unified route", async () => {
+  const { flattenPadSlot } = await mainModule();
+  assert.equal(flattenPadSlot({ bank: 0, pad: 0 }), 0);
+  assert.equal(flattenPadSlot({ bank: 2, pad: 5 }), 37);
+  assert.equal(flattenPadSlot({ bank: 3, pad: 15 }), 63);
+  assert.throws(() => flattenPadSlot({ bank: 4, pad: 0 }), RangeError);
+  const source = await readFile(resolve(hostRoot, "src/main.mjs"), "utf8");
+  assert.equal(source.match(/bank\s*\*\s*16\s*\+\s*pad/g)?.length, 1);
+});
+
+test("Pointer mouse fallback and cancellation own observable pressed state", async () => {
+  const { createPointerAdapter } = await import("../src/input_adapters.mjs");
+  const pointer = createPointerAdapter({
+    trigger: () => {},
+    velocity: 100,
+    now: () => 0,
+  });
+  assert.equal(pointer.mouseDown({ button: 0 }, 3), true);
+  assert.equal(pointer.diagnostics().pressed_count, 1);
+  pointer.clearPressed();
+  pointer.pointerDown({ isPrimary: true, button: 0, pointerId: 4 }, 4);
+  assert.equal(pointer.diagnostics().pressed_count, 1);
+  pointer.pointerCancel({ pointerId: 4 });
+  assert.equal(pointer.diagnostics().pressed_count, 0);
+});
+
+test("DOM mouse fallback releases aria-pressed on mouseup", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  const down = new Event("mousedown");
+  Object.defineProperty(down, "button", { value: 0 });
+  fixture.dom.pads[0].dispatchEvent(down);
+  assert.equal(fixture.dom.pads[0].getAttribute("aria-pressed"), "true");
+  fixture.dom.pads[0].dispatchEvent(new Event("mouseup"));
+  assert.equal(fixture.dom.pads[0].getAttribute("aria-pressed"), "false");
+});
+
+test("rejects Trigger and take.begin before initial activation without replay", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  assert.equal(await controller.trigger(0, 100), false);
+  assert.equal(await controller.beginTake("00000000-0000-0000-0000-000000000123", 0), false);
+  assert.equal(fixture.calls.some(({ operation }) => operation === "trigger"), false);
+  assert.equal(fixture.calls.some(({ operation }) => operation === "take.begin"), false);
+
+  await controller.activateAudio();
+  assert.equal(controller.state, "running");
+  assert.deepEqual(fixture.contexts[0].options, { sampleRate: 48_000 });
+  assert.equal(fixture.calls.filter(({ operation }) => operation === "trigger").length, 0);
+});
+
+test("interruption closes admission synchronously, clears pressed state, and coalesces suspend", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  fixture.options.window.dispatchEvent(new Event("keydown", { bubbles: true }));
+  controller.handleKeyDown({ code: "KeyA", repeat: false });
+  assert.equal(controller.diagnostics().pressed_count, 1);
+
+  controller.observeVisibility(true);
+  assert.equal(controller.state, "interrupted");
+  assert.equal(controller.diagnostics().pressed_count, 0);
+  assert.equal(await controller.trigger(1, 100), false);
+  controller.observePageHide({ persisted: true });
+  await settle();
+  assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.suspend").length, 1);
+});
+
+test("same adverse condition coalesces but a new adverse edge creates a new epoch", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  controller.observeVisibility(true);
+  await settle();
+  assert.equal(controller.state, "recovering");
+  controller.observeVisibility(true);
+  await settle();
+  assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.suspend").length, 1);
+
+  controller.observeVisibility(false);
+  controller.observeVisibility(true);
+  await settle();
+  assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.suspend").length, 2);
+  assert.equal(controller.state, "recovering");
+});
+
+test("gesture-required recovery returns audio-suspended to recovering without initial activation shortcut", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  const context = fixture.contexts[0];
+  context.state = "suspended";
+  context.dispatchEvent(new Event("statechange"));
+  await settle();
+  assert.equal(controller.state, "audio-suspended");
+
+  await controller.activateAudio();
+  assert.equal(controller.state, "recovering");
+  assert.equal(await controller.trigger(1, 100), true);
+  fixture.transport.emit("runtime.trigger_outcomes", {
+    events: [{ sequence: 1, outcome: "voice_started", runtime_frame: 128 }],
+  });
+  assert.equal(controller.state, "running");
+});
+
+test("recovery opens one public probe only after positive exact generation acknowledgement", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  fixture.setStatus({ control_generation: null, acknowledged_generation: null });
+  controller.observeVisibility(true);
+  await settle();
+  assert.equal(controller.state, "recovering");
+  assert.equal(await controller.trigger(1, 100), false);
+
+  controller.observeRuntimeStatus({ control_generation: 0, acknowledged_generation: 0 });
+  assert.equal(await controller.trigger(1, 100), false);
+  controller.observeRuntimeStatus({ control_generation: 8, acknowledged_generation: "8" });
+  assert.equal(await controller.trigger(1, 100), false);
+  controller.observeRuntimeStatus({ control_generation: 8, acknowledged_generation: 8 });
+
+  const probe = controller.trigger(1, 101);
+  assert.equal(await controller.trigger(2, 102), false);
+  assert.equal(await probe, true);
+  assert.equal(controller.state, "recovering");
+  fixture.transport.emit("runtime.trigger_outcomes", {
+    events: [{ sequence: 1, outcome: "voice_started", runtime_frame: 128 }],
+  });
+  assert.equal(controller.state, "running");
+});
+
+test("a valid late pre-epoch outcome cannot complete or fail the current recovery", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  assert.equal(await controller.trigger(0, 100), true);
+  controller.observeVisibility(true);
+  await settle();
+  controller.observeRuntimeStatus({ control_generation: 7, acknowledged_generation: 7 });
+  fixture.transport.emit("runtime.trigger_outcomes", {
+    events: [{ sequence: 1, outcome: "voice_capacity", runtime_frame: 128 }],
+  });
+  assert.equal(controller.state, "recovering");
+
+  assert.equal(await controller.trigger(1, 100), true);
+  fixture.transport.emit("runtime.trigger_outcomes", {
+    events: [{ sequence: 2, outcome: "voice_started", runtime_frame: 256 }],
+  });
+  assert.equal(controller.state, "running");
+});
+
+test("probe non-success and protocol-invalid outcomes fail with once-only cleanup", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  for (const scenario of [
+    { sequence: 1, outcome: "voice_capacity", code: "HOST_STATE_INVALID" },
+    { sequence: 999, outcome: "voice_started", code: "HOST_PROTOCOL_MISMATCH" },
+  ]) {
+    const fixture = harness();
+    const controller = createWebRuntimeHostController(fixture.options);
+    await controller.start();
+    await controller.activateAudio();
+    controller.observeVisibility(true);
+    await settle();
+    controller.observeRuntimeStatus({ control_generation: 7, acknowledged_generation: 7 });
+    assert.equal(await controller.trigger(1, 100), true);
+    fixture.transport.emit("runtime.trigger_outcomes", {
+      events: [{ sequence: scenario.sequence, outcome: scenario.outcome, runtime_frame: 128 }],
+    });
+    fixture.worklet.dispatchEvent(new Event("processorerror"));
+    await settle();
+    assert.equal(controller.state, "failed");
+    assert.equal(controller.diagnostics().error_code, scenario.code);
+    assert.equal(fixture.cleanupCalls, 1);
+  }
+});
+
+test("probe outcome deadline is exactly 1000 ms and times out terminally", async () => {
+  const scheduled = [];
+  const timers = {
+    setTimeout(callback, milliseconds) {
+      const record = { callback, milliseconds, cancelled: false };
+      scheduled.push(record);
+      return record;
+    },
+    clearTimeout(record) {
+      record.cancelled = true;
+    },
+  };
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness({ timers });
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  controller.observeVisibility(true);
+  await settle();
+  controller.observeRuntimeStatus({ control_generation: 7, acknowledged_generation: 7 });
+  assert.equal(await controller.trigger(1, 100), true);
+  const deadline = scheduled.find(
+    ({ milliseconds, cancelled }) => milliseconds === 1_000 && !cancelled,
+  );
+  assert.ok(deadline);
+  deadline.callback();
+  await settle();
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_TIMEOUT");
+  assert.equal(fixture.cleanupCalls, 1);
+});
+
+test("explicit suspend is synchronous and its expected statechange never starts an epoch", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  const suspended = controller.suspendAudio();
+  assert.equal(controller.state, "audio-suspended");
+  assert.equal(await controller.trigger(0, 100), false);
+  await suspended;
+  assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.suspend").length, 1);
+  assert.equal(controller.diagnostics().recovery_epoch, undefined);
+});
+
+test("fatal runtime observations and clean close use once-only terminal cleanup", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+  controller.observeRuntime({ fatal: true, code: "IO_ERROR" });
+  fixture.runtimeWorker.dispatchEvent(new Event("error"));
+  fixture.worklet.dispatchEvent(new Event("processorerror"));
+  await settle();
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "IO_ERROR");
+  assert.equal(fixture.cleanupCalls, 1);
+
+  const closingFixture = harness();
+  const closing = createWebRuntimeHostController(closingFixture.options);
+  await closing.start();
+  await closing.activateAudio();
+  await closing.observePageHide({ persisted: false });
+  assert.equal(closing.state, "closed");
+  assert.equal(closingFixture.calls.filter(({ operation }) => operation === "host.close").length, 1);
+  assert.equal(closingFixture.cleanupCalls, 1);
+});
+
+test("diagnostics expose only the privacy allowlist", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  const diagnostic = controller.diagnostics();
+  assert.deepEqual(Object.keys(diagnostic).sort(), [
+    "acknowledged_generation",
+    "connected_input_count",
+    "control_generation",
+    "error_code",
+    "host_version",
+    "midi_permission",
+    "pressed_count",
+    "product_build",
+    "protocol_version",
+    "state",
+    "trigger_admitted_count",
+    "trigger_outcome_count",
+    "trigger_rejected_count",
+  ]);
+  const serialized = JSON.stringify({ diagnostic, dom: fixture.dom.elements.get("diagnostics").textContent });
+  for (const secret of [
+    "provider-secret",
+    "/private/opfs/project",
+    "Private Controller",
+    "Private Manufacturer",
+    "stable-private-id",
+    "144,36,99",
+    "imported-audio-bytes",
+  ]) {
+    assert.equal(serialized.includes(secret), false);
+  }
+});
