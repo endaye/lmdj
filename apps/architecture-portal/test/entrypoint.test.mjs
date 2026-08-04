@@ -20,3 +20,13 @@ test('portal package is private and pins the Node and npm toolchain', async () =
   assert.equal(manifest.engines.node, '>=22.13.0');
   assert.equal(manifest.packageManager, 'npm@10.9.3');
 });
+
+test('portal check generates repository facts before typechecking', async () => {
+  const manifest = (await import('../package.json', {with: {type: 'json'}})).default;
+  const factsIndex = manifest.scripts.check.indexOf('npm run facts');
+  const typecheckIndex = manifest.scripts.check.indexOf('npm run typecheck');
+
+  assert.notEqual(factsIndex, -1);
+  assert.notEqual(typecheckIndex, -1);
+  assert.ok(factsIndex < typecheckIndex);
+});
