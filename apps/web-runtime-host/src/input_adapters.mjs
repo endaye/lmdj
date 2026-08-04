@@ -57,6 +57,8 @@ export function createPointerAdapter({
   }
   let compatibilityMarker = null;
   const pressed = new Set();
+  const pointerSlots = new Map();
+  let mouseSlot = null;
 
   function publishPressed() {
     onPressedChange(Object.freeze([...pressed]));
@@ -87,6 +89,9 @@ export function createPointerAdapter({
       expiresAt: now() + compatibilityWindowMs,
     });
     pressed.add(flatSlot);
+    if (event.pointerId !== undefined) {
+      pointerSlots.set(event.pointerId, flatSlot);
+    }
     publishPressed();
     trigger(flatSlot, velocity);
     return true;
@@ -115,12 +120,21 @@ export function createPointerAdapter({
       return false;
     }
     pressed.add(flatSlot);
+    mouseSlot = flatSlot;
     publishPressed();
     trigger(flatSlot, velocity);
     return true;
   }
 
   function pointerUp(_event, flatSlot) {
+    for (const [pointerId, slot] of pointerSlots) {
+      if (slot === flatSlot) {
+        pointerSlots.delete(pointerId);
+      }
+    }
+    if (mouseSlot === flatSlot) {
+      mouseSlot = null;
+    }
     const changed = pressed.delete(flatSlot);
     if (changed) {
       publishPressed();
@@ -128,7 +142,34 @@ export function createPointerAdapter({
     return changed;
   }
 
+  function releasePointer(event) {
+    const flatSlot = pointerSlots.get(event?.pointerId);
+    if (flatSlot === undefined) {
+      return false;
+    }
+    pointerSlots.delete(event.pointerId);
+    if (compatibilityMarker?.pointerId === event.pointerId) {
+      compatibilityMarker = null;
+    }
+    return pointerUp(event, flatSlot);
+  }
+
+  function releaseMouse(event) {
+    if (event?.button !== undefined && event.button !== 0) {
+      return false;
+    }
+    if (mouseSlot === null) {
+      return false;
+    }
+    const flatSlot = mouseSlot;
+    mouseSlot = null;
+    return pointerUp(event, flatSlot);
+  }
+
   function pointerCancel(event) {
+    if (releasePointer(event)) {
+      return true;
+    }
     if (
       compatibilityMarker === null ||
       (event?.pointerId !== undefined &&
@@ -148,9 +189,13 @@ export function createPointerAdapter({
     pointerDown,
     mouseDown,
     pointerUp,
+    releasePointer,
+    releaseMouse,
     pointerCancel,
     clearPressed() {
       compatibilityMarker = null;
+      pointerSlots.clear();
+      mouseSlot = null;
       const count = pressed.size;
       pressed.clear();
       publishPressed();

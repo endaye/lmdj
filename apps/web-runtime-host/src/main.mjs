@@ -22,15 +22,41 @@ const SOURCE_SHELL_MANIFEST = Object.freeze({
 const SOURCE_SHELL_MANIFEST_TEXT = JSON.stringify(SOURCE_SHELL_MANIFEST);
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
+const ALLOWED_TYPED_ERROR_CODES = new Set([
+  "INVALID_ARGUMENT",
+  "NOT_FOUND",
+  "REVISION_CONFLICT",
+  "DUPLICATE_ID",
+  "UNSUPPORTED_AUDIO",
+  "MISSING_ASSET",
+  "INVALID_PROJECT",
+  "COOK_FAILED",
+  "PROVIDER_NOT_FOUND",
+  "PROVIDER_FAILED",
+  "PERMISSION_DENIED",
+  "IO_ERROR",
+  "INTERNAL_ERROR",
+  "UNSUPPORTED_WEB_RUNTIME",
+  "PROJECT_BUSY",
+  "WEB_RUNTIME_RESOURCE_LIMIT",
+  "HOST_STATE_INVALID",
+  "HOST_TIMEOUT",
+  "HOST_PROTOCOL_MISMATCH",
+]);
 
 function typedError(code, message = code) {
   return new HostProtocolError(code, message, {});
 }
 
+function validatedErrorCode(value, fallback = "HOST_STATE_INVALID") {
+  if (ALLOWED_TYPED_ERROR_CODES.has(value)) {
+    return value;
+  }
+  return typeof value === "string" ? "HOST_PROTOCOL_MISMATCH" : fallback;
+}
+
 function errorCode(error, fallback = "HOST_STATE_INVALID") {
-  return typeof error?.code === "string" && error.code.length > 0
-    ? error.code
-    : fallback;
+  return validatedErrorCode(error?.code, fallback);
 }
 
 function requireFunction(value, name) {
@@ -204,9 +230,11 @@ export function createWebRuntimeHostController(options = {}) {
   let expectedContextSuspend = false;
   let visibilityHidden = false;
   let pageHidden = false;
+  const activeAdverseConditions = new Set();
   let lastContextState = null;
   let recoveryEpoch = null;
   let nextRecoveryEpoch = 1;
+  let activationReservation = null;
   let probeReservation = null;
   let lastErrorCode = null;
   let controlGeneration = null;
@@ -299,6 +327,7 @@ export function createWebRuntimeHostController(options = {}) {
   const machine = createHostStateMachine({
     notify: () => renderDiagnostics(),
     cleanup: cleanupForTransition,
+    sealTake: options.sealTake,
   });
 
   function terminalCleanup() {
@@ -317,9 +346,9 @@ export function createWebRuntimeHostController(options = {}) {
       dispose();
     }
     midiAdapter?.dispose();
-    terminalCleanupPromise = Promise.resolve(
-      runtimeTerminator({ runtime, audioContext }),
-    ).catch(() => {});
+    terminalCleanupPromise = Promise.resolve()
+      .then(() => runtimeTerminator({ runtime, audioContext }))
+      .catch(() => {});
     return terminalCleanupPromise;
   }
 
@@ -328,7 +357,9 @@ export function createWebRuntimeHostController(options = {}) {
       return false;
     }
     lastErrorCode =
-      typeof codeOrError === "string" ? codeOrError : errorCode(codeOrError);
+      typeof codeOrError === "string"
+        ? validatedErrorCode(codeOrError)
+        : errorCode(codeOrError);
     closing = true;
     machine.transition("failed", { reason: lastErrorCode });
     renderDiagnostics();
@@ -480,14 +511,22 @@ export function createWebRuntimeHostController(options = {}) {
     if (closing || machine.state !== "running") {
       return false;
     }
+    let reserved = false;
     try {
+      machine.beginTake(takeId);
+      reserved = true;
       await boundedRequest("take.begin", {
         take_id: takeId,
         expected_revision: expectedRevision,
       });
-      machine.beginTake(takeId);
+      if (closing || machine.state !== "running") {
+        return false;
+      }
       return true;
     } catch (error) {
+      if (reserved && (closing || machine.state !== "running")) {
+        return false;
+      }
       fail(error);
       return false;
     }
@@ -597,6 +636,12 @@ export function createWebRuntimeHostController(options = {}) {
     return true;
   }
 
+  function markAdverseCondition(condition) {
+    const hadActiveCondition = activeAdverseConditions.size > 0;
+    activeAdverseConditions.add(condition);
+    return !hadActiveCondition;
+  }
+
   function observeContextState() {
     if (!audioContext || closing) {
       return;
@@ -604,6 +649,7 @@ export function createWebRuntimeHostController(options = {}) {
     const previousState = lastContextState;
     lastContextState = audioContext.state;
     if (audioContext.state === "running") {
+      activeAdverseConditions.delete("audio_statechange");
       if (recoveryEpoch !== null) {
         recoveryEpoch.contextUsable = true;
         if (recoveryEpoch.suspendComplete && machine.state === "recovering") {
@@ -614,13 +660,18 @@ export function createWebRuntimeHostController(options = {}) {
     }
     if (expectedContextSuspend) {
       expectedContextSuspend = false;
+      activeAdverseConditions.delete("audio_statechange");
       return;
     }
     if (previousState === audioContext.state) {
       clearPressed();
       return;
     }
-    beginInterruption("audio_statechange");
+    if (markAdverseCondition("audio_statechange")) {
+      beginInterruption("audio_statechange");
+    } else {
+      clearPressed();
+    }
   }
 
   function observeVisibility(hidden) {
@@ -630,15 +681,21 @@ export function createWebRuntimeHostController(options = {}) {
         return false;
       }
       visibilityHidden = true;
-      beginInterruption("visibilitychange");
+      if (markAdverseCondition("visibilitychange")) {
+        beginInterruption("visibilitychange");
+      } else {
+        clearPressed();
+      }
     } else {
       visibilityHidden = false;
+      activeAdverseConditions.delete("visibilitychange");
       renderDiagnostics();
     }
   }
 
   function observePageShow() {
     pageHidden = false;
+    activeAdverseConditions.delete("pagehide");
     if (recoveryEpoch?.suspendComplete && machine.state === "recovering") {
       if (audioContext?.state === "running") {
         activateRuntimeForRecovery(recoveryEpoch);
@@ -653,7 +710,11 @@ export function createWebRuntimeHostController(options = {}) {
         return Promise.resolve(false);
       }
       pageHidden = true;
-      beginInterruption("pagehide");
+      if (markAdverseCondition("pagehide")) {
+        beginInterruption("pagehide");
+      } else {
+        clearPressed();
+      }
       return Promise.resolve(false);
     }
     return close();
@@ -745,10 +806,29 @@ export function createWebRuntimeHostController(options = {}) {
     return false;
   }
 
+  function activationIsCurrent(reservation, expectedState) {
+    return (
+      activationReservation === reservation &&
+      !closing &&
+      !visibilityHidden &&
+      !pageHidden &&
+      recoveryEpoch === reservation.recoveryEpoch &&
+      machine.state === expectedState
+    );
+  }
+
   async function activateAudio() {
-    if (closing || machine.state !== "audio-suspended") {
+    if (
+      closing ||
+      machine.state !== "audio-suspended" ||
+      activationReservation !== null ||
+      visibilityHidden ||
+      pageHidden
+    ) {
       return false;
     }
+    const reservation = Object.freeze({ recoveryEpoch });
+    activationReservation = reservation;
     try {
       if (audioContext === null) {
         audioContext = createAudioContext({ sampleRate: 48_000 });
@@ -756,11 +836,17 @@ export function createWebRuntimeHostController(options = {}) {
         listen(audioContext, "statechange", observeContextState);
         contextHandle = runtime.registerAudioContext(audioContext);
         const workletResult = await runtime.startAudioWorklet(contextHandle);
+        if (!activationIsCurrent(reservation, "audio-suspended")) {
+          return false;
+        }
         if (workletResult?.ok === false) {
           throw typedError("HOST_STATE_INVALID", "AudioWorklet start failed");
         }
       }
       await audioContext.resume();
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
       if (recoveryEpoch !== null) {
         machine.transition("recovering", {
           reason: "recovery_activation",
@@ -769,10 +855,24 @@ export function createWebRuntimeHostController(options = {}) {
         recoveryEpoch.contextUsable = true;
         recoveryEpoch.suspendComplete = true;
         await activateRuntimeForRecovery(recoveryEpoch);
+        if (
+          closing ||
+          visibilityHidden ||
+          pageHidden ||
+          recoveryEpoch !== reservation.recoveryEpoch
+        ) {
+          return false;
+        }
         return machine.state === "recovering";
       }
       await boundedRequest("audio.activate", {});
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
       const status = await boundedRequest("host.status", {});
+      if (!activationIsCurrent(reservation, "audio-suspended")) {
+        return false;
+      }
       controlGeneration = status?.control_generation ?? null;
       acknowledgedGeneration = status?.acknowledged_generation ?? null;
       if (!generationsMatch(status)) {
@@ -784,8 +884,14 @@ export function createWebRuntimeHostController(options = {}) {
       machine.transition("running", { reason: "audio_activation" });
       return true;
     } catch (error) {
-      fail(error);
+      if (machine.state !== "failed" && machine.state !== "closed") {
+        fail(error);
+      }
       return false;
+    } finally {
+      if (activationReservation === reservation) {
+        activationReservation = null;
+      }
     }
   }
 
@@ -876,15 +982,25 @@ export function createWebRuntimeHostController(options = {}) {
         pointerAdapter.pointerDown(event, flatSlot));
       listen(pad, "mousedown", (event) =>
         pointerAdapter.mouseDown(event, flatSlot));
-      listen(pad, "pointerup", (event) =>
-        pointerAdapter.pointerUp(event, flatSlot));
-      listen(pad, "mouseup", (event) =>
-        pointerAdapter.pointerUp(event, flatSlot));
+      listen(pad, "pointerup", (event) => {
+        if (!pointerAdapter.releasePointer(event)) {
+          pointerAdapter.pointerUp(event, flatSlot);
+        }
+      });
+      listen(pad, "mouseup", (event) => {
+        if (!pointerAdapter.releaseMouse(event)) {
+          pointerAdapter.pointerUp(event, flatSlot);
+        }
+      });
       listen(pad, "pointercancel", (event) => {
         pointerAdapter.pointerCancel(event);
         pointerAdapter.pointerUp(event, flatSlot);
       });
     }
+    listen(window, "pointerup", (event) => pointerAdapter.releasePointer(event));
+    listen(window, "pointercancel", (event) => pointerAdapter.pointerCancel(event));
+    listen(window, "mouseup", (event) => pointerAdapter.releaseMouse(event));
+    listen(window, "blur", () => pointerAdapter.clearPressed());
     listen(window, "keydown", (event) => keyboardAdapter.keyDown(event));
     listen(window, "keyup", (event) => keyboardAdapter.keyUp(event));
     listen(element("audio-activate"), "click", () => activateAudio());
