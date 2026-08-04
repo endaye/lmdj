@@ -27,11 +27,10 @@
   letter-spacing: -0.035em;
 }
 
-.portal-intro {
-  border: 1px solid var(--lmdj-border);
-  border-radius: 16px;
-  background: var(--lmdj-surface);
-  padding: 1.4rem 1.5rem;
+/* Long tables stay readable on narrow screens */
+.theme-doc-markdown table {
+  display: block;
+  overflow-x: auto;
 }
 
 .build-identity {
@@ -61,6 +60,12 @@
 .status-planned { color: #6a3a86; background: #f1e2fb; }
 .status-retired { color: #5d6470; background: #e5e7eb; }
 
+[data-theme='dark'] .status-implemented { color: #7ee2b0; background: rgba(16, 122, 74, 0.28); }
+[data-theme='dark'] .status-partial { color: #f5c86a; background: rgba(150, 103, 8, 0.3); }
+[data-theme='dark'] .status-designed { color: #9cc0f5; background: rgba(46, 96, 175, 0.32); }
+[data-theme='dark'] .status-planned { color: #cfa5ec; background: rgba(122, 62, 158, 0.32); }
+[data-theme='dark'] .status-retired { color: #a8b0ba; background: rgba(110, 118, 129, 0.28); }
+
 .section-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
@@ -78,9 +83,15 @@
 }
 
 .section-card:hover { border-color: var(--ifm-color-primary); text-decoration: none; transform: translateY(-2px); }
+.section-card:focus-visible { outline: 2px solid var(--ifm-color-primary); outline-offset: 2px; }
 .section-card > div { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; }
 .section-card h3 { margin: 0; font-size: 1rem; }
 .section-card p { margin: 0.65rem 0 0; color: var(--ifm-color-emphasis-700); }
+
+/* Align the always-dark footer with the portal palette */
+.footer--dark {
+  background-color: #0a1517;
+}
 
 .diagram-frame { margin: 1rem 0 2rem; }
 .diagram-frame iframe { width: 100%; min-height: 620px; border: 1px solid var(--lmdj-border); border-radius: 14px; background: #0b1020; }

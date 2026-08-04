@@ -23,6 +23,7 @@ const config: Config = {
   baseUrl: '/',
   future: {v4: true},
   onBrokenLinks: 'throw',
+  onBrokenAnchors: 'throw',
   i18n: {defaultLocale: 'zh-Hans', locales: ['zh-Hans']},
   presets: [
     [
@@ -42,6 +43,10 @@ const config: Config = {
   ],
   themeConfig: {
     colorMode: {respectPrefersColorScheme: true},
+    metadata: [
+      {name: 'description', content: 'LMDJ 产品、架构与交付说明书：Core Modules、Hosts、Providers、Contracts、Assembly 与运营证据的唯一发布源。'},
+    ],
+    docs: {sidebar: {hideable: true, autoCollapseCategories: true}},
     navbar: {
       title: 'LMDJ Manual',
       logo: {alt: 'LMDJ', src: 'img/logo.svg'},
@@ -55,6 +60,33 @@ const config: Config = {
     },
     footer: {
       style: 'dark',
+      links: [
+        {
+          title: '说明书',
+          items: [
+            {label: '产品定位', to: '/product/positioning'},
+            {label: 'Headless Core 总览', to: '/core/overview'},
+            {label: 'Hosts', to: '/hosts/overview'},
+            {label: 'Contracts', to: '/contracts/overview'},
+          ],
+        },
+        {
+          title: '交付与证据',
+          items: [
+            {label: '当前装配', to: '/assembly/lmdj'},
+            {label: '能力地图', to: '/product/capability-map'},
+            {label: '测试与 Proof', to: '/operations/testing-and-proof'},
+            {label: '版本与发布', to: '/operations/version-and-release'},
+          ],
+        },
+        {
+          title: '治理',
+          items: [
+            {label: '文档治理', to: '/operations/documentation-governance'},
+            {label: 'Repository', href: 'https://github.com/endaye/lmdj'},
+          ],
+        },
+      ],
       copyright: 'LMDJ internal product manual · publicly readable',
     },
     prism: {theme: prismThemes.github, darkTheme: prismThemes.dracula},
