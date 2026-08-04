@@ -29,7 +29,7 @@ promotion occurred. `lmdj-v1.0.14.0` is future tag text only.
 | Machine | MacBook Pro `Mac16,8`, Apple M4 Pro, 48 GB |
 | OS | macOS `26.5.2` (`25F84`), arm64 |
 | Native toolchain | Apple Clang `21.0.0`; CMake `4.1.3`; Python `3.14.6` |
-| Web toolchain | emsdk revision `dfb9d1a46c3bb8f52e1e6324be23123b9d73c190`; Emscripten `6.0.5`; releases revision `dbd755b5da399329c2576f6e3dfa7f419f5d8409`; Node `25.9.0`; npm `11.12.1`; locked Playwright `1.62.1` |
+| Web Proof toolchain | emsdk revision `dfb9d1a46c3bb8f52e1e6324be23123b9d73c190`; Emscripten `6.0.5`; releases revision `dbd755b5da399329c2576f6e3dfa7f419f5d8409`; emsdk runner Node `22.16.0`; runner npm `10.9.2`; locked Playwright `1.62.1` |
 
 The proof ran against the listed base revision plus the uncommitted Task 12A
 diff. The final atomic commit SHA is intentionally not invented inside its own

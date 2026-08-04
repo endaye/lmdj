@@ -84,13 +84,13 @@
 - `.github/workflows/core-nightly.yml`: retained TSan and Stress lanes.
 - `tests/platform/web/host/web_runtime_host_browser.spec.mjs`: Chromium full journey and WebKit capability smoke.
 - `docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md`: automated evidence and explicitly deferred physical matrix.
-- `apps/architecture-portal/docs/hosts/web-runtime.mdx`, `apps/architecture-portal/docs/platform/web-runtime.mdx`, `apps/architecture-portal/docs/platform/input.mdx`, `apps/architecture-portal/docs/operations/testing-and-proof.mdx`, `apps/architecture-portal/docs/assembly/lmdj.mdx`, `apps/architecture-portal/docs/operations/version-and-release.mdx`: current architecture portal pages updated with the corresponding Host, platform, proof, Assembly, and release evidence.
+- `apps/architecture-portal/docs/overview/index.mdx`, `apps/architecture-portal/docs/hosts/overview.mdx`, `apps/architecture-portal/docs/hosts/web-runtime.mdx`, `apps/architecture-portal/docs/platform/web-runtime.mdx`, `apps/architecture-portal/docs/platform/input.mdx`, `apps/architecture-portal/docs/operations/testing-and-proof.mdx`, `apps/architecture-portal/docs/assembly/lmdj.mdx`, `apps/architecture-portal/docs/operations/version-and-release.mdx`: current architecture portal pages updated with the corresponding product overview, Host inventory, platform, proof, Assembly, and release evidence.
 
 ## Documentation Impact
 
 Documentation impact: required
-Affected portal pages: /hosts/web-runtime/ /platform/web-runtime/ /platform/input/ /operations/testing-and-proof/ /assembly/lmdj/ /operations/version-and-release/
-Reason: Stage 6 adds a formal Assembly-listed Web Runtime Host, Web lifecycle/input behavior, clean-distribution Proof, Product Build 1.0.14.0, and an immutable canary documentation snapshot.
+Affected portal pages: / /hosts/overview/ /hosts/web-runtime/ /platform/web-runtime/ /platform/input/ /operations/testing-and-proof/ /assembly/lmdj/ /operations/version-and-release/
+Reason: Stage 6 updates the product overview and Host inventory, adds a formal Assembly-listed Web Runtime Host, Web lifecycle/input behavior, clean-distribution Proof, Product Build 1.0.14.0, and an immutable canary documentation snapshot.
 
 Tasks 9-12 update the affected current pages in the same Task as their product/evidence change; Task 12B freezes the immutable snapshot.
 
@@ -1218,6 +1218,8 @@ Task 12 is one version-management Task split into two atomic commits because `sc
 - Modify: affected CLI/MCP/Native Host version assertions
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.github/workflows/core-nightly.yml` only if required to preserve the existing TSan/Stress commands
+- Modify: `apps/architecture-portal/docs/overview/index.mdx`
+- Modify: `apps/architecture-portal/docs/hosts/overview.mdx`
 - Modify: `apps/architecture-portal/docs/hosts/web-runtime.mdx`
 - Modify: `apps/architecture-portal/docs/platform/web-runtime.mdx`
 - Modify: `apps/architecture-portal/docs/platform/input.mdx`
@@ -1225,7 +1227,7 @@ Task 12 is one version-management Task split into two atomic commits because `sc
 - Modify: `apps/architecture-portal/docs/assembly/lmdj.mdx`
 - Modify: `apps/architecture-portal/docs/operations/version-and-release.mdx`
 
-**Documentation impact:** required for `/hosts/web-runtime/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/assembly/lmdj/`, and `/operations/version-and-release/`. Update all six current portal pages in this Task; Task 12B freezes their immutable `1.0.14.0` canary snapshot.
+**Documentation impact:** required for `/`, `/hosts/overview/`, `/hosts/web-runtime/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/assembly/lmdj/`, and `/operations/version-and-release/`. Update all eight current portal pages in this Task; Task 12B freezes their immutable `1.0.14.0` canary snapshot.
 
 **Version impact:** Product Build `1.0.14.0`; propagate every exact Module and Host target in this plan's Version Management table.
 
@@ -1303,7 +1305,7 @@ git commit -m "feat(product): assemble formal web runtime host"
 - Create: `apps/architecture-portal/versioned_metadata/version-1.0.14.0.json`
 - Modify: `apps/architecture-portal/versions.json`
 
-**Documentation impact:** required for `/hosts/web-runtime/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/assembly/lmdj/`, and `/operations/version-and-release/`. This Task freezes the immutable snapshot of the six current portal routes.
+**Documentation impact:** required for `/`, `/hosts/overview/`, `/hosts/web-runtime/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/assembly/lmdj/`, and `/operations/version-and-release/`. This Task freezes the immutable snapshot of the eight current portal routes.
 
 **Version impact:** none. Snapshot creation changes no Product, Module, Host, Provider, or Contract version semantics.
 

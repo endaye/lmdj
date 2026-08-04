@@ -7,6 +7,7 @@ status: partial
 owners: [product, core]
 source_paths:
   - products/lmdj/assembly.lock.json
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
   - docs/prd/decision-log.md
   - docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
 ---
@@ -17,7 +18,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity />
 
-LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库已经实现可验证的 Headless Core Proof；面向创作者的完整产品 UI、正式 Web Runtime Host 与生产 Provider 仍需按各自页面标注的门禁推进。
+LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库已经实现可验证的 Headless Core Proof；Formal Web Runtime Host `1.0.0` 已进入 Product Assembly，并通过自动化 clean-distribution Web Proof。面向创作者的完整产品 GUI 与生产/云 Provider 仍需按各自页面标注的门禁推进。
 
 :::warning[当前文档]
 你正在查看随 `main` 演进的 current 文档，不是不可变的正式版本快照。版本下拉菜单中的 Product Build 快照才用于回看历史交付。
@@ -45,9 +46,9 @@ Project Truth 是权威创作状态；Runtime Snapshot 是不可变派生状态�
 
 ## 当前交付状态
 
-- **已实现**：七个 Core Module、CLI/MCP/Native Test Host、两个本地 Proof Provider、六个 active Contract 与 LMDJ Assembly。
-- **部分实现**：原生音频自动化 Proof 与 Web Runtime Lab；物理设备体验证据单列，不由自动化测试代替。
-- **已设计/规划中**：正式 Web Runtime Host、产品 GUI、输入适配器与生产/云 Provider。
+- **已实现**：七个 Core Module、CLI/MCP/Native Test Host 与 Formal Web Runtime Host `1.0.0`、两个本地 Proof Provider、六个 active Contract 与 LMDJ Assembly。
+- **部分实现**：原生音频自动化 Proof；Web Runtime Lab 仍是独立实验工具，不是正式 Host；物理设备体验证据单列，不由自动化测试代替。
+- **已设计/规划中**：产品 GUI 与生产/云 Provider。
 - **已退役**：旧 Patch/Materials 架构只保留在 History，active source 不得依赖。
 
 ## 文档与证据规则
