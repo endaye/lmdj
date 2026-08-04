@@ -93,6 +93,8 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_spec_regression_tests
     lmdj_application_facade_tests
     lmdj_web_control_runtime_tests
+    lmdj_web_manifest_gate_tests
+    lmdj_web_realtime_session_tests
     lmdj_assembly_loader_tests
     lmdj_application_c_api_tests
     lmdj_application_dynamic_load_tests

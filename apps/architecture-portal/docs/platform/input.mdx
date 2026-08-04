@@ -17,7 +17,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="partial" /> Web Runtime Host active source 已实现 64-Pad Pointer、Keyboard 与 Web MIDI adapter；Product Assembly 仍未列入 Web Host，Task 12 前不能把 source implementation 描述为 Assembly membership。
+<StatusBadge status="partial" /> Assembly-listed Web Runtime Host `1.0.0` 已实现 64-Pad Pointer、Keyboard 与 Web MIDI adapter；Product Build 为 `1.0.14.0`。`partial` 表示物理输入与延迟验收仍未完成，不表示 Host 尚未装配。
 
 ## 目标事件
 
@@ -29,7 +29,7 @@ Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)`。Project `
 
 ## 自动化证据
 
-Node 回归覆盖 primary Pointer、compatibility mouse suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Chromium source-shell spec 覆盖实际 DOM Pad 与生命周期路由；它不替代 packaged journey 或物理设备测量。
+Node 回归覆盖 primary Pointer、compatibility mouse suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Chromium packaged journey 覆盖实际 DOM Pad、500 次 sequence-addressed Trigger、lifecycle 与 recovery 路由；它不替代物理设备测量。
 
 ## 非能力
 

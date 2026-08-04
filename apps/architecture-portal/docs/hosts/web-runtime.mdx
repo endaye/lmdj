@@ -1,15 +1,20 @@
 ---
 title: Web Runtime Host
 area: hosts
-status: partial
+status: implemented
+host: web-runtime-host
 owners: [hosts, web, audio]
 source_paths:
   - docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md
   - docs/superpowers/plans/2026-08-03-lmdj-formal-web-runtime-host.md
   - apps/web-runtime-host
+  - apps/web-runtime-host/module.json
+  - products/lmdj/assembly.json
   - scripts/web-runtime-host.sh
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
   - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
   - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
+  - tests/platform/web/host/web_runtime_host_browser.spec.mjs
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -19,7 +24,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="partial" /> 正式 Host 的 source shell、64-Pad 输入归一化、显式音频/MIDI 激活、生命周期状态机、隐私诊断及确定性隔离分发已进入 active source；它仍未出现在 Product Assembly 或 Assembly Lock，Task 12 才拥有该成员关系。
+<StatusBadge status="implemented" /> Product Build `1.0.14.0` 已将 Formal Web Runtime Host `1.0.0` 纳入 Product Assembly 与生成的 Assembly Lock。Host 声明只依赖 Application Facade `1.2.0` 与 Audio Runtime `0.4.0`，没有直接 Project I/O 依赖；同构建私有协议仍为 `1`，没有新增公开 Contract。
 
 ## 目标边界
 
@@ -37,15 +42,15 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 
 ## 自动化证据
 
-Node source-shell 行为回归与隔离测试源上的 Chromium lifecycle spec 已覆盖静态壳、激活、中断、probe、超时、协议失败、隐私 allowlist 和 once-only cleanup。Task 10 另以 Python/C++/Chromium 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate、无 shim 的 packaged Main→Control/OPFS Host 启动，以及清单失败或迟到初始化时零新增 OPFS mutation；`scripts/web-runtime-host.sh proof` 从第二次 clean build 复制 dist 到临时目录后运行这些门禁。这些自动化仍不等于 Task 11 packaged 音频创作全旅程，也不等于物理 Touch-to-Sound。
+`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→Control→Facade/OPFS→Wasm AudioWorklet 全旅程。旅程证明 500 个 admission sequence 与 500 个 `voice_started` outcome 精确对应、20+1 Take 边界、重启重开、失败与 lifecycle 路径。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。CI 已配置独立 Formal Web Host lane，但在实际 Pull Request CI 出现前不宣称远端结果。
 
 ## 非能力
 
-当前不能宣称 Host 已 Assembly-listed、正式 Web 产品已交付、Task 11 的真实 packaged journey 已通过，或 MIDI/iPad/延迟体验已完成物理验收。
+当前不能宣称 Creator Web/PWA 已交付、WebKit automation 等于物理 Safari、MIDI/iPad/延迟体验已完成物理验收，或 `beta`/`stable` 已获准。
 
 ## 进入 Assembly 的门禁
 
-Task 12 负责 Product/module identity 与 Assembly lock；Task 11 负责 packaged Browser Proof。五个物理行继续保持：
+Task 12A 已完成 Product/module identity、Assembly/Lock 与 current-page 传播；Task 12B 才能在干净 Task 12A commit 上冻结 `1.0.14.0` canary 快照。五个物理行继续保持：
 
 | 物理行 | 状态 |
 | --- | --- |

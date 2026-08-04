@@ -1,8 +1,9 @@
 import json
-from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
@@ -14,58 +15,81 @@ expected_modules = {
     "packages/project-cooker/module.json": (
         "project-cooker",
         "0.2.1",
+        1,
         {"foundation": "0.2.0", "authoring-domain": "0.1.1"},
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "0.3.1",
+        "0.4.0",
+        1,
         {"foundation": "0.2.0", "authoring-domain": "0.1.1"},
     ),
     "packages/audio-runtime/module.json": (
         "audio-runtime",
-        "0.3.1",
+        "0.4.0",
+        1,
         {"foundation": "0.2.0", "project-cooker": "0.2.1"},
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.1.2",
+        "1.2.0",
+        2,
         {
             "foundation": "0.2.0",
             "authoring-domain": "0.1.1",
-            "project-io": "0.3.1",
+            "project-io": "0.4.0",
             "project-cooker": "0.2.1",
-            "audio-runtime": "0.3.1",
+            "audio-runtime": "0.4.0",
             "provider-sdk": "1.1.1",
         },
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.4",
-        {"application-facade": "1.1.2"},
+        "1.0.5",
+        2,
+        {"application-facade": "1.2.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.1.1",
-        {"application-facade": "1.1.2"},
+        "1.1.2",
+        2,
+        {"application-facade": "1.2.0"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.2",
-        {"application-facade": "1.1.2", "audio-runtime": "0.3.1"},
+        "1.0.3",
+        1,
+        {"application-facade": "1.2.0", "audio-runtime": "0.4.0"},
+    ),
+    "apps/web-runtime-host/module.json": (
+        "web-runtime-host",
+        "1.0.0",
+        1,
+        {"application-facade": "1.2.0", "audio-runtime": "0.4.0"},
     ),
 }
-for relative, (module_id, module_version, dependencies) in expected_modules.items():
-    manifest = json.loads((repo_root / relative).read_text(encoding="utf-8"))
+for relative, (
+    module_id,
+    module_version,
+    api_version,
+    dependencies,
+) in expected_modules.items():
+    manifest_path = repo_root / relative
+    assert manifest_path.is_file(), f"missing module manifest: {relative}"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     assert manifest["contract"] == "lmdj.module.v1"
     assert manifest["module"] == module_id
     assert manifest["version"] == module_version
+    assert manifest["api_version"] == api_version
     assert manifest["dependencies"] == dependencies
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 13, 0)
-assert str(version) == "1.0.13.0"
-assert version.product_tag() == "lmdj-v1.0.13.0"
-assert version.display("dev", "a" * 40) == "1.0.13.0 · dev · gaaaaaaaa"
+assert version == ProductVersion(1, 0, 14, 0)
+assert str(version) == "1.0.14.0"
+assert version.product_tag() == "lmdj-v1.0.14.0"
+assert version.display("canary", "a" * 40) == (
+    "1.0.14.0 · canary · gaaaaaaaa"
+)
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
@@ -94,7 +118,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.13.0\n"
+assert tag_name.stdout == "lmdj-v1.0.14.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -105,7 +129,7 @@ current = subprocess.run(
         "--version-file",
         "products/lmdj/version.json",
         "--channel",
-        "dev",
+        "canary",
         "--revision",
         "a" * 40,
     ],
@@ -114,7 +138,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.13.0 · dev · gaaaaaaaa\n"
+assert current.stdout == "1.0.14.0 · canary · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -130,7 +154,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.13.0)\n"
+assert verified.stdout == "version verification: PASS (1.0.14.0)\n"
 assert verified.stderr == ""
 
 
@@ -143,6 +167,110 @@ def write_json(path: Path, value: dict) -> None:
 
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
 tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
+assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+assert assembly["product"] == {"id": "lmdj", "version": "1.0.14.0"}
+assert assembly["providers"] == [
+    {
+        "id": "local.proof.success",
+        "version": "1.0.2",
+        "capabilities": [
+            {"id": "proof.candidate.v2", "version": "2.0.0"}
+        ],
+        "model_identity": None,
+    },
+    {
+        "id": "local.proof.failure",
+        "version": "1.0.2",
+        "capabilities": [
+            {"id": "proof.candidate.v2", "version": "2.0.0"}
+        ],
+        "model_identity": None,
+    },
+]
+assert assembly["contracts"] == [
+    {"id": "lmdj.project.v1", "version": "1.0.0"},
+    {"id": "lmdj.capability.v2", "version": "2.0.0"},
+    {"id": "lmdj.assembly.v2", "version": "2.0.0"},
+    {"id": "lmdj.error.v1", "version": "1.0.0"},
+    {"id": "lmdj.module.v1", "version": "1.0.0"},
+    {"id": "lmdj.product-version.v1", "version": "1.0.0"},
+]
+
+expected_contract_sources = {
+    "contracts/assembly/lmdj.assembly.v1.schema.json": "1.0.0",
+    "contracts/assembly/lmdj.assembly.v2.schema.json": "2.0.0",
+    "contracts/capability/lmdj.capability.v1.schema.json": "1.0.0",
+    "contracts/capability/lmdj.capability.v2.schema.json": "2.0.0",
+    "contracts/error/lmdj.error.v1.schema.json": "1.0.0",
+    "contracts/module/lmdj.module.v1.schema.json": "1.0.0",
+    "contracts/project/lmdj.project.v1.schema.json": "1.0.0",
+    "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
+}
+actual_contract_sources = sorted(
+    path.relative_to(repo_root).as_posix()
+    for path in (repo_root / "contracts").glob("*/*.schema.json")
+)
+assert actual_contract_sources == sorted(expected_contract_sources)
+for relative, contract_version in expected_contract_sources.items():
+    contract = json.loads((repo_root / relative).read_text(encoding="utf-8"))
+    assert contract["x-lmdj-contract-version"] == contract_version
+
+expected_provider_manifests = {
+    "providers/local-proof-failure/module.json": {
+        "contract": "lmdj.module.v1",
+        "module": "local.proof.failure",
+        "version": "1.0.2",
+        "api_version": 2,
+        "dependencies": {"provider-sdk": "1.1.1"},
+    },
+    "providers/local-proof-success/module.json": {
+        "contract": "lmdj.module.v1",
+        "module": "local.proof.success",
+        "version": "1.0.2",
+        "api_version": 2,
+        "dependencies": {"provider-sdk": "1.1.1"},
+    },
+}
+actual_provider_manifests = sorted(
+    path.relative_to(repo_root).as_posix()
+    for path in (repo_root / "providers").glob("*/module.json")
+)
+assert actual_provider_manifests == sorted(expected_provider_manifests)
+for relative, expected in expected_provider_manifests.items():
+    assert json.loads((repo_root / relative).read_text(encoding="utf-8")) == expected
+
+compiled_source = (
+    repo_root / "products/lmdj/src/compiled_assembly.cpp"
+).read_text(encoding="utf-8")
+compiled_product = re.search(
+    r'CompiledAssemblyCatalog\{\s*"lmdj",\s*"([^"]+)"',
+    compiled_source,
+)
+assert compiled_product is not None
+assert compiled_product.group(1) == "1.0.14.0"
+compiled_components = re.findall(
+    r'CompiledComponent\{"([^"]+)",\s*"([^"]+)"\}',
+    compiled_source,
+)
+expected_compiled_components = [
+    (component["id"], component["version"])
+    for field in ("modules", "hosts", "contracts")
+    for component in assembly[field]
+]
+assert compiled_components == expected_compiled_components
+web_manifest = json.loads(
+    (repo_root / "apps/web-runtime-host/module.json").read_text(encoding="utf-8")
+)
+assert (web_manifest["module"], web_manifest["version"]) in compiled_components
+compiled_providers = re.findall(
+    r'CompiledProvider\{\s*"([^"]+)",\s*"([^"]+)"',
+    compiled_source,
+)
+assert compiled_providers == [
+    (provider["id"], provider["version"])
+    for provider in assembly["providers"]
+]
+
 assert verify(
     "products/lmdj/version.json",
     assembly_path=assembly_path,

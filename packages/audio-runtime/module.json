@@ -1,7 +1,7 @@
 {
   "contract": "lmdj.module.v1",
   "module": "audio-runtime",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "api_version": 1,
   "dependencies": {
     "foundation": "0.2.0",

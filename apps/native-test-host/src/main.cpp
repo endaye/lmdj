@@ -53,8 +53,8 @@ constexpr std::size_t kMaximumCommandBytes = 64U * 1024U;
 constexpr int kMaximumJsonContainerDepth = 32;
 constexpr std::uint32_t kNoDeviceRenderFrames = 128;
 constexpr auto kControlDeadline = std::chrono::seconds(2);
-constexpr std::string_view kHostVersion = "1.0.0";
-constexpr std::string_view kProductBuild = "1.0.13.0";
+constexpr std::string_view kHostVersion = "1.0.3";
+constexpr std::string_view kProductBuild = "1.0.14.0";
 constexpr std::string_view kUsage =
     "usage: lmdj-native-host --workspace ABSOLUTE_PATH "
     "--assembly ABSOLUTE_ASSEMBLY_JSON "

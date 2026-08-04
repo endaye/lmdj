@@ -12,16 +12,20 @@ from the active tree and remains recoverable from Git history.
 ## Current status
 
 - Designed: full product and Core architecture.
-- Implemented: M1 Headless Core Proof plus the 5A realtime engine and 5B
-  Formal Native Host (`1.0.11.0` canary candidate).
-- Not implemented: product GUI and input adapters, Web/PWA, Creator UI, Sample
+- Implemented: M1 Headless Core Proof, the Formal Native Host, and the
+  Assembly-listed Formal Web Runtime Host (`1.0.14.0` canary candidate). The
+  Web Host uses the shared Application Facade, OPFS Project I/O, and C++ Audio
+  Runtime through a Wasm AudioWorklet; its packaged Chromium journey is
+  automated.
+- Not implemented: Creator UI, installable/offline PWA behavior, Sample
   intelligence, Sequence editing, production Providers, or cloud deployment.
+  The five required Web physical-device rows remain `deferred / unverified`.
 
 ## Architecture
 
 ```text
 Product Assembly
-  -> thin Hosts (CLI / MCP / future UI)
+  -> thin Hosts (CLI / MCP / Native / Web Runtime / future UI)
   -> Application Facade and narrow C ABI
   -> Authoring Domain + Project I/O
   -> immutable Runtime Snapshot
@@ -56,6 +60,7 @@ scripts/core.sh configure dev
 scripts/core.sh build dev
 scripts/core.sh test dev
 scripts/core.sh proof
+scripts/web-runtime-host.sh proof
 ```
 
 `scripts/core.sh proof` is the single vertical-slice acceptance command. It
@@ -63,6 +68,11 @@ builds Release, exercises CLI and MCP over the same Product Assembly, renders
 the Golden Beat, verifies Provider failure isolation and Take recovery, and
 generates a canary Build Manifest. `scripts/core.sh clean` removes only
 `build/core`.
+
+`scripts/web-runtime-host.sh proof` requires the pinned Emscripten `6.0.5`,
+Node 22, and the locked Playwright browsers. It performs clean reproducible Web
+builds, isolated packaging, Chromium full-journey automation, and WebKit
+capability smoke; it does not substitute for the five deferred physical rows.
 
 ## Source of truth
 

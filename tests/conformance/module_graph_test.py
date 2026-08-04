@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import re
 from pathlib import Path
 
 
@@ -10,6 +11,10 @@ NEUTRAL_ROOTS = ("packages",)
 HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
+EXPECTED_WEB_HOST_DEPENDENCIES = {
+    "application-facade": "1.2.0",
+    "audio-runtime": "0.4.0",
+}
 
 
 def load_object(path: Path) -> dict:
@@ -119,6 +124,17 @@ for module_id, (path, manifest) in package_manifests.items():
 for _, (path, manifest) in host_manifests.items():
     assert "project-io" not in manifest["dependencies"], path
 
+assert "web-runtime-host" in host_manifests, "Web Host manifest is missing"
+web_host_path, web_host_manifest = host_manifests["web-runtime-host"]
+assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
+assert web_host_manifest == {
+    "contract": "lmdj.module.v1",
+    "module": "web-runtime-host",
+    "version": "1.0.0",
+    "api_version": 1,
+    "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
+}
+
 for _, (path, manifest) in provider_manifests.items():
     assert "authoring-domain" not in manifest["dependencies"], path
     assert "application-facade" not in manifest["dependencies"], path
@@ -155,6 +171,21 @@ assert inventory(assembly, "providers") == {
     module_id: manifest["version"]
     for module_id, (_, manifest) in provider_manifests.items()
 }
+
+product_cmake = (
+    REPO_ROOT / "products/lmdj/CMakeLists.txt"
+).read_text(encoding="utf-8")
+web_host_link = re.search(
+    r"if\s*\(TARGET\s+lmdj_web_runtime_host\s*\)"
+    r".*?target_link_libraries\s*\(\s*lmdj_web_runtime_host\s+PRIVATE\s+"
+    r"lmdj_product_lmdj_assembly\s*\).*?endif\s*\(\s*\)",
+    product_cmake,
+    re.DOTALL,
+)
+assert web_host_link is not None, (
+    "Product Assembly must link the compiled catalog only when the "
+    "Emscripten Web Host target exists"
+)
 
 # Exercise the graph checker against cases that the current tree does not
 # naturally contain, so future refactors cannot make these gates vacuous.

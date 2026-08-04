@@ -243,20 +243,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "1.1.2"},
+           {"version", "1.2.0"},
            {"api_version", 2},
            {"dependencies",
             {
                 {"foundation", "0.2.0"},
                 {"authoring-domain", "0.1.1"},
-                {"project-io", "0.3.1"},
+                {"project-io", "0.4.0"},
                 {"project-cooker", "0.2.1"},
-                {"audio-runtime", "0.3.1"},
+                {"audio-runtime", "0.4.0"},
                 {"provider-sdk", "1.1.1"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "0.3.1");
+  LMDJ_CHECK(project_io.at("version") == "0.4.0");
 }
 
 nlohmann::json import_request(
@@ -901,6 +901,24 @@ void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
         });
     LMDJ_CHECK(imported.has_value());
     LMDJ_CHECK(imported.value().state.revision == 1);
+
+    const auto invalid_import = application.import_artifact_bytes(
+        ArtifactBytesImportRequest{
+            project,
+            CommandMeta{CommandId{uuid(303)}, 1},
+            AssetId{uuid(304)},
+            "",
+            bytes,
+        });
+    LMDJ_CHECK(!invalid_import.has_value());
+    LMDJ_CHECK(invalid_import.error().code == ErrorCode::invalid_argument);
+
+    const auto invalid_append = application.append_realtime_take_events(
+        project,
+        TakeId{"not-a-uuid"},
+        std::span<const RawTakeEvent>{});
+    LMDJ_CHECK(!invalid_append.has_value());
+    LMDJ_CHECK(invalid_append.error().code == ErrorCode::invalid_argument);
 
     check_success(
         application.command(
