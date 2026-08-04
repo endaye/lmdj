@@ -24,6 +24,39 @@ const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
 const PACKAGED_HOST_VERSION = "1.0.0";
 const PACKAGED_PROTOCOL_VERSION = 1;
 const PACKAGED_HEAP_BYTES = 536_870_912;
+const PACKAGED_DISTRIBUTION_CONTRACT =
+  "lmdj.web-runtime-host.distribution.v1";
+const PACKAGED_EMSCRIPTEN = Object.freeze({
+  emcc_version:
+    "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) " +
+    "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)",
+  emscripten_releases_revision:
+    "dbd755b5da399329c2576f6e3dfa7f419f5d8409",
+  emsdk_revision: "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190",
+  emsdk_tag: "6.0.5",
+});
+const PACKAGED_ASSET_INVENTORY = Object.freeze([
+  Object.freeze({
+    prefix: "assets/input-adapters.", suffix: ".mjs", role: "host_module",
+  }),
+  Object.freeze({ prefix: "assets/main.", suffix: ".mjs", role: "host_main" }),
+  Object.freeze({
+    prefix: "assets/preflight.", suffix: ".mjs", role: "host_module",
+  }),
+  Object.freeze({
+    prefix: "assets/protocol.", suffix: ".mjs", role: "host_module",
+  }),
+  Object.freeze({
+    prefix: "assets/runtime.", suffix: ".js", role: "runtime_script",
+  }),
+  Object.freeze({
+    prefix: "assets/runtime.", suffix: ".wasm", role: "runtime_wasm",
+  }),
+  Object.freeze({
+    prefix: "assets/state-machine.", suffix: ".mjs", role: "host_module",
+  }),
+  Object.freeze({ prefix: "assets/styles.", suffix: ".css", role: "host_style" }),
+]);
 const PACKAGED_RESOURCE_LIMITS = Object.freeze({
   decoded_float_pcm_bytes_per_bank: 67_108_864,
   decoded_float_pcm_bytes_total: 134_217_728,
@@ -102,8 +135,76 @@ export function flattenPadSlot({ bank, pad }) {
   return bank * 16 + pad;
 }
 
-function defaultCapabilities(scope) {
-  const storage = scope.navigator?.storage;
+async function probeControlWorkerCapabilities(scope) {
+  if (typeof scope.Worker !== "function" || typeof scope.Blob !== "function") {
+    return { opfs: false, opfsSyncAccessHandle: false, opfsWritableReplace: false };
+  }
+  const source = `
+    self.onmessage = async (event) => {
+      const probeName = event.data;
+      let root = null;
+      let sync = null;
+      let writable = null;
+      const result = {
+        opfs: false,
+        opfsSyncAccessHandle: false,
+        opfsWritableReplace: false,
+      };
+      try {
+        root = await navigator.storage.getDirectory();
+        result.opfs = true;
+        const file = await root.getFileHandle(probeName, {create: true});
+        sync = await file.createSyncAccessHandle();
+        result.opfsSyncAccessHandle = true;
+        sync.close();
+        sync = null;
+        writable = await file.createWritable({keepExistingData: false});
+        await writable.close();
+        writable = null;
+        result.opfsWritableReplace = true;
+      } catch {}
+      try { sync?.close(); } catch {}
+      try { await writable?.abort(); } catch {}
+      try { await root?.removeEntry(probeName); } catch {}
+      self.postMessage(result);
+    };
+  `;
+  const url = scope.URL.createObjectURL(new scope.Blob([source], {
+    type: "text/javascript",
+  }));
+  const worker = new scope.Worker(url);
+  const probeName = `.lmdj-capability-probe-${scope.crypto.randomUUID()}`;
+  try {
+    return await new Promise((resolvePromise) => {
+      const timeout = scope.setTimeout(() => {
+        resolvePromise({
+          opfs: false,
+          opfsSyncAccessHandle: false,
+          opfsWritableReplace: false,
+        });
+      }, 2_000);
+      worker.addEventListener("message", (event) => {
+        scope.clearTimeout(timeout);
+        resolvePromise(event.data);
+      }, { once: true });
+      worker.addEventListener("error", () => {
+        scope.clearTimeout(timeout);
+        resolvePromise({
+          opfs: false,
+          opfsSyncAccessHandle: false,
+          opfsWritableReplace: false,
+        });
+      }, { once: true });
+      worker.postMessage(probeName);
+    });
+  } finally {
+    worker.terminate();
+    scope.URL.revokeObjectURL(url);
+  }
+}
+
+async function defaultCapabilities(scope) {
+  const controlWorker = await probeControlWorkerCapabilities(scope);
   return {
     secureContext: scope.isSecureContext === true,
     crossOriginIsolated: scope.crossOriginIsolated === true,
@@ -112,12 +213,7 @@ function defaultCapabilities(scope) {
     audioWorklet:
       typeof scope.AudioContext === "function" &&
       "audioWorklet" in scope.AudioContext.prototype,
-    opfs: typeof storage?.getDirectory === "function",
-    opfsSyncAccessHandle:
-      typeof scope.FileSystemFileHandle?.prototype?.createSyncAccessHandle ===
-      "function",
-    opfsWritableReplace:
-      typeof scope.FileSystemFileHandle?.prototype?.createWritable === "function",
+    ...controlWorker,
   };
 }
 
@@ -219,6 +315,7 @@ function validatePackagedManifest(manifest, expected) {
   if (
     !exactKeys(manifest, [
       "assets",
+      "distribution_contract",
       "emscripten",
       "heap_bytes",
       "host_version",
@@ -227,6 +324,7 @@ function validatePackagedManifest(manifest, expected) {
       "protocol_version",
       "resource_limits",
     ]) ||
+    manifest.distribution_contract !== PACKAGED_DISTRIBUTION_CONTRACT ||
     manifest.manifest_version !== 1 ||
     manifest.product_build !== expected.product_build ||
     manifest.host_version !== PACKAGED_HOST_VERSION ||
@@ -244,15 +342,17 @@ function validatePackagedManifest(manifest, expected) {
       "emsdk_revision",
       "emsdk_tag",
     ]) ||
-    Object.values(manifest.emscripten).some(
-      (value) => typeof value !== "string" || value.length === 0,
+    Object.entries(PACKAGED_EMSCRIPTEN).some(
+      ([name, value]) => manifest.emscripten[name] !== value,
     ) ||
-    !Array.isArray(manifest.assets)
+    !Array.isArray(manifest.assets) ||
+    manifest.assets.length !== PACKAGED_ASSET_INVENTORY.length
   ) {
     throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
   }
-  const paths = new Set();
-  for (const asset of manifest.assets) {
+  for (let index = 0; index < manifest.assets.length; index += 1) {
+    const asset = manifest.assets[index];
+    const expectedAsset = PACKAGED_ASSET_INVENTORY[index];
     if (
       !exactKeys(asset, ["bytes", "path", "role", "sha256"]) ||
       !Number.isSafeInteger(asset.bytes) ||
@@ -261,16 +361,10 @@ function validatePackagedManifest(manifest, expected) {
       !/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$/.test(asset.path) ||
       typeof asset.role !== "string" ||
       !/^[0-9a-f]{64}$/.test(asset.sha256) ||
-      !asset.path.includes(`.${asset.sha256}.`) ||
-      paths.has(asset.path)
+      asset.path !== `${expectedAsset.prefix}${asset.sha256}${expectedAsset.suffix}` ||
+      asset.role !== expectedAsset.role
     ) {
       throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest asset is invalid");
-    }
-    paths.add(asset.path);
-  }
-  for (const role of ["host_main", "host_style", "runtime_script", "runtime_wasm"]) {
-    if (manifest.assets.filter((asset) => asset.role === role).length !== 1) {
-      throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest asset role is invalid");
     }
   }
 }
@@ -415,12 +509,22 @@ async function loadPackagedRuntime({ document, window, crypto, manifest }) {
     );
     document.head.append(script);
   });
-  return loadSourceRuntime({ window }).then((runtime) => {
-    if (typeof runtime.transport?.send !== "function") {
-      throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
-    }
-    return runtime;
-  });
+  const runtime = await loadSourceRuntime({ window });
+  const initializationDeadline =
+    (window.performance ?? globalThis.performance).now() + 30_000;
+  while (
+    runtime.runtimeInitialized !== true &&
+    (window.performance ?? globalThis.performance).now() < initializationDeadline
+  ) {
+    await new Promise((resolvePromise) => window.setTimeout(resolvePromise, 2));
+  }
+  if (runtime.runtimeInitialized !== true) {
+    throw typedError("HOST_STATE_INVALID", "Runtime initialization timed out");
+  }
+  if (typeof runtime.transport?.send !== "function") {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
+  }
+  return runtime;
 }
 
 async function defaultRuntimeTerminator({ runtime, audioContext, window }) {
@@ -1339,7 +1443,7 @@ export function createWebRuntimeHostController(options = {}) {
       ) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
       }
-      await runPreflight(options.capabilities ?? defaultCapabilities(window));
+      await runPreflight(options.capabilities ?? await defaultCapabilities(window));
       runtime = await loadRuntime(manifest);
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });

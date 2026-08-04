@@ -5,6 +5,8 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 #include <lmdj/foundation/json.hpp>
 #include <picosha2.h>
@@ -23,11 +25,30 @@ constexpr ManifestExpectation kExpected{
     1,
 };
 
-std::string canonical_manifest(
+std::string repeated(char value) {
+  return std::string(64, value);
+}
+
+nlohmann::json asset(
+    std::string_view stem,
+    char digest_character,
+    std::string_view suffix,
+    std::string_view role) {
+  const auto digest = repeated(digest_character);
+  return {
+      {"path", "assets/" + std::string(stem) + "." + digest + std::string(suffix)},
+      {"bytes", static_cast<int>(digest_character)},
+      {"sha256", digest},
+      {"role", role},
+  };
+}
+
+nlohmann::json manifest_json(
     std::string_view product = "1.0.13.0",
     std::string_view host = "1.0.0",
     std::uint32_t protocol = 1) {
-  return lmdj::foundation::canonical_json(nlohmann::json{
+  return {
+      {"distribution_contract", "lmdj.web-runtime-host.distribution.v1"},
       {"manifest_version", 1},
       {"product_build", product},
       {"host_version", host},
@@ -46,10 +67,30 @@ std::string canonical_manifest(
            {"emsdk_revision", "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190"},
            {"emscripten_releases_revision",
             "dbd755b5da399329c2576f6e3dfa7f419f5d8409"},
-           {"emcc_version", "emcc 6.0.5"},
+           {"emcc_version",
+            "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) "
+            "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)"},
        }},
-      {"assets", nlohmann::json::array()},
-  });
+      {"assets",
+       nlohmann::json::array({
+           asset("input-adapters", '1', ".mjs", "host_module"),
+           asset("main", '2', ".mjs", "host_main"),
+           asset("preflight", '3', ".mjs", "host_module"),
+           asset("protocol", '4', ".mjs", "host_module"),
+           asset("runtime", '5', ".js", "runtime_script"),
+           asset("runtime", '6', ".wasm", "runtime_wasm"),
+           asset("state-machine", '7', ".mjs", "host_module"),
+           asset("styles", '8', ".css", "host_style"),
+       })},
+  };
+}
+
+std::string canonical_manifest(
+    std::string_view product = "1.0.13.0",
+    std::string_view host = "1.0.0",
+    std::uint32_t protocol = 1) {
+  return lmdj::foundation::canonical_json(
+      manifest_json(product, host, protocol));
 }
 
 std::string sha256(std::string_view bytes) {
@@ -108,6 +149,82 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
   }
 }
 
+void check_rejected(nlohmann::json manifest) {
+  const auto encoded = lmdj::foundation::canonical_json(manifest);
+  ManifestGate gate;
+  LMDJ_CHECK(
+      gate.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      ManifestGateStatus::protocol_mismatch);
+  LMDJ_CHECK(!gate.begin_runtime());
+  LMDJ_CHECK(!gate.ready());
+}
+
+void test_every_identity_schema_and_inventory_drift_fails_closed() {
+  std::vector<nlohmann::json> invalid;
+
+  auto changed = manifest_json();
+  changed["unexpected"] = true;
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["distribution_contract"] = "other";
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["manifest_version"] = 2;
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["heap_bytes"] = 1;
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["resource_limits"]["imported_wav_bytes"] = 1;
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["emscripten"]["emsdk_tag"] = "latest";
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["emscripten"]["emsdk_revision"] = repeated('a');
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["emscripten"]["emscripten_releases_revision"] = repeated('b');
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["emscripten"]["emcc_version"] = "emcc 6.0.5";
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"] = nlohmann::json::array();
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"].erase(changed["assets"].begin());
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"].push_back(changed["assets"].front());
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"][1]["path"] = changed["assets"][0]["path"];
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"][0]["path"] = "assets/../escape.js";
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"][0]["bytes"] = 0;
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"][0]["sha256"] = repeated('f');
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"][0]["role"] = "host_main";
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["assets"][0]["extra"] = true;
+  invalid.push_back(changed);
+  changed = manifest_json();
+  std::swap(changed["assets"][0], changed["assets"][1]);
+  invalid.push_back(changed);
+
+  for (auto& manifest : invalid) {
+    check_rejected(std::move(manifest));
+  }
+}
+
 void test_repeated_or_late_initialization_is_terminal_before_mutation() {
   const auto manifest = canonical_manifest();
   const auto digest = sha256(manifest);
@@ -142,6 +259,7 @@ int main() {
     test_accepts_once_before_runtime_creation();
     test_missing_malformed_oversized_and_noncanonical_fail_closed();
     test_digest_and_exact_identity_mismatches_fail_closed();
+    test_every_identity_schema_and_inventory_drift_fails_closed();
     test_repeated_or_late_initialization_is_terminal_before_mutation();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -5,8 +5,10 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -15,6 +17,11 @@ from pathlib import Path
 HOST_VERSION = "1.0.0"
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912
+DISTRIBUTION_CONTRACT = "lmdj.web-runtime-host.distribution.v1"
+EMCC_VERSION = (
+    "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) "
+    "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)"
+)
 RESOURCE_LIMITS = {
     "imported_wav_bytes": 1_048_576,
     "decoded_frames_per_pad": 240_000,
@@ -36,6 +43,16 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emsdk_revision",
     "emscripten_releases_revision",
     "emcc_version",
+)
+EXPECTED_ASSETS = (
+    ("assets/input-adapters.", ".mjs", "host_module"),
+    ("assets/main.", ".mjs", "host_main"),
+    ("assets/preflight.", ".mjs", "host_module"),
+    ("assets/protocol.", ".mjs", "host_module"),
+    ("assets/runtime.", ".js", "runtime_script"),
+    ("assets/runtime.", ".wasm", "runtime_wasm"),
+    ("assets/state-machine.", ".mjs", "host_module"),
+    ("assets/styles.", ".css", "host_style"),
 )
 HASHED_ASSET_PATTERN = re.compile(
     r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$"
@@ -83,6 +100,12 @@ def sha256(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+def replace_exact_once(source: str, old: str, new: str, label: str) -> str:
+    if source.count(old) != 1:
+        raise PackageError(f"{label} must occur exactly once")
+    return source.replace(old, new, 1)
+
+
 def read_json(path: Path, label: str) -> dict:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -122,9 +145,7 @@ def validate_identity(repo_root: Path, identity_path: Path) -> dict:
         if type(identity[key]) is not type(lock[key]) or identity[key] != lock[key]:
             raise PackageError(f"toolchain identity mismatch for {key}")
     emcc_version = identity["emcc_version"]
-    if not isinstance(emcc_version, str) or re.search(
-        r"(?<![0-9.])6\.0\.5(?![0-9.])", emcc_version
-    ) is None:
+    if emcc_version != EMCC_VERSION:
         raise PackageError("toolchain identity mismatch for emcc_version")
     if identity["initial_memory"] != HEAP_BYTES or identity["allow_memory_growth"] is not False:
         raise PackageError("toolchain identity mismatch for fixed heap")
@@ -165,13 +186,24 @@ def build_distribution(
     repo_root = repo_root.expanduser().resolve(strict=True)
     runtime_root = runtime_root.expanduser().resolve(strict=True)
     identity_path = identity_path.expanduser().resolve(strict=True)
-    dist_root = dist_root.expanduser().resolve(strict=False)
+    requested_dist_root = dist_root.expanduser()
+    if not requested_dist_root.is_absolute():
+        requested_dist_root = Path.cwd() / requested_dist_root
+    requested_dist_root.parent.mkdir(parents=True, exist_ok=True)
+    dist_root = requested_dist_root.parent.resolve(strict=True) / requested_dist_root.name
     if not repo_root.is_dir() or not runtime_root.is_dir():
         raise PackageError("repository and runtime roots must be directories")
     if dist_root == Path("/") or dist_root == repo_root:
         raise PackageError(f"unsafe distribution root: {dist_root}")
-    if dist_root.exists():
-        if dist_root.is_symlink() or not dist_root.is_dir():
+    initial_target = None
+    try:
+        initial_target = os.lstat(dist_root)
+    except FileNotFoundError:
+        pass
+    if initial_target is not None:
+        if stat.S_ISLNK(initial_target.st_mode):
+            raise PackageError(f"distribution root is a symlink: {dist_root}")
+        if not stat.S_ISDIR(initial_target.st_mode):
             raise PackageError(f"unsafe existing distribution root: {dist_root}")
         try:
             verify_distribution(dist_root, repo_root)
@@ -218,8 +250,11 @@ def build_distribution(
             encoding="utf-8"
         )
         for name, entry in leaf_assets.items():
-            main_text = main_text.replace(
-                f'"./{name}"', f'"./{Path(entry["path"]).name}"'
+            main_text = replace_exact_once(
+                main_text,
+                f'"./{name}"',
+                f'"./{Path(entry["path"]).name}"',
+                f"main import {name}",
             )
         main_entry = write_hashed_asset(
             assets_root,
@@ -254,10 +289,11 @@ def build_distribution(
         except UnicodeDecodeError as error:
             raise PackageError("runtime JavaScript is not UTF-8") from error
         original_wasm_name = "lmdj-web-runtime-host.wasm"
-        if original_wasm_name not in runtime_text:
-            raise PackageError("runtime JavaScript does not bind its Wasm asset")
-        runtime_text = runtime_text.replace(
-            original_wasm_name, Path(wasm_entry["path"]).name
+        runtime_text = replace_exact_once(
+            runtime_text,
+            original_wasm_name,
+            Path(wasm_entry["path"]).name,
+            "runtime Wasm binding",
         )
         runtime_entry = write_hashed_asset(
             assets_root,
@@ -268,7 +304,19 @@ def build_distribution(
         )
         assets.append(runtime_entry)
 
+        ordered_assets = []
+        for prefix, suffix, role in EXPECTED_ASSETS:
+            matches = [
+                entry for entry in assets
+                if entry["role"] == role
+                and entry["path"].startswith(prefix)
+                and entry["path"].endswith(suffix)
+            ]
+            if len(matches) != 1:
+                raise PackageError("production asset inventory is invalid")
+            ordered_assets.append(matches[0])
         manifest = {
+            "distribution_contract": DISTRIBUTION_CONTRACT,
             "manifest_version": 1,
             "product_build": active_product_build,
             "host_version": HOST_VERSION,
@@ -278,7 +326,7 @@ def build_distribution(
             "emscripten": {
                 key: identity[key] for key in MANIFEST_TOOLCHAIN_KEYS
             },
-            "assets": sorted(assets, key=lambda entry: entry["path"]),
+            "assets": ordered_assets,
         }
         manifest_bytes = canonical_json(manifest)
         (staged / "host-manifest.json").write_bytes(manifest_bytes)
@@ -301,32 +349,86 @@ def build_distribution(
         digest_tag = (
             f'<meta name="lmdj-host-manifest-sha256" content="{manifest_digest}">'
         )
-        index = index.replace(digest_tag, digest_tag + identity_meta, 1)
-        index = index.replace(
-            'href="./styles.css"', f'href="./{style_entry["path"]}"', 1
+        index = replace_exact_once(
+            index,
+            digest_tag,
+            digest_tag + identity_meta,
+            "manifest digest metadata",
         )
-        index = index.replace(
-            'src="./src/main.mjs"', f'src="./{main_entry["path"]}"', 1
+        index = replace_exact_once(
+            index,
+            'href="./styles.css"',
+            f'href="./{style_entry["path"]}"',
+            "stylesheet reference",
+        )
+        index = replace_exact_once(
+            index,
+            'src="./src/main.mjs"',
+            f'src="./{main_entry["path"]}"',
+            "main module reference",
         )
         (staged / "index.html").write_text(
             index, encoding="utf-8", newline="\n"
         )
         verify_distribution(staged, repo_root)
 
-        if dist_root.exists():
+        current_target = None
+        try:
+            current_target = os.lstat(dist_root)
+        except FileNotFoundError:
+            pass
+        if initial_target is None and current_target is not None:
+            raise PackageError("distribution target appeared during packaging")
+        if initial_target is not None:
+            if (
+                current_target is None
+                or stat.S_ISLNK(current_target.st_mode)
+                or not stat.S_ISDIR(current_target.st_mode)
+                or (current_target.st_dev, current_target.st_ino)
+                != (initial_target.st_dev, initial_target.st_ino)
+            ):
+                raise PackageError("distribution target changed during packaging")
             try:
                 verify_distribution(dist_root, repo_root)
             except DistributionError as error:
                 raise PackageError(
                     f"existing distribution is not replaceable: {dist_root}"
                 ) from error
-            shutil.rmtree(dist_root)
-        shutil.copytree(staged, dist_root)
+        backup = Path(tempfile.mkdtemp(prefix=".lmdj-web-dist-backup-", dir=dist_root.parent))
+        backup.rmdir()
+        cleanup_backup = True
+        try:
+            if initial_target is not None:
+                os.replace(dist_root, backup)
+            try:
+                os.replace(staged, dist_root)
+            except OSError as error:
+                if initial_target is not None:
+                    try:
+                        os.replace(backup, dist_root)
+                    except OSError as rollback_error:
+                        cleanup_backup = False
+                        raise PackageError(
+                            f"distribution replacement failed and rollback failed; "
+                            f"previous distribution retained at {backup}"
+                        ) from rollback_error
+                raise PackageError("distribution replacement failed; previous distribution restored") from error
+            if backup.exists():
+                shutil.rmtree(backup)
+        finally:
+            if cleanup_backup and backup.exists() and not backup.is_symlink():
+                shutil.rmtree(backup)
 
 
 def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     try:
-        dist_root = dist_root.expanduser().resolve(strict=True)
+        requested_dist_root = dist_root.expanduser()
+        if not requested_dist_root.is_absolute():
+            requested_dist_root = Path.cwd() / requested_dist_root
+        root_status = os.lstat(requested_dist_root)
+        if stat.S_ISLNK(root_status.st_mode):
+            raise DistributionError("distribution root is a symlink")
+        dist_root = requested_dist_root.resolve(strict=True)
         repo_root = repo_root.expanduser().resolve(strict=True)
     except OSError as error:
         raise DistributionError("distribution root is missing") from error
@@ -345,12 +447,45 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         raise DistributionError("manifest is malformed") from error
     if not isinstance(manifest, dict) or canonical_json(manifest) != manifest_bytes:
         raise DistributionError("manifest is not exact canonical JSON")
-    assets = manifest.get("assets")
-    if not isinstance(assets, list):
-        raise DistributionError("manifest assets are missing")
+    if set(manifest) != {
+        "assets",
+        "distribution_contract",
+        "emscripten",
+        "heap_bytes",
+        "host_version",
+        "manifest_version",
+        "product_build",
+        "protocol_version",
+        "resource_limits",
+    }:
+        raise DistributionError("manifest root schema is invalid")
+    version = read_json(repo_root / "products/lmdj/version.json", "Product version")
+    lock = read_json(repo_root / "tools/web-runtime/emscripten.lock.json", "toolchain lock")
+    if (
+        manifest["distribution_contract"] != DISTRIBUTION_CONTRACT
+        or type(manifest["manifest_version"]) is not int
+        or manifest["manifest_version"] != 1
+        or manifest["product_build"] != product_build(version)
+        or manifest["host_version"] != HOST_VERSION
+        or type(manifest["protocol_version"]) is not int
+        or manifest["protocol_version"] != PROTOCOL_VERSION
+        or type(manifest["heap_bytes"]) is not int
+        or manifest["heap_bytes"] != HEAP_BYTES
+        or manifest["resource_limits"] != RESOURCE_LIMITS
+        or manifest["emscripten"] != {
+            "emcc_version": EMCC_VERSION,
+            "emscripten_releases_revision": lock["emscripten_releases_revision"],
+            "emsdk_revision": lock["emsdk_revision"],
+            "emsdk_tag": lock["emsdk_tag"],
+        }
+    ):
+        raise DistributionError("manifest identity is invalid")
+    assets = manifest["assets"]
+    if not isinstance(assets, list) or len(assets) != len(EXPECTED_ASSETS):
+        raise DistributionError("manifest production inventory is invalid")
     expected_files = {"index.html", "host-manifest.json"}
     seen_paths: set[str] = set()
-    for entry in assets:
+    for entry, expected_asset in zip(assets, EXPECTED_ASSETS, strict=True):
         if not isinstance(entry, dict) or set(entry) != {
             "path",
             "bytes",
@@ -361,6 +496,15 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         relative = entry["path"]
         if not isinstance(relative, str) or HASHED_ASSET_PATTERN.fullmatch(relative) is None:
             raise DistributionError("asset path is not content hashed")
+        prefix, suffix, role = expected_asset
+        if (
+            entry["role"] != role
+            or type(entry["bytes"]) is not int
+            or entry["bytes"] < 1
+            or not isinstance(entry["sha256"], str)
+            or relative != f"{prefix}{entry['sha256']}{suffix}"
+        ):
+            raise DistributionError("manifest production inventory is invalid")
         if relative in seen_paths:
             raise DistributionError("manifest contains duplicate asset")
         seen_paths.add(relative)
@@ -402,6 +546,21 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         f'<meta name="lmdj-host-manifest-sha256" content="{digest}">' not in index
     ):
         raise DistributionError("index manifest digest mismatch")
+    for exact_meta in (
+        '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">',
+        f'<meta name="lmdj-product-build" content="{manifest["product_build"]}">',
+        f'<meta name="lmdj-host-version" content="{manifest["host_version"]}">',
+        f'<meta name="lmdj-host-protocol-version" content="{manifest["protocol_version"]}">',
+    ):
+        if index.count(exact_meta) != 1:
+            raise DistributionError("index identity metadata mismatch")
+    main_asset = next(asset for asset in assets if asset["role"] == "host_main")
+    style_asset = next(asset for asset in assets if asset["role"] == "host_style")
+    if (
+        index.count(f'src="./{main_asset["path"]}"') != 1
+        or index.count(f'href="./{style_asset["path"]}"') != 1
+    ):
+        raise DistributionError("index production asset binding mismatch")
     if re.search(r"<script(?![^>]*\bsrc=)[^>]*>", index, re.IGNORECASE):
         raise DistributionError("index contains inline script")
     if LOCAL_PATH_PATTERN.search(index.encode("utf-8")) is not None:

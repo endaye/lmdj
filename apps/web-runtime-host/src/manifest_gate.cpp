@@ -38,6 +38,7 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
           value,
           {
               "assets",
+              "distribution_contract",
               "emscripten",
               "heap_bytes",
               "host_version",
@@ -48,7 +49,10 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
           })) {
     return false;
   }
-  if (!value.at("manifest_version").is_number_unsigned() ||
+  if (!value.at("distribution_contract").is_string() ||
+      value.at("distribution_contract") !=
+          "lmdj.web-runtime-host.distribution.v1" ||
+      !value.at("manifest_version").is_number_unsigned() ||
       value.at("manifest_version") != 1 ||
       !value.at("product_build").is_string() ||
       value.at("product_build") != expected.product_build ||
@@ -91,24 +95,52 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
           })) {
     return false;
   }
-  for (const auto key : {
-           "emcc_version",
-           "emscripten_releases_revision",
-           "emsdk_revision",
-           "emsdk_tag",
-       }) {
-    if (!emscripten.at(key).is_string() ||
-        emscripten.at(key).get_ref<const std::string&>().empty()) {
-      return false;
-    }
+  if (emscripten.at("emsdk_tag") != "6.0.5" ||
+      emscripten.at("emsdk_revision") !=
+          "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190" ||
+      emscripten.at("emscripten_releases_revision") !=
+          "dbd755b5da399329c2576f6e3dfa7f419f5d8409" ||
+      emscripten.at("emcc_version") !=
+          "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) "
+          "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)") {
+    return false;
   }
-  for (const auto& asset : value.at("assets")) {
+  struct ExpectedAsset {
+    std::string_view prefix;
+    std::string_view suffix;
+    std::string_view role;
+  };
+  static constexpr std::array<ExpectedAsset, 8> expected_assets{{
+      {"assets/input-adapters.", ".mjs", "host_module"},
+      {"assets/main.", ".mjs", "host_main"},
+      {"assets/preflight.", ".mjs", "host_module"},
+      {"assets/protocol.", ".mjs", "host_module"},
+      {"assets/runtime.", ".js", "runtime_script"},
+      {"assets/runtime.", ".wasm", "runtime_wasm"},
+      {"assets/state-machine.", ".mjs", "host_module"},
+      {"assets/styles.", ".css", "host_style"},
+  }};
+  const auto& assets = value.at("assets");
+  if (assets.size() != expected_assets.size()) {
+    return false;
+  }
+  for (std::size_t index = 0; index < assets.size(); ++index) {
+    const auto& asset = assets.at(index);
+    const auto expected_asset = expected_assets.at(index);
     if (!exact_keys(asset, {"bytes", "path", "role", "sha256"}) ||
         !asset.at("path").is_string() ||
         !asset.at("bytes").is_number_unsigned() ||
+        asset.at("bytes").get<std::uint64_t>() == 0 ||
         !asset.at("role").is_string() ||
         !asset.at("sha256").is_string() ||
         !lowercase_sha256(asset.at("sha256").get_ref<const std::string&>())) {
+      return false;
+    }
+    const auto& path = asset.at("path").get_ref<const std::string&>();
+    const auto& digest = asset.at("sha256").get_ref<const std::string&>();
+    if (asset.at("role") != expected_asset.role ||
+        path != std::string(expected_asset.prefix) + digest +
+                    std::string(expected_asset.suffix)) {
       return false;
     }
   }

@@ -39,69 +39,90 @@ class DistributionTest(unittest.TestCase):
         self.module = load_package_module()
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-web-dist-")
         self.root = Path(self.temporary.name) / "dist"
-        self.root.mkdir()
+        shutil.copytree(DEFAULT_DIST, self.root)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def write_valid_distribution(self, content: bytes = b"export {};\n") -> None:
-        assets = self.root / "assets"
-        assets.mkdir(exist_ok=True)
-        digest = hashlib.sha256(content).hexdigest()
-        asset_path = assets / f"runtime.{digest}.js"
-        asset_path.write_bytes(content)
-        manifest = {
-            "manifest_version": 1,
-            "product_build": "1.0.13.0",
-            "host_version": "1.0.0",
-            "protocol_version": 1,
-            "heap_bytes": 536_870_912,
-            "resource_limits": {
-                "imported_wav_bytes": 1_048_576,
-                "decoded_frames_per_pad": 240_000,
-                "decoded_float_pcm_bytes_per_bank": 67_108_864,
-                "decoded_float_pcm_bytes_total": 134_217_728,
-            },
-            "emscripten": {
-                "emsdk_tag": "6.0.5",
-                "emsdk_revision": "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190",
-                "emscripten_releases_revision": "dbd755b5da399329c2576f6e3dfa7f419f5d8409",
-                "emcc_version": "emcc 6.0.5",
-            },
-            "assets": [
-                {
-                    "path": asset_path.relative_to(self.root).as_posix(),
-                    "bytes": len(content),
-                    "sha256": digest,
-                    "role": "runtime_script",
-                }
-            ],
-        }
+    def reset_distribution(self) -> None:
+        shutil.rmtree(self.root)
+        shutil.copytree(DEFAULT_DIST, self.root)
+
+    def rewrite_manifest(self, mutate) -> dict:
+        manifest_path = self.root / "host-manifest.json"
+        old_bytes = manifest_path.read_bytes()
+        manifest = json.loads(old_bytes)
+        mutate(manifest)
         manifest_bytes = canonical_json(manifest)
-        (self.root / "host-manifest.json").write_bytes(manifest_bytes)
+        manifest_path.write_bytes(manifest_bytes)
+        old_digest = hashlib.sha256(old_bytes).hexdigest()
         manifest_digest = hashlib.sha256(manifest_bytes).hexdigest()
-        (self.root / "index.html").write_text(
-            "<!doctype html><html><head>"
-            f'<meta name="lmdj-host-manifest-sha256" content="{manifest_digest}">'
-            f'<script src="./{asset_path.relative_to(self.root).as_posix()}"></script>'
-            "</head></html>",
-            encoding="utf-8",
-            newline="\n",
+        index_path = self.root / "index.html"
+        index = index_path.read_text(encoding="utf-8").replace(
+            old_digest, manifest_digest
         )
+        index_path.write_text(index, encoding="utf-8", newline="\n")
+        return manifest
 
     def test_built_distribution_is_clean(self) -> None:
         self.module.verify_distribution(DEFAULT_DIST, REPO_ROOT)
+        manifest = json.loads((DEFAULT_DIST / "host-manifest.json").read_bytes())
+        self.assertEqual(
+            manifest["distribution_contract"],
+            "lmdj.web-runtime-host.distribution.v1",
+        )
+        self.assertEqual(
+            set(manifest),
+            {
+                "assets",
+                "distribution_contract",
+                "emscripten",
+                "heap_bytes",
+                "host_version",
+                "manifest_version",
+                "product_build",
+                "protocol_version",
+                "resource_limits",
+            },
+        )
+
+    def test_every_schema_identity_role_and_metadata_tamper_is_rejected(self) -> None:
+        mutations = {
+            "extra root field": lambda value: value.__setitem__("unexpected", True),
+            "ownership": lambda value: value.__setitem__("distribution_contract", "other"),
+            "manifest version": lambda value: value.__setitem__("manifest_version", 2),
+            "product": lambda value: value.__setitem__("product_build", "999.0.0.0"),
+            "host": lambda value: value.__setitem__("host_version", "999.0.0"),
+            "protocol": lambda value: value.__setitem__("protocol_version", 999),
+            "heap": lambda value: value.__setitem__("heap_bytes", 1),
+            "limit": lambda value: value["resource_limits"].__setitem__("imported_wav_bytes", 1),
+            "emsdk tag": lambda value: value["emscripten"].__setitem__("emsdk_tag", "latest"),
+            "emsdk revision": lambda value: value["emscripten"].__setitem__("emsdk_revision", "a" * 40),
+            "releases revision": lambda value: value["emscripten"].__setitem__("emscripten_releases_revision", "b" * 40),
+            "emcc output": lambda value: value["emscripten"].__setitem__("emcc_version", "emcc 6.0.5"),
+            "empty inventory": lambda value: value.__setitem__("assets", []),
+            "duplicate role": lambda value: value["assets"][0].__setitem__("role", "host_main"),
+            "unknown role": lambda value: value["assets"][0].__setitem__("role", "unknown"),
+            "zero bytes": lambda value: value["assets"][0].__setitem__("bytes", 0),
+            "unsafe path": lambda value: value["assets"][0].__setitem__("path", "assets/../escape.js"),
+            "filename digest": lambda value: value["assets"][0].__setitem__("sha256", "f" * 64),
+            "asset extra field": lambda value: value["assets"][0].__setitem__("unexpected", True),
+            "asset order": lambda value: value["assets"].__setitem__(slice(0, 2), list(reversed(value["assets"][:2]))),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                self.reset_distribution()
+                self.rewrite_manifest(mutate)
+                with self.assertRaises(self.module.DistributionError):
+                    self.module.verify_distribution(self.root, REPO_ROOT)
 
     def test_missing_hashed_asset_and_manifest_mismatch_are_rejected(self) -> None:
-        self.write_valid_distribution()
         asset = next((self.root / "assets").iterdir())
         asset.unlink()
         with self.assertRaisesRegex(self.module.DistributionError, "missing asset"):
             self.module.verify_distribution(self.root, REPO_ROOT)
 
-        shutil.rmtree(self.root)
-        self.root.mkdir()
-        self.write_valid_distribution()
+        self.reset_distribution()
         asset = next((self.root / "assets").iterdir())
         original = asset.read_bytes()
         asset.write_bytes(bytes([original[0] ^ 1]) + original[1:])
@@ -120,8 +141,7 @@ class DistributionTest(unittest.TestCase):
         for relative, label in forbidden.items():
             with self.subTest(label=label):
                 shutil.rmtree(self.root)
-                self.root.mkdir()
-                self.write_valid_distribution()
+                shutil.copytree(DEFAULT_DIST, self.root)
                 path = self.root / relative
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(b"forbidden")
@@ -129,9 +149,39 @@ class DistributionTest(unittest.TestCase):
                     self.module.verify_distribution(self.root, REPO_ROOT)
 
     def test_absolute_local_paths_are_rejected_even_when_asset_hash_matches(self) -> None:
-        content = b'const leaked = "/Users/example/private/build";\n'
-        self.write_valid_distribution(content)
+        manifest_path = self.root / "host-manifest.json"
+        manifest = json.loads(manifest_path.read_bytes())
+        entry = next(asset for asset in manifest["assets"] if asset["role"] == "runtime_script")
+        old_relative = entry["path"]
+        old_path = self.root / old_relative
+        content = old_path.read_bytes() + b'\nconst leaked = "/Users/example/private/build";\n'
+        digest = hashlib.sha256(content).hexdigest()
+        new_relative = f"assets/runtime.{digest}.js"
+        new_path = self.root / new_relative
+        old_path.rename(new_path)
+        new_path.write_bytes(content)
+        entry.update(path=new_relative, bytes=len(content), sha256=digest)
+        old_manifest_bytes = manifest_path.read_bytes()
+        new_manifest_bytes = canonical_json(manifest)
+        manifest_path.write_bytes(new_manifest_bytes)
+        index_path = self.root / "index.html"
+        index = index_path.read_text(encoding="utf-8")
+        index = index.replace(old_relative, new_relative)
+        index = index.replace(
+            hashlib.sha256(old_manifest_bytes).hexdigest(),
+            hashlib.sha256(new_manifest_bytes).hexdigest(),
+        )
+        index_path.write_text(index, encoding="utf-8", newline="\n")
         with self.assertRaisesRegex(self.module.DistributionError, "absolute local path"):
+            self.module.verify_distribution(self.root, REPO_ROOT)
+
+    def test_index_identity_metadata_is_exactly_bound_to_manifest(self) -> None:
+        index_path = self.root / "index.html"
+        index = index_path.read_text(encoding="utf-8").replace(
+            'content="1.0.0"', 'content="999.0.0"', 1
+        )
+        index_path.write_text(index, encoding="utf-8", newline="\n")
+        with self.assertRaises(self.module.DistributionError):
             self.module.verify_distribution(self.root, REPO_ROOT)
 
 

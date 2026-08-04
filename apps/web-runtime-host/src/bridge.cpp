@@ -842,6 +842,7 @@ using lmdj::web_host::ManifestExpectation;
 using lmdj::web_host::ManifestGate;
 using lmdj::web_host::ManifestGateStatus;
 using lmdj::web_host::detail::BridgeHooks;
+using lmdj::web_host::detail::BridgePollStatus;
 using lmdj::web_host::detail::ControlBridge;
 using lmdj::web_host::detail::ControlRuntimeAudioAccess;
 using lmdj::web_host::detail::AudioQuiescenceCoordinator;
@@ -852,6 +853,8 @@ ManifestGate web_manifest_gate;
 std::unique_ptr<ControlRuntime> web_runtime;
 std::unique_ptr<ControlBridge> web_bridge_owner;
 std::atomic<ControlBridge*> web_bridge{nullptr};
+std::atomic<bool> web_manifest_terminal_failure{false};
+std::atomic<bool> web_manifest_cleanup_reserved{false};
 std::unique_ptr<RealtimeAudioWorklet> web_audio_owner;
 std::atomic<RealtimeAudioWorklet*> web_audio{nullptr};
 enum class AudioFailureCommitState : std::uint32_t {
@@ -890,6 +893,37 @@ bool schedule_control(
 
 bool on_control(void*) noexcept {
   return pthread_equal(pthread_self(), web_control_thread) != 0;
+}
+
+void fail_manifest_on_control(void*) noexcept {
+  if (web_runtime != nullptr) {
+    web_runtime->engine().stop();
+    web_runtime->fail_and_seal("manifest_protocol_mismatch");
+  }
+}
+
+void terminal_manifest_failure() noexcept {
+  web_manifest_terminal_failure.store(true, std::memory_order_release);
+  bool expected = false;
+  if (!web_manifest_cleanup_reserved.compare_exchange_strong(
+          expected,
+          true,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire) ||
+      web_runtime == nullptr) {
+    return;
+  }
+  if (on_control(nullptr)) {
+    fail_manifest_on_control(nullptr);
+    return;
+  }
+  if (web_proxy_queue != nullptr) {
+    static_cast<void>(emscripten_proxy_async(
+        web_proxy_queue,
+        web_control_thread,
+        &fail_manifest_on_control,
+        nullptr));
+  }
 }
 
 lmdj::foundation::Result<void> await_audio_quiescent(
@@ -1058,6 +1092,7 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_initialize_manifest(
     std::size_t expected_sha256_size) {
   if ((canonical_bytes == nullptr && canonical_size != 0) ||
       (expected_sha256 == nullptr && expected_sha256_size != 0)) {
+    terminal_manifest_failure();
     return -1;
   }
   const auto status = web_manifest_gate.initialize(
@@ -1068,7 +1103,11 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_initialize_manifest(
           LMDJ_WEB_HOST_VERSION,
           1,
       });
-  return status == ManifestGateStatus::accepted ? 0 : -1;
+  if (status != ManifestGateStatus::accepted) {
+    terminal_manifest_failure();
+    return -1;
+  }
+  return 0;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
@@ -1076,6 +1115,9 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
     std::size_t envelope_size,
     const std::byte* sidecar,
     std::size_t sidecar_size) {
+  if (web_manifest_terminal_failure.load(std::memory_order_acquire)) {
+    return 1;
+  }
   if ((envelope == nullptr && envelope_size != 0) ||
       (sidecar == nullptr && sidecar_size != 0)) {
     return -1;
@@ -1094,6 +1136,9 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_poll(
     std::size_t output_size,
     std::size_t* required) {
   auto* bridge = web_bridge.load(std::memory_order_acquire);
+  if (web_manifest_terminal_failure.load(std::memory_order_acquire)) {
+    return static_cast<int>(BridgePollStatus::output_too_small);
+  }
   if (bridge == nullptr || required == nullptr ||
       (output == nullptr && output_size != 0)) {
     return -1;
@@ -1103,6 +1148,9 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_poll(
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_failed() {
+  if (web_manifest_terminal_failure.load(std::memory_order_acquire)) {
+    return 1;
+  }
   auto* bridge = web_bridge.load(std::memory_order_acquire);
   return bridge != nullptr && bridge->failed() ? 1 : 0;
 }
@@ -1110,6 +1158,9 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_failed() {
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
     std::int32_t audio_context_handle) {
   if (!emscripten_is_main_browser_thread()) {
+    return -1;
+  }
+  if (web_manifest_terminal_failure.load(std::memory_order_acquire)) {
     return -1;
   }
   auto* adapter = web_audio.load(std::memory_order_acquire);

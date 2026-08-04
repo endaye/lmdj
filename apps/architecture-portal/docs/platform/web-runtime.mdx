@@ -18,11 +18,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 ## 当前 Lab
 Web Runtime Lab 验证静态服务、WASM Core Probe、AudioWorklet 和物理证据准备器；它不在 Product Assembly。
 ## 正式 Host 分发
-正式 Web Runtime Host 已具备固定 Emscripten 身份的 clean build、内容哈希资产、canonical manifest、Browser Main 与 Control 双重身份门禁，以及只服务 dist 的 proof-only CSP server。manifest 绑定当前 Product Build、Host `1.0.0`、协议 `1`、固定 512 MiB heap、资源上限和完整资产 inventory；该 Host 尚未进入 Product Assembly。
+正式 Web Runtime Host 已具备固定 Emscripten 身份的双 clean-build 字节可复现门、内容哈希资产、带 ownership contract 的 canonical manifest、Browser Main 与 Control 双重身份门禁、Dedicated Worker realm 的 OPFS capability proof，以及只服务已完整验证 dist 的 proof-only CSP server。manifest 绑定当前 Product Build、Host `1.0.0`、协议 `1`、固定 512 MiB heap、资源上限和八项生产资产的精确 inventory；该 Host 尚未进入 Product Assembly。
 ## 线程模型
 主线程处理 UI/control，AudioWorklet 处理实时音频；消息与 buffer 边界必须保持有界。
 ## 验收阈值
-Task 10 自动化证明 deterministic package、隔离 headers/cache 和 manifest 失败时零 runtime/OPFS mutation。Task 11 才负责 packaged Chromium 全旅程与 WebKit capability smoke；Chrome 实机、MIDI、iPad、延迟与 underrun 记录仍由独立 evaluator 判定。
+Task 10 自动化证明 deterministic/atomic package、无旧进程冒充的 proof server readiness、隔离 headers/cache、无 shim 的 packaged Host 启动，以及 manifest 失败或迟到初始化时零新增 OPFS mutation。Task 11 才负责 packaged Chromium 音频创作全旅程与 WebKit capability smoke；Chrome 实机、MIDI、iPad、延迟与 underrun 记录仍由独立 evaluator 判定。
 ## 非能力
 当前不承诺离线安装、正式 Web 产品交付、浏览器全生命周期或跨设备一致体验；proof-only server 不属于生产部署面。
 ## 下一门禁

@@ -16,6 +16,8 @@ dist_root="$build_root/dist"
 identity_path="$repo_root/build/web/toolchain/toolchain-identity.json"
 web_test_root="$repo_root/tests/platform/web"
 proof_root=""
+proof_server_pid=""
+proof_server_ready_root=""
 
 cleanup_proof_root() {
   if [[ -z "$proof_root" ]]; then
@@ -31,6 +33,37 @@ cleanup_proof_root() {
       ;;
   esac
 }
+
+cleanup_proof_server() {
+  if [[ -n "$proof_server_pid" ]]; then
+    kill "$proof_server_pid" 2>/dev/null || true
+    wait "$proof_server_pid" 2>/dev/null || true
+    proof_server_pid=""
+  fi
+  if [[ -n "$proof_server_ready_root" ]]; then
+    case "$proof_server_ready_root" in
+      "${TMPDIR:-/tmp}"/lmdj-web-host-server.*)
+        cmake -E remove_directory "$proof_server_ready_root"
+        ;;
+      *)
+        echo "Web Runtime Host error: unsafe server cleanup path: $proof_server_ready_root" >&2
+        return 2
+        ;;
+    esac
+    proof_server_ready_root=""
+  fi
+}
+
+cleanup_all() {
+  local status=$?
+  cleanup_proof_server || true
+  cleanup_proof_root || true
+  return "$status"
+}
+
+trap cleanup_all EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 usage() {
   cat >&2 <<'EOF'
@@ -119,41 +152,72 @@ build_host() {
 
 run_browser_gate() {
   local selected_dist="$1"
-  local port="${LMDJ_WEB_HOST_PORT:-4175}"
+  local requested_port="${LMDJ_WEB_HOST_PORT:-0}"
   local log_path="$build_root/proof-server.log"
+  local ready_file
+  local ready_nonce
+  local port=""
   require_playwright
   cmake -E make_directory "$repo_root/build/web/toolchain"
+  cleanup_proof_server
+  proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-server.XXXXXX")"
+  ready_file="$proof_server_ready_root/ready.json"
+  ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
   python3 "$repo_root/apps/web-runtime-host/tools/server.py" \
     --root "$selected_dist" \
-    --port "$port" >"$log_path" 2>&1 &
-  local server_pid=$!
-  local ready=0
+    --port "$requested_port" \
+    --ready-file "$ready_file" \
+    --ready-nonce "$ready_nonce" >"$log_path" 2>&1 &
+  proof_server_pid=$!
   for _ in {1..100}; do
-    if python3 -c \
-      'import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=0.2).read()' \
-      "http://127.0.0.1:$port/index.html" >/dev/null 2>&1; then
-      ready=1
+    if ! kill -0 "$proof_server_pid" 2>/dev/null; then
       break
     fi
-    if ! kill -0 "$server_pid" 2>/dev/null; then
+    if [[ -f "$ready_file" ]] && port="$(python3 - "$ready_file" "$proof_server_pid" "$ready_nonce" <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    value = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+    raise SystemExit(1)
+if (
+    set(value) != {"host", "nonce", "pid", "port"}
+    or value["host"] != "127.0.0.1"
+    or value["nonce"] != sys.argv[3]
+    or value["pid"] != int(sys.argv[2])
+    or type(value["port"]) is not int
+    or value["port"] < 1
+    or value["port"] > 65_535
+):
+    raise SystemExit(1)
+print(value["port"])
+PY
+)"; then
       break
     fi
     sleep 0.05
   done
-  if [[ "$ready" != "1" ]]; then
-    kill "$server_pid" 2>/dev/null || true
-    wait "$server_pid" 2>/dev/null || true
+  if [[ -z "$port" ]] || ! kill -0 "$proof_server_pid" 2>/dev/null; then
+    cleanup_proof_server
     echo "Web Runtime Host error: proof server did not become ready" >&2
     sed -n '1,120p' "$log_path" >&2 || true
-    exit 2
+    return 2
+  fi
+  if ! python3 -c \
+    'import sys,urllib.request; urllib.request.urlopen(sys.argv[1], timeout=0.5).read()' \
+    "http://127.0.0.1:$port/index.html" >/dev/null 2>&1; then
+    cleanup_proof_server
+    echo "Web Runtime Host error: owned proof server is unreachable" >&2
+    return 2
   fi
   local status=0
   LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
       host/web_runtime_host_manifest_gate.spec.mjs || status=$?
-  kill "$server_pid" 2>/dev/null || true
-  wait "$server_pid" 2>/dev/null || true
+  cleanup_proof_server
   return "$status"
 }
 
@@ -189,12 +253,20 @@ proof_host() {
   export COREPACK_ENABLE_DOWNLOAD_PROMPT=0
   unset NODE_PATH || true
   unset PYTHONPATH || true
+  proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-proof.XXXXXX")"
   clean_host
   configure_host
   build_host
+  cmake -E copy_directory "$dist_root" "$proof_root/first-dist"
+  clean_host
+  configure_host
+  build_host
+  if ! diff -qr "$proof_root/first-dist" "$dist_root"; then
+    echo "Web Runtime Host error: two clean builds are not byte reproducible" >&2
+    return 2
+  fi
+  echo "Web Runtime Host reproducibility: PASS"
   run_nonbrowser_tests
-  proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-proof.XXXXXX")"
-  trap cleanup_proof_root EXIT
   cmake -E copy_directory "$dist_root" "$proof_root/dist"
   LMDJ_WEB_HOST_DIST_ROOT="$proof_root/dist" \
     python3 "$repo_root/apps/web-runtime-host/test/distribution_test.py"

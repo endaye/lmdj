@@ -15,9 +15,9 @@ unit/component 验证局部边界，integration/e2e 验证组合，stress 验证
 ## 稳定命令
 `scripts/core.sh test dev full` 运行除 stress 外的完整层级；stress 必须显式运行；`scripts/core.sh proof` 也不包含 stress。
 ## Web Runtime Host Proof
-`scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 清理并以固定 emsdk 重建，运行 Python/Node/C++ 测试，验证 canonical manifest 与无 source/map/fixture/server/dev dependency 的精确 dist inventory，把 dist 复制到 `mktemp -d`，再从临时目录启动 proof-only server 并运行 Chromium manifest gate；同时清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch。`clean` 只删除解析后的 `build/web/host` 子树。
+`scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory，把第二份 dist 复制到 `mktemp -d`，再从临时目录启动 proof-only server 并运行 Chromium manifest gate。同时它清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch。`clean` 只删除解析后的 `build/web/host` 子树。
 ## Web 分发 HTTP 门禁
-proof-only server 对所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，为 Wasm 返回 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。该服务只用于本地 Proof，不是生产发布入口。
+proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任
 Linux ASAN 负责 Python-hosted 覆盖，macOS ASAN 只覆盖 native label；两者和 stress 都是 PR 门禁。
 ## 证据分离
