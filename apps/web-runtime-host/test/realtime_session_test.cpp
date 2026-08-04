@@ -89,8 +89,45 @@ class FakeProxy final {
 
   static void before_response(void*) {}
 
+  static void after_capture_drain(void*) {}
+
+  static void after_outcome_drain(void* context) {
+    auto& self = *static_cast<FakeProxy*>(context);
+    if (self.request_service_at_tail_ && self.bridge_ != nullptr) {
+      self.request_service_at_tail_ = false;
+      std::array<std::byte, 1> output{};
+      std::size_t required = 0;
+      LMDJ_CHECK(
+          self.bridge_->poll(output, required) == BridgePollStatus::empty);
+    }
+    if (!self.inject_outcome_drop_ || self.engine_ == nullptr) {
+      return;
+    }
+    self.inject_outcome_drop_ = false;
+    std::array<float, 1> left{};
+    std::array<float, 1> right{};
+    self.engine_->render(left.data(), right.data(), 1);
+  }
+
   BridgeHooks hooks() noexcept {
-    return BridgeHooks{this, &schedule, &on_control, &before_response};
+    return BridgeHooks{
+        this,
+        &schedule,
+        &on_control,
+        &before_response,
+        &after_capture_drain,
+        &after_outcome_drain,
+    };
+  }
+
+  void inject_outcome_drop(lmdj::audio::RealtimeEngine& engine) {
+    engine_ = &engine;
+    inject_outcome_drop_ = true;
+  }
+
+  void request_service_at_tail(ControlBridge& bridge) {
+    bridge_ = &bridge;
+    request_service_at_tail_ = true;
   }
 
   bool empty() const {
@@ -126,6 +163,10 @@ class FakeProxy final {
   mutable std::mutex mutex_;
   std::vector<Task> tasks_;
   bool on_control_ = false;
+  lmdj::audio::RealtimeEngine* engine_ = nullptr;
+  bool inject_outcome_drop_ = false;
+  ControlBridge* bridge_ = nullptr;
+  bool request_service_at_tail_ = false;
 };
 
 nlohmann::json poll_message(ControlBridge& bridge) {
@@ -156,7 +197,7 @@ void enable_realtime_service(ControlBridge& bridge, FakeProxy& proxy) {
       bridge.submit(bytes, {}) == BridgeSubmitStatus::accepted);
   proxy.pump_one();
   LMDJ_CHECK(poll_message(bridge).at("ok") == true);
-  proxy.pump_all();
+  proxy.pump_one();
 }
 
 void test_outcome_control_drains_are_bounded_to_64() {
@@ -278,6 +319,114 @@ void test_outcome_drop_is_a_terminal_bridge_signal() {
   LMDJ_CHECK(status.at("error").at("code") == "HOST_STATE_INVALID");
 }
 
+void test_outcome_drop_racing_the_post_drain_check_is_terminal() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto& engine = runtime->engine();
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+  enable_realtime_service(bridge, proxy);
+  proxy.pump_one();
+
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeTriggerOutcomeCapacity;
+       ++sequence) {
+    LMDJ_CHECK(
+        engine.enqueue(lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+        lmdj::audio::EnqueueResult::accepted);
+    engine.render(left.data(), right.data(), 1);
+  }
+  for (std::uint64_t sequence = 4'097; sequence <= 4'161; ++sequence) {
+    LMDJ_CHECK(
+        engine.enqueue(lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+        lmdj::audio::EnqueueResult::accepted);
+  }
+  proxy.inject_outcome_drop(engine);
+
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::empty);
+  proxy.pump_one();
+  LMDJ_CHECK(
+      engine.trigger_outcome_telemetry().runtime_outcome_drops == 1);
+  LMDJ_CHECK(bridge.failed());
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::failed);
+}
+
+void test_ready_response_pressure_cannot_starve_realtime_service() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto& engine = runtime->engine();
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+  enable_realtime_service(bridge, proxy);
+  proxy.pump_one();
+
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  for (std::uint64_t sequence = 1; sequence <= 65; ++sequence) {
+    LMDJ_CHECK(
+        engine.enqueue(lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+        lmdj::audio::EnqueueResult::accepted);
+    engine.render(left.data(), right.data(), 1);
+  }
+
+  std::array<std::string, 8> request_ids{};
+  for (std::uint32_t index = 1; index <= request_ids.size(); ++index) {
+    const auto suffix = std::to_string(910 + index);
+    const auto request_id =
+        "00000000-0000-4000-8000-" +
+        std::string(12 - suffix.size(), '0') + suffix;
+    request_ids[index - 1] = request_id;
+    const auto envelope = nlohmann::json{
+        {"protocol_version", 1},
+        {"request_id", request_id},
+        {"operation", "host.status"},
+        {"payload", nlohmann::json::object()},
+    }.dump();
+    const auto bytes = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(envelope.data()), envelope.size());
+    LMDJ_CHECK(
+        bridge.submit(bytes, {}) == BridgeSubmitStatus::accepted);
+    proxy.pump_one();
+  }
+  for (const auto& request_id : request_ids) {
+    LMDJ_CHECK(poll_message(bridge).at("request_id") == request_id);
+  }
+  proxy.pump_all();
+  LMDJ_CHECK(
+      engine.trigger_outcome_telemetry().drained_outcomes > 0);
+}
+
+void test_realtime_service_tail_request_is_not_lost() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto& engine = runtime->engine();
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+  enable_realtime_service(bridge, proxy);
+  proxy.request_service_at_tail(bridge);
+
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::empty);
+  proxy.pump_one();
+  LMDJ_CHECK(!proxy.empty());
+  proxy.pump_all();
+  LMDJ_CHECK(!bridge.failed());
+}
+
 }  // namespace
 
 int main() {
@@ -285,6 +434,9 @@ int main() {
     test_outcome_control_drains_are_bounded_to_64();
     test_bridge_emits_only_non_empty_ordered_outcome_batches();
     test_outcome_drop_is_a_terminal_bridge_signal();
+    test_outcome_drop_racing_the_post_drain_check_is_terminal();
+    test_realtime_service_tail_request_is_not_lost();
+    test_ready_response_pressure_cannot_starve_realtime_service();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

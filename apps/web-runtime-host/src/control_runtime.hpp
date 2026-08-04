@@ -40,6 +40,7 @@ class ControlRuntime final {
       std::chrono::steady_clock::time_point submitted_at);
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   foundation::Result<void> drain_capture();
+  bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;
   bool failed() const noexcept;
   audio::RealtimeEngine& engine() noexcept;
@@ -98,6 +99,8 @@ struct BridgeHooks {
   bool (*on_control)(void* context) noexcept;
 #if !defined(__EMSCRIPTEN__)
   void (*before_response_serialization)(void* context);
+  void (*after_capture_drain)(void* context);
+  void (*after_outcome_drain)(void* context);
 #endif
 };
 

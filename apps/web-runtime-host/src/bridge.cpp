@@ -229,28 +229,50 @@ struct ControlBridge::Impl {
   }
 
   void service_realtime() noexcept {
+    struct Completion {
+      Impl& owner;
+      ~Completion() { owner.complete_realtime_service(); }
+    } completion{*this};
+
+    realtime_service_requested.store(false, std::memory_order_release);
     if (hooks.on_control == nullptr || !hooks.on_control(hooks.context)) {
-      realtime_service_scheduled.store(false, std::memory_order_release);
       fail_control();
       return;
     }
-    auto* message = reserve_message();
-    if (message == nullptr) {
-      realtime_service_scheduled.store(false, std::memory_order_release);
-      return;
-    }
+    MessageSlot* message = nullptr;
     try {
       static_cast<void>(runtime.drain_capture());
+#if !defined(__EMSCRIPTEN__)
+      if (hooks.after_capture_drain != nullptr) {
+        hooks.after_capture_drain(hooks.context);
+      }
+#endif
+      if (!runtime.validate_realtime_health()) {
+        fail_control();
+        return;
+      }
+      message = reserve_message();
+      if (message == nullptr) {
+        return;
+      }
       if (runtime.failed()) {
         message->state.store(MessageState::free, std::memory_order_release);
-        realtime_service_scheduled.store(false, std::memory_order_release);
         fail_control();
         return;
       }
       const auto outcomes = runtime.drain_outcomes();
+#if !defined(__EMSCRIPTEN__)
+      if (hooks.after_outcome_drain != nullptr) {
+        hooks.after_outcome_drain(hooks.context);
+      }
+#endif
+      if (!runtime.validate_realtime_health()) {
+        message->state.store(MessageState::free, std::memory_order_release);
+        fail_control();
+        return;
+      }
       if (runtime.failed()) {
         message->state.store(MessageState::free, std::memory_order_release);
-        realtime_service_scheduled.store(false, std::memory_order_release);
         fail_control();
         return;
       }
@@ -284,10 +306,28 @@ struct ControlBridge::Impl {
         }
       }
     } catch (...) {
-      message->state.store(MessageState::free, std::memory_order_release);
+      if (message != nullptr) {
+        message->state.store(MessageState::free, std::memory_order_release);
+      }
       fail_control();
     }
+  }
+
+  void complete_realtime_service() noexcept {
     realtime_service_scheduled.store(false, std::memory_order_release);
+    if (realtime_service_enabled.load(std::memory_order_acquire) &&
+        realtime_service_requested.load(std::memory_order_acquire)) {
+      schedule_realtime_service();
+    }
+  }
+
+  void request_realtime_service() noexcept {
+    if (!realtime_service_enabled.load(std::memory_order_acquire) ||
+        failed.load(std::memory_order_acquire)) {
+      return;
+    }
+    realtime_service_requested.store(true, std::memory_order_release);
+    schedule_realtime_service();
   }
 
   void schedule_realtime_service() noexcept {
@@ -305,6 +345,7 @@ struct ControlBridge::Impl {
     if (hooks.schedule == nullptr ||
         !hooks.schedule(
             hooks.context, &service_realtime_thunk, this)) {
+      realtime_service_requested.store(false, std::memory_order_release);
       realtime_service_scheduled.store(false, std::memory_order_release);
       failed.store(true, std::memory_order_release);
     }
@@ -409,6 +450,7 @@ struct ControlBridge::Impl {
 
   void fail_control() noexcept {
     realtime_service_enabled.store(false, std::memory_order_release);
+    realtime_service_requested.store(false, std::memory_order_release);
     failed.store(true, std::memory_order_release);
     runtime.fail_and_seal("bridge_failure");
   }
@@ -551,12 +593,16 @@ struct ControlBridge::Impl {
               return;
             }
           }
+          const auto runtime_was_failed = runtime.failed();
           response = runtime.dispatch(
               operation,
               parsed->at("payload"),
               std::span<const std::byte>(
                   request.sidecar.data(), request.sidecar_size),
               request.submitted_at);
+          if (!runtime_was_failed && runtime.failed()) {
+            terminal_after_response = true;
+          }
           realtime_service_enabled.store(
               runtime.engine().telemetry().state ==
                   audio::RealtimeState::running,
@@ -662,6 +708,7 @@ struct ControlBridge::Impl {
   mutable std::mutex request_id_mutex;
   std::atomic<std::uint64_t> next_message_sequence{1};
   std::atomic<bool> realtime_service_enabled{false};
+  std::atomic<bool> realtime_service_requested{false};
   std::atomic<bool> realtime_service_scheduled{false};
   std::atomic<bool> failed{false};
 };
@@ -735,9 +782,7 @@ BridgePollStatus ControlBridge::poll(
     }
   }
   if (selected == nullptr) {
-    if (impl_->realtime_service_enabled.load(std::memory_order_acquire)) {
-      impl_->schedule_realtime_service();
-    }
+    impl_->request_realtime_service();
     required = 0;
     return impl_->failed.load(std::memory_order_acquire)
                ? BridgePollStatus::failed
@@ -766,6 +811,7 @@ BridgePollStatus ControlBridge::poll(
       impl_->failed.store(true, std::memory_order_release);
     }
   }
+  impl_->request_realtime_service();
   return BridgePollStatus::message;
 }
 
@@ -1243,7 +1289,12 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_request_outcomes() {
           std::memory_order_acquire)) {
     return 0;
   }
-  if (conformance_outcome_mirror.state.load(std::memory_order_acquire) == 2) {
+  std::uint32_t mirrored = 2;
+  if (conformance_outcome_mirror.state.compare_exchange_strong(
+          mirrored,
+          1,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
     outcome_diagnostic.count = conformance_outcome_mirror.count;
     std::copy_n(
         conformance_outcome_mirror.events.begin(),

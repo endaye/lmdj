@@ -508,6 +508,33 @@ struct ControlRuntime::Impl {
     Json error = nullptr;
   };
 
+  foundation::Result<void> release_runtime_banks() {
+    for (std::size_t slot = 0; slot < audio::kRealtimeSampleSlots; ++slot) {
+      const auto cleared =
+          engine.clear_sample(static_cast<std::uint8_t>(slot));
+      if (!cleared.has_value()) {
+        return cleared;
+      }
+    }
+    const auto reclaimed = engine.reclaim_retired_bank_telemetry();
+    if (reclaimed.decoded_pcm_bytes > reserved_live_bytes) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::internal_error,
+          "runtime Bank reservation underflow",
+      });
+    }
+    reserved_live_bytes -= reclaimed.decoded_pcm_bytes;
+    if (reserved_live_bytes != 0) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::internal_error,
+          "runtime Bank resources remain reserved",
+      });
+    }
+    runtime_ready = false;
+    runtime_bank_project_id.reset();
+    return foundation::Result<void>::success();
+  }
+
   SnapshotResult prepare_and_publish(std::string_view selected_pattern) {
     const auto reclaimed = engine.reclaim_retired_bank_telemetry();
     if (reclaimed.decoded_pcm_bytes > reserved_live_bytes) {
@@ -725,15 +752,15 @@ struct ControlRuntime::Impl {
       std::this_thread::yield();
       capture = engine.capture_telemetry().state;
     }
+    if (capture == audio::CaptureState::corrupted) {
+      return seal_active_after_failure(Error{
+          ErrorCode::internal_error,
+          "realtime capture was corrupted",
+      });
+    }
     const auto drained = drain_all_capture_events();
-    if (capture == audio::CaptureState::corrupted || !drained.has_value()) {
-      return seal_active_after_failure(
-          !drained.has_value()
-              ? drained.error()
-              : Error{
-                    ErrorCode::internal_error,
-                    "realtime capture was corrupted",
-                });
+    if (!drained.has_value()) {
+      return seal_active_after_failure(drained.error());
     }
     const auto take = *active_take;
     if (make_committable) {
@@ -1184,9 +1211,12 @@ Json ControlRuntime::dispatch(
             impl_->coordinator->context);
       }
       if (acknowledged != expected_generation) {
-        return rollback();
+        const auto timed_out = impl_->request_cancelled();
+        const auto failed = rollback();
+        return timed_out ? timeout_error() : failed;
       }
-      if (impl_->cancel_if_expired()) {
+      if (impl_->request_cancelled()) {
+        static_cast<void>(rollback());
         return timeout_error();
       }
       impl_->state = Impl::State::running;
@@ -1283,6 +1313,9 @@ Json ControlRuntime::dispatch(
       }
       const auto take = *impl_->active_take;
       const auto finished = impl_->finish_capture(true);
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       if (!finished.has_value()) {
         impl_->state = Impl::State::failed;
         impl_->trigger_admission = false;
@@ -1367,6 +1400,9 @@ Json ControlRuntime::dispatch(
       }
       const auto cleanup = impl_->quiesce_and_stop_audio(
           kAudioStateDeadlineMs);
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       if (capture_failure.has_value() || !cleanup.has_value()) {
         const auto failure = capture_failure.has_value()
                                  ? *capture_failure
@@ -1386,6 +1422,17 @@ Json ControlRuntime::dispatch(
       require(exact_keys(payload, {}));
       require(sidecar.empty());
       std::optional<std::string> sealed_take;
+      std::optional<Error> close_failure;
+      bool close_timed_out = false;
+      const auto observe_timeout = [&] {
+        if (!impl_->request_cancelled()) {
+          return;
+        }
+        close_timed_out = true;
+        impl_->trigger_admission = false;
+        impl_->seal_all_noexcept();
+        impl_->state = Impl::State::failed;
+      };
       if (impl_->state == Impl::State::running) {
         if (!impl_->coordinator.has_value() ||
             impl_->coordinator->await_quiescent == nullptr) {
@@ -1402,12 +1449,11 @@ Json ControlRuntime::dispatch(
           }
         }
         const auto cleanup = impl_->quiesce_and_stop_audio(10'000);
+        observe_timeout();
         if (capture_failure.has_value() || !cleanup.has_value()) {
-          const auto failure = capture_failure.has_value()
-                                   ? *capture_failure
-                                   : cleanup.error();
-          fail_and_seal("host_close_failed");
-          return normalized_error(failure);
+          close_failure = capture_failure.has_value()
+                              ? *capture_failure
+                              : cleanup.error();
         }
       }
       if (impl_->committable_take.has_value()) {
@@ -1416,9 +1462,24 @@ Json ControlRuntime::dispatch(
         const auto sealed = impl_->seal_take(take);
         if (!sealed.has_value()) {
           impl_->state = Impl::State::failed;
-          return normalized_error(sealed.error());
+          close_failure = sealed.error();
+        } else {
+          impl_->committable_take.reset();
         }
-        impl_->committable_take.reset();
+      }
+      observe_timeout();
+      const auto released = impl_->release_runtime_banks();
+      observe_timeout();
+      if (close_timed_out) {
+        return timeout_error();
+      }
+      if (!released.has_value()) {
+        fail_and_seal("host_close_bank_release_failed");
+        return normalized_error(released.error());
+      }
+      if (close_failure.has_value()) {
+        fail_and_seal("host_close_failed");
+        return normalized_error(*close_failure);
       }
       impl_->trigger_admission = false;
       impl_->state = Impl::State::closed;
@@ -1440,8 +1501,7 @@ Json ControlRuntime::dispatch(
 
 std::vector<audio::RuntimeTriggerOutcomeEvent>
 ControlRuntime::drain_outcomes() {
-  if (impl_->engine.trigger_outcome_telemetry().runtime_outcome_drops != 0) {
-    fail_and_seal("trigger_outcome_drop");
+  if (!validate_realtime_health()) {
     return {};
   }
   std::vector<audio::RuntimeTriggerOutcomeEvent> result;
@@ -1449,6 +1509,9 @@ ControlRuntime::drain_outcomes() {
   std::array<audio::RuntimeTriggerOutcomeEvent, 64> batch{};
   const auto count = impl_->engine.drain_trigger_outcomes(batch);
   result.insert(result.end(), batch.begin(), batch.begin() + count);
+  if (!validate_realtime_health()) {
+    return {};
+  }
   return result;
 }
 
@@ -1469,7 +1532,30 @@ foundation::Result<void> ControlRuntime::drain_capture() {
     fail_and_seal("capture_persistence_failure");
     return foundation::Result<void>::failure(failure);
   }
+  if (!validate_realtime_health()) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "realtime drain failed",
+    });
+  }
   return drained;
+}
+
+bool ControlRuntime::validate_realtime_health() noexcept {
+  if (impl_->state == Impl::State::failed) {
+    return false;
+  }
+  const auto capture = impl_->engine.capture_telemetry();
+  if (capture.capture_drops != 0 ||
+      capture.state == audio::CaptureState::corrupted) {
+    fail_and_seal("capture_drop");
+    return false;
+  }
+  if (impl_->engine.trigger_outcome_telemetry().runtime_outcome_drops != 0) {
+    fail_and_seal("trigger_outcome_drop");
+    return false;
+  }
+  return true;
 }
 
 void ControlRuntime::fail_and_seal(std::string_view) noexcept {
