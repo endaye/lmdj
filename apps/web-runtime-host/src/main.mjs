@@ -511,10 +511,8 @@ export function createWebRuntimeHostController(options = {}) {
     if (closing || machine.state !== "running") {
       return false;
     }
-    let reserved = false;
     try {
       machine.beginTake(takeId);
-      reserved = true;
       await boundedRequest("take.begin", {
         take_id: takeId,
         expected_revision: expectedRevision,
@@ -524,9 +522,6 @@ export function createWebRuntimeHostController(options = {}) {
       }
       return true;
     } catch (error) {
-      if (reserved && (closing || machine.state !== "running")) {
-        return false;
-      }
       fail(error);
       return false;
     }
@@ -637,7 +632,11 @@ export function createWebRuntimeHostController(options = {}) {
   }
 
   function markAdverseCondition(condition) {
-    const hadActiveCondition = activeAdverseConditions.size > 0;
+    const hadActiveCondition =
+      condition === "audio_statechange"
+        ? activeAdverseConditions.has(condition)
+        : activeAdverseConditions.has("visibilitychange") ||
+          activeAdverseConditions.has("pagehide");
     activeAdverseConditions.add(condition);
     return !hadActiveCondition;
   }
@@ -780,12 +779,15 @@ export function createWebRuntimeHostController(options = {}) {
       observeOutcomes(notification.payload.events);
       return;
     }
-    if (
-      notification.event === "runtime.warning" &&
-      notification.payload?.fatal === true &&
-      typeof notification.payload.code === "string"
-    ) {
-      fail(notification.payload.code);
+    if (notification.event === "runtime.warning") {
+      if (
+        notification.payload?.fatal === true &&
+        ALLOWED_TYPED_ERROR_CODES.has(notification.payload.code)
+      ) {
+        fail(notification.payload.code);
+      } else {
+        renderDiagnostics();
+      }
       return;
     }
     if (notification.event === "snapshot.published") {
@@ -836,11 +838,11 @@ export function createWebRuntimeHostController(options = {}) {
         listen(audioContext, "statechange", observeContextState);
         contextHandle = runtime.registerAudioContext(audioContext);
         const workletResult = await runtime.startAudioWorklet(contextHandle);
-        if (!activationIsCurrent(reservation, "audio-suspended")) {
-          return false;
-        }
         if (workletResult?.ok === false) {
           throw typedError("HOST_STATE_INVALID", "AudioWorklet start failed");
+        }
+        if (!activationIsCurrent(reservation, "audio-suspended")) {
+          return false;
         }
       }
       await audioContext.resume();

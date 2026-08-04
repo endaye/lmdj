@@ -438,6 +438,32 @@ test("delayed persisted pagehide coalesces with the active hidden episode", asyn
   assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.suspend").length, 1);
 });
 
+test("a fresh Context adverse edge supersedes an active page episode and invalidates its probe", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+
+  controller.observeVisibility(true);
+  await settle();
+  controller.observeRuntimeStatus({ control_generation: 7, acknowledged_generation: 7 });
+  assert.equal(await controller.trigger(1, 100), true);
+
+  const context = fixture.contexts[0];
+  context.state = "suspended";
+  context.dispatchEvent(new Event("statechange"));
+  await settle();
+  fixture.transport.emit("runtime.trigger_outcomes", {
+    events: [{ sequence: 1, outcome: "voice_started", runtime_frame: 128 }],
+  });
+  await settle();
+
+  assert.equal(controller.state, "audio-suspended");
+  assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.suspend").length, 2);
+  assert.equal(controller.diagnostics().trigger_outcome_count, 1);
+});
+
 test("gesture-required recovery returns audio-suspended to recovering without initial activation shortcut", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const fixture = harness();
@@ -620,6 +646,42 @@ test("an admitted Take is reserved before transport and a late response cannot r
   assert.equal(sealedTakes.length, 1);
 });
 
+test("a late rejected take.begin preserves its typed code and fails once", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const takeResponse = deferred();
+  const sealedTakes = [];
+  const originalSend = fixture.options.transport.send.bind(fixture.options.transport);
+  fixture.options.transport.send = async (request, options) => {
+    if (request.operation !== "take.begin") {
+      return originalSend(request, options);
+    }
+    fixture.calls.push({ operation: request.operation, payload: request.payload, options });
+    await takeResponse.promise;
+    return responseFor(request, { take_id: request.payload.take_id });
+  };
+  fixture.options.sealTake = (sealed) => sealedTakes.push(sealed);
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.activateAudio();
+
+  const pendingTake = controller.beginTake(
+    "00000000-0000-0000-0000-000000000654",
+    0,
+  );
+  controller.observeVisibility(true);
+  const rejection = new Error("typed transport rejection");
+  rejection.code = "IO_ERROR";
+  takeResponse.reject(rejection);
+
+  assert.equal(await pendingTake, false);
+  await settle();
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "IO_ERROR");
+  assert.equal(fixture.cleanupCalls, 1);
+  assert.equal(sealedTakes.length, 1);
+});
+
 test("activation is synchronously serialized", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const fixture = harness();
@@ -661,6 +723,53 @@ test("backgrounding during activation cannot publish running", async () => {
   assert.equal(await activation, false);
   assert.equal(controller.state, "audio-suspended");
   assert.equal(fixture.calls.filter(({ operation }) => operation === "audio.activate").length, 0);
+});
+
+test("a fatal Worklet startup result wins over stale background activation and blocks retry", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const workletStarted = deferred();
+  let workletStartCalls = 0;
+  fixture.options.loadRuntime = async () => ({
+    registerAudioContext: () => 1,
+    startAudioWorklet() {
+      workletStartCalls += 1;
+      return workletStarted.promise;
+    },
+    workers: [fixture.runtimeWorker],
+    worklet: fixture.worklet,
+  });
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  const activation = controller.activateAudio();
+  controller.observeVisibility(true);
+  workletStarted.resolve({ ok: false });
+  const activationResult = await activation;
+  await settle();
+  controller.observeVisibility(false);
+  const retryResult = await controller.activateAudio();
+
+  assert.deepEqual(
+    {
+      activationResult,
+      retryResult,
+      state: controller.state,
+      errorCode: controller.diagnostics().error_code,
+      cleanupCalls: fixture.cleanupCalls,
+      workletStartCalls,
+      controlActivations: fixture.calls.filter(({ operation }) => operation === "audio.activate").length,
+    },
+    {
+      activationResult: false,
+      retryResult: false,
+      state: "failed",
+      errorCode: "HOST_STATE_INVALID",
+      cleanupCalls: 1,
+      workletStartCalls: 1,
+      controlActivations: 0,
+    },
+  );
 });
 
 test("off-Pad window release and blur clear Pointer pressed state", async () => {
@@ -705,12 +814,19 @@ async function assertHostileCodeMapped({ configure, exercise }) {
   assert.equal(fixture.dom.elements.get("diagnostics").textContent.includes(hostileCode), false);
 }
 
-test("hostile runtime.warning code is mapped before entering diagnostics", async () => {
-  await assertHostileCodeMapped({
-    exercise(_controller, fixture, hostileCode) {
-      fixture.transport.emit("runtime.warning", { fatal: true, code: hostileCode });
-    },
-  });
+test("hostile runtime.warning code remains nonterminal and private", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const hostileCode = "/private/opfs/provider-secret";
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  fixture.transport.emit("runtime.warning", { fatal: true, code: hostileCode });
+  await settle();
+
+  assert.equal(controller.state, "audio-suspended");
+  assert.equal(controller.diagnostics().error_code, null);
+  assert.equal(fixture.dom.elements.get("diagnostics").textContent.includes(hostileCode), false);
+  assert.equal(fixture.cleanupCalls, 0);
 });
 
 test("hostile typed runtime observation code is mapped before entering diagnostics", async () => {
