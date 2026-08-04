@@ -901,6 +901,118 @@ test("a synchronously throwing runtime terminator cannot escape terminal cleanup
   assert.equal(controller.diagnostics().error_code, "IO_ERROR");
 });
 
+test("default terminal cleanup bounds Host close before releasing every resource", async () => {
+  const { defaultRuntimeTerminator } = await mainModule();
+  const cases = [
+    ["resolved", () => Promise.resolve({ ok: true })],
+    ["rejected", () => Promise.reject(new Error("close rejected"))],
+    ["already-failed", () => Promise.resolve({
+      ok: false,
+      error: { code: "HOST_STATE_INVALID" },
+    })],
+    ["synchronous-throw", () => {
+      throw new Error("close threw");
+    }],
+    ["timeout", () => new Promise(() => {})],
+  ];
+
+  for (const [label, close] of cases) {
+    const events = [];
+    let timeoutCallback = null;
+    const duplicateWorker = {
+      terminate() {
+        events.push("worker:duplicate");
+      },
+    };
+    const runtime = {
+      transport: {
+        send(request, options) {
+          events.push("host.close");
+          assert.deepEqual(request, {
+            protocol_version: 1,
+            request_id: "00000000-0000-0000-0000-000000000001",
+            operation: "host.close",
+            payload: {},
+          });
+          assert.deepEqual(options, { deadlineMs: 10_000 });
+          return close();
+        },
+      },
+      worklet: {
+        disconnect() {
+          events.push("worklet.disconnect");
+        },
+        port: {
+          close() {
+            events.push("worklet.port.close");
+          },
+        },
+      },
+      workers: [duplicateWorker, {
+        terminate() {
+          events.push("worker:runtime");
+        },
+      }],
+    };
+    const window = {
+      crypto: uuidSource(),
+      Module: {
+        PThread: {
+          runningWorkers: [duplicateWorker, {
+            terminate() {
+              events.push("worker:running");
+            },
+          }],
+          unusedWorkers: [{
+            terminate() {
+              events.push("worker:unused");
+            },
+          }],
+        },
+      },
+    };
+    const timers = {
+      setTimeout(callback, milliseconds) {
+        assert.equal(milliseconds, 10_000);
+        timeoutCallback = callback;
+        if (label === "timeout") {
+          queueMicrotask(callback);
+        }
+        return 7;
+      },
+      clearTimeout(handle) {
+        assert.equal(handle, 7);
+        timeoutCallback = null;
+      },
+    };
+    const audioContext = {
+      state: "running",
+      async close() {
+        events.push("audio.close");
+        this.state = "closed";
+      },
+    };
+
+    await assert.doesNotReject(defaultRuntimeTerminator({
+      runtime,
+      audioContext,
+      window,
+      timers,
+    }), label);
+    assert.deepEqual(events, [
+      "host.close",
+      "worklet.disconnect",
+      "worklet.port.close",
+      "audio.close",
+      "worker:duplicate",
+      "worker:runtime",
+      "worker:running",
+      "worker:unused",
+    ], label);
+    assert.equal(timeoutCallback, null, label);
+  }
+});
+
 test("fatal runtime observations and clean close use once-only terminal cleanup", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const fixture = harness();

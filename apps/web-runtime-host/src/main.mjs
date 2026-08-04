@@ -552,17 +552,64 @@ async function loadPackagedRuntime({ document, window, crypto, manifest }) {
   return runtime;
 }
 
-async function defaultRuntimeTerminator({ runtime, audioContext, window }) {
+export async function defaultRuntimeTerminator({
+  runtime,
+  audioContext,
+  window,
+  timers,
+}) {
+  const cleanupTimers = timers ?? {
+    setTimeout: (callback, milliseconds) =>
+      window.setTimeout(callback, milliseconds),
+    clearTimeout: (handle) => window.clearTimeout(handle),
+  };
+  let closeTimeout = null;
+  try {
+    const deadlineMs = deadlineForOperation("host.close");
+    const request = createRequestEnvelope({
+      operation: "host.close",
+      payload: {},
+      crypto: window.crypto,
+    });
+    const closeAttempt = Promise.resolve()
+      .then(() => runtime?.transport?.send?.(request, { deadlineMs }))
+      .catch(() => null);
+    const timeout = new Promise((resolvePromise) => {
+      closeTimeout = cleanupTimers.setTimeout(resolvePromise, deadlineMs);
+    });
+    await Promise.race([closeAttempt, timeout]);
+  } catch {
+    // Terminal cleanup is best effort and must continue through every resource.
+  } finally {
+    if (closeTimeout !== null) {
+      try {
+        cleanupTimers.clearTimeout(closeTimeout);
+      } catch {
+        // A hostile timer cannot prevent resource cleanup.
+      }
+    }
+  }
+
+  await Promise.resolve()
+    .then(() => runtime?.worklet?.disconnect?.())
+    .catch(() => {});
+  await Promise.resolve()
+    .then(() => runtime?.worklet?.port?.close?.())
+    .catch(() => {});
+  if (audioContext && audioContext.state !== "closed") {
+    await Promise.resolve()
+      .then(() => audioContext.close())
+      .catch(() => {});
+  }
   const workers = new Set([
     ...(runtime?.workers ?? []),
     ...(window?.Module?.PThread?.runningWorkers ?? []),
     ...(window?.Module?.PThread?.unusedWorkers ?? []),
   ]);
   for (const worker of workers) {
-    worker?.terminate?.();
-  }
-  if (audioContext && audioContext.state !== "closed") {
-    await audioContext.close();
+    await Promise.resolve()
+      .then(() => worker?.terminate?.())
+      .catch(() => {});
   }
 }
 
