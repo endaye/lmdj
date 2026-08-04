@@ -326,6 +326,34 @@ test("default source-shell hash gate fails before runtime load on mismatch", asy
   }
 });
 
+test("packaged runtime locator binds the verified AudioWorklet module and Wasm", async () => {
+  const { createPackagedRuntimeLocator } = await mainModule();
+  const locateFile = createPackagedRuntimeLocator({
+    baseURI: "https://runtime.test/product/index.html",
+    runtimeScriptURL:
+      "https://runtime.test/product/assets/runtime.1111111111111111111111111111111111111111111111111111111111111111.js",
+    runtimeWasmURL:
+      "https://runtime.test/product/assets/runtime.2222222222222222222222222222222222222222222222222222222222222222.wasm",
+  });
+
+  assert.equal(
+    locateFile("lmdj-web-runtime-host.js"),
+    "https://runtime.test/product/assets/runtime.1111111111111111111111111111111111111111111111111111111111111111.js",
+  );
+  assert.equal(
+    locateFile("runtime.2222222222222222222222222222222222222222222222222222222222222222.wasm"),
+    "https://runtime.test/product/assets/runtime.2222222222222222222222222222222222222222222222222222222222222222.wasm",
+  );
+  assert.equal(
+    locateFile("other.wasm"),
+    "https://runtime.test/product/other.wasm",
+  );
+  assert.equal(
+    locateFile("support.data"),
+    "https://runtime.test/product/support.data",
+  );
+});
+
 test("flattens Project Pad address exactly once immediately before the unified route", async () => {
   const { flattenPadSlot } = await mainModule();
   assert.equal(flattenPadSlot({ bank: 0, pad: 0 }), 0);

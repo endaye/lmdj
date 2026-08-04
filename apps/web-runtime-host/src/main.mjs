@@ -459,6 +459,25 @@ function assetForRole(manifest, role) {
   return matches[0];
 }
 
+export function createPackagedRuntimeLocator({
+  baseURI,
+  runtimeScriptURL,
+  runtimeWasmURL,
+}) {
+  const scriptURL = new URL(runtimeScriptURL, baseURI);
+  const wasmURL = new URL(runtimeWasmURL, baseURI);
+  const wasmRequestName = wasmURL.pathname.split("/").at(-1);
+  return (path) => {
+    if (path === "lmdj-web-runtime-host.js") {
+      return scriptURL.href;
+    }
+    if (path === wasmRequestName) {
+      return wasmURL.href;
+    }
+    return new URL(path, baseURI).href;
+  };
+}
+
 function sha256Integrity(hexDigest, window) {
   const bytes = new Uint8Array(
     hexDigest.match(/../g).map((value) => Number.parseInt(value, 16)),
@@ -473,6 +492,10 @@ function sha256Integrity(hexDigest, window) {
 async function loadPackagedRuntime({ document, window, crypto, manifest }) {
   const runtimeScript = assetForRole(manifest, "runtime_script");
   const runtimeWasm = assetForRole(manifest, "runtime_wasm");
+  const runtimeScriptURL = new URL(
+    `./${runtimeScript.path}`,
+    document.baseURI,
+  ).href;
   const wasmURL = new URL(`./${runtimeWasm.path}`, document.baseURI).href;
   const wasmResponse = await window.fetch(wasmURL, {
     cache: "force-cache",
@@ -490,13 +513,15 @@ async function loadPackagedRuntime({ document, window, crypto, manifest }) {
     lmdjHostManifestBytes: manifest.canonical_bytes,
     lmdjHostManifestSha256: manifest.manifest_sha256,
     wasmBinary: wasmBytes,
-    locateFile(path) {
-      return path.endsWith(".wasm") ? wasmURL : new URL(path, document.baseURI).href;
-    },
+    locateFile: createPackagedRuntimeLocator({
+      baseURI: document.baseURI,
+      runtimeScriptURL,
+      runtimeWasmURL: wasmURL,
+    }),
   };
   await new Promise((resolvePromise, rejectPromise) => {
     const script = document.createElement("script");
-    script.src = new URL(`./${runtimeScript.path}`, document.baseURI).href;
+    script.src = runtimeScriptURL;
     script.integrity = sha256Integrity(runtimeScript.sha256, window);
     script.crossOrigin = "anonymous";
     script.addEventListener("load", resolvePromise, { once: true });
