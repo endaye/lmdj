@@ -29,6 +29,11 @@ def main() -> int:
     product_cmake = repo_root / "products" / "lmdj" / "CMakeLists.txt"
     product_assembly = repo_root / "products" / "lmdj" / "assembly.json"
     root_cmake = repo_root / "CMakeLists.txt"
+    realtime_failure_spec = (
+        repo_root / "tests" / "platform" / "web" / "audio" / "realtime_failure.spec.mjs"
+    )
+    web_runtime_host_script = repo_root / "scripts" / "web-runtime-host.sh"
+    web_toolchain_script = repo_root / "scripts" / "web-toolchain-conformance.sh"
 
     required_files = [
         host_cmake,
@@ -38,6 +43,9 @@ def main() -> int:
         product_cmake,
         product_assembly,
         root_cmake,
+        realtime_failure_spec,
+        web_runtime_host_script,
+        web_toolchain_script,
     ]
     for path in required_files:
         require(path.is_file(), f"required Task 6 source is missing: {path}")
@@ -46,6 +54,10 @@ def main() -> int:
         source_root.glob("*.hpp")
     )
     source = combined_text(source_files)
+    control_runtime_source = (source_root / "control_runtime.cpp").read_text(
+        encoding="utf-8"
+    )
+    bridge_source = (source_root / "bridge.cpp").read_text(encoding="utf-8")
     cmake = combined_text([host_cmake, root_cmake, product_cmake])
 
     forbidden_source = {
@@ -162,6 +174,91 @@ def main() -> int:
         "src/control_runtime.cpp" in host_cmake_text
         and "src/bridge.cpp" in host_cmake_text,
         "Host CMake does not compile the actual Task 6 sources",
+    )
+    outcome_drain = re.search(
+        r"ControlRuntime::drain_outcomes\(\)\s*\{(.*?)\n\}",
+        control_runtime_source,
+        re.DOTALL,
+    )
+    require(outcome_drain is not None, "Control outcome drain is missing")
+    require(
+        "result.insert" not in outcome_drain.group(1),
+        "Control outcome drain must not form a runtime-count iterator endpoint "
+        "for a fixed array",
+    )
+    require(
+        re.search(
+            r"for\s*\([^)]*<\s*count[^)]*\).*?result\.push_back",
+            outcome_drain.group(1),
+            re.DOTALL,
+        )
+        is not None,
+        "Control outcome drain must copy the bounded fixed array explicitly",
+    )
+    diagnostic_drain = re.search(
+        r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
+        bridge_source,
+        re.DOTALL,
+    )
+    require(diagnostic_drain is not None, "diagnostic outcome drain is missing")
+    require(
+        "&drain_outcomes_on_control" not in diagnostic_drain.group(1),
+        "diagnostic outcome drain must not self-requeue while a mirror is writing",
+    )
+    failure_spec_text = realtime_failure_spec.read_text(encoding="utf-8")
+    submission_helper = re.search(
+        r"window\.__lmdjRealtimeFailureSubmit\s*=\s*async\s*"
+        r"\([^)]*\)\s*=>\s*\{(.*?)\n\s{4}\};",
+        failure_spec_text,
+        re.DOTALL,
+    )
+    require(submission_helper is not None, "realtime failure submit helper is missing")
+    helper_body = submission_helper.group(1)
+    direct_submit = re.search(
+        r"ccall\(\s*[\"']lmdj_web_host_submit[\"']\s*,\s*[\"']number[\"']"
+        r"\s*,\s*\[[^\]]*\]\s*,\s*\[(.*?)\]\s*,?\s*\)",
+        helper_body,
+        re.DOTALL,
+    )
+    require(direct_submit is not None, "realtime failure direct native submit is missing")
+    require(
+        re.search(
+            r",\s*performance\.timeOrigin\s*\+\s*deadline\s*,?\s*$",
+            direct_submit.group(1).strip(),
+        )
+        is not None,
+        "realtime failure direct submit must pass an absolute Emscripten cutoff",
+    )
+    require(
+        re.search(
+            r"while\s*\(\s*performance\.now\(\)\s*<\s*deadline\s*\)",
+            helper_body,
+        )
+        is not None,
+        "realtime failure response polling must retain the monotonic deadline",
+    )
+    runtime_gate = re.search(
+        r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",
+        web_runtime_host_script.read_text(encoding="utf-8"),
+        re.DOTALL,
+    )
+    require(runtime_gate is not None, "Web Runtime Host AudioWorklet gate is missing")
+    require(
+        "audio/realtime_audio_worklet.spec.mjs" in runtime_gate.group(1)
+        and "audio/realtime_failure.spec.mjs" in runtime_gate.group(1),
+        "Web Runtime Host stable AudioWorklet gate must run both realtime specs",
+    )
+    toolchain_proof = re.search(
+        r"\n\s{2}proof\)\n(.*?)\n\s{4}echo\s+"
+        r"[\"']Web Toolchain Conformance Proof: PASS[\"']",
+        web_toolchain_script.read_text(encoding="utf-8"),
+        re.DOTALL,
+    )
+    require(toolchain_proof is not None, "Web Toolchain proof block is missing")
+    require(
+        "audio/realtime_audio_worklet.spec.mjs" in toolchain_proof.group(1)
+        and "audio/realtime_failure.spec.mjs" in toolchain_proof.group(1),
+        "Web Toolchain stable proof must run both realtime specs",
     )
     for required_flag in [
         "-pthread",

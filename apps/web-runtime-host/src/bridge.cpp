@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <span>
 #include <string>
 #include <string_view>
@@ -42,6 +43,42 @@ struct ConformanceOutcomeMirror {
 };
 
 ConformanceOutcomeMirror conformance_outcome_mirror;
+std::atomic<bool> conformance_outcome_mirror_writer_pending{false};
+std::atomic<bool> conformance_outcome_mirror_writer_release{false};
+std::atomic<bool> conformance_outcome_mirror_writer_timed_out{false};
+
+struct ConformanceOutcomeWriterRequest {
+  std::uint32_t sequence = 0;
+  std::uint32_t outcome = 0;
+  std::uint32_t runtime_frame = 0;
+};
+
+enum class ConformanceOutcomeMirrorRead : std::uint8_t {
+  unavailable,
+  writing,
+  consumed,
+};
+
+ConformanceOutcomeMirrorRead consume_conformance_outcome_mirror(
+    std::span<lmdj::audio::RuntimeTriggerOutcomeEvent> destination,
+    std::size_t& count) noexcept {
+  std::uint32_t expected = 2;
+  if (!conformance_outcome_mirror.state.compare_exchange_strong(
+          expected,
+          1,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return expected == 1 ? ConformanceOutcomeMirrorRead::writing
+                         : ConformanceOutcomeMirrorRead::unavailable;
+  }
+  count = std::min(
+      conformance_outcome_mirror.count, destination.size());
+  std::copy_n(
+      conformance_outcome_mirror.events.begin(), count, destination.begin());
+  conformance_outcome_mirror.count = 0;
+  conformance_outcome_mirror.state.store(0, std::memory_order_release);
+  return ConformanceOutcomeMirrorRead::consumed;
+}
 
 void mirror_conformance_outcomes(
     std::span<const lmdj::audio::RuntimeTriggerOutcomeEvent> outcomes)
@@ -1429,8 +1466,59 @@ void fail_processor_error_on_control(void*) noexcept {
   }
 }
 
+void write_conformance_outcome_on_control(void* context) noexcept {
+  std::unique_ptr<ConformanceOutcomeWriterRequest> request{
+      static_cast<ConformanceOutcomeWriterRequest*>(context)};
+  std::uint32_t expected = 0;
+  if (!conformance_outcome_mirror.state.compare_exchange_strong(
+          expected,
+          1,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    conformance_outcome_mirror_writer_pending.store(
+        false, std::memory_order_release);
+    return;
+  }
+  conformance_outcome_mirror.count = 1;
+  conformance_outcome_mirror.events[0] = RuntimeTriggerOutcomeEvent{
+      request->sequence,
+      static_cast<lmdj::audio::RuntimeTriggerOutcome>(request->outcome),
+      static_cast<std::uint64_t>(request->runtime_frame),
+  };
+
+  const auto deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds{5};
+  while (!conformance_outcome_mirror_writer_release.load(
+             std::memory_order_acquire) &&
+         std::chrono::steady_clock::now() < deadline) {
+    std::this_thread::yield();
+  }
+  if (conformance_outcome_mirror_writer_release.load(
+          std::memory_order_acquire)) {
+    conformance_outcome_mirror.state.store(2, std::memory_order_release);
+  } else {
+    conformance_outcome_mirror.count = 0;
+    conformance_outcome_mirror_writer_timed_out.store(
+        true, std::memory_order_release);
+    conformance_outcome_mirror.state.store(0, std::memory_order_release);
+  }
+  conformance_outcome_mirror_writer_pending.store(
+      false, std::memory_order_release);
+}
+
 void drain_outcomes_on_control(void*) noexcept {
   if (web_runtime == nullptr) {
+    outcome_diagnostic.count = 0;
+    outcome_diagnostic.state.store(3, std::memory_order_release);
+    return;
+  }
+  const auto mirrored = consume_conformance_outcome_mirror(
+      outcome_diagnostic.events, outcome_diagnostic.count);
+  if (mirrored == ConformanceOutcomeMirrorRead::consumed) {
+    outcome_diagnostic.state.store(2, std::memory_order_release);
+    return;
+  }
+  if (mirrored == ConformanceOutcomeMirrorRead::writing) {
     outcome_diagnostic.count = 0;
     outcome_diagnostic.state.store(3, std::memory_order_release);
     return;
@@ -1898,19 +1986,10 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_request_outcomes() {
           std::memory_order_acquire)) {
     return 0;
   }
-  std::uint32_t mirrored = 2;
-  if (conformance_outcome_mirror.state.compare_exchange_strong(
-          mirrored,
-          1,
-          std::memory_order_acq_rel,
-          std::memory_order_acquire)) {
-    outcome_diagnostic.count = conformance_outcome_mirror.count;
-    std::copy_n(
-        conformance_outcome_mirror.events.begin(),
-        outcome_diagnostic.count,
-        outcome_diagnostic.events.begin());
-    conformance_outcome_mirror.count = 0;
-    conformance_outcome_mirror.state.store(0, std::memory_order_release);
+  if (consume_conformance_outcome_mirror(
+          outcome_diagnostic.events,
+          outcome_diagnostic.count) ==
+      ConformanceOutcomeMirrorRead::consumed) {
     outcome_diagnostic.state.store(2, std::memory_order_release);
     return 1;
   }
@@ -1923,6 +2002,65 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_request_outcomes() {
     return 0;
   }
   return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_queue_outcome_mirror_write(
+    std::uint32_t sequence,
+    std::uint32_t outcome,
+    std::uint32_t runtime_frame) {
+  if (outcome > 1 || web_proxy_queue == nullptr ||
+      conformance_outcome_mirror.state.load(std::memory_order_acquire) != 0) {
+    return 0;
+  }
+  bool expected = false;
+  if (!conformance_outcome_mirror_writer_pending.compare_exchange_strong(
+          expected,
+          true,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return 0;
+  }
+  conformance_outcome_mirror_writer_release.store(
+      false, std::memory_order_release);
+  conformance_outcome_mirror_writer_timed_out.store(
+      false, std::memory_order_release);
+  auto* request = new (std::nothrow) ConformanceOutcomeWriterRequest{
+      sequence, outcome, runtime_frame};
+  if (request == nullptr ||
+      emscripten_proxy_async(
+          web_proxy_queue,
+          web_control_thread,
+          &write_conformance_outcome_on_control,
+          request) == 0) {
+    delete request;
+    conformance_outcome_mirror_writer_pending.store(
+        false, std::memory_order_release);
+    return 0;
+  }
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_release_outcome_mirror_write() {
+  if (!conformance_outcome_mirror_writer_pending.load(
+          std::memory_order_acquire)) {
+    return 0;
+  }
+  conformance_outcome_mirror_writer_release.store(
+      true, std::memory_order_release);
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_outcome_mirror_state() {
+  return conformance_outcome_mirror.state.load(std::memory_order_acquire);
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_outcome_mirror_writer_timed_out() {
+  return conformance_outcome_mirror_writer_timed_out.load(
+             std::memory_order_acquire)
+             ? 1
+             : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE std::uint32_t lmdj_web_audio_test_outcome_state() {

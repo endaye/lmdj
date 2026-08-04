@@ -1555,7 +1555,13 @@ ControlRuntime::drain_outcomes() {
   result.reserve(64);
   std::array<audio::RuntimeTriggerOutcomeEvent, 64> batch{};
   const auto count = impl_->engine.drain_trigger_outcomes(batch);
-  result.insert(result.end(), batch.begin(), batch.begin() + count);
+  if (count > batch.size()) {
+    fail_and_seal("trigger_outcome_batch_overflow");
+    return {};
+  }
+  for (std::size_t index = 0; index < count; ++index) {
+    result.push_back(batch[index]);
+  }
   if (!validate_realtime_health()) {
     return {};
   }

@@ -726,10 +726,86 @@ if (typeof window !== "undefined") {
       };
     }
 
+    let lastRenderProofDeadlines = null;
+
+    function readDiagnosticOutcome() {
+      const count = Module["_lmdj_web_audio_test_outcome_count"]();
+      return count === 0
+        ? {count: 0}
+        : {
+            count,
+            sequence: Module["_lmdj_web_audio_test_outcome_sequence"](0),
+            outcome:
+              Module["_lmdj_web_audio_test_outcome_code"](0) === 0
+                ? "voice_started"
+                : "voice_capacity",
+            runtime_frame:
+              Module["_lmdj_web_audio_test_outcome_frame"](0),
+          };
+    }
+
+    async function requestAndDrainOutcomes({
+      budgetMs = 30_000,
+      onRequested = null,
+    } = {}) {
+      Module["_lmdj_web_audio_test_clear_outcomes"]();
+      if (Module["_lmdj_web_audio_test_request_outcomes"]() !== 1) {
+        throw new Error("outcome drain request was rejected");
+      }
+      const outcomeStartedAt = performance.now();
+      const outcomeDeadline = outcomeStartedAt + budgetMs;
+      if (onRequested !== null) {
+        onRequested({outcomeStartedAt, outcomeDeadline});
+      }
+      while (
+        Module["_lmdj_web_audio_test_outcome_state"]() === 1 &&
+        performance.now() < outcomeDeadline
+      ) await delay(2);
+      return {
+        outcomeStartedAt,
+        outcomeDeadline,
+        outcomeReadyAt: performance.now(),
+        state: Module["_lmdj_web_audio_test_outcome_state"](),
+        outcome: readDiagnosticOutcome(),
+      };
+    }
+
+    async function queueSyntheticOutcomeWriter(
+      sequence,
+      outcome = 0,
+      runtimeFrame = 256,
+    ) {
+      if (Module[
+        "_lmdj_web_audio_test_queue_outcome_mirror_write"
+      ](sequence, outcome, runtimeFrame) !== 1) {
+        throw new Error("outcome mirror writer was rejected");
+      }
+      const writerDeadline = performance.now() + 3_000;
+      while (
+        Module["_lmdj_web_audio_test_outcome_mirror_state"]() !== 1 &&
+        Module[
+          "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+        ]() === 0 &&
+        performance.now() < writerDeadline
+      ) await delay(2);
+      if (Module["_lmdj_web_audio_test_outcome_mirror_state"]() !== 1) {
+        throw new Error("outcome mirror writer did not enter writing state");
+      }
+    }
+
+    function releaseSyntheticOutcomeWriter() {
+      if (Module[
+        "_lmdj_web_audio_test_release_outcome_mirror_write"
+      ]() !== 1) {
+        throw new Error("outcome mirror writer release was rejected");
+      }
+    }
+
     async function waitForRenderProof(expected) {
-      const deadline = performance.now() + 30_000;
+      const renderStartedAt = performance.now();
+      const renderDeadline = renderStartedAt + 30_000;
       let status = null;
-      while (performance.now() < deadline) {
+      while (performance.now() < renderDeadline) {
         status = await submit("host.status", {});
         if (
           status.ok &&
@@ -741,15 +817,14 @@ if (typeof window !== "undefined") {
       if (!status?.ok || status.result.acknowledged_generation !== expected) {
         throw new Error("Worklet generation acknowledgement timed out");
       }
-      Module["_lmdj_web_audio_test_clear_outcomes"]();
-      if (Module["_lmdj_web_audio_test_request_outcomes"]() !== 1) {
-        throw new Error("outcome drain request was rejected");
-      }
-      while (
-        Module["_lmdj_web_audio_test_outcome_state"]() === 1 &&
-        performance.now() < deadline
-      ) await delay(2);
-      const count = Module["_lmdj_web_audio_test_outcome_count"]();
+      const drained = await requestAndDrainOutcomes();
+      lastRenderProofDeadlines = Object.freeze({
+        renderStartedAt,
+        renderDeadline,
+        outcomeStartedAt: drained.outcomeStartedAt,
+        outcomeDeadline: drained.outcomeDeadline,
+      });
+      const count = drained.outcome.count;
       if (count < 1) throw new Error("no realtime outcome was drained");
       return {status, count};
     }
@@ -784,7 +859,133 @@ if (typeof window !== "undefined") {
             channels: 2,
             frames: Module["_lmdj_web_audio_test_observed_frames"](),
           },
+          deadlines: lastRenderProofDeadlines,
         };
+      },
+
+      async runFreshOutcomeDeadlineProof() {
+        const expectedSequence = 51_515;
+        const renderStartedAt = performance.now();
+        const renderDeadline = renderStartedAt + 20;
+        let writerQueued = false;
+        let writerReleased = false;
+        let releasePromise = null;
+        try {
+          await queueSyntheticOutcomeWriter(expectedSequence);
+          writerQueued = true;
+          while (performance.now() <= renderDeadline) await delay(2);
+          const drained = await requestAndDrainOutcomes({
+            budgetMs: 1_000,
+            onRequested: () => {
+              releasePromise = (async () => {
+                await delay(25);
+                releaseSyntheticOutcomeWriter();
+                writerReleased = true;
+              })();
+            },
+          });
+          await releasePromise;
+          if (drained.outcome.count < 1) {
+            throw new Error("no outcome arrived within its fresh budget");
+          }
+          if (Module[
+            "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+          ]() !== 0) {
+            throw new Error("outcome mirror writer timed out");
+          }
+          return {
+            expectedSequence,
+            renderStartedAt,
+            renderDeadline,
+            outcomeStartedAt: drained.outcomeStartedAt,
+            outcomeDeadline: drained.outcomeDeadline,
+            outcomeReadyAt: drained.outcomeReadyAt,
+            outcome: drained.outcome,
+          };
+        } finally {
+          if (releasePromise !== null) {
+            await releasePromise;
+          } else if (writerQueued && !writerReleased) {
+            releaseSyntheticOutcomeWriter();
+          }
+        }
+      },
+
+      async runOutcomeMirrorRaceProof() {
+        const expectedSequence = 42_424;
+        let writerQueued = false;
+        let writerReleased = false;
+        try {
+          await queueSyntheticOutcomeWriter(expectedSequence);
+          writerQueued = true;
+          const firstDrain = await requestAndDrainOutcomes({
+            budgetMs: 1_000,
+            onRequested: () => {
+              releaseSyntheticOutcomeWriter();
+              writerReleased = true;
+            },
+          });
+          const secondDrain = await requestAndDrainOutcomes({budgetMs: 1_000});
+          if (Module[
+            "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+          ]() !== 0) {
+            throw new Error("outcome mirror writer timed out");
+          }
+          return {
+            expectedSequence,
+            writerTimedOut: false,
+            first: firstDrain.outcome,
+            second: {
+              state: secondDrain.state,
+              count: secondDrain.outcome.count,
+            },
+          };
+        } finally {
+          if (writerQueued && !writerReleased) {
+            releaseSyntheticOutcomeWriter();
+          }
+        }
+      },
+
+      async runOutcomeMirrorWriterTimeoutProof() {
+        const expectedSequence = 61_616;
+        let writerMayNeedRelease = false;
+        try {
+          await queueSyntheticOutcomeWriter(expectedSequence);
+          writerMayNeedRelease = true;
+          const firstDrain = await requestAndDrainOutcomes({budgetMs: 7_000});
+          const writerTimedOut = Module[
+            "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+          ]() === 1;
+          if (writerTimedOut) writerMayNeedRelease = false;
+          const followupDrain = await requestAndDrainOutcomes({
+            budgetMs: 1_000,
+          });
+          return {
+            writerTimedOut,
+            writerElapsedMs:
+              firstDrain.outcomeReadyAt - firstDrain.outcomeStartedAt,
+            mirrorState:
+              Module["_lmdj_web_audio_test_outcome_mirror_state"](),
+            first: {
+              state: firstDrain.state,
+              count: firstDrain.outcome.count,
+            },
+            followup: {
+              state: followupDrain.state,
+              count: followupDrain.outcome.count,
+            },
+            followupElapsedMs:
+              followupDrain.outcomeReadyAt - followupDrain.outcomeStartedAt,
+          };
+        } finally {
+          if (
+            writerMayNeedRelease &&
+            Module["_lmdj_web_audio_test_outcome_mirror_state"]() === 1
+          ) {
+            releaseSyntheticOutcomeWriter();
+          }
+        }
       },
 
       engineRenderCalls() {

@@ -93,6 +93,73 @@ test("shared RealtimeEngine renders a current Bank in the Wasm AudioWorklet", as
     channels: 2,
     frames: 128,
   });
+  expect(
+    proof.deadlines.renderDeadline - proof.deadlines.renderStartedAt,
+  ).toBeCloseTo(30_000, 6);
+  expect(
+    proof.deadlines.outcomeDeadline - proof.deadlines.outcomeStartedAt,
+  ).toBeCloseTo(30_000, 6);
+  expect(proof.deadlines.outcomeStartedAt).toBeGreaterThanOrEqual(
+    proof.deadlines.renderStartedAt,
+  );
+  expect(proof.deadlines.outcomeDeadline).toBeGreaterThanOrEqual(
+    proof.deadlines.renderDeadline,
+  );
+});
+
+
+test("outcome drain receives a fresh budget after the render budget expires", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const proof = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.runFreshOutcomeDeadlineProof());
+  expect(proof.renderDeadline).toBeLessThan(proof.outcomeStartedAt);
+  expect(proof.outcomeReadyAt).toBeGreaterThan(proof.renderDeadline);
+  expect(proof.outcomeReadyAt).toBeLessThan(proof.outcomeDeadline);
+  expect(proof.outcome).toEqual({
+    count: 1,
+    sequence: proof.expectedSequence,
+    outcome: "voice_started",
+    runtime_frame: expect.any(Number),
+  });
+});
+
+
+test("an outcome mirrored during a diagnostic request is delivered exactly once", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const proof = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.runOutcomeMirrorRaceProof());
+  expect(proof.writerTimedOut).toBe(false);
+  expect(proof.first).toEqual({
+    count: 1,
+    sequence: proof.expectedSequence,
+    outcome: "voice_started",
+    runtime_frame: expect.any(Number),
+  });
+  expect(proof.first.runtime_frame).toBeGreaterThanOrEqual(0);
+  expect(proof.second).toEqual({state: 2, count: 0});
+});
+
+
+test("an unreleased proof writer times out without occupying Control", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page, 48_000)).ok).toBe(true);
+
+  const proof = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.runOutcomeMirrorWriterTimeoutProof());
+  expect(proof.writerTimedOut).toBe(true);
+  expect(proof.writerElapsedMs).toBeGreaterThanOrEqual(4_500);
+  expect(proof.writerElapsedMs).toBeLessThan(7_000);
+  expect(proof.mirrorState).toBe(0);
+  expect(proof.first).toEqual({state: 2, count: 0});
+  expect(proof.followup).toEqual({state: 2, count: 0});
+  expect(proof.followupElapsedMs).toBeLessThan(1_000);
 });
 
 

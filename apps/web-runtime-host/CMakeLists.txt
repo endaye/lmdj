@@ -142,6 +142,10 @@ if(EMSCRIPTEN)
       _lmdj_web_audio_test_generation_matches
       _lmdj_web_audio_test_processor_error
       _lmdj_web_audio_test_request_outcomes
+      _lmdj_web_audio_test_queue_outcome_mirror_write
+      _lmdj_web_audio_test_release_outcome_mirror_write
+      _lmdj_web_audio_test_outcome_mirror_state
+      _lmdj_web_audio_test_outcome_mirror_writer_timed_out
       _lmdj_web_audio_test_outcome_state
       _lmdj_web_audio_test_outcome_count
       _lmdj_web_audio_test_outcome_sequence
