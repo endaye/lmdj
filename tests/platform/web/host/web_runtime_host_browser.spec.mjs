@@ -726,8 +726,18 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   expect(runtimeModuleRequests.filter(
     (pathname) => pathname === runtimeScriptPathname,
   ).length).toBeGreaterThanOrEqual(2);
-  expect(success(await hostRequest(page, "host.close", {}), "host.close").state)
-    .toBe("closed");
+  const closeMarker = await observationMarker(page);
+  expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
+    .toBe(true);
+  const closeResponses = await page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start)
+      .filter(({ operation }) => operation === "host.close"),
+  closeMarker.responses);
+  expect(closeResponses).toHaveLength(1);
+  expect(success(closeResponses[0].response, "host.close").state).toBe("closed");
+  await expect(page.locator("#host-state")).toHaveText("closed");
+  expect(await page.evaluate(() => window.lmdjWebRuntimeHost.transport.terminated))
+    .toBe(true);
 });
 
 
