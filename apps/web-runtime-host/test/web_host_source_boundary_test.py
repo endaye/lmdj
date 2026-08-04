@@ -195,6 +195,24 @@ def main() -> int:
         is not None,
         "Control outcome drain must copy the bounded fixed array explicitly",
     )
+    capture_finish = re.search(
+        r"foundation::Result<void> finish_capture\(bool make_committable\)\s*"
+        r"\{(.*?)\n  \}",
+        control_runtime_source,
+        re.DOTALL,
+    )
+    require(capture_finish is not None, "Control capture finish barrier is missing")
+    capture_finish_body = capture_finish.group(1)
+    require(
+        "std::this_thread::yield()" not in capture_finish_body,
+        "Emscripten capture barriers must not busy-wait with a non-yielding "
+        "sched_yield implementation",
+    )
+    require(
+        "std::this_thread::sleep_for" in capture_finish_body,
+        "capture barriers must give the AudioWorklet render thread processor "
+        "capacity while polling the terminal condition",
+    )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
         bridge_source,

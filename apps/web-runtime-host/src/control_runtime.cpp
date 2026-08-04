@@ -754,6 +754,17 @@ struct ControlRuntime::Impl {
     const auto deadline = request_deadline.value_or(
         std::chrono::steady_clock::now() +
         std::chrono::milliseconds(kCaptureDeadlineMs));
+    const auto await_capture_progress = [&deadline] {
+      const auto now = std::chrono::steady_clock::now();
+      if (now >= deadline) {
+        return;
+      }
+      const auto poll_interval =
+          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+              std::chrono::milliseconds(1));
+      std::this_thread::sleep_for(
+          std::min(deadline - now, poll_interval));
+    };
     auto capture = engine.capture_telemetry().state;
     while (capture == audio::CaptureState::arm_pending) {
       if (std::chrono::steady_clock::now() >= deadline) {
@@ -762,7 +773,7 @@ struct ControlRuntime::Impl {
             "capture barrier timed out",
         });
       }
-      std::this_thread::yield();
+      await_capture_progress();
       capture = engine.capture_telemetry().state;
     }
     if (capture == audio::CaptureState::active) {
@@ -780,7 +791,7 @@ struct ControlRuntime::Impl {
             "capture barrier timed out",
         });
       }
-      std::this_thread::yield();
+      await_capture_progress();
       capture = engine.capture_telemetry().state;
     }
     if (capture == audio::CaptureState::corrupted) {
