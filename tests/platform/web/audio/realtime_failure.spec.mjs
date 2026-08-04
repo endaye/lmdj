@@ -52,8 +52,8 @@ async function installSubmissionHelper(page) {
       const submitted = window.Module.ccall(
         "lmdj_web_host_submit",
         "number",
-        ["array", "number", "array", "number"],
-        [envelope, envelope.byteLength, new Uint8Array(), 0],
+        ["array", "number", "array", "number", "number"],
+        [envelope, envelope.byteLength, new Uint8Array(), 0, 30_000],
       );
       if (submitted !== 0) {
         throw new Error(`Host submit failed: ${operation}: ${submitted}`);

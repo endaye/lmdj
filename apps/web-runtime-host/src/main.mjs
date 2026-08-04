@@ -556,14 +556,25 @@ export async function defaultRuntimeTerminator({
   runtime,
   audioContext,
   window,
-  timers,
 }) {
-  const cleanupTimers = timers ?? {
-    setTimeout: (callback, milliseconds) =>
-      window.setTimeout(callback, milliseconds),
-    clearTimeout: (handle) => window.clearTimeout(handle),
-  };
-  let closeTimeout = null;
+  let transportTerminated = false;
+  try {
+    runtime?.transport?.terminate?.();
+    transportTerminated = typeof runtime?.transport?.terminate === "function";
+  } catch {
+    // Fall through to direct Worker termination.
+  }
+  if (!transportTerminated) {
+    const workers = new Set(runtime?.workers ?? []);
+    for (const worker of workers) {
+      try {
+        worker?.terminate?.();
+      } catch {
+        // Terminal cleanup is best effort and continues through every resource.
+      }
+    }
+  }
+
   try {
     const deadlineMs = deadlineForOperation("host.close");
     const request = createRequestEnvelope({
@@ -571,23 +582,10 @@ export async function defaultRuntimeTerminator({
       payload: {},
       crypto: window.crypto,
     });
-    const closeAttempt = Promise.resolve()
-      .then(() => runtime?.transport?.send?.(request, { deadlineMs }))
+    Promise.resolve(runtime?.transport?.send?.(request, { deadlineMs }))
       .catch(() => null);
-    const timeout = new Promise((resolvePromise) => {
-      closeTimeout = cleanupTimers.setTimeout(resolvePromise, deadlineMs);
-    });
-    await Promise.race([closeAttempt, timeout]);
   } catch {
-    // Terminal cleanup is best effort and must continue through every resource.
-  } finally {
-    if (closeTimeout !== null) {
-      try {
-        cleanupTimers.clearTimeout(closeTimeout);
-      } catch {
-        // A hostile timer cannot prevent resource cleanup.
-      }
-    }
+    // A clean close attempt cannot delay terminal Worker termination.
   }
 
   await Promise.resolve()
@@ -599,16 +597,6 @@ export async function defaultRuntimeTerminator({
   if (audioContext && audioContext.state !== "closed") {
     await Promise.resolve()
       .then(() => audioContext.close())
-      .catch(() => {});
-  }
-  const workers = new Set([
-    ...(runtime?.workers ?? []),
-    ...(window?.Module?.PThread?.runningWorkers ?? []),
-    ...(window?.Module?.PThread?.unusedWorkers ?? []),
-  ]);
-  for (const worker of workers) {
-    await Promise.resolve()
-      .then(() => worker?.terminate?.())
       .catch(() => {});
   }
 }
@@ -668,6 +656,12 @@ export function createWebRuntimeHostController(options = {}) {
         }
         return runtime.transport.subscribe(listener);
       },
+      subscribeFailure(listener) {
+        if (typeof runtime?.transport?.subscribeFailure !== "function") {
+          return () => {};
+        }
+        return runtime.transport.subscribeFailure(listener);
+      },
     });
   const runtimeTerminator =
     options.runtimeTerminator ??
@@ -699,6 +693,7 @@ export function createWebRuntimeHostController(options = {}) {
   let terminalCleanupStarted = false;
   let terminalCleanupPromise = null;
   let unsubscribeTransport = null;
+  let unsubscribeTransportFailure = null;
   let expectedContextSuspend = false;
   let visibilityHidden = false;
   let pageHidden = false;
@@ -814,6 +809,8 @@ export function createWebRuntimeHostController(options = {}) {
     clearPressed();
     unsubscribeTransport?.();
     unsubscribeTransport = null;
+    unsubscribeTransportFailure?.();
+    unsubscribeTransportFailure = null;
     for (const dispose of listenerDisposers.splice(0)) {
       dispose();
     }
@@ -1497,6 +1494,9 @@ export function createWebRuntimeHostController(options = {}) {
     }
     if (typeof transport.subscribe === "function") {
       unsubscribeTransport = transport.subscribe(observeNotification);
+    }
+    if (typeof transport.subscribeFailure === "function") {
+      unsubscribeTransportFailure = transport.subscribeFailure(fail);
     }
   }
 

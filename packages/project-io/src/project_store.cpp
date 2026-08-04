@@ -25,6 +25,8 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 
+#include "publish_token.hpp"
+
 namespace lmdj::project_io {
 namespace {
 // Every JSON document below arrives from disk and is therefore external input.
@@ -1579,12 +1581,31 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   const auto manifest_bytes = foundation::canonical_json(
                                   manifest_json(revision, loaded.transactions)) +
                               "\n";
+  if (!detail::claim_publish()) {
+    const auto transaction_cleanup = platform->remove(transaction_final);
+    const auto checkpoint_cleanup = platform->remove(checkpoint_final);
+    if (!transaction_cleanup.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          transaction_cleanup.error());
+    }
+    if (!checkpoint_cleanup.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          checkpoint_cleanup.error());
+    }
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "Project mutation was cancelled before publication",
+        });
+  }
   written = platform->replace_complete(
       bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
+    detail::abort_publish();
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
+  detail::commit_publish();
 
   const auto cleanup =
       complete_journal_cleanup(*platform, bundle, cleanup_take_id);
@@ -1717,11 +1738,23 @@ foundation::Result<void> ProjectStore::create(
 
   const auto manifest_bytes =
       foundation::canonical_json(manifest_json(0, {})) + "\n";
+  if (!detail::claim_publish()) {
+    const auto cleanup = platform_->remove(checkpoint_final);
+    return cleanup.has_value()
+               ? foundation::Result<void>::failure(
+                     Error{
+                         ErrorCode::internal_error,
+                         "Project creation was cancelled before publication",
+                     })
+               : cleanup;
+  }
   auto written = platform_->replace_complete(
       bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
+    detail::abort_publish();
     return written;
   }
+  detail::commit_publish();
   return foundation::Result<void>::success();
 }
 

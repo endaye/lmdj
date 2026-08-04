@@ -2560,6 +2560,54 @@ void test_bridge_rechecks_deadline_before_success_publication() {
       bridge->poll(output, required) == BridgePollStatus::failed);
 }
 
+void test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(994);
+  const auto status = encode(request(
+      request_id, "host.status", Json::object()));
+
+  LMDJ_CHECK(
+      bridge->submit(status, {}, std::chrono::milliseconds(0)) ==
+      BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+}
+
+void test_bridge_rechecks_deadline_before_error_publication() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  proxy.response_delay_ms = 1'050;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(993);
+  const auto malformed = encode(request(
+      request_id, "host.status", {{"unexpected", true}}));
+
+  LMDJ_CHECK(
+      bridge->submit(malformed, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+}
+
 void test_internal_audio_activation_timeout_is_terminal_after_response() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -2655,6 +2703,8 @@ int main() {
     test_bridge_emits_only_real_snapshot_notifications_after_response();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_rechecks_deadline_before_success_publication();
+    test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
+    test_bridge_rechecks_deadline_before_error_publication();
     test_internal_audio_activation_timeout_is_terminal_after_response();
     test_bridge_preserves_error_responses_for_an_externally_failed_runtime();
   } catch (const std::exception& error) {

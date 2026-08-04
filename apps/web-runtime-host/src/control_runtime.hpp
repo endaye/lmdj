@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <vector>
@@ -90,6 +91,12 @@ enum class BridgePollStatus : std::uint8_t {
   failed,
 };
 
+enum class BridgeCancelStatus : std::int8_t {
+  not_found = -1,
+  publish_claimed = 0,
+  cancelled = 1,
+};
+
 struct BridgeHooks {
   void* context;
   bool (*schedule)(
@@ -110,10 +117,13 @@ class ControlBridge final {
 
   BridgeSubmitStatus submit(
       std::span<const std::byte> envelope,
-      std::span<const std::byte> sidecar) noexcept;
+      std::span<const std::byte> sidecar,
+      std::optional<std::chrono::milliseconds> caller_deadline =
+          std::nullopt) noexcept;
   BridgePollStatus poll(
       std::span<std::byte> output,
       std::size_t& required) noexcept;
+  BridgeCancelStatus cancel(std::string_view request_id) noexcept;
   bool failed() const noexcept;
 
  private:

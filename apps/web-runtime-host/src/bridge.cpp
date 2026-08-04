@@ -18,6 +18,7 @@
 #include <utility>
 
 #include <lmdj/foundation/json.hpp>
+#include <lmdj/facade/mutation_publish_scope.hpp>
 
 #if defined(__EMSCRIPTEN__)
 #include <pthread.h>
@@ -80,6 +81,13 @@ enum class RequestState : std::uint8_t {
 };
 
 enum class MessageState : std::uint8_t { free, reserved, ready };
+
+enum class PublicationState : std::uint8_t {
+  open,
+  cancelled,
+  publish_claimed,
+  committed,
+};
 
 bool exact_keys(
     const Json& value,
@@ -195,8 +203,11 @@ struct ControlBridge::Impl {
     std::size_t envelope_size = 0;
     std::size_t sidecar_size = 0;
     std::chrono::steady_clock::time_point submitted_at{};
+    std::chrono::steady_clock::time_point deadline{};
+    std::optional<std::chrono::milliseconds> caller_deadline;
     std::string request_id;
     bool has_request_id = false;
+    std::atomic<PublicationState> publication{PublicationState::open};
   };
 
   struct ProcessReservations {
@@ -227,6 +238,57 @@ struct ControlBridge::Impl {
 
   static void service_realtime_thunk(void* argument) noexcept {
     static_cast<Impl*>(argument)->service_realtime();
+  }
+
+  static bool claim_publication(void* context) noexcept {
+    auto& request = *static_cast<RequestSlot*>(context);
+    auto state = request.publication.load(std::memory_order_acquire);
+    if (state == PublicationState::committed ||
+        state == PublicationState::publish_claimed) {
+      return true;
+    }
+    if (state == PublicationState::cancelled ||
+        std::chrono::steady_clock::now() >= request.deadline) {
+      auto expected = PublicationState::open;
+      request.publication.compare_exchange_strong(
+          expected,
+          PublicationState::cancelled,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire);
+      return false;
+    }
+    auto expected = PublicationState::open;
+    if (request.publication.compare_exchange_strong(
+            expected,
+            PublicationState::publish_claimed,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      return true;
+    }
+    return expected == PublicationState::publish_claimed ||
+           expected == PublicationState::committed;
+  }
+
+  static void commit_publication(void* context) noexcept {
+    auto& request = *static_cast<RequestSlot*>(context);
+    auto expected = PublicationState::publish_claimed;
+    request.publication.compare_exchange_strong(
+        expected,
+        PublicationState::committed,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire);
+  }
+
+  static void abort_publication(void* context) noexcept {
+    auto& request = *static_cast<RequestSlot*>(context);
+    auto expected = PublicationState::publish_claimed;
+    request.publication.compare_exchange_strong(
+        expected,
+        std::chrono::steady_clock::now() >= request.deadline
+            ? PublicationState::cancelled
+            : PublicationState::open,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire);
   }
 
   void service_realtime() noexcept {
@@ -432,6 +494,8 @@ struct ControlBridge::Impl {
     }
     request.envelope_size = 0;
     request.sidecar_size = 0;
+    request.publication.store(
+        PublicationState::open, std::memory_order_release);
     request.state.store(RequestState::free, std::memory_order_release);
   }
 
@@ -576,8 +640,18 @@ struct ControlBridge::Impl {
         response = bridge_protocol_error();
       } else {
         deadline = request.submitted_at + operation_deadline(operation);
+        if (request.caller_deadline.has_value()) {
+          deadline = std::min(
+              deadline,
+              request.submitted_at + *request.caller_deadline);
+        }
+        request.deadline = deadline;
         has_deadline = true;
-        if (std::chrono::steady_clock::now() >= deadline) {
+        if (request.publication.load(std::memory_order_acquire) ==
+                PublicationState::cancelled ||
+            std::chrono::steady_clock::now() >= deadline) {
+          request.publication.store(
+              PublicationState::cancelled, std::memory_order_release);
           runtime.fail_and_seal("request_timeout");
           response = bridge_timeout_error();
           terminal_after_response = true;
@@ -595,6 +669,12 @@ struct ControlBridge::Impl {
             }
           }
           const auto runtime_was_failed = runtime.failed();
+          const facade::detail::MutationPublishScope publish_scope({
+              &request,
+              &claim_publication,
+              &commit_publication,
+              &abort_publication,
+          });
           response = runtime.dispatch(
               operation,
               parsed->at("payload"),
@@ -652,8 +732,14 @@ struct ControlBridge::Impl {
       hooks.before_response_serialization(hooks.context);
     }
 #endif
-    if (has_deadline && response.value("ok", false) &&
-        std::chrono::steady_clock::now() >= deadline) {
+    if (has_deadline &&
+        request.publication.load(std::memory_order_acquire) !=
+            PublicationState::committed &&
+        (request.publication.load(std::memory_order_acquire) ==
+             PublicationState::cancelled ||
+         std::chrono::steady_clock::now() >= deadline)) {
+      request.publication.store(
+          PublicationState::cancelled, std::memory_order_release);
       runtime.fail_and_seal("request_timeout");
       response = bridge_timeout_error();
       terminal_after_response = true;
@@ -719,7 +805,8 @@ ControlBridge::ControlBridge(ControlRuntime& runtime, BridgeHooks hooks)
 
 BridgeSubmitStatus ControlBridge::submit(
     std::span<const std::byte> envelope,
-    std::span<const std::byte> sidecar) noexcept {
+    std::span<const std::byte> sidecar,
+    std::optional<std::chrono::milliseconds> caller_deadline) noexcept {
   if (envelope.size() > kBridgeMaximumEnvelopeBytes) {
     return BridgeSubmitStatus::envelope_too_large;
   }
@@ -756,6 +843,9 @@ BridgeSubmitStatus ControlBridge::submit(
   selected->envelope_size = envelope.size();
   selected->sidecar_size = sidecar.size();
   selected->submitted_at = std::chrono::steady_clock::now();
+  selected->caller_deadline = caller_deadline;
+  selected->publication.store(
+      PublicationState::open, std::memory_order_release);
   selected->state.store(RequestState::queued, std::memory_order_release);
   if (impl_->hooks.schedule == nullptr ||
       !impl_->hooks.schedule(
@@ -767,6 +857,55 @@ BridgeSubmitStatus ControlBridge::submit(
     return BridgeSubmitStatus::proxy_failed;
   }
   return BridgeSubmitStatus::accepted;
+}
+
+BridgeCancelStatus ControlBridge::cancel(
+    std::string_view request_id) noexcept {
+  try {
+    if (!valid_request_id(Json(request_id))) {
+      return BridgeCancelStatus::not_found;
+    }
+  } catch (...) {
+    return BridgeCancelStatus::not_found;
+  }
+  std::lock_guard lock(impl_->request_id_mutex);
+  for (auto& request : impl_->requests) {
+    if (request.state.load(std::memory_order_acquire) == RequestState::free) {
+      continue;
+    }
+    bool matches = request.has_request_id && request.request_id == request_id;
+    if (!matches && !request.has_request_id) {
+      try {
+        const auto* first = reinterpret_cast<const char*>(
+            request.envelope.data());
+        const std::string_view bytes(first, request.envelope_size);
+        const auto parsed = foundation::valid_utf8(bytes)
+                                ? foundation::parse_bounded_json(bytes)
+                                : std::nullopt;
+        matches = parsed.has_value() && parsed->is_object() &&
+                  parsed->contains("request_id") &&
+                  parsed->at("request_id").is_string() &&
+                  parsed->at("request_id").get_ref<const std::string&>() ==
+                      request_id;
+      } catch (...) {
+        matches = false;
+      }
+    }
+    if (!matches) {
+      continue;
+    }
+    auto expected = PublicationState::open;
+    if (request.publication.compare_exchange_strong(
+            expected,
+            PublicationState::cancelled,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire) ||
+        expected == PublicationState::cancelled) {
+      return BridgeCancelStatus::cancelled;
+    }
+    return BridgeCancelStatus::publish_claimed;
+  }
+  return BridgeCancelStatus::not_found;
 }
 
 BridgePollStatus ControlBridge::poll(
@@ -853,6 +992,8 @@ ManifestGate web_manifest_gate;
 std::unique_ptr<ControlRuntime> web_runtime;
 std::unique_ptr<ControlBridge> web_bridge_owner;
 std::atomic<ControlBridge*> web_bridge{nullptr};
+std::array<char, 36> web_terminal_token{};
+std::atomic<std::uint8_t> web_terminal_token_state{0};
 std::atomic<bool> web_manifest_terminal_failure{false};
 std::atomic<bool> web_manifest_cleanup_reserved{false};
 std::unique_ptr<RealtimeAudioWorklet> web_audio_owner;
@@ -1114,7 +1255,8 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
     const std::byte* envelope,
     std::size_t envelope_size,
     const std::byte* sidecar,
-    std::size_t sidecar_size) {
+    std::size_t sidecar_size,
+    std::uint32_t caller_deadline_ms) {
   if (web_manifest_terminal_failure.load(std::memory_order_acquire)) {
     return 1;
   }
@@ -1128,7 +1270,68 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
   }
   return static_cast<int>(bridge->submit(
       std::span<const std::byte>(envelope, envelope_size),
-      std::span<const std::byte>(sidecar, sidecar_size)));
+      std::span<const std::byte>(sidecar, sidecar_size),
+      std::chrono::milliseconds(caller_deadline_ms)));
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_request(
+    const char* request_id,
+    std::size_t request_id_size) {
+  if (request_id == nullptr || request_id_size != 36) {
+    return static_cast<int>(
+        lmdj::web_host::detail::BridgeCancelStatus::not_found);
+  }
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  if (bridge == nullptr) {
+    return static_cast<int>(
+        lmdj::web_host::detail::BridgeCancelStatus::not_found);
+  }
+  return static_cast<int>(bridge->cancel(
+      std::string_view(request_id, request_id_size)));
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_set_terminal_token(
+    const char* token,
+    std::size_t token_size) {
+  if (token == nullptr || token_size != web_terminal_token.size()) {
+    return -1;
+  }
+  std::uint8_t expected = 0;
+  if (web_terminal_token_state.compare_exchange_strong(
+          expected,
+          1,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    std::copy_n(token, token_size, web_terminal_token.begin());
+    web_terminal_token_state.store(2, std::memory_order_release);
+    return 0;
+  }
+  while (expected == 1) {
+    expected = web_terminal_token_state.load(std::memory_order_acquire);
+  }
+  return expected == 2 &&
+                 std::equal(
+                     web_terminal_token.begin(),
+                     web_terminal_token.end(),
+                     token)
+             ? 0
+             : -1;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_authorize_terminal_release(
+    const char* token,
+    std::size_t token_size) {
+  if (!on_control(nullptr) || token == nullptr ||
+      token_size != web_terminal_token.size() ||
+      web_terminal_token_state.load(std::memory_order_acquire) != 2) {
+    return 0;
+  }
+  return std::equal(
+             web_terminal_token.begin(),
+             web_terminal_token.end(),
+             token)
+             ? 1
+             : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_poll(

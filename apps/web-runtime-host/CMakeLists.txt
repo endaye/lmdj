@@ -8,6 +8,8 @@ target_include_directories(
   lmdj_web_control_runtime
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/src"
+  PRIVATE
+    "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
 )
 target_link_libraries(
   lmdj_web_control_runtime
@@ -79,6 +81,11 @@ if(EMSCRIPTEN)
       LMDJ_WEB_PRODUCT_BUILD="${lmdj_web_product_build}"
       LMDJ_WEB_HOST_VERSION="1.0.0"
   )
+  target_include_directories(
+    lmdj_web_runtime_host
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
+  )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     target_compile_definitions(
       lmdj_web_runtime_host
@@ -98,6 +105,9 @@ if(EMSCRIPTEN)
     _main
     _lmdj_web_host_submit
     _lmdj_web_host_poll
+    _lmdj_web_host_cancel_request
+    _lmdj_web_host_set_terminal_token
+    _lmdj_web_host_authorize_terminal_release
     _lmdj_web_host_failed
     _lmdj_web_host_initialize_manifest
     _lmdj_web_audio_start
@@ -250,6 +260,7 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/src"
       "${CMAKE_SOURCE_DIR}"
+      "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
   )
   target_link_libraries(
     lmdj_web_control_runtime_tests
@@ -302,6 +313,7 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     PRIVATE
       "${CMAKE_CURRENT_SOURCE_DIR}/src"
       "${CMAKE_SOURCE_DIR}"
+      "${CMAKE_SOURCE_DIR}/packages/application-facade/internal"
   )
   target_link_libraries(
     lmdj_web_realtime_session_tests

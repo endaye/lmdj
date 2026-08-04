@@ -19,6 +19,11 @@ const fixtureBytes = await readFile(
 const rejectedFixtureBytes = Buffer.from(fixtureBytes);
 rejectedFixtureBytes.writeUInt32LE(44_100, 24);
 rejectedFixtureBytes.writeUInt32LE(88_200, 28);
+const deadlineFixtureBytes = Buffer.alloc(32_768);
+fixtureBytes.copy(deadlineFixtureBytes);
+const deadlineFixtureSha256 = createHash("sha256")
+  .update(deadlineFixtureBytes)
+  .digest("hex");
 
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
@@ -65,6 +70,9 @@ async function installTransportObservability(page) {
           }
           listener(notification);
         });
+      },
+      subscribeFailure(listener) {
+        return window.lmdjWebRuntimeHost.transport.subscribeFailure(listener);
       },
     };
     window.__LMDJ_WEB_HOST_SEAMS__ = {
@@ -339,6 +347,66 @@ async function opfsInventory(page) {
       return entries;
     }
     return (await visit(await navigator.storage.getDirectory())).sort();
+  });
+}
+
+
+async function deadlineOutcome(
+  page,
+  operation,
+  payload,
+  sidecar = [],
+  deadlineMs = 10,
+) {
+  return page.evaluate(async ({
+    selectedOperation,
+    selectedPayload,
+    bytes,
+    timeout,
+  }) => {
+    try {
+      const response = await window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation: selectedOperation,
+        payload: selectedPayload,
+      }, {
+        deadlineMs: timeout,
+        sidecar: new Uint8Array(bytes),
+      });
+      return { response };
+    } catch (error) {
+      return { error: { code: error?.code, message: error?.message } };
+    }
+  }, {
+    selectedOperation: operation,
+    selectedPayload: payload,
+    bytes: [...sidecar],
+    timeout: deadlineMs,
+  });
+}
+
+
+async function terminalTransportEvidence(page) {
+  return page.evaluate(async () => {
+    let newSubmitCode = null;
+    try {
+      await window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation: "host.status",
+        payload: {},
+      }, { deadlineMs: 1_000 });
+    } catch (error) {
+      newSubmitCode = error?.code ?? null;
+    }
+    return {
+      controller: window.lmdjWebRuntimeController.diagnostics(),
+      newSubmitCode,
+      terminated: window.lmdjWebRuntimeHost.transport.terminated,
+      terminalOwnerReleased:
+        window.lmdjWebRuntimeHost.transport.terminalOwnerReleased,
+    };
   });
 }
 
@@ -868,6 +936,128 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   expect(await reopenedPage.evaluate(() =>
     window.lmdjWebRuntimeController.close())).toBe(true);
   await reopenedPage.close();
+});
+
+
+test("Chromium packaged transport seals real Facade mutations at the deadline", async ({
+  browserName,
+  context,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(60_000);
+
+  const cases = [
+    {
+      name: "late-success",
+      operation: "asset.import",
+      payload(identity) {
+        return {
+          command_id: crypto.randomUUID(),
+          expected_revision: 0,
+          asset_id: identity.assetId,
+          media_type: "audio/wav",
+          sidecar: {
+            sidecar_bytes: deadlineFixtureBytes.byteLength,
+            sidecar_sha256: deadlineFixtureSha256,
+          },
+        };
+      },
+      sidecar: deadlineFixtureBytes,
+    },
+    {
+      name: "late-error",
+      operation: "asset.import",
+      payload(identity) {
+        return {
+          command_id: crypto.randomUUID(),
+          expected_revision: 99,
+          asset_id: identity.assetId,
+          media_type: "audio/wav",
+          sidecar: {
+            sidecar_bytes: deadlineFixtureBytes.byteLength,
+            sidecar_sha256: deadlineFixtureSha256,
+          },
+        };
+      },
+      sidecar: deadlineFixtureBytes,
+    },
+  ];
+
+  for (const [index, selected] of cases.entries()) {
+    const owner = index === 0 ? page : await context.newPage();
+    await openPackagedHost(owner);
+    const identity = {
+      projectId: crypto.randomUUID(),
+      patternId: crypto.randomUUID(),
+      assetId: crypto.randomUUID(),
+    };
+    success(await hostRequest(owner, "project.create", {
+      project_id: identity.projectId,
+      bpm: 120,
+      initial_pattern: {
+        pattern_id: identity.patternId,
+        bars: 1,
+        events: [],
+      },
+    }), `${selected.name} project.create`);
+    const before = success(
+      await hostRequest(owner, "project.inspect", {}),
+      `${selected.name} project.inspect before deadline`,
+    );
+    const inventoryBefore = await opfsInventory(owner);
+    const observationsBefore = await owner.evaluate(() => ({
+      notifications: window.__lmdjTask11.notifications.length,
+      responses: window.__lmdjTask11.responses.length,
+    }));
+
+    const outcome = await deadlineOutcome(
+      owner,
+      selected.operation,
+      selected.payload(identity),
+      selected.sidecar,
+    );
+    expect(outcome, `${selected.name}: ${JSON.stringify(outcome)}`).toMatchObject({
+      error: { code: "HOST_TIMEOUT" },
+    });
+    await expect(owner.locator("#host-state"), selected.name).toHaveText("failed");
+    const terminal = await terminalTransportEvidence(owner);
+    expect(terminal, selected.name).toMatchObject({
+      controller: { state: "failed", error_code: "HOST_TIMEOUT" },
+      newSubmitCode: "HOST_TIMEOUT",
+      terminated: true,
+      terminalOwnerReleased: true,
+    });
+    await owner.waitForTimeout(100);
+    expect(await owner.evaluate(() => ({
+      notifications: window.__lmdjTask11.notifications.length,
+      responses: window.__lmdjTask11.responses.length,
+    })), `${selected.name} late messages`).toEqual(observationsBefore);
+
+    const reopened = await context.newPage();
+    await openPackagedHost(reopened);
+    const reopenResponse = await hostRequest(reopened, "project.open", {
+      project_id: identity.projectId,
+      pattern_id: identity.patternId,
+    });
+    const reopenedProject = success(
+      reopenResponse,
+      `${selected.name} immediate writer reacquire: ${JSON.stringify(reopenResponse)}`,
+    );
+    expect(reopenedProject.project_revision, selected.name).toBe(0);
+    const after = success(
+      await hostRequest(reopened, "project.inspect", {}),
+      `${selected.name} project.inspect after deadline`,
+    );
+    expect(after, selected.name).toEqual(before);
+    expect(await opfsInventory(reopened), selected.name).toEqual(inventoryBefore);
+    expect(await reopened.evaluate(() =>
+      window.lmdjWebRuntimeController.close()), selected.name).toBe(true);
+    await reopened.close();
+    if (owner !== page) {
+      await owner.close();
+    }
+  }
 });
 
 
