@@ -15,6 +15,7 @@
     "validate:diagrams": "node scripts/validate-diagrams.mjs",
     "check:build": "node scripts/check-build.mjs",
     "check:impact": "node scripts/check-doc-impact.mjs",
+    "check:release-docs": "node scripts/check-release-docs.mjs",
     "version:docs": "node scripts/version-docs.mjs",
     "netlify:build": "node scripts/netlify-build.mjs",
     "build": "npm run facts && docusaurus build",
@@ -22,7 +23,7 @@
     "clear": "docusaurus clear",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
-    "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run facts && npm run typecheck && npm run build && npm run check:build"
+    "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run facts && npm run check:release-docs && npm run typecheck && npm run build && npm run check:build"
   },
   "dependencies": {
     "@docusaurus/core": "3.10.2",

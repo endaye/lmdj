@@ -22,11 +22,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 ## 页面 Contract
 每页声明 area、status、owners 与 source paths；构建拒绝缺失来源、非法状态和 current/history 边界泄漏。
 ## 版本更新规则
-任何改变产品能力、Module/Host/Provider/Contract/Assembly/平台/发布流程的版本 Task，都必须同步对应页面和图。
+任何改变产品能力、Module/Host/Provider/Contract/Assembly/平台/发布流程的版本 Task，都必须同步对应页面和图；Product Build 或 Assembly 变化不能声明文档无影响。
 ## 快照规则
-正式 Product Build 冻结不可变文档快照；current main 始终标明非正式快照。
+本地构建、普通 CI 和 PR Preview 只校验 current 页面，不创建永久快照。任何已分配并交付团队测试的 `canary`、`dev`、`beta` Product Build，以及 `stable` 发布，都必须冻结匹配的不可变快照；current main 始终标明非正式快照。
 ## 发布规则
 Git 合并触发 Netlify 构建，构建必须先通过事实、元数据、链接、路由和 smoke 门禁；手工 API 上传仅用于诊断。
 
 ## CI 影响检查
-Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。
+Pull Request 必须声明 `Documentation impact: required` 或 `none`。需要更新时，changed files 必须包含 current 门户页；无需更新时必须给出具体理由且不能制造空文档 churn。完整检查还要求当前 Product Build 的快照与 Product、Assembly Lock、组件版本、Channel 和冻结证据一致。

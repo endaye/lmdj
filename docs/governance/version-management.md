@@ -409,16 +409,19 @@ Provider lock 必须绑定与运行时 `ProviderRegistration.artifact_sha256` �
 
 ### 9.1 Product Build 文档快照门禁
 
-正式 Product Build 在 tag/Release 前必须冻结匹配的架构门户快照：
+本地构建、普通 CI 和 Pull Request Preview 不分配新的永久文档快照。任何已分配
+Product Build 并准备交付团队测试（`canary`、`dev`、`beta`）或正式发布
+（`stable`）的构建，在对应发布/晋级门禁前必须冻结匹配的架构门户快照：
 
 ```bash
-scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH
+scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 ```
 
 快照必须来自干净工作区，Product Build 与 `version.json` 精确一致，并记录完整 Git
 revision 和 Assembly Lock hash。`/versions/PRODUCT_BUILD/` 是不可变说明书；current
-文档继续跟随 `main`。冻结说明书不产生新的 Product、Module、Provider 或 Contract
-版本，也不授权 tag、push、Release 或部署。具体规则见
+文档继续跟随 `main`。同一 Build 的 Channel 晋级复用既有快照并在独立发布记录中
+追加证据，不重写快照。冻结说明书不产生新的 Product、Module、Provider 或 Contract
+版本，也不授权 tag、push、Release、部署或 Channel 晋级。具体规则见
 `docs/governance/architecture-portal.md`。
 
 ## 10. M1 开发版本表
