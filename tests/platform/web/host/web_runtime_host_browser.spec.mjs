@@ -110,6 +110,48 @@ async function enableDeadlineProof(page, settlementWatchdogMs = 1_000) {
 }
 
 
+async function delayTerminalAckDelivery(page, delayMs) {
+  await page.addInitScript((selectedDelayMs) => {
+    const NativeBroadcastChannel = globalThis.BroadcastChannel;
+    let ownsHostTerminalChannel = false;
+    globalThis.BroadcastChannel = class DelayedTerminalBroadcastChannel
+      extends NativeBroadcastChannel {
+      constructor(name) {
+        super(name);
+        this.delayTerminalAck =
+          name === "lmdj.web-runtime-host.terminal.v1" &&
+          ownsHostTerminalChannel === false;
+        if (this.delayTerminalAck) ownsHostTerminalChannel = true;
+        this.terminalChannelClosed = false;
+      }
+
+      addEventListener(type, listener, options) {
+        if (type !== "message" || !this.delayTerminalAck) {
+          return super.addEventListener(type, listener, options);
+        }
+        return super.addEventListener(type, (event) => {
+          if (
+            event.data?.type !== "released-and-closed" ||
+            event.data?.released === true
+          ) {
+            listener.call(this, event);
+            return;
+          }
+          setTimeout(() => {
+            if (!this.terminalChannelClosed) listener.call(this, event);
+          }, selectedDelayMs);
+        }, options);
+      }
+
+      close() {
+        this.terminalChannelClosed = true;
+        return super.close();
+      }
+    };
+  }, delayMs);
+}
+
+
 async function installTerminalAckAttack(page) {
   await page.evaluate(() => {
     const channel = new BroadcastChannel("lmdj.web-runtime-host.terminal.v1");
@@ -1247,6 +1289,9 @@ test("Chromium packaged responsive cancellation wins before mutation publication
   for (const [index, selected] of cases.entries()) {
     const owner = index === 0 ? page : await context.newPage();
     await enableDeadlineProof(owner);
+    if (index === 0) {
+      await delayTerminalAckDelivery(owner, 300);
+    }
     await openPackagedHost(owner);
     if (index === 0) {
       await installTerminalAckAttack(owner);
@@ -1463,7 +1508,7 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
     duplicateReleaseRequestsSent: 2,
     observedWorkerAcks: 0,
     acceptedConsumes: 0,
-    rejectedConsumes: 2,
+    rejectedConsumes: 3,
   });
   const directInventory = await opfsInventory(page);
   expect(directInventory, "unresponsive non-Truth staging residue")

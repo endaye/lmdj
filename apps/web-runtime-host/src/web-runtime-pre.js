@@ -256,10 +256,28 @@ if (typeof window !== "undefined") {
       token: terminalToken,
     });
     terminalAckTimeout = window.setTimeout(() => {
+      consumeTerminalOwnerRelease();
       terminateRuntimeWorkers();
       terminalChannel.close();
       deliverTerminalFailure();
     }, 100);
+  }
+
+  function consumeTerminalOwnerRelease() {
+    let released;
+    try {
+      released = Module.ccall(
+        "lmdj_web_host_consume_terminal_release",
+        "number",
+        ["string", "number"],
+        [terminalToken, terminalToken.length],
+      );
+    } catch {
+      return false;
+    }
+    if (released !== 0 && released !== 1) return false;
+    terminalOwnerReleased = released === 1;
+    return true;
   }
 
   function terminateRuntimeWorkers() {
@@ -295,19 +313,7 @@ if (typeof window !== "undefined") {
     ) {
       return;
     }
-    let released;
-    try {
-      released = Module.ccall(
-        "lmdj_web_host_consume_terminal_release",
-        "number",
-        ["string", "number"],
-        [terminalToken, terminalToken.length],
-      );
-    } catch {
-      return;
-    }
-    if (released !== 0 && released !== 1) return;
-    terminalOwnerReleased = released === 1;
+    if (!consumeTerminalOwnerRelease()) return;
     window.clearTimeout(terminalAckTimeout);
     terminateRuntimeWorkers();
     terminalChannel.close();
