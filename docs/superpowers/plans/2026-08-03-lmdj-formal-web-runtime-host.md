@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver Product Build `1.0.12.0 · canary` with a formal product-neutral Web Runtime Host that opens Project Truth through Application Facade, persists it in OPFS, renders the shared C++ Realtime Engine in a Wasm AudioWorklet, captures Takes, and passes clean-distribution Chromium Proof without claiming the five deferred physical rows.
+**Goal:** Deliver Product Build `1.0.14.0 · canary` with a formal product-neutral Web Runtime Host that opens Project Truth through Application Facade, persists it in OPFS, renders the shared C++ Realtime Engine in a Wasm AudioWorklet, captures Takes, and passes clean-distribution Chromium Proof without claiming the five deferred physical rows.
 
 **Architecture:** One Emscripten shared-memory program is loaded on the browser main thread and runs its control `main()` on the `-sPROXY_TO_PTHREAD` worker. That Control Worker owns Application Facade, the Project writer lease, OPFS-backed Project I/O, immutable Runtime Snapshot and Sample Bank preparation, outcome drain, and Capture drain; the main thread owns only activation, DOM input, lifecycle observation, and request transport. Emscripten's Wasm AudioWorklet calls the existing `RealtimeEngine::render()` against the same fixed 512 MiB memory. Native and Web persistence share ProjectStore/TakeJournal transaction logic above a semantic `ProjectStoragePlatform` boundary.
 
@@ -65,6 +65,7 @@
 - `apps/web-runtime-host/CMakeLists.txt`, `apps/web-runtime-host/module.json`: Emscripten target, source-boundary checks, and Host identity.
 - `apps/web-runtime-host/src/control_runtime.hpp`, `apps/web-runtime-host/src/control_runtime.cpp`: Facade/lease/Snapshot/Bank/Engine/Take orchestration on the Control Worker.
 - `apps/web-runtime-host/src/bridge.cpp`: bounded exported transport functions and C++ proxying queue.
+- `apps/web-runtime-host/src/manifest_gate.hpp`, `apps/web-runtime-host/src/manifest_gate.cpp`, `apps/web-runtime-host/src/web-runtime-pre.js`: bounded canonical-manifest identity verification before Control-runtime creation.
 - `apps/web-runtime-host/src/protocol.mjs`: strict private envelope, deadlines, duplicate IDs, sidecar validation, responses, and notifications.
 - `apps/web-runtime-host/src/state_machine.mjs`: exact external lifecycle transitions and failure cleanup.
 - `apps/web-runtime-host/src/preflight.mjs`: ordered mandatory capability checks.
@@ -77,12 +78,21 @@
 
 ### Product, Proof, and CI
 
-- `products/lmdj/CMakeLists.txt`, `products/lmdj/assembly.json`, `products/lmdj/assembly.lock.json`, `products/lmdj/version.json`, `products/lmdj/src/compiled_assembly.cpp`: Product wiring and exact `1.0.12.0` identity.
+- `products/lmdj/CMakeLists.txt`, `products/lmdj/assembly.json`, `products/lmdj/assembly.lock.json`, `products/lmdj/version.json`, `products/lmdj/src/compiled_assembly.cpp`: Product wiring and exact `1.0.14.0` identity.
 - Affected `module.json`, MCP Python identity, version tests, READMEs, Native Host identity, and Proof output: exact dependency propagation.
 - `.github/workflows/ci.yml`: formal Web Host lane while retaining Lab, macOS, Ubuntu, ASan, and Coverage.
 - `.github/workflows/core-nightly.yml`: retained TSan and Stress lanes.
-- `tests/host/web_runtime_host_browser.spec.mjs`: Chromium full journey and WebKit capability smoke.
+- `tests/platform/web/host/web_runtime_host_browser.spec.mjs`: Chromium full journey and WebKit capability smoke.
 - `docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md`: automated evidence and explicitly deferred physical matrix.
+- `apps/architecture-portal/docs/hosts/web-runtime.mdx`, `apps/architecture-portal/docs/platform/web-runtime.mdx`, `apps/architecture-portal/docs/platform/input.mdx`, `apps/architecture-portal/docs/operations/testing-and-proof.mdx`, `apps/architecture-portal/docs/assembly/lmdj.mdx`, `apps/architecture-portal/docs/operations/version-and-release.mdx`: current architecture portal pages updated with the corresponding Host, platform, proof, Assembly, and release evidence.
+
+## Documentation Impact
+
+Documentation impact: required
+Affected portal pages: /hosts/web-runtime/ /platform/web-runtime/ /platform/input/ /operations/testing-and-proof/ /assembly/lmdj/ /operations/version-and-release/
+Reason: Stage 6 adds a formal Assembly-listed Web Runtime Host, Web lifecycle/input behavior, clean-distribution Proof, Product Build 1.0.14.0, and an immutable canary documentation snapshot.
+
+Tasks 9-12 update the affected current pages in the same Task as their product/evidence change; Task 12B freezes the immutable snapshot.
 
 ## Version Management
 
@@ -90,23 +100,23 @@ Canonical policy: `docs/governance/version-management.md`.
 
 | Identity | Baseline | Target | API | Reason |
 | --- | --- | --- | --- | --- |
-| Product Build | `1.0.11.0` | `1.0.12.0` | n/a | Adds an Assembly-listed Formal Web Runtime Host. |
+| Product Build | `1.0.13.0` | `1.0.14.0` | n/a | Adds an Assembly-listed Formal Web Runtime Host. |
 | `web-runtime-host` | absent | `1.0.0` | 1 | First formal same-build private Host surface. |
-| `project-io` | `0.3.0` | `0.4.0` | stays 1 | Adds compatible semantic storage obligations, writer lease, byte import, and Web platform. |
-| `audio-runtime` | `0.3.0` | `0.4.0` | stays 1 | Adds compatible runtime limits, Outcome Ring, byte accounting, and Web Worklet adapter. |
-| `application-facade` | `1.1.0` | `1.2.0` | stays 2 | Adds compatible writer lease, byte import, and bounded realtime Host methods. |
-| `core-cli` | `1.0.2` | `1.0.3` | stays 2 | Exact Facade dependency update only. |
-| `core-mcp` | `1.0.2` | `1.0.3` | stays 2 | Exact Facade and Python package identity update only. |
-| `native-test-host` | `1.0.0` | `1.0.1` | stays 1 | Exact Facade/Audio dependency update and Outcome drain. |
-| `project-cooker` | `0.2.0` | unchanged | stays 1 | No public Cooker API change; limits are enforced by Facade and Audio Runtime. |
+| `project-io` | `0.3.1` | `0.4.0` | stays 1 | Adds compatible semantic storage obligations, writer lease, byte import, and Web platform. |
+| `audio-runtime` | `0.3.1` | `0.4.0` | stays 1 | Adds compatible runtime limits, Outcome Ring, byte accounting, and Web Worklet adapter. |
+| `application-facade` | `1.1.2` | `1.2.0` | stays 2 | Adds compatible writer lease, byte import, and bounded realtime Host methods. |
+| `core-cli` | `1.0.4` | `1.0.5` | stays 2 | Exact Facade dependency update only. |
+| `core-mcp` | `1.1.1` | `1.1.2` | stays 2 | Exact Facade and Python package identity update only. |
+| `native-test-host` | `1.0.2` | `1.0.3` | stays 1 | Exact Facade/Audio dependency update and Outcome drain. |
+| `project-cooker` | `0.2.1` | unchanged | stays 1 | No public Cooker API change; limits are enforced by Facade and Audio Runtime. |
 | Contracts | current | unchanged | unchanged | Private same-build transport creates no public Contract. |
 | Providers / Models | current | unchanged | unchanged | No Capability, Provider, or model behavior change. |
 
 - Update every exact dependency and every source assertion in one coherent version-integration Task after functional Tasks pass.
 - Regenerate `products/lmdj/assembly.lock.json` only with `python3 scripts/version.py lock`; never hand-edit the generated lock.
-- Candidate display is `1.0.12.0 · canary · g<short-sha>`.
-- Rollback reuses immutable `1.0.11.0`; no tag is moved and no version is reused.
-- The future Product tag is `lmdj-v1.0.12.0`, signed and annotated only after separate post-merge approval.
+- Candidate display is `1.0.14.0 · canary · g<short-sha>`.
+- Rollback reuses immutable `1.0.13.0`; no tag is moved and no version is reused.
+- The future Product tag is `lmdj-v1.0.14.0`, signed and annotated only after separate post-merge approval.
 
 ---
 
@@ -961,9 +971,15 @@ git commit -m "feat(web): persist realtime takes and failures"
 - Create: `apps/web-runtime-host/styles.css`
 - Create: `apps/web-runtime-host/src/main.mjs`
 - Create: `apps/web-runtime-host/test/main_shell.test.mjs`
-- Create: `tests/host/web_runtime_host_lifecycle.spec.mjs`
+- Create: `tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs`
 - Modify: `apps/web-runtime-host/src/input_adapters.mjs`
 - Modify: `apps/web-runtime-host/src/state_machine.mjs`
+- Modify: `apps/architecture-portal/docs/hosts/web-runtime.mdx`
+- Modify: `apps/architecture-portal/docs/platform/input.mdx`
+
+**Documentation impact:** required for `/hosts/web-runtime/` and `/platform/input/`; update both current portal pages in this Task with the implemented lifecycle and unified-input behavior.
+
+**Version impact:** none. Task 12 owns Product/module identity propagation.
 
 - [ ] **Step 1: Write failing shell and lifecycle tests**
 
@@ -973,8 +989,7 @@ Assert no inline/remote scripts or styles, 64 stable Pad buttons, exact state te
 
 ```bash
 node --test apps/web-runtime-host/test/main_shell.test.mjs
-npm --prefix tests/platform/web test -- --project=chromium \
-  tests/host/web_runtime_host_lifecycle.spec.mjs
+npm --prefix tests/platform/web test -- --project=chromium host/web_runtime_host_lifecycle.spec.mjs
 ```
 
 Expected: page and main controller do not exist.
@@ -1001,8 +1016,7 @@ Flatten Project `{bank, pad}` exactly once as `bank * 16 + pad` immediately befo
 
 ```bash
 node --test apps/web-runtime-host/test/*.test.mjs
-npm --prefix tests/platform/web test -- --project=chromium \
-  tests/host/web_runtime_host_lifecycle.spec.mjs
+npm --prefix tests/platform/web test -- --project=chromium host/web_runtime_host_lifecycle.spec.mjs
 ```
 
 - [ ] **Step 7: Commit Task 9**
@@ -1022,7 +1036,22 @@ git commit -m "feat(web): add diagnostic host lifecycle shell"
 - Create: `apps/web-runtime-host/test/distribution_test.py`
 - Create: `scripts/web-runtime-host.sh`
 - Modify: `apps/web-runtime-host/CMakeLists.txt`
+- Modify: `apps/web-runtime-host/src/main.mjs`
+- Modify: `apps/web-runtime-host/src/bridge.cpp`
+- Modify: `apps/web-runtime-host/src/web-runtime-pre.js`
+- Create: `apps/web-runtime-host/src/manifest_gate.hpp`
+- Create: `apps/web-runtime-host/src/manifest_gate.cpp`
+- Create: `apps/web-runtime-host/test/manifest_gate_test.cpp`
+- Create: `tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs`
+- Modify: `tests/platform/web/audio/realtime_audio_worklet.html` only if the conformance build needs an explicit deterministic valid manifest identity
 - Modify: `tests/build/test_active_tree.sh`
+- Modify: `apps/architecture-portal/docs/hosts/web-runtime.mdx`
+- Modify: `apps/architecture-portal/docs/platform/web-runtime.mdx`
+- Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
+
+**Documentation impact:** required for `/hosts/web-runtime/`, `/platform/web-runtime/`, and `/operations/testing-and-proof/`; update those current portal pages in this Task with deterministic packaging, manifest verification, and clean-distribution Proof evidence.
+
+**Version impact:** none. Task 12 owns identity propagation.
 
 **Stable commands:**
 
@@ -1049,9 +1078,11 @@ python3 apps/web-runtime-host/test/distribution_test.py
 
 Expected: tools and distribution are absent.
 
-- [ ] **Step 3: Implement deterministic packaging and identity**
+- [ ] **Step 3: Implement deterministic packaging and manifest gate**
 
-Write content-hashed runtime assets to `build/web/host/dist`, then canonical `host-manifest.json` binding Product Build, Host SemVer, protocol 1, all three Emscripten identities, 536,870,912-byte heap, four resource limits, `emcc --version`, and every asset path/byte length/SHA-256. Main and Control validate the manifest hash before OPFS mount.
+Write content-hashed runtime assets to `build/web/host/dist`, then canonical `host-manifest.json` binding Product Build, Host SemVer, protocol 1, all three Emscripten identities, 536,870,912-byte heap, four resource limits, `emcc --version`, and every asset path/byte length/SHA-256. Generated `index.html` carries the expected manifest digest without inline script. Main hashes exact canonical manifest bytes before loading runtime assets. Control independently hashes and validates the same bounded bytes and exact active Product Build, Host `1.0.0`, and private protocol `1` before proxy queue, `/lmdj-workspace`, Application, writer lease, bridge, or audio adapter creation.
+
+Missing, malformed, oversized, mismatched, late, or repeated initialization fails closed as `HOST_PROTOCOL_MISMATCH` without OPFS/Facade mutation. Conformance mode receives an explicit deterministic valid identity and does not weaken production. Task 10 uses locked Host `1.0.0`; Task 12 creates `module.json` and asserts equality. Product Build is read from `products/lmdj/version.json`, so Task 12 rebuilds the package as `1.0.14.0`.
 
 - [ ] **Step 4: Implement the proof-only server**
 
@@ -1080,12 +1111,18 @@ git commit -m "build(web): package isolated runtime host"
 
 **Files:**
 
-- Create: `tests/host/web_runtime_host_browser.spec.mjs`
+- Create: `tests/platform/web/host/web_runtime_host_browser.spec.mjs`
 - Create: `tests/fixtures/audio/web-runtime-host-short.wav`
 - Create: `tests/fixtures/audio/web-runtime-host-fixture.json`
 - Modify: `tests/fixtures/audio/make_fixtures.py`
 - Modify: `tests/platform/web/playwright.config.mjs`
 - Modify: `scripts/web-runtime-host.sh`
+- Modify: `apps/architecture-portal/docs/platform/web-runtime.mdx`
+- Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
+
+**Documentation impact:** required for `/platform/web-runtime/` and `/operations/testing-and-proof/`; update both current portal pages in this Task with Chromium full Proof, WebKit capability-only smoke, and the physical-evidence boundary.
+
+**Version impact:** none. Task 12 owns identities.
 
 - [ ] **Step 1: Write the failing full journey**
 
@@ -1125,7 +1162,9 @@ Expected: Chromium complete PASS; WebKit PASS or explicit limitation; clean dist
 git commit -m "test(web): prove formal browser runtime journey"
 ```
 
-### Task 12: Propagate versions, Product Assembly, full CI, and acceptance evidence
+### Task 12A: Propagate versions, Product Assembly, full CI, and current-page evidence
+
+Task 12 is one version-management Task split into two atomic commits because `scripts/architecture-portal.sh version` requires a clean worktree. Task 12A completes exact identity propagation, Product Assembly, current-page updates, CI, and acceptance evidence; Task 12B freezes the immutable canary snapshot after Task 12A is committed cleanly.
 
 **Files:**
 
@@ -1155,10 +1194,20 @@ git commit -m "test(web): prove formal browser runtime journey"
 - Modify: affected CLI/MCP/Native Host version assertions
 - Modify: `.github/workflows/ci.yml`
 - Modify: `.github/workflows/core-nightly.yml` only if required to preserve the existing TSan/Stress commands
+- Modify: `apps/architecture-portal/docs/hosts/web-runtime.mdx`
+- Modify: `apps/architecture-portal/docs/platform/web-runtime.mdx`
+- Modify: `apps/architecture-portal/docs/platform/input.mdx`
+- Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
+- Modify: `apps/architecture-portal/docs/assembly/lmdj.mdx`
+- Modify: `apps/architecture-portal/docs/operations/version-and-release.mdx`
+
+**Documentation impact:** required for `/hosts/web-runtime/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/assembly/lmdj/`, and `/operations/version-and-release/`. Update all six current portal pages in this Task; Task 12B freezes their immutable `1.0.14.0` canary snapshot.
+
+**Version impact:** Product Build `1.0.14.0`; propagate every exact Module and Host target in this plan's Version Management table.
 
 - [ ] **Step 1: Write failing exact identity assertions**
 
-Assert the target table in this plan, `web-runtime-host` presence in Assembly and compiled catalog, exact module dependency graph, `1.0.12.0` Product tag/display strings, and no Contract/Provider version change.
+Assert the target table in this plan, `web-runtime-host` presence in Assembly and compiled catalog, exact module dependency graph, `1.0.14.0` Product tag/display strings, and no Contract/Provider version change.
 
 - [ ] **Step 2: Run RED**
 
@@ -1172,7 +1221,7 @@ Expected: fail against baseline identities and missing Web Host manifest.
 
 - [ ] **Step 3: Update exact identities and Product wiring**
 
-Set Product `1.0.12.0`, Project I/O `0.4.0`, Audio Runtime `0.4.0`, Facade `1.2.0`, CLI/MCP `1.0.3`, Native Host `1.0.1`, and Web Host `1.0.0`. Add Web Host to Assembly hosts and link the Product compiled catalog object only from `products/lmdj/CMakeLists.txt` when the Emscripten target exists.
+Set Product `1.0.14.0`, Project I/O `0.4.0`, Audio Runtime `0.4.0`, Facade `1.2.0`, CLI `1.0.5`, MCP `1.1.2`, Native Host `1.0.3`, and Web Host `1.0.0`. Add Web Host to Assembly hosts and link the Product compiled catalog object only from `products/lmdj/CMakeLists.txt` when the Emscripten target exists. Regenerate the compiled catalog and assert its Web Host identity equals `apps/web-runtime-host/module.json`.
 
 - [ ] **Step 4: Regenerate and verify the Assembly lock**
 
@@ -1207,17 +1256,50 @@ scripts/core.sh configure release
 scripts/core.sh build release
 scripts/core.sh test release stress
 scripts/core-coverage.sh check
+scripts/architecture-portal.sh check
 bash scripts/verify-core-dependencies.sh
 bash tests/build/test_active_tree.sh
 git diff --check
 ```
 
-Expected: every automated gate passes; physical rows remain deferred; Product reports `1.0.12.0 · canary` and exact Assembly lock match.
+Expected: every automated gate passes except the precise missing immutable `1.0.14.0` Architecture Portal snapshot; physical rows remain deferred; Product reports `1.0.14.0 · canary` and exact Assembly lock match. The missing snapshot cannot be generated until Task 12A is committed with a clean worktree.
 
-- [ ] **Step 7: Commit Task 12**
+- [ ] **Step 7: Commit Task 12A**
 
 ```bash
 git commit -m "feat(product): assemble formal web runtime host"
+```
+
+### Task 12B: Freeze the immutable canary Architecture Portal snapshot
+
+**Files:**
+
+- Create: `apps/architecture-portal/versioned_docs/version-1.0.14.0/`
+- Create: `apps/architecture-portal/versioned_sidebars/version-1.0.14.0-sidebars.json`
+- Create: `apps/architecture-portal/versioned_metadata/version-1.0.14.0.json`
+- Modify: `apps/architecture-portal/versions.json`
+
+**Documentation impact:** required for `/hosts/web-runtime/`, `/platform/web-runtime/`, `/platform/input/`, `/operations/testing-and-proof/`, `/assembly/lmdj/`, and `/operations/version-and-release/`. This Task freezes the immutable snapshot of the six current portal routes.
+
+**Version impact:** none. Snapshot creation changes no Product, Module, Host, Provider, or Contract version semantics.
+
+- [ ] **Step 1: Generate the clean-worktree snapshot**
+
+Run only after Task 12A is committed and the worktree is clean:
+
+```bash
+scripts/architecture-portal.sh version 1.0.14.0 canary
+scripts/architecture-portal.sh check
+```
+
+Expected: the generated versioned docs, sidebar, metadata, and `versions.json` are deterministic; the Portal check passes.
+
+- [ ] **Step 2: Commit Task 12B**
+
+Commit only the deterministic snapshot/sidebar/metadata output:
+
+```bash
+git commit -m "docs(product): freeze 1.0.14.0 canary architecture snapshot"
 ```
 
 ### Task 13: Review, PR, squash merge, merged-main Proof, and separately approved tag
@@ -1277,7 +1359,7 @@ Record the full SHA and outputs in the acceptance document.
 
 - [ ] **Step 7: Create and push the signed Product tag only after separate approval**
 
-Resolve the exact merged SHA, create signed annotated `lmdj-v1.0.12.0`, verify tag object/signature/target, then push only that tag if tag push is separately authorized. GitHub Release, deployment, publication, and Channel promotion remain unperformed.
+Signed tag creation and tag push remain separately approved only. Resolve the exact merged SHA, create signed annotated `lmdj-v1.0.14.0`, verify tag object/signature/target, then push only that tag if tag push is separately authorized. GitHub Release, deployment, publication, and Channel promotion remain out of scope.
 
 ## Plan Self-review Checklist
 
@@ -1293,7 +1375,7 @@ Resolve the exact merged SHA, create signed annotated `lmdj-v1.0.12.0`, verify t
 - [ ] Audio callback work is bounded and allocation/lock/I/O/Facade/JSON/logging free.
 - [ ] Same-build private protocol creates no public Contract or compatibility negotiation.
 - [ ] Product, Module, dependency, manifest, Assembly, lock, and Host identities are internally consistent.
-- [ ] Every Task has RED, implementation, GREEN, exact staging, and one commit boundary.
+- [ ] Every Task, including Task 12A and Task 12B, has RED, implementation, GREEN, exact staging, and its declared commit boundary.
 - [ ] Push, PR, merge, tag, tag push, Release, deployment, and Channel promotion are separately authorized.
 
 ## References

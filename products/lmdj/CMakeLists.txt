@@ -34,10 +34,3 @@ target_link_libraries(
   PRIVATE
     lmdj_product_lmdj_assembly
 )
-if(TARGET lmdj_web_runtime_host)
-  target_link_libraries(
-    lmdj_web_runtime_host
-    PRIVATE
-      lmdj_product_lmdj_assembly
-  )
-endif()
