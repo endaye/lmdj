@@ -23,6 +23,7 @@
     "clear": "docusaurus clear",
     "typecheck": "tsc --noEmit",
     "test": "node --test test/*.test.mjs",
+    "check:current": "npm test && npm run validate:docs && npm run validate:diagrams && npm run facts && npm run typecheck && npm run build && npm run check:build",
     "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run facts && npm run check:release-docs && npm run typecheck && npm run build && npm run check:build"
   },
   "dependencies": {

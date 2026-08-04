@@ -117,7 +117,7 @@ export async function freezeVersion(options) {
   const run = options.run ?? ((command, args) => defaultRun(portalRoot, command, args));
   const writeMetadata = options.writeMetadata ?? ((version, metadata) => defaultWriteMetadata(portalRoot, version, metadata));
 
-  await run('npm', ['run', 'check']);
+  await run('npm', ['run', 'check:current']);
   await run('npm', ['run', 'docusaurus', '--', 'docs:version', requestedVersion]);
   await writeMetadata(requestedVersion, {
     ...facts,

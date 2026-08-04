@@ -43,7 +43,7 @@ test('freeze runs both gates around Docusaurus and writes exact metadata', async
     writeMetadata: async (_version, value) => { metadata = value; },
   }));
   assert.deepEqual(commands, [
-    ['npm', ['run', 'check']],
+    ['npm', ['run', 'check:current']],
     ['npm', ['run', 'docusaurus', '--', 'docs:version', '1.0.13.0']],
     ['npm', ['run', 'check']],
   ]);
@@ -53,6 +53,30 @@ test('freeze runs both gates around Docusaurus and writes exact metadata', async
     revision: 'abcdef123456',
     frozen_at_utc: '2026-08-04T00:00:00.000Z',
   });
+});
+
+test('freeze stops before generation and metadata when current preflight fails', async () => {
+  const commands = [];
+  let metadataWritten = false;
+  await assert.rejects(() => freezeVersion(fixture({
+    run: async (command, args) => {
+      commands.push([command, args]);
+      throw new Error('current portal validation failed');
+    },
+    writeMetadata: async () => { metadataWritten = true; },
+  })), /current portal validation failed/);
+  assert.deepEqual(commands, [['npm', ['run', 'check:current']]]);
+  assert.equal(metadataWritten, false);
+});
+
+test('package scripts separate current preflight from release snapshot validation', async () => {
+  const manifest = (await import('../package.json', {with: {type: 'json'}})).default;
+  assert.equal(
+    manifest.scripts['check:current'],
+    'npm test && npm run validate:docs && npm run validate:diagrams && npm run facts && npm run typecheck && npm run build && npm run check:build',
+  );
+  assert.doesNotMatch(manifest.scripts['check:current'], /check:release-docs/);
+  assert.match(manifest.scripts.check, /npm run check:release-docs/);
 });
 
 test('release documentation requires an immutable snapshot matching repository truth', () => {
