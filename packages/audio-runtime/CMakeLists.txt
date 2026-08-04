@@ -13,6 +13,18 @@ target_sources(
     src/realtime_engine.cpp
 )
 
+if(EMSCRIPTEN)
+  target_sources(
+    lmdj_audio_runtime
+    PRIVATE src/web/realtime_audio_worklet.cpp
+  )
+  if(LMDJ_WEB_AUDIO_CONFORMANCE)
+    target_compile_definitions(
+      lmdj_audio_runtime PRIVATE LMDJ_WEB_AUDIO_CONFORMANCE=1
+    )
+  endif()
+endif()
+
 target_include_directories(
   lmdj_audio_runtime
   PUBLIC

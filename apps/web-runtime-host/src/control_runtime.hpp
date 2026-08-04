@@ -51,6 +51,8 @@ struct AudioQuiescenceCoordinator {
   void* context;
   foundation::Result<void> (*await_quiescent)(
       void* context, std::uint32_t timeout_ms) noexcept;
+  bool (*ready)(void* context) noexcept;
+  std::uint64_t (*acknowledged_generation)(void* context) noexcept;
 };
 
 class ControlRuntimeAudioAccess final {

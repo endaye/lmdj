@@ -362,8 +362,21 @@ struct FakeCoordinator final {
     return lmdj::foundation::Result<void>::success();
   }
 
+  static bool ready(void* context) noexcept {
+    return static_cast<FakeCoordinator*>(context)->is_ready;
+  }
+
+  static std::uint64_t acknowledged_generation(void* context) noexcept {
+    return static_cast<FakeCoordinator*>(context)->acknowledged;
+  }
+
   AudioQuiescenceCoordinator seam() noexcept {
-    return AudioQuiescenceCoordinator{this, &FakeCoordinator::await};
+    return AudioQuiescenceCoordinator{
+        this,
+        &FakeCoordinator::await,
+        &FakeCoordinator::ready,
+        &FakeCoordinator::acknowledged_generation,
+    };
   }
 
   ContinuousAudioDriver* driver = nullptr;
@@ -371,12 +384,14 @@ struct FakeCoordinator final {
   std::filesystem::path workspace_root;
   std::string expected_take_id;
   bool succeed = true;
+  bool is_ready = true;
   bool timeout = false;
   bool called = false;
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
   bool observed_take_sealed = false;
   std::uint32_t timeout_ms = 0;
+  std::uint64_t acknowledged = 0;
 };
 
 class OneShotAudioDriver final {
@@ -620,6 +635,11 @@ void test_exact_payloads_and_facade_owned_project_journey() {
   LMDJ_CHECK(inspected_result.at("project_revision") == 2);
   LMDJ_CHECK(inspected_result.at("project").at("project_id") == kProjectId);
 
+  FakeCoordinator activation_coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(
+          *runtime, activation_coordinator.seam())
+          .has_value());
   const auto& activated = check_exact_success(
       runtime->dispatch("audio.activate", Json::object(), {}),
       {"state", "changed", "generation"});
@@ -748,6 +768,10 @@ void test_take_stop_drains_the_final_disarm_quantum() {
   import_and_assign(*runtime, wav, kAssetId, 751, 752, 0);
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(runtime->engine());
   check_success(runtime->dispatch(
@@ -805,6 +829,52 @@ void test_take_stop_drains_the_final_disarm_quantum() {
   LMDJ_CHECK(events.at(0).at("velocity") == 101);
 }
 
+void test_audio_activation_requires_ready_and_reports_explicit_ack() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(8);
+  import_and_assign(*runtime, wav, kAssetId, 791, 792, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+
+  const auto missing_ready = AudioQuiescenceCoordinator{
+      nullptr,
+      &FakeCoordinator::await,
+      &FakeCoordinator::ready,
+      &FakeCoordinator::acknowledged_generation,
+  };
+  LMDJ_CHECK(
+      !ControlRuntimeAudioAccess::install(*runtime, missing_ready).has_value());
+
+  FakeCoordinator coordinator;
+  coordinator.is_ready = false;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  const auto& not_ready = check_error(
+      runtime->dispatch("audio.activate", Json::object(), {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(not_ready.at("message") == "audio output is not ready");
+
+  const auto& before = check_exact_success(
+      runtime->dispatch("host.status", Json::object(), {}),
+      {"state", "project_id", "project_revision", "pattern_id",
+       "runtime_ready", "control_generation", "acknowledged_generation",
+       "limits", "audio_state", "capture_state"});
+  LMDJ_CHECK(before.at("acknowledged_generation").is_null());
+
+  coordinator.is_ready = true;
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  coordinator.acknowledged = 1;
+  const auto& after = check_exact_success(
+      runtime->dispatch("host.status", Json::object(), {}),
+      {"state", "project_id", "project_revision", "pattern_id",
+       "runtime_ready", "control_generation", "acknowledged_generation",
+       "limits", "audio_state", "capture_state"});
+  LMDJ_CHECK(after.at("acknowledged_generation") == 1);
+}
+
 void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
   {
     TempDirectory temp;
@@ -814,17 +884,14 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     import_and_assign(*runtime, wav, kAssetId, 801, 802, 0);
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     const auto& missing = check_error(
-        runtime->dispatch("audio.suspend", Json::object(), {}),
+        runtime->dispatch("audio.activate", Json::object(), {}),
         "HOST_STATE_INVALID");
-    LMDJ_CHECK(missing.at("message") == "audio quiescence is unavailable");
+    LMDJ_CHECK(missing.at("message") == "audio output is not ready");
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
-        lmdj::audio::RealtimeState::running);
-    check_error(
-        runtime->dispatch("host.status", Json::object(), {}),
-        "HOST_STATE_INVALID");
+        lmdj::audio::RealtimeState::stopped);
+    check_success(runtime->dispatch("host.status", Json::object(), {}));
   }
 
   {
@@ -835,12 +902,12 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     import_and_assign(*runtime, wav, kAssetId, 811, 812, 0);
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     FakeCoordinator failure;
     failure.succeed = false;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, failure.seam())
             .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     check_error(
         runtime->dispatch("audio.suspend", Json::object(), {}),
         "INTERNAL_ERROR");
@@ -861,13 +928,13 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     import_and_assign(*runtime, wav, kAssetId, 821, 822, 0);
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    ContinuousAudioDriver driver(runtime->engine());
     FakeCoordinator success;
-    success.driver = &driver;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, success.seam())
             .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    ContinuousAudioDriver driver(runtime->engine());
+    success.driver = &driver;
     check_success(runtime->dispatch(
         "take.begin",
         {{"take_id", kTakeId}, {"expected_revision", 2}},
@@ -913,16 +980,16 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
     import_and_assign(*runtime, wav, kAssetId, 831, 832, 0);
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    ContinuousAudioDriver driver(runtime->engine());
     FakeCoordinator coordinator;
-    coordinator.driver = &driver;
     coordinator.engine = &runtime->engine();
     coordinator.workspace_root = temp.path();
     coordinator.expected_take_id = kTakeId;
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
             .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    ContinuousAudioDriver driver(runtime->engine());
+    coordinator.driver = &driver;
     check_success(runtime->dispatch(
         "take.begin",
         {{"take_id", kTakeId}, {"expected_revision", 2}},
@@ -977,8 +1044,6 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
     import_and_assign(*runtime, wav, kAssetId, 841, 842, 0);
     check_success(runtime->dispatch(
         "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
-    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
-    ContinuousAudioDriver driver(runtime->engine());
     FakeCoordinator timeout;
     timeout.succeed = false;
     timeout.timeout = true;
@@ -988,6 +1053,8 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
     LMDJ_CHECK(
         ControlRuntimeAudioAccess::install(*runtime, timeout.seam())
             .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    ContinuousAudioDriver driver(runtime->engine());
     check_success(runtime->dispatch(
         "take.begin",
         {{"take_id", kTakeId}, {"expected_revision", 2}},
@@ -1037,6 +1104,10 @@ void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
       {"project_id", "project_revision", "pattern_id", "runtime_ready",
        "generation", "snapshot_error"});
   LMDJ_CHECK(first.at("generation") == 1);
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
   check_success(runtime->dispatch("audio.activate", Json::object(), {}));
   OneShotAudioDriver audio(runtime->engine());
   check_success(runtime->dispatch(
@@ -1535,6 +1606,7 @@ int main() {
     test_facade_error_details_follow_an_explicit_safe_schema();
     test_exact_payloads_and_facade_owned_project_journey();
     test_take_stop_drains_the_final_disarm_quantum();
+    test_audio_activation_requires_ready_and_reports_explicit_ack();
     test_audio_suspend_requires_and_honors_quiescence_coordinator();
     test_host_close_orders_capture_seal_quiescence_and_engine_stop();
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();

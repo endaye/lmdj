@@ -405,6 +405,12 @@ struct ControlRuntime::Impl {
 
   Json status() const {
     const auto bank = engine.bank_telemetry();
+    const auto acknowledged_generation =
+        coordinator.has_value() && coordinator->ready != nullptr &&
+                coordinator->ready(coordinator->context) &&
+                coordinator->acknowledged_generation != nullptr
+            ? coordinator->acknowledged_generation(coordinator->context)
+            : 0;
     const auto audio_running =
         engine.telemetry().state == audio::RealtimeState::running;
     const auto generation_visible =
@@ -424,7 +430,10 @@ struct ControlRuntime::Impl {
         {"control_generation",
          generation_visible ? Json(bank.accepted_publications)
                             : Json(nullptr)},
-        {"acknowledged_generation", nullptr},
+        {"acknowledged_generation",
+         generation_visible && acknowledged_generation != 0
+             ? Json(acknowledged_generation)
+             : Json(nullptr)},
         {"limits",
          {
              {"maximum_artifact_bytes", limits.maximum_artifact_bytes},
@@ -1012,6 +1021,11 @@ Json ControlRuntime::dispatch(
           *impl_->runtime_bank_project_id != *impl_->project_id) {
         return state_error();
       }
+      if (!impl_->coordinator.has_value() ||
+          impl_->coordinator->ready == nullptr ||
+          !impl_->coordinator->ready(impl_->coordinator->context)) {
+        return state_error("audio output is not ready");
+      }
       if (impl_->state == Impl::State::running) {
         return success({
             {"state", "running"},
@@ -1301,7 +1315,8 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
     ControlRuntime& runtime,
     AudioQuiescenceCoordinator coordinator) noexcept {
   if (coordinator.context == nullptr ||
-      coordinator.await_quiescent == nullptr) {
+      coordinator.await_quiescent == nullptr || coordinator.ready == nullptr ||
+      coordinator.acknowledged_generation == nullptr) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::invalid_argument,
         "audio quiescence coordinator is invalid",

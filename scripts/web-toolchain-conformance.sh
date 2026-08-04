@@ -8,6 +8,9 @@ toolchain_root="$build_root/toolchain"
 cmake_root="$toolchain_root/cmake"
 project_io_root="$toolchain_root/project_io"
 project_io_cmake_root="$project_io_root/cmake"
+formal_audio_root="$toolchain_root/formal-audio"
+audio_runtime_root="$build_root/audio-runtime"
+audio_runtime_cmake_root="$audio_runtime_root/cmake"
 web_test_root="$repo_root/tests/platform/web"
 
 usage() {
@@ -16,6 +19,7 @@ usage:
   scripts/web-toolchain-conformance.sh configure
   scripts/web-toolchain-conformance.sh build
   scripts/web-toolchain-conformance.sh build-project-io
+  scripts/web-toolchain-conformance.sh build-audio-runtime
   scripts/web-toolchain-conformance.sh serve [--port PORT]
   scripts/web-toolchain-conformance.sh proof
   scripts/web-toolchain-conformance.sh clean
@@ -93,6 +97,36 @@ build_project_io() {
   fi
 }
 
+build_audio_runtime() {
+  activate_toolchain
+  cmake -E remove_directory "$audio_runtime_root"
+  cmake -E remove_directory "$formal_audio_root"
+  emcmake cmake \
+    -S "$repo_root" \
+    -B "$audio_runtime_cmake_root" \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DBUILD_TESTING=OFF \
+    -DLMDJ_WEB_AUDIO_CONFORMANCE=ON \
+    -DLMDJ_WEB_AUDIO_OUTPUT_DIR="$formal_audio_root"
+  cmake --build "$audio_runtime_cmake_root" \
+    --target lmdj_web_runtime_host \
+    --parallel
+  local expected_artifacts=(
+    lmdj-web-runtime-host.html
+    lmdj-web-runtime-host.js
+    lmdj-web-runtime-host.wasm
+  )
+  local actual_artifacts=()
+  while IFS= read -r artifact; do
+    actual_artifacts+=("$(basename "$artifact")")
+  done < <(find "$formal_audio_root" -mindepth 1 -maxdepth 1 -print | sort)
+  if [[ "${actual_artifacts[*]}" != "${expected_artifacts[*]}" ]]; then
+    echo "web toolchain error: formal audio artifacts are not the exact three-file set" >&2
+    printf '  %s\n' "${actual_artifacts[@]}" >&2
+    exit 2
+  fi
+}
+
 clean_fixture() {
   if [[ -z "$repo_root" || "$repo_root" == "/" ]]; then
     echo "web toolchain error: unsafe repository root" >&2
@@ -136,6 +170,13 @@ case "$command_name" in
     }
     build_project_io
     ;;
+  build-audio-runtime)
+    [[ $# -eq 0 ]] || {
+      usage
+      exit 64
+    }
+    build_audio_runtime
+    ;;
   serve)
     if [[ $# -ne 0 && ( $# -ne 2 || "$1" != "--port" ) ]]; then
       usage
@@ -176,6 +217,7 @@ case "$command_name" in
     configure_fixture
     build_fixture
     build_project_io
+    build_audio_runtime
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
@@ -189,6 +231,9 @@ case "$command_name" in
     npm --prefix "$web_test_root" test -- \
       --project=webkit \
       "$web_test_root/project_io/project_io_web_conformance.spec.mjs"
+    npm --prefix "$web_test_root" test -- \
+      --project=chromium \
+      "$web_test_root/audio/realtime_audio_worklet.spec.mjs"
     echo "Web Toolchain Conformance Proof: PASS"
     ;;
   clean)
