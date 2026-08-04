@@ -1,0 +1,40 @@
+---
+title: Input Platform
+area: platform
+status: partial
+owners: [product, platform]
+source_paths:
+  - docs/prd/open-questions.md
+  - docs/superpowers/plans/2026-08-03-lmdj-foundation-input-hardening.md
+  - apps/web-runtime-host/src/input_adapters.mjs
+  - apps/web-runtime-host/src/main.mjs
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+
+<StatusBadge status="partial" /> Assembly-listed Web Runtime Host `1.0.0` 已实现 64-Pad Pointer、Keyboard 与 Web MIDI adapter；Product Build 为 `1.0.14.0`。`partial` 表示物理输入与延迟验收仍未完成，不表示 Host 尚未装配。
+
+## 目标事件
+
+Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)`。Project `{bank, pad}` 只在 Host 路由前按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
+
+## 生命周期
+
+普通输入只在 `running` admitted；拒绝输入不重放。中断同步清除 Pointer/Keyboard/MIDI pressed state。恢复期只有 Context 与 generation 就绪后开启的一次真实用户 probe 例外，第二次输入继续拒绝；MIDI 断开清理状态，不合成 Trigger。
+
+## 自动化证据
+
+Node 回归覆盖 primary Pointer、compatibility mouse suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Chromium packaged journey 覆盖实际 DOM Pad、500 次 sequence-addressed Trigger、lifecycle 与 recovery 路由；它不替代物理设备测量。
+
+## 非能力
+
+当前不证明 mapping UI、MIDI Learn、Controller Profile、移动端触控质量或任何物理延迟阈值已经交付。
+
+## 状态升级证据
+
+五个物理行——macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome physical MIDI、iPadOS Safari Touch、iPadOS Safari lifecycle——全部仍为 `deferred / unverified`。
