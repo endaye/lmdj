@@ -59,6 +59,8 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_observed_sample_rate
     _lmdj_web_audio_observed_render_quantum
     _lmdj_web_audio_control_failure_committed
+    _lmdj_web_audio_commit_failure
+    _lmdj_web_audio_bootstrap_timeout
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     list(
@@ -73,6 +75,7 @@ if(EMSCRIPTEN)
       _lmdj_web_audio_test_gate_state
       _lmdj_web_audio_test_start_calls
       _lmdj_web_audio_test_validate_configuration
+      _lmdj_web_audio_test_bootstrap_failure
       _lmdj_web_audio_test_invalid_shape
       _lmdj_web_audio_test_generation_matches
       _lmdj_web_audio_test_processor_error

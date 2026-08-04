@@ -233,6 +233,34 @@ test("start is exactly-once and suspend can reactivate the same processor", asyn
 });
 
 
+for (const fatal of [
+  "worklet_thread_start_failed",
+  "processor_create_failed",
+  "node_create_failed",
+  "coordinator_install_failed",
+  "bootstrap_timeout",
+]) {
+  test(`${fatal} commits Control failure before the start Promise returns`, async ({page}) => {
+    await waitForFormalHost(page);
+    const result = await page.evaluate(async (selectedFatal) =>
+      window.lmdjWebRuntimeHostTest.runBootstrapFailureProof(selectedFatal),
+    fatal);
+    expect(result.activation).toEqual({ok: false, fatal});
+    expect(result.controlFailureCommitted).toBe(1);
+    for (const response of [
+      result.hostStatus,
+      result.snapshotReload,
+      result.trigger,
+    ]) {
+      expect(response).toMatchObject({
+        ok: false,
+        error: {code: "HOST_STATE_INVALID"},
+      });
+    }
+  });
+}
+
+
 test("a stale Bank generation never masquerades as the current acknowledgement", async ({page}) => {
   await waitForFormalHost(page);
   expect((await activateFromClick(page, 48_000)).ok).toBe(true);

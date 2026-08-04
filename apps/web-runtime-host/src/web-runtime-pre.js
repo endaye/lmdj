@@ -16,6 +16,7 @@ if (typeof window !== "undefined") {
     10: "coordinator_install_failed",
     11: "processor_error",
     12: "quiescence_timeout",
+    13: "bootstrap_timeout",
   });
   const gateNames = Object.freeze({
     0: "paused",
@@ -40,14 +41,20 @@ if (typeof window !== "undefined") {
       },
     },
   });
-  async function waitForUnsupportedFailure(deadline) {
-    while (
-      Module["_lmdj_web_audio_control_failure_committed"]() !== 1 &&
-      performance.now() < deadline
-    ) await delay(2);
-    return Module["_lmdj_web_audio_control_failure_committed"]() === 1
-      ? unsupportedResult()
-      : {ok: false, fatal: "control_failure_timeout"};
+  async function ensureControlFailureCommitted() {
+    while (Module["_lmdj_web_audio_control_failure_committed"]() !== 1) {
+      Module["_lmdj_web_audio_commit_failure"]();
+      await delay(2);
+    }
+  }
+  async function waitForUnsupportedFailure() {
+    await ensureControlFailureCommitted();
+    return unsupportedResult();
+  }
+  async function committedFatalResult() {
+    const fatalCode = Module["_lmdj_web_audio_fatal"]();
+    await ensureControlFailureCommitted();
+    return {ok: false, fatal: fatalNames[fatalCode] ?? "unknown"};
   }
 
   function registerAudioContext(audioContext) {
@@ -83,10 +90,11 @@ if (typeof window !== "undefined") {
       }
       const result = Module["_lmdj_web_audio_start"](handle);
       if (result === -4 || result === -5) {
-        return waitForUnsupportedFailure(deadline);
+        return waitForUnsupportedFailure();
       }
       if (result !== 1 && result !== 2 && result !== 3) {
         const fatalCode = Module["_lmdj_web_audio_fatal"]();
+        if (fatalCode !== 0) return committedFatalResult();
         return {ok: false, fatal: fatalNames[fatalCode] ?? "unknown"};
       }
       while (performance.now() < deadline) {
@@ -102,12 +110,24 @@ if (typeof window !== "undefined") {
           };
         }
         if (state === -1) {
-          const fatalCode = Module["_lmdj_web_audio_fatal"]();
-          return {ok: false, fatal: fatalNames[fatalCode] ?? "unknown"};
+          return committedFatalResult();
         }
         await delay(5);
       }
-      return {ok: false, fatal: "worklet_start_timeout"};
+      const finalState = Module["_lmdj_web_audio_state"]();
+      if (finalState === 3) {
+        return {
+          ok: true,
+          sampleRate: context.sampleRate,
+          inputs: 0,
+          outputs: 1,
+          channels: 2,
+          frames: 128,
+        };
+      }
+      if (finalState === -1) return committedFatalResult();
+      Module["_lmdj_web_audio_bootstrap_timeout"]();
+      return committedFatalResult();
     })();
     startRecord = {handle, promise};
     return promise;
@@ -347,9 +367,42 @@ if (typeof window !== "undefined") {
         if (result !== -4 && result !== -5) {
           throw new Error(`configuration validator returned ${result}`);
         }
-        const activation = await waitForUnsupportedFailure(
-          performance.now() + 30_000);
+        const activation = await waitForUnsupportedFailure();
         return {activation, hostStatus: await submit("host.status", {})};
+      },
+
+      async runBootstrapFailureProof(selectedFatal) {
+        const codes = {
+          worklet_thread_start_failed: 5,
+          processor_create_failed: 6,
+          node_create_failed: 7,
+          coordinator_install_failed: 10,
+        };
+        if (selectedFatal === "bootstrap_timeout") {
+          if (Module["_lmdj_web_audio_bootstrap_timeout"]() !== 1) {
+            throw new Error("bootstrap timeout injection failed");
+          }
+        } else {
+          const code = codes[selectedFatal];
+          if (!code || Module[
+            "_lmdj_web_audio_test_bootstrap_failure"
+          ](code) !== 1) {
+            throw new Error(`bootstrap failure injection failed: ${selectedFatal}`);
+          }
+        }
+        const context = new AudioContext({sampleRate: 48_000});
+        await context.resume();
+        const handle = host.registerAudioContext(context);
+        const activation = await host.startAudioWorklet(handle);
+        return {
+          activation,
+          controlFailureCommitted:
+            Module["_lmdj_web_audio_control_failure_committed"](),
+          hostStatus: await submit("host.status", {}),
+          snapshotReload: await submit(
+            "snapshot.reload", {pattern_id: crypto.randomUUID()}),
+          trigger: await submit("trigger", {slot: 0, velocity: 127}),
+        };
       },
 
       invokeAdapterShape({inputs, outputs, channels, frames}) {

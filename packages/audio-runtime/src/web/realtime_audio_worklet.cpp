@@ -151,11 +151,13 @@ struct RealtimeAudioWorklet::Impl {
       void* user_data) {
     auto& self = *static_cast<Impl*>(user_data);
     if (!emscripten_is_main_browser_thread()) {
-      self.latch_fatal(RealtimeAudioWorkletFatal::wrong_browser_thread);
+      self.latch_bootstrap_fatal(
+          RealtimeAudioWorkletFatal::wrong_browser_thread);
       return;
     }
     if (!success) {
-      self.latch_fatal(RealtimeAudioWorkletFatal::processor_create_failed);
+      self.latch_bootstrap_fatal(
+          RealtimeAudioWorkletFatal::processor_create_failed);
       return;
     }
     int output_channel_counts[1] = {2};
@@ -174,7 +176,8 @@ struct RealtimeAudioWorklet::Impl {
         &Impl::process,
         &self);
     if (node == 0) {
-      self.latch_fatal(RealtimeAudioWorkletFatal::node_create_failed);
+      self.latch_bootstrap_fatal(
+          RealtimeAudioWorkletFatal::node_create_failed);
       return;
     }
     emscripten_audio_node_connect(node, context, 0, 0);
@@ -185,7 +188,7 @@ struct RealtimeAudioWorklet::Impl {
     if (self.hooks.context == nullptr ||
         self.hooks.schedule_control_install == nullptr ||
         !self.hooks.schedule_control_install(self.hooks.context)) {
-      self.latch_fatal(
+      self.latch_bootstrap_fatal(
           RealtimeAudioWorkletFatal::coordinator_install_failed);
     }
   }
@@ -196,11 +199,12 @@ struct RealtimeAudioWorklet::Impl {
       void* user_data) {
     auto& self = *static_cast<Impl*>(user_data);
     if (!emscripten_is_main_browser_thread()) {
-      self.latch_fatal(RealtimeAudioWorkletFatal::wrong_browser_thread);
+      self.latch_bootstrap_fatal(
+          RealtimeAudioWorkletFatal::wrong_browser_thread);
       return;
     }
     if (!success) {
-      self.latch_fatal(
+      self.latch_bootstrap_fatal(
           RealtimeAudioWorkletFatal::worklet_thread_start_failed);
       return;
     }
@@ -224,6 +228,12 @@ struct RealtimeAudioWorklet::Impl {
     worklet_state.store(
         RealtimeAudioWorkletState::fatal,
         std::memory_order_release);
+  }
+
+  void latch_bootstrap_fatal(RealtimeAudioWorkletFatal code) noexcept {
+    // Bootstrap callbacks only publish atomics. Control proxying is initiated
+    // later by the browser-main start Promise, never by the render callback.
+    latch_fatal(code);
   }
 
   RealtimeAudioWorkletStart validate_configuration(
@@ -274,7 +284,8 @@ RealtimeAudioWorklet::~RealtimeAudioWorklet() = default;
 RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
     std::int32_t audio_context_handle) noexcept {
   if (!emscripten_is_main_browser_thread()) {
-    impl_->latch_fatal(RealtimeAudioWorkletFatal::wrong_browser_thread);
+    impl_->latch_bootstrap_fatal(
+        RealtimeAudioWorkletFatal::wrong_browser_thread);
     return RealtimeAudioWorkletStart::wrong_browser_thread;
   }
   if (audio_context_handle <= 0) {
@@ -321,7 +332,7 @@ RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
 
 void RealtimeAudioWorklet::complete_control_install(bool installed) noexcept {
   if (!installed) {
-    impl_->latch_fatal(
+    impl_->latch_bootstrap_fatal(
         RealtimeAudioWorkletFatal::coordinator_install_failed);
     return;
   }
@@ -331,7 +342,7 @@ void RealtimeAudioWorklet::complete_control_install(bool installed) noexcept {
           RealtimeAudioWorkletState::ready,
           std::memory_order_acq_rel,
           std::memory_order_acquire)) {
-    impl_->latch_fatal(
+    impl_->latch_bootstrap_fatal(
         RealtimeAudioWorkletFatal::coordinator_install_failed);
   }
 }
@@ -421,6 +432,11 @@ void RealtimeAudioWorklet::latch_processor_error() noexcept {
   impl_->latch_fatal(RealtimeAudioWorkletFatal::processor_error);
 }
 
+void RealtimeAudioWorklet::latch_bootstrap_timeout() noexcept {
+  impl_->latch_bootstrap_fatal(
+      RealtimeAudioWorkletFatal::bootstrap_timeout);
+}
+
 std::int32_t RealtimeAudioWorklet::observed_sample_rate() const noexcept {
   return impl_->sample_rate.load(std::memory_order_acquire);
 }
@@ -463,6 +479,20 @@ RealtimeAudioWorklet::validate_configuration_for_conformance(
     return RealtimeAudioWorkletStart::fatal;
   }
   return impl_->validate_configuration(sample_rate, render_quantum);
+}
+
+bool RealtimeAudioWorklet::latch_bootstrap_fatal_for_conformance(
+    RealtimeAudioWorkletFatal fatal) noexcept {
+  switch (fatal) {
+    case RealtimeAudioWorkletFatal::worklet_thread_start_failed:
+    case RealtimeAudioWorkletFatal::processor_create_failed:
+    case RealtimeAudioWorkletFatal::node_create_failed:
+    case RealtimeAudioWorkletFatal::coordinator_install_failed:
+      impl_->latch_bootstrap_fatal(fatal);
+      return true;
+    default:
+      return false;
+  }
 }
 
 bool RealtimeAudioWorklet::callback_in_flight() const noexcept {

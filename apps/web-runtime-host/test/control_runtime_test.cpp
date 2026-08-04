@@ -301,6 +301,10 @@ class ContinuousAudioDriver final {
     }
   }
 
+  bool stopped() const noexcept {
+    return !running_.load(std::memory_order_acquire);
+  }
+
  private:
   void run() noexcept {
     std::array<float, 128> left{};
@@ -365,8 +369,14 @@ struct FakeCoordinator final {
         self.observed_take_sealed = false;
       }
     }
-    if (self.succeed && self.driver != nullptr) {
+    if (self.driver != nullptr) {
       self.driver->stop();
+    }
+    self.quiescence_established =
+        self.driver == nullptr || self.driver->stopped();
+    if (self.engine != nullptr) {
+      self.callback_count_at_quiescence =
+          self.engine->telemetry().callback_count;
     }
     if (!self.succeed) {
       return lmdj::foundation::Result<void>::failure(
@@ -415,6 +425,8 @@ struct FakeCoordinator final {
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
   bool observed_take_sealed = false;
+  bool quiescence_established = false;
+  std::uint64_t callback_count_at_quiescence = 0;
   std::uint32_t timeout_ms = 0;
   std::uint64_t acknowledged = 0;
   std::uint64_t acknowledged_before_begin = 0;
@@ -1022,10 +1034,19 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
         ControlRuntimeAudioAccess::install(*runtime, failure.seam())
             .has_value());
     check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    ContinuousAudioDriver driver(runtime->engine());
+    failure.driver = &driver;
+    failure.engine = &runtime->engine();
     check_error(
         runtime->dispatch("audio.suspend", Json::object(), {}),
         "INTERNAL_ERROR");
     LMDJ_CHECK(failure.called);
+    LMDJ_CHECK(failure.quiescence_established);
+    LMDJ_CHECK(driver.stopped());
+    LMDJ_CHECK(failure.observed_engine_running);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().callback_count ==
+        failure.callback_count_at_quiescence);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
         lmdj::audio::RealtimeState::stopped);
@@ -1171,6 +1192,7 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
             .has_value());
     check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     ContinuousAudioDriver driver(runtime->engine());
+    timeout.driver = &driver;
     check_success(runtime->dispatch(
         "take.begin",
         {{"take_id", kTakeId}, {"expected_revision", 2}},
@@ -1188,6 +1210,11 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
     LMDJ_CHECK(timeout.observed_capture_idle);
     LMDJ_CHECK(timeout.observed_take_sealed);
     LMDJ_CHECK(timeout.observed_engine_running);
+    LMDJ_CHECK(timeout.quiescence_established);
+    LMDJ_CHECK(driver.stopped());
+    LMDJ_CHECK(
+        runtime->engine().telemetry().callback_count ==
+        timeout.callback_count_at_quiescence);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
         lmdj::audio::RealtimeState::stopped);
@@ -1196,6 +1223,71 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
         "HOST_STATE_INVALID");
     check_error(
         runtime->dispatch("audio.activate", Json::object(), {}),
+        "HOST_STATE_INVALID");
+  }
+}
+
+void corrupt_active_take_capture(ControlRuntime& runtime) {
+  std::array<float, 8> left{};
+  std::array<float, 8> right{};
+  runtime.engine().render(left.data(), right.data(), 8);
+  LMDJ_CHECK(
+      runtime.engine().capture_telemetry().state == CaptureState::active);
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeCaptureCapacity + 1;
+       ++sequence) {
+    LMDJ_CHECK(
+        runtime.engine().enqueue(
+            lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+        lmdj::audio::EnqueueResult::accepted);
+    runtime.engine().render(left.data(), right.data(), 8);
+  }
+  LMDJ_CHECK(
+      runtime.engine().capture_telemetry().state ==
+      CaptureState::corrupted);
+}
+
+void test_active_take_failure_still_quiesces_suspend_and_close() {
+  for (const auto operation : {"audio.suspend", "host.close"}) {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(8);
+    import_and_assign(*runtime, wav, kAssetId, 851, 852, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    FakeCoordinator timeout;
+    timeout.succeed = false;
+    timeout.timeout = true;
+    timeout.engine = &runtime->engine();
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, timeout.seam())
+            .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    check_success(runtime->dispatch(
+        "take.begin",
+        {{"take_id", kTakeId}, {"expected_revision", 2}},
+        {}));
+    corrupt_active_take_capture(*runtime);
+
+    check_error(
+        runtime->dispatch(operation, Json::object(), {}),
+        "INTERNAL_ERROR");
+    LMDJ_CHECK(timeout.called);
+    LMDJ_CHECK(
+        timeout.timeout_ms ==
+        (std::string_view(operation) == "audio.suspend" ? 1'000U
+                                                        : 10'000U));
+    LMDJ_CHECK(timeout.quiescence_established);
+    LMDJ_CHECK(timeout.observed_engine_running);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().callback_count ==
+        timeout.callback_count_at_quiescence);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().state ==
+        lmdj::audio::RealtimeState::stopped);
+    check_error(
+        runtime->dispatch("host.status", Json::object(), {}),
         "HOST_STATE_INVALID");
   }
 }
@@ -1726,6 +1818,7 @@ int main() {
     test_audio_activation_rolls_back_begin_and_ack_failures();
     test_audio_suspend_requires_and_honors_quiescence_coordinator();
     test_host_close_orders_capture_seal_quiescence_and_engine_stop();
+    test_active_take_failure_still_quiesces_suspend_and_close();
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
     test_oversized_project_switch_is_inspectable_but_not_runnable();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();

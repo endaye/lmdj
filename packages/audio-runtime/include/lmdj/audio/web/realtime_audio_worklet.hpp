@@ -33,6 +33,7 @@ enum class RealtimeAudioWorkletFatal : std::int32_t {
   coordinator_install_failed = 10,
   processor_error = 11,
   quiescence_timeout = 12,
+  bootstrap_timeout = 13,
 };
 
 enum class RealtimeAudioWorkletGate : std::int32_t {
@@ -81,6 +82,7 @@ class RealtimeAudioWorklet final {
   RealtimeAudioWorkletState state() const noexcept;
   RealtimeAudioWorkletFatal fatal() const noexcept;
   void latch_processor_error() noexcept;
+  void latch_bootstrap_timeout() noexcept;
   std::int32_t observed_sample_rate() const noexcept;
   std::int32_t observed_render_quantum() const noexcept;
 
@@ -94,6 +96,8 @@ class RealtimeAudioWorklet final {
   std::uint32_t start_calls() const noexcept;
   RealtimeAudioWorkletStart validate_configuration_for_conformance(
       std::int32_t sample_rate, std::int32_t render_quantum) noexcept;
+  bool latch_bootstrap_fatal_for_conformance(
+      RealtimeAudioWorkletFatal fatal) noexcept;
   bool invoke_invalid_shape_for_conformance(std::int32_t frames) noexcept;
   bool generation_matches_for_conformance(
       std::uint64_t expected_generation) const noexcept;

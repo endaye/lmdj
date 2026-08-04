@@ -12,6 +12,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include <lmdj/foundation/json.hpp>
@@ -621,7 +622,16 @@ std::unique_ptr<ControlBridge> web_bridge_owner;
 std::atomic<ControlBridge*> web_bridge{nullptr};
 std::unique_ptr<RealtimeAudioWorklet> web_audio_owner;
 std::atomic<RealtimeAudioWorklet*> web_audio{nullptr};
-std::atomic<bool> web_audio_control_failure_committed{false};
+enum class AudioFailureCommitState : std::uint32_t {
+  idle,
+  reserving,
+  pending,
+  committed,
+};
+std::atomic<AudioFailureCommitState> web_audio_control_failure_state{
+    AudioFailureCommitState::idle};
+std::atomic<RealtimeAudioWorkletFatal> web_audio_control_failure_code{
+    RealtimeAudioWorkletFatal::none};
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 struct OutcomeDiagnostic {
@@ -670,6 +680,9 @@ std::uint64_t acknowledged_audio_generation(void* context) noexcept {
       ->acknowledged_generation();
 }
 
+bool schedule_audio_control_failure(
+    RealtimeAudioWorkletFatal fatal) noexcept;
+
 void install_audio_coordinator(void*) noexcept {
   auto* adapter = web_audio.load(std::memory_order_acquire);
   if (adapter == nullptr || web_runtime == nullptr) {
@@ -688,23 +701,80 @@ void install_audio_coordinator(void*) noexcept {
           &acknowledged_audio_generation,
       });
   adapter->complete_control_install(installed.has_value());
-}
-
-void fail_unsupported_audio_on_control(void*) noexcept {
-  if (web_runtime != nullptr) {
-    web_runtime->fail_and_seal("unsupported_web_runtime");
+  if (adapter->fatal() ==
+      RealtimeAudioWorkletFatal::coordinator_install_failed) {
+    static_cast<void>(schedule_audio_control_failure(
+        RealtimeAudioWorkletFatal::coordinator_install_failed));
   }
-  web_audio_control_failure_committed.store(true, std::memory_order_release);
 }
 
-bool schedule_unsupported_audio_failure() noexcept {
-  web_audio_control_failure_committed.store(false, std::memory_order_release);
-  return web_proxy_queue != nullptr &&
-         emscripten_proxy_async(
-             web_proxy_queue,
-             web_control_thread,
-             &fail_unsupported_audio_on_control,
-             nullptr) != 0;
+const char* audio_failure_reason(RealtimeAudioWorkletFatal fatal) noexcept {
+  switch (fatal) {
+    case RealtimeAudioWorkletFatal::unsupported_sample_rate:
+    case RealtimeAudioWorkletFatal::unsupported_render_quantum:
+      return "unsupported_web_runtime";
+    case RealtimeAudioWorkletFatal::worklet_thread_start_failed:
+      return "worklet_thread_start_failed";
+    case RealtimeAudioWorkletFatal::processor_create_failed:
+      return "processor_create_failed";
+    case RealtimeAudioWorkletFatal::node_create_failed:
+      return "node_create_failed";
+    case RealtimeAudioWorkletFatal::coordinator_install_failed:
+      return "coordinator_install_failed";
+    case RealtimeAudioWorkletFatal::bootstrap_timeout:
+      return "bootstrap_timeout";
+    default:
+      return "audio_bootstrap_failed";
+  }
+}
+
+void fail_audio_on_control(void*) noexcept {
+  const auto fatal =
+      web_audio_control_failure_code.load(std::memory_order_acquire);
+  if (web_runtime != nullptr) {
+    web_runtime->fail_and_seal(audio_failure_reason(fatal));
+  }
+  web_audio_control_failure_state.store(
+      AudioFailureCommitState::committed,
+      std::memory_order_release);
+}
+
+bool schedule_audio_control_failure(
+    RealtimeAudioWorkletFatal fatal) noexcept {
+  auto expected = AudioFailureCommitState::idle;
+  if (!web_audio_control_failure_state.compare_exchange_strong(
+          expected,
+          AudioFailureCommitState::reserving,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    while (expected == AudioFailureCommitState::reserving) {
+      std::this_thread::yield();
+      expected = web_audio_control_failure_state.load(
+          std::memory_order_acquire);
+    }
+    return expected == AudioFailureCommitState::pending ||
+           expected == AudioFailureCommitState::committed;
+  }
+  web_audio_control_failure_code.store(fatal, std::memory_order_release);
+  if (on_control(nullptr)) {
+    fail_audio_on_control(nullptr);
+    return true;
+  }
+  web_audio_control_failure_state.store(
+      AudioFailureCommitState::pending,
+      std::memory_order_release);
+  if (web_proxy_queue != nullptr &&
+      emscripten_proxy_async(
+          web_proxy_queue,
+          web_control_thread,
+          &fail_audio_on_control,
+          nullptr) != 0) {
+    return true;
+  }
+  web_audio_control_failure_state.store(
+      AudioFailureCommitState::idle,
+      std::memory_order_release);
+  return false;
 }
 
 bool schedule_audio_install(void*) noexcept {
@@ -797,7 +867,7 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_start(
   const auto result = adapter->start_on_browser_main(audio_context_handle);
   if (result == RealtimeAudioWorkletStart::unsupported_sample_rate ||
       result == RealtimeAudioWorkletStart::unsupported_render_quantum) {
-    if (!schedule_unsupported_audio_failure()) {
+    if (!schedule_audio_control_failure(adapter->fatal())) {
       return static_cast<int>(RealtimeAudioWorkletStart::fatal);
     }
   }
@@ -830,9 +900,46 @@ EMSCRIPTEN_KEEPALIVE std::int32_t lmdj_web_audio_observed_render_quantum() {
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_control_failure_committed() {
-  return web_audio_control_failure_committed.load(std::memory_order_acquire)
+  return web_audio_control_failure_state.load(std::memory_order_acquire) ==
+                 AudioFailureCommitState::committed
              ? 1
              : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_commit_failure() {
+  if (!emscripten_is_main_browser_thread()) {
+    return 0;
+  }
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) {
+    return 0;
+  }
+  const auto fatal = adapter->fatal();
+  switch (fatal) {
+    case RealtimeAudioWorkletFatal::wrong_browser_thread:
+    case RealtimeAudioWorkletFatal::unsupported_sample_rate:
+    case RealtimeAudioWorkletFatal::unsupported_render_quantum:
+    case RealtimeAudioWorkletFatal::worklet_thread_start_failed:
+    case RealtimeAudioWorkletFatal::processor_create_failed:
+    case RealtimeAudioWorkletFatal::node_create_failed:
+    case RealtimeAudioWorkletFatal::coordinator_install_failed:
+    case RealtimeAudioWorkletFatal::bootstrap_timeout:
+      return schedule_audio_control_failure(fatal) ? 1 : 0;
+    default:
+      return 0;
+  }
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_bootstrap_timeout() {
+  if (!emscripten_is_main_browser_thread()) {
+    return 0;
+  }
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) {
+    return 0;
+  }
+  adapter->latch_bootstrap_timeout();
+  return schedule_audio_control_failure(adapter->fatal()) ? 1 : 0;
 }
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
@@ -891,10 +998,22 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_validate_configuration(
       sample_rate, render_quantum);
   if ((result == RealtimeAudioWorkletStart::unsupported_sample_rate ||
        result == RealtimeAudioWorkletStart::unsupported_render_quantum) &&
-      !schedule_unsupported_audio_failure()) {
+      !schedule_audio_control_failure(adapter->fatal())) {
     return static_cast<int>(RealtimeAudioWorkletStart::fatal);
   }
   return static_cast<int>(result);
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_bootstrap_failure(
+    std::int32_t fatal_code) {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr || !emscripten_is_main_browser_thread()) {
+    return 0;
+  }
+  return adapter->latch_bootstrap_fatal_for_conformance(
+             static_cast<RealtimeAudioWorkletFatal>(fatal_code))
+             ? 1
+             : 0;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_invalid_shape(

@@ -718,6 +718,24 @@ struct ControlRuntime::Impl {
     return sealed;
   }
 
+  foundation::Result<void> quiesce_and_stop_audio(
+      std::uint32_t timeout_ms) noexcept {
+    trigger_admission = false;
+    if (!coordinator.has_value() ||
+        coordinator->await_quiescent == nullptr) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::internal_error,
+          "audio quiescence is unavailable",
+      });
+    }
+    // The coordinator contract guarantees paused-or-terminal and no callback
+    // in flight on every return, including a timeout/failure return.
+    const auto quiescent = coordinator->await_quiescent(
+        coordinator->context, timeout_ms);
+    engine.stop();
+    return quiescent;
+  }
+
   void seal_all_noexcept() noexcept {
     try {
       if (!retained_project_path.has_value()) {
@@ -1231,27 +1249,24 @@ Json ControlRuntime::dispatch(
         return state_error("audio quiescence is unavailable");
       }
       std::optional<std::string> sealed_take;
+      std::optional<Error> capture_failure;
       if (impl_->active_take.has_value()) {
         sealed_take = impl_->active_take->id;
         const auto finished = impl_->finish_capture(false);
         if (!finished.has_value()) {
-          impl_->seal_all_noexcept();
-          impl_->state = Impl::State::failed;
-          return normalized_error(finished.error());
+          capture_failure = finished.error();
         }
       }
-      const auto quiescent = impl_->coordinator->await_quiescent(
-          impl_->coordinator->context, kAudioStateDeadlineMs);
-      if (!quiescent.has_value()) {
-        impl_->engine.stop();
-        impl_->seal_all_noexcept();
-        impl_->state = Impl::State::failed;
-        impl_->trigger_admission = false;
-        return internal_error();
+      const auto cleanup = impl_->quiesce_and_stop_audio(
+          kAudioStateDeadlineMs);
+      if (capture_failure.has_value() || !cleanup.has_value()) {
+        const auto failure = capture_failure.has_value()
+                                 ? *capture_failure
+                                 : cleanup.error();
+        fail_and_seal("audio_suspend_failed");
+        return normalized_error(failure);
       }
-      impl_->engine.stop();
       impl_->state = Impl::State::audio_suspended;
-      impl_->trigger_admission = false;
       return success({
           {"state", "audio-suspended"},
           {"changed", true},
@@ -1270,24 +1285,22 @@ Json ControlRuntime::dispatch(
           impl_->state = Impl::State::failed;
           return state_error("audio quiescence is unavailable");
         }
+        std::optional<Error> capture_failure;
         if (impl_->active_take.has_value()) {
           sealed_take = impl_->active_take->id;
           const auto finished = impl_->finish_capture(false);
           if (!finished.has_value()) {
-            impl_->seal_all_noexcept();
-            impl_->state = Impl::State::failed;
-            return normalized_error(finished.error());
+            capture_failure = finished.error();
           }
         }
-        const auto quiescent = impl_->coordinator->await_quiescent(
-            impl_->coordinator->context, 10'000);
-        if (!quiescent.has_value()) {
-          impl_->engine.stop();
-          impl_->seal_all_noexcept();
-          impl_->state = Impl::State::failed;
-          return internal_error();
+        const auto cleanup = impl_->quiesce_and_stop_audio(10'000);
+        if (capture_failure.has_value() || !cleanup.has_value()) {
+          const auto failure = capture_failure.has_value()
+                                   ? *capture_failure
+                                   : cleanup.error();
+          fail_and_seal("host_close_failed");
+          return normalized_error(failure);
         }
-        impl_->engine.stop();
       }
       if (impl_->committable_take.has_value()) {
         sealed_take = impl_->committable_take->id;
