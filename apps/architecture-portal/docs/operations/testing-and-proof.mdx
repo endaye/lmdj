@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, scripts/core.sh, tests]
+source_paths: [docs/quality/core-test-policy.md, scripts/core.sh, scripts/web-runtime-host.sh, tests]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -14,9 +14,13 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 unit/component 验证局部边界，integration/e2e 验证组合，stress 验证锁自由/并发，Proof 验证 Headless Core 交付链。
 ## 稳定命令
 `scripts/core.sh test dev full` 运行除 stress 外的完整层级；stress 必须显式运行；`scripts/core.sh proof` 也不包含 stress。
+## Web Runtime Host Proof
+`scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 清理并以固定 emsdk 重建，运行 Python/Node/C++ 测试，验证 canonical manifest 与无 source/map/fixture/server/dev dependency 的精确 dist inventory，把 dist 复制到 `mktemp -d`，再从临时目录启动 proof-only server 并运行 Chromium manifest gate；同时清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch。`clean` 只删除解析后的 `build/web/host` 子树。
+## Web 分发 HTTP 门禁
+proof-only server 对所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，为 Wasm 返回 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任
 Linux ASAN 负责 Python-hosted 覆盖，macOS ASAN 只覆盖 native label；两者和 stress 都是 PR 门禁。
 ## 证据分离
-本地通过、CI 绿色、正式 tag/Product Build 和物理设备验收分别报告。
+本地通过、clean-room Proof、CI 绿色、正式 tag/Product Build 和物理设备验收分别报告。Task 10 manifest browser gate 不等于 Task 11 packaged 全旅程，也不等于物理 Touch-to-Sound。
 ## 门户责任
 页面状态必须链接实际测试/Proof，并明确自动化无法证明的体验范围。

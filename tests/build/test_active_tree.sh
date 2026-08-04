@@ -34,6 +34,18 @@ grep -Eq 'lmdj.patch.v1.*must not' "$repo_root/AGENTS.md"
 grep -Eq 'docs/governance/version-management.md' "$repo_root/AGENTS.md"
 cmp "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md"
 
+if [[ ! -x "$repo_root/scripts/web-runtime-host.sh" ]]; then
+  echo "stable Web Runtime Host command is missing or not executable" >&2
+  exit 1
+fi
+for command_name in configure build test proof serve clean; do
+  if ! grep -Eq "^[[:space:]]*${command_name}\\)" \
+    "$repo_root/scripts/web-runtime-host.sh"; then
+    echo "stable Web Runtime Host command is missing: $command_name" >&2
+    exit 1
+  fi
+done
+
 coverage_artifact="$(
   find "$repo_root" \
     -path "$repo_root/build/core" -prune -o \

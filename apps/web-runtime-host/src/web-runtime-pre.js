@@ -1,5 +1,42 @@
 if (typeof window !== "undefined") {
   globalThis.Module = Module;
+  /* LMDJ_WEB_AUDIO_CONFORMANCE_MANIFEST */
+
+  const injectedManifestBytes = Module["lmdjHostManifestBytes"];
+  const injectedManifestSha256 = Module["lmdjHostManifestSha256"];
+  const manifestPreRun = () => {
+    if (
+      !(injectedManifestBytes instanceof Uint8Array) ||
+      injectedManifestBytes.byteLength < 1 ||
+      injectedManifestBytes.byteLength > 65_536 ||
+      !/^[0-9a-f]{64}$/.test(injectedManifestSha256)
+    ) {
+      throw new Error("HOST_PROTOCOL_MISMATCH");
+    }
+    const initialized = Module.ccall(
+      "lmdj_web_host_initialize_manifest",
+      "number",
+      ["array", "number", "string", "number"],
+      [
+        injectedManifestBytes,
+        injectedManifestBytes.byteLength,
+        injectedManifestSha256,
+        injectedManifestSha256.length,
+      ],
+    );
+    delete Module["lmdjHostManifestBytes"];
+    delete Module["lmdjHostManifestSha256"];
+    if (initialized !== 0) {
+      throw new Error("HOST_PROTOCOL_MISMATCH");
+    }
+    host.manifestReady = true;
+  };
+  const previousPreRun = Module["preRun"];
+  Module["preRun"] = Array.isArray(previousPreRun)
+    ? [...previousPreRun, manifestPreRun]
+    : typeof previousPreRun === "function"
+      ? [previousPreRun, manifestPreRun]
+      : [manifestPreRun];
 
   const contexts = new Map();
   const fatalNames = Object.freeze({
@@ -133,10 +170,132 @@ if (typeof window !== "undefined") {
     return promise;
   }
 
+  const transportEncoder = new TextEncoder();
+  const transportDecoder = new TextDecoder("utf-8", {fatal: true});
+  const pendingRequests = new Map();
+  const notificationSubscribers = new Set();
+  let pollScheduled = false;
+
+  function transportFailure(code, message) {
+    const error = new Error(message);
+    error.code = code;
+    return error;
+  }
+
+  function failPending(error) {
+    for (const pending of pendingRequests.values()) {
+      window.clearTimeout(pending.timeout);
+      pending.reject(error);
+    }
+    pendingRequests.clear();
+  }
+
+  function scheduleTransportPoll() {
+    if (pollScheduled || (!pendingRequests.size && !notificationSubscribers.size)) {
+      return;
+    }
+    pollScheduled = true;
+    window.setTimeout(pollTransport, 2);
+  }
+
+  function pollTransport() {
+    pollScheduled = false;
+    if (!host.runtimeInitialized) {
+      scheduleTransportPoll();
+      return;
+    }
+    const output = _malloc(65_536);
+    const requiredPointer = _malloc(4);
+    try {
+      const status = _lmdj_web_host_poll(output, 65_536, requiredPointer);
+      const required = HEAPU32[requiredPointer >> 2];
+      if (status === 1) {
+        const bytes = HEAPU8.slice(output, output + required);
+        const message = JSON.parse(transportDecoder.decode(bytes));
+        if (typeof message.request_id === "string") {
+          const pending = pendingRequests.get(message.request_id);
+          if (pending) {
+            pendingRequests.delete(message.request_id);
+            window.clearTimeout(pending.timeout);
+            pending.resolve(message);
+          }
+        } else {
+          for (const subscriber of notificationSubscribers) {
+            subscriber(message);
+          }
+        }
+      } else if (status === 2 || status === 3) {
+        failPending(transportFailure(
+          status === 2 ? "HOST_PROTOCOL_MISMATCH" : "HOST_STATE_INVALID",
+          "formal Web Host transport failed",
+        ));
+      }
+    } catch {
+      failPending(transportFailure(
+        "HOST_PROTOCOL_MISMATCH",
+        "formal Web Host transport message is invalid",
+      ));
+    } finally {
+      _free(requiredPointer);
+      _free(output);
+    }
+    scheduleTransportPoll();
+  }
+
+  const transport = Object.freeze({
+    send(request, options = {}) {
+      if (!host.runtimeInitialized || pendingRequests.has(request.request_id)) {
+        return Promise.reject(transportFailure(
+          "HOST_STATE_INVALID",
+          "formal Web Host transport is unavailable",
+        ));
+      }
+      const envelope = transportEncoder.encode(JSON.stringify(request));
+      const sidecar = options.sidecar instanceof Uint8Array
+        ? options.sidecar
+        : new Uint8Array();
+      const submitted = Module.ccall(
+        "lmdj_web_host_submit",
+        "number",
+        ["array", "number", "array", "number"],
+        [envelope, envelope.byteLength, sidecar, sidecar.byteLength],
+      );
+      if (submitted !== 0) {
+        return Promise.reject(transportFailure(
+          submitted === 1 || submitted === 2
+            ? "HOST_PROTOCOL_MISMATCH"
+            : "HOST_STATE_INVALID",
+          "formal Web Host request was rejected",
+        ));
+      }
+      return new Promise((resolve, reject) => {
+        const deadlineMs = Number.isFinite(options.deadlineMs)
+          ? options.deadlineMs
+          : 30_000;
+        const timeout = window.setTimeout(() => {
+          pendingRequests.delete(request.request_id);
+          reject(transportFailure("HOST_TIMEOUT", "formal Web Host request timed out"));
+        }, deadlineMs);
+        pendingRequests.set(request.request_id, {resolve, reject, timeout});
+        scheduleTransportPoll();
+      });
+    },
+    subscribe(listener) {
+      if (typeof listener !== "function") {
+        throw new TypeError("a transport notification listener is required");
+      }
+      notificationSubscribers.add(listener);
+      scheduleTransportPoll();
+      return () => notificationSubscribers.delete(listener);
+    },
+  });
+
   const host = {
     runtimeInitialized: false,
+    manifestReady: false,
     registerAudioContext,
     startAudioWorklet,
+    transport,
   };
   window.lmdjWebRuntimeHost = host;
 

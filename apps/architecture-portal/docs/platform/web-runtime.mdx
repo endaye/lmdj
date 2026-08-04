@@ -5,6 +5,8 @@ status: partial
 owners: [web, audio]
 source_paths:
   - apps/web-runtime-lab
+  - apps/web-runtime-host
+  - scripts/web-runtime-host.sh
   - docs/quality/web-runtime-lab-acceptance.md
   - docs/architecture/2026-08-01-web-realtime-audio-threshold-decision.md
 ---
@@ -15,11 +17,13 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 当前 Lab
 Web Runtime Lab 验证静态服务、WASM Core Probe、AudioWorklet 和物理证据准备器；它不在 Product Assembly。
+## 正式 Host 分发
+正式 Web Runtime Host 已具备固定 Emscripten 身份的 clean build、内容哈希资产、canonical manifest、Browser Main 与 Control 双重身份门禁，以及只服务 dist 的 proof-only CSP server。manifest 绑定当前 Product Build、Host `1.0.0`、协议 `1`、固定 512 MiB heap、资源上限和完整资产 inventory；该 Host 尚未进入 Product Assembly。
 ## 线程模型
 主线程处理 UI/control，AudioWorklet 处理实时音频；消息与 buffer 边界必须保持有界。
 ## 验收阈值
-自动化只是前置条件；Chrome 实机、MIDI、iPad、延迟与 underrun 记录由独立 evaluator 判定。
+Task 10 自动化证明 deterministic package、隔离 headers/cache 和 manifest 失败时零 runtime/OPFS mutation。Task 11 才负责 packaged Chromium 全旅程与 WebKit capability smoke；Chrome 实机、MIDI、iPad、延迟与 underrun 记录仍由独立 evaluator 判定。
 ## 非能力
-当前不承诺正式 Web Host、离线安装、浏览器全生命周期或跨设备一致体验。
+当前不承诺离线安装、正式 Web 产品交付、浏览器全生命周期或跨设备一致体验；proof-only server 不属于生产部署面。
 ## 下一门禁
-按正式 Host 设计完成实现、保留物理 dossier，再进入 Assembly。
+完成 Task 11 packaged Browser Proof，保留物理 dossier，再由 Task 12 传播身份并进入 Assembly。

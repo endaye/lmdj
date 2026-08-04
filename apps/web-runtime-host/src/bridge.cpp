@@ -1,4 +1,5 @@
 #include "control_runtime.hpp"
+#include "manifest_gate.hpp"
 
 #include <algorithm>
 #include <array>
@@ -837,6 +838,9 @@ using lmdj::facade::ApplicationConfig;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
 using lmdj::web_host::ControlRuntime;
+using lmdj::web_host::ManifestExpectation;
+using lmdj::web_host::ManifestGate;
+using lmdj::web_host::ManifestGateStatus;
 using lmdj::web_host::detail::BridgeHooks;
 using lmdj::web_host::detail::ControlBridge;
 using lmdj::web_host::detail::ControlRuntimeAudioAccess;
@@ -844,6 +848,7 @@ using lmdj::web_host::detail::AudioQuiescenceCoordinator;
 
 em_proxying_queue* web_proxy_queue = nullptr;
 pthread_t web_control_thread{};
+ManifestGate web_manifest_gate;
 std::unique_ptr<ControlRuntime> web_runtime;
 std::unique_ptr<ControlBridge> web_bridge_owner;
 std::atomic<ControlBridge*> web_bridge{nullptr};
@@ -1045,6 +1050,26 @@ void drain_outcomes_on_control(void*) noexcept {
 }  // namespace
 
 extern "C" {
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_initialize_manifest(
+    const std::byte* canonical_bytes,
+    std::size_t canonical_size,
+    const char* expected_sha256,
+    std::size_t expected_sha256_size) {
+  if ((canonical_bytes == nullptr && canonical_size != 0) ||
+      (expected_sha256 == nullptr && expected_sha256_size != 0)) {
+    return -1;
+  }
+  const auto status = web_manifest_gate.initialize(
+      std::span<const std::byte>(canonical_bytes, canonical_size),
+      std::string_view(expected_sha256, expected_sha256_size),
+      ManifestExpectation{
+          LMDJ_WEB_PRODUCT_BUILD,
+          LMDJ_WEB_HOST_VERSION,
+          1,
+      });
+  return status == ManifestGateStatus::accepted ? 0 : -1;
+}
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_submit(
     const std::byte* envelope,
@@ -1377,6 +1402,9 @@ EMSCRIPTEN_KEEPALIVE const char* lmdj_web_audio_test_poll() {
 }  // extern "C"
 
 int main() {
+  if (!web_manifest_gate.begin_runtime()) {
+    return 2;
+  }
   web_control_thread = pthread_self();
   web_proxy_queue = em_proxying_queue_create();
   if (web_proxy_queue == nullptr) {

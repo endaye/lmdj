@@ -7,6 +7,8 @@ source_paths:
   - docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md
   - docs/superpowers/plans/2026-08-03-lmdj-formal-web-runtime-host.md
   - apps/web-runtime-host
+  - scripts/web-runtime-host.sh
+  - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
   - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
 ---
 
@@ -17,11 +19,17 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="partial" /> 正式 Host 的 source shell、64-Pad 输入归一化、显式音频/MIDI 激活、生命周期状态机与隐私诊断已进入 active source；它仍未出现在 Product Assembly 或 Assembly Lock，Task 12 才拥有该成员关系。
+<StatusBadge status="partial" /> 正式 Host 的 source shell、64-Pad 输入归一化、显式音频/MIDI 激活、生命周期状态机、隐私诊断及确定性隔离分发已进入 active source；它仍未出现在 Product Assembly 或 Assembly Lock，Task 12 才拥有该成员关系。
 
 ## 目标边界
 
 Main thread 只负责 preflight、manifest/hash 装载门、用户手势、DOM/MIDI 输入、生命周期观察、有界 transport 与终止清理；Project、OPFS、Facade、解码与混音仍由 Control/Core 边界负责。Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)` 路由。
+
+## 分发与身份门禁
+
+`scripts/web-runtime-host.sh build` 生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical `host-manifest.json` 绑定当前 Product Build、Host `1.0.0`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份以及每项资产的字节数和 SHA-256。Browser Main 在装载 runtime 资产前校验 manifest 的精确 canonical bytes；Control 在创建 proxy queue、OPFS、Facade 或 audio adapter 前独立校验同一有界 manifest。缺失、畸形、超限、hash/identity 不匹配、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。
+
+proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
 ## 生命周期门禁
 
@@ -29,11 +37,11 @@ Main thread 只负责 preflight、manifest/hash 装载门、用户手势、DOM/M
 
 ## 自动化证据
 
-Node source-shell 行为回归与隔离测试源上的 Chromium lifecycle spec 已覆盖静态壳、激活、中断、probe、超时、协议失败、隐私 allowlist 和 once-only cleanup。这些自动化不等于 packaged Wasm/OPFS/Worklet 全链路，也不等于物理 Touch-to-Sound。
+Node source-shell 行为回归与隔离测试源上的 Chromium lifecycle spec 已覆盖静态壳、激活、中断、probe、超时、协议失败、隐私 allowlist 和 once-only cleanup。Task 10 另以 Python/C++/Chromium 覆盖 deterministic inventory、proof-server headers/cache、双重 manifest gate 与失败时零 runtime/OPFS mutation；`scripts/web-runtime-host.sh proof` 从 clean build 复制 dist 到临时目录后运行这些门禁。这些自动化仍不等于 Task 11 packaged Wasm/OPFS/Worklet 完整旅程，也不等于物理 Touch-to-Sound。
 
 ## 非能力
 
-当前不能宣称 Host 已 Assembly-listed、正式 Web 产品已交付、真实 packaged journey 已通过，或 MIDI/iPad/延迟体验已完成物理验收。
+当前不能宣称 Host 已 Assembly-listed、正式 Web 产品已交付、Task 11 的真实 packaged journey 已通过，或 MIDI/iPad/延迟体验已完成物理验收。
 
 ## 进入 Assembly 的门禁
 

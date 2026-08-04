@@ -20,6 +20,16 @@ const SOURCE_SHELL_MANIFEST = Object.freeze({
   runtime_script: "source-shell",
 });
 const SOURCE_SHELL_MANIFEST_TEXT = JSON.stringify(SOURCE_SHELL_MANIFEST);
+const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
+const PACKAGED_HOST_VERSION = "1.0.0";
+const PACKAGED_PROTOCOL_VERSION = 1;
+const PACKAGED_HEAP_BYTES = 536_870_912;
+const PACKAGED_RESOURCE_LIMITS = Object.freeze({
+  decoded_float_pcm_bytes_per_bank: 67_108_864,
+  decoded_float_pcm_bytes_total: 134_217_728,
+  decoded_frames_per_pad: 240_000,
+  imported_wav_bytes: 1_048_576,
+});
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
 const ALLOWED_TYPED_ERROR_CODES = new Set([
@@ -124,6 +134,197 @@ async function sha256(text, crypto) {
     .join("");
 }
 
+async function sha256Bytes(bytes, crypto) {
+  if (typeof crypto?.subtle?.digest !== "function") {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "SHA-256 is unavailable");
+  }
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+}
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function exactKeys(value, keys) {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.keys(value).length === keys.length &&
+    keys.every((key) => Object.hasOwn(value, key))
+  );
+}
+
+function metaContent(document, name) {
+  return document
+    ?.querySelector?.(`meta[name='${name}']`)
+    ?.getAttribute?.("content");
+}
+
+async function readBoundedResponse(response, maximumBytes) {
+  if (response?.ok !== true) {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest or asset is unavailable");
+  }
+  const declared = Number.parseInt(response.headers?.get?.("content-length") ?? "", 10);
+  if (Number.isFinite(declared) && declared > maximumBytes) {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest or asset is oversized");
+  }
+  if (typeof response.body?.getReader !== "function") {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.byteLength > maximumBytes) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest or asset is oversized");
+    }
+    return bytes;
+  }
+  const reader = response.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      total += value.byteLength;
+      if (total > maximumBytes) {
+        throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest or asset is oversized");
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  const bytes = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return bytes;
+}
+
+function validatePackagedManifest(manifest, expected) {
+  if (
+    !exactKeys(manifest, [
+      "assets",
+      "emscripten",
+      "heap_bytes",
+      "host_version",
+      "manifest_version",
+      "product_build",
+      "protocol_version",
+      "resource_limits",
+    ]) ||
+    manifest.manifest_version !== 1 ||
+    manifest.product_build !== expected.product_build ||
+    manifest.host_version !== PACKAGED_HOST_VERSION ||
+    manifest.host_version !== expected.host_version ||
+    manifest.protocol_version !== PACKAGED_PROTOCOL_VERSION ||
+    manifest.protocol_version !== expected.protocol_version ||
+    manifest.heap_bytes !== PACKAGED_HEAP_BYTES ||
+    !exactKeys(manifest.resource_limits, Object.keys(PACKAGED_RESOURCE_LIMITS)) ||
+    Object.entries(PACKAGED_RESOURCE_LIMITS).some(
+      ([name, value]) => manifest.resource_limits[name] !== value,
+    ) ||
+    !exactKeys(manifest.emscripten, [
+      "emcc_version",
+      "emscripten_releases_revision",
+      "emsdk_revision",
+      "emsdk_tag",
+    ]) ||
+    Object.values(manifest.emscripten).some(
+      (value) => typeof value !== "string" || value.length === 0,
+    ) ||
+    !Array.isArray(manifest.assets)
+  ) {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
+  }
+  const paths = new Set();
+  for (const asset of manifest.assets) {
+    if (
+      !exactKeys(asset, ["bytes", "path", "role", "sha256"]) ||
+      !Number.isSafeInteger(asset.bytes) ||
+      asset.bytes < 1 ||
+      typeof asset.path !== "string" ||
+      !/^assets\/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$/.test(asset.path) ||
+      typeof asset.role !== "string" ||
+      !/^[0-9a-f]{64}$/.test(asset.sha256) ||
+      !asset.path.includes(`.${asset.sha256}.`) ||
+      paths.has(asset.path)
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest asset is invalid");
+    }
+    paths.add(asset.path);
+  }
+  for (const role of ["host_main", "host_style", "runtime_script", "runtime_wasm"]) {
+    if (manifest.assets.filter((asset) => asset.role === role).length !== 1) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest asset role is invalid");
+    }
+  }
+}
+
+async function verifyPackagedManifest({ document, window, crypto }) {
+  const manifestPath = metaContent(document, "lmdj-host-manifest-path");
+  const expectedDigest = metaContent(document, "lmdj-host-manifest-sha256");
+  const expected = {
+    product_build: metaContent(document, "lmdj-product-build"),
+    host_version: metaContent(document, "lmdj-host-version"),
+    protocol_version: Number.parseInt(
+      metaContent(document, "lmdj-host-protocol-version") ?? "",
+      10,
+    ),
+  };
+  if (
+    typeof manifestPath !== "string" ||
+    manifestPath !== "./host-manifest.json" ||
+    !/^[0-9a-f]{64}$/.test(expectedDigest ?? "") ||
+    typeof expected.product_build !== "string" ||
+    expected.host_version !== PACKAGED_HOST_VERSION ||
+    expected.protocol_version !== PACKAGED_PROTOCOL_VERSION
+  ) {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest metadata is absent");
+  }
+  try {
+    const response = await window.fetch(
+      new URL(manifestPath, document.baseURI).href,
+      { cache: "no-store", credentials: "same-origin" },
+    );
+    const bytes = await readBoundedResponse(response, HOST_MANIFEST_MAXIMUM_BYTES);
+    const actualDigest = await sha256Bytes(bytes, crypto);
+    if (actualDigest !== expectedDigest) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest digest does not match");
+    }
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    const manifest = JSON.parse(text);
+    if (canonicalJson(manifest) !== text) {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest is not canonical");
+    }
+    validatePackagedManifest(manifest, expected);
+    return Object.freeze({
+      ...manifest,
+      canonical_bytes: bytes,
+      manifest_sha256: actualDigest,
+    });
+  } catch (error) {
+    if (error?.code === "HOST_PROTOCOL_MISMATCH") {
+      throw error;
+    }
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest verification failed");
+  }
+}
+
 async function verifySourceShellManifest({ document, crypto }) {
   const expected = document
     ?.querySelector?.("meta[name='lmdj-host-manifest-sha256']")
@@ -138,6 +339,13 @@ async function verifySourceShellManifest({ document, crypto }) {
   return SOURCE_SHELL_MANIFEST;
 }
 
+async function verifyDocumentManifest({ document, window, crypto }) {
+  return metaContent(document, "lmdj-host-manifest-path") ===
+    "./host-manifest.json"
+    ? verifyPackagedManifest({ document, window, crypto })
+    : verifySourceShellManifest({ document, crypto });
+}
+
 async function loadSourceRuntime({ window }) {
   const runtime = window?.lmdjWebRuntimeHost;
   if (
@@ -147,6 +355,72 @@ async function loadSourceRuntime({ window }) {
     throw typedError("HOST_STATE_INVALID", "Source runtime is not loaded");
   }
   return runtime;
+}
+
+function assetForRole(manifest, role) {
+  const matches = manifest.assets.filter((asset) => asset.role === role);
+  if (matches.length !== 1) {
+    throw typedError("HOST_PROTOCOL_MISMATCH", `Manifest ${role} asset is invalid`);
+  }
+  return matches[0];
+}
+
+function sha256Integrity(hexDigest, window) {
+  const bytes = new Uint8Array(
+    hexDigest.match(/../g).map((value) => Number.parseInt(value, 16)),
+  );
+  let binary = "";
+  for (const byte of bytes) {
+    binary += String.fromCharCode(byte);
+  }
+  return `sha256-${window.btoa(binary)}`;
+}
+
+async function loadPackagedRuntime({ document, window, crypto, manifest }) {
+  const runtimeScript = assetForRole(manifest, "runtime_script");
+  const runtimeWasm = assetForRole(manifest, "runtime_wasm");
+  const wasmURL = new URL(`./${runtimeWasm.path}`, document.baseURI).href;
+  const wasmResponse = await window.fetch(wasmURL, {
+    cache: "force-cache",
+    credentials: "same-origin",
+  });
+  const wasmBytes = await readBoundedResponse(wasmResponse, runtimeWasm.bytes);
+  if (
+    wasmBytes.byteLength !== runtimeWasm.bytes ||
+    (await sha256Bytes(wasmBytes, crypto)) !== runtimeWasm.sha256
+  ) {
+    throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
+  }
+  window.Module = {
+    ...(window.Module ?? {}),
+    lmdjHostManifestBytes: manifest.canonical_bytes,
+    lmdjHostManifestSha256: manifest.manifest_sha256,
+    wasmBinary: wasmBytes,
+    locateFile(path) {
+      return path.endsWith(".wasm") ? wasmURL : new URL(path, document.baseURI).href;
+    },
+  };
+  await new Promise((resolvePromise, rejectPromise) => {
+    const script = document.createElement("script");
+    script.src = new URL(`./${runtimeScript.path}`, document.baseURI).href;
+    script.integrity = sha256Integrity(runtimeScript.sha256, window);
+    script.crossOrigin = "anonymous";
+    script.addEventListener("load", resolvePromise, { once: true });
+    script.addEventListener(
+      "error",
+      () => rejectPromise(
+        typedError("HOST_PROTOCOL_MISMATCH", "Runtime script asset mismatch"),
+      ),
+      { once: true },
+    );
+    document.head.append(script);
+  });
+  return loadSourceRuntime({ window }).then((runtime) => {
+    if (typeof runtime.transport?.send !== "function") {
+      throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime transport is absent");
+    }
+    return runtime;
+  });
 }
 
 async function defaultRuntimeTerminator({ runtime, audioContext, window }) {
@@ -190,13 +464,35 @@ export function createWebRuntimeHostController(options = {}) {
   const navigator = options.navigator ?? window?.navigator;
   const crypto = options.crypto ?? window?.crypto;
   const verifyManifest =
-    options.verifyManifest ?? (() => verifySourceShellManifest({ document, crypto }));
+    options.verifyManifest ??
+    (() => verifyDocumentManifest({ document, window, crypto }));
   const loadRuntime =
-    options.loadRuntime ?? (() => loadSourceRuntime({ window }));
+    options.loadRuntime ??
+    ((manifest) =>
+      Array.isArray(manifest?.assets)
+        ? loadPackagedRuntime({ document, window, crypto, manifest })
+        : loadSourceRuntime({ window }));
   const createAudioContext =
     options.createAudioContext ??
     ((audioOptions) => new window.AudioContext(audioOptions));
-  const transport = options.transport;
+  const transport =
+    options.transport ??
+    Object.freeze({
+      send(...arguments_) {
+        if (typeof runtime?.transport?.send !== "function") {
+          return Promise.reject(
+            typedError("HOST_STATE_INVALID", "Runtime transport is unavailable"),
+          );
+        }
+        return runtime.transport.send(...arguments_);
+      },
+      subscribe(listener) {
+        if (typeof runtime?.transport?.subscribe !== "function") {
+          throw typedError("HOST_STATE_INVALID", "Runtime transport is unavailable");
+        }
+        return runtime.transport.subscribe(listener);
+      },
+    });
   const runtimeTerminator =
     options.runtimeTerminator ??
     ((resources) => defaultRuntimeTerminator({ ...resources, window }));
@@ -1035,7 +1331,6 @@ export function createWebRuntimeHostController(options = {}) {
     started = true;
     try {
       machine.transition("preflight", { reason: "bootstrap" });
-      await runPreflight(options.capabilities ?? defaultCapabilities(window));
       manifest = Object.freeze(await verifyManifest());
       if (
         typeof manifest.product_build !== "string" ||
@@ -1044,6 +1339,7 @@ export function createWebRuntimeHostController(options = {}) {
       ) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
       }
+      await runPreflight(options.capabilities ?? defaultCapabilities(window));
       runtime = await loadRuntime(manifest);
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });

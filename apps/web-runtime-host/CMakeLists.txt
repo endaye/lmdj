@@ -20,6 +20,26 @@ target_link_libraries(
 lmdj_target_warnings(lmdj_web_control_runtime)
 lmdj_target_sanitizers(lmdj_web_control_runtime)
 
+add_library(
+  lmdj_web_manifest_gate
+  STATIC
+    src/manifest_gate.cpp
+)
+add_library(lmdj::web_manifest_gate ALIAS lmdj_web_manifest_gate)
+target_include_directories(
+  lmdj_web_manifest_gate
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/src"
+)
+target_link_libraries(
+  lmdj_web_manifest_gate
+  PRIVATE
+    lmdj::foundation
+    lmdj_picosha2
+)
+lmdj_target_warnings(lmdj_web_manifest_gate)
+lmdj_target_sanitizers(lmdj_web_manifest_gate)
+
 if(EMSCRIPTEN)
   option(
     LMDJ_WEB_AUDIO_CONFORMANCE
@@ -40,11 +60,37 @@ if(EMSCRIPTEN)
     lmdj_web_runtime_host
     PRIVATE
       lmdj::web_control_runtime
+      lmdj::web_manifest_gate
+  )
+  file(READ "${CMAKE_SOURCE_DIR}/products/lmdj/version.json" lmdj_web_version_json)
+  foreach(lmdj_web_version_part IN ITEMS milestone minor build patch)
+    string(
+      JSON lmdj_web_version_${lmdj_web_version_part}
+      GET "${lmdj_web_version_json}" "${lmdj_web_version_part}"
+    )
+  endforeach()
+  set(
+    lmdj_web_product_build
+    "${lmdj_web_version_milestone}.${lmdj_web_version_minor}.${lmdj_web_version_build}.${lmdj_web_version_patch}"
+  )
+  target_compile_definitions(
+    lmdj_web_runtime_host
+    PRIVATE
+      LMDJ_WEB_PRODUCT_BUILD="${lmdj_web_product_build}"
+      LMDJ_WEB_HOST_VERSION="1.0.0"
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     target_compile_definitions(
       lmdj_web_runtime_host
       PRIVATE LMDJ_WEB_AUDIO_CONFORMANCE=1
+    )
+    set(
+      LMDJ_WEB_CONFORMANCE_MANIFEST
+      "{\"assets\":[],\"emscripten\":{\"emcc_version\":\"emcc 6.0.5\",\"emscripten_releases_revision\":\"dbd755b5da399329c2576f6e3dfa7f419f5d8409\",\"emsdk_revision\":\"dfb9d1a46c3bb8f52e1e6324be23123b9d73c190\",\"emsdk_tag\":\"6.0.5\"},\"heap_bytes\":536870912,\"host_version\":\"1.0.0\",\"manifest_version\":1,\"product_build\":\"${lmdj_web_product_build}\",\"protocol_version\":1,\"resource_limits\":{\"decoded_float_pcm_bytes_per_bank\":67108864,\"decoded_float_pcm_bytes_total\":134217728,\"decoded_frames_per_pad\":240000,\"imported_wav_bytes\":1048576}}"
+    )
+    string(
+      SHA256 LMDJ_WEB_CONFORMANCE_MANIFEST_SHA256
+      "${LMDJ_WEB_CONFORMANCE_MANIFEST}"
     )
   endif()
   set(
@@ -53,6 +99,7 @@ if(EMSCRIPTEN)
     _lmdj_web_host_submit
     _lmdj_web_host_poll
     _lmdj_web_host_failed
+    _lmdj_web_host_initialize_manifest
     _lmdj_web_audio_start
     _lmdj_web_audio_state
     _lmdj_web_audio_fatal
@@ -93,7 +140,15 @@ if(EMSCRIPTEN)
     READ "${CMAKE_CURRENT_SOURCE_DIR}/src/web-runtime-pre.js"
     lmdj_web_runtime_pre_js
   )
-  if(NOT LMDJ_WEB_AUDIO_CONFORMANCE)
+  if(LMDJ_WEB_AUDIO_CONFORMANCE)
+    string(
+      REPLACE
+      "  /* LMDJ_WEB_AUDIO_CONFORMANCE_MANIFEST */"
+      "  Module[\"lmdjHostManifestBytes\"] = new TextEncoder().encode('${LMDJ_WEB_CONFORMANCE_MANIFEST}');\n  Module[\"lmdjHostManifestSha256\"] = \"${LMDJ_WEB_CONFORMANCE_MANIFEST_SHA256}\";"
+      lmdj_web_runtime_pre_js
+      "${lmdj_web_runtime_pre_js}"
+    )
+  else()
     foreach(lmdj_web_audio_block IN ITEMS API INSTALL)
       set(
         lmdj_web_audio_begin
@@ -169,7 +224,7 @@ if(EMSCRIPTEN)
       configure_file(
         "${CMAKE_SOURCE_DIR}/tests/platform/web/audio/realtime_audio_worklet.html"
         "${LMDJ_WEB_AUDIO_OUTPUT_DIR}/lmdj-web-runtime-host.html"
-        COPYONLY
+        @ONLY
       )
     endif()
   endif()
@@ -211,6 +266,31 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     COMMAND lmdj_web_control_runtime_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio concurrency
+  )
+  add_executable(
+    lmdj_web_manifest_gate_tests
+    test/manifest_gate_test.cpp
+  )
+  target_include_directories(
+    lmdj_web_manifest_gate_tests
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_web_manifest_gate_tests
+    PRIVATE
+      lmdj::web_manifest_gate
+      lmdj::foundation
+      lmdj_picosha2
+  )
+  lmdj_target_warnings(lmdj_web_manifest_gate_tests)
+  lmdj_target_sanitizers(lmdj_web_manifest_gate_tests)
+  lmdj_add_test(
+    NAME host.web_manifest_gate
+    TIER host
+    COMMAND lmdj_web_manifest_gate_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
   add_executable(
     lmdj_web_realtime_session_tests
