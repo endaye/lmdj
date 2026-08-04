@@ -1,0 +1,52 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import {freezeVersion} from '../scripts/lib/version-docs.mjs';
+
+const facts = {
+  product: {id: 'lmdj', version: '1.0.13.0'},
+  assembly_lock_sha256: 'lock-sha',
+  modules: [], hosts: [], providers: [], contracts: [],
+};
+
+function fixture(overrides = {}) {
+  return {
+    portalRoot: '/portal',
+    repoRoot: '/repo',
+    requestedVersion: '1.0.13.0',
+    revision: 'abcdef123456',
+    facts,
+    getGitStatus: async () => '',
+    readVersions: async () => [],
+    run: async () => {},
+    writeMetadata: async () => {},
+    now: () => new Date('2026-08-04T00:00:00.000Z'),
+    ...overrides,
+  };
+}
+
+test('freeze rejects syntax mismatch, dirty worktree, and existing version', async () => {
+  await assert.rejects(() => freezeVersion(fixture({requestedVersion: '1.0.13'})), /four-part Product Build/);
+  await assert.rejects(() => freezeVersion(fixture({requestedVersion: '1.0.12.0'})), /does not match 1.0.13.0/);
+  await assert.rejects(() => freezeVersion(fixture({getGitStatus: async () => ' M docs/page.mdx'})), /clean worktree/);
+  await assert.rejects(() => freezeVersion(fixture({readVersions: async () => ['1.0.13.0']})), /already exists/);
+});
+
+test('freeze runs both gates around Docusaurus and writes exact metadata', async () => {
+  const commands = [];
+  let metadata;
+  await freezeVersion(fixture({
+    run: async (command, args) => commands.push([command, args]),
+    writeMetadata: async (_version, value) => { metadata = value; },
+  }));
+  assert.deepEqual(commands, [
+    ['npm', ['run', 'check']],
+    ['npm', ['run', 'docusaurus', '--', 'docs:version', '1.0.13.0']],
+    ['npm', ['run', 'check']],
+  ]);
+  assert.deepEqual(metadata, {
+    ...facts,
+    product_build: '1.0.13.0',
+    revision: 'abcdef123456',
+    frozen_at_utc: '2026-08-04T00:00:00.000Z',
+  });
+});

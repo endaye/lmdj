@@ -1,0 +1,25 @@
+---
+title: Web Runtime Platform
+area: platform
+status: partial
+owners: [web, audio]
+source_paths:
+  - apps/web-runtime-lab
+  - docs/quality/web-runtime-lab-acceptance.md
+  - docs/architecture/2026-08-01-web-realtime-audio-threshold-decision.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 当前 Lab
+Web Runtime Lab 验证静态服务、WASM Core Probe、AudioWorklet 和物理证据准备器；它不在 Product Assembly。
+## 线程模型
+主线程处理 UI/control，AudioWorklet 处理实时音频；消息与 buffer 边界必须保持有界。
+## 验收阈值
+自动化只是前置条件；Chrome 实机、MIDI、iPad、延迟与 underrun 记录由独立 evaluator 判定。
+## 非能力
+当前不承诺正式 Web Host、离线安装、浏览器全生命周期或跨设备一致体验。
+## 下一门禁
+按正式 Host 设计完成实现、保留物理 dossier，再进入 Assembly。

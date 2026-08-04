@@ -1,0 +1,24 @@
+---
+title: Web Runtime Host
+area: hosts
+status: designed
+owners: [hosts, web, audio]
+source_paths:
+  - docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md
+  - docs/superpowers/plans/2026-08-03-lmdj-formal-web-runtime-host.md
+  - apps/web-runtime-lab
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+<StatusBadge status="designed" /> 正式 Host 有批准设计，但未出现在 Assembly Lock。现有 Lab 仅用于零 Core 改动的 WASM/AudioWorklet Spike 与证据采集。
+## 目标边界
+UI/main thread 负责控制，AudioWorklet 负责实时输出，WASM 复用 Core；Host 仍只能依赖 Application Facade。
+## 非能力
+当前不能宣称正式 Web 产品、MIDI/iPad 体验或浏览器生命周期已经交付。
+## 进入 Assembly 的门禁
+保留自动化、Chrome 实机、MIDI、iPad、延迟/underrun JSON 与独立 evaluator 证据后再改变状态。

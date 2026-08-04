@@ -1,0 +1,24 @@
+---
+title: Error、Module 与 Product Version Contracts
+area: contracts
+status: implemented
+owners: [core, release]
+contracts: [lmdj.error.v1, lmdj.module.v1, lmdj.product-version.v1]
+source_paths:
+  - contracts/error/lmdj.error.v1.schema.json
+  - contracts/module/lmdj.module.v1.schema.json
+  - contracts/version/lmdj.product-version.v1.schema.json
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="contracts" id="lmdj.error.v1" />
+
+## Error
+`lmdj.error.v1` 固定公共错误形状，使 C API、CLI、MCP 和 Provider 失败保持可机器处理。
+## Module Manifest
+`lmdj.module.v1` 声明组件 ID、独立 SemVer、API version 与确切依赖。
+## Product Version
+`lmdj.product-version.v1` 使用 `MILESTONE.MINOR.BUILD.PATCH`，不是 SemVer。
+## 一致性门禁
+Version 工具把这些身份与 Assembly/Lock 配对验证；Host 不得自行拼接版本。

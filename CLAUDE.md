@@ -64,6 +64,21 @@ restore, wrap, translate, or emit the retired contracts.
 - A plan with no version impact still records `Version impact: none` and a
   reason.
 
+## Architecture portal and documentation impact
+
+[`docs/governance/architecture-portal.md`](docs/governance/architecture-portal.md)
+is the canonical portal and documentation-impact policy. Every implementation
+plan and Pull Request declares `Documentation impact: required` with affected
+portal routes, or `Documentation impact: none` with a concrete reason. When
+required, update the current pages and source diagrams in the same Task.
+
+Do not hand-enter or guess Product, Module, Host, Provider, Contract, Channel,
+or revision identities; the portal derives them from active manifests. Run
+`scripts/architecture-portal.sh check` before commit. Formal Product Build
+snapshots use `scripts/architecture-portal.sh version PRODUCT_BUILD`. Normal
+production publication is Git-triggered; manual production uploads are
+prohibited.
+
 ## Commands
 
 The stable Core entry point is:

@@ -1,0 +1,20 @@
+---
+title: Hosts 总览
+area: hosts
+status: partial
+owners: [hosts, core]
+source_paths: [apps, packages/application-facade]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Host 规则
+Host 只通过 Application Facade 调用 Core，不解析 Project bundle，也不把协议/UI 逻辑下沉到 Core。
+## 当前清单
+CLI、MCP、Native Test Host 已锁入 Product Assembly；Web Runtime Lab 不是正式 Host。
+## 生命周期
+每个 Host 负责进程/设备输入输出、调用取消和结果呈现；Core typed error 不应被抹成无结构文本。
+## 下一门禁
+正式 Web Runtime Host 必须通过已批准的 WASM/AudioWorklet 与物理证据门禁后才能进入 Assembly。

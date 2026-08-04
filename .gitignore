@@ -50,6 +50,9 @@ $RECYCLE.BIN/
 node_modules/
 dist/
 *.tsbuildinfo
+.docusaurus/
+apps/architecture-portal/build/
+apps/architecture-portal/src/generated/
 
 ### Python
 __pycache__/

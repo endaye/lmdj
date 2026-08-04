@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-labelledby="title">
+  <title id="title">LMDJ</title>
+  <rect width="64" height="64" rx="16" fill="#071011"/>
+  <path d="M16 16h10v24h22v8H16z" fill="#35d5cf"/>
+  <circle cx="43" cy="23" r="8" fill="#ffb347"/>
+</svg>

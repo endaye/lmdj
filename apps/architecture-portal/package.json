@@ -1,0 +1,61 @@
+{
+  "name": "@lmdj/architecture-portal",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "npm@10.9.3",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "docusaurus": "docusaurus",
+    "start": "docusaurus start",
+    "facts": "node scripts/generate-facts.mjs",
+    "validate:docs": "node scripts/validate-docs.mjs",
+    "diagrams": "node scripts/render-diagrams.mjs",
+    "validate:diagrams": "node scripts/validate-diagrams.mjs",
+    "check:build": "node scripts/check-build.mjs",
+    "check:impact": "node scripts/check-doc-impact.mjs",
+    "version:docs": "node scripts/version-docs.mjs",
+    "netlify:build": "node scripts/netlify-build.mjs",
+    "build": "npm run facts && docusaurus build",
+    "serve": "docusaurus serve",
+    "clear": "docusaurus clear",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.mjs",
+    "check": "npm test && npm run validate:docs && npm run validate:diagrams && npm run facts && npm run typecheck && npm run build && npm run check:build"
+  },
+  "dependencies": {
+    "@docusaurus/core": "3.10.2",
+    "@docusaurus/faster": "3.10.2",
+    "@docusaurus/preset-classic": "3.10.2",
+    "@mdx-js/react": "3.1.1",
+    "clsx": "2.1.1",
+    "prism-react-renderer": "2.4.1",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@docusaurus/module-type-aliases": "3.10.2",
+    "@docusaurus/tsconfig": "3.10.2",
+    "@docusaurus/types": "3.10.2",
+    "@types/react": "19.2.18",
+    "cheerio": "1.2.0",
+    "glob": "13.0.6",
+    "gray-matter": "4.0.3",
+    "netlify-cli": "27.0.2",
+    "typescript": "6.0.2",
+    "yaml": "2.9.0"
+  },
+  "browserslist": {
+    "production": [
+      ">0.5%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 3 chrome version",
+      "last 3 firefox version",
+      "last 5 safari version"
+    ]
+  }
+}
