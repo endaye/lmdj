@@ -15,6 +15,7 @@ runtime_root="$build_root/runtime"
 dist_root="$build_root/dist"
 identity_path="$repo_root/build/web/toolchain/toolchain-identity.json"
 web_test_root="$repo_root/tests/platform/web"
+fixture_source_root="$repo_root/tests/fixtures/audio"
 proof_root=""
 proof_server_pid=""
 proof_server_ready_root=""
@@ -152,6 +153,7 @@ build_host() {
 
 run_browser_gate() {
   local selected_dist="$1"
+  local selected_fixture_root="${2:-$fixture_source_root}"
   local requested_port="${LMDJ_WEB_HOST_PORT:-0}"
   local log_path="$build_root/proof-server.log"
   local ready_file
@@ -214,9 +216,16 @@ PY
   fi
   local status=0
   LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_WEB_HOST_FIXTURE_ROOT="$selected_fixture_root" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
-      host/web_runtime_host_manifest_gate.spec.mjs || status=$?
+      host/web_runtime_host_manifest_gate.spec.mjs \
+      host/web_runtime_host_browser.spec.mjs || status=$?
+  LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_WEB_HOST_FIXTURE_ROOT="$selected_fixture_root" \
+    npm --prefix "$web_test_root" test -- \
+      --project=webkit \
+      host/web_runtime_host_browser.spec.mjs || status=$?
   cleanup_proof_server
   return "$status"
 }
@@ -234,6 +243,11 @@ run_nonbrowser_tests() {
     -R '^host\.web_(control_runtime|realtime_session|manifest_gate)$'
 }
 
+generate_browser_fixtures() {
+  python3 "$repo_root/tests/fixtures/audio/make_fixtures.py"
+  echo "Web Runtime Host browser fixtures: PASS"
+}
+
 test_host() {
   if [[ ! -d "$dist_root" ]]; then
     echo "Web Runtime Host error: build the Host before testing" >&2
@@ -241,7 +255,8 @@ test_host() {
   fi
   run_nonbrowser_tests
   python3 "$repo_root/apps/web-runtime-host/test/distribution_test.py"
-  run_browser_gate "$dist_root"
+  generate_browser_fixtures
+  run_browser_gate "$dist_root" "$fixture_source_root"
   echo "Web Runtime Host tests: PASS"
 }
 
@@ -270,7 +285,9 @@ proof_host() {
   cmake -E copy_directory "$dist_root" "$proof_root/dist"
   LMDJ_WEB_HOST_DIST_ROOT="$proof_root/dist" \
     python3 "$repo_root/apps/web-runtime-host/test/distribution_test.py"
-  run_browser_gate "$proof_root/dist"
+  generate_browser_fixtures
+  cmake -E copy_directory "$fixture_source_root" "$proof_root/fixtures"
+  run_browser_gate "$proof_root/dist" "$proof_root/fixtures"
   echo "Web Runtime Host Proof: PASS"
 }
 

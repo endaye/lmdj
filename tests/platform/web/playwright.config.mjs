@@ -11,6 +11,7 @@ if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error(`invalid LMDJ_WEB_TOOLCHAIN_PORT: ${process.env.LMDJ_WEB_TOOLCHAIN_PORT}`);
 }
 const baseURL = `http://127.0.0.1:${port}`;
+const browserProofBaseURL = process.env.LMDJ_WEB_HOST_BASE_URL ?? baseURL;
 
 
 export default defineConfig({
@@ -20,7 +21,7 @@ export default defineConfig({
   reporter: [["line"]],
   outputDir: resolve(webRoot, "test-results"),
   use: {
-    baseURL,
+    baseURL: browserProofBaseURL,
     trace: "retain-on-failure",
   },
   webServer: {

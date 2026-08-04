@@ -1,0 +1,23 @@
+{
+  "contract": "lmdj.web-runtime-host.browser-fixture.v1",
+  "trigger_proof": {
+    "admission_count": 500,
+    "capacities": {
+      "queue": 1024,
+      "trigger_outcome": 4096,
+      "voice": 128
+    },
+    "capacity_source": "active packages/audio-runtime/include/lmdj/audio/realtime_engine.hpp constants",
+    "maximum_concurrent_voices": 3,
+    "pacing_ms": 2
+  },
+  "wav": {
+    "channels": 1,
+    "duration_ms": 5.0,
+    "frame_count": 240,
+    "path": "web-runtime-host-short.wav",
+    "sample_rate": 48000,
+    "sample_width_bytes": 2,
+    "sha256": "85c1ce4ea0195fb217b9bbc0f5572a24f6781088f750958570c820c29acac3c4"
+  }
+}
