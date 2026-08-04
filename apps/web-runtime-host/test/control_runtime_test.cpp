@@ -404,6 +404,11 @@ struct FakeCoordinator final {
 
   static std::uint64_t acknowledged_generation(void* context) noexcept {
     auto& self = *static_cast<FakeCoordinator*>(context);
+    ++self.acknowledgement_calls;
+    if (self.acknowledgement_poll_delay_ms != 0) {
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(self.acknowledgement_poll_delay_ms));
+    }
     if (self.acknowledgement_delay_polls != 0 &&
         ++self.acknowledgement_polls >= self.acknowledgement_delay_polls) {
       self.acknowledged = self.begin_acknowledgement;
@@ -442,8 +447,10 @@ struct FakeCoordinator final {
   std::uint64_t acknowledged_before_begin = 0;
   std::uint64_t begin_acknowledgement = 1;
   std::uint32_t begin_calls = 0;
+  std::uint32_t acknowledgement_calls = 0;
   std::uint32_t acknowledgement_delay_polls = 0;
   std::uint32_t acknowledgement_polls = 0;
+  std::uint32_t acknowledgement_poll_delay_ms = 0;
 };
 
 class OneShotAudioDriver final {
@@ -1101,11 +1108,10 @@ void test_audio_activation_rolls_back_begin_and_ack_failures() {
     check_error(
         runtime->dispatch("audio.activate", Json::object(), {}),
         "HOST_TIMEOUT");
-    LMDJ_CHECK(coordinator.called);
-    LMDJ_CHECK(coordinator.timeout_ms == 1'000);
+    LMDJ_CHECK(!coordinator.called);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
-        lmdj::audio::RealtimeState::stopped);
+        lmdj::audio::RealtimeState::running);
     check_error(
         runtime->dispatch("host.status", Json::object(), {}),
         "HOST_STATE_INVALID");
@@ -1203,7 +1209,8 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
              {"changed", true},
              {"sealed_take_id", kTakeId}}));
     LMDJ_CHECK(success.called);
-    LMDJ_CHECK(success.timeout_ms == 1'000);
+    LMDJ_CHECK(success.timeout_ms >= 1);
+    LMDJ_CHECK(success.timeout_ms <= 1'000);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
         lmdj::audio::RealtimeState::stopped);
@@ -1259,7 +1266,8 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
         closed ==
         Json{{"state", "closed"}, {"sealed_take_id", kTakeId}}));
     LMDJ_CHECK(coordinator.called);
-    LMDJ_CHECK(coordinator.timeout_ms == 10'000);
+    LMDJ_CHECK(coordinator.timeout_ms >= 1);
+    LMDJ_CHECK(coordinator.timeout_ms <= 10'000);
     LMDJ_CHECK(coordinator.observed_capture_idle);
     LMDJ_CHECK(coordinator.observed_take_sealed);
     LMDJ_CHECK(coordinator.observed_engine_running);
@@ -1317,7 +1325,8 @@ void test_host_close_orders_capture_seal_quiescence_and_engine_stop() {
         runtime->dispatch("host.close", Json::object(), {}),
         "INTERNAL_ERROR");
     LMDJ_CHECK(timeout.called);
-    LMDJ_CHECK(timeout.timeout_ms == 10'000);
+    LMDJ_CHECK(timeout.timeout_ms >= 1);
+    LMDJ_CHECK(timeout.timeout_ms <= 10'000);
     LMDJ_CHECK(timeout.observed_capture_idle);
     LMDJ_CHECK(timeout.observed_take_sealed);
     LMDJ_CHECK(timeout.observed_engine_running);
@@ -1491,8 +1500,9 @@ void test_active_take_failure_still_quiesces_suspend_and_close() {
         runtime->dispatch(operation, Json::object(), {}),
         "INTERNAL_ERROR");
     LMDJ_CHECK(timeout.called);
+    LMDJ_CHECK(timeout.timeout_ms >= 1);
     LMDJ_CHECK(
-        timeout.timeout_ms ==
+        timeout.timeout_ms <=
         (std::string_view(operation) == "audio.suspend" ? 1'000U
                                                         : 10'000U));
     LMDJ_CHECK(timeout.quiescence_established);
@@ -1546,15 +1556,87 @@ void test_active_take_suspend_rechecks_deadline_after_quiescence() {
 }
 
 void test_audio_activation_rechecks_deadline_after_generation_ack() {
+  for (const auto begin_succeeds : {true, false}) {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(8);
+    import_and_assign(*runtime, wav, kAssetId, 885, 886, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    FakeCoordinator coordinator;
+    coordinator.begin_delay_ms = 100;
+    coordinator.begin_succeed = begin_succeeds;
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+            .has_value());
+
+    check_error(
+        runtime->dispatch(
+            "audio.activate",
+            Json::object(),
+            {},
+            std::chrono::steady_clock::now() -
+                std::chrono::milliseconds(950)),
+        "HOST_TIMEOUT");
+    LMDJ_CHECK(coordinator.begin_calls == 1);
+    LMDJ_CHECK(coordinator.acknowledgement_calls == 0);
+    LMDJ_CHECK(!coordinator.called);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().state ==
+        (begin_succeeds ? lmdj::audio::RealtimeState::running
+                        : lmdj::audio::RealtimeState::stopped));
+    check_error(
+        runtime->dispatch("host.status", Json::object(), {}),
+        "HOST_STATE_INVALID");
+  }
+}
+
+void test_audio_activation_ack_wait_uses_original_request_budget() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
   check_success(runtime->dispatch("project.create", create_payload(), {}));
   const auto wav = mono_pcm16_wav(8);
-  import_and_assign(*runtime, wav, kAssetId, 885, 886, 0);
+  import_and_assign(*runtime, wav, kAssetId, 887, 888, 0);
   check_success(runtime->dispatch(
       "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
   FakeCoordinator coordinator;
-  coordinator.begin_delay_ms = 100;
+  coordinator.begin_acknowledgement = 0;
+  coordinator.acknowledgement_delay_polls =
+      std::numeric_limits<std::uint32_t>::max();
+  coordinator.acknowledgement_poll_delay_ms = 10;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+
+  const auto started_at = std::chrono::steady_clock::now();
+  check_error(
+      runtime->dispatch(
+          "audio.activate",
+          Json::object(),
+          {},
+          started_at - std::chrono::milliseconds(900)),
+      "HOST_TIMEOUT");
+  const auto elapsed = std::chrono::steady_clock::now() - started_at;
+  LMDJ_CHECK(elapsed < std::chrono::milliseconds(500));
+  LMDJ_CHECK(coordinator.acknowledgement_calls < 20);
+  LMDJ_CHECK(!coordinator.called);
+  LMDJ_CHECK(
+      runtime->engine().telemetry().state ==
+      lmdj::audio::RealtimeState::running);
+}
+
+void test_audio_activation_rollback_rechecks_the_original_deadline() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(8);
+  import_and_assign(*runtime, wav, kAssetId, 889, 890, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.begin_succeed = false;
+  coordinator.await_delay_ms = 100;
   LMDJ_CHECK(
       ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
           .has_value());
@@ -1567,14 +1649,13 @@ void test_audio_activation_rechecks_deadline_after_generation_ack() {
           std::chrono::steady_clock::now() -
               std::chrono::milliseconds(950)),
       "HOST_TIMEOUT");
-  LMDJ_CHECK(coordinator.begin_calls == 1);
   LMDJ_CHECK(coordinator.called);
+  LMDJ_CHECK(coordinator.timeout_ms >= 1);
+  LMDJ_CHECK(coordinator.timeout_ms <= 100);
+  LMDJ_CHECK(coordinator.acknowledgement_calls == 0);
   LMDJ_CHECK(
       runtime->engine().telemetry().state ==
       lmdj::audio::RealtimeState::stopped);
-  check_error(
-      runtime->dispatch("host.status", Json::object(), {}),
-      "HOST_STATE_INVALID");
 }
 
 void test_take_stop_and_host_close_recheck_exact_deadlines() {
@@ -1641,6 +1722,131 @@ void test_take_stop_and_host_close_recheck_exact_deadlines() {
     LMDJ_CHECK(
         runtime->engine().reclaim_retired_bank_telemetry().count == 0);
   }
+}
+
+void test_suspend_and_close_pass_only_the_original_remaining_budget() {
+  for (const auto operation : {"audio.suspend", "host.close"}) {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(8);
+    import_and_assign(*runtime, wav, kAssetId, 895, 896, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    FakeCoordinator coordinator;
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+            .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    const auto elapsed_budget =
+        operation == std::string_view("audio.suspend") ? 750 : 9'750;
+
+    check_success(runtime->dispatch(
+        operation,
+        Json::object(),
+        {},
+        std::chrono::steady_clock::now() -
+            std::chrono::milliseconds(elapsed_budget)));
+    LMDJ_CHECK(coordinator.called);
+    LMDJ_CHECK(coordinator.timeout_ms >= 1);
+    LMDJ_CHECK(coordinator.timeout_ms <= 300);
+  }
+}
+
+void test_suspend_and_close_do_not_quiesce_after_capture_expires() {
+  for (const auto operation : {"audio.suspend", "host.close"}) {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(8);
+    import_and_assign(*runtime, wav, kAssetId, 897, 898, 0);
+    check_success(runtime->dispatch(
+        "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+    FakeCoordinator coordinator;
+    LMDJ_CHECK(
+        ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+            .has_value());
+    check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+    check_success(runtime->dispatch(
+        "take.begin",
+        {{"take_id", kTakeId}, {"expected_revision", 2}},
+        {}));
+    std::array<float, 1> left{};
+    std::array<float, 1> right{};
+    runtime->engine().render(left.data(), right.data(), 1);
+    LMDJ_CHECK(
+        runtime->engine().capture_telemetry().state == CaptureState::active);
+    const auto elapsed_budget =
+        operation == std::string_view("audio.suspend") ? 950 : 9'950;
+
+    check_error(
+        runtime->dispatch(
+            operation,
+            Json::object(),
+            {},
+            std::chrono::steady_clock::now() -
+                std::chrono::milliseconds(elapsed_budget)),
+        "HOST_TIMEOUT");
+    LMDJ_CHECK(!coordinator.called);
+    LMDJ_CHECK(
+        runtime->engine().telemetry().state ==
+        lmdj::audio::RealtimeState::running);
+    LMDJ_CHECK(runtime->engine().bank_telemetry().current_generation == 1);
+  }
+}
+
+void test_take_stop_stops_capture_batches_at_the_original_deadline() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(1);
+  import_and_assign(*runtime, wav, kAssetId, 899, 900, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "take.begin",
+      {{"take_id", kTakeId}, {"expected_revision", 2}},
+      {}));
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  runtime->engine().render(left.data(), right.data(), 1);
+  LMDJ_CHECK(
+      runtime->engine().capture_telemetry().state == CaptureState::active);
+
+  std::uint64_t sequence = 1;
+  for (std::size_t batch = 0; batch < 32; ++batch) {
+    for (std::size_t index = 0; index < 128; ++index, ++sequence) {
+      LMDJ_CHECK(
+          runtime->engine().enqueue(
+              lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+          lmdj::audio::EnqueueResult::accepted);
+    }
+    runtime->engine().render(left.data(), right.data(), 1);
+    LMDJ_CHECK(runtime->drain_outcomes().size() == 64);
+    LMDJ_CHECK(runtime->drain_outcomes().size() == 64);
+  }
+  LMDJ_CHECK(
+      runtime->engine().capture_telemetry().captured_events ==
+      lmdj::audio::kRealtimeCaptureCapacity);
+  ContinuousAudioDriver driver(runtime->engine());
+
+  check_error(
+      runtime->dispatch(
+          "take.stop",
+          Json::object(),
+          {},
+          std::chrono::steady_clock::now() -
+              std::chrono::milliseconds(29'950)),
+      "HOST_TIMEOUT");
+  driver.stop();
+  const auto capture = runtime->engine().capture_telemetry();
+  LMDJ_CHECK(capture.drained_events >= 64);
+  LMDJ_CHECK(capture.drained_events < capture.captured_events);
 }
 
 void test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention() {
@@ -2429,7 +2635,12 @@ int main() {
     test_active_take_failure_still_quiesces_suspend_and_close();
     test_active_take_suspend_rechecks_deadline_after_quiescence();
     test_audio_activation_rechecks_deadline_after_generation_ack();
+    test_audio_activation_ack_wait_uses_original_request_budget();
+    test_audio_activation_rollback_rechecks_the_original_deadline();
     test_take_stop_and_host_close_recheck_exact_deadlines();
+    test_suspend_and_close_pass_only_the_original_remaining_budget();
+    test_suspend_and_close_do_not_quiesce_after_capture_expires();
+    test_take_stop_stops_capture_batches_at_the_original_deadline();
     test_capture_drop_control_drain_seals_and_fails_the_session();
     test_capture_drop_racing_the_post_drain_check_is_terminal();
     test_outcome_drop_seals_the_active_take_and_never_resumes();

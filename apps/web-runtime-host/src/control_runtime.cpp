@@ -27,7 +27,6 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uint32_t kSampleRate = 48'000;
-constexpr std::uint32_t kAudioStateDeadlineMs = 1'000;
 constexpr std::uint32_t kCaptureDeadlineMs = 30'000;
 
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
@@ -424,6 +423,25 @@ struct ControlRuntime::Impl {
            std::chrono::steady_clock::now() >= *request_deadline;
   }
 
+  std::uint32_t remaining_request_budget_ms() const noexcept {
+    if (!request_deadline.has_value()) {
+      return 0;
+    }
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= *request_deadline) {
+      return 0;
+    }
+    const auto remaining = *request_deadline - now;
+    auto rounded = std::chrono::duration_cast<std::chrono::milliseconds>(
+        remaining);
+    if (rounded < remaining) {
+      rounded += std::chrono::milliseconds(1);
+    }
+    return static_cast<std::uint32_t>(std::min<std::int64_t>(
+        rounded.count(),
+        std::numeric_limits<std::uint32_t>::max()));
+  }
+
   Json status() const {
     const auto bank = engine.bank_telemetry();
     const auto acknowledged_generation =
@@ -659,6 +677,12 @@ struct ControlRuntime::Impl {
           "no active realtime Take",
       });
     }
+    if (request_cancelled()) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::internal_error,
+          "request deadline expired before Capture persistence",
+      });
+    }
     std::array<audio::CapturedTriggerEvent, 64> captured{};
     const auto count = engine.drain_capture(captured);
     if (count == 0) {
@@ -675,10 +699,17 @@ struct ControlRuntime::Impl {
           captured[index].velocity,
       };
     }
-    return application.append_realtime_take_events(
+    auto appended = application.append_realtime_take_events(
         *retained_project_path,
         foundation::TakeId{active_take->id},
         std::span<const domain::RawTakeEvent>(events.data(), count));
+    if (request_cancelled()) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::internal_error,
+          "request deadline expired after Capture persistence",
+      });
+    }
+    return appended;
   }
 
   foundation::Result<void> drain_all_capture_events() {
@@ -776,14 +807,20 @@ struct ControlRuntime::Impl {
     return sealed;
   }
 
-  foundation::Result<void> quiesce_and_stop_audio(
-      std::uint32_t timeout_ms) noexcept {
+  foundation::Result<void> quiesce_and_stop_audio() noexcept {
     trigger_admission = false;
     if (!coordinator.has_value() ||
         coordinator->await_quiescent == nullptr) {
       return foundation::Result<void>::failure(Error{
           ErrorCode::internal_error,
           "audio quiescence is unavailable",
+      });
+    }
+    const auto timeout_ms = remaining_request_budget_ms();
+    if (timeout_ms == 0) {
+      return foundation::Result<void>::failure(Error{
+          ErrorCode::internal_error,
+          "request deadline expired before audio quiescence",
       });
     }
     // The coordinator contract guarantees paused-or-terminal and no callback
@@ -1175,12 +1212,7 @@ Json ControlRuntime::dispatch(
       }
       const auto rollback = [this]() {
         impl_->trigger_admission = false;
-        if (impl_->coordinator.has_value() &&
-            impl_->coordinator->await_quiescent != nullptr) {
-          static_cast<void>(impl_->coordinator->await_quiescent(
-              impl_->coordinator->context, kAudioStateDeadlineMs));
-        }
-        impl_->engine.stop();
+        static_cast<void>(impl_->quiesce_and_stop_audio());
         fail_and_seal("audio_activation_failed");
         return internal_error();
       };
@@ -1196,12 +1228,18 @@ Json ControlRuntime::dispatch(
       }
       const auto begun = impl_->coordinator->begin_rendering(
           impl_->coordinator->context);
-      if (!begun.has_value()) {
-        return rollback();
+      if (impl_->request_cancelled()) {
+        if (!begun.has_value()) {
+          impl_->engine.stop();
+        }
+        fail_and_seal("audio_activation_timeout");
+        return timeout_error();
       }
-      const auto deadline = std::chrono::steady_clock::now() +
-                            std::chrono::milliseconds(
-                                kAudioStateDeadlineMs);
+      if (!begun.has_value()) {
+        const auto failed = rollback();
+        return impl_->request_cancelled() ? timeout_error() : failed;
+      }
+      const auto deadline = *impl_->request_deadline;
       auto acknowledged = impl_->coordinator->acknowledged_generation(
           impl_->coordinator->context);
       while (acknowledged == 0 &&
@@ -1212,11 +1250,15 @@ Json ControlRuntime::dispatch(
       }
       if (acknowledged != expected_generation) {
         const auto timed_out = impl_->request_cancelled();
+        if (timed_out) {
+          fail_and_seal("audio_activation_timeout");
+          return timeout_error();
+        }
         const auto failed = rollback();
-        return timed_out ? timeout_error() : failed;
+        return impl_->request_cancelled() ? timeout_error() : failed;
       }
       if (impl_->request_cancelled()) {
-        static_cast<void>(rollback());
+        fail_and_seal("audio_activation_timeout");
         return timeout_error();
       }
       impl_->state = Impl::State::running;
@@ -1398,8 +1440,10 @@ Json ControlRuntime::dispatch(
           capture_failure = finished.error();
         }
       }
-      const auto cleanup = impl_->quiesce_and_stop_audio(
-          kAudioStateDeadlineMs);
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto cleanup = impl_->quiesce_and_stop_audio();
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
@@ -1448,8 +1492,11 @@ Json ControlRuntime::dispatch(
             capture_failure = finished.error();
           }
         }
-        const auto cleanup = impl_->quiesce_and_stop_audio(10'000);
         observe_timeout();
+        if (close_timed_out) {
+          return timeout_error();
+        }
+        const auto cleanup = impl_->quiesce_and_stop_audio();
         if (capture_failure.has_value() || !cleanup.has_value()) {
           close_failure = capture_failure.has_value()
                               ? *capture_failure
