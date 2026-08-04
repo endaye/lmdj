@@ -30,6 +30,17 @@ constexpr std::uint32_t kSampleRate = 48'000;
 constexpr std::uint32_t kAudioStateDeadlineMs = 1'000;
 constexpr std::uint32_t kCaptureDeadlineMs = 30'000;
 
+std::chrono::milliseconds operation_deadline(std::string_view operation) {
+  if (operation == "host.close") {
+    return std::chrono::seconds(10);
+  }
+  if (operation == "host.status" || operation == "audio.activate" ||
+      operation == "audio.suspend" || operation == "trigger") {
+    return std::chrono::seconds(1);
+  }
+  return std::chrono::seconds(30);
+}
+
 class ProtocolFailure final : public std::runtime_error {
  public:
   ProtocolFailure() : std::runtime_error("invalid Host protocol request") {}
@@ -147,6 +158,10 @@ Json protocol_error() {
 
 Json state_error(std::string message = "operation is unavailable") {
   return host_error("HOST_STATE_INVALID", std::move(message));
+}
+
+Json timeout_error() {
+  return host_error("HOST_TIMEOUT", "host request timed out");
 }
 
 Json internal_error() {
@@ -404,6 +419,11 @@ struct ControlRuntime::Impl {
            retained_project_path.has_value() && writer_lease.has_value();
   }
 
+  bool request_cancelled() const noexcept {
+    return request_deadline.has_value() &&
+           std::chrono::steady_clock::now() >= *request_deadline;
+  }
+
   Json status() const {
     const auto bank = engine.bank_telemetry();
     const auto acknowledged_generation =
@@ -572,6 +592,10 @@ struct ControlRuntime::Impl {
           error.at("error"),
       };
     }
+    if (cancel_if_expired()) {
+      auto error = timeout_error();
+      return SnapshotResult{false, false, std::nullopt, error.at("error")};
+    }
     const auto publication = engine.publish_sample_bank(std::move(bank.value()));
     if (publication != audio::PublishResult::accepted) {
       auto error = state_error("runtime Bank publication is unavailable");
@@ -609,30 +633,36 @@ struct ControlRuntime::Impl {
       });
     }
     std::array<audio::CapturedTriggerEvent, 64> captured{};
-    while (true) {
-      const auto count = engine.drain_capture(captured);
-      if (count == 0) {
-        return foundation::Result<void>::success();
-      }
-      std::array<domain::RawTakeEvent, 64> events{};
-      for (std::size_t index = 0; index < count; ++index) {
-        events[index] = domain::RawTakeEvent{
-            domain::PadSlotId{
-                static_cast<std::uint8_t>(captured[index].slot / 16U),
-                static_cast<std::uint8_t>(captured[index].slot % 16U),
-            },
-            captured[index].frame_offset,
-            captured[index].velocity,
-        };
-      }
-      auto appended = application.append_realtime_take_events(
-          *retained_project_path,
-          foundation::TakeId{active_take->id},
-          std::span<const domain::RawTakeEvent>(events.data(), count));
-      if (!appended.has_value()) {
-        return appended;
+    const auto count = engine.drain_capture(captured);
+    if (count == 0) {
+      return foundation::Result<void>::success();
+    }
+    std::array<domain::RawTakeEvent, 64> events{};
+    for (std::size_t index = 0; index < count; ++index) {
+      events[index] = domain::RawTakeEvent{
+          domain::PadSlotId{
+              static_cast<std::uint8_t>(captured[index].slot / 16U),
+              static_cast<std::uint8_t>(captured[index].slot % 16U),
+          },
+          captured[index].frame_offset,
+          captured[index].velocity,
+      };
+    }
+    return application.append_realtime_take_events(
+        *retained_project_path,
+        foundation::TakeId{active_take->id},
+        std::span<const domain::RawTakeEvent>(events.data(), count));
+  }
+
+  foundation::Result<void> drain_all_capture_events() {
+    while (engine.capture_telemetry().drained_events <
+           engine.capture_telemetry().captured_events) {
+      const auto drained = drain_capture_events();
+      if (!drained.has_value()) {
+        return drained;
       }
     }
+    return foundation::Result<void>::success();
   }
 
   foundation::Result<void> seal_take(const TakeSession& take) {
@@ -663,8 +693,9 @@ struct ControlRuntime::Impl {
       });
     }
     trigger_admission = false;
-    const auto deadline = std::chrono::steady_clock::now() +
-                          std::chrono::milliseconds(kCaptureDeadlineMs);
+    const auto deadline = request_deadline.value_or(
+        std::chrono::steady_clock::now() +
+        std::chrono::milliseconds(kCaptureDeadlineMs));
     auto capture = engine.capture_telemetry().state;
     while (capture == audio::CaptureState::arm_pending) {
       if (std::chrono::steady_clock::now() >= deadline) {
@@ -694,7 +725,7 @@ struct ControlRuntime::Impl {
       std::this_thread::yield();
       capture = engine.capture_telemetry().state;
     }
-    const auto drained = drain_capture_events();
+    const auto drained = drain_all_capture_events();
     if (capture == audio::CaptureState::corrupted || !drained.has_value()) {
       return seal_active_after_failure(
           !drained.has_value()
@@ -757,6 +788,16 @@ struct ControlRuntime::Impl {
     }
   }
 
+  bool cancel_if_expired() noexcept {
+    if (!request_cancelled()) {
+      return false;
+    }
+    trigger_admission = false;
+    seal_all_noexcept();
+    state = State::failed;
+    return true;
+  }
+
   std::filesystem::path workspace_root;
   facade::Application application;
   audio::RuntimePreparationLimits limits;
@@ -775,6 +816,7 @@ struct ControlRuntime::Impl {
   std::uint64_t next_trigger_sequence = 1;
   bool runtime_ready = false;
   bool trigger_admission = false;
+  std::optional<std::chrono::steady_clock::time_point> request_deadline;
 };
 
 ControlRuntime::ControlRuntime(std::shared_ptr<Impl> impl) noexcept
@@ -806,10 +848,27 @@ Json ControlRuntime::dispatch(
     std::string_view operation,
     const Json& payload,
     std::span<const std::byte> sidecar) {
+  return dispatch(
+      operation, payload, sidecar, std::chrono::steady_clock::now());
+}
+
+Json ControlRuntime::dispatch(
+    std::string_view operation,
+    const Json& payload,
+    std::span<const std::byte> sidecar,
+    std::chrono::steady_clock::time_point submitted_at) {
+  struct DeadlineReset final {
+    std::optional<std::chrono::steady_clock::time_point>& value;
+    ~DeadlineReset() { value.reset(); }
+  } reset{impl_->request_deadline};
+  impl_->request_deadline = submitted_at + operation_deadline(operation);
   try {
     if (impl_->state == Impl::State::failed ||
         impl_->state == Impl::State::closed) {
       return state_error();
+    }
+    if (impl_->cancel_if_expired()) {
+      return timeout_error();
     }
     if (operation == "host.status") {
       require(exact_keys(payload, {}));
@@ -835,6 +894,9 @@ Json ControlRuntime::dispatch(
       if (!lease.has_value()) {
         return normalized_error(lease.error());
       }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       auto created = impl_->application.create_initial_project(
           facade::InitialProjectRequest{
               path,
@@ -844,6 +906,9 @@ Json ControlRuntime::dispatch(
           });
       if (!created.has_value()) {
         return normalized_error(created.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
       }
       impl_->writer_lease.emplace(std::move(lease.value()));
       impl_->retained_project_path = path;
@@ -880,6 +945,9 @@ Json ControlRuntime::dispatch(
            {"project_path", path.generic_string()}});
       if (!inspected.value("ok", false)) {
         return normalized_facade_error(inspected);
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
       }
       const auto& inspected_project =
           inspected.at("result").at("project");
@@ -964,6 +1032,9 @@ Json ControlRuntime::dispatch(
                 {"limit", impl_->limits.maximum_artifact_bytes},
             });
       }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       auto imported = impl_->application.import_artifact_bytes(
           facade::ArtifactBytesImportRequest{
               *impl_->retained_project_path,
@@ -975,6 +1046,9 @@ Json ControlRuntime::dispatch(
           });
       if (!imported.has_value()) {
         return normalized_error(imported.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
       }
       const auto& applied = imported.value();
       const auto found =
@@ -1010,7 +1084,13 @@ Json ControlRuntime::dispatch(
       request["operation"] = "pad.assign";
       request["project_path"] =
           impl_->retained_project_path->generic_string();
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       auto response = impl_->facade_command(std::move(request));
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       if (response.value("ok", false)) {
         impl_->project_revision =
             response.at("result").at("project_revision")
@@ -1025,6 +1105,9 @@ Json ControlRuntime::dispatch(
         return state_error();
       }
       const auto selected_pattern = uuid_field(payload, "pattern_id");
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       const auto snapshot = impl_->prepare_and_publish(selected_pattern);
       if (!snapshot.published) {
         return {{"ok", false}, {"error", snapshot.error}};
@@ -1074,6 +1157,9 @@ Json ControlRuntime::dispatch(
         fail_and_seal("audio_activation_failed");
         return internal_error();
       };
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       const auto started = impl_->engine.start();
       if (!started.has_value()) {
         return rollback();
@@ -1100,6 +1186,9 @@ Json ControlRuntime::dispatch(
       if (acknowledged != expected_generation) {
         return rollback();
       }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       impl_->state = Impl::State::running;
       impl_->trigger_admission = true;
       return success({
@@ -1120,6 +1209,9 @@ Json ControlRuntime::dispatch(
         return state_error();
       }
       const auto sequence = impl_->next_trigger_sequence;
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       const auto enqueued = impl_->engine.enqueue(audio::TriggerEvent{
           sequence,
           static_cast<std::uint8_t>(selected_slot),
@@ -1142,6 +1234,9 @@ Json ControlRuntime::dispatch(
       }
       const auto take_id = uuid_field(payload, "take_id");
       const auto revision = unsigned_field(payload, "expected_revision");
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       const auto begun = impl_->application.command(
           {
               {"operation", "take.begin"},
@@ -1153,6 +1248,13 @@ Json ControlRuntime::dispatch(
           });
       if (!begun.value("ok", false)) {
         return normalized_facade_error(begun);
+      }
+      if (impl_->cancel_if_expired()) {
+        static_cast<void>(impl_->application.seal_realtime_take(
+            *impl_->retained_project_path,
+            foundation::TakeId{take_id},
+            "capture_incomplete"));
+        return timeout_error();
       }
       const auto armed = impl_->engine.arm_capture();
       if (!armed.has_value()) {
@@ -1209,7 +1311,13 @@ Json ControlRuntime::dispatch(
       request["project_path"] =
           impl_->retained_project_path->generic_string();
       request["take_id"] = impl_->committable_take->id;
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       auto response = impl_->facade_command(std::move(request));
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
       if (response.value("ok", false)) {
         impl_->project_revision =
             response.at("result").at("project_revision")
@@ -1332,25 +1440,46 @@ Json ControlRuntime::dispatch(
 
 std::vector<audio::RuntimeTriggerOutcomeEvent>
 ControlRuntime::drain_outcomes() {
-  std::vector<audio::RuntimeTriggerOutcomeEvent> result;
-  std::array<audio::RuntimeTriggerOutcomeEvent, 64> batch{};
-  while (true) {
-    const auto count = impl_->engine.drain_trigger_outcomes(batch);
-    result.insert(result.end(), batch.begin(), batch.begin() + count);
-    if (count != batch.size()) {
-      return result;
-    }
+  if (impl_->engine.trigger_outcome_telemetry().runtime_outcome_drops != 0) {
+    fail_and_seal("trigger_outcome_drop");
+    return {};
   }
+  std::vector<audio::RuntimeTriggerOutcomeEvent> result;
+  result.reserve(64);
+  std::array<audio::RuntimeTriggerOutcomeEvent, 64> batch{};
+  const auto count = impl_->engine.drain_trigger_outcomes(batch);
+  result.insert(result.end(), batch.begin(), batch.begin() + count);
+  return result;
 }
 
 foundation::Result<void> ControlRuntime::drain_capture() {
-  return impl_->drain_capture_events();
+  const auto capture = impl_->engine.capture_telemetry();
+  if (capture.capture_drops != 0 ||
+      capture.state == audio::CaptureState::corrupted) {
+    fail_and_seal("capture_drop");
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "realtime capture was corrupted",
+    });
+  }
+  auto drained = impl_->drain_capture_events();
+  if (!drained.has_value() &&
+      drained.error().code != ErrorCode::invalid_argument) {
+    const auto failure = drained.error();
+    fail_and_seal("capture_persistence_failure");
+    return foundation::Result<void>::failure(failure);
+  }
+  return drained;
 }
 
 void ControlRuntime::fail_and_seal(std::string_view) noexcept {
   impl_->trigger_admission = false;
   impl_->seal_all_noexcept();
   impl_->state = Impl::State::failed;
+}
+
+bool ControlRuntime::failed() const noexcept {
+  return impl_->state == Impl::State::failed;
 }
 
 audio::RealtimeEngine& ControlRuntime::engine() noexcept {

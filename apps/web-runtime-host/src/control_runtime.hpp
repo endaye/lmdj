@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <memory>
@@ -32,9 +33,15 @@ class ControlRuntime final {
       std::string_view operation,
       const nlohmann::json& payload,
       std::span<const std::byte> sidecar);
+  nlohmann::json dispatch(
+      std::string_view operation,
+      const nlohmann::json& payload,
+      std::span<const std::byte> sidecar,
+      std::chrono::steady_clock::time_point submitted_at);
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
   foundation::Result<void> drain_capture();
   void fail_and_seal(std::string_view cause) noexcept;
+  bool failed() const noexcept;
   audio::RealtimeEngine& engine() noexcept;
 
  private:

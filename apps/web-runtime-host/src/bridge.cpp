@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -27,6 +28,38 @@
 #include <lmdj/audio/web/realtime_audio_worklet.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
+#endif
+
+#if defined(__EMSCRIPTEN__) && defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+namespace {
+struct ConformanceOutcomeMirror {
+  std::atomic<std::uint32_t> state{0};
+  std::array<lmdj::audio::RuntimeTriggerOutcomeEvent, 64> events{};
+  std::size_t count = 0;
+};
+
+ConformanceOutcomeMirror conformance_outcome_mirror;
+
+void mirror_conformance_outcomes(
+    std::span<const lmdj::audio::RuntimeTriggerOutcomeEvent> outcomes)
+    noexcept {
+  std::uint32_t expected = 0;
+  if (!conformance_outcome_mirror.state.compare_exchange_strong(
+          expected,
+          1,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return;
+  }
+  conformance_outcome_mirror.count = std::min(
+      outcomes.size(), conformance_outcome_mirror.events.size());
+  std::copy_n(
+      outcomes.begin(),
+      conformance_outcome_mirror.count,
+      conformance_outcome_mirror.events.begin());
+  conformance_outcome_mirror.state.store(2, std::memory_order_release);
+}
+}  // namespace
 #endif
 
 namespace lmdj::web_host::detail {
@@ -94,6 +127,29 @@ Json bridge_protocol_error() {
   };
 }
 
+Json bridge_timeout_error() {
+  return {
+      {"ok", false},
+      {"error",
+       {
+           {"code", "HOST_TIMEOUT"},
+           {"message", "host request timed out"},
+           {"details", Json::object()},
+       }},
+  };
+}
+
+std::chrono::milliseconds operation_deadline(std::string_view operation) {
+  if (operation == "host.close") {
+    return std::chrono::seconds(10);
+  }
+  if (operation == "host.status" || operation == "audio.activate" ||
+      operation == "audio.suspend" || operation == "trigger") {
+    return std::chrono::seconds(1);
+  }
+  return std::chrono::seconds(30);
+}
+
 bool supported_operation(std::string_view operation) {
   static constexpr std::array<std::string_view, 15> operations{
       "host.status",
@@ -137,6 +193,7 @@ struct ControlBridge::Impl {
     std::array<std::byte, kBridgeMaximumSidecarBytes> sidecar{};
     std::size_t envelope_size = 0;
     std::size_t sidecar_size = 0;
+    std::chrono::steady_clock::time_point submitted_at{};
     std::string request_id;
     bool has_request_id = false;
   };
@@ -165,6 +222,92 @@ struct ControlBridge::Impl {
   static void release_thunk(void* argument) noexcept {
     auto& request = *static_cast<RequestSlot*>(argument);
     request.owner->release_consumed_request(request);
+  }
+
+  static void service_realtime_thunk(void* argument) noexcept {
+    static_cast<Impl*>(argument)->service_realtime();
+  }
+
+  void service_realtime() noexcept {
+    if (hooks.on_control == nullptr || !hooks.on_control(hooks.context)) {
+      realtime_service_scheduled.store(false, std::memory_order_release);
+      fail_control();
+      return;
+    }
+    auto* message = reserve_message();
+    if (message == nullptr) {
+      realtime_service_scheduled.store(false, std::memory_order_release);
+      return;
+    }
+    try {
+      static_cast<void>(runtime.drain_capture());
+      if (runtime.failed()) {
+        message->state.store(MessageState::free, std::memory_order_release);
+        realtime_service_scheduled.store(false, std::memory_order_release);
+        fail_control();
+        return;
+      }
+      const auto outcomes = runtime.drain_outcomes();
+      if (runtime.failed()) {
+        message->state.store(MessageState::free, std::memory_order_release);
+        realtime_service_scheduled.store(false, std::memory_order_release);
+        fail_control();
+        return;
+      }
+      if (outcomes.empty()) {
+        message->state.store(MessageState::free, std::memory_order_release);
+      } else {
+#if defined(__EMSCRIPTEN__) && defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+        mirror_conformance_outcomes(outcomes);
+#endif
+        auto events = Json::array();
+        for (const auto& outcome : outcomes) {
+          events.push_back({
+              {"sequence", outcome.sequence},
+              {"outcome",
+               outcome.outcome == audio::RuntimeTriggerOutcome::voice_started
+                   ? "voice_started"
+                   : "voice_capacity"},
+              {"runtime_frame", outcome.runtime_frame},
+          });
+        }
+        if (!publish_message(
+                *message,
+                Json{
+                    {"protocol_version", 1},
+                    {"event", "runtime.trigger_outcomes"},
+                    {"payload", {{"events", std::move(events)}}},
+                },
+                nullptr,
+                false)) {
+          message->state.store(MessageState::free, std::memory_order_release);
+        }
+      }
+    } catch (...) {
+      message->state.store(MessageState::free, std::memory_order_release);
+      fail_control();
+    }
+    realtime_service_scheduled.store(false, std::memory_order_release);
+  }
+
+  void schedule_realtime_service() noexcept {
+    if (failed.load(std::memory_order_acquire)) {
+      return;
+    }
+    auto expected = false;
+    if (!realtime_service_scheduled.compare_exchange_strong(
+            expected,
+            true,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      return;
+    }
+    if (hooks.schedule == nullptr ||
+        !hooks.schedule(
+            hooks.context, &service_realtime_thunk, this)) {
+      realtime_service_scheduled.store(false, std::memory_order_release);
+      failed.store(true, std::memory_order_release);
+    }
   }
 
   bool publish_internal_fallback_noexcept(
@@ -265,6 +408,7 @@ struct ControlBridge::Impl {
   }
 
   void fail_control() noexcept {
+    realtime_service_enabled.store(false, std::memory_order_release);
     failed.store(true, std::memory_order_release);
     runtime.fail_and_seal("bridge_failure");
   }
@@ -367,6 +511,9 @@ struct ControlBridge::Impl {
         request, parsed->at("request_id").get<std::string>());
     Json response;
     std::string operation;
+    bool terminal_after_response = false;
+    bool has_deadline = false;
+    std::chrono::steady_clock::time_point deadline{};
     MessageSlot* notification_slot = nullptr;
     Json notification = nullptr;
     const bool valid_envelope =
@@ -385,23 +532,36 @@ struct ControlBridge::Impl {
       if (!supported_operation(operation)) {
         response = bridge_protocol_error();
       } else {
-        if (operation == "project.open" ||
-            operation == "snapshot.reload") {
-          notification_slot = reserve_message();
-          reservations.notification = notification_slot;
-          if (notification_slot == nullptr) {
-            response_slot->state.store(
-                MessageState::free, std::memory_order_release);
-            release_request(request);
-            fail_control();
-            return;
+        deadline = request.submitted_at + operation_deadline(operation);
+        has_deadline = true;
+        if (std::chrono::steady_clock::now() >= deadline) {
+          runtime.fail_and_seal("request_timeout");
+          response = bridge_timeout_error();
+          terminal_after_response = true;
+        } else {
+          if (operation == "project.open" ||
+              operation == "snapshot.reload") {
+            notification_slot = reserve_message();
+            reservations.notification = notification_slot;
+            if (notification_slot == nullptr) {
+              response_slot->state.store(
+                  MessageState::free, std::memory_order_release);
+              release_request(request);
+              fail_control();
+              return;
+            }
           }
+          response = runtime.dispatch(
+              operation,
+              parsed->at("payload"),
+              std::span<const std::byte>(
+                  request.sidecar.data(), request.sidecar_size),
+              request.submitted_at);
+          realtime_service_enabled.store(
+              runtime.engine().telemetry().state ==
+                  audio::RealtimeState::running,
+              std::memory_order_release);
         }
-        response = runtime.dispatch(
-            operation,
-            parsed->at("payload"),
-            std::span<const std::byte>(
-                request.sidecar.data(), request.sidecar_size));
         if (notification_slot != nullptr) {
           const auto has_result =
               response.value("ok", false) &&
@@ -440,6 +600,23 @@ struct ControlBridge::Impl {
       }
     }
 
+#if !defined(__EMSCRIPTEN__)
+    if (hooks.before_response_serialization != nullptr) {
+      hooks.before_response_serialization(hooks.context);
+    }
+#endif
+    if (has_deadline && response.value("ok", false) &&
+        std::chrono::steady_clock::now() >= deadline) {
+      runtime.fail_and_seal("request_timeout");
+      response = bridge_timeout_error();
+      terminal_after_response = true;
+      if (notification_slot != nullptr) {
+        notification_slot->state.store(
+            MessageState::free, std::memory_order_release);
+        notification_slot = nullptr;
+        reservations.notification = nullptr;
+      }
+    }
     Json bridge_response{
         {"protocol_version", 1},
         {"request_id", request.request_id},
@@ -450,11 +627,6 @@ struct ControlBridge::Impl {
     } else {
       bridge_response["error"] = response.at("error");
     }
-#if !defined(__EMSCRIPTEN__)
-    if (hooks.before_response_serialization != nullptr) {
-      hooks.before_response_serialization(hooks.context);
-    }
-#endif
     request.state.store(
         RequestState::awaiting_response, std::memory_order_release);
     if (!publish_message(*response_slot, bridge_response, &request, true)) {
@@ -478,6 +650,9 @@ struct ControlBridge::Impl {
       reservations.notification = nullptr;
       return;
     }
+    if (terminal_after_response) {
+      fail_control();
+    }
   }
 
   ControlRuntime& runtime;
@@ -486,6 +661,8 @@ struct ControlBridge::Impl {
   std::array<MessageSlot, kBridgeMessageSlotCount> messages{};
   mutable std::mutex request_id_mutex;
   std::atomic<std::uint64_t> next_message_sequence{1};
+  std::atomic<bool> realtime_service_enabled{false};
+  std::atomic<bool> realtime_service_scheduled{false};
   std::atomic<bool> failed{false};
 };
 
@@ -530,6 +707,7 @@ BridgeSubmitStatus ControlBridge::submit(
   std::copy(sidecar.begin(), sidecar.end(), selected->sidecar.begin());
   selected->envelope_size = envelope.size();
   selected->sidecar_size = sidecar.size();
+  selected->submitted_at = std::chrono::steady_clock::now();
   selected->state.store(RequestState::queued, std::memory_order_release);
   if (impl_->hooks.schedule == nullptr ||
       !impl_->hooks.schedule(
@@ -557,6 +735,9 @@ BridgePollStatus ControlBridge::poll(
     }
   }
   if (selected == nullptr) {
+    if (impl_->realtime_service_enabled.load(std::memory_order_acquire)) {
+      impl_->schedule_realtime_service();
+    }
     required = 0;
     return impl_->failed.load(std::memory_order_acquire)
                ? BridgePollStatus::failed
@@ -1061,6 +1242,17 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_request_outcomes() {
           std::memory_order_acq_rel,
           std::memory_order_acquire)) {
     return 0;
+  }
+  if (conformance_outcome_mirror.state.load(std::memory_order_acquire) == 2) {
+    outcome_diagnostic.count = conformance_outcome_mirror.count;
+    std::copy_n(
+        conformance_outcome_mirror.events.begin(),
+        outcome_diagnostic.count,
+        outcome_diagnostic.events.begin());
+    conformance_outcome_mirror.count = 0;
+    conformance_outcome_mirror.state.store(0, std::memory_order_release);
+    outcome_diagnostic.state.store(2, std::memory_order_release);
+    return 1;
   }
   if (emscripten_proxy_async(
           web_proxy_queue,

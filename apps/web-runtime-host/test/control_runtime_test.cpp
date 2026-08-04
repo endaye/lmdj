@@ -571,6 +571,23 @@ void test_facade_error_details_follow_an_explicit_safe_schema() {
   }
 }
 
+void test_runtime_cancellation_precedes_project_mutation() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  const auto expired = std::chrono::steady_clock::now() -
+                       std::chrono::seconds(31);
+  check_error(
+      runtime->dispatch(
+          "project.create", create_payload(), {}, expired),
+      "HOST_TIMEOUT");
+  LMDJ_CHECK(!std::filesystem::exists(
+      temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj")));
+  check_error(
+      runtime->dispatch("host.status", Json::object(), {}),
+      "HOST_STATE_INVALID");
+}
+
 void test_exact_payloads_and_facade_owned_project_journey() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -824,10 +841,12 @@ void test_take_stop_drains_the_final_disarm_quantum() {
   LMDJ_CHECK(
       runtime->engine().capture_telemetry().state == CaptureState::active);
 
-  // This event is admitted before the stop boundary but is not rendered until
-  // capture has entered disarm_pending.
-  check_success(runtime->dispatch(
-      "trigger", {{"slot", 0}, {"velocity", 101}}, {}));
+  // These 20 events are admitted before the stop boundary but are not rendered
+  // until capture has entered disarm_pending.
+  for (std::uint32_t index = 0; index < 20; ++index) {
+    check_success(runtime->dispatch(
+        "trigger", {{"slot", 0}, {"velocity", 101}}, {}));
+  }
   LMDJ_CHECK(
       runtime->engine().capture_telemetry().captured_events == 0);
   Json stopped;
@@ -867,8 +886,90 @@ void test_take_stop_drains_the_final_disarm_quantum() {
                            .at("takes")
                            .at(kTakeId)
                            .at("events");
-  LMDJ_CHECK(events.size() == 1);
-  LMDJ_CHECK(events.at(0).at("velocity") == 101);
+  LMDJ_CHECK(events.size() == 20);
+  for (const auto& event : events) {
+    LMDJ_CHECK(event.at("velocity") == 101);
+  }
+}
+
+void test_trigger_queue_full_is_admission_failure() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(256);
+  import_and_assign(*runtime, wav, kAssetId, 761, 762, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeQueueCapacity;
+       ++sequence) {
+    const auto admitted = check_exact_success(
+        runtime->dispatch(
+            "trigger", {{"slot", 0}, {"velocity", 127}}, {}),
+        {"sequence", "status"});
+    LMDJ_CHECK(admitted.at("sequence") == sequence);
+  }
+  const auto rejected = check_error(
+      runtime->dispatch(
+          "trigger", {{"slot", 0}, {"velocity", 127}}, {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(rejected.at("message") == "trigger queue is full");
+  LMDJ_CHECK(runtime->engine().telemetry().queue_drops == 1);
+  LMDJ_CHECK(
+      runtime->engine().trigger_outcome_telemetry().published_outcomes == 0);
+}
+
+void test_voice_capacity_is_sequence_addressed_execution_outcome() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(48'000);
+  import_and_assign(*runtime, wav, kAssetId, 771, 772, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+
+  for (std::uint64_t sequence = 1; sequence <= 129; ++sequence) {
+    const auto admitted = check_exact_success(
+        runtime->dispatch(
+            "trigger", {{"slot", 0}, {"velocity", 127}}, {}),
+        {"sequence", "status"});
+    LMDJ_CHECK(admitted.at("sequence") == sequence);
+  }
+  std::array<float, 128> left{};
+  std::array<float, 128> right{};
+  runtime->engine().render(left.data(), right.data(), 128);
+
+  const auto first = runtime->drain_outcomes();
+  const auto second = runtime->drain_outcomes();
+  const auto third = runtime->drain_outcomes();
+  LMDJ_CHECK(first.size() == 64);
+  LMDJ_CHECK(second.size() == 64);
+  LMDJ_CHECK(third.size() == 1);
+  for (const auto& outcome : first) {
+    LMDJ_CHECK(
+        outcome.outcome == lmdj::audio::RuntimeTriggerOutcome::voice_started);
+  }
+  for (const auto& outcome : second) {
+    LMDJ_CHECK(
+        outcome.outcome == lmdj::audio::RuntimeTriggerOutcome::voice_started);
+  }
+  LMDJ_CHECK(third.front().sequence == 129);
+  LMDJ_CHECK(
+      third.front().outcome ==
+      lmdj::audio::RuntimeTriggerOutcome::voice_capacity);
+  LMDJ_CHECK(runtime->engine().telemetry().voice_drops == 1);
+  LMDJ_CHECK(runtime->engine().telemetry().queue_drops == 0);
 }
 
 void test_audio_activation_requires_ready_and_reports_explicit_ack() {
@@ -1247,6 +1348,112 @@ void corrupt_active_take_capture(ControlRuntime& runtime) {
       CaptureState::corrupted);
 }
 
+void test_capture_drop_control_drain_seals_and_fails_the_session() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(8);
+  import_and_assign(*runtime, wav, kAssetId, 861, 862, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "take.begin",
+      {{"take_id", kTakeId}, {"expected_revision", 2}},
+      {}));
+  corrupt_active_take_capture(*runtime);
+
+  const auto drained = runtime->drain_capture();
+  LMDJ_CHECK(!drained.has_value());
+  check_error(
+      runtime->dispatch("host.status", Json::object(), {}),
+      "HOST_STATE_INVALID");
+  runtime.reset();
+
+  auto reopened = make_runtime(temp.path());
+  check_success(reopened->dispatch(
+      "project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
+      {}));
+  const auto recoverable = check_exact_success(
+      reopened->dispatch("take.recoverable.list", Json::object(), {}),
+      {"candidates", "project_revision"});
+  LMDJ_CHECK(recoverable.at("candidates").size() == 1);
+  LMDJ_CHECK(
+      recoverable.at("candidates").at(0).at("take_id") == kTakeId);
+}
+
+void test_outcome_drop_seals_the_active_take_and_never_resumes() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(1);
+  import_and_assign(*runtime, wav, kAssetId, 871, 872, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  check_success(runtime->dispatch(
+      "take.begin",
+      {{"take_id", kTakeId}, {"expected_revision", 2}},
+      {}));
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  runtime->engine().render(left.data(), right.data(), 1);
+
+  std::uint64_t sequence = 1;
+  for (std::size_t batch = 0; batch < 4; ++batch) {
+    for (std::size_t index = 0;
+         index < lmdj::audio::kRealtimeQueueCapacity;
+         ++index, ++sequence) {
+      LMDJ_CHECK(
+          runtime->engine().enqueue(
+              lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+          lmdj::audio::EnqueueResult::accepted);
+    }
+    runtime->engine().render(left.data(), right.data(), 1);
+    LMDJ_CHECK(runtime->drain_capture().has_value());
+    LMDJ_CHECK(runtime->drain_capture().has_value());
+  }
+  LMDJ_CHECK(
+      runtime->engine().enqueue(
+          lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+      lmdj::audio::EnqueueResult::accepted);
+  runtime->engine().render(left.data(), right.data(), 1);
+  LMDJ_CHECK(
+      runtime->engine()
+              .trigger_outcome_telemetry()
+              .runtime_outcome_drops == 1);
+
+  LMDJ_CHECK(runtime->drain_outcomes().empty());
+  check_error(
+      runtime->dispatch("host.status", Json::object(), {}),
+      "HOST_STATE_INVALID");
+  check_error(
+      runtime->dispatch("audio.activate", Json::object(), {}),
+      "HOST_STATE_INVALID");
+  runtime.reset();
+
+  auto reopened = make_runtime(temp.path());
+  check_success(reopened->dispatch(
+      "project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
+      {}));
+  const auto recoverable = check_exact_success(
+      reopened->dispatch("take.recoverable.list", Json::object(), {}),
+      {"candidates", "project_revision"});
+  LMDJ_CHECK(recoverable.at("candidates").size() == 1);
+  LMDJ_CHECK(
+      recoverable.at("candidates").at(0).at("take_id") == kTakeId);
+}
+
 void test_active_take_failure_still_quiesces_suspend_and_close() {
   for (const auto operation : {"audio.suspend", "host.close"}) {
     TempDirectory temp;
@@ -1474,6 +1681,10 @@ struct FakeProxy final {
 
   static void before_response_serialization(void* context) {
     auto& self = *static_cast<FakeProxy*>(context);
+    if (self.response_delay_ms != 0) {
+      std::this_thread::sleep_for(
+          std::chrono::milliseconds(self.response_delay_ms));
+    }
     if (std::exchange(self.throw_before_response_serialization, false)) {
       throw std::runtime_error("injected response serialization failure");
     }
@@ -1491,6 +1702,7 @@ struct FakeProxy final {
   bool accept = true;
   bool is_control = false;
   bool throw_before_response_serialization = false;
+  std::uint32_t response_delay_ms = 0;
   std::vector<Task> tasks;
 };
 
@@ -1807,18 +2019,74 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
   }
 }
 
+void test_bridge_rejects_an_expired_control_request_without_late_success() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(990);
+  const auto status = encode(request(
+      request_id, "host.status", Json::object()));
+
+  LMDJ_CHECK(
+      bridge->submit(status, {}) == BridgeSubmitStatus::accepted);
+  std::this_thread::sleep_for(std::chrono::milliseconds(1'050));
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+  check_error(
+      runtime->dispatch("host.status", Json::object(), {}),
+      "HOST_STATE_INVALID");
+}
+
+void test_bridge_rechecks_deadline_before_success_publication() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  proxy.response_delay_ms = 1'050;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(991);
+  const auto status = encode(request(
+      request_id, "host.status", Json::object()));
+
+  LMDJ_CHECK(
+      bridge->submit(status, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+}
+
 }  // namespace
 
 int main() {
   try {
     test_facade_error_details_follow_an_explicit_safe_schema();
+    test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_take_stop_drains_the_final_disarm_quantum();
+    test_trigger_queue_full_is_admission_failure();
+    test_voice_capacity_is_sequence_addressed_execution_outcome();
     test_audio_activation_requires_ready_and_reports_explicit_ack();
     test_audio_activation_rolls_back_begin_and_ack_failures();
     test_audio_suspend_requires_and_honors_quiescence_coordinator();
     test_host_close_orders_capture_seal_quiescence_and_engine_stop();
     test_active_take_failure_still_quiesces_suspend_and_close();
+    test_capture_drop_control_drain_seals_and_fails_the_session();
+    test_outcome_drop_seals_the_active_take_and_never_resumes();
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
     test_oversized_project_switch_is_inspectable_but_not_runnable();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
@@ -1827,6 +2095,8 @@ int main() {
     test_bridge_exception_reuses_the_reserved_response_slot();
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
+    test_bridge_rejects_an_expired_control_request_without_late_success();
+    test_bridge_rechecks_deadline_before_success_publication();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

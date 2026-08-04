@@ -212,6 +212,33 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS audio concurrency
   )
+  add_executable(
+    lmdj_web_realtime_session_tests
+    test/realtime_session_test.cpp
+    src/bridge.cpp
+  )
+  target_include_directories(
+    lmdj_web_realtime_session_tests
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/src"
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_web_realtime_session_tests
+    PRIVATE
+      lmdj::web_control_runtime
+      lmdj_picosha2
+      Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_web_realtime_session_tests)
+  lmdj_target_sanitizers(lmdj_web_realtime_session_tests)
+  lmdj_add_test(
+    NAME host.web_realtime_session
+    TIER host
+    COMMAND lmdj_web_realtime_session_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS audio concurrency
+  )
   lmdj_add_test(
     NAME host.web_source_boundary
     TIER contract
