@@ -15,9 +15,40 @@ if (typeof window !== "undefined") {
     9: "callback_reentry",
     10: "coordinator_install_failed",
     11: "processor_error",
+    12: "quiescence_timeout",
+  });
+  const gateNames = Object.freeze({
+    0: "paused",
+    1: "open",
+    2: "final-quantum-requested",
+    3: "terminal",
   });
   const delay = (milliseconds) =>
     new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+  const unsupportedResult = () => ({
+    ok: false,
+    error: {
+      code: "UNSUPPORTED_WEB_RUNTIME",
+      message: "realized Web Audio configuration is unsupported",
+      details: {
+        expected_sample_rate: 48_000,
+        observed_sample_rate:
+          Module["_lmdj_web_audio_observed_sample_rate"](),
+        expected_render_quantum: 128,
+        observed_render_quantum:
+          Module["_lmdj_web_audio_observed_render_quantum"](),
+      },
+    },
+  });
+  async function waitForUnsupportedFailure(deadline) {
+    while (
+      Module["_lmdj_web_audio_control_failure_committed"]() !== 1 &&
+      performance.now() < deadline
+    ) await delay(2);
+    return Module["_lmdj_web_audio_control_failure_committed"]() === 1
+      ? unsupportedResult()
+      : {ok: false, fatal: "control_failure_timeout"};
+  }
 
   function registerAudioContext(audioContext) {
     if (!(audioContext instanceof AudioContext)) {
@@ -31,55 +62,55 @@ if (typeof window !== "undefined") {
     return handle;
   }
 
-  async function startAudioWorklet(handle) {
+  let startRecord = null;
+  function startAudioWorklet(handle) {
     if (!Number.isInteger(handle) || handle <= 0 || !contexts.has(handle)) {
-      throw new TypeError("a registered AudioContext handle is required");
+      return Promise.reject(
+        new TypeError("a registered AudioContext handle is required"));
+    }
+    if (startRecord !== null) {
+      if (startRecord.handle !== handle) {
+        return Promise.reject(
+          new TypeError("the AudioWorklet is bound to another context"));
+      }
+      return startRecord.promise;
     }
     const context = contexts.get(handle);
-    const deadline = performance.now() + 30_000;
-    let result = -2;
-    while (result === -2 && performance.now() < deadline) {
-      result = Module["_lmdj_web_audio_start"](handle);
-      if (result === -2) await delay(5);
-    }
-    if (result !== 1) {
-      const fatalCode = Module["_lmdj_web_audio_fatal"]();
-      if (fatalCode === 3) {
-        return {
-          ok: false,
-          fatal: fatalNames[fatalCode],
-          expectedSampleRate: 48_000,
-          observedSampleRate: context.sampleRate,
-        };
+    const promise = (async () => {
+      const deadline = performance.now() + 30_000;
+      while (!host.runtimeInitialized && performance.now() < deadline) {
+        await delay(2);
       }
-      if (fatalCode === 4) {
-        return {
-          ok: false,
-          fatal: fatalNames[fatalCode],
-          expectedFrames: 128,
-        };
+      const result = Module["_lmdj_web_audio_start"](handle);
+      if (result === -4 || result === -5) {
+        return waitForUnsupportedFailure(deadline);
       }
-      return {ok: false, fatal: fatalNames[fatalCode] ?? "unknown"};
-    }
-    while (performance.now() < deadline) {
-      const state = Module["_lmdj_web_audio_state"]();
-      if (state === 3) {
-        return {
-          ok: true,
-          sampleRate: context.sampleRate,
-          inputs: 0,
-          outputs: 1,
-          channels: 2,
-          frames: 128,
-        };
-      }
-      if (state === -1) {
+      if (result !== 1 && result !== 2 && result !== 3) {
         const fatalCode = Module["_lmdj_web_audio_fatal"]();
         return {ok: false, fatal: fatalNames[fatalCode] ?? "unknown"};
       }
-      await delay(5);
-    }
-    return {ok: false, fatal: "worklet_start_timeout"};
+      while (performance.now() < deadline) {
+        const state = Module["_lmdj_web_audio_state"]();
+        if (state === 3) {
+          return {
+            ok: true,
+            sampleRate: context.sampleRate,
+            inputs: 0,
+            outputs: 1,
+            channels: 2,
+            frames: 128,
+          };
+        }
+        if (state === -1) {
+          const fatalCode = Module["_lmdj_web_audio_fatal"]();
+          return {ok: false, fatal: fatalNames[fatalCode] ?? "unknown"};
+        }
+        await delay(5);
+      }
+      return {ok: false, fatal: "worklet_start_timeout"};
+    })();
+    startRecord = {handle, promise};
+    return promise;
   }
 
   const host = {
@@ -177,7 +208,7 @@ if (typeof window !== "undefined") {
         .join("");
     }
 
-    async function prepareAndTrigger() {
+    async function prepareProject() {
       const projectId = crypto.randomUUID();
       const patternId = crypto.randomUUID();
       const assetId = crypto.randomUUID();
@@ -209,12 +240,17 @@ if (typeof window !== "undefined") {
       const snapshot = await submit(
         "snapshot.reload", {pattern_id: patternId});
       if (!snapshot.ok) throw new Error(JSON.stringify(snapshot));
+      return {controlGeneration: snapshot.result.generation};
+    }
+
+    async function prepareAndTrigger() {
+      const prepared = await prepareProject();
       const activated = await submit("audio.activate", {});
       if (!activated.ok) throw new Error(JSON.stringify(activated));
       const trigger = await submit("trigger", {slot: 0, velocity: 127});
       if (!trigger.ok) throw new Error(JSON.stringify(trigger));
       return {
-        controlGeneration: snapshot.result.generation,
+        ...prepared,
         admittedSequence: trigger.result.sequence,
       };
     }
@@ -284,6 +320,38 @@ if (typeof window !== "undefined") {
         return Module["_lmdj_web_audio_test_render_calls"]();
       },
 
+      preactivationState() {
+        return {
+          gate:
+            gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
+          callbackInFlight:
+            Module["_lmdj_web_audio_test_in_flight"](),
+          renderCalls: Module["_lmdj_web_audio_test_render_calls"](),
+          acknowledgedGeneration:
+            Module["_lmdj_web_audio_test_ack_generation"](),
+        };
+      },
+
+      startCalls() {
+        return Module["_lmdj_web_audio_test_start_calls"]();
+      },
+
+      hostStatus() {
+        return submit("host.status", {});
+      },
+
+      async validateUnsupportedConfiguration({sampleRate, renderQuantum}) {
+        const result = Module[
+          "_lmdj_web_audio_test_validate_configuration"
+        ](sampleRate, renderQuantum);
+        if (result !== -4 && result !== -5) {
+          throw new Error(`configuration validator returned ${result}`);
+        }
+        const activation = await waitForUnsupportedFailure(
+          performance.now() + 30_000);
+        return {activation, hostStatus: await submit("host.status", {})};
+      },
+
       invokeAdapterShape({inputs, outputs, channels, frames}) {
         if (inputs !== 0 || outputs !== 1 || channels !== 2) {
           throw new TypeError("the conformance seam varies frames only");
@@ -292,7 +360,8 @@ if (typeof window !== "undefined") {
         const returned = Module["_lmdj_web_audio_test_invalid_shape"](frames);
         return {
           returned: returned === 1,
-          fatal: "invalid_render_quantum",
+          fatal: fatalNames[Module["_lmdj_web_audio_fatal"]()],
+          gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
           expectedFrames: 128,
           observedFrames: Module["_lmdj_web_audio_test_observed_frames"](),
           engineRenderCalls:
@@ -355,6 +424,33 @@ if (typeof window !== "undefined") {
             Module["_lmdj_web_audio_test_generation_matches"](
               expectedGeneration) === 1,
           reason: "generation_mismatch",
+        };
+      },
+
+      async runSuspendReactivateProof() {
+        const prepared = await prepareProject();
+        const firstActivation = await submit("audio.activate", {});
+        if (!firstActivation.ok) throw new Error(JSON.stringify(firstActivation));
+        const firstAcknowledgement =
+          Module["_lmdj_web_audio_test_ack_generation"]();
+        const suspended = await submit("audio.suspend", {});
+        const paused = {
+          gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
+          callbackInFlight: Module["_lmdj_web_audio_test_in_flight"](),
+        };
+        const secondActivation = await submit("audio.activate", {});
+        if (!secondActivation.ok) {
+          throw new Error(JSON.stringify(secondActivation));
+        }
+        const secondAcknowledgement =
+          Module["_lmdj_web_audio_test_ack_generation"]();
+        return {
+          ...prepared,
+          firstAcknowledgement,
+          suspended,
+          paused,
+          secondActivation,
+          secondAcknowledgement,
         };
       },
     });

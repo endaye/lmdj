@@ -21,16 +21,10 @@ constexpr std::int32_t kRequiredSampleRate = 48'000;
 constexpr std::int32_t kRequiredFrames = 128;
 constexpr std::size_t kWorkletStackBytes = 64U * 1024U;
 
-enum class CallbackGate : std::uint32_t {
-  open,
-  final_quantum_requested,
-  closed,
-};
-
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
 static_assert(std::atomic<bool>::is_always_lock_free);
-static_assert(std::atomic<CallbackGate>::is_always_lock_free);
+static_assert(std::atomic<RealtimeAudioWorkletGate>::is_always_lock_free);
 static_assert(std::atomic<RealtimeAudioWorkletState>::is_always_lock_free);
 static_assert(std::atomic<RealtimeAudioWorkletFatal>::is_always_lock_free);
 
@@ -58,16 +52,8 @@ struct RealtimeAudioWorklet::Impl {
     auto& self = *static_cast<Impl*>(user_data);
     if (self.fatal_code.load(std::memory_order_acquire) !=
             RealtimeAudioWorkletFatal::none ||
-        self.gate.load(std::memory_order_acquire) == CallbackGate::closed) {
-      return false;
-    }
-    bool expected = false;
-    if (!self.in_flight.compare_exchange_strong(
-            expected,
-            true,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
-      self.latch_fatal(RealtimeAudioWorkletFatal::callback_reentry);
+        self.gate.load(std::memory_order_acquire) ==
+            RealtimeAudioWorkletGate::terminal) {
       return false;
     }
 
@@ -87,8 +73,38 @@ struct RealtimeAudioWorklet::Impl {
             std::memory_order_relaxed);
       }
 #endif
-      self.in_flight.store(false, std::memory_order_release);
       self.latch_fatal(RealtimeAudioWorkletFatal::invalid_callback_shape);
+      return false;
+    }
+
+    auto gate = self.gate.load(std::memory_order_acquire);
+    if (gate == RealtimeAudioWorkletGate::paused) {
+      std::fill_n(
+          outputs[0].data,
+          outputs[0].numberOfChannels * outputs[0].samplesPerChannel,
+          0.0F);
+      return true;
+    }
+    bool expected = false;
+    if (!self.in_flight.compare_exchange_strong(
+            expected,
+            true,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      self.latch_fatal(RealtimeAudioWorkletFatal::callback_reentry);
+      return false;
+    }
+    gate = self.gate.load(std::memory_order_acquire);
+    if (gate == RealtimeAudioWorkletGate::paused) {
+      std::fill_n(
+          outputs[0].data,
+          outputs[0].numberOfChannels * outputs[0].samplesPerChannel,
+          0.0F);
+      self.in_flight.store(false, std::memory_order_release);
+      return true;
+    }
+    if (gate == RealtimeAudioWorkletGate::terminal) {
+      self.in_flight.store(false, std::memory_order_release);
       return false;
     }
 
@@ -118,17 +134,15 @@ struct RealtimeAudioWorklet::Impl {
     self.acknowledged.store(
         self.engine.bank_telemetry().current_generation,
         std::memory_order_release);
+    auto requested = RealtimeAudioWorkletGate::final_quantum_requested;
+    static_cast<void>(self.gate.compare_exchange_strong(
+        requested,
+        RealtimeAudioWorkletGate::paused,
+        std::memory_order_acq_rel,
+        std::memory_order_acquire));
     self.in_flight.store(false, std::memory_order_release);
-
-    auto requested = CallbackGate::final_quantum_requested;
-    if (self.gate.compare_exchange_strong(
-            requested,
-            CallbackGate::closed,
-            std::memory_order_acq_rel,
-            std::memory_order_acquire)) {
-      return false;
-    }
-    return self.gate.load(std::memory_order_acquire) == CallbackGate::open;
+    return self.gate.load(std::memory_order_acquire) !=
+           RealtimeAudioWorkletGate::terminal;
   }
 
   static void processor_created(
@@ -206,10 +220,26 @@ struct RealtimeAudioWorklet::Impl {
         code,
         std::memory_order_acq_rel,
         std::memory_order_acquire);
-    gate.store(CallbackGate::closed, std::memory_order_release);
+    gate.store(RealtimeAudioWorkletGate::terminal, std::memory_order_release);
     worklet_state.store(
         RealtimeAudioWorkletState::fatal,
         std::memory_order_release);
+  }
+
+  RealtimeAudioWorkletStart validate_configuration(
+      std::int32_t realized_sample_rate,
+      std::int32_t realized_render_quantum) noexcept {
+    sample_rate.store(realized_sample_rate, std::memory_order_release);
+    render_quantum.store(realized_render_quantum, std::memory_order_release);
+    if (realized_sample_rate != kRequiredSampleRate) {
+      latch_fatal(RealtimeAudioWorkletFatal::unsupported_sample_rate);
+      return RealtimeAudioWorkletStart::unsupported_sample_rate;
+    }
+    if (realized_render_quantum != kRequiredFrames) {
+      latch_fatal(RealtimeAudioWorkletFatal::unsupported_render_quantum);
+      return RealtimeAudioWorkletStart::unsupported_render_quantum;
+    }
+    return RealtimeAudioWorkletStart::accepted;
   }
 
   RealtimeEngine& engine;
@@ -219,14 +249,19 @@ struct RealtimeAudioWorklet::Impl {
       RealtimeAudioWorkletState::idle};
   std::atomic<RealtimeAudioWorkletFatal> fatal_code{
       RealtimeAudioWorkletFatal::none};
-  std::atomic<CallbackGate> gate{CallbackGate::open};
+  std::atomic<RealtimeAudioWorkletGate> gate{
+      RealtimeAudioWorkletGate::paused};
   std::atomic<bool> in_flight{false};
   std::atomic<std::uint64_t> acknowledged{0};
   std::atomic<std::int32_t> node{0};
+  std::atomic<std::int32_t> sample_rate{0};
+  std::atomic<std::int32_t> render_quantum{0};
+  std::int32_t audio_context_handle = 0;
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
   std::atomic<std::uint32_t> observed_quantum{0};
   std::atomic<std::uint32_t> render_count{0};
   std::atomic<std::uint32_t> energy_microunits{0};
+  std::atomic<std::uint32_t> accepted_start_calls{0};
 #endif
 };
 
@@ -236,28 +271,38 @@ RealtimeAudioWorklet::RealtimeAudioWorklet(
 
 RealtimeAudioWorklet::~RealtimeAudioWorklet() = default;
 
-int RealtimeAudioWorklet::start_on_browser_main(
+RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
     std::int32_t audio_context_handle) noexcept {
   if (!emscripten_is_main_browser_thread()) {
     impl_->latch_fatal(RealtimeAudioWorkletFatal::wrong_browser_thread);
-    return -1;
+    return RealtimeAudioWorkletStart::wrong_browser_thread;
   }
-  if (audio_context_handle <= 0 ||
-      impl_->worklet_state.load(std::memory_order_acquire) !=
-          RealtimeAudioWorkletState::idle) {
-    impl_->latch_fatal(RealtimeAudioWorkletFatal::invalid_audio_context);
-    return -2;
+  if (audio_context_handle <= 0) {
+    return RealtimeAudioWorkletStart::invalid_handle;
   }
-  if (emscripten_audio_context_sample_rate(audio_context_handle) !=
-      kRequiredSampleRate) {
-    impl_->latch_fatal(RealtimeAudioWorkletFatal::unsupported_sample_rate);
-    return -3;
+  const auto state = impl_->worklet_state.load(std::memory_order_acquire);
+  if (state == RealtimeAudioWorkletState::starting ||
+      state == RealtimeAudioWorkletState::node_ready) {
+    return impl_->audio_context_handle == audio_context_handle
+               ? RealtimeAudioWorkletStart::already_starting
+               : RealtimeAudioWorkletStart::duplicate_handle;
   }
-  if (emscripten_audio_context_quantum_size(audio_context_handle) !=
-      kRequiredFrames) {
-    impl_->latch_fatal(
-        RealtimeAudioWorkletFatal::unsupported_render_quantum);
-    return -4;
+  if (state == RealtimeAudioWorkletState::ready) {
+    return impl_->audio_context_handle == audio_context_handle
+               ? RealtimeAudioWorkletStart::already_ready
+               : RealtimeAudioWorkletStart::duplicate_handle;
+  }
+  if (state == RealtimeAudioWorkletState::fatal) {
+    return RealtimeAudioWorkletStart::fatal;
+  }
+  impl_->audio_context_handle = audio_context_handle;
+  const auto sample_rate =
+      emscripten_audio_context_sample_rate(audio_context_handle);
+  const auto quantum =
+      emscripten_audio_context_quantum_size(audio_context_handle);
+  const auto validation = impl_->validate_configuration(sample_rate, quantum);
+  if (validation != RealtimeAudioWorkletStart::accepted) {
+    return validation;
   }
   impl_->worklet_state.store(
       RealtimeAudioWorkletState::starting,
@@ -268,7 +313,10 @@ int RealtimeAudioWorklet::start_on_browser_main(
       impl_->stack.size(),
       &Impl::worklet_started,
       impl_.get());
-  return 1;
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+  impl_->accepted_start_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+  return RealtimeAudioWorkletStart::accepted;
 }
 
 void RealtimeAudioWorklet::complete_control_install(bool installed) noexcept {
@@ -288,20 +336,59 @@ void RealtimeAudioWorklet::complete_control_install(bool installed) noexcept {
   }
 }
 
+foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
+  if (impl_->worklet_state.load(std::memory_order_acquire) !=
+          RealtimeAudioWorkletState::ready ||
+      impl_->fatal_code.load(std::memory_order_acquire) !=
+          RealtimeAudioWorkletFatal::none ||
+      impl_->in_flight.load(std::memory_order_acquire)) {
+    return foundation::Result<void>::failure(
+        worklet_error("Wasm AudioWorklet is not ready to render"));
+  }
+  auto expected = RealtimeAudioWorkletGate::paused;
+  impl_->acknowledged.store(0, std::memory_order_release);
+  if (!impl_->gate.compare_exchange_strong(
+          expected,
+          RealtimeAudioWorkletGate::open,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return foundation::Result<void>::failure(
+        worklet_error("Wasm AudioWorklet gate is not paused"));
+  }
+  return foundation::Result<void>::success();
+}
+
 foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     std::uint32_t timeout_ms) noexcept {
-  auto expected = CallbackGate::open;
+  auto gate = impl_->gate.load(std::memory_order_acquire);
+  if (gate == RealtimeAudioWorkletGate::paused &&
+      !impl_->in_flight.load(std::memory_order_acquire)) {
+    return foundation::Result<void>::success();
+  }
+  auto expected = RealtimeAudioWorkletGate::open;
   impl_->gate.compare_exchange_strong(
       expected,
-      CallbackGate::final_quantum_requested,
+      RealtimeAudioWorkletGate::final_quantum_requested,
       std::memory_order_acq_rel,
       std::memory_order_acquire);
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(timeout_ms);
   while (impl_->gate.load(std::memory_order_acquire) !=
-             CallbackGate::closed ||
+             RealtimeAudioWorkletGate::paused ||
          impl_->in_flight.load(std::memory_order_acquire)) {
+    if (impl_->gate.load(std::memory_order_acquire) ==
+        RealtimeAudioWorkletGate::terminal) {
+      while (impl_->in_flight.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
+      return foundation::Result<void>::failure(
+          worklet_error("Wasm AudioWorklet is terminal"));
+    }
     if (std::chrono::steady_clock::now() >= deadline) {
+      impl_->latch_fatal(RealtimeAudioWorkletFatal::quiescence_timeout);
+      while (impl_->in_flight.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+      }
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet quiescence timed out"));
     }
@@ -313,7 +400,9 @@ foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
 bool RealtimeAudioWorklet::ready() const noexcept {
   return impl_->worklet_state.load(std::memory_order_acquire) ==
              RealtimeAudioWorkletState::ready &&
-         impl_->gate.load(std::memory_order_acquire) == CallbackGate::open;
+         impl_->gate.load(std::memory_order_acquire) ==
+             RealtimeAudioWorkletGate::paused &&
+         !impl_->in_flight.load(std::memory_order_acquire);
 }
 
 std::uint64_t RealtimeAudioWorklet::acknowledged_generation() const noexcept {
@@ -328,12 +417,16 @@ RealtimeAudioWorkletFatal RealtimeAudioWorklet::fatal() const noexcept {
   return impl_->fatal_code.load(std::memory_order_acquire);
 }
 
-std::int32_t RealtimeAudioWorklet::node_handle() const noexcept {
-  return impl_->node.load(std::memory_order_acquire);
-}
-
 void RealtimeAudioWorklet::latch_processor_error() noexcept {
   impl_->latch_fatal(RealtimeAudioWorkletFatal::processor_error);
+}
+
+std::int32_t RealtimeAudioWorklet::observed_sample_rate() const noexcept {
+  return impl_->sample_rate.load(std::memory_order_acquire);
+}
+
+std::int32_t RealtimeAudioWorklet::observed_render_quantum() const noexcept {
+  return impl_->render_quantum.load(std::memory_order_acquire);
 }
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
@@ -350,7 +443,26 @@ std::uint32_t RealtimeAudioWorklet::output_energy_microunits() const noexcept {
 }
 
 bool RealtimeAudioWorklet::callback_gate_closed() const noexcept {
-  return impl_->gate.load(std::memory_order_acquire) == CallbackGate::closed;
+  return impl_->gate.load(std::memory_order_acquire) ==
+         RealtimeAudioWorkletGate::terminal;
+}
+
+RealtimeAudioWorkletGate RealtimeAudioWorklet::gate_state() const noexcept {
+  return impl_->gate.load(std::memory_order_acquire);
+}
+
+std::uint32_t RealtimeAudioWorklet::start_calls() const noexcept {
+  return impl_->accepted_start_calls.load(std::memory_order_acquire);
+}
+
+RealtimeAudioWorkletStart
+RealtimeAudioWorklet::validate_configuration_for_conformance(
+    std::int32_t sample_rate, std::int32_t render_quantum) noexcept {
+  if (impl_->worklet_state.load(std::memory_order_acquire) !=
+      RealtimeAudioWorkletState::idle) {
+    return RealtimeAudioWorkletStart::fatal;
+  }
+  return impl_->validate_configuration(sample_rate, render_quantum);
 }
 
 bool RealtimeAudioWorklet::callback_in_flight() const noexcept {

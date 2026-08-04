@@ -64,6 +64,15 @@ test("shared RealtimeEngine renders a current Bank in the Wasm AudioWorklet", as
     frames: 128,
   });
 
+  await page.waitForTimeout(100);
+  expect(await page.evaluate(() =>
+    window.lmdjWebRuntimeHostTest.preactivationState())).toEqual({
+    gate: "paused",
+    callbackInFlight: 0,
+    renderCalls: 0,
+    acknowledgedGeneration: 0,
+  });
+
   const proof = await page.evaluate(async () =>
     window.lmdjWebRuntimeHostTest.runSharedEngineProof());
   expect(proof.controlGeneration).toBeGreaterThan(0);
@@ -92,12 +101,51 @@ test("realized 44.1 kHz is rejected before Engine activation", async ({page}) =>
   const activation = await activateFromClick(page, 44_100);
   expect(activation).toEqual({
     ok: false,
-    fatal: "unsupported_sample_rate",
-    expectedSampleRate: 48_000,
-    observedSampleRate: 44_100,
+    error: {
+      code: "UNSUPPORTED_WEB_RUNTIME",
+      message: "realized Web Audio configuration is unsupported",
+      details: {
+        expected_sample_rate: 48_000,
+        observed_sample_rate: 44_100,
+        expected_render_quantum: 128,
+        observed_render_quantum: 128,
+      },
+    },
   });
   expect(await page.evaluate(() =>
     window.lmdjWebRuntimeHostTest.engineRenderCalls())).toBe(0);
+  expect(await page.evaluate(() =>
+    window.lmdjWebRuntimeHostTest.hostStatus())).toMatchObject({
+    ok: false,
+    error: {code: "HOST_STATE_INVALID"},
+  });
+});
+
+
+test("the conformance quantum validator seals the real Control runtime", async ({page}) => {
+  await waitForFormalHost(page);
+  const result = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.validateUnsupportedConfiguration({
+      sampleRate: 48_000,
+      renderQuantum: 256,
+    }));
+  expect(result.activation).toEqual({
+    ok: false,
+    error: {
+      code: "UNSUPPORTED_WEB_RUNTIME",
+      message: "realized Web Audio configuration is unsupported",
+      details: {
+        expected_sample_rate: 48_000,
+        observed_sample_rate: 48_000,
+        expected_render_quantum: 128,
+        observed_render_quantum: 256,
+      },
+    },
+  });
+  expect(result.hostStatus).toMatchObject({
+    ok: false,
+    error: {code: "HOST_STATE_INVALID"},
+  });
 });
 
 
@@ -113,7 +161,8 @@ for (const frames of [127, 256]) {
       }), frames);
     expect(result).toEqual({
       returned: false,
-      fatal: "invalid_render_quantum",
+      fatal: "invalid_callback_shape",
+      gate: "terminal",
       expectedFrames: 128,
       observedFrames: frames,
       engineRenderCalls: 0,
@@ -139,6 +188,48 @@ test("processorerror closes the callback gate and seals the Host", async ({page}
     },
   });
   expect(result.renderCallsAfterFatal).toBe(result.renderCallsAtFatal);
+});
+
+
+test("start is exactly-once and suspend can reactivate the same processor", async ({page}) => {
+  await waitForFormalHost(page);
+  const start = await page.evaluate(async () => {
+    const context = new AudioContext({sampleRate: 48_000});
+    await context.resume();
+    const handle = window.lmdjWebRuntimeHost.registerAudioContext(context);
+    const first = window.lmdjWebRuntimeHost.startAudioWorklet(handle);
+    const second = window.lmdjWebRuntimeHost.startAudioWorklet(handle);
+    const otherContext = new AudioContext({sampleRate: 48_000});
+    const otherHandle = window.lmdjWebRuntimeHost
+      .registerAudioContext(otherContext);
+    const differentHandleRejected = await window.lmdjWebRuntimeHost
+      .startAudioWorklet(otherHandle)
+      .then(() => false, () => true);
+    return {
+      samePromise: first === second,
+      activation: await first,
+      differentHandleRejected,
+      startCalls: window.lmdjWebRuntimeHostTest.startCalls(),
+    };
+  });
+  expect(start.samePromise).toBe(true);
+  expect(start.activation.ok).toBe(true);
+  expect(start.differentHandleRejected).toBe(true);
+  expect(start.startCalls).toBe(1);
+
+  const proof = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.runSuspendReactivateProof());
+  expect(proof.firstAcknowledgement).toBeGreaterThan(0);
+  expect(proof.suspended).toMatchObject({
+    ok: true,
+    result: {state: "audio-suspended", changed: true},
+  });
+  expect(proof.paused).toEqual({gate: "paused", callbackInFlight: 0});
+  expect(proof.secondAcknowledgement).toBe(proof.firstAcknowledgement);
+  expect(proof.secondActivation).toMatchObject({
+    ok: true,
+    result: {state: "running", changed: true},
+  });
 });
 
 

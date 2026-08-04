@@ -56,7 +56,9 @@ if(EMSCRIPTEN)
     _lmdj_web_audio_start
     _lmdj_web_audio_state
     _lmdj_web_audio_fatal
-    _lmdj_web_audio_node
+    _lmdj_web_audio_observed_sample_rate
+    _lmdj_web_audio_observed_render_quantum
+    _lmdj_web_audio_control_failure_committed
   )
   if(LMDJ_WEB_AUDIO_CONFORMANCE)
     list(
@@ -68,6 +70,9 @@ if(EMSCRIPTEN)
       _lmdj_web_audio_test_observed_frames
       _lmdj_web_audio_test_gate_closed
       _lmdj_web_audio_test_in_flight
+      _lmdj_web_audio_test_gate_state
+      _lmdj_web_audio_test_start_calls
+      _lmdj_web_audio_test_validate_configuration
       _lmdj_web_audio_test_invalid_shape
       _lmdj_web_audio_test_generation_matches
       _lmdj_web_audio_test_processor_error

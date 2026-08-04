@@ -27,6 +27,7 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uint32_t kSampleRate = 48'000;
+constexpr std::uint32_t kAudioStateDeadlineMs = 1'000;
 constexpr std::uint32_t kCaptureDeadlineMs = 30'000;
 
 class ProtocolFailure final : public std::runtime_error {
@@ -406,8 +407,7 @@ struct ControlRuntime::Impl {
   Json status() const {
     const auto bank = engine.bank_telemetry();
     const auto acknowledged_generation =
-        coordinator.has_value() && coordinator->ready != nullptr &&
-                coordinator->ready(coordinator->context) &&
+        coordinator.has_value() &&
                 coordinator->acknowledged_generation != nullptr
             ? coordinator->acknowledged_generation(coordinator->context)
             : 0;
@@ -1021,11 +1021,6 @@ Json ControlRuntime::dispatch(
           *impl_->runtime_bank_project_id != *impl_->project_id) {
         return state_error();
       }
-      if (!impl_->coordinator.has_value() ||
-          impl_->coordinator->ready == nullptr ||
-          !impl_->coordinator->ready(impl_->coordinator->context)) {
-        return state_error("audio output is not ready");
-      }
       if (impl_->state == Impl::State::running) {
         return success({
             {"state", "running"},
@@ -1034,21 +1029,65 @@ Json ControlRuntime::dispatch(
              impl_->engine.bank_telemetry().accepted_publications},
         });
       }
+      if (!impl_->coordinator.has_value() ||
+          impl_->coordinator->ready == nullptr ||
+          !impl_->coordinator->ready(impl_->coordinator->context)) {
+        return state_error("audio output is not ready");
+      }
       if (impl_->state != Impl::State::core_ready &&
           impl_->state != Impl::State::audio_suspended) {
         return state_error();
       }
+      const auto bank = impl_->engine.bank_telemetry();
+      const auto expected_generation = bank.accepted_publications;
+      if (expected_generation == 0 ||
+          bank.current_generation != expected_generation ||
+          bank.pending_publications != 0) {
+        return state_error("runtime Bank is not current");
+      }
+      const auto rollback = [this]() {
+        impl_->trigger_admission = false;
+        if (impl_->coordinator.has_value() &&
+            impl_->coordinator->await_quiescent != nullptr) {
+          static_cast<void>(impl_->coordinator->await_quiescent(
+              impl_->coordinator->context, kAudioStateDeadlineMs));
+        }
+        impl_->engine.stop();
+        fail_and_seal("audio_activation_failed");
+        return internal_error();
+      };
       const auto started = impl_->engine.start();
       if (!started.has_value()) {
-        return normalized_error(started.error());
+        return rollback();
+      }
+      if (impl_->coordinator->begin_rendering == nullptr) {
+        return rollback();
+      }
+      const auto begun = impl_->coordinator->begin_rendering(
+          impl_->coordinator->context);
+      if (!begun.has_value()) {
+        return rollback();
+      }
+      const auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::milliseconds(
+                                kAudioStateDeadlineMs);
+      auto acknowledged = impl_->coordinator->acknowledged_generation(
+          impl_->coordinator->context);
+      while (acknowledged == 0 &&
+             std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::yield();
+        acknowledged = impl_->coordinator->acknowledged_generation(
+            impl_->coordinator->context);
+      }
+      if (acknowledged != expected_generation) {
+        return rollback();
       }
       impl_->state = Impl::State::running;
       impl_->trigger_admission = true;
       return success({
           {"state", "running"},
           {"changed", true},
-          {"generation",
-           impl_->engine.bank_telemetry().accepted_publications},
+          {"generation", expected_generation},
       });
     }
     if (operation == "trigger") {
@@ -1202,8 +1241,9 @@ Json ControlRuntime::dispatch(
         }
       }
       const auto quiescent = impl_->coordinator->await_quiescent(
-          impl_->coordinator->context, kCaptureDeadlineMs);
+          impl_->coordinator->context, kAudioStateDeadlineMs);
       if (!quiescent.has_value()) {
+        impl_->engine.stop();
         impl_->seal_all_noexcept();
         impl_->state = Impl::State::failed;
         impl_->trigger_admission = false;
@@ -1242,6 +1282,7 @@ Json ControlRuntime::dispatch(
         const auto quiescent = impl_->coordinator->await_quiescent(
             impl_->coordinator->context, 10'000);
         if (!quiescent.has_value()) {
+          impl_->engine.stop();
           impl_->seal_all_noexcept();
           impl_->state = Impl::State::failed;
           return internal_error();
@@ -1315,7 +1356,8 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
     ControlRuntime& runtime,
     AudioQuiescenceCoordinator coordinator) noexcept {
   if (coordinator.context == nullptr ||
-      coordinator.await_quiescent == nullptr || coordinator.ready == nullptr ||
+      coordinator.await_quiescent == nullptr ||
+      coordinator.begin_rendering == nullptr || coordinator.ready == nullptr ||
       coordinator.acknowledged_generation == nullptr) {
     return foundation::Result<void>::failure(Error{
         ErrorCode::invalid_argument,
