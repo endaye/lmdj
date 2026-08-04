@@ -11,7 +11,7 @@ usage:
   scripts/architecture-portal.sh dev
   scripts/architecture-portal.sh build
   scripts/architecture-portal.sh check
-  scripts/architecture-portal.sh version PRODUCT_BUILD
+  scripts/architecture-portal.sh version PRODUCT_BUILD [CHANNEL]
   scripts/architecture-portal.sh smoke BASE_URL
 EOF
 }
@@ -43,8 +43,8 @@ case "$command_name" in
     exec npm run check
     ;;
   version)
-    [[ $# -eq 1 ]] || { usage; exit 64; }
-    exec node scripts/version-docs.mjs "$1"
+    [[ $# -ge 1 && $# -le 2 ]] || { usage; exit 64; }
+    exec node scripts/version-docs.mjs "$@"
     ;;
   smoke)
     [[ $# -eq 1 ]] || { usage; exit 64; }

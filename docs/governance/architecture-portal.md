@@ -46,6 +46,8 @@ Reason: test fixture refactor does not change product behavior, public boundarie
 - 已批准产品定位、能力地图、工作流或状态发生变化。
 
 只有完全内部、不会改变上述事实且理由具体的变化才可声明 `none`。
+Product Build、Assembly 或 Assembly Lock 发生变化时禁止声明 `none`，必须同步
+current 页面和受影响的源图。
 
 ## 4. 页面与图的责任
 
@@ -59,21 +61,43 @@ Assembly Lock 中每个 Module、Host、Provider 和 Contract 必须恰好映射
 scripts/architecture-portal.sh install
 scripts/architecture-portal.sh dev
 scripts/architecture-portal.sh check
-scripts/architecture-portal.sh version PRODUCT_BUILD
+scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL
 scripts/architecture-portal.sh smoke BASE_URL
 ```
 
 实现 Task 的负责人同时负责相关 current 页面和源图。`scripts/architecture-portal.sh check` 是合入前稳定门禁，覆盖单测、元数据、current truth、确定性图、类型、生产构建、路由、身份和站内链接。
 
-## 6. 正式快照
+## 6. 构建与快照分级
 
-current 路由跟随 `main` 并明确标为非正式快照。正式 Product Build 在 release gate 中运行 `scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH`，生成不可变 `/versions/PRODUCT_BUILD/`、sidebar 与冻结元数据。命令要求版本精确匹配、工作区干净且快照不存在；已冻结版本不得重写。
+| 场景 | 文档门禁 |
+| --- | --- |
+| 本地构建、普通 CI、Pull Request Preview | 校验 current 页面；不创建永久快照 |
+| 分配 Product Build 并交付团队测试（`canary`、`dev`、`beta`） | 强制同步 current 页面，并冻结匹配 Product Build 的不可变快照 |
+| `stable` 发布 | 强制使用匹配快照，并补齐 Release、生产部署和 release verification 证据 |
+
+current 路由跟随 `main` 并明确标为非正式快照。任何已经分配 Product Build、准备
+交付给测试者或正式发布的构建，都必须在同一版本 Task 中运行：
+
+```bash
+scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
+```
+
+`CHANNEL` 只能是 `canary`、`dev`、`beta` 或 `stable`；省略时仅为兼容旧流程而按
+`canary` 处理。命令生成不可变 `/versions/PRODUCT_BUILD/`、sidebar 与冻结元数据，
+并要求版本精确匹配、工作区干净且快照不存在。已冻结版本不得重写；同一 Build
+后续 Channel 晋级复用该快照，在独立发布记录中追加晋级证据。
 
 快照 commit 不改变 Product/Module/Provider/Contract 的版本语义，只记录该 Product Build 对应的说明书。
 
 ## 7. CI、发布与回滚证据
 
-受影响 PR 和 `main` push 运行 Architecture Portal CI。PR 还会校验文档影响声明及 changed files。正常生产发布只能由合入后的 Git/Netlify 构建触发；禁止把本地目录或单个 HTML 通过 API/拖拽手工上传到生产站点。手工 deploy 仅可用于明确标记的临时诊断站点。
+受影响 PR 和 `main` push 运行 Architecture Portal CI。PR 还会校验文档影响声明及
+changed files；Product Build/Assembly 变化不能选择 `none`。完整门户检查同时验证
+当前 Product Build 存在匹配的 `versions.json` 条目、快照源码和冻结元数据，并比对
+Product、Assembly Lock、Module、Host、Provider、Contract、Channel、完整 Git SHA
+与冻结时间。正常生产发布只能由合入后的 Git/Netlify 构建触发；禁止把本地目录或
+单个 HTML 通过 API/拖拽手工上传到生产站点。手工 deploy 仅可用于明确标记的临时
+诊断站点。
 
 发布验证必须记录 Git SHA、Netlify deploy ID/URL、HTTP 200、`Content-Type: text/html`、current Product Build/revision、正式快照路由及关键页面/图。回滚使用 Netlify 的先前不可变 deploy，并重新运行相同 smoke；回滚不删除失败 deploy 或改写 Git/快照历史。
 

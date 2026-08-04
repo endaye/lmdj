@@ -30,3 +30,13 @@ test('portal check generates repository facts before typechecking', async () => 
   assert.notEqual(typecheckIndex, -1);
   assert.ok(factsIndex < typecheckIndex);
 });
+
+test('portal check verifies the current Product Build snapshot', async () => {
+  const manifest = (await import('../package.json', {with: {type: 'json'}})).default;
+  const snapshotIndex = manifest.scripts.check.indexOf('npm run check:release-docs');
+  const buildIndex = manifest.scripts.check.indexOf('npm run build');
+
+  assert.notEqual(snapshotIndex, -1);
+  assert.notEqual(buildIndex, -1);
+  assert.ok(snapshotIndex < buildIndex);
+});

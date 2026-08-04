@@ -11,9 +11,14 @@ export function checkDocumentationImpact({body, changedFiles}) {
   const reason = body.match(/^Reason:\s*(.*)$/im)?.[1]?.trim();
   const pages = body.match(/^Affected portal pages:\s*(.*)$/im)?.[1]?.trim();
   const currentPortalChanged = changedFiles.some((file) => /^apps\/architecture-portal\/docs\/.+\.mdx?$/.test(file));
+  const productIdentityChanged = changedFiles.some((file) =>
+    /^products\/lmdj\/(?:version\.json|assembly(?:\.lock)?\.json|CMakeLists\.txt|src\/)/.test(file));
 
   if (!impact) return ['documentation impact must be required or none'];
   if (!reason) errors.push('documentation impact reason is empty');
+  if (productIdentityChanged && impact !== 'required') {
+    errors.push('Product Build or Assembly changes require documentation impact: required');
+  }
   if (impact === 'required') {
     if (!pages || !pages.split(/[\s,]+/).filter(Boolean).every((route) => route.startsWith('/'))) {
       errors.push('affected portal pages must list one or more absolute routes');

@@ -5,6 +5,54 @@ import {promisify} from 'node:util';
 import {readRepoFacts} from './repo-facts.mjs';
 
 const execFileAsync = promisify(execFile);
+const RELEASE_CHANNELS = new Set(['canary', 'dev', 'beta', 'stable']);
+
+function sameJson(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function isIsoTimestamp(value) {
+  if (typeof value !== 'string') return false;
+  const parsed = new Date(value);
+  return !Number.isNaN(parsed.valueOf()) && parsed.toISOString() === value;
+}
+
+export function validateReleaseSnapshot({facts, versions, metadata, snapshotExists}) {
+  const productBuild = facts.product.version;
+  const errors = [];
+  if (!versions.includes(productBuild)) {
+    errors.push(`Product Build ${productBuild} is missing from versions.json`);
+  }
+  if (!snapshotExists) errors.push(`Product Build ${productBuild} snapshot source is missing`);
+  if (!metadata) {
+    errors.push(`Product Build ${productBuild} metadata is missing`);
+    return errors;
+  }
+  if (metadata.product_build !== productBuild) {
+    errors.push(`snapshot product_build does not match ${productBuild}`);
+  }
+  if (!sameJson(metadata.product, facts.product)) {
+    errors.push('snapshot product identity does not match repository truth');
+  }
+  if (metadata.assembly_lock_sha256 !== facts.assembly_lock_sha256) {
+    errors.push('snapshot Assembly Lock does not match repository truth');
+  }
+  for (const field of ['modules', 'hosts', 'providers', 'contracts']) {
+    if (!sameJson(metadata[field], facts[field])) {
+      errors.push(`snapshot ${field} do not match repository truth`);
+    }
+  }
+  if (!RELEASE_CHANNELS.has(metadata.channel)) {
+    errors.push('snapshot channel must be canary, dev, beta, or stable');
+  }
+  if (typeof metadata.revision !== 'string' || !/^[0-9a-f]{40}$/.test(metadata.revision)) {
+    errors.push('snapshot revision must be a full Git SHA');
+  }
+  if (!isIsoTimestamp(metadata.frozen_at_utc)) {
+    errors.push('snapshot frozen_at_utc must be an ISO timestamp');
+  }
+  return errors;
+}
 
 async function defaultGitStatus(repoRoot) {
   const {stdout} = await execFileAsync('git', ['status', '--porcelain'], {cwd: repoRoot});
@@ -48,10 +96,14 @@ export async function freezeVersion(options) {
   if (!/^\d+\.\d+\.\d+\.\d+$/.test(requestedVersion)) {
     throw new Error('documentation version must be a four-part Product Build');
   }
+  const channel = options.channel ?? options.facts?.channel ?? process.env.PORTAL_CHANNEL ?? 'canary';
+  if (!RELEASE_CHANNELS.has(channel)) {
+    throw new Error('documentation channel must be canary, dev, beta, or stable');
+  }
   const facts = options.facts ?? await readRepoFacts({
     repoRoot,
     revision,
-    channel: process.env.PORTAL_CHANNEL || 'canary',
+    channel,
   });
   if (requestedVersion !== facts.product.version) {
     throw new Error(`requested Product Build ${requestedVersion} does not match ${facts.product.version}`);

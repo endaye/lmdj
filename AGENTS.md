@@ -74,8 +74,11 @@ required, update the current pages and source diagrams in the same Task.
 
 Do not hand-enter or guess Product, Module, Host, Provider, Contract, Channel,
 or revision identities; the portal derives them from active manifests. Run
-`scripts/architecture-portal.sh check` before commit. Formal Product Build
-snapshots use `scripts/architecture-portal.sh version PRODUCT_BUILD`. Normal
+`scripts/architecture-portal.sh check` before commit. A local build, CI run, or
+Pull Request Preview does not create a permanent snapshot. Any Product Build
+allocated for team testing or release must include an immutable snapshot made
+with `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL`; Product
+Build or Assembly changes cannot declare `Documentation impact: none`. Normal
 production publication is Git-triggered; manual production uploads are
 prohibited.
 

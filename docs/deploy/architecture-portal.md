@@ -14,7 +14,8 @@
 | CI | Architecture Portal workflow 对目标 SHA 为绿色 |
 | Deploy Preview | Netlify Preview URL、Deploy ID、目标 SHA 与 smoke |
 | Production deploy | `lmdj.netlify.app` 当前 immutable Deploy ID 与目标 SHA |
-| Release verified | 生产 smoke、正式 Product Build 快照和关键页面人工抽查 |
+| Test release verified | `canary`/`dev`/`beta` 构建证据、匹配 Product Build 快照与目标环境 smoke |
+| Stable release verified | 生产 smoke、匹配 Product Build 快照、Release 证据和关键页面人工抽查 |
 
 前一状态不自动证明后一状态。PR Preview 成功不等于 production；Netlify 显示 Published 不等于内容身份正确。
 
@@ -30,6 +31,10 @@ Node: 22
 ```
 
 Pull Request 使用 Deploy Preview；合入受保护 `main` 后由 Netlify Git integration 自动生产部署。正常流程禁止 Netlify API、CLI `deploy --prod`、ZIP、拖拽或单个 HTML 手工上传。临时诊断如确需手工 deploy，必须使用独立非生产站点并明确记录，不能覆盖 `lmdj.netlify.app`。
+
+普通 Preview 不创建永久文档快照。Product Build 一旦分配并交付给测试者，必须先用
+`scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL` 生成匹配快照，并通过
+`scripts/architecture-portal.sh check`；`stable` 发布在此基础上追加 Release 与生产验证。
 
 ## 3. 部署后 smoke
 

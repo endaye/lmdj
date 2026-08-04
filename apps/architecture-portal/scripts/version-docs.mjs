@@ -8,11 +8,12 @@ const execFileAsync = promisify(execFile);
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const repoRoot = path.resolve(portalRoot, '../..');
 const requestedVersion = process.argv[2];
-if (!requestedVersion || process.argv.length !== 3) {
-  console.error('usage: node scripts/version-docs.mjs PRODUCT_BUILD');
+const channel = process.argv[3] ?? 'canary';
+if (!requestedVersion || process.argv.length < 3 || process.argv.length > 4) {
+  console.error('usage: node scripts/version-docs.mjs PRODUCT_BUILD [CHANNEL]');
   process.exit(64);
 }
 const {stdout} = await execFileAsync('git', ['rev-parse', 'HEAD'], {cwd: repoRoot});
 const revision = stdout.trim();
-await freezeVersion({portalRoot, repoRoot, requestedVersion, revision});
-console.log(`portal version: froze ${requestedVersion} at ${revision}`);
+await freezeVersion({portalRoot, repoRoot, requestedVersion, revision, channel});
+console.log(`portal version: froze ${requestedVersion} (${channel}) at ${revision}`);
