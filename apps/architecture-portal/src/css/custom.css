@@ -94,7 +94,7 @@
 }
 
 .diagram-frame { margin: 1rem 0 2rem; }
-.diagram-frame iframe { width: 100%; min-height: 620px; border: 1px solid var(--lmdj-border); border-radius: 14px; background: #0b1020; }
+.diagram-frame iframe { width: 100%; min-height: 620px; border: 1px solid var(--lmdj-border); border-radius: 14px; background: var(--lmdj-surface); }
 .diagram-frame figcaption { display: flex; justify-content: space-between; gap: 1rem; padding-top: 0.5rem; font-size: 0.85rem; }
 
 @media (max-width: 700px) {

@@ -1,5 +1,6 @@
-import React from 'react';
+import React, {useEffect, useRef} from 'react';
 import useBaseUrl from '@docusaurus/useBaseUrl';
+import {useColorMode} from '@docusaurus/theme-common';
 import {useActiveDocContext} from '@docusaurus/plugin-content-docs/client';
 import versionFacts from '@site/src/generated/version-facts.json';
 
@@ -34,9 +35,18 @@ export function DiagramFrame(props: DiagramFrameProps) {
     : '/diagrams';
   const html = useBaseUrl(`${assetBase}/${diagramId}.html`);
   const svg = useBaseUrl(`${assetBase}/${diagramId}.svg`);
+  const {colorMode} = useColorMode();
+  const frameRef = useRef<HTMLIFrameElement>(null);
+  const syncTheme = () => {
+    frameRef.current?.contentWindow?.postMessage(
+      {type: 'lmdj-diagram-theme', theme: colorMode},
+      window.location.origin,
+    );
+  };
+  useEffect(syncTheme, [colorMode]);
   return (
     <figure className="diagram-frame">
-      <iframe title={title} src={html} loading="lazy" />
+      <iframe ref={frameRef} title={title} src={html} loading="lazy" onLoad={syncTheme} />
       <figcaption>
         <strong>{title}</strong>
         <span><a href={html}>独立 HTML</a> · <a href={svg}>SVG</a></span>
