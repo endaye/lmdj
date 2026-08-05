@@ -375,11 +375,16 @@ test("pagehide invalidation prevents late readiness and forces a later reopen", 
   });
 
   const first = subject.load();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(transport.calls.length, 3);
   subject.invalidate();
+  const second = subject.load();
+  assert.notStrictEqual(second, first);
+  assert.equal(transport.calls.length, 3);
   releaseReload({ runtime_ready: true, generation: 8 });
   assert.deepEqual(await first, { state: "error" });
-  assert.deepEqual(subject.diagnostics(), { diagnostic_project_state: "error" });
-  assert.deepEqual(await subject.load(), { state: "ready", generation: 9 });
+  assert.deepEqual(subject.diagnostics(), { diagnostic_project_state: "loading" });
+  assert.deepEqual(await second, { state: "ready", generation: 9 });
   transport.assertDrained();
 });
 

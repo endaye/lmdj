@@ -183,6 +183,8 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
   let code;
   let generation;
   let pending = null;
+  let pendingAdmission = null;
+  let queuedLoad = null;
   let admission = 0;
 
   function diagnostics() {
@@ -304,9 +306,20 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
 
   function load() {
     if (pending !== null) {
+      if (pendingAdmission !== admission) {
+        if (queuedLoad === null) {
+          const staleLoad = pending;
+          queuedLoad = staleLoad.then(() => {
+            queuedLoad = null;
+            return load();
+          });
+        }
+        return queuedLoad;
+      }
       return pending;
     }
     const token = admission;
+    pendingAdmission = token;
     state = "loading";
     code = undefined;
     generation = undefined;
@@ -330,6 +343,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
       })
       .finally(() => {
         pending = null;
+        pendingAdmission = null;
       });
     return pending;
   }
