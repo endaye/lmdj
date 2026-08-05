@@ -70,6 +70,7 @@ async function installTransportObservability(page) {
         );
         observations.responses.push({
           operation: request.operation,
+          payload: structuredClone(request.payload),
           response: structuredClone(response),
         });
         if (request.operation === "trigger" && response?.ok === true) {
@@ -875,16 +876,45 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     return manifest.assets.find(({ role }) => role === "runtime_script").path;
   });
   const runtimeScriptPathname = new URL(runtimeScriptPath, page.url()).pathname;
-  const humanMarker = await observationMarker(page);
+  const pointerMarker = await observationMarker(page);
   await page.locator("#pad-0").click();
+  await expect.poll(() => page.evaluate((start) =>
+    window.__lmdjTask11.admittedSequences.length - start,
+  pointerMarker.admissions)).toBe(1);
+  const pointerAdmissions = await page.evaluate((start) =>
+    window.__lmdjTask11.admittedSequences.slice(start),
+  pointerMarker.admissions);
+  expect(pointerAdmissions).toHaveLength(1);
+  await proveExactOutcomes(
+    page,
+    pointerAdmissions,
+    pointerMarker.notifications,
+  );
+  expect(await page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start)
+      .filter(({ operation }) => operation === "trigger")
+      .map(({ payload }) => payload),
+  pointerMarker.responses)).toEqual([{ slot: 0, velocity: 100 }]);
+
+  const keyboardMarker = await observationMarker(page);
   await page.keyboard.press("s");
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.length - start,
-  humanMarker.admissions)).toBe(2);
-  const humanAdmissions = await page.evaluate((start) =>
+  keyboardMarker.admissions)).toBe(1);
+  const keyboardAdmissions = await page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.slice(start),
-  humanMarker.admissions);
-  await proveExactOutcomes(page, humanAdmissions, humanMarker.notifications);
+  keyboardMarker.admissions);
+  expect(keyboardAdmissions).toHaveLength(1);
+  await proveExactOutcomes(
+    page,
+    keyboardAdmissions,
+    keyboardMarker.notifications,
+  );
+  expect(await page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start)
+      .filter(({ operation }) => operation === "trigger")
+      .map(({ payload }) => payload),
+  keyboardMarker.responses)).toEqual([{ slot: 1, velocity: 100 }]);
 
   const descriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),

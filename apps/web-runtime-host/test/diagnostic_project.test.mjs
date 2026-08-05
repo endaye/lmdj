@@ -282,6 +282,70 @@ test("an existing project retries a transient writer handoff", async () => {
   transport.assertDrained();
 });
 
+test("persistent project busy expires without a post-deadline open", async () => {
+  const performanceDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "performance",
+  );
+  const setTimeoutDescriptor = Object.getOwnPropertyDescriptor(
+    globalThis,
+    "setTimeout",
+  );
+  let elapsed = 0;
+  const calls = [];
+  const transport = {
+    async send(request, options) {
+      calls.push({
+        operation: request.operation,
+        called_at_ms: elapsed,
+        deadline_ms: options.deadlineMs,
+      });
+      assert.equal(request.operation, "project.open");
+      throw Object.assign(new Error("PROJECT_BUSY"), { code: "PROJECT_BUSY" });
+    },
+  };
+  const subject = createDiagnosticProjectCoordinator({
+    storage: memoryStorage(JSON.stringify(descriptor())),
+    crypto: uuidSource(),
+    transport,
+  });
+  let result;
+
+  try {
+    Object.defineProperty(globalThis, "performance", {
+      configurable: true,
+      value: { now: () => elapsed },
+    });
+    Object.defineProperty(globalThis, "setTimeout", {
+      configurable: true,
+      value(callback, milliseconds) {
+        elapsed += milliseconds;
+        callback();
+        return 1;
+      },
+    });
+    result = await subject.load();
+  } finally {
+    Object.defineProperty(globalThis, "performance", performanceDescriptor);
+    Object.defineProperty(globalThis, "setTimeout", setTimeoutDescriptor);
+  }
+
+  assert.deepEqual(result, { state: "error", error_code: "PROJECT_BUSY" });
+  assert.equal(elapsed, 10_000);
+  assert.equal(calls.length, 400);
+  assert.deepEqual(calls.at(0), {
+    operation: "project.open",
+    called_at_ms: 0,
+    deadline_ms: 10_000,
+  });
+  assert.deepEqual(calls.at(-1), {
+    operation: "project.open",
+    called_at_ms: 9_975,
+    deadline_ms: 25,
+  });
+  assert.equal(calls.some(({ called_at_ms }) => called_at_ms >= 10_000), false);
+});
+
 test("a partial project imports only an absent asset and repairs only wrong pad slots", async () => {
   const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
   assignments[1] = null;
@@ -331,6 +395,33 @@ test("a duplicate creation race reopens then repairs authoritative truth", async
   assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
     "project.open", "project.create", "project.open", "project.inspect", "snapshot.reload",
   ]);
+  transport.assertDrained();
+});
+
+test("an invalid duplicate project fails closed before inspection or mutation", async () => {
+  const { coordinator: subject, transport } = coordinator({
+    entries: [
+      { operation: "project.open", error: { code: "INVALID_PROJECT" } },
+      { operation: "project.create", error: { code: "DUPLICATE_ID" } },
+      { operation: "project.open", error: { code: "INVALID_PROJECT" } },
+    ],
+  });
+
+  assert.deepEqual(await subject.load(), {
+    state: "error",
+    error_code: "INVALID_PROJECT",
+  });
+  assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
+    "project.open",
+    "project.create",
+    "project.open",
+  ]);
+  assert.equal(transport.calls.some(({ request }) => [
+    "project.inspect",
+    "asset.import",
+    "pad.assign",
+    "snapshot.reload",
+  ].includes(request.operation)), false);
   transport.assertDrained();
 });
 

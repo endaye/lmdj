@@ -200,10 +200,15 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     return Object.freeze(result);
   }
 
-  async function send(operation, payload, sidecar = undefined) {
+  async function send(
+    operation,
+    payload,
+    sidecar = undefined,
+    deadlineMs = PROJECT_DEADLINE_MS,
+  ) {
     const response = await transport.send(
       { operation, payload },
-      { deadlineMs: PROJECT_DEADLINE_MS, sidecar },
+      { deadlineMs, sidecar },
     );
     if (response?.ok === false) {
       throw typedError(response.error?.code ?? "HOST_PROTOCOL_MISMATCH");
@@ -215,24 +220,36 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     async function openExisting() {
       const deadline = globalThis.performance.now() +
         PROJECT_OPEN_RETRY_DEADLINE_MS;
+      let busyError = typedError("PROJECT_BUSY");
       while (true) {
+        const remainingMs = deadline - globalThis.performance.now();
+        if (remainingMs <= 0) {
+          throw busyError;
+        }
         try {
-          await send("project.open", {
-            project_id: descriptor.project_id,
-            pattern_id: descriptor.pattern_id,
-          });
+          await send(
+            "project.open",
+            {
+              project_id: descriptor.project_id,
+              pattern_id: descriptor.pattern_id,
+            },
+            undefined,
+            remainingMs,
+          );
           return;
         } catch (error) {
-          if (
-            errorCode(error) !== "PROJECT_BUSY" ||
-            globalThis.performance.now() >= deadline
-          ) {
+          if (errorCode(error) !== "PROJECT_BUSY") {
             throw error;
           }
+          busyError = error;
+        }
+        const retryBudgetMs = deadline - globalThis.performance.now();
+        if (retryBudgetMs <= 0) {
+          throw busyError;
         }
         await new Promise((resolvePromise) => globalThis.setTimeout(
           resolvePromise,
-          PROJECT_OPEN_RETRY_DELAY_MS,
+          Math.min(PROJECT_OPEN_RETRY_DELAY_MS, retryBudgetMs),
         ));
       }
     }
