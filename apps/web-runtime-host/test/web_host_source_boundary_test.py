@@ -34,6 +34,14 @@ def main() -> int:
     )
     web_runtime_host_script = repo_root / "scripts" / "web-runtime-host.sh"
     web_toolchain_script = repo_root / "scripts" / "web-toolchain-conformance.sh"
+    realtime_audio_worklet = (
+        repo_root
+        / "packages"
+        / "audio-runtime"
+        / "src"
+        / "web"
+        / "realtime_audio_worklet.cpp"
+    )
 
     required_files = [
         host_cmake,
@@ -46,6 +54,7 @@ def main() -> int:
         realtime_failure_spec,
         web_runtime_host_script,
         web_toolchain_script,
+        realtime_audio_worklet,
     ]
     for path in required_files:
         require(path.is_file(), f"required Task 6 source is missing: {path}")
@@ -209,9 +218,36 @@ def main() -> int:
         "sched_yield implementation",
     )
     require(
-        "std::this_thread::sleep_for" in capture_finish_body,
-        "capture barriers must give the AudioWorklet render thread processor "
-        "capacity while polling the terminal condition",
+        "coordinator->await_quiescent" in capture_finish_body,
+        "capture barriers must request an acknowledged AudioWorklet quantum",
+    )
+    require(
+        "coordinator->begin_rendering" in capture_finish_body,
+        "successful take.stop must resume AudioWorklet rendering after the "
+        "acknowledged final quantum",
+    )
+    realtime_audio_worklet_source = realtime_audio_worklet.read_text(
+        encoding="utf-8"
+    )
+    quiescence_wait = re.search(
+        r"RealtimeAudioWorklet::await_quiescent\([^)]*\)\s*noexcept\s*"
+        r"\{(.*?)\n\}",
+        realtime_audio_worklet_source,
+        re.DOTALL,
+    )
+    require(
+        quiescence_wait is not None,
+        "AudioWorklet quiescence barrier is missing",
+    )
+    require(
+        "std::this_thread::yield()" not in quiescence_wait.group(1),
+        "AudioWorklet quiescence must not busy-wait with the pinned "
+        "non-yielding sched_yield implementation",
+    )
+    require(
+        "std::this_thread::sleep_for" in quiescence_wait.group(1),
+        "AudioWorklet quiescence must release the Control Worker while "
+        "awaiting the render-thread acknowledgement",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",

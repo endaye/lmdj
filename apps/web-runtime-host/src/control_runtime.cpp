@@ -27,7 +27,6 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uint32_t kSampleRate = 48'000;
-constexpr std::uint32_t kCaptureDeadlineMs = 30'000;
 
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
   if (operation == "host.close") {
@@ -751,47 +750,45 @@ struct ControlRuntime::Impl {
       });
     }
     trigger_admission = false;
-    const auto deadline = request_deadline.value_or(
-        std::chrono::steady_clock::now() +
-        std::chrono::milliseconds(kCaptureDeadlineMs));
-    const auto await_capture_progress = [&deadline] {
-      const auto now = std::chrono::steady_clock::now();
-      if (now >= deadline) {
-        return;
-      }
-      const auto poll_interval =
-          std::chrono::duration_cast<std::chrono::steady_clock::duration>(
-              std::chrono::milliseconds(1));
-      std::this_thread::sleep_for(
-          std::min(deadline - now, poll_interval));
-    };
+    if (!coordinator.has_value() ||
+        coordinator->await_quiescent == nullptr ||
+        coordinator->begin_rendering == nullptr) {
+      return seal_active_after_failure(Error{
+          ErrorCode::internal_error,
+          "audio capture acknowledgement is unavailable",
+      });
+    }
+    bool worklet_paused = false;
     auto capture = engine.capture_telemetry().state;
-    while (capture == audio::CaptureState::arm_pending) {
-      if (std::chrono::steady_clock::now() >= deadline) {
-        return seal_active_after_failure(Error{
-            ErrorCode::internal_error,
-            "capture barrier timed out",
-        });
-      }
-      await_capture_progress();
-      capture = engine.capture_telemetry().state;
-    }
-    if (capture == audio::CaptureState::active) {
-      const auto disarmed = engine.disarm_capture();
-      if (!disarmed.has_value()) {
-        return seal_active_after_failure(disarmed.error());
-      }
-    }
-    capture = engine.capture_telemetry().state;
     while (capture != audio::CaptureState::idle &&
            capture != audio::CaptureState::corrupted) {
-      if (std::chrono::steady_clock::now() >= deadline) {
+      if (capture == audio::CaptureState::active) {
+        const auto disarmed = engine.disarm_capture();
+        if (!disarmed.has_value()) {
+          return seal_active_after_failure(disarmed.error());
+        }
+      }
+      if (worklet_paused) {
+        const auto begun = coordinator->begin_rendering(
+            coordinator->context);
+        if (!begun.has_value()) {
+          return seal_active_after_failure(begun.error());
+        }
+        worklet_paused = false;
+      }
+      const auto timeout_ms = remaining_request_budget_ms();
+      if (timeout_ms == 0) {
         return seal_active_after_failure(Error{
             ErrorCode::internal_error,
             "capture barrier timed out",
         });
       }
-      await_capture_progress();
+      const auto quiescent = coordinator->await_quiescent(
+          coordinator->context, timeout_ms);
+      worklet_paused = true;
+      if (!quiescent.has_value()) {
+        return seal_active_after_failure(quiescent.error());
+      }
       capture = engine.capture_telemetry().state;
     }
     if (capture == audio::CaptureState::corrupted) {
@@ -806,6 +803,23 @@ struct ControlRuntime::Impl {
     }
     const auto take = *active_take;
     if (make_committable) {
+      if (request_cancelled()) {
+        return foundation::Result<void>::failure(Error{
+            ErrorCode::internal_error,
+            "request deadline expired before audio rendering resumed",
+        });
+      }
+      const auto begun = coordinator->begin_rendering(
+          coordinator->context);
+      if (!begun.has_value()) {
+        return seal_active_after_failure(begun.error());
+      }
+      if (request_cancelled()) {
+        return foundation::Result<void>::failure(Error{
+            ErrorCode::internal_error,
+            "request deadline expired after audio rendering resumed",
+        });
+      }
       committable_take = take;
       active_take.reset();
       trigger_admission = true;

@@ -371,6 +371,9 @@ foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
 
 foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     std::uint32_t timeout_ms) noexcept {
+  const auto await_render_progress = [] {
+    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+  };
   auto gate = impl_->gate.load(std::memory_order_acquire);
   if (gate == RealtimeAudioWorkletGate::paused &&
       !impl_->in_flight.load(std::memory_order_acquire)) {
@@ -390,7 +393,7 @@ foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     if (impl_->gate.load(std::memory_order_acquire) ==
         RealtimeAudioWorkletGate::terminal) {
       while (impl_->in_flight.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
+        await_render_progress();
       }
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet is terminal"));
@@ -398,12 +401,12 @@ foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     if (std::chrono::steady_clock::now() >= deadline) {
       impl_->latch_fatal(RealtimeAudioWorkletFatal::quiescence_timeout);
       while (impl_->in_flight.load(std::memory_order_acquire)) {
-        std::this_thread::yield();
+        await_render_progress();
       }
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet quiescence timed out"));
     }
-    std::this_thread::yield();
+    await_render_progress();
   }
   return foundation::Result<void>::success();
 }
