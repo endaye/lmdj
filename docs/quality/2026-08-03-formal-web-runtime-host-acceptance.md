@@ -29,20 +29,20 @@ Take, restart, rejection, recovery, and timeout journey continues.
 | --- | --- |
 | Focused visible Chromium journey | PASS; `1 passed` |
 | Product version, module graph, Assembly Lock, and lock verification | PASS; Product `1.0.15.0`, Host `1.1.0`, protocol `1` |
-| `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17, two clean packages byte-identical, Python package 13/13, server 7/7, Node 106/106, native Web CTest 3/3, distribution 6/6, packaged Chromium 14 passed/1 designed skip, WebKit 1 limitation-path pass/10 capability skips |
+| `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17, two clean packages byte-identical, Python package 14/14, server 7/7, Node 115/115, native Web CTest 3/3, distribution 6/6, all tracked Formal Host specs selected with packaged Chromium 15 passed/1 designed skip, WebKit 1 limitation-path pass/10 capability skips |
 | `scripts/web-runtime-lab.sh test` | PASS; 42/42 Node tests plus server and active-tree checks |
 | `scripts/core.sh proof` | PASS; 32/32 selected CTests, CLI 10/10, MCP 10/10, package acceptance, Product `1.0.15.0`, Assembly Lock `MATCH` |
 | Dependency, active-tree, and diff checks | PASS |
-| Architecture Portal current preflight | PASS; 40/40 tests, 34 pages, 9 diagram sources/18 outputs, Product `1.0.15.0` facts, typecheck, optimized build, and 37 routes/internal links |
-| `scripts/architecture-portal.sh check` | Current gates PASS through 40/40 tests, 34 current pages, 9 diagram sources/18 outputs, and generated Product `1.0.15.0` facts; then expected Task 4 boundary: `1.0.15.0` is missing from `versions.json`, snapshot source, and metadata |
+| Architecture Portal current-source preflight | PASS; 34 pages, 9 diagram sources/18 outputs, Product `1.0.15.0` facts, typecheck, optimized build, and current routes/internal links |
+| Immutable snapshot lifecycle | Generated only from a clean committed source boundary; existence and provenance are verified separately by the governed Portal command and are not inferred from this current-source row |
 
 This automated Chromium evidence proves deterministic preparation,
 browser-local descriptor persistence, pointer/keyboard routing, and exact audio
 outcomes. It does not prove acoustic latency, a physical MIDI device,
 Safari/iPad touch behavior, or subjective audio quality. It also does not claim
-new Pull Request CI, merge, signed tag, Release, deployment, publication,
-Channel promotion, or an immutable `1.0.15.0` Portal snapshot. Task 4 owns that
-snapshot boundary.
+new Pull Request CI, merge, signed tag, Release, deployment, publication, or
+Channel promotion. Immutable snapshot existence and provenance are a separate
+governed documentation result and do not upgrade Host or physical evidence.
 
 ## Task 12A historical outcome
 

@@ -14,6 +14,29 @@ const SAMPLE_COUNT = 4_800;
 const ATTACK_RELEASE_SAMPLES = 240;
 const TONE_HERTZ = 440;
 const TONE_AMPLITUDE = 12_000;
+const STALE_ADMISSION = Object.freeze({ stale_admission: true });
+const ALLOWED_TYPED_ERROR_CODES = new Set([
+  "INVALID_ARGUMENT",
+  "NOT_FOUND",
+  "REVISION_CONFLICT",
+  "DUPLICATE_ID",
+  "UNSUPPORTED_AUDIO",
+  "MISSING_ASSET",
+  "INVALID_PROJECT",
+  "COOK_FAILED",
+  "PROVIDER_NOT_FOUND",
+  "PROVIDER_FAILED",
+  "PERMISSION_DENIED",
+  "IO_ERROR",
+  "INTERNAL_ERROR",
+  "UNSUPPORTED_WEB_RUNTIME",
+  "PROJECT_BUSY",
+  "WEB_RUNTIME_RESOURCE_LIMIT",
+  "HOST_STATE_INVALID",
+  "HOST_TIMEOUT",
+  "HOST_RESTART_REQUIRED",
+  "HOST_PROTOCOL_MISMATCH",
+]);
 
 function exactKeys(value, expected) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
@@ -117,7 +140,9 @@ function typedError(code) {
 }
 
 function errorCode(error) {
-  return typeof error?.code === "string" ? error.code : "HOST_PROTOCOL_MISMATCH";
+  return ALLOWED_TYPED_ERROR_CODES.has(error?.code)
+    ? error.code
+    : "HOST_PROTOCOL_MISMATCH";
 }
 
 function projectRevision(result) {
@@ -188,6 +213,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
   let pendingAdmission = null;
   let queuedLoad = null;
   let admission = 0;
+  let terminalResult = null;
 
   function diagnostics() {
     const result = { diagnostic_project_state: state };
@@ -201,11 +227,15 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
   }
 
   async function send(
+    token,
     operation,
     payload,
     sidecar = undefined,
     deadlineMs = PROJECT_DEADLINE_MS,
   ) {
+    if (token !== admission) {
+      throw STALE_ADMISSION;
+    }
     const response = await transport.send(
       { operation, payload },
       { deadlineMs, sidecar },
@@ -213,10 +243,13 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     if (response?.ok === false) {
       throw typedError(response.error?.code ?? "HOST_PROTOCOL_MISMATCH");
     }
+    if (token !== admission) {
+      throw STALE_ADMISSION;
+    }
     return response?.ok === true ? response.result : response;
   }
 
-  async function openOrCreate(descriptor) {
+  async function openOrCreate(descriptor, token) {
     async function openExisting() {
       const deadline = globalThis.performance.now() +
         PROJECT_OPEN_RETRY_DEADLINE_MS;
@@ -228,6 +261,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
         }
         try {
           await send(
+            token,
             "project.open",
             {
               project_id: descriptor.project_id,
@@ -264,7 +298,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     }
 
     try {
-      await send("project.create", {
+      await send(token, "project.create", {
         project_id: descriptor.project_id,
         bpm: 120,
         initial_pattern: {
@@ -283,14 +317,15 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
 
   async function prepare(token) {
     const descriptor = loadOrCreateDiagnosticDescriptor({ storage, crypto });
-    await openOrCreate(descriptor);
-    const inspected = await send("project.inspect", {});
+    await openOrCreate(descriptor, token);
+    const inspected = await send(token, "project.inspect", {});
     const project = projectFromInspection(inspected);
     let revision = projectRevision(inspected);
 
     if (!assetExists(project, descriptor.asset_id)) {
       const wav = createDiagnosticWav();
       const imported = await send(
+        token,
         "asset.import",
         {
           command_id: crypto.randomUUID(),
@@ -311,7 +346,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
       if (assignedAsset(project, flatSlot) === descriptor.asset_id) {
         continue;
       }
-      const assigned = await send("pad.assign", {
+      const assigned = await send(token, "pad.assign", {
         command_id: crypto.randomUUID(),
         expected_revision: revision,
         slot: { bank: Math.floor(flatSlot / 16), pad: flatSlot % 16 },
@@ -320,7 +355,21 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
       revision = projectRevision(assigned);
     }
 
-    const snapshot = await send("snapshot.reload", {
+    const finalInspection = await send(token, "project.inspect", {});
+    const finalProject = projectFromInspection(finalInspection);
+    if (
+      projectRevision(finalInspection) !== revision ||
+      !assetExists(finalProject, descriptor.asset_id)
+    ) {
+      throw typedError("HOST_PROTOCOL_MISMATCH");
+    }
+    for (let flatSlot = 0; flatSlot < PAD_COUNT; flatSlot += 1) {
+      if (assignedAsset(finalProject, flatSlot) !== descriptor.asset_id) {
+        throw typedError("HOST_PROTOCOL_MISMATCH");
+      }
+    }
+
+    const snapshot = await send(token, "snapshot.reload", {
       pattern_id: descriptor.pattern_id,
     });
     if (
@@ -330,12 +379,6 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     ) {
       throw typedError("HOST_STATE_INVALID");
     }
-    if (token !== admission) {
-      state = "error";
-      code = undefined;
-      generation = undefined;
-      return diagnosticResult("error");
-    }
     state = "ready";
     code = undefined;
     generation = snapshot.generation;
@@ -343,12 +386,21 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
   }
 
   function load() {
+    if (terminalResult !== null) {
+      return Promise.resolve(terminalResult);
+    }
     if (pending !== null) {
       if (pendingAdmission !== admission) {
         if (queuedLoad === null) {
           const staleLoad = pending;
-          queuedLoad = staleLoad.then(() => {
+          queuedLoad = staleLoad.then((result) => {
             queuedLoad = null;
+            if (terminalResult !== null) {
+              return terminalResult;
+            }
+            if (result.state === "restart-required") {
+              return result;
+            }
             return load();
           });
         }
@@ -363,7 +415,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     generation = undefined;
     pending = prepare(token)
       .catch((error) => {
-        if (token !== admission) {
+        if (error === STALE_ADMISSION) {
           state = "error";
           code = undefined;
           generation = undefined;
@@ -374,7 +426,20 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
         generation = undefined;
         if (failureCode === "HOST_RESTART_REQUIRED") {
           state = "restart-required";
-          return diagnosticResult("restart-required");
+          terminalResult = diagnosticResult("restart-required");
+          return terminalResult;
+        }
+        if (failureCode === "HOST_PROTOCOL_MISMATCH") {
+          state = "error";
+          terminalResult = diagnosticResult("error", {
+            errorCode: failureCode,
+          });
+          return terminalResult;
+        }
+        if (token !== admission) {
+          state = "error";
+          code = undefined;
+          return diagnosticResult("error");
         }
         state = "error";
         return diagnosticResult("error", { errorCode: failureCode });

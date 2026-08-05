@@ -24,7 +24,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> 当前本地候选 Product Build `1.0.15.0` 将 Formal Web Runtime Host 更新为 `1.1.0`，并已进入 Product Assembly 与生成的 Assembly Lock。Host 声明只依赖 Application Facade `1.2.0` 与 Audio Runtime `0.4.0`，没有直接 Project I/O 依赖；同构建私有协议仍为 `1`，没有新增公开 Contract。`1.0.15.0` 尚未建立不可变 Portal 快照。
+<StatusBadge status="implemented" /> 当前本地候选 Product Build `1.0.15.0` 将 Formal Web Runtime Host 更新为 `1.1.0`，并已进入 Product Assembly 与生成的 Assembly Lock。Host 声明只依赖 Application Facade `1.2.0` 与 Audio Runtime `0.4.0`，没有直接 Project I/O 依赖；同构建私有协议仍为 `1`，没有新增公开 Contract。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
 
 ## 目标边界
 
@@ -38,7 +38,9 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 
 ## 生命周期门禁
 
-普通 Trigger 与全部 `take.begin` 只在 `running` 接收。中断同步关闭 admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
+普通 Trigger 与全部 `take.begin` 只在 `running` 接收。诊断 Project 的每个 awaited Host request 返回后都重新核对 page-lifetime admission；pagehide 后不得继续 import、assignment、final inspect 或 publication。修复结束后必须再次 `project.inspect`，且 final revision、诊断 Asset 与全部 64 个 Pad assignment 都匹配，才可请求 Snapshot publication。`HOST_RESTART_REQUIRED` 即使晚于 invalidation 返回也保持 sticky，`HOST_PROTOCOL_MISMATCH` 同样 fail closed；两者都只触发一次终止清理，页面重建前 direct/queued Load 不得重试。
+
+中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
 
 ## 自动化证据
 

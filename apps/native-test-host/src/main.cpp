@@ -54,7 +54,10 @@ constexpr int kMaximumJsonContainerDepth = 32;
 constexpr std::uint32_t kNoDeviceRenderFrames = 128;
 constexpr auto kControlDeadline = std::chrono::seconds(2);
 constexpr std::string_view kHostVersion = "1.0.3";
-constexpr std::string_view kProductBuild = "1.0.14.0";
+#if !defined(LMDJ_NATIVE_PRODUCT_BUILD)
+#error "Native Test Host Product Build identity is required"
+#endif
+constexpr std::string_view kProductBuild = LMDJ_NATIVE_PRODUCT_BUILD;
 constexpr std::string_view kUsage =
     "usage: lmdj-native-host --workspace ABSOLUTE_PATH "
     "--assembly ABSOLUTE_ASSEMBLY_JSON "

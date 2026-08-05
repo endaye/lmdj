@@ -438,7 +438,7 @@ test("diagnostic project errors remain retryable without consuming Host error_co
   assert.equal(controller.diagnostics().diagnostic_project_error_code, undefined);
 });
 
-test("diagnostic restart-required is the only terminal preparation failure", async () => {
+test("diagnostic restart-required terminalizes with once-only cleanup", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const fixture = harness();
   fixture.transport.send = (request) =>
@@ -457,6 +457,8 @@ test("diagnostic restart-required is the only terminal preparation failure", asy
     fixture.dom.elements.get("diagnostic-project-state").textContent,
     "restart-required",
   );
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
 });
 
 test("diagnostic project diagnostics are allowlisted and pagehide invalidates readiness", async () => {
@@ -478,7 +480,7 @@ test("diagnostic project diagnostics are allowlisted and pagehide invalidates re
   assert.equal(fixture.dom.elements.get("audio-activate").disabled, true);
 });
 
-test("diagnostic project transport errors do not disclose hostile codes", async () => {
+test("diagnostic protocol mismatch is private, terminal, and cleaned up once", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const hostileCode = "/private/opfs/diagnostic-project-secret";
   const fixture = harness();
@@ -488,6 +490,8 @@ test("diagnostic project transport errors do not disclose hostile codes", async 
   await controller.start();
 
   assert.equal(await controller.loadDiagnosticProject(), false);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
   assert.equal(
     controller.diagnostics().diagnostic_project_error_code,
     "HOST_PROTOCOL_MISMATCH",
@@ -496,6 +500,82 @@ test("diagnostic project transport errors do not disclose hostile codes", async 
     fixture.dom.elements.get("diagnostics").textContent.includes(hostileCode),
     false,
   );
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+  fixture.runtimeWorker.dispatchEvent(new Event("error"));
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+});
+
+test("late restart-required after pagehide seals the controller and queued Load", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.transport.send.bind(fixture.transport);
+  const importSettlement = deferred();
+  let importRequest = null;
+  fixture.transport.send = (request, options) => {
+    if (request.operation === "asset.import") {
+      fixture.calls.push({ operation: request.operation, payload: request.payload, options });
+      importRequest = request;
+      return importSettlement.promise;
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  const first = controller.loadDiagnosticProject();
+  await settle();
+  assert.ok(importRequest);
+  await controller.observePageHide({ persisted: true });
+  controller.observePageShow();
+  const queued = controller.loadDiagnosticProject();
+  importSettlement.resolve(errorResponseFor(importRequest, "HOST_RESTART_REQUIRED"));
+
+  assert.deepEqual(await Promise.all([first, queued]), [false, false]);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_RESTART_REQUIRED");
+  assert.equal(
+    controller.diagnostics().diagnostic_project_state,
+    "restart-required",
+  );
+  assert.equal(
+    fixture.calls.filter(({ operation }) => operation === "asset.import").length,
+    1,
+  );
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+});
+
+test("final Project Truth mismatch terminalizes before snapshot publication", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.transport.send.bind(fixture.transport);
+  let inspections = 0;
+  fixture.transport.send = (request, options) => {
+    if (request.operation === "project.inspect" && inspections++ === 1) {
+      fixture.calls.push({ operation: request.operation, payload: request.payload, options });
+      return Promise.resolve(responseFor(request, {
+        project_revision: 65,
+        project: { assets: {}, banks: [] },
+      }));
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+  assert.equal(
+    fixture.calls.some(({ operation }) => operation === "snapshot.reload"),
+    false,
+  );
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
 });
 
 test("source shell verifies manifest before loading runtime and exposes exact Host state", async () => {

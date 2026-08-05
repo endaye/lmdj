@@ -242,6 +242,15 @@ class PackageTest(unittest.TestCase):
         self.assertIn("trap 'exit 130' INT", script)
         self.assertIn("trap 'exit 143' TERM", script)
 
+    def test_operator_selects_every_tracked_formal_host_spec(self) -> None:
+        script = OPERATOR_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            "git -C \"$repo_root\" ls-files "
+            "'tests/platform/web/host/web_runtime_host_*.spec.mjs'",
+            script,
+        )
+        self.assertIn('"${formal_host_specs[@]}"', script)
+
     def test_pre_js_declares_configure_and_link_dependencies(self) -> None:
         cmake = HOST_CMAKE_PATH.read_text(encoding="utf-8")
         self.assertRegex(

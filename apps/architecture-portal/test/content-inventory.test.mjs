@@ -6,6 +6,9 @@ import {readFile} from 'node:fs/promises';
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../docs');
 const versionedDocsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../versioned_docs');
+const repoRoot = path.resolve(docsRoot, '../../..');
+const transientSnapshotClaim =
+  /(?:快照[^。\n]*(?:尚未生成|尚未建立|由下一[^。\n]*Task)|尚未建立[^。\n]*快照|当前缺少[^。\n]*快照|尚无[^。\n]*快照|下一(?:文档)?门禁[^。\n]*建立[^。\n]*快照)/;
 const requiredRoutes = [
   'overview/index', 'product/positioning', 'product/capability-map', 'product/workflows',
   'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
@@ -65,7 +68,11 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   })));
   for (const {route, body} of currentPages) {
     assert.doesNotMatch(body, /Task 12[AB]/, `${route} contains task-phase wording`);
-    assert.doesNotMatch(body, /(?:快照[^。\n]*尚未生成|当前缺少[^。\n]*快照)/, `${route} claims a transient missing snapshot`);
+    assert.doesNotMatch(
+      body,
+      transientSnapshotClaim,
+      `${route} claims a transient missing snapshot`,
+    );
     assert.doesNotMatch(body, /Web Runtime (?:目前是|仍是) Lab\/设计边界/, `${route} describes the formal Host as Lab-only`);
     assert.doesNotMatch(body, /未来正式 Host/, `${route} describes an assembled Host as future`);
   }
@@ -84,4 +91,15 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
 
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
   assert.match(overview, /Build Identity[^。]+current[^。]+不可变正式快照/);
+
+  const acceptance = await readFile(
+    path.join(repoRoot, 'docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md'),
+    'utf8',
+  );
+  const currentAcceptance = acceptance.split('\n## Task 12A historical outcome')[0];
+  assert.doesNotMatch(
+    currentAcceptance,
+    /(?:1\.0\.15\.0[^\n]*(?:missing|absent)|(?:does not claim|no)[^\n]*1\.0\.15\.0[^\n]*snapshot|Task 4[^\n]*snapshot)/i,
+    'current acceptance claims a transient missing snapshot',
+  );
 });

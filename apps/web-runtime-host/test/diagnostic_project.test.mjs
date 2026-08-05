@@ -65,6 +65,15 @@ function emptyProject({ assetPresent = false, assignments = {} } = {}) {
   };
 }
 
+function preparedProject() {
+  return emptyProject({
+    assetPresent: true,
+    assignments: Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]),
+    ),
+  });
+}
+
 function scriptedTransport(entries) {
   const calls = [];
   return {
@@ -90,6 +99,21 @@ function scriptedTransport(entries) {
 
 function inspector(project, projectRevision) {
   return { project, project_revision: projectRevision };
+}
+
+function deferred() {
+  let resolvePromise;
+  let rejectPromise;
+  const promise = new Promise((resolve, reject) => {
+    resolvePromise = resolve;
+    rejectPromise = reject;
+  });
+  return { promise, resolve: resolvePromise, reject: rejectPromise };
+}
+
+async function settle() {
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
+  await new Promise((resolvePromise) => setImmediate(resolvePromise));
 }
 
 function freshEntries() {
@@ -132,6 +156,10 @@ function freshEntries() {
         assert.equal(payload.asset_id, ASSET_ID);
       },
     })),
+    {
+      operation: "project.inspect",
+      result: inspector(preparedProject(), 65),
+    },
     {
       operation: "snapshot.reload",
       result: { runtime_ready: true, generation: 1 },
@@ -218,7 +246,7 @@ test("fresh preparation creates, inspects, imports, assigns all pads, and publis
     diagnostic_project_state: "ready",
     diagnostic_project_generation: 1,
   });
-  assert.equal(transport.calls.length, 69);
+  assert.equal(transport.calls.length, 70);
   transport.assertDrained();
 });
 
@@ -238,11 +266,12 @@ test("fresh preparation accepts the Host missing-project normalization", async (
 });
 
 test("an existing correct project only opens, inspects, and republishes", async () => {
-  const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
+  const project = preparedProject();
   const { coordinator: subject, transport } = coordinator({
     entries: [
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 3 } },
     ],
   });
@@ -251,22 +280,22 @@ test("an existing correct project only opens, inspects, and republishes", async 
   assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
     "project.open",
     "project.inspect",
+    "project.inspect",
     "snapshot.reload",
   ]);
   transport.assertDrained();
 });
 
 test("an existing project retries a transient writer handoff", async () => {
-  const assignments = Object.fromEntries(
-    Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]),
-  );
+  const project = preparedProject();
   const transport = scriptedTransport([
     { operation: "project.open", error: { code: "PROJECT_BUSY" } },
     { operation: "project.open", result: { project_revision: 65 } },
-    {
-      operation: "project.inspect",
-      result: inspector(emptyProject({ assetPresent: true, assignments }), 65),
-    },
+      {
+        operation: "project.inspect",
+        result: inspector(project, 65),
+      },
+      { operation: "project.inspect", result: inspector(project, 65) },
     {
       operation: "snapshot.reload",
       result: { runtime_ready: true, generation: 2 },
@@ -371,6 +400,10 @@ test("a partial project imports only an absent asset and repairs only wrong pad 
           assert.deepEqual(payload.slot, { bank: 2, pad: 15 });
         },
       },
+      {
+        operation: "project.inspect",
+        result: inspector(preparedProject(), 68),
+      },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 4 } },
     ],
   });
@@ -380,20 +413,22 @@ test("a partial project imports only an absent asset and repairs only wrong pad 
 });
 
 test("a duplicate creation race reopens then repairs authoritative truth", async () => {
-  const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
+  const project = preparedProject();
   const { coordinator: subject, transport } = coordinator({
     entries: [
       { operation: "project.open", error: { code: "NOT_FOUND" } },
       { operation: "project.create", error: { code: "DUPLICATE_ID" } },
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 5 } },
     ],
   });
 
   assert.deepEqual(await subject.load(), { state: "ready", generation: 5 });
   assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
-    "project.open", "project.create", "project.open", "project.inspect", "snapshot.reload",
+    "project.open", "project.create", "project.open", "project.inspect",
+    "project.inspect", "snapshot.reload",
   ]);
   transport.assertDrained();
 });
@@ -426,11 +461,12 @@ test("an invalid duplicate project fails closed before inspection or mutation", 
 });
 
 test("concurrent calls share one preparation and one public result", async () => {
-  const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
+  const project = preparedProject();
   const { coordinator: subject, transport } = coordinator({
     entries: [
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 6 } },
     ],
   });
@@ -439,19 +475,20 @@ test("concurrent calls share one preparation and one public result", async () =>
   const second = subject.load();
   assert.strictEqual(first, second);
   assert.deepEqual(await first, { state: "ready", generation: 6 });
-  assert.equal(transport.calls.length, 3);
+  assert.equal(transport.calls.length, 4);
   transport.assertDrained();
 });
 
 test("a typed pre-publication error is retryable from authoritative truth", async () => {
-  const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
+  const project = preparedProject();
   const { coordinator: subject, transport } = coordinator({
     entries: [
       { operation: "project.open", result: { project_revision: 0 } },
       { operation: "project.inspect", result: inspector(emptyProject(), 0) },
       { operation: "asset.import", error: { code: "WEB_RUNTIME_RESOURCE_LIMIT" } },
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 7 } },
     ],
   });
@@ -494,25 +531,27 @@ test("pagehide invalidation prevents late readiness and forces a later reopen", 
   const reload = new Promise((resolve) => {
     releaseReload = resolve;
   });
-  const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
+  const project = preparedProject();
   const { coordinator: subject, transport } = coordinator({
     entries: [
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: reload },
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 9 } },
     ],
   });
 
   const first = subject.load();
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(transport.calls.length, 3);
+  assert.equal(transport.calls.length, 4);
   subject.invalidate();
   const second = subject.load();
   assert.notStrictEqual(second, first);
-  assert.equal(transport.calls.length, 3);
+  assert.equal(transport.calls.length, 4);
   releaseReload({ runtime_ready: true, generation: 8 });
   assert.deepEqual(await first, { state: "error" });
   assert.deepEqual(subject.diagnostics(), { diagnostic_project_state: "loading" });
@@ -521,11 +560,12 @@ test("pagehide invalidation prevents late readiness and forces a later reopen", 
 });
 
 test("public results and diagnostics never disclose descriptor UUIDs", async () => {
-  const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
+  const project = preparedProject();
   const { coordinator: subject } = coordinator({
     entries: [
       { operation: "project.open", result: { project_revision: 65 } },
-      { operation: "project.inspect", result: inspector(emptyProject({ assetPresent: true, assignments }), 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 65) },
       { operation: "snapshot.reload", result: { runtime_ready: true, generation: 10 } },
     ],
   });
@@ -534,5 +574,209 @@ test("public results and diagnostics never disclose descriptor UUIDs", async () 
   const publicValues = `${JSON.stringify(result)}${JSON.stringify(subject.diagnostics())}`;
   for (const id of [PROJECT_ID, PATTERN_ID, ASSET_ID]) {
     assert.equal(publicValues.includes(id), false);
+  }
+});
+
+test("pagehide during import stops all later preparation requests", async () => {
+  const importSettlement = deferred();
+  const { coordinator: subject, transport } = coordinator({
+    entries: [
+      { operation: "project.open", result: { project_revision: 0 } },
+      { operation: "project.inspect", result: inspector(emptyProject(), 0) },
+      { operation: "asset.import", result: importSettlement.promise },
+    ],
+  });
+
+  const loading = subject.load();
+  await settle();
+  assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
+    "project.open",
+    "project.inspect",
+    "asset.import",
+  ]);
+
+  subject.invalidate();
+  importSettlement.resolve({ project_revision: 1 });
+
+  assert.deepEqual(await loading, { state: "error" });
+  assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
+    "project.open",
+    "project.inspect",
+    "asset.import",
+  ]);
+  assert.deepEqual(subject.diagnostics(), { diagnostic_project_state: "error" });
+  transport.assertDrained();
+});
+
+test("pagehide during assignment stops before the next Pad mutation", async () => {
+  const assignmentSettlement = deferred();
+  const { coordinator: subject, transport } = coordinator({
+    entries: [
+      { operation: "project.open", result: { project_revision: 1 } },
+      {
+        operation: "project.inspect",
+        result: inspector(emptyProject({ assetPresent: true }), 1),
+      },
+      { operation: "pad.assign", result: assignmentSettlement.promise },
+    ],
+  });
+
+  const loading = subject.load();
+  await settle();
+  subject.invalidate();
+  assignmentSettlement.resolve({ project_revision: 2 });
+
+  assert.deepEqual(await loading, { state: "error" });
+  assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
+    "project.open",
+    "project.inspect",
+    "pad.assign",
+  ]);
+  transport.assertDrained();
+});
+
+test("late restart-required beats invalidation and seals a queued and direct Load", async () => {
+  const importSettlement = deferred();
+  const { coordinator: subject, transport } = coordinator({
+    entries: [
+      { operation: "project.open", result: { project_revision: 0 } },
+      { operation: "project.inspect", result: inspector(emptyProject(), 0) },
+      { operation: "asset.import", result: importSettlement.promise },
+    ],
+  });
+
+  const first = subject.load();
+  await settle();
+  subject.invalidate();
+  const queued = subject.load();
+  importSettlement.resolve({
+    ok: false,
+    error: { code: "HOST_RESTART_REQUIRED" },
+  });
+
+  const terminal = { state: "restart-required", outcome: "unknown" };
+  assert.deepEqual(await first, terminal);
+  assert.deepEqual(await queued, terminal);
+  assert.deepEqual(await subject.load(), terminal);
+  assert.deepEqual(subject.diagnostics(), {
+    diagnostic_project_state: "restart-required",
+    diagnostic_project_error_code: "HOST_RESTART_REQUIRED",
+  });
+  assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
+    "project.open",
+    "project.inspect",
+    "asset.import",
+  ]);
+  transport.assertDrained();
+});
+
+test("successful repair requires a matching final authoritative inspect before publication", async () => {
+  const assignments = Object.fromEntries(
+    Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]),
+  );
+  const repairedProject = emptyProject({ assetPresent: true, assignments });
+  const { coordinator: subject, transport } = coordinator({
+    entries: [
+      { operation: "project.open", result: { project_revision: 65 } },
+      { operation: "project.inspect", result: inspector(repairedProject, 65) },
+      { operation: "project.inspect", result: inspector(repairedProject, 65) },
+      {
+        operation: "snapshot.reload",
+        result: { runtime_ready: true, generation: 11 },
+      },
+    ],
+  });
+
+  assert.deepEqual(await subject.load(), { state: "ready", generation: 11 });
+  assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
+    "project.open",
+    "project.inspect",
+    "project.inspect",
+    "snapshot.reload",
+  ]);
+  transport.assertDrained();
+});
+
+test("apparent mutation success absent from final Project Truth fails closed without publication", async () => {
+  const entries = [
+    { operation: "project.open", result: { project_revision: 0 } },
+    { operation: "project.inspect", result: inspector(emptyProject(), 0) },
+    { operation: "asset.import", result: { project_revision: 1 } },
+    ...Array.from({ length: 64 }, (_, index) => ({
+      operation: "pad.assign",
+      result: { project_revision: index + 2 },
+    })),
+    {
+      operation: "project.inspect",
+      result: inspector(emptyProject(), 65),
+    },
+  ];
+  const { coordinator: subject, transport } = coordinator({ entries });
+
+  assert.deepEqual(await subject.load(), {
+    state: "error",
+    error_code: "HOST_PROTOCOL_MISMATCH",
+  });
+  assert.equal(
+    transport.calls.some(({ request }) => request.operation === "snapshot.reload"),
+    false,
+  );
+  const callCount = transport.calls.length;
+  assert.deepEqual(await subject.load(), {
+    state: "error",
+    error_code: "HOST_PROTOCOL_MISMATCH",
+  });
+  assert.equal(transport.calls.length, callCount);
+  transport.assertDrained();
+});
+
+test("final authoritative revision must equal the last settled mutation revision", async () => {
+  const project = preparedProject();
+  const { coordinator: subject, transport } = coordinator({
+    entries: [
+      { operation: "project.open", result: { project_revision: 65 } },
+      { operation: "project.inspect", result: inspector(project, 65) },
+      { operation: "project.inspect", result: inspector(project, 64) },
+    ],
+  });
+
+  assert.deepEqual(await subject.load(), {
+    state: "error",
+    error_code: "HOST_PROTOCOL_MISMATCH",
+  });
+  assert.equal(
+    transport.calls.some(({ request }) => request.operation === "snapshot.reload"),
+    false,
+  );
+  transport.assertDrained();
+});
+
+test("malformed and hostile preparation responses terminalize as protocol mismatch", async () => {
+  for (const inspection of [
+    { project: emptyProject() },
+    { ok: false, error: { code: "/private/opfs/diagnostic-project-secret" } },
+  ]) {
+    const { coordinator: subject, transport } = coordinator({
+      entries: [
+        { operation: "project.open", result: { project_revision: 0 } },
+        { operation: "project.inspect", result: inspection },
+      ],
+    });
+
+    assert.deepEqual(await subject.load(), {
+      state: "error",
+      error_code: "HOST_PROTOCOL_MISMATCH",
+    });
+    const callCount = transport.calls.length;
+    assert.deepEqual(await subject.load(), {
+      state: "error",
+      error_code: "HOST_PROTOCOL_MISMATCH",
+    });
+    assert.equal(transport.calls.length, callCount);
+    assert.equal(
+      JSON.stringify(subject.diagnostics()).includes("/private/opfs"),
+      false,
+    );
+    transport.assertDrained();
   }
 });

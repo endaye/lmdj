@@ -1421,6 +1421,10 @@ export function createWebRuntimeHostController(options = {}) {
       fail("HOST_RESTART_REQUIRED");
       return false;
     }
+    if (result.error_code === "HOST_PROTOCOL_MISMATCH") {
+      fail("HOST_PROTOCOL_MISMATCH");
+      return false;
+    }
     return result.state === "ready";
   }
 

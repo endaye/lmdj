@@ -271,6 +271,23 @@ assert compiled_providers == [
     for provider in assembly["providers"]
 ]
 
+native_host_source = (
+    repo_root / "apps/native-test-host/src/main.cpp"
+).read_text(encoding="utf-8")
+native_host_cmake = (
+    repo_root / "apps/native-test-host/CMakeLists.txt"
+).read_text(encoding="utf-8")
+assert "1.0.14.0" not in native_host_source
+assert re.search(
+    r'constexpr std::string_view kProductBuild\s*=\s*LMDJ_NATIVE_PRODUCT_BUILD;',
+    native_host_source,
+)
+assert 'products/lmdj/version.json' in native_host_cmake
+assert re.search(
+    r'LMDJ_NATIVE_PRODUCT_BUILD="\$\{lmdj_native_product_build\}"',
+    native_host_cmake,
+)
+
 assert verify(
     "products/lmdj/version.json",
     assembly_path=assembly_path,

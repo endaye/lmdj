@@ -8,6 +8,7 @@ const hostRoot = resolve(repoRoot, "apps/web-runtime-host");
 const sourceRoutes = new Map([
   ["/formal-host/index.html", resolve(hostRoot, "index.html")],
   ["/formal-host/styles.css", resolve(hostRoot, "styles.css")],
+  ["/formal-host/src/diagnostic_project.mjs", resolve(hostRoot, "src/diagnostic_project.mjs")],
   ["/formal-host/src/main.mjs", resolve(hostRoot, "src/main.mjs")],
   ["/formal-host/src/input_adapters.mjs", resolve(hostRoot, "src/input_adapters.mjs")],
   ["/formal-host/src/preflight.mjs", resolve(hostRoot, "src/preflight.mjs")],
@@ -50,7 +51,20 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
     const notificationListeners = new Set();
     let sequence = 1;
     let cleanupCalls = 0;
+    let projectExists = false;
+    let projectRevision = 0;
     const operations = [];
+    const project = {
+      assets: {},
+      banks: Array.from({ length: 4 }, (_, bank) => ({
+        bank,
+        pads: Array.from({ length: 16 }, (_, pad) => ({
+          bank,
+          pad,
+          asset_id: null,
+        })),
+      })),
+    };
     const worker = new EventTarget();
     const worklet = new EventTarget();
     window.__task9 = {
@@ -91,7 +105,37 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
       transport: {
         async send(request, options) {
           operations.push({ operation: request.operation, payload: request.payload, options });
+          if (request.operation === "project.open" && !projectExists) {
+            return {
+              protocol_version: 1,
+              request_id: request.request_id,
+              ok: false,
+              error: { code: "NOT_FOUND", message: "NOT_FOUND", details: {} },
+            };
+          }
+          if (request.operation === "project.create") {
+            projectExists = true;
+            projectRevision = 0;
+          }
+          if (request.operation === "asset.import") {
+            project.assets[request.payload.asset_id] = {
+              asset_id: request.payload.asset_id,
+            };
+            projectRevision += 1;
+          }
+          if (request.operation === "pad.assign") {
+            project.banks[request.payload.slot.bank].pads[
+              request.payload.slot.pad
+            ].asset_id = request.payload.asset_id;
+            projectRevision += 1;
+          }
           const results = {
+            "project.open": { project_revision: projectRevision },
+            "project.create": { project_revision: projectRevision },
+            "project.inspect": { project_revision: projectRevision, project },
+            "asset.import": { project_revision: projectRevision },
+            "pad.assign": { project_revision: projectRevision },
+            "snapshot.reload": { runtime_ready: true, generation: 7 },
             "audio.activate": { state: "running", changed: true, generation: 7 },
             "audio.suspend": { state: "audio-suspended", changed: true },
             "host.status": { control_generation: 7, acknowledged_generation: 7 },
@@ -121,6 +165,7 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
   await page.goto("/formal-host/index.html");
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await expect(page.locator("button[data-bank][data-pad]")).toHaveCount(64);
+  await expect(page.locator("#audio-activate")).toBeDisabled();
 
   await page.locator("#pad-0").dispatchEvent("pointerdown", {
     isPrimary: true,
@@ -128,6 +173,23 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
     pointerId: 1,
   });
   expect(await page.evaluate(() => window.__task9.operations.filter(({ operation }) => operation === "trigger").length)).toBe(0);
+
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#audio-activate")).toBeEnabled();
+  expect(await page.evaluate(() => ({
+    creates: window.__task9.operations.filter(({ operation }) => operation === "project.create").length,
+    imports: window.__task9.operations.filter(({ operation }) => operation === "asset.import").length,
+    assignments: window.__task9.operations.filter(({ operation }) => operation === "pad.assign").length,
+    inspections: window.__task9.operations.filter(({ operation }) => operation === "project.inspect").length,
+    reloads: window.__task9.operations.filter(({ operation }) => operation === "snapshot.reload").length,
+  }))).toEqual({
+    creates: 1,
+    imports: 1,
+    assignments: 64,
+    inspections: 2,
+    reloads: 1,
+  });
 
   await page.locator("#audio-activate").click();
   await expect(page.locator("#host-state")).toHaveText("running");
