@@ -29,7 +29,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
-          RUNNER_NAME: contabo-lmdj-linux
+          TARGET_RUNNER_NAME: contabo-lmdj-linux
           RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
         run: |
           set -euo pipefail
@@ -90,7 +90,7 @@ jobs:
           runner_candidates="$(
             jq \
               --compact-output \
-              --arg runner_name "$RUNNER_NAME" \
+              --arg runner_name "$TARGET_RUNNER_NAME" \
               '[
                 .runners[]?
                 | select(.name == $runner_name)
@@ -107,7 +107,7 @@ jobs:
 
           eligible_count="$(
             jq \
-              --arg runner_name "$RUNNER_NAME" \
+              --arg runner_name "$TARGET_RUNNER_NAME" \
               '[
                 .runners[]?
                 | select(
@@ -131,7 +131,7 @@ jobs:
             echo 'self-hosted=true'
             echo 'reason=online idle trusted self-hosted runner'
           } >>"$GITHUB_OUTPUT"
-          echo "Using self-hosted runner: $RUNNER_NAME"
+          echo "Using self-hosted runner: $TARGET_RUNNER_NAME"
 
   web-toolchain-conformance:
     needs: select-ubuntu-runner
@@ -266,7 +266,7 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
-          RUNNER_NAME: endaye-mbp-m1
+          TARGET_RUNNER_NAME: endaye-mbp-m1
           RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
         run: |
           set -euo pipefail
@@ -327,7 +327,7 @@ jobs:
           runner_candidates="$(
             jq \
               --compact-output \
-              --arg runner_name "$RUNNER_NAME" \
+              --arg runner_name "$TARGET_RUNNER_NAME" \
               '[
                 .runners[]?
                 | select(.name == $runner_name)
@@ -344,7 +344,7 @@ jobs:
 
           eligible_count="$(
             jq \
-              --arg runner_name "$RUNNER_NAME" \
+              --arg runner_name "$TARGET_RUNNER_NAME" \
               '[
                 .runners[]?
                 | select(
@@ -368,7 +368,7 @@ jobs:
             echo 'self-hosted=true'
             echo 'reason=online idle trusted self-hosted runner'
           } >>"$GITHUB_OUTPUT"
-          echo "Using self-hosted runner: $RUNNER_NAME"
+          echo "Using self-hosted runner: $TARGET_RUNNER_NAME"
 
   macos-primary:
     name: macOS gates (primary)
