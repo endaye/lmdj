@@ -7,6 +7,7 @@ import { defineConfig, devices } from "@playwright/test";
 const webRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(webRoot, "../../..");
 const cleanRoom = process.env.LMDJ_WEB_HOST_CLEAN_ROOM === "1";
+const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1";
 const externalServer =
   cleanRoom || process.env.LMDJ_WEB_HOST_EXTERNAL_SERVER === "1";
 const port = Number.parseInt(process.env.LMDJ_WEB_TOOLCHAIN_PORT ?? "4174", 10);
@@ -49,7 +50,10 @@ export default defineConfig({
   projects: [
     {
       name: "chromium",
-      use: { ...devices["Desktop Chrome"], channel: "chromium" },
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(fullChromium ? { channel: "chromium" } : {}),
+      },
     },
     {
       name: "webkit",

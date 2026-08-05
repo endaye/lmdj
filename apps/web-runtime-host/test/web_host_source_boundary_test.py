@@ -262,15 +262,38 @@ def main() -> int:
         "futex waiter",
     )
     playwright_config_text = playwright_config.read_text(encoding="utf-8")
+    web_runtime_host_script_text = web_runtime_host_script.read_text(
+        encoding="utf-8"
+    )
+    require(
+        'process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1"'
+        in playwright_config_text,
+        "full Chromium selection must be scoped behind the formal Web Host "
+        "Proof environment",
+    )
     require(
         re.search(
-            r'name:\s*["\']chromium["\'].*?channel:\s*["\']chromium["\']',
+            r"\.\.\.\(fullChromium\s*\?\s*\{\s*"
+            r"channel:\s*[\"']chromium[\"']\s*\}\s*:\s*\{\s*\}\)",
             playwright_config_text,
             re.DOTALL,
         )
         is not None,
-        "formal browser Proof must use full Chromium new-headless mode, not "
-        "Chromium Headless Shell",
+        "default Chromium conformance must remain on its default runner while "
+        "the formal Web Host Proof opts into full Chromium",
+    )
+    require(
+        re.search(
+            r"LMDJ_WEB_HOST_FULL_CHROMIUM=1\s*\\\s*.*?"
+            r"--project=chromium\s*\\\s*"
+            r"host/web_runtime_host_manifest_gate\.spec\.mjs\s*\\\s*"
+            r"host/web_runtime_host_browser\.spec\.mjs",
+            web_runtime_host_script_text,
+            re.DOTALL,
+        )
+        is not None,
+        "formal browser Proof must explicitly select full Chromium "
+        "new-headless mode",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
