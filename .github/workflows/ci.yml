@@ -387,7 +387,33 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: true
+      - name: Verify self-hosted Python 3.11
+        if: ${{ needs.select-macos-runner.outputs.self-hosted == 'true' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if python_path="$(command -v python3.11)"; then
+            :
+          elif python_path="$(command -v python3)" && \
+              "$python_path" -c \
+                'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))'; then
+            :
+          else
+            echo 'self-hosted macOS requires Python 3.11' >&2
+            exit 1
+          fi
+
+          "$python_path" -c \
+            'import sys; raise SystemExit(sys.version_info[:2] != (3, 11))'
+
+          python_shim_dir="$RUNNER_TEMP/lmdj-python-3.11"
+          mkdir -p "$python_shim_dir"
+          ln -sf -- "$python_path" "$python_shim_dir/python3"
+          echo "$python_shim_dir" >>"$GITHUB_PATH"
+          "$python_shim_dir/python3" --version
       - uses: actions/setup-python@v6
+        if: ${{ needs.select-macos-runner.outputs.self-hosted != 'true' }}
         with:
           python-version: "3.11"
       - name: Run macOS Core gates

@@ -88,6 +88,19 @@ class CiRunnerFallbackTest(unittest.TestCase):
                     job,
                 )
 
+    def test_self_hosted_mac_uses_preinstalled_python_while_hosted_uses_setup(self) -> None:
+        primary = self.workflow_job("macos-primary")
+        self.assertIn("name: Verify self-hosted Python 3.11", primary)
+        self.assertIn("command -v python3.11", primary)
+        self.assertIn("$RUNNER_TEMP/lmdj-python-3.11", primary)
+        self.assertIn(
+            "needs.select-macos-runner.outputs.self-hosted == 'true'", primary
+        )
+        self.assertIn(
+            "needs.select-macos-runner.outputs.self-hosted != 'true'", primary
+        )
+        self.assertEqual(primary.count("uses: actions/setup-python@v6"), 1)
+
     def test_composite_action_publishes_results_instead_of_retrying_tests(self) -> None:
         source = ACTION.read_text(encoding="utf-8")
         self.assertEqual(source.count("continue-on-error: true"), 3)
