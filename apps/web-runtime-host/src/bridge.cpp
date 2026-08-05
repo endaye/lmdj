@@ -257,6 +257,7 @@ struct ControlBridge::Impl {
     std::atomic<bool> released{false};
     std::atomic<bool> entered_facade{false};
     std::atomic<bool> claim_attempted{false};
+    std::atomic<bool> claim_started_open{false};
     std::atomic<PublicationState> publication{PublicationState::open};
     std::atomic<std::uint8_t> cancel_observation{0};
     std::atomic<std::uint8_t> cancel_calls{0};
@@ -406,6 +407,10 @@ struct ControlBridge::Impl {
 
   void mark_claim_attempted(const RequestSlot& request) noexcept {
     if (proof_matches(request)) {
+      deadline_proof.claim_started_open.store(
+          request.publication.load(std::memory_order_acquire) ==
+              PublicationState::open,
+          std::memory_order_relaxed);
       deadline_proof.claim_attempted.store(true, std::memory_order_release);
     }
   }
@@ -1099,6 +1104,8 @@ bool ControlBridge::configure_deadline_proof(
     impl_->deadline_proof.released.store(false, std::memory_order_release);
     impl_->deadline_proof.entered_facade.store(false, std::memory_order_release);
     impl_->deadline_proof.claim_attempted.store(false, std::memory_order_release);
+    impl_->deadline_proof.claim_started_open.store(
+        false, std::memory_order_release);
     impl_->deadline_proof.publication.store(
         PublicationState::open, std::memory_order_release);
     impl_->deadline_proof.cancel_observation.store(
@@ -1136,6 +1143,10 @@ int ControlBridge::deadline_proof_state(
     }
     if (impl_->deadline_proof.claim_attempted.load(std::memory_order_acquire)) {
       state |= 1 << 9;
+    }
+    if (impl_->deadline_proof.claim_started_open.load(
+            std::memory_order_acquire)) {
+      state |= 1 << 10;
     }
     state |= static_cast<int>(
                  impl_->deadline_proof.gate.load(std::memory_order_acquire))

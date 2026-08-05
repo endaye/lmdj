@@ -1482,8 +1482,8 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
   await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
     entered_facade: true,
     claim_attempted: true,
+    claim_started_open: true,
     gate: "unresponsive-cancellation",
-    publication: "open",
   });
   await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
     publication: "cancelled",

@@ -556,6 +556,7 @@ if (typeof window !== "undefined") {
           return Object.freeze({
             entered_facade: (packed & (1 << 8)) !== 0,
             claim_attempted: (packed & (1 << 9)) !== 0,
+            claim_started_open: (packed & (1 << 10)) !== 0,
             last_cancel_result: Object.freeze({
               0: "none",
               1: "publish-claimed",
