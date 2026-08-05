@@ -252,6 +252,7 @@ class RecordingPlatform final
 
   lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& path) override {
+    ++acquire_writer_calls;
     return inner_->acquire_writer(path);
   }
 
@@ -315,11 +316,14 @@ class RecordingPlatform final
 
   lmdj::foundation::Result<void> validate_managed_tree(
       const std::filesystem::path& path) const override {
+    ++validate_managed_tree_calls;
     return inner_->validate_managed_tree(path);
   }
 
   std::vector<std::string> operation_log;
   std::vector<std::uint64_t> append_valid_prefix_lengths;
+  std::size_t acquire_writer_calls = 0;
+  mutable std::size_t validate_managed_tree_calls = 0;
 
  private:
   std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
@@ -743,6 +747,27 @@ void test_journal_routes_mutations_through_semantic_operations_in_order() {
   LMDJ_CHECK(
       platform->append_valid_prefix_lengths ==
       std::vector<std::uint64_t>{clean_prefix_length});
+}
+
+void test_append_batch_validates_once_after_writer_acquisition() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "single-validation-append.lmdj";
+  auto platform = std::make_shared<RecordingPlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  ProjectStore store{platform};
+  TakeJournal journal{platform};
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto take = recorded_take("single-validation-append");
+  LMDJ_CHECK(
+      journal.begin(bundle, take.id, 0, take.sample_rate).has_value());
+  platform->acquire_writer_calls = 0;
+  platform->validate_managed_tree_calls = 0;
+
+  LMDJ_CHECK(
+      journal.append_batch(bundle, take.id, take.events).has_value());
+
+  LMDJ_CHECK(platform->acquire_writer_calls == 1);
+  LMDJ_CHECK(platform->validate_managed_tree_calls == 1);
 }
 
 void test_invalid_command_id_is_rejected_before_journal_matching() {
@@ -1381,6 +1406,7 @@ int main() {
     test_begin_maps_only_explicit_storage_collision_to_duplicate_id();
     test_default_journal_remains_copy_list_initializable();
     test_journal_routes_mutations_through_semantic_operations_in_order();
+    test_append_batch_validates_once_after_writer_acquisition();
     test_invalid_command_id_is_rejected_before_journal_matching();
     test_append_flushes_each_event_and_restart_reads_acknowledged_data();
     test_same_platform_concurrent_appends_do_not_lose_acknowledged_events();
