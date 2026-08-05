@@ -42,7 +42,7 @@ const config: Config = {
     ],
   ],
   themeConfig: {
-    colorMode: {respectPrefersColorScheme: true},
+    colorMode: {respectPrefersColorScheme: true, disableSwitch: true},
     metadata: [
       {name: 'description', content: 'LMDJ 产品、架构与交付说明书：Core Modules、Hosts、Providers、Contracts、Assembly 与运营证据的唯一发布源。'},
     ],
