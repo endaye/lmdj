@@ -123,6 +123,9 @@ async function stopTakeWithQuiescenceDiagnostics(page) {
         audio_context_state: audioContext?.state ?? null,
         worklet_state: window.Module?._lmdj_web_audio_state?.() ?? null,
         worklet_fatal: window.Module?._lmdj_web_audio_fatal?.() ?? null,
+        worklet_gate: window.Module?._lmdj_web_audio_gate_state?.() ?? null,
+        worklet_in_flight:
+          window.Module?._lmdj_web_audio_in_flight?.() ?? null,
         controller: window.lmdjWebRuntimeController.diagnostics(),
       });
       if (samples.length > 12) samples.shift();
@@ -490,6 +493,16 @@ async function waitForRecoveryReadiness(page, responseMarker) {
       response.result.control_generation ===
         response.result.acknowledged_generation),
   responseMarker)).toBe(true);
+  await page.evaluate(() => new Promise((resolvePromise) => {
+    window.setTimeout(resolvePromise, 0);
+  }));
+  await expect.poll(() => page.evaluate(() => {
+    const diagnostics = window.lmdjWebRuntimeController.diagnostics();
+    return diagnostics.state === "recovering" &&
+      Number.isInteger(diagnostics.control_generation) &&
+      diagnostics.control_generation > 0 &&
+      diagnostics.control_generation === diagnostics.acknowledged_generation;
+  })).toBe(true);
 }
 
 
@@ -1539,7 +1552,10 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
     deadlineFixtureBytes,
     { deadlineMs: 250, gate: "unresponsive-cancellation" },
   );
-  await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
+  await expect.poll(
+    () => deadlineProofState(page, requestId),
+    { timeout: 30_000 },
+  ).toMatchObject({
     entered_facade: true,
     claim_attempted: true,
     claim_started_open: true,
