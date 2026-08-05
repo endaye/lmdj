@@ -19,7 +19,11 @@
       </header>
 
       <section class="controls" aria-label="Runtime controls">
-        <button id="audio-activate" type="button">Activate audio</button>
+        <button id="diagnostic-project-load" type="button">
+          Load diagnostic project
+        </button>
+        <output id="diagnostic-project-state" aria-live="polite">idle</output>
+        <button id="audio-activate" type="button" disabled>Activate audio</button>
         <button id="audio-suspend" type="button">Suspend audio</button>
         <button id="midi-enable" type="button">Enable MIDI</button>
       </section>

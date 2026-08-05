@@ -45,6 +45,7 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emcc_version",
 )
 EXPECTED_ASSETS = (
+    ("assets/diagnostic-project.", ".mjs", "host_module"),
     ("assets/input-adapters.", ".mjs", "host_module"),
     ("assets/main.", ".mjs", "host_main"),
     ("assets/preflight.", ".mjs", "host_module"),
@@ -230,6 +231,7 @@ def build_distribution(
 
         leaf_assets: dict[str, dict] = {}
         for name in (
+            "diagnostic_project.mjs",
             "input_adapters.mjs",
             "preflight.mjs",
             "protocol.mjs",

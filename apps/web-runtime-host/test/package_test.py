@@ -467,6 +467,7 @@ class PackageTest(unittest.TestCase):
         )
 
         roles = {asset["role"] for asset in manifest["assets"]}
+        self.assertEqual(len(manifest["assets"]), 9)
         self.assertEqual(
             roles,
             {
@@ -481,6 +482,7 @@ class PackageTest(unittest.TestCase):
             [(Path(asset["path"]).name.split(".", 1)[0], asset["role"])
              for asset in manifest["assets"]],
             [
+                ("diagnostic-project", "host_module"),
                 ("input-adapters", "host_module"),
                 ("main", "host_main"),
                 ("preflight", "host_module"),
@@ -491,6 +493,15 @@ class PackageTest(unittest.TestCase):
                 ("styles", "host_style"),
             ],
         )
+        diagnostic_modules = [
+            asset for asset in manifest["assets"]
+            if re.fullmatch(
+                r"assets/diagnostic-project\.[0-9a-f]{64}\.mjs",
+                asset["path"],
+            )
+        ]
+        self.assertEqual(len(diagnostic_modules), 1)
+        self.assertFalse(any(self.dist.rglob("*.wav")))
         for asset in manifest["assets"]:
             self.assertEqual(set(asset), {"bytes", "path", "role", "sha256"})
             self.assertRegex(

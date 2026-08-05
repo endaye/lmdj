@@ -3,6 +3,7 @@ import {
   createMidiAdapter,
   createPointerAdapter,
 } from "./input_adapters.mjs";
+import { createDiagnosticProjectCoordinator } from "./diagnostic_project.mjs";
 import { PREFLIGHT_CAPABILITIES, runPreflight } from "./preflight.mjs";
 import {
   HostProtocolError,
@@ -36,6 +37,9 @@ const PACKAGED_EMSCRIPTEN = Object.freeze({
   emsdk_tag: "6.0.5",
 });
 const PACKAGED_ASSET_INVENTORY = Object.freeze([
+  Object.freeze({
+    prefix: "assets/diagnostic-project.", suffix: ".mjs", role: "host_module",
+  }),
   Object.freeze({
     prefix: "assets/input-adapters.", suffix: ".mjs", role: "host_module",
   }),
@@ -687,6 +691,7 @@ export function createWebRuntimeHostController(options = {}) {
 
   let manifest = SOURCE_SHELL_MANIFEST;
   let runtime = null;
+  let diagnosticProjectCoordinator = null;
   let audioContext = null;
   let contextHandle = null;
   let started = false;
@@ -747,6 +752,9 @@ export function createWebRuntimeHostController(options = {}) {
       permission: "prompt",
       connected_input_count: 0,
     };
+    const diagnosticProject = diagnosticProjectCoordinator?.diagnostics() ?? {
+      diagnostic_project_state: "idle",
+    };
     return Object.freeze({
       state: machine.state,
       error_code: lastErrorCode,
@@ -761,6 +769,7 @@ export function createWebRuntimeHostController(options = {}) {
       midi_permission: midi.permission,
       connected_input_count: midi.connected_input_count,
       pressed_count: pressedCount(),
+      ...diagnosticProject,
     });
   }
 
@@ -772,6 +781,28 @@ export function createWebRuntimeHostController(options = {}) {
     const output = element("diagnostics");
     if (output) {
       output.textContent = JSON.stringify(diagnostics(), null, 2);
+    }
+    const diagnosticProject =
+      diagnosticProjectCoordinator?.diagnostics() ?? {
+        diagnostic_project_state: "idle",
+      };
+    const diagnosticState = element("diagnostic-project-state");
+    if (diagnosticState) {
+      diagnosticState.textContent = diagnosticProject.diagnostic_project_state;
+    }
+    const loadButton = element("diagnostic-project-load");
+    if (loadButton) {
+      const loading = diagnosticProject.diagnostic_project_state === "loading";
+      loadButton.disabled = loading || closing;
+      loadButton.setAttribute("aria-busy", loading ? "true" : "false");
+    }
+    const activateButton = element("audio-activate");
+    if (activateButton) {
+      activateButton.disabled = !(
+        diagnosticProject.diagnostic_project_state === "ready" &&
+        isPositiveInteger(diagnosticProject.diagnostic_project_generation) &&
+        !closing
+      );
     }
   }
 
@@ -844,11 +875,16 @@ export function createWebRuntimeHostController(options = {}) {
     listenerDisposers.push(() => target.removeEventListener(type, listener));
   }
 
-  async function boundedRequest(operation, payload) {
+  async function boundedRequest(operation, payload, requestOptions = {}) {
     const request = createRequestEnvelope({ operation, payload, crypto });
-    const deadlineMs = deadlineForOperation(operation);
+    const transportOptions = {
+      deadlineMs: requestOptions.deadlineMs ?? deadlineForOperation(operation),
+    };
+    if (requestOptions.sidecar !== undefined) {
+      transportOptions.sidecar = requestOptions.sidecar;
+    }
     const response = validateResponseEnvelope(
-      await transport.send(request, { deadlineMs }),
+      await transport.send(request, transportOptions),
     );
     if (response.request_id !== request.request_id) {
       throw typedError(
@@ -1140,6 +1176,8 @@ export function createWebRuntimeHostController(options = {}) {
   }
 
   function observePageHide(event) {
+    diagnosticProjectCoordinator?.invalidate();
+    renderDiagnostics();
     if (event?.persisted === true) {
       if (pageHidden) {
         clearPressed();
@@ -1257,7 +1295,10 @@ export function createWebRuntimeHostController(options = {}) {
   }
 
   async function activateAudio() {
+    const diagnosticProject = diagnosticProjectCoordinator?.diagnostics();
     if (
+      diagnosticProject?.diagnostic_project_state !== "ready" ||
+      !isPositiveInteger(diagnosticProject?.diagnostic_project_generation) ||
       closing ||
       machine.state !== "audio-suspended" ||
       activationReservation !== null ||
@@ -1364,6 +1405,25 @@ export function createWebRuntimeHostController(options = {}) {
     }
   }
 
+  async function loadDiagnosticProject() {
+    if (
+      diagnosticProjectCoordinator === null ||
+      closing ||
+      machine.state !== "audio-suspended"
+    ) {
+      return false;
+    }
+    const pending = diagnosticProjectCoordinator.load();
+    renderDiagnostics();
+    const result = await pending;
+    renderDiagnostics();
+    if (result.state === "restart-required") {
+      fail("HOST_RESTART_REQUIRED");
+      return false;
+    }
+    return result.state === "ready";
+  }
+
   async function close() {
     if (closing || machine.state === "closed" || machine.state === "failed") {
       return false;
@@ -1442,6 +1502,8 @@ export function createWebRuntimeHostController(options = {}) {
     listen(window, "blur", () => pointerAdapter.clearPressed());
     listen(window, "keydown", (event) => keyboardAdapter.keyDown(event));
     listen(window, "keyup", (event) => keyboardAdapter.keyUp(event));
+    listen(element("diagnostic-project-load"), "click", () =>
+      loadDiagnosticProject());
     listen(element("audio-activate"), "click", () => activateAudio());
     listen(element("audio-suspend"), "click", () => suspendAudio());
     listen(element("midi-enable"), "click", () => enableMidi());
@@ -1485,6 +1547,23 @@ export function createWebRuntimeHostController(options = {}) {
       }
       await runPreflight(options.capabilities ?? await defaultCapabilities(window));
       runtime = await loadRuntime(manifest);
+      diagnosticProjectCoordinator = createDiagnosticProjectCoordinator({
+        storage: options.storage ?? window?.localStorage,
+        crypto,
+        transport: Object.freeze({
+          async send(request, requestOptions = {}) {
+            try {
+              return await boundedRequest(
+                request.operation,
+                request.payload,
+                requestOptions,
+              );
+            } catch (error) {
+              throw typedError(errorCode(error));
+            }
+          },
+        }),
+      });
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });
       machine.transition("audio-suspended", { reason: "activation_required" });
@@ -1502,6 +1581,7 @@ export function createWebRuntimeHostController(options = {}) {
     start,
     trigger,
     beginTake,
+    loadDiagnosticProject,
     activateAudio,
     suspendAudio,
     enableMidi,
