@@ -68,6 +68,25 @@ jobs:
             exit 0
           fi
 
+          runner_inventory="$(
+            jq \
+              --compact-output \
+              '{
+                total_count,
+                runners: [
+                  .runners[]?
+                  | {
+                      name,
+                      status,
+                      busy,
+                      labels: [.labels[].name]
+                    }
+                ]
+              }' \
+              <<<"$runner_response"
+          )"
+          echo "Runner selection inventory: $runner_inventory"
+
           runner_candidates="$(
             jq \
               --compact-output \
@@ -285,6 +304,25 @@ jobs:
             select_hosted 'runner status API is unavailable'
             exit 0
           fi
+
+          runner_inventory="$(
+            jq \
+              --compact-output \
+              '{
+                total_count,
+                runners: [
+                  .runners[]?
+                  | {
+                      name,
+                      status,
+                      busy,
+                      labels: [.labels[].name]
+                    }
+                ]
+              }' \
+              <<<"$runner_response"
+          )"
+          echo "Runner selection inventory: $runner_inventory"
 
           runner_candidates="$(
             jq \
