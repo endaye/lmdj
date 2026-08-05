@@ -27,12 +27,12 @@ target_link_libraries(
 if(EMSCRIPTEN)
   set(
     lmdj_project_io_async_imports
-    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
   )
   if(LMDJ_PROJECT_IO_WEB_TESTING)
     set(
       lmdj_project_io_async_imports
-      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable_test','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable_test','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
     )
   endif()
   target_link_options(

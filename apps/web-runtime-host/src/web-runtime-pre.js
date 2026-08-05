@@ -1,6 +1,7 @@
 if (typeof window !== "undefined") {
   globalThis.Module = Module;
   const PUBLICATION_SETTLEMENT_WATCHDOG_MS = 1_000;
+  const TRANSPORT_POLL_INTERVAL_MS = 16;
   const deadlineProofConfig = window.__LMDJ_WEB_HOST_DEADLINE_PROOF__;
   const publicationSettlementWatchdogMs =
     Number.isInteger(deadlineProofConfig?.settlementWatchdogMs) &&
@@ -368,7 +369,7 @@ if (typeof window !== "undefined") {
       return;
     }
     pollScheduled = true;
-    window.setTimeout(pollTransport, 2);
+    window.setTimeout(pollTransport, TRANSPORT_POLL_INTERVAL_MS);
   }
 
   function pollTransport() {

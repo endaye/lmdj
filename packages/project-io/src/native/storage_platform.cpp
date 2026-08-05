@@ -1117,6 +1117,44 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
     return foundation::Result<bool>::success(true);
   }
 
+  foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    const auto present = exists(path);
+    if (!present.has_value()) {
+      return foundation::Result<bool>::failure(present.error());
+    }
+    if (!present.value()) {
+      return foundation::Result<bool>::success(false);
+    }
+    const auto normalized = normalize_path(path);
+    if (!normalized.has_value()) {
+      return foundation::Result<bool>::failure(normalized.error());
+    }
+    if (normalized.value() == normalized.value().root_path()) {
+      return foundation::Result<bool>::success(true);
+    }
+    auto parent = open_parent_without_symlinks(path);
+    if (!parent.has_value()) {
+      return foundation::Result<bool>::failure(parent.error());
+    }
+    struct stat metadata {};
+    if (fstatat_no_follow_retry(
+            parent.value().descriptor.get(),
+            parent.value().name.c_str(),
+            &metadata) != 0) {
+      if (errno == ENOENT) {
+        return foundation::Result<bool>::success(false);
+      }
+      return foundation::Result<bool>::failure(
+          storage_error("storage path could not be inspected", path));
+    }
+    if (S_ISLNK(metadata.st_mode)) {
+      return foundation::Result<bool>::failure(
+          invalid_storage_path("storage path is a symbolic link", path));
+    }
+    return foundation::Result<bool>::success(S_ISDIR(metadata.st_mode));
+  }
+
   foundation::Result<std::uint64_t> byte_length(
       const std::filesystem::path& path) const override {
     auto opened = open_regular_file(path);

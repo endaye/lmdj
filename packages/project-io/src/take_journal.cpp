@@ -49,19 +49,8 @@ foundation::Result<void> validate_journal_bundle_tree(
   if (!no_symlinks.has_value()) {
     return no_symlinks;
   }
-  const auto root_names = platform.list_names(bundle);
-  if (!root_names.has_value()) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "journal bundle root is missing, invalid, or symbolic",
-            {
-                {"path", bundle.generic_string()},
-                {"detail", root_names.error().message},
-            },
-        });
-  }
   const std::array required_directories{
+      bundle,
       bundle / "assets",
       bundle / "history",
       bundle / "history/checkpoints",
@@ -71,15 +60,18 @@ foundation::Result<void> validate_journal_bundle_tree(
       bundle / "recovery/sealed",
   };
   for (const auto& directory : required_directories) {
-    const auto names = platform.list_names(directory);
-    if (!names.has_value()) {
+    const auto present = platform.directory_exists(directory);
+    if (!present.has_value() || !present.value()) {
       return foundation::Result<void>::failure(
           Error{
               ErrorCode::invalid_project,
               "journal managed directory is missing, invalid, or symbolic",
               {
                   {"path", directory.generic_string()},
-                  {"detail", names.error().message},
+                  {"detail",
+                   present.has_value()
+                       ? "path is not an existing directory"
+                       : present.error().message},
               },
           });
     }

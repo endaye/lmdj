@@ -482,6 +482,17 @@ async function observationMarker(page) {
 }
 
 
+async function waitForRecoveryReadiness(page, responseMarker) {
+  await expect.poll(() => page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start).some(({ operation, response }) =>
+      operation === "host.status" &&
+      response?.ok === true &&
+      response.result.control_generation ===
+        response.result.acknowledged_generation),
+  responseMarker)).toBe(true);
+}
+
+
 async function triggerThroughController(page, count, pacingMs, velocity = 100) {
   return page.evaluate(async ({ triggerCount, pacing, selectedVelocity }) => {
     const start = window.__lmdjTask11.admittedSequences.length;
@@ -1069,9 +1080,10 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   await page.locator("#audio-suspend").click();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await activateWithGesture(page);
+  const recoveryMarker = await observationMarker(page);
   await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
   await expect(page.locator("#host-state")).toHaveText("recovering");
-  const recoveryMarker = await observationMarker(page);
+  await waitForRecoveryReadiness(page, recoveryMarker.responses);
   await page.locator("#pad-0").click();
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.length - start,
@@ -1194,12 +1206,13 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   };
   await createPreparedProject(page, identity);
   await activateWithGesture(page);
+  const marker = await observationMarker(page);
   await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
   await expect(page.locator("#host-state")).toHaveText("recovering");
+  await waitForRecoveryReadiness(page, marker.responses);
   await page.evaluate(() => {
     window.__lmdjTask11.suppressTriggerOutcomes = true;
   });
-  const marker = await observationMarker(page);
   await page.locator("#pad-0").click();
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.length - start,

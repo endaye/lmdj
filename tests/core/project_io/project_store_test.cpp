@@ -104,6 +104,12 @@ class MemoryStoragePlatform final : public ProjectStoragePlatform {
         files_.contains(key(path)) || directories_.contains(key(path)));
   }
 
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return lmdj::foundation::Result<bool>::success(
+        directories_.contains(key(path)));
+  }
+
   lmdj::foundation::Result<std::uint64_t> byte_length(
       const std::filesystem::path& path) const override {
     const auto found = files_.find(key(path));

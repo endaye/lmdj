@@ -55,6 +55,47 @@ mergeInto(LibraryManager.library, {
       return error instanceof DOMException ? (table[error.name] ?? -1) : -1;
     },
 
+    isMissingEntry(error) {
+      return error instanceof DOMException &&
+          (error.name === "NotFoundError" || error.name === "TypeMismatchError");
+    },
+
+    async exists(parts) {
+      if (parts.length === 0) {
+        await this.workspace();
+        return true;
+      }
+      try {
+        const [parent, name] = await this.parent(parts, false);
+        try {
+          await parent.getFileHandle(name);
+          return true;
+        } catch (error) {
+          if (!this.isMissingEntry(error)) throw error;
+        }
+        try {
+          await parent.getDirectoryHandle(name);
+          return true;
+        } catch (error) {
+          if (!this.isMissingEntry(error)) throw error;
+        }
+        return false;
+      } catch (error) {
+        if (this.isMissingEntry(error)) return false;
+        throw error;
+      }
+    },
+
+    async directoryExists(parts) {
+      try {
+        await this.directory(parts, false);
+        return true;
+      } catch (error) {
+        if (this.isMissingEntry(error)) return false;
+        throw error;
+      }
+    },
+
     bytes(pointer, length) {
       return HEAPU8.slice(pointer, pointer + length);
     },
@@ -499,19 +540,22 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_exists__deps: ["$LmdjOpfs"],
   lmdj_opfs_exists: (path, length) => Asyncify.handleAsync(async () => {
     try {
-      const parts = LmdjOpfs.parts(path, length);
-      if (parts.length === 0) return 1;
-      const [parent, name] = await LmdjOpfs.parent(parts, false);
-      for await (const entry of parent.values()) {
-        if (entry.name === name) return 1;
-      }
-      return 0;
+      return await LmdjOpfs.exists(LmdjOpfs.parts(path, length)) ? 1 : 0;
     } catch (error) {
-      return error instanceof DOMException && error.name === "NotFoundError"
-        ? 0
-        : LmdjOpfs.status(error);
+      return LmdjOpfs.status(error);
     }
   }),
+
+  lmdj_opfs_directory_exists__deps: ["$LmdjOpfs"],
+  lmdj_opfs_directory_exists:
+      (path, length) => Asyncify.handleAsync(async () => {
+        try {
+          return await LmdjOpfs.directoryExists(
+              LmdjOpfs.parts(path, length)) ? 1 : 0;
+        } catch (error) {
+          return LmdjOpfs.status(error);
+        }
+      }),
 
   lmdj_opfs_byte_length__deps: ["$LmdjOpfs"],
   lmdj_opfs_byte_length: (path, length) => Asyncify.handleAsync(async () => {
@@ -666,15 +710,10 @@ mergeInto(LibraryManager.library, {
     try {
       const parts = LmdjOpfs.parts(path, length);
       if (parts.length === 0) return 0;
-      const [parent, name] = await LmdjOpfs.parent(parts, false);
-      for await (const entry of parent.values()) {
-        if (entry.name === name) return 0;
-      }
+      await LmdjOpfs.directoryExists(parts);
       return 0;
     } catch (error) {
-      return error instanceof DOMException && error.name === "NotFoundError"
-        ? 0
-        : LmdjOpfs.status(error);
+      return LmdjOpfs.status(error);
     }
   }),
 });
