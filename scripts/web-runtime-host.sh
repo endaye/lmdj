@@ -246,7 +246,8 @@ PY
     return 2
   fi
   local status=0
-  LMDJ_WEB_HOST_CLEAN_ROOM="$clean_room_mode" \
+  LMDJ_WEB_HOST_FULL_CHROMIUM=1 \
+    LMDJ_WEB_HOST_CLEAN_ROOM="$clean_room_mode" \
     LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
     LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_WEB_HOST_FIXTURE_ROOT="$selected_fixture_root" \

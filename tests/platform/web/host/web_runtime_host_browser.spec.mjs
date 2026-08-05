@@ -36,6 +36,18 @@ function clone(value) {
 
 async function installTransportObservability(page) {
   await page.addInitScript(() => {
+    const NativeAudioContext = globalThis.AudioContext;
+    const audioContexts = [];
+    if (typeof NativeAudioContext === "function") {
+      globalThis.AudioContext = class ObservableAudioContext
+        extends NativeAudioContext {
+        constructor(options) {
+          super(options);
+          audioContexts.push(this);
+        }
+      };
+    }
+    window.__lmdjAudioContexts = audioContexts;
     const observations = {
       admittedSequences: [],
       notifications: [],
@@ -97,6 +109,41 @@ async function openPackagedHost(page) {
     manifestReady: true,
     runtimeInitialized: true,
     sharedMemory: true,
+  });
+}
+
+
+async function stopTakeWithQuiescenceDiagnostics(page) {
+  return page.evaluate(async () => {
+    const samples = [];
+    const observe = () => {
+      const audioContext = window.__lmdjAudioContexts.at(-1);
+      samples.push({
+        elapsed_ms: Math.round(performance.now()),
+        audio_context_state: audioContext?.state ?? null,
+        worklet_state: window.Module?._lmdj_web_audio_state?.() ?? null,
+        worklet_fatal: window.Module?._lmdj_web_audio_fatal?.() ?? null,
+        controller: window.lmdjWebRuntimeController.diagnostics(),
+      });
+      if (samples.length > 12) samples.shift();
+    };
+    observe();
+    const interval = window.setInterval(observe, 250);
+    try {
+      return await window.lmdjWebRuntimeHost.transport.send({
+        protocol_version: 1,
+        request_id: crypto.randomUUID(),
+        operation: "take.stop",
+        payload: {},
+      }, { deadlineMs: 30_000, sidecar: new Uint8Array() });
+    } catch (error) {
+      observe();
+      throw new Error(
+        `${error?.message ?? error}; quiescence diagnostics: ${JSON.stringify(samples)}`,
+      );
+    } finally {
+      window.clearInterval(interval);
+    }
   });
 }
 
@@ -896,7 +943,7 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
     fixtureMetadata.trigger_proof.pacing_ms,
     101,
   );
-  const stopped = success(await hostRequest(page, "take.stop", {}), "take.stop");
+  const stopped = success(await stopTakeWithQuiescenceDiagnostics(page), "take.stop");
   expect(stopped).toMatchObject({ take_id: identity.takeId, status: "committable" });
   await proveExactOutcomes(page, takeAdmissions, takeMarker.notifications);
 

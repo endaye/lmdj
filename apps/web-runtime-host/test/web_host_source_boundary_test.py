@@ -34,6 +34,7 @@ def main() -> int:
     )
     web_runtime_host_script = repo_root / "scripts" / "web-runtime-host.sh"
     web_toolchain_script = repo_root / "scripts" / "web-toolchain-conformance.sh"
+    playwright_config = repo_root / "tests" / "platform" / "web" / "playwright.config.mjs"
     realtime_audio_worklet = (
         repo_root
         / "packages"
@@ -54,6 +55,7 @@ def main() -> int:
         realtime_failure_spec,
         web_runtime_host_script,
         web_toolchain_script,
+        playwright_config,
         realtime_audio_worklet,
     ]
     for path in required_files:
@@ -258,6 +260,40 @@ def main() -> int:
         "emscripten_futex_wake" in realtime_audio_worklet_source,
         "AudioWorklet final-quantum acknowledgement must wake the Control "
         "futex waiter",
+    )
+    playwright_config_text = playwright_config.read_text(encoding="utf-8")
+    web_runtime_host_script_text = web_runtime_host_script.read_text(
+        encoding="utf-8"
+    )
+    require(
+        'process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1"'
+        in playwright_config_text,
+        "full Chromium selection must be scoped behind the formal Web Host "
+        "Proof environment",
+    )
+    require(
+        re.search(
+            r"\.\.\.\(fullChromium\s*\?\s*\{\s*"
+            r"channel:\s*[\"']chromium[\"']\s*\}\s*:\s*\{\s*\}\)",
+            playwright_config_text,
+            re.DOTALL,
+        )
+        is not None,
+        "default Chromium conformance must remain on its default runner while "
+        "the formal Web Host Proof opts into full Chromium",
+    )
+    require(
+        re.search(
+            r"LMDJ_WEB_HOST_FULL_CHROMIUM=1\s*\\\s*.*?"
+            r"--project=chromium\s*\\\s*"
+            r"host/web_runtime_host_manifest_gate\.spec\.mjs\s*\\\s*"
+            r"host/web_runtime_host_browser\.spec\.mjs",
+            web_runtime_host_script_text,
+            re.DOTALL,
+        )
+        is not None,
+        "formal browser Proof must explicitly select full Chromium "
+        "new-headless mode",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
