@@ -42,7 +42,7 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 
 ## 自动化证据
 
-`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→Control→Facade/OPFS→Wasm AudioWorklet 全旅程。旅程证明 500 个 admission sequence 与 500 个 `voice_started` outcome 精确对应、20+1 Take 边界、重启重开、失败与 lifecycle 路径。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。CI 已配置独立 Formal Web Host lane，但在实际 Pull Request CI 出现前不宣称远端结果。
+`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→Control→Facade/OPFS→Wasm AudioWorklet 全旅程。旅程证明 500 个 admission sequence 与 500 个 `voice_started` outcome 精确对应、20+1 Take 边界、重启重开、失败与 lifecycle 路径。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。[PR #91](https://github.com/endaye/lmdj/pull/91) 的 [Core CI](https://github.com/endaye/lmdj/actions/runs/31009477920) 与 [Architecture Portal CI](https://github.com/endaye/lmdj/actions/runs/31009477985) 已全部满足必需门禁；squash 后的 `main` `d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf` 也完成 Web Host、Core 与版本锁复验。
 
 ## 非能力
 

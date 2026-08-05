@@ -1,4 +1,4 @@
-# Formal Web Runtime Host Local Acceptance — 2026-08-03
+# Formal Web Runtime Host Acceptance — 2026-08-03
 
 ## Task 12A historical outcome
 
@@ -9,13 +9,15 @@ the declared composition. Clean-distribution Web Proof, Web Runtime Lab, Core
 Proof, ASan, TSan, release stress, dependency, active-tree, and exact-identity
 gates pass locally.
 
-This record does not claim Pull Request CI, physical-device acceptance, or an
-Architecture Portal snapshot outcome. Current Portal truth and immutable
-snapshot provenance are verified and reported by their own documentation
-gates, rather than inferred from this Host acceptance record.
+At the Task 12A evidence point, this section did not claim Pull Request CI,
+physical-device acceptance, or an Architecture Portal snapshot outcome.
+Current Portal truth and immutable snapshot provenance are verified and
+reported by their own documentation gates, rather than inferred from the
+historical local Host evidence.
 
-No push, Pull Request, merge, tag, Release, deployment, publication, or Channel
-promotion occurred. `lmdj-v1.0.14.0` is future tag text only.
+At that point no push, Pull Request, merge, tag, Release, deployment,
+publication, or Channel promotion had occurred. `lmdj-v1.0.14.0` remains
+future tag text only.
 
 ## Task 12A historical identity and environment
 
@@ -160,7 +162,7 @@ for `opfsSyncAccessHandle` and `opfsWritableReplace`; ten skipped tests are not
 WebKit product acceptance. The current automated browser journey is not
 acoustic, MIDI-device, latency-camera, or iPad evidence.
 
-## CI configuration boundary
+## Pull Request CI and merge evidence
 
 The retained CI matrix contains Web Toolchain Conformance, Web Runtime Lab,
 macOS Core, Ubuntu Core, Linux ASan, macOS native ASan, and Coverage. A dedicated
@@ -170,9 +172,39 @@ runs `npm ci`, explicitly installs Chromium and WebKit, verifies the exact
 Emscripten identity, and runs `scripts/web-runtime-host.sh proof`. Nightly keeps
 TSan and Stress.
 
-This is workflow configuration evidence only. Pull Request CI is `not run /
-pending`; there is no CI URL or remote job result because no push or Pull
-Request was authorized.
+The final corrective integration was [PR #91](https://github.com/endaye/lmdj/pull/91).
+Its exact reviewed head was
+`b8d73e0e9597a7cddbfe3756a70298719ee5b9aa`. The
+[Core CI run](https://github.com/endaye/lmdj/actions/runs/31009477920)
+completed successfully for Web Toolchain Conformance, Formal Web Runtime Host,
+Web Runtime Lab, Ubuntu Core, Linux ASan, Coverage, the primary macOS gate,
+macOS Core, and macOS native ASan. The GitHub-hosted macOS fallback was skipped
+by design because the primary lane published successful terminal results. The
+[Architecture Portal run](https://github.com/endaye/lmdj/actions/runs/31009477985)
+also completed successfully. The PR rollup finished with 12 successful checks,
+four designed skips/neutral results, zero failures, and zero pending checks.
+
+PR #91 was squash-merged at `2026-08-05T13:31:16Z` as
+`d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf`. Its only parent is the verified
+pre-merge `main` revision
+`7a1b5d3cbc100d5f6b113854592a842af8ab4e84`, and the merged tree exactly equals
+the reviewed PR-head tree.
+
+## Merged-main acceptance — 2026-08-05
+
+The required post-merge verification ran from a clean isolated worktree at the
+exact merged `main` revision
+`d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf`:
+
+| Gate | Merged-main result |
+| --- | --- |
+| `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet 17/17, two clean builds/packages byte-identical, Python package 13/13, server 7/7, Node 84/84, native Web CTest 3/3, distribution 6/6, packaged Chromium 14 passed/1 designed skip, WebKit 1 capability-path pass/10 skips |
+| `scripts/core.sh proof` | PASS; 32/32 selected CTests; Headless Core Proof PASS; Product `1.0.14.0`, Channel `canary`, Assembly lock `MATCH` |
+| `python3 scripts/version.py verify --version-file products/lmdj/version.json --assembly products/lmdj/assembly.json --lock products/lmdj/assembly.lock.json` | PASS; Product Build `1.0.14.0` |
+
+This establishes the implemented-and-merged Stage 6 canary boundary. It does
+not create a signed Product tag, GitHub Release, deployment, publication,
+Channel promotion, or physical-device evidence.
 
 ## Required physical rows
 
@@ -190,7 +222,7 @@ canary implementation boundary, but they block physical-pass, `beta`, and
 
 ## Remaining boundary
 
-Local Host proof does not create a signed tag, Release, deployment, Channel
-promotion, remote CI result, or physical-device evidence. Snapshot generation
-and provenance remain owned by the Architecture Portal workflow and its own
-acceptance report.
+Merged-main Host Proof and successful PR CI do not create a signed tag,
+Release, deployment, Channel promotion, or physical-device evidence. The
+immutable `1.0.14.0` Portal snapshot remains unchanged and independently
+verified by its provenance gate.
