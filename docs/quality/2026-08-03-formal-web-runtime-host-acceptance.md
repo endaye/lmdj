@@ -29,7 +29,7 @@ Take, restart, rejection, recovery, and timeout journey continues.
 | --- | --- |
 | Focused visible Chromium journey | PASS; `1 passed` |
 | Product version, module graph, Assembly Lock, and lock verification | PASS; Product `1.0.15.0`, Host `1.1.0`, protocol `1` |
-| `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17, two clean packages byte-identical, Python package 13/13, server 7/7, Node 104/104, native Web CTest 3/3, distribution 6/6, packaged Chromium 14 passed/1 designed skip, WebKit 1 limitation-path pass/10 capability skips |
+| `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17, two clean packages byte-identical, Python package 13/13, server 7/7, Node 106/106, native Web CTest 3/3, distribution 6/6, packaged Chromium 14 passed/1 designed skip, WebKit 1 limitation-path pass/10 capability skips |
 | `scripts/web-runtime-lab.sh test` | PASS; 42/42 Node tests plus server and active-tree checks |
 | `scripts/core.sh proof` | PASS; 32/32 selected CTests, CLI 10/10, MCP 10/10, package acceptance, Product `1.0.15.0`, Assembly Lock `MATCH` |
 | Dependency, active-tree, and diff checks | PASS |
