@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Loopback-only static server for Kumaleon Lab.
+"""Loopback-only static server for Chameleon Lab.
 
 Mirrors the web-runtime-lab serving contract: cross-origin isolation headers,
 no-store caching, path traversal containment, and TLS required for any
@@ -18,7 +18,7 @@ from urllib.parse import urlsplit
 
 
 LAB_ROOT = Path(__file__).resolve().parent
-NOT_FOUND_PATH = LAB_ROOT / ".lmdj-kumaleon-not-found"
+NOT_FOUND_PATH = LAB_ROOT / ".lmdj-chameleon-not-found"
 ISOLATION_HEADERS = {
     "Cross-Origin-Opener-Policy": "same-origin",
     "Cross-Origin-Embedder-Policy": "require-corp",
@@ -31,13 +31,13 @@ class ServerError(RuntimeError):
     pass
 
 
-class KumaleonLabServer(ThreadingHTTPServer):
+class ChameleonLabServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
 
-class KumaleonLabHandler(SimpleHTTPRequestHandler):
-    server_version = "LMDJKumaleonLab/1"
+class ChameleonLabHandler(SimpleHTTPRequestHandler):
+    server_version = "LMDJChameleonLab/1"
 
     def __init__(self, *args, verbose: bool = False, **kwargs) -> None:
         self.verbose = verbose
@@ -62,7 +62,7 @@ class KumaleonLabHandler(SimpleHTTPRequestHandler):
 
     def _health(self, include_body: bool) -> None:
         body = json.dumps(
-            {"ok": True, "service": "kumaleon-lab"},
+            {"ok": True, "service": "chameleon-lab"},
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
@@ -137,11 +137,11 @@ def validate_options(options: argparse.Namespace) -> tuple[Path | None, Path | N
 def serve(options: argparse.Namespace) -> None:
     cert_file, key_file = validate_options(options)
     handler = partial(
-        KumaleonLabHandler,
+        ChameleonLabHandler,
         directory=str(LAB_ROOT),
         verbose=options.verbose,
     )
-    server = KumaleonLabServer((options.bind, options.port), handler)
+    server = ChameleonLabServer((options.bind, options.port), handler)
     scheme = "http"
     if cert_file is not None and key_file is not None:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

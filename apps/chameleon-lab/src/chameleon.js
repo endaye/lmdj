@@ -1,4 +1,4 @@
-// Pure geometry model for the Kumaleon Lab chameleon.
+// Pure geometry model for the Chameleon Lab chameleon.
 // Everything here is deterministic: the static body is a pure function of the
 // traits, and only the declared animated fields depend on time. The renderer
 // (main.js) turns this model into canvas calls; tests run it under Node.

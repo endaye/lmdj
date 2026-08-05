@@ -3,13 +3,13 @@ set -euo pipefail
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 repo_root="$(cd "$script_dir/.." && pwd -P)"
-lab_root="$repo_root/apps/kumaleon-lab"
+lab_root="$repo_root/apps/chameleon-lab"
 
 usage() {
   cat <<'EOF'
 usage:
-  scripts/kumaleon-lab.sh test
-  scripts/kumaleon-lab.sh serve [--port PORT]
+  scripts/chameleon-lab.sh test
+  scripts/chameleon-lab.sh serve [--port PORT]
 EOF
 }
 

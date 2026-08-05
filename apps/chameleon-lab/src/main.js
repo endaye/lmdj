@@ -1,4 +1,4 @@
-// Renderer and UI wiring for Kumaleon Lab. The geometry comes from the pure
+// Renderer and UI wiring for Chameleon Lab. The geometry comes from the pure
 // model in chameleon.js; this file only paints it and handles input.
 
 import {makeRng, randomSeedText} from './rng.js';
@@ -311,4 +311,4 @@ if (reduceMotion) {
 }
 
 // Kept for manual poking in devtools; harmless in production.
-globalThis.kumaleonLab = {state, makeRng};
+globalThis.chameleonLab = {state, makeRng};

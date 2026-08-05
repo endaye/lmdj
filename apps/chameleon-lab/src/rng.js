@@ -1,4 +1,4 @@
-// Deterministic seeded randomness for the Kumaleon Lab generative engine.
+// Deterministic seeded randomness for the Chameleon Lab generative engine.
 // Every creature is a pure function of its seed, so the same seed always
 // hatches the same chameleon.
 
@@ -51,7 +51,7 @@ export function randomSeedText() {
   if (cryptoObject && typeof cryptoObject.getRandomValues === 'function') {
     const buffer = new Uint32Array(2);
     cryptoObject.getRandomValues(buffer);
-    return `kuma-${buffer[0].toString(36)}-${buffer[1].toString(36)}`;
+    return `cham-${buffer[0].toString(36)}-${buffer[1].toString(36)}`;
   }
-  return `kuma-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
+  return `cham-${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;
 }

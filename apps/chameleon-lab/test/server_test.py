@@ -60,7 +60,7 @@ def assert_headers(response) -> None:
 
 def main() -> int:
     with tempfile.TemporaryDirectory(
-        prefix="lmdj-kumaleon-server-test-"
+        prefix="lmdj-chameleon-server-test-"
     ) as temporary:
         temporary_root = Path(temporary)
         port_file = temporary_root / "port.txt"
@@ -89,13 +89,13 @@ def main() -> int:
                 assert_headers(response)
                 assert json.loads(response.read()) == {
                     "ok": True,
-                    "service": "kumaleon-lab",
+                    "service": "chameleon-lab",
                 }
             with urlopen(f"{base_url}/package.json", timeout=5) as response:
                 assert response.status == 200
                 assert_headers(response)
                 package = json.loads(response.read())
-                assert package["name"] == "@lmdj/kumaleon-lab"
+                assert package["name"] == "@lmdj/chameleon-lab"
             with urlopen(f"{base_url}/index.html", timeout=5) as response:
                 assert response.status == 200
                 assert_headers(response)
@@ -158,7 +158,7 @@ def main() -> int:
         assert unsafe_lan.stderr.startswith("server error:")
         assert "non-loopback binding requires TLS" in unsafe_lan.stderr
 
-    print("kumaleon lab server tests: PASS")
+    print("chameleon lab server tests: PASS")
     return 0
 
 

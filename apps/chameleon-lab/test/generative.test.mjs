@@ -16,8 +16,8 @@ test('mulberry32 is deterministic and stays in [0, 1)', () => {
 });
 
 test('hashSeed is stable and distinguishes strings', () => {
-  assert.equal(hashSeed('kumaleon'), hashSeed('kumaleon'));
-  assert.notEqual(hashSeed('kumaleon'), hashSeed('chameleon'));
+  assert.equal(hashSeed('chameleon'), hashSeed('chameleon'));
+  assert.notEqual(hashSeed('chameleon'), hashSeed('lizard'));
   const rngA = makeRng('seed-a');
   const rngB = makeRng('seed-a');
   assert.equal(rngA(), rngB());

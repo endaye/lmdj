@@ -1,6 +1,6 @@
-# Kumaleon Lab
+# Chameleon Lab
 
-Kumaleon Lab is a product-neutral generative-art web experiment: a single-page
+Chameleon Lab is a product-neutral generative-art web experiment: a single-page
 site that draws a living-looking chameleon from pure mathematics. It is an
 original, code-only homage inspired by the concept of generative creature sites
 (such as kumaleon.com) — every pixel, curve, palette, and line of copy here is
@@ -31,16 +31,16 @@ behavior.
 Run the test gate from the repository root:
 
 ```bash
-scripts/kumaleon-lab.sh test
+scripts/chameleon-lab.sh test
 ```
 
 Start the loopback-only server:
 
 ```bash
-scripts/kumaleon-lab.sh serve --port 4175
+scripts/chameleon-lab.sh serve --port 4175
 ```
 
-or, from `apps/kumaleon-lab`:
+or, from `apps/chameleon-lab`:
 
 ```bash
 npm run dev

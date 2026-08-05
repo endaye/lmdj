@@ -1,8 +1,8 @@
-# Kumaleon 动态 3D 贴图实验站设计
+# Chameleon Lab 动态 3D 贴图实验站设计（参考 Kumaleon）
 
 - 日期：2026-08-05
 - 状态：用户已确认；尚未实施
-- 目标落点：`apps/kumaleon-lab/`
+- 目标落点：`apps/chameleon-lab/`
 - 性质：独立视觉技术实验，不是 LMDJ Product Assembly 或 Core Host
 - 参考对象：[Kumaleon](https://kumaleon.com/)
 
@@ -48,7 +48,7 @@ React 更适合管理首页 DOM、响应式导航、皮肤选择和无障碍状�
 ## 4. 模块边界
 
 ```text
-apps/kumaleon-lab/src/
+apps/chameleon-lab/src/
   app/              首页组合、状态与页面级样式
   patterns/         确定性 Canvas 2D 动态纹理生成器
   three/            场景、茶壶、CanvasTexture、渲染循环与资源释放
@@ -130,7 +130,7 @@ renderer 像素比、Canvas 尺寸、相机比例和模型尺度。像素比上�
 ## 8. GitHub CI 边界
 
 该实验不加入独立 GitHub workflow。现有通用 CI 和架构门户 workflow 应将
-`apps/kumaleon-lab/**` 作为 app-only 变更的忽略路径；当同一提交同时修改其他受管
+`apps/chameleon-lab/**` 作为 app-only 变更的忽略路径；当同一提交同时修改其他受管
 路径时，原有 CI 仍正常运行。仓库保护规则和本地验证不因 CI 排除而取消。
 
 ## 9. Documentation Impact
@@ -154,7 +154,7 @@ Version impact: none
 
 ## 11. 首版验收标准
 
-1. `apps/kumaleon-lab/` 可通过单一 npm 命令启动并通过 README 独立理解；
+1. `apps/chameleon-lab/` 可通过单一 npm 命令启动并通过 README 独立理解；
 2. 首页在桌面和移动视口都可用，不依赖 KUMALEON 美术资产；
 3. 茶壶使用一个持续存在的 `CanvasTexture` 显示动态程序化纹理；
 4. 四个皮肤按钮都能切换纹理，并同步页面视觉变量；

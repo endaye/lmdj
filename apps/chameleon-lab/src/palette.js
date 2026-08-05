@@ -1,4 +1,4 @@
-// Palettes and trait generation for the Kumaleon Lab generative engine.
+// Palettes and trait generation for the Chameleon Lab generative engine.
 // All colors are original to this lab; traits are a pure function of the seed.
 
 import {makeRng} from './rng.js';
