@@ -3,6 +3,7 @@ add_library(
   STATIC
     src/application.cpp
     src/assembly_loader.cpp
+    src/mutation_publish_scope.cpp
 )
 add_library(lmdj::application ALIAS lmdj_application)
 
@@ -10,6 +11,8 @@ target_include_directories(
   lmdj_application
   PUBLIC
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
+  PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/internal"
 )
 target_link_libraries(
   lmdj_application

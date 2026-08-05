@@ -359,8 +359,9 @@ run_audio_worklet_conformance() {
   "$repo_root/scripts/web-toolchain-conformance.sh" build-audio-runtime
   npm --prefix "$web_test_root" test -- \
     --project=chromium \
-    audio/realtime_audio_worklet.spec.mjs
-  echo "Web Runtime Host non-clean-room AudioWorklet conformance: PASS"
+    audio/realtime_audio_worklet.spec.mjs \
+    audio/realtime_failure.spec.mjs
+  echo "Web Runtime Host stable AudioWorklet and failure conformance: PASS"
 }
 
 test_host() {
