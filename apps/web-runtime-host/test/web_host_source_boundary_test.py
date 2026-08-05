@@ -34,6 +34,7 @@ def main() -> int:
     )
     web_runtime_host_script = repo_root / "scripts" / "web-runtime-host.sh"
     web_toolchain_script = repo_root / "scripts" / "web-toolchain-conformance.sh"
+    playwright_config = repo_root / "tests" / "platform" / "web" / "playwright.config.mjs"
     realtime_audio_worklet = (
         repo_root
         / "packages"
@@ -54,6 +55,7 @@ def main() -> int:
         realtime_failure_spec,
         web_runtime_host_script,
         web_toolchain_script,
+        playwright_config,
         realtime_audio_worklet,
     ]
     for path in required_files:
@@ -258,6 +260,17 @@ def main() -> int:
         "emscripten_futex_wake" in realtime_audio_worklet_source,
         "AudioWorklet final-quantum acknowledgement must wake the Control "
         "futex waiter",
+    )
+    playwright_config_text = playwright_config.read_text(encoding="utf-8")
+    require(
+        re.search(
+            r'name:\s*["\']chromium["\'].*?channel:\s*["\']chromium["\']',
+            playwright_config_text,
+            re.DOTALL,
+        )
+        is not None,
+        "formal browser Proof must use full Chromium new-headless mode, not "
+        "Chromium Headless Shell",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
