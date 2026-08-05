@@ -56,6 +56,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("needs.macos-primary.outputs.completed != 'true'", source)
         self.assertIn("timeout-minutes: 30", source)
         self.assertIn("github.event.pull_request.head.repo.full_name", source)
+        self.assertEqual(source.count("Runner selection candidates:"), 2)
 
     def test_workflow_routes_linux_gates_to_contabo_when_selected(self) -> None:
         selector = self.workflow_job("select-ubuntu-runner")
