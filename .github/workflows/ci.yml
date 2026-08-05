@@ -14,8 +14,91 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  web-toolchain-conformance:
+  select-ubuntu-runner:
+    name: Select Ubuntu runner
     runs-on: ubuntu-24.04
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      self-hosted: ${{ steps.select.outputs.self-hosted }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - name: Select an online idle trusted runner
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          RUNNER_NAME: contabo-lmdj-linux
+          RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          select_hosted() {
+            {
+              echo 'runner=["ubuntu-24.04"]'
+              echo 'self-hosted=false'
+              echo "reason=$1"
+            } >>"$GITHUB_OUTPUT"
+            echo "Using GitHub-hosted Ubuntu: $1"
+          }
+
+          if [[ "$EVENT_NAME" == "pull_request" && \
+                "$HEAD_REPOSITORY" != "$REPOSITORY" ]]; then
+            select_hosted 'untrusted fork pull request'
+            exit 0
+          fi
+
+          if [[ -z "$RUNNER_READ_TOKEN" ]]; then
+            select_hosted 'runner status token is unavailable'
+            exit 0
+          fi
+
+          if ! runner_response="$(
+            curl \
+              --silent \
+              --show-error \
+              --fail-with-body \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $RUNNER_READ_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$REPOSITORY/actions/runners"
+          )"; then
+            select_hosted 'runner status API is unavailable'
+            exit 0
+          fi
+
+          eligible_count="$(
+            jq \
+              --arg runner_name "$RUNNER_NAME" \
+              '[
+                .runners[]?
+                | select(
+                    .name == $runner_name
+                    and .status == "online"
+                    and .busy == false
+                  )
+                | [.labels[].name]
+                | select(contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"]))
+              ] | length' \
+              <<<"$runner_response"
+          )"
+
+          if [[ "$eligible_count" != "1" ]]; then
+            select_hosted 'self-hosted runner is offline, busy, missing, or mislabeled'
+            exit 0
+          fi
+
+          {
+            echo 'runner=["self-hosted","Linux","X64","lmdj-linux","contabo"]'
+            echo 'self-hosted=true'
+            echo 'reason=online idle trusted self-hosted runner'
+          } >>"$GITHUB_OUTPUT"
+          echo "Using self-hosted runner: $RUNNER_NAME"
+
+  web-toolchain-conformance:
+    needs: select-ubuntu-runner
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -44,7 +127,8 @@ jobs:
           scripts/web-toolchain-conformance.sh proof
 
   web-runtime-host:
-    runs-on: ubuntu-24.04
+    needs: select-ubuntu-runner
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -79,7 +163,8 @@ jobs:
           scripts/web-runtime-host.sh proof
 
   web-runtime-lab:
-    runs-on: ubuntu-latest
+    needs: select-ubuntu-runner
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -92,7 +177,8 @@ jobs:
 
   core-ubuntu:
     name: core (ubuntu-latest)
-    runs-on: ubuntu-latest
+    needs: select-ubuntu-runner
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -296,7 +382,8 @@ jobs:
         run: bash .github/scripts/assert-macos-gate-result.sh asan
 
   core-asan:
-    runs-on: ubuntu-24.04
+    needs: select-ubuntu-runner
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -313,7 +400,8 @@ jobs:
       - run: scripts/core.sh test asan stress
 
   core-coverage:
-    runs-on: ubuntu-24.04
+    needs: select-ubuntu-runner
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
         with:

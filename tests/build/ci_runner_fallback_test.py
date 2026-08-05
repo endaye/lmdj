@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Contract tests for the self-hosted macOS CI fallback topology."""
+"""Contract tests for the trusted self-hosted CI routing topology."""
 
 from __future__ import annotations
 
 import os
 from pathlib import Path
+import re
 import subprocess
 import unittest
 
@@ -16,6 +17,17 @@ ASSERT_GATE = REPO_ROOT / ".github/scripts/assert-macos-gate-result.sh"
 
 
 class CiRunnerFallbackTest(unittest.TestCase):
+    def workflow_job(self, job_name: str) -> str:
+        source = WORKFLOW.read_text(encoding="utf-8")
+        match = re.search(
+            rf"^  {re.escape(job_name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+            source,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match, f"workflow job is missing: {job_name}")
+        assert match is not None
+        return match.group("body")
+
     def run_gate(
         self,
         gate: str,
@@ -44,6 +56,32 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("needs.macos-primary.outputs.completed != 'true'", source)
         self.assertIn("timeout-minutes: 30", source)
         self.assertIn("github.event.pull_request.head.repo.full_name", source)
+
+    def test_workflow_routes_linux_gates_to_contabo_when_selected(self) -> None:
+        selector = self.workflow_job("select-ubuntu-runner")
+        self.assertIn("RUNNER_NAME: contabo-lmdj-linux", selector)
+        self.assertIn(
+            "runner=[\"self-hosted\",\"Linux\",\"X64\",\"lmdj-linux\",\"contabo\"]",
+            selector,
+        )
+        self.assertIn("runner=[\"ubuntu-24.04\"]", selector)
+        self.assertIn("github.event.pull_request.head.repo.full_name", selector)
+
+        for job_name in (
+            "web-toolchain-conformance",
+            "web-runtime-host",
+            "web-runtime-lab",
+            "core-ubuntu",
+            "core-asan",
+            "core-coverage",
+        ):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn("needs: select-ubuntu-runner", job)
+                self.assertIn(
+                    "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
+                    job,
+                )
 
     def test_composite_action_publishes_results_instead_of_retrying_tests(self) -> None:
         source = ACTION.read_text(encoding="utf-8")
