@@ -1,11 +1,11 @@
 :root {
-  --ifm-color-primary: #00a9a5;
-  --ifm-color-primary-dark: #009894;
-  --ifm-color-primary-darker: #008f8c;
-  --ifm-color-primary-darkest: #007673;
-  --ifm-color-primary-light: #00bab6;
-  --ifm-color-primary-lighter: #00c3bf;
-  --ifm-color-primary-lightest: #00dcd7;
+  --ifm-color-primary: #00807c;
+  --ifm-color-primary-dark: #007370;
+  --ifm-color-primary-darker: #006d6a;
+  --ifm-color-primary-darkest: #005a58;
+  --ifm-color-primary-light: #008d89;
+  --ifm-color-primary-lighter: #00948f;
+  --ifm-color-primary-lightest: #00a6a1;
   --ifm-code-font-size: 92%;
   --lmdj-surface: #f4f7f8;
   --lmdj-border: #d9e2e4;
@@ -23,8 +23,10 @@
   max-width: 1040px;
 }
 
-.theme-doc-markdown h1 {
-  letter-spacing: -0.035em;
+/* Keep CJK line length comfortable while wide diagrams and cards span the full column */
+.theme-doc-markdown p,
+.theme-doc-markdown li {
+  max-width: 72ch;
 }
 
 /* Long tables stay readable on narrow screens */
@@ -88,16 +90,22 @@
 .section-card h3 { margin: 0; font-size: 1rem; }
 .section-card p { margin: 0.65rem 0 0; color: var(--ifm-color-emphasis-700); }
 
-/* Align the always-dark footer with the portal palette */
-.footer--dark {
+/* Footer follows the site theme */
+.footer {
+  background-color: var(--lmdj-surface);
+}
+
+[data-theme='dark'] .footer {
   background-color: #0a1517;
 }
 
 .diagram-frame { margin: 1rem 0 2rem; }
-.diagram-frame iframe { width: 100%; min-height: 620px; border: 1px solid var(--lmdj-border); border-radius: 14px; background: var(--lmdj-surface); }
+/* Diagrams are 1560x820 SVGs; match the frame to the scaled figure instead of a fixed height */
+.diagram-frame iframe { display: block; width: 100%; height: auto; aspect-ratio: 1560 / 820; border: 1px solid var(--lmdj-border); border-radius: 14px; background: var(--lmdj-surface); }
 .diagram-frame figcaption { display: flex; justify-content: space-between; gap: 1rem; padding-top: 0.5rem; font-size: 0.85rem; }
 
 @media (max-width: 700px) {
-  .diagram-frame iframe { min-height: 480px; }
+  /* Diagrams keep a 760px minimum width and scroll horizontally on narrow screens */
+  .diagram-frame iframe { aspect-ratio: auto; height: 480px; }
   .diagram-frame figcaption { flex-direction: column; }
 }
