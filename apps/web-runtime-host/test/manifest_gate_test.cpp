@@ -20,8 +20,8 @@ using lmdj::web_host::ManifestGate;
 using lmdj::web_host::ManifestGateStatus;
 
 constexpr ManifestExpectation kExpected{
-    "1.0.13.0",
-    "1.0.0",
+    "1.0.15.0",
+    "1.1.0",
     1,
 };
 
@@ -44,8 +44,8 @@ nlohmann::json asset(
 }
 
 nlohmann::json manifest_json(
-    std::string_view product = "1.0.13.0",
-    std::string_view host = "1.0.0",
+    std::string_view product = "1.0.15.0",
+    std::string_view host = "1.1.0",
     std::uint32_t protocol = 1) {
   return {
       {"distribution_contract", "lmdj.web-runtime-host.distribution.v1"},
@@ -73,6 +73,7 @@ nlohmann::json manifest_json(
        }},
       {"assets",
        nlohmann::json::array({
+           asset("diagnostic-project", '0', ".mjs", "host_module"),
            asset("input-adapters", '1', ".mjs", "host_module"),
            asset("main", '2', ".mjs", "host_main"),
            asset("preflight", '3', ".mjs", "host_module"),
@@ -86,8 +87,8 @@ nlohmann::json manifest_json(
 }
 
 std::string canonical_manifest(
-    std::string_view product = "1.0.13.0",
-    std::string_view host = "1.0.0",
+    std::string_view product = "1.0.15.0",
+    std::string_view host = "1.1.0",
     std::uint32_t protocol = 1) {
   return lmdj::foundation::canonical_json(
       manifest_json(product, host, protocol));
@@ -136,10 +137,10 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
            std::pair{valid, std::string(64, '0')},
            std::pair{canonical_manifest("1.0.14.0"),
                      sha256(canonical_manifest("1.0.14.0"))},
-           std::pair{canonical_manifest("1.0.13.0", "1.0.1"),
-                     sha256(canonical_manifest("1.0.13.0", "1.0.1"))},
-           std::pair{canonical_manifest("1.0.13.0", "1.0.0", 2),
-                     sha256(canonical_manifest("1.0.13.0", "1.0.0", 2))},
+           std::pair{canonical_manifest("1.0.15.0", "1.0.0"),
+                     sha256(canonical_manifest("1.0.15.0", "1.0.0"))},
+           std::pair{canonical_manifest("1.0.15.0", "1.1.0", 2),
+                     sha256(canonical_manifest("1.0.15.0", "1.1.0", 2))},
        }) {
     ManifestGate gate;
     LMDJ_CHECK(

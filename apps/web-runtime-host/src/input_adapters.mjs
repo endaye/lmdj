@@ -102,8 +102,8 @@ export function createPointerAdapter({
       now() <= marker.expiresAt &&
       flatSlot === marker.flatSlot &&
       event?.target === marker.target &&
-      event?.clientX === marker.clientX &&
-      event?.clientY === marker.clientY
+      Math.abs(event?.clientX - marker.clientX) <= 1 &&
+      Math.abs(event?.clientY - marker.clientY) <= 1
     );
   }
 

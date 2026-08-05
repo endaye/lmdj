@@ -222,6 +222,21 @@ test("fresh preparation creates, inspects, imports, assigns all pads, and publis
   transport.assertDrained();
 });
 
+test("fresh preparation accepts the Host missing-project normalization", async () => {
+  const storage = memoryStorage(JSON.stringify(descriptor()));
+  const entries = freshEntries();
+  entries[0] = { operation: "project.open", error: { code: "INVALID_PROJECT" } };
+  const transport = scriptedTransport(entries);
+  const subject = createDiagnosticProjectCoordinator({
+    storage,
+    crypto: uuidSource(),
+    transport,
+  });
+
+  assert.deepEqual(await subject.load(), { state: "ready", generation: 1 });
+  transport.assertDrained();
+});
+
 test("an existing correct project only opens, inspects, and republishes", async () => {
   const assignments = Object.fromEntries(Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]));
   const { coordinator: subject, transport } = coordinator({
@@ -238,6 +253,32 @@ test("an existing correct project only opens, inspects, and republishes", async 
     "project.inspect",
     "snapshot.reload",
   ]);
+  transport.assertDrained();
+});
+
+test("an existing project retries a transient writer handoff", async () => {
+  const assignments = Object.fromEntries(
+    Array.from({ length: 64 }, (_, index) => [index, ASSET_ID]),
+  );
+  const transport = scriptedTransport([
+    { operation: "project.open", error: { code: "PROJECT_BUSY" } },
+    { operation: "project.open", result: { project_revision: 65 } },
+    {
+      operation: "project.inspect",
+      result: inspector(emptyProject({ assetPresent: true, assignments }), 65),
+    },
+    {
+      operation: "snapshot.reload",
+      result: { runtime_ready: true, generation: 2 },
+    },
+  ]);
+  const subject = createDiagnosticProjectCoordinator({
+    storage: memoryStorage(JSON.stringify(descriptor())),
+    crypto: uuidSource(),
+    transport,
+  });
+
+  assert.deepEqual(await subject.load(), { state: "ready", generation: 2 });
   transport.assertDrained();
 });
 

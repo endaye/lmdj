@@ -4,6 +4,8 @@ export const DIAGNOSTIC_PROJECT_STORAGE_KEY =
   "lmdj.web-runtime-host.diagnostic-project.v1";
 
 const PROJECT_DEADLINE_MS = 30_000;
+const PROJECT_OPEN_RETRY_DEADLINE_MS = 10_000;
+const PROJECT_OPEN_RETRY_DELAY_MS = 25;
 const PAD_COUNT = 64;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const DESCRIPTOR_KEYS = ["asset_id", "contract", "pattern_id", "project_id"].sort();
@@ -210,14 +212,36 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
   }
 
   async function openOrCreate(descriptor) {
+    async function openExisting() {
+      const deadline = globalThis.performance.now() +
+        PROJECT_OPEN_RETRY_DEADLINE_MS;
+      while (true) {
+        try {
+          await send("project.open", {
+            project_id: descriptor.project_id,
+            pattern_id: descriptor.pattern_id,
+          });
+          return;
+        } catch (error) {
+          if (
+            errorCode(error) !== "PROJECT_BUSY" ||
+            globalThis.performance.now() >= deadline
+          ) {
+            throw error;
+          }
+        }
+        await new Promise((resolvePromise) => globalThis.setTimeout(
+          resolvePromise,
+          PROJECT_OPEN_RETRY_DELAY_MS,
+        ));
+      }
+    }
+
     try {
-      await send("project.open", {
-        project_id: descriptor.project_id,
-        pattern_id: descriptor.pattern_id,
-      });
+      await openExisting();
       return;
     } catch (error) {
-      if (errorCode(error) !== "NOT_FOUND") {
+      if (!["NOT_FOUND", "INVALID_PROJECT"].includes(errorCode(error))) {
         throw error;
       }
     }
@@ -236,10 +260,7 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
       if (errorCode(error) !== "DUPLICATE_ID") {
         throw error;
       }
-      await send("project.open", {
-        project_id: descriptor.project_id,
-        pattern_id: descriptor.pattern_id,
-      });
+      await openExisting();
     }
   }
 

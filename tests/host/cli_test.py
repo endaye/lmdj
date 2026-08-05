@@ -735,7 +735,7 @@ def host_boundary_and_identity(executable: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 14,
+        "build": 15,
         "patch": 0,
     }
     manifest = json.loads(

@@ -130,7 +130,7 @@ assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "api_version": 1,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }

@@ -28,6 +28,11 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
+const DIAGNOSTIC_PROJECT_CONTRACT =
+  "lmdj.web-runtime-host.diagnostic-project.v1";
+const DIAGNOSTIC_PROJECT_STORAGE_KEY = DIAGNOSTIC_PROJECT_CONTRACT;
+const PREPARED_PROJECT_REVISION = 65;
+const COMMITTED_PROJECT_REVISION = 66;
 
 
 function clone(value) {
@@ -436,47 +441,6 @@ async function activateWithGesture(page) {
 }
 
 
-async function createPreparedProject(page, identity) {
-  const created = success(await hostRequest(page, "project.create", {
-    project_id: identity.projectId,
-    bpm: 120,
-    initial_pattern: {
-      pattern_id: identity.patternId,
-      bars: 1,
-      events: [],
-    },
-  }), "project.create");
-  expect(created.project_revision).toBe(0);
-
-  const imported = success(await hostRequest(page, "asset.import", {
-    command_id: crypto.randomUUID(),
-    expected_revision: 0,
-    asset_id: identity.assetId,
-    media_type: "audio/wav",
-    sidecar: {
-      sidecar_bytes: fixtureBytes.byteLength,
-      sidecar_sha256: fixtureMetadata.wav.sha256,
-    },
-  }, { sidecar: fixtureBytes }), "asset.import");
-  expect(imported.project_revision).toBe(1);
-
-  const assigned = success(await hostRequest(page, "pad.assign", {
-    command_id: crypto.randomUUID(),
-    expected_revision: 1,
-    slot: { bank: 0, pad: 0 },
-    asset_id: identity.assetId,
-  }), "pad.assign");
-  expect(assigned.project_revision).toBe(2);
-
-  const snapshot = success(await hostRequest(page, "snapshot.reload", {
-    pattern_id: identity.patternId,
-  }), "snapshot.reload");
-  expect(snapshot.runtime_ready).toBe(true);
-  expect(snapshot.generation).toBeGreaterThan(0);
-  return snapshot;
-}
-
-
 async function observationMarker(page) {
   return page.evaluate(() => ({
     admissions: window.__lmdjTask11.admittedSequences.length,
@@ -828,12 +792,8 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
     return manifest.assets.find(({ role }) => role === "runtime_script").path;
   });
   const runtimeScriptPathname = new URL(runtimeScriptPath, page.url()).pathname;
-  const identity = {
-    projectId: crypto.randomUUID(),
-    patternId: crypto.randomUUID(),
-    assetId: crypto.randomUUID(),
-  };
-  await createPreparedProject(page, identity);
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
   await activateWithGesture(page);
 
   expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
@@ -855,7 +815,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
 });
 
 
-test("Chromium completes the exact twelve-step packaged runtime journey", async ({
+test("Chromium visible diagnostic project completes the packaged runtime journey", async ({
   browserName,
   context,
   page,
@@ -903,22 +863,150 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   );
 
   await openPackagedHost(page);
+  await expect(page.locator("#audio-activate")).toBeDisabled();
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#audio-activate")).toBeEnabled();
+  await page.locator("#audio-activate").click();
+  await expect(page.locator("#host-state")).toHaveText("running");
   const runtimeScriptPath = await page.evaluate(async () => {
     const manifest = await fetch("./host-manifest.json").then((response) =>
       response.json());
     return manifest.assets.find(({ role }) => role === "runtime_script").path;
   });
   const runtimeScriptPathname = new URL(runtimeScriptPath, page.url()).pathname;
+  const humanMarker = await observationMarker(page);
+  await page.locator("#pad-0").click();
+  await page.keyboard.press("s");
+  await expect.poll(() => page.evaluate((start) =>
+    window.__lmdjTask11.admittedSequences.length - start,
+  humanMarker.admissions)).toBe(2);
+  const humanAdmissions = await page.evaluate((start) =>
+    window.__lmdjTask11.admittedSequences.slice(start),
+  humanMarker.admissions);
+  await proveExactOutcomes(page, humanAdmissions, humanMarker.notifications);
+
+  const descriptor = await page.evaluate((storageKey) =>
+    JSON.parse(localStorage.getItem(storageKey)),
+  DIAGNOSTIC_PROJECT_STORAGE_KEY);
+  expect(Object.keys(descriptor).sort()).toEqual([
+    "asset_id",
+    "contract",
+    "pattern_id",
+    "project_id",
+  ]);
+  expect(descriptor).toEqual({
+    contract: DIAGNOSTIC_PROJECT_CONTRACT,
+    project_id: expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    ),
+    pattern_id: expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    ),
+    asset_id: expect.stringMatching(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    ),
+  });
+  const diagnosticText = await page.locator("#diagnostics").textContent();
+  for (const identifier of [
+    descriptor.project_id,
+    descriptor.pattern_id,
+    descriptor.asset_id,
+  ]) {
+    expect(diagnosticText).not.toContain(identifier);
+  }
+
+  const firstPreparationResponses = await page.evaluate(() =>
+    window.__lmdjTask11.responses.map(({ operation, response }) => ({
+      operation,
+      response,
+    })));
+  expect(firstPreparationResponses.filter(
+    ({ operation }) => operation === "project.create",
+  )).toHaveLength(1);
+  expect(firstPreparationResponses.filter(
+    ({ operation }) => operation === "asset.import",
+  )).toHaveLength(1);
+  expect(firstPreparationResponses.filter(
+    ({ operation }) => operation === "pad.assign",
+  )).toHaveLength(64);
+  const initiallyPrepared = success(
+    await hostRequest(page, "project.inspect", {}),
+    "project.inspect after visible preparation",
+  );
+  expect(initiallyPrepared.project_revision).toBe(PREPARED_PROJECT_REVISION);
+  expect(Object.keys(initiallyPrepared.project.assets)).toEqual([
+    descriptor.asset_id,
+  ]);
+  expect(initiallyPrepared.project.banks).toHaveLength(4);
+  for (const [bank, bankState] of initiallyPrepared.project.banks.entries()) {
+    expect(bankState.bank).toBe(bank);
+    expect(bankState.pads).toHaveLength(16);
+    for (const [pad, padState] of bankState.pads.entries()) {
+      expect(padState).toMatchObject({
+        pad,
+        asset_id: descriptor.asset_id,
+      });
+    }
+  }
+  const initialSnapshot = {
+    generation: await page.evaluate(() =>
+      window.lmdjWebRuntimeController.diagnostics()
+        .diagnostic_project_generation),
+  };
+  expect(initialSnapshot.generation).toBeGreaterThan(0);
+
+  await page.reload();
+  await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+  await expect(page.locator("#audio-activate")).toBeDisabled();
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#audio-activate")).toBeEnabled();
+  const reopenedDescriptor = await page.evaluate((storageKey) =>
+    JSON.parse(localStorage.getItem(storageKey)),
+  DIAGNOSTIC_PROJECT_STORAGE_KEY);
+  expect(reopenedDescriptor).toEqual(descriptor);
+  const reopenResponses = await page.evaluate(() =>
+    window.__lmdjTask11.responses.map(({ operation, response }) => ({
+      operation,
+      response,
+    })));
+  const projectOpenResponses = reopenResponses.filter(
+    ({ operation }) => operation === "project.open",
+  );
+  expect(projectOpenResponses.length).toBeGreaterThan(0);
+  expect(projectOpenResponses.filter(({ response }) => response.ok === true))
+    .toHaveLength(1);
+  expect(projectOpenResponses.at(-1)?.response).toMatchObject({
+    ok: true,
+    result: { project_revision: PREPARED_PROJECT_REVISION },
+  });
+  expect(projectOpenResponses.slice(0, -1).every(({ response }) =>
+    response.error?.code === "PROJECT_BUSY")).toBe(true);
+  expect(reopenResponses.filter(
+    ({ operation }) => operation === "project.create",
+  )).toHaveLength(0);
+  expect(reopenResponses.filter(
+    ({ operation }) => operation === "asset.import",
+  )).toHaveLength(0);
+  expect(reopenResponses.filter(
+    ({ operation }) => operation === "pad.assign",
+  )).toHaveLength(0);
+  await page.locator("#audio-activate").click();
+  await expect(page.locator("#host-state")).toHaveText("running");
+  expect(success(
+    await hostRequest(page, "project.inspect", {}),
+    "project.inspect after visible reopen",
+  ).project_revision).toBe(PREPARED_PROJECT_REVISION);
+
   const identity = {
-    projectId: crypto.randomUUID(),
-    patternId: crypto.randomUUID(),
+    projectId: descriptor.project_id,
+    patternId: descriptor.pattern_id,
     committedPatternId: crypto.randomUUID(),
-    assetId: crypto.randomUUID(),
+    assetId: descriptor.asset_id,
     rejectedAssetId: crypto.randomUUID(),
     takeId: crypto.randomUUID(),
   };
-  const initialSnapshot = await createPreparedProject(page, identity);
-  await activateWithGesture(page);
   expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
   expect(runtimeModuleRequests.filter(
     (pathname) => pathname === runtimeScriptPathname,
@@ -958,8 +1046,11 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.diagnostics()))
     .toMatchObject({ state: "running" });
 
-  expect(await page.evaluate(({ takeId }) =>
-    window.lmdjWebRuntimeController.beginTake(takeId, 2), identity)).toBe(true);
+  expect(await page.evaluate(({ takeId, expectedRevision }) =>
+    window.lmdjWebRuntimeController.beginTake(takeId, expectedRevision), {
+    ...identity,
+    expectedRevision: PREPARED_PROJECT_REVISION,
+  })).toBe(true);
   await waitForCaptureState(page, "active");
   const takeMarker = await observationMarker(page);
   const takeAdmissions = await triggerThroughController(
@@ -995,19 +1086,19 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   };
   const committed = success(await hostRequest(page, "take.commit", {
     command_id: crypto.randomUUID(),
-    expected_revision: 2,
+    expected_revision: PREPARED_PROJECT_REVISION,
     pattern: committedPattern,
   }), "take.commit");
   expect(committed).toMatchObject({
     take_id: identity.takeId,
     pattern_id: identity.committedPatternId,
-    project_revision: 3,
+    project_revision: COMMITTED_PROJECT_REVISION,
   });
   const inspectedAfterCommit = success(
     await hostRequest(page, "project.inspect", {}),
     "project.inspect after commit",
   );
-  expect(inspectedAfterCommit.project_revision).toBe(3);
+  expect(inspectedAfterCommit.project_revision).toBe(COMMITTED_PROJECT_REVISION);
   expect(inspectedAfterCommit.project.takes[identity.takeId].events).toHaveLength(20);
   expect(inspectedAfterCommit.project.takes[identity.takeId].events
     .every(({ velocity }) => velocity === 101)).toBe(true);
@@ -1018,12 +1109,15 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
 
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#audio-activate")).toBeEnabled();
   const reopened = success(
     await reopenProject(page, identity, identity.committedPatternId),
     "project.open after page and Worker reload",
   );
   expect(reopened).toMatchObject({
-    project_revision: 3,
+    project_revision: COMMITTED_PROJECT_REVISION,
     runtime_ready: true,
     pattern_id: identity.committedPatternId,
   });
@@ -1031,7 +1125,7 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
     await hostRequest(page, "project.inspect", {}),
     "project.inspect after restart",
   );
-  expect(inspectedAfterRestart.project_revision).toBe(3);
+  expect(inspectedAfterRestart.project_revision).toBe(COMMITTED_PROJECT_REVISION);
   expect(inspectedAfterRestart.project.takes[identity.takeId].events).toHaveLength(20);
   expect(success(await hostRequest(page, "take.recoverable.list", {}),
     "recoverable after restart").candidates).toEqual([]);
@@ -1049,7 +1143,7 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   expect(priorStatus.control_generation).toBe(reopened.generation);
   const importedRejected = success(await hostRequest(page, "asset.import", {
     command_id: crypto.randomUUID(),
-    expected_revision: 3,
+    expected_revision: COMMITTED_PROJECT_REVISION,
     asset_id: identity.rejectedAssetId,
     media_type: "audio/wav",
     sidecar: {
@@ -1057,13 +1151,15 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
       sidecar_sha256: createHash("sha256").update(rejectedFixtureBytes).digest("hex"),
     },
   }, { sidecar: rejectedFixtureBytes }), "rejected fixture import");
-  expect(importedRejected.project_revision).toBe(4);
+  expect(importedRejected.project_revision).toBe(COMMITTED_PROJECT_REVISION + 1);
   expect(success(await hostRequest(page, "pad.assign", {
     command_id: crypto.randomUUID(),
-    expected_revision: 4,
+    expected_revision: COMMITTED_PROJECT_REVISION + 1,
     slot: { bank: 0, pad: 0 },
     asset_id: identity.rejectedAssetId,
-  }), "assign rejected fixture").project_revision).toBe(5);
+  }), "assign rejected fixture").project_revision).toBe(
+    COMMITTED_PROJECT_REVISION + 2,
+  );
   const rejectionMarker = await observationMarker(page);
   const rejectedSnapshot = await hostRequest(page, "snapshot.reload", {
     pattern_id: identity.committedPatternId,
@@ -1082,10 +1178,12 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   );
   expect(success(await hostRequest(page, "pad.assign", {
     command_id: crypto.randomUUID(),
-    expected_revision: 5,
+    expected_revision: COMMITTED_PROJECT_REVISION + 2,
     slot: { bank: 0, pad: 0 },
     asset_id: identity.assetId,
-  }), "restore accepted fixture").project_revision).toBe(6);
+  }), "restore accepted fixture").project_revision).toBe(
+    COMMITTED_PROJECT_REVISION + 3,
+  );
   const republished = success(await hostRequest(page, "snapshot.reload", {
     pattern_id: identity.committedPatternId,
   }), "republish after rejected Snapshot");
@@ -1213,12 +1311,15 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   test.skip(browserName !== "chromium");
   test.setTimeout(60_000);
   await openPackagedHost(page);
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  const descriptor = await page.evaluate((storageKey) =>
+    JSON.parse(localStorage.getItem(storageKey)),
+  DIAGNOSTIC_PROJECT_STORAGE_KEY);
   const identity = {
-    projectId: crypto.randomUUID(),
-    patternId: crypto.randomUUID(),
-    assetId: crypto.randomUUID(),
+    projectId: descriptor.project_id,
+    patternId: descriptor.pattern_id,
   };
-  await createPreparedProject(page, identity);
   await activateWithGesture(page);
   const marker = await observationMarker(page);
   await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
@@ -1250,7 +1351,7 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
     reopenResponse,
     `reopen after timeout cleanup: ${JSON.stringify(reopenResponse)}`,
   );
-  expect(reopened.project_revision).toBe(2);
+  expect(reopened.project_revision).toBe(PREPARED_PROJECT_REVISION);
   expect(await reopenedPage.evaluate(() =>
     window.lmdjWebRuntimeController.close())).toBe(true);
   await reopenedPage.close();
@@ -1885,24 +1986,17 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
   }
 
   expect(missing).toEqual([]);
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  const descriptor = await page.evaluate((storageKey) =>
+    JSON.parse(localStorage.getItem(storageKey)),
+  DIAGNOSTIC_PROJECT_STORAGE_KEY);
   const identity = {
-    projectId: crypto.randomUUID(),
-    patternId: crypto.randomUUID(),
+    projectId: descriptor.project_id,
+    patternId: descriptor.pattern_id,
   };
   expect(success(await hostRequest(page, "host.status", {}), "WebKit status"))
     .toMatchObject({ state: "core-ready" });
-  expect(success(await hostRequest(page, "project.create", {
-    project_id: identity.projectId,
-    bpm: 120,
-    initial_pattern: {
-      pattern_id: identity.patternId,
-      bars: 1,
-      events: [],
-    },
-  }), "WebKit project.create").project_revision).toBe(0);
-  expect(success(await hostRequest(page, "snapshot.reload", {
-    pattern_id: identity.patternId,
-  }), "WebKit snapshot.reload").runtime_ready).toBe(true);
   const beforeMismatch = await hostRequest(page, "project.inspect", {});
   const mismatch = await page.evaluate(() =>
     window.lmdjWebRuntimeHost.transport.send({
@@ -1921,8 +2015,10 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
 
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+  await page.locator("#diagnostic-project-load").click();
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
   expect(success(await reopenProject(page, identity, identity.patternId),
-    "WebKit reopen").project_revision).toBe(0);
+    "WebKit reopen").project_revision).toBe(PREPARED_PROJECT_REVISION);
   await activateWithGesture(page);
   await page.locator("#audio-suspend").click();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");

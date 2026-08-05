@@ -1,5 +1,49 @@
 # Formal Web Runtime Host Acceptance — 2026-08-03
 
+## Manual diagnostic candidate — 2026-08-06
+
+The current local candidate advances Product Build `1.0.14.0 -> 1.0.15.0`
+and Formal Web Runtime Host `1.0.0 -> 1.1.0`. Private protocol `1`, all Core
+Module versions, Contracts, Providers, and Models are unchanged. The generated
+Assembly Lock and compiled product identity agree with those two version
+changes.
+
+The shipped human sequence is exactly:
+
+`Load diagnostic project -> ready -> Activate audio -> running -> trigger`
+
+The primary packaged Chromium journey starts from a fresh origin and uses only
+those visible controls before activation. The first Load performs exactly one
+Project create, one bounded WAV import, and 64 Pad assignments, producing
+revision `65`. Its browser-local descriptor contains only the diagnostic
+contract plus Project, Pattern, and Asset UUIDs; none of those UUIDs appears in
+DOM diagnostics. One pointer Pad and one mapped keyboard key produce exactly
+two admissions and two `voice_started` outcomes. After reload, Load reuses the
+same descriptor, performs no create/import/assignment, reopens revision `65`,
+and enables activation to reach `running` again before the existing 500-trigger,
+Take, restart, rejection, recovery, and timeout journey continues.
+
+### Current local candidate evidence
+
+| Gate | Observed local result |
+| --- | --- |
+| Focused visible Chromium journey | PASS; `1 passed` |
+| Product version, module graph, Assembly Lock, and lock verification | PASS; Product `1.0.15.0`, Host `1.1.0`, protocol `1` |
+| `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17, two clean packages byte-identical, Python package 13/13, server 7/7, Node 104/104, native Web CTest 3/3, distribution 6/6, packaged Chromium 14 passed/1 designed skip, WebKit 1 limitation-path pass/10 capability skips |
+| `scripts/web-runtime-lab.sh test` | PASS; 42/42 Node tests plus server and active-tree checks |
+| `scripts/core.sh proof` | PASS; 32/32 selected CTests, CLI 10/10, MCP 10/10, package acceptance, Product `1.0.15.0`, Assembly Lock `MATCH` |
+| Dependency, active-tree, and diff checks | PASS |
+| Architecture Portal current preflight | PASS; 40/40 tests, 34 pages, 9 diagram sources/18 outputs, Product `1.0.15.0` facts, typecheck, optimized build, and 37 routes/internal links |
+| `scripts/architecture-portal.sh check` | Current gates PASS through 40/40 tests, 34 current pages, 9 diagram sources/18 outputs, and generated Product `1.0.15.0` facts; then expected Task 4 boundary: `1.0.15.0` is missing from `versions.json`, snapshot source, and metadata |
+
+This automated Chromium evidence proves deterministic preparation,
+browser-local descriptor persistence, pointer/keyboard routing, and exact audio
+outcomes. It does not prove acoustic latency, a physical MIDI device,
+Safari/iPad touch behavior, or subjective audio quality. It also does not claim
+new Pull Request CI, merge, signed tag, Release, deployment, publication,
+Channel promotion, or an immutable `1.0.15.0` Portal snapshot. Task 4 owns that
+snapshot boundary.
+
 ## Task 12A historical outcome
 
 Task 12A assembles Formal Web Runtime Host `1.0.0` into Product Build
