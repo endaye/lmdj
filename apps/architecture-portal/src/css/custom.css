@@ -95,6 +95,19 @@
   background-color: var(--lmdj-surface);
 }
 
+.footer__title {
+  font-size: 0.95rem;
+}
+
+.footer__link-item {
+  font-size: 0.875rem;
+  line-height: 1.8;
+}
+
+.footer__copyright {
+  font-size: 0.8rem;
+}
+
 [data-theme='dark'] .footer {
   background-color: #0a1517;
 }
