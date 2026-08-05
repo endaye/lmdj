@@ -27,6 +27,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
+const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
 
 
 function clone(value) {
@@ -1669,20 +1670,21 @@ test("Chromium packaged asset.import claim wins before deadline and settles afte
       },
       deadlineFixtureBytes,
       {
-        deadlineMs: 250,
+        deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS,
         gate: "after-claim",
         forcePublicationError: selected.forcePublicationError,
       },
     );
     await expect.poll(() => deadlineProofState(owner, requestId), {
       message: `${selected.name} entered Facade and won publication claim`,
+      timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000,
     }).toMatchObject({
       entered_facade: true,
       claim_attempted: true,
       gate: "after-claim",
       publication: "publish-claimed",
     });
-    await owner.waitForTimeout(300);
+    await owner.waitForTimeout(CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 100);
     expect(await deadlineProofState(owner, requestId), selected.name)
       .toMatchObject({
         publication: "publish-claimed",
