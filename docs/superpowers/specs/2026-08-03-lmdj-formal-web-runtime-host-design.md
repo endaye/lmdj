@@ -808,8 +808,8 @@ Every response echoes `request_id` and `protocol_version` and uses the existing
 their Contract error code. Host-local failures use exact codes tested with Web
 Runtime Host `1.0.0`, including `UNSUPPORTED_WEB_RUNTIME`, `PROJECT_BUSY`,
 `WEB_RUNTIME_RESOURCE_LIMIT`, `HOST_STATE_INVALID`, `HOST_TIMEOUT`, and
-`HOST_PROTOCOL_MISMATCH`. Notifications have an `event` field and no
-`request_id`.
+`HOST_RESTART_REQUIRED`, and `HOST_PROTOCOL_MISMATCH`. Notifications have an
+`event` field and no `request_id`.
 
 The transport rejects malformed UTF-8, duplicate request IDs, unknown fields,
 unsupported operations, and wrong-state operations. A JSON envelope is at most
@@ -830,8 +830,40 @@ Request deadlines use monotonic time and are exact:
 | Project, Asset, Snapshot, and Take operations | 30 seconds |
 | `host.close` | 10 seconds |
 
-A deadline produces `HOST_TIMEOUT` and then `failed`. The Host does not return a
-timeout while allowing the same Worker to publish a late Project mutation.
+The caller computes one absolute cutoff before the synchronous JavaScript-to-
+Wasm envelope/sidecar marshal and copy. Native admission maps that same cutoff
+into its steady clock instead of starting a fresh duration after copying. The
+source-shell controller delegates the operation deadline to the authoritative
+transport and does not race it with a second operation timer; the transport
+retains the original cutoff when the synchronous call returns. No copy, queue
+handoff, or blocked main-thread timer may extend the caller's publication
+window. The separate 1,000 ms recovery-outcome watchdog and default runtime-
+terminator deadline retain their lifecycle-specific authority.
+
+For Project mutation requests, the caller deadline is a hard upper bound only
+while authoritative publication remains open and cancellable. If deadline
+cancellation wins `open -> cancelled`, the Host returns `HOST_TIMEOUT`, enters
+`failed`, publishes no new Project Truth, seals the transport, rejects new
+submissions, and releases or force-terminates the Control owner. If publication
+claims first, that claim is the cancellation cutoff: crossing the caller
+deadline cannot convert the claimed operation into `HOST_TIMEOUT`; the Host
+delivers its real success or typed error.
+
+Claimed publication settlement is nevertheless bounded. The production
+watchdog is exactly 1,000 ms. If settlement remains unknown at that bound, the
+Host returns `HOST_RESTART_REQUIRED` with `terminal_state:
+"restart-required"` and `mutation_outcome: "unknown"`, remains `failed`, seals
+and terminates the transport owner, and requires reopen recovery before inspect
+or retry. Reopen accepts old-or-new authoritative truth and removes uncommitted
+files that are not referenced by the manifest. Response and notification
+delivery remains once-only; late terminal messages cannot revive the Host.
+The terminal BroadcastChannel is only a wake-up path: Control atomically
+authorizes one release, records one post-release completion, and Browser Main
+atomically consumes that native completion once. A forged, duplicate, or
+replayed channel acknowledgement cannot manufacture native completion; at most
+one channel event can consume an actual completion, and later events are
+rejected. Without native completion, an unresponsive Control owner still
+reaches the 100 ms force-termination fallback.
 
 ### 12.2 Required operations
 

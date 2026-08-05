@@ -298,6 +298,102 @@ test("source shell verifies manifest before loading runtime and exposes exact Ho
   assert.equal(fixture.dom.elements.get("host-state").textContent, "audio-suspended");
 });
 
+test("controller preserves a late authoritative transport success", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const scheduled = [];
+  const fixture = harness({
+    timers: {
+      setTimeout(callback, milliseconds) {
+        const record = { callback, milliseconds, cleared: false };
+        scheduled.push(record);
+        return record;
+      },
+      clearTimeout(record) {
+        record.cleared = true;
+      },
+    },
+  });
+  const originalSend = fixture.options.transport.send.bind(
+    fixture.options.transport);
+  const late = deferred();
+  let lateRequest = null;
+  fixture.options.transport.send = (request, options) => {
+    if (request.operation === "audio.activate") {
+      lateRequest = request;
+      assert.deepEqual(options, { deadlineMs: 1_000 });
+      return late.promise;
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  const activation = controller.activateAudio();
+  await settle();
+  for (const timer of scheduled.filter((record) => !record.cleared)) {
+    timer.callback();
+  }
+  await settle();
+  late.resolve(responseFor(lateRequest, {
+    state: "running",
+    changed: true,
+    generation: 7,
+  }));
+
+  assert.equal(await activation, true);
+  assert.equal(controller.state, "running");
+  assert.equal(scheduled.length, 0);
+});
+
+test("controller preserves a late authoritative transport error", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const scheduled = [];
+  const fixture = harness({
+    timers: {
+      setTimeout(callback, milliseconds) {
+        const record = { callback, milliseconds, cleared: false };
+        scheduled.push(record);
+        return record;
+      },
+      clearTimeout(record) {
+        record.cleared = true;
+      },
+    },
+  });
+  const originalSend = fixture.options.transport.send.bind(
+    fixture.options.transport);
+  const late = deferred();
+  let lateRequest = null;
+  fixture.options.transport.send = (request, options) => {
+    if (request.operation === "audio.activate") {
+      lateRequest = request;
+      assert.deepEqual(options, { deadlineMs: 1_000 });
+      return late.promise;
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  const activation = controller.activateAudio();
+  await settle();
+  for (const timer of scheduled.filter((record) => !record.cleared)) {
+    timer.callback();
+  }
+  await settle();
+  late.resolve({
+    protocol_version: 1,
+    request_id: lateRequest.request_id,
+    ok: false,
+    error: { code: "IO_ERROR", message: "late rejection", details: {} },
+  });
+
+  assert.equal(await activation, false);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "IO_ERROR");
+  assert.equal(scheduled.length, 0);
+});
+
 test("default source-shell hash gate fails before runtime load on mismatch", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   for (const [digest, expectedState, expectedLoads] of [
@@ -901,7 +997,7 @@ test("a synchronously throwing runtime terminator cannot escape terminal cleanup
   assert.equal(controller.diagnostics().error_code, "IO_ERROR");
 });
 
-test("default terminal cleanup bounds Host close before releasing every resource", async () => {
+test("default terminal cleanup terminates Workers before best-effort Host close", async () => {
   const { defaultRuntimeTerminator } = await mainModule();
   const cases = [
     ["resolved", () => Promise.resolve({ ok: true })],
@@ -918,7 +1014,6 @@ test("default terminal cleanup bounds Host close before releasing every resource
 
   for (const [label, close] of cases) {
     const events = [];
-    let timeoutCallback = null;
     const duplicateWorker = {
       terminate() {
         events.push("worker:duplicate");
@@ -954,37 +1049,7 @@ test("default terminal cleanup bounds Host close before releasing every resource
         },
       }],
     };
-    const window = {
-      crypto: uuidSource(),
-      Module: {
-        PThread: {
-          runningWorkers: [duplicateWorker, {
-            terminate() {
-              events.push("worker:running");
-            },
-          }],
-          unusedWorkers: [{
-            terminate() {
-              events.push("worker:unused");
-            },
-          }],
-        },
-      },
-    };
-    const timers = {
-      setTimeout(callback, milliseconds) {
-        assert.equal(milliseconds, 10_000);
-        timeoutCallback = callback;
-        if (label === "timeout") {
-          queueMicrotask(callback);
-        }
-        return 7;
-      },
-      clearTimeout(handle) {
-        assert.equal(handle, 7);
-        timeoutCallback = null;
-      },
-    };
+    const window = { crypto: uuidSource() };
     const audioContext = {
       state: "running",
       async close() {
@@ -997,19 +1062,15 @@ test("default terminal cleanup bounds Host close before releasing every resource
       runtime,
       audioContext,
       window,
-      timers,
     }), label);
     assert.deepEqual(events, [
+      "worker:duplicate",
+      "worker:runtime",
       "host.close",
       "worklet.disconnect",
       "worklet.port.close",
       "audio.close",
-      "worker:duplicate",
-      "worker:runtime",
-      "worker:running",
-      "worker:unused",
     ], label);
-    assert.equal(timeoutCallback, null, label);
   }
 });
 

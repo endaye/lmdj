@@ -233,7 +233,8 @@ case "$command_name" in
       "$web_test_root/project_io/project_io_web_conformance.spec.mjs"
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
-      "$web_test_root/audio/realtime_audio_worklet.spec.mjs"
+      "$web_test_root/audio/realtime_audio_worklet.spec.mjs" \
+      "$web_test_root/audio/realtime_failure.spec.mjs"
     echo "Web Toolchain Conformance Proof: PASS"
     ;;
   clean)

@@ -47,6 +47,7 @@ using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
 using lmdj::web_host::ControlRuntime;
 using lmdj::web_host::detail::AudioQuiescenceCoordinator;
+using lmdj::web_host::detail::BridgeCancelStatus;
 using lmdj::web_host::detail::BridgeHooks;
 using lmdj::web_host::detail::BridgePollStatus;
 using lmdj::web_host::detail::BridgeSubmitStatus;
@@ -347,17 +348,16 @@ struct FakeCoordinator final {
       void* context, std::uint32_t timeout_ms) noexcept {
     auto& self = *static_cast<FakeCoordinator*>(context);
     self.called = true;
+    ++self.await_calls;
     self.timeout_ms = timeout_ms;
     if (self.await_delay_ms != 0) {
       std::this_thread::sleep_for(
           std::chrono::milliseconds(self.await_delay_ms));
     }
-    if (self.engine != nullptr) {
-      self.observed_capture_idle =
-          self.engine->capture_telemetry().state == CaptureState::idle;
-      self.observed_engine_running =
-          self.engine->telemetry().state ==
-          lmdj::audio::RealtimeState::running;
+    if (self.render_during_await && self.engine != nullptr) {
+      std::array<float, 128> left{};
+      std::array<float, 128> right{};
+      self.engine->render(left.data(), right.data(), 128);
     }
     if (!self.workspace_root.empty() && !self.expected_take_id.empty()) {
       try {
@@ -377,8 +377,26 @@ struct FakeCoordinator final {
         self.observed_take_sealed = false;
       }
     }
+    if (self.driver != nullptr && self.engine != nullptr) {
+      const auto deadline = std::chrono::steady_clock::now() +
+                            std::chrono::seconds(1);
+      auto capture = self.engine->capture_telemetry().state;
+      while (capture != CaptureState::idle &&
+             capture != CaptureState::corrupted &&
+             std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        capture = self.engine->capture_telemetry().state;
+      }
+    }
     if (self.driver != nullptr) {
       self.driver->stop();
+    }
+    if (self.engine != nullptr) {
+      self.observed_capture_idle =
+          self.engine->capture_telemetry().state == CaptureState::idle;
+      self.observed_engine_running =
+          self.engine->telemetry().state ==
+          lmdj::audio::RealtimeState::running;
     }
     self.quiescence_established =
         self.driver == nullptr || self.driver->stopped();
@@ -435,6 +453,7 @@ struct FakeCoordinator final {
   bool is_ready = true;
   bool timeout = false;
   bool called = false;
+  bool render_during_await = false;
   bool observed_capture_idle = false;
   bool observed_engine_running = false;
   bool observed_take_sealed = false;
@@ -447,6 +466,7 @@ struct FakeCoordinator final {
   std::uint64_t acknowledged_before_begin = 0;
   std::uint64_t begin_acknowledgement = 1;
   std::uint32_t begin_calls = 0;
+  std::uint32_t await_calls = 0;
   std::uint32_t acknowledgement_calls = 0;
   std::uint32_t acknowledgement_delay_polls = 0;
   std::uint32_t acknowledgement_polls = 0;
@@ -909,6 +929,52 @@ void test_take_stop_drains_the_final_disarm_quantum() {
   }
 }
 
+void test_take_stop_requests_an_acknowledged_final_worklet_quantum() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(8);
+  import_and_assign(*runtime, wav, kAssetId, 755, 756, 0);
+  check_success(runtime->dispatch(
+      "snapshot.reload", {{"pattern_id", kPatternId}}, {}));
+  FakeCoordinator coordinator;
+  coordinator.engine = &runtime->engine();
+  coordinator.render_during_await = true;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  OneShotAudioDriver audio(runtime->engine());
+  check_success(runtime->dispatch(
+      "take.begin",
+      {{"take_id", kTakeId}, {"expected_revision", 2}},
+      {}));
+  audio.render_one();
+  LMDJ_CHECK(
+      runtime->engine().capture_telemetry().state == CaptureState::active);
+
+  for (std::uint32_t index = 0; index < 20; ++index) {
+    check_success(runtime->dispatch(
+        "trigger", {{"slot", 0}, {"velocity", 101}}, {}));
+  }
+  const auto& stopped = check_exact_success(
+      runtime->dispatch(
+          "take.stop",
+          Json::object(),
+          {},
+          std::chrono::steady_clock::now() -
+              std::chrono::milliseconds(29'500)),
+      {"take_id", "project_revision", "status"});
+  LMDJ_CHECK(stopped.at("status") == "committable");
+  LMDJ_CHECK(coordinator.await_calls == 1);
+  LMDJ_CHECK(coordinator.observed_capture_idle);
+  LMDJ_CHECK(coordinator.begin_calls == 2);
+  const auto capture = runtime->engine().capture_telemetry();
+  LMDJ_CHECK(capture.state == CaptureState::idle);
+  LMDJ_CHECK(capture.captured_events == 20);
+  LMDJ_CHECK(capture.drained_events == 20);
+}
+
 void test_trigger_queue_full_is_admission_failure() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -1187,6 +1253,7 @@ void test_audio_suspend_requires_and_honors_quiescence_coordinator() {
     check_success(runtime->dispatch("audio.activate", Json::object(), {}));
     ContinuousAudioDriver driver(runtime->engine());
     success.driver = &driver;
+    success.engine = &runtime->engine();
     check_success(runtime->dispatch(
         "take.begin",
         {{"take_id", kTakeId}, {"expected_revision", 2}},
@@ -1753,7 +1820,7 @@ void test_suspend_and_close_pass_only_the_original_remaining_budget() {
   }
 }
 
-void test_suspend_and_close_do_not_quiesce_after_capture_expires() {
+void test_suspend_and_close_stop_after_capture_acknowledgement_expires() {
   for (const auto operation : {"audio.suspend", "host.close"}) {
     TempDirectory temp;
     auto runtime = make_runtime(temp.path());
@@ -1787,7 +1854,10 @@ void test_suspend_and_close_do_not_quiesce_after_capture_expires() {
             std::chrono::steady_clock::now() -
                 std::chrono::milliseconds(elapsed_budget)),
         "HOST_TIMEOUT");
-    LMDJ_CHECK(!coordinator.called);
+    LMDJ_CHECK(coordinator.called);
+    LMDJ_CHECK(coordinator.await_calls >= 1);
+    LMDJ_CHECK(coordinator.timeout_ms >= 1);
+    LMDJ_CHECK(coordinator.timeout_ms <= 100);
     LMDJ_CHECK(
         runtime->engine().telemetry().state ==
         lmdj::audio::RealtimeState::running);
@@ -2536,6 +2606,47 @@ void test_bridge_rejects_an_expired_control_request_without_late_success() {
       "HOST_STATE_INVALID");
 }
 
+void test_bridge_cancelled_before_dispatch_skips_facade_work() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch(
+      "project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(2'400);
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(989);
+  const auto import = encode(request(
+      request_id,
+      "asset.import",
+      import_payload(989, 0, kAssetId, wav)));
+
+  LMDJ_CHECK(bridge->configure_deadline_proof(request_id, 1, false));
+  LMDJ_CHECK(
+      bridge->submit(import, wav) == BridgeSubmitStatus::accepted);
+  std::jthread control([&] { proxy.pump_one(); });
+  wait_until([&] {
+    return (bridge->deadline_proof_state(request_id) & (1 << 8)) != 0;
+  });
+  LMDJ_CHECK(
+      bridge->cancel(request_id) == BridgeCancelStatus::cancelled);
+  control.join();
+
+  const auto proof = bridge->deadline_proof_state(request_id);
+  LMDJ_CHECK((proof & (1 << 9)) == 0);
+  LMDJ_CHECK(bridge->terminal_release_ready());
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  LMDJ_CHECK(std::filesystem::is_empty(
+      temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj") / "assets"));
+  LMDJ_CHECK(std::filesystem::is_empty(
+      temp.path() / "projects" /
+      (std::string(kProjectId) + ".lmdj") / "history/transactions"));
+}
+
 void test_bridge_rechecks_deadline_before_success_publication() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -2548,6 +2659,54 @@ void test_bridge_rechecks_deadline_before_success_publication() {
 
   LMDJ_CHECK(
       bridge->submit(status, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+}
+
+void test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(994);
+  const auto status = encode(request(
+      request_id, "host.status", Json::object()));
+
+  LMDJ_CHECK(
+      bridge->submit(status, {}, std::chrono::steady_clock::now()) ==
+      BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  LMDJ_CHECK(response.at("ok") == false);
+  LMDJ_CHECK(response.at("error").at("code") == "HOST_TIMEOUT");
+  proxy.pump_one();
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(
+      bridge->poll(output, required) == BridgePollStatus::failed);
+}
+
+void test_bridge_rechecks_deadline_before_error_publication() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  proxy.response_delay_ms = 1'050;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(993);
+  const auto malformed = encode(request(
+      request_id, "host.status", {{"unexpected", true}}));
+
+  LMDJ_CHECK(
+      bridge->submit(malformed, {}) == BridgeSubmitStatus::accepted);
   proxy.pump_one();
   const auto response = poll_message(*bridge);
   LMDJ_CHECK(response.at("request_id") == request_id);
@@ -2626,6 +2785,7 @@ int main() {
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_take_stop_drains_the_final_disarm_quantum();
+    test_take_stop_requests_an_acknowledged_final_worklet_quantum();
     test_trigger_queue_full_is_admission_failure();
     test_voice_capacity_is_sequence_addressed_execution_outcome();
     test_audio_activation_requires_ready_and_reports_explicit_ack();
@@ -2639,7 +2799,7 @@ int main() {
     test_audio_activation_rollback_rechecks_the_original_deadline();
     test_take_stop_and_host_close_recheck_exact_deadlines();
     test_suspend_and_close_pass_only_the_original_remaining_budget();
-    test_suspend_and_close_do_not_quiesce_after_capture_expires();
+    test_suspend_and_close_stop_after_capture_acknowledgement_expires();
     test_take_stop_stops_capture_batches_at_the_original_deadline();
     test_capture_drop_control_drain_seals_and_fails_the_session();
     test_capture_drop_racing_the_post_drain_check_is_terminal();
@@ -2654,7 +2814,10 @@ int main() {
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
     test_bridge_rejects_an_expired_control_request_without_late_success();
+    test_bridge_cancelled_before_dispatch_skips_facade_work();
     test_bridge_rechecks_deadline_before_success_publication();
+    test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
+    test_bridge_rechecks_deadline_before_error_publication();
     test_internal_audio_activation_timeout_is_terminal_after_response();
     test_bridge_preserves_error_responses_for_an_externally_failed_runtime();
   } catch (const std::exception& error) {

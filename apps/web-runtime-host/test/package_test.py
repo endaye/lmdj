@@ -24,6 +24,7 @@ PACKAGE_TOOL = REPO_ROOT / "apps/web-runtime-host/tools/package.py"
 OPERATOR_SCRIPT = REPO_ROOT / "scripts/web-runtime-host.sh"
 LOCK_PATH = REPO_ROOT / "tools/web-runtime/emscripten.lock.json"
 PRODUCT_VERSION_PATH = REPO_ROOT / "products/lmdj/version.json"
+HOST_CMAKE_PATH = REPO_ROOT / "apps/web-runtime-host/CMakeLists.txt"
 
 
 def load_package_module():
@@ -240,6 +241,17 @@ class PackageTest(unittest.TestCase):
         self.assertIn("trap cleanup_all EXIT", script)
         self.assertIn("trap 'exit 130' INT", script)
         self.assertIn("trap 'exit 143' TERM", script)
+
+    def test_pre_js_declares_configure_and_link_dependencies(self) -> None:
+        cmake = HOST_CMAKE_PATH.read_text(encoding="utf-8")
+        self.assertRegex(
+            cmake,
+            r"CMAKE_CONFIGURE_DEPENDS[\s\S]*?src/web-runtime-pre\.js",
+        )
+        self.assertRegex(
+            cmake,
+            r"LINK_DEPENDS[\s\S]*?lmdj_web_runtime_pre_js_path",
+        )
 
     def test_operator_term_cleans_owned_server_pid_and_ready_directory(self) -> None:
         packaged = self.run_package()

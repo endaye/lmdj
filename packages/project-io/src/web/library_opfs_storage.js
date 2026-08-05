@@ -338,6 +338,16 @@ mergeInto(LibraryManager.library, {
       }
     },
 
+    releaseAllWriters() {
+      const states = new Set(this.leasesByPath.values());
+      this.leaseTokens.clear();
+      this.leasesByPath.clear();
+      for (const state of states) {
+        state.references = 0;
+        state.access.close();
+      }
+    },
+
     async replaceComplete(path, length, data, dataLength, observer) {
       const parts = this.parts(path, length);
       const replacement = this.bytes(data, dataLength);

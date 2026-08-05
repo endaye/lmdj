@@ -1345,6 +1345,34 @@ git commit -m "docs(product): freeze 1.0.14.0 canary architecture snapshot"
 - Modify only files required by concrete review findings; each finding gets a focused test and follow-up commit.
 - Update: `docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md` only with verified PR/CI/merged-main evidence.
 
+Task 13 A is a local review-finding follow-up. Its approved Project mutation
+deadline semantics are: cancellation wins only from open publication;
+publication claim is the cancellation cutoff; claimed settlement has an exact
+1,000 ms production watchdog and returns typed `HOST_RESTART_REQUIRED` with an
+unknown mutation outcome when bounded settlement fails. One absolute caller
+cutoff starts before synchronous JavaScript-to-Wasm copy and is preserved in
+native steady time. The source-shell controller delegates that operation
+deadline solely to the authoritative transport instead of racing a second
+timer; the recovery-outcome watchdog and runtime-terminator deadline remain
+separate lifecycle bounds. Terminal release is a native
+authorize/complete/consume one-shot; BroadcastChannel messages cannot
+authenticate their own ACK. The focused packaged `CONFORMANCE=OFF` proof must
+cover synchronous-copy deadline
+pressure, forged/replayed ACK and duplicate release requests, responsive and
+force-terminated cancellation, committed and aborted claim-wins results across
+the caller deadline, a deadline-after-claim cancellation attempt, once-only
+terminal delivery, and old-or-new recovery after a permanent claim hang.
+
+Version impact: none. This changes source-private arbitration and terminal
+release state plus package-private proof telemetry without changing a Product,
+Module, Host, Provider, Contract, Assembly, Channel, or public protocol
+identity.
+
+Documentation impact: required. Update design §12.1, this Task 13 record, the
+product decision log, Formal Host acceptance, and current Portal route
+`/platform/web-runtime/`. Do not edit or regenerate the immutable `1.0.14.0`
+snapshot, versioned metadata, sidebars, or static snapshot assets.
+
 - [ ] **Step 1: Self-review spec and source coverage**
 
 Map every design section and B1–B6 to a named test/implementation. Inspect placeholder hits in changed files, then fail automatically on forbidden contracts, `record.*` in formal source, direct Host Project I/O, Web Runtime Lab runtime imports, unbounded allocations, source maps, and physical PASS claims.

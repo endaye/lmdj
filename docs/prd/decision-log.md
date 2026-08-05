@@ -313,3 +313,35 @@
 - 影响：批准只冻结门槛，不代表 Spike 已通过。实验室只判定显式提供的本地物理
   证据，不用浏览器报告推导物理结论。完整门槛见
   [Web Realtime Audio Touch-to-Sound Threshold Decision](../architecture/2026-08-01-web-realtime-audio-threshold-decision.md)。
+
+## 2026-08-05
+
+### 已确认：Web Project mutation deadline 以 publication claim 为取消截止点
+
+- 结论：caller deadline 只在 mutation publication 仍为 `open` 时是硬上限；若
+  deadline cancellation 先赢得 `open -> cancelled`，Host 返回 `HOST_TIMEOUT`、
+  进入 `failed`、不发布 Project Truth、封口 transport，并释放或强停 Control
+  owner。若 authoritative publication 先 claim，claim 就是取消截止点；即使随后
+  越过 caller deadline，也必须返回真实 success 或 typed error，不能伪造
+  `HOST_TIMEOUT`。
+- 起点与终止确认：Browser Main 在同步 envelope/sidecar marshal 与 copy 之前生成
+  唯一绝对 cutoff，native 将同一 cutoff 映射到 steady clock；copy、queue handoff
+  或阻塞主线程 timer 都不能延长 publication window。source-shell controller 只把
+  operation deadline 交给权威 transport，不再另起一个竞争 timer；1,000 ms 恢复
+  outcome watchdog 与 runtime terminator deadline 仍是相互独立的生命周期边界。
+  terminal BroadcastChannel 只负责唤醒；Control 对 release 做一次性
+  authorize/complete，Browser Main 只消费一次 native completion，伪造、重复或
+  replay ACK 不能跳过 100 ms fallback。
+- 有界性：claimed settlement 的生产 watchdog 固定为 1,000 ms。到期仍无法判定
+  committed 或 aborted 时，返回 `HOST_RESTART_REQUIRED`，details 固定为
+  `terminal_state: restart-required` 与 `mutation_outcome: unknown`；Host 保持
+  `failed`，重开后按 manifest 接受 old-or-new truth，再 inspect/retry。
+- 原因：caller timeout、authoritative manifest publication 与异步 response poll
+  是三个不同的线性化边界。把 response 到达时间当作 publication 时间会在已经
+  commit 后误报 timeout；反过来，无界等待 claimed operation 又会让 Host 永久
+  卡死。
+- 影响：只修改 source-private publication arbitration、terminal release state、
+  package-private proof telemetry、OPFS 未提交文件恢复和 Web transport
+  settlement；不改变公开
+  Contract、Product Build、Module/Host 版本、Assembly 或 Channel。自动化证明不
+  升级五项 deferred physical rows，也不代表 PR CI、tag、Release 或部署完成。

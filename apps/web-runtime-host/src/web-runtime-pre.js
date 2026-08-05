@@ -1,5 +1,23 @@
 if (typeof window !== "undefined") {
   globalThis.Module = Module;
+  const PUBLICATION_SETTLEMENT_WATCHDOG_MS = 1_000;
+  const deadlineProofConfig = window.__LMDJ_WEB_HOST_DEADLINE_PROOF__;
+  const publicationSettlementWatchdogMs =
+    Number.isInteger(deadlineProofConfig?.settlementWatchdogMs) &&
+    deadlineProofConfig.settlementWatchdogMs > 0 &&
+    deadlineProofConfig.settlementWatchdogMs <=
+      PUBLICATION_SETTLEMENT_WATCHDOG_MS
+      ? deadlineProofConfig.settlementWatchdogMs
+      : PUBLICATION_SETTLEMENT_WATCHDOG_MS;
+  const NativeWorker = window.Worker;
+  const runtimeWorkers = new Set();
+  window.Worker = class LmdjWebRuntimeWorker extends NativeWorker {
+    constructor(...arguments_) {
+      super(...arguments_);
+      runtimeWorkers.add(this);
+      window.Worker = NativeWorker;
+    }
+  };
   /* LMDJ_WEB_AUDIO_CONFORMANCE_MANIFEST */
 
   const injectedManifestBytes = Module["lmdjHostManifestBytes"];
@@ -174,24 +192,179 @@ if (typeof window !== "undefined") {
   const transportDecoder = new TextDecoder("utf-8", {fatal: true});
   const pendingRequests = new Map();
   const notificationSubscribers = new Set();
+  const failureSubscribers = new Set();
+  const terminalToken = crypto.randomUUID();
+  const terminalChannel = new BroadcastChannel(
+    "lmdj.web-runtime-host.terminal.v1");
   let pollScheduled = false;
+  let transportTerminated = false;
+  let terminalTransportError = null;
+  let terminalOwnerReleased = false;
+  let terminalFailureDelivered = false;
+  let terminalAckTimeout = 0;
+  let host;
 
-  function transportFailure(code, message) {
+  function transportFailure(code, message, details = {}) {
     const error = new Error(message);
     error.code = code;
+    error.details = Object.freeze({...details});
     return error;
   }
 
-  function failPending(error) {
-    for (const pending of pendingRequests.values()) {
+  function restartRequiredFailure() {
+    return transportFailure(
+      "HOST_RESTART_REQUIRED",
+      "Project publication settlement did not complete; restart and inspect before retrying",
+      {
+        terminal_state: "restart-required",
+        mutation_outcome: "unknown",
+      },
+    );
+  }
+
+  function cancelControlRequest(requestId) {
+    if (!host.runtimeInitialized) return -1;
+    try {
+      return Module.ccall(
+        "lmdj_web_host_cancel_request",
+        "number",
+        ["string", "number"],
+        [requestId, requestId.length],
+      );
+    } catch {
+      return -1;
+    }
+  }
+
+  function deliverTerminalFailure() {
+    if (terminalFailureDelivered) return;
+    terminalFailureDelivered = true;
+    for (const subscriber of [...failureSubscribers]) {
+      try {
+        subscriber(terminalTransportError);
+      } catch {
+        // One observer cannot prevent terminal cleanup.
+      }
+    }
+    notificationSubscribers.clear();
+    failureSubscribers.clear();
+  }
+
+  function releaseTerminalOwner() {
+    terminalChannel.postMessage({
+      type: "release-and-close",
+      token: terminalToken,
+    });
+    terminalAckTimeout = window.setTimeout(() => {
+      consumeTerminalOwnerRelease();
+      terminateRuntimeWorkers();
+      terminalChannel.close();
+      deliverTerminalFailure();
+    }, 100);
+  }
+
+  function consumeTerminalOwnerRelease() {
+    let released;
+    try {
+      released = Module.ccall(
+        "lmdj_web_host_consume_terminal_release",
+        "number",
+        ["string", "number"],
+        [terminalToken, terminalToken.length],
+      );
+    } catch {
+      return false;
+    }
+    if (released !== 0 && released !== 1) return false;
+    terminalOwnerReleased = released === 1;
+    return true;
+  }
+
+  function terminateRuntimeWorkers() {
+    for (const worker of runtimeWorkers) {
+      try {
+        worker.terminate();
+      } catch {
+        // The transport has already sealed every external operation.
+      }
+    }
+    runtimeWorkers.clear();
+  }
+
+  function failClosed(error) {
+    if (transportTerminated) return false;
+    transportTerminated = true;
+    terminalTransportError = error;
+    const entries = [...pendingRequests.entries()];
+    pendingRequests.clear();
+    for (const [requestId, pending] of entries) {
+      cancelControlRequest(requestId);
       window.clearTimeout(pending.timeout);
       pending.reject(error);
     }
-    pendingRequests.clear();
+    releaseTerminalOwner();
+    return true;
+  }
+
+  terminalChannel.addEventListener("message", (event) => {
+    if (
+      event.data?.type !== "released-and-closed" ||
+      event.data?.token !== terminalToken
+    ) {
+      return;
+    }
+    if (!consumeTerminalOwnerRelease()) return;
+    window.clearTimeout(terminalAckTimeout);
+    terminateRuntimeWorkers();
+    terminalChannel.close();
+    deliverTerminalFailure();
+  });
+
+  function linearizeRequestDeadline(requestId, pending) {
+    const remaining = pending.deadlineAt - performance.now();
+    if (remaining > 0) {
+      pending.timeout = window.setTimeout(
+        () => onRequestDeadline(requestId), remaining);
+      return true;
+    }
+    if (
+      pending.deadlineLinearized === true ||
+      cancelControlRequest(requestId) === 0
+    ) {
+      pending.deadlineLinearized = true;
+      if (pending.settlementDeadlineAt === null) {
+        pending.settlementDeadlineAt =
+          performance.now() + publicationSettlementWatchdogMs;
+      }
+      const settlementRemaining =
+        pending.settlementDeadlineAt - performance.now();
+      if (settlementRemaining <= 0) {
+        failClosed(restartRequiredFailure());
+        return false;
+      }
+      pending.timeout = window.setTimeout(
+        () => onRequestDeadline(requestId),
+        Math.min(2, settlementRemaining),
+      );
+      return true;
+    }
+    failClosed(transportFailure(
+      "HOST_TIMEOUT", "formal Web Host request timed out"));
+    return false;
+  }
+
+  function onRequestDeadline(requestId) {
+    const pending = pendingRequests.get(requestId);
+    if (!pending || transportTerminated) return;
+    linearizeRequestDeadline(requestId, pending);
   }
 
   function scheduleTransportPoll() {
-    if (pollScheduled || (!pendingRequests.size && !notificationSubscribers.size)) {
+    if (
+      transportTerminated ||
+      pollScheduled ||
+      (!pendingRequests.size && !notificationSubscribers.size)
+    ) {
       return;
     }
     pollScheduled = true;
@@ -200,9 +373,19 @@ if (typeof window !== "undefined") {
 
   function pollTransport() {
     pollScheduled = false;
+    if (transportTerminated) return;
     if (!host.runtimeInitialized) {
       scheduleTransportPoll();
       return;
+    }
+    for (const [requestId, pending] of pendingRequests) {
+      if (
+        performance.now() >= pending.deadlineAt &&
+        pending.deadlineLinearized !== true &&
+        !linearizeRequestDeadline(requestId, pending)
+      ) {
+        return;
+      }
     }
     const output = _malloc(65_536);
     const requiredPointer = _malloc(4);
@@ -225,13 +408,13 @@ if (typeof window !== "undefined") {
           }
         }
       } else if (status === 2 || status === 3) {
-        failPending(transportFailure(
+        failClosed(transportFailure(
           status === 2 ? "HOST_PROTOCOL_MISMATCH" : "HOST_STATE_INVALID",
           "formal Web Host transport failed",
         ));
       }
     } catch {
-      failPending(transportFailure(
+      failClosed(transportFailure(
         "HOST_PROTOCOL_MISMATCH",
         "formal Web Host transport message is invalid",
       ));
@@ -244,6 +427,9 @@ if (typeof window !== "undefined") {
 
   const transport = Object.freeze({
     send(request, options = {}) {
+      if (transportTerminated) {
+        return Promise.reject(terminalTransportError);
+      }
       if (!host.runtimeInitialized || pendingRequests.has(request.request_id)) {
         return Promise.reject(transportFailure(
           "HOST_STATE_INVALID",
@@ -254,11 +440,21 @@ if (typeof window !== "undefined") {
       const sidecar = options.sidecar instanceof Uint8Array
         ? options.sidecar
         : new Uint8Array();
+      const deadlineMs = Number.isFinite(options.deadlineMs)
+        ? Math.min(0xffff_ffff, Math.max(0, options.deadlineMs))
+        : 30_000;
+      const deadlineAt = performance.now() + deadlineMs;
       const submitted = Module.ccall(
         "lmdj_web_host_submit",
         "number",
-        ["array", "number", "array", "number"],
-        [envelope, envelope.byteLength, sidecar, sidecar.byteLength],
+        ["array", "number", "array", "number", "number"],
+        [
+          envelope,
+          envelope.byteLength,
+          sidecar,
+          sidecar.byteLength,
+          performance.timeOrigin + deadlineAt,
+        ],
       );
       if (submitted !== 0) {
         return Promise.reject(transportFailure(
@@ -269,14 +465,16 @@ if (typeof window !== "undefined") {
         ));
       }
       return new Promise((resolve, reject) => {
-        const deadlineMs = Number.isFinite(options.deadlineMs)
-          ? options.deadlineMs
-          : 30_000;
-        const timeout = window.setTimeout(() => {
-          pendingRequests.delete(request.request_id);
-          reject(transportFailure("HOST_TIMEOUT", "formal Web Host request timed out"));
-        }, deadlineMs);
-        pendingRequests.set(request.request_id, {resolve, reject, timeout});
+        const pending = {
+          resolve,
+          reject,
+          timeout: 0,
+          deadlineAt,
+          deadlineLinearized: false,
+          settlementDeadlineAt: null,
+        };
+        pendingRequests.set(request.request_id, pending);
+        linearizeRequestDeadline(request.request_id, pending);
         scheduleTransportPoll();
       });
     },
@@ -288,14 +486,109 @@ if (typeof window !== "undefined") {
       scheduleTransportPoll();
       return () => notificationSubscribers.delete(listener);
     },
+    subscribeFailure(listener) {
+      if (typeof listener !== "function") {
+        throw new TypeError("a transport failure listener is required");
+      }
+      if (transportTerminated) {
+        if (terminalFailureDelivered) {
+          listener(terminalTransportError);
+          return () => {};
+        }
+        failureSubscribers.add(listener);
+        return () => failureSubscribers.delete(listener);
+      }
+      failureSubscribers.add(listener);
+      return () => failureSubscribers.delete(listener);
+    },
+    terminate() {
+      failClosed(transportFailure(
+        "HOST_STATE_INVALID", "formal Web Host transport is terminated"));
+    },
+    get terminated() {
+      return transportTerminated;
+    },
+    get terminalOwnerReleased() {
+      return terminalOwnerReleased;
+    },
   });
 
-  const host = {
+  const deadlineProof = deadlineProofConfig === undefined
+    ? undefined
+    : Object.freeze({
+        arm({requestId, gate, forcePublicationError = false}) {
+          const gates = Object.freeze({
+            "responsive-cancellation": 1,
+            "after-claim": 2,
+            "unresponsive-cancellation": 3,
+          });
+          const selectedGate = gates[gate];
+          if (
+            typeof requestId !== "string" ||
+            !Number.isInteger(selectedGate) ||
+            Module.ccall(
+              "lmdj_web_host_deadline_proof_configure",
+              "number",
+              ["string", "number", "number", "number"],
+              [
+                requestId,
+                requestId.length,
+                selectedGate,
+                forcePublicationError === true ? 1 : 0,
+              ],
+            ) !== 1
+          ) {
+            throw new TypeError("deadline proof configuration is invalid");
+          }
+        },
+        release() {
+          return Module.ccall(
+            "lmdj_web_host_deadline_proof_release", "number", [], []) === 1;
+        },
+        state(requestId) {
+          const packed = Module.ccall(
+            "lmdj_web_host_deadline_proof_state",
+            "number",
+            ["string", "number"],
+            [requestId, requestId.length],
+          );
+          if (packed < 0) return null;
+          return Object.freeze({
+            entered_facade: (packed & (1 << 8)) !== 0,
+            claim_attempted: (packed & (1 << 9)) !== 0,
+            claim_started_open: (packed & (1 << 10)) !== 0,
+            last_cancel_result: Object.freeze({
+              0: "none",
+              1: "publish-claimed",
+              2: "cancelled",
+              3: "not-found",
+            })[(packed >> 16) & 0x3] ?? "unknown",
+            cancel_calls: (packed >> 20) & 0xff,
+            gate: Object.freeze({
+              1: "responsive-cancellation",
+              2: "after-claim",
+              3: "unresponsive-cancellation",
+            })[
+              (packed >> 12) & 0xf
+            ] ?? "none",
+            publication: Object.freeze({
+              0: "open",
+              1: "cancelled",
+              2: "publish-claimed",
+              3: "committed",
+              4: "aborted",
+            })[packed & 0xff] ?? "unknown",
+          });
+        },
+      });
+
+  host = {
     runtimeInitialized: false,
     manifestReady: false,
     registerAudioContext,
     startAudioWorklet,
     transport,
+    ...(deadlineProof === undefined ? {} : {deadlineProof}),
   };
   window.lmdjWebRuntimeHost = host;
 
@@ -317,8 +610,14 @@ if (typeof window !== "undefined") {
         const submitted = Module.ccall(
           "lmdj_web_host_submit",
           "number",
-          ["array", "number", "array", "number"],
-          [envelope, envelope.byteLength, sidecar, sidecar.byteLength],
+          ["array", "number", "array", "number", "number"],
+          [
+            envelope,
+            envelope.byteLength,
+            sidecar,
+            sidecar.byteLength,
+            performance.timeOrigin + deadline,
+          ],
         );
         if (submitted === 0) {
           accepted = true;
@@ -434,10 +733,86 @@ if (typeof window !== "undefined") {
       };
     }
 
+    let lastRenderProofDeadlines = null;
+
+    function readDiagnosticOutcome() {
+      const count = Module["_lmdj_web_audio_test_outcome_count"]();
+      return count === 0
+        ? {count: 0}
+        : {
+            count,
+            sequence: Module["_lmdj_web_audio_test_outcome_sequence"](0),
+            outcome:
+              Module["_lmdj_web_audio_test_outcome_code"](0) === 0
+                ? "voice_started"
+                : "voice_capacity",
+            runtime_frame:
+              Module["_lmdj_web_audio_test_outcome_frame"](0),
+          };
+    }
+
+    async function requestAndDrainOutcomes({
+      budgetMs = 30_000,
+      onRequested = null,
+    } = {}) {
+      Module["_lmdj_web_audio_test_clear_outcomes"]();
+      if (Module["_lmdj_web_audio_test_request_outcomes"]() !== 1) {
+        throw new Error("outcome drain request was rejected");
+      }
+      const outcomeStartedAt = performance.now();
+      const outcomeDeadline = outcomeStartedAt + budgetMs;
+      if (onRequested !== null) {
+        onRequested({outcomeStartedAt, outcomeDeadline});
+      }
+      while (
+        Module["_lmdj_web_audio_test_outcome_state"]() === 1 &&
+        performance.now() < outcomeDeadline
+      ) await delay(2);
+      return {
+        outcomeStartedAt,
+        outcomeDeadline,
+        outcomeReadyAt: performance.now(),
+        state: Module["_lmdj_web_audio_test_outcome_state"](),
+        outcome: readDiagnosticOutcome(),
+      };
+    }
+
+    async function queueSyntheticOutcomeWriter(
+      sequence,
+      outcome = 0,
+      runtimeFrame = 256,
+    ) {
+      if (Module[
+        "_lmdj_web_audio_test_queue_outcome_mirror_write"
+      ](sequence, outcome, runtimeFrame) !== 1) {
+        throw new Error("outcome mirror writer was rejected");
+      }
+      const writerDeadline = performance.now() + 3_000;
+      while (
+        Module["_lmdj_web_audio_test_outcome_mirror_state"]() !== 1 &&
+        Module[
+          "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+        ]() === 0 &&
+        performance.now() < writerDeadline
+      ) await delay(2);
+      if (Module["_lmdj_web_audio_test_outcome_mirror_state"]() !== 1) {
+        throw new Error("outcome mirror writer did not enter writing state");
+      }
+    }
+
+    function releaseSyntheticOutcomeWriter() {
+      if (Module[
+        "_lmdj_web_audio_test_release_outcome_mirror_write"
+      ]() !== 1) {
+        throw new Error("outcome mirror writer release was rejected");
+      }
+    }
+
     async function waitForRenderProof(expected) {
-      const deadline = performance.now() + 30_000;
+      const renderStartedAt = performance.now();
+      const renderDeadline = renderStartedAt + 30_000;
       let status = null;
-      while (performance.now() < deadline) {
+      while (performance.now() < renderDeadline) {
         status = await submit("host.status", {});
         if (
           status.ok &&
@@ -449,15 +824,14 @@ if (typeof window !== "undefined") {
       if (!status?.ok || status.result.acknowledged_generation !== expected) {
         throw new Error("Worklet generation acknowledgement timed out");
       }
-      Module["_lmdj_web_audio_test_clear_outcomes"]();
-      if (Module["_lmdj_web_audio_test_request_outcomes"]() !== 1) {
-        throw new Error("outcome drain request was rejected");
-      }
-      while (
-        Module["_lmdj_web_audio_test_outcome_state"]() === 1 &&
-        performance.now() < deadline
-      ) await delay(2);
-      const count = Module["_lmdj_web_audio_test_outcome_count"]();
+      const drained = await requestAndDrainOutcomes();
+      lastRenderProofDeadlines = Object.freeze({
+        renderStartedAt,
+        renderDeadline,
+        outcomeStartedAt: drained.outcomeStartedAt,
+        outcomeDeadline: drained.outcomeDeadline,
+      });
+      const count = drained.outcome.count;
       if (count < 1) throw new Error("no realtime outcome was drained");
       return {status, count};
     }
@@ -492,7 +866,133 @@ if (typeof window !== "undefined") {
             channels: 2,
             frames: Module["_lmdj_web_audio_test_observed_frames"](),
           },
+          deadlines: lastRenderProofDeadlines,
         };
+      },
+
+      async runFreshOutcomeDeadlineProof() {
+        const expectedSequence = 51_515;
+        const renderStartedAt = performance.now();
+        const renderDeadline = renderStartedAt + 20;
+        let writerQueued = false;
+        let writerReleased = false;
+        let releasePromise = null;
+        try {
+          await queueSyntheticOutcomeWriter(expectedSequence);
+          writerQueued = true;
+          while (performance.now() <= renderDeadline) await delay(2);
+          const drained = await requestAndDrainOutcomes({
+            budgetMs: 1_000,
+            onRequested: () => {
+              releasePromise = (async () => {
+                await delay(25);
+                releaseSyntheticOutcomeWriter();
+                writerReleased = true;
+              })();
+            },
+          });
+          await releasePromise;
+          if (drained.outcome.count < 1) {
+            throw new Error("no outcome arrived within its fresh budget");
+          }
+          if (Module[
+            "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+          ]() !== 0) {
+            throw new Error("outcome mirror writer timed out");
+          }
+          return {
+            expectedSequence,
+            renderStartedAt,
+            renderDeadline,
+            outcomeStartedAt: drained.outcomeStartedAt,
+            outcomeDeadline: drained.outcomeDeadline,
+            outcomeReadyAt: drained.outcomeReadyAt,
+            outcome: drained.outcome,
+          };
+        } finally {
+          if (releasePromise !== null) {
+            await releasePromise;
+          } else if (writerQueued && !writerReleased) {
+            releaseSyntheticOutcomeWriter();
+          }
+        }
+      },
+
+      async runOutcomeMirrorRaceProof() {
+        const expectedSequence = 42_424;
+        let writerQueued = false;
+        let writerReleased = false;
+        try {
+          await queueSyntheticOutcomeWriter(expectedSequence);
+          writerQueued = true;
+          const firstDrain = await requestAndDrainOutcomes({
+            budgetMs: 1_000,
+            onRequested: () => {
+              releaseSyntheticOutcomeWriter();
+              writerReleased = true;
+            },
+          });
+          const secondDrain = await requestAndDrainOutcomes({budgetMs: 1_000});
+          if (Module[
+            "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+          ]() !== 0) {
+            throw new Error("outcome mirror writer timed out");
+          }
+          return {
+            expectedSequence,
+            writerTimedOut: false,
+            first: firstDrain.outcome,
+            second: {
+              state: secondDrain.state,
+              count: secondDrain.outcome.count,
+            },
+          };
+        } finally {
+          if (writerQueued && !writerReleased) {
+            releaseSyntheticOutcomeWriter();
+          }
+        }
+      },
+
+      async runOutcomeMirrorWriterTimeoutProof() {
+        const expectedSequence = 61_616;
+        let writerMayNeedRelease = false;
+        try {
+          await queueSyntheticOutcomeWriter(expectedSequence);
+          writerMayNeedRelease = true;
+          const firstDrain = await requestAndDrainOutcomes({budgetMs: 7_000});
+          const writerTimedOut = Module[
+            "_lmdj_web_audio_test_outcome_mirror_writer_timed_out"
+          ]() === 1;
+          if (writerTimedOut) writerMayNeedRelease = false;
+          const followupDrain = await requestAndDrainOutcomes({
+            budgetMs: 1_000,
+          });
+          return {
+            writerTimedOut,
+            writerElapsedMs:
+              firstDrain.outcomeReadyAt - firstDrain.outcomeStartedAt,
+            mirrorState:
+              Module["_lmdj_web_audio_test_outcome_mirror_state"](),
+            first: {
+              state: firstDrain.state,
+              count: firstDrain.outcome.count,
+            },
+            followup: {
+              state: followupDrain.state,
+              count: followupDrain.outcome.count,
+            },
+            followupElapsedMs:
+              followupDrain.outcomeReadyAt - followupDrain.outcomeStartedAt,
+          };
+        } finally {
+          if (
+            writerMayNeedRelease &&
+            Module["_lmdj_web_audio_test_outcome_mirror_state"]() === 1
+          ) {
+            releaseSyntheticOutcomeWriter();
+          }
+        }
       },
 
       engineRenderCalls() {
@@ -681,6 +1181,15 @@ if (typeof window !== "undefined") {
     if (Module["_lmdj_web_audio_state"]() === -2) {
       throw new Error("formal Web Runtime Host initialization timed out");
     }
+    const terminalTokenAccepted = Module.ccall(
+      "lmdj_web_host_set_terminal_token",
+      "number",
+      ["string", "number"],
+      [terminalToken, terminalToken.length],
+    );
+    if (terminalTokenAccepted !== 0) {
+      throw new Error("formal Web Runtime Host terminal token was rejected");
+    }
     host.runtimeInitialized = true;
     /* LMDJ_WEB_AUDIO_CONFORMANCE_INSTALL_BEGIN */
     if (typeof Module["_lmdj_web_audio_test_poll"] === "function") {
@@ -688,4 +1197,52 @@ if (typeof window !== "undefined") {
     }
     /* LMDJ_WEB_AUDIO_CONFORMANCE_INSTALL_END */
   };
+}
+
+if (ENVIRONMENT_IS_PTHREAD && typeof BroadcastChannel === "function") {
+  const terminalChannel = new BroadcastChannel(
+    "lmdj.web-runtime-host.terminal.v1");
+  terminalChannel.addEventListener("message", (event) => {
+    const token = event.data?.token;
+    if (
+      event.data?.type !== "release-and-close" ||
+      typeof token !== "string"
+    ) {
+      return;
+    }
+    const releaseWhenReady = () => {
+      const authorization = Module.ccall(
+        "lmdj_web_host_authorize_terminal_release",
+        "number",
+        ["string", "number"],
+        [token, token.length],
+      );
+      if (authorization === 2) {
+        setTimeout(releaseWhenReady, 2);
+        return;
+      }
+      if (authorization !== 1) return;
+      let released = false;
+      try {
+        LmdjOpfs.releaseAllWriters();
+        released = true;
+      } finally {
+        const completed = Module.ccall(
+          "lmdj_web_host_complete_terminal_release",
+          "number",
+          ["string", "number", "number"],
+          [token, token.length, released ? 1 : 0],
+        );
+        if (completed === 1) {
+          terminalChannel.postMessage({
+            type: "released-and-closed",
+            token,
+          });
+        }
+        terminalChannel.close();
+        globalThis.close();
+      }
+    };
+    releaseWhenReady();
+  });
 }
