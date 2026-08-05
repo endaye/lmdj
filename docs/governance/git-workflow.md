@@ -69,6 +69,12 @@ Before committing:
 Do not create empty commits. If verification fails or the commit boundary
 cannot be isolated, stop and report the blocker instead of committing.
 
+Coding agents do not need per-commit confirmation: once a change is complete
+and its verification passes, commit autonomously, and commit later
+user-requested modifications the same way. This autonomy covers local
+commits only; push and every later state transition still require explicit
+authorization (see §7).
+
 ## 5. Pull Request and merge
 
 Remote operations require separate authorization. When authorized:

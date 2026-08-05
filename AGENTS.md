@@ -23,6 +23,12 @@ commit:
 - inspect the staged file list and `git diff --cached --check`;
 - inspect the committed file list and final worktree status.
 
+Coding agents commit autonomously: once a change is complete and its
+Task-specific verification passes, create the Conventional Commit without
+asking for confirmation, and commit later user-requested modifications the
+same way. This autonomy covers local commits only; push and every later
+state transition still require explicit authorization.
+
 A commit does not authorize push, Pull Request creation, merge, tag push,
 release, publication, deployment, or Channel promotion.
 
