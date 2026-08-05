@@ -11,7 +11,7 @@ const transientSnapshotClaim =
   /(?:快照[^。\n]*(?:尚未生成|尚未建立|由下一[^。\n]*Task)|尚未建立[^。\n]*快照|当前缺少[^。\n]*快照|尚无[^。\n]*快照|下一(?:文档)?门禁[^。\n]*建立[^。\n]*快照)/;
 const requiredRoutes = [
   'overview/index', 'product/positioning', 'product/capability-map', 'product/workflows',
-  'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
+  'core/overview', 'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
   'core/modules/project-cooker', 'core/modules/audio-runtime', 'core/modules/provider-sdk',
   'core/modules/application-facade', 'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp',
   'hosts/native-test-host', 'hosts/web-runtime', 'providers/overview', 'providers/local-proof',
@@ -62,6 +62,10 @@ test('current overview uses stable doc IDs and all nine diagram callers use vali
 });
 
 test('current truth is version-neutral about the formal Web Host, snapshot lifecycle, and evidence', async () => {
+  assert.ok(
+    requiredRoutes.includes('core/overview'),
+    'current truth inventory includes the Core overview',
+  );
   const currentPages = await Promise.all(requiredRoutes.map(async (route) => ({
     route,
     body: await readFile(path.join(docsRoot, `${route}.mdx`), 'utf8'),
