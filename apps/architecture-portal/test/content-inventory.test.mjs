@@ -75,7 +75,11 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
-  assert.match(proof, /Pull Request CI[^。]+pending/);
+  assert.match(proof, /PR #91/);
+  assert.match(proof, /31009477920/);
+  assert.match(proof, /31009477985/);
+  assert.match(proof, /d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf/);
+  assert.doesNotMatch(proof, /Pull Request CI[^。]+pending/);
   assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 5);
 
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');

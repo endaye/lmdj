@@ -29,6 +29,6 @@ Linux ASAN 负责 Python-hosted 覆盖，macOS ASAN 只覆盖 native label；两
 
 macOS Core Proof 与 native ASan 优先选择带 `lmdj` 标签、在线且空闲的受信 self-hosted runner；外部 fork、状态密钥缺失、Runner API 失败、机器离线/忙碌/缺失/标签不符时直接使用 GitHub-hosted macOS。self-hosted lane 若因 checkout/setup、通信中断或 30 分钟超时而没有发布终态结果，GitHub-hosted macOS 才完整执行一次备用 lane；已发布的准备、Proof 或 sanitizer 失败不会触发备用执行。最终门禁仍以 `core (macos-latest)` 与 `core-asan-macos` 对外报告，避免 runner 实现细节改变受保护分支契约。
 ## 证据分离
-本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。`1.0.14.0` 身份/Assembly 与本地自动化门禁已有本地证据；Pull Request CI 仍为 `pending / unverified`，没有远端运行结果。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari Touch lifecycle `deferred / unverified`。
+本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。`1.0.14.0` 身份/Assembly 与本地自动化门禁已有证据；[PR #91](https://github.com/endaye/lmdj/pull/91) 的 [Core CI](https://github.com/endaye/lmdj/actions/runs/31009477920) 和 [Architecture Portal CI](https://github.com/endaye/lmdj/actions/runs/31009477985) 均通过，合入后的 `main` `d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf` 也完成 Web Host、Core 与版本锁复验。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari Touch lifecycle `deferred / unverified`。
 ## 门户责任
 页面状态必须链接实际测试/Proof，并明确自动化无法证明的体验范围。
