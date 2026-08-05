@@ -108,13 +108,15 @@ foundation::Result<void> validate_managed_bundle_tree(
       bundle / "recovery/sealed",
   };
   for (const auto& directory : managed_directories) {
-    const auto names = platform.list_names(directory);
-    if (!names.has_value()) {
+    const auto present = platform.directory_exists(directory);
+    if (!present.has_value() || !present.value()) {
       return foundation::Result<void>::failure(
           invalid_project(
               "project managed directory is missing or invalid",
               directory,
-              names.error().message));
+              present.has_value()
+                  ? "path is not an existing directory"
+                  : present.error().message));
     }
   }
   const auto manifest = platform.byte_length(bundle / "manifest.json");

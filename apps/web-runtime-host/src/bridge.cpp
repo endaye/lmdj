@@ -1829,6 +1829,18 @@ EMSCRIPTEN_KEEPALIVE std::int32_t lmdj_web_audio_fatal() {
              : static_cast<std::int32_t>(adapter->fatal());
 }
 
+EMSCRIPTEN_KEEPALIVE std::int32_t lmdj_web_audio_gate_state() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter == nullptr
+             ? static_cast<std::int32_t>(RealtimeAudioWorkletGate::terminal)
+             : static_cast<std::int32_t>(adapter->gate_state());
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_in_flight() {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  return adapter != nullptr && adapter->callback_in_flight() ? 1 : 0;
+}
+
 EMSCRIPTEN_KEEPALIVE std::int32_t lmdj_web_audio_observed_sample_rate() {
   auto* adapter = web_audio.load(std::memory_order_acquire);
   return adapter == nullptr ? 0 : adapter->observed_sample_rate();

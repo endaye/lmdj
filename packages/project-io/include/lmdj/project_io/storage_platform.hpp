@@ -52,6 +52,14 @@ class ProjectStoragePlatform {
   // Returns unsigned-byte-sorted direct child names for regular files only.
   virtual foundation::Result<std::vector<std::string>> list_names(
       const std::filesystem::path& path) const = 0;
+  virtual foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const {
+    const auto names = list_names(path);
+    if (!names.has_value()) {
+      return foundation::Result<bool>::failure(names.error());
+    }
+    return foundation::Result<bool>::success(true);
+  }
   virtual foundation::Result<void> validate_managed_tree(
       const std::filesystem::path& root) const = 0;
 };

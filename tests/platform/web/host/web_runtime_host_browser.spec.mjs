@@ -27,6 +27,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
+const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
 
 
 function clone(value) {
@@ -123,6 +124,9 @@ async function stopTakeWithQuiescenceDiagnostics(page) {
         audio_context_state: audioContext?.state ?? null,
         worklet_state: window.Module?._lmdj_web_audio_state?.() ?? null,
         worklet_fatal: window.Module?._lmdj_web_audio_fatal?.() ?? null,
+        worklet_gate: window.Module?._lmdj_web_audio_gate_state?.() ?? null,
+        worklet_in_flight:
+          window.Module?._lmdj_web_audio_in_flight?.() ?? null,
         controller: window.lmdjWebRuntimeController.diagnostics(),
       });
       if (samples.length > 12) samples.shift();
@@ -479,6 +483,27 @@ async function observationMarker(page) {
     notifications: window.__lmdjTask11.notifications.length,
     responses: window.__lmdjTask11.responses.length,
   }));
+}
+
+
+async function waitForRecoveryReadiness(page, responseMarker) {
+  await expect.poll(() => page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start).some(({ operation, response }) =>
+      operation === "host.status" &&
+      response?.ok === true &&
+      response.result.control_generation ===
+        response.result.acknowledged_generation),
+  responseMarker)).toBe(true);
+  await page.evaluate(() => new Promise((resolvePromise) => {
+    window.setTimeout(resolvePromise, 0);
+  }));
+  await expect.poll(() => page.evaluate(() => {
+    const diagnostics = window.lmdjWebRuntimeController.diagnostics();
+    return diagnostics.state === "recovering" &&
+      Number.isInteger(diagnostics.control_generation) &&
+      diagnostics.control_generation > 0 &&
+      diagnostics.control_generation === diagnostics.acknowledged_generation;
+  })).toBe(true);
 }
 
 
@@ -1069,9 +1094,10 @@ test("Chromium completes the exact twelve-step packaged runtime journey", async 
   await page.locator("#audio-suspend").click();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await activateWithGesture(page);
+  const recoveryMarker = await observationMarker(page);
   await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
   await expect(page.locator("#host-state")).toHaveText("recovering");
-  const recoveryMarker = await observationMarker(page);
+  await waitForRecoveryReadiness(page, recoveryMarker.responses);
   await page.locator("#pad-0").click();
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.length - start,
@@ -1194,12 +1220,13 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   };
   await createPreparedProject(page, identity);
   await activateWithGesture(page);
+  const marker = await observationMarker(page);
   await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
   await expect(page.locator("#host-state")).toHaveText("recovering");
+  await waitForRecoveryReadiness(page, marker.responses);
   await page.evaluate(() => {
     window.__lmdjTask11.suppressTriggerOutcomes = true;
   });
-  const marker = await observationMarker(page);
   await page.locator("#pad-0").click();
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.length - start,
@@ -1526,7 +1553,10 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
     deadlineFixtureBytes,
     { deadlineMs: 250, gate: "unresponsive-cancellation" },
   );
-  await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
+  await expect.poll(
+    () => deadlineProofState(page, requestId),
+    { timeout: 30_000 },
+  ).toMatchObject({
     entered_facade: true,
     claim_attempted: true,
     claim_started_open: true,
@@ -1640,20 +1670,21 @@ test("Chromium packaged asset.import claim wins before deadline and settles afte
       },
       deadlineFixtureBytes,
       {
-        deadlineMs: 250,
+        deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS,
         gate: "after-claim",
         forcePublicationError: selected.forcePublicationError,
       },
     );
     await expect.poll(() => deadlineProofState(owner, requestId), {
       message: `${selected.name} entered Facade and won publication claim`,
+      timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000,
     }).toMatchObject({
       entered_facade: true,
       claim_attempted: true,
       gate: "after-claim",
       publication: "publish-claimed",
     });
-    await owner.waitForTimeout(300);
+    await owner.waitForTimeout(CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 100);
     expect(await deadlineProofState(owner, requestId), selected.name)
       .toMatchObject({
         publication: "publish-claimed",

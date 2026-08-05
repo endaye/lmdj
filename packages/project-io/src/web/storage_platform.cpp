@@ -17,6 +17,7 @@ int lmdj_opfs_acquire_writer(const char*, int, int);
 void lmdj_opfs_release_writer(int);
 int lmdj_opfs_ensure_directory(const char*, int);
 int lmdj_opfs_exists(const char*, int);
+int lmdj_opfs_directory_exists(const char*, int);
 double lmdj_opfs_byte_length(const char*, int);
 int lmdj_opfs_read_complete(const char*, int, void**, int*);
 int lmdj_opfs_create_immutable(const char*, int, const void*, int);
@@ -100,6 +101,19 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
     const auto path = web_path(input);
     const int status = lmdj_opfs_exists(path.data(), path.size());
     if (status < 0) return failure<bool>(status, "existence check");
+    return foundation::Result<bool>::success(status != 0);
+  }
+
+  foundation::Result<bool> directory_exists(
+      const std::filesystem::path& input) const override {
+    if (!mounted_) {
+      return failure<bool>(-1, "mount availability");
+    }
+    const auto path = web_path(input);
+    const int status = lmdj_opfs_directory_exists(path.data(), path.size());
+    if (status < 0) {
+      return failure<bool>(status, "directory existence check");
+    }
     return foundation::Result<bool>::success(status != 0);
   }
 

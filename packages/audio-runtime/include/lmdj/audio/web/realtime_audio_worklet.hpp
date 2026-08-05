@@ -85,14 +85,14 @@ class RealtimeAudioWorklet final {
   void latch_bootstrap_timeout() noexcept;
   std::int32_t observed_sample_rate() const noexcept;
   std::int32_t observed_render_quantum() const noexcept;
+  RealtimeAudioWorkletGate gate_state() const noexcept;
+  bool callback_in_flight() const noexcept;
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
   std::uint32_t observed_frames() const noexcept;
   std::uint32_t render_calls() const noexcept;
   std::uint32_t output_energy_microunits() const noexcept;
   bool callback_gate_closed() const noexcept;
-  RealtimeAudioWorkletGate gate_state() const noexcept;
-  bool callback_in_flight() const noexcept;
   std::uint32_t start_calls() const noexcept;
   RealtimeAudioWorkletStart validate_configuration_for_conformance(
       std::int32_t sample_rate, std::int32_t render_quantum) noexcept;

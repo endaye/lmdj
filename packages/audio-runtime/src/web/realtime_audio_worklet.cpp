@@ -470,6 +470,14 @@ std::int32_t RealtimeAudioWorklet::observed_render_quantum() const noexcept {
   return impl_->render_quantum.load(std::memory_order_acquire);
 }
 
+RealtimeAudioWorkletGate RealtimeAudioWorklet::gate_state() const noexcept {
+  return impl_->gate.load(std::memory_order_acquire);
+}
+
+bool RealtimeAudioWorklet::callback_in_flight() const noexcept {
+  return impl_->in_flight.load(std::memory_order_acquire);
+}
+
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
 std::uint32_t RealtimeAudioWorklet::observed_frames() const noexcept {
   return impl_->observed_quantum.load(std::memory_order_acquire);
@@ -486,10 +494,6 @@ std::uint32_t RealtimeAudioWorklet::output_energy_microunits() const noexcept {
 bool RealtimeAudioWorklet::callback_gate_closed() const noexcept {
   return impl_->gate.load(std::memory_order_acquire) ==
          RealtimeAudioWorkletGate::terminal;
-}
-
-RealtimeAudioWorkletGate RealtimeAudioWorklet::gate_state() const noexcept {
-  return impl_->gate.load(std::memory_order_acquire);
 }
 
 std::uint32_t RealtimeAudioWorklet::start_calls() const noexcept {
@@ -518,10 +522,6 @@ bool RealtimeAudioWorklet::latch_bootstrap_fatal_for_conformance(
     default:
       return false;
   }
-}
-
-bool RealtimeAudioWorklet::callback_in_flight() const noexcept {
-  return impl_->in_flight.load(std::memory_order_acquire);
 }
 
 bool RealtimeAudioWorklet::invoke_invalid_shape_for_conformance(

@@ -43,6 +43,7 @@ def main() -> int:
         / "web"
         / "realtime_audio_worklet.cpp"
     )
+    runtime_pre = source_root / "web-runtime-pre.js"
 
     required_files = [
         host_cmake,
@@ -57,6 +58,7 @@ def main() -> int:
         web_toolchain_script,
         playwright_config,
         realtime_audio_worklet,
+        runtime_pre,
     ]
     for path in required_files:
         require(path.is_file(), f"required Task 6 source is missing: {path}")
@@ -69,6 +71,7 @@ def main() -> int:
         encoding="utf-8"
     )
     bridge_source = (source_root / "bridge.cpp").read_text(encoding="utf-8")
+    runtime_pre_source = runtime_pre.read_text(encoding="utf-8")
     cmake = combined_text([host_cmake, root_cmake, product_cmake])
 
     forbidden_source = {
@@ -378,6 +381,19 @@ def main() -> int:
     require(
         "ASYNCIFY_IMPORTS" not in host_cmake_text,
         "Host CMake must not override the Project I/O Asyncify import set",
+    )
+    require(
+        re.search(
+            r"const\s+TRANSPORT_POLL_INTERVAL_MS\s*=\s*16\s*;",
+            runtime_pre_source,
+        )
+        is not None,
+        "Web Host transport polling must use the bounded 16 ms cadence",
+    )
+    require(
+        "window.setTimeout(pollTransport, TRANSPORT_POLL_INTERVAL_MS)"
+        in runtime_pre_source,
+        "Web Host transport polling must use the named bounded cadence",
     )
 
     if len(sys.argv) == 3:

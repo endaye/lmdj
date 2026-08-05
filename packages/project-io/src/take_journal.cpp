@@ -49,19 +49,8 @@ foundation::Result<void> validate_journal_bundle_tree(
   if (!no_symlinks.has_value()) {
     return no_symlinks;
   }
-  const auto root_names = platform.list_names(bundle);
-  if (!root_names.has_value()) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::invalid_project,
-            "journal bundle root is missing, invalid, or symbolic",
-            {
-                {"path", bundle.generic_string()},
-                {"detail", root_names.error().message},
-            },
-        });
-  }
   const std::array required_directories{
+      bundle,
       bundle / "assets",
       bundle / "history",
       bundle / "history/checkpoints",
@@ -71,15 +60,18 @@ foundation::Result<void> validate_journal_bundle_tree(
       bundle / "recovery/sealed",
   };
   for (const auto& directory : required_directories) {
-    const auto names = platform.list_names(directory);
-    if (!names.has_value()) {
+    const auto present = platform.directory_exists(directory);
+    if (!present.has_value() || !present.value()) {
       return foundation::Result<void>::failure(
           Error{
               ErrorCode::invalid_project,
               "journal managed directory is missing, invalid, or symbolic",
               {
                   {"path", directory.generic_string()},
-                  {"detail", names.error().message},
+                  {"detail",
+                   present.has_value()
+                       ? "path is not an existing directory"
+                       : present.error().message},
               },
           });
     }
@@ -576,33 +568,13 @@ foundation::Result<void> TakeJournal::append_batch(
   }
   auto append_mutex = journal_append_mutex(platform_);
   std::lock_guard append_operation(*append_mutex);
-  auto tree = validate_journal_bundle_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return tree;
-  }
   auto lease = platform_->acquire_writer(bundle);
   if (!lease.has_value()) {
     return foundation::Result<void>::failure(lease.error());
   }
   auto operation = std::move(lease.value());
   (void)operation;
-  tree = validate_journal_bundle_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return tree;
-  }
   const auto path = active_path(bundle, take_id);
-  auto existing = platform_->exists(path);
-  if (!existing.has_value()) {
-    return foundation::Result<void>::failure(existing.error());
-  }
-  if (!existing.value()) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::not_found,
-            "active take journal could not be opened for append",
-            {{"path", path.generic_string()}},
-        });
-  }
   auto journal = read_journal(*platform_, bundle, take_id);
   if (!journal.has_value()) {
     return foundation::Result<void>::failure(journal.error());

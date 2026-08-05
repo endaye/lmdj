@@ -92,6 +92,9 @@ nlohmann::json run_suite() {
       unavailable->ensure_directory(unavailable_path), "directory creation");
   require_mount_error(unavailable->exists(unavailable_path), "existence check");
   require_mount_error(
+      unavailable->directory_exists(unavailable_path),
+      "directory existence check");
+  require_mount_error(
       unavailable->byte_length(unavailable_path), "length query");
   require_mount_error(
       unavailable->read_complete(unavailable_path), "complete read");
@@ -326,11 +329,22 @@ nlohmann::json run_suite() {
   auto contract_lease = value(
       platform->acquire_writer(bundle), "contract writer lease");
   success(platform->ensure_directory(contract), "contract directory");
+  require(
+      value(platform->directory_exists(contract), "existing directory probe"),
+      "existing directory was not recognized");
+  require(
+      !value(
+          platform->directory_exists(contract / "missing"),
+          "missing directory probe"),
+      "missing directory was recognized");
   success(platform->remove(contract / "missing.bin"), "missing remove");
   success(platform->remove(contract / "missing.bin"), "idempotent missing remove");
   const auto bridge_file = contract / "bridge-visible.bin";
   const int immutable_writes = lmdj_opfs_immutable_write_count();
   success(platform->create_immutable(bridge_file, bytes("bridge")), "bridge coherence seed");
+  require(
+      !value(platform->directory_exists(bridge_file), "regular file probe"),
+      "regular file was recognized as a directory");
   require(
       lmdj_opfs_immutable_write_count() >= immutable_writes + 3,
       "immutable creation did not loop over short writes");

@@ -909,6 +909,83 @@ foundation::Result<int> acquire_native_descriptor(
   return foundation::Result<int>::success(descriptor);
 }
 
+foundation::Result<std::optional<mode_t>> path_mode_without_symlinks(
+    const std::filesystem::path& path) {
+  auto normalized_result = normalize_path(path);
+  if (!normalized_result.has_value()) {
+    return foundation::Result<std::optional<mode_t>>::failure(
+        normalized_result.error());
+  }
+  const auto& normalized = normalized_result.value();
+  if (normalized == normalized.root_path()) {
+    return foundation::Result<std::optional<mode_t>>::success(
+        std::optional<mode_t>{static_cast<mode_t>(S_IFDIR)});
+  }
+
+  const int root = open_retry("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+  if (root < 0) {
+    return foundation::Result<std::optional<mode_t>>::failure(
+        storage_error("storage traversal root could not be opened", path));
+  }
+  OwnedDescriptor current(root);
+  const auto relative = normalized.relative_path();
+  auto component = relative.begin();
+  const auto component_end = relative.end();
+  if (component == component_end) {
+    return foundation::Result<std::optional<mode_t>>::failure(
+        invalid_storage_path("storage file name is invalid", path));
+  }
+  auto next_component = component;
+  ++next_component;
+  while (next_component != component_end) {
+    const int next = openat_retry(
+        current.get(),
+        component->c_str(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (next < 0) {
+      const int open_error = errno;
+      if (open_error == ENOENT) {
+        return foundation::Result<std::optional<mode_t>>::success(
+            std::optional<mode_t>{});
+      }
+      if (open_error == ELOOP || open_error == ENOTDIR) {
+        return foundation::Result<std::optional<mode_t>>::failure(
+            invalid_storage_path(
+                "storage traversal encountered a symbolic or invalid component",
+                path,
+                component->generic_string()));
+      }
+      return foundation::Result<std::optional<mode_t>>::failure(
+          storage_error(
+              "storage directory could not be opened",
+              path,
+              open_error));
+    }
+    current = OwnedDescriptor(next);
+    component = next_component;
+    ++next_component;
+  }
+
+  struct stat metadata {};
+  if (fstatat_no_follow_retry(
+          current.get(),
+          component->c_str(),
+          &metadata) != 0) {
+    if (errno == ENOENT) {
+      return foundation::Result<std::optional<mode_t>>::success(
+          std::optional<mode_t>{});
+    }
+    return foundation::Result<std::optional<mode_t>>::failure(
+        storage_error("storage path could not be inspected", path));
+  }
+  if (S_ISLNK(metadata.st_mode)) {
+    return foundation::Result<std::optional<mode_t>>::failure(
+        invalid_storage_path("storage path is a symbolic link", path));
+  }
+  return foundation::Result<std::optional<mode_t>>::success(
+      std::optional<mode_t>{metadata.st_mode});
+}
+
 class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
  public:
   explicit NativeProjectStoragePlatform(std::filesystem::path metadata_root)
@@ -1047,74 +1124,21 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<bool> exists(
       const std::filesystem::path& path) const override {
-    auto normalized_result = normalize_path(path);
-    if (!normalized_result.has_value()) {
-      return foundation::Result<bool>::failure(normalized_result.error());
+    const auto mode = path_mode_without_symlinks(path);
+    if (!mode.has_value()) {
+      return foundation::Result<bool>::failure(mode.error());
     }
-    const auto& normalized = normalized_result.value();
-    if (normalized == normalized.root_path()) {
-      return foundation::Result<bool>::success(true);
-    }
+    return foundation::Result<bool>::success(mode.value().has_value());
+  }
 
-    const int root = open_retry("/", O_RDONLY | O_DIRECTORY | O_CLOEXEC);
-    if (root < 0) {
-      return foundation::Result<bool>::failure(
-          storage_error("storage traversal root could not be opened", path));
+  foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    const auto mode = path_mode_without_symlinks(path);
+    if (!mode.has_value()) {
+      return foundation::Result<bool>::failure(mode.error());
     }
-    OwnedDescriptor current(root);
-    const auto relative = normalized.relative_path();
-    auto component = relative.begin();
-    const auto component_end = relative.end();
-    if (component == component_end) {
-      return foundation::Result<bool>::failure(
-          invalid_storage_path("storage file name is invalid", path));
-    }
-    auto next_component = component;
-    ++next_component;
-    while (next_component != component_end) {
-      const int next = openat_retry(
-          current.get(),
-          component->c_str(),
-          O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
-      if (next < 0) {
-        const int open_error = errno;
-        if (open_error == ENOENT) {
-          return foundation::Result<bool>::success(false);
-        }
-        if (open_error == ELOOP || open_error == ENOTDIR) {
-          return foundation::Result<bool>::failure(
-              invalid_storage_path(
-                  "storage traversal encountered a symbolic or invalid component",
-                  path,
-                  component->generic_string()));
-        }
-        return foundation::Result<bool>::failure(
-            storage_error(
-                "storage directory could not be opened",
-                path,
-                open_error));
-      }
-      current = OwnedDescriptor(next);
-      component = next_component;
-      ++next_component;
-    }
-
-    struct stat metadata {};
-    if (fstatat_no_follow_retry(
-            current.get(),
-            component->c_str(),
-            &metadata) != 0) {
-      if (errno == ENOENT) {
-        return foundation::Result<bool>::success(false);
-      }
-      return foundation::Result<bool>::failure(
-          storage_error("storage path could not be inspected", path));
-    }
-    if (S_ISLNK(metadata.st_mode)) {
-      return foundation::Result<bool>::failure(
-          invalid_storage_path("storage path is a symbolic link", path));
-    }
-    return foundation::Result<bool>::success(true);
+    return foundation::Result<bool>::success(
+        mode.value().has_value() && S_ISDIR(mode.value().value()));
   }
 
   foundation::Result<std::uint64_t> byte_length(
