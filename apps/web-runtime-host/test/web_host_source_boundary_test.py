@@ -245,9 +245,19 @@ def main() -> int:
         "non-yielding sched_yield implementation",
     )
     require(
-        "std::this_thread::sleep_for" in quiescence_wait.group(1),
-        "AudioWorklet quiescence must release the Control Worker while "
-        "awaiting the render-thread acknowledgement",
+        "emscripten_futex_wait" in quiescence_wait.group(1),
+        "AudioWorklet quiescence must block the Control Worker on the "
+        "render-thread acknowledgement",
+    )
+    require(
+        "std::this_thread::sleep_for" not in quiescence_wait.group(1),
+        "AudioWorklet quiescence must not poll or process the Control proxy "
+        "queue while awaiting the render-thread acknowledgement",
+    )
+    require(
+        "emscripten_futex_wake" in realtime_audio_worklet_source,
+        "AudioWorklet final-quantum acknowledgement must wake the Control "
+        "futex waiter",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",

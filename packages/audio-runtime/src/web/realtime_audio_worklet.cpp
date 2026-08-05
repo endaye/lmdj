@@ -5,11 +5,12 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <climits>
 #include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <thread>
+#include <limits>
 
 #include <emscripten/threading.h>
 #include <emscripten/webaudio.h>
@@ -101,10 +102,12 @@ struct RealtimeAudioWorklet::Impl {
           outputs[0].numberOfChannels * outputs[0].samplesPerChannel,
           0.0F);
       self.in_flight.store(false, std::memory_order_release);
+      self.signal_quiescence_waiters();
       return true;
     }
     if (gate == RealtimeAudioWorkletGate::terminal) {
       self.in_flight.store(false, std::memory_order_release);
+      self.signal_quiescence_waiters();
       return false;
     }
 
@@ -135,14 +138,22 @@ struct RealtimeAudioWorklet::Impl {
         self.engine.bank_telemetry().current_generation,
         std::memory_order_release);
     auto requested = RealtimeAudioWorkletGate::final_quantum_requested;
-    static_cast<void>(self.gate.compare_exchange_strong(
+    const auto paused = self.gate.compare_exchange_strong(
         requested,
         RealtimeAudioWorkletGate::paused,
         std::memory_order_acq_rel,
-        std::memory_order_acquire));
+        std::memory_order_acquire);
     self.in_flight.store(false, std::memory_order_release);
+    if (paused || requested == RealtimeAudioWorkletGate::terminal) {
+      self.signal_quiescence_waiters();
+    }
     return self.gate.load(std::memory_order_acquire) !=
            RealtimeAudioWorkletGate::terminal;
+  }
+
+  void signal_quiescence_waiters() noexcept {
+    quiescence_signal.fetch_add(1, std::memory_order_release);
+    static_cast<void>(emscripten_futex_wake(&quiescence_signal, INT_MAX));
   }
 
   static void processor_created(
@@ -228,6 +239,7 @@ struct RealtimeAudioWorklet::Impl {
     worklet_state.store(
         RealtimeAudioWorkletState::fatal,
         std::memory_order_release);
+    signal_quiescence_waiters();
   }
 
   void latch_bootstrap_fatal(RealtimeAudioWorkletFatal code) noexcept {
@@ -262,6 +274,7 @@ struct RealtimeAudioWorklet::Impl {
   std::atomic<RealtimeAudioWorkletGate> gate{
       RealtimeAudioWorkletGate::paused};
   std::atomic<bool> in_flight{false};
+  std::atomic<std::uint32_t> quiescence_signal{0};
   std::atomic<std::uint64_t> acknowledged{0};
   std::atomic<std::int32_t> node{0};
   std::atomic<std::int32_t> sample_rate{0};
@@ -371,9 +384,6 @@ foundation::Result<void> RealtimeAudioWorklet::begin_rendering() noexcept {
 
 foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     std::uint32_t timeout_ms) noexcept {
-  const auto await_render_progress = [] {
-    std::this_thread::sleep_for(std::chrono::milliseconds(1));
-  };
   auto gate = impl_->gate.load(std::memory_order_acquire);
   if (gate == RealtimeAudioWorkletGate::paused &&
       !impl_->in_flight.load(std::memory_order_acquire)) {
@@ -387,28 +397,40 @@ foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
       std::memory_order_acquire);
   const auto deadline = std::chrono::steady_clock::now() +
                         std::chrono::milliseconds(timeout_ms);
-  while (impl_->gate.load(std::memory_order_acquire) !=
-             RealtimeAudioWorkletGate::paused ||
-         impl_->in_flight.load(std::memory_order_acquire)) {
-    if (impl_->gate.load(std::memory_order_acquire) ==
-        RealtimeAudioWorkletGate::terminal) {
-      while (impl_->in_flight.load(std::memory_order_acquire)) {
-        await_render_progress();
-      }
+  while (true) {
+    const auto observed_signal =
+        impl_->quiescence_signal.load(std::memory_order_acquire);
+    gate = impl_->gate.load(std::memory_order_acquire);
+    const auto in_flight = impl_->in_flight.load(std::memory_order_acquire);
+    if (gate == RealtimeAudioWorkletGate::paused && !in_flight) {
+      return foundation::Result<void>::success();
+    }
+    if (gate == RealtimeAudioWorkletGate::terminal && !in_flight) {
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet is terminal"));
     }
-    if (std::chrono::steady_clock::now() >= deadline) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) {
       impl_->latch_fatal(RealtimeAudioWorkletFatal::quiescence_timeout);
       while (impl_->in_flight.load(std::memory_order_acquire)) {
-        await_render_progress();
+        const auto terminal_signal =
+            impl_->quiescence_signal.load(std::memory_order_acquire);
+        if (!impl_->in_flight.load(std::memory_order_acquire)) {
+          break;
+        }
+        static_cast<void>(emscripten_futex_wait(
+            &impl_->quiescence_signal,
+            terminal_signal,
+            std::numeric_limits<double>::infinity()));
       }
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet quiescence timed out"));
     }
-    await_render_progress();
+    const auto remaining =
+        std::chrono::duration<double, std::milli>(deadline - now).count();
+    static_cast<void>(emscripten_futex_wait(
+        &impl_->quiescence_signal, observed_signal, remaining));
   }
-  return foundation::Result<void>::success();
 }
 
 bool RealtimeAudioWorklet::ready() const noexcept {
