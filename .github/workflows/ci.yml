@@ -90,12 +90,9 @@ jobs:
           node-version: "22"
       - run: scripts/web-runtime-lab.sh test
 
-  core:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
+  core-ubuntu:
+    name: core (ubuntu-latest)
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
@@ -108,7 +105,6 @@ jobs:
       - run: bash scripts/verify-core-dependencies.sh
       - run: scripts/core.sh proof
       - name: Verify Apple-only audio targets are absent on Ubuntu
-        if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           set -euo pipefail
@@ -132,6 +128,173 @@ jobs:
             cat "$evidence_dir/$target.log"
           done
 
+  select-macos-runner:
+    name: Select macOS runner
+    runs-on: ubuntu-24.04
+    outputs:
+      runner: ${{ steps.select.outputs.runner }}
+      self-hosted: ${{ steps.select.outputs.self-hosted }}
+      reason: ${{ steps.select.outputs.reason }}
+    steps:
+      - name: Select an online idle trusted runner
+        id: select
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          RUNNER_NAME: endaye-mbp-m1
+          RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          select_hosted() {
+            {
+              echo 'runner=["macos-latest"]'
+              echo 'self-hosted=false'
+              echo "reason=$1"
+            } >>"$GITHUB_OUTPUT"
+            echo "Using GitHub-hosted macOS: $1"
+          }
+
+          if [[ "$EVENT_NAME" == "pull_request" && \
+                "$HEAD_REPOSITORY" != "$REPOSITORY" ]]; then
+            select_hosted 'untrusted fork pull request'
+            exit 0
+          fi
+
+          if [[ -z "$RUNNER_READ_TOKEN" ]]; then
+            select_hosted 'runner status token is unavailable'
+            exit 0
+          fi
+
+          if ! runner_response="$(
+            curl \
+              --silent \
+              --show-error \
+              --fail-with-body \
+              --header 'Accept: application/vnd.github+json' \
+              --header "Authorization: Bearer $RUNNER_READ_TOKEN" \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/$REPOSITORY/actions/runners"
+          )"; then
+            select_hosted 'runner status API is unavailable'
+            exit 0
+          fi
+
+          eligible_count="$(
+            jq \
+              --arg runner_name "$RUNNER_NAME" \
+              '[
+                .runners[]?
+                | select(
+                    .name == $runner_name
+                    and .status == "online"
+                    and .busy == false
+                  )
+                | [.labels[].name]
+                | select(contains(["self-hosted", "macOS", "ARM64", "lmdj"]))
+              ] | length' \
+              <<<"$runner_response"
+          )"
+
+          if [[ "$eligible_count" != "1" ]]; then
+            select_hosted 'self-hosted runner is offline, busy, missing, or mislabeled'
+            exit 0
+          fi
+
+          {
+            echo 'runner=["self-hosted","macOS","ARM64","lmdj"]'
+            echo 'self-hosted=true'
+            echo 'reason=online idle trusted self-hosted runner'
+          } >>"$GITHUB_OUTPUT"
+          echo "Using self-hosted runner: $RUNNER_NAME"
+
+  macos-primary:
+    name: macOS gates (primary)
+    needs: select-macos-runner
+    runs-on: ${{ fromJSON(needs.select-macos-runner.outputs.runner) }}
+    timeout-minutes: 30
+    # Infrastructure failure is adjudicated by the fallback and final gate
+    # jobs. Semantic test outcomes are published by the composite action.
+    continue-on-error: true
+    outputs:
+      completed: ${{ steps.gates.outputs.completed }}
+      prepare-result: ${{ steps.gates.outputs.prepare-result }}
+      core-result: ${{ steps.gates.outputs.core-result }}
+      asan-result: ${{ steps.gates.outputs.asan-result }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run macOS Core gates
+        id: gates
+        uses: ./.github/actions/macos-core-gates
+
+  macos-fallback:
+    name: macOS gates (GitHub-hosted fallback)
+    needs: [select-macos-runner, macos-primary]
+    if: >-
+      ${{
+        !cancelled()
+        && needs.select-macos-runner.outputs.self-hosted == 'true'
+        && needs.macos-primary.outputs.completed != 'true'
+      }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    outputs:
+      completed: ${{ steps.gates.outputs.completed }}
+      prepare-result: ${{ steps.gates.outputs.prepare-result }}
+      core-result: ${{ steps.gates.outputs.core-result }}
+      asan-result: ${{ steps.gates.outputs.asan-result }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Rerun macOS Core gates after infrastructure failure
+        id: gates
+        uses: ./.github/actions/macos-core-gates
+
+  core-macos:
+    name: core (macos-latest)
+    needs: [select-macos-runner, macos-primary, macos-fallback]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Adjudicate macOS Core Proof
+        env:
+          PRIMARY_COMPLETED: ${{ needs.macos-primary.outputs.completed }}
+          PRIMARY_PREPARE_RESULT: ${{ needs.macos-primary.outputs.prepare-result }}
+          PRIMARY_CORE_RESULT: ${{ needs.macos-primary.outputs.core-result }}
+          FALLBACK_COMPLETED: ${{ needs.macos-fallback.outputs.completed }}
+          FALLBACK_PREPARE_RESULT: ${{ needs.macos-fallback.outputs.prepare-result }}
+          FALLBACK_CORE_RESULT: ${{ needs.macos-fallback.outputs.core-result }}
+        run: bash .github/scripts/assert-macos-gate-result.sh core
+
+  core-asan-macos:
+    name: core-asan-macos
+    needs: [select-macos-runner, macos-primary, macos-fallback]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Adjudicate native macOS sanitizers
+        env:
+          PRIMARY_COMPLETED: ${{ needs.macos-primary.outputs.completed }}
+          PRIMARY_PREPARE_RESULT: ${{ needs.macos-primary.outputs.prepare-result }}
+          PRIMARY_ASAN_RESULT: ${{ needs.macos-primary.outputs.asan-result }}
+          FALLBACK_COMPLETED: ${{ needs.macos-fallback.outputs.completed }}
+          FALLBACK_PREPARE_RESULT: ${{ needs.macos-fallback.outputs.prepare-result }}
+          FALLBACK_ASAN_RESULT: ${{ needs.macos-fallback.outputs.asan-result }}
+        run: bash .github/scripts/assert-macos-gate-result.sh asan
+
   core-asan:
     runs-on: ubuntu-24.04
     steps:
@@ -148,42 +311,6 @@ jobs:
       - run: scripts/core.sh build asan
       - run: scripts/core.sh test asan full
       - run: scripts/core.sh test asan stress
-
-  core-asan-macos:
-    runs-on: macos-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          lfs: true
-      - uses: actions/setup-python@v6
-        with:
-          python-version: "3.11"
-      - run: python3 tests/fixtures/audio/make_fixtures.py
-      - run: python3 tests/fixtures/golden/reference_render.py
-      - run: bash scripts/verify-core-dependencies.sh
-      - run: scripts/core.sh configure asan
-      - run: scripts/core.sh build asan
-      - name: Verify Apple-only audio targets are built under the sanitizer
-        shell: bash
-        run: |
-          set -euo pipefail
-          for target in lmdj_audio_coreaudio lmdj_audio_coreaudio_tests; do
-            if ! cmake --build build/core/asan --target "$target"; then
-              echo "Apple-only target missing from the macOS sanitizer build: $target" >&2
-              exit 1
-            fi
-          done
-      # Native tests only, which is every test whose command is a built target
-      # and therefore all of the Apple-only audio coverage this job exists for.
-      # It also covers both stress tests, since they are native.
-      #
-      # The Python-hosted tests are deliberately excluded here. They dlopen the
-      # instrumented C ABI dylib from an uninstrumented CPython, which needs
-      # DYLD_INSERT_LIBRARIES to preload the ASan runtime; that does not
-      # interpose into the runner's Python on arm64 macOS, so they die with
-      # DEADLYSIGNAL before reaching any assertion. The Linux core-asan job
-      # keeps that coverage via LD_PRELOAD.
-      - run: ctest --preset asan -L '^native$' --output-on-failure
 
   core-coverage:
     runs-on: ubuntu-24.04

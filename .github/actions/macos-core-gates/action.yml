@@ -1,0 +1,87 @@
+name: Run macOS Core gates
+description: Run each macOS Core Proof and native sanitizer gate once and publish its result.
+
+outputs:
+  completed:
+    description: Whether the action reached its terminal result publisher.
+    value: ${{ steps.results.outputs.completed }}
+  prepare-result:
+    description: Outcome of deterministic fixture and dependency preparation.
+    value: ${{ steps.results.outputs.prepare-result }}
+  core-result:
+    description: Outcome of the macOS Core Proof.
+    value: ${{ steps.results.outputs.core-result }}
+  asan-result:
+    description: Outcome of the native macOS sanitizer gate.
+    value: ${{ steps.results.outputs.asan-result }}
+
+runs:
+  using: composite
+  steps:
+    - name: Prepare deterministic Core inputs
+      id: prepare
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 tests/fixtures/audio/make_fixtures.py
+        python3 tests/fixtures/golden/reference_render.py
+        bash scripts/verify-core-dependencies.sh
+
+    - name: Prove Core on macOS
+      id: core
+      if: ${{ always() && steps.prepare.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      run: scripts/core.sh proof
+
+    - name: Run native macOS sanitizers
+      id: asan
+      if: ${{ always() && steps.prepare.outcome == 'success' }}
+      continue-on-error: true
+      shell: bash
+      run: |
+        set -euo pipefail
+        scripts/core.sh configure asan
+        scripts/core.sh build asan
+
+        for target in lmdj_audio_coreaudio lmdj_audio_coreaudio_tests; do
+          if ! cmake --build build/core/asan --target "$target"; then
+            echo "Apple-only target missing from the macOS sanitizer build: $target" >&2
+            exit 1
+          fi
+        done
+
+        # Python-hosted tests cannot preload the ASan runtime into CPython on
+        # arm64 macOS. Linux ASan owns that coverage; this lane owns every
+        # native test, including both stress tests and Apple-only audio.
+        ctest --preset asan -L '^native$' --output-on-failure
+
+    - name: Publish semantic gate results
+      id: results
+      if: ${{ always() }}
+      shell: bash
+      env:
+        PREPARE_RESULT: ${{ steps.prepare.outcome }}
+        CORE_RESULT: ${{ steps.core.outcome }}
+        ASAN_RESULT: ${{ steps.asan.outcome }}
+      run: |
+        set -euo pipefail
+
+        normalize_result() {
+          case "$1" in
+            success|failure|cancelled|skipped) printf '%s' "$1" ;;
+            '') printf 'skipped' ;;
+            *)
+              echo "unexpected step outcome: $1" >&2
+              exit 1
+              ;;
+          esac
+        }
+
+        {
+          echo 'completed=true'
+          echo "prepare-result=$(normalize_result "$PREPARE_RESULT")"
+          echo "core-result=$(normalize_result "$CORE_RESULT")"
+          echo "asan-result=$(normalize_result "$ASAN_RESULT")"
+        } >>"$GITHUB_OUTPUT"

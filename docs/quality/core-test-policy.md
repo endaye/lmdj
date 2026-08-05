@@ -94,6 +94,14 @@ An automated test runs once per requested command. A failure is evidence to
 diagnose, not a reason to retry until it passes. A deliberate rerun after a
 code or environment correction must be recorded as a new result.
 
+The macOS CI fallback is infrastructure recovery, not a test retry. Runner
+selection uses GitHub-hosted macOS immediately when the trusted self-hosted
+runner is unavailable. When the self-hosted lane is selected, GitHub-hosted
+macOS may run the same gates only if checkout, setup, runner communication, or
+the 30-minute job limit prevents that lane from publishing a terminal result.
+A published preparation, Core Proof, or sanitizer failure is final and must not
+start the fallback lane.
+
 The nightly Release stress lane is bounded stability sampling: it runs at most
 20 consecutive successful repetitions and stops on the first failure. It does
 not retry a failed execution.

@@ -337,3 +337,13 @@ lmdj_add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 10
 )
+
+lmdj_add_test(
+  NAME build.ci_runner_fallback
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/ci_runner_fallback_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
