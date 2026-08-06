@@ -964,6 +964,48 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
       .map(({ payload }) => payload),
   keyboardMarker.responses)).toEqual([{ slot: 1, velocity: 100 }]);
 
+  const burstCodes = [
+    "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
+    "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
+  ];
+  const burstMarker = await observationMarker(page);
+  await page.evaluate((codes) => {
+    for (const code of codes) {
+      window.dispatchEvent(new KeyboardEvent("keydown", { code }));
+      window.dispatchEvent(new KeyboardEvent("keyup", { code }));
+    }
+  }, burstCodes);
+  await expect.poll(() => page.evaluate((start) => {
+    const diagnostics = window.lmdjWebRuntimeController.diagnostics();
+    return {
+      state: diagnostics.state,
+      admissions:
+        window.__lmdjTask11.admittedSequences.length - start.admissions,
+      responses:
+        window.__lmdjTask11.responses.slice(start.responses)
+          .filter(({ operation }) => operation === "trigger").length,
+    };
+  }, burstMarker)).toEqual({
+    state: "running",
+    admissions: burstCodes.length,
+    responses: burstCodes.length,
+  });
+  const burstAdmissions = await page.evaluate((start) =>
+    window.__lmdjTask11.admittedSequences.slice(start),
+  burstMarker.admissions);
+  await proveExactOutcomes(
+    page,
+    burstAdmissions,
+    burstMarker.notifications,
+  );
+  expect(await page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start)
+      .filter(({ operation }) => operation === "trigger")
+      .map(({ payload }) => payload),
+  burstMarker.responses)).toEqual(
+    burstCodes.map((_, slot) => ({ slot, velocity: 100 })),
+  );
+
   const descriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
   DIAGNOSTIC_PROJECT_STORAGE_KEY);

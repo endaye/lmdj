@@ -715,6 +715,7 @@ export function createWebRuntimeHostController(options = {}) {
   let triggerAdmittedCount = 0;
   let triggerOutcomeCount = 0;
   let triggerRejectedCount = 0;
+  let triggerTail = Promise.resolve();
   const admittedSequences = new Map();
   const listenerDisposers = [];
 
@@ -922,7 +923,7 @@ export function createWebRuntimeHostController(options = {}) {
     return false;
   }
 
-  async function trigger(flatSlot, velocity) {
+  async function dispatchTrigger(flatSlot, velocity) {
     if (
       !Number.isInteger(flatSlot) ||
       flatSlot < 0 ||
@@ -978,6 +979,16 @@ export function createWebRuntimeHostController(options = {}) {
       fail(error);
       return false;
     }
+  }
+
+  function trigger(flatSlot, velocity) {
+    const pending = triggerTail.then(() =>
+      dispatchTrigger(flatSlot, velocity));
+    triggerTail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
 
   async function beginTake(takeId, expectedRevision) {

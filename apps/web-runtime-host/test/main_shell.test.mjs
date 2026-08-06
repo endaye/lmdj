@@ -812,6 +812,50 @@ test("rejects Trigger and take.begin before initial activation without replay", 
   assert.equal(fixture.calls.filter(({ operation }) => operation === "trigger").length, 0);
 });
 
+test("serializes concurrent Trigger submissions through one transport request", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.options.transport.send.bind(
+    fixture.options.transport,
+  );
+  const pending = [];
+  let sequence = 1;
+  fixture.options.transport.send = (request, options) => {
+    if (request.operation !== "trigger") {
+      return originalSend(request, options);
+    }
+    fixture.calls.push({
+      operation: request.operation,
+      payload: request.payload,
+      options,
+    });
+    const settlement = deferred();
+    pending.push({ request, settlement });
+    return settlement.promise.then(() => responseFor(request, {
+      sequence: sequence++,
+      status: "enqueued",
+    }));
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.loadDiagnosticProject();
+  await controller.activateAudio();
+
+  const burst = Array.from({ length: 16 }, (_, slot) =>
+    controller.trigger(slot, 100));
+  await settle();
+  assert.equal(pending.length, 1);
+
+  for (let index = 0; index < burst.length; index += 1) {
+    pending[index].settlement.resolve();
+    await settle();
+    assert.equal(pending.length, Math.min(index + 2, burst.length));
+  }
+  assert.deepEqual(await Promise.all(burst), Array(16).fill(true));
+  assert.equal(controller.state, "running");
+  assert.equal(controller.diagnostics().trigger_admitted_count, 16);
+});
+
 test("interruption closes admission synchronously, clears pressed state, and coalesces suspend", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const fixture = harness();
