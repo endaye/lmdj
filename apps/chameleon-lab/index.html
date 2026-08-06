@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Chameleon Lab — a chameleon written in code</title>
+<meta name="description" content="Chameleon Lab: an original generative-art experiment. One chameleon, infinite evolutions, drawn live in your browser." />
+<link rel="stylesheet" href="styles.css" />
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ccircle cx='16' cy='16' r='14' fill='%233fae6a'/%3E%3Ccircle cx='21' cy='12' r='4' fill='%23e8d44d'/%3E%3Ccircle cx='21' cy='12' r='1.8' fill='%23071009'/%3E%3C/svg%3E" />
+</head>
+<body>
+
+<header class="site-header">
+  <a class="brand" href="#top" aria-label="Chameleon Lab home">
+    <span class="brand-mark" aria-hidden="true"></span>
+    CHAMELEON&nbsp;LAB
+  </a>
+  <button class="menu-button" id="menu-open" type="button" aria-haspopup="dialog" aria-controls="menu-overlay">
+    Open menu
+  </button>
+</header>
+
+<nav class="menu-overlay" id="menu-overlay" role="dialog" aria-modal="true" aria-label="Site menu" hidden>
+  <button class="menu-close" id="menu-close" type="button">Close</button>
+  <ul class="menu-list">
+    <li><a href="#theory">Theory of evolution</a></li>
+    <li><a href="#about">About</a></li>
+    <li><a href="#artist">Artist</a></li>
+    <li><a href="#playground">Playground</a></li>
+    <li><a href="#history">History</a></li>
+    <li><a href="#hatch">Hatch</a></li>
+  </ul>
+  <p class="menu-foot">A generative creature, redrawn every time you ask.</p>
+</nav>
+
+<main id="top">
+
+  <section class="hero" id="hero">
+    <canvas id="stage" aria-label="Generative chameleon artwork" role="img"></canvas>
+    <div class="hero-copy">
+      <p class="hero-kicker">GENERATIVE ART LAB · 生成アート実験室</p>
+      <h1>Chameleon Lab</h1>
+      <p class="hero-jp" lang="ja">コードでできたカメレオン。何度でも、進化する。</p>
+      <p class="hero-en">A chameleon written in pure mathematics. Every seed is a new
+        evolution, drawn live on this page — no two creatures are ever the same.</p>
+    </div>
+    <div class="trait-bar" role="group" aria-label="Creature traits — click icons to change">
+      <p class="trait-hint">Click icons to change</p>
+      <div class="trait-buttons">
+        <button type="button" id="trait-palette" title="Change palette">🎨</button>
+        <button type="button" id="trait-pattern" title="Change skin pattern">🧬</button>
+        <button type="button" id="trait-seed" title="Hatch a new creature">🎲</button>
+        <button type="button" id="trait-speed" title="Change motion">⏱</button>
+      </div>
+      <p class="trait-readout" id="trait-readout" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <section class="panel" id="theory">
+    <h2>Theory of evolution</h2>
+    <p>Every creature here starts as a single number: a seed. From that seed the lab
+      derives a spine, a curled tail, a crown of dorsal spikes, and a skin pattern —
+      then lets color and motion drift over time. Change one trait and the whole
+      organism re-computes around it. That is the only rule: form follows formula,
+      and formula follows chance.</p>
+    <p>Nothing on this page is an image file. The chameleon you see is geometry —
+      spirals, offset curves, and deterministic randomness — recomputed on every
+      frame, in your browser, from scratch.</p>
+  </section>
+
+  <section class="panel" id="about">
+    <h2>About</h2>
+    <p>Chameleon Lab is a small generative-art experiment built inside the LMDJ
+      repository as a product-neutral web lab. It is an original, code-only homage
+      to generative creature sites: a single canvas, a seeded random engine, and a
+      renderer that turns mathematics into a living-looking animal.</p>
+    <p>There is no backend, no account, and no tracking. The static server binds to
+      loopback, sends cross-origin isolation headers, and stores nothing.</p>
+  </section>
+
+  <section class="panel" id="artist">
+    <h2>Artist</h2>
+    <p>The artist here is an algorithm. Humans chose the palette names, the curve
+      families, and the constraints — but each individual creature is hatched by a
+      pseudorandom generator that no one directed by hand. The lab's job is to make
+      that collaboration visible: press 🎲 and watch authorship transfer to chance.</p>
+  </section>
+
+  <section class="panel" id="playground">
+    <h2>Playground</h2>
+    <p>The four icons above the fold are the whole instrument. Palette shifts the
+      color genome, pattern rewrites the skin, the die rolls a brand-new seed, and
+      the timer changes the creature's gait. The readout names the current genome
+      so you can find your way back to a favorite.</p>
+  </section>
+
+  <section class="panel" id="history">
+    <h2>History</h2>
+    <ol class="timeline">
+      <li><strong>v0.3</strong> — Trait locking: palette, pattern, and gait can evolve
+        independently of the seed.</li>
+      <li><strong>0.2</strong> — The creature learned to breathe, blink, and watch
+        the room.</li>
+      <li><strong>v0.1</strong> — First hatch: one spiral tail, one canvas, one seed.</li>
+    </ol>
+  </section>
+
+  <section class="panel hatch" id="hatch">
+    <h2>Hatch</h2>
+    <p>Ready for a different animal? Rolling the die re-derives every trait from a
+      fresh seed — same species, new individual.</p>
+    <button type="button" id="hatch-button" class="hatch-button">Hatch a new creature</button>
+    <p class="hatch-note">Tip: the readout shows the current seed, so you can keep the
+      ones you love.</p>
+  </section>
+
+</main>
+
+<footer class="site-footer">
+  <p>©2026 Chameleon Lab — an original generative-art homage, drawn live with canvas and math.</p>
+  <p class="footer-links">
+    <a href="#theory">Theory</a> · <a href="#about">About</a> · <a href="#hatch">Hatch</a>
+  </p>
+</footer>
+
+<script type="module" src="src/main.js"></script>
+</body>
+</html>
