@@ -29,7 +29,10 @@ def properties_by_name(test: dict[str, object]) -> dict[str, object]:
 
 def validate(build_dir: Path) -> tuple[list[str], int]:
     cache = (build_dir / "CMakeCache.txt").read_text(encoding="utf-8")
+    is_asan = "LMDJ_SANITIZER:STRING=address" in cache.splitlines()
     is_tsan = "LMDJ_SANITIZER:STRING=thread" in cache.splitlines()
+    sanitizer_name = "ASan" if is_asan else "TSan" if is_tsan else None
+    sanitizer_timeout_factor = 2.0 if is_asan else 4.0 if is_tsan else 1.0
     result = subprocess.run(
         ["ctest", "--test-dir", str(build_dir), "--show-only=json-v1"],
         check=False,
@@ -82,12 +85,12 @@ def validate(build_dir: Path) -> tuple[list[str], int]:
         if timeout is None:
             errors.append(f"{name}: missing timeout")
             continue
-        timeout_limit = MAX_TIMEOUT[tier] * (4.0 if is_tsan else 1.0)
-        if is_tsan and is_native and tier != "stress":
-            expected_timeout = MAX_TIMEOUT[tier] * 4.0
+        timeout_limit = MAX_TIMEOUT[tier] * sanitizer_timeout_factor
+        if sanitizer_name and is_native and tier != "stress":
+            expected_timeout = MAX_TIMEOUT[tier] * sanitizer_timeout_factor
             if float(timeout) != expected_timeout:
                 errors.append(
-                    f"{name}: TSan timeout {timeout} must be "
+                    f"{name}: {sanitizer_name} timeout {timeout} must be "
                     f"{expected_timeout}"
                 )
         if float(timeout) > timeout_limit:

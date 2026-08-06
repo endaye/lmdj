@@ -37,6 +37,19 @@ def lmdj_include_headers(source: str) -> list[str]:
     ]
 
 
+def configured_timeout(build_directory: Path, base_timeout: float) -> float:
+    cache = (build_directory / "CMakeCache.txt").read_text(encoding="utf-8")
+    sanitizer = next(
+        (
+            line.removeprefix("LMDJ_SANITIZER:STRING=")
+            for line in cache.splitlines()
+            if line.startswith("LMDJ_SANITIZER:STRING=")
+        ),
+        "none",
+    )
+    return base_timeout * {"address": 2.0, "thread": 4.0}.get(sanitizer, 1.0)
+
+
 def encoded_request(value: object) -> str:
     return canonical_json(value)
 
@@ -797,7 +810,7 @@ def host_boundary_and_identity(executable: Path) -> None:
     properties = {
         item["name"]: item["value"] for item in host_test["properties"]
     }
-    assert properties["TIMEOUT"] == 60.0
+    assert properties["TIMEOUT"] == configured_timeout(build_directory, 60.0)
 
     assert lmdj_include_headers(
         '#include <lmdj/angle.hpp>\n'
