@@ -58,13 +58,22 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name", source)
         self.assertEqual(source.count("Runner selection candidates:"), 2)
         self.assertEqual(source.count("Runner selection inventory:"), 2)
-        self.assertEqual(source.count("TARGET_RUNNER_NAME:"), 2)
+        self.assertEqual(source.count("TARGET_RUNNER_NAME:"), 1)
         self.assertNotRegex(source, r"(?m)^\s+RUNNER_NAME:")
         self.assertNotIn('"$RUNNER_NAME"', source)
 
     def test_workflow_routes_linux_gates_to_contabo_when_selected(self) -> None:
         selector = self.workflow_job("select-ubuntu-runner")
-        self.assertIn("TARGET_RUNNER_NAME: contabo-lmdj-linux", selector)
+        self.assertNotIn("TARGET_RUNNER_NAME", selector)
+        self.assertNotIn("contabo-lmdj-linux", selector)
+        self.assertNotIn(".name ==", selector)
+        self.assertIn('if [[ "$eligible_count" == "0" ]]', selector)
+        self.assertGreaterEqual(
+            selector.count(
+                'contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"])'
+            ),
+            2,
+        )
         self.assertIn(
             "runner=[\"self-hosted\",\"Linux\",\"X64\",\"lmdj-linux\",\"contabo\"]",
             selector,

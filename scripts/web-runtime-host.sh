@@ -106,6 +106,16 @@ activate_toolchain() {
   fi
 }
 
+run_cmake_build() {
+  local build_directory="$1"
+  shift
+  local parallel_args=(--parallel)
+  if [[ -n "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]]; then
+    parallel_args+=("$CMAKE_BUILD_PARALLEL_LEVEL")
+  fi
+  cmake --build "$build_directory" "$@" "${parallel_args[@]}"
+}
+
 require_playwright() {
   if [[ ! -f "$web_test_root/node_modules/@playwright/test/package.json" ]]; then
     echo "Web Runtime Host error: run npm ci in tests/platform/web" >&2
@@ -177,7 +187,7 @@ build_host() {
   else
     python3 "$repo_root/tools/web-runtime/verify_emscripten.py"
   fi
-  cmake --build "$cmake_root" --target lmdj_web_runtime_host --parallel
+  run_cmake_build "$cmake_root" --target lmdj_web_runtime_host
   package_host
 }
 

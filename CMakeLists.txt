@@ -347,3 +347,13 @@ lmdj_add_test(
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   TIMEOUT 10
 )
+
+lmdj_add_test(
+  NAME build.ci_build_acceleration
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/ci_build_acceleration_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
