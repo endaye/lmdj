@@ -76,10 +76,15 @@ function preparedProject() {
 
 function scriptedTransport(entries) {
   const calls = [];
+  const callWaiters = new Map();
   return {
     calls,
     async send(request, options) {
       calls.push({ request, options });
+      for (const resolvePromise of callWaiters.get(request.operation) ?? []) {
+        resolvePromise();
+      }
+      callWaiters.delete(request.operation);
       const entry = entries.shift();
       assert.ok(entry, `unexpected request: ${request.operation}`);
       assert.equal(request.operation, entry.operation);
@@ -93,6 +98,16 @@ function scriptedTransport(entries) {
     },
     assertDrained() {
       assert.equal(entries.length, 0, "all scripted requests were consumed");
+    },
+    waitForOperation(operation) {
+      if (calls.some(({ request }) => request.operation === operation)) {
+        return Promise.resolve();
+      }
+      return new Promise((resolvePromise) => {
+        const waiters = callWaiters.get(operation) ?? [];
+        waiters.push(resolvePromise);
+        callWaiters.set(operation, waiters);
+      });
     },
   };
 }
@@ -109,11 +124,6 @@ function deferred() {
     rejectPromise = reject;
   });
   return { promise, resolve: resolvePromise, reject: rejectPromise };
-}
-
-async function settle() {
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
-  await new Promise((resolvePromise) => setImmediate(resolvePromise));
 }
 
 function freshEntries() {
@@ -588,7 +598,7 @@ test("pagehide during import stops all later preparation requests", async () => 
   });
 
   const loading = subject.load();
-  await settle();
+  await transport.waitForOperation("asset.import");
   assert.deepEqual(transport.calls.map(({ request }) => request.operation), [
     "project.open",
     "project.inspect",
@@ -622,7 +632,7 @@ test("pagehide during assignment stops before the next Pad mutation", async () =
   });
 
   const loading = subject.load();
-  await settle();
+  await transport.waitForOperation("pad.assign");
   subject.invalidate();
   assignmentSettlement.resolve({ project_revision: 2 });
 
@@ -646,7 +656,7 @@ test("late restart-required beats invalidation and seals a queued and direct Loa
   });
 
   const first = subject.load();
-  await settle();
+  await transport.waitForOperation("asset.import");
   subject.invalidate();
   const queued = subject.load();
   importSettlement.resolve({
