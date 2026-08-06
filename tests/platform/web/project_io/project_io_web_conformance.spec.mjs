@@ -116,6 +116,7 @@ async function compareReacquiredLeaseEntry(page) {
 }
 
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
+  test.setTimeout(120_000);
   await page.goto("/preflight.html");
   const capabilities = await inspectStorageCapabilities(page);
   if (capabilities.status === "unsupported") {

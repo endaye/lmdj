@@ -289,14 +289,23 @@ def main() -> int:
         re.search(
             r"LMDJ_WEB_HOST_FULL_CHROMIUM=1\s*\\\s*.*?"
             r"--project=chromium\s*\\\s*"
-            r"host/web_runtime_host_manifest_gate\.spec\.mjs\s*\\\s*"
-            r"host/web_runtime_host_browser\.spec\.mjs",
+            r'"\$\{formal_host_specs\[@\]\}"',
             web_runtime_host_script_text,
             re.DOTALL,
         )
         is not None,
-        "formal browser Proof must explicitly select full Chromium "
-        "new-headless mode",
+        "formal browser Proof must run every discovered Formal Host spec in "
+        "full Chromium new-headless mode",
+    )
+    require(
+        "git -C \"$repo_root\" ls-files "
+        "'tests/platform/web/host/web_runtime_host_*.spec.mjs'"
+        in web_runtime_host_script_text,
+        "formal browser Proof must discover its tracked Formal Host specs",
+    )
+    require(
+        'if [[ ${#formal_host_specs[@]} -eq 0 ]]' in web_runtime_host_script_text,
+        "formal browser Proof must fail closed when no tracked specs are found",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",

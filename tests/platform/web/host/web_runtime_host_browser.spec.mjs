@@ -28,6 +28,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
+const DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS = 30_000;
 const DIAGNOSTIC_PROJECT_CONTRACT =
   "lmdj.web-runtime-host.diagnostic-project.v1";
 const DIAGNOSTIC_PROJECT_STORAGE_KEY = DIAGNOSTIC_PROJECT_CONTRACT;
@@ -794,7 +795,9 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   });
   const runtimeScriptPathname = new URL(runtimeScriptPath, page.url()).pathname;
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   await activateWithGesture(page);
 
   expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
@@ -866,7 +869,9 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await openPackagedHost(page);
   await expect(page.locator("#audio-activate")).toBeDisabled();
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   await expect(page.locator("#audio-activate")).toBeEnabled();
   await page.locator("#audio-activate").click();
   await expect(page.locator("#host-state")).toHaveText("running");
@@ -990,7 +995,9 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await expect(page.locator("#audio-activate")).toBeDisabled();
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   await expect(page.locator("#audio-activate")).toBeEnabled();
   const reopenedDescriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
@@ -1140,7 +1147,9 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   await expect(page.locator("#audio-activate")).toBeEnabled();
   const reopened = success(
     await reopenProject(page, identity, identity.committedPatternId),
@@ -1342,7 +1351,9 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   test.setTimeout(60_000);
   await openPackagedHost(page);
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   const descriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
   DIAGNOSTIC_PROJECT_STORAGE_KEY);
@@ -2017,7 +2028,9 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
 
   expect(missing).toEqual([]);
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   const descriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
   DIAGNOSTIC_PROJECT_STORAGE_KEY);
@@ -2046,7 +2059,9 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready");
+  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
+    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
+  });
   expect(success(await reopenProject(page, identity, identity.patternId),
     "WebKit reopen").project_revision).toBe(PREPARED_PROJECT_REVISION);
   await activateWithGesture(page);

@@ -170,6 +170,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: true
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -220,6 +222,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: true
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -488,6 +492,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: true
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -506,6 +512,8 @@ jobs:
       - uses: actions/checkout@v6
         with:
           lfs: true
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
