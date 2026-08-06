@@ -60,6 +60,16 @@ activate_toolchain() {
   fi
 }
 
+run_cmake_build() {
+  local build_directory="$1"
+  shift
+  local parallel_args=(--parallel)
+  if [[ -n "${CMAKE_BUILD_PARALLEL_LEVEL:-}" ]]; then
+    parallel_args+=("$CMAKE_BUILD_PARALLEL_LEVEL")
+  fi
+  cmake --build "$build_directory" "$@" "${parallel_args[@]}"
+}
+
 configure_fixture() {
   activate_toolchain
   python3 "$repo_root/tools/web-runtime/verify_emscripten.py"
@@ -74,7 +84,7 @@ build_fixture() {
   if [[ ! -f "$cmake_root/CMakeCache.txt" ]]; then
     configure_fixture
   fi
-  cmake --build "$cmake_root" --parallel
+  run_cmake_build "$cmake_root"
 }
 
 build_project_io() {
@@ -85,7 +95,7 @@ build_project_io() {
       -B "$project_io_cmake_root" \
       -DCMAKE_BUILD_TYPE=Release
   fi
-  cmake --build "$project_io_cmake_root" --parallel
+  run_cmake_build "$project_io_cmake_root"
   local production_js="$project_io_root/project_io_web_production_link.js"
   if [[ ! -f "$production_js" ]]; then
     echo "web toolchain error: production Project I/O link output is missing" >&2
@@ -108,9 +118,8 @@ build_audio_runtime() {
     -DBUILD_TESTING=OFF \
     -DLMDJ_WEB_AUDIO_CONFORMANCE=ON \
     -DLMDJ_WEB_AUDIO_OUTPUT_DIR="$formal_audio_root"
-  cmake --build "$audio_runtime_cmake_root" \
-    --target lmdj_web_runtime_host \
-    --parallel
+  run_cmake_build "$audio_runtime_cmake_root" \
+    --target lmdj_web_runtime_host
   local expected_artifacts=(
     lmdj-web-runtime-host.html
     lmdj-web-runtime-host.js

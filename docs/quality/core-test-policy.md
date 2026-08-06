@@ -95,15 +95,24 @@ diagnose, not a reason to retry until it passes. A deliberate rerun after a
 code or environment correction must be recorded as a new result.
 
 The PR and `main` Core CI Linux workloads prefer the repository's trusted
-`contabo-lmdj-linux` runner when it is online, idle, and carries the exact
-`self-hosted`, `Linux`, `X64`, `lmdj-linux`, and `contabo` labels. The selector
-uses GitHub-hosted Ubuntu for an untrusted fork, a missing status token, a
-Runner API failure, or a runner that is offline, busy, missing, or mislabeled.
-The selection happens before the workload jobs start; a semantic failure on
-the selected lane is final and is not retried on a GitHub-hosted runner.
-Because the trusted Linux runner is a single machine, selected Linux jobs may
-queue there instead of running in hosted parallelism. That tradeoff reduces
-hosted compute use but does not claim a shorter wall-clock CI duration.
+runner pool whenever at least one online, idle runner carries the
+`self-hosted`, `Linux`, `X64`, `lmdj-linux`, and `contabo` labels. Selection is
+label-based rather than bound to a runner name, so GitHub assigns each selected
+job to any matching free runner. The selector uses GitHub-hosted Ubuntu for an
+untrusted fork, a missing status token, a Runner API failure, or a pool with no
+online idle matching runner. Selection happens before the workload jobs start;
+a semantic failure on the selected lane is final and is not retried on a
+GitHub-hosted runner.
+
+The trusted Linux pool currently contains two independent runner services and
+therefore executes at most two selected jobs concurrently; additional jobs
+queue. Each CI CMake build is capped at three parallel jobs. Native Linux jobs
+use the pool's shared checkout-external persistent `ccache`, while Emscripten
+jobs deliberately bypass it. The trusted M1 runner uses its own persistent
+`ccache` with the same three-job build cap. GitHub-hosted Linux and macOS lanes
+keep the cap but do not depend on runner-local persistent caches. Per-job cache
+statistics are diagnostic evidence only and never replace semantic gate
+results.
 
 The macOS CI fallback is infrastructure recovery, not a test retry. Runner
 selection uses GitHub-hosted macOS immediately when the trusted self-hosted

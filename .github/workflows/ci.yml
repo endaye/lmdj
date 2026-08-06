@@ -29,7 +29,6 @@ jobs:
           EVENT_NAME: ${{ github.event_name }}
           HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           REPOSITORY: ${{ github.repository }}
-          TARGET_RUNNER_NAME: contabo-lmdj-linux
           RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
         run: |
           set -euo pipefail
@@ -90,10 +89,12 @@ jobs:
           runner_candidates="$(
             jq \
               --compact-output \
-              --arg runner_name "$TARGET_RUNNER_NAME" \
               '[
                 .runners[]?
-                | select(.name == $runner_name)
+                | select(
+                    [.labels[].name]
+                    | contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"])
+                  )
                 | {
                     name,
                     status,
@@ -107,12 +108,10 @@ jobs:
 
           eligible_count="$(
             jq \
-              --arg runner_name "$TARGET_RUNNER_NAME" \
               '[
                 .runners[]?
                 | select(
-                    .name == $runner_name
-                    and .status == "online"
+                    .status == "online"
                     and .busy == false
                   )
                 | [.labels[].name]
@@ -121,17 +120,17 @@ jobs:
               <<<"$runner_response"
           )"
 
-          if [[ "$eligible_count" != "1" ]]; then
-            select_hosted 'self-hosted runner is offline, busy, missing, or mislabeled'
+          if [[ "$eligible_count" == "0" ]]; then
+            select_hosted 'no online idle trusted self-hosted runner is available'
             exit 0
           fi
 
           {
             echo 'runner=["self-hosted","Linux","X64","lmdj-linux","contabo"]'
             echo 'self-hosted=true'
-            echo 'reason=online idle trusted self-hosted runner'
+            echo 'reason=online idle trusted self-hosted runner pool'
           } >>"$GITHUB_OUTPUT"
-          echo "Using self-hosted runner: $TARGET_RUNNER_NAME"
+          echo "Using trusted self-hosted runner pool: $eligible_count eligible runner(s)"
 
   web-toolchain-conformance:
     needs: select-ubuntu-runner
@@ -144,6 +143,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
+      - name: Configure bounded build parallelism
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: false
       - name: Clone pinned emsdk
         run: |
           git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
@@ -178,6 +181,10 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
+      - name: Configure bounded build parallelism
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: false
       - name: Clone pinned emsdk
         run: |
           git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
@@ -227,6 +234,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Configure bounded build acceleration
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
@@ -236,7 +247,6 @@ jobs:
         run: |
           set -euo pipefail
           scripts/core.sh configure dev
-          scripts/core.sh build dev
 
           evidence_dir="$(mktemp -d)"
           trap 'rm -rf -- "$evidence_dir"' EXIT
@@ -254,6 +264,11 @@ jobs:
             fi
             cat "$evidence_dir/$target.log"
           done
+      - name: Report persistent ccache statistics
+        if: ${{ always() && needs.select-ubuntu-runner.outputs.self-hosted == 'true' }}
+        run: >-
+          ccache --show-log-stats
+          || echo 'warning: ccache statistics are unavailable' >&2
 
   select-macos-runner:
     name: Select macOS runner
@@ -423,6 +438,8 @@ jobs:
       - name: Run macOS Core gates
         id: gates
         uses: ./.github/actions/macos-core-gates
+        with:
+          use-ccache: ${{ needs.select-macos-runner.outputs.self-hosted }}
 
   macos-fallback:
     name: macOS gates (GitHub-hosted fallback)
@@ -450,6 +467,8 @@ jobs:
       - name: Rerun macOS Core gates after infrastructure failure
         id: gates
         uses: ./.github/actions/macos-core-gates
+        with:
+          use-ccache: false
 
   core-macos:
     name: core (macos-latest)
@@ -497,6 +516,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Configure bounded build acceleration
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
@@ -504,6 +527,11 @@ jobs:
       - run: scripts/core.sh build asan
       - run: scripts/core.sh test asan full
       - run: scripts/core.sh test asan stress
+      - name: Report persistent ccache statistics
+        if: ${{ always() && needs.select-ubuntu-runner.outputs.self-hosted == 'true' }}
+        run: >-
+          ccache --show-log-stats
+          || echo 'warning: ccache statistics are unavailable' >&2
 
   core-coverage:
     needs: select-ubuntu-runner
@@ -517,6 +545,10 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - name: Configure bounded build acceleration
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
@@ -537,3 +569,8 @@ jobs:
           path: |
             build/core/coverage/coverage/report.txt
             build/core/coverage/coverage/summary.json
+      - name: Report persistent ccache statistics
+        if: ${{ always() && needs.select-ubuntu-runner.outputs.self-hosted == 'true' }}
+        run: >-
+          ccache --show-log-stats
+          || echo 'warning: ccache statistics are unavailable' >&2

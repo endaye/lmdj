@@ -1,0 +1,62 @@
+name: Configure build acceleration
+description: Bound CMake parallelism and optionally use a runner-persistent ccache.
+
+inputs:
+  parallel-level:
+    description: Maximum number of concurrent CMake build jobs.
+    required: false
+    default: "3"
+  use-ccache:
+    description: Whether to use the runner-provided persistent ccache.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    - name: Configure bounded CMake parallelism
+      shell: bash
+      env:
+        PARALLEL_LEVEL: ${{ inputs.parallel-level }}
+      run: |
+        set -euo pipefail
+
+        if [[ ! "$PARALLEL_LEVEL" =~ ^[1-9][0-9]*$ ]]; then
+          echo "parallel-level must be a positive integer: $PARALLEL_LEVEL" >&2
+          exit 64
+        fi
+
+        echo "CMAKE_BUILD_PARALLEL_LEVEL=$PARALLEL_LEVEL" >>"$GITHUB_ENV"
+
+    - name: Configure runner-persistent ccache
+      if: ${{ inputs.use-ccache == 'true' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        ccache_path="$(command -v ccache)" || {
+          echo 'persistent ccache was requested but ccache is unavailable' >&2
+          exit 1
+        }
+        if [[ -z "${CCACHE_DIR:-}" ]]; then
+          echo 'persistent ccache was requested but CCACHE_DIR is unset' >&2
+          exit 1
+        fi
+
+        mkdir -p -- "$CCACHE_DIR"
+        if [[ ! -w "$CCACHE_DIR" ]]; then
+          echo "persistent ccache is not writable: $CCACHE_DIR" >&2
+          exit 1
+        fi
+
+        stats_log="$RUNNER_TEMP/lmdj-ccache-${GITHUB_JOB:-job}-${GITHUB_RUN_ID:-run}-${GITHUB_RUN_ATTEMPT:-0}.log"
+        : >"$stats_log"
+        {
+          echo "CCACHE_BASEDIR=$GITHUB_WORKSPACE"
+          echo "CCACHE_STATSLOG=$stats_log"
+          echo 'CMAKE_C_COMPILER_LAUNCHER=ccache'
+          echo 'CMAKE_CXX_COMPILER_LAUNCHER=ccache'
+        } >>"$GITHUB_ENV"
+
+        "$ccache_path" --version
+        "$ccache_path" --show-config

@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, tests, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, scripts/web-toolchain-conformance.sh, tests, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -27,7 +27,7 @@ Linux ASAN 负责 Python-hosted 覆盖，macOS ASAN 只覆盖 native label；两
 
 正式 CI 保留 Web Runtime Lab、macOS、Ubuntu、Linux ASan、macOS native ASan 与 Coverage，并新增 Formal Web Host lane：校验固定 emsdk revision/release mapping/`emcc 6.0.5`，执行 `npm ci`，显式安装 Chromium/WebKit，再运行 `scripts/web-runtime-host.sh proof`。Nightly 继续保留 TSan 与重复 Stress lane。工作流定义不是远端执行结果；实际 Pull Request CI URL 与状态只能在 CI 产生后记录。
 
-PR 与 `main` 的 Web、Ubuntu Core、Linux ASan 和 Coverage 重负载任务优先选择在线、空闲且精确带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 `contabo-lmdj-linux` runner。外部 fork、状态密钥缺失、Runner API 失败或机器离线/忙碌/缺失/标签不符时，任务在开始前改用 GitHub-hosted Ubuntu。单台 Linux runner 会令这些任务排队串行；该策略减少 hosted compute，不承诺比 hosted 并行执行拥有更短的墙钟时间。选定 lane 的语义失败是最终结果，不会换机器重试。
+PR 与 `main` 的 Web、Ubuntu Core、Linux ASan 和 Coverage 重负载任务优先选择至少一台在线、空闲且带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 runner；selector 不再绑定机器名称，GitHub 会把任务分配给任意满足标签的空闲 runner。外部 fork、状态密钥缺失、Runner API 失败或池中没有在线空闲匹配 runner 时，任务在开始前改用 GitHub-hosted Ubuntu。当前 Contabo 池由两个独立 runner service 构成，最多并发两个任务，其余排队；所有 CI CMake build 均限制为 3 路并行。Linux 原生任务共享 checkout 外持久 `ccache`，Emscripten 任务明确绕过该缓存；M1 原生任务使用本机持久 `ccache`，GitHub-hosted fallback 只保留 3 路并行、不依赖 runner 本地缓存。选定 lane 的语义失败是最终结果，不会换机器重试；每个任务输出的缓存统计只作诊断证据。
 
 macOS Core Proof 与 native ASan 优先选择带 `lmdj` 标签、在线且空闲的受信 self-hosted runner；外部 fork、状态密钥缺失、Runner API 失败、机器离线/忙碌/缺失/标签不符时直接使用 GitHub-hosted macOS。self-hosted lane 若因 checkout/setup、通信中断或 30 分钟超时而没有发布终态结果，GitHub-hosted macOS 才完整执行一次备用 lane；已发布的准备、Proof 或 sanitizer 失败不会触发备用执行。最终门禁仍以 `core (macos-latest)` 与 `core-asan-macos` 对外报告，避免 runner 实现细节改变受保护分支契约。
 
