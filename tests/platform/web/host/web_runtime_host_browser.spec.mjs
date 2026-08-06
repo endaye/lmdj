@@ -28,6 +28,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
+const TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 180_000;
 const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 45_000;
 const DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS = 250;
@@ -1493,7 +1494,9 @@ test("Chromium synchronous submit copy cannot move the caller publication cutoff
     error: { code: "HOST_TIMEOUT" },
   });
   await expect(page.locator("#host-state")).toHaveText("failed");
-  await expect.poll(() => terminalTransportEvidence(page)).toMatchObject({
+  await expect.poll(() => terminalTransportEvidence(page), {
+    timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
+  }).toMatchObject({
     controller: { state: "failed", error_code: "HOST_TIMEOUT" },
     newSubmitCode: "HOST_TIMEOUT",
     terminated: true,
@@ -1613,6 +1616,7 @@ test("Chromium packaged responsive cancellation wins before mutation publication
     await expect(owner.locator("#host-state"), selected.name).toHaveText("failed");
     await expect.poll(() => terminalTransportEvidence(owner), {
       message: `${selected.name} responsive owner release`,
+      timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
     }).toMatchObject({
       controller: { state: "failed", error_code: "HOST_TIMEOUT" },
       newSubmitCode: "HOST_TIMEOUT",

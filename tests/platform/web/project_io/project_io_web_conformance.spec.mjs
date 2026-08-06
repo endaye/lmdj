@@ -7,6 +7,7 @@ const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfsSyncAccessHandle",
   "opfsWritableReplace",
 ]);
+const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 15_000;
 
 async function inspectStorageCapabilities(page) {
   return page.evaluate(async (order) => {
@@ -65,7 +66,7 @@ async function waitForFault(page, point) {
       const host = await root.getDirectoryHandle(".lmdj-host");
       return (await (await host.getFileHandle("test-fault-reached")).getFile()).text();
     } catch (_) { return ""; }
-  })).toBe(point);
+  }), {timeout: FAULT_REACHED_OBSERVATION_TIMEOUT_MS}).toBe(point);
 }
 
 async function clearFaultControl(page) {
