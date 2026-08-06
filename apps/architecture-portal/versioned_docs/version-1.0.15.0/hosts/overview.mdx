@@ -1,0 +1,31 @@
+---
+title: Hosts 总览
+area: hosts
+status: partial
+owners: [hosts, core]
+source_paths:
+  - apps
+  - packages/application-facade
+  - products/lmdj/assembly.json
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Host 规则
+
+Host 只通过 Application Facade 调用 Core，不解析 Project bundle，也不把协议/UI 逻辑下沉到 Core。
+
+## 当前清单
+
+CLI、MCP、Native Test Host 与 Formal Web Runtime Host `1.1.0` 已锁入当前本地候选 Product Build `1.0.15.0` 的 Product Assembly。Formal Web Runtime Host 的自动化 clean-distribution Web Proof 已通过；Web Runtime Lab 仍是独立实验工具，不是正式 Host。
+
+## 生命周期
+
+每个 Host 负责进程/设备输入输出、调用取消和结果呈现；Core typed error 不应被抹成无结构文本。
+
+## 下一门禁
+
+五条物理设备验收仍为 `deferred / unverified`，不再是进入 Assembly 的前置条件；它们仍阻断 physical-pass、`beta` 和 `stable` 声明。

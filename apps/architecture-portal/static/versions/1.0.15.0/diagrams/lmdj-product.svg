@@ -1,0 +1,81 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="0c0369c53190806513cf5b4d3a49fd2fb531b86bd21e98eb77ae518de8fff48b">
+  <title id="title">LMDJ 全产品架构</title><desc id="description">64-Pad 产品从 Host 到 Project Truth、Runtime、Provider 与 Product Assembly 的边界</desc>
+  <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
+  <style>
+    :root{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    @media(prefers-color-scheme:dark){:root{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}}
+    [data-theme=dark]{--bg:#071011;--panel:#102023;--text:#f1fbfb;--muted:#a7c0c3;--line:#59d8d3;--border:#29464a;--boundary:#0c1a1c;--accent:#35d5cf;--mask:#071011}
+    [data-theme=light]{--bg:#f7fafb;--panel:#fff;--text:#102427;--muted:#4b6569;--line:#2b7778;--border:#b8cdcf;--boundary:#eaf4f4;--accent:#00a9a5;--mask:#f7fafb}
+    svg{background:var(--bg);font-family:Inter,"PingFang SC",system-ui,sans-serif}.page-title{font-size:32px;font-weight:750;fill:var(--text)}.page-summary{font-size:16px;fill:var(--muted)}
+    .boundary rect{fill:var(--boundary);stroke:var(--border);stroke-dasharray:7 6}.boundary text{fill:var(--muted);font-size:15px;font-weight:700}.edge-mask{fill:none;stroke:var(--mask);stroke-width:10}.edge{fill:none;stroke:var(--line);stroke-width:2.5}.connection text{fill:var(--muted);font-size:14px;text-anchor:middle}.node-mask{fill:var(--mask)}.node{fill:var(--panel);stroke:var(--border);stroke-width:2}.kind-host .node,.kind-provider .node{stroke:var(--accent)}.node-title{fill:var(--text);font-size:19px;font-weight:750}.node-detail{fill:var(--muted);font-size:14px}.card rect{fill:var(--panel);stroke:var(--border)}.card-title{fill:var(--text);font-size:17px;font-weight:750}.card-body{color:var(--muted);font-size:15px;line-height:1.45}.marker{fill:var(--line)}
+  </style>
+  <rect width="1560" height="820" fill="var(--bg)"/><text class="page-title" x="40" y="44">LMDJ 全产品架构</text><text class="page-summary" x="40" y="68">64-Pad 产品从 Host 到 Project Truth、Runtime、Provider 与 Product Assembly 的边界</text>
+
+    <g class="boundary"><rect x="286" y="112" width="1218" height="442" rx="22"/><text x="306" y="142">Product-neutral Headless Core</text></g>
+  <g class="connection"><path class="edge-mask" d="M 240 228 H 285 V 228 H 330"/><path class="edge" d="M 240 228 H 285 V 228 H 330" marker-end="url(#arrow)"/><text x="285" y="219">Facade API</text></g>
+<g class="connection"><path class="edge-mask" d="M 534 228 H 564 V 228 H 594"/><path class="edge" d="M 534 228 H 564 V 228 H 594" marker-end="url(#arrow)"/><text x="564" y="219">commands</text></g>
+<g class="connection"><path class="edge-mask" d="M 782 228 H 812 V 228 H 842"/><path class="edge" d="M 782 228 H 812 V 228 H 842" marker-end="url(#arrow)"/><text x="812" y="219">Project</text></g>
+<g class="connection"><path class="edge-mask" d="M 1030 228 H 1060 V 228 H 1090"/><path class="edge" d="M 1030 228 H 1060 V 228 H 1090" marker-end="url(#arrow)"/><text x="1060" y="219">derive</text></g>
+<g class="connection"><path class="edge-mask" d="M 1284 228 H 1314 V 228 H 1344"/><path class="edge" d="M 1284 228 H 1314 V 228 H 1344" marker-end="url(#arrow)"/><text x="1314" y="219">read-only</text></g>
+<g class="connection"><path class="edge-mask" d="M 782 228 H 816 V 482 H 560 V 428 H 594"/><path class="edge" d="M 782 228 H 816 V 482 H 560 V 428 H 594" marker-end="url(#arrow)"/><text x="688" y="319">persist</text></g>
+<g class="connection"><path class="edge-mask" d="M 534 228 H 688 V 428 H 842"/><path class="edge" d="M 534 228 H 688 V 428 H 842" marker-end="url(#arrow)"/><text x="688" y="319">capability</text></g>
+<g class="connection"><path class="edge-mask" d="M 1030 428 H 1060 V 428 H 1090"/><path class="edge" d="M 1030 428 H 1060 V 428 H 1090" marker-end="url(#arrow)"/><text x="1060" y="419">Artifact I/O</text></g>
+
+    <g class="component kind-host">
+      <rect class="node-mask" x="40" y="178" width="204" height="100" rx="18"/>
+      <rect class="node" x="44" y="182" width="196" height="92" rx="14"/>
+      <text class="node-title" x="60" y="214">Hosts</text>
+      <text class="node-detail" x="60" y="240">CLI · MCP · Native</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="326" y="178" width="212" height="100" rx="18"/>
+      <rect class="node" x="330" y="182" width="204" height="92" rx="14"/>
+      <text class="node-title" x="346" y="214">Application Facade</text>
+      <text class="node-detail" x="346" y="240">唯一 Core 入口</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="590" y="178" width="196" height="100" rx="18"/>
+      <rect class="node" x="594" y="182" width="188" height="92" rx="14"/>
+      <text class="node-title" x="610" y="214">Project Truth</text>
+      <text class="node-detail" x="610" y="240">权威创作状态</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="838" y="178" width="196" height="100" rx="18"/>
+      <rect class="node" x="842" y="182" width="188" height="92" rx="14"/>
+      <text class="node-title" x="858" y="214">Project Cooker</text>
+      <text class="node-detail" x="858" y="240">确定性派生</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1086" y="178" width="202" height="100" rx="18"/>
+      <rect class="node" x="1090" y="182" width="194" height="92" rx="14"/>
+      <text class="node-title" x="1106" y="214">Runtime Snapshot</text>
+      <text class="node-detail" x="1106" y="240">不可变运行态</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="1340" y="178" width="180" height="100" rx="18"/>
+      <rect class="node" x="1344" y="182" width="172" height="92" rx="14"/>
+      <text class="node-title" x="1360" y="214">Audio Runtime</text>
+      <text class="node-detail" x="1360" y="240">离线 · 实时</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="590" y="378" width="196" height="100" rx="18"/>
+      <rect class="node" x="594" y="382" width="188" height="92" rx="14"/>
+      <text class="node-title" x="610" y="414">Project I/O</text>
+      <text class="node-detail" x="610" y="440">Store · Journal</text>
+    </g>
+    <g class="component kind-core">
+      <rect class="node-mask" x="838" y="378" width="196" height="100" rx="18"/>
+      <rect class="node" x="842" y="382" width="188" height="92" rx="14"/>
+      <text class="node-title" x="858" y="414">Provider SDK</text>
+      <text class="node-detail" x="858" y="440">Capability · Attempt</text>
+    </g>
+    <g class="component kind-provider">
+      <rect class="node-mask" x="1086" y="378" width="202" height="100" rx="18"/>
+      <rect class="node" x="1090" y="382" width="194" height="92" rx="14"/>
+      <text class="node-title" x="1106" y="414">Providers</text>
+      <text class="node-detail" x="1106" y="440">Artifact ports</text>
+    </g>
+  <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Project Truth</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">唯一权威创作状态；不保存 Provider 选择、Attempt failure 或 Runtime Snapshot。</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Product Assembly</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">LMDJ 专属 wiring 和 Product Build 只在 products/lmdj；Lock 固定全部身份。</div></foreignObject></g>
+<g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">当前交付</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Headless Proof 已实现；正式 Web Host、产品 GUI 与生产 Provider 尚未进入 Assembly。</div></foreignObject></g>
+</svg>
