@@ -1,0 +1,332 @@
+/* Chameleon Lab — original stylesheet. Dark, quiet, canvas-first. */
+
+:root {
+  --page-bg: #0a0f0c;
+  --panel-bg: #101812;
+  --text: #e8f0ea;
+  --text-dim: #9fb3a6;
+  --accent: #7de86a;
+  --line: #223428;
+  --font: "Avenir Next", "Helvetica Neue", "Hiragino Sans", "Noto Sans JP",
+    system-ui, sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background: var(--page-bg);
+  color: var(--text);
+  font-family: var(--font);
+  line-height: 1.65;
+}
+
+/* ---------- header ---------- */
+
+.site-header {
+  position: fixed;
+  inset: 0 0 auto 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.5rem;
+  mix-blend-mode: difference;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #fff;
+  text-decoration: none;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  font-size: 0.85rem;
+}
+
+.brand-mark {
+  width: 0.9rem;
+  height: 0.9rem;
+  border-radius: 50%;
+  background: radial-gradient(circle at 65% 35%, #e8d44d 0 22%, #3fae6a 25% 100%);
+  display: inline-block;
+}
+
+.menu-button,
+.menu-close {
+  background: none;
+  border: 1px solid currentColor;
+  color: #fff;
+  font: inherit;
+  font-size: 0.8rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 0.45rem 0.9rem;
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.menu-button:hover,
+.menu-close:hover {
+  background: #fff;
+  color: #000;
+}
+
+/* ---------- overlay menu ---------- */
+
+.menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(6, 10, 8, 0.96);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  padding: 4rem clamp(1.5rem, 8vw, 8rem);
+}
+
+.menu-overlay[hidden] {
+  display: none;
+}
+
+.menu-close {
+  position: absolute;
+  top: 1rem;
+  right: 1.5rem;
+}
+
+.menu-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.4rem;
+}
+
+.menu-list a {
+  color: var(--text);
+  text-decoration: none;
+  font-size: clamp(2rem, 6vw, 4rem);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.15;
+  transition: color 160ms ease, padding-left 160ms ease;
+}
+
+.menu-list a:hover {
+  color: var(--accent);
+  padding-left: 0.5em;
+}
+
+.menu-foot {
+  margin-top: 3rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+}
+
+/* ---------- hero ---------- */
+
+.hero {
+  position: relative;
+  min-height: 100svh;
+  display: grid;
+  align-content: end;
+  overflow: hidden;
+}
+
+#stage {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.hero-copy {
+  position: relative;
+  z-index: 2;
+  padding: 0 clamp(1.5rem, 6vw, 6rem) 8.5rem;
+  max-width: 44rem;
+  pointer-events: none;
+}
+
+.hero-kicker {
+  font-size: 0.75rem;
+  letter-spacing: 0.3em;
+  color: var(--text-dim);
+  margin: 0 0 0.75rem;
+}
+
+.hero h1 {
+  font-size: clamp(2.6rem, 8vw, 5.5rem);
+  line-height: 1;
+  margin: 0 0 0.75rem;
+  letter-spacing: 0.01em;
+}
+
+.hero-jp {
+  font-size: clamp(1rem, 2.4vw, 1.35rem);
+  margin: 0 0 0.5rem;
+  color: var(--accent);
+}
+
+.hero-en {
+  margin: 0;
+  color: var(--text-dim);
+  max-width: 34rem;
+}
+
+/* ---------- trait bar ---------- */
+
+.trait-bar {
+  position: absolute;
+  z-index: 3;
+  right: clamp(1rem, 4vw, 3rem);
+  bottom: 1.5rem;
+  text-align: right;
+}
+
+.trait-hint {
+  margin: 0 0 0.4rem;
+  font-size: 0.72rem;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.trait-buttons {
+  display: flex;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+
+.trait-buttons button {
+  width: 3rem;
+  height: 3rem;
+  border-radius: 50%;
+  border: 1px solid var(--line);
+  background: rgba(10, 15, 12, 0.7);
+  backdrop-filter: blur(6px);
+  font-size: 1.25rem;
+  cursor: pointer;
+  transition: transform 140ms ease, border-color 140ms ease;
+}
+
+.trait-buttons button:hover {
+  transform: translateY(-3px) scale(1.06);
+  border-color: var(--accent);
+}
+
+.trait-readout {
+  margin: 0.5rem 0 0;
+  font-size: 0.75rem;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------- content panels ---------- */
+
+.panel {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: clamp(3rem, 8vw, 6rem) 1.5rem 0;
+}
+
+.panel h2 {
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  margin: 0 0 1rem;
+  letter-spacing: 0.02em;
+}
+
+.panel p {
+  color: var(--text-dim);
+  margin: 0 0 1rem;
+}
+
+.panel p strong,
+.timeline strong {
+  color: var(--text);
+}
+
+.timeline {
+  margin: 0;
+  padding-left: 1.25rem;
+  color: var(--text-dim);
+  display: grid;
+  gap: 0.6rem;
+}
+
+.hatch {
+  text-align: center;
+  padding-bottom: clamp(3rem, 8vw, 6rem);
+}
+
+.hatch-button {
+  font: inherit;
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 0.9rem 2.2rem;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  color: #071009;
+  background: linear-gradient(120deg, #7de86a, #35c4d8);
+  transition: transform 140ms ease, filter 140ms ease;
+}
+
+.hatch-button:hover {
+  transform: translateY(-2px) scale(1.03);
+  filter: brightness(1.1);
+}
+
+.hatch-note {
+  font-size: 0.85rem;
+}
+
+/* ---------- footer ---------- */
+
+.site-footer {
+  border-top: 1px solid var(--line);
+  padding: 2rem 1.5rem 3rem;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+}
+
+.footer-links a {
+  color: var(--text-dim);
+}
+
+.footer-links a:hover {
+  color: var(--accent);
+}
+
+@media (max-width: 640px) {
+  .hero-copy {
+    padding-bottom: 10rem;
+  }
+
+  .trait-bar {
+    left: 1.5rem;
+    right: 1.5rem;
+    text-align: left;
+  }
+
+  .trait-buttons {
+    justify-content: flex-start;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+}
