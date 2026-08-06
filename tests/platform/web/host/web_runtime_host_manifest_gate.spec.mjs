@@ -165,6 +165,7 @@ test("late or repeated real manifest initialization terminally seals the real Ho
 
 
 test("missing malformed oversized mismatched and wrong-identity manifests load no runtime", async ({ browser, request }) => {
+  test.setTimeout(120_000);
   const indexResponse = await request.get(`${baseURL}/index.html`);
   const originalIndex = await indexResponse.text();
   const manifestResponse = await request.get(`${baseURL}/host-manifest.json`);

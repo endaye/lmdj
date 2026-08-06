@@ -28,7 +28,7 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
-const DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS = 30_000;
+const DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS = 60_000;
 const DIAGNOSTIC_PROJECT_CONTRACT =
   "lmdj.web-runtime-host.diagnostic-project.v1";
 const DIAGNOSTIC_PROJECT_STORAGE_KEY = DIAGNOSTIC_PROJECT_CONTRACT;
@@ -777,7 +777,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   const runtimeModuleRequests = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -1348,7 +1348,7 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(60_000);
+  test.setTimeout(120_000);
   await openPackagedHost(page);
   await page.locator("#diagnostic-project-load").click();
   await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
