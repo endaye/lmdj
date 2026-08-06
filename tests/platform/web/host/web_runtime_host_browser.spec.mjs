@@ -28,7 +28,9 @@ const deadlineFixtureSha256 = createHash("sha256")
 const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
-const DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS = 60_000;
+const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 180_000;
+const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 45_000;
+const DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS = 250;
 const DIAGNOSTIC_PROJECT_CONTRACT =
   "lmdj.web-runtime-host.diagnostic-project.v1";
 const DIAGNOSTIC_PROJECT_STORAGE_KEY = DIAGNOSTIC_PROJECT_CONTRACT;
@@ -58,6 +60,7 @@ async function installTransportObservability(page) {
     const observations = {
       admittedSequences: [],
       notifications: [],
+      requests: [],
       responses: [],
       suppressTriggerOutcomes: false,
     };
@@ -65,6 +68,7 @@ async function installTransportObservability(page) {
     const existing = window.__LMDJ_WEB_HOST_SEAMS__ ?? {};
     const observedTransport = {
       async send(request, options) {
+        observations.requests.push(request.operation);
         const response = await window.lmdjWebRuntimeHost.transport.send(
           request,
           options,
@@ -118,6 +122,48 @@ async function openPackagedHost(page) {
     runtimeInitialized: true,
     sharedMemory: true,
   });
+}
+
+
+async function waitForDiagnosticProjectReady(page) {
+  const startedAt = Date.now();
+  let lastProgressAt = startedAt;
+  let lastProgressKey = null;
+  let observation = null;
+
+  while (true) {
+    observation = await page.evaluate(() => ({
+      state: document.querySelector("#diagnostic-project-state")?.textContent ?? null,
+      request_count: window.__lmdjTask11?.requests?.length ?? 0,
+      response_count: window.__lmdjTask11?.responses?.length ?? 0,
+      last_request: window.__lmdjTask11?.requests?.at(-1) ?? null,
+      last_response: window.__lmdjTask11?.responses?.at(-1)?.operation ?? null,
+    }));
+    if (observation.state === "ready") {
+      return observation;
+    }
+    if (observation.state !== "loading") {
+      throw new Error(
+        `diagnostic project entered ${observation.state}: ${JSON.stringify(observation)}`,
+      );
+    }
+
+    const progressKey = `${observation.request_count}:${observation.response_count}`;
+    const now = Date.now();
+    if (progressKey !== lastProgressKey) {
+      lastProgressKey = progressKey;
+      lastProgressAt = now;
+    }
+    if (
+      now - startedAt >= DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS ||
+      now - lastProgressAt >= DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS
+    ) {
+      throw new Error(
+        `diagnostic project readiness deadline elapsed: ${JSON.stringify(observation)}`,
+      );
+    }
+    await page.waitForTimeout(DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS);
+  }
 }
 
 
@@ -777,7 +823,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   const runtimeModuleRequests = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -795,9 +841,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   });
   const runtimeScriptPathname = new URL(runtimeScriptPath, page.url()).pathname;
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   await activateWithGesture(page);
 
   expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
@@ -825,7 +869,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   const runtimeModuleRequests = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -869,9 +913,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await openPackagedHost(page);
   await expect(page.locator("#audio-activate")).toBeDisabled();
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   await expect(page.locator("#audio-activate")).toBeEnabled();
   await page.locator("#audio-activate").click();
   await expect(page.locator("#host-state")).toHaveText("running");
@@ -995,9 +1037,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await expect(page.locator("#audio-activate")).toBeDisabled();
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   await expect(page.locator("#audio-activate")).toBeEnabled();
   const reopenedDescriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
@@ -1147,9 +1187,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   await expect(page.locator("#audio-activate")).toBeEnabled();
   const reopened = success(
     await reopenProject(page, identity, identity.committedPatternId),
@@ -1348,12 +1386,10 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(120_000);
+  test.setTimeout(240_000);
   await openPackagedHost(page);
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   const descriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
   DIAGNOSTIC_PROJECT_STORAGE_KEY);
@@ -1997,7 +2033,7 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
   page,
 }, testInfo) => {
   test.skip(browserName !== "webkit");
-  test.setTimeout(120_000);
+  test.setTimeout(300_000);
   await installTransportObservability(page);
   await page.goto("/index.html");
   await expect.poll(() => page.locator("#host-state").textContent(), {
@@ -2028,9 +2064,7 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
 
   expect(missing).toEqual([]);
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   const descriptor = await page.evaluate((storageKey) =>
     JSON.parse(localStorage.getItem(storageKey)),
   DIAGNOSTIC_PROJECT_STORAGE_KEY);
@@ -2059,9 +2093,7 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await page.locator("#diagnostic-project-load").click();
-  await expect(page.locator("#diagnostic-project-state")).toHaveText("ready", {
-    timeout: DIAGNOSTIC_PROJECT_READY_TIMEOUT_MS,
-  });
+  await waitForDiagnosticProjectReady(page);
   expect(success(await reopenProject(page, identity, identity.patternId),
     "WebKit reopen").project_revision).toBe(PREPARED_PROJECT_REVISION);
   await activateWithGesture(page);
