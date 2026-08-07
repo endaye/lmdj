@@ -387,7 +387,7 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "1.3.0"},
+           {"version", "1.3.1"},
            {"api_version", 2},
            {"dependencies",
             {

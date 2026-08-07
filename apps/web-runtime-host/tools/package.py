@@ -15,8 +15,8 @@ from pathlib import Path
 
 
 HOST_ID = "web-runtime-host"
-HOST_VERSION = "1.2.0"
-PLATFORM_VERSION = "0.1.0"
+HOST_VERSION = "1.2.1"
+PLATFORM_VERSION = "0.1.1"
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912
 DISTRIBUTION_CONTRACT = "lmdj.web-runtime-host.distribution.v1"

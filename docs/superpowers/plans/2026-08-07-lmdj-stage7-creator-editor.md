@@ -212,6 +212,24 @@ Canonical policy: `docs/governance/version-management.md`.
 - The future Product tag is `lmdj-v1.0.16.0`, signed and annotated only after merged-main Proof and separate approval.
 - Rollback returns to immutable `1.0.15.0`; it does not delete imported OPFS Projects, reuse a Build number, or move a tag.
 
+### Post-freeze corrective patch
+
+Final review found two defects after the immutable `1.0.16.0 · canary` Portal snapshot had been created: visible `PROJECT_BUSY` Retry cleared the error instead of directly retrying Project open, and incomplete import staging was not cleaned on startup or normal Host close. The immutable `1.0.16.0` snapshot remains unchanged. The corrected candidate is Product Build `1.0.16.1 · canary`; it must receive a new immutable snapshot and a full clean-source Proof before push.
+
+| Identity | Frozen Stage 7 | Corrective candidate | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.0` | `1.0.16.1` | Post-freeze defect correction without new capability or Contract semantics. |
+| `application-facade` | `1.3.0` | `1.3.1` | Startup cleanup of incomplete import staging. |
+| `web-runtime-platform` | `0.1.0` | `0.1.1` | Normal Host close aborts active imports. |
+| `creator-web` | `1.0.0` | `1.0.1` | Direct open retry and exact Platform dependency propagation. |
+| `web-runtime-host` | `1.2.0` | `1.2.1` | Exact Platform dependency propagation. |
+| `core-cli` | `1.0.6` | `1.0.7` | Exact Facade dependency propagation. |
+| `core-mcp` | `1.1.3` | `1.1.4` | Exact Facade dependency and Python identity propagation. |
+| `native-test-host` | `1.0.4` | `1.0.5` | Exact Facade dependency propagation. |
+| Contracts / Providers / Models | current | unchanged | No public Contract, Capability, Provider, or model change. |
+
+The corrective candidate tag text is `lmdj-v1.0.16.1`; creating or pushing that tag still requires separate post-merge approval.
+
 ---
 
 ### Task 1: Define and prove the portable Project Bundle Contract

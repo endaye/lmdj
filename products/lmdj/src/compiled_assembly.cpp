@@ -12,7 +12,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.16.0",
+      "1.0.16.1",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.2.0"},
@@ -21,15 +21,15 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"project-cooker", "0.2.1"},
           CompiledComponent{"audio-runtime", "0.4.0"},
           CompiledComponent{"provider-sdk", "1.1.1"},
-          CompiledComponent{"application-facade", "1.3.0"},
-          CompiledComponent{"web-runtime-platform", "0.1.0"},
+          CompiledComponent{"application-facade", "1.3.1"},
+          CompiledComponent{"web-runtime-platform", "0.1.1"},
       },
       {
-          CompiledComponent{"core-cli", "1.0.6"},
-          CompiledComponent{"core-mcp", "1.1.3"},
-          CompiledComponent{"native-test-host", "1.0.4"},
-          CompiledComponent{"web-runtime-host", "1.2.0"},
-          CompiledComponent{"creator-web", "1.0.0"},
+          CompiledComponent{"core-cli", "1.0.7"},
+          CompiledComponent{"core-mcp", "1.1.4"},
+          CompiledComponent{"native-test-host", "1.0.5"},
+          CompiledComponent{"web-runtime-host", "1.2.1"},
+          CompiledComponent{"creator-web", "1.0.1"},
       },
       {
           CompiledComponent{"lmdj.project.v1", "1.0.0"},

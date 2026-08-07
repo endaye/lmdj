@@ -21,11 +21,11 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.0.0` 已进入 Product Build `1.0.16.0` Assembly。它只依赖共享 Web Runtime Platform `0.1.0`，不直接依赖或绕过 Application Facade。
+<StatusBadge status="implemented" /> Creator Web Host `1.0.1` 已进入 Product Build `1.0.16.1` Assembly。它只依赖共享 Web Runtime Platform `0.1.1`，不直接依赖或绕过 Application Facade。
 
 ## 创作边界
 
-当前 UI 提供 browser-local Project create/open、portable Project Bundle import/export、64 个稳定 Pad Slot、WAV 分配、四个 Bank、Project inspect 与 Runtime diagnostics。Host 不解析 Bundle；导入字节流交给 Facade，Project Truth 与 publication 仍由 Core 决定。
+当前 UI 提供 browser-local Project discovery/open、portable Project Bundle import、64 个稳定 Pad Slot、四个 Bank、Project inspect 与 Runtime diagnostics。Host 不解析 Bundle；导入字节流交给 Facade，Project Truth 与 publication 仍由 Core 决定。空白 Project 创建、Bundle 导出与 WAV 分配不属于当前 Stage 7 能力。
 
 ## 演奏边界
 
@@ -37,7 +37,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、导入、Runtime Session 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。revision `4399dc5e182518ca3e159f65eab8827ad64ab26d` 的完整 clean-source Proof 已通过：Vitest 33/33、package 7/7、server 3/3、shared Platform 75/75、Chromium 9 passed/1 designed skip、WebKit capability boundary 1/1；额外 focused Chromium reload/reopen 重复门禁为 10/10。reload 后若旧 writer 尚在退出，Creator 只呈现 `PROJECT_BUSY`，可见 Retry 只重试 Project open、不重新扫描 OPFS，随后显式 reopen 与 Audio reactivation。完整证据见 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`。
+Node/Vitest 覆盖 UI 状态、导入、Runtime Session 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。`1.0.16.1` corrective candidate 的完整 clean-source Proof 在新快照冻结后重新执行；精确 revision、命令和计数只记录在 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`，不会沿用 `1.0.16.0` 的历史结论。
 
 该结论是本地自动化验收，不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

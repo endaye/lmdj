@@ -78,10 +78,10 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
     diagnostics: () => ({
       state: "audio-suspended",
       error_code: null,
-      product_build: "1.0.16.0",
+      product_build: "1.0.16.1",
       host_id: "creator-web",
-      host_version: "1.0.0",
-      platform_version: "0.1.0",
+      host_version: "1.0.1",
+      platform_version: "0.1.1",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

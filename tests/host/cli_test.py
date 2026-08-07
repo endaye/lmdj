@@ -759,9 +759,9 @@ def host_boundary_and_identity(executable: Path) -> None:
     assert manifest == {
         "contract": "lmdj.module.v1",
         "module": "core-cli",
-        "version": "1.0.6",
+        "version": "1.0.7",
         "api_version": 2,
-        "dependencies": {"application-facade": "1.3.0"},
+        "dependencies": {"application-facade": "1.3.1"},
     }
 
     root_cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
