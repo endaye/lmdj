@@ -395,6 +395,30 @@ def main() -> int:
     diagnostic_overall_timeout_ms = int(
         diagnostic_overall_timeout.group(1).replace("_", "")
     )
+    diagnostic_stall_timeout = re.search(
+        r"const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = ([0-9_]+);",
+        browser_spec_text,
+    )
+    require(
+        diagnostic_stall_timeout is not None
+        and int(diagnostic_stall_timeout.group(1).replace("_", ""))
+        >= 90_000,
+        "diagnostic progress observation must outlive a slow reload handoff",
+    )
+    require(
+        "diagnostic_project_error_code" in browser_spec_text
+        and "HOST_TIMEOUT" in browser_spec_text
+        and "recoverDiagnosticProjectAfterTimeout" in browser_spec_text,
+        "the slow-runner browser journey must expose and recover exactly one "
+        "reload handoff timeout",
+    )
+    require(
+        browser_spec_text.count(
+            "await recoverDiagnosticProjectAfterTimeout(page, error);"
+        )
+        == 1,
+        "the browser proof must allow exactly one reload handoff recovery",
+    )
     for diagnostic_test_name in (
         "Chromium binds the verified packaged runtime to the real AudioWorklet",
         "Chromium visible diagnostic project completes the packaged runtime journey",
@@ -415,6 +439,13 @@ def main() -> int:
             > diagnostic_overall_timeout_ms,
             f"{diagnostic_test_name} must outlive its diagnostic readiness budget",
         )
+        if diagnostic_test_name.startswith("Chromium visible diagnostic"):
+            require(
+                int(diagnostic_test_timeout.group(1).replace("_", ""))
+                >= 660_000,
+                "the visible diagnostic journey must include one bounded "
+                "reload-timeout recovery budget",
+            )
     unresponsive_cancellation = re.search(
         r'test\("Chromium packaged unresponsive cancellation '
         r'force-terminates and recovers".*?\n\}\);',

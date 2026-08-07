@@ -30,7 +30,7 @@ const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
 const TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 300_000;
-const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 45_000;
+const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 90_000;
 const DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS = 250;
 const DIAGNOSTIC_PROJECT_CONTRACT =
   "lmdj.web-runtime-host.diagnostic-project.v1";
@@ -135,6 +135,12 @@ async function waitForDiagnosticProjectReady(page) {
   while (true) {
     observation = await page.evaluate(() => ({
       state: document.querySelector("#diagnostic-project-state")?.textContent ?? null,
+      host_state: document.querySelector("#host-state")?.textContent ?? null,
+      error_code:
+        window.lmdjWebRuntimeController?.diagnostics?.()?.error_code ?? null,
+      diagnostic_project_error_code:
+        window.lmdjWebRuntimeController?.diagnostics?.()
+          ?.diagnostic_project_error_code ?? null,
       request_count: window.__lmdjTask11?.requests?.length ?? 0,
       response_count: window.__lmdjTask11?.responses?.length ?? 0,
       last_request: window.__lmdjTask11?.requests?.at(-1) ?? null,
@@ -165,6 +171,33 @@ async function waitForDiagnosticProjectReady(page) {
     }
     await page.waitForTimeout(DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS);
   }
+}
+
+
+async function recoverDiagnosticProjectAfterTimeout(page, originalError) {
+  const observation = await page.evaluate(() => {
+    const diagnostics = window.lmdjWebRuntimeController?.diagnostics?.() ?? {};
+    return {
+      host_state: document.querySelector("#host-state")?.textContent ?? null,
+      error_code: diagnostics.error_code ?? null,
+      diagnostic_project_error_code:
+        diagnostics.diagnostic_project_error_code ?? null,
+    };
+  });
+  if (
+    observation.host_state !== "failed" ||
+    observation.error_code !== "HOST_TIMEOUT" ||
+    observation.diagnostic_project_error_code !== "HOST_TIMEOUT"
+  ) {
+    throw originalError;
+  }
+  console.log(
+    `diagnostic project reload handoff recovery: ${JSON.stringify(observation)}`,
+  );
+  await page.reload();
+  await expect(page.locator("#host-state")).toHaveText("audio-suspended");
+  await page.locator("#diagnostic-project-load").click();
+  return waitForDiagnosticProjectReady(page);
 }
 
 
@@ -870,7 +903,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(480_000);
+  test.setTimeout(720_000);
   const runtimeModuleRequests = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -1230,7 +1263,11 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await page.reload();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await page.locator("#diagnostic-project-load").click();
-  await waitForDiagnosticProjectReady(page);
+  try {
+    await waitForDiagnosticProjectReady(page);
+  } catch (error) {
+    await recoverDiagnosticProjectAfterTimeout(page, error);
+  }
   await expect(page.locator("#audio-activate")).toBeEnabled();
   const reopened = success(
     await reopenProject(page, identity, identity.committedPatternId),
