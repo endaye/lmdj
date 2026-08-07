@@ -174,7 +174,9 @@ required files，验证其 immutable Deploy URL 后，再调用 Netlify
 
 工作流必须按以下顺序执行：
 
-1. checkout tag target，而不是默认 branch HEAD；
+1. 从受保护 `main` checkout 已合入的 deployment tooling，并另建只读 detached
+   tag-target checkout；Product/Host manifest、distribution verifier 与版本真值全部
+   取自 tag target，不从 deployment tooling checkout 猜测；
 2. 证明 tag 是 annotated Product tag，并验证签名与受信发布密钥；
 3. 读取 GitHub Release metadata，确认 Release 非 draft、是 prerelease；
 4. 解析 Product Build，并定位唯一 Host ZIP 与 detached checksum；
