@@ -1916,13 +1916,15 @@ test("Chromium packaged asset.import claim wins before deadline and settles afte
       gate: "after-claim",
       publication: "publish-claimed",
     });
-    await owner.waitForTimeout(CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 100);
-    expect(await deadlineProofState(owner, requestId), selected.name)
-      .toMatchObject({
-        publication: "publish-claimed",
-        cancel_calls: 1,
-        last_cancel_result: "publish-claimed",
-      });
+    await expect.poll(() => deadlineProofState(owner, requestId), {
+      message: `${selected.name} deadline observed claimed publication`,
+      timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 1_000,
+      intervals: [5, 10, 20, 50],
+    }).toMatchObject({
+      publication: "publish-claimed",
+      cancel_calls: 1,
+      last_cancel_result: "publish-claimed",
+    });
     expect(await releaseDeadlineProof(owner), selected.name).toBe(true);
     const outcome = await deadlineMutationOutcome(owner, requestId);
     const settledProof = await deadlineProofState(owner, requestId);

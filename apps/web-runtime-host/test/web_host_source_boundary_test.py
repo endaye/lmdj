@@ -418,6 +418,22 @@ def main() -> int:
         "unresponsive cancellation must prove forced terminal cleanup before "
         "releasing the artificial claim gate",
     )
+    claimed_settlement = re.search(
+        r'test\("Chromium packaged asset\.import claim wins before deadline '
+        r'and settles after it".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        claimed_settlement is not None,
+        "claimed publication settlement browser proof is missing",
+    )
+    require(
+        "waitForTimeout(CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 100)"
+        not in claimed_settlement.group(0),
+        "claimed publication settlement must observe the first deadline "
+        "cancellation instead of sleeping past the settlement watchdog",
+    )
     visible_journey = re.search(
         r'test\("Chromium visible diagnostic project completes the packaged '
         r'runtime journey".*?\n\}\);',
