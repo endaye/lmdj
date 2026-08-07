@@ -55,6 +55,11 @@ const MANIFEST_SOURCE = Object.freeze({
       role: "platform_module",
     }),
     Object.freeze({
+      prefix: "assets/project-bundle-reader.",
+      suffix: ".mjs",
+      role: "platform_module",
+    }),
+    Object.freeze({
       prefix: "assets/protocol.",
       suffix: ".mjs",
       role: "platform_module",

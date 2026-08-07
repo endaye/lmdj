@@ -52,6 +52,7 @@ EXPECTED_ASSETS = (
     ("assets/input-adapters.", ".mjs", "platform_module"),
     ("assets/main.", ".mjs", "host_main"),
     ("assets/preflight.", ".mjs", "platform_module"),
+    ("assets/project-bundle-reader.", ".mjs", "platform_module"),
     ("assets/protocol.", ".mjs", "platform_module"),
     ("assets/runtime.", ".js", "runtime_script"),
     ("assets/runtime.", ".wasm", "runtime_wasm"),
@@ -284,6 +285,12 @@ def build_distribution(
             "protocol",
             "platform_module",
         )
+        project_bundle_reader_entry = write_module(
+            platform_root / "project_bundle_reader.mjs",
+            "project-bundle-reader",
+            "platform_module",
+            (("./protocol.mjs", protocol_entry),),
+        )
         state_machine_entry = write_module(
             platform_root / "state_machine.mjs",
             "state-machine",
@@ -302,6 +309,7 @@ def build_distribution(
             (
                 ("./input_adapters.mjs", input_adapters_entry),
                 ("./diagnostic_client.mjs", diagnostic_client_entry),
+                ("./project_bundle_reader.mjs", project_bundle_reader_entry),
                 ("./runtime_loader.mjs", runtime_loader_entry),
                 ("./preflight.mjs", preflight_entry),
                 ("./protocol.mjs", protocol_entry),

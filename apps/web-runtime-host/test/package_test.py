@@ -482,7 +482,7 @@ class PackageTest(unittest.TestCase):
         )
 
         roles = {asset["role"] for asset in manifest["assets"]}
-        self.assertEqual(len(manifest["assets"]), 12)
+        self.assertEqual(len(manifest["assets"]), 13)
         self.assertEqual(
             roles,
             {
@@ -503,6 +503,7 @@ class PackageTest(unittest.TestCase):
                 ("input-adapters", "platform_module"),
                 ("main", "host_main"),
                 ("preflight", "platform_module"),
+                ("project-bundle-reader", "platform_module"),
                 ("protocol", "platform_module"),
                 ("runtime", "runtime_script"),
                 ("runtime", "runtime_wasm"),

@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -25,6 +26,7 @@
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
+#include <lmdj/foundation/json.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
 
@@ -200,6 +202,105 @@ std::string sha256(std::span<const std::byte> bytes) {
   hasher.process(first, first + bytes.size());
   hasher.finish();
   return picosha2::get_hash_hex_string(hasher);
+}
+
+std::string sha256(std::string_view text) {
+  return sha256(std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(text.data()), text.size()});
+}
+
+std::vector<std::byte> read_bytes(const std::filesystem::path& path) {
+  std::ifstream stream(path, std::ios::binary);
+  LMDJ_CHECK(stream.good());
+  const std::string text{
+      std::istreambuf_iterator<char>{stream},
+      std::istreambuf_iterator<char>{}};
+  return {
+      reinterpret_cast<const std::byte*>(text.data()),
+      reinterpret_cast<const std::byte*>(text.data() + text.size()),
+  };
+}
+
+struct ProjectBundleFixture {
+  std::string index;
+  std::vector<std::vector<std::byte>> entries;
+  std::string digest;
+};
+
+ProjectBundleFixture build_project_bundle_fixture(
+    const std::filesystem::path& source,
+    std::string_view project_id) {
+  struct SourceEntry {
+    std::string path;
+    std::vector<std::byte> bytes;
+  };
+  std::vector<SourceEntry> source_entries;
+  for (const auto& entry :
+       std::filesystem::recursive_directory_iterator(source)) {
+    LMDJ_CHECK(!entry.is_symlink());
+    if (!entry.is_regular_file()) {
+      continue;
+    }
+    source_entries.push_back({
+        std::filesystem::relative(entry.path(), source).generic_string(),
+        read_bytes(entry.path()),
+    });
+  }
+  std::sort(
+      source_entries.begin(),
+      source_entries.end(),
+      [](const auto& left, const auto& right) {
+        return std::lexicographical_compare(
+            left.path.begin(),
+            left.path.end(),
+            right.path.begin(),
+            right.path.end(),
+            [](char left_byte, char right_byte) {
+              return static_cast<unsigned char>(left_byte) <
+                     static_cast<unsigned char>(right_byte);
+            });
+      });
+
+  auto encoded_entries = Json::array();
+  std::uint64_t offset = 0;
+  std::vector<std::vector<std::byte>> payloads;
+  for (auto& entry : source_entries) {
+    encoded_entries.push_back({
+        {"bytes", entry.bytes.size()},
+        {"offset", offset},
+        {"path", entry.path},
+        {"sha256", sha256(entry.bytes)},
+    });
+    offset += entry.bytes.size();
+    payloads.push_back(std::move(entry.bytes));
+  }
+  Json index{
+      {"bundle_digest", std::string(64, '0')},
+      {"compression", "none"},
+      {"contract", "lmdj.project-bundle.v1"},
+      {"contract_version", "1.0.0"},
+      {"entries", std::move(encoded_entries)},
+      {"project_contract", "lmdj.project.v1"},
+      {"project_id", project_id},
+      {"uncompressed_bytes", offset},
+  };
+  auto digest_source = index;
+  digest_source.erase("bundle_digest");
+  const auto digest = sha256(
+      lmdj::foundation::canonical_json(digest_source));
+  index["bundle_digest"] = digest;
+  return {
+      lmdj::foundation::canonical_json(index),
+      std::move(payloads),
+      digest,
+  };
+}
+
+Json sidecar_declaration(std::span<const std::byte> bytes) {
+  return {
+      {"sidecar_bytes", bytes.size()},
+      {"sidecar_sha256", sha256(bytes)},
+  };
 }
 
 Json import_payload(
@@ -606,6 +707,145 @@ void test_facade_error_details_follow_an_explicit_safe_schema() {
        {kDetailMarker, kPathMarker, kSystemMarker, kStorageMarker}) {
     LMDJ_CHECK(encoded.find(marker) == std::string::npos);
   }
+
+  check_error(
+      lmdj::web_runtime::detail::normalize_error_for_testing(
+          lmdj::foundation::Error{
+              lmdj::foundation::ErrorCode::invalid_project,
+              "Project Bundle entry exceeds 64 MiB",
+              {{"transfer_condition", "resource_limit"}},
+          }),
+      "WEB_RUNTIME_RESOURCE_LIMIT");
+  check_error(
+      lmdj::web_runtime::detail::normalize_error_for_testing(
+          lmdj::foundation::Error{
+              lmdj::foundation::ErrorCode::io_error,
+              "atomic publish failed",
+              {{"storage_condition", "atomic_publish_unsupported"}},
+          }),
+      "UNSUPPORTED_WEB_RUNTIME");
+  check_error(
+      lmdj::web_runtime::detail::normalize_error_for_testing(
+          lmdj::foundation::Error{
+              lmdj::foundation::ErrorCode::io_error,
+              "destination appeared",
+              {{"storage_condition", "already_exists"}},
+          }),
+      "DUPLICATE_ID");
+}
+
+void test_project_bundle_stream_delegates_to_facade_and_lists_summary() {
+  TempDirectory temp;
+  const auto source_root = temp.path() / "source";
+  const auto target_root = temp.path() / "target";
+  std::filesystem::create_directories(source_root);
+  std::filesystem::create_directories(target_root);
+  {
+    auto builder = make_runtime(source_root);
+    check_success(builder->dispatch(
+        "project.create", create_payload(), {}));
+  }
+  const auto fixture = build_project_bundle_fixture(
+      source_root / "projects" /
+          (std::string(kProjectId) + ".lmdj"),
+      kProjectId);
+  const auto index_bytes = std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(fixture.index.data()),
+      fixture.index.size(),
+  };
+  auto runtime = make_runtime(target_root);
+
+  auto listed = check_locked_success_result(
+      runtime->dispatch("project.list", Json::object(), {}));
+  check_exact_keys(listed, {"projects"});
+  LMDJ_CHECK(listed.at("projects") == Json::array());
+
+  const auto token = uuid(601);
+  auto begun = check_locked_success_result(runtime->dispatch(
+      "project.import.begin",
+      {
+          {"import_token", token},
+          {"index_bytes", fixture.index.size()},
+          {"index_sha256", sha256(fixture.index)},
+      },
+      {}));
+  check_exact_keys(begun, {"import_token", "expected_index_bytes"});
+  LMDJ_CHECK(begun.at("import_token") == token);
+  LMDJ_CHECK(begun.at("expected_index_bytes") == fixture.index.size());
+
+  const auto identity = check_locked_success_result(runtime->dispatch(
+      "project.import.index",
+      {
+          {"import_token", token},
+          {"offset", 0},
+          {"final", true},
+          {"sidecar", sidecar_declaration(index_bytes)},
+      },
+      index_bytes));
+  check_exact_keys(identity, {"project_id", "bundle_digest", "entry_count"});
+  LMDJ_CHECK(identity.at("project_id") == kProjectId);
+  LMDJ_CHECK(identity.at("bundle_digest") == fixture.digest);
+  LMDJ_CHECK(identity.at("entry_count") == fixture.entries.size());
+
+  for (std::size_t entry_index = 0;
+       entry_index < fixture.entries.size();
+       ++entry_index) {
+    const auto& entry = fixture.entries.at(entry_index);
+    const auto result = check_locked_success_result(runtime->dispatch(
+        "project.import.entry",
+        {
+            {"import_token", token},
+            {"entry_index", entry_index},
+            {"offset", 0},
+            {"final", true},
+            {"sidecar", sidecar_declaration(entry)},
+        },
+        entry));
+    check_exact_keys(
+        result, {"entry_index", "received_entry_bytes", "final"});
+    LMDJ_CHECK(result.at("entry_index") == entry_index);
+    LMDJ_CHECK(result.at("received_entry_bytes") == entry.size());
+    LMDJ_CHECK(result.at("final") == true);
+  }
+
+  const auto committed = check_locked_success_result(runtime->dispatch(
+      "project.import.commit", {{"import_token", token}}, {}));
+  check_exact_keys(
+      committed,
+      {"project_id", "pattern_id", "revision", "bpm", "asset_count",
+       "assigned_pad_count", "bundle_digest"});
+  LMDJ_CHECK(committed.at("project_id") == kProjectId);
+  LMDJ_CHECK(committed.at("pattern_id") == kPatternId);
+  LMDJ_CHECK(committed.at("revision") == 0);
+  LMDJ_CHECK(committed.at("bundle_digest") == fixture.digest);
+
+  listed = check_locked_success_result(
+      runtime->dispatch("project.list", Json::object(), {}));
+  LMDJ_CHECK(listed.at("projects").size() == 1);
+  LMDJ_CHECK(listed.at("projects").front() == committed);
+
+  const auto mismatch_token = uuid(602);
+  check_success(runtime->dispatch(
+      "project.import.begin",
+      {
+          {"import_token", mismatch_token},
+          {"index_bytes", fixture.index.size()},
+          {"index_sha256", sha256(fixture.index)},
+      },
+      {}));
+  check_error(runtime->dispatch(
+      "project.import.index",
+      {
+          {"import_token", mismatch_token},
+          {"offset", 1},
+          {"final", true},
+          {"sidecar", sidecar_declaration(index_bytes)},
+      },
+      index_bytes),
+      "INVALID_PROJECT");
+  const auto aborted = check_locked_success_result(runtime->dispatch(
+      "project.import.abort", {{"import_token", mismatch_token}}, {}));
+  LMDJ_CHECK((aborted == Json{{"aborted", true}}));
 }
 
 void test_runtime_cancellation_precedes_project_mutation() {
@@ -2782,6 +3022,7 @@ void test_bridge_preserves_error_responses_for_an_externally_failed_runtime() {
 int main() {
   try {
     test_facade_error_details_follow_an_explicit_safe_schema();
+    test_project_bundle_stream_delegates_to_facade_and_lists_summary();
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_take_stop_drains_the_final_disarm_quantum();

@@ -7,6 +7,10 @@ import {
 } from "./input_adapters.mjs";
 import {registerDiagnosticTransport} from "./diagnostic_client.mjs";
 import {
+  importProjectBundle,
+  normalizeLocalProjectSummary,
+} from "./project_bundle_reader.mjs";
+import {
   createPackagedRuntimeLocator,
   defaultRuntimeTerminator,
 } from "./runtime_loader.mjs";
@@ -83,7 +87,11 @@ function generationsMatch(status) {
 
 async function probeControlWorkerCapabilities(scope) {
   if (typeof scope.Worker !== "function" || typeof scope.Blob !== "function") {
-    return { opfs: false, opfsSyncAccessHandle: false, opfsWritableReplace: false };
+    return {
+      opfs: false,
+      opfsSyncAccessHandle: false,
+      opfsWritableReplace: false,
+    };
   }
   const source = `
     self.onmessage = async (event) => {
@@ -672,6 +680,7 @@ function createRuntimeSessionController(options = {}) {
   let triggerOutcomeCount = 0;
   let triggerRejectedCount = 0;
   let triggerTail = Promise.resolve();
+  let importTail = Promise.resolve();
   const admittedSequences = new Map();
   const listenerDisposers = [];
   const hostStateListeners = new Set();
@@ -1398,17 +1407,55 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function listLocalProjects() {
-    throw typedError(
-      "UNSUPPORTED_WEB_RUNTIME",
-      "Project discovery is introduced by the Stage 7 streaming transport",
-    );
+    if (closing || !started) {
+      throw typedError("HOST_STATE_INVALID", "Project discovery is unavailable");
+    }
+    const result = await boundedRequest("project.list", {});
+    if (!exactKeys(result, ["projects"]) || !Array.isArray(result.projects)) {
+      throw typedError(
+        "HOST_PROTOCOL_MISMATCH",
+        "Local Project inventory is invalid",
+      );
+    }
+    return Object.freeze(result.projects.map((item) =>
+      normalizeLocalProjectSummary(item)));
   }
 
-  async function importProject() {
-    throw typedError(
-      "UNSUPPORTED_WEB_RUNTIME",
-      "Project import is introduced by the Stage 7 streaming transport",
+  function importProject(file, importOptions = {}) {
+    const pending = importTail.then(async () => {
+      if (closing || !started) {
+        throw typedError("HOST_STATE_INVALID", "Project import is unavailable");
+      }
+      return importProjectBundle(file, {
+        crypto,
+        signal: importOptions.signal,
+        onProgress: importOptions.onProgress,
+        send: async (operation, payload, sidecar) => {
+          try {
+            return await boundedRequest(
+              operation,
+              payload,
+              sidecar === undefined ? {} : {sidecar},
+            );
+          } catch (error) {
+            const code = errorCode(error);
+            if ([
+              "HOST_RESTART_REQUIRED",
+              "HOST_TIMEOUT",
+              "HOST_PROTOCOL_MISMATCH",
+            ].includes(code)) {
+              fail(code);
+            }
+            throw error;
+          }
+        },
+      });
+    });
+    importTail = pending.then(
+      () => undefined,
+      () => undefined,
     );
+    return pending;
   }
 
   async function close() {

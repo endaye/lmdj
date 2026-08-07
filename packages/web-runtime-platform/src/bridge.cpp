@@ -199,11 +199,17 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 15> operations{
+  static constexpr std::array<std::string_view, 21> operations{
       "host.status",
       "project.create",
       "project.open",
       "project.inspect",
+      "project.list",
+      "project.import.begin",
+      "project.import.index",
+      "project.import.entry",
+      "project.import.commit",
+      "project.import.abort",
       "asset.import",
       "pad.assign",
       "snapshot.reload",

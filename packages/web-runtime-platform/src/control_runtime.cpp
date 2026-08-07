@@ -7,6 +7,7 @@
 #include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -86,6 +87,12 @@ std::uint64_t unsigned_field(
   }
   require(result <= maximum);
   return result;
+}
+
+bool bool_field(const Json& value, std::string_view key) {
+  const auto& field = value.at(std::string(key));
+  require(field.is_boolean());
+  return field.get<bool>();
 }
 
 std::string uuid_field(const Json& value, std::string_view key) {
@@ -263,6 +270,16 @@ Json normalized_error(
     std::string_view source_message = {}) {
   const auto storage_condition =
       details.is_object() ? details.find("storage_condition") : details.end();
+  const auto transfer_condition =
+      details.is_object() ? details.find("transfer_condition") : details.end();
+  if (code == "INVALID_PROJECT" && details.is_object() &&
+      transfer_condition != details.end() &&
+      transfer_condition->is_string() &&
+      *transfer_condition == "resource_limit") {
+    return host_error(
+        "WEB_RUNTIME_RESOURCE_LIMIT",
+        "Project Bundle exceeds the Web Runtime transfer limit");
+  }
   if (code == "IO_ERROR" && details.is_object() &&
       storage_condition != details.end() &&
       storage_condition->is_string() &&
@@ -270,6 +287,26 @@ Json normalized_error(
     return host_error(
         "PROJECT_BUSY",
         "project is already open for writing");
+  }
+  if (code == "IO_ERROR" && details.is_object() &&
+      storage_condition != details.end() &&
+      storage_condition->is_string() &&
+      *storage_condition == "atomic_publish_unsupported") {
+    return host_error(
+        "UNSUPPORTED_WEB_RUNTIME",
+        "atomic Project directory publication is unavailable");
+  }
+  if (code == "IO_ERROR" && details.is_object() &&
+      storage_condition != details.end() &&
+      storage_condition->is_string() &&
+      *storage_condition == "already_exists") {
+    return host_error(
+        "DUPLICATE_ID",
+        "a different Project already uses this identity");
+  }
+  if (code == "INVALID_ARGUMENT" &&
+      source_message.starts_with("Project Bundle")) {
+    return host_error("INVALID_PROJECT", "Project Bundle transfer is invalid");
   }
   static constexpr std::array<std::string_view, 4> resource_names{
       "artifact_bytes",
@@ -353,6 +390,37 @@ std::string sha256(std::span<const std::byte> bytes) {
   }
   hasher.finish();
   return picosha2::get_hash_hex_string(hasher);
+}
+
+void require_sidecar(
+    const Json& declaration,
+    std::span<const std::byte> sidecar) {
+  require(exact_keys(
+      declaration, {"sidecar_bytes", "sidecar_sha256"}));
+  const auto declared_bytes = unsigned_field(
+      declaration, "sidecar_bytes", detail::kBridgeMaximumSidecarBytes);
+  const auto declared_sha = string_field(declaration, "sidecar_sha256");
+  require(
+      declared_sha.size() == 64 &&
+      std::all_of(
+          declared_sha.begin(), declared_sha.end(), [](char value) {
+            return (value >= '0' && value <= '9') ||
+                   (value >= 'a' && value <= 'f');
+          }));
+  require(declared_bytes == sidecar.size());
+  require(sha256(sidecar) == declared_sha);
+}
+
+Json local_project_summary(const facade::LocalProjectSummary& summary) {
+  return {
+      {"project_id", summary.project_id.value()},
+      {"pattern_id", summary.pattern_id.value()},
+      {"revision", summary.revision},
+      {"bpm", summary.bpm},
+      {"asset_count", summary.asset_count},
+      {"assigned_pad_count", summary.assigned_pad_count},
+      {"bundle_digest", summary.bundle_digest},
+  };
 }
 
 std::string capture_state_name(audio::CaptureState state) {
@@ -858,6 +926,10 @@ struct ControlRuntime::Impl {
 
   void seal_all_noexcept() noexcept {
     try {
+      for (const auto& token : import_tokens) {
+        static_cast<void>(application.abort_project_bundle_import(token));
+      }
+      import_tokens.clear();
       if (!retained_project_path.has_value()) {
         active_take.reset();
         committable_take.reset();
@@ -901,6 +973,7 @@ struct ControlRuntime::Impl {
   std::optional<TakeSession> active_take;
   std::optional<TakeSession> committable_take;
   std::optional<detail::AudioQuiescenceCoordinator> coordinator;
+  std::set<std::string> import_tokens;
   std::uint64_t reserved_live_bytes = 0;
   std::uint64_t next_trigger_sequence = 1;
   bool runtime_ready = false;
@@ -963,6 +1036,138 @@ Json ControlRuntime::dispatch(
       require(exact_keys(payload, {}));
       require(sidecar.empty());
       return impl_->status();
+    }
+    if (operation == "project.list") {
+      require(exact_keys(payload, {}));
+      require(sidecar.empty());
+      const auto listed = impl_->application.list_local_projects();
+      if (!listed.has_value()) {
+        return normalized_error(listed.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      auto projects = Json::array();
+      for (const auto& summary : listed.value()) {
+        projects.push_back(local_project_summary(summary));
+      }
+      return success({{"projects", std::move(projects)}});
+    }
+    if (operation == "project.import.begin") {
+      require(exact_keys(
+          payload, {"import_token", "index_bytes", "index_sha256"}));
+      require(sidecar.empty());
+      const auto token = uuid_field(payload, "import_token");
+      const auto index_bytes = unsigned_field(
+          payload, "index_bytes", 4'194'304);
+      require(index_bytes != 0);
+      const auto index_sha256 = string_field(payload, "index_sha256");
+      require(
+          index_sha256.size() == 64 &&
+          std::all_of(
+              index_sha256.begin(), index_sha256.end(), [](char value) {
+                return (value >= '0' && value <= '9') ||
+                       (value >= 'a' && value <= 'f');
+              }));
+      const auto begun = impl_->application.begin_project_bundle_import(
+          facade::ProjectBundleImportBeginRequest{
+              token, index_bytes, index_sha256});
+      if (!begun.has_value()) {
+        return normalized_error(begun.error());
+      }
+      impl_->import_tokens.insert(token);
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success({
+          {"import_token", begun.value().token},
+          {"expected_index_bytes", begun.value().expected_index_bytes},
+      });
+    }
+    if (operation == "project.import.index") {
+      require(exact_keys(
+          payload, {"import_token", "offset", "final", "sidecar"}));
+      const auto token = uuid_field(payload, "import_token");
+      const auto offset = unsigned_field(payload, "offset");
+      const auto final = bool_field(payload, "final");
+      require_sidecar(payload.at("sidecar"), sidecar);
+      const auto appended = impl_->application.append_project_bundle_index(
+          token, offset, sidecar, final);
+      if (!appended.has_value()) {
+        return normalized_error(appended.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      if (!appended.value().has_value()) {
+        return success({
+            {"received_index_bytes", offset + sidecar.size()},
+            {"final", false},
+        });
+      }
+      const auto& identity = *appended.value();
+      return success({
+          {"project_id", identity.project_id.value()},
+          {"bundle_digest", identity.bundle_digest},
+          {"entry_count", identity.entry_count},
+      });
+    }
+    if (operation == "project.import.entry") {
+      require(exact_keys(
+          payload,
+          {"import_token", "entry_index", "offset", "final", "sidecar"}));
+      const auto token = uuid_field(payload, "import_token");
+      const auto entry_index = unsigned_field(payload, "entry_index", 4'095);
+      const auto offset = unsigned_field(payload, "offset");
+      const auto final = bool_field(payload, "final");
+      require_sidecar(payload.at("sidecar"), sidecar);
+      const auto appended = impl_->application.append_project_bundle_entry(
+          token,
+          static_cast<std::uint32_t>(entry_index),
+          offset,
+          sidecar,
+          final);
+      if (!appended.has_value()) {
+        return normalized_error(appended.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success({
+          {"entry_index", entry_index},
+          {"received_entry_bytes", offset + sidecar.size()},
+          {"final", final},
+      });
+    }
+    if (operation == "project.import.commit") {
+      require(exact_keys(payload, {"import_token"}));
+      require(sidecar.empty());
+      const auto token = uuid_field(payload, "import_token");
+      const auto committed =
+          impl_->application.commit_project_bundle_import(token);
+      impl_->import_tokens.erase(token);
+      if (!committed.has_value()) {
+        return normalized_error(committed.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success(local_project_summary(committed.value()));
+    }
+    if (operation == "project.import.abort") {
+      require(exact_keys(payload, {"import_token"}));
+      require(sidecar.empty());
+      const auto token = uuid_field(payload, "import_token");
+      const auto aborted =
+          impl_->application.abort_project_bundle_import(token);
+      impl_->import_tokens.erase(token);
+      if (!aborted.has_value()) {
+        return normalized_error(aborted.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success({{"aborted", true}});
     }
     if (operation == "project.create") {
       require(exact_keys(

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import {webcrypto} from "node:crypto";
 import test from "node:test";
 
 import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
@@ -72,8 +73,9 @@ function fixture({send, browserWindow = {}, navigator = {}} = {}) {
     crypto: {
       randomUUID() {
         request += 1;
-        return `00000000-0000-0000-0000-${String(request).padStart(12, "0")}`;
+        return `00000000-0000-4000-8000-${String(request).padStart(12, "0")}`;
       },
+      subtle: webcrypto.subtle,
     },
     manifestSource: {},
     assemblyIdentity: {
@@ -200,7 +202,7 @@ test("suppresses a late Trigger response after pagehide close", async () => {
   browserWindow.dispatchEvent(new Event("pagehide"));
   settleTrigger({
     protocol_version: 1,
-    request_id: "00000000-0000-0000-0000-000000000003",
+    request_id: "00000000-0000-4000-8000-000000000003",
     ok: true,
     result: {sequence: 1},
   });
@@ -271,4 +273,103 @@ test("timeout becomes one terminal restart-required notification", async () => {
   ]);
   await Promise.resolve();
   assert.equal(terminated(), 1);
+});
+
+async function oneEntryBundle() {
+  const canonical = (value) => {
+    if (Array.isArray(value)) {
+      return `[${value.map(canonical).join(",")}]`;
+    }
+    if (value !== null && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const hash = async (bytes) => [...new Uint8Array(
+    await webcrypto.subtle.digest("SHA-256", bytes),
+  )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  const payload = new TextEncoder().encode("project");
+  const digestSource = {
+    compression: "none",
+    contract: "lmdj.project-bundle.v1",
+    contract_version: "1.0.0",
+    entries: [{
+      bytes: payload.byteLength,
+      offset: 0,
+      path: "manifest.json",
+      sha256: await hash(payload),
+    }],
+    project_contract: "lmdj.project.v1",
+    project_id: "11111111-1111-4111-8111-111111111111",
+    uncompressed_bytes: payload.byteLength,
+  };
+  const index = {
+    bundle_digest: await hash(new TextEncoder().encode(canonical(digestSource))),
+    ...digestSource,
+  };
+  const indexBytes = new TextEncoder().encode(canonical(index));
+  const header = new Uint8Array(12);
+  header.set(new TextEncoder().encode("LMDJBND1"));
+  new DataView(header.buffer).setUint32(8, indexBytes.byteLength, false);
+  return {file: new Blob([header, indexBytes, payload]), index};
+}
+
+test("lists and imports Projects through the public typed surface", async () => {
+  const {file, index} = await oneEntryBundle();
+  const operations = [];
+  const summary = {
+    project_id: index.project_id,
+    pattern_id: "22222222-2222-4222-8222-222222222222",
+    revision: 3,
+    bpm: 120,
+    asset_count: 1,
+    assigned_pad_count: 8,
+    bundle_digest: index.bundle_digest,
+  };
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      let result = {};
+      if (envelope.operation === "project.list") {
+        result = {projects: [summary]};
+      } else if (
+        envelope.operation === "project.import.index" &&
+        envelope.payload.final
+      ) {
+        result = {
+          project_id: index.project_id,
+          bundle_digest: index.bundle_digest,
+          entry_count: 1,
+        };
+      } else if (envelope.operation === "project.import.commit") {
+        result = summary;
+      }
+      return {
+        protocol_version: 1,
+        request_id: envelope.request_id,
+        ok: true,
+        result,
+      };
+    },
+  });
+  await session.start();
+  const expected = {
+    projectId: index.project_id,
+    patternId: summary.pattern_id,
+    revision: 3,
+    bpm: 120,
+    assetCount: 1,
+    assignedPadCount: 8,
+    bundleDigest: index.bundle_digest,
+  };
+  assert.deepEqual(await session.listLocalProjects(), [expected]);
+  assert.deepEqual(await session.importProject(file), expected);
+  assert.deepEqual(operations, [
+    "project.list",
+    "project.import.begin",
+    "project.import.index",
+    "project.import.entry",
+    "project.import.commit",
+  ]);
 });

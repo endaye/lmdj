@@ -427,6 +427,43 @@ void test_realtime_service_tail_request_is_not_lost() {
   LMDJ_CHECK(!bridge.failed());
 }
 
+void test_bundle_stream_keeps_the_sixteen_request_slot_bound() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+
+  for (std::uint32_t index = 0; index < 16; ++index) {
+    const auto suffix = std::to_string(950 + index);
+    const auto request_id =
+        "00000000-0000-4000-8000-" +
+        std::string(12 - suffix.size(), '0') + suffix;
+    const auto envelope = nlohmann::json{
+        {"protocol_version", 1},
+        {"request_id", request_id},
+        {"operation", "project.list"},
+        {"payload", nlohmann::json::object()},
+    }.dump();
+    const auto bytes = std::span<const std::byte>{
+        reinterpret_cast<const std::byte*>(envelope.data()),
+        envelope.size(),
+    };
+    LMDJ_CHECK(
+        bridge.submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  }
+
+  const auto overflow = nlohmann::json{
+      {"protocol_version", 1},
+      {"request_id", "00000000-0000-4000-8000-000000000999"},
+      {"operation", "project.list"},
+      {"payload", nlohmann::json::object()},
+  }.dump();
+  const auto bytes = std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(overflow.data()), overflow.size()};
+  LMDJ_CHECK(
+      bridge.submit(bytes, {}) == BridgeSubmitStatus::queue_full);
+}
+
 }  // namespace
 
 int main() {
@@ -437,6 +474,7 @@ int main() {
     test_outcome_drop_racing_the_post_drain_check_is_terminal();
     test_realtime_service_tail_request_is_not_lost();
     test_ready_response_pressure_cannot_starve_realtime_service();
+    test_bundle_stream_keeps_the_sixteen_request_slot_bound();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
