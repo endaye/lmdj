@@ -1,22 +1,14 @@
-export interface LocalProjectSummary {
-  projectId: string;
-  patternId: string;
-  revision: number;
-  bpm: number;
-  assetCount: number;
-  assignedPadCount: number;
-  bundleDigest: string;
-}
+import type {
+  LocalProjectSummary,
+  ProjectPadView,
+  ProjectView,
+} from "../runtime/runtime_types";
 
-export interface ProjectPadView {
-  slot: number;
-  assetId: string | null;
-}
-
-export interface ProjectView extends LocalProjectSummary {
-  key: "—";
-  pads: readonly ProjectPadView[];
-}
+export type {
+  LocalProjectSummary,
+  ProjectPadView,
+  ProjectView,
+} from "../runtime/runtime_types";
 
 export type CreatorPhase =
   | "failed"
@@ -69,10 +61,11 @@ export type CreatorAction =
       phase: CreatorState["runtime"]["phase"];
       errorCode: string | null;
     }
+  | {type: "projects-listing"}
   | {type: "projects-loaded"; projects: LocalProjectSummary[]}
   | {type: "project-opening"}
   | {type: "project-ready"; project: ProjectView}
-  | {type: "project-error"}
+  | {type: "project-error"; errorCode: string}
   | {type: "transfer-started"; totalBytes: number}
   | {type: "transfer-progressed"; completedBytes: number}
   | {type: "transfer-ended"}
@@ -114,6 +107,12 @@ export function creatorReducer(
         ...state,
         runtime: {phase: action.phase, errorCode: action.errorCode},
       };
+    case "projects-listing":
+      return {
+        ...state,
+        project: {...state.project, phase: "listing"},
+        runtime: {...state.runtime, errorCode: null},
+      };
     case "projects-loaded":
       return {
         ...state,
@@ -122,22 +121,26 @@ export function creatorReducer(
           projects: [...action.projects],
           current: state.project.current,
         },
+        runtime: {...state.runtime, errorCode: null},
       };
     case "project-opening":
       return {
         ...state,
         project: {...state.project, phase: "opening"},
+        runtime: {...state.runtime, errorCode: null},
       };
     case "project-ready":
       return {
         ...state,
         project: {...state.project, phase: "ready", current: action.project},
+        runtime: {...state.runtime, errorCode: null},
         audio: {phase: "inactive"},
       };
     case "project-error":
       return {
         ...state,
         project: {...state.project, phase: "error"},
+        runtime: {...state.runtime, errorCode: action.errorCode},
       };
     case "transfer-started":
       return {

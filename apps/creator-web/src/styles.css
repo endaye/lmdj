@@ -71,6 +71,11 @@ button:disabled { color: #737b87; }
 .project-summary div, .empty-state, .stage-note { padding: 1rem; border: 1px solid #353b45; border-radius: .75rem; background: #171b21; }
 .project-summary dt { color: #9da6b4; }
 .project-summary dd { margin: .35rem 0 0; overflow-wrap: anywhere; }
+.local-projects { display: grid; gap: .75rem; padding: 0; list-style: none; }
+.local-projects li { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem; border: 1px solid #353b45; border-radius: .75rem; background: #171b21; }
+.local-projects li div { display: flex; flex-wrap: wrap; gap: .5rem 1rem; align-items: baseline; }
+.local-projects li span { color: #9da6b4; }
+.project-actions input[type="file"] { display: none; }
 
 .pads { grid-area: pads; padding: 1rem 1.25rem 1.25rem; border-top: 1px solid #353b45; }
 .bank-selector { display: flex; gap: .5rem; margin-bottom: .75rem; }
