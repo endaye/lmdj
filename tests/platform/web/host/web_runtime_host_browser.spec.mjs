@@ -1786,9 +1786,11 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
   ).toMatchObject({
     entered_facade: true,
     claim_attempted: true,
-    claim_started_open: true,
     gate: "unresponsive-cancellation",
   });
+  // The deadline may cancel publication immediately before the claim callback
+  // records whether it started open. Both interleavings still enter and block
+  // the real claim path; the assertions below retain cancellation authority.
   await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
     publication: "cancelled",
     cancel_calls: 2,

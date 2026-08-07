@@ -32,6 +32,14 @@ def main() -> int:
     realtime_failure_spec = (
         repo_root / "tests" / "platform" / "web" / "audio" / "realtime_failure.spec.mjs"
     )
+    web_runtime_browser_spec = (
+        repo_root
+        / "tests"
+        / "platform"
+        / "web"
+        / "host"
+        / "web_runtime_host_browser.spec.mjs"
+    )
     web_runtime_host_script = repo_root / "scripts" / "web-runtime-host.sh"
     web_toolchain_script = repo_root / "scripts" / "web-toolchain-conformance.sh"
     playwright_config = repo_root / "tests" / "platform" / "web" / "playwright.config.mjs"
@@ -54,6 +62,7 @@ def main() -> int:
         product_assembly,
         root_cmake,
         realtime_failure_spec,
+        web_runtime_browser_spec,
         web_runtime_host_script,
         web_toolchain_script,
         playwright_config,
@@ -370,6 +379,26 @@ def main() -> int:
     require(
         re.search(r"submit\(\s*[\"']host\.status[\"']", fatal_wait_body) is None,
         "processor fatal proof must not submit through the Bridge after terminalization",
+    )
+    browser_spec_text = web_runtime_browser_spec.read_text(encoding="utf-8")
+    unresponsive_cancellation = re.search(
+        r'test\("Chromium packaged unresponsive cancellation '
+        r'force-terminates and recovers".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        unresponsive_cancellation is not None,
+        "unresponsive cancellation browser proof is missing",
+    )
+    require(
+        "claim_attempted: true" in unresponsive_cancellation.group(0),
+        "unresponsive cancellation must prove that publication was attempted",
+    )
+    require(
+        "claim_started_open: true" not in unresponsive_cancellation.group(0),
+        "unresponsive cancellation must allow deadline cancellation to race "
+        "the publication-attempt observation",
     )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",
