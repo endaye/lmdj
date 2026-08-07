@@ -1778,7 +1778,10 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
       },
     },
     deadlineFixtureBytes,
-    { deadlineMs: 250, gate: "unresponsive-cancellation" },
+    {
+      deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS,
+      gate: "unresponsive-cancellation",
+    },
   );
   await expect.poll(
     () => deadlineProofState(page, requestId),
@@ -1796,8 +1799,6 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
     cancel_calls: 2,
     last_cancel_result: "cancelled",
   });
-  expect(await releaseDeadlineProof(page), "release unresponsive proof gate")
-    .toBe(true);
   expect(await deadlineMutationOutcome(page, requestId)).toMatchObject({
     error: { code: "HOST_TIMEOUT" },
   });
@@ -1816,6 +1817,8 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
     acceptedConsumes: 0,
     rejectedConsumes: 3,
   });
+  expect(await releaseDeadlineProof(page), "release terminated proof gate")
+    .toBe(true);
   const directInventory = await opfsInventory(page);
   expect(directInventory, "unresponsive non-Truth staging residue")
     .not.toEqual(inventoryBefore);

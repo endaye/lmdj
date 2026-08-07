@@ -396,9 +396,27 @@ def main() -> int:
         "unresponsive cancellation must prove that publication was attempted",
     )
     require(
+        "deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS"
+        in unresponsive_cancellation.group(0),
+        "unresponsive cancellation must leave enough time for slow runners to "
+        "reach the publication claim before forcing termination",
+    )
+    require(
         "claim_started_open: true" not in unresponsive_cancellation.group(0),
         "unresponsive cancellation must allow deadline cancellation to race "
         "the publication-attempt observation",
+    )
+    unresponsive_release = unresponsive_cancellation.group(0).find(
+        "releaseDeadlineProof(page)"
+    )
+    unresponsive_terminal_evidence = unresponsive_cancellation.group(0).find(
+        "terminalTransportEvidence(page)"
+    )
+    require(
+        unresponsive_terminal_evidence >= 0
+        and unresponsive_release > unresponsive_terminal_evidence,
+        "unresponsive cancellation must prove forced terminal cleanup before "
+        "releasing the artificial claim gate",
     )
     visible_journey = re.search(
         r'test\("Chromium visible diagnostic project completes the packaged '
