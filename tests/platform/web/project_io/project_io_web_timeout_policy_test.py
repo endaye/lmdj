@@ -13,6 +13,17 @@ SPEC = REPO_ROOT / "tests/platform/web/project_io/project_io_web_conformance.spe
 
 def main() -> int:
     source = SPEC.read_text(encoding="utf-8")
+    fault_observation_timeout = re.search(
+        r"const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = ([0-9_]+);",
+        source,
+    )
+    assert fault_observation_timeout is not None, (
+        "named Project I/O fault observation timeout is missing"
+    )
+    assert int(fault_observation_timeout.group(1).replace("_", "")) >= 60_000, (
+        "Project I/O fault observation timeout must cover slow OPFS progress "
+        "on the Linux runner"
+    )
     timeout = re.search(
         r"const PROJECT_IO_CONFORMANCE_TIMEOUT_MS = ([0-9_]+);",
         source,

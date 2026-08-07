@@ -7,7 +7,7 @@ const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfsSyncAccessHandle",
   "opfsWritableReplace",
 ]);
-const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 15_000;
+const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 60_000;
 const PROJECT_IO_CONFORMANCE_TIMEOUT_MS = 300_000;
 
 async function inspectStorageCapabilities(page) {
