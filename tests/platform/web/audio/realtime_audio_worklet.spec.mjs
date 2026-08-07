@@ -249,10 +249,7 @@ test("processorerror closes the callback gate and seals the Host", async ({page}
     fatal: "processor_error",
     callbackGate: "closed",
     callbackInFlight: 0,
-    hostStatus: {
-      ok: false,
-      error: {code: "HOST_STATE_INVALID"},
-    },
+    controlFailureCommitted: true,
   });
   expect(result.renderCallsAfterFatal).toBe(result.renderCallsAtFatal);
 });

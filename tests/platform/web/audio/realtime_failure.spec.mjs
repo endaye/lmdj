@@ -118,7 +118,7 @@ test("processorerror seals an active Take and the failed session never resumes",
     fatal: "processor_error",
     callbackGate: "closed",
     callbackInFlight: 0,
-    hostStatus: {ok: false, error: {code: "HOST_STATE_INVALID"}},
+    controlFailureCommitted: true,
   });
 
   await waitForFormalHost(page);

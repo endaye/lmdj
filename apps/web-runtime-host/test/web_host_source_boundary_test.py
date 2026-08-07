@@ -355,6 +355,22 @@ def main() -> int:
         is not None,
         "realtime failure response polling must retain the monotonic deadline",
     )
+    fatal_wait = re.search(
+        r"async\s+waitForFatal\(\)\s*\{(.*?)\n\s{6}\},",
+        runtime_pre_source,
+        re.DOTALL,
+    )
+    require(fatal_wait is not None, "processor fatal wait helper is missing")
+    fatal_wait_body = fatal_wait.group(1)
+    require(
+        'Module["_lmdj_web_audio_control_failure_committed"]()'
+        in fatal_wait_body,
+        "processor fatal proof must observe committed Control failure",
+    )
+    require(
+        re.search(r"submit\(\s*[\"']host\.status[\"']", fatal_wait_body) is None,
+        "processor fatal proof must not submit through the Bridge after terminalization",
+    )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",
         web_runtime_host_script.read_text(encoding="utf-8"),
