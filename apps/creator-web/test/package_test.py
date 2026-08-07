@@ -177,6 +177,32 @@ class CreatorPackageTest(unittest.TestCase):
         with self.assertRaises(self.module.DistributionError):
             self.module.verify_distribution(destination, self.repo)
 
+    def test_emscripten_virtual_home_is_not_treated_as_a_host_path(self) -> None:
+        destination = self.root / "dist"
+        (self.runtime / "lmdj-web-runtime.js").write_text(
+            'const home="/home/web_user"; const wasm="lmdj-web-runtime.wasm";\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        self.build(destination)
+
+        self.module.verify_distribution(destination, self.repo)
+
+    def test_runtime_file_url_is_rejected_as_a_host_path(self) -> None:
+        destination = self.root / "dist"
+        (self.runtime / "lmdj-web-runtime.js").write_text(
+            'const leaked="file:///home/private/build"; '
+            'const wasm="lmdj-web-runtime.wasm";\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+
+        with self.assertRaisesRegex(
+            self.module.DistributionError, "absolute local path"
+        ):
+            self.build(destination)
+
     def test_cli_has_a_bounded_usage_failure(self) -> None:
         completed = subprocess.run(
             ["python3", str(PACKAGE_TOOL)], check=False, capture_output=True, text=True

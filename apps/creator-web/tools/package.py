@@ -59,7 +59,7 @@ EXPECTED_ASSETS = (
 HASHED_ASSET_PATTERN = re.compile(
     r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$"
 )
-LOCAL_PATH_PATTERN = re.compile(rb"(?:/Users/|/home/|file:/+|[A-Za-z]:\\)")
+LOCAL_PATH_PATTERN = re.compile(rb"(?:/Users/|file:/+(?:Users|home)/|[A-Za-z]:\\)")
 SOURCE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".py", ".map",
 }
