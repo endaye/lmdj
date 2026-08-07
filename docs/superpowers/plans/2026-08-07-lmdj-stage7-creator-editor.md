@@ -19,6 +19,7 @@
 - Stage 7 exposes only Project, Bank selection, 4×4 Pads, audio lifecycle, input enablement, and privacy-safe report export. Sample, Sequence, and Perform are visible disabled controls with no route, Command, Job, or storage mutation.
 - Do not add blank Project creation, Project rename, WAV/MP3 import, Pad assignment, Take/Pattern editing, Momentary FX, Resample, Sound Sets, PWA, Service Worker, account, cloud sync, telemetry, deployment, `beta`, or `stable` behavior.
 - Project Truth remains `lmdj.project.v1`. `lmdj.project-bundle.v1` is only a portable transfer envelope and never becomes persisted Project Truth.
+- Native import publication uses same-filesystem no-overwrite directory rename. Web import publication uses the approved R1 writer-lease + publication-intent protocol; do not depend on `FileSystemDirectoryHandle.move()`, which shipping Chromium does not implement for directories.
 - Web Runtime stays one non-growing `536,870,912`-byte shared Wasm memory. Do not add a JavaScript sampler, fallback AudioContext path, ScriptProcessor, alternate Project parser, or browser-specific Contract.
 - Audio activation always begins in a current user gesture. Reload, restart-required, Project reopen, visibility recovery, or pageshow cannot reactivate audio automatically.
 - Pointer, Keyboard, and Web MIDI converge on the same serialized Runtime Session `trigger()` call and use real admission/outcome evidence. A timer cannot manufacture sound success.
@@ -149,8 +150,8 @@ only a current trusted browser event, brands the token in a module-private
 - `tests/conformance/project_bundle_contract_test.py`: binary header, canonical index, positive/negative Contract, and deterministic pack tests.
 - `packages/project-io/include/lmdj/project_io/project_bundle_transfer.hpp`: discovery and bounded streaming import API.
 - `packages/project-io/src/project_bundle_transfer.cpp`: inventory validation, staging, hash verification, collision handling, and atomic publish.
-- `packages/project-io/include/lmdj/project_io/storage_platform.hpp`: direct-directory listing, recursive removal, and no-overwrite atomic directory publish obligations.
-- Native/Web storage implementations and contract tests: identical semantic obligations, with Web using OPFS directory `move()` and explicit capability failure.
+- `packages/project-io/include/lmdj/project_io/storage_platform.hpp`: direct-directory listing, recursive removal, and no-overwrite atomic-visibility directory publish obligations.
+- Native/Web storage implementations and contract tests: identical externally visible obligations. Native uses directory rename; Web uses a hidden publication intent, bounded verified copy, and atomic file replacement as the visibility commit point.
 
 ### Application Facade and Shared Web Runtime
 
@@ -369,11 +370,11 @@ class ProjectBundleTransfer final {
 ```
 
 - Extends `ProjectStoragePlatform` with `list_directories(path)`, `remove_tree(path)`, and `publish_directory_if_absent(staging, destination)`.
-- Native publish uses a same-filesystem no-overwrite directory rename. Web publish uses OPFS `FileSystemDirectoryHandle.move()`; absence is a capability failure, never copy-then-visible fallback.
+- Native publish uses a same-filesystem no-overwrite directory rename. Web publish uses the R1 journaled-copy protocol below; raw destination existence never implies discoverability while its publication intent is pending.
 
 - [ ] **Step 1: Write failing storage and transfer tests**
 
-Cover sorted Project discovery, ignoring `.lmdj-host/import-staging`, multi-chunk index/entry writes, canonical/hash validation, 64 MiB and 512 MiB limits, abort cleanup, startup cleanup, interruption before publish, publish failure, same-ID/same-digest idempotency, same-ID/different-digest `DUPLICATE_ID`, and writer contention.
+Cover sorted Project discovery, ignoring `.lmdj-host/import-staging`, multi-chunk index/entry writes, canonical/hash validation, 64 MiB and 512 MiB limits, abort cleanup, startup cleanup, interruption before publish, publish failure, same-ID/same-digest idempotency, same-ID/different-digest `DUPLICATE_ID`, and writer contention. Web conformance additionally faults initial intent persistence, bounded copy, verification, atomic commit replacement, source cleanup, and intent cleanup; before the commit point Project list equals its prior value, and after it Project list contains the complete validated Project.
 
 The central atomicity assertion is:
 
@@ -383,8 +384,6 @@ faults.fail_next_publish = true;
 const auto failed = transfer.commit(session.token);
 LMDJ_CHECK(!failed.has_value());
 LMDJ_CHECK(transfer.list_local_projects(workspace).value() == before.value());
-LMDJ_CHECK(!platform->directory_exists(
-    workspace / "projects" / (project_id.value() + ".lmdj")).value());
 ```
 
 - [ ] **Step 2: Run RED**
@@ -416,22 +415,31 @@ WORKSPACE/projects/<project-id>.lmdj
 
 - [ ] **Step 4: Implement the Web storage obligations**
 
-Add browser functions with exact status mapping:
+Reuse the existing OPFS cross-tab writer lease and storage-intent recovery. The exact publication record is stored at:
 
-```js
-async publishDirectoryIfAbsent(stagingParts, destinationParts) {
-  const [sourceParent, sourceName] = await this.parent(stagingParts, false);
-  const source = await sourceParent.getDirectoryHandle(sourceName);
-  const [destinationParent, destinationName] =
-    await this.parent(destinationParts, true);
-  if (await this.exists(destinationParts)) return -4;
-  if (typeof source.move !== 'function') return -8;
-  await source.move(destinationParent, destinationName);
-  return 0;
-}
+```text
+WORKSPACE/.lmdj-host/storage-intents/<destination-scope>/directory-publication.json
 ```
 
-Map `-8` to a structured storage condition `atomic_publish_unsupported`; Platform preflight later maps it to `UNSUPPORTED_WEB_RUNTIME`.
+It has exact canonical fields `{contract, destination, source, state}` with
+contract `lmdj.storage.directory-publication.v1` and state `pending` or
+`committed`. `publish_directory_if_absent()` performs, in order:
+
+1. require the destination writer lease and recover any prior exact-destination intent;
+2. reject an existing destination without a recoverable intent;
+3. persist and read back `pending` before creating destination;
+4. copy regular files in at most 1 MiB slices and recursively create directories;
+5. compare source/destination names, kinds, lengths, and every byte in at most 1 MiB slices;
+6. replace the intent atomically with `committed` through `createWritable()` + `close()`;
+7. remove source, then remove intent.
+
+`list_directories()` filters an exact child whose publication intent is pending
+or malformed, includes committed children, and keeps legacy/no-intent Projects
+compatible. Destination-lease recovery removes pending partial destinations;
+committed recovery keeps destination and removes source/intent residue. A
+failure after the commit point returns the complete Project on authoritative
+reopen rather than deleting it. Neither marker nor internal path enters errors,
+Bundle inventory, Project Truth, or Host diagnostics.
 
 - [ ] **Step 5: Run Native and Web GREEN**
 
@@ -444,7 +452,7 @@ npm --prefix tests/platform/web test -- --project=chromium \
   project_io/project_io_web_conformance.spec.mjs
 ```
 
-Expected: Native and Chromium storage/import matrices PASS; no incomplete Project becomes discoverable.
+Expected: Native and Chromium storage/import matrices PASS; Chromium does not require directory `move()`; every R1 fault point exposes either the prior Project list or the complete new Project, never a partial Project.
 
 - [ ] **Step 6: Run Portal gate and commit**
 
@@ -756,6 +764,108 @@ git diff --cached --check
 git commit -m "refactor(web): share browser runtime session"
 ```
 
+### Task 5R1: Replace the unavailable Web directory move with journaled publication
+
+**Files:**
+
+- Modify: `packages/project-io/src/web/library_opfs_storage.js`
+- Modify: `tests/platform/web/project_io/project_io_web_test.cpp`
+- Modify: `tests/platform/web/project_io/project_io_web_conformance.spec.mjs`
+- Modify if the common fault seam requires it: `packages/project-io/src/web/storage_platform.cpp`
+- Modify if the public storage contract requires clarification: `packages/project-io/include/lmdj/project_io/storage_platform.hpp`
+- Modify: `tests/core/project_io/storage_platform_contract_test.cpp`
+- Modify: `tests/core/project_io/project_bundle_transfer_test.cpp`
+
+**Interfaces:**
+
+- `publish_directory_if_absent(staging, destination)` keeps the same C++ API and
+  externally visible Native/Web contract.
+- Web adds no new browser capability. It consumes the already mandatory
+  `opfsSyncAccessHandle` and `opfsWritableReplace` primitives.
+- The private publication record is exactly
+  `{contract, destination, source, state}` with contract
+  `lmdj.storage.directory-publication.v1` and state `pending | committed`.
+- Internal copy and comparison buffers never exceed `1,048,576` bytes.
+- Pending/malformed publication is invisible; committed/no-intent publication is
+  visible. Recovery owns the same destination writer lease as publication.
+
+- [ ] **Step 1: Write failing Chromium crash-boundary tests**
+
+Add deterministic fault points:
+
+```text
+before_intent_write
+during_intent_write
+after_pending_intent
+during_directory_copy
+after_directory_copy
+during_directory_verify
+before_commit_close
+after_commit_close
+before_source_cleanup
+before_intent_cleanup
+```
+
+For every point, terminate the publishing page/Worker, reopen in a new page,
+and assert the authoritative Project list. The first seven points must expose
+the prior list; the final three must expose the complete Project. Also prove:
+
+- pending and malformed intents hide partial destination directories;
+- recovery removes pending destination and allows retry;
+- committed recovery preserves destination and makes same-digest retry idempotent;
+- a different digest remains `DUPLICATE_ID`;
+- legacy no-intent Projects remain discoverable;
+- copy/verify slices are at most 1 MiB;
+- no internal marker/path appears in Host errors or Project inventory.
+
+- [ ] **Step 2: Run RED**
+
+```bash
+scripts/web-toolchain-conformance.sh build-project-io
+npm --prefix tests/platform/web test -- --project=chromium \
+  project_io/project_io_web_conformance.spec.mjs
+```
+
+Expected: FAIL because shipping Chromium has no directory move and journaled
+publication/fault recovery is absent.
+
+- [ ] **Step 3: Implement the minimal R1 publication state machine**
+
+Extend the existing lease-scoped storage-intent machinery rather than adding a
+second catalog. Persist/read back pending before destination creation; copy and
+compare ordered trees using bounded slices; atomically replace the intent with
+committed; then clean source and intent. Filter pending/malformed destinations
+from Web directory enumeration and recover exact-destination intent on writer
+lease acquisition.
+
+- [ ] **Step 4: Run GREEN and cross-platform regressions**
+
+```bash
+scripts/core.sh build dev
+ctest --test-dir build/core/dev --output-on-failure \
+  -R '^core\.project_io\.(storage_platform_contract|project_bundle_transfer)$'
+scripts/web-toolchain-conformance.sh build-project-io
+npm --prefix tests/platform/web test -- --project=chromium \
+  project_io/project_io_web_conformance.spec.mjs
+scripts/web-runtime-host.sh proof
+```
+
+Expected: common Native tests, the full Chromium publication fault matrix, and
+the unchanged diagnostic Host Proof PASS without a directory-move capability.
+
+- [ ] **Step 5: Run Portal gate and commit**
+
+```bash
+scripts/architecture-portal.sh check
+git add packages/project-io/src/web \
+  packages/project-io/include/lmdj/project_io/storage_platform.hpp \
+  tests/core/project_io/storage_platform_contract_test.cpp \
+  tests/core/project_io/project_bundle_transfer_test.cpp \
+  tests/platform/web/project_io
+git diff --cached --check
+git commit -m "fix(project-io): journal web project publication"
+```
+
 ### Task 6: Stream Project Bundle import through the shared Web transport
 
 **Files:**
@@ -763,7 +873,6 @@ git commit -m "refactor(web): share browser runtime session"
 - Create: `packages/web-runtime-platform/web/project_bundle_reader.mjs`
 - Create: `packages/web-runtime-platform/test/project_bundle_reader.test.mjs`
 - Modify: `packages/web-runtime-platform/web/protocol.mjs`
-- Modify: `packages/web-runtime-platform/web/preflight.mjs`
 - Modify: `packages/web-runtime-platform/web/runtime_session.mjs`
 - Modify: `packages/web-runtime-platform/src/control_runtime.cpp`
 - Modify: `packages/web-runtime-platform/src/bridge.cpp`
@@ -771,7 +880,6 @@ git commit -m "refactor(web): share browser runtime session"
 - Modify: `packages/web-runtime-platform/test/control_runtime_test.cpp`
 - Modify: `packages/web-runtime-platform/test/realtime_session_test.cpp`
 - Modify: `packages/web-runtime-platform/test/protocol.test.mjs`
-- Modify: `packages/web-runtime-platform/test/preflight.test.mjs`
 - Modify: `packages/web-runtime-platform/test/runtime_session.test.mjs`
 
 **Interfaces:**
@@ -811,9 +919,7 @@ Expected: FAIL because the reader and operations are absent.
 
 - [ ] **Step 3: Implement serialized streaming and Control/Fascade delegation**
 
-Keep the bridge sidecar capacity `1,048,576`; do not enlarge 16 request slots. Map Project I/O limit details to `WEB_RUNTIME_RESOURCE_LIMIT`, storage contention to `PROJECT_BUSY`, identity collision to `DUPLICATE_ID`, invalid transfer/tree to `INVALID_PROJECT`, and unavailable atomic directory move to `UNSUPPORTED_WEB_RUNTIME`.
-
-Add `opfsDirectoryMove` after `opfsWritableReplace` in the ordered mandatory preflight list.
+Keep the bridge sidecar capacity `1,048,576`; do not enlarge 16 request slots. Map Project I/O limit details to `WEB_RUNTIME_RESOURCE_LIMIT`, storage contention to `PROJECT_BUSY`, identity collision to `DUPLICATE_ID`, and invalid transfer/tree to `INVALID_PROJECT`. R1 publication consumes the already mandatory `opfsWritableReplace`; it adds no directory-move capability and does not weaken preflight.
 
 - [ ] **Step 4: Run GREEN and diagnostic regression**
 
@@ -825,7 +931,7 @@ ctest --test-dir build/core/dev --output-on-failure \
 scripts/web-runtime-host.sh proof
 ```
 
-Expected: streaming tests and all diagnostic regressions PASS; WebKit may report only the ordered `opfsDirectoryMove` limitation.
+Expected: streaming tests and all diagnostic regressions PASS; Chromium Host startup remains supported. WebKit reports only capabilities it actually lacks from the pre-R1 mandatory list and never reports a synthetic directory-move requirement.
 
 - [ ] **Step 5: Run Portal gate and commit**
 
@@ -1563,7 +1669,7 @@ git commit -m "docs(quality): record stage 7 manual canary"
 | --- | --- |
 | Independent Creator Host and shared Platform | 4, 5, 7, 11 |
 | Browser-local discovery and `.lmdj` import | 1, 2, 3, 6, 8 |
-| Bounded/path-safe/atomic/idempotent transfer | 1, 2, 6, 10 |
+| Bounded/path-safe/atomic/idempotent transfer | 1, 2, 5R1, 6, 10 |
 | Full workspace, Project-only active, future modes disabled | 7, 8, 10 |
 | 4 Banks / 64 stable Slots | 7, 9, 10, 14 |
 | Pointer/Keyboard/MIDI one Trigger path | 5, 9, 10 |

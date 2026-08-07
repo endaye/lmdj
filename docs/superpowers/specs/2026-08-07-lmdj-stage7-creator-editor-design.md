@@ -2,7 +2,7 @@
 
 日期：2026-08-07
 
-状态：规格已批准
+状态：规格已批准；R1 OPFS publication 修订已批准
 
 目标渠道：`canary`
 前置依赖：PR #94 的 `1.0.15.0` Web Runtime Host 修复必须先合入并在 `main`
@@ -32,6 +32,7 @@ Momentary FX、Resample 或 Sound Set。
 | S7-D6 | Stage 7 为 `canary`；五项实体 Web 物理门槛继续保持 `deferred / unverified`。 |
 | S7-D7 | Take 属于 Stage 9。Stage 7 不利用 Stage 6 诊断能力提前暴露录制 UI。 |
 | S7-D8 | PWA 安装、Service Worker、离线更新、云存储、账号和部署不进入本阶段。 |
+| S7-D9 | Native 以同文件系统 no-overwrite directory rename 发布导入；Web 以 Project writer lease、隐藏的 publication intent、有界目录复制和原子 intent 替换形成唯一可见性提交点，不依赖浏览器未实现的目录 `move()`。 |
 
 ## 2. 设计依据与阶段边界
 
@@ -237,6 +238,53 @@ Browser File
 - 浏览器重启后遗留 staging 是可清理 Workspace Cache，不是 Project Truth；
 - 任何失败都不能留下可被 Project list 发现的半成品目录。
 
+#### Web publication commit protocol（R1）
+
+OPFS 的 `FileSystemHandle.move()` 已支持文件，但
+[Chrome 官方文档](https://developer.chrome.com/docs/capabilities/web-apis/file-system-access#move-file-directory)
+明确记录目录移动尚未实现；因此 Web 不把 `FileSystemDirectoryHandle.move()` 作为
+capability 或发布前置条件。
+Native 仍以同文件系统、no-overwrite directory rename 作为物理原子提交；Web 在
+`ProjectStoragePlatform` 内实现等价的**逻辑原子可见性**：
+
+```text
+acquire destination Project writer lease
+  → persist and verify pending publication intent
+  → copy staging tree in <= 1 MiB chunks
+  → compare source/destination paths, kinds, lengths, and bytes
+  → atomically replace intent state pending → committed
+  → remove staging tree
+  → remove committed intent
+```
+
+Publication intent 位于
+`WORKSPACE/.lmdj-host/storage-intents/<destination-scope>/directory-publication.json`，
+属于可重建的 Host recovery metadata，不属于 Project Truth。记录只允许
+`lmdj.storage.directory-publication.v1`、规范 Workspace 内 source/destination 和
+`pending | committed` 状态；它不得进入 Project Bundle inventory、Creator UI 或
+privacy-safe report。
+
+`pending → committed` 是唯一 commit point，使用 `createWritable()` 的 swap-file
+replacement 并在 `close()` 后才成立；该 old-or-new 语义由
+[WHATWG File System Standard](https://fs.spec.whatwg.org/#api-filesystemfilehandle-createwritable)
+定义。Web `ProjectStoragePlatform` 的目录枚举必须：
+
+- 遇到 `pending` 或损坏的 exact-destination intent 时隐藏对应目标目录；
+- 遇到 `committed` 时呈现目标目录，即使 staging/intent cleanup 尚未完成；
+- 没有 publication intent 时按现有 Project 规则处理，兼容既有本地 Project。
+
+持有同一 destination writer lease 的恢复流程在任何 Project mutation 前处理 intent：
+
+- `pending` 或损坏 intent：删除半成品 destination，再删除 intent；
+- `committed`：保留 destination，清理残留 staging 和 intent；
+- destination 已存在且没有可恢复 intent：保持 no-overwrite collision 语义。
+
+复制或校验失败在当前调用内尽力清理；进程、页面或 Worker 在任意 fault point 中断时，
+上述枚举和恢复规则仍保证 Project list 只能观察到旧集合或完整新 Project，绝不会观察
+半成品。猜测 Project ID 的直接 open 最多得到 typed invalid/busy failure，不能把部分树
+作为成功 Project 返回。这个协议复用既有跨标签页 writer lease 与 storage-intent
+恢复设施，不引入第二份 Project 数据库或浏览器专属 Project Contract。
+
 ## 8. Creator Workspace
 
 ### 8.1 Desktop layout
@@ -378,7 +426,8 @@ Stage 7 不捕获异常后静默继续，不播放占位声音，不把 Netlify/
 - 文件选择、MIDI device、Project ID 和素材数据不进入遥测；Stage 7 不加入遥测；
 - privacy-safe diagnostics 只包含 allowlisted capability、版本、状态、计数和 typed
   error code；
-- OPFS staging、Workspace metadata 与 Project managed root 使用不同 namespace；
+- OPFS staging、publication intent、其他 Workspace metadata 与 Project managed root
+  使用不同 namespace；publication intent 不进入 Project Truth 或 Bundle digest；
 - Host close/restart 释放 Worker、MIDI listener、BroadcastChannel 和 AudioContext；
   不能留下第二个活跃输入消费者。
 
@@ -422,7 +471,8 @@ Package 必须：
 2. Creator reducer、view-model、input mapping 和 disabled-mode unit tests；
 3. `.lmdj` transfer schema positive/negative tests；
 4. Bundle traversal、duplicate、case-fold、symlink、hash、entry-count、byte-limit、
-   collision、中断和 atomic-publish tests；
+   collision、中断和 atomic-publish tests；Web fault matrix 覆盖 pending intent 写入、
+   目录复制、逐块校验、commit replacement、staging cleanup 与 intent cleanup 前后；
 5. `creator-web` component/build/package/server tests；
 6. Chromium packaged E2E：import/open → ready → activate → 4 Banks → 64 Pad
    address verification → reload/reopen；
@@ -579,6 +629,8 @@ Stage 7 只有在以下证据全部成立时才完成：
 - UI 没有第二份可写 Project Truth。
 - Portable transfer Contract 不替代 `lmdj.project.v1`。
 - Bundle import 对 traversal、collision、quota、interruption 和 publish fail closed。
+- Web publication 的 pending/committed 可见性、崩溃恢复和既有 Project 兼容语义明确，
+  且不依赖未实现的 OPFS directory `move()`。
 - UI 不显示猜测的 Project Name 或 Key。
 - Audio 激活始终需要用户手势。
 - Disabled future modes 不可聚焦、不调用、不持久化。
