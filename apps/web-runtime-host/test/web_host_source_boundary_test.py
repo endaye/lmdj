@@ -400,6 +400,25 @@ def main() -> int:
         "unresponsive cancellation must allow deadline cancellation to race "
         "the publication-attempt observation",
     )
+    visible_journey = re.search(
+        r'test\("Chromium visible diagnostic project completes the packaged '
+        r'runtime journey".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(visible_journey is not None, "visible packaged journey is missing")
+    take_outcome_proof = visible_journey.group(0).find(
+        "await proveExactOutcomes(page, takeAdmissions"
+    )
+    take_stop = visible_journey.group(0).find(
+        "stopTakeWithQuiescenceDiagnostics(page)"
+    )
+    require(
+        take_outcome_proof >= 0 and take_outcome_proof < take_stop,
+        "packaged Take proof must settle exact realtime outcomes before the "
+        "stop barrier so slow OPFS persistence is not conflated with final "
+        "AudioWorklet quiescence",
+    )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",
         web_runtime_host_script.read_text(encoding="utf-8"),

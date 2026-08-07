@@ -1179,9 +1179,9 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     fixtureMetadata.trigger_proof.pacing_ms,
     101,
   );
+  await proveExactOutcomes(page, takeAdmissions, takeMarker.notifications);
   const stopped = success(await stopTakeWithQuiescenceDiagnostics(page), "take.stop");
   expect(stopped).toMatchObject({ take_id: identity.takeId, status: "committable" });
-  await proveExactOutcomes(page, takeAdmissions, takeMarker.notifications);
 
   const afterStopMarker = await observationMarker(page);
   const afterStopAdmissions = await triggerThroughController(
