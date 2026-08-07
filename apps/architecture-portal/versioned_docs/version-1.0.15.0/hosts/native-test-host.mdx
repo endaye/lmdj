@@ -1,0 +1,23 @@
+---
+title: Native Test Host
+area: hosts
+status: implemented
+owners: [hosts, audio]
+host: native-test-host
+source_paths: [apps/native-test-host, tests/host/native_host_test.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="hosts" id="native-test-host" />
+
+## 目的
+为本机集成、capture 和音频 Probe 提供薄 Host，不承担产品 UI。
+## 数据流
+请求 → Application Facade/Audio Runtime → capture writer/设备输出 → 可保留证据。
+## 生命周期
+Host 管理设备开启、停止和 capture 文件；实时引擎所有权仍在 Audio Runtime。
+## 测试与证据
+Native host 测试验证协议与输出；物理听感和端到端延迟单独验收。
+## 限制
+它是测试装配，不应扩展为隐藏的产品专属 Core。

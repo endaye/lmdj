@@ -13,6 +13,27 @@ target_link_libraries(
     lmdj::application
     lmdj::audio_runtime
 )
+set(lmdj_native_version_path "${CMAKE_SOURCE_DIR}/products/lmdj/version.json")
+set_property(
+  DIRECTORY
+  APPEND
+  PROPERTY CMAKE_CONFIGURE_DEPENDS "${lmdj_native_version_path}"
+)
+file(READ "${lmdj_native_version_path}" lmdj_native_version_json)
+foreach(lmdj_native_version_part IN ITEMS milestone minor build patch)
+  string(
+    JSON lmdj_native_version_${lmdj_native_version_part}
+    GET "${lmdj_native_version_json}" "${lmdj_native_version_part}"
+  )
+endforeach()
+set(
+  lmdj_native_product_build
+  "${lmdj_native_version_milestone}.${lmdj_native_version_minor}.${lmdj_native_version_build}.${lmdj_native_version_patch}"
+)
+target_compile_definitions(
+  lmdj_native_host
+  PRIVATE LMDJ_NATIVE_PRODUCT_BUILD="${lmdj_native_product_build}"
+)
 if(APPLE)
   target_link_libraries(
     lmdj_native_host PRIVATE lmdj::audio_coreaudio

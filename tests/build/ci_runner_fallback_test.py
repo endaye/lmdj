@@ -97,6 +97,21 @@ class CiRunnerFallbackTest(unittest.TestCase):
                     job,
                 )
 
+    def test_linux_fixture_consumers_rehydrate_lfs_before_generation(self) -> None:
+        consumers = {
+            "web-runtime-host": "scripts/web-runtime-host.sh proof",
+            "core-ubuntu": "python3 tests/fixtures/audio/make_fixtures.py",
+            "core-asan": "python3 tests/fixtures/audio/make_fixtures.py",
+            "core-coverage": "python3 tests/fixtures/audio/make_fixtures.py",
+        }
+
+        for job_name, consumer in consumers.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                hydration = "git lfs checkout -- tests/fixtures/audio"
+                self.assertIn(hydration, job)
+                self.assertLess(job.index(hydration), job.index(consumer))
+
     def test_self_hosted_mac_uses_preinstalled_python_while_hosted_uses_setup(self) -> None:
         primary = self.workflow_job("macos-primary")
         self.assertIn("name: Verify self-hosted Python 3.11", primary)

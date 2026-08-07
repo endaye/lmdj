@@ -21,6 +21,7 @@ namespace {
 constexpr std::int32_t kRequiredSampleRate = 48'000;
 constexpr std::int32_t kRequiredFrames = 128;
 constexpr std::size_t kWorkletStackBytes = 64U * 1024U;
+constexpr auto kQuiescenceRecheckInterval = std::chrono::milliseconds{10};
 
 static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
@@ -428,8 +429,12 @@ foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     }
     const auto remaining =
         std::chrono::duration<double, std::milli>(deadline - now).count();
+    const auto wait_ms = std::min(
+        remaining,
+        std::chrono::duration<double, std::milli>(
+            kQuiescenceRecheckInterval).count());
     static_cast<void>(emscripten_futex_wait(
-        &impl_->quiescence_signal, observed_signal, remaining));
+        &impl_->quiescence_signal, observed_signal, wait_ms));
   }
 }
 

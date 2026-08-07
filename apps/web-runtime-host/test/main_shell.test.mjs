@@ -45,6 +45,7 @@ class FakeElement extends FakeTarget {
     this.id = id;
     this.dataset = dataset;
     this.textContent = "";
+    this.disabled = false;
     this.attributes = new Map();
   }
 
@@ -62,6 +63,8 @@ function fakeDom() {
   for (const id of [
     "host-state",
     "diagnostics",
+    "diagnostic-project-load",
+    "diagnostic-project-state",
     "audio-activate",
     "audio-suspend",
     "midi-enable",
@@ -134,6 +137,27 @@ function responseFor(request, result) {
   };
 }
 
+function errorResponseFor(request, code) {
+  return {
+    protocol_version: 1,
+    request_id: request.request_id,
+    ok: false,
+    error: { code, message: code, details: {} },
+  };
+}
+
+function localStorage() {
+  const values = new Map();
+  return {
+    getItem(key) {
+      return values.get(key) ?? null;
+    },
+    setItem(key, value) {
+      values.set(key, String(value));
+    },
+  };
+}
+
 function harness({ status = { control_generation: 7, acknowledged_generation: 7 }, timers } = {}) {
   const dom = fakeDom();
   const calls = [];
@@ -144,10 +168,39 @@ function harness({ status = { control_generation: 7, acknowledged_generation: 7 
   let sequence = 1;
   let currentStatus = status;
   let cleanupCalls = 0;
+  let projectRevision = 0;
+  const project = {
+    assets: {},
+    banks: Array.from({ length: 4 }, (_, bank) => ({
+      pads: Array.from({ length: 16 }, (_, pad) => ({
+        bank,
+        pad,
+        asset_id: null,
+      })),
+    })),
+  };
   const transport = {
     async send(request, options) {
       calls.push({ operation: request.operation, payload: request.payload, options });
       switch (request.operation) {
+        case "project.open":
+          return responseFor(request, { project_revision: projectRevision });
+        case "project.inspect":
+          return responseFor(request, { project_revision: projectRevision, project });
+        case "asset.import":
+          project.assets[request.payload.asset_id] = {
+            asset_id: request.payload.asset_id,
+          };
+          projectRevision += 1;
+          return responseFor(request, { project_revision: projectRevision });
+        case "pad.assign":
+          project.banks[request.payload.slot.bank].pads[
+            request.payload.slot.pad
+          ].asset_id = request.payload.asset_id;
+          projectRevision += 1;
+          return responseFor(request, { project_revision: projectRevision });
+        case "snapshot.reload":
+          return responseFor(request, { runtime_ready: true, generation: 7 });
         case "audio.activate":
           return responseFor(request, { state: "running", changed: true, generation: 7 });
         case "audio.suspend":
@@ -177,6 +230,9 @@ function harness({ status = { control_generation: 7, acknowledged_generation: 7 
       }
     },
   };
+  const storage = localStorage();
+  const crypto = uuidSource();
+  crypto.subtle = webcrypto.subtle;
   const capabilities = Object.fromEntries(
     [
       "secureContext",
@@ -193,10 +249,11 @@ function harness({ status = { control_generation: 7, acknowledged_generation: 7 
     ...dom,
     navigator: { requestMIDIAccess: async () => ({ inputs: new Map() }) },
     capabilities,
-    crypto: uuidSource(),
+    crypto,
+    storage,
     verifyManifest: async () => ({
-      product_build: "1.0.13.0",
-      host_version: "1.0.0",
+      product_build: "1.0.15.0",
+      host_version: "1.1.0",
       protocol_version: 1,
     }),
     loadRuntime: async () => ({
@@ -268,10 +325,272 @@ test("static shell has only local external assets and 64 exact Pad identities", 
     assert.match(attributes, new RegExp(`\\bdata-pad=["']${flatSlot % 16}["']`));
     assert.match(attributes, /\baria-pressed=["']false["']/);
   });
-  for (const id of ["audio-activate", "audio-suspend", "midi-enable", "host-state", "diagnostics"]) {
+  for (const id of [
+    "diagnostic-project-load",
+    "diagnostic-project-state",
+    "audio-activate",
+    "audio-suspend",
+    "midi-enable",
+    "host-state",
+    "diagnostics",
+  ]) {
     assert.match(html, new RegExp(`\\bid=["']${id}["']`));
   }
+  assert.match(
+    html,
+    /id=["']diagnostic-project-load["'][^>]*>[\s\S]*id=["']diagnostic-project-state["'][^>]*>[\s\S]*id=["']audio-activate["'][^>]*\bdisabled\b/,
+  );
+  assert.match(
+    html,
+    /id=["']diagnostic-project-state["'][^>]*\baria-live=["']polite["'][^>]*>idle</,
+  );
   assert.match(html, /id=["']host-state["'][^>]*>cold</);
+});
+
+test("controller gates audio activation until the diagnostic project is ready", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+
+  await controller.start();
+  assert.equal(fixture.dom.elements.get("audio-activate").disabled, true);
+  assert.equal(await controller.activateAudio(), false);
+  assert.equal(fixture.contexts.length, 0);
+  assert.equal(
+    fixture.calls.some(({ operation }) => operation === "audio.activate"),
+    false,
+  );
+
+  assert.equal(await controller.loadDiagnosticProject(), true);
+  assert.equal(controller.diagnostics().diagnostic_project_state, "ready");
+  assert.ok(controller.diagnostics().diagnostic_project_generation > 0);
+  assert.equal(fixture.dom.elements.get("audio-activate").disabled, false);
+  assert.equal(await controller.activateAudio(), true);
+
+  const imported = fixture.calls.find(({ operation }) => operation === "asset.import");
+  assert.ok(imported.options.sidecar instanceof Uint8Array);
+  assert.equal(imported.options.sidecar.byteLength, 9_644);
+  assert.equal(imported.payload.sidecar.sidecar_bytes, 9_644);
+});
+
+test("diagnostic project load serializes double clicks and renders loading state", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.transport.send.bind(fixture.transport);
+  const blocked = deferred();
+  let openRequest = null;
+  let openCalls = 0;
+  fixture.transport.send = (request, options) => {
+    if (request.operation === "project.open") {
+      openCalls += 1;
+      openRequest = request;
+      return blocked.promise;
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  const first = controller.loadDiagnosticProject();
+  const second = controller.loadDiagnosticProject();
+  await settle();
+  assert.equal(openCalls, 1);
+  assert.equal(fixture.dom.elements.get("diagnostic-project-load").disabled, true);
+  assert.equal(
+    fixture.dom.elements.get("diagnostic-project-load").getAttribute("aria-busy"),
+    "true",
+  );
+  assert.equal(fixture.dom.elements.get("diagnostic-project-state").textContent, "loading");
+
+  blocked.resolve(responseFor(openRequest, { project_revision: 0 }));
+  assert.deepEqual(await Promise.all([first, second]), [true, true]);
+  assert.equal(fixture.dom.elements.get("diagnostic-project-load").disabled, false);
+  assert.equal(
+    fixture.dom.elements.get("diagnostic-project-load").getAttribute("aria-busy"),
+    "false",
+  );
+});
+
+test("diagnostic project errors remain retryable without consuming Host error_code", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.transport.send.bind(fixture.transport);
+  let attempts = 0;
+  fixture.transport.send = (request, options) => {
+    if (request.operation === "project.open" && attempts++ === 0) {
+      return Promise.resolve(errorResponseFor(request, "IO_ERROR"));
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  assert.equal(controller.state, "audio-suspended");
+  assert.equal(controller.diagnostics().error_code, null);
+  assert.equal(controller.diagnostics().diagnostic_project_state, "error");
+  assert.equal(controller.diagnostics().diagnostic_project_error_code, "IO_ERROR");
+  assert.equal(fixture.dom.elements.get("diagnostic-project-load").disabled, false);
+  assert.equal(fixture.dom.elements.get("audio-activate").disabled, true);
+
+  assert.equal(await controller.loadDiagnosticProject(), true);
+  assert.equal(controller.diagnostics().diagnostic_project_state, "ready");
+  assert.equal(controller.diagnostics().diagnostic_project_error_code, undefined);
+});
+
+test("diagnostic restart-required terminalizes with once-only cleanup", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  fixture.transport.send = (request) =>
+    Promise.resolve(errorResponseFor(request, "HOST_RESTART_REQUIRED"));
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_RESTART_REQUIRED");
+  assert.equal(
+    controller.diagnostics().diagnostic_project_state,
+    "restart-required",
+  );
+  assert.equal(
+    fixture.dom.elements.get("diagnostic-project-state").textContent,
+    "restart-required",
+  );
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+});
+
+test("diagnostic project diagnostics are allowlisted and pagehide invalidates readiness", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  assert.equal(await controller.loadDiagnosticProject(), true);
+
+  const serialized = JSON.stringify(controller.diagnostics());
+  assert.equal(serialized.includes("project_id"), false);
+  assert.equal(serialized.includes("pattern_id"), false);
+  assert.equal(serialized.includes("asset_id"), false);
+  assert.equal(serialized.includes("00000000-0000-0000-0000"), false);
+
+  await controller.observePageHide({ persisted: true });
+  assert.equal(controller.diagnostics().diagnostic_project_state, "error");
+  assert.equal(controller.diagnostics().diagnostic_project_generation, undefined);
+  assert.equal(fixture.dom.elements.get("audio-activate").disabled, true);
+});
+
+test("diagnostic protocol mismatch is private, terminal, and cleaned up once", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const hostileCode = "/private/opfs/diagnostic-project-secret";
+  const fixture = harness();
+  fixture.transport.send = (request) =>
+    Promise.resolve(errorResponseFor(request, hostileCode));
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+  assert.equal(
+    controller.diagnostics().diagnostic_project_error_code,
+    "HOST_PROTOCOL_MISMATCH",
+  );
+  assert.equal(
+    fixture.dom.elements.get("diagnostics").textContent.includes(hostileCode),
+    false,
+  );
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+  fixture.runtimeWorker.dispatchEvent(new Event("error"));
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+});
+
+test("late restart-required after pagehide seals the controller and queued Load", {
+  timeout: 2_000,
+}, async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const digest = fixture.options.crypto.subtle.digest.bind(
+    fixture.options.crypto.subtle,
+  );
+  fixture.options.crypto.subtle = {
+    async digest(...arguments_) {
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      return digest(...arguments_);
+    },
+  };
+  const originalSend = fixture.transport.send.bind(fixture.transport);
+  const importSettlement = deferred();
+  const importStarted = deferred();
+  let importRequest = null;
+  fixture.transport.send = (request, options) => {
+    if (request.operation === "asset.import") {
+      fixture.calls.push({ operation: request.operation, payload: request.payload, options });
+      importRequest = request;
+      importStarted.resolve();
+      return importSettlement.promise;
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  const first = controller.loadDiagnosticProject();
+  await importStarted.promise;
+  assert.ok(importRequest);
+  await controller.observePageHide({ persisted: true });
+  controller.observePageShow();
+  const queued = controller.loadDiagnosticProject();
+  importSettlement.resolve(errorResponseFor(importRequest, "HOST_RESTART_REQUIRED"));
+
+  assert.deepEqual(await Promise.all([first, queued]), [false, false]);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_RESTART_REQUIRED");
+  assert.equal(
+    controller.diagnostics().diagnostic_project_state,
+    "restart-required",
+  );
+  assert.equal(
+    fixture.calls.filter(({ operation }) => operation === "asset.import").length,
+    1,
+  );
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
+});
+
+test("final Project Truth mismatch terminalizes before snapshot publication", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.transport.send.bind(fixture.transport);
+  let inspections = 0;
+  fixture.transport.send = (request, options) => {
+    if (request.operation === "project.inspect" && inspections++ === 1) {
+      fixture.calls.push({ operation: request.operation, payload: request.payload, options });
+      return Promise.resolve(responseFor(request, {
+        project_revision: 65,
+        project: { assets: {}, banks: [] },
+      }));
+    }
+    return originalSend(request, options);
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+
+  assert.equal(await controller.loadDiagnosticProject(), false);
+  assert.equal(controller.state, "failed");
+  assert.equal(controller.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+  assert.equal(
+    fixture.calls.some(({ operation }) => operation === "snapshot.reload"),
+    false,
+  );
+  await settle();
+  assert.equal(fixture.cleanupCalls, 1);
 });
 
 test("source shell verifies manifest before loading runtime and exposes exact Host state", async () => {
@@ -280,7 +599,7 @@ test("source shell verifies manifest before loading runtime and exposes exact Ho
   const fixture = harness();
   fixture.options.verifyManifest = async () => {
     order.push("manifest");
-    return { product_build: "1.0.13.0", host_version: "1.0.0", protocol_version: 1 };
+    return { product_build: "1.0.15.0", host_version: "1.1.0", protocol_version: 1 };
   };
   fixture.options.loadRuntime = async () => {
     order.push("runtime");
@@ -327,6 +646,7 @@ test("controller preserves a late authoritative transport success", async () => 
   };
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
 
   const activation = controller.activateAudio();
   await settle();
@@ -374,6 +694,7 @@ test("controller preserves a late authoritative transport error", async () => {
   };
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
 
   const activation = controller.activateAudio();
   await settle();
@@ -397,7 +718,7 @@ test("controller preserves a late authoritative transport error", async () => {
 test("default source-shell hash gate fails before runtime load on mismatch", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   for (const [digest, expectedState, expectedLoads] of [
-    ["8751198714fa0a46eb42c0740550d1baaecf465c7e63f5d1d1ddfa6a2d61d4ed", "audio-suspended", 1],
+    ["38b711ab18cdcfb6b7911c698d997cd26c6cb03ad95c4a21a06f891b3cf2228c", "audio-suspended", 1],
     ["0".repeat(64), "failed", 0],
   ]) {
     const fixture = harness();
@@ -499,10 +820,55 @@ test("rejects Trigger and take.begin before initial activation without replay", 
   assert.equal(fixture.calls.some(({ operation }) => operation === "trigger"), false);
   assert.equal(fixture.calls.some(({ operation }) => operation === "take.begin"), false);
 
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   assert.equal(controller.state, "running");
   assert.deepEqual(fixture.contexts[0].options, { sampleRate: 48_000 });
   assert.equal(fixture.calls.filter(({ operation }) => operation === "trigger").length, 0);
+});
+
+test("serializes concurrent Trigger submissions through one transport request", async () => {
+  const { createWebRuntimeHostController } = await mainModule();
+  const fixture = harness();
+  const originalSend = fixture.options.transport.send.bind(
+    fixture.options.transport,
+  );
+  const pending = [];
+  let sequence = 1;
+  fixture.options.transport.send = (request, options) => {
+    if (request.operation !== "trigger") {
+      return originalSend(request, options);
+    }
+    fixture.calls.push({
+      operation: request.operation,
+      payload: request.payload,
+      options,
+    });
+    const settlement = deferred();
+    pending.push({ request, settlement });
+    return settlement.promise.then(() => responseFor(request, {
+      sequence: sequence++,
+      status: "enqueued",
+    }));
+  };
+  const controller = createWebRuntimeHostController(fixture.options);
+  await controller.start();
+  await controller.loadDiagnosticProject();
+  await controller.activateAudio();
+
+  const burst = Array.from({ length: 16 }, (_, slot) =>
+    controller.trigger(slot, 100));
+  await settle();
+  assert.equal(pending.length, 1);
+
+  for (let index = 0; index < burst.length; index += 1) {
+    pending[index].settlement.resolve();
+    await settle();
+    assert.equal(pending.length, Math.min(index + 2, burst.length));
+  }
+  assert.deepEqual(await Promise.all(burst), Array(16).fill(true));
+  assert.equal(controller.state, "running");
+  assert.equal(controller.diagnostics().trigger_admitted_count, 16);
 });
 
 test("interruption closes admission synchronously, clears pressed state, and coalesces suspend", async () => {
@@ -510,6 +876,7 @@ test("interruption closes admission synchronously, clears pressed state, and coa
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   fixture.options.window.dispatchEvent(new Event("keydown", { bubbles: true }));
   controller.handleKeyDown({ code: "KeyA", repeat: false });
@@ -529,6 +896,7 @@ test("same adverse condition coalesces but a new adverse edge creates a new epoc
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   controller.observeVisibility(true);
   await settle();
@@ -549,6 +917,7 @@ test("delayed persisted pagehide coalesces with the active hidden episode", asyn
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
 
   controller.observeVisibility(true);
@@ -567,6 +936,7 @@ test("a fresh Context adverse edge supersedes an active page episode and invalid
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
 
   controller.observeVisibility(true);
@@ -593,6 +963,7 @@ test("gesture-required recovery returns audio-suspended to recovering without in
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   const context = fixture.contexts[0];
   context.state = "suspended";
@@ -614,6 +985,7 @@ test("recovery opens one public probe only after positive exact generation ackno
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   fixture.setStatus({ control_generation: null, acknowledged_generation: null });
   controller.observeVisibility(true);
@@ -642,6 +1014,7 @@ test("a valid late pre-epoch outcome cannot complete or fail the current recover
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   assert.equal(await controller.trigger(0, 100), true);
   controller.observeVisibility(true);
@@ -668,6 +1041,7 @@ test("probe non-success and protocol-invalid outcomes fail with once-only cleanu
     const fixture = harness();
     const controller = createWebRuntimeHostController(fixture.options);
     await controller.start();
+    await controller.loadDiagnosticProject();
     await controller.activateAudio();
     controller.observeVisibility(true);
     await settle();
@@ -700,6 +1074,7 @@ test("probe outcome deadline is exactly 1000 ms and times out terminally", async
   const fixture = harness({ timers });
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   controller.observeVisibility(true);
   await settle();
@@ -721,6 +1096,7 @@ test("explicit suspend is synchronous and its expected statechange never starts 
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   const suspended = controller.suspendAudio();
   assert.equal(controller.state, "audio-suspended");
@@ -747,6 +1123,7 @@ test("an admitted Take is reserved before transport and a late response cannot r
   fixture.options.sealTake = (sealed) => sealedTakes.push(sealed);
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
 
   const pendingTake = controller.beginTake(
@@ -787,6 +1164,7 @@ test("a late rejected take.begin preserves its typed code and fails once", async
   fixture.options.sealTake = (sealed) => sealedTakes.push(sealed);
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
 
   const pendingTake = controller.beginTake(
@@ -818,6 +1196,7 @@ test("activation is synchronously serialized", async () => {
   });
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
 
   const first = controller.activateAudio();
   const second = controller.activateAudio();
@@ -840,6 +1219,7 @@ test("backgrounding during activation cannot publish running", async () => {
   });
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
 
   const activation = controller.activateAudio();
   controller.observeVisibility(true);
@@ -865,6 +1245,7 @@ test("a fatal Worklet startup result wins over stale background activation and b
   });
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
 
   const activation = controller.activateAudio();
   controller.observeVisibility(true);
@@ -931,6 +1312,7 @@ async function assertHostileCodeMapped({ configure, exercise }) {
   configure?.(fixture, hostileCode);
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await exercise(controller, fixture, hostileCode);
   await settle();
   assert.equal(controller.state, "failed");
@@ -1079,6 +1461,7 @@ test("fatal runtime observations and clean close use once-only terminal cleanup"
   const fixture = harness();
   const controller = createWebRuntimeHostController(fixture.options);
   await controller.start();
+  await controller.loadDiagnosticProject();
   await controller.activateAudio();
   controller.observeRuntime({ fatal: true, code: "IO_ERROR" });
   fixture.runtimeWorker.dispatchEvent(new Event("error"));
@@ -1091,6 +1474,7 @@ test("fatal runtime observations and clean close use once-only terminal cleanup"
   const closingFixture = harness();
   const closing = createWebRuntimeHostController(closingFixture.options);
   await closing.start();
+  await closing.loadDiagnosticProject();
   await closing.activateAudio();
   await closing.observePageHide({ persisted: false });
   assert.equal(closing.state, "closed");
@@ -1108,6 +1492,7 @@ test("diagnostics expose only the privacy allowlist", async () => {
     "acknowledged_generation",
     "connected_input_count",
     "control_generation",
+    "diagnostic_project_state",
     "error_code",
     "host_version",
     "midi_permission",

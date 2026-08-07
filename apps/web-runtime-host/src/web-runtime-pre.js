@@ -1096,24 +1096,22 @@ if (typeof window !== "undefined") {
           const callbackInFlight =
             Module["_lmdj_web_audio_test_in_flight"]() === 1;
           const fatalCode = Module["_lmdj_web_audio_fatal"]();
-          if (gateClosed && !callbackInFlight && fatalCode === 11) {
+          const controlFailureCommitted =
+            Module["_lmdj_web_audio_control_failure_committed"]() === 1;
+          if (
+            gateClosed &&
+            !callbackInFlight &&
+            fatalCode === 11 &&
+            controlFailureCommitted
+          ) {
             const callsAtFatal =
               Module["_lmdj_web_audio_test_render_calls"]();
-            let hostStatus = null;
-            while (performance.now() < deadline) {
-              hostStatus = await submit("host.status", {});
-              if (
-                !hostStatus.ok &&
-                hostStatus.error?.code === "HOST_STATE_INVALID"
-              ) break;
-              await delay(2);
-            }
             await delay(20);
             return {
               fatal: fatalNames[fatalCode],
               callbackGate: "closed",
               callbackInFlight: 0,
-              hostStatus,
+              controlFailureCommitted,
               renderCallsAtFatal: callsAtFatal,
               renderCallsAfterFatal:
                 Module["_lmdj_web_audio_test_render_calls"](),

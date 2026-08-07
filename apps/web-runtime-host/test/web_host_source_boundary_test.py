@@ -32,6 +32,14 @@ def main() -> int:
     realtime_failure_spec = (
         repo_root / "tests" / "platform" / "web" / "audio" / "realtime_failure.spec.mjs"
     )
+    web_runtime_browser_spec = (
+        repo_root
+        / "tests"
+        / "platform"
+        / "web"
+        / "host"
+        / "web_runtime_host_browser.spec.mjs"
+    )
     web_runtime_host_script = repo_root / "scripts" / "web-runtime-host.sh"
     web_toolchain_script = repo_root / "scripts" / "web-toolchain-conformance.sh"
     playwright_config = repo_root / "tests" / "platform" / "web" / "playwright.config.mjs"
@@ -54,6 +62,7 @@ def main() -> int:
         product_assembly,
         root_cmake,
         realtime_failure_spec,
+        web_runtime_browser_spec,
         web_runtime_host_script,
         web_toolchain_script,
         playwright_config,
@@ -255,6 +264,12 @@ def main() -> int:
         "render-thread acknowledgement",
     )
     require(
+        "kQuiescenceRecheckInterval" in quiescence_wait.group(1)
+        and "std::min" in quiescence_wait.group(1),
+        "AudioWorklet quiescence must bound each futex wait so a missed "
+        "notification cannot consume the whole request deadline",
+    )
+    require(
         "std::this_thread::sleep_for" not in quiescence_wait.group(1),
         "AudioWorklet quiescence must not poll or process the Control proxy "
         "queue while awaiting the render-thread acknowledgement",
@@ -289,14 +304,23 @@ def main() -> int:
         re.search(
             r"LMDJ_WEB_HOST_FULL_CHROMIUM=1\s*\\\s*.*?"
             r"--project=chromium\s*\\\s*"
-            r"host/web_runtime_host_manifest_gate\.spec\.mjs\s*\\\s*"
-            r"host/web_runtime_host_browser\.spec\.mjs",
+            r'"\$\{formal_host_specs\[@\]\}"',
             web_runtime_host_script_text,
             re.DOTALL,
         )
         is not None,
-        "formal browser Proof must explicitly select full Chromium "
-        "new-headless mode",
+        "formal browser Proof must run every discovered Formal Host spec in "
+        "full Chromium new-headless mode",
+    )
+    require(
+        "git -C \"$repo_root\" ls-files "
+        "'tests/platform/web/host/web_runtime_host_*.spec.mjs'"
+        in web_runtime_host_script_text,
+        "formal browser Proof must discover its tracked Formal Host specs",
+    )
+    require(
+        'if [[ ${#formal_host_specs[@]} -eq 0 ]]' in web_runtime_host_script_text,
+        "formal browser Proof must fail closed when no tracked specs are found",
     )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
@@ -339,6 +363,149 @@ def main() -> int:
         )
         is not None,
         "realtime failure response polling must retain the monotonic deadline",
+    )
+    fatal_wait = re.search(
+        r"async\s+waitForFatal\(\)\s*\{(.*?)\n\s{6}\},",
+        runtime_pre_source,
+        re.DOTALL,
+    )
+    require(fatal_wait is not None, "processor fatal wait helper is missing")
+    fatal_wait_body = fatal_wait.group(1)
+    require(
+        'Module["_lmdj_web_audio_control_failure_committed"]()'
+        in fatal_wait_body,
+        "processor fatal proof must observe committed Control failure",
+    )
+    require(
+        re.search(r"submit\(\s*[\"']host\.status[\"']", fatal_wait_body) is None,
+        "processor fatal proof must not submit through the Bridge after terminalization",
+    )
+    browser_spec_text = web_runtime_browser_spec.read_text(encoding="utf-8")
+    diagnostic_overall_timeout = re.search(
+        r"const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = ([0-9_]+);",
+        browser_spec_text,
+    )
+    require(
+        diagnostic_overall_timeout is not None
+        and int(diagnostic_overall_timeout.group(1).replace("_", ""))
+        >= 300_000,
+        "diagnostic project proof must budget for 64 serial Pad assignments "
+        "on the slow Linux runner",
+    )
+    diagnostic_overall_timeout_ms = int(
+        diagnostic_overall_timeout.group(1).replace("_", "")
+    )
+    for diagnostic_test_name in (
+        "Chromium binds the verified packaged runtime to the real AudioWorklet",
+        "Chromium visible diagnostic project completes the packaged runtime journey",
+    ):
+        diagnostic_test = re.search(
+            rf'test\("{re.escape(diagnostic_test_name)}".*?\n\}}\);',
+            browser_spec_text,
+            re.DOTALL,
+        )
+        diagnostic_test_timeout = (
+            re.search(r"test\.setTimeout\(([0-9_]+)\);", diagnostic_test.group(0))
+            if diagnostic_test is not None
+            else None
+        )
+        require(
+            diagnostic_test_timeout is not None
+            and int(diagnostic_test_timeout.group(1).replace("_", ""))
+            > diagnostic_overall_timeout_ms,
+            f"{diagnostic_test_name} must outlive its diagnostic readiness budget",
+        )
+    unresponsive_cancellation = re.search(
+        r'test\("Chromium packaged unresponsive cancellation '
+        r'force-terminates and recovers".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        unresponsive_cancellation is not None,
+        "unresponsive cancellation browser proof is missing",
+    )
+    require(
+        "claim_attempted: true" in unresponsive_cancellation.group(0),
+        "unresponsive cancellation must prove that publication was attempted",
+    )
+    require(
+        "deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS"
+        in unresponsive_cancellation.group(0),
+        "unresponsive cancellation must leave enough time for slow runners to "
+        "reach the publication claim before forcing termination",
+    )
+    require(
+        "claim_started_open: true" not in unresponsive_cancellation.group(0),
+        "unresponsive cancellation must allow deadline cancellation to race "
+        "the publication-attempt observation",
+    )
+    require(
+        "timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000"
+        in unresponsive_cancellation.group(0),
+        "unresponsive cancellation observation must remain open after the "
+        "request deadline fires",
+    )
+    unresponsive_release = unresponsive_cancellation.group(0).find(
+        "releaseDeadlineProof(page)"
+    )
+    unresponsive_terminal_evidence = unresponsive_cancellation.group(0).find(
+        "terminalTransportEvidence(page)"
+    )
+    require(
+        unresponsive_terminal_evidence >= 0
+        and unresponsive_release > unresponsive_terminal_evidence,
+        "unresponsive cancellation must prove forced terminal cleanup before "
+        "releasing the artificial claim gate",
+    )
+    require(
+        "rejectedConsumes: 3" not in unresponsive_cancellation.group(0)
+        and "expect([1, 2, 3]).toContain" in unresponsive_cancellation.group(0)
+        and "replayConsumedTerminalAck(page)"
+        in unresponsive_cancellation.group(0),
+        "unresponsive terminal-ack proof must accept asynchronous rejection "
+        "ordering and deterministically reject an explicit replay",
+    )
+    claimed_settlement = re.search(
+        r'test\("Chromium packaged asset\.import claim wins before deadline '
+        r'and settles after it".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        claimed_settlement is not None,
+        "claimed publication settlement browser proof is missing",
+    )
+    require(
+        "waitForTimeout(CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 100)"
+        not in claimed_settlement.group(0),
+        "claimed publication settlement must observe the first deadline "
+        "cancellation instead of sleeping past the settlement watchdog",
+    )
+    require(
+        '"HOST_RESTART_REQUIRED"' in claimed_settlement.group(0)
+        and "reopenProject(" in claimed_settlement.group(0),
+        "claimed publication settlement must recover authoritative Project "
+        "Truth when a slow runner exceeds the settlement watchdog",
+    )
+    visible_journey = re.search(
+        r'test\("Chromium visible diagnostic project completes the packaged '
+        r'runtime journey".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(visible_journey is not None, "visible packaged journey is missing")
+    take_outcome_proof = visible_journey.group(0).find(
+        "await proveExactOutcomes(page, takeAdmissions"
+    )
+    take_stop = visible_journey.group(0).find(
+        "stopTakeWithQuiescenceDiagnostics(page)"
+    )
+    require(
+        take_outcome_proof >= 0 and take_outcome_proof < take_stop,
+        "packaged Take proof must settle exact realtime outcomes before the "
+        "stop barrier so slow OPFS persistence is not conflated with final "
+        "AudioWorklet quiescence",
     )
     runtime_gate = re.search(
         r"run_audio_worklet_conformance\(\)\s*\{(.*?)\n\}",

@@ -90,6 +90,33 @@ test("Pointer suppresses the compatibility mouse activation for a pointer sequen
   ]);
 });
 
+test("Pointer suppresses Chromium rounded compatibility mouse coordinates", () => {
+  const calls = [];
+  const target = {};
+  const pointer = createPointerAdapter({
+    trigger: (...args) => calls.push(args),
+    velocity: 100,
+    now: () => 10,
+    compatibilityWindowMs: 500,
+  });
+  pointer.pointerDown({
+    isPrimary: true,
+    button: 0,
+    pointerId: 7,
+    clientX: 160.5,
+    clientY: 309.5,
+    target,
+  }, 4);
+
+  assert.equal(pointer.mouseDown({
+    button: 0,
+    clientX: 160,
+    clientY: 309,
+    target,
+  }, 4), false);
+  assert.deepEqual(calls, [[4, 100]]);
+});
+
 test("Pointer cancellation and marker expiry never suppress a later genuine mouse", () => {
   const calls = [];
   const target = {};

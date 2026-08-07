@@ -110,7 +110,8 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
     std::string_view suffix;
     std::string_view role;
   };
-  static constexpr std::array<ExpectedAsset, 8> expected_assets{{
+  static constexpr std::array<ExpectedAsset, 9> expected_assets{{
+      {"assets/diagnostic-project.", ".mjs", "host_module"},
       {"assets/input-adapters.", ".mjs", "host_module"},
       {"assets/main.", ".mjs", "host_main"},
       {"assets/preflight.", ".mjs", "host_module"},

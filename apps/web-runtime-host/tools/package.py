@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 
-HOST_VERSION = "1.0.0"
+HOST_VERSION = "1.1.0"
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912
 DISTRIBUTION_CONTRACT = "lmdj.web-runtime-host.distribution.v1"
@@ -45,6 +45,7 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emcc_version",
 )
 EXPECTED_ASSETS = (
+    ("assets/diagnostic-project.", ".mjs", "host_module"),
     ("assets/input-adapters.", ".mjs", "host_module"),
     ("assets/main.", ".mjs", "host_main"),
     ("assets/preflight.", ".mjs", "host_module"),
@@ -230,6 +231,7 @@ def build_distribution(
 
         leaf_assets: dict[str, dict] = {}
         for name in (
+            "diagnostic_project.mjs",
             "input_adapters.mjs",
             "preflight.mjs",
             "protocol.mjs",

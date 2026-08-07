@@ -31,6 +31,18 @@ button:focus-visible {
   outline-offset: 2px;
 }
 
+button:disabled {
+  border-color: #2c323a;
+  color: #69737f;
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
+button[aria-busy="true"] {
+  border-color: #8aa139;
+  color: #d7ff64;
+}
+
 .shell {
   width: min(72rem, 100%);
   margin: 0 auto;
@@ -89,6 +101,13 @@ h2 {
 .controls button {
   min-height: 2.75rem;
   padding: 0.7rem 1rem;
+}
+
+#diagnostic-project-state {
+  min-width: 8rem;
+  color: #b9c3cf;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
 }
 
 .pad-grid {

@@ -67,6 +67,16 @@ class DistributionTest(unittest.TestCase):
     def test_built_distribution_is_clean(self) -> None:
         self.module.verify_distribution(DEFAULT_DIST, REPO_ROOT)
         manifest = json.loads((DEFAULT_DIST / "host-manifest.json").read_bytes())
+        self.assertEqual(len(manifest["assets"]), 9)
+        self.assertEqual(
+            len([
+                asset for asset in manifest["assets"]
+                if asset["path"].startswith("assets/diagnostic-project.")
+                and asset["path"].endswith(".mjs")
+            ]),
+            1,
+        )
+        self.assertFalse(any(DEFAULT_DIST.rglob("*.wav")))
         self.assertEqual(
             manifest["distribution_contract"],
             "lmdj.web-runtime-host.distribution.v1",
@@ -178,7 +188,7 @@ class DistributionTest(unittest.TestCase):
     def test_index_identity_metadata_is_exactly_bound_to_manifest(self) -> None:
         index_path = self.root / "index.html"
         index = index_path.read_text(encoding="utf-8").replace(
-            'content="1.0.0"', 'content="999.0.0"', 1
+            'content="1.1.0"', 'content="999.0.0"', 1
         )
         index_path.write_text(index, encoding="utf-8", newline="\n")
         with self.assertRaises(self.module.DistributionError):

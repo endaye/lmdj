@@ -242,6 +242,15 @@ class PackageTest(unittest.TestCase):
         self.assertIn("trap 'exit 130' INT", script)
         self.assertIn("trap 'exit 143' TERM", script)
 
+    def test_operator_selects_every_tracked_formal_host_spec(self) -> None:
+        script = OPERATOR_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            "git -C \"$repo_root\" ls-files "
+            "'tests/platform/web/host/web_runtime_host_*.spec.mjs'",
+            script,
+        )
+        self.assertIn('"${formal_host_specs[@]}"', script)
+
     def test_pre_js_declares_configure_and_link_dependencies(self) -> None:
         cmake = HOST_CMAKE_PATH.read_text(encoding="utf-8")
         self.assertRegex(
@@ -441,7 +450,7 @@ class PackageTest(unittest.TestCase):
         )
         self.assertEqual(manifest["manifest_version"], 1)
         self.assertEqual(manifest["product_build"], current_product_build())
-        self.assertEqual(manifest["host_version"], "1.0.0")
+        self.assertEqual(manifest["host_version"], "1.1.0")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["heap_bytes"], 536_870_912)
         self.assertEqual(
@@ -467,6 +476,7 @@ class PackageTest(unittest.TestCase):
         )
 
         roles = {asset["role"] for asset in manifest["assets"]}
+        self.assertEqual(len(manifest["assets"]), 9)
         self.assertEqual(
             roles,
             {
@@ -481,6 +491,7 @@ class PackageTest(unittest.TestCase):
             [(Path(asset["path"]).name.split(".", 1)[0], asset["role"])
              for asset in manifest["assets"]],
             [
+                ("diagnostic-project", "host_module"),
                 ("input-adapters", "host_module"),
                 ("main", "host_main"),
                 ("preflight", "host_module"),
@@ -491,6 +502,15 @@ class PackageTest(unittest.TestCase):
                 ("styles", "host_style"),
             ],
         )
+        diagnostic_modules = [
+            asset for asset in manifest["assets"]
+            if re.fullmatch(
+                r"assets/diagnostic-project\.[0-9a-f]{64}\.mjs",
+                asset["path"],
+            )
+        ]
+        self.assertEqual(len(diagnostic_modules), 1)
+        self.assertFalse(any(self.dist.rglob("*.wav")))
         for asset in manifest["assets"]:
             self.assertEqual(set(asset), {"bytes", "path", "role", "sha256"})
             self.assertRegex(
@@ -519,7 +539,7 @@ class PackageTest(unittest.TestCase):
             index,
         )
         self.assertIn(
-            '<meta name="lmdj-host-version" content="1.0.0">', index
+            '<meta name="lmdj-host-version" content="1.1.0">', index
         )
         self.assertIn(
             '<meta name="lmdj-host-protocol-version" content="1">', index

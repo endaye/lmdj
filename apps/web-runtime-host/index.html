@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="lmdj-host-manifest-sha256" content="8751198714fa0a46eb42c0740550d1baaecf465c7e63f5d1d1ddfa6a2d61d4ed">
+    <meta name="lmdj-host-manifest-sha256" content="38b711ab18cdcfb6b7911c698d997cd26c6cb03ad95c4a21a06f891b3cf2228c">
     <title>LMDJ Web Runtime Host</title>
     <link rel="stylesheet" href="./styles.css">
     <script type="module" src="./src/main.mjs"></script>
@@ -19,7 +19,11 @@
       </header>
 
       <section class="controls" aria-label="Runtime controls">
-        <button id="audio-activate" type="button">Activate audio</button>
+        <button id="diagnostic-project-load" type="button">
+          Load diagnostic project
+        </button>
+        <output id="diagnostic-project-state" aria-live="polite">idle</output>
+        <button id="audio-activate" type="button" disabled>Activate audio</button>
         <button id="audio-suspend" type="button">Suspend audio</button>
         <button id="midi-enable" type="button">Enable MIDI</button>
       </section>

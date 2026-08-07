@@ -200,6 +200,17 @@ run_browser_gate() {
   local ready_file
   local ready_nonce
   local port=""
+  local formal_host_specs=()
+  local tracked_spec
+  while IFS= read -r tracked_spec; do
+    formal_host_specs+=("${tracked_spec#tests/platform/web/}")
+  done < <(
+    git -C "$repo_root" ls-files 'tests/platform/web/host/web_runtime_host_*.spec.mjs'
+  )
+  if [[ ${#formal_host_specs[@]} -eq 0 ]]; then
+    echo "Web Runtime Host error: no tracked Formal Host specs" >&2
+    return 2
+  fi
   require_playwright
   verify_clean_room_playwright_config "http://127.0.0.1:9"
   cleanup_proof_server
@@ -263,8 +274,7 @@ PY
     LMDJ_WEB_HOST_FIXTURE_ROOT="$selected_fixture_root" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium \
-      host/web_runtime_host_manifest_gate.spec.mjs \
-      host/web_runtime_host_browser.spec.mjs || status=$?
+      "${formal_host_specs[@]}" || status=$?
   LMDJ_WEB_HOST_CLEAN_ROOM="$clean_room_mode" \
     LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
     LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \

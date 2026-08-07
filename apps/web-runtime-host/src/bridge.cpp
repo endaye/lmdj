@@ -1479,7 +1479,14 @@ void fail_processor_error_on_control(void*) noexcept {
     }
     web_runtime->engine().stop();
     web_runtime->fail_and_seal("processor_error");
+    web_audio_control_failure_state.store(
+        AudioFailureCommitState::committed,
+        std::memory_order_release);
+    return;
   }
+  web_audio_control_failure_state.store(
+      AudioFailureCommitState::idle,
+      std::memory_order_release);
 }
 
 void write_conformance_outcome_on_control(void* context) noexcept {
@@ -1992,14 +1999,26 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_processor_error() {
   if (adapter == nullptr || web_proxy_queue == nullptr) {
     return 0;
   }
+  auto expected = AudioFailureCommitState::idle;
+  if (!web_audio_control_failure_state.compare_exchange_strong(
+          expected,
+          AudioFailureCommitState::pending,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return 0;
+  }
   adapter->latch_processor_error();
-  return emscripten_proxy_async(
-             web_proxy_queue,
-             web_control_thread,
-             &fail_processor_error_on_control,
-             nullptr) != 0
-             ? 1
-             : 0;
+  if (emscripten_proxy_async(
+          web_proxy_queue,
+          web_control_thread,
+          &fail_processor_error_on_control,
+          nullptr) != 0) {
+    return 1;
+  }
+  web_audio_control_failure_state.store(
+      AudioFailureCommitState::idle,
+      std::memory_order_release);
+  return 0;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_request_outcomes() {

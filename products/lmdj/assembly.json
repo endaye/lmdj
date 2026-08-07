@@ -2,7 +2,7 @@
   "contract": "lmdj.assembly.v2",
   "product": {
     "id": "lmdj",
-    "version": "1.0.14.0"
+    "version": "1.0.15.0"
   },
   "provider_policy": {
     "allowed_regions": [
@@ -60,7 +60,7 @@
     },
     {
       "id": "web-runtime-host",
-      "version": "1.0.0"
+      "version": "1.1.0"
     }
   ],
   "providers": [

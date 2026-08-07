@@ -136,7 +136,8 @@ bounded stress tier. TSan uses the `native` execution label: `full` runs every
 direct native non-stress test, while `stress` runs every direct native stress
 test. Python and shell orchestration remain covered by Dev, ASan, Release, and
 Product Proof, but never host a TSan-instrumented library in their own process.
-TSan registrations receive four times the normal tier timeout to account for
+ASan registrations receive twice the normal tier timeout and TSan
+registrations receive four times the normal tier timeout to account for
 instrumentation overhead; the underlying tier and workload remain unchanged.
 
 ## Proof-Scoped C ABI Concurrency Baseline
