@@ -7,6 +7,7 @@ add_library(
   lmdj_project_io
   STATIC
     src/project_store.cpp
+    src/project_bundle_transfer.cpp
     src/take_journal.cpp
     ${lmdj_project_io_platform_source}
 )
@@ -27,12 +28,12 @@ target_link_libraries(
 if(EMSCRIPTEN)
   set(
     lmdj_project_io_async_imports
-    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+    "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
   )
   if(LMDJ_PROJECT_IO_WEB_TESTING)
     set(
       lmdj_project_io_async_imports
-      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable_test','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+      "['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable_test','lmdj_opfs_replace_complete_test','lmdj_opfs_append_durable_test','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
     )
   endif()
   target_link_options(
@@ -59,6 +60,7 @@ if(BUILD_TESTING)
     lmdj_project_io_testable
     STATIC
       src/project_store.cpp
+      src/project_bundle_transfer.cpp
       src/take_journal.cpp
       src/native/storage_platform.cpp
   )
@@ -139,6 +141,37 @@ if(BUILD_TESTING)
     NAME project_io.storage_platform
     TIER component
     COMMAND lmdj_project_storage_platform_tests
+    LABELS persistence concurrency
+  )
+
+  add_executable(
+    lmdj_project_bundle_transfer_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/project_bundle_transfer_test.cpp"
+  )
+  target_include_directories(
+    lmdj_project_bundle_transfer_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_project_bundle_transfer_tests
+    PRIVATE
+      lmdj_project_io_testable
+      lmdj_picosha2
+      nlohmann_json::nlohmann_json
+      Threads::Threads
+  )
+  target_compile_definitions(
+    lmdj_project_bundle_transfer_tests
+    PRIVATE
+      LMDJ_PROJECT_IO_TESTING=1
+  )
+  lmdj_target_warnings(lmdj_project_bundle_transfer_tests)
+  lmdj_target_sanitizers(lmdj_project_bundle_transfer_tests)
+  lmdj_add_test(
+    NAME project_io.project_bundle_transfer
+    TIER component
+    COMMAND lmdj_project_bundle_transfer_tests
     LABELS persistence concurrency
   )
 

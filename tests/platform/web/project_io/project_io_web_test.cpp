@@ -111,6 +111,15 @@ nlohmann::json run_suite() {
   require_mount_error(
       unavailable->list_names(unavailable_path), "directory iteration");
   require_mount_error(
+      unavailable->list_directories(unavailable_path),
+      "directory iteration");
+  require_mount_error(
+      unavailable->remove_tree(unavailable_path), "recursive removal");
+  require_mount_error(
+      unavailable->publish_directory_if_absent(
+          unavailable_path, unavailable_path / "published"),
+      "atomic directory publish");
+  require_mount_error(
       unavailable->validate_managed_tree(unavailable_path), "tree validation");
 
   const auto action = query("action");
@@ -398,6 +407,57 @@ nlohmann::json run_suite() {
   const auto accented = std::find(names.begin(), names.end(), "\xc3\xa9");
   require(a < z && z < accented, "unsigned UTF-8 sorting");
 
+  const auto staging = contract / "staging-directory";
+  const auto published = contract / "published-directory";
+  success(platform->ensure_directory(staging / "nested"), "staging directory");
+  success(
+      platform->create_immutable(staging / "nested/payload.bin", bytes("complete")),
+      "staging payload");
+  const auto publish =
+      platform->publish_directory_if_absent(staging, published);
+  std::string directory_transfer;
+  if (!publish.has_value()) {
+    require(
+        publish.error().details.value("storage_condition", "") ==
+            project_io::kStorageConditionAtomicPublishUnsupported,
+        "directory publish returned an unexpected failure");
+    require(!value(platform->directory_exists(published), "publish absent"),
+            "unsupported publish exposed a destination");
+    success(platform->remove_tree(staging), "unsupported staging removal");
+    directory_transfer = "unsupported";
+  } else {
+    require(!value(platform->directory_exists(staging), "staging moved"),
+            "staging remained visible after publish");
+    require(value(platform->directory_exists(published), "published exists"),
+            "published directory is missing");
+    require(
+        text(value(
+            platform->read_complete(published / "nested/payload.bin"),
+            "published payload")) == "complete",
+        "published payload changed");
+    const auto directory_names =
+        value(platform->list_directories(contract), "directory listing");
+    require(
+        std::find(directory_names.begin(), directory_names.end(),
+                  "published-directory") != directory_names.end(),
+        "published directory was not listed");
+    const auto collision_staging = contract / "collision-staging";
+    success(platform->ensure_directory(collision_staging), "collision staging");
+    const auto collision = platform->publish_directory_if_absent(
+        collision_staging, published);
+    require(
+        !collision.has_value() &&
+            collision.error().details.value("storage_condition", "") ==
+                project_io::kStorageConditionAlreadyExists,
+        "directory publish overwrote an existing destination");
+    success(platform->remove_tree(published), "recursive published removal");
+    success(platform->remove_tree(published), "idempotent recursive removal");
+    success(
+        platform->remove_tree(collision_staging),
+        "collision staging removal");
+    directory_transfer = "pass";
+  }
+
   contract_lease.reset();
 
   return {
@@ -408,6 +468,7 @@ nlohmann::json run_suite() {
           {"appendContracts", "pass"}, {"lease", "pass"},
           {"mountFailure", "pass"}, {"idempotentRemove", "pass"},
           {"immutableShortWrites", "pass"},
+          {"directoryTransfer", directory_transfer},
           {"directoryBarrier", "absent"},
           {"replacementFaultPoints", {"before_write", "during_write", "before_close",
                                         "after_close", "before_cleanup"}}

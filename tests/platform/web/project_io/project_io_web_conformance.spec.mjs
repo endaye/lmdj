@@ -146,6 +146,10 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.mountFailure).toBe("pass");
   expect(result.idempotentRemove).toBe("pass");
   expect(result.immutableShortWrites).toBe("pass");
+  const directoryMoveSupported = await page.evaluate(
+      () => typeof FileSystemDirectoryHandle.prototype.move === "function");
+  expect(result.directoryTransfer).toBe(
+      directoryMoveSupported ? "pass" : "unsupported");
   expect(result.directoryBarrier).toBe("absent");
   expect(result.replacementFaultPoints).toEqual(REPLACEMENT_FAULT_POINTS);
 

@@ -30,6 +30,10 @@ int lmdj_opfs_append_durable_test(const char*, int, double, const void*, int);
 #endif
 int lmdj_opfs_remove(const char*, int);
 int lmdj_opfs_list_names(const char*, int, char**, int*);
+int lmdj_opfs_list_directories(const char*, int, char**, int*);
+int lmdj_opfs_remove_tree(const char*, int);
+int lmdj_opfs_publish_directory_if_absent(
+    const char*, int, const char*, int);
 int lmdj_opfs_validate_tree(const char*, int);
 }
 
@@ -42,6 +46,9 @@ foundation::Error web_error(int status, std::string_view operation) {
     error.details["storage_condition"] = kStorageConditionProjectBusy;
   } else if (status == -4) {
     error.details["storage_condition"] = kStorageConditionAlreadyExists;
+  } else if (status == -8) {
+    error.details["storage_condition"] =
+        kStorageConditionAtomicPublishUnsupported;
   }
   return error;
 }
@@ -208,6 +215,38 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
     return foundation::Result<std::vector<std::string>>::success(std::move(names));
   }
 
+  foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& input) const override {
+    if (!mounted_) {
+      return failure<std::vector<std::string>>(-1, "mount availability");
+    }
+    return list_entries(
+        input, lmdj_opfs_list_directories, "directory iteration");
+  }
+
+  foundation::Result<void> remove_tree(
+      const std::filesystem::path& input) override {
+    if (!mounted_) return mount_failure();
+    return call_path(input, lmdj_opfs_remove_tree, "recursive removal");
+  }
+
+  foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& staging,
+      const std::filesystem::path& destination) override {
+    if (!mounted_) return mount_failure();
+    const auto source_path = web_path(staging);
+    const auto destination_path = web_path(destination);
+    const int status = lmdj_opfs_publish_directory_if_absent(
+        source_path.data(),
+        source_path.size(),
+        destination_path.data(),
+        destination_path.size());
+    return status < 0
+               ? foundation::Result<void>::failure(
+                     web_error(status, "atomic directory publish"))
+               : foundation::Result<void>::success();
+  }
+
   foundation::Result<void> validate_managed_tree(
       const std::filesystem::path& input) const override {
     if (!mounted_) return mount_failure();
@@ -217,6 +256,7 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
  private:
   using PathCall = int (*)(const char*, int);
   using ByteCall = int (*)(const char*, int, const void*, int);
+  using ListCall = int (*)(const char*, int, char**, int*);
 
   bool mounted_;
   int platform_identity_;
@@ -246,6 +286,30 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
     const int status = call(path.data(), path.size(), bytes.data(), bytes.size());
     return status < 0 ? foundation::Result<void>::failure(web_error(status, operation))
                       : foundation::Result<void>::success();
+  }
+
+  static foundation::Result<std::vector<std::string>> list_entries(
+      const std::filesystem::path& input,
+      ListCall call,
+      std::string_view operation) {
+    const auto path = web_path(input);
+    char* data = nullptr;
+    int length = 0;
+    const int status = call(path.data(), path.size(), &data, &length);
+    if (status < 0) {
+      return failure<std::vector<std::string>>(status, operation);
+    }
+    std::vector<std::string> names;
+    const char* current = data;
+    const char* end = data + length;
+    while (current < end) {
+      const auto size = std::strlen(current);
+      names.emplace_back(current, size);
+      current += size + 1;
+    }
+    std::free(data);
+    return foundation::Result<std::vector<std::string>>::success(
+        std::move(names));
   }
 };
 

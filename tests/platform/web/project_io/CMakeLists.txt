@@ -88,7 +88,7 @@ target_link_options(
   PRIVATE
     "--js-library=${LMDJ_REPO_ROOT}/packages/project-io/src/web/library_opfs_storage.js"
     -sASYNCIFY=1
-    "-sASYNCIFY_IMPORTS=['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_validate_tree']"
+    "-sASYNCIFY_IMPORTS=['lmdj_opfs_acquire_writer','lmdj_opfs_ensure_directory','lmdj_opfs_exists','lmdj_opfs_directory_exists','lmdj_opfs_byte_length','lmdj_opfs_read_complete','lmdj_opfs_create_immutable','lmdj_opfs_replace_complete','lmdj_opfs_append_durable','lmdj_opfs_remove','lmdj_opfs_list_names','lmdj_opfs_list_directories','lmdj_opfs_remove_tree','lmdj_opfs_publish_directory_if_absent','lmdj_opfs_validate_tree']"
     -sWASMFS
 )
 set_target_properties(

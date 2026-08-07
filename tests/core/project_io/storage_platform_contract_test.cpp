@@ -570,6 +570,80 @@ void test_names_use_unsigned_byte_order() {
   LMDJ_CHECK(platform->list_names(directory).value() == expected);
 }
 
+void test_directory_transfer_primitives_are_atomic_and_path_safe() {
+  TempDirectory temp;
+  const auto root = temp.path() / "directory-transfer";
+  auto platform = make_default_project_storage_platform();
+  LMDJ_CHECK(platform->ensure_directory(root / "z-directory").has_value());
+  LMDJ_CHECK(platform->ensure_directory(root / "A-directory").has_value());
+  LMDJ_CHECK(
+      platform->ensure_directory(root / "\xC2\xA2-directory").has_value());
+  auto lease = platform->acquire_writer(root);
+  LMDJ_CHECK(lease.has_value());
+  LMDJ_CHECK(
+      platform->create_immutable(root / "ignored.bin", bytes("file"))
+          .has_value());
+
+  const std::vector<std::string> expected_directories{
+      "A-directory",
+      "z-directory",
+      std::string{"\xC2\xA2-directory"},
+  };
+  LMDJ_CHECK(
+      platform->list_directories(root).value() == expected_directories);
+
+  const auto staging = root / "staging";
+  const auto destination = root / "published";
+  LMDJ_CHECK(platform->ensure_directory(staging / "nested").has_value());
+  LMDJ_CHECK(
+      platform->create_immutable(
+          staging / "nested/payload.bin", bytes("complete"))
+          .has_value());
+  LMDJ_CHECK(
+      platform->publish_directory_if_absent(staging, destination)
+          .has_value());
+  LMDJ_CHECK(!platform->directory_exists(staging).value());
+  LMDJ_CHECK(platform->directory_exists(destination).value());
+  LMDJ_CHECK(
+      text(platform->read_complete(destination / "nested/payload.bin").value()) ==
+      "complete");
+
+  const auto collision_staging = root / "collision-staging";
+  LMDJ_CHECK(platform->ensure_directory(collision_staging).has_value());
+  LMDJ_CHECK(
+      platform->create_immutable(
+          collision_staging / "payload.bin", bytes("must-survive"))
+          .has_value());
+  const auto collision = platform->publish_directory_if_absent(
+      collision_staging, destination);
+  LMDJ_CHECK(!collision.has_value());
+  LMDJ_CHECK(collision.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(
+      collision.error().details.at("storage_condition") ==
+      "already_exists");
+  LMDJ_CHECK(platform->directory_exists(collision_staging).value());
+  LMDJ_CHECK(
+      text(platform->read_complete(destination / "nested/payload.bin").value()) ==
+      "complete");
+
+  const auto external = temp.path() / "external";
+  std::filesystem::create_directories(external);
+  write_bytes(external / "survive.bin", "external");
+  const auto unsafe = root / "unsafe";
+  LMDJ_CHECK(platform->ensure_directory(unsafe).has_value());
+  std::filesystem::create_directory_symlink(external, unsafe / "escape");
+  const auto unsafe_remove = platform->remove_tree(unsafe);
+  LMDJ_CHECK(!unsafe_remove.has_value());
+  LMDJ_CHECK(unsafe_remove.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(std::filesystem::is_regular_file(external / "survive.bin"));
+  std::filesystem::remove(unsafe / "escape");
+
+  LMDJ_CHECK(platform->remove_tree(destination).has_value());
+  LMDJ_CHECK(!platform->directory_exists(destination).value());
+  LMDJ_CHECK(platform->remove_tree(destination).has_value());
+  LMDJ_CHECK(platform->remove_tree(collision_staging).has_value());
+}
+
 void test_replacement_readers_observe_only_complete_versions() {
   TempDirectory temp;
   const auto directory = temp.path() / "atomic";
@@ -731,6 +805,7 @@ int main() {
     test_immutable_fault_phases_precede_atomic_publication();
     test_path_substitution_never_publishes_a_symlink();
     test_names_use_unsigned_byte_order();
+    test_directory_transfer_primitives_are_atomic_and_path_safe();
     test_replacement_readers_observe_only_complete_versions();
     test_complete_read_serializes_compliant_same_inode_mutation();
     test_special_files_are_rejected_without_blocking();

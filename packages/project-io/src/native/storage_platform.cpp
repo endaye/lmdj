@@ -22,6 +22,11 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <sys/file.h>
+#if defined(__APPLE__)
+#include <sys/stdio.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
+#endif
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -381,6 +386,36 @@ bool same_identity(const struct stat& left, const struct stat& right) {
   return left.st_dev == right.st_dev && left.st_ino == right.st_ino;
 }
 
+int rename_directory_no_replace(
+    int source_parent,
+    const char* source_name,
+    int destination_parent,
+    const char* destination_name) {
+  int result = -1;
+  do {
+#if defined(__APPLE__)
+    result = ::renameatx_np(
+        source_parent,
+        source_name,
+        destination_parent,
+        destination_name,
+        RENAME_EXCL);
+#elif defined(__linux__) && defined(SYS_renameat2)
+    result = static_cast<int>(::syscall(
+        SYS_renameat2,
+        source_parent,
+        source_name,
+        destination_parent,
+        destination_name,
+        1U));
+#else
+    errno = ENOTSUP;
+    result = -1;
+#endif
+  } while (result != 0 && errno == EINTR);
+  return result;
+}
+
 bool same_stable_metadata(
     const struct stat& left,
     const struct stat& right) {
@@ -607,6 +642,123 @@ foundation::Result<void> validate_directory_contents(
             read_error));
   }
   return foundation::Result<void>::success();
+}
+
+foundation::Result<void> remove_directory_contents(
+    int descriptor,
+    const std::filesystem::path& path) {
+  const int duplicated = duplicate_descriptor_retry(descriptor);
+  if (duplicated < 0) {
+    return foundation::Result<void>::failure(
+        storage_error("storage tree could not be enumerated", path));
+  }
+  DIR* stream = ::fdopendir(duplicated);
+  if (stream == nullptr) {
+    const int open_error = errno;
+    ::close(duplicated);
+    return foundation::Result<void>::failure(
+        storage_error(
+            "storage tree could not be enumerated", path, open_error));
+  }
+  while (true) {
+    errno = 0;
+    const auto* entry = ::readdir(stream);
+    if (entry == nullptr) {
+      if (errno == EINTR) {
+        continue;
+      }
+      break;
+    }
+    const std::string name{entry->d_name};
+    if (name == "." || name == "..") {
+      continue;
+    }
+    const auto entry_path = path / name;
+    struct stat before {};
+    if (fstatat_no_follow_retry(descriptor, name.c_str(), &before) != 0) {
+      const int inspect_error = errno;
+      ::closedir(stream);
+      return foundation::Result<void>::failure(
+          storage_error(
+              "storage tree entry could not be inspected",
+              entry_path,
+              inspect_error));
+    }
+    if (S_ISLNK(before.st_mode)) {
+      ::closedir(stream);
+      return foundation::Result<void>::failure(
+          invalid_storage_path(
+              "storage tree contains a symbolic link", entry_path));
+    }
+    int flags = 0;
+    if (S_ISDIR(before.st_mode)) {
+      const int child_descriptor = openat_retry(
+          descriptor,
+          name.c_str(),
+          O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+      if (child_descriptor < 0) {
+        const int open_error = errno;
+        ::closedir(stream);
+        return foundation::Result<void>::failure(
+            storage_error(
+                "storage tree directory could not be opened",
+                entry_path,
+                open_error));
+      }
+      OwnedDescriptor child(child_descriptor);
+      struct stat opened {};
+      if (fstat_retry(child.get(), &opened) != 0 ||
+          !S_ISDIR(opened.st_mode) || !same_identity(before, opened)) {
+        ::closedir(stream);
+        return foundation::Result<void>::failure(
+            invalid_storage_path(
+                "storage tree directory identity changed", entry_path));
+      }
+      const auto removed = remove_directory_contents(child.get(), entry_path);
+      if (!removed.has_value()) {
+        ::closedir(stream);
+        return removed;
+      }
+      struct stat named {};
+      if (fstatat_no_follow_retry(descriptor, name.c_str(), &named) != 0 ||
+          !S_ISDIR(named.st_mode) || !same_identity(opened, named)) {
+        ::closedir(stream);
+        return foundation::Result<void>::failure(
+            invalid_storage_path(
+                "storage tree directory identity changed", entry_path));
+      }
+      flags = AT_REMOVEDIR;
+    } else if (!S_ISREG(before.st_mode)) {
+      ::closedir(stream);
+      return foundation::Result<void>::failure(
+          invalid_storage_path(
+              "storage tree contains a special file", entry_path));
+    }
+    int removed = -1;
+    do {
+      removed = ::unlinkat(descriptor, name.c_str(), flags);
+    } while (removed != 0 && errno == EINTR);
+    if (removed != 0) {
+      const int remove_error = errno;
+      ::closedir(stream);
+      return foundation::Result<void>::failure(
+          storage_error(
+              "storage tree entry could not be removed",
+              entry_path,
+              remove_error));
+    }
+  }
+  const int read_error = errno;
+  if (::closedir(stream) != 0 && read_error == 0) {
+    return foundation::Result<void>::failure(
+        storage_error("storage tree directory could not be closed", path));
+  }
+  if (read_error != 0) {
+    return foundation::Result<void>::failure(
+        storage_error(
+            "storage tree could not be enumerated", path, read_error));
+  }
+  return sync_directory_descriptor(descriptor, path);
 }
 
 enum class ManagedFileKind {
@@ -1854,6 +2006,241 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
     std::sort(names.begin(), names.end(), unsigned_byte_less);
     return foundation::Result<std::vector<std::string>>::success(
         std::move(names));
+  }
+
+  foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    auto directory = open_directory_without_symlinks(path);
+    if (!directory.has_value()) {
+      return foundation::Result<std::vector<std::string>>::failure(
+          directory.error());
+    }
+    const int duplicated = duplicate_descriptor_retry(directory.value().get());
+    if (duplicated < 0) {
+      return foundation::Result<std::vector<std::string>>::failure(
+          storage_error("storage directory could not be enumerated", path));
+    }
+    DIR* stream = ::fdopendir(duplicated);
+    if (stream == nullptr) {
+      const int open_error = errno;
+      ::close(duplicated);
+      return foundation::Result<std::vector<std::string>>::failure(
+          storage_error(
+              "storage directory could not be enumerated", path, open_error));
+    }
+    std::vector<std::string> names;
+    while (true) {
+      errno = 0;
+      const auto* entry = ::readdir(stream);
+      if (entry == nullptr) {
+        if (errno == EINTR) {
+          continue;
+        }
+        break;
+      }
+      const std::string name{entry->d_name};
+      if (name == "." || name == "..") {
+        continue;
+      }
+      struct stat metadata {};
+      if (fstatat_no_follow_retry(
+              directory.value().get(), name.c_str(), &metadata) != 0) {
+        const int inspect_error = errno;
+        ::closedir(stream);
+        return foundation::Result<std::vector<std::string>>::failure(
+            storage_error(
+                "storage directory entry could not be inspected",
+                path / name,
+                inspect_error));
+      }
+      if (S_ISLNK(metadata.st_mode)) {
+        ::closedir(stream);
+        return foundation::Result<std::vector<std::string>>::failure(
+            invalid_storage_path(
+                "storage directory contains a symbolic link", path / name));
+      }
+      if (S_ISDIR(metadata.st_mode)) {
+        names.push_back(name);
+      }
+    }
+    const int read_error = errno;
+    if (::closedir(stream) != 0 && read_error == 0) {
+      return foundation::Result<std::vector<std::string>>::failure(
+          storage_error("storage directory could not be closed", path));
+    }
+    if (read_error != 0) {
+      return foundation::Result<std::vector<std::string>>::failure(
+          storage_error(
+              "storage directory could not be enumerated", path, read_error));
+    }
+    std::sort(names.begin(), names.end(), unsigned_byte_less);
+    return foundation::Result<std::vector<std::string>>::success(
+        std::move(names));
+  }
+
+  foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    const auto present = exists(path);
+    if (!present.has_value()) {
+      return foundation::Result<void>::failure(present.error());
+    }
+    if (!present.value()) {
+      return foundation::Result<void>::success();
+    }
+    auto parent = open_parent_without_symlinks(path);
+    if (!parent.has_value()) {
+      return foundation::Result<void>::failure(parent.error());
+    }
+    struct stat named {};
+    if (fstatat_no_follow_retry(
+            parent.value().descriptor.get(),
+            parent.value().name.c_str(),
+            &named) != 0) {
+      return foundation::Result<void>::failure(
+          storage_error("storage tree could not be inspected", path));
+    }
+    if (S_ISLNK(named.st_mode) || !S_ISDIR(named.st_mode)) {
+      return foundation::Result<void>::failure(
+          invalid_storage_path(
+              "storage tree root is not a real directory", path));
+    }
+    const int descriptor = openat_retry(
+        parent.value().descriptor.get(),
+        parent.value().name.c_str(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (descriptor < 0) {
+      return foundation::Result<void>::failure(
+          storage_error("storage tree could not be opened", path));
+    }
+    OwnedDescriptor tree(descriptor);
+    struct stat opened {};
+    if (fstat_retry(tree.get(), &opened) != 0 ||
+        !S_ISDIR(opened.st_mode) || !same_identity(named, opened)) {
+      return foundation::Result<void>::failure(
+          invalid_storage_path("storage tree identity changed", path));
+    }
+    const auto contents = remove_directory_contents(tree.get(), path);
+    if (!contents.has_value()) {
+      return contents;
+    }
+    struct stat revalidated {};
+    if (fstatat_no_follow_retry(
+            parent.value().descriptor.get(),
+            parent.value().name.c_str(),
+            &revalidated) != 0 ||
+        !S_ISDIR(revalidated.st_mode) ||
+        !same_identity(opened, revalidated)) {
+      return foundation::Result<void>::failure(
+          invalid_storage_path("storage tree identity changed", path));
+    }
+    int removed = -1;
+    do {
+      removed = ::unlinkat(
+          parent.value().descriptor.get(),
+          parent.value().name.c_str(),
+          AT_REMOVEDIR);
+    } while (removed != 0 && errno == EINTR);
+    if (removed != 0) {
+      return foundation::Result<void>::failure(
+          storage_error("storage tree could not be removed", path));
+    }
+    return sync_directory_descriptor(
+        parent.value().descriptor.get(),
+        parent.value().normalized_path.parent_path());
+  }
+
+  foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& staging,
+      const std::filesystem::path& destination) override {
+    auto source_parent = open_parent_without_symlinks(staging);
+    if (!source_parent.has_value()) {
+      return foundation::Result<void>::failure(source_parent.error());
+    }
+    auto destination_parent = open_parent_without_symlinks(destination);
+    if (!destination_parent.has_value()) {
+      return foundation::Result<void>::failure(destination_parent.error());
+    }
+    struct stat source_named {};
+    if (fstatat_no_follow_retry(
+            source_parent.value().descriptor.get(),
+            source_parent.value().name.c_str(),
+            &source_named) != 0 ||
+        !S_ISDIR(source_named.st_mode)) {
+      return foundation::Result<void>::failure(
+          invalid_storage_path(
+              "storage publication source is not a directory", staging));
+    }
+    struct stat existing {};
+    if (fstatat_no_follow_retry(
+            destination_parent.value().descriptor.get(),
+            destination_parent.value().name.c_str(),
+            &existing) == 0) {
+      return foundation::Result<void>::failure(
+          already_exists_error(destination));
+    }
+    if (errno != ENOENT) {
+      return foundation::Result<void>::failure(
+          storage_error(
+              "storage publication destination could not be inspected",
+              destination));
+    }
+    const int source_descriptor = openat_retry(
+        source_parent.value().descriptor.get(),
+        source_parent.value().name.c_str(),
+        O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    if (source_descriptor < 0) {
+      return foundation::Result<void>::failure(
+          storage_error("storage publication source could not be opened", staging));
+    }
+    OwnedDescriptor source(source_descriptor);
+    struct stat source_opened {};
+    if (fstat_retry(source.get(), &source_opened) != 0 ||
+        !S_ISDIR(source_opened.st_mode) ||
+        !same_identity(source_named, source_opened)) {
+      return foundation::Result<void>::failure(
+          invalid_storage_path(
+              "storage publication source identity changed", staging));
+    }
+    const auto valid = validate_directory_contents(source.get(), staging);
+    if (!valid.has_value()) {
+      return valid;
+    }
+    if (rename_directory_no_replace(
+            source_parent.value().descriptor.get(),
+            source_parent.value().name.c_str(),
+            destination_parent.value().descriptor.get(),
+            destination_parent.value().name.c_str()) != 0) {
+      const int rename_error = errno;
+      if (rename_error == EEXIST || rename_error == ENOTEMPTY) {
+        return foundation::Result<void>::failure(
+            already_exists_error(destination));
+      }
+      return foundation::Result<void>::failure(
+          storage_error(
+              "storage directory could not be published",
+              destination,
+              rename_error));
+    }
+    struct stat published {};
+    if (fstatat_no_follow_retry(
+            destination_parent.value().descriptor.get(),
+            destination_parent.value().name.c_str(),
+            &published) != 0 ||
+        !S_ISDIR(published.st_mode) ||
+        !same_identity(source_opened, published)) {
+      return foundation::Result<void>::failure(
+          invalid_storage_path(
+              "storage publication identity changed", destination));
+    }
+    const auto source_sync = sync_directory_descriptor(
+        source_parent.value().descriptor.get(),
+        source_parent.value().normalized_path.parent_path());
+    if (!source_sync.has_value()) {
+      return source_sync;
+    }
+    return sync_directory_descriptor(
+        destination_parent.value().descriptor.get(),
+        destination_parent.value().normalized_path.parent_path());
   }
 
   foundation::Result<void> validate_managed_tree(

@@ -96,6 +96,30 @@ mergeInto(LibraryManager.library, {
       }
     },
 
+    async listEntries(parts, kind) {
+      const directory = await this.directory(parts, false);
+      const names = [];
+      for await (const entry of directory.values()) {
+        if (entry.kind === kind) names.push(entry.name);
+      }
+      names.sort((a, b) => this.compareUtf8(a, b));
+      return names;
+    },
+
+    writeNames(names, output, outputLength) {
+      const encoder = new TextEncoder();
+      const encoded = names.map((name) => encoder.encode(`${name}\0`));
+      const total = encoded.reduce((sum, bytes) => sum + bytes.length, 0);
+      const allocation = _malloc(total || 1);
+      let cursor = allocation;
+      for (const bytes of encoded) {
+        HEAPU8.set(bytes, cursor);
+        cursor += bytes.length;
+      }
+      setValue(output, allocation, "*");
+      setValue(outputLength, total, "i32");
+    },
+
     bytes(pointer, length) {
       return HEAPU8.slice(pointer, pointer + length);
     },
@@ -681,29 +705,68 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_list_names:
       (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
         try {
-          const directory = await LmdjOpfs.directory(
-              LmdjOpfs.parts(path, length), false);
-          const names = [];
-          for await (const entry of directory.values()) {
-            if (entry.kind === "file") names.push(entry.name);
-          }
-          names.sort((a, b) => LmdjOpfs.compareUtf8(a, b));
-          const encoder = new TextEncoder();
-          const encoded = names.map((name) => encoder.encode(`${name}\0`));
-          const total = encoded.reduce((sum, bytes) => sum + bytes.length, 0);
-          const allocation = _malloc(total || 1);
-          let cursor = allocation;
-          for (const bytes of encoded) {
-            HEAPU8.set(bytes, cursor);
-            cursor += bytes.length;
-          }
-          setValue(output, allocation, "*");
-          setValue(outputLength, total, "i32");
+          const names = await LmdjOpfs.listEntries(
+              LmdjOpfs.parts(path, length), "file");
+          LmdjOpfs.writeNames(names, output, outputLength);
           return 0;
         } catch (error) {
           return LmdjOpfs.status(error);
         }
       }),
+
+  lmdj_opfs_list_directories__deps: ["$LmdjOpfs"],
+  lmdj_opfs_list_directories:
+      (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
+        try {
+          const names = await LmdjOpfs.listEntries(
+              LmdjOpfs.parts(path, length), "directory");
+          LmdjOpfs.writeNames(names, output, outputLength);
+          return 0;
+        } catch (error) {
+          return LmdjOpfs.status(error);
+        }
+      }),
+
+  lmdj_opfs_remove_tree__deps: ["$LmdjOpfs"],
+  lmdj_opfs_remove_tree: (path, length) => Asyncify.handleAsync(async () => {
+    try {
+      const [parent, name] = await LmdjOpfs.parent(
+          LmdjOpfs.parts(path, length), false);
+      await parent.removeEntry(name, {recursive: true}).catch((error) => {
+        if (!(error instanceof DOMException) || error.name !== "NotFoundError") {
+          throw error;
+        }
+      });
+      return 0;
+    } catch (error) {
+      return error instanceof DOMException && error.name === "NotFoundError"
+        ? 0
+        : LmdjOpfs.status(error);
+    }
+  }),
+
+  lmdj_opfs_publish_directory_if_absent__deps: ["$LmdjOpfs"],
+  lmdj_opfs_publish_directory_if_absent:
+      (source, sourceLength, destination, destinationLength) =>
+          Asyncify.handleAsync(async () => {
+            try {
+              const sourceParts = LmdjOpfs.parts(source, sourceLength);
+              const destinationParts =
+                  LmdjOpfs.parts(destination, destinationLength);
+              const [sourceParent, sourceName] =
+                  await LmdjOpfs.parent(sourceParts, false);
+              const sourceHandle =
+                  await sourceParent.getDirectoryHandle(sourceName);
+              const [destinationParent, destinationName] =
+                  await LmdjOpfs.parent(destinationParts, true);
+              if (await LmdjOpfs.exists(destinationParts)) return -4;
+              if (typeof sourceHandle.move !== "function") return -8;
+              await sourceHandle.move(destinationParent, destinationName);
+              return 0;
+            } catch (error) {
+              return LmdjOpfs.status(error);
+            }
+          }),
 
   lmdj_opfs_validate_tree__deps: ["$LmdjOpfs"],
   lmdj_opfs_validate_tree: (path, length) => Asyncify.handleAsync(async () => {
