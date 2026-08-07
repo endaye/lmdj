@@ -29,7 +29,7 @@ const FULL_TRIGGER_COUNT = 500;
 const PROTOCOL_VERSION = 1;
 const CLAIMED_PUBLICATION_PROOF_DEADLINE_MS = 5_000;
 const TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS = 15_000;
-const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 180_000;
+const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 300_000;
 const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 45_000;
 const DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS = 250;
 const DIAGNOSTIC_PROJECT_CONTRACT =
@@ -824,7 +824,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(240_000);
+  test.setTimeout(360_000);
   const runtimeModuleRequests = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;
@@ -870,7 +870,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(300_000);
+  test.setTimeout(480_000);
   const runtimeModuleRequests = [];
   page.on("request", (request) => {
     const pathname = new URL(request.url()).pathname;

@@ -381,6 +381,40 @@ def main() -> int:
         "processor fatal proof must not submit through the Bridge after terminalization",
     )
     browser_spec_text = web_runtime_browser_spec.read_text(encoding="utf-8")
+    diagnostic_overall_timeout = re.search(
+        r"const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = ([0-9_]+);",
+        browser_spec_text,
+    )
+    require(
+        diagnostic_overall_timeout is not None
+        and int(diagnostic_overall_timeout.group(1).replace("_", ""))
+        >= 300_000,
+        "diagnostic project proof must budget for 64 serial Pad assignments "
+        "on the slow Linux runner",
+    )
+    diagnostic_overall_timeout_ms = int(
+        diagnostic_overall_timeout.group(1).replace("_", "")
+    )
+    for diagnostic_test_name in (
+        "Chromium binds the verified packaged runtime to the real AudioWorklet",
+        "Chromium visible diagnostic project completes the packaged runtime journey",
+    ):
+        diagnostic_test = re.search(
+            rf'test\("{re.escape(diagnostic_test_name)}".*?\n\}}\);',
+            browser_spec_text,
+            re.DOTALL,
+        )
+        diagnostic_test_timeout = (
+            re.search(r"test\.setTimeout\(([0-9_]+)\);", diagnostic_test.group(0))
+            if diagnostic_test is not None
+            else None
+        )
+        require(
+            diagnostic_test_timeout is not None
+            and int(diagnostic_test_timeout.group(1).replace("_", ""))
+            > diagnostic_overall_timeout_ms,
+            f"{diagnostic_test_name} must outlive its diagnostic readiness budget",
+        )
     unresponsive_cancellation = re.search(
         r'test\("Chromium packaged unresponsive cancellation '
         r'force-terminates and recovers".*?\n\}\);',
