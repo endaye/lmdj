@@ -117,7 +117,9 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
           const code = diagnostics.error_code ?? "HOST_STATE_INVALID";
           setErrorCode(code);
           observe({state: diagnostics.state, errorCode: code});
-          if (!["restart-required", "failed", "closed"].includes(diagnostics.state)) {
+          if (code === "UNSUPPORTED_WEB_RUNTIME") {
+            setPhase("unsupported");
+          } else if (!["restart-required", "failed", "closed"].includes(diagnostics.state)) {
             setPhase(phaseForError(Object.assign(new Error(code), {code})));
           }
           return;

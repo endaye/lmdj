@@ -210,6 +210,7 @@ export function createCreatorInputController({
   const onPointerUp = (event: PointerEvent) => { pointer.releasePointer(event); };
   const onPointerCancel = (event: PointerEvent) => { pointer.pointerCancel(event); };
   const onMouseUp = (event: MouseEvent) => { pointer.releaseMouse(event); };
+  const onPageHide = () => dispose();
   const onVisibility = () => {
     if (documentTarget.visibilityState === "hidden") clearPressed();
   };
@@ -219,6 +220,7 @@ export function createCreatorInputController({
   windowTarget.addEventListener("pointerup", onPointerUp);
   windowTarget.addEventListener("pointercancel", onPointerCancel);
   windowTarget.addEventListener("mouseup", onMouseUp);
+  windowTarget.addEventListener("pagehide", onPageHide);
   documentTarget.addEventListener("visibilitychange", onVisibility);
 
   function clearPressed() {
@@ -227,6 +229,24 @@ export function createCreatorInputController({
     midi.clearPressed();
     activeGestures.clear();
     dispatch({type: "pressed-cleared"});
+  }
+
+  function dispose() {
+    if (disposed) return;
+    disposed = true;
+    windowTarget.removeEventListener("blur", onBlur);
+    windowTarget.removeEventListener("keydown", onKeyDown);
+    windowTarget.removeEventListener("keyup", onKeyUp);
+    windowTarget.removeEventListener("pointerup", onPointerUp);
+    windowTarget.removeEventListener("pointercancel", onPointerCancel);
+    windowTarget.removeEventListener("mouseup", onMouseUp);
+    windowTarget.removeEventListener("pagehide", onPageHide);
+    documentTarget.removeEventListener("visibilitychange", onVisibility);
+    unsubscribeOutcome();
+    clearPressed();
+    midi.dispose();
+    admissions.clear();
+    earlyOutcomes.clear();
   }
 
   return Object.freeze({
@@ -260,21 +280,6 @@ export function createCreatorInputController({
       }
     },
     clearPressed,
-    dispose() {
-      if (disposed) return;
-      disposed = true;
-      windowTarget.removeEventListener("blur", onBlur);
-      windowTarget.removeEventListener("keydown", onKeyDown);
-      windowTarget.removeEventListener("keyup", onKeyUp);
-      windowTarget.removeEventListener("pointerup", onPointerUp);
-      windowTarget.removeEventListener("pointercancel", onPointerCancel);
-      windowTarget.removeEventListener("mouseup", onMouseUp);
-      documentTarget.removeEventListener("visibilitychange", onVisibility);
-      unsubscribeOutcome();
-      clearPressed();
-      midi.dispose();
-      admissions.clear();
-      earlyOutcomes.clear();
-    },
+    dispose,
   });
 }

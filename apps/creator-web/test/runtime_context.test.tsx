@@ -91,3 +91,20 @@ test("exposes a typed terminal startup failure", async () => {
   );
   await screen.findByText("unsupported");
 });
+
+test("preserves unsupported when startup returns a failed Host state", async () => {
+  const fixture = sessionFixture();
+  const diagnostics = fixture.session.diagnostics();
+  fixture.session.start = async () => false;
+  fixture.session.diagnostics = () => ({
+    ...diagnostics,
+    state: "failed",
+    error_code: "UNSUPPORTED_WEB_RUNTIME",
+  });
+
+  render(
+    <RuntimeProvider factory={() => fixture.session}><Probe /></RuntimeProvider>,
+  );
+
+  await screen.findByText("unsupported");
+});

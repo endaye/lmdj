@@ -31,7 +31,9 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
     const payload = await response.body();
     expect(payload.byteLength).toBe(asset.bytes);
     expect(createHash("sha256").update(payload).digest("hex")).toBe(asset.sha256);
-    expect(payload.toString("utf8")).not.toMatch(/sourceMappingURL|\/Users\/|\/home\//);
+    const text = payload.toString("utf8");
+    expect(text).not.toMatch(/sourceMappingURL|\/Users\/|file:\/+(?:Users|home)\//);
+    expect(text).not.toMatch(/[A-Za-z]:\\/);
   }
 });
 
@@ -74,7 +76,7 @@ for (const viewport of [
       await expect(page.getByRole("button", {name: new RegExp(`^${mode}`)}))
         .toBeDisabled();
     }
-    await page.evaluate(() => document.activeElement?.blur());
+    await page.getByRole("button", {name: "Activate audio"}).focus();
     const focusOrder = [];
     for (let index = 0; index < 5; index += 1) {
       await page.keyboard.press("Tab");

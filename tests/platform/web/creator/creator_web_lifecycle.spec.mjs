@@ -7,6 +7,9 @@ const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 
 async function importAndActivate(page) {
+  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
+    timeout: 30_000,
+  });
   const chooserPromise = page.waitForEvent("filechooser");
   await page.getByRole("button", {name: "Import .lmdj"}).click();
   await (await chooserPromise).setFiles(bundle);
