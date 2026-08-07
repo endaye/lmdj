@@ -9,6 +9,9 @@
     "moduleResolution": "Bundler",
     "noEmit": true,
     "noUncheckedIndexedAccess": true,
+    "paths": {
+      "@lmdj/web-runtime-platform/*": ["../../packages/web-runtime-platform/web/*"]
+    },
     "strict": true,
     "target": "ES2024",
     "types": ["node", "vite/client", "vitest/globals"]

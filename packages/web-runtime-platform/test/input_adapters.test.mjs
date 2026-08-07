@@ -271,6 +271,24 @@ test("Keyboard keyup and lifecycle cleanup clear pressed state", () => {
   ]);
 });
 
+test("Keyboard resolves a local mapping at keydown and releases the resolved slot", () => {
+  const calls = [];
+  const releases = [];
+  let bank = 2;
+  const keyboard = createKeyboardAdapter({
+    trigger: (...args) => calls.push(args),
+    mapping: { KeyA: 0 },
+    resolveSlot: (localSlot) => bank * 16 + localSlot,
+    velocity: 100,
+    onRelease: (slot, source) => releases.push([slot, source]),
+  });
+  keyboard.keyDown({ code: "KeyA", repeat: false });
+  bank = 3;
+  keyboard.keyUp({ code: "KeyA" });
+  assert.deepEqual(calls, [[32, 100, "keyboard"]]);
+  assert.deepEqual(releases, [[32, "keyboard"]]);
+});
+
 test("Web MIDI permission is explicit and always requests sysex false", async () => {
   const input = fakeMidiInput();
   const access = fakeMidiAccess([input]);
@@ -327,6 +345,32 @@ test("Web MIDI preserves Note On velocity in exactly one flat Trigger", async ()
   await midi.requestPermission();
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 40, 73]) }, input), true);
   assert.deepEqual(calls, [[12, 73, "midi"]]);
+});
+
+test("Web MIDI resolves the current Bank, filters channel, and releases the admitted slot", async () => {
+  const calls = [];
+  const releases = [];
+  let bank = 1;
+  const input = fakeMidiInput();
+  const access = fakeMidiAccess([input]);
+  const midi = createMidiAdapter({
+    trigger: (...args) => calls.push(args),
+    requestMIDIAccess: async () => access,
+    notify: () => {},
+    noteStart: 36,
+    slotStart: 0,
+    slotCount: 16,
+    channel: 0,
+    resolveSlot: (localSlot) => bank * 16 + localSlot,
+    onRelease: (slot, source) => releases.push([slot, source]),
+  });
+  await midi.requestPermission();
+  input.emit("midimessage", { data: Uint8Array.from([0x90, 36, 72]) });
+  input.emit("midimessage", { data: Uint8Array.from([0x91, 36, 72]) });
+  bank = 3;
+  input.emit("midimessage", { data: Uint8Array.from([0x90, 36, 0]) });
+  assert.deepEqual(calls, [[16, 72, "midi"]]);
+  assert.deepEqual(releases, [[16, "midi"]]);
 });
 
 test("Web MIDI ignores messages before permission, from unknown inputs, and after disconnect", async () => {

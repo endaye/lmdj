@@ -11,7 +11,9 @@ import {
   listLocalProjectsJourney,
   openProjectJourney,
 } from "./runtime/project_actions";
+import {createCreatorInputController} from "./runtime/input_controller";
 import {
+  activateCreatorAudio,
   RuntimeProvider,
   useRuntime,
   type RuntimeProviderPhase,
@@ -38,6 +40,7 @@ interface WorkspaceProps {
   session?: CreatorRuntimeSession;
   runtimePhase?: RuntimeProviderPhase;
   runtimeErrorCode?: string | null;
+  runtimeHostState?: string;
 }
 
 function errorCode(error: unknown): string {
@@ -52,12 +55,48 @@ function Workspace({
   session,
   runtimePhase,
   runtimeErrorCode,
+  runtimeHostState,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [listAttempt, setListAttempt] = useState(0);
   const importController = useRef<AbortController | null>(null);
+  const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => () => importController.current?.abort(), []);
+
+  useEffect(() => {
+    if (!session || runtimePhase !== "ready") return;
+    const controller = createCreatorInputController({
+      session,
+      getActiveBank: () => stateRef.current.activeBank,
+      isAssigned: (slot) =>
+        stateRef.current.project.current?.pads[slot]?.assetId !== null &&
+        stateRef.current.project.current?.pads[slot]?.assetId !== undefined &&
+        stateRef.current.audio.phase === "running",
+      dispatch,
+    });
+    inputController.current = controller;
+    return () => {
+      if (inputController.current === controller) inputController.current = null;
+      controller.dispose();
+    };
+  }, [session, runtimePhase]);
+
+  useEffect(() => {
+    if (!runtimeHostState) return;
+    if (runtimeHostState === "running") {
+      dispatch({type: "audio-changed", phase: "running"});
+    } else if (
+      runtimeHostState === "interrupted" ||
+      runtimeHostState === "recovering" ||
+      (runtimeHostState === "audio-suspended" &&
+        stateRef.current.audio.phase !== "inactive")
+    ) {
+      dispatch({type: "audio-changed", phase: "suspended"});
+    }
+  }, [runtimeHostState]);
 
   useEffect(() => {
     if (!session || !runtimePhase) return;
@@ -70,8 +109,24 @@ function Workspace({
     let active = true;
     dispatch({type: "projects-listing"});
     void listLocalProjectsJourney(session).then(
-      (projects) => {
-        if (active) dispatch({type: "projects-loaded", projects});
+      async (projects) => {
+        if (!active) return;
+        dispatch({type: "projects-loaded", projects});
+        const retained = stateRef.current.project.current;
+        if (!retained) return;
+        const summary = projects.find(({projectId, patternId}) =>
+          projectId === retained.projectId && patternId === retained.patternId);
+        if (!summary) {
+          dispatch({type: "project-error", errorCode: "NOT_FOUND"});
+          return;
+        }
+        dispatch({type: "project-opening"});
+        try {
+          const project = await openProjectJourney(session, summary);
+          if (active) dispatch({type: "project-ready", project});
+        } catch (error) {
+          if (active) reportProjectError(error);
+        }
       },
       (error: unknown) => {
         if (!active) return;
@@ -132,9 +187,49 @@ function Workspace({
     }
   };
 
+  const activateAudio = async (event: MouseEvent) => {
+    if (!session) return;
+    dispatch({type: "audio-changed", phase: "activating"});
+    try {
+      const activated = await activateCreatorAudio(session, event);
+      if (!activated) {
+        const diagnostics = session.diagnostics();
+        if (diagnostics.error_code) {
+          reportProjectError(Object.assign(new Error(diagnostics.error_code), {
+            code: diagnostics.error_code,
+          }));
+        } else {
+          dispatch({type: "audio-changed", phase: "inactive"});
+        }
+      } else if (session.diagnostics().state === "running") {
+        dispatch({type: "audio-changed", phase: "running"});
+      }
+    } catch (error) {
+      dispatch({type: "audio-changed", phase: "inactive"});
+      if (!(error instanceof TypeError)) reportProjectError(error);
+    }
+  };
+
+  const suspendAudio = async () => {
+    if (!session) return;
+    if (await session.suspendAudio()) {
+      inputController.current?.clearPressed();
+      dispatch({type: "audio-changed", phase: "suspended"});
+    }
+  };
+
   return (
     <div className="workspace">
-      <StatusBar state={state} />
+      <StatusBar
+        state={state}
+        {...(session && inputController.current
+          ? {
+              onActivateAudio: (event) => { void activateAudio(event.nativeEvent); },
+              onSuspendAudio: () => { void suspendAudio(); },
+              onEnableMidi: () => { void inputController.current?.enableMidi(); },
+            }
+          : {})}
+      />
       <ModeRail />
       <ProjectSurface
         state={state}
@@ -144,9 +239,15 @@ function Workspace({
       <section className="pads" aria-label="Instrument">
         <BankSelector
           activeBank={state.activeBank}
-          onSelect={(bank) => dispatch({type: "bank-selected", bank})}
+          onSelect={(bank) => {
+            inputController.current?.clearPressed();
+            dispatch({type: "bank-selected", bank});
+          }}
         />
-        <PadSurface state={state} />
+        <PadSurface
+          state={state}
+          {...(inputController.current ? {controller: inputController.current} : {})}
+        />
       </section>
       <ErrorPanel
         code={state.runtime.errorCode}
@@ -166,6 +267,7 @@ function ManagedWorkspace({initialState}: {initialState: CreatorState}) {
       session={runtime.session}
       runtimePhase={runtime.phase}
       runtimeErrorCode={runtime.errorCode}
+      runtimeHostState={runtime.hostState}
     />
   );
 }

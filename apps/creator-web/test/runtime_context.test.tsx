@@ -30,6 +30,22 @@ function sessionFixture({startError}: {startError?: Error} = {}) {
     openProject: async () => ({}),
     inspectProject: async () => ({}),
     reloadSnapshot: async () => ({}),
+    activateAudio: async () => true,
+    suspendAudio: async () => true,
+    trigger: async () => false,
+    requestMidi: async () => true,
+    subscribeHostState: () => () => {},
+    subscribeRuntimeOutcome: () => () => {},
+    diagnostics: () => ({
+      state: "audio-suspended",
+      error_code: null,
+      product_build: "1.0.16.0",
+      host_version: "1.0.0",
+      protocol_version: 1,
+      trigger_admitted_count: 0,
+      trigger_outcome_count: 0,
+      trigger_rejected_count: 0,
+    }),
   };
   return {session, starts: () => starts, closes: () => closes};
 }

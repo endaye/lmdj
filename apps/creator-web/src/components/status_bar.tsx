@@ -4,12 +4,21 @@ import {
   type CreatorState,
 } from "../state/creator_state";
 import {shortProjectId} from "../state/view_model";
+import type {MouseEvent} from "react";
 
 interface StatusBarProps {
   state: CreatorState;
+  onActivateAudio?: (event: MouseEvent<HTMLButtonElement>) => void;
+  onSuspendAudio?: () => void;
+  onEnableMidi?: () => void;
 }
 
-export function StatusBar({state}: StatusBarProps) {
+export function StatusBar({
+  state,
+  onActivateAudio,
+  onSuspendAudio,
+  onEnableMidi,
+}: StatusBarProps) {
   const project = state.project.current;
   return (
     <header className="status-bar">
@@ -32,8 +41,26 @@ export function StatusBar({state}: StatusBarProps) {
         <span data-testid="creator-phase">{selectCreatorPhase(state)}</span>
         <span data-testid="audio-state">Audio {state.audio.phase}</span>
       </div>
-      <button type="button" disabled={!selectCanActivateAudio(state)}>
+      <button
+        type="button"
+        disabled={!selectCanActivateAudio(state)}
+        onClick={onActivateAudio}
+      >
         Activate audio
+      </button>
+      <button
+        type="button"
+        disabled={state.audio.phase !== "running" || !onSuspendAudio}
+        onClick={onSuspendAudio}
+      >
+        Suspend audio
+      </button>
+      <button
+        type="button"
+        disabled={state.runtime.phase !== "ready" || !onEnableMidi}
+        onClick={onEnableMidi}
+      >
+        Enable MIDI
       </button>
     </header>
   );

@@ -1,4 +1,8 @@
 const userGestureTokens = new WeakSet();
+const acceptAnySlot = (_slot) => true;
+const ignoreRelease = (_slot, _source) => {};
+/** @type {number | null} */
+const allMidiChannels = null;
 
 
 export function createUserGestureToken(event) {
@@ -71,10 +75,11 @@ function isEditableTarget(target) {
 export function createPointerAdapter({
   trigger,
   velocity,
-  isAvailable = () => true,
+  isAvailable = acceptAnySlot,
   now,
   compatibilityWindowMs = 500,
   onPressedChange = () => {},
+  onRelease = ignoreRelease,
 }) {
   requireTrigger(trigger);
   requireVelocity(velocity);
@@ -88,7 +93,7 @@ export function createPointerAdapter({
   ) {
     throw new TypeError("Pointer correlation requires an injected monotonic clock");
   }
-  if (typeof onPressedChange !== "function") {
+  if (typeof onPressedChange !== "function" || typeof onRelease !== "function") {
     throw new TypeError("Pointer pressed-state notification must be a function");
   }
   let compatibilityMarker = null;
@@ -173,6 +178,7 @@ export function createPointerAdapter({
     }
     const changed = pressed.delete(flatSlot);
     if (changed) {
+      onRelease(flatSlot, "pointer");
       publishPressed();
     }
     return changed;
@@ -216,6 +222,7 @@ export function createPointerAdapter({
     const flatSlot = compatibilityMarker.flatSlot;
     compatibilityMarker = null;
     if (pressed.delete(flatSlot)) {
+      onRelease(flatSlot, "pointer");
       publishPressed();
     }
     return true;
@@ -233,6 +240,9 @@ export function createPointerAdapter({
       pointerSlots.clear();
       mouseSlot = null;
       const count = pressed.size;
+      for (const flatSlot of pressed) {
+        onRelease(flatSlot, "pointer");
+      }
       pressed.clear();
       publishPressed();
       return count;
@@ -247,15 +257,22 @@ export function createKeyboardAdapter({
   trigger,
   mapping,
   velocity,
+  resolveSlot = (slot) => slot,
+  isAvailable = acceptAnySlot,
   editable = isEditableTarget,
   onPressedChange = () => {},
+  onRelease = ignoreRelease,
 }) {
   requireTrigger(trigger);
   requireVelocity(velocity);
-  if (typeof editable !== "function") {
+  if (
+    typeof resolveSlot !== "function" ||
+    typeof isAvailable !== "function" ||
+    typeof editable !== "function"
+  ) {
     throw new TypeError("Keyboard editable detection must be a function");
   }
-  if (typeof onPressedChange !== "function") {
+  if (typeof onPressedChange !== "function" || typeof onRelease !== "function") {
     throw new TypeError("Keyboard pressed-state notification must be a function");
   }
   const entries = mapping instanceof Map ? [...mapping] : Object.entries(mapping ?? {});
@@ -265,7 +282,7 @@ export function createKeyboardAdapter({
       throw new TypeError("Keyboard mappings require code to flat slot entries");
     }
   }
-  const pressed = new Set();
+  const pressed = new Map();
 
   function keyDown(event) {
     const code = event?.code;
@@ -278,22 +295,32 @@ export function createKeyboardAdapter({
     ) {
       return false;
     }
-    pressed.add(code);
+    const flatSlot = resolveSlot(codeToSlot.get(code));
+    if (!isFlatSlot(flatSlot) || isAvailable(flatSlot) !== true) {
+      return false;
+    }
+    pressed.set(code, flatSlot);
     onPressedChange(pressed.size);
-    trigger(codeToSlot.get(code), velocity, "keyboard");
+    trigger(flatSlot, velocity, "keyboard");
     return true;
   }
 
   function keyUp(event) {
-    const changed = pressed.delete(event?.code);
-    if (changed) {
+    const flatSlot = pressed.get(event?.code);
+    if (flatSlot !== undefined) {
+      pressed.delete(event?.code);
+      onRelease(flatSlot, "keyboard");
       onPressedChange(pressed.size);
+      return true;
     }
-    return changed;
+    return false;
   }
 
   function clearPressed() {
     const count = pressed.size;
+    for (const flatSlot of pressed.values()) {
+      onRelease(flatSlot, "keyboard");
+    }
     pressed.clear();
     onPressedChange(0);
     return count;
@@ -316,13 +343,20 @@ export function createMidiAdapter({
   noteStart,
   slotStart,
   slotCount,
+  channel = allMidiChannels,
+  resolveSlot = (slot) => slot,
+  isAvailable = acceptAnySlot,
   onPressedChange = () => {},
+  onRelease = ignoreRelease,
 }) {
   requireTrigger(trigger);
   if (
     typeof requestMIDIAccess !== "function" ||
     typeof notify !== "function" ||
-    typeof onPressedChange !== "function"
+    typeof resolveSlot !== "function" ||
+    typeof isAvailable !== "function" ||
+    typeof onPressedChange !== "function" ||
+    typeof onRelease !== "function"
   ) {
     throw new TypeError("MIDI access and notification sinks must be injected");
   }
@@ -334,7 +368,8 @@ export function createMidiAdapter({
     !Number.isInteger(slotCount) ||
     slotCount < 1 ||
     noteStart + slotCount > 128 ||
-    slotStart + slotCount > 64
+    slotStart + slotCount > 64 ||
+    !(channel === null || (Number.isInteger(channel) && channel >= 0 && channel <= 15))
   ) {
     throw new RangeError("MIDI mapping must be a valid contiguous note and slot range");
   }
@@ -364,7 +399,7 @@ export function createMidiAdapter({
   function pressedFor(input) {
     let pressed = pressedByInput.get(input);
     if (!pressed) {
-      pressed = new Set();
+      pressed = new Map();
       pressedByInput.set(input, pressed);
     }
     return pressed;
@@ -379,6 +414,7 @@ export function createMidiAdapter({
       return false;
     }
     const status = data[0] & 0xf0;
+    const messageChannel = data[0] & 0x0f;
     const note = data[1];
     const velocity = data[2];
     if (
@@ -392,8 +428,15 @@ export function createMidiAdapter({
       return false;
     }
     const pressed = pressedFor(input);
+    if (channel !== null && messageChannel !== channel) {
+      return false;
+    }
     if (status === 0x80 || (status === 0x90 && velocity === 0)) {
+      const flatSlot = pressed.get(note);
       pressed.delete(note);
+      if (flatSlot !== undefined) {
+        onRelease(flatSlot, "midi");
+      }
       publishPressed();
       return false;
     }
@@ -404,9 +447,16 @@ export function createMidiAdapter({
     if (offset < 0 || offset >= slotCount) {
       return false;
     }
-    pressed.add(note);
+    if (pressed.has(note)) {
+      return false;
+    }
+    const flatSlot = resolveSlot(slotStart + offset);
+    if (!isFlatSlot(flatSlot) || isAvailable(flatSlot) !== true) {
+      return false;
+    }
+    pressed.set(note, flatSlot);
     publishPressed();
-    trigger(slotStart + offset, velocity, "midi");
+    trigger(flatSlot, velocity, "midi");
     return true;
   }
 
@@ -440,7 +490,11 @@ export function createMidiAdapter({
     input.removeEventListener?.("midimessage", handler);
     messageHandlers.delete(input);
     connectedInputs.delete(input);
-    const lostPressedNotes = pressedByInput.get(input)?.size ?? 0;
+    const pressed = pressedByInput.get(input);
+    const lostPressedNotes = pressed?.size ?? 0;
+    for (const flatSlot of pressed?.values() ?? []) {
+      onRelease(flatSlot, "midi");
+    }
     pressedByInput.delete(input);
     publishPressed();
     notify("midi.disconnected", {
@@ -488,6 +542,11 @@ export function createMidiAdapter({
       input.removeEventListener?.("midimessage", handler);
     }
     connectedInputs.clear();
+    for (const pressed of pressedByInput.values()) {
+      for (const flatSlot of pressed.values()) {
+        onRelease(flatSlot, "midi");
+      }
+    }
     pressedByInput.clear();
     publishPressed();
     messageHandlers.clear();
@@ -503,6 +562,9 @@ export function createMidiAdapter({
       let count = 0;
       for (const notes of pressedByInput.values()) {
         count += notes.size;
+        for (const flatSlot of notes.values()) {
+          onRelease(flatSlot, "midi");
+        }
         notes.clear();
       }
       publishPressed();
