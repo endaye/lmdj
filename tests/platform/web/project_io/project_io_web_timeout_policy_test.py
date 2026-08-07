@@ -34,6 +34,18 @@ def main() -> int:
         "on the slow Linux runner"
     )
     assert "test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);" in source
+    assert 'page.on("pageerror", onPageError);' in source, (
+        "Project I/O conformance must observe runtime failures before navigation"
+    )
+    assert "await Promise.race([" in source, (
+        "Project I/O result waits must race completion against runtime failure"
+    )
+    assert "result?.error" in source, (
+        "Project I/O conformance must fail on a reported native runtime error"
+    )
+    assert "trackedPage(context)" in source, (
+        "Project I/O conformance must observe runtime failures on child pages"
+    )
     print("Web Project I/O timeout policy: PASS")
     return 0
 

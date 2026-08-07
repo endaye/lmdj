@@ -135,6 +135,9 @@ jobs:
   web-toolchain-conformance:
     needs: select-ubuntu-runner
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
@@ -169,6 +172,9 @@ jobs:
   web-runtime-host:
     needs: select-ubuntu-runner
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v6
         with:
@@ -211,6 +217,9 @@ jobs:
   creator-web:
     needs: [select-ubuntu-runner, web-toolchain-conformance, core-ubuntu]
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    env:
+      LANG: C.UTF-8
+      LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v6
         with:

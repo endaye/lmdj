@@ -81,6 +81,19 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL", source)
                 self.assertRegex(source, r'parallel_args=\(--parallel\)')
 
+    def test_linux_browser_jobs_force_utf8_locale(self) -> None:
+        for job_name in (
+            "web-toolchain-conformance",
+            "web-runtime-host",
+            "creator-web",
+        ):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn(
+                    "    env:\n      LANG: C.UTF-8\n      LC_ALL: C.UTF-8\n",
+                    job,
+                )
+
     def test_ubuntu_apple_target_probe_reuses_proof_configuration(self) -> None:
         job = self.workflow_job("core-ubuntu")
         self.assertIn("scripts/core.sh proof", job)
