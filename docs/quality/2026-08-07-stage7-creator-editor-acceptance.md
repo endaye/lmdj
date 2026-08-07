@@ -3,9 +3,9 @@
 ## Current status
 
 Stage 7 automated local acceptance is `PASS` at source revision
-`4399dc5e182518ca3e159f65eab8827ad64ab26d`. The verified candidate is Product
-Build `1.0.16.0`, Channel `canary`, Creator Web Host `1.0.0`, and shared Web
-Runtime Platform `0.1.0`.
+`914b71c47b1d12727bd90ad93f97f1a297b96e88`. The verified corrective candidate
+is Product Build `1.0.16.1`, Channel `canary`, Creator Web Host `1.0.1`, shared
+Web Runtime Platform `0.1.1`, and Application Facade `1.3.1`.
 
 This result establishes the implemented local candidate and its clean-source
 Proof boundary. It does not establish remote CI, merge, a signed Product tag,
@@ -16,11 +16,11 @@ acceptance.
 
 | Gate | Result at the acceptance revision |
 | --- | --- |
-| `scripts/core.sh proof` | PASS; Product version checks, lock conformance, and version verification passed; 35/35 selected CTests passed; schema checks reported 9 positive cases, 11 negative cases, and 17 Product artifacts; CLI 10/10, MCP 10/10, package acceptance, Product `1.0.16.0`, Channel `canary`, and Assembly Lock `MATCH` |
+| `scripts/core.sh proof` | PASS; Product version checks, lock conformance, and version verification passed; 35/35 selected CTests passed; schema checks reported 9 positive cases, 11 negative cases, and 17 Product artifacts; CLI 10/10, MCP 10/10, package acceptance, Product `1.0.16.1`, Channel `canary`, and Assembly Lock `MATCH` |
 | `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17; two clean distributions byte-identical; Python package 14/14, server 8/8, Node 25/25, native Web CTest 3/3, and browser fixtures 6/6; packaged Chromium 15 passed/1 designed skip; WebKit 1 limitation-path pass/10 capability skips |
 | `scripts/creator-web.sh proof` | PASS; Core-generated Project Bundle pack reproducible; two clean Creator distributions byte-identical; Vitest 33/33, Python package 7/7, server 3/3, shared Platform 75/75; packaged Chromium 9 passed/1 designed skip; WebKit capability boundary 1/1 |
 | Focused Chromium reload/reopen repetition | PASS 10/10 against the clean packaged candidate; every transient writer conflict remained `PROJECT_BUSY`, visible Retry retried Project open without re-listing, and no `INVALID_PROJECT`, `HOST_STATE_INVALID`, or Wasm memory fault recurred |
-| `scripts/architecture-portal.sh check` | PASS; 40/40 Portal tests, 37 current pages, 10 diagram sources/20 outputs, Product `1.0.16.0` facts, immutable snapshot provenance, typecheck, optimized build, and 42 routes/internal links |
+| `scripts/architecture-portal.sh check` | PASS; 40/40 Portal tests, 37 current pages, 10 diagram sources/20 outputs, Product `1.0.16.1` facts, immutable snapshot provenance, typecheck, optimized build, and 42 routes/internal links |
 | `bash scripts/verify-core-dependencies.sh` | PASS |
 | `bash tests/build/test_active_tree.sh` | PASS |
 
@@ -52,13 +52,14 @@ screen recovery, or long-session stability on those platforms.
 
 | State transition | Status |
 | --- | --- |
-| Push | not authorized / not performed |
-| Pull Request | not authorized / not created |
+| Push | authorized / pending execution |
+| Pull Request | authorized / pending creation |
 | Pull Request CI | not run |
 | Merge | not authorized / not performed |
 | Product tag or GitHub Release | not authorized / not created |
 | Deployment or publication | not authorized / not performed |
 | Channel promotion | not authorized / not performed |
 
-Stage 7 remains a locally proven canary candidate until the separately
-authorized PR/CI/merge workflow and the deferred physical rows are completed.
+Stage 7 remains a locally proven canary candidate until push and Pull Request
+creation are executed, required CI is green, the separately authorized merge
+workflow completes, and the deferred physical rows are completed.

@@ -23,7 +23,7 @@ WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、O
 ## Creator Web Proof
 `scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
-Product Build `1.0.16.1` 是 `1.0.16.0` 冻结后的 corrective candidate：它修正 `PROJECT_BUSY` Retry 语义，并在启动及正常 close 生命周期清理未完成导入。该候选的 clean-source Core、Creator、Formal Web Host、Portal、dependency 与 active-tree Proof 必须全部重新执行；精确 revision、命令、计数和未获授权的外部状态只记录在 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`，不继承 `1.0.16.0` 的历史通过结论。
+Product Build `1.0.16.1` 是 `1.0.16.0` 冻结后的 corrective candidate：它修正 `PROJECT_BUSY` Retry 语义，并在启动及正常 close 生命周期清理未完成导入。该候选已重新完成 clean-source Core、Creator、Formal Web Host、Portal、dependency 与 active-tree Proof；精确 revision、命令、计数和外部状态记录在 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`，不继承 `1.0.16.0` 的历史通过结论。
 ## Web 分发 HTTP 门禁
 proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任
