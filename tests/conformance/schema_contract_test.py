@@ -10,6 +10,9 @@ contract_root = repo_root / "contracts"
 
 schema_paths = {
     "project": contract_root / "project" / "lmdj.project.v1.schema.json",
+    "project_bundle": (
+        contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
+    ),
     "capability": (
         contract_root / "capability" / "lmdj.capability.v1.schema.json"
     ),
@@ -267,6 +270,33 @@ for rule in pattern["allOf"]:
     step_limits[bars] = step["maximum"]
 assert step_limits == {1: 15, 2: 31, 4: 63, 8: 127}
 
+project_bundle = schemas["project_bundle"]
+assert set(project_bundle["required"]) == {
+    "bundle_digest",
+    "compression",
+    "contract",
+    "contract_version",
+    "entries",
+    "project_contract",
+    "project_id",
+    "uncompressed_bytes",
+}
+assert project_bundle["properties"]["contract"]["const"] == (
+    "lmdj.project-bundle.v1"
+)
+assert project_bundle["properties"]["contract_version"]["const"] == "1.0.0"
+assert project_bundle["properties"]["compression"]["const"] == "none"
+assert project_bundle["properties"]["project_contract"]["const"] == (
+    "lmdj.project.v1"
+)
+assert project_bundle["properties"]["entries"]["maxItems"] == 4096
+assert project_bundle["$defs"]["entry"]["properties"]["bytes"]["maximum"] == (
+    67_108_864
+)
+assert project_bundle["properties"]["uncompressed_bytes"]["maximum"] == (
+    536_870_912
+)
+
 module = schemas["module"]
 assert set(module["required"]) == {
     "contract",
@@ -365,6 +395,15 @@ json_schema.check(
     load_json(repo_root / "products" / "lmdj" / "version.json"),
     product_version,
     "products/lmdj/version.json",
+)
+json_schema.check(
+    load_json(fixture_root / "project-bundle-valid.json"),
+    project_bundle,
+    "project-bundle-valid",
+)
+assert json_schema.validate(
+    load_json(fixture_root / "project-bundle-invalid-traversal.json"),
+    project_bundle,
 )
 module_manifests = sorted(repo_root.glob("*/*/module.json"))
 assert len(module_manifests) >= 11, module_manifests
@@ -492,7 +531,7 @@ assert (
 ), "expected the Schema to accept empty candidate outputs"
 
 print(
-    "schema contract checks: 8 passed, "
+    f"schema contract checks: {len(schemas)} passed, "
     f"{len(negative_cases)} negative cases, "
     f"{len(module_manifests) + 2} Product artifacts validated"
 )

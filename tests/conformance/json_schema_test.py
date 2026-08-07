@@ -145,4 +145,28 @@ for path in contracts:
         path.relative_to(repo_root).as_posix(),
     )
 
+bundle_schema = json.loads(
+    (contract_root / "project" / "lmdj.project-bundle.v1.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
+bundle_fixture_root = repo_root / "tests" / "fixtures" / "contracts"
+valid(
+    json.loads(
+        (bundle_fixture_root / "project-bundle-valid.json").read_text(
+            encoding="utf-8"
+        )
+    ),
+    bundle_schema,
+)
+invalid(
+    json.loads(
+        (
+            bundle_fixture_root / "project-bundle-invalid-traversal.json"
+        ).read_text(encoding="utf-8")
+    ),
+    bundle_schema,
+    "does not match pattern",
+)
+
 print("contract schema validator tests: PASS")
