@@ -1,6 +1,9 @@
 import {expect, test} from "@playwright/test";
 
-import {REPLACEMENT_FAULT_POINTS} from "./project_io_web_faults.mjs";
+import {
+  PUBLICATION_FAULT_POINTS,
+  REPLACEMENT_FAULT_POINTS,
+} from "./project_io_web_faults.mjs";
 
 const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfs",
@@ -78,6 +81,53 @@ async function clearFaultControl(page) {
   });
 }
 
+async function preparePublicationFixture(page, bundle) {
+  await page.evaluate(async ({bundle}) => {
+    const root = await navigator.storage.getDirectory();
+    await root.removeEntry(`${bundle}.lmdj`, {recursive: true}).catch(() => {});
+    const host = await root.getDirectoryHandle(".lmdj-host", {create: true});
+    const fixtures = await host.getDirectoryHandle(
+        "publication-fixtures", {create: true});
+    await fixtures.removeEntry(bundle, {recursive: true}).catch(() => {});
+    const source = await fixtures.getDirectoryHandle(bundle, {create: true});
+    const nested = await source.getDirectoryHandle("nested", {create: true});
+    const payload = await nested.getFileHandle("payload.bin", {create: true});
+    const bytes = new Uint8Array(1_048_593);
+    for (let index = 0; index < bytes.length; ++index) {
+      bytes[index] = index % 251;
+    }
+    const writable = await payload.createWritable({keepExistingData: false});
+    await writable.write(bytes);
+    await writable.close();
+  }, {bundle});
+}
+
+async function writeMalformedPublicationIntent(page, bundle) {
+  await page.evaluate(async ({bundle}) => {
+    const destination = `/lmdj-workspace/${bundle}.lmdj`;
+    const digest = new Uint8Array(await crypto.subtle.digest(
+        "SHA-256", new TextEncoder().encode(destination)));
+    const scope = [...digest]
+        .map((byte) => byte.toString(16).padStart(2, "0"))
+        .join("");
+    const root = await navigator.storage.getDirectory();
+    const partial = await root.getDirectoryHandle(
+        `${bundle}.lmdj`, {create: true});
+    const partialFile = await partial.getFileHandle("partial.bin", {create: true});
+    const partialWritable = await partialFile.createWritable();
+    await partialWritable.write("partial");
+    await partialWritable.close();
+    const host = await root.getDirectoryHandle(".lmdj-host", {create: true});
+    const intents = await host.getDirectoryHandle("storage-intents", {create: true});
+    const directory = await intents.getDirectoryHandle(scope, {create: true});
+    const marker = await directory.getFileHandle(
+        "directory-publication.json", {create: true});
+    const writable = await marker.createWritable({keepExistingData: false});
+    await writable.write("{");
+    await writable.close();
+  }, {bundle});
+}
+
 async function snapshotLeaseEntries(page) {
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
@@ -146,12 +196,11 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.mountFailure).toBe("pass");
   expect(result.idempotentRemove).toBe("pass");
   expect(result.immutableShortWrites).toBe("pass");
-  const directoryMoveSupported = await page.evaluate(
-      () => typeof FileSystemDirectoryHandle.prototype.move === "function");
-  expect(result.directoryTransfer).toBe(
-      directoryMoveSupported ? "pass" : "unsupported");
+  expect(result.directoryTransfer).toBe("pass");
   expect(result.directoryBarrier).toBe("absent");
   expect(result.replacementFaultPoints).toEqual(REPLACEMENT_FAULT_POINTS);
+  expect(result.publicationFaultPoints).toEqual(PUBLICATION_FAULT_POINTS);
+  expect(result.publicationMaxChunkBytes).toBe(1_048_576);
 
   const leaseInspector = await context.newPage();
   const firstLeasePage = await context.newPage();
@@ -301,4 +350,85 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect((await waitForResult(immutableRestarted)).state).toBe("immutable-retry");
   await immutableRestarted.close();
   await immutableController.close();
+
+  for (const [index, point] of PUBLICATION_FAULT_POINTS.entries()) {
+    const bundle = `publication-fault-${index}-${Date.now()}`;
+    const controller = await context.newPage();
+    await controller.goto("/preflight.html");
+    await preparePublicationFixture(controller, bundle);
+    await writeFaultControl(
+        controller, `/lmdj-workspace/${bundle}.lmdj`, point);
+
+    const interrupted = await context.newPage();
+    await interrupted.goto(
+        `/project_io/project_io_web_test.html?action=publish_publication&bundle=${bundle}`);
+    await waitForFault(controller, point);
+    await interrupted.close();
+    await clearFaultControl(controller);
+
+    const inspector = await context.newPage();
+    await inspector.goto(
+        `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${bundle}`);
+    const beforeRecovery = await waitForResult(inspector);
+    const committed = index >= 7;
+    expect(beforeRecovery.visible).toBe(committed);
+    if (committed) expect(beforeRecovery.complete).toBe(true);
+
+    const recovery = await context.newPage();
+    const recoveryAction = committed
+      ? "recover_publication"
+      : "recover_and_publish";
+    await recovery.goto(
+        `/project_io/project_io_web_test.html?action=${recoveryAction}&bundle=${bundle}`);
+    expect(await waitForResult(recovery)).toEqual({
+      visible: true,
+      physical: true,
+      complete: true,
+      source: false,
+    });
+    await recovery.close();
+    await inspector.close();
+    await controller.close();
+  }
+
+  const malformedBundle = `publication-malformed-${Date.now()}`;
+  const malformedController = await context.newPage();
+  await malformedController.goto("/preflight.html");
+  await preparePublicationFixture(malformedController, malformedBundle);
+  await writeMalformedPublicationIntent(malformedController, malformedBundle);
+  const malformedInspector = await context.newPage();
+  await malformedInspector.goto(
+      `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${malformedBundle}`);
+  expect(await waitForResult(malformedInspector)).toEqual({
+    visible: false,
+    physical: true,
+    complete: false,
+    source: true,
+  });
+  const malformedRecovery = await context.newPage();
+  await malformedRecovery.goto(
+      `/project_io/project_io_web_test.html?action=recover_and_publish&bundle=${malformedBundle}`);
+  expect(await waitForResult(malformedRecovery)).toEqual({
+    visible: true,
+    physical: true,
+    complete: true,
+    source: false,
+  });
+  await malformedRecovery.close();
+  await malformedInspector.close();
+  await malformedController.close();
+
+  const legacyBundle = `publication-legacy-${Date.now()}`;
+  const legacyController = await context.newPage();
+  await legacyController.goto("/preflight.html");
+  await legacyController.evaluate(async ({bundle}) => {
+    const root = await navigator.storage.getDirectory();
+    await root.getDirectoryHandle(`${bundle}.lmdj`, {create: true});
+  }, {bundle: legacyBundle});
+  const legacyInspector = await context.newPage();
+  await legacyInspector.goto(
+      `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${legacyBundle}`);
+  expect((await waitForResult(legacyInspector)).visible).toBe(true);
+  await legacyInspector.close();
+  await legacyController.close();
 });

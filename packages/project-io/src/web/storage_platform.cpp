@@ -27,6 +27,8 @@ int lmdj_opfs_append_durable(const char*, int, double, const void*, int);
 int lmdj_opfs_create_immutable_test(const char*, int, const void*, int);
 int lmdj_opfs_replace_complete_test(const char*, int, const void*, int);
 int lmdj_opfs_append_durable_test(const char*, int, double, const void*, int);
+int lmdj_opfs_publish_directory_if_absent_test(
+    const char*, int, const char*, int);
 #endif
 int lmdj_opfs_remove(const char*, int);
 int lmdj_opfs_list_names(const char*, int, char**, int*);
@@ -236,7 +238,12 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
     if (!mounted_) return mount_failure();
     const auto source_path = web_path(staging);
     const auto destination_path = web_path(destination);
-    const int status = lmdj_opfs_publish_directory_if_absent(
+    const int status =
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+        lmdj_opfs_publish_directory_if_absent_test(
+#else
+        lmdj_opfs_publish_directory_if_absent(
+#endif
         source_path.data(),
         source_path.size(),
         destination_path.data(),
