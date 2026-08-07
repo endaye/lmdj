@@ -1262,9 +1262,14 @@ using lmdj::web_runtime::detail::AudioQuiescenceCoordinator;
 em_proxying_queue* web_proxy_queue = nullptr;
 pthread_t web_control_thread{};
 ManifestGate web_manifest_gate;
-constexpr std::array<ManifestExpectation::ComponentIdentity, 1>
+constexpr std::array<ManifestExpectation::ComponentIdentity, 2>
     web_allowed_hosts{{
-        {LMDJ_WEB_ALLOWED_HOST_ID, LMDJ_WEB_ALLOWED_HOST_VERSION},
+        {LMDJ_WEB_CREATOR_DISTRIBUTION_CONTRACT,
+         LMDJ_WEB_CREATOR_HOST_ID,
+         LMDJ_WEB_CREATOR_HOST_VERSION},
+        {LMDJ_WEB_DIAGNOSTIC_DISTRIBUTION_CONTRACT,
+         LMDJ_WEB_DIAGNOSTIC_HOST_ID,
+         LMDJ_WEB_DIAGNOSTIC_HOST_VERSION},
     }};
 std::unique_ptr<ControlRuntime> web_runtime;
 std::unique_ptr<ControlBridge> web_bridge_owner;
@@ -1585,7 +1590,6 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_initialize_manifest(
       std::span<const std::byte>(canonical_bytes, canonical_size),
       std::string_view(expected_sha256, expected_sha256_size),
       ManifestExpectation{
-          LMDJ_WEB_DISTRIBUTION_CONTRACT,
           LMDJ_WEB_PRODUCT_BUILD,
           LMDJ_WEB_PLATFORM_VERSION,
           web_allowed_hosts,

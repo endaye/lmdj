@@ -6,6 +6,9 @@ owners: [web, audio]
 source_paths:
   - apps/web-runtime-lab
   - apps/web-runtime-host
+  - apps/creator-web
+  - packages/web-runtime-platform
+  - scripts/creator-web.sh
   - scripts/web-runtime-host.sh
   - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
   - docs/quality/web-runtime-lab-acceptance.md
@@ -16,21 +19,26 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity />
 
-## 当前 Lab
-Web Runtime Lab 验证静态服务、WASM Core Probe、AudioWorklet 和物理证据准备器；它不在 Product Assembly。
-## 正式 Host 分发
-正式 Web Runtime Host `1.1.0` 已进入当前本地候选 Product Build `1.0.15.0` Assembly。它具备固定 Emscripten 身份的双 clean-build 字节可复现门、内容哈希资产、带 ownership contract 的 canonical manifest、Browser Main 与 Control 双重身份门禁、Dedicated Worker realm 的 OPFS capability proof，以及只服务已完整验证 dist 的 proof-only CSP server。manifest 绑定当前 Product Build、协议 `1`、固定 512 MiB heap、资源上限和九项生产资产的精确 inventory；AudioWorklet 的 Emscripten 固定自引用也精确绑定同一 manifest 已验证的内容哈希 runtime。
-## 线程模型
-主线程处理 UI/control，AudioWorklet 处理实时音频；消息与 buffer 边界必须保持有界。
-## 验收阈值
-Task 10 自动化证明 deterministic/atomic package、无旧进程冒充的 proof server readiness、隔离 headers/cache、无 shim 的 packaged Host 启动，以及 manifest 失败或迟到初始化时零新增 OPFS mutation。Task 11 的 packaged Chromium 全旅程现进一步证明：真实 Facade/OPFS Project create/import/assign/Snapshot，500 个 admission sequence 与 500 个 `voice_started` outcome 精确一一对应且零容量损失，20+1 Trigger 的 Take 提交后精确保留 20 个 event，page/Worker restart 后重开同一 Project，并覆盖 Snapshot 拒绝保留旧 generation、显式 suspend、单 probe recovery、writer lease contention、protocol mismatch、`HOST_TIMEOUT` 后 lease 释放与 clean close。
+## 当前组成
 
-Task 13 A 进一步固定 Project mutation deadline：唯一绝对 cutoff 在同步 JavaScript-to-Wasm envelope/sidecar copy 之前开始，native steady deadline 不会因 copy、queue handoff 或主线程 timer 阻塞而后移；source-shell controller 只把 operation deadline 交给权威 transport，不再另起竞争 timer，1,000 ms recovery-outcome watchdog 与 runtime-terminator deadline 则保持独立；publication 仍 open 时 cancellation 可赢并返回 `HOST_TIMEOUT`；publication claim 先赢时，claim 是取消截止点，越过 caller deadline 后仍返回真实 committed success 或 aborted error。claimed settlement 的生产 watchdog 精确为 1,000 ms；超时返回带 `terminal_state: restart-required`、`mutation_outcome: unknown` 的 `HOST_RESTART_REQUIRED`，Host 保持 failed/sealed，并在重开时接受 old-or-new authoritative truth、清理 manifest 未引用文件后允许 inspect/retry。terminal BroadcastChannel 只负责唤醒，Control 的 native authorize/complete 与 Browser Main 的一次性 consume 让 forged/replayed ACK 和 duplicate release 无法制造 completion，真实 completion 也只能消费一次；packaged `CONFORMANCE=OFF` regression 同时覆盖 responsive native completion、无 native completion 时不可跳过的 100 ms force-terminate fallback、deadline-after-claim cancel telemetry 与 once-only terminal delivery。这些自动化证据不改变五项物理门状态。
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.1.0`、Diagnostic Web Runtime Host `1.2.0` 与 Creator Web Host `1.0.0` 组成，并锁入 Product Build `1.0.16.0`。
 
-当前本地候选把真实人工前置序列固定为 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`。Chromium 自动化证明首次准备为一次 create、一次 import、64 次 assignment、revision `65`，Pointer/Keyboard 各有一个精确 `voice_started` outcome；reload 后同一 browser-local descriptor 被重开，零重复 mutation、revision 不变并可再次激活。descriptor UUID 不进入 DOM diagnostics。该证据不等于声学延迟、物理 MIDI、Safari/iPad Touch 或主观音质验收。
+## 共享 Platform
 
-Playwright WebKit 仅是 capability/protocol/OPFS/restart/lifecycle smoke；当前 runner 以 `UNSUPPORTED_WEB_RUNTIME` 明确记录缺少 `opfsSyncAccessHandle` 与 `opfsWritableReplace`，不能冒充完整 WebKit 产品验收。五项物理门仍是 `deferred / unverified`：macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome Physical MIDI、iPadOS Safari Touch、iPadOS Safari Touch lifecycle；延迟、underrun 与真实设备体验仍由独立 evaluator 判定。
-## 非能力
-当前不承诺离线安装、Creator Web/PWA 交付、跨物理设备一致体验或 `beta`/`stable` 质量；proof-only server 不属于生产部署面。
-## 下一门禁
-历史 `1.0.14.0` 的 Assembly、PR CI 与 merged-main 自动化 Proof 已建立；当前 `1.0.15.0` / Host `1.1.0` 只有本地候选 Proof。匹配 Build 的快照存在性与 provenance 由 Portal 版本门禁独立验证，不从 current 页面或 Task 阶段推断。五项物理 dossier、signed Product tag、发布和 Channel promotion 仍需各自独立授权与证据；自动化仍不替代物理证据。
+两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。
+
+## 分发与服务
+
+两个 Host 都生成 canonical manifest 与内容哈希资产；固定 Emscripten `6.0.5`、512 MiB heap、协议 `1` 和资源上限。proof-only server 在 bind 前验证完整 dist，并固定 COOP/COEP/CORP/CSP、MIME、cache、no-follow 与每请求 hash；它不是生产部署服务。
+
+## 线程与生命周期
+
+主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。Manifest mismatch、publication outcome unknown、终止与重启恢复 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
+
+## 自动化范围
+
+共享 C++/Node tests 固定 manifest、transport、input、recovery 与 realtime session；Creator 和 Diagnostic 的 packaged Playwright proof 分别验证创作旅程与诊断压力/Take/lifecycle 路径。WebKit capability smoke 只有在 mandatory primitive 可用时才能升级为完整自动化 PASS。
+
+## 非能力与下一门禁
+
+当前不承诺离线安装、生产部署、跨物理设备一致体验或 `beta`/`stable` 质量。macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome Physical MIDI、iPadOS Safari Touch、iPadOS Safari lifecycle 五项仍为 `deferred / unverified`；声学延迟、underrun 与主观听感由独立 evaluator 判定。Snapshot、tag、PR/CI、merge、发布和 Channel promotion 各自需要独立证据。

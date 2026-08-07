@@ -86,9 +86,9 @@ function fixture({
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
-      hostVersion: "1.1.0",
+      hostVersion: "1.2.0",
       platformVersion: "0.1.0",
-      productBuild: "1.0.15.0",
+      productBuild: "1.0.16.0",
       protocolVersion: 1,
     },
     inputConfiguration: {},
@@ -107,9 +107,9 @@ function fixture({
       transport,
       verifyManifest: async () => ({
         host_id: "web-runtime-host",
-        host_version: "1.1.0",
+        host_version: "1.2.0",
         platform_version: "0.1.0",
-        product_build: "1.0.15.0",
+        product_build: "1.0.16.0",
         protocol_version: 1,
       }),
     },

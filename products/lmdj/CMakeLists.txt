@@ -35,6 +35,29 @@ target_link_libraries(
     lmdj_product_lmdj_assembly
 )
 if(TARGET lmdj_web_runtime_host)
+  file(READ "${CMAKE_CURRENT_SOURCE_DIR}/version.json" lmdj_web_version_json)
+  foreach(lmdj_web_version_part IN ITEMS milestone minor build patch)
+    string(
+      JSON lmdj_web_version_${lmdj_web_version_part}
+      GET "${lmdj_web_version_json}" "${lmdj_web_version_part}"
+    )
+  endforeach()
+  set(
+    lmdj_web_product_build
+    "${lmdj_web_version_milestone}.${lmdj_web_version_minor}.${lmdj_web_version_build}.${lmdj_web_version_patch}"
+  )
+  target_compile_definitions(
+    lmdj_web_runtime_host
+    PRIVATE
+      LMDJ_WEB_PRODUCT_BUILD="${lmdj_web_product_build}"
+      LMDJ_WEB_PLATFORM_VERSION="0.1.0"
+      LMDJ_WEB_CREATOR_DISTRIBUTION_CONTRACT="lmdj.creator-web.distribution.v1"
+      LMDJ_WEB_CREATOR_HOST_ID="creator-web"
+      LMDJ_WEB_CREATOR_HOST_VERSION="1.0.0"
+      LMDJ_WEB_DIAGNOSTIC_DISTRIBUTION_CONTRACT="lmdj.web-runtime-host.distribution.v1"
+      LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"
+      LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.0"
+  )
   target_link_libraries(
     lmdj_web_runtime_host
     PRIVATE

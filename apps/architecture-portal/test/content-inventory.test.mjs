@@ -13,9 +13,10 @@ const requiredRoutes = [
   'overview/index', 'product/positioning', 'product/capability-map', 'product/workflows',
   'core/overview', 'core/modules/foundation', 'core/modules/authoring-domain', 'core/modules/project-io',
   'core/modules/project-cooker', 'core/modules/audio-runtime', 'core/modules/provider-sdk',
-  'core/modules/application-facade', 'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp',
-  'hosts/native-test-host', 'hosts/web-runtime', 'providers/overview', 'providers/local-proof',
-  'contracts/overview', 'contracts/project', 'contracts/runtime-snapshot',
+  'core/modules/application-facade', 'core/modules/web-runtime-platform', 'hosts/overview',
+  'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-test-host', 'hosts/web-runtime',
+  'hosts/creator-web', 'providers/overview', 'providers/local-proof',
+  'contracts/overview', 'contracts/project', 'contracts/project-bundle', 'contracts/runtime-snapshot',
   'contracts/capability', 'contracts/assembly', 'contracts/error-module-version',
   'assembly/lmdj', 'platform/native-audio', 'platform/web-runtime', 'platform/storage',
   'platform/input', 'operations/testing-and-proof', 'operations/version-and-release',
@@ -36,7 +37,7 @@ test('formal snapshot does not describe itself as current main documentation', a
   assert.match(body, /正式快照/);
 });
 
-test('current overview uses stable doc IDs and all nine diagram callers use validated IDs', async () => {
+test('current overview uses stable doc IDs and all ten diagram callers use validated IDs', async () => {
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
   const docIds = [...overview.matchAll(/docId:\s*['"]([^'"]+)['"]/g)].map((match) => match[1]);
   assert.equal(docIds.length, 9);
@@ -53,6 +54,7 @@ test('current overview uses stable doc IDs and all nine diagram callers use vali
     ['core/modules/audio-runtime.mdx', 'audio-runtime'],
     ['core/modules/provider-sdk.mdx', 'provider-sdk'],
     ['core/modules/application-facade.mdx', 'application-facade'],
+    ['core/modules/web-runtime-platform.mdx', 'web-runtime-platform'],
   ];
   for (const [relative, diagramId] of callers) {
     const body = await readFile(path.join(docsRoot, relative), 'utf8');
@@ -82,14 +84,13 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   }
 
   const capability = await readFile(path.join(docsRoot, 'product/capability-map.mdx'), 'utf8');
-  assert.match(capability, /Formal Web Runtime Host `1\.1\.0` 已装配/);
+  assert.match(capability, /Creator Web Host `1\.0\.0` 与 Formal Web Runtime Host `1\.2\.0` 已装配/);
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
-  assert.match(proof, /PR #91/);
-  assert.match(proof, /31009477920/);
-  assert.match(proof, /31009477985/);
-  assert.match(proof, /d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf/);
+  assert.match(proof, /Product Build `1\.0\.16\.0`/);
+  assert.match(proof, /scripts\/creator-web\.sh/);
+  assert.match(proof, /不继承历史 Build 的 PR、CI 或 merge 结论/);
   assert.doesNotMatch(proof, /Pull Request CI[^。]+pending/);
   assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 5);
 

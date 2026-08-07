@@ -17,6 +17,7 @@ const DIAGRAM_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const DIAGRAM_IDS = Object.freeze([
   'application-facade', 'audio-runtime', 'authoring-domain', 'foundation',
   'lmdj-core', 'lmdj-product', 'project-cooker', 'project-io', 'provider-sdk',
+  'web-runtime-platform',
 ]);
 
 function canonicalize(value) {
@@ -268,7 +269,7 @@ export async function createSnapshotMetadata({
   revision,
   facts,
   now = () => new Date(),
-  expectedDocCount = 34,
+  expectedDocCount = 37,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
 }) {
@@ -446,7 +447,7 @@ export async function verifySnapshotProvenance({
   portalRoot,
   metadata,
   headRevision,
-  expectedDocCount = 34,
+  expectedDocCount = 37,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
   readFactsAtRevision: factsReader = readRepoFactsAtRevision,

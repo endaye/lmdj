@@ -7,6 +7,7 @@ import versionFacts from '@site/src/generated/version-facts.json';
 const DIAGRAM_IDS = new Set([
   'application-facade', 'audio-runtime', 'authoring-domain', 'foundation',
   'lmdj-core', 'lmdj-product', 'project-cooker', 'project-io', 'provider-sdk',
+  'web-runtime-platform',
 ]);
 
 type DiagramFrameProps = {title: string; diagramId: string; html?: never; svg?: never} |

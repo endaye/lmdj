@@ -18,7 +18,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="partial" /> 当前本地候选 Product Build `1.0.15.0` 的 Assembly-listed Web Runtime Host `1.1.0` 已实现 64-Pad Pointer、Keyboard 与 Web MIDI adapter。`partial` 表示物理输入与延迟验收仍未完成，不表示 Host 尚未装配。
+<StatusBadge status="partial" /> Product Build `1.0.16.0` 的 Creator Web Host `1.0.0` 与 Diagnostic Web Runtime Host `1.2.0` 通过共享 Web Runtime Platform `0.1.0` 使用 64-Pad Pointer、Keyboard 与 Web MIDI adapter。`partial` 表示 mapping UI、物理输入与延迟验收仍未完成，不表示 Host 尚未装配。
 
 ## 目标事件
 
@@ -30,7 +30,7 @@ Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的唯一 `trigger(flatSl
 
 ## 自动化证据
 
-Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coordinate suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Chromium packaged journey 通过可见 Load/Activate 流程覆盖实际 DOM Pointer Pad、mapped Keyboard、500 次 sequence-addressed Trigger、lifecycle 与 recovery 路由；它不替代物理设备测量。
+Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coordinate suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Creator 与 Diagnostic packaged Chromium journey 分别覆盖实际 DOM Pointer Pad、mapped Keyboard、sequence-addressed Trigger、lifecycle 与 recovery 路由；它们不替代物理设备测量。
 
 ## 非能力
 

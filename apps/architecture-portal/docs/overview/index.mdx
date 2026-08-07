@@ -7,6 +7,7 @@ status: partial
 owners: [product, core]
 source_paths:
   - products/lmdj/assembly.lock.json
+  - docs/superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md
   - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
   - docs/prd/decision-log.md
   - docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
@@ -18,7 +19,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity />
 
-LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库已经实现可验证的 Headless Core Proof；Formal Web Runtime Host `1.1.0` 已进入当前本地候选 Product Build `1.0.15.0` 的 Product Assembly，并通过自动化 clean-distribution Web Proof。面向创作者的完整产品 GUI 与生产/云 Provider 仍需按各自页面标注的门禁推进。
+LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库已经实现可验证的 Headless Core Proof，并在 Product Build `1.0.16.0` 装配 Creator Web Host `1.0.0`、Formal Web Runtime Host `1.2.0` 与共享 Web Runtime Platform `0.1.0`。Creator 已提供本地 Project create/open、portable Bundle import/export、Pad 素材分配与共享 Runtime 演奏壳；Sequence 编辑、生产/云 Provider、离线安装和物理设备验收仍按各自页面的门禁推进。
 
 :::info[构建身份]
 上方 Build Identity 会明确标出本页属于随 `main` 演进的 current 说明书，还是某个 Product Build 的不可变正式快照；版本下拉菜单用于在两类证据之间切换。
@@ -34,8 +35,8 @@ Project Truth 是权威创作状态；Runtime Snapshot 是不可变派生状态�
 
 <SectionCards items={[
   {title: '产品', description: '定位、能力边界与核心工作流。', docId: 'product/positioning', status: 'partial'},
-  {title: 'Core Modules', description: '七个产品中立模块及其依赖。', docId: 'core/modules/foundation', status: 'implemented'},
-  {title: 'Hosts', description: 'CLI、MCP、Native Test 与 Web Runtime。', docId: 'hosts/overview', status: 'partial'},
+  {title: 'Core Modules', description: '八个产品中立模块及其依赖。', docId: 'core/modules/foundation', status: 'implemented'},
+  {title: 'Hosts', description: 'CLI、MCP、Native、Diagnostic Web 与 Creator Web。', docId: 'hosts/overview', status: 'partial'},
   {title: 'Providers', description: '能力发现、Attempt 与 Proof Provider。', docId: 'providers/overview', status: 'partial'},
   {title: 'Contracts', description: '跨语言边界和不可变运行态。', docId: 'contracts/overview', status: 'implemented'},
   {title: 'Assembly', description: 'LMDJ 产品组合与版本身份。', docId: 'assembly/lmdj', status: 'implemented'},
@@ -46,9 +47,9 @@ Project Truth 是权威创作状态；Runtime Snapshot 是不可变派生状态�
 
 ## 当前交付状态
 
-- **已实现**：七个 Core Module、CLI/MCP/Native Test Host 与 Formal Web Runtime Host `1.1.0`、两个本地 Proof Provider、六个 active Contract 与 LMDJ Assembly。
-- **部分实现**：原生音频自动化 Proof；Web Runtime Lab 仍是独立实验工具，不是正式 Host；物理设备体验证据单列，不由自动化测试代替。
-- **已设计/规划中**：产品 GUI 与生产/云 Provider。
+- **已实现**：八个 Core Module、五个 Assembly-listed Host、两个本地 Proof Provider、七个 active Contract 与 LMDJ Assembly；Creator 已覆盖 Project workspace、portable transfer、Pad 分配和共享 Runtime 壳。
+- **部分实现**：Creator 完整编辑体验、原生音频与 Web 物理设备体验；Web Runtime Lab 仍是独立实验工具，不是正式 Host。
+- **已设计/规划中**：Sequence 编辑、素材智能、生产/云 Provider、离线安装与正式部署。
 - **已退役**：旧 Patch/Materials 架构只保留在 History，active source 不得依赖。
 
 ## 文档与证据规则

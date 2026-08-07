@@ -12,8 +12,7 @@ HOST_ROOT = REPO_ROOT / "apps"
 PROVIDER_ROOT = REPO_ROOT / "providers"
 FORBIDDEN_PACKAGE_REFERENCES = ("products/lmdj/", "apps/creator-web/")
 EXPECTED_WEB_HOST_DEPENDENCIES = {
-    "application-facade": "1.2.0",
-    "audio-runtime": "0.4.0",
+    "web-runtime-platform": "0.1.0",
 }
 
 
@@ -130,7 +129,16 @@ assert web_host_path == REPO_ROOT / "apps/web-runtime-host/module.json"
 assert web_host_manifest == {
     "contract": "lmdj.module.v1",
     "module": "web-runtime-host",
-    "version": "1.1.0",
+    "version": "1.2.0",
+    "api_version": 1,
+    "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
+}
+creator_path, creator_manifest = host_manifests["creator-web"]
+assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
+assert creator_manifest == {
+    "contract": "lmdj.module.v1",
+    "module": "creator-web",
+    "version": "1.0.0",
     "api_version": 1,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
@@ -186,6 +194,13 @@ assert web_host_link is not None, (
     "Product Assembly must link the compiled catalog only when the "
     "Emscripten Web Host target exists"
 )
+for identity in (
+    'LMDJ_WEB_CREATOR_HOST_ID="creator-web"',
+    'LMDJ_WEB_CREATOR_HOST_VERSION="1.0.0"',
+    'LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"',
+    'LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.0"',
+):
+    assert identity in product_cmake, identity
 
 # Exercise the graph checker against cases that the current tree does not
 # naturally contain, so future refactors cannot make these gates vacuous.

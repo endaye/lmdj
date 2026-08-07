@@ -1,27 +1,35 @@
 {
   "schema_version": 1,
-  "meta": {"title": "LMDJ Headless Core", "summary": "七个 Core Module、Host/Provider 隔离及不可变 Runtime Snapshot 数据流"},
-  "boundaries": [{"id": "modules", "label": "packages/ · product-neutral modules", "x": 280, "y": 104, "width": 1236, "height": 458}],
+  "meta": {"title": "LMDJ Headless Core", "summary": "八个产品中立 Module、Host/Provider 隔离及不可变 Runtime Snapshot 数据流"},
+  "boundaries": [{"id": "modules", "label": "packages/ · product-neutral modules", "x": 270, "y": 92, "width": 1250, "height": 490}],
   "components": [
-    {"id": "hosts", "label": "Hosts", "detail": "只依赖 Facade", "kind": "host", "x": 42, "y": 178, "width": 190, "height": 92},
-    {"id": "facade", "label": "Application Facade", "detail": "orchestration", "kind": "core", "x": 320, "y": 178, "width": 206, "height": 92},
-    {"id": "domain", "label": "Authoring Domain", "detail": "Project Truth", "kind": "core", "x": 584, "y": 178, "width": 198, "height": 92},
-    {"id": "cooker", "label": "Project Cooker", "detail": "deterministic", "kind": "core", "x": 840, "y": 178, "width": 188, "height": 92},
-    {"id": "snapshot", "label": "Runtime Snapshot", "detail": "immutable", "kind": "core", "x": 1086, "y": 178, "width": 194, "height": 92},
-    {"id": "audio", "label": "Audio Runtime", "detail": "realtime", "kind": "core", "x": 1338, "y": 178, "width": 178, "height": 92},
-    {"id": "io", "label": "Project I/O", "detail": "Store · Journal", "kind": "core", "x": 584, "y": 384, "width": 198, "height": 92},
-    {"id": "sdk", "label": "Provider SDK", "detail": "Attempt isolation", "kind": "core", "x": 840, "y": 384, "width": 188, "height": 92},
-    {"id": "provider", "label": "Provider", "detail": "Artifact sink", "kind": "provider", "x": 1086, "y": 384, "width": 194, "height": 92}
+    {"id": "hosts", "label": "Native Hosts", "detail": "Facade only", "kind": "host", "x": 35, "y": 150, "width": 190, "height": 92},
+    {"id": "web-hosts", "label": "Web Hosts", "detail": "Creator · Diagnostic", "kind": "host", "x": 35, "y": 390, "width": 190, "height": 92},
+    {"id": "web-platform", "label": "Web Runtime Platform", "detail": "browser adapter", "kind": "core", "x": 305, "y": 390, "width": 210, "height": 92},
+    {"id": "facade", "label": "Application Facade", "detail": "orchestration", "kind": "core", "x": 305, "y": 150, "width": 210, "height": 92},
+    {"id": "domain", "label": "Authoring Domain", "detail": "Project Truth", "kind": "core", "x": 565, "y": 150, "width": 190, "height": 92},
+    {"id": "cooker", "label": "Project Cooker", "detail": "deterministic", "kind": "core", "x": 805, "y": 150, "width": 180, "height": 92},
+    {"id": "snapshot", "label": "Runtime Snapshot", "detail": "immutable", "kind": "core", "x": 1035, "y": 150, "width": 190, "height": 92},
+    {"id": "audio", "label": "Audio Runtime", "detail": "realtime", "kind": "core", "x": 1275, "y": 150, "width": 180, "height": 92},
+    {"id": "io", "label": "Project I/O", "detail": "Store · Bundle · Journal", "kind": "core", "x": 565, "y": 390, "width": 190, "height": 92},
+    {"id": "sdk", "label": "Provider SDK", "detail": "Attempt isolation", "kind": "core", "x": 805, "y": 390, "width": 180, "height": 92},
+    {"id": "provider", "label": "Provider", "detail": "Artifact sink", "kind": "provider", "x": 1035, "y": 390, "width": 190, "height": 92}
   ],
   "connections": [
-    {"from": "hosts", "to": "facade"}, {"from": "facade", "to": "domain"},
-    {"from": "domain", "to": "cooker"}, {"from": "cooker", "to": "snapshot"},
-    {"from": "snapshot", "to": "audio"}, {"from": "domain", "to": "io"},
-    {"from": "facade", "to": "sdk"}, {"from": "sdk", "to": "provider"}
+    {"from": "hosts", "to": "facade"},
+    {"from": "web-hosts", "to": "web-platform"},
+    {"from": "web-platform", "to": "facade"},
+    {"from": "facade", "to": "domain"},
+    {"from": "domain", "to": "cooker"},
+    {"from": "cooker", "to": "snapshot"},
+    {"from": "snapshot", "to": "audio"},
+    {"from": "domain", "to": "io"},
+    {"from": "facade", "to": "sdk"},
+    {"from": "sdk", "to": "provider"}
   ],
   "cards": [
     {"title": "Foundation", "body": "Artifact、JSON、typed error 为所有路径提供共同底座。"},
-    {"title": "Contracts", "body": "Project、Capability、Assembly、Error、Module、Product Version 固定跨边界语义。"},
-    {"title": "禁止路径", "body": "Host 不解析 bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。"}
+    {"title": "Contracts", "body": "Project Bundle 只负责 transfer；Project Truth 与 Runtime Snapshot 语义不变。"},
+    {"title": "禁止路径", "body": "Host 不解析 Bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。"}
   ]
 }

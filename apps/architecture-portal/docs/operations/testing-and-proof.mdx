@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, scripts/web-toolchain-conformance.sh, tests, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/web-toolchain-conformance.sh, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -20,6 +20,8 @@ unit/component 验证局部边界，integration/e2e 验证组合，stress 验证
 Chromium journey 的第一段只通过可见控件执行 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`。fresh origin 首次准备必须恰好产生一次 create、一次 import、64 次 assignment 与 revision `65`；Pointer 和 Keyboard 必须各产生一个 admission 和一个 `voice_started` outcome；reload 后同一 browser-local descriptor 必须零重复 mutation、revision 不变并再次进入 `running`，且 descriptor 的三个 UUID 不得进入 DOM diagnostics。随后对 500 个 paced Trigger 保存所有 admitted sequence，排空并比较完整 outcome 集合，拒绝 missing、duplicate、unknown、`voice_capacity`、queue/Bank transition/Outcome Ring drop；Take 路径证明 20 个 capture event、stop 后第 21 个 Trigger 不进入已停止 Take、Facade commit/inspect、page/Worker restart、OPFS reopen 与重新发布。失败路径覆盖 44.1 kHz Snapshot 拒绝且旧 generation 留存、显式 suspend/recovery、竞争 writer 的 `PROJECT_BUSY`、mutation 前 protocol mismatch、精确 recovery outcome timeout、timeout 后 lease 重获与 clean close。
 
 WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、OPFS、restart 与 lifecycle；否则必须输出结构化 `UNSUPPORTED_WEB_RUNTIME` limitation。当前 Playwright WebKit 缺少 `opfsSyncAccessHandle` 与 `opfsWritableReplace`，因此是明确限制记录，不是完整 PASS。
+## Creator Web Proof
+`scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 ## Web 分发 HTTP 门禁
 proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任
@@ -33,6 +35,6 @@ macOS Core Proof 与 native ASan 优先选择带 `lmdj` 标签、在线且空闲
 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 commit 的 GitHub required checks。
 ## 证据分离
-本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。当前本地 `1.0.15.0` / Host `1.1.0` 候选的 `scripts/web-runtime-host.sh proof` 已通过；精确测试计数以同一候选的验收记录和命令输出为准。它不继承历史 `1.0.14.0` 的 PR #91 [Core CI](https://github.com/endaye/lmdj/actions/runs/31009477920)、[Architecture Portal CI](https://github.com/endaye/lmdj/actions/runs/31009477985) 或 merged-main `d4cf657bdd194e3eeee4e78e119dcb0b97f49cdf` 结论。匹配 Build 的快照 provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari Touch lifecycle `deferred / unverified`。
+本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。Product Build `1.0.16.0` 的 Core、Diagnostic Host 与 Creator Proof 必须绑定同一提交并在 acceptance 记录中逐项报告；它不继承历史 Build 的 PR、CI 或 merge 结论。匹配 Build 的快照 provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari Touch lifecycle `deferred / unverified`。
 ## 门户责任
 页面状态必须链接实际测试/Proof，并明确自动化无法证明的体验范围。

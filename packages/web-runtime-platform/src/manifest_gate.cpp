@@ -68,26 +68,53 @@ bool safe_asset_path(std::string_view path, std::string_view digest) {
          path.find(marker, marker_at + 1U) == std::string_view::npos;
 }
 
+bool valid_compatible_hosts(
+    const Json& value,
+    std::span<const ManifestExpectation::ComponentIdentity> allowed_hosts,
+    std::string_view current_host) {
+  if (!value.is_array() || value.empty() || value.size() > 64U) {
+    return false;
+  }
+  std::set<std::pair<std::string, std::string>> identities;
+  return std::all_of(value.begin(), value.end(), [&](const auto& item) {
+    if (!exact_keys(item, {"host_id", "host_version"}) ||
+        !item.at("host_id").is_string() ||
+        !item.at("host_version").is_string()) {
+      return false;
+    }
+    const auto& id =
+        item.at("host_id").template get_ref<const std::string&>();
+    const auto& version =
+        item.at("host_version").template get_ref<const std::string&>();
+    return id != current_host && safe_identity(id) && safe_identity(version) &&
+           identities.emplace(id, version).second &&
+           std::any_of(
+               allowed_hosts.begin(), allowed_hosts.end(),
+               [&](const auto& allowed) {
+                 return allowed.id == id && allowed.version == version;
+               });
+  });
+}
+
 bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
-  if (!exact_keys(
-          value,
-          {
-              "assets",
-              "distribution_contract",
-              "emscripten",
-              "heap_bytes",
-              "host_id",
-              "host_version",
-              "manifest_version",
-              "platform_version",
-              "product_build",
-              "protocol_version",
-              "resource_limits",
-          })) {
+  const auto has_compatible_hosts = value.contains("compatible_hosts");
+  const auto exact_root = has_compatible_hosts
+      ? exact_keys(
+            value,
+            {"assets", "compatible_hosts", "distribution_contract",
+             "emscripten", "heap_bytes", "host_id", "host_version",
+             "manifest_version", "platform_version", "product_build",
+             "protocol_version", "resource_limits"})
+      : exact_keys(
+            value,
+            {"assets", "distribution_contract", "emscripten", "heap_bytes",
+             "host_id", "host_version", "manifest_version",
+             "platform_version", "product_build", "protocol_version",
+             "resource_limits"});
+  if (!exact_root) {
     return false;
   }
   if (!value.at("distribution_contract").is_string() ||
-      value.at("distribution_contract") != expected.distribution_contract ||
       !value.at("manifest_version").is_number_unsigned() ||
       value.at("manifest_version") != 1 ||
       !value.at("product_build").is_string() ||
@@ -106,14 +133,23 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
   const auto& host_id = value.at("host_id").get_ref<const std::string&>();
   const auto& host_version =
       value.at("host_version").get_ref<const std::string&>();
+  const auto& distribution_contract =
+      value.at("distribution_contract").get_ref<const std::string&>();
   if (!safe_identity(host_id) || !safe_identity(host_version) ||
+      !safe_identity(distribution_contract) ||
       expected.allowed_hosts.empty() || expected.allowed_hosts.size() > 64U ||
       !std::any_of(
           expected.allowed_hosts.begin(),
           expected.allowed_hosts.end(),
           [&](const auto& allowed) {
-            return allowed.id == host_id && allowed.version == host_version;
+            return allowed.distribution_contract == distribution_contract &&
+                   allowed.id == host_id && allowed.version == host_version;
           })) {
+    return false;
+  }
+  if (has_compatible_hosts &&
+      !valid_compatible_hosts(
+          value.at("compatible_hosts"), expected.allowed_hosts, host_id)) {
     return false;
   }
   const auto& limits = value.at("resource_limits");
