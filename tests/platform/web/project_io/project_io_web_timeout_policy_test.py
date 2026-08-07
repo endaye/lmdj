@@ -1,0 +1,31 @@
+#!/usr/bin/env python3
+"""Protect the full Project I/O fault-matrix browser time budget."""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+
+REPO_ROOT = Path(__file__).resolve().parents[4]
+SPEC = REPO_ROOT / "tests/platform/web/project_io/project_io_web_conformance.spec.mjs"
+
+
+def main() -> int:
+    source = SPEC.read_text(encoding="utf-8")
+    timeout = re.search(
+        r"const PROJECT_IO_CONFORMANCE_TIMEOUT_MS = ([0-9_]+);",
+        source,
+    )
+    assert timeout is not None, "named Project I/O conformance timeout is missing"
+    assert int(timeout.group(1).replace("_", "")) >= 300_000, (
+        "Project I/O conformance timeout must cover both full fault matrices "
+        "on the slow Linux runner"
+    )
+    assert "test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);" in source
+    print("Web Project I/O timeout policy: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -488,6 +488,28 @@ def main() -> int:
         "claimed publication settlement must recover authoritative Project "
         "Truth when a slow runner exceeds the settlement watchdog",
     )
+    claimed_publication_hang = re.search(
+        r'test\("Chromium claimed asset\.import publication hang becomes '
+        r'restart-required and recovers".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        claimed_publication_hang is not None,
+        "claimed publication hang browser proof is missing",
+    )
+    require(
+        "deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS"
+        in claimed_publication_hang.group(0),
+        "claimed publication hang must leave enough time for a slow runner "
+        "to reach the publication claim before the deadline fires",
+    )
+    require(
+        "timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000"
+        in claimed_publication_hang.group(0),
+        "claimed publication hang observation must outlive its request "
+        "deadline on a slow runner",
+    )
     visible_journey = re.search(
         r'test\("Chromium visible diagnostic project completes the packaged '
         r'runtime journey".*?\n\}\);',

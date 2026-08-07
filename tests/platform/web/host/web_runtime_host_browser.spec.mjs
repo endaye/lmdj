@@ -2055,9 +2055,14 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
       },
     },
     deadlineFixtureBytes,
-    { deadlineMs: 250, gate: "after-claim" },
+    {
+      deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS,
+      gate: "after-claim",
+    },
   );
-  await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
+  await expect.poll(() => deadlineProofState(page, requestId), {
+    timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000,
+  }).toMatchObject({
     entered_facade: true,
     claim_attempted: true,
     gate: "after-claim",

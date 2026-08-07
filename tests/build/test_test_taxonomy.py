@@ -32,7 +32,7 @@ def validate(build_dir: Path) -> tuple[list[str], int]:
     is_asan = "LMDJ_SANITIZER:STRING=address" in cache.splitlines()
     is_tsan = "LMDJ_SANITIZER:STRING=thread" in cache.splitlines()
     sanitizer_name = "ASan" if is_asan else "TSan" if is_tsan else None
-    sanitizer_timeout_factor = 2.0 if is_asan else 4.0 if is_tsan else 1.0
+    sanitizer_timeout_factor = 3.0 if is_asan else 4.0 if is_tsan else 1.0
     result = subprocess.run(
         ["ctest", "--test-dir", str(build_dir), "--show-only=json-v1"],
         check=False,
