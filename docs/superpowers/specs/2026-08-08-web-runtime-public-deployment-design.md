@@ -131,9 +131,10 @@ Netlify 不拥有 Host 编译步骤。Emscripten build、clean-room Proof、字�
 相同字节，避免 Netlify 环境重建出一个没有 Release provenance 的第二份候选。
 
 Netlify project 不连接 Git repository，并保持 Git-triggered auto publishing 关闭。工作流
-先通过 Netlify CLI 创建不会改变 production alias 的 draft atomic Deploy，验证其
-immutable Deploy URL 后，再调用 Netlify `restoreSiteDeploy` API 发布同一个 Deploy ID。
-不得上传第二份 production Deploy 来模拟提升。
+通过 Netlify REST digest API 创建 `draft: true` 的 atomic Deploy，只上传 API 返回的
+required files，验证其 immutable Deploy URL 后，再调用 Netlify
+`restoreSiteDeploy` API 发布同一个 Deploy ID。不得上传第二份 production Deploy 来
+模拟提升，也不得引入运行时下载的未锁定 Netlify CLI。
 
 ## 7. 触发与授权
 
@@ -183,11 +184,13 @@ immutable Deploy URL 后，再调用 Netlify `restoreSiteDeploy` API 发布同�
 8. 使用 tag target 的仓库 verifier 验证 `host-manifest.json`、完整 inventory、资产摘要、
    Product Build、Host version、Emscripten identity 和 index meta；
 9. 证明解压后的 deploy root 与 Release Host distribution 字节一致；
-10. 只把已验证 deploy root 交给 Netlify CLI 创建 draft Deploy；
+10. 从已验证产品文件与仓库跟踪的 `_headers` deploy-control template 生成 Netlify
+    digest，调用 REST API 创建 draft Deploy 并只上传 required files；
 11. draft smoke 成功后，只用该 Deploy ID 执行 publish/restore。
 
-Netlify headers 由仓库中的独立站点配置提供，不写入、删除或改名 Host dist 文件。
-部署后 Host 的 canonical manifest inventory 仍描述被发布的全部产品文件。
+`_headers` 是 Netlify 消费的 deploy-control artifact，不属于 Release Host ZIP、Host
+distribution contract 或产品资产。staging 不写入、删除或改名任何已验证 Host dist
+文件；部署后 Host 的 canonical manifest inventory 仍描述被发布的全部产品文件。
 
 ## 9. HTTP 与浏览器安全合同
 
@@ -244,7 +247,7 @@ Production deploy 默认是公开 URL，所以不能依赖 Netlify 对 Deploy Pr
 
 发布严格分两阶段执行：
 
-1. Netlify CLI 创建 `draft: true` 的 atomic Deploy；
+1. Netlify REST digest API 创建 `draft: true` 的 atomic Deploy，并上传 required files；
 2. 等待 Deploy state `ready`，取得 Deploy ID 与 immutable Deploy URL；
 3. 对 immutable URL 执行以下 HTTP 与 browser smoke；
 4. smoke 全部通过后，调用
