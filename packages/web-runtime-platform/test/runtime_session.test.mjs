@@ -370,11 +370,11 @@ test("suppresses a late Trigger response after pagehide close", async () => {
   assert.equal(terminated(), 1);
 });
 
-test("non-persisted pagehide starts terminal owner release synchronously", async () => {
+test("non-persisted pagehide submits clean close without forced termination", async () => {
   const browserWindow = new EventTarget();
   let closeEnvelope;
   let settleClose;
-  let ownerReleases = 0;
+  let forcedTerminations = 0;
   const lifecycle = [];
   const closeResponse = new Promise((resolvePromise) => {
     settleClose = resolvePromise;
@@ -382,10 +382,9 @@ test("non-persisted pagehide starts terminal owner release synchronously", async
   const {session} = fixture({
     browserWindow,
     runtimeTransport: {
-      terminate(options) {
-        assert.deepEqual(options, {immediate: true});
-        ownerReleases += 1;
-        lifecycle.push("terminal-release");
+      terminate() {
+        forcedTerminations += 1;
+        lifecycle.push("forced-termination");
       },
     },
     send: async (envelope) => {
@@ -406,8 +405,8 @@ test("non-persisted pagehide starts terminal owner release synchronously", async
 
   browserWindow.dispatchEvent(new Event("pagehide"));
 
-  assert.equal(ownerReleases, 1);
-  assert.deepEqual(lifecycle, ["terminal-release", "clean-close"]);
+  assert.equal(forcedTerminations, 0);
+  assert.deepEqual(lifecycle, ["clean-close"]);
   settleClose({
     protocol_version: 1,
     request_id: closeEnvelope.request_id,

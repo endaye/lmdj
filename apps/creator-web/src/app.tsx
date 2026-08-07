@@ -63,6 +63,7 @@ function Workspace({
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [listAttempt, setListAttempt] = useState(0);
+  const [busyRetry, setBusyRetry] = useState<"list" | "open" | null>(null);
   const importController = useRef<AbortController | null>(null);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const stateRef = useRef(state);
@@ -104,6 +105,7 @@ function Workspace({
 
   useEffect(() => {
     if (!session || !runtimePhase) return;
+    setBusyRetry(null);
     dispatch({
       type: "runtime-changed",
       phase: runtimePhase,
@@ -115,6 +117,7 @@ function Workspace({
     void listLocalProjectsJourney(session).then(
       async (projects) => {
         if (!active) return;
+        setBusyRetry(null);
         dispatch({type: "projects-loaded", projects});
         const retained = stateRef.current.project.current;
         if (!retained) return;
@@ -129,12 +132,13 @@ function Workspace({
           const project = await openProjectJourney(session, summary);
           if (active) dispatch({type: "project-ready", project});
         } catch (error) {
-          if (active) reportProjectError(error);
+          if (active) reportProjectError(error, "open");
         }
       },
       (error: unknown) => {
         if (!active) return;
         const code = errorCode(error);
+        setBusyRetry(code === "PROJECT_BUSY" ? "list" : null);
         if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
           dispatch({type: "runtime-changed", phase: "restart-required", errorCode: code});
         } else if (code === "UNSUPPORTED_WEB_RUNTIME") {
@@ -147,9 +151,13 @@ function Workspace({
     return () => { active = false; };
   }, [session, runtimePhase, runtimeErrorCode, listAttempt]);
 
-  const reportProjectError = (error: unknown) => {
+  const reportProjectError = (
+    error: unknown,
+    retry: "open" | null = null,
+  ) => {
     if (error instanceof DOMException && error.name === "AbortError") return;
     const code = errorCode(error);
+    setBusyRetry(code === "PROJECT_BUSY" ? retry : null);
     if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
       dispatch({type: "runtime-changed", phase: "restart-required", errorCode: code});
       return;
@@ -163,7 +171,7 @@ function Workspace({
     try {
       dispatch({type: "project-ready", project: await openProjectJourney(session, summary)});
     } catch (error) {
-      reportProjectError(error);
+      reportProjectError(error, "open");
     }
   };
 
@@ -283,8 +291,14 @@ function Workspace({
       </section>
       <ErrorPanel
         code={state.runtime.errorCode}
-        {...(session && state.runtime.errorCode === "PROJECT_BUSY"
-          ? {onRetry: () => setListAttempt((attempt) => attempt + 1)}
+        {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
+          ? {onRetry: () => {
+              if (busyRetry === "list") {
+                setListAttempt((attempt) => attempt + 1);
+              } else {
+                dispatch({type: "project-retry"});
+              }
+            }}
           : {})}
       />
     </div>

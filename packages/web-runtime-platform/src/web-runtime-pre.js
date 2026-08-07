@@ -502,12 +502,9 @@ if (typeof globalThis.window !== "undefined") {
       failureSubscribers.add(listener);
       return () => failureSubscribers.delete(listener);
     },
-    terminate(options = {}) {
+    terminate() {
       failClosed(transportFailure(
         "HOST_STATE_INVALID", "formal Web Host transport is terminated"));
-      if (options?.immediate === true) {
-        terminateRuntimeWorkers();
-      }
     },
     get terminated() {
       return transportTerminated;
