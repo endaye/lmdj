@@ -7,12 +7,13 @@
 #include <fstream>
 #include <future>
 #include <iostream>
-#include <set>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 #include <vector>
+
+#include <picosha2.h>
 
 #include <fcntl.h>
 #include <nlohmann/json.hpp>
@@ -42,6 +43,27 @@ class TempDirectory {
   }
 
   const std::filesystem::path& path() const { return path_; }
+
+ private:
+  std::filesystem::path path_;
+};
+
+class ScopedRegularFile {
+ public:
+  explicit ScopedRegularFile(std::filesystem::path path)
+      : path_(std::move(path)) {
+    std::filesystem::create_directories(path_.parent_path());
+    std::ofstream stream(path_, std::ios::binary | std::ios::trunc);
+    LMDJ_CHECK(static_cast<bool>(stream));
+  }
+
+  ~ScopedRegularFile() {
+    std::error_code error;
+    std::filesystem::remove(path_, error);
+  }
+
+  ScopedRegularFile(const ScopedRegularFile&) = delete;
+  ScopedRegularFile& operator=(const ScopedRegularFile&) = delete;
 
  private:
   std::filesystem::path path_;
@@ -83,18 +105,19 @@ std::filesystem::path default_project_writer_lease_root() {
          "project-writer-leases";
 }
 
-std::set<std::string> regular_file_names(
-    const std::filesystem::path& directory) {
-  if (!std::filesystem::exists(directory)) {
-    return {};
-  }
-  std::set<std::string> names;
-  for (const auto& entry : std::filesystem::directory_iterator(directory)) {
-    if (entry.is_regular_file()) {
-      names.insert(entry.path().filename().string());
+std::filesystem::path normalized_project_path(
+    const std::filesystem::path& path) {
+  auto normalized = std::filesystem::absolute(path).lexically_normal();
+#if defined(__APPLE__)
+  const auto relative = normalized.relative_path();
+  if (!relative.empty()) {
+    const auto first = *relative.begin();
+    if (first == "var" || first == "tmp") {
+      normalized = std::filesystem::path{"/private"} / relative;
     }
   }
-  return names;
+#endif
+  return normalized;
 }
 
 std::string config_json(const std::filesystem::path& root) {
@@ -634,7 +657,9 @@ void test_busy_project_fails_fast_without_serializing_engines() {
 
   const auto project = temp.path() / "blocked-engine.lmdj";
   const auto lease_root = default_project_writer_lease_root();
-  const auto lease_names_before = regular_file_names(lease_root);
+  const ScopedRegularFile unrelated_lease{
+      lease_root /
+      (temp.path().filename().string() + ".unrelated-project.lock")};
   LMDJ_CHECK(
       command(
           blocked_engine,
@@ -645,16 +670,12 @@ void test_busy_project_fails_fast_without_serializing_engines() {
               {"bpm", 120},
           })
           .at("ok") == true);
-  const auto lease_names_after = regular_file_names(lease_root);
-  std::vector<std::string> created_lease_names;
-  std::set_difference(
-      lease_names_after.begin(),
-      lease_names_after.end(),
-      lease_names_before.begin(),
-      lease_names_before.end(),
-      std::back_inserter(created_lease_names));
-  LMDJ_CHECK(created_lease_names.size() == 1);
-  const auto lease_path = lease_root / created_lease_names.front();
+  const auto lease_path =
+      lease_root /
+      (picosha2::hash256_hex_string(
+           normalized_project_path(project).generic_string()) +
+       ".lock");
+  LMDJ_CHECK(std::filesystem::is_regular_file(lease_path));
   const int lease_fd = ::open(lease_path.c_str(), O_RDWR | O_CLOEXEC);
   LMDJ_CHECK(lease_fd >= 0);
   LMDJ_CHECK(::flock(lease_fd, LOCK_EX) == 0);

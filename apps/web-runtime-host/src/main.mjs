@@ -15,14 +15,14 @@ import {
 import { createHostStateMachine } from "./state_machine.mjs";
 
 const SOURCE_SHELL_MANIFEST = Object.freeze({
-  product_build: "1.0.15.0",
-  host_version: "1.1.0",
+  product_build: "1.0.15.2",
+  host_version: "1.1.2",
   protocol_version: 1,
   runtime_script: "source-shell",
 });
 const SOURCE_SHELL_MANIFEST_TEXT = JSON.stringify(SOURCE_SHELL_MANIFEST);
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
-const PACKAGED_HOST_VERSION = "1.1.0";
+const PACKAGED_HOST_VERSION = "1.1.2";
 const PACKAGED_PROTOCOL_VERSION = 1;
 const PACKAGED_HEAP_BYTES = 536_870_912;
 const PACKAGED_DISTRIBUTION_CONTRACT =

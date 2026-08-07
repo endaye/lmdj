@@ -82,7 +82,7 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   }
 
   const capability = await readFile(path.join(docsRoot, 'product/capability-map.mdx'), 'utf8');
-  assert.match(capability, /Formal Web Runtime Host `1\.1\.0` 已装配/);
+  assert.match(capability, /Formal Web Runtime Host `1\.1\.2` 已装配/);
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');

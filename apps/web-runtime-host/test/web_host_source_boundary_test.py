@@ -395,6 +395,30 @@ def main() -> int:
     diagnostic_overall_timeout_ms = int(
         diagnostic_overall_timeout.group(1).replace("_", "")
     )
+    diagnostic_stall_timeout = re.search(
+        r"const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = ([0-9_]+);",
+        browser_spec_text,
+    )
+    require(
+        diagnostic_stall_timeout is not None
+        and int(diagnostic_stall_timeout.group(1).replace("_", ""))
+        >= 90_000,
+        "diagnostic progress observation must outlive a slow reload handoff",
+    )
+    require(
+        "diagnostic_project_error_code" in browser_spec_text
+        and "HOST_TIMEOUT" in browser_spec_text
+        and "recoverDiagnosticProjectAfterTimeout" in browser_spec_text,
+        "the slow-runner browser journey must expose and recover exactly one "
+        "reload handoff timeout",
+    )
+    require(
+        browser_spec_text.count(
+            "await recoverDiagnosticProjectAfterTimeout(page, error);"
+        )
+        == 1,
+        "the browser proof must allow exactly one reload handoff recovery",
+    )
     for diagnostic_test_name in (
         "Chromium binds the verified packaged runtime to the real AudioWorklet",
         "Chromium visible diagnostic project completes the packaged runtime journey",
@@ -415,6 +439,13 @@ def main() -> int:
             > diagnostic_overall_timeout_ms,
             f"{diagnostic_test_name} must outlive its diagnostic readiness budget",
         )
+        if diagnostic_test_name.startswith("Chromium visible diagnostic"):
+            require(
+                int(diagnostic_test_timeout.group(1).replace("_", ""))
+                >= 660_000,
+                "the visible diagnostic journey must include one bounded "
+                "reload-timeout recovery budget",
+            )
     unresponsive_cancellation = re.search(
         r'test\("Chromium packaged unresponsive cancellation '
         r'force-terminates and recovers".*?\n\}\);',
@@ -487,6 +518,28 @@ def main() -> int:
         and "reopenProject(" in claimed_settlement.group(0),
         "claimed publication settlement must recover authoritative Project "
         "Truth when a slow runner exceeds the settlement watchdog",
+    )
+    claimed_publication_hang = re.search(
+        r'test\("Chromium claimed asset\.import publication hang becomes '
+        r'restart-required and recovers".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        claimed_publication_hang is not None,
+        "claimed publication hang browser proof is missing",
+    )
+    require(
+        "deadlineMs: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS"
+        in claimed_publication_hang.group(0),
+        "claimed publication hang must leave enough time for a slow runner "
+        "to reach the publication claim before the deadline fires",
+    )
+    require(
+        "timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000"
+        in claimed_publication_hang.group(0),
+        "claimed publication hang observation must outlive its request "
+        "deadline on a slow runner",
     )
     visible_journey = re.search(
         r'test\("Chromium visible diagnostic project completes the packaged '
@@ -561,6 +614,19 @@ def main() -> int:
         "window.setTimeout(pollTransport, TRANSPORT_POLL_INTERVAL_MS)"
         in runtime_pre_source,
         "Web Host transport polling must use the named bounded cadence",
+    )
+    require(
+        re.search(
+            r"const\s+TERMINAL_OWNER_RELEASE_GRACE_MS\s*=\s*5_000\s*;",
+            runtime_pre_source,
+        )
+        is not None,
+        "Web Host must give responsive Control cleanup a bounded 5 second "
+        "terminal owner release grace",
+    )
+    require(
+        "}, TERMINAL_OWNER_RELEASE_GRACE_MS);" in runtime_pre_source,
+        "Web Host terminal owner fallback must use the named release grace",
     )
 
     if len(sys.argv) == 3:

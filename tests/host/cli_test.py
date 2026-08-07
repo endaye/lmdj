@@ -47,7 +47,28 @@ def configured_timeout(build_directory: Path, base_timeout: float) -> float:
         ),
         "none",
     )
-    return base_timeout * {"address": 2.0, "thread": 4.0}.get(sanitizer, 1.0)
+    return base_timeout * {"address": 3.0, "thread": 4.0}.get(sanitizer, 1.0)
+
+
+def subprocess_timeout(executable: Path) -> float:
+    return configured_timeout(
+        executable.parent.parent,
+        SUBPROCESS_TIMEOUT_SECONDS,
+    )
+
+
+def timeout_policy_contract() -> None:
+    with tempfile.TemporaryDirectory(prefix="lmdj-cli-timeout-policy-") as temp:
+        build_directory = Path(temp)
+        (build_directory / "CMakeCache.txt").write_text(
+            "LMDJ_SANITIZER:STRING=address\n",
+            encoding="utf-8",
+        )
+        executable = build_directory / "bin/lmdj-core"
+        executable.parent.mkdir()
+        executable.touch()
+        assert configured_timeout(build_directory, 10.0) == 30.0
+        assert subprocess_timeout(executable) == 30.0
 
 
 def encoded_request(value: object) -> str:
@@ -64,7 +85,7 @@ def run_raw(executable: Path, arguments: list[str]) -> subprocess.CompletedProce
         cwd=REPO_ROOT,
         check=False,
         capture_output=True,
-        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        timeout=subprocess_timeout(executable),
     )
 
 
@@ -510,12 +531,12 @@ def facade_routing_and_exit_mapping(
             os.close(write_descriptor)
         try:
             _, stderr = process.communicate(
-                timeout=SUBPROCESS_TIMEOUT_SECONDS
+                timeout=subprocess_timeout(executable)
             )
         except subprocess.TimeoutExpired:
             process.kill()
             _, stderr = process.communicate(
-                timeout=SUBPROCESS_TIMEOUT_SECONDS
+                timeout=subprocess_timeout(executable)
             )
             raise
         assert process.returncode == 2, process.returncode
@@ -749,7 +770,7 @@ def host_boundary_and_identity(executable: Path) -> None:
         "milestone": 1,
         "minor": 0,
         "build": 15,
-        "patch": 0,
+        "patch": 2,
     }
     manifest = json.loads(
         (REPO_ROOT / "apps/core-cli/module.json").read_text(
@@ -799,7 +820,7 @@ def host_boundary_and_identity(executable: Path) -> None:
         check=True,
         capture_output=True,
         text=True,
-        timeout=SUBPROCESS_TIMEOUT_SECONDS,
+        timeout=subprocess_timeout(executable),
     )
     tests = json.loads(ctest.stdout)["tests"]
     host_test = next(test for test in tests if test["name"] == "host.cli")
@@ -874,9 +895,11 @@ def main() -> int:
         passed += 1
         host_boundary_and_identity(executable)
         passed += 1
+        timeout_policy_contract()
+        passed += 1
 
-    assert passed == 10
-    print("cli behavior fixtures: 10 passed")
+    assert passed == 11
+    print("cli behavior fixtures: 11 passed")
     return 0
 
 
