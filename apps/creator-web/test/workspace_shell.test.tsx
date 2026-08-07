@@ -223,14 +223,9 @@ test("retries a busy Project open only after the visible Retry action", async ()
   expect(openAttempts).toBe(1);
 
   await user.click(screen.getByRole("button", {name: "Retry"}));
-  const open = await screen.findByRole("button", {
-    name: "Open Project 11111111",
-  });
+  await screen.findByRole("heading", {name: "Project 11111111"});
   expect(fixture.calls.filter((call) => call === "listLocalProjects"))
     .toHaveLength(1);
-  expect(openAttempts).toBe(1);
-  await user.click(open);
-  await screen.findByRole("heading", {name: "Project 11111111"});
   expect(openAttempts).toBe(2);
 });
 

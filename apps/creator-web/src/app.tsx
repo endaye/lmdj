@@ -47,6 +47,10 @@ interface WorkspaceProps {
   runtimeHostState?: string;
 }
 
+type BusyRetry =
+  | {kind: "list"}
+  | {kind: "open"; project: LocalProjectSummary};
+
 function errorCode(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "ABORTED";
@@ -63,7 +67,7 @@ function Workspace({
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [listAttempt, setListAttempt] = useState(0);
-  const [busyRetry, setBusyRetry] = useState<"list" | "open" | null>(null);
+  const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const importController = useRef<AbortController | null>(null);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const stateRef = useRef(state);
@@ -132,13 +136,13 @@ function Workspace({
           const project = await openProjectJourney(session, summary);
           if (active) dispatch({type: "project-ready", project});
         } catch (error) {
-          if (active) reportProjectError(error, "open");
+          if (active) reportProjectError(error, {kind: "open", project: summary});
         }
       },
       (error: unknown) => {
         if (!active) return;
         const code = errorCode(error);
-        setBusyRetry(code === "PROJECT_BUSY" ? "list" : null);
+        setBusyRetry(code === "PROJECT_BUSY" ? {kind: "list"} : null);
         if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
           dispatch({type: "runtime-changed", phase: "restart-required", errorCode: code});
         } else if (code === "UNSUPPORTED_WEB_RUNTIME") {
@@ -153,7 +157,7 @@ function Workspace({
 
   const reportProjectError = (
     error: unknown,
-    retry: "open" | null = null,
+    retry: BusyRetry | null = null,
   ) => {
     if (error instanceof DOMException && error.name === "AbortError") return;
     const code = errorCode(error);
@@ -171,7 +175,7 @@ function Workspace({
     try {
       dispatch({type: "project-ready", project: await openProjectJourney(session, summary)});
     } catch (error) {
-      reportProjectError(error, "open");
+      reportProjectError(error, {kind: "open", project: summary});
     }
   };
 
@@ -293,10 +297,10 @@ function Workspace({
         code={state.runtime.errorCode}
         {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
           ? {onRetry: () => {
-              if (busyRetry === "list") {
+              if (busyRetry.kind === "list") {
                 setListAttempt((attempt) => attempt + 1);
               } else {
-                dispatch({type: "project-retry"});
+                void openProject(busyRetry.project);
               }
             }}
           : {})}

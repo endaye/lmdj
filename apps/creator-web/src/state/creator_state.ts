@@ -64,7 +64,6 @@ export type CreatorAction =
   | {type: "projects-listing"}
   | {type: "projects-loaded"; projects: LocalProjectSummary[]}
   | {type: "project-opening"}
-  | {type: "project-retry"}
   | {type: "project-ready"; project: ProjectView}
   | {type: "project-error"; errorCode: string}
   | {type: "transfer-started"; totalBytes: number}
@@ -128,15 +127,6 @@ export function creatorReducer(
       return {
         ...state,
         project: {...state.project, phase: "opening"},
-        runtime: {...state.runtime, errorCode: null},
-      };
-    case "project-retry":
-      return {
-        ...state,
-        project: {
-          ...state.project,
-          phase: state.project.projects.length === 0 ? "empty" : "ready",
-        },
         runtime: {...state.runtime, errorCode: null},
       };
     case "project-ready":
