@@ -3,7 +3,7 @@
 ## Current status
 
 Stage 7 automated local acceptance is `PASS` at source revision
-`914b71c47b1d12727bd90ad93f97f1a297b96e88`. The verified corrective candidate
+`8726bc51d4e21ae42d8548de2bcff6becc592022`. The verified corrective candidate
 is Product Build `1.0.16.1`, Channel `canary`, Creator Web Host `1.0.1`, shared
 Web Runtime Platform `0.1.1`, and Application Facade `1.3.1`.
 
