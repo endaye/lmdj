@@ -201,6 +201,37 @@ test("presents Project busy with an explicit retry", async () => {
   expect(attempts).toBe(2);
 });
 
+test("retries a busy Project open only after the visible Retry action", async () => {
+  const user = userEvent.setup();
+  let openAttempts = 0;
+  const fixture = runtimeFixture({
+    openProject: async () => {
+      openAttempts += 1;
+      if (openAttempts === 1) {
+        throw Object.assign(new Error("busy"), {code: "PROJECT_BUSY"});
+      }
+      return {};
+    },
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  expect((await screen.findByRole("alert")).textContent)
+    .toContain("PROJECT_BUSY");
+  expect(openAttempts).toBe(1);
+
+  await user.click(screen.getByRole("button", {name: "Retry"}));
+  const open = await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  });
+  expect(openAttempts).toBe(1);
+  await user.click(open);
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  expect(openAttempts).toBe(2);
+});
+
 test.each([
   "INVALID_PROJECT",
   "DUPLICATE_ID",

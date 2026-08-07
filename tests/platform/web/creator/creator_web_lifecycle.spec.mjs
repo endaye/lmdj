@@ -25,6 +25,28 @@ async function report(page) {
   return JSON.parse(await readFile(await (await pending).path(), "utf8"));
 }
 
+async function reopenWithVisibleBusyRetry(page) {
+  const heading = page.getByRole("heading", {name: "Project 00000000"});
+  const open = () => page.getByRole("button", {
+    name: "Open Project 00000000",
+  });
+  const deadline = Date.now() + 120_000;
+  while (Date.now() < deadline) {
+    await open().click();
+    const alert = page.getByRole("alert");
+    await expect.poll(async () =>
+      await heading.isVisible() || await alert.isVisible(),
+    {timeout: 35_000}).toBe(true);
+    if (await heading.isVisible()) return;
+    await expect(alert).toContainText("PROJECT_BUSY");
+    await page.getByRole("button", {name: "Retry"}).click();
+    await expect(open()).toBeVisible();
+    await expect(alert).toHaveCount(0);
+    await page.waitForTimeout(100);
+  }
+  throw new Error("Project writer lease did not become available after Retry");
+}
+
 test("suspend and reload require explicit reopen and explicit reactivation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
@@ -39,9 +61,7 @@ test("suspend and reload require explicit reopen and explicit reactivation", asy
   await expect(page.getByRole("button", {name: "Open Project 00000000"}))
     .toBeVisible({timeout: 60_000});
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
-  await page.getByRole("button", {name: "Open Project 00000000"}).click();
-  await expect(page.getByRole("heading", {name: "Project 00000000"}))
-    .toBeVisible({timeout: 60_000});
+  await reopenWithVisibleBusyRetry(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
