@@ -2,7 +2,7 @@
 
 日期：2026-08-07
 
-状态：已批准设计方向，待规格复核
+状态：规格已批准
 
 目标渠道：`canary`
 前置依赖：PR #94 的 `1.0.15.0` Web Runtime Host 修复必须先合入并在 `main`
@@ -478,6 +478,9 @@ Stage 7 的目标版本为：
 | `application-facade` | `1.2.0` | `1.3.0` | 新增原子 Project Bundle import 能力。 |
 | `project-io` | `0.4.0` | `0.5.0` | 新增 transfer inventory 验证、staging 和 atomic publish。 |
 | `audio-runtime` | `0.4.0` | unchanged | Stage 7 不增加 DSP、Voice 或 realtime contract。 |
+| `core-cli` | `1.0.5` | `1.0.6` | 精确 `application-facade` 依赖传播，不新增 CLI 命令。 |
+| `core-mcp` | `1.1.2` | `1.1.3` | 精确 `application-facade` 依赖与 Python package identity 传播。 |
+| `native-test-host` | `1.0.3` | `1.0.4` | 精确 `application-facade` 依赖传播，不改变 Native Host 行为。 |
 | `lmdj.project.v1` | `1.0.0` | unchanged | Project Truth shape 不变。 |
 | `lmdj.project-bundle.v1` | absent | `1.0.0` | 新增可移植 transfer envelope；不替代 Project Truth。 |
 
@@ -489,10 +492,19 @@ Stage 7 分配 Product Build，因此 Documentation impact 必须为 `required`�
 
 - `/`；
 - `/core/overview/`；
-- `/core/facade/`；
+- `/core/modules/application-facade/`；
 - `/core/modules/project-io/`；
+- 新增 `/core/modules/web-runtime-platform/`；
+- `/hosts/overview/`；
+- `/hosts/web-runtime/`；
+- 新增 `/hosts/creator-web/`；
+- 新增 `/contracts/project-bundle/`；
 - `/platform/web-runtime/`；
-- 新增 `/product/creator-web/`；
+- `/platform/input/`；
+- `/platform/storage/`；
+- `/assembly/lmdj/`；
+- `/operations/testing-and-proof/`；
+- `/operations/version-and-release/`；
 - 对应 Module/Host diagram sources 与 generated outputs。
 
 实施分支必须在 clean committed source boundary 运行：
