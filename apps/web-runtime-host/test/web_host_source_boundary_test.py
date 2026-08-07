@@ -406,6 +406,12 @@ def main() -> int:
         "unresponsive cancellation must allow deadline cancellation to race "
         "the publication-attempt observation",
     )
+    require(
+        "timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000"
+        in unresponsive_cancellation.group(0),
+        "unresponsive cancellation observation must remain open after the "
+        "request deadline fires",
+    )
     unresponsive_release = unresponsive_cancellation.group(0).find(
         "releaseDeadlineProof(page)"
     )
@@ -433,6 +439,12 @@ def main() -> int:
         not in claimed_settlement.group(0),
         "claimed publication settlement must observe the first deadline "
         "cancellation instead of sleeping past the settlement watchdog",
+    )
+    require(
+        '"HOST_RESTART_REQUIRED"' in claimed_settlement.group(0)
+        and "reopenProject(" in claimed_settlement.group(0),
+        "claimed publication settlement must recover authoritative Project "
+        "Truth when a slow runner exceeds the settlement watchdog",
     )
     visible_journey = re.search(
         r'test\("Chromium visible diagnostic project completes the packaged '

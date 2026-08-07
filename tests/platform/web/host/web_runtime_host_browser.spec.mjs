@@ -1794,7 +1794,9 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
   // The deadline may cancel publication immediately before the claim callback
   // records whether it started open. Both interleavings still enter and block
   // the real claim path; the assertions below retain cancellation authority.
-  await expect.poll(() => deadlineProofState(page, requestId)).toMatchObject({
+  await expect.poll(() => deadlineProofState(page, requestId), {
+    timeout: CLAIMED_PUBLICATION_PROOF_DEADLINE_MS + 5_000,
+  }).toMatchObject({
     publication: "cancelled",
     cancel_calls: 2,
     last_cancel_result: "cancelled",
@@ -1928,6 +1930,53 @@ test("Chromium packaged asset.import claim wins before deadline and settles afte
     expect(await releaseDeadlineProof(owner), selected.name).toBe(true);
     const outcome = await deadlineMutationOutcome(owner, requestId);
     const settledProof = await deadlineProofState(owner, requestId);
+    if (outcome?.error?.code === "HOST_RESTART_REQUIRED") {
+      expect(outcome, `${selected.name}: ${JSON.stringify(settledProof)}`)
+        .toMatchObject({
+        error: {
+          code: "HOST_RESTART_REQUIRED",
+          details: {
+            terminal_state: "restart-required",
+            mutation_outcome: "unknown",
+          },
+        },
+      });
+      await expect(owner.locator("#host-state")).toHaveText("failed");
+      expect(await terminalTransportEvidence(owner)).toMatchObject({
+        controller: { state: "failed", error_code: "HOST_RESTART_REQUIRED" },
+        newSubmitCode: "HOST_RESTART_REQUIRED",
+        terminated: true,
+      });
+
+      const reopened = await context.newPage();
+      await openPackagedHost(reopened);
+      const recovered = success(await reopenProject(
+        reopened,
+        identity,
+        identity.patternId,
+        { overallDeadlineMs: 5_000, retryDelayMs: 10 },
+      ), `${selected.name} reopen after settlement watchdog`);
+      if (settledProof.publication === "committed") {
+        expect(recovered.project_revision, selected.name).toBe(1);
+      } else if (settledProof.publication === "aborted") {
+        expect(recovered.project_revision, selected.name).toBe(0);
+      } else {
+        expect([0, 1], selected.name).toContain(recovered.project_revision);
+      }
+      expect(success(await hostRequest(reopened, "project.inspect", {})),
+        `${selected.name} inspect recovered truth`).toMatchObject({
+        project_revision: recovered.project_revision,
+      });
+      await expect.poll(async () => (await opfsInventory(reopened)).filter(
+        (entry) => entry.includes(".lmdj-host/storage-intents/") &&
+          entry.startsWith("file:"),
+      )).toEqual([]);
+      expect(await reopened.evaluate(() =>
+        window.lmdjWebRuntimeController.close()), selected.name).toBe(true);
+      await reopened.close();
+      await owner.close();
+      continue;
+    }
     if (selected.forcePublicationError) {
       expect(outcome, `${selected.name}: ${JSON.stringify(settledProof)}`)
         .toMatchObject({
