@@ -1,0 +1,26 @@
+---
+title: Version 与 Release
+area: operations
+status: implemented
+owners: [release, core]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, scripts/version.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 四条版本轴
+Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
+## Assembly Lock
+锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
+当前本地候选 Product Build 是 `1.0.15.1 · canary · g<short-sha>`；Web Runtime Host `1.1.1` 已进入 Assembly 和生成 lock。除此之外 Module/Host identity 均未变化；Contracts、Providers 与 Models 未变化。
+## Git 与发布
+Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
+## 不可变性
+已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
+schema-2 快照冻结 34 页源码、sidebar、九张图的 18 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+## 发布门禁
+实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
+
+当前候选 Product tag 文本为 `lmdj-v1.0.15.1`，仅是未来 tag 文本。当前 Task 只建立本地身份与自动化 Proof，不宣称新 PR、远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；current 页面不按 Task 顺序声明其临时存在状态。历史 `1.0.14.0` 的 PR #91 与 merged-main 证据不自动升级为当前候选证据。
