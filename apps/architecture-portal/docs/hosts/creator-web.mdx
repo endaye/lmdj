@@ -37,7 +37,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、导入、Runtime Session 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。revision `d2d5dda0377de966576225c9fb280e7a76e0cba5` 的完整 clean-source Proof 已通过：Vitest 32/32、package 7/7、server 3/3、shared Platform 75/75、Chromium 9 passed/1 designed skip、WebKit capability boundary 1/1，且 reload 后 Project reopen 不保留旧 OPFS writer lease。完整证据见 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`。
+Node/Vitest 覆盖 UI 状态、导入、Runtime Session 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。revision `4399dc5e182518ca3e159f65eab8827ad64ab26d` 的完整 clean-source Proof 已通过：Vitest 33/33、package 7/7、server 3/3、shared Platform 75/75、Chromium 9 passed/1 designed skip、WebKit capability boundary 1/1；额外 focused Chromium reload/reopen 重复门禁为 10/10。reload 后若旧 writer 尚在退出，Creator 只呈现 `PROJECT_BUSY`，可见 Retry 只重试 Project open、不重新扫描 OPFS，随后显式 reopen 与 Audio reactivation。完整证据见 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`。
 
 该结论是本地自动化验收，不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

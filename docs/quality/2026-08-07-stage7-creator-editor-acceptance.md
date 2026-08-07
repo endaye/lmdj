@@ -3,7 +3,7 @@
 ## Current status
 
 Stage 7 automated local acceptance is `PASS` at source revision
-`d2d5dda0377de966576225c9fb280e7a76e0cba5`. The verified candidate is Product
+`4399dc5e182518ca3e159f65eab8827ad64ab26d`. The verified candidate is Product
 Build `1.0.16.0`, Channel `canary`, Creator Web Host `1.0.0`, and shared Web
 Runtime Platform `0.1.0`.
 
@@ -18,7 +18,8 @@ acceptance.
 | --- | --- |
 | `scripts/core.sh proof` | PASS; Product version checks, lock conformance, and version verification passed; 35/35 selected CTests passed; schema checks reported 9 positive cases, 11 negative cases, and 17 Product artifacts; CLI 10/10, MCP 10/10, package acceptance, Product `1.0.16.0`, Channel `canary`, and Assembly Lock `MATCH` |
 | `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17; two clean distributions byte-identical; Python package 14/14, server 8/8, Node 25/25, native Web CTest 3/3, and browser fixtures 6/6; packaged Chromium 15 passed/1 designed skip; WebKit 1 limitation-path pass/10 capability skips |
-| `scripts/creator-web.sh proof` | PASS; Core-generated Project Bundle pack reproducible; two clean Creator distributions byte-identical; Vitest 32/32, Python package 7/7, server 3/3, shared Platform 75/75; packaged Chromium 9 passed/1 designed skip; WebKit capability boundary 1/1 |
+| `scripts/creator-web.sh proof` | PASS; Core-generated Project Bundle pack reproducible; two clean Creator distributions byte-identical; Vitest 33/33, Python package 7/7, server 3/3, shared Platform 75/75; packaged Chromium 9 passed/1 designed skip; WebKit capability boundary 1/1 |
+| Focused Chromium reload/reopen repetition | PASS 10/10 against the clean packaged candidate; every transient writer conflict remained `PROJECT_BUSY`, visible Retry retried Project open without re-listing, and no `INVALID_PROJECT`, `HOST_STATE_INVALID`, or Wasm memory fault recurred |
 | `scripts/architecture-portal.sh check` | PASS; 40/40 Portal tests, 37 current pages, 10 diagram sources/20 outputs, Product `1.0.16.0` facts, immutable snapshot provenance, typecheck, optimized build, and 42 routes/internal links |
 | `bash scripts/verify-core-dependencies.sh` | PASS |
 | `bash tests/build/test_active_tree.sh` | PASS |
@@ -26,9 +27,10 @@ acceptance.
 The Creator Chromium journey imports a real portable Bundle, opens Project
 Truth, activates the shared Wasm/AudioWorklet Runtime, admits all 64 stable Pad
 addresses, verifies a held-key 16-trigger burst, suspends/reactivates, reloads,
-reopens without retaining a stale OPFS writer lease, explicitly reactivates,
-routes synthetic MIDI, and preserves exact cleanup and denied-permission
-semantics. The WebKit result is the structured `UNSUPPORTED_WEB_RUNTIME`
+keeps any retiring writer conflict typed as `PROJECT_BUSY`, requires the visible
+Retry action, reopens without re-listing during that conflict, explicitly
+reactivates, routes synthetic MIDI, and preserves exact cleanup and
+denied-permission semantics. The WebKit result is the structured `UNSUPPORTED_WEB_RUNTIME`
 capability boundary for `opfsSyncAccessHandle` and `opfsWritableReplace`; it is
 not Safari product acceptance.
 
