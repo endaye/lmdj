@@ -924,12 +924,28 @@ struct ControlRuntime::Impl {
     return quiescent;
   }
 
+  foundation::Result<void> abort_imports() {
+    std::optional<Error> first_failure;
+    for (auto current = import_tokens.begin(); current != import_tokens.end();) {
+      const auto aborted = application.abort_project_bundle_import(*current);
+      if (aborted.has_value()) {
+        current = import_tokens.erase(current);
+        continue;
+      }
+      if (!first_failure.has_value()) {
+        first_failure = aborted.error();
+      }
+      ++current;
+    }
+    if (first_failure.has_value()) {
+      return foundation::Result<void>::failure(*first_failure);
+    }
+    return foundation::Result<void>::success();
+  }
+
   void seal_all_noexcept() noexcept {
     try {
-      for (const auto& token : import_tokens) {
-        static_cast<void>(application.abort_project_bundle_import(token));
-      }
-      import_tokens.clear();
+      static_cast<void>(abort_imports());
       if (!retained_project_path.has_value()) {
         active_take.reset();
         committable_take.reset();
@@ -1743,6 +1759,10 @@ Json ControlRuntime::dispatch(
         } else {
           impl_->committable_take.reset();
         }
+      }
+      const auto imports_released = impl_->abort_imports();
+      if (!imports_released.has_value() && !close_failure.has_value()) {
+        close_failure = imports_released.error();
       }
       observe_timeout();
       const auto released = impl_->release_runtime_banks();

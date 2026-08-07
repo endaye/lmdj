@@ -841,6 +841,20 @@ void test_project_bundle_discovery_and_import_are_typed_facade_apis() {
   LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
 }
 
+void test_application_startup_cleans_incomplete_bundle_staging() {
+  TempDirectory temp;
+  const auto workspace = temp.path() / "workspace";
+  const auto stale = workspace / ".lmdj-host" / "import-staging" /
+                     uuid(906);
+  std::filesystem::create_directories(stale / "project.lmdj");
+  write_bytes(stale / "project.lmdj" / "partial.bin", "partial");
+  LMDJ_CHECK(std::filesystem::exists(stale));
+
+  Application application(config(workspace));
+
+  LMDJ_CHECK(!std::filesystem::exists(stale));
+}
+
 void test_render_recooks_after_restart_and_publishes_golden_atomically() {
   TempDirectory temp;
   const auto project = temp.path() / "proof-beat.lmdj";
@@ -1906,6 +1920,7 @@ int main() {
     test_module_versions_and_dependencies_are_exact();
     test_all_operations_share_one_facade_and_revision_contract();
     test_project_bundle_discovery_and_import_are_typed_facade_apis();
+    test_application_startup_cleans_incomplete_bundle_staging();
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();

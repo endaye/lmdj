@@ -848,6 +848,29 @@ void test_project_bundle_stream_delegates_to_facade_and_lists_summary() {
   LMDJ_CHECK((aborted == Json{{"aborted", true}}));
 }
 
+void test_host_close_aborts_active_project_bundle_import() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  const auto token = uuid(603);
+  check_success(runtime->dispatch(
+      "project.import.begin",
+      {
+          {"import_token", token},
+          {"index_bytes", 1},
+          {"index_sha256", sha256("x")},
+      },
+      {}));
+  const auto staging = temp.path() / ".lmdj-host" / "import-staging" /
+                       token;
+  LMDJ_CHECK(std::filesystem::exists(staging));
+
+  const auto& closed = check_exact_success(
+      runtime->dispatch("host.close", Json::object(), {}),
+      {"state", "sealed_take_id"});
+  LMDJ_CHECK((closed == Json{{"state", "closed"}, {"sealed_take_id", nullptr}}));
+  LMDJ_CHECK(!std::filesystem::exists(staging));
+}
+
 void test_runtime_cancellation_precedes_project_mutation() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -3023,6 +3046,7 @@ int main() {
   try {
     test_facade_error_details_follow_an_explicit_safe_schema();
     test_project_bundle_stream_delegates_to_facade_and_lists_summary();
+    test_host_close_aborts_active_project_bundle_import();
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_take_stop_drains_the_final_disarm_quantum();

@@ -1017,6 +1017,11 @@ struct Application::Impl {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
     }
+    const auto cleaned = bundle_transfers.cleanup_incomplete(workspace_root);
+    if (!cleaned.has_value()) {
+      throw std::runtime_error(
+          "incomplete Project Bundle staging cleanup failed");
+    }
   }
 
   nlohmann::json dispatch(
