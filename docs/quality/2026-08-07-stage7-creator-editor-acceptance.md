@@ -3,7 +3,7 @@
 ## Current status
 
 Stage 7 automated local acceptance is `PASS` at source revision
-`8726bc51d4e21ae42d8548de2bcff6becc592022`. The verified corrective candidate
+`04a6800efc79211b836674b34ce83081c8d69438`. The verified corrective candidate
 is Product Build `1.0.16.1`, Channel `canary`, Creator Web Host `1.0.1`, shared
 Web Runtime Platform `0.1.1`, and Application Facade `1.3.1`.
 
@@ -52,14 +52,15 @@ screen recovery, or long-session stability on those platforms.
 
 | State transition | Status |
 | --- | --- |
-| Push | authorized / pending execution |
-| Pull Request | authorized / pending creation |
-| Pull Request CI | not run |
+| Push | pre-sync revision pushed; rebased update not authorized / not performed |
+| Pull Request | Draft PR #97 open; it still points to the pre-sync revision |
+| Pull Request CI | pre-sync run completed with failures; rebased revision not run remotely |
 | Merge | not authorized / not performed |
 | Product tag or GitHub Release | not authorized / not created |
 | Deployment or publication | not authorized / not performed |
 | Channel promotion | not authorized / not performed |
 
-Stage 7 remains a locally proven canary candidate until push and Pull Request
-creation are executed, required CI is green, the separately authorized merge
-workflow completes, and the deferred physical rows are completed.
+Stage 7 remains a locally proven canary candidate until the rebased branch is
+separately authorized and pushed, required CI is green, the separately
+authorized merge workflow completes, and the deferred physical rows are
+completed.
