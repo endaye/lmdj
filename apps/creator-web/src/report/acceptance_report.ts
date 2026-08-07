@@ -55,6 +55,10 @@ export interface CreatorAcceptanceCapabilities {
   webMidi: boolean;
 }
 
+export function serializeAcceptanceReport(report: unknown): string {
+  return `${JSON.stringify(report, null, 2)}\n`;
+}
+
 export interface AcceptanceDiagnostics {
   state: string;
   error_code: string | null;

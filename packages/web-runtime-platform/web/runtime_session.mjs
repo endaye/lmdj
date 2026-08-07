@@ -274,20 +274,23 @@ function validatePackagedManifest(
   const expectedAssets = manifestSource?.expectedAssets;
   const expectedResourceLimits = manifestSource?.resourceLimits;
   const expectedEmscripten = manifestSource?.emscripten;
+  const expectedCompatibleHosts = manifestSource?.compatibleHosts;
+  const manifestKeys = [
+    "assets",
+    ...(expectedCompatibleHosts === undefined ? [] : ["compatible_hosts"]),
+    "distribution_contract",
+    "emscripten",
+    "heap_bytes",
+    "host_id",
+    "host_version",
+    "manifest_version",
+    "platform_version",
+    "product_build",
+    "protocol_version",
+    "resource_limits",
+  ];
   if (
-    !exactKeys(manifest, [
-      "assets",
-      "distribution_contract",
-      "emscripten",
-      "heap_bytes",
-      "host_id",
-      "host_version",
-      "manifest_version",
-      "platform_version",
-      "product_build",
-      "protocol_version",
-      "resource_limits",
-    ]) ||
+    !exactKeys(manifest, manifestKeys) ||
     manifest.distribution_contract !== assemblyIdentity.distributionContract ||
     manifest.manifest_version !== 1 ||
     manifest.product_build !== expected.product_build ||
@@ -314,6 +317,15 @@ function validatePackagedManifest(
     Object.entries(expectedEmscripten ?? {}).some(
       ([name, value]) => manifest.emscripten[name] !== value,
     ) ||
+    (expectedCompatibleHosts !== undefined && (
+      !Array.isArray(manifest.compatible_hosts) ||
+      manifest.compatible_hosts.length !== expectedCompatibleHosts.length ||
+      manifest.compatible_hosts.some((host, index) =>
+        !exactKeys(host, ["host_id", "host_version"]) ||
+        host.host_id !== expectedCompatibleHosts[index]?.host_id ||
+        host.host_version !== expectedCompatibleHosts[index]?.host_version
+      )
+    )) ||
     !Array.isArray(manifest.assets) ||
     !Array.isArray(expectedAssets) ||
     manifest.assets.length !== expectedAssets.length
@@ -681,6 +693,17 @@ function createRuntimeSessionController(options = {}) {
   let triggerRejectedCount = 0;
   let triggerTail = Promise.resolve();
   let importTail = Promise.resolve();
+  let capabilitySnapshot = Object.freeze({
+    secureContext: false,
+    crossOriginIsolated: false,
+    sharedArrayBuffer: false,
+    webAssembly: false,
+    audioWorklet: false,
+    opfs: false,
+    opfsSyncAccessHandle: false,
+    opfsWritableReplace: false,
+    webMidi: typeof navigator?.requestMIDIAccess === "function",
+  });
   const admittedSequences = new Map();
   const listenerDisposers = [];
   const hostStateListeners = new Set();
@@ -714,8 +737,11 @@ function createRuntimeSessionController(options = {}) {
       state: machine.state,
       error_code: lastErrorCode,
       product_build: manifest.product_build,
+      host_id: assemblyIdentity.hostId,
       host_version: manifest.host_version,
+      platform_version: assemblyIdentity.platformVersion,
       protocol_version: manifest.protocol_version,
+      capabilities: capabilitySnapshot,
       control_generation: controlGeneration,
       acknowledged_generation: acknowledgedGeneration,
       trigger_admitted_count: triggerAdmittedCount,
@@ -1578,7 +1604,21 @@ function createRuntimeSessionController(options = {}) {
       const capabilities =
         options.capabilities ??
         (preflight === runPreflight ? await defaultCapabilities(window) : {});
-      await preflight(capabilities);
+      const resolvedCapabilities = {};
+      for (const name of PREFLIGHT_CAPABILITIES) {
+        try {
+          const value = capabilities[name];
+          resolvedCapabilities[name] =
+            (typeof value === "function" ? await value() : await value) === true;
+        } catch {
+          resolvedCapabilities[name] = false;
+        }
+      }
+      capabilitySnapshot = Object.freeze({
+        ...resolvedCapabilities,
+        webMidi: typeof navigator?.requestMIDIAccess === "function",
+      });
+      await preflight(resolvedCapabilities);
       runtime = await loadRuntime(manifest);
       machine.transition("storage-ready", { reason: "runtime_loaded" });
       machine.transition("core-ready", { reason: "runtime_ready" });

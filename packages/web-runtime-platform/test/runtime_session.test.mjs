@@ -24,7 +24,12 @@ const API = [
   "trigger",
 ].sort();
 
-function fixture({send, browserWindow = {}, navigator = {}} = {}) {
+function fixture({
+  send,
+  browserWindow = {},
+  navigator = {},
+  capabilities,
+} = {}) {
   let request = 0;
   let terminated = 0;
   let notificationListener = null;
@@ -88,6 +93,7 @@ function fixture({send, browserWindow = {}, navigator = {}} = {}) {
     },
     inputConfiguration: {},
     seams: {
+      ...(capabilities === undefined ? {} : {capabilities}),
       createAudioContext: () => context,
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
@@ -117,6 +123,153 @@ function fixture({send, browserWindow = {}, navigator = {}} = {}) {
     terminated: () => terminated,
   };
 }
+
+test("reports the exact assembly identity and resolved browser capabilities", async () => {
+  const capabilities = Object.fromEntries([
+    "secureContext",
+    "crossOriginIsolated",
+    "sharedArrayBuffer",
+    "webAssembly",
+    "audioWorklet",
+    "opfs",
+    "opfsSyncAccessHandle",
+    "opfsWritableReplace",
+  ].map((name) => [name, true]));
+  const {session} = fixture({
+    capabilities,
+    navigator: {requestMIDIAccess: async () => ({inputs: new Map()})},
+  });
+  await session.start();
+  assert.deepEqual(session.diagnostics().capabilities, {
+    secureContext: true,
+    crossOriginIsolated: true,
+    sharedArrayBuffer: true,
+    webAssembly: true,
+    audioWorklet: true,
+    opfs: true,
+    opfsSyncAccessHandle: true,
+    opfsWritableReplace: true,
+    webMidi: true,
+  });
+  assert.equal(session.diagnostics().host_id, "web-runtime-host");
+  assert.equal(session.diagnostics().platform_version, "0.1.0");
+});
+
+test("accepts only the declared compatible Host inventory in packaged manifests", async () => {
+  const canonical = (value) => {
+    if (Array.isArray(value)) return `[${value.map(canonical).join(",")}]`;
+    if (value !== null && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) =>
+        `${JSON.stringify(key)}:${canonical(value[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const assemblyIdentity = {
+    distributionContract: "lmdj.creator-web.distribution.v1",
+    hostId: "creator-web",
+    hostVersion: "1.0.0",
+    platformVersion: "0.1.0",
+    productBuild: "1.0.16.0",
+    protocolVersion: 1,
+  };
+  const manifestSource = {
+    heapBytes: 536_870_912,
+    resourceLimits: {imported_wav_bytes: 1_048_576},
+    emscripten: {
+      emcc_version: "emcc",
+      emscripten_releases_revision: "a".repeat(40),
+      emsdk_revision: "b".repeat(40),
+      emsdk_tag: "6.0.5",
+    },
+    compatibleHosts: [{host_id: "web-runtime-host", host_version: "1.2.0"}],
+    expectedAssets: [{
+      prefix: "assets/main.", suffix: ".js", role: "host_main",
+    }],
+  };
+  const baseManifest = {
+    assets: [{
+      bytes: 1,
+      path: `assets/main.${"c".repeat(64)}.js`,
+      role: "host_main",
+      sha256: "c".repeat(64),
+    }],
+    compatible_hosts: manifestSource.compatibleHosts,
+    distribution_contract: assemblyIdentity.distributionContract,
+    emscripten: manifestSource.emscripten,
+    heap_bytes: manifestSource.heapBytes,
+    host_id: assemblyIdentity.hostId,
+    host_version: assemblyIdentity.hostVersion,
+    manifest_version: 1,
+    platform_version: assemblyIdentity.platformVersion,
+    product_build: assemblyIdentity.productBuild,
+    protocol_version: 1,
+    resource_limits: manifestSource.resourceLimits,
+  };
+
+  async function packagedSession(manifest) {
+    const text = canonical(manifest);
+    const digest = [...new Uint8Array(
+      await webcrypto.subtle.digest("SHA-256", new TextEncoder().encode(text)),
+    )].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    const metadata = new Map([
+      ["lmdj-host-manifest-path", "./host-manifest.json"],
+      ["lmdj-host-manifest-sha256", digest],
+      ["lmdj-product-build", assemblyIdentity.productBuild],
+      ["lmdj-host-id", assemblyIdentity.hostId],
+      ["lmdj-host-version", assemblyIdentity.hostVersion],
+      ["lmdj-web-runtime-platform-version", assemblyIdentity.platformVersion],
+      ["lmdj-host-protocol-version", "1"],
+    ]);
+    const browserWindow = new EventTarget();
+    browserWindow.fetch = async () => new Response(text);
+    const session = createRuntimeSession({
+      document: {
+        baseURI: "http://127.0.0.1:4175/",
+        visibilityState: "visible",
+        addEventListener() {},
+        removeEventListener() {},
+        querySelector(selector) {
+          const name = selector.match(/meta\[name='([^']+)'\]/)?.[1];
+          const value = metadata.get(name);
+          return value === undefined ? null : {getAttribute: () => value};
+        },
+      },
+      window: browserWindow,
+      navigator: {},
+      crypto: webcrypto,
+      manifestSource,
+      assemblyIdentity,
+      seams: {
+        createAudioContext: () => ({state: "suspended"}),
+        loadRuntime: async () => ({workers: []}),
+        preflight: async () => {},
+        runtimeTerminator: async () => {},
+        transport: {
+          async send(envelope) {
+            return {
+              protocol_version: 1,
+              request_id: envelope.request_id,
+              ok: true,
+              result: {},
+            };
+          },
+          subscribe: () => () => {},
+          subscribeFailure: () => () => {},
+        },
+      },
+    });
+    return session;
+  }
+
+  const accepted = await packagedSession(baseManifest);
+  assert.equal(await accepted.start(), true);
+  const rejected = await packagedSession({
+    ...baseManifest,
+    compatible_hosts: [{host_id: "web-runtime-host", host_version: "9.9.9"}],
+  });
+  assert.equal(await rejected.start(), false);
+  assert.equal(rejected.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+});
 
 test("owns the exact Host-neutral surface and lifecycle", async () => {
   const {session, terminated} = fixture();

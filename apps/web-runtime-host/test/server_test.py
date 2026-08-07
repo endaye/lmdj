@@ -84,6 +84,13 @@ class ServerTest(unittest.TestCase):
         connection.close()
         return result
 
+    def test_host_wrapper_uses_the_shared_distribution_server(self) -> None:
+        self.assertEqual(
+            self.module.SHARED_SERVER.resolve(),
+            (REPO_ROOT / "tools/web-runtime/serve_distribution.py").resolve(),
+        )
+        self.assertEqual(self.module.ProofHandler.__module__, "lmdj_shared_web_server")
+
     def test_exact_isolation_csp_mime_and_cache_headers(self) -> None:
         status, headers, _ = self.request("GET", "/index.html")
         self.assertEqual(status, 200)

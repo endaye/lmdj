@@ -218,8 +218,10 @@ run_browser_gate() {
   proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-server.XXXXXX")"
   ready_file="$proof_server_ready_root/ready.json"
   ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-  python3 "$repo_root/apps/web-runtime-host/tools/server.py" \
+  python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
     --root "$selected_dist" \
+    --verifier "$repo_root/apps/web-runtime-host/tools/package.py" \
+    --repo-root "$repo_root" \
     --port "$requested_port" \
     --ready-file "$ready_file" \
     --ready-nonce "$ready_nonce" >"$log_path" 2>&1 &
@@ -479,8 +481,10 @@ case "$command_name" in
       echo "Web Runtime Host error: build the Host before serving" >&2
       exit 2
     }
-    exec python3 "$repo_root/apps/web-runtime-host/tools/server.py" \
-      --root "$dist_root" "$@"
+    exec python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
+      --root "$dist_root" \
+      --verifier "$repo_root/apps/web-runtime-host/tools/package.py" \
+      --repo-root "$repo_root" "$@"
     ;;
   clean)
     [[ $# -eq 0 ]] || { usage; exit 64; }

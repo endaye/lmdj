@@ -7,6 +7,10 @@ import {PadSurface} from "./components/pad_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {StatusBar} from "./components/status_bar";
 import {
+  createAcceptanceReport,
+  serializeAcceptanceReport,
+} from "./report/acceptance_report";
+import {
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -218,6 +222,33 @@ function Workspace({
     }
   };
 
+  const exportReport = () => {
+    if (!session) return;
+    const diagnostics = session.diagnostics();
+    const report = createAcceptanceReport({
+      identity: {
+        productBuild: diagnostics.product_build,
+        hostId: diagnostics.host_id,
+        hostVersion: diagnostics.host_version,
+        platformVersion: diagnostics.platform_version,
+        protocolVersion: diagnostics.protocol_version,
+      },
+      capabilities: diagnostics.capabilities,
+      diagnostics,
+      bankCount: 4,
+      padCount: 64,
+    });
+    const url = URL.createObjectURL(new Blob(
+      [serializeAcceptanceReport(report)],
+      {type: "application/json"},
+    ));
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = `lmdj-creator-web-${diagnostics.product_build}.json`;
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="workspace">
       <StatusBar
@@ -227,6 +258,7 @@ function Workspace({
               onActivateAudio: (event) => { void activateAudio(event.nativeEvent); },
               onSuspendAudio: () => { void suspendAudio(); },
               onEnableMidi: () => { void inputController.current?.enableMidi(); },
+              onExportReport: exportReport,
             }
           : {})}
       />

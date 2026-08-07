@@ -208,6 +208,47 @@ jobs:
           source build/toolchains/emsdk/emsdk_env.sh
           scripts/web-runtime-host.sh proof
 
+  creator-web:
+    needs: [select-ubuntu-runner, web-toolchain-conformance, core-ubuntu]
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Configure bounded build parallelism
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: false
+      - name: Clone pinned emsdk
+        run: |
+          git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
+          git -C build/toolchains/emsdk checkout dfb9d1a46c3bb8f52e1e6324be23123b9d73c190
+      - name: Install and activate Emscripten 6.0.5
+        run: |
+          build/toolchains/emsdk/emsdk install 6.0.5
+          build/toolchains/emsdk/emsdk activate 6.0.5
+      - name: Install locked Creator dependencies
+        working-directory: apps/creator-web
+        run: npm ci
+      - name: Install locked browser runner
+        working-directory: tests/platform/web
+        run: npm ci
+      - name: Install Chromium and WebKit
+        working-directory: tests/platform/web
+        run: npx --no-install playwright install --with-deps chromium webkit
+      - name: Prove the packaged Creator Web Host
+        run: |
+          source build/toolchains/emsdk/emsdk_env.sh
+          scripts/creator-web.sh proof
+
   web-runtime-lab:
     needs: select-ubuntu-runner
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}

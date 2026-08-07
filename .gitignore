@@ -70,6 +70,8 @@ build/core/
 build/web/
 tests/platform/web/test-results/
 tests/platform/web/playwright-report/
+# Privacy-safe local Creator acceptance exports
+lmdj-creator-web-*.json
 
 # Reference demo run artifacts (pipeline output packages)
 references/demos/lmdj-song-pipeline/output/

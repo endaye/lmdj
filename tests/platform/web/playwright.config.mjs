@@ -7,18 +7,25 @@ import { defineConfig, devices } from "@playwright/test";
 const webRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(webRoot, "../../..");
 const cleanRoom = process.env.LMDJ_WEB_HOST_CLEAN_ROOM === "1";
-const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1";
+const creatorExternal = process.env.LMDJ_CREATOR_WEB_EXTERNAL_SERVER === "1";
+const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1" ||
+  process.env.LMDJ_CREATOR_WEB_FULL_CHROMIUM === "1";
 const externalServer =
-  cleanRoom || process.env.LMDJ_WEB_HOST_EXTERNAL_SERVER === "1";
+  cleanRoom || creatorExternal ||
+  process.env.LMDJ_WEB_HOST_EXTERNAL_SERVER === "1";
 const port = Number.parseInt(process.env.LMDJ_WEB_TOOLCHAIN_PORT ?? "4174", 10);
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error(`invalid LMDJ_WEB_TOOLCHAIN_PORT: ${process.env.LMDJ_WEB_TOOLCHAIN_PORT}`);
 }
 const baseURL = `http://127.0.0.1:${port}`;
 if (externalServer && !process.env.LMDJ_WEB_HOST_BASE_URL) {
-  throw new Error("LMDJ_WEB_HOST_BASE_URL is required with an external server");
+  if (!creatorExternal || !process.env.LMDJ_CREATOR_WEB_BASE_URL) {
+    throw new Error("an owned external-server base URL is required");
+  }
 }
-const browserProofBaseURL = process.env.LMDJ_WEB_HOST_BASE_URL ?? baseURL;
+const browserProofBaseURL = creatorExternal
+  ? process.env.LMDJ_CREATOR_WEB_BASE_URL
+  : process.env.LMDJ_WEB_HOST_BASE_URL ?? baseURL;
 const webServer = externalServer
   ? undefined
   : {

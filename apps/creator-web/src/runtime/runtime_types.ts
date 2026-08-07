@@ -52,8 +52,21 @@ export interface RuntimeDiagnostics {
   state: string;
   error_code: string | null;
   product_build: string;
+  host_id: string;
   host_version: string;
+  platform_version: string;
   protocol_version: number;
+  capabilities: {
+    secureContext: boolean;
+    crossOriginIsolated: boolean;
+    sharedArrayBuffer: boolean;
+    webAssembly: boolean;
+    audioWorklet: boolean;
+    opfs: boolean;
+    opfsSyncAccessHandle: boolean;
+    opfsWritableReplace: boolean;
+    webMidi: boolean;
+  };
   trigger_admitted_count: number;
   trigger_outcome_count: number;
   trigger_rejected_count: number;

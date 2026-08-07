@@ -11,6 +11,7 @@ interface StatusBarProps {
   onActivateAudio?: (event: MouseEvent<HTMLButtonElement>) => void;
   onSuspendAudio?: () => void;
   onEnableMidi?: () => void;
+  onExportReport?: () => void;
 }
 
 export function StatusBar({
@@ -18,6 +19,7 @@ export function StatusBar({
   onActivateAudio,
   onSuspendAudio,
   onEnableMidi,
+  onExportReport,
 }: StatusBarProps) {
   const project = state.project.current;
   return (
@@ -61,6 +63,13 @@ export function StatusBar({
         onClick={onEnableMidi}
       >
         Enable MIDI
+      </button>
+      <button
+        type="button"
+        disabled={state.runtime.phase !== "ready" || !onExportReport}
+        onClick={onExportReport}
+      >
+        Export report
       </button>
     </header>
   );
