@@ -508,16 +508,31 @@ test("diagnostic protocol mismatch is private, terminal, and cleaned up once", a
   assert.equal(fixture.cleanupCalls, 1);
 });
 
-test("late restart-required after pagehide seals the controller and queued Load", async () => {
+test("late restart-required after pagehide seals the controller and queued Load", {
+  timeout: 2_000,
+}, async () => {
   const { createWebRuntimeHostController } = await mainModule();
   const fixture = harness();
+  const digest = fixture.options.crypto.subtle.digest.bind(
+    fixture.options.crypto.subtle,
+  );
+  fixture.options.crypto.subtle = {
+    async digest(...arguments_) {
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      await new Promise((resolvePromise) => setImmediate(resolvePromise));
+      return digest(...arguments_);
+    },
+  };
   const originalSend = fixture.transport.send.bind(fixture.transport);
   const importSettlement = deferred();
+  const importStarted = deferred();
   let importRequest = null;
   fixture.transport.send = (request, options) => {
     if (request.operation === "asset.import") {
       fixture.calls.push({ operation: request.operation, payload: request.payload, options });
       importRequest = request;
+      importStarted.resolve();
       return importSettlement.promise;
     }
     return originalSend(request, options);
@@ -526,7 +541,7 @@ test("late restart-required after pagehide seals the controller and queued Load"
   await controller.start();
 
   const first = controller.loadDiagnosticProject();
-  await settle();
+  await importStarted.promise;
   assert.ok(importRequest);
   await controller.observePageHide({ persisted: true });
   controller.observePageShow();
