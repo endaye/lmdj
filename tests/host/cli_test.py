@@ -749,7 +749,7 @@ def host_boundary_and_identity(executable: Path) -> None:
         "milestone": 1,
         "minor": 0,
         "build": 16,
-        "patch": 0,
+        "patch": 1,
     }
     manifest = json.loads(
         (REPO_ROOT / "apps/core-cli/module.json").read_text(
