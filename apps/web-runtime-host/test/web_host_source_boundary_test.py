@@ -583,6 +583,22 @@ def main() -> int:
         and "audio/realtime_failure.spec.mjs" in runtime_gate.group(1),
         "Web Runtime Host stable AudioWorklet gate must run both realtime specs",
     )
+    require(
+        '"$web_test_root/toolchain/server.py"' in runtime_gate.group(1)
+        and "--port 0" in runtime_gate.group(1)
+        and "--write-port" in runtime_gate.group(1),
+        "AudioWorklet gate must start its own dynamic-port conformance server",
+    )
+    require(
+        "proof_server_pid=$!" in runtime_gate.group(1)
+        and "cleanup_proof_server" in runtime_gate.group(1),
+        "AudioWorklet gate must own and clean up its conformance server",
+    )
+    require(
+        "LMDJ_WEB_HOST_EXTERNAL_SERVER=1" in runtime_gate.group(1)
+        and "LMDJ_WEB_HOST_BASE_URL=" in runtime_gate.group(1),
+        "AudioWorklet gate must bind Playwright to the owned server URL",
+    )
     toolchain_proof = re.search(
         r"\n\s{2}proof\)\n(.*?)\n\s{4}echo\s+"
         r"[\"']Web Toolchain Conformance Proof: PASS[\"']",
