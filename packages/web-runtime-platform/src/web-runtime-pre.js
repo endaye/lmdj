@@ -194,6 +194,7 @@ if (typeof globalThis.window !== "undefined") {
   const pendingRequests = new Map();
   const notificationSubscribers = new Set();
   const failureSubscribers = new Set();
+  const TERMINAL_OWNER_RELEASE_GRACE_MS = 5_000;
   const terminalToken = crypto.randomUUID();
   const terminalChannel = new BroadcastChannel(
     "lmdj.web-runtime-host.terminal.v1");
@@ -261,7 +262,7 @@ if (typeof globalThis.window !== "undefined") {
       terminateRuntimeWorkers();
       terminalChannel.close();
       deliverTerminalFailure();
-    }, 100);
+    }, TERMINAL_OWNER_RELEASE_GRACE_MS);
   }
 
   function consumeTerminalOwnerRelease() {

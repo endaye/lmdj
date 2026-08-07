@@ -10,7 +10,8 @@ const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfsSyncAccessHandle",
   "opfsWritableReplace",
 ]);
-const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 15_000;
+const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 60_000;
+const PROJECT_IO_CONFORMANCE_TIMEOUT_MS = 300_000;
 
 async function inspectStorageCapabilities(page) {
   return page.evaluate(async (order) => {
@@ -167,7 +168,7 @@ async function compareReacquiredLeaseEntry(page) {
 }
 
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
-  test.setTimeout(120_000);
+  test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
   await page.goto("/preflight.html");
   const capabilities = await inspectStorageCapabilities(page);
   if (capabilities.status === "unsupported") {

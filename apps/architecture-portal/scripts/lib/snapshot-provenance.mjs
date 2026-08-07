@@ -606,8 +606,23 @@ export async function verifySnapshotProvenance({
 
   const immutableHistory = (await execGit(repoRoot, [
     'log', '--full-history', '--format=%H', `${introducing}..${headRevision}`, '--', ...immutablePaths(metadata),
-  ])).stdout.trim();
-  if (immutableHistory) {
+  ])).stdout.trim().split('\n').filter(Boolean);
+  let immutableHistoryChanged = false;
+  for (const revision of immutableHistory) {
+    const ancestry = (await execGit(repoRoot, [
+      'rev-list', '--parents', '-n', '1', revision,
+    ])).stdout.trim().split(/\s+/);
+    const matchesParent = await Promise.all(ancestry.slice(1).map(async (parentRevision) =>
+      Boolean(await execGit(repoRoot, [
+        'diff', '--quiet', parentRevision, revision, '--', ...immutablePaths(metadata),
+      ], {allowFailure: true}))
+    ));
+    if (!matchesParent.some(Boolean)) {
+      immutableHistoryChanged = true;
+      break;
+    }
+  }
+  if (immutableHistoryChanged) {
     errors.push('generated immutable snapshot paths changed after introducing commit');
   }
   try {

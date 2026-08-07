@@ -4,7 +4,7 @@ export const DIAGNOSTIC_PROJECT_STORAGE_KEY =
   "lmdj.web-runtime-host.diagnostic-project.v1";
 
 const PROJECT_DEADLINE_MS = 30_000;
-const PROJECT_OPEN_RETRY_DEADLINE_MS = 10_000;
+const PROJECT_OPEN_RETRY_DEADLINE_MS = 60_000;
 const PROJECT_OPEN_RETRY_DELAY_MS = 25;
 const PAD_COUNT = 64;
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;

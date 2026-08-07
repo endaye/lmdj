@@ -402,19 +402,19 @@ test("persistent project busy expires without a post-deadline open", async () =>
   }
 
   assert.deepEqual(result, { state: "error", error_code: "PROJECT_BUSY" });
-  assert.equal(elapsed, 10_000);
-  assert.equal(calls.length, 400);
+  assert.equal(elapsed, 60_000);
+  assert.equal(calls.length, 2_400);
   assert.deepEqual(calls.at(0), {
     operation: "project.open",
     called_at_ms: 0,
-    deadline_ms: 10_000,
+    deadline_ms: 60_000,
   });
   assert.deepEqual(calls.at(-1), {
     operation: "project.open",
-    called_at_ms: 9_975,
+    called_at_ms: 59_975,
     deadline_ms: 25,
   });
-  assert.equal(calls.some(({ called_at_ms }) => called_at_ms >= 10_000), false);
+  assert.equal(calls.some(({ called_at_ms }) => called_at_ms >= 60_000), false);
 });
 
 test("a partial project imports only an absent asset and repairs only wrong pad slots", async () => {

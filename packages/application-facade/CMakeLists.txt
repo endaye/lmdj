@@ -141,6 +141,7 @@ if(BUILD_TESTING)
     lmdj_application_c_api_tests
     PRIVATE
       lmdj_core_c
+      lmdj_picosha2
       nlohmann_json::nlohmann_json
       Threads::Threads
   )
