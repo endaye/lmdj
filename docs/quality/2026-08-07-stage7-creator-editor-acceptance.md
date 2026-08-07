@@ -52,15 +52,16 @@ screen recovery, or long-session stability on those platforms.
 
 | State transition | Status |
 | --- | --- |
-| Push | pre-sync revision pushed; rebased update not authorized / not performed |
-| Pull Request | Draft PR #97 open; it still points to the pre-sync revision |
-| Pull Request CI | pre-sync run completed with failures; rebased revision not run remotely |
+| Push | rebased feature branch pushed; the latest pushed evidence revision before this record is `a2def3db374c83cfe1b13d5c8d95962cb9d08f42` |
+| Pull Request | Draft PR #97 open against `main`; dependency PR #94 is merged at `63fb788e33ccdf65d0a18e76872c7c106d8efd5b` and is an ancestor of this branch |
+| Pull Request CI | not green at `a2def3db374c83cfe1b13d5c8d95962cb9d08f42`: Portal rejected stale machine-readable PR fields; Web toolchain, Web Runtime Host, Linux Core, Linux ASan, and coverage also reported failures that remain unadjudicated; a fresh run is required after this evidence update |
 | Merge | not authorized / not performed |
 | Product tag or GitHub Release | not authorized / not created |
 | Deployment or publication | not authorized / not performed |
 | Channel promotion | not authorized / not performed |
 
-Stage 7 remains a locally proven canary candidate until the rebased branch is
-separately authorized and pushed, required CI is green, the separately
-authorized merge workflow completes, and the deferred physical rows are
-completed.
+Stage 7 remains a locally proven canary candidate until the current required CI
+is green, manual canary acceptance is recorded, the separately authorized merge
+workflow completes, and merged `main` passes the required Proof. The five
+physical rows remain accurately deferred and continue to block physical-pass,
+`beta`, and `stable`.
