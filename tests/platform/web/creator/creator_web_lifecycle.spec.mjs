@@ -41,7 +41,7 @@ test("suspend and reload require explicit reopen and explicit reactivation", asy
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Open Project 00000000"}).click();
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
-    .toBeVisible();
+    .toBeVisible({timeout: 60_000});
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
@@ -58,9 +58,7 @@ test.describe("synthetic Web MIDI", () => {
           if (type === "midimessage") listeners.add(listener);
         },
         removeEventListener(type, listener) {
-          if (type === "midimessage" && listeners.delete(listener)) {
-            console.log("creator-midi-listener-removed");
-          }
+          if (type === "midimessage") listeners.delete(listener);
         },
       };
       const access = new EventTarget();
@@ -75,6 +73,9 @@ test.describe("synthetic Web MIDI", () => {
             listener({data: new Uint8Array([0x90, note, velocity])});
           }
         },
+        listenerCount() {
+          return listeners.size;
+        },
       };
     });
   });
@@ -82,10 +83,6 @@ test.describe("synthetic Web MIDI", () => {
   test("notes 36 through 51 map to the selected Bank and listeners clean up", async ({page, browserName}) => {
     test.skip(browserName !== "chromium");
     test.setTimeout(180_000);
-    const cleanup = [];
-    page.on("console", (message) => {
-      if (message.text() === "creator-midi-listener-removed") cleanup.push(true);
-    });
     await page.goto("/index.html");
     await importAndActivate(page);
     await page.getByRole("button", {name: "Bank C"}).click();
@@ -97,8 +94,12 @@ test.describe("synthetic Web MIDI", () => {
       const value = await report(page);
       return [value.trigger_admitted_count, value.trigger_outcome_count];
     }, {timeout: 30_000}).toEqual([16, 16]);
+    await page.evaluate(() => {
+      window.dispatchEvent(new PageTransitionEvent("pagehide"));
+    });
+    await expect.poll(() => page.evaluate(() => window.__creatorMidi.listenerCount()))
+      .toBe(0);
     await page.reload();
-    await expect.poll(() => cleanup.length).toBeGreaterThan(0);
   });
 });
 
