@@ -255,6 +255,12 @@ def main() -> int:
         "render-thread acknowledgement",
     )
     require(
+        "kQuiescenceRecheckInterval" in quiescence_wait.group(1)
+        and "std::min" in quiescence_wait.group(1),
+        "AudioWorklet quiescence must bound each futex wait so a missed "
+        "notification cannot consume the whole request deadline",
+    )
+    require(
         "std::this_thread::sleep_for" not in quiescence_wait.group(1),
         "AudioWorklet quiescence must not poll or process the Control proxy "
         "queue while awaiting the render-thread acknowledgement",
