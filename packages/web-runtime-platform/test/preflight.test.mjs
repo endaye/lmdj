@@ -5,7 +5,7 @@ import {
   PREFLIGHT_CAPABILITIES,
   PreflightError,
   runPreflight,
-} from "../src/preflight.mjs";
+} from "../web/preflight.mjs";
 
 test("uses the exact ordered mandatory preflight list", () => {
   assert.deepEqual(PREFLIGHT_CAPABILITIES, [

@@ -17,7 +17,7 @@ import {
   validateNotificationEnvelope,
   validateResponseEnvelope,
   verifyAssetSidecar,
-} from "../src/protocol.mjs";
+} from "../web/protocol.mjs";
 
 const REQUEST_ID = "01234567-89ab-cdef-0123-456789abcdef";
 

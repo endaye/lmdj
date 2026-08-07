@@ -47,14 +47,17 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emcc_version",
 )
 EXPECTED_ASSETS = (
+    ("assets/diagnostic-client.", ".mjs", "platform_module"),
     ("assets/diagnostic-project.", ".mjs", "host_module"),
-    ("assets/input-adapters.", ".mjs", "host_module"),
+    ("assets/input-adapters.", ".mjs", "platform_module"),
     ("assets/main.", ".mjs", "host_main"),
-    ("assets/preflight.", ".mjs", "host_module"),
-    ("assets/protocol.", ".mjs", "host_module"),
+    ("assets/preflight.", ".mjs", "platform_module"),
+    ("assets/protocol.", ".mjs", "platform_module"),
     ("assets/runtime.", ".js", "runtime_script"),
     ("assets/runtime.", ".wasm", "runtime_wasm"),
-    ("assets/state-machine.", ".mjs", "host_module"),
+    ("assets/runtime-loader.", ".mjs", "platform_module"),
+    ("assets/runtime-session.", ".mjs", "platform_module"),
+    ("assets/state-machine.", ".mjs", "platform_module"),
     ("assets/styles.", ".css", "host_style"),
 )
 HASHED_ASSET_PATTERN = re.compile(
@@ -219,6 +222,7 @@ def build_distribution(
     version = read_json(repo_root / "products/lmdj/version.json", "Product version")
     active_product_build = product_build(version)
     host_root = repo_root / "apps/web-runtime-host"
+    platform_root = repo_root / "packages/web-runtime-platform/web"
     runtime_js_path = require_file(runtime_root / "lmdj-web-runtime.js")
     runtime_wasm_path = require_file(runtime_root / "lmdj-web-runtime.wasm")
 
@@ -231,34 +235,103 @@ def build_distribution(
         assets_root.mkdir()
         assets: list[dict] = []
 
-        leaf_assets: dict[str, dict] = {}
-        for name in (
-            "diagnostic_project.mjs",
-            "input_adapters.mjs",
-            "preflight.mjs",
-            "protocol.mjs",
-            "state_machine.mjs",
-        ):
-            payload = require_file(host_root / "src" / name).read_bytes()
+        def write_module(
+            source: Path,
+            stem: str,
+            role: str,
+            dependencies: tuple[tuple[str, dict], ...] = (),
+        ) -> dict:
+            text = require_file(source).read_text(encoding="utf-8")
+            for specifier, dependency in dependencies:
+                text = replace_exact_once(
+                    text,
+                    f'"{specifier}"',
+                    f'"./{Path(dependency["path"]).name}"',
+                    f"{stem} import {specifier}",
+                )
             entry = write_hashed_asset(
                 assets_root,
-                Path(name).stem.replace("_", "-"),
+                stem,
                 ".mjs",
-                payload,
-                "host_module",
+                text.encode("utf-8"),
+                role,
             )
-            leaf_assets[name] = entry
             assets.append(entry)
+            return entry
+
+        diagnostic_client_entry = write_module(
+            platform_root / "diagnostic_client.mjs",
+            "diagnostic-client",
+            "platform_module",
+        )
+        diagnostic_project_entry = write_module(
+            host_root / "src/diagnostic_project.mjs",
+            "diagnostic-project",
+            "host_module",
+        )
+        input_adapters_entry = write_module(
+            platform_root / "input_adapters.mjs",
+            "input-adapters",
+            "platform_module",
+        )
+        preflight_entry = write_module(
+            platform_root / "preflight.mjs",
+            "preflight",
+            "platform_module",
+        )
+        protocol_entry = write_module(
+            platform_root / "protocol.mjs",
+            "protocol",
+            "platform_module",
+        )
+        state_machine_entry = write_module(
+            platform_root / "state_machine.mjs",
+            "state-machine",
+            "platform_module",
+        )
+        runtime_loader_entry = write_module(
+            platform_root / "runtime_loader.mjs",
+            "runtime-loader",
+            "platform_module",
+            (("./protocol.mjs", protocol_entry),),
+        )
+        runtime_session_entry = write_module(
+            platform_root / "runtime_session.mjs",
+            "runtime-session",
+            "platform_module",
+            (
+                ("./input_adapters.mjs", input_adapters_entry),
+                ("./diagnostic_client.mjs", diagnostic_client_entry),
+                ("./runtime_loader.mjs", runtime_loader_entry),
+                ("./preflight.mjs", preflight_entry),
+                ("./protocol.mjs", protocol_entry),
+                ("./state_machine.mjs", state_machine_entry),
+            ),
+        )
 
         main_text = require_file(host_root / "src/main.mjs").read_text(
             encoding="utf-8"
         )
-        for name, entry in leaf_assets.items():
+        for specifier, entry in (
+            (
+                "../../../packages/web-runtime-platform/web/diagnostic_client.mjs",
+                diagnostic_client_entry,
+            ),
+            (
+                "../../../packages/web-runtime-platform/web/input_adapters.mjs",
+                input_adapters_entry,
+            ),
+            (
+                "../../../packages/web-runtime-platform/web/runtime_session.mjs",
+                runtime_session_entry,
+            ),
+            ("./diagnostic_project.mjs", diagnostic_project_entry),
+        ):
             main_text = replace_exact_once(
                 main_text,
-                f'"./{name}"',
+                f'"{specifier}"',
                 f'"./{Path(entry["path"]).name}"',
-                f"main import {name}",
+                f"main import {specifier}",
             )
         main_entry = write_hashed_asset(
             assets_root,

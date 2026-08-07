@@ -5,7 +5,14 @@ import {
   createKeyboardAdapter,
   createMidiAdapter,
   createPointerAdapter,
-} from "../src/input_adapters.mjs";
+  flattenPadSlot,
+} from "../web/input_adapters.mjs";
+
+test("flattens a Project Pad address at the input boundary", () => {
+  assert.equal(flattenPadSlot({bank: 3, pad: 15}), 63);
+  assert.throws(() => flattenPadSlot({bank: -1, pad: 0}), RangeError);
+  assert.throws(() => flattenPadSlot({bank: 0, pad: 16}), RangeError);
+});
 
 function fakeMidiInput(sensitive = {}) {
   const listeners = new Map();
@@ -65,7 +72,7 @@ test("Pointer primary activation emits exactly one flat Trigger", () => {
     false,
   );
   assert.equal(pointer.pointerDown({ isPrimary: true, button: 1 }, 17), false);
-  assert.deepEqual(calls, [[17, 96]]);
+  assert.deepEqual(calls, [[17, 96, "pointer"]]);
 });
 
 test("Pointer suppresses the compatibility mouse activation for a pointer sequence", () => {
@@ -85,8 +92,8 @@ test("Pointer suppresses the compatibility mouse activation for a pointer sequen
   assert.equal(pointer.mouseDown(correlated, 4), false);
   assert.equal(pointer.mouseDown(correlated, 4), true);
   assert.deepEqual(calls, [
-    [4, 100],
-    [4, 100],
+    [4, 100, "pointer"],
+    [4, 100, "pointer"],
   ]);
 });
 
@@ -114,7 +121,7 @@ test("Pointer suppresses Chromium rounded compatibility mouse coordinates", () =
     clientY: 309,
     target,
   }, 4), false);
-  assert.deepEqual(calls, [[4, 100]]);
+  assert.deepEqual(calls, [[4, 100, "pointer"]]);
 });
 
 test("Pointer cancellation and marker expiry never suppress a later genuine mouse", () => {
@@ -148,12 +155,12 @@ test("Pointer cancellation and marker expiry never suppress a later genuine mous
   pointer.clearPressed();
   assert.equal(pointer.mouseDown(activation, 4), true);
   assert.deepEqual(calls, [
-    [4, 100],
-    [4, 100],
-    [4, 100],
-    [4, 100],
-    [4, 100],
-    [4, 100],
+    [4, 100, "pointer"],
+    [4, 100, "pointer"],
+    [4, 100, "pointer"],
+    [4, 100, "pointer"],
+    [4, 100, "pointer"],
+    [4, 100, "pointer"],
   ]);
 });
 
@@ -186,8 +193,8 @@ test("Pointer marker mismatch does not suppress an independent mouse activation"
     true,
   );
   assert.deepEqual(calls, [
-    [4, 100],
-    [5, 100],
+    [4, 100, "pointer"],
+    [5, 100, "pointer"],
   ]);
 });
 
@@ -220,7 +227,7 @@ test("Keyboard maps physical code, ignores repeat, and preserves fixed velocity"
     keyboard.keyDown({ code: "KeyB", key: "b", repeat: true }),
     false,
   );
-  assert.deepEqual(calls, [[3, 91]]);
+  assert.deepEqual(calls, [[3, 91, "keyboard"]]);
 });
 
 test("Keyboard disables shortcuts in editable focus", () => {
@@ -258,9 +265,9 @@ test("Keyboard keyup and lifecycle cleanup clear pressed state", () => {
   keyboard.clearPressed();
   assert.equal(keyboard.keyDown({ code: "KeyA", repeat: false }), true);
   assert.deepEqual(calls, [
-    [3, 91],
-    [3, 91],
-    [3, 91],
+    [3, 91, "keyboard"],
+    [3, 91, "keyboard"],
+    [3, 91, "keyboard"],
   ]);
 });
 
@@ -301,7 +308,7 @@ test("Web MIDI treats velocity-zero Note On as Note Off", async () => {
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 36, 81]) }, input), true);
   assert.equal(midi.diagnostics().pressed_note_count, 1);
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 36, 0]) }, input), false);
-  assert.deepEqual(calls, [[0, 81]]);
+  assert.deepEqual(calls, [[0, 81, "midi"]]);
   assert.equal(midi.diagnostics().pressed_note_count, 0);
 });
 
@@ -319,7 +326,7 @@ test("Web MIDI preserves Note On velocity in exactly one flat Trigger", async ()
   });
   await midi.requestPermission();
   assert.equal(midi.message({ data: Uint8Array.from([0x90, 40, 73]) }, input), true);
-  assert.deepEqual(calls, [[12, 73]]);
+  assert.deepEqual(calls, [[12, 73, "midi"]]);
 });
 
 test("Web MIDI ignores messages before permission, from unknown inputs, and after disconnect", async () => {
@@ -345,7 +352,7 @@ test("Web MIDI ignores messages before permission, from unknown inputs, and afte
     port: Object.assign(input, { state: "disconnected" }),
   });
   assert.equal(midi.message(noteOn, input), false);
-  assert.deepEqual(calls, [[0, 90]]);
+  assert.deepEqual(calls, [[0, 90, "midi"]]);
   assert.equal(midi.diagnostics().pressed_note_count, 0);
 });
 
@@ -369,7 +376,7 @@ test("Web MIDI disconnect clears pressed state without synthesizing triggers", a
     port: Object.assign(input, { state: "disconnected" }),
   });
   assert.equal(midi.diagnostics().pressed_note_count, 0);
-  assert.deepEqual(calls, [[0, 64]]);
+  assert.deepEqual(calls, [[0, 64, "midi"]]);
   assert.deepEqual(
     notifications.map(({ event }) => event),
     ["midi.connected", "midi.disconnected"],

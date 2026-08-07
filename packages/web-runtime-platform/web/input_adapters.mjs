@@ -1,3 +1,39 @@
+const userGestureTokens = new WeakSet();
+
+
+export function createUserGestureToken(event) {
+  if (event === null || typeof event !== "object" || event.isTrusted !== true) {
+    throw new TypeError("Audio activation requires a trusted browser event");
+  }
+  const token = Object.freeze({kind: "lmdj.web-runtime.user-gesture"});
+  userGestureTokens.add(token);
+  return token;
+}
+
+Object.defineProperty(createUserGestureToken, "consume", {
+  value(token) {
+    return (
+      token?.kind === "lmdj.web-runtime.user-gesture" &&
+      userGestureTokens.delete(token)
+    );
+  },
+});
+
+export function flattenPadSlot({bank, pad}) {
+  if (
+    !Number.isInteger(bank) ||
+    !Number.isInteger(pad) ||
+    bank < 0 ||
+    bank > 3 ||
+    pad < 0 ||
+    pad > 15
+  ) {
+    throw new RangeError("Project Pad address must be bank 0..3 and pad 0..15");
+  }
+  return bank * 16 + pad;
+}
+
+
 function requireTrigger(trigger) {
   if (typeof trigger !== "function") {
     throw new TypeError("A Trigger sink must be injected");
@@ -93,7 +129,7 @@ export function createPointerAdapter({
       pointerSlots.set(event.pointerId, flatSlot);
     }
     publishPressed();
-    trigger(flatSlot, velocity);
+    trigger(flatSlot, velocity, "pointer");
     return true;
   }
 
@@ -122,7 +158,7 @@ export function createPointerAdapter({
     pressed.add(flatSlot);
     mouseSlot = flatSlot;
     publishPressed();
-    trigger(flatSlot, velocity);
+    trigger(flatSlot, velocity, "pointer");
     return true;
   }
 
@@ -244,7 +280,7 @@ export function createKeyboardAdapter({
     }
     pressed.add(code);
     onPressedChange(pressed.size);
-    trigger(codeToSlot.get(code), velocity);
+    trigger(codeToSlot.get(code), velocity, "keyboard");
     return true;
   }
 
@@ -370,7 +406,7 @@ export function createMidiAdapter({
     }
     pressed.add(note);
     publishPressed();
-    trigger(slotStart + offset, velocity);
+    trigger(slotStart + offset, velocity, "midi");
     return true;
   }
 

@@ -5,7 +5,7 @@ import {
   HOST_STATES,
   HostStateError,
   createHostStateMachine,
-} from "../src/state_machine.mjs";
+} from "../web/state_machine.mjs";
 
 const NONTERMINAL_STATES = [
   "cold",
@@ -33,6 +33,7 @@ function advanceToRunning(machine) {
 test("exports exactly the externally visible Host states", () => {
   assert.deepEqual(HOST_STATES, [
     ...NONTERMINAL_STATES,
+    "restart-required",
     "closed",
     "failed",
   ]);
@@ -75,6 +76,15 @@ test("allows fatal failure from every nonterminal state", () => {
   }
 });
 
+test("allows restart-required from every nonterminal state and seals terminally", () => {
+  for (const state of NONTERMINAL_STATES) {
+    const machine = createHostStateMachine({initialState: state});
+    machine.transition("restart-required", {reason: "HOST_TIMEOUT"});
+    assert.equal(machine.state, "restart-required", state);
+    assert.throws(() => machine.transition("closed"), HostStateError);
+  }
+});
+
 test("rejects transitions absent from the locked state table", () => {
   const machine = createHostStateMachine();
   assert.throws(
@@ -98,7 +108,7 @@ test("audio.suspend is idempotent only in audio-suspended", () => {
     changed: true,
   });
 
-  for (const state of ["cold", "preflight", "storage-ready", "core-ready", "interrupted", "recovering", "closed", "failed"]) {
+  for (const state of ["cold", "preflight", "storage-ready", "core-ready", "interrupted", "recovering", "restart-required", "closed", "failed"]) {
     const invalid = createHostStateMachine({ initialState: state });
     assert.throws(
       () => invalid.handleOperation("audio.suspend"),
@@ -191,8 +201,8 @@ test("interruption seals an active Take and emits exact notifications", () => {
   );
 });
 
-test("seals and cleans before interrupted, failed, or closed becomes observable", () => {
-  for (const nextState of ["interrupted", "failed", "closed"]) {
+test("seals and cleans before terminal or interrupted state becomes observable", () => {
+  for (const nextState of ["interrupted", "restart-required", "failed", "closed"]) {
     const observations = [];
     let machine;
     machine = createHostStateMachine({

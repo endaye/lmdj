@@ -67,7 +67,7 @@ class DistributionTest(unittest.TestCase):
     def test_built_distribution_is_clean(self) -> None:
         self.module.verify_distribution(DEFAULT_DIST, REPO_ROOT)
         manifest = json.loads((DEFAULT_DIST / "host-manifest.json").read_bytes())
-        self.assertEqual(len(manifest["assets"]), 9)
+        self.assertEqual(len(manifest["assets"]), 12)
         self.assertEqual(
             len([
                 asset for asset in manifest["assets"]

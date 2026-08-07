@@ -7,12 +7,13 @@ export const HOST_STATES = Object.freeze([
   "running",
   "interrupted",
   "recovering",
+  "restart-required",
   "closed",
   "failed",
 ]);
 
 const STATE_SET = new Set(HOST_STATES);
-const TERMINAL_STATES = new Set(["closed", "failed"]);
+const TERMINAL_STATES = new Set(["restart-required", "closed", "failed"]);
 const NONTERMINAL_STATES = new Set(
   HOST_STATES.filter((state) => !TERMINAL_STATES.has(state)),
 );
@@ -74,7 +75,7 @@ export function createHostStateMachine({
     if (!STATE_SET.has(nextState) || TERMINAL_STATES.has(state)) {
       return false;
     }
-    if (nextState === "closed" || nextState === "failed") {
+    if (TERMINAL_STATES.has(nextState)) {
       return NONTERMINAL_STATES.has(state);
     }
     if (
@@ -120,6 +121,7 @@ export function createHostStateMachine({
       const previousState = state;
       const requiresCleanup =
         nextState === "interrupted" ||
+        nextState === "restart-required" ||
         nextState === "failed" ||
         nextState === "closed";
       const requiresCaptureSeal =

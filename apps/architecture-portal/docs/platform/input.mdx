@@ -6,7 +6,8 @@ owners: [product, platform]
 source_paths:
   - docs/prd/open-questions.md
   - docs/superpowers/plans/2026-08-03-lmdj-foundation-input-hardening.md
-  - apps/web-runtime-host/src/input_adapters.mjs
+  - packages/web-runtime-platform/web/input_adapters.mjs
+  - packages/web-runtime-platform/web/runtime_session.mjs
   - apps/web-runtime-host/src/main.mjs
 ---
 
@@ -21,7 +22,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 目标事件
 
-Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)`。Project `{bank, pad}` 只在 Host 路由前按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
+Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的唯一 `trigger(flatSlot, velocity, source)`，并保留归一化来源。Project `{bank, pad}` 只在输入边界按 `bank * 16 + pad` 展平一次；adapter 不操作 Asset、Project Truth、Provider 或音频字节。
 
 ## 生命周期
 

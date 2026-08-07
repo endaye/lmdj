@@ -43,7 +43,7 @@ def main() -> int:
         if path.is_file() and path.suffix in {".css", ".scss", ".sass", ".less"}:
             fail(f"Platform package owns product presentation: {path}")
 
-    forbidden_platform_patterns = {
+    forbidden_native_patterns = {
         r"(?:from|require\s*\()\s*['\"]react": "React dependency",
         r"\b(?:document|HTMLElement|CSSStyleSheet)\b": "DOM or CSS ownership",
         r"lmdj\.web-runtime-host\.distribution": "diagnostic distribution identity",
@@ -52,9 +52,31 @@ def main() -> int:
     for production_root in (PLATFORM_ROOT / "include", PLATFORM_ROOT / "src"):
         for path in text_files(production_root):
             source = path.read_text(encoding="utf-8")
-            for pattern, label in forbidden_platform_patterns.items():
+            for pattern, label in forbidden_native_patterns.items():
                 if re.search(pattern, source, re.IGNORECASE):
                     fail(f"{label} entered Platform package: {path}")
+
+    forbidden_web_patterns = {
+        r"(?:from|require\s*\()\s*['\"]react": "React dependency",
+        r"\b(?:getElementById|querySelectorAll|CSSStyleSheet)\b": (
+            "product DOM presentation"
+        ),
+        r"\b(?:classList|innerHTML)\b": "product DOM mutation",
+        r"lmdj\.web-runtime-host\.distribution": "diagnostic distribution identity",
+        r"\b(?:diagnostic-project|creator-web)\b": "product Host identity",
+    }
+    for path in text_files(PLATFORM_ROOT / "web"):
+        source = path.read_text(encoding="utf-8")
+        for pattern, label in forbidden_web_patterns.items():
+            if re.search(pattern, source, re.IGNORECASE):
+                fail(f"{label} entered Platform web module: {path}")
+
+    creator_root = REPO_ROOT / "apps" / "creator-web"
+    if creator_root.exists():
+        for path in text_files(creator_root):
+            source = path.read_text(encoding="utf-8")
+            if re.search(r"diagnostic[_-]client\.mjs", source, re.IGNORECASE):
+                fail(f"Creator imports diagnostic-only client: {path}")
 
     direct_project_io = re.compile(
         r"(?:lmdj/project_io/|\blmdj::project_io\b|\blmdj_project_io\b|"
