@@ -252,8 +252,8 @@ function harness({ status = { control_generation: 7, acknowledged_generation: 7 
     crypto,
     storage,
     verifyManifest: async () => ({
-      product_build: "1.0.15.1",
-      host_version: "1.1.1",
+      product_build: "1.0.15.2",
+      host_version: "1.1.2",
       protocol_version: 1,
     }),
     loadRuntime: async () => ({
@@ -599,7 +599,7 @@ test("source shell verifies manifest before loading runtime and exposes exact Ho
   const fixture = harness();
   fixture.options.verifyManifest = async () => {
     order.push("manifest");
-    return { product_build: "1.0.15.1", host_version: "1.1.1", protocol_version: 1 };
+    return { product_build: "1.0.15.2", host_version: "1.1.2", protocol_version: 1 };
   };
   fixture.options.loadRuntime = async () => {
     order.push("runtime");
@@ -718,7 +718,7 @@ test("controller preserves a late authoritative transport error", async () => {
 test("default source-shell hash gate fails before runtime load on mismatch", async () => {
   const { createWebRuntimeHostController } = await mainModule();
   for (const [digest, expectedState, expectedLoads] of [
-    ["71f73a60a8473067f8ea1cff8fb3717ccaf25981601fd79a6a3f60c75c507748", "audio-suspended", 1],
+    ["cd8f1d51176cae3801f065c2c37df2166210192326d3d36255d747b28e568510", "audio-suspended", 1],
     ["0".repeat(64), "failed", 0],
   ]) {
     const fixture = harness();

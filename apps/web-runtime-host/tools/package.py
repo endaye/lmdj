@@ -14,7 +14,7 @@ import tempfile
 from pathlib import Path
 
 
-HOST_VERSION = "1.1.1"
+HOST_VERSION = "1.1.2"
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912
 DISTRIBUTION_CONTRACT = "lmdj.web-runtime-host.distribution.v1"

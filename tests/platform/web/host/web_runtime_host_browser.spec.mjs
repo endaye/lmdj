@@ -290,6 +290,45 @@ async function delayTerminalAckDelivery(page, delayMs) {
 }
 
 
+async function delayTerminalReleaseRequest(page, delayMs) {
+  await page.addInitScript((selectedDelayMs) => {
+    const NativeBroadcastChannel = globalThis.BroadcastChannel;
+    let ownsHostTerminalChannel = false;
+    globalThis.BroadcastChannel = class DelayedTerminalReleaseBroadcastChannel
+      extends NativeBroadcastChannel {
+      constructor(name) {
+        super(name);
+        this.delayTerminalRelease =
+          name === "lmdj.web-runtime-host.terminal.v1" &&
+          ownsHostTerminalChannel === false;
+        if (this.delayTerminalRelease) ownsHostTerminalChannel = true;
+        this.terminalChannelClosed = false;
+      }
+
+      postMessage(message) {
+        if (
+          this.delayTerminalRelease &&
+          message?.type === "release-and-close"
+        ) {
+          setTimeout(() => {
+            if (!this.terminalChannelClosed) {
+              NativeBroadcastChannel.prototype.postMessage.call(this, message);
+            }
+          }, selectedDelayMs);
+          return;
+        }
+        return super.postMessage(message);
+      }
+
+      close() {
+        this.terminalChannelClosed = true;
+        return super.close();
+      }
+    };
+  }, delayMs);
+}
+
+
 async function installTerminalAckAttack(page) {
   await page.evaluate(() => {
     const channel = new BroadcastChannel("lmdj.web-runtime-host.terminal.v1");
@@ -1625,6 +1664,8 @@ test("Chromium packaged responsive cancellation wins before mutation publication
     await enableDeadlineProof(owner);
     if (index === 0) {
       await delayTerminalAckDelivery(owner, 300);
+    } else {
+      await delayTerminalReleaseRequest(owner, 300);
     }
     await openPackagedHost(owner);
     if (index === 0) {
@@ -1841,7 +1882,9 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
   expect(await deadlineMutationOutcome(page, requestId)).toMatchObject({
     error: { code: "HOST_TIMEOUT" },
   });
-  await expect(page.locator("#host-state")).toHaveText("failed");
+  await expect(page.locator("#host-state")).toHaveText("failed", {
+    timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
+  });
   await page.waitForTimeout(150);
   expect(await terminalTransportEvidence(page)).toMatchObject({
     controller: { state: "failed", error_code: "HOST_TIMEOUT" },
@@ -2130,7 +2173,9 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
     cancel_calls: 2,
     last_cancel_result: "publish-claimed",
   });
-  await expect(page.locator("#host-state")).toHaveText("failed");
+  await expect(page.locator("#host-state")).toHaveText("failed", {
+    timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
+  });
   expect(await terminalTransportEvidence(page)).toMatchObject({
     controller: { state: "failed", error_code: "HOST_RESTART_REQUIRED" },
     newSubmitCode: "HOST_RESTART_REQUIRED",

@@ -13,7 +13,7 @@ from the active tree and remains recoverable from Git history.
 
 - Designed: full product and Core architecture.
 - Implemented: M1 Headless Core Proof, the Formal Native Host, and the
-  Assembly-listed Formal Web Runtime Host (`1.0.15.1` canary candidate). The
+  Assembly-listed Formal Web Runtime Host (`1.0.15.2` canary candidate). The
   Web Host uses the shared Application Facade, OPFS Project I/O, and C++ Audio
   Runtime through a Wasm AudioWorklet; its packaged Chromium journey is
   automated.

@@ -172,7 +172,7 @@ CompiledAssemblyCatalog catalog(const nlohmann::json& assembly) {
       declared_model_identity(assembly.at("providers").at(1));
   return CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.15.1",
+      "1.0.15.2",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       components(assembly, "modules"),
       components(assembly, "hosts"),

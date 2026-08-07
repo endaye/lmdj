@@ -615,6 +615,19 @@ def main() -> int:
         in runtime_pre_source,
         "Web Host transport polling must use the named bounded cadence",
     )
+    require(
+        re.search(
+            r"const\s+TERMINAL_OWNER_RELEASE_GRACE_MS\s*=\s*5_000\s*;",
+            runtime_pre_source,
+        )
+        is not None,
+        "Web Host must give responsive Control cleanup a bounded 5 second "
+        "terminal owner release grace",
+    )
+    require(
+        "}, TERMINAL_OWNER_RELEASE_GRACE_MS);" in runtime_pre_source,
+        "Web Host terminal owner fallback must use the named release grace",
+    )
 
     if len(sys.argv) == 3:
         link_evidence = Path(sys.argv[2])
