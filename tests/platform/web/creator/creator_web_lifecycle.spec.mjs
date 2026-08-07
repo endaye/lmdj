@@ -30,17 +30,16 @@ async function reopenWithVisibleBusyRetry(page) {
   const open = () => page.getByRole("button", {
     name: "Open Project 00000000",
   });
+  const alert = page.getByRole("alert");
   const deadline = Date.now() + 120_000;
+  await open().click();
   while (Date.now() < deadline) {
-    await open().click();
-    const alert = page.getByRole("alert");
     await expect.poll(async () =>
       await heading.isVisible() || await alert.isVisible(),
     {timeout: 35_000}).toBe(true);
     if (await heading.isVisible()) return;
     await expect(alert).toContainText("PROJECT_BUSY");
     await page.getByRole("button", {name: "Retry"}).click();
-    await expect(open()).toBeVisible();
     await expect(alert).toHaveCount(0);
     await page.waitForTimeout(100);
   }
