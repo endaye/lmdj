@@ -259,8 +259,10 @@ void append_fixture(
       continue;
     }
     std::size_t offset = 0;
+    std::size_t chunk_count = 0;
+    const auto chunk_bytes = (payload.size() + 1) / 2;
     while (offset < payload.size()) {
-      const auto count = std::min<std::size_t>(5, payload.size() - offset);
+      const auto count = std::min(chunk_bytes, payload.size() - offset);
       LMDJ_CHECK(
           transfer.append_entry(
               token,
@@ -270,7 +272,9 @@ void append_fixture(
               offset + count == payload.size())
               .has_value());
       offset += count;
+      ++chunk_count;
     }
+    LMDJ_CHECK(chunk_count <= 2);
   }
 }
 
