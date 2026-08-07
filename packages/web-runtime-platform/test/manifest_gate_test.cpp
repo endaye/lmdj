@@ -1,5 +1,6 @@
-#include "manifest_gate.hpp"
+#include <lmdj/web_runtime/manifest_gate.hpp>
 
+#include <array>
 #include <cstddef>
 #include <iostream>
 #include <span>
@@ -15,13 +16,18 @@
 
 namespace {
 
-using lmdj::web_host::ManifestExpectation;
-using lmdj::web_host::ManifestGate;
-using lmdj::web_host::ManifestGateStatus;
+using lmdj::web_runtime::ManifestExpectation;
+using lmdj::web_runtime::ManifestGate;
+using lmdj::web_runtime::ManifestGateStatus;
 
+constexpr std::array<ManifestExpectation::ComponentIdentity, 1> kAllowedHosts{{
+    {"web-runtime-host", "1.1.0"},
+}};
 constexpr ManifestExpectation kExpected{
+    "lmdj.web-runtime-host.distribution.v1",
     "1.0.15.0",
-    "1.1.0",
+    "0.1.0",
+    kAllowedHosts,
     1,
 };
 
@@ -51,6 +57,8 @@ nlohmann::json manifest_json(
       {"distribution_contract", "lmdj.web-runtime-host.distribution.v1"},
       {"manifest_version", 1},
       {"product_build", product},
+      {"platform_version", "0.1.0"},
+      {"host_id", "web-runtime-host"},
       {"host_version", host},
       {"protocol_version", protocol},
       {"heap_bytes", 536'870'912},
@@ -120,7 +128,7 @@ void test_missing_malformed_oversized_and_noncanonical_fail_closed() {
            std::string{},
            std::string{"{"},
            std::string{" "} + canonical_manifest(),
-           std::string(lmdj::web_host::kHostManifestMaximumBytes + 1, 'x'),
+           std::string(lmdj::web_runtime::kHostManifestMaximumBytes + 1, 'x'),
        }) {
     ManifestGate gate;
     LMDJ_CHECK(
@@ -173,6 +181,12 @@ void test_every_identity_schema_and_inventory_drift_fails_closed() {
   changed["manifest_version"] = 2;
   invalid.push_back(changed);
   changed = manifest_json();
+  changed["platform_version"] = "0.2.0";
+  invalid.push_back(changed);
+  changed = manifest_json();
+  changed["host_id"] = "creator-web";
+  invalid.push_back(changed);
+  changed = manifest_json();
   changed["heap_bytes"] = 1;
   invalid.push_back(changed);
   changed = manifest_json();
@@ -194,7 +208,7 @@ void test_every_identity_schema_and_inventory_drift_fails_closed() {
   changed["assets"] = nlohmann::json::array();
   invalid.push_back(changed);
   changed = manifest_json();
-  changed["assets"].erase(changed["assets"].begin());
+  changed["assets"].erase(changed["assets"].begin() + 5);
   invalid.push_back(changed);
   changed = manifest_json();
   changed["assets"].push_back(changed["assets"].front());
@@ -209,21 +223,49 @@ void test_every_identity_schema_and_inventory_drift_fails_closed() {
   changed["assets"][0]["bytes"] = 0;
   invalid.push_back(changed);
   changed = manifest_json();
+  changed["assets"][0]["bytes"] = 9'007'199'254'740'992ULL;
+  invalid.push_back(changed);
+  changed = manifest_json();
   changed["assets"][0]["sha256"] = repeated('f');
   invalid.push_back(changed);
   changed = manifest_json();
-  changed["assets"][0]["role"] = "host_main";
-  invalid.push_back(changed);
-  changed = manifest_json();
   changed["assets"][0]["extra"] = true;
-  invalid.push_back(changed);
-  changed = manifest_json();
-  std::swap(changed["assets"][0], changed["assets"][1]);
   invalid.push_back(changed);
 
   for (auto& manifest : invalid) {
     check_rejected(std::move(manifest));
   }
+}
+
+void test_generic_bounded_inventory_accepts_host_owned_assets() {
+  auto manifest = manifest_json();
+  manifest["assets"] = nlohmann::json::array({
+      asset("runtime", '5', ".js", "runtime_script"),
+      asset("runtime", '6', ".wasm", "runtime_wasm"),
+  });
+  auto encoded = lmdj::foundation::canonical_json(manifest);
+  ManifestGate minimal;
+  LMDJ_CHECK(
+      minimal.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      ManifestGateStatus::accepted);
+
+  for (std::size_t index = 0; index < 62; ++index) {
+    manifest["assets"].push_back(
+        asset(
+            "module-" + std::to_string(index),
+            'a',
+            ".mjs",
+            "host_module"));
+  }
+  encoded = lmdj::foundation::canonical_json(manifest);
+  ManifestGate maximum;
+  LMDJ_CHECK(
+      maximum.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      ManifestGateStatus::accepted);
+
+  manifest["assets"].push_back(
+      asset("overflow", 'b', ".mjs", "host_module"));
+  check_rejected(std::move(manifest));
 }
 
 void test_repeated_or_late_initialization_is_terminal_before_mutation() {
@@ -261,6 +303,7 @@ int main() {
     test_missing_malformed_oversized_and_noncanonical_fail_closed();
     test_digest_and_exact_identity_mismatches_fail_closed();
     test_every_identity_schema_and_inventory_drift_fails_closed();
+    test_generic_bounded_inventory_accepts_host_owned_assets();
     test_repeated_or_late_initialization_is_terminal_before_mutation();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

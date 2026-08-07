@@ -1,7 +1,7 @@
 import {expect, test} from "@playwright/test";
 
 
-const FORMAL_HOST_PAGE = "/formal-audio/lmdj-web-runtime-host.html";
+const FORMAL_HOST_PAGE = "/formal-audio/lmdj-web-runtime.html";
 
 
 async function waitForFormalHost(page) {

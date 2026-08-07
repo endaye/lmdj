@@ -121,9 +121,9 @@ build_audio_runtime() {
   run_cmake_build "$audio_runtime_cmake_root" \
     --target lmdj_web_runtime_host
   local expected_artifacts=(
-    lmdj-web-runtime-host.html
-    lmdj-web-runtime-host.js
-    lmdj-web-runtime-host.wasm
+    lmdj-web-runtime.html
+    lmdj-web-runtime.js
+    lmdj-web-runtime.wasm
   )
   local actual_artifacts=()
   while IFS= read -r artifact; do

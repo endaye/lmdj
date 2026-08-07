@@ -22,7 +22,9 @@ const SOURCE_SHELL_MANIFEST = Object.freeze({
 });
 const SOURCE_SHELL_MANIFEST_TEXT = JSON.stringify(SOURCE_SHELL_MANIFEST);
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
+const PACKAGED_HOST_ID = "web-runtime-host";
 const PACKAGED_HOST_VERSION = "1.1.0";
+const PACKAGED_PLATFORM_VERSION = "0.1.0";
 const PACKAGED_PROTOCOL_VERSION = 1;
 const PACKAGED_HEAP_BYTES = 536_870_912;
 const PACKAGED_DISTRIBUTION_CONTRACT =
@@ -323,8 +325,10 @@ function validatePackagedManifest(manifest, expected) {
       "distribution_contract",
       "emscripten",
       "heap_bytes",
+      "host_id",
       "host_version",
       "manifest_version",
+      "platform_version",
       "product_build",
       "protocol_version",
       "resource_limits",
@@ -332,8 +336,12 @@ function validatePackagedManifest(manifest, expected) {
     manifest.distribution_contract !== PACKAGED_DISTRIBUTION_CONTRACT ||
     manifest.manifest_version !== 1 ||
     manifest.product_build !== expected.product_build ||
+    manifest.host_id !== PACKAGED_HOST_ID ||
+    manifest.host_id !== expected.host_id ||
     manifest.host_version !== PACKAGED_HOST_VERSION ||
     manifest.host_version !== expected.host_version ||
+    manifest.platform_version !== PACKAGED_PLATFORM_VERSION ||
+    manifest.platform_version !== expected.platform_version ||
     manifest.protocol_version !== PACKAGED_PROTOCOL_VERSION ||
     manifest.protocol_version !== expected.protocol_version ||
     manifest.heap_bytes !== PACKAGED_HEAP_BYTES ||
@@ -379,7 +387,12 @@ async function verifyPackagedManifest({ document, window, crypto }) {
   const expectedDigest = metaContent(document, "lmdj-host-manifest-sha256");
   const expected = {
     product_build: metaContent(document, "lmdj-product-build"),
+    host_id: metaContent(document, "lmdj-host-id"),
     host_version: metaContent(document, "lmdj-host-version"),
+    platform_version: metaContent(
+      document,
+      "lmdj-web-runtime-platform-version",
+    ),
     protocol_version: Number.parseInt(
       metaContent(document, "lmdj-host-protocol-version") ?? "",
       10,
@@ -390,7 +403,9 @@ async function verifyPackagedManifest({ document, window, crypto }) {
     manifestPath !== "./host-manifest.json" ||
     !/^[0-9a-f]{64}$/.test(expectedDigest ?? "") ||
     typeof expected.product_build !== "string" ||
+    expected.host_id !== PACKAGED_HOST_ID ||
     expected.host_version !== PACKAGED_HOST_VERSION ||
+    expected.platform_version !== PACKAGED_PLATFORM_VERSION ||
     expected.protocol_version !== PACKAGED_PROTOCOL_VERSION
   ) {
     throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest metadata is absent");
@@ -473,7 +488,7 @@ export function createPackagedRuntimeLocator({
   const wasmURL = new URL(runtimeWasmURL, baseURI);
   const wasmRequestName = wasmURL.pathname.split("/").at(-1);
   return (path) => {
-    if (path === "lmdj-web-runtime-host.js") {
+    if (path === "lmdj-web-runtime.js") {
       return scriptURL.href;
     }
     if (path === wasmRequestName) {

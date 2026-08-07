@@ -1,4 +1,4 @@
-if (typeof window !== "undefined") {
+if (typeof globalThis.window !== "undefined") {
   globalThis.Module = Module;
   const PUBLICATION_SETTLEMENT_WATCHDOG_MS = 1_000;
   const TRANSPORT_POLL_INTERVAL_MS = 16;

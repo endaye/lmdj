@@ -23,9 +23,12 @@ def main() -> int:
         "usage: web_host_source_boundary_test.py HOST_ROOT [LINK_EVIDENCE]",
     )
     host_root = Path(sys.argv[1]).resolve()
-    source_root = host_root / "src"
     host_cmake = host_root / "CMakeLists.txt"
     repo_root = host_root.parents[1]
+    platform_root = repo_root / "packages" / "web-runtime-platform"
+    source_root = platform_root / "src"
+    include_root = platform_root / "include" / "lmdj" / "web_runtime"
+    platform_cmake = platform_root / "CMakeLists.txt"
     product_cmake = repo_root / "products" / "lmdj" / "CMakeLists.txt"
     product_assembly = repo_root / "products" / "lmdj" / "assembly.json"
     root_cmake = repo_root / "CMakeLists.txt"
@@ -55,7 +58,8 @@ def main() -> int:
 
     required_files = [
         host_cmake,
-        source_root / "control_runtime.hpp",
+        platform_cmake,
+        include_root / "control_runtime.hpp",
         source_root / "control_runtime.cpp",
         source_root / "bridge.cpp",
         product_cmake,
@@ -72,16 +76,14 @@ def main() -> int:
     for path in required_files:
         require(path.is_file(), f"required Task 6 source is missing: {path}")
 
-    source_files = sorted(source_root.glob("*.cpp")) + sorted(
-        source_root.glob("*.hpp")
-    )
+    source_files = sorted(source_root.glob("*.cpp")) + sorted(include_root.glob("*.hpp"))
     source = combined_text(source_files)
     control_runtime_source = (source_root / "control_runtime.cpp").read_text(
         encoding="utf-8"
     )
     bridge_source = (source_root / "bridge.cpp").read_text(encoding="utf-8")
     runtime_pre_source = runtime_pre.read_text(encoding="utf-8")
-    cmake = combined_text([host_cmake, root_cmake, product_cmake])
+    cmake = combined_text([host_cmake, platform_cmake, root_cmake, product_cmake])
 
     forbidden_source = {
         r"lmdj/project_io/": "direct Project I/O include",
@@ -116,6 +118,7 @@ def main() -> int:
         r"lmdj_provider_local_|providers/local-": "Product Provider link in Host CMake",
     }
     host_cmake_text = host_cmake.read_text(encoding="utf-8")
+    platform_cmake_text = platform_cmake.read_text(encoding="utf-8")
     for pattern, description in forbidden_cmake.items():
         require(
             re.search(pattern, host_cmake_text) is None,
@@ -194,9 +197,18 @@ def main() -> int:
         "all Emscripten translation units must compile with -pthread",
     )
     require(
-        "src/control_runtime.cpp" in host_cmake_text
-        and "src/bridge.cpp" in host_cmake_text,
-        "Host CMake does not compile the actual Task 6 sources",
+        "add_subdirectory(packages/web-runtime-platform)" in root_cmake_text,
+        "root CMake does not include the shared Web Runtime Platform",
+    )
+    require(
+        "src/control_runtime.cpp" in platform_cmake_text
+        and "src/bridge.cpp" in platform_cmake_text,
+        "Platform CMake does not compile the actual Runtime sources",
+    )
+    require(
+        "src/control_runtime.cpp" not in host_cmake_text
+        and "src/bridge.cpp" not in host_cmake_text,
+        "Host CMake still owns shared Runtime sources",
     )
     outcome_drain = re.search(
         r"ControlRuntime::drain_outcomes\(\)\s*\{(.*?)\n\}",
@@ -542,11 +554,11 @@ def main() -> int:
         "-sENVIRONMENT=web,worker",
     ]:
         require(
-            required_flag in host_cmake_text,
+            required_flag in platform_cmake_text,
             f"required fixed-heap Web Host flag is missing: {required_flag}",
         )
     require(
-        "ASYNCIFY_IMPORTS" not in host_cmake_text,
+        "ASYNCIFY_IMPORTS" not in platform_cmake_text,
         "Host CMake must not override the Project I/O Asyncify import set",
     )
     require(

@@ -1,4 +1,4 @@
-#include "control_runtime.hpp"
+#include <lmdj/web_runtime/control_runtime.hpp>
 
 #include <array>
 #include <cstdint>
@@ -25,11 +25,11 @@ using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
-using lmdj::web_host::ControlRuntime;
-using lmdj::web_host::detail::BridgeHooks;
-using lmdj::web_host::detail::BridgePollStatus;
-using lmdj::web_host::detail::BridgeSubmitStatus;
-using lmdj::web_host::detail::ControlBridge;
+using lmdj::web_runtime::ControlRuntime;
+using lmdj::web_runtime::detail::BridgeHooks;
+using lmdj::web_runtime::detail::BridgePollStatus;
+using lmdj::web_runtime::detail::BridgeSubmitStatus;
+using lmdj::web_runtime::detail::ControlBridge;
 
 class TempDirectory final {
  public:
@@ -170,7 +170,7 @@ class FakeProxy final {
 };
 
 nlohmann::json poll_message(ControlBridge& bridge) {
-  std::array<std::byte, lmdj::web_host::detail::kBridgeMaximumEnvelopeBytes>
+  std::array<std::byte, lmdj::web_runtime::detail::kBridgeMaximumEnvelopeBytes>
       output{};
   std::size_t required = 0;
   const auto status = bridge.poll(output, required);

@@ -17,7 +17,7 @@
 #include <lmdj/facade/application.hpp>
 #include <lmdj/foundation/error.hpp>
 
-namespace lmdj::web_host {
+namespace lmdj::web_runtime {
 
 namespace detail {
 class ControlRuntimeAudioAccess;
@@ -139,4 +139,4 @@ class ControlBridge final {
 };
 
 }  // namespace detail
-}  // namespace lmdj::web_host
+}  // namespace lmdj::web_runtime

@@ -1,4 +1,4 @@
-#include "control_runtime.hpp"
+#include <lmdj/web_runtime/control_runtime.hpp>
 
 #include <algorithm>
 #include <array>
@@ -19,7 +19,7 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 
-namespace lmdj::web_host {
+namespace lmdj::web_runtime {
 namespace {
 
 using Json = nlohmann::json;
@@ -1681,4 +1681,4 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
   return foundation::Result<void>::success();
 }
 
-}  // namespace lmdj::web_host
+}  // namespace lmdj::web_runtime

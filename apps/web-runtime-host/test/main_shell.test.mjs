@@ -754,7 +754,7 @@ test("packaged runtime locator binds the verified AudioWorklet module and Wasm",
   });
 
   assert.equal(
-    locateFile("lmdj-web-runtime-host.js"),
+    locateFile("lmdj-web-runtime.js"),
     "https://runtime.test/product/assets/runtime.1111111111111111111111111111111111111111111111111111111111111111.js",
   );
   assert.equal(

@@ -7,13 +7,20 @@
 #include <string_view>
 
 
-namespace lmdj::web_host {
+namespace lmdj::web_runtime {
 
 inline constexpr std::size_t kHostManifestMaximumBytes = 65'536;
 
 struct ManifestExpectation {
+  struct ComponentIdentity {
+    std::string_view id;
+    std::string_view version;
+  };
+
+  std::string_view distribution_contract;
   std::string_view product_build;
-  std::string_view host_version;
+  std::string_view platform_version;
+  std::span<const ComponentIdentity> allowed_hosts;
   std::uint32_t protocol_version;
 };
 
@@ -44,4 +51,4 @@ class ManifestGate final {
   Phase phase_ = Phase::awaiting_manifest;
 };
 
-}  // namespace lmdj::web_host
+}  // namespace lmdj::web_runtime

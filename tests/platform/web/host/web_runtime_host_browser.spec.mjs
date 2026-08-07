@@ -845,7 +845,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   await waitForDiagnosticProjectReady(page);
   await activateWithGesture(page);
 
-  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
+  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime.js");
   expect(runtimeModuleRequests.filter(
     (pathname) => pathname === runtimeScriptPathname,
   ).length).toBeGreaterThanOrEqual(2);
@@ -1127,7 +1127,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     rejectedAssetId: crypto.randomUUID(),
     takeId: crypto.randomUUID(),
   };
-  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
+  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime.js");
   expect(runtimeModuleRequests.filter(
     (pathname) => pathname === runtimeScriptPathname,
   ).length).toBeGreaterThanOrEqual(2);

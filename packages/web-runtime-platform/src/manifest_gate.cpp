@@ -1,18 +1,20 @@
-#include "manifest_gate.hpp"
+#include <lmdj/web_runtime/manifest_gate.hpp>
 
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <set>
 #include <string>
 
 #include <lmdj/foundation/json.hpp>
 #include <picosha2.h>
 
 
-namespace lmdj::web_host {
+namespace lmdj::web_runtime {
 namespace {
 
 using Json = nlohmann::json;
+constexpr std::uint64_t kMaximumSafeJsonInteger = 9'007'199'254'740'991ULL;
 
 bool exact_keys(
     const Json& value,
@@ -33,6 +35,39 @@ bool lowercase_sha256(std::string_view value) {
          });
 }
 
+bool safe_identity(std::string_view value) {
+  return !value.empty() && value.size() <= 64U &&
+         std::all_of(
+             value.begin(), value.end(), [](unsigned char character) {
+               return std::isalnum(character) != 0 || character == '.' ||
+                      character == '_' || character == '-';
+             });
+}
+
+bool safe_asset_path(std::string_view path, std::string_view digest) {
+  if (path.size() < 8U || path.size() > 255U ||
+      !path.starts_with("assets/") || path.back() == '/' ||
+      path.find("//") != std::string_view::npos ||
+      path.find("/../") != std::string_view::npos ||
+      path.find("/./") != std::string_view::npos ||
+      path.find('\\') != std::string_view::npos) {
+    return false;
+  }
+  if (!std::all_of(
+          path.begin(), path.end(), [](unsigned char character) {
+            return std::isalnum(character) != 0 || character == '/' ||
+                   character == '.' || character == '_' || character == '-';
+          })) {
+    return false;
+  }
+  const auto marker = "." + std::string{digest} + ".";
+  const auto marker_at = path.find(marker);
+  return marker_at != std::string_view::npos &&
+         marker_at > std::string_view{"assets/"}.size() &&
+         marker_at + marker.size() < path.size() &&
+         path.find(marker, marker_at + 1U) == std::string_view::npos;
+}
+
 bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
   if (!exact_keys(
           value,
@@ -41,8 +76,10 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
               "distribution_contract",
               "emscripten",
               "heap_bytes",
+              "host_id",
               "host_version",
               "manifest_version",
+              "platform_version",
               "product_build",
               "protocol_version",
               "resource_limits",
@@ -50,19 +87,33 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
     return false;
   }
   if (!value.at("distribution_contract").is_string() ||
-      value.at("distribution_contract") !=
-          "lmdj.web-runtime-host.distribution.v1" ||
+      value.at("distribution_contract") != expected.distribution_contract ||
       !value.at("manifest_version").is_number_unsigned() ||
       value.at("manifest_version") != 1 ||
       !value.at("product_build").is_string() ||
       value.at("product_build") != expected.product_build ||
+      !value.at("platform_version").is_string() ||
+      value.at("platform_version") != expected.platform_version ||
+      !value.at("host_id").is_string() ||
       !value.at("host_version").is_string() ||
-      value.at("host_version") != expected.host_version ||
       !value.at("protocol_version").is_number_unsigned() ||
       value.at("protocol_version") != expected.protocol_version ||
       !value.at("heap_bytes").is_number_unsigned() ||
       value.at("heap_bytes") != 536'870'912 ||
       !value.at("assets").is_array()) {
+    return false;
+  }
+  const auto& host_id = value.at("host_id").get_ref<const std::string&>();
+  const auto& host_version =
+      value.at("host_version").get_ref<const std::string&>();
+  if (!safe_identity(host_id) || !safe_identity(host_version) ||
+      expected.allowed_hosts.empty() || expected.allowed_hosts.size() > 64U ||
+      !std::any_of(
+          expected.allowed_hosts.begin(),
+          expected.allowed_hosts.end(),
+          [&](const auto& allowed) {
+            return allowed.id == host_id && allowed.version == host_version;
+          })) {
     return false;
   }
   const auto& limits = value.at("resource_limits");
@@ -105,33 +156,19 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
           "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)") {
     return false;
   }
-  struct ExpectedAsset {
-    std::string_view prefix;
-    std::string_view suffix;
-    std::string_view role;
-  };
-  static constexpr std::array<ExpectedAsset, 9> expected_assets{{
-      {"assets/diagnostic-project.", ".mjs", "host_module"},
-      {"assets/input-adapters.", ".mjs", "host_module"},
-      {"assets/main.", ".mjs", "host_main"},
-      {"assets/preflight.", ".mjs", "host_module"},
-      {"assets/protocol.", ".mjs", "host_module"},
-      {"assets/runtime.", ".js", "runtime_script"},
-      {"assets/runtime.", ".wasm", "runtime_wasm"},
-      {"assets/state-machine.", ".mjs", "host_module"},
-      {"assets/styles.", ".css", "host_style"},
-  }};
   const auto& assets = value.at("assets");
-  if (assets.size() != expected_assets.size()) {
+  if (assets.empty() || assets.size() > 64U) {
     return false;
   }
-  for (std::size_t index = 0; index < assets.size(); ++index) {
-    const auto& asset = assets.at(index);
-    const auto expected_asset = expected_assets.at(index);
+  std::set<std::string> paths;
+  std::size_t runtime_scripts = 0;
+  std::size_t runtime_wasm = 0;
+  for (const auto& asset : assets) {
     if (!exact_keys(asset, {"bytes", "path", "role", "sha256"}) ||
         !asset.at("path").is_string() ||
         !asset.at("bytes").is_number_unsigned() ||
         asset.at("bytes").get<std::uint64_t>() == 0 ||
+        asset.at("bytes").get<std::uint64_t>() > kMaximumSafeJsonInteger ||
         !asset.at("role").is_string() ||
         !asset.at("sha256").is_string() ||
         !lowercase_sha256(asset.at("sha256").get_ref<const std::string&>())) {
@@ -139,13 +176,15 @@ bool valid_manifest_shape(const Json& value, ManifestExpectation expected) {
     }
     const auto& path = asset.at("path").get_ref<const std::string&>();
     const auto& digest = asset.at("sha256").get_ref<const std::string&>();
-    if (asset.at("role") != expected_asset.role ||
-        path != std::string(expected_asset.prefix) + digest +
-                    std::string(expected_asset.suffix)) {
+    const auto& role = asset.at("role").get_ref<const std::string&>();
+    if (!safe_identity(role) || !safe_asset_path(path, digest) ||
+        !paths.insert(path).second) {
       return false;
     }
+    runtime_scripts += role == "runtime_script" ? 1U : 0U;
+    runtime_wasm += role == "runtime_wasm" ? 1U : 0U;
   }
-  return true;
+  return runtime_scripts == 1U && runtime_wasm == 1U;
 }
 
 }  // namespace
@@ -203,4 +242,4 @@ bool ManifestGate::ready() const noexcept {
   return phase_ == Phase::accepted || phase_ == Phase::running;
 }
 
-}  // namespace lmdj::web_host
+}  // namespace lmdj::web_runtime

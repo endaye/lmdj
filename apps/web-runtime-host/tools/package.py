@@ -14,7 +14,9 @@ import tempfile
 from pathlib import Path
 
 
+HOST_ID = "web-runtime-host"
 HOST_VERSION = "1.1.0"
+PLATFORM_VERSION = "0.1.0"
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912
 DISTRIBUTION_CONTRACT = "lmdj.web-runtime-host.distribution.v1"
@@ -217,8 +219,8 @@ def build_distribution(
     version = read_json(repo_root / "products/lmdj/version.json", "Product version")
     active_product_build = product_build(version)
     host_root = repo_root / "apps/web-runtime-host"
-    runtime_js_path = require_file(runtime_root / "lmdj-web-runtime-host.js")
-    runtime_wasm_path = require_file(runtime_root / "lmdj-web-runtime-host.wasm")
+    runtime_js_path = require_file(runtime_root / "lmdj-web-runtime.js")
+    runtime_wasm_path = require_file(runtime_root / "lmdj-web-runtime.wasm")
 
     dist_root.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
@@ -290,7 +292,7 @@ def build_distribution(
             runtime_text = runtime_payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise PackageError("runtime JavaScript is not UTF-8") from error
-        original_wasm_name = "lmdj-web-runtime-host.wasm"
+        original_wasm_name = "lmdj-web-runtime.wasm"
         runtime_text = replace_exact_once(
             runtime_text,
             original_wasm_name,
@@ -321,7 +323,9 @@ def build_distribution(
             "distribution_contract": DISTRIBUTION_CONTRACT,
             "manifest_version": 1,
             "product_build": active_product_build,
+            "host_id": HOST_ID,
             "host_version": HOST_VERSION,
+            "platform_version": PLATFORM_VERSION,
             "protocol_version": PROTOCOL_VERSION,
             "heap_bytes": HEAP_BYTES,
             "resource_limits": RESOURCE_LIMITS,
@@ -345,7 +349,10 @@ def build_distribution(
         identity_meta = (
             '\n    <meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
             f'\n    <meta name="lmdj-product-build" content="{active_product_build}">'
+            f'\n    <meta name="lmdj-host-id" content="{HOST_ID}">'
             f'\n    <meta name="lmdj-host-version" content="{HOST_VERSION}">'
+            '\n    <meta name="lmdj-web-runtime-platform-version" '
+            f'content="{PLATFORM_VERSION}">'
             f'\n    <meta name="lmdj-host-protocol-version" content="{PROTOCOL_VERSION}">'
         )
         digest_tag = (
@@ -454,8 +461,10 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         "distribution_contract",
         "emscripten",
         "heap_bytes",
+        "host_id",
         "host_version",
         "manifest_version",
+        "platform_version",
         "product_build",
         "protocol_version",
         "resource_limits",
@@ -468,7 +477,9 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         or type(manifest["manifest_version"]) is not int
         or manifest["manifest_version"] != 1
         or manifest["product_build"] != product_build(version)
+        or manifest["host_id"] != HOST_ID
         or manifest["host_version"] != HOST_VERSION
+        or manifest["platform_version"] != PLATFORM_VERSION
         or type(manifest["protocol_version"]) is not int
         or manifest["protocol_version"] != PROTOCOL_VERSION
         or type(manifest["heap_bytes"]) is not int
@@ -551,7 +562,10 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     for exact_meta in (
         '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">',
         f'<meta name="lmdj-product-build" content="{manifest["product_build"]}">',
+        f'<meta name="lmdj-host-id" content="{manifest["host_id"]}">',
         f'<meta name="lmdj-host-version" content="{manifest["host_version"]}">',
+        '<meta name="lmdj-web-runtime-platform-version" '
+        f'content="{manifest["platform_version"]}">',
         f'<meta name="lmdj-host-protocol-version" content="{manifest["protocol_version"]}">',
     ):
         if index.count(exact_meta) != 1:

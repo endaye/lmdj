@@ -1,5 +1,5 @@
-#include "control_runtime.hpp"
-#include "manifest_gate.hpp"
+#include <lmdj/web_runtime/control_runtime.hpp>
+#include <lmdj/web_runtime/manifest_gate.hpp>
 
 #include <algorithm>
 #include <array>
@@ -102,7 +102,7 @@ void mirror_conformance_outcomes(
 }  // namespace
 #endif
 
-namespace lmdj::web_host::detail {
+namespace lmdj::web_runtime::detail {
 namespace {
 
 using Json = nlohmann::json;
@@ -1226,7 +1226,7 @@ bool ControlBridge::failed() const noexcept {
   return impl_->failed.load(std::memory_order_acquire);
 }
 
-}  // namespace lmdj::web_host::detail
+}  // namespace lmdj::web_runtime::detail
 
 #if defined(__EMSCRIPTEN__)
 namespace {
@@ -1243,19 +1243,23 @@ using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
-using lmdj::web_host::ControlRuntime;
-using lmdj::web_host::ManifestExpectation;
-using lmdj::web_host::ManifestGate;
-using lmdj::web_host::ManifestGateStatus;
-using lmdj::web_host::detail::BridgeHooks;
-using lmdj::web_host::detail::BridgePollStatus;
-using lmdj::web_host::detail::ControlBridge;
-using lmdj::web_host::detail::ControlRuntimeAudioAccess;
-using lmdj::web_host::detail::AudioQuiescenceCoordinator;
+using lmdj::web_runtime::ControlRuntime;
+using lmdj::web_runtime::ManifestExpectation;
+using lmdj::web_runtime::ManifestGate;
+using lmdj::web_runtime::ManifestGateStatus;
+using lmdj::web_runtime::detail::BridgeHooks;
+using lmdj::web_runtime::detail::BridgePollStatus;
+using lmdj::web_runtime::detail::ControlBridge;
+using lmdj::web_runtime::detail::ControlRuntimeAudioAccess;
+using lmdj::web_runtime::detail::AudioQuiescenceCoordinator;
 
 em_proxying_queue* web_proxy_queue = nullptr;
 pthread_t web_control_thread{};
 ManifestGate web_manifest_gate;
+constexpr std::array<ManifestExpectation::ComponentIdentity, 1>
+    web_allowed_hosts{{
+        {LMDJ_WEB_ALLOWED_HOST_ID, LMDJ_WEB_ALLOWED_HOST_VERSION},
+    }};
 std::unique_ptr<ControlRuntime> web_runtime;
 std::unique_ptr<ControlBridge> web_bridge_owner;
 std::atomic<ControlBridge*> web_bridge{nullptr};
@@ -1294,7 +1298,7 @@ struct OutcomeDiagnostic {
 };
 
 OutcomeDiagnostic outcome_diagnostic;
-std::array<char, lmdj::web_host::detail::kBridgeMaximumEnvelopeBytes + 1>
+std::array<char, lmdj::web_runtime::detail::kBridgeMaximumEnvelopeBytes + 1>
     diagnostic_poll_buffer{};
 #endif
 
@@ -1575,8 +1579,10 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_initialize_manifest(
       std::span<const std::byte>(canonical_bytes, canonical_size),
       std::string_view(expected_sha256, expected_sha256_size),
       ManifestExpectation{
+          LMDJ_WEB_DISTRIBUTION_CONTRACT,
           LMDJ_WEB_PRODUCT_BUILD,
-          LMDJ_WEB_HOST_VERSION,
+          LMDJ_WEB_PLATFORM_VERSION,
+          web_allowed_hosts,
           1,
       });
   if (status != ManifestGateStatus::accepted) {
@@ -1622,12 +1628,12 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_request(
     std::size_t request_id_size) {
   if (request_id == nullptr || request_id_size != 36) {
     return static_cast<int>(
-        lmdj::web_host::detail::BridgeCancelStatus::not_found);
+        lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
   }
   auto* bridge = web_bridge.load(std::memory_order_acquire);
   if (bridge == nullptr) {
     return static_cast<int>(
-        lmdj::web_host::detail::BridgeCancelStatus::not_found);
+        lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
   }
   return static_cast<int>(bridge->cancel(
       std::string_view(request_id, request_id_size)));
@@ -2159,7 +2165,7 @@ EMSCRIPTEN_KEEPALIVE const char* lmdj_web_audio_test_poll() {
       diagnostic_poll_buffer.size() - 1,
       &required);
   if (status != static_cast<int>(
-                    lmdj::web_host::detail::BridgePollStatus::message) ||
+                    lmdj::web_runtime::detail::BridgePollStatus::message) ||
       required >= diagnostic_poll_buffer.size()) {
     return nullptr;
   }

@@ -214,6 +214,7 @@ run_browser_gate() {
   require_playwright
   verify_clean_room_playwright_config "http://127.0.0.1:9"
   cleanup_proof_server
+  cmake -E make_directory "$build_root"
   proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-server.XXXXXX")"
   ready_file="$proof_server_ready_root/ready.json"
   ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"

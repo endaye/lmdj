@@ -1,4 +1,4 @@
-#include "control_runtime.hpp"
+#include <lmdj/web_runtime/control_runtime.hpp>
 
 #include <algorithm>
 #include <array>
@@ -30,7 +30,7 @@
 
 #include "tests/core/support/test.hpp"
 
-namespace lmdj::web_host::detail {
+namespace lmdj::web_runtime::detail {
 nlohmann::json normalize_error_for_testing(
     const foundation::Error& error);
 }
@@ -45,17 +45,17 @@ using lmdj::facade::Application;
 using lmdj::facade::ApplicationConfig;
 using lmdj::provider::ProviderPolicy;
 using lmdj::provider::Registry;
-using lmdj::web_host::ControlRuntime;
-using lmdj::web_host::detail::AudioQuiescenceCoordinator;
-using lmdj::web_host::detail::BridgeCancelStatus;
-using lmdj::web_host::detail::BridgeHooks;
-using lmdj::web_host::detail::BridgePollStatus;
-using lmdj::web_host::detail::BridgeSubmitStatus;
-using lmdj::web_host::detail::ControlBridge;
-using lmdj::web_host::detail::ControlRuntimeAudioAccess;
-using lmdj::web_host::detail::kBridgeMaximumEnvelopeBytes;
-using lmdj::web_host::detail::kBridgeMaximumSidecarBytes;
-using lmdj::web_host::detail::kBridgeMessageSlotCount;
+using lmdj::web_runtime::ControlRuntime;
+using lmdj::web_runtime::detail::AudioQuiescenceCoordinator;
+using lmdj::web_runtime::detail::BridgeCancelStatus;
+using lmdj::web_runtime::detail::BridgeHooks;
+using lmdj::web_runtime::detail::BridgePollStatus;
+using lmdj::web_runtime::detail::BridgeSubmitStatus;
+using lmdj::web_runtime::detail::ControlBridge;
+using lmdj::web_runtime::detail::ControlRuntimeAudioAccess;
+using lmdj::web_runtime::detail::kBridgeMaximumEnvelopeBytes;
+using lmdj::web_runtime::detail::kBridgeMaximumSidecarBytes;
+using lmdj::web_runtime::detail::kBridgeMessageSlotCount;
 
 constexpr std::string_view kProjectId =
     "00000000-0000-4000-8000-000000000001";
@@ -568,7 +568,7 @@ void test_facade_error_details_follow_an_explicit_safe_schema() {
   static constexpr std::string_view kStorageMarker =
       "backend_volume_offline";
   const auto normalized =
-      lmdj::web_host::detail::normalize_error_for_testing(
+      lmdj::web_runtime::detail::normalize_error_for_testing(
       lmdj::foundation::Error{
           lmdj::foundation::ErrorCode::revision_conflict,
           "source message must not escape",
