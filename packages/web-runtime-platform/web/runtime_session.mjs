@@ -1185,6 +1185,11 @@ function createRuntimeSessionController(options = {}) {
       }
       return Promise.resolve(false);
     }
+    try {
+      runtime?.transport?.terminate?.({immediate: true});
+    } catch {
+      // A clean-close attempt still follows; owner release is best effort.
+    }
     return close();
   }
 

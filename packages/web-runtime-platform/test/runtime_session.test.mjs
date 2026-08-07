@@ -29,6 +29,7 @@ function fixture({
   browserWindow = {},
   navigator = {},
   capabilities,
+  runtimeTransport,
 } = {}) {
   let request = 0;
   let terminated = 0;
@@ -99,6 +100,9 @@ function fixture({
         registerAudioContext: () => 1,
         startAudioWorklet: async () => ({ok: true}),
         workers: [],
+        ...(runtimeTransport === undefined
+          ? {}
+          : {transport: runtimeTransport}),
       }),
       preflight: async () => {},
       runtimeTerminator: async () => {
@@ -364,6 +368,54 @@ test("suppresses a late Trigger response after pagehide close", async () => {
   assert.equal(session.diagnostics().state, "closed");
   assert.equal(session.diagnostics().trigger_admitted_count, 0);
   assert.equal(terminated(), 1);
+});
+
+test("non-persisted pagehide starts terminal owner release synchronously", async () => {
+  const browserWindow = new EventTarget();
+  let closeEnvelope;
+  let settleClose;
+  let ownerReleases = 0;
+  const lifecycle = [];
+  const closeResponse = new Promise((resolvePromise) => {
+    settleClose = resolvePromise;
+  });
+  const {session} = fixture({
+    browserWindow,
+    runtimeTransport: {
+      terminate(options) {
+        assert.deepEqual(options, {immediate: true});
+        ownerReleases += 1;
+        lifecycle.push("terminal-release");
+      },
+    },
+    send: async (envelope) => {
+      if (envelope.operation === "host.close") {
+        lifecycle.push("clean-close");
+        closeEnvelope = envelope;
+        return closeResponse;
+      }
+      return {
+        protocol_version: 1,
+        request_id: envelope.request_id,
+        ok: true,
+        result: {},
+      };
+    },
+  });
+  await session.start();
+
+  browserWindow.dispatchEvent(new Event("pagehide"));
+
+  assert.equal(ownerReleases, 1);
+  assert.deepEqual(lifecycle, ["terminal-release", "clean-close"]);
+  settleClose({
+    protocol_version: 1,
+    request_id: closeEnvelope.request_id,
+    ok: true,
+    result: {},
+  });
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  assert.equal(session.diagnostics().state, "closed");
 });
 
 test("close disposes MIDI input listeners exactly once", async () => {
