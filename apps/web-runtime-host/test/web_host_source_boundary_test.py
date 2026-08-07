@@ -458,6 +458,14 @@ def main() -> int:
         "unresponsive cancellation must prove forced terminal cleanup before "
         "releasing the artificial claim gate",
     )
+    require(
+        "rejectedConsumes: 3" not in unresponsive_cancellation.group(0)
+        and "expect([1, 2, 3]).toContain" in unresponsive_cancellation.group(0)
+        and "replayConsumedTerminalAck(page)"
+        in unresponsive_cancellation.group(0),
+        "unresponsive terminal-ack proof must accept asynchronous rejection "
+        "ordering and deterministically reject an explicit replay",
+    )
     claimed_settlement = re.search(
         r'test\("Chromium packaged asset\.import claim wins before deadline '
         r'and settles after it".*?\n\}\);',

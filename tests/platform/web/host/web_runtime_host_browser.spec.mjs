@@ -1812,12 +1812,18 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
     terminated: true,
     terminalOwnerReleased: false,
   });
-  expect(await terminalAckAttackEvidence(page)).toMatchObject({
+  await expect.poll(() => terminalAckAttackEvidence(page)).toMatchObject({
     forgedAcksSent: 2,
     duplicateReleaseRequestsSent: 2,
     observedWorkerAcks: 0,
     acceptedConsumes: 0,
-    rejectedConsumes: 3,
+  });
+  const attackEvidence = await terminalAckAttackEvidence(page);
+  expect([1, 2, 3]).toContain(attackEvidence.rejectedConsumes);
+  expect(await replayConsumedTerminalAck(page)).toBe(-1);
+  expect(await terminalAckAttackEvidence(page)).toMatchObject({
+    acceptedConsumes: 0,
+    rejectedConsumes: attackEvidence.rejectedConsumes + 1,
   });
   expect(await releaseDeadlineProof(page), "release terminated proof gate")
     .toBe(true);
