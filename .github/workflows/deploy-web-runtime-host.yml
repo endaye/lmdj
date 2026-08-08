@@ -1,0 +1,104 @@
+name: Deploy Web Runtime Host
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact signed Product tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: web-runtime-host-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    environment: runtime-canary
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/platform/web/package-lock.json
+
+      - name: Install browser smoke dependencies
+        working-directory: tests/platform/web
+        run: npm ci
+
+      - name: Install Chromium
+        working-directory: tests/platform/web
+        run: npx --no-install playwright install --with-deps chromium
+
+      - name: Select exact signed Product tag
+        id: release-tag
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          MANUAL_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          release_prerelease="$RELEASE_PRERELEASE"
+          case "$EVENT_NAME" in
+            release)
+              [[ "$release_prerelease" == "true" ]] || {
+                echo "Published release must be a prerelease" >&2
+                exit 2
+              }
+              tag="$RELEASE_TAG"
+              ;;
+            workflow_dispatch)
+              tag="$MANUAL_TAG"
+              ;;
+            *)
+              echo "Unsupported deployment event: $EVENT_NAME" >&2
+              exit 64
+              ;;
+          esac
+          [[ "$tag" =~ ^lmdj-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
+            echo "Deployment tag must be an exact Product tag" >&2
+            exit 64
+          }
+          printf 'tag=%s\n' "$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy signed Runtime Host release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          NETLIFY_RUNTIME_SITE_ID: ${{ secrets.NETLIFY_RUNTIME_SITE_ID }}
+          NETLIFY_AUTH_TOKEN: ${{ secrets.NETLIFY_AUTH_TOKEN }}
+          LMDJ_RELEASE_TAG: ${{ steps.release-tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p build/deploy/web-runtime-host
+          tag="$LMDJ_RELEASE_TAG"
+          scripts/web-runtime-deploy.sh deploy "$tag" 2>&1 |
+            tee build/deploy/web-runtime-host/deployment.log
+
+      - name: Upload deployment evidence and failure logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-host-deployment-evidence
+          path: |
+            build/deploy/web-runtime-host/evidence.json
+            build/deploy/web-runtime-host/deployment.log
+          if-no-files-found: warn
