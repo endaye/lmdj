@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 import threading
 import unittest
+from unittest import mock
+from urllib.error import HTTPError
 from urllib.parse import urlsplit
 
 
@@ -24,9 +26,12 @@ class RequestRecord:
         self.path = handler.path
         self.headers = dict(handler.headers.items())
         self.body = body
+        if handler.headers.get_content_type() != "application/json":
+            self.json = None
+            return
         try:
             self.json = json.loads(body)
-        except json.JSONDecodeError:
+        except (UnicodeDecodeError, json.JSONDecodeError):
             self.json = None
 
 
@@ -178,6 +183,23 @@ class NetlifyClientTest(unittest.TestCase):
             "/api/v1/deploys/deploy-456/files/assets/a%20space%25%3F%23.wasm",
         )
 
+    def test_uploads_binary_wasm_without_fake_api_decode_failure(self) -> None:
+        payload = b"\x00asm\xff\x00binary"
+        self.server.create_response = {
+            "id": "deploy-456",
+            "site_id": "site-123",
+            "deploy_ssl_url": "https://draft.example/deploy-456",
+            "state": "uploading",
+            "required": [hashlib.sha1(payload).hexdigest()],
+        }
+        self.client.create_draft(
+            site_id="site-123",
+            files={"/assets/runtime.wasm": payload},
+            title="title",
+        )
+        self.assertEqual(self.server.requests[1].body, payload)
+        self.assertIsNone(self.server.requests[1].json)
+
     def test_accepts_additive_documented_response_fields(self) -> None:
         self.server.create_response = {
             "id": "deploy-456",
@@ -216,7 +238,6 @@ class NetlifyClientTest(unittest.TestCase):
             "required": [],
         }
         cases = (
-            (b"not-json", "Netlify API response is invalid"),
             ({"id": "deploy-456"}, "Netlify API response is invalid"),
             ({**valid, "required": [42]}, "Netlify API response is invalid"),
             ({**valid, "id": 42}, "Netlify API response is invalid"),
@@ -227,6 +248,20 @@ class NetlifyClientTest(unittest.TestCase):
                 self.server.create_response = response
                 with self.assertRaisesRegex(netlify_api.NetlifyError, message):
                     self.create_ready_draft()
+
+    def test_json_parse_failures_are_redacted_without_exception_links(self) -> None:
+        for response, leaked_body in (
+            (b"malformed-json-body-do-not-leak", "malformed-json-body-do-not-leak"),
+            (b"\xffinvalid-utf8-body-do-not-leak", "invalid-utf8-body-do-not-leak"),
+        ):
+            with self.subTest(response=response):
+                self.server.create_response = response
+                with self.assertRaises(netlify_api.NetlifyError) as raised:
+                    self.create_ready_draft()
+                self.assertEqual(str(raised.exception), "Netlify API response is invalid")
+                self.assertNotIn(leaked_body, str(raised.exception))
+                self.assertIsNone(raised.exception.__cause__)
+                self.assertIsNone(raised.exception.__context__)
 
     def test_rejects_foreign_site_or_non_https_draft_url(self) -> None:
         for response in (
@@ -258,7 +293,29 @@ class NetlifyClientTest(unittest.TestCase):
         self.assertNotIn("header-do-not-leak", str(raised.exception))
         self.assertIsNone(raised.exception.__cause__)
         self.assertIsNone(raised.exception.__context__)
+        frames = []
+        traceback = raised.exception.__traceback__
+        while traceback is not None:
+            frames.append(traceback.tb_frame)
+            traceback = traceback.tb_next
+        self.assertFalse(
+            any(
+                isinstance(value, HTTPError)
+                or isinstance(getattr(value, "__self__", None), HTTPError)
+                for frame in frames
+                for value in frame.f_locals.values()
+            )
+        )
         self.assertFalse(any(request.path.endswith("/restore") for request in self.server.requests))
+
+    def test_transport_oserror_is_sanitized_without_exception_links(self) -> None:
+        with mock.patch.object(netlify_api.request, "urlopen", side_effect=OSError("dns-do-not-leak")):
+            with self.assertRaises(netlify_api.NetlifyError) as raised:
+                self.client.publish_deploy(site_id="site-123", deploy_id="deploy-456")
+        self.assertEqual(str(raised.exception), "Netlify API request failed")
+        self.assertNotIn("dns-do-not-leak", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
 
     def test_uploads_one_deterministic_path_per_required_digest(self) -> None:
         payload = b"duplicate"

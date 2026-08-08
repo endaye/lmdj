@@ -168,10 +168,14 @@ class NetlifyClient:
             document, sort_keys=True, separators=(",", ":")
         ).encode("utf-8")
         response = self._request(method, endpoint, data, "application/json", deadline)
+        invalid = False
         try:
             return json.loads(response)
-        except (TypeError, UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise NetlifyError("Netlify API response is invalid") from error
+        except (TypeError, UnicodeDecodeError, json.JSONDecodeError):
+            invalid = True
+        if invalid:
+            raise NetlifyError("Netlify API response is invalid")
+        raise AssertionError("Netlify JSON response did not return or fail")
 
     def _request(
         self,
@@ -203,10 +207,12 @@ class NetlifyClient:
             with request.urlopen(operation, timeout=timeout) as response:
                 return response.read()
         except OSError as error:
-            try:
-                error.close()
-            except OSError:
-                pass
+            closer = getattr(error, "close", None)
+            if callable(closer):
+                try:
+                    closer()
+                except OSError:
+                    pass
             failed = True
         if failed:
             raise NetlifyError("Netlify API request failed")
