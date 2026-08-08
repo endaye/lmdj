@@ -64,6 +64,7 @@ Canonical policy: `docs/governance/version-management.md`.
 | `apps/web-runtime-host/test/deployment_smoke_test.py` | Serve valid and intentionally invalid responses through an in-process HTTP server. |
 | `tests/platform/web/deployment/web_runtime_host_deployment.spec.mjs` | Run the minimal secure-context, cross-origin-isolation, diagnostic-load, audio-activation, trigger-outcome, and close smoke. |
 | `scripts/web-runtime-deploy.sh` | Own the end-to-end order: tag/Release validation → stage → draft → immutable smoke → publish same Deploy ID → production smoke → evidence. |
+| `apps/web-runtime-host/tools/deploy_orchestrator.py` | Parse and project trusted release/deploy metadata, call the canonical Netlify API client, and write secret-free evidence atomically. |
 | `apps/web-runtime-host/test/deploy_command_test.py` | Prove command usage, cleanup, environment gates, tag selection, and that smoke precedes publish. |
 | `.github/release-signing-keys/lmdj-product.asc` | Repository-pinned public key for Product tag verification. |
 | `.github/workflows/deploy-web-runtime-host.yml` | Release/manual trigger, minimal permissions, GitHub Environment boundary, locked tool setup, deployment, and evidence upload. |
@@ -554,6 +555,7 @@ git commit -m "test(deploy): prove published Runtime Host behavior"
 
 **Files:**
 - Create: `scripts/web-runtime-deploy.sh`
+- Create: `apps/web-runtime-host/tools/deploy_orchestrator.py`
 - Create: `apps/web-runtime-host/test/deploy_command_test.py`
 - Modify: `scripts/web-runtime-host.sh`
 
@@ -681,6 +683,7 @@ Add `deploy_command_test.py` after `deployment_smoke_test.py` in `run_nonbrowser
 ```bash
 git add \
   scripts/web-runtime-deploy.sh \
+  apps/web-runtime-host/tools/deploy_orchestrator.py \
   apps/web-runtime-host/test/deploy_command_test.py \
   scripts/web-runtime-host.sh
 git diff --cached --check
