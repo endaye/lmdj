@@ -290,6 +290,7 @@ run_nonbrowser_tests() {
   activate_toolchain
   python3 "$repo_root/apps/web-runtime-host/test/package_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/release_bundle_test.py"
+  python3 "$repo_root/apps/web-runtime-host/test/netlify_api_test.py"
   python3 "$repo_root/apps/web-runtime-host/test/server_test.py"
   node --test "$repo_root"/apps/web-runtime-host/test/*.test.mjs
   "$repo_root/scripts/core.sh" configure dev
