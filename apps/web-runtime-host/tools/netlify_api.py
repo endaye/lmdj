@@ -18,6 +18,14 @@ class DraftDeploy:
     state: str
 
 
+@dataclass(frozen=True)
+class PublishedSite:
+    id: str
+    state: str
+    ssl_url: str
+    published_deploy: DraftDeploy | None
+
+
 class NetlifyError(RuntimeError):
     pass
 
@@ -92,6 +100,49 @@ class NetlifyClient:
         ):
             raise NetlifyError("Netlify published deploy identity is invalid")
         return response
+
+    def get_site(self, *, site_id: str) -> PublishedSite:
+        """Return the current published deploy only when its identity is usable."""
+        if not site_id:
+            raise NetlifyError("Netlify site identity is invalid")
+        response = self._json_request(
+            "GET", f"/sites/{self._path_segment(site_id)}", None, None
+        )
+        if not isinstance(response, dict) or not {
+            "id", "state", "ssl_url", "published_deploy"
+        }.issubset(response):
+            raise NetlifyError("Netlify API response is invalid")
+        state = response.get("state")
+        ssl_url = response.get("ssl_url")
+        if (
+            response.get("id") != site_id
+            or not isinstance(state, str)
+            or not state
+            or not self._https_url(ssl_url)
+        ):
+            raise NetlifyError("Netlify site identity is invalid")
+        prior_document = response.get("published_deploy")
+        prior = None
+        if prior_document is not None:
+            try:
+                prior = self._parse_deploy_response(prior_document, site_id)
+            except NetlifyError:
+                raise NetlifyError("Netlify published deploy identity is invalid") from None
+            if prior.state != "ready":
+                raise NetlifyError("Netlify published deploy identity is invalid")
+        return PublishedSite(site_id, state, ssl_url, prior)
+
+    def disable_site(self, *, site_id: str, reason: str) -> None:
+        """Disable a site through Netlify's reversible serving control."""
+        if not site_id or not reason or "\n" in reason or "\r" in reason:
+            raise NetlifyError("Netlify disable input is invalid")
+        self._request(
+            "PUT",
+            f"/sites/{self._path_segment(site_id)}/disable?reason={parse.quote(reason, safe='')}",
+            None,
+            "application/json",
+            None,
+        )
 
     def _file_digests(self, files: Mapping[str, bytes]) -> dict[str, str]:
         digests: dict[str, str] = {}

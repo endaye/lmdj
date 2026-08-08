@@ -10,10 +10,32 @@ production_url='https://lmdj-runtime.netlify.app'
 trusted_fingerprint='2B5EE362F058800036AD4FB5116ECE156F954D29'
 initial_tag='lmdj-v1.0.15.2'
 initial_tag_target='72ae40074620cc5681c462ba04a31a666449734f'
+canonical_repository='endaye/lmdj'
+remote_tag_ref=''
+remote_main_ref='refs/lmdj-deploy/origin-main'
 python_bin='python3'
 owned_temp=''
 owned_temp_parent=''
 tag_checkout=''
+publication_attempted=0
+deployment_complete=0
+recovery_running=0
+prior_deploy_id=''
+prior_deploy_url=''
+prior_product_build=''
+prior_host_version=''
+current_site_json='{}'
+prior_immutable_http_result='{}'
+prior_immutable_browser_result='{}'
+prior_production_http_result='{}'
+prior_production_browser_result='{}'
+reconcile_site_json='{}'
+recovery_response_json='null'
+recovery_action='not-started'
+recovery_immutable_http_result='{}'
+recovery_immutable_browser_result='{}'
+recovery_production_http_result='{}'
+recovery_production_browser_result='{}'
 
 usage() {
   cat >&2 <<'EOF'
@@ -29,42 +51,61 @@ fail() {
   return 2
 }
 
+with_gh_environment_removed() {
+  local -a unset_arguments=()
+  local name=''
+  while IFS= read -r name; do
+    [[ "$name" == GH* ]] && unset_arguments+=(-u "$name")
+  done < <(compgen -e)
+  env "${unset_arguments[@]}" "$@"
+}
+
 without_deploy_secrets() {
-  env \
+  with_gh_environment_removed \
     -u GITHUB_TOKEN \
-    -u GH_TOKEN \
     -u GITHUB_ENTERPRISE_TOKEN \
-    -u GH_ENTERPRISE_TOKEN \
     -u NETLIFY_AUTH_TOKEN \
     -u NETLIFY_RUNTIME_SITE_ID \
     "$@"
 }
 
 with_pinned_github() {
-  env \
-    -u GH_TOKEN \
+  with_gh_environment_removed \
     -u GITHUB_ENTERPRISE_TOKEN \
-    -u GH_ENTERPRISE_TOKEN \
-    -u GH_HOST \
-    -u GH_REPO \
     -u NETLIFY_AUTH_TOKEN \
     -u NETLIFY_RUNTIME_SITE_ID \
     "$@"
 }
 
 with_netlify_credential() {
-  env \
-    -u GH_TOKEN \
+  with_gh_environment_removed \
+    -u GITHUB_TOKEN \
     -u GITHUB_ENTERPRISE_TOKEN \
-    -u GH_ENTERPRISE_TOKEN \
-    -u GH_HOST \
-    -u GH_REPO \
     "$@"
 }
 
 cleanup_all() {
   local status=$?
   trap - EXIT INT TERM
+  if (( status != 0 && publication_attempted == 1 && deployment_complete == 0 && recovery_running == 0 )); then
+    recovery_running=1
+    local original_status="$status"
+    local recovery_status='passed'
+    if ! reconcile_publication_failure "$original_status"; then
+      echo "Web Runtime deployment error: publication recovery failed" >&2
+      recovery_status='failed'
+      status=2
+    fi
+    if ! write_recovery_evidence "$original_status" "$recovery_status"; then
+      echo "Web Runtime deployment error: recovery evidence write failed" >&2
+      status=2
+    fi
+  fi
+  if [[ -n "$remote_tag_ref" ]]; then
+    without_deploy_secrets git update-ref -d "$remote_tag_ref" >/dev/null 2>&1 || status=2
+    remote_tag_ref=''
+  fi
+  without_deploy_secrets git update-ref -d "$remote_main_ref" >/dev/null 2>&1 || status=2
   if [[ -n "$tag_checkout" ]]; then
     if ! without_deploy_secrets \
       git worktree remove --force "$tag_checkout" >/dev/null 2>&1
@@ -137,6 +178,44 @@ validate_tag() {
   product_build="${BASH_REMATCH[1]}"
 }
 
+fetch_remote_authority() {
+  local tag="$1"
+  local origin_url=''
+  local protected=''
+  origin_url="$(without_deploy_secrets git remote get-url origin 2>/dev/null)" || {
+    fail "canonical origin remote is unavailable"
+    return
+  }
+  case "$origin_url" in
+    https://github.com/endaye/lmdj.git|https://endaye@github.com/endaye/lmdj.git|git@github.com:endaye/lmdj.git|ssh://git@github.com/endaye/lmdj.git) ;;
+    *) fail "origin remote is not the canonical repository"; return ;;
+  esac
+  remote_tag_ref="refs/lmdj-deploy/tags/$tag"
+  without_deploy_secrets git update-ref -d "$remote_tag_ref" >/dev/null 2>&1 || true
+  without_deploy_secrets git update-ref -d "$remote_main_ref" >/dev/null 2>&1 || true
+  without_deploy_secrets git fetch --no-tags origin \
+    "refs/tags/$tag:$remote_tag_ref" >/dev/null 2>&1 || {
+    fail "canonical remote Product tag fetch failed"
+    return
+  }
+  without_deploy_secrets git fetch --no-tags origin \
+    "refs/heads/main:$remote_main_ref" >/dev/null 2>&1 || {
+    fail "canonical origin/main fetch failed"
+    return
+  }
+  protected="$(
+    with_pinned_github gh api "repos/$canonical_repository/branches/main" \
+      --jq .protected 2>/dev/null
+  )" || {
+    fail "canonical main protection metadata is unavailable"
+    return
+  }
+  [[ "$protected" == 'true' ]] || {
+    fail "canonical origin/main is not protected"
+    return
+  }
+}
+
 verify_signed_tag() {
   local tag="$1"
   local key_path="$repo_root/.github/release-signing-keys/lmdj-product.asc"
@@ -145,7 +224,7 @@ verify_signed_tag() {
   local verify_status=''
 
   tag_type="$(
-    without_deploy_secrets git cat-file -t "refs/tags/$tag" 2>/dev/null
+    without_deploy_secrets git cat-file -t "$remote_tag_ref" 2>/dev/null
   )" || {
     fail "Product tag is unavailable"
     return
@@ -175,7 +254,7 @@ verify_signed_tag() {
     return
   }
   if ! verify_status="$(
-    without_deploy_secrets git verify-tag --raw "$tag" 2>&1
+    without_deploy_secrets git verify-tag --raw "$remote_tag_ref" 2>&1
   )"; then
     fail "Product tag signature verification failed"
     return
@@ -196,7 +275,7 @@ verify_signed_tag() {
 
   tag_target="$(
     without_deploy_secrets \
-      git rev-parse --verify "${tag}^{commit}" 2>/dev/null
+      git rev-parse --verify "${remote_tag_ref}^{commit}" 2>/dev/null
   )" || {
     fail "Product tag target cannot be resolved"
     return
@@ -209,6 +288,11 @@ verify_signed_tag() {
     fail "initial Product tag target mismatch"
     return
   fi
+  without_deploy_secrets git merge-base --is-ancestor \
+    "$tag_target" "$remote_main_ref" >/dev/null 2>&1 || {
+    fail "Product tag target is not an ancestor of protected origin/main"
+    return
+  }
 }
 
 create_tag_checkout() {
@@ -227,7 +311,7 @@ create_tag_checkout() {
 read_tag_identity() {
   local fields=''
   fields="$(
-    "$python_bin" "$orchestrator_tool" \
+    without_deploy_secrets "$python_bin" "$orchestrator_tool" \
       tag-identity "$tag_checkout" "$product_build"
   )" || {
     fail "signed tag-target identity verification failed"
@@ -247,16 +331,17 @@ parse_release_metadata() {
   local tag="$1"
   local fields=''
   fields="$(
-    "$python_bin" "$orchestrator_tool" release-metadata \
+    without_deploy_secrets "$python_bin" "$orchestrator_tool" release-metadata \
       "$tag" "$tag_target" "$product_build" "$host_version"
   )" || {
     fail "GitHub Release identity verification failed"
     return
   }
-  IFS=$'\t' read -r archive_name checksum_name release_url <<<"$fields"
+  IFS=$'\t' read -r archive_name checksum_name signature_name release_url <<<"$fields"
   [[ \
     -n "$archive_name" && \
     "$checksum_name" == "$archive_name.sha256" && \
+    "$signature_name" == "$checksum_name.asc" && \
     -n "$release_url" \
   ]] || {
     fail "GitHub Release identity output is invalid"
@@ -272,18 +357,20 @@ download_release_assets() {
     --repo endaye/lmdj \
     --pattern "$archive_name" \
     --pattern "$checksum_name" \
+    --pattern "$signature_name" \
     --dir "$download_root" \
     --clobber >/dev/null 2>&1 || {
     fail "GitHub Release asset download failed"
     return
   }
-  "$python_bin" "$orchestrator_tool" downloaded-assets \
-    "$download_root" "$archive_name" "$checksum_name" || {
+  without_deploy_secrets "$python_bin" "$orchestrator_tool" downloaded-assets \
+    "$download_root" "$archive_name" "$checksum_name" "$signature_name" || {
     fail "downloaded GitHub Release asset verification failed"
     return
   }
   archive_path="$download_root/$archive_name"
   checksum_path="$download_root/$checksum_name"
+  signature_path="$download_root/$signature_name"
 }
 
 stage_release_assets() {
@@ -296,6 +383,9 @@ stage_release_assets() {
         --repo-root "$tag_checkout" \
         --archive "$archive_path" \
         --checksum "$checksum_path" \
+        --checksum-signature "$signature_path" \
+        --product-public-key "$repo_root/.github/release-signing-keys/lmdj-product.asc" \
+        --trusted-primary-fingerprint "$trusted_fingerprint" \
         --output-root "$stage_root" \
         --expected-product-build "$product_build" \
         --expected-host-version "$host_version" 2>/dev/null
@@ -304,7 +394,7 @@ stage_release_assets() {
     return
   }
   fields="$(
-    "$python_bin" "$orchestrator_tool" staged-bundle \
+    without_deploy_secrets "$python_bin" "$orchestrator_tool" staged-bundle \
       "$stage_root" "$product_build" "$host_version" "$tag" "$bundle_json"
   )" || {
     fail "staged Host bundle result verification failed"
@@ -330,6 +420,7 @@ verify_release() {
   local tag="$1"
   local release_json=''
   create_owned_temp
+  fetch_remote_authority "$tag"
   verify_signed_tag "$tag"
   create_tag_checkout
   read_tag_identity
@@ -337,6 +428,7 @@ verify_release() {
     with_pinned_github gh release view "$tag" \
       --repo endaye/lmdj \
       --json tagName,isDraft,isPrerelease,targetCommitish,assets,url \
+      --jq '{tagName,isDraft,isPrerelease,targetCommitish,assets:[.assets[]|{name:.name}],url}' \
       2>/dev/null
   )" || {
     fail "GitHub Release metadata is unavailable"
@@ -366,60 +458,267 @@ create_draft_deploy() {
   }
 }
 
+parse_site_fields() {
+  without_deploy_secrets "$python_bin" -c '
+import json,sys
+value=json.load(sys.stdin)
+prior=value.get("published_deploy")
+if prior is None:
+    print(value["state"] + "\t\t")
+else:
+    print(value["state"] + "\t" + prior["id"] + "\t" + prior["deploy_ssl_url"])
+'
+}
+
+get_current_site() {
+  current_site_json="$(
+    with_netlify_credential "$python_bin" "$orchestrator_tool" site-current \
+      "$NETLIFY_RUNTIME_SITE_ID"
+  )" || {
+    fail "Netlify current published deploy lookup failed"
+    return
+  }
+  local fields=''
+  fields="$(parse_site_fields <<<"$current_site_json")" || {
+    fail "Netlify current published deploy output is invalid"
+    return
+  }
+  IFS=$'\t' read -r current_site_state current_deploy_id current_deploy_url <<<"$fields"
+}
+
+preflight_prior_good() {
+  local identity_json=''
+  local fields=''
+  get_current_site
+  [[ "$current_site_state" != 'disabled' ]] || {
+    fail "Netlify site is already disabled; refusing automatic enable or publication"
+    return
+  }
+  prior_deploy_id="$current_deploy_id"
+  prior_deploy_url="$current_deploy_url"
+  if [[ -z "$prior_deploy_id" ]]; then
+    return
+  fi
+  identity_json="$(
+    without_deploy_secrets "$python_bin" \
+      "$repo_root/apps/web-runtime-host/tools/deployment_smoke.py" \
+      discover-identity "$prior_deploy_url"
+  )" || {
+    fail "prior published deploy identity discovery failed"
+    return
+  }
+  fields="$(
+    without_deploy_secrets "$python_bin" -c '
+import json,sys
+value=json.load(sys.stdin)
+print(value["product_build"] + "\t" + value["host_version"])
+' <<<"$identity_json"
+  )" || {
+    fail "prior published deploy identity output is invalid"
+    return
+  }
+  IFS=$'\t' read -r prior_product_build prior_host_version <<<"$fields"
+  run_http_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id"
+  prior_immutable_http_result="$http_smoke_result"
+  run_browser_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version"
+  prior_immutable_browser_result="$browser_smoke_result"
+  run_http_smoke "$production_url" "$prior_product_build" "$prior_host_version"
+  prior_production_http_result="$http_smoke_result"
+  run_browser_smoke "$production_url" "$prior_product_build" "$prior_host_version"
+  prior_production_browser_result="$browser_smoke_result"
+}
+
+restore_exact_deploy() {
+  local restore_id="$1"
+  with_netlify_credential "$python_bin" "$orchestrator_tool" publish \
+    "$NETLIFY_RUNTIME_SITE_ID" "$restore_id"
+}
+
+reconcile_publication_failure() {
+  local original_status="$1"
+  get_current_site || return 2
+  reconcile_site_json="$current_site_json"
+  if [[ "$current_deploy_id" != "${deploy_id:-}" ]]; then
+    recovery_action='alias-not-new'
+    return 0
+  fi
+  if [[ -n "$prior_deploy_id" ]]; then
+    recovery_response_json="$(restore_exact_deploy "$prior_deploy_id")" || return 2
+    recovery_action='restored-prior'
+    run_http_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id" || return 2
+    recovery_immutable_http_result="$http_smoke_result"
+    run_browser_smoke "$prior_deploy_url" "$prior_product_build" "$prior_host_version" || return 2
+    recovery_immutable_browser_result="$browser_smoke_result"
+    run_http_smoke "$production_url" "$prior_product_build" "$prior_host_version" || return 2
+    recovery_production_http_result="$http_smoke_result"
+    run_browser_smoke "$production_url" "$prior_product_build" "$prior_host_version" || return 2
+    recovery_production_browser_result="$browser_smoke_result"
+  else
+    recovery_response_json="$(
+      with_netlify_credential "$python_bin" "$orchestrator_tool" disable-site \
+        "$NETLIFY_RUNTIME_SITE_ID" "failed first publication; original status $original_status"
+    )" || return 2
+    recovery_action='disabled-first-publication'
+  fi
+  return 0
+}
+
+write_recovery_evidence() {
+  local original_status="$1"
+  local recovery_status="$2"
+  local recorded_at=''
+  recorded_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  without_deploy_secrets "$python_bin" -c '
+import json,sys
+(
+ original_status,recorded_at,action,recovery_status,attempted_id,attempted_url,
+ prior_id,prior_url,reconcile,response,immutable_http,immutable_browser,
+ production_http,production_browser,
+)=sys.argv[1:]
+prior=None if not prior_id else {"id":prior_id,"url":prior_url}
+document={
+ "action":action,
+ "attempted_deploy":{"id":attempted_id,"url":attempted_url},
+ "contract":"lmdj.web-runtime-host.deployment-recovery-evidence.v1",
+ "original_status":int(original_status),
+ "prior_deploy":prior,
+ "reconcile":json.loads(reconcile),
+ "recorded_at":recorded_at,
+ "recovery_response":json.loads(response),
+ "validation":{
+   "immutable_browser":json.loads(immutable_browser),
+   "immutable_http":json.loads(immutable_http),
+   "production_browser":json.loads(production_browser),
+   "production_http":json.loads(production_http),
+   "status":recovery_status,
+ },
+}
+print(json.dumps(document,sort_keys=True,separators=(",",":")))
+' "$original_status" "$recorded_at" "$recovery_action" "$recovery_status" \
+    "${deploy_id:-}" "${deploy_url:-}" "$prior_deploy_id" "$prior_deploy_url" \
+    "$reconcile_site_json" "$recovery_response_json" \
+    "$recovery_immutable_http_result" "$recovery_immutable_browser_result" \
+    "$recovery_production_http_result" "$recovery_production_browser_result" |
+    without_deploy_secrets "$python_bin" "$orchestrator_tool" \
+      evidence-write-document "$deploy_root/recovery-evidence.json" \
+      lmdj.web-runtime-host.deployment-recovery-evidence.v1
+}
+
 run_http_smoke() {
   local base_url="$1"
-  local expected_deploy_id="${2:-}"
+  local expected_product="${2:-$product_build}"
+  local expected_host="${3:-$host_version}"
+  local expected_deploy_id="${4:-}"
   local arguments=(
     "$repo_root/apps/web-runtime-host/tools/deployment_smoke.py"
     "$base_url"
-    "$product_build"
-    "$host_version"
+    "$expected_product"
+    "$expected_host"
   )
+  local started_at=''
+  local ended_at=''
+  local raw_result=''
   if [[ -n "$expected_deploy_id" ]]; then
     arguments+=(--expected-deploy-id "$expected_deploy_id")
   fi
-  without_deploy_secrets "$python_bin" "${arguments[@]}" >/dev/null
+  started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  raw_result="$({ without_deploy_secrets "$python_bin" "${arguments[@]}"; })"
+  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  http_smoke_result="{\"ended_at\":\"$ended_at\",\"result\":$raw_result,\"started_at\":\"$started_at\",\"status\":\"passed\"}"
 }
 
 run_browser_smoke() {
   local base_url="$1"
-  env \
-    -u GITHUB_TOKEN \
-    -u GH_TOKEN \
-    -u GITHUB_ENTERPRISE_TOKEN \
-    -u GH_ENTERPRISE_TOKEN \
-    -u NETLIFY_AUTH_TOKEN \
-    -u NETLIFY_RUNTIME_SITE_ID \
+  local expected_product="${2:-$product_build}"
+  local expected_host="${3:-$host_version}"
+  local started_at=''
+  local ended_at=''
+  started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  without_deploy_secrets \
     LMDJ_WEB_HOST_CLEAN_ROOM=1 \
     LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
     LMDJ_WEB_HOST_BASE_URL="$base_url" \
-    LMDJ_WEB_HOST_EXPECTED_PRODUCT_BUILD="$product_build" \
-    LMDJ_WEB_HOST_EXPECTED_VERSION="$host_version" \
+    LMDJ_WEB_HOST_EXPECTED_PRODUCT_BUILD="$expected_product" \
+    LMDJ_WEB_HOST_EXPECTED_VERSION="$expected_host" \
     npm --prefix "$repo_root/tests/platform/web" test -- \
       --project=chromium \
       deployment/web_runtime_host_deployment.spec.mjs
+  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  browser_smoke_result="{\"ended_at\":\"$ended_at\",\"started_at\":\"$started_at\",\"status\":\"passed\"}"
 }
 
 publish_deploy() {
-  with_netlify_credential \
-    "$python_bin" "$orchestrator_tool" publish \
-      "$NETLIFY_RUNTIME_SITE_ID" "$deploy_id" || {
+  publication_attempted=1
+  publish_response_json="$(
+    with_netlify_credential \
+      "$python_bin" "$orchestrator_tool" publish \
+        "$NETLIFY_RUNTIME_SITE_ID" "$deploy_id"
+  )" || {
     fail "Netlify same-ID publication failed"
     return
   }
 }
 
 initialize_evidence_target() {
-  "$python_bin" "$orchestrator_tool" evidence-init \
+  without_deploy_secrets "$python_bin" "$orchestrator_tool" evidence-init \
     "$repo_root" "$deploy_root"
 }
 
 write_evidence() {
-  "$python_bin" "$orchestrator_tool" evidence-write \
-    "$deploy_root/evidence.json" \
-    "$archive_sha256" "$deploy_id" "$deploy_url" "$tag_target" \
-    "$host_version" "$product_build" "$release_url" \
-    "$NETLIFY_RUNTIME_SITE_ID" "$tag"
+  local ended_at=''
+  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  without_deploy_secrets "$python_bin" -c '
+import json,sys
+(
+ archive_name,archive_sha,revision,host,product,release_url,site_id,tag,
+ run_id,started_at,ended_at,deploy_id,deploy_url,immutable_http,
+ immutable_browser,publish_response,production_http,production_browser,
+ prior_id,prior_url,prior_product,prior_host,prior_site,prior_immutable_http,
+ prior_immutable_browser,prior_production_http,prior_production_browser,
+)=sys.argv[1:]
+prior_good=None
+if prior_id:
+    prior_good={
+        "deploy_id":prior_id,
+        "deploy_url":prior_url,
+        "host_version":prior_host,
+        "immutable":{"browser":json.loads(prior_immutable_browser),"http":json.loads(prior_immutable_http)},
+        "product_build":prior_product,
+        "production":{"browser":json.loads(prior_production_browser),"http":json.loads(prior_production_http)},
+        "site_response":json.loads(prior_site),
+    }
+document={
+ "archive":{"filename":archive_name,"sha256":archive_sha},
+ "channel":"canary",
+ "contract":"lmdj.web-runtime-host.deployment-evidence.v2",
+ "ended_at":ended_at,
+ "git_revision":revision,
+ "github_actions":{"run_id":run_id,"run_url":f"https://github.com/endaye/lmdj/actions/runs/{run_id}"},
+ "host_version":host,
+ "immutable":{"browser":json.loads(immutable_browser),"deploy_id":deploy_id,"deploy_url":deploy_url,"http":json.loads(immutable_http)},
+ "prior_good":prior_good,
+ "product_build":product,
+ "production":{"browser":json.loads(production_browser),"http":json.loads(production_http),"url":"https://lmdj-runtime.netlify.app"},
+ "publication":{"response":json.loads(publish_response),"same_deploy_id":deploy_id},
+ "release_url":release_url,
+ "site_id":site_id,
+ "started_at":started_at,
+ "tag":tag,
+}
+print(json.dumps(document,sort_keys=True,separators=(",",":")))
+' \
+    "$archive_name" "$archive_sha256" "$tag_target" "$host_version" \
+    "$product_build" "$release_url" "$NETLIFY_RUNTIME_SITE_ID" "$tag" \
+    "$GITHUB_RUN_ID" "$deployment_started_at" "$ended_at" "$deploy_id" \
+    "$deploy_url" "$immutable_http_result" "$immutable_browser_result" \
+    "$publish_response_json" "$production_http_result" "$production_browser_result" \
+    "$prior_deploy_id" "$prior_deploy_url" "$prior_product_build" \
+    "$prior_host_version" "$current_site_json" \
+    "$prior_immutable_http_result" "$prior_immutable_browser_result" \
+    "$prior_production_http_result" "$prior_production_browser_result" |
+    without_deploy_secrets "$python_bin" "$orchestrator_tool" \
+      evidence-write-document "$deploy_root/evidence.json" \
+      lmdj.web-runtime-host.deployment-evidence.v2
 }
 
 deploy_release() {
@@ -428,15 +727,26 @@ deploy_release() {
   require_secret GITHUB_TOKEN
   require_secret NETLIFY_RUNTIME_SITE_ID
   require_secret NETLIFY_AUTH_TOKEN
+  require_secret GITHUB_RUN_ID
+  [[ "$GITHUB_RUN_ID" =~ ^[0-9]+$ ]] || fail "GitHub Actions run ID is invalid"
+  [[ "${GITHUB_REPOSITORY:-}" == "$canonical_repository" ]] || fail "GitHub Actions repository is not canonical"
+  [[ "${GITHUB_SERVER_URL:-}" == 'https://github.com' ]] || fail "GitHub Actions server URL is not canonical"
+  deployment_started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
   initialize_evidence_target
   verify_release "$tag"
+  preflight_prior_good
   create_draft_deploy
-  run_http_smoke "$deploy_url" "$deploy_id"
+  run_http_smoke "$deploy_url" "$product_build" "$host_version" "$deploy_id"
+  immutable_http_result="$http_smoke_result"
   run_browser_smoke "$deploy_url"
+  immutable_browser_result="$browser_smoke_result"
   publish_deploy
   run_http_smoke "$production_url"
+  production_http_result="$http_smoke_result"
   run_browser_smoke "$production_url"
+  production_browser_result="$browser_smoke_result"
   write_evidence
+  deployment_complete=1
   echo "Web Runtime Host deployment: PASS ($deploy_id)"
 }
 
@@ -444,7 +754,7 @@ smoke_target() {
   local base_url="$1"
   product_build="$2"
   host_version="$3"
-  run_http_smoke "$base_url"
+  run_http_smoke "$base_url" "$product_build" "$host_version"
   run_browser_smoke "$base_url"
   echo "Web Runtime Host deployment smoke: PASS"
 }

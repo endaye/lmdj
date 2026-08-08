@@ -6,6 +6,7 @@ import hashlib
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -122,6 +123,7 @@ class SmokeFixture:
             f'<script type="module" src="./{main["path"]}"></script>'
             "</head><body></body></html>"
         ).encode()
+        self.payloads["/"] = self.payloads["/index.html"]
 
     def security_headers(self) -> dict[str, str]:
         headers = {
@@ -200,11 +202,15 @@ class FixtureHandler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         suffix = Path(self.path).suffix
         content_type = fixture.content_type_overrides.get(
-            self.path, "text/html; charset=utf-8" if forced else CONTENT_TYPES[suffix]
+            self.path,
+            "text/html; charset=utf-8"
+            if forced or self.path in {"/", "/index.html"}
+            else CONTENT_TYPES[suffix],
         )
         cache = fixture.cache_overrides.get(
             self.path,
-            "no-store" if forced or self.path in {"/index.html", "/host-manifest.json"}
+            "no-store"
+            if forced or self.path in {"/", "/index.html", "/host-manifest.json"}
             else "public, max-age=31536000, immutable",
         )
         self.send_header("Content-Type", content_type)
@@ -245,9 +251,40 @@ class DeploymentSmokeTest(unittest.TestCase):
             {
                 "asset_count": 9,
                 "host_version": "1.1.2",
+                "index_sha256": hashlib.sha256(
+                    self.fixture.payloads["/index.html"]
+                ).hexdigest(),
+                "manifest_sha256": hashlib.sha256(
+                    self.fixture.payloads["/host-manifest.json"]
+                ).hexdigest(),
                 "product_build": "1.0.15.2",
+                "root_final_path": "/",
+                "root_redirect_count": 0,
+                "root_request_path": "/",
             },
         )
+
+    def test_starts_at_root_and_allows_only_a_secure_no_store_redirect_to_index(self) -> None:
+        self.fixture.redirects["/"] = "/index.html"
+        result = self.smoke()
+        self.assertEqual(result["root_request_path"], "/")
+        self.assertEqual(result["root_final_path"], "/index.html")
+        self.assertEqual(result["root_redirect_count"], 1)
+
+        for location in (
+            "/redirected-index.html",
+            "/index.html?unexpected=query",
+            f"http://localhost:{self.server.server_address[1]}/index.html",
+        ):
+            with self.subTest(location=location):
+                self.fixture.redirects["/"] = location
+                with self.assertRaisesRegex(SmokeError, "redirect"):
+                    self.smoke()
+
+    def test_rejects_root_index_identity_that_differs_from_direct_index(self) -> None:
+        self.fixture.payloads["/"] = b"different root index"
+        with self.assertRaisesRegex(SmokeError, "root index identity"):
+            self.smoke()
 
     def test_rejects_missing_cross_origin_or_noindex_header(self) -> None:
         for header in REQUIRED_SECURITY_HEADERS:
@@ -505,6 +542,58 @@ class DeploymentSmokeTest(unittest.TestCase):
                 "http://runtime.example/index.html",
             )
 
+    def test_discover_identity_cli_extracts_the_actual_manifest_identity_in_a_scrubbed_environment(self) -> None:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(TOOLS_ROOT / "deployment_smoke.py"),
+                "discover-identity",
+                self.server.base_url,
+                "--allow-http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"LANG": "C.UTF-8", "PATH": os.defpath},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertEqual(
+            completed.stdout,
+            json.dumps(
+                {
+                    "host_version": "1.1.2",
+                    "manifest_sha256": hashlib.sha256(
+                        self.fixture.payloads["/host-manifest.json"]
+                    ).hexdigest(),
+                    "product_build": "1.0.15.2",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
+        )
+        self.assertEqual(completed.stderr, "")
+
+    def test_discover_identity_cli_rejects_a_manifest_without_actual_identity(self) -> None:
+        self.fixture.manifest["product_build"] = ""
+        self.fixture.update_manifest(update_index=True)
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(TOOLS_ROOT / "deployment_smoke.py"),
+                "discover-identity",
+                self.server.base_url,
+                "--allow-http",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            env={"LANG": "C.UTF-8", "PATH": os.defpath},
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(completed.stdout, "")
+        self.assertIn("Product Build identity is invalid", completed.stderr)
+
     def test_cli_prints_only_sorted_compact_json_after_success(self) -> None:
         completed = subprocess.run(
             [
@@ -522,7 +611,25 @@ class DeploymentSmokeTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(
             completed.stdout,
-            '{"asset_count":9,"host_version":"1.1.2","product_build":"1.0.15.2"}\n',
+            json.dumps(
+                {
+                    "asset_count": 9,
+                    "host_version": "1.1.2",
+                    "index_sha256": hashlib.sha256(
+                        self.fixture.payloads["/index.html"]
+                    ).hexdigest(),
+                    "manifest_sha256": hashlib.sha256(
+                        self.fixture.payloads["/host-manifest.json"]
+                    ).hexdigest(),
+                    "product_build": "1.0.15.2",
+                    "root_final_path": "/",
+                    "root_redirect_count": 0,
+                    "root_request_path": "/",
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            + "\n",
         )
         self.assertEqual(completed.stderr, "")
 

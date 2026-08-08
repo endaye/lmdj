@@ -44,6 +44,7 @@ class FakeNetlifyServer(ThreadingHTTPServer):
         self.create_response: object | None = None
         self.deploy_response: object | None = None
         self.restore_response: object | None = None
+        self.site_response: object | None = None
         self.fail_upload = False
         self.poll_states: list[str] = ["ready"]
         self._poll_index = 0
@@ -102,6 +103,9 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
 
     def do_PUT(self) -> None:
         self._record()
+        if urlsplit(self.path).path == "/api/v1/sites/site-123/disable":
+            self.server.response(self, 204, b"")
+            return
         if self.server.fail_upload:
             self.server.response(self, 500, {"token": "do-not-leak"})
             return
@@ -109,6 +113,24 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self._record()
+        if urlsplit(self.path).path == "/api/v1/sites/site-123":
+            self.server.response(
+                self,
+                200,
+                self.server.site_response
+                or {
+                    "id": "site-123",
+                    "state": "current",
+                    "ssl_url": "https://runtime.example",
+                    "published_deploy": {
+                        "id": "prior-123",
+                        "site_id": "site-123",
+                        "deploy_ssl_url": "https://prior-123--runtime.netlify.app",
+                        "state": "ready",
+                    },
+                },
+            )
+            return
         if urlsplit(self.path).path == "/api/v1/deploys/deploy-456":
             self.server.response(
                 self,
@@ -358,6 +380,52 @@ class NetlifyClientTest(unittest.TestCase):
         self.assertEqual(request.path, "/api/v1/sites/site-123/deploys/deploy-456/restore")
         self.assertEqual(published["id"], "deploy-456")
         self.assertEqual(published["state"], "ready")
+
+    def test_get_site_returns_strict_current_published_deploy(self) -> None:
+        site = self.client.get_site(site_id="site-123")
+        self.assertEqual(site.id, "site-123")
+        self.assertEqual(site.state, "current")
+        self.assertEqual(site.ssl_url, "https://runtime.example")
+        self.assertIsNotNone(site.published_deploy)
+        self.assertEqual(site.published_deploy.id, "prior-123")
+        self.assertEqual(
+            site.published_deploy.deploy_ssl_url,
+            "https://prior-123--runtime.netlify.app",
+        )
+        self.assertEqual(self.server.requests[-1].method, "GET")
+        self.assertEqual(self.server.requests[-1].path, "/api/v1/sites/site-123")
+
+    def test_get_site_accepts_no_prior_and_rejects_unusable_or_foreign_prior(self) -> None:
+        self.server.site_response = {
+            "id": "site-123",
+            "state": "current",
+            "ssl_url": "https://runtime.example",
+            "published_deploy": None,
+        }
+        self.assertIsNone(self.client.get_site(site_id="site-123").published_deploy)
+        for prior in (
+            {"id": "prior-123", "site_id": "other", "deploy_ssl_url": "https://prior.example", "state": "ready"},
+            {"id": "prior-123", "site_id": "site-123", "deploy_ssl_url": "http://prior.example", "state": "ready"},
+            {"id": "prior-123", "site_id": "site-123", "deploy_ssl_url": "https://prior.example", "state": "error"},
+        ):
+            with self.subTest(prior=prior):
+                self.server.site_response = {
+                    "id": "site-123",
+                    "state": "current",
+                    "ssl_url": "https://runtime.example",
+                    "published_deploy": prior,
+                }
+                with self.assertRaisesRegex(netlify_api.NetlifyError, "published deploy"):
+                    self.client.get_site(site_id="site-123")
+
+    def test_disable_site_uses_official_reversible_endpoint(self) -> None:
+        self.client.disable_site(site_id="site-123", reason="failed first publication")
+        request = self.server.requests[-1]
+        self.assertEqual(request.method, "PUT")
+        self.assertEqual(
+            request.path,
+            "/api/v1/sites/site-123/disable?reason=failed%20first%20publication",
+        )
 
     def test_publish_rejects_wrong_identity_or_non_https_production_url(self) -> None:
         for response in (

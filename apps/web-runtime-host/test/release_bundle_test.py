@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -20,11 +21,30 @@ import release_bundle
 
 
 class ReleaseBundleTest(unittest.TestCase):
+    TRUSTED_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+
     def setUp(self) -> None:
         self.module = release_bundle
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-release-bundle-")
         self.root = Path(self.temporary.name)
         self.output = self.root / "staged"
+        self.signature = self.root / "release.zip.sha256.asc"
+        self.signature.write_text(
+            "-----BEGIN PGP SIGNATURE-----\nfixture\n-----END PGP SIGNATURE-----\n",
+            encoding="ascii",
+        )
+        self.public_key = self.root / "product.asc"
+        self.public_key.write_text("fixture public key\n", encoding="ascii")
+        self.fake_gpg = self.root / "fake-gpg"
+        self.fake_gpg.write_text(
+            "#!/bin/sh\n"
+            "case \" $* \" in\n"
+            "  *\" --list-keys \"*) printf 'pub:-:4096:1:KEY::::::\\nfpr:::::::::2B5EE362F058800036AD4FB5116ECE156F954D29:\\n' ;;\n"
+            "  *\" --verify \"*) printf '[GNUPG:] VALIDSIG 2B5EE362F058800036AD4FB5116ECE156F954D29 2026-08-09 0 4 0 1 10 00 2B5EE362F058800036AD4FB5116ECE156F954D29\\n' ;;\n"
+            "esac\n",
+            encoding="utf-8",
+        )
+        self.fake_gpg.chmod(0o755)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -53,6 +73,14 @@ class ReleaseBundleTest(unittest.TestCase):
                 str(archive),
                 "--checksum",
                 str(checksum),
+                "--checksum-signature",
+                str(self.signature),
+                "--product-public-key",
+                str(self.public_key),
+                "--trusted-primary-fingerprint",
+                self.TRUSTED_FINGERPRINT,
+                "--gpg-program",
+                str(self.fake_gpg),
                 "--output-root",
                 str(self.output),
                 "--expected-product-build",
@@ -63,6 +91,7 @@ class ReleaseBundleTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
+            env={**os.environ, "LMDJ_TEST_FINGERPRINT": self.TRUSTED_FINGERPRINT},
         )
 
     def archive_with_member(self, member: str) -> tuple[Path, Path]:
@@ -78,10 +107,16 @@ class ReleaseBundleTest(unittest.TestCase):
             repo_root=repo_root,
             archive_path=archive,
             checksum_path=checksum,
+            signature_path=self.signature,
+            product_public_key_path=self.public_key,
+            trusted_primary_fingerprint=self.TRUSTED_FINGERPRINT,
             output_root=self.output,
             expected_product_build="1.0.15.2",
             expected_host_version="1.1.2",
             verifier=verifier,
+            checksum_authorizer=extra.pop(
+                "checksum_authorizer", lambda checksum, signature, key, fingerprint: None
+            ),
             **extra,
         )
 
@@ -100,6 +135,41 @@ class ReleaseBundleTest(unittest.TestCase):
             hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name
         )
         return self.stage(archive, checksum, **extra)
+
+    def test_authorizes_detached_signature_before_parsing_checksum(self) -> None:
+        archive = self.write_zip({"dist/index.html": b"host"})
+        checksum = self.root / "release.zip.sha256"
+        checksum.write_text("not-a-checksum\n", encoding="utf-8")
+        observed: list[bytes] = []
+        with self.assertRaisesRegex(self.module.BundleError, "checksum record"):
+            self.stage(
+                archive,
+                checksum,
+                checksum_authorizer=lambda path, signature, key, fingerprint: observed.append(
+                    path.read_bytes()
+                ),
+            )
+        self.assertEqual(observed, [b"not-a-checksum\n"])
+
+    def test_rejects_noncanonical_signature_name_before_checksum_parse(self) -> None:
+        archive = self.write_zip({"dist/index.html": b"host"})
+        checksum = self.root / "release.zip.sha256"
+        checksum.write_text("not-a-checksum\n", encoding="utf-8")
+        wrong = self.root / "other.asc"
+        wrong.write_text(self.signature.read_text(encoding="ascii"), encoding="ascii")
+        with self.assertRaisesRegex(self.module.BundleError, "signature name"):
+            self.module.stage_release_bundle(
+                repo_root=REPO_ROOT,
+                archive_path=archive,
+                checksum_path=checksum,
+                signature_path=wrong,
+                product_public_key_path=self.public_key,
+                trusted_primary_fingerprint=self.TRUSTED_FINGERPRINT,
+                output_root=self.output,
+                expected_product_build="1.0.15.2",
+                expected_host_version="1.1.2",
+                verifier=lambda root, repo: None,
+            )
 
     def test_rejects_checksum_mismatch_before_extraction(self) -> None:
         archive = self.write_zip({"dist/index.html": b"host"})
@@ -350,6 +420,14 @@ class ReleaseBundleTest(unittest.TestCase):
             str(archive),
             "--checksum",
             "",
+            "--checksum-signature",
+            str(self.signature),
+            "--product-public-key",
+            str(self.public_key),
+            "--trusted-primary-fingerprint",
+            self.TRUSTED_FINGERPRINT,
+            "--gpg-program",
+            str(self.fake_gpg),
             "--output-root",
             str(self.output),
             "--expected-product-build",
@@ -364,6 +442,7 @@ class ReleaseBundleTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
+            env={**os.environ, "LMDJ_TEST_FINGERPRINT": self.TRUSTED_FINGERPRINT},
         )
         self.assertEqual(completed.returncode, 2)
         self.assertIn("Web Runtime deployment bundle error:", completed.stderr)
@@ -378,6 +457,7 @@ class ReleaseBundleTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
+            env={**os.environ, "LMDJ_TEST_FINGERPRINT": self.TRUSTED_FINGERPRINT},
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(

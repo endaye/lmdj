@@ -39,9 +39,11 @@ INITIAL_HOST_DIGEST = (
 )
 TRUSTED_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 GITHUB_TOKEN = "github-secret-value-should-never-leak"
+GITHUB_RUN_ID = "123456789"
 NETLIFY_TOKEN = "netlify-secret-value-should-never-leak"
 SITE_ID = "site-123"
 DEPLOY_ID = "deploy-456"
+PRIOR_DEPLOY_ID = "prior-123"
 PRODUCTION_URL = "https://lmdj-runtime.netlify.app"
 
 
@@ -83,7 +85,6 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:
         parsed = urlsplit(self.path)
         create_path = f"/api/v1/sites/{SITE_ID}/deploys"
-        restore_path = f"/api/v1/sites/{SITE_ID}/deploys/{DEPLOY_ID}/restore"
         if parsed.path == create_path:
             document = self.read_json()
             self.server.create_document = document
@@ -101,12 +102,33 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
             response.update(self.server.create_extra)
             self.send_json(200, response)
             return
-        if parsed.path == restore_path:
+        restore_prefix = f"/api/v1/sites/{SITE_ID}/deploys/"
+        if parsed.path.startswith(restore_prefix) and parsed.path.endswith("/restore"):
             self.read_json()
+            requested_id = parsed.path.removeprefix(restore_prefix).removesuffix("/restore")
             self.server.authorization_headers.append(
                 self.headers.get("Authorization", "")
             )
-            self.server.append_log("netlify publish same-id")
+            self.server.append_log(
+                "netlify publish same-id"
+                if requested_id == DEPLOY_ID
+                else "netlify restore prior-id"
+            )
+            if requested_id == PRIOR_DEPLOY_ID:
+                self.server.current_deploy_id = PRIOR_DEPLOY_ID
+                self.server.current_deploy_url = (
+                    f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app"
+                )
+                self.send_json(
+                    201,
+                    {
+                        "id": PRIOR_DEPLOY_ID,
+                        "site_id": SITE_ID,
+                        "ssl_url": PRODUCTION_URL,
+                        "state": "ready",
+                    },
+                )
+                return
             document: dict[str, object] = {
                 "id": self.server.published_id,
                 "site_id": self.server.published_site_id,
@@ -114,7 +136,48 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 "state": self.server.published_state,
             }
             document.update(self.server.restore_extra)
-            self.send_json(200, document)
+            if self.server.publish_switches_alias:
+                self.server.current_deploy_id = self.server.published_id
+                self.server.current_deploy_url = self.server.deploy_url
+            if self.server.publish_error_after_switch:
+                self.send_json(500, {"error": "publish failed after alias switch"})
+                return
+            self.send_json(201, document)
+            return
+        self.send_json(404, {"error": "not found"})
+
+    def do_GET(self) -> None:
+        if urlsplit(self.path).path != f"/api/v1/sites/{SITE_ID}":
+            self.send_json(404, {"error": "not found"})
+            return
+        self.server.authorization_headers.append(self.headers.get("Authorization", ""))
+        prior = None
+        if self.server.current_deploy_id:
+            prior = {
+                "id": self.server.current_deploy_id,
+                "site_id": SITE_ID,
+                "deploy_ssl_url": self.server.current_deploy_url,
+                "state": "ready",
+            }
+        self.server.append_log("netlify get-current-site")
+        self.send_json(
+            200,
+            {
+                "id": SITE_ID,
+                "state": self.server.site_state,
+                "ssl_url": PRODUCTION_URL,
+                "published_deploy": prior,
+            },
+        )
+
+    def do_PUT(self) -> None:
+        if urlsplit(self.path).path == f"/api/v1/sites/{SITE_ID}/disable":
+            self.server.authorization_headers.append(self.headers.get("Authorization", ""))
+            self.server.site_state = "disabled"
+            self.server.append_log("netlify disable-site")
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
             return
         self.send_json(404, {"error": "not found"})
 
@@ -131,6 +194,11 @@ class FakeNetlifyServer(ThreadingHTTPServer):
     create_extra: dict[str, object]
     restore_extra: dict[str, object]
     authorization_headers: list[str]
+    current_deploy_id: str
+    current_deploy_url: str
+    site_state: str
+    publish_switches_alias: bool
+    publish_error_after_switch: bool
 
     def append_log(self, value: str) -> None:
         with self.command_log.open("a", encoding="utf-8") as output:
@@ -183,6 +251,13 @@ class DeployCommandTest(unittest.TestCase):
         self.server.published_site_id = SITE_ID
         self.server.production_url = PRODUCTION_URL
         self.server.published_state = "ready"
+        self.server.current_deploy_id = PRIOR_DEPLOY_ID
+        self.server.current_deploy_url = (
+            f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app"
+        )
+        self.server.site_state = "current"
+        self.server.publish_switches_alias = True
+        self.server.publish_error_after_switch = False
         self.server.create_extra = {}
         self.server.restore_extra = {}
         self.server.authorization_headers = []
@@ -224,19 +299,45 @@ class DeployCommandTest(unittest.TestCase):
                 f"""
                 #!{sys.executable}
                 import os
+                import json
                 from pathlib import Path
                 import sys
 
-                for name in ("GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID"):
-                    if os.environ.get(name):
+                for name in os.environ:
+                    if (
+                        name.startswith("GH")
+                        or name in ("GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID")
+                    ) and os.environ.get(name):
                         raise SystemExit("deployment credential reached HTTP smoke")
+                if len(sys.argv) > 1 and sys.argv[1] == "discover-identity":
+                    with Path(os.environ["COMMAND_LOG"]).open("a", encoding="utf-8") as output:
+                        output.write("http-discover prior\\n")
+                    print(json.dumps({{
+                        "host_version": {HOST_VERSION!r},
+                        "manifest_sha256": "a" * 64,
+                        "product_build": {PRODUCT_BUILD!r},
+                    }}, sort_keys=True, separators=(",", ":")))
+                    raise SystemExit(0)
+                base_url = sys.argv[1]
                 immutable = "--expected-deploy-id" in sys.argv
-                label = "immutable" if immutable else "production"
+                if {PRIOR_DEPLOY_ID!r} in base_url:
+                    label = "prior-immutable"
+                else:
+                    label = "immutable" if immutable else "production"
                 with Path(os.environ["COMMAND_LOG"]).open("a", encoding="utf-8") as output:
                     output.write(f"http-smoke {{label}}\\n")
-                failure = "FAIL_IMMUTABLE_SMOKE" if immutable else "FAIL_PRODUCTION_SMOKE"
-                if os.environ.get(failure) == "1":
+                should_fail = (
+                    label == "immutable" and os.environ.get("FAIL_IMMUTABLE_SMOKE") == "1"
+                )
+                if label == "production" and os.environ.get("FAIL_PRODUCTION_SMOKE") == "1":
+                    marker = Path(os.environ["FAILURE_MARKER"])
+                    published = "netlify publish same-id" in Path(os.environ["COMMAND_LOG"]).read_text(encoding="utf-8")
+                    should_fail = published and not marker.exists()
+                    if should_fail:
+                        marker.write_text("failed", encoding="utf-8")
+                if should_fail:
                     raise SystemExit(f"forced {{label}} smoke failure")
+                print(json.dumps({{"base_url": base_url, "status": "passed"}}, sort_keys=True, separators=(",", ":")))
                 """
             ).lstrip(),
             encoding="utf-8",
@@ -274,7 +375,23 @@ class DeployCommandTest(unittest.TestCase):
                         secret in argument for argument in args for secret in secrets
                     ),
                 }}, sort_keys=True) + "\\n")
-            os.execv("/usr/bin/env", ["/usr/bin/env", *args])
+            preserved = []
+            for name, value in os.environ.items():
+                if (
+                    name.startswith(("FAKE_", "FAIL_", "BLOCK_"))
+                    or name in {{
+                        "COMMAND_LOG", "DETAILS_LOG", "WORKTREE_PATH",
+                        "WORKTREE_REMOVED", "BLOCK_READY", "ARCHIVE_DIGEST",
+                        "EXPECTED_GITHUB_TOKEN", "RUNNER_TEMP",
+                    }}
+                ):
+                    preserved.append(f"{{name}}={{value}}")
+            forwarded = (
+                [args[0], *preserved, *args[1:]]
+                if args and args[0] == "-i"
+                else args
+            )
+            os.execv("/usr/bin/env", ["/usr/bin/env", *forwarded])
             """,
         )
         self.write_executable(
@@ -303,6 +420,16 @@ class DeployCommandTest(unittest.TestCase):
                     "program": "python3",
                     "command": command,
                     "argument_count": len(args),
+                    "credential_environment": sorted(
+                        name
+                        for name in os.environ
+                        if name in {{
+                            "GITHUB_TOKEN", "GH_TOKEN", "GITHUB_ENTERPRISE_TOKEN",
+                            "GH_ENTERPRISE_TOKEN", "NETLIFY_AUTH_TOKEN",
+                            "NETLIFY_RUNTIME_SITE_ID",
+                        }}
+                        or name.startswith("GH_")
+                    ),
                     "credential_in_argv": any(
                         secret in argument for argument in args for secret in secrets
                     ),
@@ -319,10 +446,13 @@ def verify_distribution(dist_root, repo_root):
     product = json.loads((repo_root / "products/lmdj/version.json").read_text(encoding="utf-8"))
     expected_product = ".".join(str(product[name]) for name in ("milestone", "minor", "build", "patch"))
     host = json.loads((repo_root / "apps/web-runtime-host/module.json").read_text(encoding="utf-8"))
-    if manifest != {"product_build": expected_product, "host_version": host["version"]}:
+    if manifest.get("product_build") != expected_product or manifest.get("host_version") != host["version"]:
         raise RuntimeError("fixture distribution identity mismatch")
+    if not isinstance(manifest.get("assets"), list) or len(manifest["assets"]) != 9:
+        raise RuntimeError("fixture asset identity mismatch")
     actual = sorted(path.relative_to(dist_root).as_posix() for path in dist_root.rglob("*") if path.is_file())
-    if actual != ["host-manifest.json", "index.html"]:
+    expected_files = sorted(["host-manifest.json", "index.html", *[asset["path"] for asset in manifest["assets"]]])
+    if actual != expected_files:
         raise RuntimeError("fixture distribution inventory mismatch")
     with Path(os.environ["COMMAND_LOG"]).open("a", encoding="utf-8") as output:
         output.write("release_bundle stage\\n")
@@ -338,7 +468,18 @@ def verify_distribution(dist_root, repo_root):
               *" --show-keys "*)
                 printf 'pub:-:4096:1:116ECE156F954D29:0:0::::::\nfpr:::::::::{TRUSTED_FINGERPRINT}:\n'
                 ;;
+              *" --list-keys "*)
+                printf 'pub:-:4096:1:116ECE156F954D29:0:0::::::\nfpr:::::::::{TRUSTED_FINGERPRINT}:\n'
+                ;;
               *" --import "*) exit 0 ;;
+              *" --verify "*)
+                for argument in "$@"; do
+                  case "$argument" in
+                    *.asc) grep -q 'wrong-signature' "$argument" && exit 1 ;;
+                  esac
+                done
+                printf '[GNUPG:] VALIDSIG {TRUSTED_FINGERPRINT} 2026-08-09 0 4 0 1 10 00 {TRUSTED_FINGERPRINT}\n'
+                ;;
               *) exit 2 ;;
             esac
             """,
@@ -357,7 +498,16 @@ def verify_distribution(dist_root, repo_root):
             log = Path(os.environ["COMMAND_LOG"])
             target = os.environ.get("FAKE_TAG_TARGET", {TAG_TARGET!r})
             product_build = os.environ.get("FAKE_PRODUCT_BUILD", {PRODUCT_BUILD!r})
-            if args[:2] == ["cat-file", "-t"]:
+            if args[:3] == ["remote", "get-url", "origin"]:
+                print(os.environ.get("FAKE_ORIGIN_URL", "https://github.com/endaye/lmdj.git"))
+            elif args[:2] == ["update-ref", "-d"]:
+                pass
+            elif args[:2] == ["fetch", "--no-tags"]:
+                if os.environ.get("FAIL_REMOTE_FETCH") == "1":
+                    raise SystemExit(1)
+                with log.open("a", encoding="utf-8") as output:
+                    output.write(f"git remote fetch {{args[-1]}}\\n")
+            elif args[:2] == ["cat-file", "-t"]:
                 print(os.environ.get("FAKE_TAG_TYPE", "tag"))
             elif args[:2] == ["verify-tag", "--raw"]:
                 with log.open("a", encoding="utf-8") as output:
@@ -373,6 +523,9 @@ def verify_distribution(dist_root, repo_root):
                 )
             elif args[:2] == ["rev-parse", "--verify"]:
                 print(target)
+            elif args[:2] == ["merge-base", "--is-ancestor"]:
+                if os.environ.get("FAKE_TAG_NOT_MAIN") == "1":
+                    raise SystemExit(1)
             elif args[:3] == ["worktree", "add", "--detach"]:
                 checkout = Path(args[3])
                 checkout.joinpath("products/lmdj").mkdir(parents=True)
@@ -428,11 +581,18 @@ def verify_distribution(dist_root, repo_root):
             args = sys.argv[1:]
             if os.environ.get("GH_REPO") or os.environ.get("GH_TOKEN") or os.environ.get("GH_HOST"):
                 raise SystemExit("conflicting gh environment was not neutralized")
+            if os.environ.get("NETLIFY_AUTH_TOKEN") or os.environ.get("NETLIFY_RUNTIME_SITE_ID"):
+                raise SystemExit("Netlify credential reached GitHub child")
             if os.environ.get("GITHUB_TOKEN") != os.environ["EXPECTED_GITHUB_TOKEN"]:
                 raise SystemExit("intended GitHub credential was not selected")
+            log = Path(os.environ["COMMAND_LOG"])
+            if args[:1] == ["api"]:
+                if args[1:2] != ["repos/endaye/lmdj/branches/main"]:
+                    raise SystemExit("GitHub repository was not pinned")
+                print(os.environ.get("FAKE_MAIN_PROTECTED", "true"))
+                raise SystemExit(0)
             if args.count("--repo") != 1 or args[args.index("--repo") + 1] != "endaye/lmdj":
                 raise SystemExit("GitHub repository was not pinned")
-            log = Path(os.environ["COMMAND_LOG"])
             if args[:2] == ["release", "view"]:
                 tag = args[2]
                 product_build = tag.removeprefix("lmdj-v")
@@ -441,11 +601,14 @@ def verify_distribution(dist_root, repo_root):
                     f"lmdj-web-runtime-host-{HOST_VERSION}-product-{{product_build}}.zip",
                 )
                 checksum = os.environ.get("FAKE_CHECKSUM_NAME", archive + ".sha256")
-                assets = [{{"name": archive}}, {{"name": checksum}}]
+                signature = os.environ.get("FAKE_SIGNATURE_NAME", checksum + ".asc")
+                assets = [{{"name": archive}}, {{"name": checksum}}, {{"name": signature}}]
                 if os.environ.get("FAKE_DUPLICATE_ARCHIVE") == "1":
                     assets.append({{"name": archive}})
                 if os.environ.get("FAKE_RELEASE_SECRET_FIELD") == "1":
                     assets[0]["label"] = os.environ["GITHUB_TOKEN"]
+                if "--jq" in args:
+                    assets = [{{"name": asset["name"]}} for asset in assets]
                 with log.open("a", encoding="utf-8") as output:
                     output.write(f"gh release view {{tag}}\\n")
                 print(json.dumps({{
@@ -468,17 +631,37 @@ def verify_distribution(dist_root, repo_root):
                 patterns = [args[index + 1] for index, value in enumerate(args) if value == "--pattern"]
                 archive_name = next(name for name in patterns if name.endswith(".zip"))
                 checksum_name = next(name for name in patterns if name.endswith(".zip.sha256"))
+                signature_name = next(name for name in patterns if name.endswith(".zip.sha256.asc"))
                 destination.mkdir(parents=True, exist_ok=True)
                 product_build = tag.removeprefix("lmdj-v")
-                manifest = json.dumps({{"product_build": product_build, "host_version": {HOST_VERSION!r}}}, sort_keys=True, separators=(",", ":"))
+                assets = [{{
+                    "bytes": 1,
+                    "path": f"assets/asset-{{index}}.{{str(index) * 64}}.mjs",
+                    "role": "host_module",
+                    "sha256": str(index) * 64,
+                }} for index in range(9)]
+                manifest = json.dumps({{"assets": assets, "product_build": product_build, "host_version": {HOST_VERSION!r}}}, sort_keys=True, separators=(",", ":"))
                 archive_path = destination / archive_name
                 with zipfile.ZipFile(archive_path, "w") as archive:
                     archive.writestr("dist/index.html", "fixture index")
                     archive.writestr("dist/host-manifest.json", manifest)
+                    for asset in assets:
+                        archive.writestr("dist/" + asset["path"], "x")
                 digest = hashlib.sha256(archive_path.read_bytes()).hexdigest()
                 (destination / checksum_name).write_text(
                     f"{{digest}}  {{archive_name}}\\n", encoding="utf-8"
                 )
+                if os.environ.get("FAKE_MISSING_SIGNATURE") != "1":
+                    signature_payload = (
+                        "wrong-signature"
+                        if os.environ.get("FAKE_WRONG_SIGNATURE") == "1"
+                        else "fixture"
+                    )
+                    (destination / signature_name).write_text(
+                        "-----BEGIN PGP SIGNATURE-----\\n" + signature_payload
+                        + "\\n-----END PGP SIGNATURE-----\\n",
+                        encoding="ascii",
+                    )
                 Path(os.environ["ARCHIVE_DIGEST"]).write_text(digest, encoding="utf-8")
             else:
                 raise SystemExit(97)
@@ -490,17 +673,39 @@ def verify_distribution(dist_root, repo_root):
             #!{sys.executable}
             import os
             from pathlib import Path
+            import time
 
-            for name in ("GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID"):
-                if os.environ.get(name):
+            for name in os.environ:
+                if (
+                    name.startswith("GH")
+                    or name in ("GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID")
+                ) and os.environ.get(name):
                     raise SystemExit("deployment credential reached browser smoke")
             base_url = os.environ.get("LMDJ_WEB_HOST_BASE_URL", "")
             immutable = base_url != {PRODUCTION_URL!r}
-            label = "immutable" if immutable else "production"
+            label = (
+                "prior-immutable"
+                if {PRIOR_DEPLOY_ID!r} in base_url
+                else "immutable" if immutable else "production"
+            )
             with Path(os.environ["COMMAND_LOG"]).open("a", encoding="utf-8") as output:
                 output.write(f"playwright {{label}}\\n")
-            failure = "FAIL_IMMUTABLE_PLAYWRIGHT" if immutable else "FAIL_PRODUCTION_PLAYWRIGHT"
-            if os.environ.get(failure) == "1":
+            if label == "production" and os.environ.get("BLOCK_PRODUCTION_PLAYWRIGHT") == "1":
+                marker = Path(os.environ["BLOCK_ONCE_MARKER"])
+                published = "netlify publish same-id" in Path(os.environ["COMMAND_LOG"]).read_text(encoding="utf-8")
+                if published and not marker.exists():
+                    marker.write_text("blocked", encoding="utf-8")
+                    Path(os.environ["BLOCK_READY"]).write_text("ready", encoding="utf-8")
+                    while True:
+                        time.sleep(1)
+            should_fail = label == "immutable" and os.environ.get("FAIL_IMMUTABLE_PLAYWRIGHT") == "1"
+            if label == "production" and os.environ.get("FAIL_PRODUCTION_PLAYWRIGHT") == "1":
+                marker = Path(os.environ["FAILURE_MARKER"])
+                published = "netlify publish same-id" in Path(os.environ["COMMAND_LOG"]).read_text(encoding="utf-8")
+                should_fail = published and not marker.exists()
+                if should_fail:
+                    marker.write_text("failed", encoding="utf-8")
+            if should_fail:
                 raise SystemExit(f"forced {{label}} Playwright failure")
             """,
         )
@@ -517,14 +722,20 @@ def verify_distribution(dist_root, repo_root):
                 "WORKTREE_REMOVED": str(self.worktree_removed_record),
                 "BLOCK_READY": str(self.block_ready),
                 "ARCHIVE_DIGEST": str(self.root / "archive-digest"),
+                "FAILURE_MARKER": str(self.root / "failure-marker"),
+                "BLOCK_ONCE_MARKER": str(self.root / "block-once-marker"),
                 "RUNNER_TEMP": str(self.runner_temp),
                 "GITHUB_TOKEN": GITHUB_TOKEN,
+                "GITHUB_RUN_ID": GITHUB_RUN_ID,
+                "GITHUB_REPOSITORY": "endaye/lmdj",
+                "GITHUB_SERVER_URL": "https://github.com",
                 "EXPECTED_GITHUB_TOKEN": GITHUB_TOKEN,
                 "NETLIFY_RUNTIME_SITE_ID": SITE_ID,
                 "NETLIFY_AUTH_TOKEN": NETLIFY_TOKEN,
                 "GH_REPO": "attacker/example",
                 "GH_TOKEN": "higher-precedence-hostile-token",
                 "GH_HOST": "attacker.example",
+                "GH_SECRET_SENTINEL": "must-not-reach-deployment-children",
             }
         )
         if extra:
@@ -564,6 +775,8 @@ def verify_distribution(dist_root, repo_root):
             self.worktree_removed_record,
             self.block_ready,
             self.root / "archive-digest",
+            self.root / "failure-marker",
+            self.root / "block-once-marker",
         ):
             path.unlink(missing_ok=True)
         shutil.rmtree(self.deploy_root, ignore_errors=True)
@@ -594,10 +807,18 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(
             self.command_log(),
             [
-                f"git tag verify {TAG}",
+                f"git remote fetch refs/tags/{TAG}:refs/lmdj-deploy/tags/{TAG}",
+                "git remote fetch refs/heads/main:refs/lmdj-deploy/origin-main",
+                f"git tag verify refs/lmdj-deploy/tags/{TAG}",
                 f"gh release view {TAG}",
                 f"gh release download {TAG}",
                 "release_bundle stage",
+                "netlify get-current-site",
+                "http-discover prior",
+                "http-smoke prior-immutable",
+                "playwright prior-immutable",
+                "http-smoke production",
+                "playwright production",
                 "netlify create-draft",
                 "http-smoke immutable",
                 "playwright immutable",
@@ -607,12 +828,13 @@ def verify_distribution(dist_root, repo_root):
             ],
         )
         create = cast(dict[str, object], self.server.create_document)
-        self.assertEqual(set(cast(dict[str, str], create["files"])), {
-            "/_headers", "/host-manifest.json", "/index.html"
-        })
+        files = set(cast(dict[str, str], create["files"]))
+        self.assertEqual(len(files), 12)
+        self.assertTrue({"/_headers", "/host-manifest.json", "/index.html"}.issubset(files))
+        self.assertEqual(len([path for path in files if path.startswith("/assets/")]), 9)
         self.assertEqual(
             self.server.authorization_headers,
-            [f"Bearer {NETLIFY_TOKEN}", f"Bearer {NETLIFY_TOKEN}"],
+            [f"Bearer {NETLIFY_TOKEN}"] * 3,
         )
 
     def test_release_stage_uses_real_bundle_wrapper_and_detached_tag_checkout(self) -> None:
@@ -620,7 +842,7 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         detail = next(item for item in self.details() if "release_bundle_repo_root" in item)
         checkout = Path(str(detail["release_bundle_repo_root"]))
-        self.assertEqual(detail["dist_files"], ["host-manifest.json", "index.html"])
+        self.assertEqual(len(cast(list[str], detail["dist_files"])), 11)
         self.assertNotEqual(checkout, self.repo)
         self.assertEqual(checkout.name, "tag-target")
         self.assertTrue(str(checkout).startswith(str(self.runner_temp.resolve())))
@@ -657,7 +879,7 @@ def verify_distribution(dist_root, repo_root):
                 completed = self.run_command("deploy", TAG)
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertIn("netlify publish same-id", self.command_log())
-                self.assertNotIn("http-smoke production", self.command_log())
+                self.assertNotIn("Web Runtime Host deployment: PASS", completed.stdout)
 
     def test_missing_each_secret_fails_before_tag_verification(self) -> None:
         for name in ("GITHUB_TOKEN", "NETLIFY_RUNTIME_SITE_ID", "NETLIFY_AUTH_TOKEN"):
@@ -696,12 +918,33 @@ def verify_distribution(dist_root, repo_root):
                 self.assertNotIn("gh release view", "\n".join(self.command_log()))
                 self.assert_no_owned_temp()
 
+    def test_ignores_local_tag_shadow_and_attests_only_canonical_remote_ref(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"FAKE_LOCAL_TAG_TARGET": "f" * 40}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            f"git tag verify refs/lmdj-deploy/tags/{TAG}", self.command_log()
+        )
+        self.assertNotIn(f"git tag verify {TAG}", self.command_log())
+
+    def test_rejects_noncanonical_origin_unprotected_main_and_non_main_tag(self) -> None:
+        for environment in (
+            {"FAKE_ORIGIN_URL": "https://github.com/attacker/lmdj.git"},
+            {"FAKE_MAIN_PROTECTED": "false"},
+            {"FAKE_TAG_NOT_MAIN": "1"},
+        ):
+            with self.subTest(environment=environment):
+                self.reset_run_records()
+                completed = self.run_command("verify", TAG, environment=environment)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertNotIn(f"gh release view {TAG}", self.command_log())
+
     def test_release_is_exact_published_canary_target_and_canonical_url(self) -> None:
         failures = (
             {"FAKE_RELEASE_DRAFT": "1"},
             {"FAKE_RELEASE_PRERELEASE": "0"},
             {"FAKE_RELEASE_TAG": "lmdj-v1.0.15.4"},
-            {"FAKE_RELEASE_TARGET": "f" * 40},
             {"FAKE_RELEASE_URL": f"https://attacker.example/releases/tag/{TAG}"},
             {"FAKE_RELEASE_URL": f"https://github.com/attacker/lmdj/releases/tag/{TAG}"},
         )
@@ -711,6 +954,11 @@ def verify_distribution(dist_root, repo_root):
                 completed = self.run_command("deploy", TAG, environment=environment)
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertNotIn(f"gh release download {TAG}", self.command_log())
+
+        completed = self.run_command(
+            "verify", TAG, environment={"FAKE_RELEASE_TARGET": "main"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
 
     def test_hostile_gh_environment_is_neutralized_and_repo_is_pinned(self) -> None:
         completed = self.run_command("verify", TAG)
@@ -733,11 +981,26 @@ def verify_distribution(dist_root, repo_root):
         source = SOURCE_COMMAND.read_text(encoding="utf-8")
         self.assertNotIn('GITHUB_TOKEN="$GITHUB_TOKEN"', source)
 
+    def test_each_child_receives_only_its_required_deployment_credentials(self) -> None:
+        completed = self.run_command("deploy", TAG)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        netlify_commands = {"create-draft", "publish", "site-current", "disable-site"}
+        for detail in self.details():
+            if detail.get("program") != "python3":
+                continue
+            observed = set(cast(list[str], detail["credential_environment"]))
+            if detail.get("command") in netlify_commands:
+                self.assertEqual(
+                    observed, {"NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID"}
+                )
+            else:
+                self.assertEqual(observed, set(), detail)
+
     def test_release_metadata_uses_stdin_without_credential_argv(self) -> None:
         completed = self.run_command(
             "verify", TAG, environment={"FAKE_RELEASE_SECRET_FIELD": "1"}
         )
-        self.assertNotEqual(completed.returncode, 0)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
         invocation = next(
             detail
             for detail in self.details()
@@ -768,6 +1031,7 @@ def verify_distribution(dist_root, repo_root):
             {"FAKE_ARCHIVE_NAME": "lmdj-web-runtime-host-1.1.2-product-1.0.99.0.zip"},
             {"FAKE_ARCHIVE_NAME": "lmdj-web-runtime-host-9.9.9-product-1.0.15.3.zip"},
             {"FAKE_CHECKSUM_NAME": "wrong.zip.sha256"},
+            {"FAKE_SIGNATURE_NAME": "wrong.zip.sha256.asc"},
         )
         for environment in failures:
             with self.subTest(environment=environment):
@@ -775,6 +1039,18 @@ def verify_distribution(dist_root, repo_root):
                 completed = self.run_command("deploy", TAG, environment=environment)
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertNotIn(f"gh release download {TAG}", self.command_log())
+
+    def test_future_coherent_archive_and_checksum_require_valid_product_signature(self) -> None:
+        for environment in (
+            {"FAKE_MISSING_SIGNATURE": "1"},
+            {"FAKE_WRONG_SIGNATURE": "1"},
+        ):
+            with self.subTest(environment=environment):
+                self.reset_run_records()
+                completed = self.run_command("deploy", TAG, environment=environment)
+                self.assertNotEqual(completed.returncode, 0)
+                self.assertNotIn("release_bundle stage", self.command_log())
+                self.assertNotIn("netlify create-draft", self.command_log())
 
     def test_initial_tag_requires_exact_target_and_corrected_host_digest(self) -> None:
         completed = self.run_command(
@@ -816,13 +1092,62 @@ def verify_distribution(dist_root, repo_root):
                 self.assertNotIn("netlify publish same-id", self.command_log())
                 self.assertFalse((self.deploy_root / "evidence.json").exists())
 
-    def test_failed_production_smoke_does_not_write_evidence(self) -> None:
+    def test_failed_production_smoke_restores_prior_and_writes_atomic_recovery_evidence(self) -> None:
         completed = self.run_command(
             "deploy", TAG, environment={"FAIL_PRODUCTION_SMOKE": "1"}
         )
         self.assertNotEqual(completed.returncode, 0)
         self.assertIn("netlify publish same-id", self.command_log())
         self.assertFalse((self.deploy_root / "evidence.json").exists())
+        recovery_path = self.deploy_root / "recovery-evidence.json"
+        recovery = json.loads(recovery_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            recovery["contract"],
+            "lmdj.web-runtime-host.deployment-recovery-evidence.v1",
+        )
+        self.assertEqual(recovery["action"], "restored-prior")
+        self.assertEqual(recovery["prior_deploy"]["id"], PRIOR_DEPLOY_ID)
+        self.assertEqual(recovery["recovery_response"]["id"], PRIOR_DEPLOY_ID)
+        self.assertEqual(recovery["validation"]["status"], "passed")
+        self.assertEqual(recovery["validation"]["immutable_http"]["status"], "passed")
+        self.assertEqual(recovery["validation"]["production_browser"]["status"], "passed")
+
+    def test_first_publication_failure_disables_site_instead_of_fake_rollback(self) -> None:
+        self.server.current_deploy_id = ""
+        self.server.current_deploy_url = ""
+        completed = self.run_command(
+            "deploy", TAG, environment={"FAIL_PRODUCTION_SMOKE": "1"}
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        log = self.command_log()
+        self.assertIn("netlify publish same-id", log)
+        self.assertIn("netlify disable-site", log)
+        self.assertNotIn("netlify restore prior-id", log)
+        self.assertEqual(self.server.site_state, "disabled")
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "disabled-first-publication")
+        self.assertIsNone(recovery["prior_deploy"])
+        self.assertEqual(recovery["recovery_response"]["action"], "disabled")
+
+    def test_publish_api_error_reconciles_alias_and_restores_exact_prior(self) -> None:
+        self.server.publish_error_after_switch = True
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        log = self.command_log()
+        publish_index = log.index("netlify publish same-id")
+        self.assertIn("netlify get-current-site", log[publish_index:])
+        self.assertIn("netlify restore prior-id", log[publish_index:])
+        self.assertEqual(self.server.current_deploy_id, PRIOR_DEPLOY_ID)
+        self.assertTrue((self.deploy_root / "recovery-evidence.json").is_file())
+
+    def test_pre_disabled_site_refuses_automatic_enable_or_publication(self) -> None:
+        self.server.site_state = "disabled"
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("netlify create-draft", self.command_log())
+        self.assertNotIn("netlify publish same-id", self.command_log())
 
     def test_owned_worktree_and_temp_are_removed_on_success_and_failure(self) -> None:
         for environment in ({}, {"FAIL_IMMUTABLE_SMOKE": "1"}):
@@ -843,22 +1168,40 @@ def verify_distribution(dist_root, repo_root):
         digest = (self.root / "archive-digest").read_text(encoding="utf-8")
         evidence = json.loads(raw)
         self.assertEqual(
-            evidence,
+            set(evidence),
             {
-                "archive_sha256": digest,
-                "channel": "canary",
-                "contract": "lmdj.web-runtime-host.deployment-evidence.v1",
-                "deploy_id": DEPLOY_ID,
-                "deploy_url": f"https://{DEPLOY_ID}--lmdj-runtime.netlify.app",
-                "git_revision": TAG_TARGET,
-                "host_version": HOST_VERSION,
-                "product_build": PRODUCT_BUILD,
-                "production_url": PRODUCTION_URL,
-                "release_url": f"https://github.com/endaye/lmdj/releases/tag/{TAG}",
-                "site_id": SITE_ID,
-                "tag": TAG,
+                "archive", "channel", "contract", "ended_at", "git_revision",
+                "github_actions", "host_version", "immutable", "prior_good",
+                "product_build", "production", "publication", "release_url",
+                "site_id", "started_at", "tag",
             },
         )
+        self.assertEqual(
+            evidence["archive"],
+            {
+                "filename": f"lmdj-web-runtime-host-{HOST_VERSION}-product-{PRODUCT_BUILD}.zip",
+                "sha256": digest,
+            },
+        )
+        self.assertEqual(evidence["contract"], "lmdj.web-runtime-host.deployment-evidence.v2")
+        self.assertEqual(
+            evidence["github_actions"],
+            {
+                "run_id": GITHUB_RUN_ID,
+                "run_url": f"https://github.com/endaye/lmdj/actions/runs/{GITHUB_RUN_ID}",
+            },
+        )
+        self.assertEqual(evidence["immutable"]["deploy_id"], DEPLOY_ID)
+        self.assertEqual(evidence["immutable"]["http"]["status"], "passed")
+        self.assertEqual(evidence["immutable"]["browser"]["status"], "passed")
+        self.assertEqual(evidence["publication"]["same_deploy_id"], DEPLOY_ID)
+        self.assertEqual(evidence["publication"]["response"]["id"], DEPLOY_ID)
+        self.assertEqual(evidence["production"]["url"], PRODUCTION_URL)
+        self.assertEqual(evidence["production"]["http"]["status"], "passed")
+        self.assertEqual(evidence["production"]["browser"]["status"], "passed")
+        self.assertEqual(evidence["prior_good"]["deploy_id"], PRIOR_DEPLOY_ID)
+        self.assertRegex(evidence["started_at"], r"Z$")
+        self.assertRegex(evidence["ended_at"], r"Z$")
         self.assertEqual(
             raw, json.dumps(evidence, sort_keys=True, separators=(",", ":")) + "\n"
         )
@@ -867,20 +1210,18 @@ def verify_distribution(dist_root, repo_root):
         self.assertNotIn(NETLIFY_TOKEN, raw)
 
     def test_rejects_credentials_in_release_draft_or_additive_restore_values(self) -> None:
-        cases = ("release", "draft", "draft-additive", "restore")
+        cases = ("draft", "draft-additive", "restore")
         for case in cases:
             with self.subTest(case=case):
                 self.reset_run_records()
                 environment: dict[str, str] = {}
-                if case == "release":
-                    environment["FAKE_RELEASE_SECRET_FIELD"] = "1"
-                elif case == "draft":
+                if case == "draft":
                     self.server.deploy_id = GITHUB_TOKEN
                     self.server.deploy_url = (
                         f"https://{GITHUB_TOKEN}--lmdj-runtime.netlify.app"
                     )
                 elif case == "draft-additive":
-                    self.server.create_extra = {"diagnostic": GITHUB_TOKEN}
+                    self.server.create_extra = {"diagnostic": NETLIFY_TOKEN}
                 else:
                     self.server.restore_extra = {"diagnostic": NETLIFY_TOKEN}
                 completed = self.run_command("deploy", TAG, environment=environment)
@@ -888,7 +1229,6 @@ def verify_distribution(dist_root, repo_root):
                 self.assert_no_secret_output(completed)
                 self.assertFalse((self.deploy_root / "evidence.json").exists())
                 if case in {"draft", "draft-additive"}:
-                    self.assertNotIn("http-smoke immutable", self.command_log())
                     self.assertNotIn("netlify publish same-id", self.command_log())
 
     def test_production_source_has_no_api_override_and_pins_github_repo(self) -> None:
@@ -954,6 +1294,48 @@ def verify_distribution(dist_root, repo_root):
                 removed = Path(self.worktree_removed_record.read_text(encoding="utf-8"))
                 self.assertEqual(checkout, removed)
                 self.assertFalse(checkout.exists())
+                self.assert_no_owned_temp()
+
+    def test_post_publish_int_and_term_reconcile_and_restore_prior_good(self) -> None:
+        for selected_signal, expected in ((signal.SIGINT, 130), (signal.SIGTERM, 143)):
+            with self.subTest(signal=selected_signal):
+                self.reset_run_records()
+                process = subprocess.Popen(
+                    [str(self.command), "deploy", TAG],
+                    cwd=self.repo,
+                    env=self.environment({"BLOCK_PRODUCTION_PLAYWRIGHT": "1"}),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                deadline = time.monotonic() + 15
+                while not self.block_ready.exists() and process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        process.kill()
+                        self.fail("post-publish Playwright did not become ready")
+                    time.sleep(0.02)
+                os.killpg(process.pid, selected_signal)
+                stdout, stderr = process.communicate(timeout=15)
+                self.assertIn(process.returncode, {expected, -selected_signal})
+                completed = subprocess.CompletedProcess(
+                    process.args, process.returncode, stdout, stderr
+                )
+                self.assert_no_secret_output(completed)
+                log = self.command_log()
+                self.assertIn("netlify publish same-id", log)
+                self.assertIn("netlify get-current-site", log)
+                self.assertIn("netlify restore prior-id", log)
+                restore_index = log.index("netlify restore prior-id")
+                self.assertIn("http-smoke prior-immutable", log[restore_index:])
+                self.assertIn("playwright prior-immutable", log[restore_index:])
+                self.assertIn("http-smoke production", log[restore_index:])
+                self.assertIn("playwright production", log[restore_index:])
+                self.assertEqual(self.server.current_deploy_id, PRIOR_DEPLOY_ID)
+                recovery = json.loads(
+                    (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(recovery["action"], "restored-prior")
                 self.assert_no_owned_temp()
 
     def test_host_nonbrowser_gate_registers_isolated_command_test(self) -> None:

@@ -13,7 +13,7 @@ if (!expectedHostVersion) {
 
 test("published Runtime Host completes the minimal diagnostic journey", async ({ page }) => {
   test.setTimeout(360_000);
-  await page.goto("/index.html");
+  await page.goto("/");
   await expect(page.locator("#host-state")).toHaveText(
     "audio-suspended",
     { timeout: 60_000 },
@@ -51,17 +51,37 @@ test("published Runtime Host completes the minimal diagnostic journey", async ({
     "running",
     { timeout: 60_000 },
   );
-  const marker = await page.evaluate(() =>
-    window.lmdjWebRuntimeController.diagnostics().trigger_outcome_count
-  );
+  const marker = await page.evaluate(() => {
+    const diagnostics = window.lmdjWebRuntimeController.diagnostics();
+    return {
+      admitted: diagnostics.trigger_admitted_count,
+      outcome: diagnostics.trigger_outcome_count,
+      rejected: diagnostics.trigger_rejected_count,
+    };
+  });
   await page.locator("#pad-0").click();
-  await expect.poll(() => page.evaluate(() =>
-    window.lmdjWebRuntimeController.diagnostics().trigger_outcome_count
-  )).toBe(marker + 1);
+  const afterTrigger = {
+    admitted: marker.admitted + 1,
+    outcome: marker.outcome + 1,
+    rejected: marker.rejected,
+  };
+  await expect.poll(() => page.evaluate(() => {
+    const diagnostics = window.lmdjWebRuntimeController.diagnostics();
+    return {
+      admitted: diagnostics.trigger_admitted_count,
+      outcome: diagnostics.trigger_outcome_count,
+      rejected: diagnostics.trigger_rejected_count,
+    };
+  })).toEqual(afterTrigger);
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
     .toBe(true);
   await expect(page.locator("#host-state")).toHaveText("closed");
-  expect(await page.evaluate(() =>
-    window.lmdjWebRuntimeController.diagnostics().trigger_outcome_count
-  )).toBe(marker + 1);
+  expect(await page.evaluate(() => {
+    const diagnostics = window.lmdjWebRuntimeController.diagnostics();
+    return {
+      admitted: diagnostics.trigger_admitted_count,
+      outcome: diagnostics.trigger_outcome_count,
+      rejected: diagnostics.trigger_rejected_count,
+    };
+  })).toEqual(afterTrigger);
 });

@@ -91,7 +91,8 @@ jobs:
           set -euo pipefail
           mkdir -p build/deploy/web-runtime-host
           tag="$LMDJ_RELEASE_TAG"
-          scripts/web-runtime-deploy.sh deploy "$tag" 2>&1 |
+          timeout --signal=TERM --kill-after=480s 1080s \
+            scripts/web-runtime-deploy.sh deploy "$tag" 2>&1 |
             tee build/deploy/web-runtime-host/deployment.log
 
       - name: Upload deployment evidence and failure logs
@@ -101,5 +102,6 @@ jobs:
           name: runtime-host-deployment-evidence
           path: |
             build/deploy/web-runtime-host/evidence.json
+            build/deploy/web-runtime-host/recovery-evidence.json
             build/deploy/web-runtime-host/deployment.log
           if-no-files-found: warn

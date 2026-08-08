@@ -89,8 +89,9 @@ def _origin(url: str) -> tuple[str, str, int]:
 
 
 class RedirectGuard(HTTPRedirectHandler):
-    def __init__(self) -> None:
+    def __init__(self, *, root_url: str | None = None) -> None:
         super().__init__()
+        self.root_url = root_url
         self.redirect_count = 0
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
@@ -110,9 +111,24 @@ class RedirectGuard(HTTPRedirectHandler):
             expected=expected_cache,
             label="redirect response",
         )
+        if self.root_url is None:
+            raise SmokeError("redirect is forbidden")
+        request_url = urlsplit(req.full_url)
+        target_url = urlsplit(newurl)
+        if (
+            self.redirect_count != 0
+            or req.full_url != self.root_url
+            or request_url.path != "/"
+            or request_url.query
+            or request_url.fragment
+            or target_url.path != "/index.html"
+            or target_url.query
+            or target_url.fragment
+            or target_url.username is not None
+            or target_url.password is not None
+        ):
+            raise SmokeError("redirect is forbidden")
         self.redirect_count += 1
-        if self.redirect_count > MAX_REDIRECTS:
-            raise SmokeError("redirect limit exceeded")
         redirected = super().redirect_request(
             req, fp, code, msg, headers, newurl
         )
@@ -247,7 +263,7 @@ def _fetch(
     cache_control: str,
     limit: int,
     timeout_seconds: float,
-) -> bytes:
+) -> tuple[bytes, str]:
     try:
         with opener.open(
             _request(url, cache_control),
@@ -265,7 +281,10 @@ def _fetch(
                 expected=cache_control,
                 label=label,
             )
-            return _read_bounded(response, limit=limit, label=label)
+            return (
+                _read_bounded(response, limit=limit, label=label),
+                response.geturl(),
+            )
     except SmokeError:
         raise
     except HTTPError as error:
@@ -313,28 +332,40 @@ def _require_negative(
         raise SmokeError(f"{path} returned HTTP {status}, expected 404")
 
 
-def _validate_manifest(
-    manifest: object,
-    *,
-    expected_product_build: str,
-    expected_host_version: str,
-) -> list[dict[str, object]]:
+def _manifest_identity(manifest: object) -> tuple[str, str]:
     if not isinstance(manifest, dict) or set(manifest) != MANIFEST_KEYS:
         raise SmokeError("manifest root schema is invalid")
     if manifest["distribution_contract"] != "lmdj.web-runtime-host.distribution.v1":
         raise SmokeError("manifest distribution identity is invalid")
     if manifest["manifest_version"] != 1:
         raise SmokeError("manifest version is invalid")
-    if manifest["product_build"] != expected_product_build:
+    product_build = manifest["product_build"]
+    host_version = manifest["host_version"]
+    if not isinstance(product_build, str) or not product_build:
+        raise SmokeError("Product Build identity is invalid")
+    if not isinstance(host_version, str) or not host_version:
+        raise SmokeError("Host version identity is invalid")
+    return product_build, host_version
+
+
+def _validate_manifest(
+    manifest: object,
+    *,
+    expected_product_build: str,
+    expected_host_version: str,
+) -> list[dict[str, object]]:
+    product_build, host_version = _manifest_identity(manifest)
+    if product_build != expected_product_build:
         raise SmokeError(
             f"Product Build mismatch: expected {expected_product_build!r}, "
-            f"got {manifest['product_build']!r}"
+            f"got {product_build!r}"
         )
-    if manifest["host_version"] != expected_host_version:
+    if host_version != expected_host_version:
         raise SmokeError(
             f"Host version mismatch: expected {expected_host_version!r}, "
-            f"got {manifest['host_version']!r}"
+            f"got {host_version!r}"
         )
+    assert isinstance(manifest, dict)
     assets = manifest["assets"]
     if not isinstance(assets, list) or len(assets) != len(EXPECTED_ASSETS):
         raise SmokeError("manifest asset inventory is invalid")
@@ -378,16 +409,12 @@ def _is_loopback_host(hostname: str) -> bool:
         return False
 
 
-def smoke_http(
-    *,
+def _validated_base_url(
     base_url: str,
-    expected_product_build: str,
-    expected_host_version: str,
-    expected_deploy_id: str | None = None,
-    require_https: bool = True,
-    timeout_seconds: float = 10.0,
-) -> dict[str, object]:
-    """Validate index, manifest, every declared asset, and negative routes."""
+    *,
+    require_https: bool,
+    timeout_seconds: float,
+) -> str:
     parsed = urlsplit(base_url)
     scheme, hostname, _ = _origin(base_url)
     if require_https and scheme != "https":
@@ -404,6 +431,69 @@ def smoke_http(
         raise SmokeError("base URL must be an origin without credentials, path, query, or fragment")
     if not isinstance(timeout_seconds, (int, float)) or not 0 < timeout_seconds <= 60:
         raise SmokeError("timeout must be greater than zero and at most 60 seconds")
+    return base_url.rstrip("/") + "/"
+
+
+def _decode_manifest(manifest_bytes: bytes) -> object:
+    try:
+        return json.loads(manifest_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise SmokeError("manifest is not valid UTF-8 JSON") from None
+
+
+def discover_http_identity(
+    *,
+    base_url: str,
+    require_https: bool = True,
+    timeout_seconds: float = 10.0,
+) -> dict[str, str]:
+    """Strictly read the published manifest identity before a deployment smoke."""
+    root = _validated_base_url(
+        base_url,
+        require_https=require_https,
+        timeout_seconds=timeout_seconds,
+    )
+    opener = build_opener(RedirectGuard())
+    opener.addheaders = []
+    manifest_bytes, _ = _fetch(
+        opener,
+        url=urljoin(root, "host-manifest.json"),
+        label="/host-manifest.json",
+        content_type="application/json",
+        cache_control="no-store",
+        limit=MAX_MANIFEST_BYTES,
+        timeout_seconds=timeout_seconds,
+    )
+    manifest = _decode_manifest(manifest_bytes)
+    product_build, host_version = _manifest_identity(manifest)
+    _validate_manifest(
+        manifest,
+        expected_product_build=product_build,
+        expected_host_version=host_version,
+    )
+    return {
+        "host_version": host_version,
+        "manifest_sha256": hashlib.sha256(manifest_bytes).hexdigest(),
+        "product_build": product_build,
+    }
+
+
+def smoke_http(
+    *,
+    base_url: str,
+    expected_product_build: str,
+    expected_host_version: str,
+    expected_deploy_id: str | None = None,
+    require_https: bool = True,
+    timeout_seconds: float = 10.0,
+) -> dict[str, object]:
+    """Validate index, manifest, every declared asset, and negative routes."""
+    root = _validated_base_url(
+        base_url,
+        require_https=require_https,
+        timeout_seconds=timeout_seconds,
+    )
+    _, hostname, _ = _origin(base_url)
     if not expected_product_build or not expected_host_version:
         raise SmokeError("expected Product Build and Host version are required")
     if expected_deploy_id is not None:
@@ -412,11 +502,26 @@ def smoke_http(
         if not hostname.startswith(expected_deploy_id.lower() + "--"):
             raise SmokeError("immutable URL does not identify the expected Deploy ID")
 
-    root = base_url.rstrip("/") + "/"
+    root_redirect_guard = RedirectGuard(root_url=root)
+    root_opener = build_opener(root_redirect_guard)
+    root_opener.addheaders = []
+    root_index_bytes, root_final_url = _fetch(
+        root_opener,
+        url=root,
+        label="/",
+        content_type="text/html",
+        cache_control="no-store",
+        limit=MAX_INDEX_BYTES,
+        timeout_seconds=timeout_seconds,
+    )
+    root_final_path = urlsplit(root_final_url).path
+    if root_final_path not in {"/", "/index.html"}:
+        raise SmokeError("root final path is invalid")
+
     redirect_guard = RedirectGuard()
     opener = build_opener(redirect_guard)
     opener.addheaders = []
-    index_bytes = _fetch(
+    index_bytes, _ = _fetch(
         opener,
         url=urljoin(root, "index.html"),
         label="/index.html",
@@ -425,7 +530,9 @@ def smoke_http(
         limit=MAX_INDEX_BYTES,
         timeout_seconds=timeout_seconds,
     )
-    manifest_bytes = _fetch(
+    if root_index_bytes != index_bytes:
+        raise SmokeError("root index identity does not match /index.html")
+    manifest_bytes, _ = _fetch(
         opener,
         url=urljoin(root, "host-manifest.json"),
         label="/host-manifest.json",
@@ -435,13 +542,10 @@ def smoke_http(
         timeout_seconds=timeout_seconds,
     )
     try:
-        index = index_bytes.decode("utf-8")
+        index = root_index_bytes.decode("utf-8")
     except UnicodeDecodeError:
         raise SmokeError("index is not UTF-8") from None
-    try:
-        manifest = json.loads(manifest_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        raise SmokeError("manifest is not valid UTF-8 JSON") from None
+    manifest = _decode_manifest(manifest_bytes)
     assets = _validate_manifest(
         manifest,
         expected_product_build=expected_product_build,
@@ -463,7 +567,7 @@ def smoke_http(
     for entry in assets:
         path = str(entry["path"])
         suffix = next(suffix for suffix in CONTENT_TYPES if path.endswith(suffix))
-        payload = _fetch(
+        payload, _ = _fetch(
             opener,
             url=urljoin(root, path),
             label="/" + path,
@@ -493,7 +597,12 @@ def smoke_http(
     result: dict[str, object] = {
         "asset_count": len(assets),
         "host_version": expected_host_version,
+        "index_sha256": hashlib.sha256(index_bytes).hexdigest(),
+        "manifest_sha256": manifest_digest,
         "product_build": expected_product_build,
+        "root_final_path": root_final_path,
+        "root_redirect_count": root_redirect_guard.redirect_count,
+        "root_request_path": "/",
     }
     if expected_deploy_id is not None:
         result["deploy_id"] = expected_deploy_id
@@ -501,6 +610,16 @@ def smoke_http(
 
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    if argv and argv[0] == "discover-identity":
+        parser = argparse.ArgumentParser(
+            description="Strictly discover published Web Runtime Host identity"
+        )
+        parser.add_argument("base_url")
+        parser.add_argument("--allow-http", action="store_true")
+        parser.add_argument("--timeout", type=float, default=10.0)
+        options = parser.parse_args(argv[1:])
+        options.command = "discover-identity"
+        return options
     parser = argparse.ArgumentParser(
         description="Validate an immutable published Web Runtime Host"
     )
@@ -510,20 +629,29 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--expected-deploy-id")
     parser.add_argument("--allow-http", action="store_true")
     parser.add_argument("--timeout", type=float, default=10.0)
-    return parser.parse_args(argv)
+    options = parser.parse_args(argv)
+    options.command = "smoke"
+    return options
 
 
 def main(argv: list[str] | None = None) -> int:
     options = parse_arguments(sys.argv[1:] if argv is None else argv)
     try:
-        result = smoke_http(
-            base_url=options.base_url,
-            expected_product_build=options.expected_product_build,
-            expected_host_version=options.expected_host_version,
-            expected_deploy_id=options.expected_deploy_id,
-            require_https=not options.allow_http,
-            timeout_seconds=options.timeout,
-        )
+        if options.command == "discover-identity":
+            result = discover_http_identity(
+                base_url=options.base_url,
+                require_https=not options.allow_http,
+                timeout_seconds=options.timeout,
+            )
+        else:
+            result = smoke_http(
+                base_url=options.base_url,
+                expected_product_build=options.expected_product_build,
+                expected_host_version=options.expected_host_version,
+                expected_deploy_id=options.expected_deploy_id,
+                require_https=not options.allow_http,
+                timeout_seconds=options.timeout,
+            )
     except SmokeError as error:
         print(f"web deployment smoke error: {error}", file=sys.stderr)
         return 2

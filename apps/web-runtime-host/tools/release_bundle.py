@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -60,6 +61,77 @@ def parse_detached_checksum(path: Path, expected_name: str) -> str:
     if re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise BundleError("release checksum digest is invalid")
     return digest
+
+
+def verify_detached_checksum_signature(
+    checksum_path: Path,
+    signature_path: Path,
+    product_public_key_path: Path,
+    trusted_primary_fingerprint: str,
+    *,
+    gpg_program: str = "gpg",
+) -> None:
+    """Verify an armored checksum signature in a keyring containing only the Product key."""
+    fingerprint = trusted_primary_fingerprint.upper()
+    if re.fullmatch(r"[0-9A-F]{40}", fingerprint) is None:
+        raise BundleError("trusted Product key fingerprint is invalid")
+    try:
+        signature_text = signature_path.read_text(encoding="ascii")
+    except (OSError, UnicodeDecodeError) as error:
+        raise BundleError("release checksum signature is invalid") from error
+    if not signature_text.startswith("-----BEGIN PGP SIGNATURE-----\n"):
+        raise BundleError("release checksum signature is not armored")
+
+    def run_gpg(home: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
+        try:
+            completed = subprocess.run(
+                [gpg_program, "--batch", "--no-tty", "--homedir", str(home), *arguments],
+                check=False,
+                capture_output=True,
+                text=True,
+                env={"LANG": "C", "LC_ALL": "C", "PATH": os.environ.get("PATH", "")},
+            )
+        except OSError:
+            raise BundleError("release checksum signature verification is unavailable") from None
+        if completed.returncode != 0:
+            raise BundleError("release checksum signature verification failed")
+        return completed
+
+    with tempfile.TemporaryDirectory(prefix=".lmdj-product-signature-") as directory:
+        home = Path(directory)
+        home.chmod(0o700)
+        run_gpg(home, ["--import", str(product_public_key_path)])
+        listed = run_gpg(home, ["--with-colons", "--fingerprint", "--list-keys"])
+        primary_fingerprints: list[str] = []
+        expecting_primary = False
+        for line in listed.stdout.splitlines():
+            fields = line.split(":")
+            record = fields[0] if fields else ""
+            if record == "pub":
+                expecting_primary = True
+            elif record == "fpr" and expecting_primary and len(fields) > 9:
+                primary_fingerprints.append(fields[9].upper())
+                expecting_primary = False
+            elif record in {"sub", "sec", "ssb"}:
+                expecting_primary = False
+        if primary_fingerprints != [fingerprint]:
+            raise BundleError("repository Product public key fingerprint mismatch")
+        verified = run_gpg(
+            home,
+            [
+                "--status-fd",
+                "1",
+                "--verify",
+                str(signature_path),
+                str(checksum_path),
+            ],
+        )
+        valid = []
+        for line in verified.stdout.splitlines():
+            if line.startswith("[GNUPG:] VALIDSIG "):
+                valid.append(line.split())
+        if len(valid) != 1 or fingerprint not in {field.upper() for field in valid[0][2:]}:
+            raise BundleError("release checksum signature signer mismatch")
 
 
 def canonical_json(bundle: StagedBundle) -> str:
@@ -148,16 +220,23 @@ def stage_release_bundle(
     repo_root: Path,
     archive_path: Path,
     checksum_path: Path,
+    signature_path: Path,
+    product_public_key_path: Path,
+    trusted_primary_fingerprint: str,
     output_root: Path,
     expected_product_build: str,
     expected_host_version: str,
     verifier: Callable[[Path, Path], None] | None = None,
+    checksum_authorizer: Callable[[Path, Path, Path, str], None] | None = None,
+    gpg_program: str = "gpg",
 ) -> StagedBundle:
     """Validate and atomically stage exactly one dist/ tree."""
     try:
         repo_root = repo_root.expanduser().resolve(strict=True)
         archive_path = archive_path.expanduser().resolve(strict=True)
         checksum_path = checksum_path.expanduser().resolve(strict=True)
+        signature_path = signature_path.expanduser().resolve(strict=True)
+        product_public_key_path = product_public_key_path.expanduser().resolve(strict=True)
         requested_output = output_root.expanduser()
         if not requested_output.is_absolute():
             requested_output = Path.cwd() / requested_output
@@ -165,11 +244,39 @@ def stage_release_bundle(
         output_root = output_parent / requested_output.name
     except OSError as error:
         raise BundleError("release bundle input is unavailable") from error
-    if not repo_root.is_dir() or not archive_path.is_file() or not checksum_path.is_file():
+    if (
+        not repo_root.is_dir()
+        or not archive_path.is_file()
+        or not checksum_path.is_file()
+        or not signature_path.is_file()
+        or not product_public_key_path.is_file()
+    ):
         raise BundleError("release bundle input is unavailable")
     if output_root.exists() or output_root.is_symlink():
         raise BundleError("release bundle output root must be absent")
 
+    if signature_path.name != f"{checksum_path.name}.asc":
+        raise BundleError("release checksum signature name is not canonical")
+    selected_authorizer = checksum_authorizer or (
+        lambda checksum, signature, key, fingerprint: verify_detached_checksum_signature(
+            checksum,
+            signature,
+            key,
+            fingerprint,
+            gpg_program=gpg_program,
+        )
+    )
+    try:
+        selected_authorizer(
+            checksum_path,
+            signature_path,
+            product_public_key_path,
+            trusted_primary_fingerprint,
+        )
+    except BundleError:
+        raise
+    except Exception:
+        raise BundleError("release checksum signature verification failed") from None
     expected_digest = parse_detached_checksum(checksum_path, archive_path.name)
     actual_digest = sha256_file(archive_path)
     if actual_digest != expected_digest:
@@ -233,6 +340,10 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     stage.add_argument("--repo-root", required=True, type=Path)
     stage.add_argument("--archive", required=True, type=Path)
     stage.add_argument("--checksum", required=True, type=Path)
+    stage.add_argument("--checksum-signature", required=True, type=Path)
+    stage.add_argument("--product-public-key", required=True, type=Path)
+    stage.add_argument("--trusted-primary-fingerprint", required=True)
+    stage.add_argument("--gpg-program", default="gpg")
     stage.add_argument("--output-root", required=True, type=Path)
     stage.add_argument("--expected-product-build", required=True)
     stage.add_argument("--expected-host-version", required=True)
@@ -247,9 +358,13 @@ def main(argv: list[str] | None = None) -> int:
             repo_root=options.repo_root,
             archive_path=options.archive,
             checksum_path=options.checksum,
+            signature_path=options.checksum_signature,
+            product_public_key_path=options.product_public_key,
+            trusted_primary_fingerprint=options.trusted_primary_fingerprint,
             output_root=options.output_root,
             expected_product_build=options.expected_product_build,
             expected_host_version=options.expected_host_version,
+            gpg_program=options.gpg_program,
         )
     except UsageError:
         return 64

@@ -10,6 +10,7 @@
     "test": "playwright test"
   },
   "devDependencies": {
+    "@netlify/headers-parser": "10.1.0",
     "@playwright/test": "1.62.1"
   }
 }

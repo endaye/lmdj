@@ -238,8 +238,20 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertIn("if: always()", source)
         self.assertIn("name: runtime-host-deployment-evidence", source)
         self.assertIn("build/deploy/web-runtime-host/evidence.json", source)
+        self.assertIn("build/deploy/web-runtime-host/recovery-evidence.json", source)
         self.assertIn("build/deploy/web-runtime-host/deployment.log", source)
         self.assertIn("if-no-files-found: warn", source)
+
+    def test_internal_timeout_leaves_bounded_recovery_and_upload_budget(self) -> None:
+        source = self.workflow_source()
+        deploy_step = self.step_named(source, "Deploy signed Runtime Host release")
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=480s 1080s", deploy_step
+        )
+        self.assertIn("timeout-minutes: 30", source)
+        self.assertLess(1080 + 480, 30 * 60)
+        upload = self.step_named(source, "Upload deployment evidence and failure logs")
+        self.assertIn("if: always()", upload)
 
     def test_public_key_has_exactly_one_trusted_primary_fingerprint(self) -> None:
         self.assertTrue(PUBLIC_KEY.is_file(), "Product signing public key is missing")
