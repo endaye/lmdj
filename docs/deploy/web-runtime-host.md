@@ -5,7 +5,11 @@
 当前真相见
 [`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`](../quality/2026-08-08-web-runtime-public-deployment-acceptance.md)：
 Product `1.0.15.2` / Host `1.1.2` 的本地工具已实现，但尚未 push、merge、创建
-Netlify 项目、配置 GitHub Environment、运行部署或生成公共证据。
+Netlify 项目、配置 GitHub Environment、运行部署或生成公共证据。本地 Git 数据库已存在
+signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
+`2B5EE362F058800036AD4FB5116ECE156F954D29` 的 Good signature，且 tag target 是
+`72ae40074620cc5681c462ba04a31a666449734f`；该 tag 尚未 push，未做远端验证，不能由此
+推断远端 tag、Release 或部署存在。
 
 ## 发布不变量
 
@@ -13,11 +17,14 @@ Netlify 项目、配置 GitHub Environment、运行部署或生成公共证据�
   `72ae40074620cc5681c462ba04a31a666449734f`。
 - Release archive 的 SHA-256 必须是
   `d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a`。
+- 已验证的 Release ZIP 未修改。`apps/web-runtime-host/deploy/_headers` 是
+  repository-tracked deploy-control artifact：staging 时独立加入 Netlify digest deploy，
+  不在 Release bundle 内；不得写入、删除、改名或替换任何已验证 Release `dist` 文件。
 - 唯一生产别名是 `https://lmdj-runtime.netlify.app`。先创建 immutable draft
   Deploy，再对**同一个** ready Deploy ID 运行 smoke，最后才允许把该 ID 设为生产别名。
 - `scripts/web-runtime-host.sh proof` 的 Python proof-only server 只用于本地
-  Proof；它不是生产服务。生产由 Netlify 静态托管已验证的 `dist`，并使用 release
-  bundle 内的 `_headers`。
+  Proof；它不是生产服务。生产由 Netlify 静态托管已验证的 `dist`，并应用独立 staging
+  的 `_headers` deploy-control artifact。
 - 这不是 Creator URL、Creator PWA 或 `lmdj-canary` 的发布。`lmdj-canary` 留给
   未来 Creator 产品，不能在本 Task 创建、绑定、重定向或作为 Runtime Host 的别名。
 
@@ -43,15 +50,16 @@ Environment 已配置且本次发布获授权后执行；它是手动 workflow d
 
 ## 创建 Netlify 项目（一次性、获授权后）
 
-1. 在 Netlify 创建空的团队站点，站点名为 `lmdj-runtime`；记录平台返回的 site ID，
-   不把它写入仓库、Issue 或日志。
+1. 在 Netlify 创建空的团队站点，站点名为 `lmdj-runtime`；记录平台返回的 site ID。
 2. 不连接 Git provider。若创建流程默认连接 Git，取消连接；若已有连接，先断开。
    在项目 Deploy 设置中关闭 automatic publishing / auto-publish，并确认没有 build
    command、publish directory、branch deploy 或 Deploy Preview 会替该项目发布。
 3. 独立检查项目设置：Git repository 显示未连接，自动发布关闭，生产 URL 仅是
    `lmdj-runtime.netlify.app`。不要创建、别名化或重定向 `lmdj-canary`。
-4. 将 site ID 仅保存为 GitHub Environment secret；此站点只能由下述 GitHub Actions
-   路径以 API 创建 draft、smoke 后同 ID 发布，禁止手工拖拽/CLI 生产上传。
+4. site ID 本质上是非敏感身份标识，不得与 token 混淆；为保持已批准的 scoped
+   configuration contract，当前把 `NETLIFY_RUNTIME_SITE_ID` 存为 GitHub Environment
+   secret 并提供给受控 workflow。此站点只能由下述 GitHub Actions 路径以 API 创建 draft、
+   smoke 后同 ID 发布，禁止手工拖拽/CLI 生产上传。
 
 这一步完成前，任何 `lmdj-runtime` site ID、Deploy ID 或 immutable Deploy URL 都是
 不存在的值，不能用占位符伪造为证据。
@@ -59,17 +67,24 @@ Environment 已配置且本次发布获授权后执行；它是手动 workflow d
 ## GitHub Environment 与 secret
 
 workflow `.github/workflows/deploy-web-runtime-host.yml` 使用 GitHub Environment
-`runtime-canary`，且仅需要以下 secrets：
+`runtime-canary`。site ID 本质上不是 secret，但按已批准的 scoped configuration contract
+存为 Environment secret；不得与 token 混淆。它可以进入实际的 evidence artifact 和后续
+验收记录，供核对 deploy identity；token 不得进入任何 evidence、验收记录或日志。当前
+tracked runbook、Portal 和日志不写入尚未创建站点的真实 site ID；该限制不把 site ID
+重新分类为敏感值。也就是说，不在 tracked runbook、Portal 或日志中写入真实值；真实 site
+ID 只在实际 evidence artifact 与验收记录的身份字段中出现。
 
-| Secret | 值 | 操作边界 |
+| 配置项 | 值 | 操作边界 |
 | --- | --- | --- |
-| `NETLIFY_RUNTIME_SITE_ID` | 已确认的 `lmdj-runtime` Netlify site ID | 只在 Environment `runtime-canary` 配置；不进入仓库或日志。 |
-| `NETLIFY_AUTH_TOKEN` | 仅有该站点部署所需的最小权限 Netlify token | 只在 Environment `runtime-canary` 配置；不回显、不写入证据。 |
+| Environment secret `NETLIFY_RUNTIME_SITE_ID` | 已确认的 `lmdj-runtime` Netlify site ID（非敏感身份标识） | 为保持已批准配置契约只在 Environment `runtime-canary` 配置；可写入实际 evidence artifact 和验收记录，不与 token 的敏感性混淆。 |
+| Environment secret `NETLIFY_AUTH_TOKEN` | 仅有该站点部署所需的最小权限 Netlify token | 只在 Environment `runtime-canary` 配置；不回显、不写入 evidence、验收记录或日志。 |
 
 GitHub Actions 提供短期 `GITHUB_TOKEN` 读取固定仓库的 Release；它不是一个需手工添加
-的 repository secret。配置后从 Environment 设置确认两个名称存在、值不可见，并在
-workflow 的 Environment approval/protection policy（如已配置）通过后再 dispatch。
-不要把 token 或 site ID 粘贴到 shell history、PR、runbook、artifact 或 Portal。
+的 repository secret。配置后确认两个 Environment secret 名称存在、值不可见，并核对
+`NETLIFY_RUNTIME_SITE_ID` 与 Netlify 返回的 site ID 一致；在 workflow 的 Environment
+approval/protection policy（如已配置）通过后再 dispatch。
+不要把 token 粘贴到 shell history、PR、runbook、artifact、Portal 或日志；site ID 的记录
+规则以前段为准。
 
 ## 受控执行与证据检查
 
@@ -87,10 +102,19 @@ gh run download RUN_ID --name runtime-host-deployment-evidence --dir evidence/RU
 python3 -m json.tool evidence/RUN_ID/evidence.json
 ```
 
-证据必须至少包含实际 `deploy_id`、immutable `deploy_url`、`git_revision`、Product
-Build、Host version、tag、release URL、site ID 和 archive digest；确认 digest 等于上文
-指定值、revision 等于指定 tag target，且证据不包含 token。只有成功的 evidence
-artifact 可以填充验收记录的 ID、URL、run 与时间字段；发生失败时保留失败日志，不把
+证据按来源分别核对，不能声称 artifact 单独提供全部字段：
+
+- `evidence.json` 提供 deploy identity：`deploy_id`、immutable `deploy_url`、
+  `git_revision`、Product Build、Host version、tag、release URL、site ID 和 archive
+  digest；确认 digest 等于上文指定值、revision 等于指定 tag target。它不单独提供
+  run URL、timestamp 或 smoke detail。
+- 不可变 GitHub run metadata 提供该 run 的 URL、run identity 和 timestamps；保留与
+  `runtime-host-deployment-evidence` artifact 的 identity 对应关系。
+- 同一不可变 run 的 workflow log 与 artifact identity 提供 immutable/prod HTTP 与
+  Chromium smoke detail、same-ID restore 结果和失败上下文；这不是 `evidence.json` 的
+  字段。
+
+只有三类记录相互一致，成功 evidence 才能填充验收记录；发生失败时保留失败日志，不把
 失败 draft 当作发布证据。
 
 生产 alias 切换后，在干净环境执行：
@@ -113,19 +137,22 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 | production alias 已切换但 production smoke 失败 | 立即用已记录、曾通过生产 smoke 的**精确 prior Deploy ID**回滚，然后再次 smoke 并记录结果。 |
 | evidence artifact 缺失、字段不匹配或含敏感信息 | 将部署视为证据不完整；不要更新 acceptance/Portal 为 deployed，先修复证据链。 |
 
-回滚不是重新构建或从当前分支重新上传。获授权后，以记录中的 `PRIOR_DEPLOY_ID` 对同一
-site ID 调用 publication，再验证生产 URL：
+回滚不是重新构建或从当前分支重新上传，也不在 token 命令行或 shell history 中操作。
+现有 `deploy-web-runtime-host.yml` 没有 rollback dispatch；因此回滚必须先获得单独授权，
+由受控 GitHub Actions/专用授权流程在受保护 Environment 中执行，不能假装现有 workflow
+已自动支持它。受控操作者按以下顺序执行：
 
-```bash
-NETLIFY_RUNTIME_SITE_ID='recorded-site-id' \
-NETLIFY_AUTH_TOKEN='authorized-token' \
-python3 apps/web-runtime-host/tools/deploy_orchestrator.py publish \
-  "$NETLIFY_RUNTIME_SITE_ID" "$PRIOR_DEPLOY_ID"
-scripts/web-runtime-deploy.sh smoke https://lmdj-runtime.netlify.app 1.0.15.2 1.1.2
-```
+1. 从 prior evidence 读取 exact prior Deploy ID、immutable URL、Product Build 和 Host
+   version；先 smoke prior immutable URL，使用 prior evidence 的实际 Product/Host
+   identity，而不是当前候选身份。
+2. 仅在 prior immutable smoke 通过后，使用 sealed Environment credential 发布 exact
+   prior Deploy ID；publication 响应必须确认同一个 ready ID 已恢复 production alias。
+3. 再 smoke production alias，仍使用该 prior evidence 的实际 Product/Host identity，
+   并把三步证据记录到受控运行中。
 
-`PRIOR_DEPLOY_ID` 必须来自先前已验证 evidence，且 publication 响应必须确认相同
-ready ID 与正式 alias；未知、当前 draft、猜测或截断的 ID 一律不可使用。
+`PRIOR_DEPLOY_ID` 必须来自先前已验证 evidence；未知、当前 draft、猜测或截断的 ID
+一律不可使用。初次发布没有 prior good Deploy 时不可回滚：保持或恢复为无已验证生产
+版本，并升级处置，不得把未 smoke draft 或当前候选冒充为回滚目标。
 
 ## 凭据轮换
 

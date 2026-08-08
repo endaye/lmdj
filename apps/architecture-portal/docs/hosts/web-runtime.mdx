@@ -43,7 +43,10 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 本地两阶段 Netlify release/deploy 工具已实现：验证 signed Product tag 与 GitHub Release
 archive、创建 immutable draft Deploy、对该 draft 运行 HTTP/Chromium smoke、再将同一
 ready Deploy ID 设为生产 alias，并留下 evidence artifact。当前这只是实现状态：
-`1.0.15.2` / Host `1.1.2` 尚未 push、review、CI、merge、tag、Release 或部署；
+本地已存在 signed annotated tag `lmdj-v1.0.15.2`，Good signature primary fingerprint
+为 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 为
+`72ae40074620cc5681c462ba04a31a666449734f`；它尚未 push，未做远端验证。故
+`1.0.15.2` / Host `1.1.2` 尚未 push、review、CI、merge、远端 verified tag、Release 或部署；
 `lmdj-runtime` 项目、Environment secrets、workflow run、Deploy ID、immutable URL 和
 production publication 均不存在。不可将本地 Host Proof 或部署工具测试上升为公开部署
 结论。

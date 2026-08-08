@@ -23,7 +23,13 @@ schema-2 快照冻结 34 页源码、sidebar、九张图的 18 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.15.2`，仅是未来 tag 文本。当前 Task 只建立本地身份与自动化 Proof，不宣称新 PR、远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；current 页面不按 Task 顺序声明其临时存在状态。历史 `1.0.14.0` 的 PR #91 与 merged-main 证据不自动升级为当前候选证据。
+本地已存在 signed annotated Product tag `lmdj-v1.0.15.2`：`git tag -v` 的 Good signature
+primary fingerprint 是 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 是
+`72ae40074620cc5681c462ba04a31a666449734f`。该 tag 尚未 push，未做远端验证；因此当前
+Task 不宣称远端 CI、merge、Release、部署、发布或 Channel promotion。匹配 Product Build
+的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；
+current 页面不按 Task 顺序声明其临时存在状态。历史 `1.0.14.0` 的 PR #91 与 merged-main
+证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 
@@ -34,7 +40,7 @@ Chromium smoke，再只把同一个 ready Deploy ID 发布到
 不是当前已发生的发布。
 
 当前 `1.0.15.2` / Host `1.1.2` 仍为 pre-deploy：没有 push、PR review、CI、merge、
-signed tag、Release、`lmdj-runtime` Netlify project、GitHub Environment secret、
+远端 verified tag、Release、`lmdj-runtime` Netlify project、GitHub Environment secret、
 workflow run、Deploy ID、immutable URL、production alias 或 deployment evidence。只有
 实际 evidence record 才能让 Portal 报告公共部署；本地工具、Proof、PR Preview 或
 workflow 定义都不能替代它。运营前置条件、回滚和凭据轮换见仓库运行手册

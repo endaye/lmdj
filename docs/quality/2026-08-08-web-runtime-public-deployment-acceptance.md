@@ -5,7 +5,10 @@
 本记录只描述 Product `1.0.15.2` / Web Runtime Host `1.1.2` 的公共发布前真相。
 Task 1–5 已实现本地部署工具和 workflow 定义；它们尚未获得远端执行授权。本记录
 不包含 Deploy ID、site ID、immutable URL、workflow run URL 或部署时间，因为这些值
-当前均不存在。
+当前均不存在。本地已存在 signed annotated tag `lmdj-v1.0.15.2`；`git tag -v` 的
+Good signature primary fingerprint 是 `2B5EE362F058800036AD4FB5116ECE156F954D29`，
+target 是 `72ae40074620cc5681c462ba04a31a666449734f`。该 tag 尚未 push，未做远端验证，
+所以这不是远端 tag、Release 或部署存在的结论。
 
 | Gate | Current result |
 | --- | --- |
@@ -35,8 +38,9 @@ run、draft、production alias 变更或 evidence artifact 已创建。尚未 pu
 | --- | --- |
 | Product Build | `1.0.15.2` |
 | Web Runtime Host | `1.1.2` |
-| 预期 Product tag | `lmdj-v1.0.15.2`（未在本记录中宣称已创建/验证） |
-| 预期 tag target | `72ae40074620cc5681c462ba04a31a666449734f` |
+| 本地 signed annotated Product tag | `lmdj-v1.0.15.2`（已存在；尚未 push，未做远端验证） |
+| 本地 tag Good signature primary fingerprint | `2B5EE362F058800036AD4FB5116ECE156F954D29` |
+| 本地 tag target | `72ae40074620cc5681c462ba04a31a666449734f` |
 | 预期 release archive SHA-256 | `d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a` |
 
 后续获得授权后，操作者必须按
