@@ -253,7 +253,7 @@ def test_create_draft_uploads_only_required_sha1_files(self) -> None:
     self.assertEqual(draft.id, "deploy-456")
 ```
 
-Also test malformed JSON, missing/extra response fields, foreign `site_id`, non-HTTPS deploy URL, required digest not present locally, encoded nested asset paths, API error body redaction, non-terminal poll states, error state, and deadline expiry.
+Also test malformed JSON; missing or invalid required fields while accepting additive documented fields; foreign `site_id`; non-HTTPS deploy URL; required digest not present locally; encoded nested asset paths; API error body/header redaction and unreachable exception context; non-terminal poll states; error state; and deadline expiry. For every SHA-1 in `required`, select one deterministic local representative and upload it exactly once, including when multiple paths have identical content.
 
 - [ ] **Step 2: Run the tests and verify the failure**
 
@@ -300,10 +300,10 @@ class NetlifyClient:
         """Create draft digest, upload required files, and wait for ready."""
 
     def publish_deploy(self, *, site_id: str, deploy_id: str) -> dict[str, object]:
-        """Restore exactly deploy_id and require the response to identify it as current."""
+        """Restore exactly deploy_id and require it as the live ready production Deploy."""
 ```
 
-Every request sends `Authorization: Bearer`, `Accept: application/json`, and a fixed user agent. Never include the token or full error response headers in exceptions. Encode file paths segment-by-segment while preserving `/` separators.
+Every request sends `Authorization: Bearer`, `Accept: application/json`, and a fixed user agent. Accept additive documented response fields, but reject malformed JSON and missing or invalid required fields. For every HTTP failure, close and discard the response; never include the token, raw response body, or response headers in an exception, cause, or context. Encode file paths segment-by-segment while preserving `/` separators.
 
 - [ ] **Step 4: Add the exact deploy-control header template**
 
@@ -342,7 +342,9 @@ def test_publish_uses_restore_and_requires_the_same_deploy_id(self) -> None:
     self.assertEqual(request.method, "POST")
     self.assertEqual(request.path, "/api/v1/sites/site-123/deploys/deploy-456/restore")
     self.assertEqual(published["id"], "deploy-456")
-    self.assertEqual(published["state"], "current")
+    self.assertEqual(published["site_id"], "site-123")
+    self.assertEqual(published["ssl_url"], "https://runtime.example")
+    self.assertEqual(published["state"], "ready")
 
 def test_api_failure_never_calls_restore(self) -> None:
     self.server.fail_upload = True
@@ -350,6 +352,8 @@ def test_api_failure_never_calls_restore(self) -> None:
         self.create_ready_draft()
     self.assertFalse(any(request.path.endswith("/restore") for request in self.server.requests))
 ```
+
+The restore response must identify the exact requested Deploy ID and site, provide an HTTPS production `ssl_url`, and report the live state `ready`; it must not create or accept a second production Deploy.
 
 - [ ] **Step 6: Run Task 2 tests and register them in Host proof**
 

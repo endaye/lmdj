@@ -47,6 +47,8 @@ class FakeNetlifyServer(ThreadingHTTPServer):
         body = document if isinstance(document, bytes) else json.dumps(document).encode("utf-8")
         handler.send_response(status)
         handler.send_header("Content-Type", "application/json")
+        if status >= 400:
+            handler.send_header("X-Netlify-Secret", "header-do-not-leak")
         handler.send_header("Content-Length", str(len(body)))
         handler.end_headers()
         handler.wfile.write(body)
@@ -87,7 +89,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 "id": "deploy-456",
                 "site_id": "site-123",
                 "ssl_url": "https://runtime.example",
-                "state": "current",
+                "state": "ready",
             }
             self.server.response(self, 200, response)
             return
@@ -176,21 +178,49 @@ class NetlifyClientTest(unittest.TestCase):
             "/api/v1/deploys/deploy-456/files/assets/a%20space%25%3F%23.wasm",
         )
 
-    def test_rejects_malformed_or_nonconforming_create_response(self) -> None:
+    def test_accepts_additive_documented_response_fields(self) -> None:
+        self.server.create_response = {
+            "id": "deploy-456",
+            "site_id": "site-123",
+            "deploy_ssl_url": "https://draft.example/deploy-456",
+            "state": "uploading",
+            "required": [hashlib.sha1(b"index").hexdigest()],
+            "admin_url": "https://app.netlify.com/sites/runtime/deploys/deploy-456",
+        }
+        self.server.deploy_response = {
+            "id": "deploy-456",
+            "site_id": "site-123",
+            "deploy_ssl_url": "https://draft.example/deploy-456",
+            "state": "ready",
+            "summary": {"status": "complete"},
+        }
+        self.server.restore_response = {
+            "id": "deploy-456",
+            "site_id": "site-123",
+            "ssl_url": "https://runtime.example",
+            "state": "ready",
+            "deploy_url": "https://deploy-456--runtime.netlify.app",
+        }
+        self.assertEqual(self.create_ready_draft().id, "deploy-456")
+        self.assertEqual(
+            self.client.publish_deploy(site_id="site-123", deploy_id="deploy-456")["id"],
+            "deploy-456",
+        )
+
+    def test_rejects_malformed_or_missing_or_invalid_required_create_fields(self) -> None:
+        valid = {
+            "id": "deploy-456",
+            "site_id": "site-123",
+            "deploy_ssl_url": "https://draft.example/deploy-456",
+            "state": "uploading",
+            "required": [],
+        }
         cases = (
             (b"not-json", "Netlify API response is invalid"),
             ({"id": "deploy-456"}, "Netlify API response is invalid"),
-            (
-                {
-                    "id": "deploy-456",
-                    "site_id": "site-123",
-                    "deploy_ssl_url": "https://draft.example/deploy-456",
-                    "state": "uploading",
-                    "required": [],
-                    "unexpected": True,
-                },
-                "Netlify API response is invalid",
-            ),
+            ({**valid, "required": [42]}, "Netlify API response is invalid"),
+            ({**valid, "id": 42}, "Netlify API response is invalid"),
+            ({**valid, "state": 42}, "Netlify API response is invalid"),
         )
         for response, message in cases:
             with self.subTest(response=response):
@@ -219,13 +249,34 @@ class NetlifyClientTest(unittest.TestCase):
         with self.assertRaisesRegex(netlify_api.NetlifyError, "required file is unavailable"):
             self.create_ready_draft()
 
-    def test_api_error_is_redacted_and_never_calls_restore(self) -> None:
+    def test_api_error_is_redacted_unreachable_and_never_calls_restore(self) -> None:
         self.server.fail_upload = True
         with self.assertRaises(netlify_api.NetlifyError) as raised:
             self.create_ready_draft()
         self.assertNotIn("test-token", str(raised.exception))
         self.assertNotIn("do-not-leak", str(raised.exception))
+        self.assertNotIn("header-do-not-leak", str(raised.exception))
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertIsNone(raised.exception.__context__)
         self.assertFalse(any(request.path.endswith("/restore") for request in self.server.requests))
+
+    def test_uploads_one_deterministic_path_per_required_digest(self) -> None:
+        payload = b"duplicate"
+        self.server.create_response = {
+            "id": "deploy-456",
+            "site_id": "site-123",
+            "deploy_ssl_url": "https://draft.example/deploy-456",
+            "state": "uploading",
+            "required": [hashlib.sha1(payload).hexdigest()],
+        }
+        self.client.create_draft(
+            site_id="site-123",
+            files={"/assets/z.wasm": payload, "/assets/a.wasm": payload},
+            title="title",
+        )
+        uploads = [record for record in self.server.requests if record.method == "PUT"]
+        self.assertEqual(len(uploads), 1)
+        self.assertEqual(uploads[0].path, "/api/v1/deploys/deploy-456/files/assets/a.wasm")
 
     def test_waits_through_non_terminal_state(self) -> None:
         self.server.poll_states = ["uploading", "processing", "ready"]
@@ -249,12 +300,13 @@ class NetlifyClientTest(unittest.TestCase):
         self.assertEqual(request.method, "POST")
         self.assertEqual(request.path, "/api/v1/sites/site-123/deploys/deploy-456/restore")
         self.assertEqual(published["id"], "deploy-456")
-        self.assertEqual(published["state"], "current")
+        self.assertEqual(published["state"], "ready")
 
     def test_publish_rejects_wrong_identity_or_non_https_production_url(self) -> None:
         for response in (
-            {"id": "other", "site_id": "site-123", "ssl_url": "https://runtime.example", "state": "current"},
-            {"id": "deploy-456", "site_id": "site-123", "ssl_url": "http://runtime.example", "state": "current"},
+            {"id": "other", "site_id": "site-123", "ssl_url": "https://runtime.example", "state": "ready"},
+            {"id": "deploy-456", "site_id": "site-123", "ssl_url": "http://runtime.example", "state": "ready"},
+            {"id": "deploy-456", "site_id": "site-123", "ssl_url": "https://runtime.example", "state": "current"},
         ):
             with self.subTest(response=response):
                 self.server.restore_response = response

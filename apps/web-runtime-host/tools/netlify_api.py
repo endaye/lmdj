@@ -54,14 +54,15 @@ class NetlifyClient:
         )
         draft, required = self._parse_create_response(create, site_id)
         required_digests = set(required)
-        selected = [
-            (path, contents)
-            for path, contents in files.items()
-            if hashlib.sha1(contents).hexdigest() in required_digests
-        ]
-        if {hashlib.sha1(contents).hexdigest() for _, contents in selected} != required_digests:
+        selected: dict[str, tuple[str, bytes]] = {}
+        for path in sorted(digests):
+            digest = digests[path]
+            if digest in required_digests and digest not in selected:
+                selected[digest] = (path, files[path])
+        if set(selected) != required_digests:
             raise NetlifyError("Netlify required file is unavailable")
-        for path, contents in selected:
+        for digest in required:
+            path, contents = selected[digest]
             self._request(
                 "PUT",
                 f"/deploys/{self._path_segment(draft.id)}/files/{self._upload_path(path)}",
@@ -72,7 +73,7 @@ class NetlifyClient:
         return self._wait_for_ready(draft, deadline)
 
     def publish_deploy(self, *, site_id: str, deploy_id: str) -> dict[str, object]:
-        """Restore exactly deploy_id and require the response to identify it as current."""
+        """Restore exactly deploy_id and require the response to identify it as ready."""
         if not site_id or not deploy_id:
             raise NetlifyError("Netlify publish input is invalid")
         response = self._json_request(
@@ -81,12 +82,12 @@ class NetlifyClient:
             {},
             None,
         )
-        if not isinstance(response, dict) or set(response) != {"id", "site_id", "ssl_url", "state"}:
+        if not isinstance(response, dict) or not {"id", "site_id", "ssl_url", "state"}.issubset(response):
             raise NetlifyError("Netlify API response is invalid")
         if (
             response.get("id") != deploy_id
             or response.get("site_id") != site_id
-            or response.get("state") != "current"
+            or response.get("state") != "ready"
             or not self._https_url(response.get("ssl_url"))
         ):
             raise NetlifyError("Netlify published deploy identity is invalid")
@@ -119,9 +120,9 @@ class NetlifyClient:
         return current
 
     def _parse_create_response(self, response: object, site_id: str) -> tuple[DraftDeploy, list[str]]:
-        if not isinstance(response, dict) or set(response) != {
+        if not isinstance(response, dict) or not {
             "id", "site_id", "deploy_ssl_url", "state", "required"
-        }:
+        }.issubset(response):
             raise NetlifyError("Netlify API response is invalid")
         required = response.get("required")
         if not isinstance(required, list) or any(
@@ -135,9 +136,9 @@ class NetlifyClient:
     def _parse_deploy_response(
         self, response: object, site_id: str, deploy_id: str | None = None
     ) -> DraftDeploy:
-        if not isinstance(response, dict) or set(response) != {
+        if not isinstance(response, dict) or not {
             "id", "site_id", "deploy_ssl_url", "state"
-        }:
+        }.issubset(response):
             raise NetlifyError("Netlify API response is invalid")
         identifier = response.get("id")
         response_site_id = response.get("site_id")
@@ -153,7 +154,7 @@ class NetlifyClient:
             or not isinstance(state, str)
             or not state
         ):
-            raise NetlifyError("Netlify draft deploy identity is invalid")
+            raise NetlifyError("Netlify API response is invalid")
         return DraftDeploy(identifier, response_site_id, deploy_ssl_url, state)
 
     def _json_request(
@@ -197,11 +198,19 @@ class NetlifyClient:
                 "User-Agent": self._USER_AGENT,
             },
         )
+        failed = False
         try:
             with request.urlopen(operation, timeout=timeout) as response:
                 return response.read()
         except OSError as error:
-            raise NetlifyError("Netlify API request failed") from error
+            try:
+                error.close()
+            except OSError:
+                pass
+            failed = True
+        if failed:
+            raise NetlifyError("Netlify API request failed")
+        raise AssertionError("Netlify request did not return or fail")
 
     @staticmethod
     def _path_segment(value: str) -> str:
