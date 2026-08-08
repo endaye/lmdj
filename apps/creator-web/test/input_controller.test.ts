@@ -204,7 +204,15 @@ describe("Creator input controller", () => {
     input.emit([0x90, 36, 91]);
     await settle();
     expect(value.triggers.at(-1)).toEqual({slot: 32, velocity: 91, source: "midi"});
-    window.dispatchEvent(new PageTransitionEvent("pagehide"));
+    window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}));
+    expect(value.state().pressed.size).toBe(0);
+    expect(input.listenerCount()).toBe(1);
+    expect(access.listenerCount()).toBe(1);
+    input.emit([0x90, 36, 92]);
+    await settle();
+    expect(value.triggers.at(-1)).toEqual({slot: 32, velocity: 92, source: "midi"});
+
+    window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: false}));
     expect(input.listenerCount()).toBe(0);
     expect(access.listenerCount()).toBe(0);
     controller.dispose();

@@ -103,7 +103,8 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       }
     };
     const unsubscribeHostState = session.subscribeHostState(observe);
-    const pagehide = () => {
+    const pagehide = (event: PageTransitionEvent) => {
+      if (event.persisted) return;
       if (active) setPhase("closed");
       void closeOnce(session);
     };

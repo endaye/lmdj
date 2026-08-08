@@ -81,6 +81,23 @@ test("creates and starts one Runtime Session and closes it once", async () => {
   expect(fixture.closes()).toBe(1);
 });
 
+test("keeps the Runtime Session alive across persisted page lifecycle", async () => {
+  const fixture = sessionFixture();
+  const rendered = render(
+    <RuntimeProvider factory={() => fixture.session}><Probe /></RuntimeProvider>,
+  );
+  await screen.findByText("ready");
+
+  window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}));
+  window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+  await Promise.resolve();
+
+  expect(fixture.closes()).toBe(0);
+  expect(screen.getByText("ready")).toBeTruthy();
+  rendered.unmount();
+  await waitFor(() => expect(fixture.closes()).toBe(1));
+});
+
 test("exposes a typed terminal startup failure", async () => {
   const failure = Object.assign(new Error("unsupported"), {
     code: "UNSUPPORTED_WEB_RUNTIME",

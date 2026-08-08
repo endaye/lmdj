@@ -66,6 +66,27 @@ test("suspend and reload require explicit reopen and explicit reactivation", asy
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
   expect((await report(page)).state).toBe("running");
 });
+
+test("persisted page lifecycle retains the Project and live input surface", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await importAndActivate(page);
+
+  await page.evaluate(() => {
+    window.dispatchEvent(new PageTransitionEvent("pagehide", {persisted: true}));
+    window.dispatchEvent(new PageTransitionEvent("pageshow", {persisted: true}));
+  });
+
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
+    .toBeVisible();
+  await expect(page.getByTestId("creator-phase")).not.toHaveText("closed");
+  await page.keyboard.press("KeyA");
+  await expect.poll(async () => {
+    const value = await report(page);
+    return [value.trigger_admitted_count, value.trigger_outcome_count];
+  }, {timeout: 30_000}).toEqual([1, 1]);
+});
 test.describe("synthetic Web MIDI", () => {
   test.beforeEach(async ({page}) => {
     await page.addInitScript(() => {

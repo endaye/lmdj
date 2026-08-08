@@ -210,7 +210,13 @@ export function createCreatorInputController({
   const onPointerUp = (event: PointerEvent) => { pointer.releasePointer(event); };
   const onPointerCancel = (event: PointerEvent) => { pointer.pointerCancel(event); };
   const onMouseUp = (event: MouseEvent) => { pointer.releaseMouse(event); };
-  const onPageHide = () => dispose();
+  const onPageHide = (event: PageTransitionEvent) => {
+    if (event.persisted) {
+      clearPressed();
+      return;
+    }
+    dispose();
+  };
   const onVisibility = () => {
     if (documentTarget.visibilityState === "hidden") clearPressed();
   };
