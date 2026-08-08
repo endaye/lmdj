@@ -540,7 +540,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "milestone": 1,
         "minor": 0,
         "build": 16,
-        "patch": 2,
+        "patch": 3,
     }
 
     workspace = temp_root / "workspace"

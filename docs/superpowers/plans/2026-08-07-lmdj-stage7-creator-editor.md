@@ -241,6 +241,31 @@ PR CI review of the frozen `1.0.16.1 · canary` candidate found three infrastruc
 
 The second corrective candidate tag text is `lmdj-v1.0.16.2`; creating or pushing that tag still requires separate post-merge approval.
 
+### Third post-freeze corrective patch
+
+Final review after the immutable `1.0.16.2 · canary` snapshot found that the
+Creator's visible **Open local** action became unreachable after a Project was
+selected, concurrent Project actions could overlap against stale UI state, and
+persisted `pagehide` incorrectly closed the shared Runtime instead of allowing
+the browser back/forward cache lifecycle. The resulting packaged recovery Proof
+also exposed a deadlock and readiness race: the Creator disabled every Trigger
+while the Platform was waiting for the single real recovery probe, then could
+enable input before that probe window was armed. The immutable `1.0.16.2`
+snapshot remains unchanged. Product Build `1.0.16.3 · canary` is allocated for
+these corrections and must receive a new immutable snapshot plus full
+clean-source Proof before push.
+
+| Identity | Frozen second candidate | Third corrective candidate | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.2` | `1.0.16.3` | Post-freeze Creator action, persisted lifecycle, and recovery-probe correction without a new product capability or public Contract. |
+| `web-runtime-platform` | `0.1.1` | `0.1.2` | Expose fail-closed diagnostics only while the unique recovery probe window is armed. |
+| `creator-web` | `1.0.1` | `1.0.2` | Keep Open local reachable, serialize Project actions, preserve persisted lifecycle, and admit only the armed recovery probe. |
+| `web-runtime-host` | `1.2.1` | `1.2.2` | Exact Platform dependency propagation only. |
+| Other Modules / Hosts / Contracts / Providers / Models | current | unchanged | No other implementation, public Contract, Capability, Provider, or model change. |
+
+The third corrective candidate tag text is `lmdj-v1.0.16.3`; creating or
+pushing that tag still requires separate post-merge approval.
+
 ---
 
 ### Task 1: Define and prove the portable Project Bundle Contract

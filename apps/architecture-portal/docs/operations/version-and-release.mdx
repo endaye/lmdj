@@ -14,7 +14,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前本地候选 Product Build 是 `1.0.16.2 · canary · g<short-sha>`；它保留 `1.0.16.1` 的 Stage 7 Product Assembly 与全部 Module、Host、Contract、Provider 身份，只修正 Core transfer 测试夹具、Web Host Proof server 所有权以及 Linux Web UTF-8/快速失败门禁。产品能力与公开语义未变化，`1.0.16.0` 和 `1.0.16.1` 的不可变快照均不被重写。
+当前本地候选 Product Build 是 `1.0.16.3 · canary · g<short-sha>`。它是 `1.0.16.2` 冻结后的第三个 corrective candidate：Web Runtime Platform 升至 `0.1.2`，Creator Web Host 升至 `1.0.2`，Formal Web Runtime Host 因精确 Platform 依赖传播升至 `1.2.2`；其他 Module、Host、Contract、Provider 和 Model 身份不变。该候选修正 Creator 的 Open local 可达性、Project action 串行化、persisted page lifecycle，以及仅在真实 recovery probe window 已 armed 时开放唯一 Probe Trigger。它没有增加产品能力或公共 Contract。`1.0.16.0`、`1.0.16.1` 与 `1.0.16.2` 的不可变快照均不被重写。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 ## 不可变性
@@ -23,4 +23,4 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.16.2`，仅是未来 tag 文本。当前源码身份不宣称远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+当前候选 Product tag 文本为 `lmdj-v1.0.16.3`，仅是未来 tag 文本。当前源码身份不宣称远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。

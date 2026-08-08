@@ -10,9 +10,9 @@ import {createDiagnosticProjectCoordinator} from "./diagnostic_project.mjs";
 const ASSEMBLY_IDENTITY = Object.freeze({
   distributionContract: "lmdj.web-runtime-host.distribution.v1",
   hostId: "web-runtime-host",
-  hostVersion: "1.2.1",
-  platformVersion: "0.1.1",
-  productBuild: "1.0.16.2",
+  hostVersion: "1.2.2",
+  platformVersion: "0.1.2",
+  productBuild: "1.0.16.3",
   protocolVersion: 1,
 });
 const MANIFEST_SOURCE = Object.freeze({

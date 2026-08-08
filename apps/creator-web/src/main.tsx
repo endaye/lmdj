@@ -12,9 +12,9 @@ if (root === null) throw new Error("Creator root is missing");
 const ASSEMBLY_IDENTITY = Object.freeze({
   distributionContract: "lmdj.creator-web.distribution.v1",
   hostId: "creator-web",
-  hostVersion: "1.0.1",
-  platformVersion: "0.1.1",
-  productBuild: "1.0.16.2",
+  hostVersion: "1.0.2",
+  platformVersion: "0.1.2",
+  productBuild: "1.0.16.3",
   protocolVersion: 1,
 });
 const MANIFEST_SOURCE = Object.freeze({
@@ -35,7 +35,7 @@ const MANIFEST_SOURCE = Object.freeze({
     emsdk_tag: "6.0.5",
   }),
   compatibleHosts: Object.freeze([
-    Object.freeze({host_id: "web-runtime-host", host_version: "1.2.1"}),
+    Object.freeze({host_id: "web-runtime-host", host_version: "1.2.2"}),
   ]),
   expectedAssets: Object.freeze([
     Object.freeze({prefix: "assets/main.", suffix: ".js", role: "host_main"}),
