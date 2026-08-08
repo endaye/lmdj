@@ -24,3 +24,22 @@ schema-2 快照冻结 34 页源码、sidebar、九张图的 18 个 HTML/SVG 资�
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
 当前候选 Product tag 文本为 `lmdj-v1.0.15.2`，仅是未来 tag 文本。当前 Task 只建立本地身份与自动化 Proof，不宣称新 PR、远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；current 页面不按 Task 顺序声明其临时存在状态。历史 `1.0.14.0` 的 PR #91 与 merged-main 证据不自动升级为当前候选证据。
+
+## Runtime Host 公共发布
+
+Runtime Host 的两阶段发布工具和 workflow 定义已经存在：先从精确 signed Product tag
+与 Release archive 验证身份，创建 immutable Netlify draft，对 draft 运行 HTTP 与
+Chromium smoke，再只把同一个 ready Deploy ID 发布到
+`https://lmdj-runtime.netlify.app`，最后写出 evidence artifact。它是实现好的操作路径，
+不是当前已发生的发布。
+
+当前 `1.0.15.2` / Host `1.1.2` 仍为 pre-deploy：没有 push、PR review、CI、merge、
+signed tag、Release、`lmdj-runtime` Netlify project、GitHub Environment secret、
+workflow run、Deploy ID、immutable URL、production alias 或 deployment evidence。只有
+实际 evidence record 才能让 Portal 报告公共部署；本地工具、Proof、PR Preview 或
+workflow 定义都不能替代它。运营前置条件、回滚和凭据轮换见仓库运行手册
+`docs/deploy/web-runtime-host.md`；其验收真相记录见
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+proof-only Python server 不属于生产面；Netlify 将静态服务经验证的 release `dist`。
+`lmdj-canary` 保留给未来 Creator，不能作为本 Runtime Host Task 的项目、别名或 URL。
