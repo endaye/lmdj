@@ -30,7 +30,7 @@ smoke，并只将已 smoke 的同一 Deploy ID 设为生产 alias。workflow 目
 
 这描述的是工具能力，不是远端事实：没有 GitHub 环境、Netlify site、secret、workflow
 run、draft、production alias 变更或 evidence artifact 已创建。尚未 push 或 merge，
-也没有 signed tag、Release、Channel promotion 或公共部署结论。
+也没有远端 verified tag、Release、Channel promotion 或公共部署结论。
 
 ## 固定候选身份
 

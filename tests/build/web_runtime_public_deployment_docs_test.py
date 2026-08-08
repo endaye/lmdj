@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 import unittest
 
 
@@ -35,6 +36,18 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
                 self.assertIn("本地已存在", source)
                 self.assertIn("尚未 push", source)
                 self.assertIn("未做远端验证", source)
+
+    def test_current_truth_never_denies_the_local_signed_tag(self) -> None:
+        deprecated_local_tag_absence = re.compile(
+            r"也没有(?:本候选的)?\s*(?:signed\s+tag|已签名(?:的)?\s*tag)"
+        )
+        for path in (*PORTAL_CURRENT_PAGES, ACCEPTANCE):
+            with self.subTest(path=path):
+                self.assertNotRegex(
+                    self.read(path),
+                    deprecated_local_tag_absence,
+                    "current truth must distinguish absent remote verification from a local signed tag",
+                )
 
     def test_runbook_keeps_release_bytes_and_headers_boundary_explicit(self) -> None:
         source = self.read(RUNBOOK)
