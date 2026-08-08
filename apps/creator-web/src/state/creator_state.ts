@@ -20,6 +20,7 @@ export type CreatorPhase =
   | "opening"
   | "empty"
   | "activating"
+  | "recovering"
   | "running"
   | "suspended"
   | "ready";
@@ -44,7 +45,7 @@ export interface CreatorState {
     errorCode: string | null;
   };
   audio: {
-    phase: "inactive" | "activating" | "running" | "suspended";
+    phase: "inactive" | "activating" | "recovering" | "running" | "suspended";
   };
   transfer: {
     phase: "idle" | "importing";
@@ -194,6 +195,7 @@ export function selectCreatorPhase(state: CreatorState): CreatorPhase {
   if (state.project.phase === "opening") return "opening";
   if (state.project.phase === "empty") return "empty";
   if (state.audio.phase === "activating") return "activating";
+  if (state.audio.phase === "recovering") return "recovering";
   if (state.audio.phase === "running") return "running";
   if (state.audio.phase === "suspended") return "suspended";
   return "ready";
@@ -242,5 +244,5 @@ export function selectCanTrigger(state: CreatorState): boolean {
     state.project.phase === "ready" &&
     state.project.current !== null &&
     state.transfer.phase === "idle" &&
-    state.audio.phase === "running";
+    (state.audio.phase === "running" || state.audio.phase === "recovering");
 }

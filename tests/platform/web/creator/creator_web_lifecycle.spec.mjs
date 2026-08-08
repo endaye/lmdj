@@ -81,11 +81,15 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible();
   await expect(page.getByTestId("creator-phase")).not.toHaveText("closed");
-  await page.keyboard.press("KeyA");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
+    timeout: 30_000,
+  });
+  await page.keyboard.down("KeyA");
   await expect.poll(async () => {
     const value = await report(page);
-    return [value.trigger_admitted_count, value.trigger_outcome_count];
-  }, {timeout: 30_000}).toEqual([1, 1]);
+    return [value.state, value.trigger_admitted_count, value.trigger_outcome_count];
+  }, {timeout: 30_000}).toEqual(["running", 1, 1]);
+  await page.keyboard.up("KeyA");
 });
 test.describe("synthetic Web MIDI", () => {
   test.beforeEach(async ({page}) => {

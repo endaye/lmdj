@@ -147,6 +147,39 @@ test("a failed Runtime Session start never becomes ready", async () => {
   expect(screen.getByTestId("creator-phase").textContent).toBe("failed");
 });
 
+test("recovery keeps the Project playable for the required probe Trigger", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("recovery");
+  value.session.trigger = async (slot, velocity, source) => {
+    value.calls.push(`recovery:trigger:${slot}:${velocity}:${source}`);
+    return {sequence: 1, slot, velocity, source};
+  };
+  render(<App runtimeFactory={() => value.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  value.emit({state: "running", errorCode: null});
+  await screen.findByText("Audio running");
+
+  value.emit({state: "interrupted", errorCode: null});
+  await screen.findByText("Audio suspended");
+  const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
+  expect(pad.hasAttribute("disabled")).toBe(true);
+
+  value.emit({state: "recovering", errorCode: null});
+  await screen.findByText("Audio recovering");
+  expect(pad.hasAttribute("disabled")).toBe(false);
+  window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyA"}));
+  await waitFor(() => expect(value.calls).toContain(
+    "recovery:trigger:0:100:keyboard",
+  ));
+
+  value.emit({state: "running", errorCode: null});
+  await screen.findByText("Audio running");
+});
+
 test("audio activation consumes only an explicit trusted gesture", async () => {
   const value = sessionFixture("gesture");
   let token: unknown = null;

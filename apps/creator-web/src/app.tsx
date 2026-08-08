@@ -98,7 +98,8 @@ function Workspace({
       isAssigned: (slot) =>
         stateRef.current.project.current?.pads[slot]?.assetId !== null &&
         stateRef.current.project.current?.pads[slot]?.assetId !== undefined &&
-        stateRef.current.audio.phase === "running",
+        (stateRef.current.audio.phase === "running" ||
+          stateRef.current.audio.phase === "recovering"),
       dispatch,
     });
     inputController.current = controller;
@@ -112,9 +113,10 @@ function Workspace({
     if (!runtimeHostState) return;
     if (runtimeHostState === "running") {
       dispatch({type: "audio-changed", phase: "running"});
+    } else if (runtimeHostState === "recovering") {
+      dispatch({type: "audio-changed", phase: "recovering"});
     } else if (
       runtimeHostState === "interrupted" ||
-      runtimeHostState === "recovering" ||
       (runtimeHostState === "audio-suspended" &&
         stateRef.current.audio.phase !== "inactive")
     ) {
