@@ -417,6 +417,50 @@ test("non-persisted pagehide submits clean close without forced termination", as
   assert.equal(session.diagnostics().state, "closed");
 });
 
+test("diagnostics expose only the armed recovery probe window", async () => {
+  const browserWindow = new EventTarget();
+  const {emitNotification, session} = fixture({
+    browserWindow,
+    send: async (envelope) => ({
+      protocol_version: 1,
+      request_id: envelope.request_id,
+      ok: true,
+      result: envelope.operation === "trigger"
+        ? {sequence: 7}
+        : envelope.operation === "host.status"
+          ? {acknowledged_generation: 1, control_generation: 1}
+          : {},
+    }),
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(session.diagnostics().recovery_probe_ready, false);
+
+  const pagehide = new Event("pagehide");
+  Object.defineProperty(pagehide, "persisted", {value: true});
+  browserWindow.dispatchEvent(pagehide);
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+  assert.equal(session.diagnostics().state, "recovering");
+  assert.equal(session.diagnostics().recovery_probe_ready, true);
+
+  assert.deepEqual(await session.trigger(0, 100, "keyboard"), {
+    sequence: 7,
+    slot: 0,
+    velocity: 100,
+    source: "keyboard",
+  });
+  assert.equal(session.diagnostics().recovery_probe_ready, false);
+  emitNotification({
+    protocol_version: 1,
+    event: "runtime.trigger_outcomes",
+    payload: {
+      events: [{sequence: 7, outcome: "voice_started", runtime_frame: 42}],
+    },
+  });
+  assert.equal(session.diagnostics().state, "running");
+  assert.equal(session.diagnostics().recovery_probe_ready, false);
+});
+
 test("close disposes MIDI input listeners exactly once", async () => {
   let added = 0;
   let removed = 0;

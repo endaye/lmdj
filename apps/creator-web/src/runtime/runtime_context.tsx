@@ -30,6 +30,7 @@ interface RuntimeContextValue {
   phase: RuntimeProviderPhase;
   errorCode: string | null;
   hostState: string;
+  recoveryProbeReady: boolean;
 }
 
 const RuntimeContext = createContext<RuntimeContextValue | null>(null);
@@ -62,6 +63,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   const [phase, setPhase] = useState<RuntimeProviderPhase>("booting");
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [hostState, setHostState] = useState("cold");
+  const [recoveryProbeReady, setRecoveryProbeReady] = useState(false);
   const closePromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<unknown>>());
   const restartCount = useRef(0);
   const closeOnce = useCallback((target: CreatorRuntimeSession) => {
@@ -76,9 +78,27 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   useEffect(() => {
     let active = true;
     let replacementStarted = false;
+    let recoveryTimer: number | null = null;
     setPhase("booting");
     setErrorCode(null);
     setHostState("cold");
+    setRecoveryProbeReady(false);
+
+    const stopRecoveryProbeWatch = () => {
+      if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
+      recoveryTimer = null;
+    };
+    const watchRecoveryProbe = () => {
+      if (!active) return;
+      const diagnostics = session.diagnostics();
+      if (diagnostics.state !== "recovering") {
+        setRecoveryProbeReady(false);
+        recoveryTimer = null;
+        return;
+      }
+      setRecoveryProbeReady(diagnostics.recovery_probe_ready === true);
+      recoveryTimer = window.setTimeout(watchRecoveryProbe, 16);
+    };
 
     const observe = ({state, errorCode: observedError}: {
       state: string;
@@ -87,6 +107,12 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       if (!active) return;
       setHostState(state);
       setErrorCode(observedError);
+      stopRecoveryProbeWatch();
+      if (state === "recovering") {
+        watchRecoveryProbe();
+      } else {
+        setRecoveryProbeReady(false);
+      }
       if (state === "restart-required") {
         setPhase("restart-required");
         if (restartCount.current === 0 && !replacementStarted) {
@@ -135,6 +161,7 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
     );
     return () => {
       active = false;
+      stopRecoveryProbeWatch();
       window.removeEventListener("pagehide", pagehide);
       unsubscribeHostState();
       void closeOnce(session);
@@ -142,8 +169,8 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   }, [closeOnce, session]);
 
   const value = useMemo(
-    () => ({session, phase, errorCode, hostState}),
-    [session, phase, errorCode, hostState],
+    () => ({session, phase, errorCode, hostState, recoveryProbeReady}),
+    [session, phase, errorCode, hostState, recoveryProbeReady],
   );
   return <RuntimeContext value={value}>{children}</RuntimeContext>;
 }

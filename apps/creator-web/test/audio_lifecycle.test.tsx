@@ -51,6 +51,7 @@ function sessionFixture(name: string) {
   const outcomeListeners = new Set<(outcome: RuntimeOutcome) => void>();
   let hostState = "audio-suspended";
   let errorCode: string | null = null;
+  let recoveryProbeReady = false;
   const session: CreatorRuntimeSession = {
     start: async () => { calls.push(`${name}:start`); return true; },
     close: async () => { calls.push(`${name}:close`); return true; },
@@ -94,14 +95,21 @@ function sessionFixture(name: string) {
       trigger_admitted_count: 0,
       trigger_outcome_count: 0,
       trigger_rejected_count: 0,
+      recovery_probe_ready: recoveryProbeReady,
     }),
   };
   function emit(value: RuntimeHostState) {
     hostState = value.state;
     errorCode = value.errorCode;
+    if (value.state !== "recovering") recoveryProbeReady = false;
     for (const listener of hostListeners) listener(value);
   }
-  return {session, calls, emit};
+  return {
+    session,
+    calls,
+    emit,
+    setRecoveryProbeReady(value: boolean) { recoveryProbeReady = value; },
+  };
 }
 
 test("suspend stays explicit and restart rebuilds, lists, and reopens without autoplay", async () => {
@@ -169,6 +177,8 @@ test("recovery keeps the Project playable for the required probe Trigger", async
   expect(pad.hasAttribute("disabled")).toBe(true);
 
   value.emit({state: "recovering", errorCode: null});
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+  value.setRecoveryProbeReady(true);
   await screen.findByText("Audio recovering");
   expect(pad.hasAttribute("disabled")).toBe(false);
   window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyA"}));

@@ -744,6 +744,10 @@ function createRuntimeSessionController(options = {}) {
       capabilities: capabilitySnapshot,
       control_generation: controlGeneration,
       acknowledged_generation: acknowledgedGeneration,
+      recovery_probe_ready:
+        machine.state === "recovering" &&
+        recoveryEpoch?.probeWindow === true &&
+        probeReservation === null,
       trigger_admitted_count: triggerAdmittedCount,
       trigger_outcome_count: triggerOutcomeCount,
       trigger_rejected_count: triggerRejectedCount,

@@ -47,6 +47,7 @@ interface WorkspaceProps {
   runtimePhase?: RuntimeProviderPhase;
   runtimeErrorCode?: string | null;
   runtimeHostState?: string;
+  runtimeRecoveryProbeReady?: boolean;
 }
 
 type BusyRetry =
@@ -71,6 +72,7 @@ function Workspace({
   runtimePhase,
   runtimeErrorCode,
   runtimeHostState,
+  runtimeRecoveryProbeReady,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [listAttempt, setListAttempt] = useState(0);
@@ -113,16 +115,19 @@ function Workspace({
     if (!runtimeHostState) return;
     if (runtimeHostState === "running") {
       dispatch({type: "audio-changed", phase: "running"});
-    } else if (runtimeHostState === "recovering") {
+    } else if (
+      runtimeHostState === "recovering" && runtimeRecoveryProbeReady === true
+    ) {
       dispatch({type: "audio-changed", phase: "recovering"});
     } else if (
       runtimeHostState === "interrupted" ||
+      runtimeHostState === "recovering" ||
       (runtimeHostState === "audio-suspended" &&
         stateRef.current.audio.phase !== "inactive")
     ) {
       dispatch({type: "audio-changed", phase: "suspended"});
     }
-  }, [runtimeHostState]);
+  }, [runtimeHostState, runtimeRecoveryProbeReady]);
 
   useEffect(() => {
     if (!session || !runtimePhase) return;
@@ -392,6 +397,7 @@ function ManagedWorkspace({initialState}: {initialState: CreatorState}) {
       runtimePhase={runtime.phase}
       runtimeErrorCode={runtime.errorCode}
       runtimeHostState={runtime.hostState}
+      runtimeRecoveryProbeReady={runtime.recoveryProbeReady}
     />
   );
 }

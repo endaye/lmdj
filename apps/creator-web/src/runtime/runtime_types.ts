@@ -70,6 +70,7 @@ export interface RuntimeDiagnostics {
   trigger_admitted_count: number;
   trigger_outcome_count: number;
   trigger_rejected_count: number;
+  recovery_probe_ready?: boolean;
   [key: string]: unknown;
 }
 
