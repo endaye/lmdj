@@ -84,7 +84,10 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("恢复 exact prior", source)
         self.assertIn("reversible `PUT /sites/{site_id}/disable`", source)
         self.assertIn("preflight 发现站点已 disabled", source)
-        self.assertIn("480 秒 kill budget", source)
+        self.assertIn("900 秒 kill budget", source)
+        self.assertIn("未知第三 ID 必须 recovery FAIL", source)
+        self.assertIn("GET 必须确认 exact prior", source)
+        self.assertIn("GET 必须确认 disabled", source)
         self.assertNotIn("NETLIFY_AUTH_TOKEN='authorized-token'", source)
 
     def test_evidence_schemas_preserve_complete_publication_and_recovery_results(self) -> None:
@@ -95,6 +98,10 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("github_actions", source)
         self.assertIn("prior_good", source)
         self.assertIn("publication", source)
+        self.assertIn("release_files", source)
+        self.assertIn("validated secret-safe official projection", source)
+        self.assertIn("{status_code: 204}", source)
+        self.assertIn("post_recovery_site", source)
         self.assertIn("recovery-evidence.json", source)
         self.assertIn("lmdj.web-runtime-host.deployment-recovery-evidence.v1", source)
         self.assertIn("reconcile", source)
@@ -107,6 +114,11 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("trap 'unset GITHUB_TOKEN' EXIT INT TERM", source)
         self.assertIn("unset GITHUB_TOKEN", source)
         self.assertIn("不得在 shell 命令行写", source)
+        self.assertNotIn("优先使用 `gh` 自己的 credential store", source)
+        for match in re.finditer(r"scripts/web-runtime-deploy\.sh (?:verify|deploy)", source):
+            preceding = source[max(0, match.start() - 500):match.start()]
+            self.assertIn("read -rsp", preceding)
+            self.assertIn("export GITHUB_TOKEN", preceding)
 
     def test_approved_design_and_plan_record_no_version_change_and_three_routes(self) -> None:
         for path in (DESIGN, PLAN):

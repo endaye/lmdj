@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
@@ -227,7 +229,7 @@ def parse_staged_bundle(
     product_build: str,
     host_version: str,
     tag: str,
-) -> tuple[Path, str]:
+) -> tuple[Path, str, str, str]:
     staged = parse_json_document(source, "staged Host bundle result")
     if set(staged) != {
         "archive_sha256",
@@ -257,7 +259,14 @@ def parse_staged_bundle(
         raise DeployOrchestratorError("staged Host identity is invalid")
     if tag == INITIAL_TAG and digest != INITIAL_HOST_DIGEST:
         raise DeployOrchestratorError("initial Host archive SHA-256 mismatch")
-    return dist_root, digest
+    try:
+        index_sha256 = hashlib.sha256((dist_root / "index.html").read_bytes()).hexdigest()
+        manifest_sha256 = hashlib.sha256(
+            (dist_root / "host-manifest.json").read_bytes()
+        ).hexdigest()
+    except OSError as error:
+        raise DeployOrchestratorError("staged Host release files are unavailable") from error
+    return dist_root, digest, index_sha256, manifest_sha256
 
 
 def collect_deploy_files(dist_root: Path, headers_path: Path) -> dict[str, bytes]:
@@ -393,22 +402,29 @@ def create_draft(
 
 def validate_published(
     value: Mapping[str, object], *, site_id: str, deploy_id: str
-) -> dict[str, str]:
+) -> dict[str, object]:
     reject_secret_material(value, label="Netlify published identity")
-    required = {"id", "site_id", "ssl_url", "state"}
+    required = {"deploy_ssl_url", "id", "site_id", "ssl_url", "state"}
     if not required.issubset(value):
         raise DeployOrchestratorError("Netlify published identity is invalid")
     if (
         value["id"] != deploy_id
         or value["site_id"] != site_id
         or value["ssl_url"] != CANONICAL_PRODUCTION_URL
+        or value["deploy_ssl_url"]
+        != f"https://{deploy_id.lower()}--{CANONICAL_NETLIFY_SITE}.netlify.app"
         or value["state"] != "ready"
     ):
         raise DeployOrchestratorError(
             "Netlify published identity is not the same ready Deploy"
         )
+    published_at = value.get("published_at")
+    if published_at is not None and not _valid_timestamp(published_at):
+        raise DeployOrchestratorError("Netlify published identity timestamp is invalid")
     return {
+        "deploy_ssl_url": value["deploy_ssl_url"],
         "id": deploy_id,
+        "published_at": published_at,
         "site_id": site_id,
         "ssl_url": CANONICAL_PRODUCTION_URL,
         "state": "ready",
@@ -421,7 +437,7 @@ def publish(
     deploy_id: str,
     token: str,
     client: NetlifyClient | None = None,
-) -> dict[str, str]:
+) -> dict[str, object]:
     selected = (
         _SecretCheckingNetlifyClient(token=token, secrets=_secret_values())
         if client is None
@@ -478,14 +494,14 @@ def current_site(
 
 def disable_site(
     *, site_id: str, reason: str, token: str, client: NetlifyClient | None = None
-) -> dict[str, str]:
+) -> dict[str, int]:
     selected = (
         _SecretCheckingNetlifyClient(token=token, secrets=_secret_values())
         if client is None
         else client
     )
-    selected.disable_site(site_id=site_id, reason=reason)
-    result = {"action": "disabled", "site_id": site_id}
+    status_code = selected.disable_site(site_id=site_id, reason=reason)
+    result = {"status_code": status_code}
     reject_secret_material(result, label="Netlify disable result")
     return result
 
@@ -510,30 +526,83 @@ def initialize_evidence_target(repo_root: Path, deploy_root: Path) -> None:
             evidence.unlink()
 
 
-def _valid_timestamp(value: object, pattern: re.Pattern[str]) -> bool:
-    return isinstance(value, str) and pattern.fullmatch(value) is not None
+def _valid_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+            tzinfo=timezone.utc
+        )
+    except ValueError:
+        return False
+    return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
 
 
-def _valid_browser_evidence(value: object, timestamp: re.Pattern[str]) -> bool:
+def _valid_interval(value: Mapping[str, object]) -> bool:
     return (
-        isinstance(value, dict)
-        and set(value) == {"ended_at", "started_at", "status"}
-        and value.get("status") == "passed"
-        and _valid_timestamp(value.get("started_at"), timestamp)
-        and _valid_timestamp(value.get("ended_at"), timestamp)
-        and value["started_at"] <= value["ended_at"]
+        _valid_timestamp(value.get("started_at"))
+        and _valid_timestamp(value.get("ended_at"))
+        and str(value["started_at"]) <= str(value["ended_at"])
     )
 
 
-def _valid_http_evidence(value: object, timestamp: re.Pattern[str]) -> bool:
+def _valid_browser_evidence(
+    value: object, *, url: str, product: str, host: str, deploy_id: str
+) -> bool:
     return (
         isinstance(value, dict)
-        and set(value) == {"ended_at", "result", "started_at", "status"}
+        and set(value)
+        == {
+            "base_url", "deploy_id", "ended_at", "host_version",
+            "product_build", "started_at", "status",
+        }
         and value.get("status") == "passed"
-        and isinstance(value.get("result"), dict)
-        and _valid_timestamp(value.get("started_at"), timestamp)
-        and _valid_timestamp(value.get("ended_at"), timestamp)
-        and value["started_at"] <= value["ended_at"]
+        and value.get("base_url") == url
+        and value.get("deploy_id") == deploy_id
+        and value.get("product_build") == product
+        and value.get("host_version") == host
+        and _valid_interval(value)
+    )
+
+
+def _valid_http_evidence(
+    value: object,
+    *,
+    product: str,
+    host: str,
+    deploy_id: str | None,
+    index_sha256: str,
+    manifest_sha256: str,
+) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"ended_at", "result", "started_at", "status"}
+        or value.get("status") != "passed"
+        or not _valid_interval(value)
+        or not isinstance(value.get("result"), dict)
+    ):
+        return False
+    result = value["result"]
+    expected_keys = {
+        "asset_count", "host_version", "index_sha256", "manifest_sha256",
+        "product_build", "root_final_path", "root_redirect_count",
+        "root_request_path",
+    }
+    if deploy_id is not None:
+        expected_keys.add("deploy_id")
+    return (
+        set(result) == expected_keys
+        and type(result.get("asset_count")) is int
+        and result.get("asset_count") == 9
+        and result.get("host_version") == host
+        and result.get("product_build") == product
+        and result.get("index_sha256") == index_sha256
+        and result.get("manifest_sha256") == manifest_sha256
+        and result.get("root_request_path") == "/"
+        and result.get("root_final_path") == "/"
+        and type(result.get("root_redirect_count")) is int
+        and result.get("root_redirect_count") == 0
+        and (deploy_id is None or result.get("deploy_id") == deploy_id)
     )
 
 
@@ -546,9 +615,47 @@ def _valid_deploy_url(value: object, deploy_id: object) -> bool:
     )
 
 
-def _valid_success_evidence(
-    document: dict[str, object], timestamp: re.Pattern[str]
+def _valid_site_projection(value: object, *, site_id: str) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"id", "published_deploy", "ssl_url", "state"}
+        or value.get("id") != site_id
+        or value.get("ssl_url") != CANONICAL_PRODUCTION_URL
+        or value.get("state") not in {"current", "disabled"}
+    ):
+        return False
+    deploy = value.get("published_deploy")
+    if deploy is None:
+        return True
+    return (
+        isinstance(deploy, dict)
+        and set(deploy) == {"deploy_ssl_url", "id", "site_id", "state"}
+        and deploy.get("site_id") == site_id
+        and deploy.get("state") == "ready"
+        and _valid_deploy_url(deploy.get("deploy_ssl_url"), deploy.get("id"))
+    )
+
+
+def _valid_publish_projection(
+    value: object, *, site_id: str, deploy_id: str
 ) -> bool:
+    return (
+        isinstance(value, dict)
+        and set(value)
+        == {"deploy_ssl_url", "id", "published_at", "site_id", "ssl_url", "state"}
+        and value.get("id") == deploy_id
+        and value.get("site_id") == site_id
+        and value.get("state") == "ready"
+        and value.get("ssl_url") == CANONICAL_PRODUCTION_URL
+        and _valid_deploy_url(value.get("deploy_ssl_url"), deploy_id)
+        and (
+            value.get("published_at") is None
+            or _valid_timestamp(value.get("published_at"))
+        )
+    )
+
+
+def _valid_success_evidence(document: dict[str, object]) -> bool:
     archive = document.get("archive")
     actions = document.get("github_actions")
     immutable = document.get("immutable")
@@ -558,6 +665,7 @@ def _valid_success_evidence(
     host = document.get("host_version")
     tag = document.get("tag")
     site_id = document.get("site_id")
+    release_files = document.get("release_files")
     if (
         not isinstance(product, str)
         or PRODUCT_PATTERN.fullmatch(product) is None
@@ -570,12 +678,23 @@ def _valid_success_evidence(
         or not isinstance(document.get("git_revision"), str)
         or SHA1_PATTERN.fullmatch(document["git_revision"]) is None
         or document.get("release_url") != CANONICAL_RELEASE_PREFIX + str(tag)
-        or not _valid_timestamp(document.get("started_at"), timestamp)
-        or not _valid_timestamp(document.get("ended_at"), timestamp)
+        or not _valid_timestamp(document.get("started_at"))
+        or not _valid_timestamp(document.get("ended_at"))
         or document["started_at"] > document["ended_at"]
     ):
         return False
     expected_archive = f"lmdj-web-runtime-host-{host}-product-{product}.zip"
+    if (
+        not isinstance(release_files, dict)
+        or set(release_files) != {"index_sha256", "manifest_sha256"}
+        or not isinstance(release_files.get("index_sha256"), str)
+        or SHA256_PATTERN.fullmatch(release_files["index_sha256"]) is None
+        or not isinstance(release_files.get("manifest_sha256"), str)
+        or SHA256_PATTERN.fullmatch(release_files["manifest_sha256"]) is None
+    ):
+        return False
+    index_sha = release_files["index_sha256"]
+    manifest_sha = release_files["manifest_sha256"]
     if (
         not isinstance(archive, dict)
         or set(archive) != {"filename", "sha256"}
@@ -594,13 +713,26 @@ def _valid_success_evidence(
         not isinstance(immutable, dict)
         or set(immutable) != {"browser", "deploy_id", "deploy_url", "http"}
         or not _valid_deploy_url(immutable.get("deploy_url"), immutable.get("deploy_id"))
-        or not _valid_http_evidence(immutable.get("http"), timestamp)
-        or not _valid_browser_evidence(immutable.get("browser"), timestamp)
+        or not _valid_http_evidence(
+            immutable.get("http"), product=product, host=host,
+            deploy_id=immutable.get("deploy_id"), index_sha256=index_sha,
+            manifest_sha256=manifest_sha,
+        )
+        or not _valid_browser_evidence(
+            immutable.get("browser"), url=immutable.get("deploy_url"),
+            product=product, host=host, deploy_id=immutable.get("deploy_id"),
+        )
         or not isinstance(production, dict)
         or set(production) != {"browser", "http", "url"}
         or production.get("url") != CANONICAL_PRODUCTION_URL
-        or not _valid_http_evidence(production.get("http"), timestamp)
-        or not _valid_browser_evidence(production.get("browser"), timestamp)
+        or not _valid_http_evidence(
+            production.get("http"), product=product, host=host, deploy_id=None,
+            index_sha256=index_sha, manifest_sha256=manifest_sha,
+        )
+        or not _valid_browser_evidence(
+            production.get("browser"), url=CANONICAL_PRODUCTION_URL,
+            product=product, host=host, deploy_id=immutable.get("deploy_id"),
+        )
     ):
         return False
     response = publication.get("response") if isinstance(publication, dict) else None
@@ -608,11 +740,9 @@ def _valid_success_evidence(
         not isinstance(publication, dict)
         or set(publication) != {"response", "same_deploy_id"}
         or publication.get("same_deploy_id") != immutable.get("deploy_id")
-        or not isinstance(response, dict)
-        or response.get("id") != immutable.get("deploy_id")
-        or response.get("site_id") != site_id
-        or response.get("ssl_url") != CANONICAL_PRODUCTION_URL
-        or response.get("state") != "ready"
+        or not _valid_publish_projection(
+            response, site_id=site_id, deploy_id=immutable.get("deploy_id")
+        )
     ):
         return False
     prior = document.get("prior_good")
@@ -627,24 +757,49 @@ def _valid_success_evidence(
     prior_immutable = prior.get("immutable")
     prior_production = prior.get("production")
     site_response = prior.get("site_response")
+    prior_product = prior.get("product_build")
+    prior_host = prior.get("host_version")
+    prior_index = (
+        prior_immutable.get("http", {}).get("result", {}).get("index_sha256")
+        if isinstance(prior_immutable, dict)
+        else None
+    )
+    prior_manifest = (
+        prior_immutable.get("http", {}).get("result", {}).get("manifest_sha256")
+        if isinstance(prior_immutable, dict)
+        else None
+    )
     return (
         _valid_deploy_url(prior.get("deploy_url"), prior_id)
-        and isinstance(prior.get("product_build"), str)
-        and PRODUCT_PATTERN.fullmatch(prior["product_build"]) is not None
-        and isinstance(prior.get("host_version"), str)
-        and HOST_PATTERN.fullmatch(prior["host_version"]) is not None
+        and isinstance(prior_product, str)
+        and PRODUCT_PATTERN.fullmatch(prior_product) is not None
+        and isinstance(prior_host, str)
+        and HOST_PATTERN.fullmatch(prior_host) is not None
+        and isinstance(prior_index, str) and SHA256_PATTERN.fullmatch(prior_index) is not None
+        and isinstance(prior_manifest, str) and SHA256_PATTERN.fullmatch(prior_manifest) is not None
         and isinstance(prior_immutable, dict)
         and set(prior_immutable) == {"browser", "http"}
-        and _valid_http_evidence(prior_immutable.get("http"), timestamp)
-        and _valid_browser_evidence(prior_immutable.get("browser"), timestamp)
+        and _valid_http_evidence(
+            prior_immutable.get("http"), product=prior_product, host=prior_host,
+            deploy_id=prior_id, index_sha256=prior_index,
+            manifest_sha256=prior_manifest,
+        )
+        and _valid_browser_evidence(
+            prior_immutable.get("browser"), url=prior.get("deploy_url"),
+            product=prior_product, host=prior_host, deploy_id=prior_id,
+        )
         and isinstance(prior_production, dict)
         and set(prior_production) == {"browser", "http"}
-        and _valid_http_evidence(prior_production.get("http"), timestamp)
-        and _valid_browser_evidence(prior_production.get("browser"), timestamp)
-        and isinstance(site_response, dict)
-        and set(site_response) == {"id", "published_deploy", "ssl_url", "state"}
-        and site_response.get("id") == site_id
-        and site_response.get("ssl_url") == CANONICAL_PRODUCTION_URL
+        and _valid_http_evidence(
+            prior_production.get("http"), product=prior_product, host=prior_host,
+            deploy_id=None, index_sha256=prior_index,
+            manifest_sha256=prior_manifest,
+        )
+        and _valid_browser_evidence(
+            prior_production.get("browser"), url=CANONICAL_PRODUCTION_URL,
+            product=prior_product, host=prior_host, deploy_id=prior_id,
+        )
+        and _valid_site_projection(site_response, site_id=site_id)
         and site_response.get("state") == "current"
         and isinstance(site_response.get("published_deploy"), dict)
         and site_response["published_deploy"].get("id") == prior_id
@@ -655,71 +810,136 @@ def _valid_success_evidence(
     )
 
 
-def _valid_recovery_evidence(
-    document: dict[str, object], timestamp: re.Pattern[str]
-) -> bool:
+def _valid_recovery_evidence(document: dict[str, object]) -> bool:
     action = document.get("action")
     attempted = document.get("attempted_deploy")
     prior = document.get("prior_deploy")
     validation = document.get("validation")
     if (
         action not in {
-            "alias-not-new", "disabled-first-publication", "not-started",
-            "restored-prior",
+            "disabled-first-publication", "no-publication", "not-started",
+            "prior-still-current", "restored-prior", "unsafe-unknown-alias",
         }
         or type(document.get("original_status")) is not int
         or document["original_status"] == 0
-        or not _valid_timestamp(document.get("recorded_at"), timestamp)
+        or not _valid_timestamp(document.get("recorded_at"))
         or not isinstance(attempted, dict)
         or set(attempted) != {"id", "url"}
         or not _valid_deploy_url(attempted.get("url"), attempted.get("id"))
-        or not isinstance(document.get("reconcile"), dict)
+        or document.get("status") not in {"failed", "passed"}
         or not isinstance(validation, dict)
         or set(validation) != {
             "immutable_browser", "immutable_http", "production_browser",
             "production_http", "status",
         }
         or validation.get("status") not in {"failed", "passed"}
+        or validation.get("status") != document.get("status")
     ):
         return False
     if prior is not None and (
         not isinstance(prior, dict)
-        or set(prior) != {"id", "url"}
+        or set(prior) != {
+            "host_version", "id", "index_sha256", "manifest_sha256",
+            "product_build", "url",
+        }
         or not _valid_deploy_url(prior.get("url"), prior.get("id"))
+        or not isinstance(prior.get("product_build"), str)
+        or PRODUCT_PATTERN.fullmatch(prior["product_build"]) is None
+        or not isinstance(prior.get("host_version"), str)
+        or HOST_PATTERN.fullmatch(prior["host_version"]) is None
+        or not isinstance(prior.get("index_sha256"), str)
+        or SHA256_PATTERN.fullmatch(prior["index_sha256"]) is None
+        or not isinstance(prior.get("manifest_sha256"), str)
+        or SHA256_PATTERN.fullmatch(prior["manifest_sha256"]) is None
     ):
         return False
+    reconcile = document.get("reconcile")
+    post = document.get("post_recovery_site")
     response = document.get("recovery_response")
-    if action == "alias-not-new":
-        return validation["status"] == "passed" and response is None
-    if action == "disabled-first-publication":
-        return (
-            prior is None
-            and validation["status"] == "passed"
-            and isinstance(response, dict)
-            and set(response) == {"action", "site_id"}
-            and response.get("action") == "disabled"
-            and isinstance(response.get("site_id"), str)
-            and DEPLOY_ID_PATTERN.fullmatch(response["site_id"]) is not None
-        )
+    passed = validation["status"] == "passed"
     if action == "not-started":
-        return validation["status"] == "failed" and response is None
+        if passed or response is not None or post != {}:
+            return False
+        return reconcile == {} or (
+            isinstance(reconcile, dict)
+            and isinstance(reconcile.get("id"), str)
+            and _valid_site_projection(reconcile, site_id=reconcile["id"])
+        )
+    site_id = (
+        reconcile.get("id")
+        if isinstance(reconcile, dict) and isinstance(reconcile.get("id"), str)
+        else None
+    )
+    if not isinstance(site_id, str) or not _valid_site_projection(reconcile, site_id=site_id):
+        return False
+    if action == "unsafe-unknown-alias":
+        return not passed and response is None and post == {}
+    if action == "no-publication":
+        return (
+            passed and prior is None and response is None
+            and reconcile.get("state") == "current"
+            and reconcile.get("published_deploy") is None
+            and post == reconcile
+        )
+    if action == "prior-still-current":
+        return (
+            passed and isinstance(prior, dict) and response is None
+            and post == reconcile
+            and reconcile.get("state") == "current"
+            and reconcile.get("published_deploy", {}).get("id") == prior.get("id")
+            and _valid_recovery_smokes(validation, prior)
+        )
+    if action == "disabled-first-publication":
+        if prior is not None or response != {"status_code": 204}:
+            return False
+        return (
+            (passed and _valid_site_projection(post, site_id=site_id)
+             and post.get("state") == "disabled")
+            or (not passed and (post == {} or _valid_site_projection(post, site_id=site_id)))
+        )
     if not isinstance(prior, dict) or not isinstance(response, dict):
         return False
-    if (
-        response.get("id") != prior.get("id")
-        or not isinstance(response.get("site_id"), str)
-        or DEPLOY_ID_PATTERN.fullmatch(response["site_id"]) is None
-        or response.get("state") != "ready"
-        or response.get("ssl_url") != CANONICAL_PRODUCTION_URL
+    if not _valid_publish_projection(
+        response, site_id=site_id, deploy_id=prior.get("id")
     ):
         return False
-    if validation["status"] == "failed":
-        return True
+    if not passed:
+        return post == {} or _valid_site_projection(post, site_id=site_id)
     return (
-        _valid_http_evidence(validation.get("immutable_http"), timestamp)
-        and _valid_browser_evidence(validation.get("immutable_browser"), timestamp)
-        and _valid_http_evidence(validation.get("production_http"), timestamp)
-        and _valid_browser_evidence(validation.get("production_browser"), timestamp)
+        _valid_site_projection(post, site_id=site_id)
+        and post.get("state") == "current"
+        and post.get("published_deploy", {}).get("id") == prior.get("id")
+        and _valid_recovery_smokes(validation, prior)
+    )
+
+
+def _valid_recovery_smokes(
+    validation: Mapping[str, object], prior: Mapping[str, object]
+) -> bool:
+    prior_id = prior["id"]
+    product = prior["product_build"]
+    host = prior["host_version"]
+    index_sha = prior["index_sha256"]
+    manifest_sha = prior["manifest_sha256"]
+    return (
+        _valid_http_evidence(
+            validation.get("immutable_http"), product=product, host=host,
+            deploy_id=prior_id, index_sha256=index_sha,
+            manifest_sha256=manifest_sha,
+        )
+        and _valid_browser_evidence(
+            validation.get("immutable_browser"), url=prior["url"],
+            product=product, host=host, deploy_id=prior_id,
+        )
+        and _valid_http_evidence(
+            validation.get("production_http"), product=product, host=host,
+            deploy_id=None, index_sha256=index_sha,
+            manifest_sha256=manifest_sha,
+        )
+        and _valid_browser_evidence(
+            validation.get("production_browser"), url=CANONICAL_PRODUCTION_URL,
+            product=product, host=host, deploy_id=prior_id,
+        )
     )
 
 
@@ -729,25 +949,24 @@ def write_evidence_document(
     document = parse_json_document(source, "deployment evidence")
     if document.get("contract") != expected_contract:
         raise DeployOrchestratorError("deployment evidence contract is invalid")
-    timestamp = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z")
     if expected_contract == "lmdj.web-runtime-host.deployment-evidence.v2":
         required = {
             "archive", "channel", "contract", "ended_at", "git_revision",
             "github_actions", "host_version", "immutable", "prior_good",
             "product_build", "production", "publication", "release_url",
-            "site_id", "started_at", "tag",
+            "release_files", "site_id", "started_at", "tag",
         }
         if set(document) != required:
             raise DeployOrchestratorError("deployment evidence schema is invalid")
-        if not _valid_success_evidence(document, timestamp):
+        if not _valid_success_evidence(document):
             raise DeployOrchestratorError("deployment evidence schema is invalid")
     elif expected_contract == "lmdj.web-runtime-host.deployment-recovery-evidence.v1":
         required = {
             "action", "attempted_deploy", "contract", "original_status",
-            "prior_deploy", "reconcile", "recorded_at", "recovery_response",
-            "validation",
+            "post_recovery_site", "prior_deploy", "reconcile", "recorded_at",
+            "recovery_response", "status", "validation",
         }
-        if set(document) != required or not _valid_recovery_evidence(document, timestamp):
+        if set(document) != required or not _valid_recovery_evidence(document):
             raise DeployOrchestratorError("deployment recovery evidence schema is invalid")
     else:
         raise DeployOrchestratorError("deployment evidence contract is unsupported")
@@ -857,14 +1076,14 @@ def run(options: argparse.Namespace) -> None:
         )
         return
     if options.command == "staged-bundle":
-        dist_root, digest = parse_staged_bundle(
+        dist_root, digest, index_sha256, manifest_sha256 = parse_staged_bundle(
             options.document,
             stage_root=options.stage_root,
             product_build=options.product_build,
             host_version=options.host_version,
             tag=options.tag,
         )
-        print(f"{dist_root}\t{digest}")
+        print(f"{dist_root}\t{digest}\t{index_sha256}\t{manifest_sha256}")
         return
     if options.command == "create-draft":
         draft = create_draft(

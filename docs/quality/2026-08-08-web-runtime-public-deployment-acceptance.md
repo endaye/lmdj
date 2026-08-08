@@ -30,8 +30,10 @@ target 是 `72ae40074620cc5681c462ba04a31a666449734f`。该本地 tag 尚未 pus
 验证 canonical remote signed tag、protected `origin/main` ancestor、精确 ZIP/checksum/
 checksum signature 三资产，再取得并完整验证实际 prior published deploy，然后创建
 immutable draft，分别对 draft 和生产别名运行 HTTP/Chromium smoke，并只将已 smoke 的
-同一 Deploy ID 设为生产 alias。publish 后任何失败或信号都 GET reconcile；若 alias
-指向新 Deploy，恢复 exact prior，首次无 prior 则 reversible disable。workflow 目标 Environment 是
+同一 Deploy ID 设为生产 alias。staged Release index/manifest digest 必须与 candidate
+immutable 和 production 一致，prior 两个 URL 也必须逐字节一致。publish 后任何失败或
+信号都 GET reconcile；candidate、exact prior、首次无 publication 之外的第三 ID 失败；
+restore/disable 后 GET 必须证明 exact prior/disabled。workflow 目标 Environment 是
 `runtime-canary`，所需 secret 名称是 `NETLIFY_RUNTIME_SITE_ID` 与
 `NETLIFY_AUTH_TOKEN`。
 
@@ -46,10 +48,12 @@ run、draft、production alias 变更或 evidence artifact 已创建。deploymen
 尚未 push/review/CI/merge；也没有远端 verified tag、Release、Channel promotion 或公共部署结论。
 
 成功 evidence exact contract 是 `lmdj.web-runtime-host.deployment-evidence.v2`，包含 archive
-filename/SHA、canonical Actions run ID/URL、start/end、prior-good、immutable HTTP/browser、
-same-ID publish 完整 response 与 production HTTP/browser。失败恢复 exact contract 是
+filename/SHA、Release file digests、canonical Actions run ID/URL、真实 UTC start/end、
+prior-good、immutable HTTP/browser、same-ID publish validated secret-safe official projection
+与 production HTTP/browser。失败恢复 exact contract 是
 `lmdj.web-runtime-host.deployment-recovery-evidence.v1`，包含 reconcile GET、restore/disable
-response 与四项复验；workflow `always()` 上传两类 JSON 和完整日志。
+官方 projection、post-action GET 与四项复验；disable 记录官方 204，不伪造 response。
+workflow `always()` 上传两类 JSON 和完整日志。
 
 ## 固定候选身份
 

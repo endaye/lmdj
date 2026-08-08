@@ -45,6 +45,35 @@ SITE_ID = "site-123"
 DEPLOY_ID = "deploy-456"
 PRIOR_DEPLOY_ID = "prior-123"
 PRODUCTION_URL = "https://lmdj-runtime.netlify.app"
+CANDIDATE_INDEX_SHA256 = hashlib.sha256(b"fixture index").hexdigest()
+PRIOR_INDEX_SHA256 = "c" * 64
+PRIOR_MANIFEST_SHA256 = "d" * 64
+
+
+def fixture_manifest(product_build: str) -> str:
+    assets = [
+        {
+            "bytes": 1,
+            "path": f"assets/asset-{index}.{str(index) * 64}.mjs",
+            "role": "host_module",
+            "sha256": str(index) * 64,
+        }
+        for index in range(9)
+    ]
+    return json.dumps(
+        {
+            "assets": assets,
+            "product_build": product_build,
+            "host_version": HOST_VERSION,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+CANDIDATE_MANIFEST_SHA256 = hashlib.sha256(
+    fixture_manifest(PRODUCT_BUILD).encode()
+).hexdigest()
 
 
 def snapshot_tree(root: Path) -> tuple[object, ...]:
@@ -115,17 +144,20 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 else "netlify restore prior-id"
             )
             if requested_id == PRIOR_DEPLOY_ID:
-                self.server.current_deploy_id = PRIOR_DEPLOY_ID
-                self.server.current_deploy_url = (
-                    f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app"
-                )
+                if not self.server.restore_keeps_candidate:
+                    self.server.current_deploy_id = PRIOR_DEPLOY_ID
+                    self.server.current_deploy_url = (
+                        f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app"
+                    )
                 self.send_json(
                     201,
                     {
                         "id": PRIOR_DEPLOY_ID,
                         "site_id": SITE_ID,
                         "ssl_url": PRODUCTION_URL,
+                        "deploy_ssl_url": f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app",
                         "state": "ready",
+                        "published_at": "2026-08-09T00:00:00Z",
                     },
                 )
                 return
@@ -133,7 +165,9 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 "id": self.server.published_id,
                 "site_id": self.server.published_site_id,
                 "ssl_url": self.server.production_url,
+                "deploy_ssl_url": self.server.deploy_url,
                 "state": self.server.published_state,
+                "published_at": "2026-08-09T00:00:00Z",
             }
             document.update(self.server.restore_extra)
             if self.server.publish_switches_alias:
@@ -151,6 +185,12 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "not found"})
             return
         self.server.authorization_headers.append(self.headers.get("Authorization", ""))
+        if (
+            self.server.reconcile_override_deploy_id
+            and "netlify publish same-id" in self.server.command_log.read_text(encoding="utf-8")
+        ):
+            self.server.current_deploy_id = self.server.reconcile_override_deploy_id
+            self.server.current_deploy_url = self.server.reconcile_override_deploy_url
         prior = None
         if self.server.current_deploy_id:
             prior = {
@@ -173,7 +213,8 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
     def do_PUT(self) -> None:
         if urlsplit(self.path).path == f"/api/v1/sites/{SITE_ID}/disable":
             self.server.authorization_headers.append(self.headers.get("Authorization", ""))
-            self.server.site_state = "disabled"
+            if not self.server.disable_keeps_enabled:
+                self.server.site_state = "disabled"
             self.server.append_log("netlify disable-site")
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -199,6 +240,10 @@ class FakeNetlifyServer(ThreadingHTTPServer):
     site_state: str
     publish_switches_alias: bool
     publish_error_after_switch: bool
+    restore_keeps_candidate: bool
+    disable_keeps_enabled: bool
+    reconcile_override_deploy_id: str
+    reconcile_override_deploy_url: str
 
     def append_log(self, value: str) -> None:
         with self.command_log.open("a", encoding="utf-8") as output:
@@ -258,6 +303,10 @@ class DeployCommandTest(unittest.TestCase):
         self.server.site_state = "current"
         self.server.publish_switches_alias = True
         self.server.publish_error_after_switch = False
+        self.server.restore_keeps_candidate = False
+        self.server.disable_keeps_enabled = False
+        self.server.reconcile_override_deploy_id = ""
+        self.server.reconcile_override_deploy_url = ""
         self.server.create_extra = {}
         self.server.restore_extra = {}
         self.server.authorization_headers = []
@@ -337,7 +386,33 @@ class DeployCommandTest(unittest.TestCase):
                         marker.write_text("failed", encoding="utf-8")
                 if should_fail:
                     raise SystemExit(f"forced {{label}} smoke failure")
-                print(json.dumps({{"base_url": base_url, "status": "passed"}}, sort_keys=True, separators=(",", ":")))
+                log_text = Path(os.environ["COMMAND_LOG"]).read_text(encoding="utf-8")
+                publish_position = log_text.rfind("netlify publish same-id")
+                restored = log_text.rfind("netlify restore prior-id") > publish_position
+                prior = label == "prior-immutable" or (
+                    label == "production" and (publish_position < 0 or restored)
+                )
+                phase = "PRIOR" if prior else "CANDIDATE"
+                surface = "IMMUTABLE" if immutable else "PRODUCTION"
+                default_index = {PRIOR_INDEX_SHA256!r} if prior else {CANDIDATE_INDEX_SHA256!r}
+                default_manifest = {PRIOR_MANIFEST_SHA256!r} if prior else {CANDIDATE_MANIFEST_SHA256!r}
+                index_sha256 = os.environ.get(f"FAKE_{{phase}}_{{surface}}_INDEX_SHA", default_index)
+                manifest_sha256 = os.environ.get(f"FAKE_{{phase}}_{{surface}}_MANIFEST_SHA", default_manifest)
+                expected_product = sys.argv[2]
+                expected_host = sys.argv[3]
+                result = {{
+                    "asset_count": 9,
+                    "host_version": expected_host,
+                    "index_sha256": index_sha256,
+                    "manifest_sha256": manifest_sha256,
+                    "product_build": expected_product,
+                    "root_final_path": "/",
+                    "root_redirect_count": 0,
+                    "root_request_path": "/",
+                }}
+                if immutable:
+                    result["deploy_id"] = sys.argv[sys.argv.index("--expected-deploy-id") + 1]
+                print(json.dumps(result, sort_keys=True, separators=(",", ":")))
                 """
             ).lstrip(),
             encoding="utf-8",
@@ -349,6 +424,24 @@ class DeployCommandTest(unittest.TestCase):
         path.chmod(0o755)
 
     def write_fake_commands(self) -> None:
+        self.write_executable(
+            "timeout",
+            f"""
+            #!{sys.executable}
+            import os
+            import sys
+
+            args = sys.argv[1:]
+            while args and args[0].startswith("--"):
+                args.pop(0)
+            if not args:
+                raise SystemExit(64)
+            args.pop(0)
+            if not args:
+                raise SystemExit(64)
+            os.execvp(args[0], args)
+            """,
+        )
         self.write_executable(
             "env",
             f"""
@@ -640,7 +733,7 @@ def verify_distribution(dist_root, repo_root):
                     "role": "host_module",
                     "sha256": str(index) * 64,
                 }} for index in range(9)]
-                manifest = json.dumps({{"assets": assets, "product_build": product_build, "host_version": {HOST_VERSION!r}}}, sort_keys=True, separators=(",", ":"))
+                manifest = {fixture_manifest(PRODUCT_BUILD)!r}.replace({PRODUCT_BUILD!r}, product_build)
                 archive_path = destination / archive_name
                 with zipfile.ZipFile(archive_path, "w") as archive:
                     archive.writestr("dist/index.html", "fixture index")
@@ -1092,6 +1185,84 @@ def verify_distribution(dist_root, repo_root):
                 self.assertNotIn("netlify publish same-id", self.command_log())
                 self.assertFalse((self.deploy_root / "evidence.json").exists())
 
+    def test_prior_good_requires_identical_immutable_and_production_bytes(self) -> None:
+        completed = self.run_command(
+            "deploy",
+            TAG,
+            environment={"FAKE_PRIOR_PRODUCTION_INDEX_SHA": "e" * 64},
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("netlify create-draft", self.command_log())
+
+    def test_candidate_immutable_must_match_staged_release_bytes(self) -> None:
+        completed = self.run_command(
+            "deploy",
+            TAG,
+            environment={"FAKE_CANDIDATE_IMMUTABLE_MANIFEST_SHA": "e" * 64},
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("netlify publish same-id", self.command_log())
+
+    def test_candidate_production_byte_mismatch_restores_prior(self) -> None:
+        completed = self.run_command(
+            "deploy",
+            TAG,
+            environment={"FAKE_CANDIDATE_PRODUCTION_INDEX_SHA": "e" * 64},
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("netlify restore prior-id", self.command_log())
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["status"], "passed")
+
+    def test_reconcile_rejects_unknown_third_deploy_id(self) -> None:
+        self.server.reconcile_override_deploy_id = "unknown-789"
+        self.server.reconcile_override_deploy_url = (
+            "https://unknown-789--lmdj-runtime.netlify.app"
+        )
+        completed = self.run_command(
+            "deploy", TAG, environment={"FAIL_PRODUCTION_SMOKE": "1"}
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("netlify restore prior-id", self.command_log())
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "unsafe-unknown-alias")
+        self.assertEqual(recovery["status"], "failed")
+
+    def test_restore_requires_post_action_get_to_confirm_exact_prior(self) -> None:
+        self.server.restore_keeps_candidate = True
+        completed = self.run_command(
+            "deploy", TAG, environment={"FAIL_PRODUCTION_SMOKE": "1"}
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "restored-prior")
+        self.assertEqual(recovery["status"], "failed")
+        self.assertEqual(
+            recovery["post_recovery_site"]["published_deploy"]["id"], DEPLOY_ID
+        )
+
+    def test_disable_requires_post_action_get_to_confirm_disabled_state(self) -> None:
+        self.server.current_deploy_id = ""
+        self.server.current_deploy_url = ""
+        self.server.disable_keeps_enabled = True
+        completed = self.run_command(
+            "deploy", TAG, environment={"FAIL_PRODUCTION_SMOKE": "1"}
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "disabled-first-publication")
+        self.assertEqual(recovery["recovery_response"], {"status_code": 204})
+        self.assertEqual(recovery["status"], "failed")
+        self.assertEqual(recovery["post_recovery_site"]["state"], "current")
+
     def test_failed_production_smoke_restores_prior_and_writes_atomic_recovery_evidence(self) -> None:
         completed = self.run_command(
             "deploy", TAG, environment={"FAIL_PRODUCTION_SMOKE": "1"}
@@ -1129,7 +1300,7 @@ def verify_distribution(dist_root, repo_root):
         )
         self.assertEqual(recovery["action"], "disabled-first-publication")
         self.assertIsNone(recovery["prior_deploy"])
-        self.assertEqual(recovery["recovery_response"]["action"], "disabled")
+        self.assertEqual(recovery["recovery_response"], {"status_code": 204})
 
     def test_publish_api_error_reconciles_alias_and_restores_exact_prior(self) -> None:
         self.server.publish_error_after_switch = True
@@ -1141,6 +1312,34 @@ def verify_distribution(dist_root, repo_root):
         self.assertIn("netlify restore prior-id", log[publish_index:])
         self.assertEqual(self.server.current_deploy_id, PRIOR_DEPLOY_ID)
         self.assertTrue((self.deploy_root / "recovery-evidence.json").is_file())
+
+    def test_publish_error_accepts_only_exact_prior_still_current(self) -> None:
+        self.server.publish_switches_alias = False
+        self.server.publish_error_after_switch = True
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("netlify restore prior-id", self.command_log())
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "prior-still-current")
+        self.assertEqual(recovery["status"], "passed")
+        self.assertEqual(recovery["post_recovery_site"], recovery["reconcile"])
+
+    def test_first_publish_error_with_no_alias_is_safe_no_publication(self) -> None:
+        self.server.current_deploy_id = ""
+        self.server.current_deploy_url = ""
+        self.server.publish_switches_alias = False
+        self.server.publish_error_after_switch = True
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("netlify disable-site", self.command_log())
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "no-publication")
+        self.assertEqual(recovery["status"], "passed")
+        self.assertIsNone(recovery["reconcile"]["published_deploy"])
 
     def test_pre_disabled_site_refuses_automatic_enable_or_publication(self) -> None:
         self.server.site_state = "disabled"
@@ -1173,7 +1372,7 @@ def verify_distribution(dist_root, repo_root):
                 "archive", "channel", "contract", "ended_at", "git_revision",
                 "github_actions", "host_version", "immutable", "prior_good",
                 "product_build", "production", "publication", "release_url",
-                "site_id", "started_at", "tag",
+                "release_files", "site_id", "started_at", "tag",
             },
         )
         self.assertEqual(
@@ -1184,6 +1383,13 @@ def verify_distribution(dist_root, repo_root):
             },
         )
         self.assertEqual(evidence["contract"], "lmdj.web-runtime-host.deployment-evidence.v2")
+        self.assertEqual(
+            evidence["release_files"],
+            {
+                "index_sha256": CANDIDATE_INDEX_SHA256,
+                "manifest_sha256": CANDIDATE_MANIFEST_SHA256,
+            },
+        )
         self.assertEqual(
             evidence["github_actions"],
             {

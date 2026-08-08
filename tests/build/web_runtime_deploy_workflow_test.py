@@ -11,6 +11,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/deploy-web-runtime-host.yml"
+DEPLOY_SCRIPT = REPO_ROOT / "scripts/web-runtime-deploy.sh"
 PUBLIC_KEY = REPO_ROOT / ".github/release-signing-keys/lmdj-product.asc"
 TRUSTED_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 EXPECTED_ACTION_PINS = {
@@ -138,8 +139,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             (
                 step
                 for step in self.workflow_steps(source)
-                if step.splitlines()[0]
-                == f"      - uses: actions/checkout@{checkout_pin} # {checkout_version}"
+                if f"uses: actions/checkout@{checkout_pin} # {checkout_version}" in step
             ),
             None,
         )
@@ -246,10 +246,62 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         source = self.workflow_source()
         deploy_step = self.step_named(source, "Deploy signed Runtime Host release")
         self.assertIn(
-            "timeout --signal=TERM --kill-after=480s 1080s", deploy_step
+            "timeout --signal=TERM --kill-after=900s 1080s", deploy_step
         )
-        self.assertIn("timeout-minutes: 30", source)
-        self.assertLess(1080 + 480, 30 * 60)
+        self.assertIn("timeout-minutes: 75", source)
+
+        step_budgets = {
+            "Checkout protected main tooling": 5,
+            "Set up Python": 3,
+            "Set up Node": 3,
+            "Install browser smoke dependencies": 5,
+            "Install Chromium": 10,
+            "Select exact signed Product tag": 2,
+            "Deploy signed Runtime Host release": 35,
+            "Upload deployment evidence and failure logs": 5,
+        }
+        for name, minutes in step_budgets.items():
+            with self.subTest(step=name):
+                step = self.step_named(source, name)
+                self.assertIn(f"timeout-minutes: {minutes}", step)
+
+        script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+        recovery_api = 30
+        recovery_http = 180
+        recovery_browser = 180
+        recovery_evidence = 30
+        for name, seconds in (
+            ("recovery_api_timeout_seconds", recovery_api),
+            ("recovery_http_timeout_seconds", recovery_http),
+            ("recovery_browser_timeout_seconds", recovery_browser),
+            ("recovery_evidence_timeout_seconds", recovery_evidence),
+        ):
+            self.assertIn(f"{name}={seconds}", script)
+        recovery_worst = (
+            3 * recovery_api
+            + 2 * recovery_http
+            + 2 * recovery_browser
+            + recovery_evidence
+        )
+        recovery_kill_budget = 900
+        main_budget = 1080
+        deploy_step_budget = step_budgets["Deploy signed Runtime Host release"] * 60
+        setup_and_select = sum(
+            minutes
+            for name, minutes in step_budgets.items()
+            if name not in {
+                "Deploy signed Runtime Host release",
+                "Upload deployment evidence and failure logs",
+            }
+        ) * 60
+        upload_budget = step_budgets["Upload deployment evidence and failure logs"] * 60
+        job_budget = 75 * 60
+        self.assertLessEqual(recovery_worst + 60, recovery_kill_budget)
+        self.assertLessEqual(main_budget + recovery_kill_budget, deploy_step_budget)
+        self.assertLessEqual(
+            setup_and_select + deploy_step_budget + upload_budget + 60,
+            job_budget,
+        )
         upload = self.step_named(source, "Upload deployment evidence and failure logs")
         self.assertIn("if: always()", upload)
 

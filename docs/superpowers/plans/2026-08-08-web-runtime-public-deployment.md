@@ -22,8 +22,9 @@ This amendment is part of the approved plan and supersedes incompatible early ta
 - Before a draft is created, `GET /api/v1/sites/{site_id}` establishes the actual published deploy.
   A discovered prior is identity-discovered and fully smoke-tested at immutable and production URLs.
   After publication attempt, production failure, ERR, INT/TERM, controlled timeout, and publish API
-  error all reconcile the current alias. Restore exact prior only when the alias identifies the new
-  deploy; with no prior, use official reversible site disable. Never auto-enable a pre-disabled site.
+  error all reconcile the current alias. The only safe current identities are candidate, exact prior,
+  or no publication on a first deploy; an unknown third ID fails recovery. Restore/disable only from
+  candidate, then GET must prove exact prior/disabled. Never auto-enable a pre-disabled site.
 - `_headers` is a tracked base with default `no-store`; deploy assembly appends nine exact immutable
   paths from the verified manifest. No `/assets/*` rule and no released `dist` mutation are allowed.
 - HTTP and Chromium start at `/`. HTTP permits only 200 or one same-origin redirect ending at
@@ -32,8 +33,13 @@ This amendment is part of the approved plan and supersedes incompatible early ta
   `lmdj.web-runtime-host.deployment-recovery-evidence.v1`. Preserve archive filename, Actions run
   ID/canonical URL, start/end, full HTTP JSON, browser results, same-ID publish response, reconcile,
   restore/disable response, and post-recovery validation. Both writes are atomic and the workflow
-  always uploads them. Its 1,080-second TERM timeout plus 480-second kill budget finishes before the
-  30-minute job timeout.
+  always uploads them. Staged Release index/manifest digests bind candidate immutable and production;
+  prior immutable and production must match. Netlify evidence uses a validated secret-safe official
+  allowlist projection (restore fields include id/site_id/state/ssl_url/deploy_ssl_url/published_at),
+  while disable records status code 204 and a post-disable GET, not a fabricated response. Canonical
+  UTC timestamps and every nested HTTP/browser identity are exact. A 1,080-second main TERM timeout,
+  900-second kill budget, per-stage recovery bounds, 35-minute deploy step, and 75-minute job cover
+  bounded setup, worst-case recovery, evidence, and upload margins.
 - Child credential scope is exclusive: GitHub commands inherit only GitHub deployment authority,
   Netlify commands receive no GitHub/GH variables, and local metadata/stage/evidence/smoke helpers
   receive no deployment credentials.
@@ -815,10 +821,10 @@ jobs:
   deploy:
     environment: runtime-canary
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 75
 ```
 
-Steps must checkout protected `main` with `ref: main` and `fetch-depth: 0`, set Python 3.11 and Node 22, run `npm ci` under `tests/platform/web`, install only Chromium, derive the tag from `github.event.release.tag_name` or `inputs.tag`, require `github.event.release.prerelease == true` on release events, execute `scripts/web-runtime-deploy.sh deploy "$tag"`, and upload `build/deploy/web-runtime-host/evidence.json` plus failure logs with `if: always()` and `if-no-files-found: warn`. The command creates the detached tag-target verification checkout described in Task 4; the workflow must not replace the protected-`main` tooling checkout with a tag checkout.
+Steps must checkout protected `main` with `ref: main` and `fetch-depth: 0`, set Python 3.11 and Node 22, run `npm ci` under `tests/platform/web`, install only Chromium, derive the tag from `github.event.release.tag_name` or `inputs.tag`, require `github.event.release.prerelease == true` on release events, execute `scripts/web-runtime-deploy.sh deploy "$tag"`, and upload `build/deploy/web-runtime-host/evidence.json` plus failure logs with `if: always()` and `if-no-files-found: warn`. Every setup/install/select/upload step has its own timeout; the deploy step is 35 minutes and uses 1,080-second main plus 900-second recovery kill budget within the 75-minute job. The command creates the detached tag-target verification checkout described in Task 4; the workflow must not replace the protected-`main` tooling checkout with a tag checkout.
 
 Do not install Emscripten or rerun Core CI in this workflow; it verifies the published asset and runs deployment-specific smoke.
 

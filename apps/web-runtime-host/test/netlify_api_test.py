@@ -95,6 +95,8 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 "id": "deploy-456",
                 "site_id": "site-123",
                 "ssl_url": "https://runtime.example",
+                "deploy_ssl_url": "https://deploy-456--runtime.netlify.app",
+                "published_at": "2026-08-09T00:00:00Z",
                 "state": "ready",
             }
             self.server.response(self, 200, response)
@@ -419,7 +421,10 @@ class NetlifyClientTest(unittest.TestCase):
                     self.client.get_site(site_id="site-123")
 
     def test_disable_site_uses_official_reversible_endpoint(self) -> None:
-        self.client.disable_site(site_id="site-123", reason="failed first publication")
+        status_code = self.client.disable_site(
+            site_id="site-123", reason="failed first publication"
+        )
+        self.assertEqual(status_code, 204)
         request = self.server.requests[-1]
         self.assertEqual(request.method, "PUT")
         self.assertEqual(

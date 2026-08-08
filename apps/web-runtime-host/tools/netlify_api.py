@@ -132,17 +132,20 @@ class NetlifyClient:
                 raise NetlifyError("Netlify published deploy identity is invalid")
         return PublishedSite(site_id, state, ssl_url, prior)
 
-    def disable_site(self, *, site_id: str, reason: str) -> None:
+    def disable_site(self, *, site_id: str, reason: str) -> int:
         """Disable a site through Netlify's reversible serving control."""
         if not site_id or not reason or "\n" in reason or "\r" in reason:
             raise NetlifyError("Netlify disable input is invalid")
-        self._request(
+        status_code, _ = self._request_with_status(
             "PUT",
             f"/sites/{self._path_segment(site_id)}/disable?reason={parse.quote(reason, safe='')}",
             None,
             "application/json",
             None,
         )
+        if status_code != 204:
+            raise NetlifyError("Netlify disable response is invalid")
+        return status_code
 
     def _file_digests(self, files: Mapping[str, bytes]) -> dict[str, str]:
         digests: dict[str, str] = {}
@@ -236,6 +239,18 @@ class NetlifyClient:
         content_type: str,
         deadline: float | None,
     ) -> bytes:
+        return self._request_with_status(
+            method, endpoint, data, content_type, deadline
+        )[1]
+
+    def _request_with_status(
+        self,
+        method: str,
+        endpoint: str,
+        data: bytes | None,
+        content_type: str,
+        deadline: float | None,
+    ) -> tuple[int, bytes]:
         timeout = 120.0
         if deadline is not None:
             timeout = deadline - time.monotonic()
@@ -256,7 +271,7 @@ class NetlifyClient:
         failed = False
         try:
             with request.urlopen(operation, timeout=timeout) as response:
-                return response.read()
+                return response.status, response.read()
         except OSError as error:
             closer = getattr(error, "close", None)
             if callable(closer):

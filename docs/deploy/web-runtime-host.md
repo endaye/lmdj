@@ -71,11 +71,16 @@ signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
    source map、替代 ZIP 或未签名 checksum：
 
    ```bash
+   read -rsp 'Short-lived GitHub token: ' GITHUB_TOKEN; printf '\n'
+   export GITHUB_TOKEN
+   trap 'unset GITHUB_TOKEN' EXIT INT TERM
    gh release create lmdj-v1.0.15.2 \
      "$archive" "$archive.sha256" "$archive.sha256.asc" \
      --repo endaye/lmdj --verify-tag --prerelease \
      --title 'LMDJ Product 1.0.15.2 Web Runtime Host 1.1.2'
    scripts/web-runtime-deploy.sh verify lmdj-v1.0.15.2
+   unset GITHUB_TOKEN
+   trap - EXIT INT TERM
    ```
 
 4. 只有远端 tag、protected `origin/main` ancestor、三资产 inventory/signature 与 bundle
@@ -126,8 +131,8 @@ approval/protection policy（如已配置）通过后再 dispatch。
 不要把 token 粘贴到 shell history、PR、runbook、artifact、Portal 或日志；site ID 的记录
 规则以前段为准。
 
-若在受信 workstation 临时运行只读 `verify`，优先使用 `gh` 自己的 credential store。
-需要显式 `GITHUB_TOKEN` 时，用无回显读取且立即注册清理，不把 token 写进命令历史：
+若在受信 workstation 临时运行只读 `verify`，必须为该示例显式读取短期
+`GITHUB_TOKEN`，用无回显读取且立即注册清理，不把 token 写进命令历史：
 
 ```bash
 read -rsp 'Short-lived GitHub token: ' GITHUB_TOKEN; printf '\n'
@@ -169,19 +174,22 @@ python3 -m json.tool evidence/RUN_ID/evidence.json
 | 字段 | 精确内容 |
 | --- | --- |
 | `archive` | `{filename, sha256}`，保留 canonical archive filename 与 digest。 |
+| `release_files` | `{index_sha256, manifest_sha256}`；与 verified staged Release bytes、candidate immutable 与 production HTTP 结果逐字节绑定。 |
 | `github_actions` | `{run_id, run_url}`；URL 必须为 `https://github.com/endaye/lmdj/actions/runs/<run_id>`。 |
 | `started_at`, `ended_at` | 本次受控部署的 UTC 起止时间。 |
 | `git_revision`, `tag`, `release_url`, `product_build`, `host_version`, `site_id`, `channel` | 已验证 provenance 与 live identity。 |
-| `prior_good` | `null`，或发布前 `GET site` 完整 projection、发现的 prior Product/Host、prior immutable 与 production 的 HTTP/browser 结构化结果及时间。 |
+| `prior_good` | `null`，或发布前 `GET site` 的 validated secret-safe official projection、发现的 prior Product/Host、prior immutable 与 production 的 HTTP/browser 结构化结果及时间；两 URL 的 index/manifest digest 必须一致。 |
 | `immutable` | `{deploy_id, deploy_url, http, browser}`；`http.result` 保留完整 HTTP smoke JSON。 |
-| `publication` | `{same_deploy_id, response}`；`response` 保留 same-ID publish/restore API JSON。 |
+| `publication` | `{same_deploy_id, response}`；`response` 是字段 allowlist 为 `id/site_id/state/ssl_url/deploy_ssl_url/published_at` 的 validated secret-safe official projection，不声称保存 raw exact response。 |
 | `production` | `{url, http, browser}`；HTTP/browser 均含结构化结果和时间。 |
 
 失败恢复写入独立、原子替换的 `recovery-evidence.json`，contract 为
 `lmdj.web-runtime-host.deployment-recovery-evidence.v1`，exact top-level 字段是
 `action`、`attempted_deploy`、`original_status`、`prior_deploy`、`reconcile`、
-`recorded_at`、`recovery_response`、`validation` 与 `contract`。其中 `reconcile` 保留失败后
-实际 `GET site` JSON，`recovery_response` 保留 exact restore 或 disable response，
+`post_recovery_site`、`recorded_at`、`recovery_response`、`status`、`validation` 与 `contract`。
+其中 `reconcile` 与 `post_recovery_site` 保留失败前后 `GET site` 的 validated secret-safe
+official projection；restore 的 `recovery_response` 使用上述明确 allowlist，disable 只记录
+官方 204 为 `{status_code: 204}`，不伪造 action response，
 `validation` 保留 prior immutable 与 production 的 HTTP/browser 复验结构和恢复状态。
 workflow 以 `if: always()` 上传 `evidence.json`、`recovery-evidence.json` 与完整
 `deployment.log`；不得丢弃 HTTP JSON 或 restore response。
@@ -207,9 +215,9 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 | remote tag/signature、三资产 inventory/checksum signature、archive digest 或 bundle identity 失败 | 停止；不要创建 Netlify Deploy。修复 release provenance 后从验证重新开始。 |
 | prior published deploy/identity/smoke 失败 | 停止；未建立本次 prior-good 前不要创建或发布新 Deploy。 |
 | draft 创建或 immutable URL HTTP/Chromium 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
-| publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；只有 alias 实际指向新 Deploy 才执行恢复。 |
-| alias 指向新 Deploy 且 prior-good 存在 | `POST /sites/{site_id}/deploys/{prior_id}/restore` 恢复 exact prior，再对 prior immutable 与 production 运行完整 HTTP/Chromium，原子写 recovery evidence。 |
-| alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点并写 recovery evidence；不得伪造 rollback。 |
+| publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；当前 ID 只允许 candidate、exact prior，或首次发布时为空；未知第三 ID 必须 recovery FAIL。 |
+| alias 指向新 Deploy 且 prior-good 存在 | `POST /sites/{site_id}/deploys/{prior_id}/restore` 恢复 exact prior，随后 GET 必须确认 exact prior，再对 prior immutable 与 production 运行完整 HTTP/Chromium，原子写 recovery evidence。 |
+| alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点；记录 204 后 GET 必须确认 disabled，并写 recovery evidence；不得伪造 rollback。 |
 | preflight 发现站点已 disabled | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
 | evidence artifact 缺失、字段不匹配或含敏感信息 | 将部署视为证据不完整；不要更新 acceptance/Portal 为 deployed，先修复证据链。 |
 
@@ -217,8 +225,10 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 该 immutable manifest 的实际 Product/Host；脚本先 smoke prior immutable URL，再 smoke
 production alias，建立本次 prior-good。publish 后失败即使 API 返回 error，也必须 GET
 reconcile，而不能假设 alias 未切换。workflow 内部 1,080 秒 timeout 先发送 TERM，另留
-480 秒 kill budget，最坏 26 分钟仍早于 30 分钟 job timeout，给 exact restore/disable、
-复验与 `recovery-evidence.json` 上传留出预算。
+900 秒 kill budget。恢复的三个 API 阶段各 30 秒、两次 HTTP 各 180 秒、两次 Chromium
+各 180 秒、证据写入 30 秒，最坏 840 秒并另留 60 秒；deploy step 为 35 分钟，
+checkout/setup/install/select/upload 各有显式上限，75 分钟 job timeout 覆盖所有最坏和与
+上传余量。
 
 现有 workflow 没有独立的人工 rollback dispatch；正常部署的失败恢复已内建在同一受保护
 Environment run 中。任何事后手工恢复仍需单独授权，且必须使用已验证的 exact prior

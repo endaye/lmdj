@@ -45,9 +45,10 @@ https://lmdj-beta.netlify.app/
 - 发布前必须从 Netlify `GET /api/v1/sites/{site_id}` 取得实际 `published_deploy`；若存在，
   从其 immutable manifest 发现真实 Product/Host identity，并先对 prior immutable URL 与
   production alias 各运行完整 HTTP/Chromium。发布后任何 production smoke failure、ERR、
-  INT/TERM、受控 timeout 或 publish API error 都先重新 GET reconcile；只有 alias 确认指向
-  新 Deploy 时才 restore exact prior。若首次没有 prior，则使用官方 reversible site disable；
-  若站点预先 disabled，拒绝自动 enable 或 publication。
+  INT/TERM、受控 timeout 或 publish API error 都先重新 GET reconcile。current ID 只允许
+  candidate、exact prior，或首次发布时为空；未知第三 ID 失败。candidate 才可 restore exact
+  prior 或 disable；restore 后 GET 必须确认 exact prior，disable 的 204 后 GET 必须确认
+  disabled。若站点预先 disabled，拒绝自动 enable 或 publication。
 - tracked `_headers` 只保留 base security/no-store。deploy assembly 从已验证 manifest 生成
   九条 exact immutable asset rules；`/assets/*` blanket 禁止，未知 asset/source map 保持
   `no-store`，Release `dist` 不变。
@@ -55,10 +56,12 @@ https://lmdj-beta.netlify.app/
   no-store、安全 headers 与最终 identity。Chromium 同样从 `/` 开始，要求 admitted/outcome
   各精确 +1、rejected 不变，close 后仍保持。
 - 成功 evidence 使用 `lmdj.web-runtime-host.deployment-evidence.v2`；失败恢复使用原子
-  `lmdj.web-runtime-host.deployment-recovery-evidence.v1`。两者保留完整 HTTP JSON、Netlify
-  publish/restore response、Actions run ID/canonical URL、start/end 与 immutable/production
-  HTTP/browser 结构化结果。workflow 的内部 timeout 必须早于 30 分钟 job timeout，并以
-  `always()` 上传成功、失败与恢复证据。
+  `lmdj.web-runtime-host.deployment-recovery-evidence.v1`。HTTP 的 index/manifest digest 将
+  staged Release、candidate immutable 与 production bytes 绑定，prior 两个 URL 也必须一致。
+  Netlify API 证据是 validated secret-safe official allowlist projection，不声称是 raw response；
+  disable 记录官方 204 与 post-disable GET。真实 canonical UTC 时间与 HTTP/browser identity
+  逐字段交叉绑定。workflow 以 1,080 秒 main、900 秒 recovery kill budget、每个恢复阶段的
+  显式 timeout 与 75 分钟 job 上限覆盖 setup、deploy、最坏恢复、证据和 always-upload 余量。
 - GitHub、Netlify 与本地 helper 使用互斥 credential scope：gh 不接收 Netlify credential；
   Netlify child 不接收 `GITHUB_TOKEN` 或 `GH*`；metadata/stage/evidence/smoke helper 不接收
   任何部署凭据。
