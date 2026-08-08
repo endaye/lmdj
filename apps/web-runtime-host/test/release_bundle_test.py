@@ -41,6 +41,30 @@ class ReleaseBundleTest(unittest.TestCase):
         checksum.write_text(f"{digest}  {name}\n", encoding="utf-8")
         return checksum
 
+    def run_stage_cli(self, archive: Path, checksum: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(RELEASE_BUNDLE_TOOL),
+                "stage",
+                "--repo-root",
+                str(REPO_ROOT),
+                "--archive",
+                str(archive),
+                "--checksum",
+                str(checksum),
+                "--output-root",
+                str(self.output),
+                "--expected-product-build",
+                "1.0.15.2",
+                "--expected-host-version",
+                "1.1.2",
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
     def archive_with_member(self, member: str) -> tuple[Path, Path]:
         archive = self.write_zip({member: b"unsafe"})
         return archive, self.write_checksum(
@@ -243,6 +267,53 @@ class ReleaseBundleTest(unittest.TestCase):
         )
         bundle = self.stage(archive, checksum)
         self.assertTrue(bundle.dist_root.is_dir())
+
+    def test_cli_normalizes_checksum_and_unsupported_zip_input_errors(self) -> None:
+        archive = self.write_zip({"dist/index.html": b"host"})
+        checksum = self.root / "non-utf8.sha256"
+        checksum.write_bytes(b"\xff")
+        cases: list[tuple[str, Path, Path]] = [("checksum", archive, checksum)]
+
+        for label, patches in (
+            (
+                "compression",
+                ((b"PK\x03\x04", 8, lambda value: 99), (b"PK\x01\x02", 10, lambda value: 99)),
+            ),
+            (
+                "encryption",
+                (
+                    (b"PK\x03\x04", 6, lambda value: value | 1),
+                    (b"PK\x01\x02", 8, lambda value: value | 1),
+                ),
+            ),
+        ):
+            source = self.write_zip({"dist/index.html": b"host"})
+            payload = bytearray(source.read_bytes())
+            for signature, offset, mutate in patches:
+                position = payload.find(signature)
+                self.assertNotEqual(position, -1)
+                value = int.from_bytes(
+                    payload[position + offset : position + offset + 2], "little"
+                )
+                payload[position + offset : position + offset + 2] = mutate(value).to_bytes(
+                    2, "little"
+                )
+            archive = self.root / f"{label}.zip"
+            archive.write_bytes(payload)
+            checksum = self.root / f"{label}.zip.sha256"
+            checksum.write_text(
+                f"{hashlib.sha256(payload).hexdigest()}  {archive.name}\n",
+                encoding="utf-8",
+            )
+            cases.append((label, archive, checksum))
+
+        for label, archive, checksum in cases:
+            with self.subTest(label=label):
+                completed = self.run_stage_cli(archive, checksum)
+                self.assertEqual(completed.returncode, 2)
+                self.assertIn("Web Runtime deployment bundle error:", completed.stderr)
+                self.assertNotIn("Traceback", completed.stderr)
+                self.assertFalse(self.output.exists())
 
     def test_cli_requires_stage_and_all_arguments_and_prints_canonical_json(self) -> None:
         completed = subprocess.run(

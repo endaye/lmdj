@@ -50,7 +50,10 @@ def sha256_file(path: Path) -> str:
 
 
 def parse_detached_checksum(path: Path, expected_name: str) -> str:
-    fields = path.read_text(encoding="utf-8").strip().split()
+    try:
+        fields = path.read_text(encoding="utf-8").strip().split()
+    except (OSError, UnicodeDecodeError) as error:
+        raise BundleError("release checksum record is invalid") from error
     if len(fields) != 2 or fields[1].removeprefix("*") != expected_name:
         raise BundleError("release checksum record is invalid")
     digest = fields[0].lower()
@@ -187,7 +190,12 @@ def stage_release_bundle(
                         shutil.copyfileobj(source, target)
         except BundleError:
             raise
-        except (OSError, zipfile.BadZipFile, zipfile.LargeZipFile) as error:
+        except (
+            OSError,
+            RuntimeError,
+            zipfile.BadZipFile,
+            zipfile.LargeZipFile,
+        ) as error:
             raise BundleError("release archive is invalid") from error
 
         dist_root = staged / "dist"
