@@ -220,6 +220,23 @@ export function selectCanActivateAudio(state: CreatorState): boolean {
     (state.audio.phase === "inactive" || state.audio.phase === "suspended");
 }
 
+function selectCanChangeProject(state: CreatorState): boolean {
+  return state.runtime.phase === "ready" &&
+    (state.project.phase === "empty" ||
+      state.project.phase === "ready" ||
+      state.project.phase === "error") &&
+    state.transfer.phase === "idle" &&
+    (state.audio.phase === "inactive" || state.audio.phase === "suspended");
+}
+
+export function selectCanOpenProject(state: CreatorState): boolean {
+  return selectCanChangeProject(state);
+}
+
+export function selectCanImportProject(state: CreatorState): boolean {
+  return selectCanChangeProject(state);
+}
+
 export function selectCanTrigger(state: CreatorState): boolean {
   return state.runtime.phase === "ready" &&
     state.project.phase === "ready" &&

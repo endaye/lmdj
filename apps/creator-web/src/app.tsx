@@ -31,6 +31,8 @@ import type {
 import {
   creatorReducer,
   initialCreatorState,
+  selectCanImportProject,
+  selectCanOpenProject,
   type CreatorState,
 } from "./state/creator_state";
 
@@ -51,6 +53,11 @@ type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
 
+interface ProjectActionToken {
+  readonly epoch: number;
+  readonly session: CreatorRuntimeSession;
+}
+
 function errorCode(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "ABORTED";
@@ -68,12 +75,20 @@ function Workspace({
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
+  const [showLocalProjects, setShowLocalProjects] = useState(false);
   const importController = useRef<AbortController | null>(null);
+  const projectAction = useRef<ProjectActionToken | null>(null);
+  const projectActionEpoch = useRef(0);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
-  useEffect(() => () => importController.current?.abort(), []);
+  useEffect(() => () => {
+    projectActionEpoch.current += 1;
+    projectAction.current = null;
+    importController.current?.abort();
+    importController.current = null;
+  }, [session]);
 
   useEffect(() => {
     if (!session || runtimePhase !== "ready") return;
@@ -169,37 +184,83 @@ function Workspace({
     dispatch({type: "project-error", errorCode: code});
   };
 
+  const beginProjectAction = (
+    kind: "open" | "import",
+  ): ProjectActionToken | null => {
+    if (!session || projectAction.current !== null) return null;
+    const allowed = kind === "open"
+      ? selectCanOpenProject(stateRef.current)
+      : selectCanImportProject(stateRef.current);
+    if (!allowed) return null;
+    const token = Object.freeze({
+      epoch: ++projectActionEpoch.current,
+      session,
+    });
+    projectAction.current = token;
+    return token;
+  };
+
+  const ownsProjectAction = (token: ProjectActionToken): boolean =>
+    projectAction.current === token &&
+    projectActionEpoch.current === token.epoch &&
+    token.session === session;
+
+  const finishProjectAction = (token: ProjectActionToken) => {
+    if (ownsProjectAction(token)) projectAction.current = null;
+  };
+
   const openProject = async (summary: LocalProjectSummary) => {
-    if (!session) return;
+    const token = beginProjectAction("open");
+    if (!token) return false;
     dispatch({type: "project-opening"});
     try {
-      dispatch({type: "project-ready", project: await openProjectJourney(session, summary)});
+      const project = await openProjectJourney(token.session, summary);
+      if (!ownsProjectAction(token)) return false;
+      dispatch({type: "project-ready", project});
+      setShowLocalProjects(false);
+      return true;
     } catch (error) {
-      reportProjectError(error, {kind: "open", project: summary});
+      if (ownsProjectAction(token)) {
+        reportProjectError(error, {kind: "open", project: summary});
+      }
+      return false;
+    } finally {
+      finishProjectAction(token);
     }
   };
 
   const importProject = async (file: File) => {
-    if (!session) return;
-    importController.current?.abort();
+    const token = beginProjectAction("import");
+    if (!token) return false;
     const controller = new AbortController();
     importController.current = controller;
     dispatch({type: "transfer-started", totalBytes: file.size});
     try {
       const project = await importProjectJourney(
-        session,
+        token.session,
         file,
         controller.signal,
-        ({completedBytes}) => dispatch({type: "transfer-progressed", completedBytes}),
+        ({completedBytes}) => {
+          if (ownsProjectAction(token)) {
+            dispatch({type: "transfer-progressed", completedBytes});
+          }
+        },
       );
+      if (!ownsProjectAction(token)) return false;
       dispatch({type: "project-ready", project});
+      setShowLocalProjects(false);
+      return true;
     } catch (error) {
-      reportProjectError(error);
+      if (ownsProjectAction(token)) reportProjectError(error);
+      return false;
     } finally {
+      if (ownsProjectAction(token)) {
+        dispatch({type: "transfer-ended"});
+        finishProjectAction(token);
+      }
       if (importController.current === controller) {
         importController.current = null;
       }
-      dispatch({type: "transfer-ended"});
     }
   };
 
@@ -261,6 +322,13 @@ function Workspace({
     URL.revokeObjectURL(url);
   };
 
+  const canOpenProject = session !== undefined &&
+    projectAction.current === null &&
+    selectCanOpenProject(state);
+  const canImportProject = session !== undefined &&
+    projectAction.current === null &&
+    selectCanImportProject(state);
+
   return (
     <div className="workspace">
       <StatusBar
@@ -277,6 +345,10 @@ function Workspace({
       <ModeRail />
       <ProjectSurface
         state={state}
+        canOpen={canOpenProject}
+        canImport={canImportProject}
+        showLocalProjects={showLocalProjects}
+        onShowLocal={() => setShowLocalProjects(true)}
         onOpen={(summary) => { void openProject(summary); }}
         onImport={(file) => { void importProject(file); }}
       />

@@ -8,12 +8,25 @@ import {shortProjectId} from "../state/view_model";
 
 interface ProjectSurfaceProps {
   state: CreatorState;
+  canOpen?: boolean;
+  canImport?: boolean;
+  showLocalProjects?: boolean;
+  onShowLocal?: () => void;
   onOpen?: (project: LocalProjectSummary) => void;
   onImport?: (file: File) => void;
 }
 
-export function ProjectSurface({state, onOpen, onImport}: ProjectSurfaceProps) {
+export function ProjectSurface({
+  state,
+  canOpen = false,
+  canImport = false,
+  showLocalProjects = false,
+  onShowLocal,
+  onOpen,
+  onImport,
+}: ProjectSurfaceProps) {
   const project = state.project.current;
+  const showChooser = project === null || showLocalProjects;
   const fileInput = useRef<HTMLInputElement>(null);
   const onImportFile = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.currentTarget.files?.item(0);
@@ -25,11 +38,22 @@ export function ProjectSurface({state, onOpen, onImport}: ProjectSurfaceProps) {
       <div className="surface-heading">
         <div>
           <p className="eyebrow">Project surface</p>
-          <h1>{project ? `Project ${shortProjectId(project.projectId)}` : "Local Projects"}</h1>
+          <h1>{showChooser ? "Local Projects" : `Project ${shortProjectId(project.projectId)}`}</h1>
         </div>
         <div className="project-actions">
-          <button type="button" aria-controls="local-projects">Open local</button>
-          <button type="button" onClick={() => fileInput.current?.click()}>
+          <button
+            type="button"
+            aria-controls="local-projects"
+            disabled={!canOpen}
+            onClick={onShowLocal}
+          >
+            Open local
+          </button>
+          <button
+            type="button"
+            disabled={!canImport}
+            onClick={() => fileInput.current?.click()}
+          >
             Import .lmdj
           </button>
           <input
@@ -37,12 +61,13 @@ export function ProjectSurface({state, onOpen, onImport}: ProjectSurfaceProps) {
             type="file"
             accept=".lmdj,application/vnd.lmdj.project-bundle"
             onChange={onImportFile}
+            disabled={!canImport}
             tabIndex={-1}
             aria-hidden="true"
           />
         </div>
       </div>
-      {project ? (
+      {!showChooser && project ? (
         <dl className="project-summary">
           <div><dt>Project ID</dt><dd>{project.projectId}</dd></div>
           <div><dt>Revision</dt><dd>{project.revision}</dd></div>
@@ -69,6 +94,7 @@ export function ProjectSurface({state, onOpen, onImport}: ProjectSurfaceProps) {
                 <button
                   type="button"
                   aria-label={`Open Project ${id}`}
+                  disabled={!canOpen}
                   onClick={() => onOpen?.(summary)}
                 >
                   Open

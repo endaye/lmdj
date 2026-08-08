@@ -1,4 +1,4 @@
-import {render, screen, waitFor} from "@testing-library/react";
+import {fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test} from "vitest";
 
@@ -61,8 +61,10 @@ test("renders the approved workspace without inventing future modes or Project t
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(true);
   expect(document.activeElement).toBe(
-    screen.getByRole("button", {name: "Open local"}),
+    screen.getByRole("button", {name: "Bank A"}),
   );
 });
 
@@ -143,6 +145,112 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
   };
   return {calls, session};
 }
+
+test("gates Project actions while the Runtime is booting", async () => {
+  let finishStart: ((started: boolean) => void) | undefined;
+  const start = new Promise<boolean>((resolve) => { finishStart = resolve; });
+  const fixture = runtimeFixture({start: () => start});
+  render(<App runtimeFactory={() => fixture.session} />);
+
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(true);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
+    .toBe(true);
+
+  finishStart?.(true);
+  await screen.findByRole("button", {name: "Open Project 11111111"});
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(false);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
+    .toBe(false);
+});
+
+test("Open local switches Projects through one serialized visible selection", async () => {
+  const secondSummary: LocalProjectSummary = {
+    ...listedSummary,
+    projectId: "22222222-2222-4222-8222-222222222222",
+    patternId: "33333333-3333-4333-8333-333333333333",
+    revision: 7,
+    bpm: 128,
+  };
+  let opened = listedSummary;
+  let secondOpenCount = 0;
+  let finishSecondOpen: (() => void) | undefined;
+  const secondOpen = new Promise<void>((resolve) => { finishSecondOpen = resolve; });
+  const inspection = () => ({
+    project_revision: opened.revision,
+    project: {
+      contract: "lmdj.project.v1",
+      project_id: opened.projectId,
+      revision: opened.revision,
+      bpm: opened.bpm,
+      assets: {"44444444-4444-4444-8444-444444444444": {artifact: {}}},
+      banks: Array.from({length: 4}, (_, bank) => ({
+        bank,
+        pads: Array.from({length: 16}, (_, pad) => ({
+          pad,
+          asset_id: bank === 0 && pad === 0
+            ? "44444444-4444-4444-8444-444444444444"
+            : null,
+        })),
+      })),
+      patterns: {},
+      takes: {},
+    },
+  });
+  const fixture = runtimeFixture({
+    listLocalProjects: async () => [listedSummary, secondSummary],
+    openProject: async (projectId) => {
+      if (projectId === secondSummary.projectId) {
+        secondOpenCount += 1;
+        await secondOpen;
+        opened = secondSummary;
+      } else {
+        opened = listedSummary;
+      }
+      return {};
+    },
+    inspectProject: async () => inspection(),
+  });
+  render(<App runtimeFactory={() => fixture.session} />);
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+  const openSecond = await screen.findByRole("button", {
+    name: "Open Project 22222222",
+  });
+  fireEvent.click(openSecond);
+  fireEvent.click(openSecond);
+
+  expect(secondOpenCount).toBe(1);
+  expect(screen.getByText("11111111")).toBeTruthy();
+  finishSecondOpen?.();
+  await screen.findByRole("heading", {name: "Project 22222222"});
+});
+
+test("disables Project actions while an import owns the action slot", async () => {
+  let finishImport: ((summary: LocalProjectSummary) => void) | undefined;
+  const pendingImport = new Promise<LocalProjectSummary>((resolve) => {
+    finishImport = resolve;
+  });
+  const fixture = runtimeFixture({importProject: async () => pendingImport});
+  const {container} = render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByRole("button", {name: "Open Project 11111111"});
+
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  await userEvent.upload(input!, new File(["bundle"], "pending.lmdj"));
+  await screen.findByText("importing");
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(true);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
+    .toBe(true);
+
+  finishImport?.(listedSummary);
+  await screen.findByRole("heading", {name: "Project 11111111"});
+});
 
 test("lists, opens, and imports through the injected Runtime Session", async () => {
   const user = userEvent.setup();
