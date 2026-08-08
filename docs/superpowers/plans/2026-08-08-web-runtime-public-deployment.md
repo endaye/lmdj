@@ -658,7 +658,7 @@ evidence = {
 Serialize with sorted keys and a trailing newline, then atomically replace the evidence
 file only after production smoke passes. For the initial deployment, require tag target
 `72ae40074620cc5681c462ba04a31a666449734f` and Host archive SHA-256
-`d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5`;
+`d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a`;
 the Core ZIP digest is invalid here. Tests must compare keys exactly and reject token-like
 values.
 
