@@ -31,15 +31,24 @@ Task 13 A 进一步固定 Project mutation deadline：唯一绝对 cutoff 在同
 
 ## 公共静态托管边界
 
-已实现的发布 tooling 会从已验证 release bundle 创建 Netlify immutable draft，先在其
-immutable URL 做 HTTP/Chromium smoke，再将同一 ready Deploy ID 发布到 Runtime Host
-production alias，最后保存 evidence。该流程尚未在远端发生：当前没有 `lmdj-runtime`
-项目、Environment secret、workflow run、Deploy ID、immutable URL、production alias 或
-evidence；本地已存在 signed annotated tag `lmdj-v1.0.15.2`，Good signature primary
-fingerprint 为 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 为
-`72ae40074620cc5681c462ba04a31a666449734f`，但它尚未 push，未做远端验证。因此没有
-本候选的远端 verified tag、Release 或部署结论。Portal 因而只报告 tooling 已实现和公共
-部署 absent，直到真实 evidence record 被审查并提交。
+已实现的发布 tooling 从 canonical origin 获取 remote signed tag 与受保护 `main`，要求 tag
+commit 是该 `main` 的 ancestor；Release inventory 精确为 ZIP、checksum、受信 Product key
+的 detached armored checksum signature，并在解析 checksum 前验证 signature。它会发现并
+验证真实 prior Product/Host 身份，在 prior immutable 与 production 上先跑完整
+HTTP/Chromium，再创建 immutable draft；只有 draft smoke 通过才发布同一 ready Deploy ID。
+发布后失败或信号中断会 reconcile alias，必要时恢复 exact prior；首次无 prior 时采用官方
+reversible site disable。生成站点只给 manifest 中九个精确 hash asset 加 immutable header，
+未知 asset/source map 继续 `no-store`；成功/恢复分别保存 deployment evidence v2/recovery
+evidence v1。
+
+该流程尚未在远端发生。本地已存在 signed annotated tag `lmdj-v1.0.15.2`，Good signature
+primary fingerprint 为 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 为
+`72ae40074620cc5681c462ba04a31a666449734f`；该 target 已是 `origin/main` 上 PR #98 的 merge
+commit。尚未 push、review、CI、merge 的限定只适用于本 Task 的 deployment-tooling branch；
+本地 tag 尚未 push，未做远端验证，因此仍不声称有本候选的 remote verified tag、Release、
+`lmdj-runtime` project、workflow run、Deploy ID、immutable URL、production alias 或
+deployment evidence。Portal 只报告 tooling 已实现和公共部署 absent，直到真实 evidence
+record 被审查并提交。
 
 proof-only server 仅对本地 Proof 服务 `dist` 与安全 headers；它不是生产服务。生产由
 Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python server。`lmdj-canary`

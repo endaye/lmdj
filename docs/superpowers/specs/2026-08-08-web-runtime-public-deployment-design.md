@@ -27,6 +27,42 @@ https://lmdj-beta.netlify.app/
 `lmdj-beta` 只是命名保留，不创建站点、不部署占位页，也不代表 Creator、`beta`
 或 `stable` 已交付。
 
+## 1.1 批准的最终安全修正（2026-08-09）
+
+本节是已批准设计的一部分；与后文早期“两资产、仅本地 tag、发布后人工判断”描述冲突时，
+以本节为准。Version impact: none；该修正只改变尚未发布的部署控制面，Product/Host/Core
+字节与身份不变。Documentation impact: required：同步
+`/operations/version-and-release/`、`/hosts/web-runtime/`、`/platform/web-runtime/`。
+
+- 每个 canonical prerelease 必须精确包含 Host ZIP、`<archive>.sha256` 与由受信 Product
+  key 对 checksum 文件签名的 detached armored `<archive>.sha256.asc`。部署器先用仓库
+  public key 的唯一 primary fingerprint
+  `2B5EE362F058800036AD4FB5116ECE156F954D29` 验签，之后才允许解析 checksum；初始
+  tag target 与 archive digest pin 继续保留。私钥与 token 不进入 Release、日志或证据。
+- 本地同名 tag 不具权威性。部署器固定 canonical `endaye/lmdj` origin，fetch 远端
+  annotated signed tag 与 `origin/main` 到 scratch refs，验证 tag peel 是 protected
+  `origin/main` 的祖先。Release `targetCommitish` 仅是非空辅助 metadata，不是 attestation。
+- 发布前必须从 Netlify `GET /api/v1/sites/{site_id}` 取得实际 `published_deploy`；若存在，
+  从其 immutable manifest 发现真实 Product/Host identity，并先对 prior immutable URL 与
+  production alias 各运行完整 HTTP/Chromium。发布后任何 production smoke failure、ERR、
+  INT/TERM、受控 timeout 或 publish API error 都先重新 GET reconcile；只有 alias 确认指向
+  新 Deploy 时才 restore exact prior。若首次没有 prior，则使用官方 reversible site disable；
+  若站点预先 disabled，拒绝自动 enable 或 publication。
+- tracked `_headers` 只保留 base security/no-store。deploy assembly 从已验证 manifest 生成
+  九条 exact immutable asset rules；`/assets/*` blanket 禁止，未知 asset/source map 保持
+  `no-store`，Release `dist` 不变。
+- HTTP 从 `/` 开始，只接受 200 或一次严格同源且最终仅 `/index.html` 的 redirect，并验证
+  no-store、安全 headers 与最终 identity。Chromium 同样从 `/` 开始，要求 admitted/outcome
+  各精确 +1、rejected 不变，close 后仍保持。
+- 成功 evidence 使用 `lmdj.web-runtime-host.deployment-evidence.v2`；失败恢复使用原子
+  `lmdj.web-runtime-host.deployment-recovery-evidence.v1`。两者保留完整 HTTP JSON、Netlify
+  publish/restore response、Actions run ID/canonical URL、start/end 与 immutable/production
+  HTTP/browser 结构化结果。workflow 的内部 timeout 必须早于 30 分钟 job timeout，并以
+  `always()` 上传成功、失败与恢复证据。
+- GitHub、Netlify 与本地 helper 使用互斥 credential scope：gh 不接收 Netlify credential；
+  Netlify child 不接收 `GITHUB_TOKEN` 或 `GH*`；metadata/stage/evidence/smoke helper 不接收
+  任何部署凭据。
+
 ## 2. 决策
 
 | ID | 决策 |
@@ -174,14 +210,17 @@ required files，验证其 immutable Deploy URL 后，再调用 Netlify
 
 工作流必须按以下顺序执行：
 
-1. 从受保护 `main` checkout 已合入的 deployment tooling，并另建只读 detached
-   tag-target checkout；Product/Host manifest、distribution verifier 与版本真值全部
-   取自 tag target，不从 deployment tooling checkout 猜测；
-2. 证明 tag 是 annotated Product tag，并验证签名与受信发布密钥；
+1. 从受保护 `main` checkout 已合入的 deployment tooling；从 pinned canonical origin 把
+   tag 与 `main` fetch 到 scratch refs，忽略本地同名 tag，并另建只读 detached tag-target
+   checkout；Product/Host manifest、distribution verifier 与版本真值全部取自 tag target；
+2. 证明 remote tag 是 annotated signed Product tag、签名来自受信 Product key，peeled
+   commit 是 GitHub-proven-protected canonical `main` 的 ancestor；
 3. 读取 GitHub Release metadata，确认 Release 非 draft、是 prerelease；
-4. 解析 Product Build，并定位唯一 Host ZIP 与 detached checksum；
-5. 下载两个资产，拒绝 redirect 后名称或数量不匹配；
-6. 校验 detached SHA-256；
+4. 解析 Product Build，并要求 Release inventory 精确为 Host ZIP、detached checksum 与
+   canonical armored detached checksum signature 三资产；`targetCommitish` 仅是辅助 metadata；
+5. 下载精确三资产，拒绝 redirect 后名称或数量不匹配；
+6. 用仓库 Product public key 的 exact primary fingerprint 先验证 checksum signature，
+   然后才解析并校验 detached SHA-256；
 7. 安全解压到新建临时目录，拒绝绝对路径、`..`、symlink、hardlink 和额外顶层根；
 8. 使用 tag target 的仓库 verifier 验证 `host-manifest.json`、完整 inventory、资产摘要、
    Product Build、Host version、Emscripten identity 和 index meta；
@@ -259,7 +298,8 @@ Production deploy 默认是公开 URL，所以不能依赖 Netlify 对 Deploy Pr
 
 HTTP smoke 覆盖：
 
-1. HTTPS 与 HTTP 200；
+1. 从 `/` 开始，HTTPS 下只接受直接 HTTP 200，或一次严格同源、无 query/fragment 且最终
+   仅到 `/index.html` 的 redirect；
 2. `index.html`、manifest 和一个 hashed JS/MJS/CSS/WASM 资产；
 3. 精确安全 header、`X-Robots-Tag`、MIME 和 cache policy；
 4. manifest Product Build、Host version 与 Release identity；
@@ -278,15 +318,18 @@ Chromium 对 immutable Deploy URL 执行一个有界远程 smoke：
 - `SharedArrayBuffer`、WebAssembly、AudioWorklet 与 OPFS mandatory capability 可见；
 - manifest gate 成功；
 - `Load diagnostic project -> ready -> Activate audio -> running`；
-- 一个 Pointer/Keyboard synthetic trigger 获得精确 admission/outcome；
-- 关闭页面后 Worker、MIDI listener、BroadcastChannel 与 AudioContext 完成清理。
+- 一个 Pointer/Keyboard synthetic trigger 使 admitted 与 outcome 各精确 `+1`，rejected
+  不变；
+- controller close 后上述三项计数保持，并证明 Worker、MIDI listener、BroadcastChannel
+  与 AudioContext 完成清理。
 
 远程 smoke 只证明发布配置与自动化旅程，不升级任何实体设备、声学延迟、Safari、
 iPad Touch 或 Physical MIDI 验收状态。
 
 ## 11. 发布状态与证据记录
 
-每次成功部署记录：
+成功 evidence exact contract 是 `lmdj.web-runtime-host.deployment-evidence.v2`；失败恢复
+exact contract 是 `lmdj.web-runtime-host.deployment-recovery-evidence.v1`。每次成功部署记录：
 
 - Product Build；
 - Web Runtime Host SemVer；
@@ -294,12 +337,17 @@ iPad Touch 或 Physical MIDI 验收状态。
 - signed tag 与 tag target Git SHA；
 - GitHub Release URL；
 - Host ZIP 名称与 SHA-256；
-- GitHub Actions run URL；
+- GitHub Actions canonical run URL 与 run ID、执行 start/end；
 - Netlify site ID；
 - Netlify Deploy ID；
 - immutable Deploy URL；
 - production URL；
-- HTTP smoke 与 browser smoke 结果及时间。
+- prior-good 身份与 immutable/production HTTP/browser、immutable 本次 HTTP/browser、
+  same-ID publish response、production HTTP/browser 的结构化结果及时间。
+
+失败恢复证据必须原子写入并保留 reconcile site JSON、exact restore/disable response、原始
+exit status、attempted/prior Deploy、恢复后 immutable/production HTTP/browser 与时间；不得
+丢弃完整 HTTP JSON 或 restore response。workflow 以 `always()` 上传成功/恢复证据与日志。
 
 `lmdj-runtime.netlify.app` 是可移动的 latest approved diagnostic pointer。只有 Deploy ID
 URL、Release asset、tag 和 Git SHA 的组合可以作为某个具体版本的不可变发布证据。
@@ -312,13 +360,17 @@ URL、Release asset、tag 和 Git SHA 的组合可以作为某个具体版本的
 | checksum、解压或 manifest 验证失败 | 部署前失败；保留证据，不发布 |
 | Netlify draft 上传失败 | 当前 published deploy 不变 |
 | immutable URL smoke 失败 | 不发布该 Deploy；保留失败 Deploy 和日志 |
-| restore/publish API 失败 | 当前 published deploy 不变；不得改为第二次 production 上传 |
-| production alias smoke 失败 | 标记 publication failed，并 restore 上一个已知良好 Deploy ID |
+| publish API error、production smoke 失败、ERR、INT/TERM 或受控 timeout | 重新 GET site reconcile；只有 alias 指向新 Deploy 才恢复 |
+| alias 指向新 Deploy且本次已建立 prior-good | restore exact prior，复验 prior immutable/production 并原子写 recovery evidence |
+| alias 指向新 Deploy且首次无 prior | 使用官方 reversible site disable，不能伪造 rollback |
 | 新版本 Runtime regression | 恢复先前 Deploy，不删除失败 Release、tag 或 Deploy |
 | Netlify outage | 保持 GitHub Release 可下载；不得转为未经设计的临时生产服务器 |
 
-回滚后必须对恢复的 immutable URL 与 production alias 重跑相同 HTTP/browser smoke，
-并记录恢复所用 Deploy ID。回滚不修改 Product Build、Host SemVer 或 Channel。
+部署前必须从官方 site response 发现 current published deploy（若有），从其 immutable
+manifest 发现实际 Product/Host identity，并先对 prior immutable 与 production 跑完整
+HTTP/browser，建立本次 prior-good。preflight 若发现 site 已 disabled，拒绝自动 enable 或
+publication。恢复后重跑 prior immutable 与 production；workflow 内部 timeout 必须早于 job
+timeout，给 reconcile、restore/disable、复验和证据上传留出预算。
 
 ## 13. Secrets 与最小权限
 
@@ -326,6 +378,11 @@ URL、Release asset、tag 和 Git SHA 的组合可以作为某个具体版本的
 
 - `NETLIFY_RUNTIME_SITE_ID`；
 - `NETLIFY_AUTH_TOKEN`，或 Netlify 支持的权限更小的等价部署凭据。
+
+Netlify child 必须删除 `GITHUB_TOKEN` 与全部 `GH*`；GitHub child 删除全部 Netlify
+credential 并只继承受控 GitHub authority；metadata、stage、evidence、HTTP/Chromium
+helper 不继承任何部署 credential。私钥、token、secret response 均不得进入 argv、日志或
+evidence。
 
 凭据不得写入仓库、Release asset、Netlify deploy 文件或日志。工作流 permissions 默认
 `contents: read`；只在记录 GitHub deployment 状态确有需要时增加最小

@@ -4,8 +4,11 @@
 执行记录，也不授权创建远端资源、写入 secret、发布 Release、运行 workflow 或部署。
 当前真相见
 [`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`](../quality/2026-08-08-web-runtime-public-deployment-acceptance.md)：
-Product `1.0.15.2` / Host `1.1.2` 的本地工具已实现，但尚未 push、merge、创建
-Netlify 项目、配置 GitHub Environment、运行部署或生成公共证据。本地 Git 数据库已存在
+Product `1.0.15.2` / Host `1.1.2` 的 deployment-tooling branch 已实现但尚未 push、
+review、CI 或 merge，也尚未创建 Netlify 项目、配置 GitHub Environment、运行部署或生成
+公共证据。tag target `72ae40074620cc5681c462ba04a31a666449734f` 已是
+`origin/main` 上 PR #98 的 merge commit；这不证明 deployment-tooling branch 已合并。
+本地 Git 数据库已存在
 signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
 `2B5EE362F058800036AD4FB5116ECE156F954D29` 的 Good signature，且 tag target 是
 `72ae40074620cc5681c462ba04a31a666449734f`；该 tag 尚未 push，未做远端验证，不能由此
@@ -17,9 +20,16 @@ signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
   `72ae40074620cc5681c462ba04a31a666449734f`。
 - Release archive 的 SHA-256 必须是
   `d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a`。
+- canonical prerelease 必须精确包含三个资产：Host ZIP、`<archive>.sha256` 与
+  `<archive>.sha256.asc`。最后一项是受信 Product key 对 checksum 文件的 detached
+  armored signature；部署器用仓库 public key 的唯一 primary fingerprint 验证成功后
+  才解析 checksum。Release creator 与 Product signer 是独立授权角色；不记录私钥或 token。
 - 已验证的 Release ZIP 未修改。`apps/web-runtime-host/deploy/_headers` 是
   repository-tracked deploy-control artifact：staging 时独立加入 Netlify digest deploy，
   不在 Release bundle 内；不得写入、删除、改名或替换任何已验证 Release `dist` 文件。
+  tracked 文件只保留 base security 与默认 `no-store`；组装时从已验证 manifest 生成九条
+  精确 immutable asset rule。禁止 `/assets/*` blanket；未知资产与 source map 保持
+  `no-store`。
 - 唯一生产别名是 `https://lmdj-runtime.netlify.app`。先创建 immutable draft
   Deploy，再对**同一个** ready Deploy ID 运行 smoke，最后才允许把该 ID 设为生产别名。
 - `scripts/web-runtime-host.sh proof` 的 Python proof-only server 只用于本地
@@ -28,25 +38,55 @@ signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
 - 这不是 Creator URL、Creator PWA 或 `lmdj-canary` 的发布。`lmdj-canary` 留给
   未来 Creator 产品，不能在本 Task 创建、绑定、重定向或作为 Runtime Host 的别名。
 
-## 前置条件与发布前验证
+## 独立授权的 tag、三资产 prerelease 与 dispatch
 
-获得逐项授权后，在受信任的操作者环境中运行下列命令；它们要求已安装并已认证
-`gh`、`git`、`gpg`、Python 3 与 Node/npm。必须在干净、已同步的 `main` checkout
-中操作，并以最小权限凭据执行。`verify` 读取 GitHub Release，不部署到 Netlify。
+下列是获授权后的操作模板，不是本 Task 的执行记录。Product signer 在受信 workstation
+对 checksum 签名；Release operator 独立创建 canonical prerelease；deployment operator
+再独立 dispatch。三者不得在文档、日志或 artifact 中记录私钥/token。
 
-```bash
-gh auth status
-git fetch origin --tags
-git tag -v lmdj-v1.0.15.2
-scripts/web-runtime-deploy.sh verify lmdj-v1.0.15.2
-gh workflow run deploy-web-runtime-host.yml --ref main -f tag=lmdj-v1.0.15.2
-```
+1. Product signer 先核对 archive filename 与 SHA-256，再在受信 workstation 创建
+   canonical detached armored signature：
 
-前四步必须分别确认 GitHub 身份、远端 tag、签名和 Release archive；不要以本地 tag
-或未签名 lightweight tag 代替。`verify` 还会校验 release identity、目标 checkout、
-archive digest、bundle manifest 的 Product/Host identity。最后一条仅在前四步成功、
-Environment 已配置且本次发布获授权后执行；它是手动 workflow dispatch，不应在本
-文档的 pre-deploy 状态下执行。
+   ```bash
+   gpg --batch --armor --detach-sign \
+     --output "$archive.sha256.asc" "$archive.sha256"
+   gpg --batch --status-fd 1 --verify "$archive.sha256.asc" "$archive.sha256"
+   ```
+
+2. 获得独立 tag-push 授权后，只 push canonical annotated signed tag，并从 canonical
+   origin 重新 fetch 到 scratch ref 核对远端对象，不以本地同名 tag 作为证明：
+
+   ```bash
+   git push origin refs/tags/lmdj-v1.0.15.2:refs/tags/lmdj-v1.0.15.2
+   git fetch --no-tags origin \
+     refs/tags/lmdj-v1.0.15.2:refs/lmdj-verify/tags/lmdj-v1.0.15.2
+   git cat-file -t refs/lmdj-verify/tags/lmdj-v1.0.15.2
+   git verify-tag refs/lmdj-verify/tags/lmdj-v1.0.15.2
+   git merge-base --is-ancestor \
+     refs/lmdj-verify/tags/lmdj-v1.0.15.2^{commit} origin/main
+   git update-ref -d refs/lmdj-verify/tags/lmdj-v1.0.15.2
+   ```
+
+3. 获得独立 Release 授权后，创建 canonical prerelease 并一次上传精确三项；不得多传
+   source map、替代 ZIP 或未签名 checksum：
+
+   ```bash
+   gh release create lmdj-v1.0.15.2 \
+     "$archive" "$archive.sha256" "$archive.sha256.asc" \
+     --repo endaye/lmdj --verify-tag --prerelease \
+     --title 'LMDJ Product 1.0.15.2 Web Runtime Host 1.1.2'
+   scripts/web-runtime-deploy.sh verify lmdj-v1.0.15.2
+   ```
+
+4. 只有远端 tag、protected `origin/main` ancestor、三资产 inventory/signature 与 bundle
+   全部验证成功，Environment 已配置且本次 deployment 另获授权后，才可 dispatch：
+
+   ```bash
+   gh workflow run deploy-web-runtime-host.yml --ref main -f tag=lmdj-v1.0.15.2
+   ```
+
+Release `targetCommitish` 只作为非空辅助 metadata；tag 已存在时它不是 commit attestation。
+部署器固定 canonical origin URL/repository，并自行 fetch remote tag 与 main scratch refs。
 
 ## 创建 Netlify 项目（一次性、获授权后）
 
@@ -86,12 +126,33 @@ approval/protection policy（如已配置）通过后再 dispatch。
 不要把 token 粘贴到 shell history、PR、runbook、artifact、Portal 或日志；site ID 的记录
 规则以前段为准。
 
+若在受信 workstation 临时运行只读 `verify`，优先使用 `gh` 自己的 credential store。
+需要显式 `GITHUB_TOKEN` 时，用无回显读取且立即注册清理，不把 token 写进命令历史：
+
+```bash
+read -rsp 'Short-lived GitHub token: ' GITHUB_TOKEN; printf '\n'
+export GITHUB_TOKEN
+trap 'unset GITHUB_TOKEN' EXIT INT TERM
+scripts/web-runtime-deploy.sh verify lmdj-v1.0.15.2
+unset GITHUB_TOKEN
+trap - EXIT INT TERM
+```
+
+只使用短期、最小只读范围 token；不得在 shell 命令行写 `GITHUB_TOKEN=真实值`，不得
+保存到 `.env`、history、tracked file、日志或 evidence。部署 workflow 使用 GitHub 提供的
+短期 token，不复制到 Netlify child；Netlify token 同样不进入 gh/local helper。
+
 ## 受控执行与证据检查
 
 获授权的 workflow 只接受发布事件的 prerelease tag 或手动输入的精确 Product tag，
 并固定 checkout `main`。它执行：签名 tag/Release/archive 验证 → staging → Netlify
-draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
+prior discovery/immutable+production smoke → draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
 生产 URL HTTP 和 Chromium smoke → artifact evidence。
+
+HTTP smoke 从 `/` 开始，只允许直接 200，或一次严格同源、无 query/fragment 且最终仅到
+`/index.html` 的 redirect；随后验证 `no-store`、全部 security headers、manifest identity、
+九资产 exact immutable 与 unknown/source map `no-store`。Chromium 同样从 `/` 开始，点击
+前后要求 admitted 与 outcome 各精确 `+1`、rejected 不变，并在 close 后再次确认计数保持。
 
 调度后记录并审查 workflow run，而不是仅凭 Actions 页面上的绿色图标宣布发布：
 
@@ -102,20 +163,32 @@ gh run download RUN_ID --name runtime-host-deployment-evidence --dir evidence/RU
 python3 -m json.tool evidence/RUN_ID/evidence.json
 ```
 
-证据按来源分别核对，不能声称 artifact 单独提供全部字段：
+`evidence.json` 的 exact top-level schema 是
+`lmdj.web-runtime-host.deployment-evidence.v2`：
 
-- `evidence.json` 提供 deploy identity：`deploy_id`、immutable `deploy_url`、
-  `git_revision`、Product Build、Host version、tag、release URL、site ID 和 archive
-  digest；确认 digest 等于上文指定值、revision 等于指定 tag target。它不单独提供
-  run URL、timestamp 或 smoke detail。
-- 不可变 GitHub run metadata 提供该 run 的 URL、run identity 和 timestamps；保留与
-  `runtime-host-deployment-evidence` artifact 的 identity 对应关系。
-- 同一不可变 run 的 workflow log 与 artifact identity 提供 immutable/prod HTTP 与
-  Chromium smoke detail、same-ID restore 结果和失败上下文；这不是 `evidence.json` 的
-  字段。
+| 字段 | 精确内容 |
+| --- | --- |
+| `archive` | `{filename, sha256}`，保留 canonical archive filename 与 digest。 |
+| `github_actions` | `{run_id, run_url}`；URL 必须为 `https://github.com/endaye/lmdj/actions/runs/<run_id>`。 |
+| `started_at`, `ended_at` | 本次受控部署的 UTC 起止时间。 |
+| `git_revision`, `tag`, `release_url`, `product_build`, `host_version`, `site_id`, `channel` | 已验证 provenance 与 live identity。 |
+| `prior_good` | `null`，或发布前 `GET site` 完整 projection、发现的 prior Product/Host、prior immutable 与 production 的 HTTP/browser 结构化结果及时间。 |
+| `immutable` | `{deploy_id, deploy_url, http, browser}`；`http.result` 保留完整 HTTP smoke JSON。 |
+| `publication` | `{same_deploy_id, response}`；`response` 保留 same-ID publish/restore API JSON。 |
+| `production` | `{url, http, browser}`；HTTP/browser 均含结构化结果和时间。 |
 
-只有三类记录相互一致，成功 evidence 才能填充验收记录；发生失败时保留失败日志，不把
-失败 draft 当作发布证据。
+失败恢复写入独立、原子替换的 `recovery-evidence.json`，contract 为
+`lmdj.web-runtime-host.deployment-recovery-evidence.v1`，exact top-level 字段是
+`action`、`attempted_deploy`、`original_status`、`prior_deploy`、`reconcile`、
+`recorded_at`、`recovery_response`、`validation` 与 `contract`。其中 `reconcile` 保留失败后
+实际 `GET site` JSON，`recovery_response` 保留 exact restore 或 disable response，
+`validation` 保留 prior immutable 与 production 的 HTTP/browser 复验结构和恢复状态。
+workflow 以 `if: always()` 上传 `evidence.json`、`recovery-evidence.json` 与完整
+`deployment.log`；不得丢弃 HTTP JSON 或 restore response。
+
+artifact 字段仍须与不可变 GitHub run metadata 和 workflow log 相互一致；只有成功 schema、
+canonical run URL、same-ID response 与两阶段 smoke 全部一致，才可填充验收记录。失败 draft
+不是发布证据。
 
 生产 alias 切换后，在干净环境执行：
 
@@ -131,28 +204,25 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 
 | 情形 | 操作 |
 | --- | --- |
-| 签名、target、Release、archive digest 或 bundle identity 校验失败 | 停止；不要创建 Netlify Deploy。修复 release provenance 后从验证重新开始。 |
-| draft 创建或 immutable URL smoke 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
-| production alias 发布 API 失败 | 停止并检查 alias 仍指向的实际 Deploy ID；不要假定新 draft 已上线。保留日志并按授权重试同一已 smoke 的 Deploy ID。 |
-| production alias 已切换但 production smoke 失败 | 立即用已记录、曾通过生产 smoke 的**精确 prior Deploy ID**回滚，然后再次 smoke 并记录结果。 |
+| remote tag/signature、三资产 inventory/checksum signature、archive digest 或 bundle identity 失败 | 停止；不要创建 Netlify Deploy。修复 release provenance 后从验证重新开始。 |
+| prior published deploy/identity/smoke 失败 | 停止；未建立本次 prior-good 前不要创建或发布新 Deploy。 |
+| draft 创建或 immutable URL HTTP/Chromium 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
+| publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；只有 alias 实际指向新 Deploy 才执行恢复。 |
+| alias 指向新 Deploy 且 prior-good 存在 | `POST /sites/{site_id}/deploys/{prior_id}/restore` 恢复 exact prior，再对 prior immutable 与 production 运行完整 HTTP/Chromium，原子写 recovery evidence。 |
+| alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点并写 recovery evidence；不得伪造 rollback。 |
+| preflight 发现站点已 disabled | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
 | evidence artifact 缺失、字段不匹配或含敏感信息 | 将部署视为证据不完整；不要更新 acceptance/Portal 为 deployed，先修复证据链。 |
 
-回滚不是重新构建或从当前分支重新上传，也不在 token 命令行或 shell history 中操作。
-现有 `deploy-web-runtime-host.yml` 没有 rollback dispatch；因此回滚必须先获得单独授权，
-由受控 GitHub Actions/专用授权流程在受保护 Environment 中执行，不能假装现有 workflow
-已自动支持它。受控操作者按以下顺序执行：
+恢复不是重新构建、重新上传或猜 Deploy ID。prior identity 来自发布前官方 site response 与
+该 immutable manifest 的实际 Product/Host；脚本先 smoke prior immutable URL，再 smoke
+production alias，建立本次 prior-good。publish 后失败即使 API 返回 error，也必须 GET
+reconcile，而不能假设 alias 未切换。workflow 内部 1,080 秒 timeout 先发送 TERM，另留
+480 秒 kill budget，最坏 26 分钟仍早于 30 分钟 job timeout，给 exact restore/disable、
+复验与 `recovery-evidence.json` 上传留出预算。
 
-1. 从 prior evidence 读取 exact prior Deploy ID、immutable URL、Product Build 和 Host
-   version；先 smoke prior immutable URL，使用 prior evidence 的实际 Product/Host
-   identity，而不是当前候选身份。
-2. 仅在 prior immutable smoke 通过后，使用 sealed Environment credential 发布 exact
-   prior Deploy ID；publication 响应必须确认同一个 ready ID 已恢复 production alias。
-3. 再 smoke production alias，仍使用该 prior evidence 的实际 Product/Host identity，
-   并把三步证据记录到受控运行中。
-
-`PRIOR_DEPLOY_ID` 必须来自先前已验证 evidence；未知、当前 draft、猜测或截断的 ID
-一律不可使用。初次发布没有 prior good Deploy 时不可回滚：保持或恢复为无已验证生产
-版本，并升级处置，不得把未 smoke draft 或当前候选冒充为回滚目标。
+现有 workflow 没有独立的人工 rollback dispatch；正常部署的失败恢复已内建在同一受保护
+Environment run 中。任何事后手工恢复仍需单独授权，且必须使用已验证的 exact prior
+Deploy ID，不得把当前 draft 或未知 ID 冒充 prior。
 
 ## 凭据轮换
 

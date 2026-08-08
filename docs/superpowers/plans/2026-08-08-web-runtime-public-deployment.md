@@ -8,6 +8,42 @@
 
 **Tech Stack:** Bash, Python 3.11 standard library, Git/GPG, GitHub CLI and Actions, Netlify REST API, Playwright 1.62.1 with Node 22, Docusaurus Architecture Portal.
 
+## Approved Final Security Amendment (2026-08-09)
+
+This amendment is part of the approved plan and supersedes incompatible early task detail below.
+
+- Release authority is exact three-asset inventory: ZIP, `<archive>.sha256`, and canonical detached
+  armored `<archive>.sha256.asc`. `release_bundle.py` verifies the checksum signature with the repository Product
+  public key and exact primary fingerprint before parsing checksum bytes. The initial exact target
+  and digest remain pinned.
+- Tag authority comes only from a canonical-origin scratch fetch of the remote annotated signed tag.
+  Its peeled commit must be an ancestor of freshly fetched, GitHub-proven-protected `origin/main`.
+  Local tag shadows are ignored; `targetCommitish` remains nonempty auxiliary metadata only.
+- Before a draft is created, `GET /api/v1/sites/{site_id}` establishes the actual published deploy.
+  A discovered prior is identity-discovered and fully smoke-tested at immutable and production URLs.
+  After publication attempt, production failure, ERR, INT/TERM, controlled timeout, and publish API
+  error all reconcile the current alias. Restore exact prior only when the alias identifies the new
+  deploy; with no prior, use official reversible site disable. Never auto-enable a pre-disabled site.
+- `_headers` is a tracked base with default `no-store`; deploy assembly appends nine exact immutable
+  paths from the verified manifest. No `/assets/*` rule and no released `dist` mutation are allowed.
+- HTTP and Chromium start at `/`. HTTP permits only 200 or one same-origin redirect ending at
+  `/index.html`; Chromium proves admitted +1, outcome +1, rejected unchanged, including after close.
+- Success evidence is exact `lmdj.web-runtime-host.deployment-evidence.v2`; recovery evidence is
+  `lmdj.web-runtime-host.deployment-recovery-evidence.v1`. Preserve archive filename, Actions run
+  ID/canonical URL, start/end, full HTTP JSON, browser results, same-ID publish response, reconcile,
+  restore/disable response, and post-recovery validation. Both writes are atomic and the workflow
+  always uploads them. Its 1,080-second TERM timeout plus 480-second kill budget finishes before the
+  30-minute job timeout.
+- Child credential scope is exclusive: GitHub commands inherit only GitHub deployment authority,
+  Netlify commands receive no GitHub/GH variables, and local metadata/stage/evidence/smoke helpers
+  receive no deployment credentials.
+
+**Version impact: none.** This is an unpublished deployment-control-plane correction; Product,
+Host, Core, Provider, Contract, Assembly, and released distribution bytes remain unchanged.
+
+**Documentation impact: required.** Update `/operations/version-and-release/`,
+`/hosts/web-runtime/`, and `/platform/web-runtime/` together with the runbook and acceptance record.
+
 ## Global Constraints
 
 - Work on `feat/web-runtime-public-deployment` in an isolated worktree created from updated `main`; do not implement on the docs branch or protected `main`.
@@ -327,12 +363,12 @@ Create `apps/web-runtime-host/deploy/_headers` with the current proof-server CSP
 
 /host-manifest.json
   Cache-Control: no-store
-
-/assets/*
-  Cache-Control: public, max-age=31536000, immutable
 ```
 
-Do not add a catch-all rewrite or authentication header.
+Do not add a catch-all rewrite or authentication header. After the distribution manifest has been
+fully verified, deployment assembly appends nine literal asset paths, each with
+`Cache-Control: public, max-age=31536000, immutable`. A wildcard `/assets/*` rule is forbidden, so
+unknown assets and source maps inherit `no-store` from `/*`.
 
 - [ ] **Step 5: Prove same-ID publication and failed draft isolation**
 
@@ -629,9 +665,20 @@ tag_pattern='^lmdj-v([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$'
 production_url='https://lmdj-runtime.netlify.app'
 ```
 
-Use `mktemp -d` under `${RUNNER_TEMP:-${TMPDIR:-/tmp}}`, validate the cleanup prefix before removal, create a temporary `GNUPGHOME`, import only `.github/release-signing-keys/lmdj-product.asc`, run `git verify-tag --raw`, and require the exact trusted fingerprint from the key file test. Resolve `tag_target="$(git rev-parse "${tag}^{commit}")"`, create a detached verification checkout with `git worktree add --detach "$owned_temp/tag-target" "$tag_target"`, and treat it as read-only. The merged-`main` command must pass that checkout—not its own repository root—to `release_bundle.py --repo-root`, so Product/Host manifests and `package.py::verify_distribution` come from the exact signed tag target even when the initial tag predates the deployment tooling. Remove the detached worktree with `git worktree remove --force` before validating and deleting only the owned temporary root.
+Use `mktemp -d` under `${RUNNER_TEMP:-${TMPDIR:-/tmp}}`, validate the cleanup prefix before removal,
+and fetch the tag plus `main` from the pinned canonical origin into scratch refs. Ignore any local
+same-name tag. In a temporary `GNUPGHOME`, import only
+`.github/release-signing-keys/lmdj-product.asc`, run `git verify-tag --raw` on the fetched annotated
+tag, and require the exact trusted primary fingerprint. The peeled tag commit must be an ancestor of
+the freshly fetched, GitHub-proven-protected canonical `main`. Create the detached verification
+checkout from that commit and pass it—not the deployment-tooling checkout—to `release_bundle.py
+--repo-root`. Remove the detached worktree and scratch refs before deleting only the owned temp root.
 
-Resolve Release metadata with `gh release view --json tagName,isDraft,isPrerelease,targetCommitish,assets,url` and download exact asset names with `gh release download`.
+Resolve Release metadata with `gh release view --json
+tagName,isDraft,isPrerelease,targetCommitish,assets,url`; treat `targetCommitish` as auxiliary metadata,
+not attestation. Require and download exactly ZIP, `<archive>.sha256`, and canonical detached armored
+`<archive>.sha256.asc`. Verify the checksum signature with the trusted Product key before parsing the
+checksum.
 
 Call the Python tools in order. Build Netlify deploy files from every verified dist file plus `_headers`; never mutate the staged dist. Write evidence atomically only after production smoke passes.
 
@@ -640,25 +687,19 @@ Call the Python tools in order. Build Netlify deploy files from every verified d
 Build the successful record from the live staged bundle, draft deploy, verified tag
 target, selected site, and GitHub Release URL; never use sample IDs or URLs:
 
-```python
-evidence = {
-    "archive_sha256": staged.archive_sha256,
-    "channel": "canary",
-    "contract": "lmdj.web-runtime-host.deployment-evidence.v1",
-    "deploy_id": draft.id,
-    "deploy_url": draft.deploy_ssl_url,
-    "git_revision": tag_target,
-    "host_version": staged.host_version,
-    "product_build": staged.product_build,
-    "production_url": "https://lmdj-runtime.netlify.app",
-    "release_url": release_url,
-    "site_id": site_id,
-    "tag": tag,
-}
-```
+The exact success contract is `lmdj.web-runtime-host.deployment-evidence.v2`. It contains archive
+`{filename, sha256}`, canonical Actions `{run_id, run_url}`, run `started_at`/`ended_at`, verified
+Git/tag/Release/Product/Host/site identity, optional `prior_good`, immutable `{deploy_id, deploy_url,
+http, browser}`, same-ID publication `{same_deploy_id, response}`, and production `{url, http,
+browser}`. HTTP records preserve their complete JSON results and each smoke records start/end time.
 
-Serialize with sorted keys and a trailing newline, then atomically replace the evidence
-file only after production smoke passes. For the initial deployment, require tag target
+The exact failure-recovery contract is
+`lmdj.web-runtime-host.deployment-recovery-evidence.v1`; it preserves attempted/prior deploys,
+original status, reconcile GET, restore/disable response, validation results, action and time.
+
+Serialize with sorted keys and a trailing newline, then atomically replace the appropriate evidence
+file. Success evidence is written only after production smoke passes; recovery evidence is written
+even when recovery fails. For the initial deployment, require tag target
 `72ae40074620cc5681c462ba04a31a666449734f` and Host archive SHA-256
 `d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a`;
 the Core ZIP digest is invalid here. Tests must compare keys exactly and reject token-like

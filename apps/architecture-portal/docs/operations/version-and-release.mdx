@@ -25,25 +25,31 @@ schema-2 快照冻结 34 页源码、sidebar、九张图的 18 个 HTML/SVG 资�
 
 本地已存在 signed annotated Product tag `lmdj-v1.0.15.2`：`git tag -v` 的 Good signature
 primary fingerprint 是 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 是
-`72ae40074620cc5681c462ba04a31a666449734f`。该 tag 尚未 push，未做远端验证；因此当前
-Task 不宣称远端 CI、merge、Release、部署、发布或 Channel promotion。匹配 Product Build
-的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；
-current 页面不按 Task 顺序声明其临时存在状态。历史 `1.0.14.0` 的 PR #91 与 merged-main
-证据不自动升级为当前候选证据。
+`72ae40074620cc5681c462ba04a31a666449734f`。该 target 已是 `origin/main` 上 PR #98 的 merge
+commit；尚未 push、review、CI、merge 的限定只适用于本 Task 的 deployment-tooling branch。
+本地 tag 尚未 push，未做远端验证，因此当前 Task 仍不宣称 remote verified tag、Release、
+部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由
+`versions.json`、冻结 metadata 和 Portal 校验器共同判定；current 页面不按 Task 顺序声明
+其临时存在状态。历史 `1.0.14.0` 的 PR #91 证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 
-Runtime Host 的两阶段发布工具和 workflow 定义已经存在：先从精确 signed Product tag
-与 Release archive 验证身份，创建 immutable Netlify draft，对 draft 运行 HTTP 与
-Chromium smoke，再只把同一个 ready Deploy ID 发布到
-`https://lmdj-runtime.netlify.app`，最后写出 evidence artifact。它是实现好的操作路径，
-不是当前已发生的发布。
+Runtime Host 的两阶段发布工具和 workflow 定义已经存在：从 canonical origin 验证 remote
+annotated signed Product tag、protected `main` ancestry，以及 Release 精确三资产 ZIP、
+checksum 和受信 Product key 的 detached armored signature；signature 验证先于 checksum
+解析。发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
+HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
+API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
+以官方 reversible site disable 安全撤下。成功 evidence v2 与恢复 evidence v1 分别保存完整
+HTTP JSON、browser、publish/restore response 和时间。它是实现好的操作路径，不是当前已
+发生的发布。
 
-当前 `1.0.15.2` / Host `1.1.2` 仍为 pre-deploy：没有 push、PR review、CI、merge、
-远端 verified tag、Release、`lmdj-runtime` Netlify project、GitHub Environment secret、
-workflow run、Deploy ID、immutable URL、production alias 或 deployment evidence。只有
-实际 evidence record 才能让 Portal 报告公共部署；本地工具、Proof、PR Preview 或
-workflow 定义都不能替代它。运营前置条件、回滚和凭据轮换见仓库运行手册
+当前 deployment-tooling branch 尚未 push、PR review、CI 或 merge；但 target commit 本身
+已经由 PR #98 合入 `origin/main`。本地 tag 尚未 push且未做远端验证，因此仍没有本候选的
+remote verified tag、Release、`lmdj-runtime` Netlify project、GitHub Environment secret、
+workflow run、Deploy ID、immutable URL、production alias 或 deployment evidence。只有实际
+evidence record 才能让 Portal 报告公共部署；本地工具、Proof、PR Preview 或 workflow 定义
+都不能替代它。运营前置条件、恢复和凭据轮换见仓库运行手册
 `docs/deploy/web-runtime-host.md`；其验收真相记录见
 `docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 

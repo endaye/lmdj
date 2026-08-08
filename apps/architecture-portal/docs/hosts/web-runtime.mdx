@@ -40,16 +40,23 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 
 ## 公共发布状态
 
-本地两阶段 Netlify release/deploy 工具已实现：验证 signed Product tag 与 GitHub Release
-archive、创建 immutable draft Deploy、对该 draft 运行 HTTP/Chromium smoke、再将同一
-ready Deploy ID 设为生产 alias，并留下 evidence artifact。当前这只是实现状态：
+本地两阶段 Netlify release/deploy 工具已实现：从 canonical origin 获取受保护 `main` 和
+remote annotated signed Product tag，验证 tag commit 是该 `main` 的 ancestor；GitHub
+Release 必须精确包含 ZIP、checksum 和由受信 Product key 签名的 armored detached
+checksum signature，工具在解析 checksum 前先验证 signature。组装层只为 manifest 中的
+九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
+部署前先验证真实 prior immutable/production 身份和 HTTP/Chromium；发布后失败或中断时
+reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
+使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
+evidence v1。当前这些都只是 tooling 实现状态：
 本地已存在 signed annotated tag `lmdj-v1.0.15.2`，Good signature primary fingerprint
 为 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 为
-`72ae40074620cc5681c462ba04a31a666449734f`；它尚未 push，未做远端验证。故
-`1.0.15.2` / Host `1.1.2` 尚未 push、review、CI、merge、远端 verified tag、Release 或部署；
-`lmdj-runtime` 项目、Environment secrets、workflow run、Deploy ID、immutable URL 和
-production publication 均不存在。不可将本地 Host Proof 或部署工具测试上升为公开部署
-结论。
+`72ae40074620cc5681c462ba04a31a666449734f`；该 target 已是 `origin/main` 上 PR #98 的
+merge commit。尚未 push、review、CI、merge 的限定只适用于本 Task 的 deployment-tooling
+branch；本地 tag 尚未 push，未做远端验证，因而仍无本候选的 remote verified tag、
+Release 或部署结论，也不声称 `lmdj-runtime` 项目、Environment secrets、workflow run、
+Deploy ID、immutable URL 或 production publication 已存在。不可将本地 Host Proof 或
+部署工具测试上升为公开部署结论。
 
 Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
 `lmdj-canary` 明确留给未来 Creator，不创建、不绑定给此 Host，亦不作为 Runtime URL。
