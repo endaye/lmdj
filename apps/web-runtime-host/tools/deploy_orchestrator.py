@@ -494,7 +494,6 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     release.add_argument("tag_target")
     release.add_argument("product_build")
     release.add_argument("host_version")
-    release.add_argument("document")
 
     downloaded = commands.add_parser("downloaded-assets")
     downloaded.add_argument("root", type=Path)
@@ -545,7 +544,7 @@ def run(options: argparse.Namespace) -> None:
         print(
             "\t".join(
                 parse_release_metadata(
-                    options.document,
+                    sys.stdin.read(),
                     tag=options.tag,
                     tag_target=options.tag_target,
                     product_build=options.product_build,

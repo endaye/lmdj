@@ -248,6 +248,68 @@ class DeployCommandTest(unittest.TestCase):
         path.chmod(0o755)
 
     def write_fake_commands(self) -> None:
+        self.write_executable(
+            "env",
+            f"""
+            #!{sys.executable}
+            import json
+            import os
+            from pathlib import Path
+            import sys
+
+            args = sys.argv[1:]
+            secrets = tuple(
+                value
+                for value in (
+                    os.environ.get("EXPECTED_GITHUB_TOKEN", ""),
+                    os.environ.get("NETLIFY_AUTH_TOKEN", ""),
+                )
+                if value
+            )
+            with Path(os.environ["DETAILS_LOG"]).open("a", encoding="utf-8") as output:
+                output.write(json.dumps({{
+                    "program": "env",
+                    "argument_count": len(args),
+                    "credential_in_argv": any(
+                        secret in argument for argument in args for secret in secrets
+                    ),
+                }}, sort_keys=True) + "\\n")
+            os.execv("/usr/bin/env", ["/usr/bin/env", *args])
+            """,
+        )
+        self.write_executable(
+            "python3",
+            f"""
+            #!{sys.executable}
+            import json
+            import os
+            from pathlib import Path
+            import sys
+
+            args = sys.argv[1:]
+            secrets = tuple(
+                value
+                for value in (
+                    os.environ.get("EXPECTED_GITHUB_TOKEN", ""),
+                    os.environ.get("NETLIFY_AUTH_TOKEN", ""),
+                )
+                if value
+            )
+            command = ""
+            if len(args) >= 2 and args[0].endswith("deploy_orchestrator.py"):
+                command = args[1]
+            with Path(os.environ["DETAILS_LOG"]).open("a", encoding="utf-8") as output:
+                output.write(json.dumps({{
+                    "program": "python3",
+                    "command": command,
+                    "argument_count": len(args),
+                    "credential_in_argv": any(
+                        secret in argument for argument in args for secret in secrets
+                    ),
+                }}, sort_keys=True) + "\\n")
+            os.execv(sys.executable, [sys.executable, *args])
+            """,
+        )
         package_verifier = """import json
 import os
 from pathlib import Path
@@ -657,6 +719,48 @@ def verify_distribution(dist_root, repo_root):
             [value for value in self.command_log() if value.startswith("gh release")],
             [f"gh release view {TAG}", f"gh release download {TAG}"],
         )
+
+    def test_github_token_is_inherited_without_argv_assignment(self) -> None:
+        completed = self.run_command("verify", TAG)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        env_invocations = [
+            detail for detail in self.details() if detail.get("program") == "env"
+        ]
+        self.assertTrue(env_invocations)
+        self.assertFalse(
+            any(detail["credential_in_argv"] for detail in env_invocations)
+        )
+        source = SOURCE_COMMAND.read_text(encoding="utf-8")
+        self.assertNotIn('GITHUB_TOKEN="$GITHUB_TOKEN"', source)
+
+    def test_release_metadata_uses_stdin_without_credential_argv(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"FAKE_RELEASE_SECRET_FIELD": "1"}
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        invocation = next(
+            detail
+            for detail in self.details()
+            if detail.get("program") == "python3"
+            and detail.get("command") == "release-metadata"
+        )
+        self.assertEqual(invocation["argument_count"], 6)
+        self.assertFalse(invocation["credential_in_argv"])
+        self.assertNotIn(GITHUB_TOKEN, self.details_path.read_text(encoding="utf-8"))
+        self.assert_no_secret_output(completed)
+
+    def test_verify_missing_github_token_fails_before_tag_work(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"GITHUB_TOKEN": ""}
+        )
+        self.assertEqual(completed.returncode, 2)
+        self.assertEqual(self.command_log(), [])
+        self.assertEqual(
+            completed.stderr,
+            "Web Runtime deployment error: required environment is missing: "
+            "GITHUB_TOKEN\n",
+        )
+        self.assert_no_owned_temp()
 
     def test_rejects_duplicate_or_mismatched_release_assets(self) -> None:
         failures = (

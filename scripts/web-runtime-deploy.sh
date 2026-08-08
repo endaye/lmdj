@@ -49,7 +49,6 @@ with_pinned_github() {
     -u GH_REPO \
     -u NETLIFY_AUTH_TOKEN \
     -u NETLIFY_RUNTIME_SITE_ID \
-    GITHUB_TOKEN="$GITHUB_TOKEN" \
     "$@"
 }
 
@@ -246,11 +245,10 @@ read_tag_identity() {
 
 parse_release_metadata() {
   local tag="$1"
-  local release_json="$2"
   local fields=''
   fields="$(
     "$python_bin" "$orchestrator_tool" release-metadata \
-      "$tag" "$tag_target" "$product_build" "$host_version" "$release_json"
+      "$tag" "$tag_target" "$product_build" "$host_version"
   )" || {
     fail "GitHub Release identity verification failed"
     return
@@ -344,7 +342,7 @@ verify_release() {
     fail "GitHub Release metadata is unavailable"
     return
   }
-  parse_release_metadata "$tag" "$release_json"
+  parse_release_metadata "$tag" <<<"$release_json"
   download_release_assets "$tag"
   stage_release_assets
   remove_tag_checkout
@@ -463,6 +461,7 @@ cd "$repo_root"
 case "$command_name" in
   verify)
     [[ $# -eq 1 ]] || { usage; exit 64; }
+    require_secret GITHUB_TOKEN
     validate_tag "$1"
     tag="$1"
     for command in git gpg gh "$python_bin"; do
