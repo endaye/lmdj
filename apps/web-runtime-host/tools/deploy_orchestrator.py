@@ -599,9 +599,10 @@ def _valid_http_evidence(
         and result.get("index_sha256") == index_sha256
         and result.get("manifest_sha256") == manifest_sha256
         and result.get("root_request_path") == "/"
-        and result.get("root_final_path") == "/"
         and type(result.get("root_redirect_count")) is int
-        and result.get("root_redirect_count") == 0
+        and (
+            result.get("root_final_path"), result.get("root_redirect_count")
+        ) in {("/", 0), ("/index.html", 1)}
         and (deploy_id is None or result.get("deploy_id") == deploy_id)
     )
 

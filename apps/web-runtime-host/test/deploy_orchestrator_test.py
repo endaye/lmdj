@@ -263,6 +263,39 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
             "tag": "lmdj-v1.0.15.3",
         }
 
+    def recovery_document(self) -> dict[str, object]:
+        success = self.success_document()
+        prior = success["prior_good"]
+        return {
+            "action": "prior-still-current",
+            "attempted_deploy": {
+                "id": self.DEPLOY,
+                "url": f"https://{self.DEPLOY}--lmdj-runtime.netlify.app",
+            },
+            "contract": "lmdj.web-runtime-host.deployment-recovery-evidence.v1",
+            "original_status": 2,
+            "post_recovery_site": prior["site_response"],
+            "prior_deploy": {
+                "host_version": prior["host_version"],
+                "id": prior["deploy_id"],
+                "index_sha256": self.PRIOR_INDEX_SHA,
+                "manifest_sha256": self.PRIOR_MANIFEST_SHA,
+                "product_build": prior["product_build"],
+                "url": prior["deploy_url"],
+            },
+            "reconcile": prior["site_response"],
+            "recorded_at": self.NOW,
+            "recovery_response": None,
+            "status": "passed",
+            "validation": {
+                "immutable_browser": prior["immutable"]["browser"],
+                "immutable_http": prior["immutable"]["http"],
+                "production_browser": prior["production"]["browser"],
+                "production_http": prior["production"]["http"],
+                "status": "passed",
+            },
+        }
+
     def write(self, document: dict[str, object], contract: str) -> str:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "evidence.json"
@@ -279,6 +312,41 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
             self.write(document, document["contract"]),
             json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
         )
+
+    def test_success_evidence_accepts_verified_root_redirect(self) -> None:
+        document = self.success_document()
+        result = document["production"]["http"]["result"]
+        result["root_final_path"] = "/index.html"
+        result["root_redirect_count"] = 1
+        self.assertIn('"root_final_path":"/index.html"', self.write(
+            document, document["contract"]
+        ))
+
+    def test_recovery_evidence_accepts_verified_root_redirect(self) -> None:
+        document = self.recovery_document()
+        result = document["validation"]["production_http"]["result"]
+        result["root_final_path"] = "/index.html"
+        result["root_redirect_count"] = 1
+        self.assertIn('"root_redirect_count":1', self.write(
+            document, document["contract"]
+        ))
+
+    def test_rejects_mismatched_or_multi_hop_root_redirect_evidence(self) -> None:
+        for final_path, redirect_count in (
+            ("/", 1),
+            ("/index.html", 0),
+            ("/index.html", 2),
+            ("/other", 1),
+        ):
+            with self.subTest(final_path=final_path, redirect_count=redirect_count):
+                document = self.success_document()
+                result = document["production"]["http"]["result"]
+                result["root_final_path"] = final_path
+                result["root_redirect_count"] = redirect_count
+                with self.assertRaisesRegex(
+                    deploy_orchestrator.DeployOrchestratorError, "schema"
+                ):
+                    self.write(document, document["contract"])
 
     def test_rejects_impossible_utc_timestamps_and_empty_http_results(self) -> None:
         for mutate in (
