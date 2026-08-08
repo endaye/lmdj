@@ -284,10 +284,25 @@ def _require_negative(
             status = response.status
             _validate_headers(response.headers, path)
             response.read(1)
+            if status == 404:
+                _require_header(
+                    response.headers,
+                    name="cache-control",
+                    expected="no-store",
+                    label=path,
+                )
     except HTTPError as error:
         try:
             _validate_headers(error.headers, path)
             status = error.code
+            error.read(1)
+            if status == 404:
+                _require_header(
+                    error.headers,
+                    name="cache-control",
+                    expected="no-store",
+                    label=path,
+                )
         finally:
             error.close()
     except SmokeError:

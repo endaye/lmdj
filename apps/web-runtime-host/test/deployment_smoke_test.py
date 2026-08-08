@@ -61,10 +61,11 @@ class SmokeFixture:
         self.omit_header: str | None = None
         self.redirect_omit_header: str | None = None
         self.redirect_duplicate_header: tuple[str, str] | None = None
+        self.negative_duplicate_header: tuple[str, str] | None = None
         self.duplicate_header: tuple[str, str] | None = None
         self.header_overrides: dict[str, str] = {}
         self.content_type_overrides: dict[str, str] = {}
-        self.cache_overrides: dict[str, str] = {}
+        self.cache_overrides: dict[str, str | None] = {}
         self.redirects: dict[str, str] = {}
         self.redirect_cache_overrides: dict[str, str | None] = {}
         self.delays: dict[str, float] = {}
@@ -188,8 +189,12 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if payload is None:
             self.send_response(HTTPStatus.NOT_FOUND)
             self.send_header("Content-Type", "text/plain; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
+            negative_cache = fixture.cache_overrides.get(self.path, "no-store")
+            if negative_cache is not None:
+                self.send_header("Cache-Control", negative_cache)
             self._headers()
+            if fixture.negative_duplicate_header is not None:
+                self.send_header(*fixture.negative_duplicate_header)
             self.end_headers()
             return
         self.send_response(HTTPStatus.OK)
@@ -379,6 +384,19 @@ class DeploymentSmokeTest(unittest.TestCase):
                 with self.assertRaisesRegex(SmokeError, re.escape(path)):
                     self.smoke()
                 self.fixture.forced_ok.clear()
+
+    def test_rejects_missing_wrong_or_duplicate_negative_route_cache(self) -> None:
+        for observed in (None, "public, max-age=31536000, immutable"):
+            with self.subTest(observed=observed):
+                self.fixture.cache_overrides["/missing"] = observed
+                with self.assertRaisesRegex(SmokeError, "cache-control"):
+                    self.smoke()
+        self.fixture.cache_overrides.clear()
+        self.fixture.negative_duplicate_header = (
+            "Cache-Control", "public, max-age=0"
+        )
+        with self.assertRaisesRegex(SmokeError, "cache-control"):
+            self.smoke()
 
     def test_rejects_http_base_url_when_https_is_required(self) -> None:
         with self.assertRaisesRegex(SmokeError, "HTTPS"):
