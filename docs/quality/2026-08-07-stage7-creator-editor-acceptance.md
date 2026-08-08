@@ -3,8 +3,8 @@
 ## Current status
 
 Stage 7 automated local acceptance is `PASS` at source revision
-`04a6800efc79211b836674b34ce83081c8d69438`. The verified corrective candidate
-is Product Build `1.0.16.1`, Channel `canary`, Creator Web Host `1.0.1`, shared
+`16a67192b1097fcd4d8ab57451cbec7c7c93db91`. The verified corrective candidate
+is Product Build `1.0.16.2`, Channel `canary`, Creator Web Host `1.0.1`, shared
 Web Runtime Platform `0.1.1`, and Application Facade `1.3.1`.
 
 This result establishes the implemented local candidate and its clean-source
@@ -16,11 +16,11 @@ acceptance.
 
 | Gate | Result at the acceptance revision |
 | --- | --- |
-| `scripts/core.sh proof` | PASS; Product version checks, lock conformance, and version verification passed; 35/35 selected CTests passed; schema checks reported 9 positive cases, 11 negative cases, and 17 Product artifacts; CLI 10/10, MCP 10/10, package acceptance, Product `1.0.16.1`, Channel `canary`, and Assembly Lock `MATCH` |
+| `scripts/core.sh proof` | PASS; Product version checks, lock conformance, and version verification passed; 35/35 selected CTests passed; schema checks reported 9 positive cases, 11 negative cases, and 17 Product artifacts; CLI 11/11, MCP 10/10, package acceptance, Product `1.0.16.2`, Channel `canary`, and Assembly Lock `MATCH` |
+| `scripts/web-toolchain-conformance.sh proof` | PASS; Chromium toolchain conformance 2/2; WebKit 1 capability pass/1 designed capability skip; Chromium Project I/O 2/2; WebKit Project I/O 2/2 with the declared capability-limited path; Chromium AudioWorklet 17/17 |
 | `scripts/web-runtime-host.sh proof` | PASS; AudioWorklet Chromium 17/17; two clean distributions byte-identical; Python package 14/14, server 8/8, Node 25/25, native Web CTest 3/3, and browser fixtures 6/6; packaged Chromium 15 passed/1 designed skip; WebKit 1 limitation-path pass/10 capability skips |
 | `scripts/creator-web.sh proof` | PASS; Core-generated Project Bundle pack reproducible; two clean Creator distributions byte-identical; Vitest 33/33, Python package 7/7, server 3/3, shared Platform 75/75; packaged Chromium 9 passed/1 designed skip; WebKit capability boundary 1/1 |
-| Focused Chromium reload/reopen repetition | PASS 10/10 against the clean packaged candidate; every transient writer conflict remained `PROJECT_BUSY`, visible Retry retried Project open without re-listing, and no `INVALID_PROJECT`, `HOST_STATE_INVALID`, or Wasm memory fault recurred |
-| `scripts/architecture-portal.sh check` | PASS; 40/40 Portal tests, 37 current pages, 10 diagram sources/20 outputs, Product `1.0.16.1` facts, immutable snapshot provenance, typecheck, optimized build, and 42 routes/internal links |
+| `scripts/architecture-portal.sh check` | PASS; 41/41 Portal tests, 37 current pages, 10 diagram sources/20 outputs, Product `1.0.16.2` facts, immutable snapshot provenance, typecheck, optimized build, and 42 routes/internal links |
 | `bash scripts/verify-core-dependencies.sh` | PASS |
 | `bash tests/build/test_active_tree.sh` | PASS |
 
@@ -52,9 +52,9 @@ screen recovery, or long-session stability on those platforms.
 
 | State transition | Status |
 | --- | --- |
-| Push | rebased feature branch pushed; the latest pushed evidence revision before this record is `a2def3db374c83cfe1b13d5c8d95962cb9d08f42` |
-| Pull Request | Draft PR #97 open against `main`; dependency PR #94 is merged at `63fb788e33ccdf65d0a18e76872c7c106d8efd5b` and is an ancestor of this branch |
-| Pull Request CI | not green at `a2def3db374c83cfe1b13d5c8d95962cb9d08f42`: Portal rejected stale machine-readable PR fields; Web toolchain, Web Runtime Host, Linux Core, Linux ASan, and coverage also reported failures that remain unadjudicated; a fresh run is required after this evidence update |
+| Push | corrective commits are not pushed; the remote feature branch remains at `a2c2d02b50c2bd4f556d41177bfe827dbdf45e98` |
+| Pull Request | Draft PR #97 is open against `main`, but it does not yet contain the `1.0.16.2` corrective candidate |
+| Pull Request CI | no current result exists for acceptance revision `16a67192b1097fcd4d8ab57451cbec7c7c93db91`; results attached to the older remote revision are not evidence for this candidate |
 | Merge | not authorized / not performed |
 | Product tag or GitHub Release | not authorized / not created |
 | Deployment or publication | not authorized / not performed |
