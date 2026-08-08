@@ -107,13 +107,21 @@ def validate_archive_entries(archive: zipfile.ZipFile) -> list[tuple[zipfile.Zip
 
 
 def default_verifier(dist_root: Path, repo_root: Path) -> None:
-    package_path = Path(__file__).with_name("package.py")
+    package_path = repo_root / "apps/web-runtime-host/tools/package.py"
+    if not package_path.is_file() or package_path.is_symlink():
+        raise RuntimeError("distribution verifier is unavailable")
     spec = importlib.util.spec_from_file_location("lmdj_web_package", package_path)
     if spec is None or spec.loader is None:
         raise RuntimeError("distribution verifier cannot be loaded")
     module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    module.verify_distribution(dist_root, repo_root)
+    try:
+        spec.loader.exec_module(module)
+    except (ImportError, OSError, SyntaxError) as error:
+        raise RuntimeError("distribution verifier cannot be loaded") from error
+    verify_distribution = getattr(module, "verify_distribution", None)
+    if not callable(verify_distribution):
+        raise RuntimeError("distribution verifier cannot be loaded")
+    verify_distribution(dist_root, repo_root)
 
 
 def read_manifest_identity(dist_root: Path) -> tuple[str, str]:
@@ -172,7 +180,7 @@ def stage_release_bundle(
                 for info, relative in entries:
                     destination = staged / relative
                     if info.is_dir():
-                        destination.mkdir(parents=True, exist_ok=False)
+                        destination.mkdir(parents=True, exist_ok=True)
                         continue
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     with archive.open(info) as source, destination.open("xb") as target:
@@ -185,11 +193,11 @@ def stage_release_bundle(
         dist_root = staged / "dist"
         if not dist_root.is_dir() or dist_root.is_symlink():
             raise BundleError("release archive must contain exactly one dist tree")
-        if verifier is None:
-            try:
-                default_verifier(dist_root, repo_root)
-            except Exception as error:
-                raise BundleError("release bundle verification failed") from error
+        selected_verifier = verifier or default_verifier
+        try:
+            selected_verifier(dist_root, repo_root)
+        except Exception as error:
+            raise BundleError("release bundle verification failed") from error
         product_build, host_version = read_manifest_identity(dist_root)
         if product_build != expected_product_build:
             raise BundleError("release bundle Product Build mismatch")
@@ -202,23 +210,6 @@ def stage_release_bundle(
             host_version=host_version,
             archive_sha256=actual_digest,
         )
-        if verifier is not None:
-            owned_output = os.lstat(output_root)
-            try:
-                verifier(bundle.dist_root, repo_root)
-            except Exception as error:
-                try:
-                    current_output = os.lstat(output_root)
-                    if (
-                        stat.S_ISDIR(current_output.st_mode)
-                        and not stat.S_ISLNK(current_output.st_mode)
-                        and (current_output.st_dev, current_output.st_ino)
-                        == (owned_output.st_dev, owned_output.st_ino)
-                    ):
-                        shutil.rmtree(output_root)
-                except OSError:
-                    pass
-                raise BundleError("release bundle verification failed") from error
         return bundle
     finally:
         if staged.exists() and not staged.is_symlink():

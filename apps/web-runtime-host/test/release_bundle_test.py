@@ -49,8 +49,9 @@ class ReleaseBundleTest(unittest.TestCase):
 
     def stage(self, archive: Path, checksum: Path, **extra):
         verifier = extra.pop("verifier", lambda root, repo: None)
+        repo_root = extra.pop("repo_root", REPO_ROOT)
         return self.module.stage_release_bundle(
-            repo_root=REPO_ROOT,
+            repo_root=repo_root,
             archive_path=archive,
             checksum_path=checksum,
             output_root=self.output,
@@ -171,17 +172,45 @@ class ReleaseBundleTest(unittest.TestCase):
             self.stage(archive, checksum)
         self.assertFalse(self.output.exists())
 
+    def test_default_verifier_comes_from_supplied_repository_root(self) -> None:
+        tagged_repo = self.root / "tagged-repository"
+        package_path = tagged_repo / "apps/web-runtime-host/tools/package.py"
+        package_path.parent.mkdir(parents=True)
+        package_path.write_text(
+            "from pathlib import Path\n"
+            "def verify_distribution(dist_root, repo_root):\n"
+            "    Path(repo_root, 'used-tagged-verifier').write_text(dist_root.name)\n",
+            encoding="utf-8",
+        )
+        bundle = self.stage_valid(repo_root=tagged_repo, verifier=None)
+        self.assertTrue(bundle.dist_root.is_dir())
+        self.assertEqual(
+            (tagged_repo / "used-tagged-verifier").read_text(encoding="utf-8"),
+            "dist",
+        )
+
     def test_verifier_failure_leaves_output_absent(self) -> None:
+        observed_output_states: list[bool] = []
+
+        def fail_while_staged(root: Path, repo: Path) -> None:
+            observed_output_states.append(self.output.exists())
+            raise ValueError()
+
         with self.assertRaisesRegex(self.module.BundleError, "release bundle verification failed"):
-            self.stage_valid(verifier=lambda root, repo: (_ for _ in ()).throw(ValueError()))
+            self.stage_valid(verifier=fail_while_staged)
+        self.assertEqual(observed_output_states, [False])
         self.assertFalse(self.output.exists())
 
     def test_success_calls_verifier_and_emits_canonical_metadata(self) -> None:
         observed: list[tuple[Path, Path]] = []
         bundle = self.stage_valid(
-            verifier=lambda root, repo: observed.append((root, repo)),
+            verifier=lambda root, repo: (
+                self.assertFalse(self.output.exists()), observed.append((root, repo))
+            ),
         )
-        self.assertEqual(observed, [(bundle.dist_root, REPO_ROOT)])
+        self.assertEqual(len(observed), 1)
+        self.assertNotEqual(observed[0][0], bundle.dist_root)
+        self.assertEqual(observed[0][1], REPO_ROOT)
         self.assertEqual(bundle.product_build, "1.0.15.2")
         self.assertEqual(bundle.host_version, "1.1.2")
         self.assertRegex(bundle.archive_sha256, r"^[0-9a-f]{64}$")
@@ -199,6 +228,21 @@ class ReleaseBundleTest(unittest.TestCase):
                 separators=(",", ":"),
             ),
         )
+
+    def test_accepts_explicit_directory_after_its_child_file(self) -> None:
+        archive = self.root / "out-of-order.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            output.writestr("dist/index.html", b"<!doctype html>")
+            output.writestr("dist/", b"")
+            output.writestr(
+                "dist/host-manifest.json",
+                b'{"host_version":"1.1.2","product_build":"1.0.15.2"}',
+            )
+        checksum = self.write_checksum(
+            hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name
+        )
+        bundle = self.stage(archive, checksum)
+        self.assertTrue(bundle.dist_root.is_dir())
 
     def test_cli_requires_stage_and_all_arguments_and_prints_canonical_json(self) -> None:
         completed = subprocess.run(
