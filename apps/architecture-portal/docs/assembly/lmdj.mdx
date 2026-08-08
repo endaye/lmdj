@@ -11,7 +11,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 <BuildIdentity />
 
 ## 当前组合
-Product Build `1.0.16.1` 的 LMDJ Assembly 组合八个 Core Module、五个 Host、两个本地 Proof Provider 与七个 active Contract。Stage 7 引入的 Project I/O `0.5.0` 与 `lmdj.project-bundle.v1 1.0.0` 保持不变；corrective patch 将 Application Facade 升至 `1.3.1`、Web Runtime Platform 升至 `0.1.1`，并把精确依赖传播到 Creator Web Host `1.0.1`、Web Runtime Host `1.2.1`、CLI `1.0.7`、MCP `1.1.4` 与 Native Test Host `1.0.5`。Audio Runtime 保持 `0.4.0`。
+Product Build `1.0.16.2` 的 LMDJ Assembly 组合八个 Core Module、五个 Host、两个本地 Proof Provider 与七个 active Contract。Stage 7 引入的 Project I/O `0.5.0` 与 `lmdj.project-bundle.v1 1.0.0` 保持不变；corrective patch 将 Application Facade 升至 `1.3.1`、Web Runtime Platform 升至 `0.1.1`，并把精确依赖传播到 Creator Web Host `1.0.1`、Web Runtime Host `1.2.1`、CLI `1.0.7`、MCP `1.1.4` 与 Native Test Host `1.0.5`。Audio Runtime 保持 `0.4.0`。
 ## 编译接线
 `products/lmdj/src/compiled_assembly.cpp` 是产品专属 wiring；产品中立模块不知道 LMDJ 的具体组合。
 Product CMake 只在 Emscripten `lmdj_web_runtime_host` target 存在时链接 compiled catalog object，并注入 Product Build、Platform version 以及 Creator/Diagnostic 两组精确 distribution-contract/Host identity。两个 Web Host 只声明 Web Runtime Platform 依赖；Platform 声明 Facade/Audio 依赖，Provider wiring 仍只属于 Product Assembly。

@@ -12,7 +12,7 @@ const ASSEMBLY_IDENTITY = Object.freeze({
   hostId: "web-runtime-host",
   hostVersion: "1.2.1",
   platformVersion: "0.1.1",
-  productBuild: "1.0.16.1",
+  productBuild: "1.0.16.2",
   protocolVersion: 1,
 });
 const MANIFEST_SOURCE = Object.freeze({

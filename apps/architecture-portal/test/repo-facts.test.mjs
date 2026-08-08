@@ -8,7 +8,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 test('facts match the current locked product composition', async () => {
   const facts = await readRepoFacts({repoRoot, revision: 'abcdef123456', channel: 'canary'});
-  assert.equal(facts.product.version, '1.0.16.1');
+  assert.equal(facts.product.version, '1.0.16.2');
   assert.equal(facts.revision, 'abcdef123456');
   assert.equal(facts.channel, 'canary');
   assert.deepEqual(facts.modules.map(({id}) => id), [

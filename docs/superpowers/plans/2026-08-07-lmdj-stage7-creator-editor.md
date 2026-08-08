@@ -230,6 +230,17 @@ Final review found two defects after the immutable `1.0.16.0 · canary` Portal s
 
 The corrective candidate tag text is `lmdj-v1.0.16.1`; creating or pushing that tag still requires separate post-merge approval.
 
+### Second post-freeze corrective patch
+
+PR CI review of the frozen `1.0.16.1 · canary` candidate found three infrastructure defects: the native transfer regression fixture forced thousands of durable flushes on Linux, the Formal Web Host AudioWorklet gate relied on an unowned fixed-port Playwright server, and the Linux browser lanes inherited a POSIX locale that broke Chromium OPFS Unicode names while a fatal page error waited for the full suite timeout. The immutable `1.0.16.1` snapshot remains unchanged. Product Build `1.0.16.2 · canary` is allocated for these corrections and must receive a new immutable snapshot plus full clean-source Proof before push.
+
+| Identity | Frozen corrective candidate | Second corrective candidate | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.1` | `1.0.16.2` | Post-freeze test, Proof-server, and Linux browser-lane correction without new product capability or Contract semantics. |
+| Modules / Hosts / Contracts / Providers / Models | current | unchanged | No product implementation, public Contract, Capability, Provider, or model change. |
+
+The second corrective candidate tag text is `lmdj-v1.0.16.2`; creating or pushing that tag still requires separate post-merge approval.
+
 ---
 
 ### Task 1: Define and prove the portable Project Bundle Contract

@@ -39,7 +39,7 @@ function sessionFixture({startError}: {startError?: Error} = {}) {
     diagnostics: () => ({
       state: "audio-suspended",
       error_code: null,
-      product_build: "1.0.16.1",
+      product_build: "1.0.16.2",
       host_id: "creator-web",
       host_version: "1.0.1",
       platform_version: "0.1.1",

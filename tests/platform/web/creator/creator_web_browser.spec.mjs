@@ -30,7 +30,7 @@ async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export report"}).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("lmdj-creator-web-1.0.16.1.json");
+  expect(download.suggestedFilename()).toBe("lmdj-creator-web-1.0.16.2.json");
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
 

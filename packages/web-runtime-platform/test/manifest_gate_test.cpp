@@ -25,7 +25,7 @@ constexpr std::array<ManifestExpectation::ComponentIdentity, 2> kAllowedHosts{{
     {"lmdj.web-runtime-host.distribution.v1", "web-runtime-host", "1.2.1"},
 }};
 constexpr ManifestExpectation kExpected{
-    "1.0.16.1",
+    "1.0.16.2",
     "0.1.1",
     kAllowedHosts,
     1,
@@ -50,7 +50,7 @@ nlohmann::json asset(
 }
 
 nlohmann::json manifest_json(
-    std::string_view product = "1.0.16.1",
+    std::string_view product = "1.0.16.2",
     std::string_view host = "1.2.1",
     std::uint32_t protocol = 1) {
   return {
@@ -95,7 +95,7 @@ nlohmann::json manifest_json(
 }
 
 std::string canonical_manifest(
-    std::string_view product = "1.0.16.1",
+    std::string_view product = "1.0.16.2",
     std::string_view host = "1.2.1",
     std::uint32_t protocol = 1) {
   return lmdj::foundation::canonical_json(
@@ -147,10 +147,10 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
            std::pair{valid, std::string(64, '0')},
            std::pair{canonical_manifest("1.0.14.0"),
                      sha256(canonical_manifest("1.0.14.0"))},
-           std::pair{canonical_manifest("1.0.16.1", "1.0.1"),
-                     sha256(canonical_manifest("1.0.16.1", "1.0.1"))},
-           std::pair{canonical_manifest("1.0.16.1", "1.2.1", 2),
-                     sha256(canonical_manifest("1.0.16.1", "1.2.1", 2))},
+           std::pair{canonical_manifest("1.0.16.2", "1.0.1"),
+                     sha256(canonical_manifest("1.0.16.2", "1.0.1"))},
+           std::pair{canonical_manifest("1.0.16.2", "1.2.1", 2),
+                     sha256(canonical_manifest("1.0.16.2", "1.2.1", 2))},
        }) {
     ManifestGate gate;
     LMDJ_CHECK(

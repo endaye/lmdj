@@ -81,7 +81,7 @@ function sessionFixture(name: string) {
     diagnostics: () => ({
       state: hostState,
       error_code: errorCode,
-      product_build: "1.0.16.1",
+      product_build: "1.0.16.2",
       host_id: "creator-web",
       host_version: "1.0.1",
       platform_version: "0.1.1",
