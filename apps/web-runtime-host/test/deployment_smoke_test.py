@@ -60,11 +60,13 @@ class SmokeFixture:
     def __init__(self) -> None:
         self.omit_header: str | None = None
         self.redirect_omit_header: str | None = None
+        self.redirect_duplicate_header: tuple[str, str] | None = None
         self.duplicate_header: tuple[str, str] | None = None
         self.header_overrides: dict[str, str] = {}
         self.content_type_overrides: dict[str, str] = {}
         self.cache_overrides: dict[str, str] = {}
         self.redirects: dict[str, str] = {}
+        self.redirect_cache_overrides: dict[str, str | None] = {}
         self.delays: dict[str, float] = {}
         self.forced_ok: set[str] = set()
         self.payloads: dict[str, bytes] = {}
@@ -167,7 +169,16 @@ class FixtureHandler(BaseHTTPRequestHandler):
         if self.path in fixture.redirects:
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", fixture.redirects[self.path])
+            redirect_cache = fixture.redirect_cache_overrides.get(
+                self.path,
+                "public, max-age=31536000, immutable"
+                if self.path.startswith("/assets/") else "no-store",
+            )
+            if redirect_cache is not None:
+                self.send_header("Cache-Control", redirect_cache)
             self._headers(redirect=True)
+            if fixture.redirect_duplicate_header is not None:
+                self.send_header(*fixture.redirect_duplicate_header)
             self.end_headers()
             return
         payload = fixture.payloads.get(self.path)
@@ -275,6 +286,47 @@ class DeploymentSmokeTest(unittest.TestCase):
         with self.assertRaisesRegex(SmokeError, "cache-control"):
             self.smoke()
 
+    def test_accepts_standard_equivalent_content_types(self) -> None:
+        main = next(
+            "/" + entry["path"] for entry in self.fixture.manifest["assets"]
+            if entry["role"] == "host_main"
+        )
+        self.fixture.content_type_overrides["/index.html"] = (
+            'Text/HTML; Charset="UTF-8"'
+        )
+        self.fixture.content_type_overrides["/host-manifest.json"] = (
+            "Application/JSON"
+        )
+        self.fixture.content_type_overrides[main] = (
+            "TEXT/JAVASCRIPT; CHARSET=UTF8"
+        )
+        self.assertEqual(self.smoke()["asset_count"], 9)
+
+    def test_rejects_wrong_or_malformed_content_types(self) -> None:
+        wasm = next(
+            "/" + entry["path"] for entry in self.fixture.manifest["assets"]
+            if entry["role"] == "runtime_wasm"
+        )
+        cases = (
+            ("/index.html", "application/octet-stream"),
+            ("/index.html", "text/html; charset=latin-1"),
+            ("/index.html", "text/html; charset"),
+            ("/index.html", "text/html; charset=utf-8; boundary=x"),
+            (wasm, "application/wasm; charset=utf-8"),
+        )
+        for path, value in cases:
+            with self.subTest(path=path, value=value):
+                self.fixture.content_type_overrides[path] = value
+                with self.assertRaisesRegex(SmokeError, "content-type"):
+                    self.smoke()
+                self.fixture.content_type_overrides.clear()
+
+        self.fixture.duplicate_header = (
+            "Content-Type", "text/html; charset=utf-8"
+        )
+        with self.assertRaisesRegex(SmokeError, "content-type"):
+            self.smoke()
+
     def test_rejects_manifest_digest_identity_or_asset_mismatch(self) -> None:
         self.fixture.manifest["resource_limits"] = {"changed": True}
         self.fixture.update_manifest(update_index=False)
@@ -283,10 +335,11 @@ class DeploymentSmokeTest(unittest.TestCase):
 
         self.fixture.update_manifest(update_index=True)
         asset = self.fixture.manifest["assets"][0]
-        self.fixture.payloads["/" + asset["path"]] += b"tampered"
-        with self.assertRaisesRegex(
-            SmokeError, "response exceeds size limit|asset digest"
-        ):
+        asset_path = "/" + asset["path"]
+        payload = bytearray(self.fixture.payloads[asset_path])
+        payload[0] ^= 1
+        self.fixture.payloads[asset_path] = bytes(payload)
+        with self.assertRaisesRegex(SmokeError, "^asset digest mismatch:"):
             self.smoke()
 
     def test_rejects_wrong_product_or_host_identity(self) -> None:
@@ -335,6 +388,34 @@ class DeploymentSmokeTest(unittest.TestCase):
                 expected_host_version="1.1.2",
             )
 
+    def test_cleartext_override_accepts_only_validated_loopback_targets(self) -> None:
+        localhost_url = self.server.base_url.replace("127.0.0.1", "localhost")
+        self.assertEqual(
+            smoke_http(
+                base_url=localhost_url,
+                expected_product_build="1.0.15.2",
+                expected_host_version="1.1.2",
+                require_https=False,
+            )["asset_count"],
+            9,
+        )
+        with self.assertRaisesRegex(SmokeError, "request failed"):
+            smoke_http(
+                base_url="http://[::1]:1",
+                expected_product_build="1.0.15.2",
+                expected_host_version="1.1.2",
+                require_https=False,
+                timeout_seconds=0.01,
+            )
+        with self.assertRaisesRegex(SmokeError, "cleartext.*loopback"):
+            smoke_http(
+                base_url="http://192.0.2.1:9",
+                expected_product_build="1.0.15.2",
+                expected_host_version="1.1.2",
+                require_https=False,
+                timeout_seconds=0.01,
+            )
+
     def test_applies_the_bounded_timeout_to_each_request(self) -> None:
         self.fixture.delays["/index.html"] = 0.1
         with self.assertRaisesRegex(SmokeError, "request failed"):
@@ -361,6 +442,36 @@ class DeploymentSmokeTest(unittest.TestCase):
         self.fixture.redirects["/index.html"] = redirected
         self.fixture.redirect_omit_header = "x-robots-tag"
         with self.assertRaisesRegex(SmokeError, "x-robots-tag"):
+            self.smoke()
+
+    def test_rejects_missing_wrong_or_duplicate_redirect_cache(self) -> None:
+        redirected = "/redirected-index.html"
+        self.fixture.payloads[redirected] = self.fixture.payloads["/index.html"]
+        self.fixture.cache_overrides[redirected] = "no-store"
+        self.fixture.redirects["/index.html"] = redirected
+        for observed in (None, "public, max-age=31536000, immutable"):
+            with self.subTest(observed=observed):
+                self.fixture.redirect_cache_overrides["/index.html"] = observed
+                with self.assertRaisesRegex(SmokeError, "cache-control"):
+                    self.smoke()
+        self.fixture.redirect_cache_overrides.clear()
+        self.fixture.redirect_duplicate_header = ("Cache-Control", "no-cache")
+        with self.assertRaisesRegex(SmokeError, "cache-control"):
+            self.smoke()
+
+    def test_asset_redirect_requires_immutable_cache_for_original_route(self) -> None:
+        asset_path = next(
+            "/" + entry["path"] for entry in self.fixture.manifest["assets"]
+            if entry["role"] == "host_main"
+        )
+        redirected = "/mirror" + asset_path
+        self.fixture.payloads[redirected] = self.fixture.payloads[asset_path]
+        self.fixture.cache_overrides[redirected] = (
+            "public, max-age=31536000, immutable"
+        )
+        self.fixture.redirects[asset_path] = redirected
+        self.fixture.redirect_cache_overrides[asset_path] = "no-store"
+        with self.assertRaisesRegex(SmokeError, "cache-control"):
             self.smoke()
 
     def test_rejects_https_to_http_redirect(self) -> None:

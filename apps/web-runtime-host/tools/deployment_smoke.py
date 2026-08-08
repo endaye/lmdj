@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import codecs
 import hashlib
+import ipaddress
 import json
 import re
 import sys
@@ -49,9 +51,9 @@ MANIFEST_KEYS = {
     "resource_limits",
 }
 CONTENT_TYPES = {
-    ".css": "text/css; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".mjs": "text/javascript; charset=utf-8",
+    ".css": "text/css",
+    ".js": "text/javascript",
+    ".mjs": "text/javascript",
     ".wasm": "application/wasm",
 }
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -99,10 +101,24 @@ class RedirectGuard(HTTPRedirectHandler):
         if old_origin != new_origin:
             raise SmokeError("cross-origin redirect is forbidden")
         _validate_headers(headers, "redirect response")
+        expected_cache = getattr(req, "lmdj_expected_cache", None)
+        if expected_cache is None:
+            raise SmokeError("redirect request cache contract is missing")
+        _require_header(
+            headers,
+            name="cache-control",
+            expected=expected_cache,
+            label="redirect response",
+        )
         self.redirect_count += 1
         if self.redirect_count > MAX_REDIRECTS:
             raise SmokeError("redirect limit exceeded")
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        redirected = super().redirect_request(
+            req, fp, code, msg, headers, newurl
+        )
+        if redirected is not None:
+            redirected.lmdj_expected_cache = expected_cache
+        return redirected
 
 
 def _header_values(headers, name: str) -> list[str]:
@@ -138,6 +154,71 @@ def _optional_single_header(headers, name: str, label: str) -> str | None:
     return values[0] if values else None
 
 
+def _parse_content_type(value: str, label: str) -> tuple[str, dict[str, str]]:
+    parts = value.split(";")
+    media_type = parts[0].strip().lower()
+    if not media_type or "/" not in media_type:
+        raise SmokeError(f"{label} content-type is invalid")
+    parameters: dict[str, str] = {}
+    for raw_parameter in parts[1:]:
+        parameter = raw_parameter.strip()
+        if not parameter or "=" not in parameter:
+            raise SmokeError(f"{label} content-type parameters are invalid")
+        name, raw_value = parameter.split("=", 1)
+        name = name.strip().lower()
+        raw_value = raw_value.strip()
+        if (
+            not name
+            or name in parameters
+            or not raw_value
+            or (raw_value.startswith('"') != raw_value.endswith('"'))
+        ):
+            raise SmokeError(f"{label} content-type parameters are invalid")
+        if raw_value.startswith('"'):
+            raw_value = raw_value[1:-1]
+            if not raw_value or '"' in raw_value:
+                raise SmokeError(f"{label} content-type parameters are invalid")
+        parameters[name] = raw_value
+    return media_type, parameters
+
+
+def _validate_content_type(headers, *, expected: str, label: str) -> None:
+    values = _header_values(headers, "content-type")
+    if len(values) != 1:
+        raise SmokeError(
+            f"{label} content-type mismatch: expected one value, got {values!r}"
+        )
+    media_type, parameters = _parse_content_type(values[0], label)
+    if media_type != expected:
+        raise SmokeError(
+            f"{label} content-type mismatch: expected {expected!r}, "
+            f"got {media_type!r}"
+        )
+    if media_type == "application/wasm":
+        if parameters:
+            raise SmokeError(f"{label} content-type parameters are invalid")
+        return
+    if set(parameters) - {"charset"}:
+        raise SmokeError(f"{label} content-type parameters are invalid")
+    charset = parameters.get("charset")
+    if charset is None:
+        if media_type != "application/json":
+            raise SmokeError(f"{label} content-type charset is missing")
+        return
+    try:
+        normalized_charset = codecs.lookup(charset).name
+    except LookupError:
+        raise SmokeError(f"{label} content-type charset is invalid") from None
+    if normalized_charset != "utf-8":
+        raise SmokeError(f"{label} content-type charset is invalid")
+
+
+def _request(url: str, cache_control: str) -> Request:
+    request = Request(url, headers={"Accept-Encoding": "identity"})
+    request.lmdj_expected_cache = cache_control
+    return request
+
+
 def _read_bounded(response, *, limit: int, label: str) -> bytes:
     content_length = _optional_single_header(
         response.headers, "content-length", label
@@ -169,17 +250,14 @@ def _fetch(
 ) -> bytes:
     try:
         with opener.open(
-            Request(url, headers={"Accept-Encoding": "identity"}),
+            _request(url, cache_control),
             timeout=timeout_seconds,
         ) as response:
             if response.status != 200:
                 raise SmokeError(f"{label} returned HTTP {response.status}")
             _validate_headers(response.headers, label)
-            _require_header(
-                response.headers,
-                name="content-type",
-                expected=content_type,
-                label=label,
+            _validate_content_type(
+                response.headers, expected=content_type, label=label
             )
             _require_header(
                 response.headers,
@@ -200,7 +278,7 @@ def _fetch(
 def _require_negative(
     opener, *, url: str, path: str, timeout_seconds: float
 ) -> None:
-    request = Request(url, headers={"Accept-Encoding": "identity"})
+    request = _request(url, "no-store")
     try:
         with opener.open(request, timeout=timeout_seconds) as response:
             status = response.status
@@ -276,6 +354,15 @@ def _require_exact_once(text: str, fragment: str, label: str) -> None:
         raise SmokeError(f"index {label} mismatch")
 
 
+def _is_loopback_host(hostname: str) -> bool:
+    if hostname == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(hostname).is_loopback
+    except ValueError:
+        return False
+
+
 def smoke_http(
     *,
     base_url: str,
@@ -290,6 +377,8 @@ def smoke_http(
     scheme, hostname, _ = _origin(base_url)
     if require_https and scheme != "https":
         raise SmokeError("HTTPS base URL is required")
+    if scheme == "http" and not _is_loopback_host(hostname):
+        raise SmokeError("cleartext HTTP is allowed only for a loopback target")
     if (
         parsed.username is not None
         or parsed.password is not None
@@ -316,7 +405,7 @@ def smoke_http(
         opener,
         url=urljoin(root, "index.html"),
         label="/index.html",
-        content_type="text/html; charset=utf-8",
+        content_type="text/html",
         cache_control="no-store",
         limit=MAX_INDEX_BYTES,
         timeout_seconds=timeout_seconds,
@@ -325,7 +414,7 @@ def smoke_http(
         opener,
         url=urljoin(root, "host-manifest.json"),
         label="/host-manifest.json",
-        content_type="application/json; charset=utf-8",
+        content_type="application/json",
         cache_control="no-store",
         limit=MAX_MANIFEST_BYTES,
         timeout_seconds=timeout_seconds,

@@ -61,4 +61,7 @@ test("published Runtime Host completes the minimal diagnostic journey", async ({
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
     .toBe(true);
   await expect(page.locator("#host-state")).toHaveText("closed");
+  expect(await page.evaluate(() =>
+    window.lmdjWebRuntimeController.diagnostics().trigger_outcome_count
+  )).toBe(marker + 1);
 });
