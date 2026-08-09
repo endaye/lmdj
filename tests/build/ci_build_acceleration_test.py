@@ -16,6 +16,7 @@ ACCELERATION_ACTION = (
 MACOS_ACTION = REPO_ROOT / ".github/actions/macos-core-gates/action.yml"
 WEB_TOOLCHAIN = REPO_ROOT / "scripts/web-toolchain-conformance.sh"
 WEB_HOST = REPO_ROOT / "scripts/web-runtime-host.sh"
+GITIGNORE = REPO_ROOT / ".gitignore"
 
 
 class CiBuildAccelerationTest(unittest.TestCase):
@@ -80,6 +81,14 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 self.assertIn("run_cmake_build()", source)
                 self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL", source)
                 self.assertRegex(source, r'parallel_args=\(--parallel\)')
+
+    def test_generated_web_toolchain_does_not_dirty_source_tree(self) -> None:
+        ignored = {
+            line.strip()
+            for line in GITIGNORE.read_text(encoding="utf-8").splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        }
+        self.assertIn("build/toolchains/", ignored)
 
     def test_linux_browser_jobs_force_utf8_locale(self) -> None:
         for job_name in (

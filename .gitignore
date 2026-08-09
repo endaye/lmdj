@@ -66,6 +66,9 @@ __pycache__/
 # Headless Core build outputs
 build/core/
 
+# Pinned toolchains installed by Web CI and local proofs
+build/toolchains/
+
 # Formal Web toolchain and browser proof outputs
 build/web/
 tests/platform/web/test-results/
