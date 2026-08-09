@@ -29,6 +29,33 @@ Task 13 A 进一步固定 Project mutation deadline：唯一绝对 cutoff 在同
 
 当前本地候选把真实人工前置序列固定为 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`。Chromium 自动化证明首次准备为一次 create、一次 import、64 次 assignment、revision `65`，Pointer/Keyboard 各有一个精确 `voice_started` outcome；reload 后同一 browser-local descriptor 被重开，零重复 mutation、revision 不变并可再次激活。descriptor UUID 不进入 DOM diagnostics。该证据不等于声学延迟、物理 MIDI、Safari/iPad Touch 或主观音质验收。
 
+## 公共静态托管边界
+
+已实现的发布 tooling 从 canonical origin 获取 remote signed tag 与受保护 `main`，要求 tag
+commit 是该 `main` 的 ancestor；Release inventory 精确为 ZIP、checksum、受信 Product key
+的 detached armored checksum signature，并在解析 checksum 前验证 signature。它会发现并
+验证真实 prior Product/Host 身份，在 prior immutable 与 production 上先跑完整
+HTTP/Chromium，再创建 immutable draft；只有 draft smoke 通过才发布同一 ready Deploy ID。
+发布后失败或信号中断会 reconcile alias，必要时恢复 exact prior；首次无 prior 时采用官方
+reversible site disable。生成站点只给 manifest 中九个精确 hash asset 加 immutable header，
+未知 asset/source map 继续 `no-store`；成功/恢复分别保存 deployment evidence v2/recovery
+evidence v1。
+
+该流程尚未在远端发生。本地已存在 signed annotated tag `lmdj-v1.0.15.2`，Good signature
+primary fingerprint 为 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 为
+`72ae40074620cc5681c462ba04a31a666449734f`；该 target 已是 `origin/main` 上 PR #98 的 merge
+commit。尚未 push、review、CI、merge 的限定只适用于本 Task 的 deployment-tooling branch；
+本地 tag 尚未 push，未做远端验证，因此仍不声称有本候选的 remote verified tag、Release、
+`lmdj-runtime` project、workflow run、Deploy ID、immutable URL、production alias 或
+deployment evidence。Portal 只报告 tooling 已实现和公共部署 absent，直到真实 evidence
+record 被审查并提交。
+
+proof-only server 仅对本地 Proof 服务 `dist` 与安全 headers；它不是生产服务。生产由
+Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python server。`lmdj-canary`
+属于未来 Creator，排除在此 Runtime Host project/URL/alias 之外；完整操作与 pre-deploy
+记录分别见仓库文件 `docs/deploy/web-runtime-host.md` 和
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
 Playwright WebKit 仅是 capability/protocol/OPFS/restart/lifecycle smoke；当前 runner 以 `UNSUPPORTED_WEB_RUNTIME` 明确记录缺少 `opfsSyncAccessHandle` 与 `opfsWritableReplace`，不能冒充完整 WebKit 产品验收。五项物理门仍是 `deferred / unverified`：macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome Physical MIDI、iPadOS Safari Touch、iPadOS Safari Touch lifecycle；延迟、underrun 与真实设备体验仍由独立 evaluator 判定。
 ## 非能力
 当前不承诺离线安装、Creator Web/PWA 交付、跨物理设备一致体验或 `beta`/`stable` 质量；proof-only server 不属于生产部署面。

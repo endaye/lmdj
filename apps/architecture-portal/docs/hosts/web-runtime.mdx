@@ -12,6 +12,8 @@ source_paths:
   - products/lmdj/assembly.json
   - scripts/web-runtime-host.sh
   - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+  - docs/deploy/web-runtime-host.md
+  - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
   - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
   - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
   - tests/platform/web/host/web_runtime_host_browser.spec.mjs
@@ -35,6 +37,32 @@ Main thread 只负责 manifest/hash 装载门、Window 能力、用户手势、D
 `scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical `host-manifest.json` 以私有 ownership contract 绑定当前 Product Build、Host `1.1.2`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份，以及九项生产资产的精确路径、role、正字节数和 SHA-256；第九项是可见 Load 流程使用的诊断 Project 资产。Browser Main 在装载 runtime 资产前校验完整形状与 canonical bytes；Control 在创建 proxy queue、OPFS、Facade 或 audio adapter 前独立校验同一有界 manifest。缺失、畸形、超限、任何字段或 inventory 漂移、hash/identity 不匹配、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`；即使真实 bridge 已发布，迟到/重复初始化也会关闭入口并 once-only seal Control runtime。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
+
+## 公共发布状态
+
+本地两阶段 Netlify release/deploy 工具已实现：从 canonical origin 获取受保护 `main` 和
+remote annotated signed Product tag，验证 tag commit 是该 `main` 的 ancestor；GitHub
+Release 必须精确包含 ZIP、checksum 和由受信 Product key 签名的 armored detached
+checksum signature，工具在解析 checksum 前先验证 signature。组装层只为 manifest 中的
+九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
+部署前先验证真实 prior immutable/production 身份和 HTTP/Chromium；发布后失败或中断时
+reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
+使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
+evidence v1。当前这些都只是 tooling 实现状态：
+本地已存在 signed annotated tag `lmdj-v1.0.15.2`，Good signature primary fingerprint
+为 `2B5EE362F058800036AD4FB5116ECE156F954D29`，target 为
+`72ae40074620cc5681c462ba04a31a666449734f`；该 target 已是 `origin/main` 上 PR #98 的
+merge commit。尚未 push、review、CI、merge 的限定只适用于本 Task 的 deployment-tooling
+branch；本地 tag 尚未 push，未做远端验证，因而仍无本候选的 remote verified tag、
+Release 或部署结论，也不声称 `lmdj-runtime` 项目、Environment secrets、workflow run、
+Deploy ID、immutable URL 或 production publication 已存在。不可将本地 Host Proof 或
+部署工具测试上升为公开部署结论。
+
+Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
+`lmdj-canary` 明确留给未来 Creator，不创建、不绑定给此 Host，亦不作为 Runtime URL。
+操作前置条件、失败处置、精确 Deploy-ID 回滚和轮换在仓库运行手册
+`docs/deploy/web-runtime-host.md`；当前 acceptance 记录在
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 
 ## 生命周期门禁
 
