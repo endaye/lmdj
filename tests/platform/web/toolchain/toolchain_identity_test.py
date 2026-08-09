@@ -116,14 +116,22 @@ def assert_browser_package() -> None:
         "type": "module",
         "engines": {"node": "22.x"},
         "scripts": {"test": "playwright test"},
-        "devDependencies": {"@playwright/test": "1.62.1"},
+        "devDependencies": {
+            "@netlify/headers-parser": "10.1.0",
+            "@playwright/test": "1.62.1",
+        },
     }
 
     package_lock = json.loads(PACKAGE_LOCK_PATH.read_text(encoding="utf-8"))
     assert package_lock["lockfileVersion"] == 3
     root = package_lock["packages"][""]
     assert root["engines"] == {"node": "22.x"}
-    assert root["devDependencies"] == {"@playwright/test": "1.62.1"}
+    assert root["devDependencies"] == {
+        "@netlify/headers-parser": "10.1.0",
+        "@playwright/test": "1.62.1",
+    }
+    headers_parser = package_lock["packages"]["node_modules/@netlify/headers-parser"]
+    assert headers_parser["version"] == "10.1.0"
     playwright = package_lock["packages"]["node_modules/@playwright/test"]
     assert playwright["version"] == "1.62.1"
 

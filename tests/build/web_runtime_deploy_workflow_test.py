@@ -3,9 +3,10 @@
 
 from __future__ import annotations
 
+import base64
+import hashlib
 from pathlib import Path
 import re
-import subprocess
 import unittest
 
 
@@ -37,6 +38,112 @@ CREDENTIAL_ENVIRONMENT = {
     "NETLIFY_RUNTIME_SITE_ID",
     "NETLIFY_AUTH_TOKEN",
 }
+
+
+def openpgp_packets(payload: bytes):
+    offset = 0
+    while offset < len(payload):
+        header = payload[offset]
+        offset += 1
+        if header & 0x80 == 0:
+            raise ValueError("OpenPGP packet header is invalid")
+
+        if header & 0x40:
+            tag = header & 0x3F
+            if offset >= len(payload):
+                raise ValueError("truncated OpenPGP packet length")
+            first_length = payload[offset]
+            offset += 1
+            if first_length < 192:
+                length = first_length
+            elif first_length < 224:
+                if offset >= len(payload):
+                    raise ValueError("truncated OpenPGP packet length")
+                length = ((first_length - 192) << 8) + payload[offset] + 192
+                offset += 1
+            elif first_length == 255:
+                if offset + 4 > len(payload):
+                    raise ValueError("truncated OpenPGP packet length")
+                length = int.from_bytes(payload[offset : offset + 4], "big")
+                offset += 4
+            else:
+                raise ValueError("partial OpenPGP packet lengths are unsupported")
+        else:
+            tag = (header >> 2) & 0x0F
+            length_type = header & 0x03
+            if length_type == 3:
+                raise ValueError("indeterminate OpenPGP packet lengths are unsupported")
+            length_bytes = (1, 2, 4)[length_type]
+            if offset + length_bytes > len(payload):
+                raise ValueError("truncated OpenPGP packet length")
+            length = int.from_bytes(payload[offset : offset + length_bytes], "big")
+            offset += length_bytes
+
+        end = offset + length
+        if end > len(payload):
+            raise ValueError("OpenPGP packet extends beyond the armored payload")
+        yield tag, payload[offset:end]
+        offset = end
+
+
+def primary_fingerprints(armored_key: str) -> list[str]:
+    lines = armored_key.splitlines()
+    begin_marker = "-----BEGIN PGP PUBLIC KEY BLOCK-----"
+    end_marker = "-----END PGP PUBLIC KEY BLOCK-----"
+    if lines.count(begin_marker) != 1 or lines.count(end_marker) != 1:
+        raise ValueError("expected exactly one public key block")
+    try:
+        start = lines.index(begin_marker) + 1
+        end = lines.index(end_marker)
+    except ValueError as error:
+        raise ValueError("public key armor boundary is invalid") from error
+    if end < start:
+        raise ValueError("public key armor boundary is invalid")
+    if any(line.strip() for line in lines[: start - 1] + lines[end + 1 :]):
+        raise ValueError("unexpected data outside the public key block")
+
+    body_started = False
+    checksum_seen = False
+    encoded_lines: list[str] = []
+    for line in lines[start:end]:
+        if not body_started:
+            if line == "":
+                body_started = True
+            continue
+        if line.startswith("="):
+            if checksum_seen:
+                raise ValueError("public key armor has duplicate checksums")
+            checksum_seen = True
+            continue
+        if checksum_seen and line:
+            raise ValueError("public key armor has data after its checksum")
+        encoded_lines.append(line)
+    if not encoded_lines:
+        raise ValueError("public key armor body is empty")
+
+    payload = base64.b64decode("".join(encoded_lines), validate=True)
+    fingerprints: list[str] = []
+    for tag, packet in openpgp_packets(payload):
+        if tag in {5, 7}:
+            raise ValueError("public key armor contains a secret key packet")
+        if tag != 6:
+            continue
+        if not packet or packet[0] != 4:
+            raise ValueError("only OpenPGP v4 primary keys are supported")
+        if len(packet) > 0xFFFF:
+            raise ValueError("OpenPGP v4 primary key packet is too large")
+        digest_input = b"\x99" + len(packet).to_bytes(2, "big") + packet
+        fingerprints.append(hashlib.sha1(digest_input).hexdigest().upper())
+    return fingerprints
+
+
+def armor_payload(payload: bytes) -> str:
+    encoded = base64.b64encode(payload).decode("ascii")
+    return (
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\n"
+        f"{encoded}\n"
+        "-----END PGP PUBLIC KEY BLOCK-----\n"
+    )
 
 
 class WebRuntimeDeployWorkflowTest(unittest.TestCase):
@@ -307,38 +414,24 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
 
     def test_public_key_has_exactly_one_trusted_primary_fingerprint(self) -> None:
         self.assertTrue(PUBLIC_KEY.is_file(), "Product signing public key is missing")
-        completed = subprocess.run(
-            [
-                "gpg",
-                "--batch",
-                "--show-keys",
-                "--with-colons",
-                str(PUBLIC_KEY),
-            ],
-            cwd=REPO_ROOT,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        self.assertEqual(completed.returncode, 0, completed.stderr)
+        public_key = PUBLIC_KEY.read_text(encoding="utf-8")
+        self.assertEqual(primary_fingerprints(public_key), [TRUSTED_FINGERPRINT])
+        self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", public_key)
+        self.assertNotIn("PRIVATE KEY", public_key)
 
-        primary_fingerprints: list[str] = []
-        awaiting_primary_fingerprint = False
-        for line in completed.stdout.splitlines():
-            fields = line.split(":")
-            record_type = fields[0]
-            if record_type == "pub":
-                awaiting_primary_fingerprint = True
-            elif record_type == "fpr" and awaiting_primary_fingerprint:
-                primary_fingerprints.append(fields[9])
-                awaiting_primary_fingerprint = False
-            elif record_type in {"sub", "sec", "ssb"}:
-                awaiting_primary_fingerprint = False
+    def test_public_key_parser_rejects_a_second_armored_key_block(self) -> None:
+        public_key = PUBLIC_KEY.read_text(encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "exactly one public key block"):
+            primary_fingerprints(public_key + public_key)
 
-        self.assertEqual(primary_fingerprints, [TRUSTED_FINGERPRINT])
-        self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", PUBLIC_KEY.read_text())
-        self.assertNotIn("PRIVATE KEY", PUBLIC_KEY.read_text())
+    def test_public_key_parser_rejects_secret_key_packets(self) -> None:
+        secret_key_packet = bytes([0x94, 0x01, 0x04])
+        with self.assertRaisesRegex(ValueError, "secret key packet"):
+            primary_fingerprints(armor_payload(secret_key_packet))
+
+    def test_public_key_parser_rejects_truncated_packet_lengths(self) -> None:
+        with self.assertRaisesRegex(ValueError, "truncated OpenPGP packet"):
+            list(openpgp_packets(bytes([0xC6])))
 
 
 if __name__ == "__main__":

@@ -57,6 +57,15 @@ def canonical_json(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def scrubbed_python_environment() -> dict[str, str]:
+    environment = {"LANG": "C.UTF-8", "PATH": os.defpath}
+    for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return environment
+
+
 class SmokeFixture:
     def __init__(self) -> None:
         self.omit_header: str | None = None
@@ -554,7 +563,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={"LANG": "C.UTF-8", "PATH": os.defpath},
+            env=scrubbed_python_environment(),
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(
@@ -588,7 +597,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={"LANG": "C.UTF-8", "PATH": os.defpath},
+            env=scrubbed_python_environment(),
         )
         self.assertEqual(completed.returncode, 2)
         self.assertEqual(completed.stdout, "")
