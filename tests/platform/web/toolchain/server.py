@@ -5,6 +5,7 @@ from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+from socketserver import TCPServer
 import sys
 from urllib.parse import urlsplit
 
@@ -38,6 +39,12 @@ class ServerError(RuntimeError):
 class ConformanceServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
 
 class ConformanceHandler(SimpleHTTPRequestHandler):

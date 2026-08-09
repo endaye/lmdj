@@ -91,6 +91,18 @@ class ServerTest(unittest.TestCase):
         )
         self.assertEqual(self.module.ProofHandler.__module__, "lmdj_shared_web_server")
 
+    def test_loopback_bind_does_not_resolve_hostname(self) -> None:
+        with mock.patch(
+            "socket.getfqdn",
+            side_effect=AssertionError("loopback bind must not perform reverse DNS"),
+        ):
+            server = self.module.make_server(self.root, "127.0.0.1", 0)
+        try:
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertGreater(server.server_port, 0)
+        finally:
+            server.server_close()
+
     def test_exact_isolation_csp_mime_and_cache_headers(self) -> None:
         status, headers, _ = self.request("GET", "/index.html")
         self.assertEqual(status, 200)

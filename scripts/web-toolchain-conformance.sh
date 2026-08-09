@@ -222,6 +222,7 @@ case "$command_name" in
     export npm_config_offline=true
     export PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
     clean_fixture
+    python3 "$web_test_root/toolchain/server_test.py"
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
     python3 "$web_test_root/project_io/project_io_web_timeout_policy_test.py"
     configure_fixture

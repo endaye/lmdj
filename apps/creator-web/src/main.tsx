@@ -14,7 +14,7 @@ const ASSEMBLY_IDENTITY = Object.freeze({
   hostId: "creator-web",
   hostVersion: "1.0.2",
   platformVersion: "0.1.2",
-  productBuild: "1.0.16.3",
+  productBuild: "1.0.16.5",
   protocolVersion: 1,
 });
 const MANIFEST_SOURCE = Object.freeze({
