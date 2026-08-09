@@ -12,6 +12,7 @@ import json
 import os
 from pathlib import Path
 import re
+from socketserver import TCPServer
 import stat
 import sys
 from types import ModuleType
@@ -108,6 +109,12 @@ def read_file_no_follow(root: Path, relative: str) -> bytes | None:
 class ProofServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = str(host)
+        self.server_port = int(port)
 
 
 class ProofHandler(BaseHTTPRequestHandler):
