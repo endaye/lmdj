@@ -40,8 +40,9 @@ async function reopenWithVisibleBusyRetry(page) {
     if (await heading.isVisible()) return;
     await expect(alert).toContainText("PROJECT_BUSY");
     await page.getByRole("button", {name: "Retry"}).click();
-    await expect(alert).toHaveCount(0);
-    await page.waitForTimeout(100);
+    // The next PROJECT_BUSY may replace the alert before Playwright can observe
+    // an empty render. Let this attempt settle, then retry from the visible state.
+    await page.waitForTimeout(250);
   }
   throw new Error("Project writer lease did not become available after Retry");
 }
