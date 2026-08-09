@@ -37,13 +37,6 @@ std::vector<std::byte> fixture_bytes(const std::string& name) {
   return bytes;
 }
 
-void write_u16(std::vector<std::byte>& bytes,
-               std::size_t offset,
-               std::uint16_t value) {
-  bytes.at(offset) = static_cast<std::byte>(value & 0xffU);
-  bytes.at(offset + 1) = static_cast<std::byte>(value >> 8U);
-}
-
 void write_u32(std::vector<std::byte>& bytes,
                std::size_t offset,
                std::uint32_t value) {
@@ -55,23 +48,6 @@ void write_u32(std::vector<std::byte>& bytes,
 void update_riff_size(std::vector<std::byte>& bytes) {
   LMDJ_CHECK(bytes.size() >= 8U);
   write_u32(bytes, 4, static_cast<std::uint32_t>(bytes.size() - 8U));
-}
-
-void append_chunk(std::vector<std::byte>& bytes,
-                  const std::array<char, 4>& type,
-                  const std::vector<std::byte>& payload) {
-  for (const char character : type) {
-    bytes.push_back(static_cast<std::byte>(
-        static_cast<unsigned char>(character)));
-  }
-  const auto payload_size = static_cast<std::uint32_t>(payload.size());
-  for (std::uint32_t shift = 0; shift < 32U; shift += 8U) {
-    bytes.push_back(static_cast<std::byte>(payload_size >> shift));
-  }
-  bytes.insert(bytes.end(), payload.begin(), payload.end());
-  if ((payload.size() & 1U) != 0U) {
-    bytes.push_back(std::byte{0});
-  }
 }
 
 void check_bucket(const PeakBucket& bucket,
@@ -97,10 +73,8 @@ void test_inspection_accepts_locked_pcm16_rates_and_reports_source_metadata() {
       fixture_bytes("mono-44100.wav"));
   const auto stereo = lmdj::cooker::inspect_wav(
       fixture_bytes("stereo.wav"));
-  auto stereo_44100_bytes = fixture_bytes("stereo.wav");
-  write_u32(stereo_44100_bytes, 24, 44'100);
-  write_u32(stereo_44100_bytes, 28, 176'400);
-  const auto stereo_44100 = lmdj::cooker::inspect_wav(stereo_44100_bytes);
+  const auto stereo_44100 = lmdj::cooker::inspect_wav(
+      fixture_bytes("stereo-44100.wav"));
 
   LMDJ_CHECK(mono.has_value());
   LMDJ_CHECK(mono.value().sample_rate == 44'100);
@@ -113,80 +87,75 @@ void test_inspection_accepts_locked_pcm16_rates_and_reports_source_metadata() {
   LMDJ_CHECK(stereo_44100.has_value());
   LMDJ_CHECK(stereo_44100.value().sample_rate == 44'100);
   LMDJ_CHECK(stereo_44100.value().channels == 2);
-  LMDJ_CHECK(stereo_44100.value().source_frames == 4);
+  LMDJ_CHECK(stereo_44100.value().source_frames == 2);
 }
 
-void test_strict_wav_rejects_format_field_and_duplicate_chunk_breaks() {
-  const auto valid = fixture_bytes("mono-44100.wav");
-
-  auto float_encoding = valid;
-  write_u16(float_encoding, 20, 3);
-
-  auto wrong_rate = valid;
-  write_u32(wrong_rate, 24, 32'000);
-  write_u32(wrong_rate, 28, 64'000);
-
-  auto wrong_bits = valid;
-  write_u16(wrong_bits, 34, 24);
-  write_u16(wrong_bits, 32, 3);
-  write_u32(wrong_bits, 28, 132'300);
-
-  auto wrong_byte_rate = valid;
-  write_u32(wrong_byte_rate, 28, 88'199);
-
-  auto wrong_block_align = valid;
-  write_u16(wrong_block_align, 32, 4);
-
-  auto duplicate_fmt = valid;
-  duplicate_fmt.insert(
-      duplicate_fmt.begin() + 36,
-      valid.begin() + 12,
-      valid.begin() + 36);
-  update_riff_size(duplicate_fmt);
-
-  auto duplicate_data = valid;
-  append_chunk(
-      duplicate_data,
-      {'d', 'a', 't', 'a'},
-      {std::byte{0}, std::byte{0}});
-  update_riff_size(duplicate_data);
-
-  auto empty_data = valid;
-  empty_data.resize(44);
-  write_u32(empty_data, 40, 0);
-  update_riff_size(empty_data);
-
-  for (const auto& malformed : {
-           float_encoding,
-           wrong_rate,
-           wrong_bits,
-           wrong_byte_rate,
-           wrong_block_align,
-           duplicate_fmt,
-           duplicate_data,
-           empty_data,
+void test_strict_wav_rejects_duplicate_required_chunks() {
+  for (const auto* name : {
+           "duplicate-fmt-chunk.wav",
+           "duplicate-data-chunk.wav",
        }) {
-    check_unsupported(malformed);
+    check_unsupported(fixture_bytes(name));
   }
 }
 
-void test_strict_wav_rejects_source_frame_declaration_above_active_limit() {
-  constexpr std::uint32_t boundary_frame_count = 240'000;
-  constexpr std::uint32_t frame_count = 240'001;
-  auto boundary = fixture_bytes("mono-44100.wav");
-  boundary.resize(
-      44U + boundary_frame_count * sizeof(std::int16_t), std::byte{0});
-  write_u32(boundary, 40, boundary_frame_count * sizeof(std::int16_t));
-  update_riff_size(boundary);
-  auto oversized = fixture_bytes("mono-44100.wav");
-  oversized.resize(44U + frame_count * sizeof(std::int16_t), std::byte{0});
-  write_u32(oversized, 40, frame_count * sizeof(std::int16_t));
-  update_riff_size(oversized);
+void test_strict_wav_rejects_inconsistent_pcm_shape_fields() {
+  for (const auto* name : {
+           "invalid-byte-rate.wav",
+           "invalid-block-align.wav",
+       }) {
+    check_unsupported(fixture_bytes(name));
+  }
+}
 
-  const auto accepted = lmdj::cooker::decode_wav(boundary);
-  LMDJ_CHECK(accepted.has_value());
-  LMDJ_CHECK(accepted.value()->interleaved.size() == boundary_frame_count);
-  check_unsupported(oversized);
+void test_strict_wav_rejects_unsupported_encodings() {
+  for (const auto* name : {
+           "unsupported-float.wav",
+           "unsupported-sample-rate.wav",
+           "unsupported-bit-depth.wav",
+       }) {
+    check_unsupported(fixture_bytes(name));
+  }
+}
+
+void test_strict_wav_rejects_truncated_data_declaration() {
+  check_unsupported(fixture_bytes("truncated-data-declaration.wav"));
+}
+
+void test_strict_wav_rejects_empty_data() {
+  auto empty_data = fixture_bytes("mono-44100.wav");
+  empty_data.resize(44);
+  write_u32(empty_data, 40, 0);
+  update_riff_size(empty_data);
+  check_unsupported(empty_data);
+}
+
+void test_cooker_does_not_apply_web_product_frame_admission_policy() {
+  constexpr std::uint32_t frame_count_beyond_web_product_limit = 240'001;
+  const auto structurally_valid =
+      fixture_bytes("mono-44100-over-web-frame-limit.wav");
+
+  const auto decoded = lmdj::cooker::decode_wav(structurally_valid);
+  const auto inspected = lmdj::cooker::inspect_wav(structurally_valid);
+
+  LMDJ_CHECK(decoded.has_value());
+  LMDJ_CHECK(
+      decoded.value()->interleaved.size() ==
+      frame_count_beyond_web_product_limit);
+  LMDJ_CHECK(inspected.has_value());
+  LMDJ_CHECK(
+      inspected.value().source_frames ==
+      frame_count_beyond_web_product_limit);
+
+  const auto envelope = lmdj::cooker::waveform_envelope(
+      *decoded.value(), {0, 1, 1});
+  const auto prepared = lmdj::cooker::prepare_runtime_pcm(*decoded.value());
+
+  LMDJ_CHECK(envelope.has_value());
+  LMDJ_CHECK(envelope.value().metadata.source_frames ==
+             frame_count_beyond_web_product_limit);
+  LMDJ_CHECK(prepared.has_value());
+  LMDJ_CHECK(prepared.value()->interleaved.size() == 261'226);
 }
 
 void test_waveform_uses_exact_nonempty_buckets_and_int16_min_magnitude() {
@@ -296,8 +265,10 @@ void test_integer_rational_preparation_clamps_the_last_source_frame() {
 }
 
 void test_integer_rational_preparation_preserves_stereo_channel_order() {
-  const PcmSample source{44'100, 2, {0, 1'000, -1'000, 0}};
-  const auto prepared = lmdj::cooker::prepare_runtime_pcm(source);
+  const auto decoded = lmdj::cooker::decode_wav(
+      fixture_bytes("stereo-44100.wav"));
+  LMDJ_CHECK(decoded.has_value());
+  const auto prepared = lmdj::cooker::prepare_runtime_pcm(*decoded.value());
 
   LMDJ_CHECK(prepared.has_value());
   LMDJ_CHECK(prepared.value()->channels == 2);
@@ -346,8 +317,12 @@ void test_analysis_rejects_invalid_decoded_pcm_shapes() {
 int main() {
   try {
     test_inspection_accepts_locked_pcm16_rates_and_reports_source_metadata();
-    test_strict_wav_rejects_format_field_and_duplicate_chunk_breaks();
-    test_strict_wav_rejects_source_frame_declaration_above_active_limit();
+    test_strict_wav_rejects_duplicate_required_chunks();
+    test_strict_wav_rejects_inconsistent_pcm_shape_fields();
+    test_strict_wav_rejects_unsupported_encodings();
+    test_strict_wav_rejects_truncated_data_declaration();
+    test_strict_wav_rejects_empty_data();
+    test_cooker_does_not_apply_web_product_frame_admission_policy();
     test_waveform_uses_exact_nonempty_buckets_and_int16_min_magnitude();
     test_waveform_folds_all_stereo_channels_by_max_absolute_peak();
     test_waveform_partial_window_never_reuses_an_overwide_peak();

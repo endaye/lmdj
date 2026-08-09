@@ -76,23 +76,69 @@ def wav_bytes(
     sample_rate: int = SAMPLE_RATE,
 ) -> bytes:
     frame_bytes = struct.pack("<" + "h" * len(samples), *samples)
-    data_size = len(frame_bytes)
-    return (
-        b"RIFF"
-        + struct.pack("<I", 36 + data_size)
-        + b"WAVEfmt "
-        + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate,
-                      sample_rate * channels * 2, channels * 2, 16)
-        + b"data"
-        + struct.pack("<I", data_size)
-        + frame_bytes
+    return wav_from_chunks(
+        [
+            wav_format_chunk(1, channels, sample_rate, 16),
+            wav_chunk(b"data", frame_bytes),
+        ]
     )
+
+
+def wav_chunk(
+    identifier: bytes,
+    payload: bytes,
+    declared_size: int = None,
+) -> bytes:
+    if len(identifier) != 4:
+        raise ValueError("WAV chunk identifiers must contain four bytes")
+    chunk_size = len(payload) if declared_size is None else declared_size
+    padding = b"\x00" if len(payload) % 2 else b""
+    return identifier + struct.pack("<I", chunk_size) + payload + padding
+
+
+def wav_format_chunk(
+    audio_format: int,
+    channels: int,
+    sample_rate: int,
+    bits_per_sample: int,
+    byte_rate: int = None,
+    block_align: int = None,
+) -> bytes:
+    sample_width = (bits_per_sample + 7) // 8
+    declared_block_align = (
+        channels * sample_width if block_align is None else block_align
+    )
+    declared_byte_rate = (
+        sample_rate * declared_block_align if byte_rate is None else byte_rate
+    )
+    return wav_chunk(
+        b"fmt ",
+        struct.pack(
+            "<HHIIHH",
+            audio_format,
+            channels,
+            sample_rate,
+            declared_byte_rate,
+            declared_block_align,
+            bits_per_sample,
+        ),
+    )
+
+
+def wav_from_chunks(chunks: list[bytes]) -> bytes:
+    body = b"WAVE" + b"".join(chunks)
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def pcm16_frame_bytes(samples: list[int]) -> bytes:
+    return struct.pack("<" + "h" * len(samples), *samples)
 
 
 def write_fixture(
     name: str,
     contents: bytes,
     expected_sample_rate: int = SAMPLE_RATE,
+    verify_pcm16: bool = True,
 ) -> str:
     path = FIXTURE_DIRECTORY / name
     expected_hash = hashlib.sha256(contents).hexdigest()
@@ -107,14 +153,16 @@ def write_fixture(
         )
     with open(path, "wb") as output:
         output.write(contents)
-    with wave.open(str(path), "rb") as fixture:
-        if (fixture.getsampwidth(), fixture.getframerate()) != (
-            2,
-            expected_sample_rate,
-        ):
-            raise SystemExit(
-                f"fixture encoding is invalid: {path.relative_to(REPOSITORY_ROOT)}"
-            )
+    if verify_pcm16:
+        with wave.open(str(path), "rb") as fixture:
+            if (fixture.getsampwidth(), fixture.getframerate()) != (
+                2,
+                expected_sample_rate,
+            ):
+                raise SystemExit(
+                    "fixture encoding is invalid: "
+                    + str(path.relative_to(REPOSITORY_ROOT))
+                )
     return expected_hash
 
 
@@ -291,28 +339,125 @@ def write_web_runtime_host_metadata(wav_hash: str) -> None:
 
 def main() -> None:
     FIXTURE_DIRECTORY.mkdir(parents=True, exist_ok=True)
-    fixtures = {
-        "kick.wav": wav_bytes(1, kick_samples()),
-        "mono-44100.wav": wav_bytes(
-            1,
-            [-32_768, 16_384, -8_192, 4_096, -4_096, 2_048, 0, 0],
+    accepted_fixtures = {
+        "kick.wav": (wav_bytes(1, kick_samples()), SAMPLE_RATE),
+        "mono-44100-over-web-frame-limit.wav": (
+            wav_bytes(1, [0] * 240_001, SAMPLE_RATE_44_100),
             SAMPLE_RATE_44_100,
         ),
-        "snare.wav": wav_bytes(1, snare_samples()),
-        "stereo.wav": wav_bytes(
-            2,
-            [32_767, -32_768, -32_768, 32_767, 123, -789, -456, 1_011],
+        "mono-44100.wav": (
+            wav_bytes(
+                1,
+                [-32_768, 16_384, -8_192, 4_096, -4_096, 2_048, 0, 0],
+                SAMPLE_RATE_44_100,
+            ),
+            SAMPLE_RATE_44_100,
         ),
-        "web-runtime-host-short.wav": wav_bytes(1, web_runtime_host_samples()),
+        "snare.wav": (wav_bytes(1, snare_samples()), SAMPLE_RATE),
+        "stereo-44100.wav": (
+            wav_bytes(
+                2,
+                [0, 1_000, -1_000, 0],
+                SAMPLE_RATE_44_100,
+            ),
+            SAMPLE_RATE_44_100,
+        ),
+        "stereo.wav": (
+            wav_bytes(
+                2,
+                [32_767, -32_768, -32_768, 32_767, 123, -789, -456, 1_011],
+            ),
+            SAMPLE_RATE,
+        ),
+        "web-runtime-host-short.wav": (
+            wav_bytes(1, web_runtime_host_samples()),
+            SAMPLE_RATE,
+        ),
+    }
+
+    mono_frames = pcm16_frame_bytes([0, 1, -1, 32_767])
+    mono_format = wav_format_chunk(1, 1, SAMPLE_RATE_44_100, 16)
+    rejection_fixtures = {
+        "duplicate-data-chunk.wav": wav_from_chunks(
+            [
+                mono_format,
+                wav_chunk(b"data", pcm16_frame_bytes([0, 1])),
+                wav_chunk(b"data", pcm16_frame_bytes([-1, 32_767])),
+            ]
+        ),
+        "duplicate-fmt-chunk.wav": wav_from_chunks(
+            [
+                mono_format,
+                mono_format,
+                wav_chunk(b"data", mono_frames),
+            ]
+        ),
+        "invalid-block-align.wav": wav_from_chunks(
+            [
+                wav_format_chunk(
+                    1,
+                    1,
+                    SAMPLE_RATE_44_100,
+                    16,
+                    block_align=4,
+                ),
+                wav_chunk(b"data", mono_frames),
+            ]
+        ),
+        "invalid-byte-rate.wav": wav_from_chunks(
+            [
+                wav_format_chunk(
+                    1,
+                    1,
+                    SAMPLE_RATE_44_100,
+                    16,
+                    byte_rate=88_199,
+                ),
+                wav_chunk(b"data", mono_frames),
+            ]
+        ),
+        "truncated-data-declaration.wav": wav_from_chunks(
+            [
+                mono_format,
+                wav_chunk(
+                    b"data",
+                    pcm16_frame_bytes([0, 1]),
+                    declared_size=6,
+                ),
+            ]
+        ),
+        "unsupported-bit-depth.wav": wav_from_chunks(
+            [
+                wav_format_chunk(1, 1, SAMPLE_RATE_44_100, 24),
+                wav_chunk(
+                    b"data",
+                    b"\x00\x00\x00\xff\xff\x7f\x00\x00\x80",
+                ),
+            ]
+        ),
+        "unsupported-float.wav": wav_from_chunks(
+            [
+                wav_format_chunk(3, 1, SAMPLE_RATE_44_100, 32),
+                wav_chunk(b"data", struct.pack("<ff", 0.25, -0.25)),
+            ]
+        ),
+        "unsupported-sample-rate.wav": wav_from_chunks(
+            [
+                wav_format_chunk(1, 1, 32_000, 16),
+                wav_chunk(b"data", mono_frames),
+            ]
+        ),
     }
     hashes = {
-        name: write_fixture(
-            name,
-            contents,
-            SAMPLE_RATE_44_100 if name == "mono-44100.wav" else SAMPLE_RATE,
-        )
-        for name, contents in fixtures.items()
+        name: write_fixture(name, contents, sample_rate)
+        for name, (contents, sample_rate) in accepted_fixtures.items()
     }
+    hashes.update(
+        {
+            name: write_fixture(name, contents, verify_pcm16=False)
+            for name, contents in rejection_fixtures.items()
+        }
+    )
     with open(FIXTURE_DIRECTORY / "hashes.json", "w", encoding="utf-8") as output:
         json.dump(
             {

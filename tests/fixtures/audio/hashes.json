@@ -1,6 +1,16 @@
 {
+  "duplicate-data-chunk.wav": "e206d81e1a50eaf2b6e038b806099be2373c8f6d54b8213436944f1696e7320e",
+  "duplicate-fmt-chunk.wav": "4b4cb77f83b1f028778f8b068238da3d7e325d44b83e356ddfd05302a56fe2d7",
+  "invalid-block-align.wav": "29c7bc3b568da535f141ad0a750caa3fbe0dcf06dfc3dea21a914a9f40ec1818",
+  "invalid-byte-rate.wav": "be504a9b1b1ab3730441d7c1cfe42007fd1c6d468305519871b111a4808db2ee",
   "kick.wav": "43ab266faaaddc590b75ea49921574f795c8c7535d28453fda0b48b3f620bfb7",
+  "mono-44100-over-web-frame-limit.wav": "bb6671ab5ab80cf3dddc171d780fe30ade9b9a1404e2245ae6a626c713a50690",
   "mono-44100.wav": "ab8779402a0adb665d30c1a67a150d2543e2a4a2c2e694cf947ba6dc5c17a792",
   "snare.wav": "5e5a88f0e06b9d94237924931de577868fae92f98d146c6bf0fb9fc7054a5d18",
-  "stereo.wav": "8ed906292be8d7ecd66263e66187af80719a79e6b2934759c3d0f06b4c02421b"
+  "stereo-44100.wav": "f1f5c8994851d580e9ef16cdbca97487fee8fca848474afc9f4b90c50e9e8021",
+  "stereo.wav": "8ed906292be8d7ecd66263e66187af80719a79e6b2934759c3d0f06b4c02421b",
+  "truncated-data-declaration.wav": "d0ec814f70aa9bce2f44ef94e4772ea75dc0789301c8b68098fcbc8dbf3195b9",
+  "unsupported-bit-depth.wav": "0752981dfbcbba60a25b99ba9abe5d0cf5a35d05d2dbdb48494df975b50e9612",
+  "unsupported-float.wav": "79ee3cacded378de36118927c180cade582d8149dc17be65ca3d4895e92dac06",
+  "unsupported-sample-rate.wav": "a0659be16aa4340904a7d7c181ee9921d1503435841d11efda466a38224ac498"
 }

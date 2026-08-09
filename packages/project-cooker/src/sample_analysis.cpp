@@ -13,7 +13,6 @@
 namespace lmdj::cooker {
 namespace {
 
-constexpr std::uint64_t kMaximumDecodedSourceFrames = 240'000;
 constexpr std::uint64_t kRuntimeSampleRate = 48'000;
 
 foundation::Result<void> validate_sample(const PcmSample& sample) {
@@ -24,14 +23,6 @@ foundation::Result<void> validate_sample(const PcmSample& sample) {
     return foundation::Result<void>::failure(foundation::Error{
         foundation::ErrorCode::unsupported_audio,
         "decoded PCM shape is unsupported",
-    });
-  }
-  const auto source_frames = static_cast<std::uint64_t>(
-      sample.interleaved.size() / sample.channels);
-  if (source_frames > kMaximumDecodedSourceFrames) {
-    return foundation::Result<void>::failure(foundation::Error{
-        foundation::ErrorCode::unsupported_audio,
-        "decoded PCM frame count exceeds supported range",
     });
   }
   return foundation::Result<void>::success();

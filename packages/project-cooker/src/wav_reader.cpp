@@ -11,8 +11,6 @@
 namespace lmdj::cooker {
 namespace {
 
-constexpr std::uint64_t kMaximumDecodedSourceFrames = 240'000;
-
 foundation::Result<std::shared_ptr<const PcmSample>> unsupported(
     std::string_view message) {
   return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
@@ -142,9 +140,6 @@ foundation::Result<std::shared_ptr<const PcmSample>> decode_wav(
   }
   const auto source_frames = static_cast<std::uint64_t>(
       audio_bytes.size() / block_align);
-  if (source_frames > kMaximumDecodedSourceFrames) {
-    return unsupported("WAV decoded frame count exceeds supported range");
-  }
   if (source_frames >
       std::numeric_limits<std::uint64_t>::max() / channels) {
     return unsupported("WAV sample count overflowed");
