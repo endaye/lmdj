@@ -1,6 +1,7 @@
 #include <lmdj/cooker/project_cooker.hpp>
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <limits>
 #include <map>
@@ -9,6 +10,7 @@
 #include <utility>
 #include <vector>
 
+#include <lmdj/cooker/sample_analysis.hpp>
 #include <lmdj/cooker/wav_reader.hpp>
 
 namespace lmdj::cooker {
@@ -175,8 +177,86 @@ bool valid_pattern(const domain::Pattern& pattern) {
 
 struct DecodedArtifact {
   std::uint64_t byte_length;
-  std::shared_ptr<const PcmSample> sample;
+  std::shared_ptr<const PcmSample> source;
+  std::shared_ptr<const PcmSample> prepared;
 };
+
+bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+    case domain::TriggerMode::gate:
+    case domain::TriggerMode::loop_gate:
+    case domain::TriggerMode::loop_toggle:
+      return true;
+  }
+  return false;
+}
+
+foundation::Result<ResolvedPlayback> resolve_playback(
+    const domain::PadPlayback& playback,
+    const PcmSample& source,
+    const PcmSample& prepared) {
+  if (source.channels == 0 || prepared.channels == 0 ||
+      source.interleaved.size() % source.channels != 0 ||
+      prepared.interleaved.size() % prepared.channels != 0 ||
+      source.sample_rate == 0 || prepared.sample_rate != 48'000 ||
+      !valid_trigger_mode(playback.trigger_mode)) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback cannot be resolved from invalid PCM or mode",
+    });
+  }
+  const auto source_frames = static_cast<std::uint64_t>(
+      source.interleaved.size() / source.channels);
+  const auto prepared_frames = static_cast<std::uint64_t>(
+      prepared.interleaved.size() / prepared.channels);
+  const auto source_end = playback.trim_end_frame.value_or(source_frames);
+  if (playback.trim_start_frame >= source_end || source_end > source_frames ||
+      playback.trim_start_frame >
+          std::numeric_limits<std::uint64_t>::max() / 48'000U ||
+      source_end > std::numeric_limits<std::uint64_t>::max() / 48'000U) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback trim is outside source bounds",
+    });
+  }
+  const auto scaled_start = playback.trim_start_frame * 48'000U;
+  const auto scaled_end = source_end * 48'000U;
+  const auto runtime_start = scaled_start / source.sample_rate;
+  const auto runtime_end =
+      scaled_end / source.sample_rate +
+      (scaled_end % source.sample_rate == 0 ? 0U : 1U);
+  if (runtime_start >= runtime_end || runtime_end > prepared_frames ||
+      runtime_start > std::numeric_limits<std::uint32_t>::max() ||
+      runtime_end > std::numeric_limits<std::uint32_t>::max()) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback runtime trim is outside prepared PCM bounds",
+    });
+  }
+  if (playback.gain_millidb < -60'000 || playback.gain_millidb > 6'000) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback gain is outside supported bounds",
+    });
+  }
+  const auto gain = static_cast<float>(std::pow(
+      10.0,
+      static_cast<double>(playback.gain_millidb) / 20'000.0));
+  if (!std::isfinite(gain)) {
+    return foundation::Result<ResolvedPlayback>::failure(foundation::Error{
+        foundation::ErrorCode::invalid_argument,
+        "Pad playback gain is not finite",
+    });
+  }
+  return foundation::Result<ResolvedPlayback>::success(ResolvedPlayback{
+      static_cast<std::uint32_t>(runtime_start),
+      static_cast<std::uint32_t>(runtime_end),
+      playback.trigger_mode,
+      gain,
+      playback.muted,
+  });
+}
 
 foundation::Result<std::shared_ptr<const RuntimeSnapshot>> failure(
     foundation::ErrorCode code,
@@ -208,9 +288,9 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
 
   std::map<std::string, DecodedArtifact> decoded;
   const auto resolve_sample = [&](const foundation::ArtifactRef& artifact)
-      -> foundation::Result<std::shared_ptr<const PcmSample>> {
+      -> foundation::Result<const DecodedArtifact*> {
     if (!valid_sha256(artifact.sha256)) {
-      return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+      return foundation::Result<const DecodedArtifact*>::failure(
           foundation::Error{
               foundation::ErrorCode::invalid_project,
               "asset artifact hash is invalid",
@@ -219,25 +299,25 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
     const auto cached = decoded.find(artifact.sha256);
     if (cached != decoded.end()) {
       if (cached->second.byte_length != artifact.byte_length) {
-        return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+        return foundation::Result<const DecodedArtifact*>::failure(
             foundation::Error{
                 foundation::ErrorCode::cook_failed,
                 "cached artifact bytes do not match declared metadata",
             });
       }
-      return foundation::Result<std::shared_ptr<const PcmSample>>::success(
-          cached->second.sample);
+      return foundation::Result<const DecodedArtifact*>::success(
+          &cached->second);
     }
     const auto resolved = resolve(artifact);
     if (!resolved.has_value()) {
-      return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+      return foundation::Result<const DecodedArtifact*>::failure(
           resolved.error());
     }
     const auto& bytes = resolved.value();
     const auto actual_byte_length = static_cast<std::uint64_t>(bytes.size());
     if (actual_byte_length != artifact.byte_length ||
         sha256_hex(bytes) != artifact.sha256) {
-      return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
+      return foundation::Result<const DecodedArtifact*>::failure(
           foundation::Error{
               foundation::ErrorCode::cook_failed,
               "artifact bytes do not match declared metadata",
@@ -245,12 +325,23 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
     }
     const auto decoded_sample = decode_wav(bytes);
     if (!decoded_sample.has_value()) {
-      return decoded_sample;
+      return foundation::Result<const DecodedArtifact*>::failure(
+          decoded_sample.error());
     }
-    decoded.emplace(
+    const auto prepared_sample = prepare_runtime_pcm(*decoded_sample.value());
+    if (!prepared_sample.has_value()) {
+      return foundation::Result<const DecodedArtifact*>::failure(
+          prepared_sample.error());
+    }
+    const auto inserted = decoded.emplace(
         artifact.sha256,
-        DecodedArtifact{actual_byte_length, decoded_sample.value()});
-    return decoded_sample;
+        DecodedArtifact{
+            actual_byte_length,
+            decoded_sample.value(),
+            prepared_sample.value(),
+        });
+    return foundation::Result<const DecodedArtifact*>::success(
+        &inserted.first->second);
   };
 
   std::vector<ResolvedPad> pads;
@@ -274,13 +365,26 @@ foundation::Result<std::shared_ptr<const RuntimeSnapshot>> cook(
             foundation::ErrorCode::missing_asset,
             "assigned pad references a missing asset");
       }
-      const auto sample = resolve_sample(asset->artifact);
-      if (!sample.has_value()) {
+      const auto resolved = resolve_sample(asset->artifact);
+      if (!resolved.has_value()) {
         return foundation::Result<
-            std::shared_ptr<const RuntimeSnapshot>>::failure(sample.error());
+            std::shared_ptr<const RuntimeSnapshot>>::failure(resolved.error());
       }
-      pads.push_back(ResolvedPad{slot, asset->artifact, sample.value()});
-      pad_samples.emplace(slot, sample.value());
+      const auto playback = resolve_playback(
+          assignment.playback,
+          *resolved.value()->source,
+          *resolved.value()->prepared);
+      if (!playback.has_value()) {
+        return foundation::Result<
+            std::shared_ptr<const RuntimeSnapshot>>::failure(playback.error());
+      }
+      pads.push_back(ResolvedPad{
+          slot,
+          asset->artifact,
+          resolved.value()->prepared,
+          playback.value(),
+      });
+      pad_samples.emplace(slot, resolved.value()->prepared);
     }
   }
 

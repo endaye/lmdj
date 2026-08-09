@@ -25,6 +25,7 @@ REALTIME_CAPACITY_HEADER = Path(
     )
 ).resolve()
 SAMPLE_RATE = 48_000
+SAMPLE_RATE_44_100 = 44_100
 WEB_RUNTIME_HOST_FRAME_COUNT = 240
 WEB_RUNTIME_HOST_TRIGGER_COUNT = 500
 WEB_RUNTIME_HOST_TRIGGER_PACING_MS = 2
@@ -69,22 +70,30 @@ def web_runtime_host_samples() -> list[int]:
     ]
 
 
-def wav_bytes(channels: int, samples: list[int]) -> bytes:
+def wav_bytes(
+    channels: int,
+    samples: list[int],
+    sample_rate: int = SAMPLE_RATE,
+) -> bytes:
     frame_bytes = struct.pack("<" + "h" * len(samples), *samples)
     data_size = len(frame_bytes)
     return (
         b"RIFF"
         + struct.pack("<I", 36 + data_size)
         + b"WAVEfmt "
-        + struct.pack("<IHHIIHH", 16, 1, channels, SAMPLE_RATE,
-                      SAMPLE_RATE * channels * 2, channels * 2, 16)
+        + struct.pack("<IHHIIHH", 16, 1, channels, sample_rate,
+                      sample_rate * channels * 2, channels * 2, 16)
         + b"data"
         + struct.pack("<I", data_size)
         + frame_bytes
     )
 
 
-def write_fixture(name: str, contents: bytes) -> str:
+def write_fixture(
+    name: str,
+    contents: bytes,
+    expected_sample_rate: int = SAMPLE_RATE,
+) -> str:
     path = FIXTURE_DIRECTORY / name
     expected_hash = hashlib.sha256(contents).hexdigest()
     try:
@@ -99,7 +108,10 @@ def write_fixture(name: str, contents: bytes) -> str:
     with open(path, "wb") as output:
         output.write(contents)
     with wave.open(str(path), "rb") as fixture:
-        if (fixture.getsampwidth(), fixture.getframerate()) != (2, SAMPLE_RATE):
+        if (fixture.getsampwidth(), fixture.getframerate()) != (
+            2,
+            expected_sample_rate,
+        ):
             raise SystemExit(
                 f"fixture encoding is invalid: {path.relative_to(REPOSITORY_ROOT)}"
             )
@@ -146,7 +158,10 @@ struct adl_serializer;
         temporary_root = Path(root)
         shim_path = temporary_root / "nlohmann/json.hpp"
         shim_path.parent.mkdir(parents=True)
-        shim_path.write_text(nlohmann_shim, encoding="utf-8", newline="\n")
+        with open(
+            shim_path, "w", encoding="utf-8", newline="\n"
+        ) as shim_output:
+            shim_output.write(nlohmann_shim)
         executable = temporary_root / "realtime-capacities"
         command = [
             compiler,
@@ -266,17 +281,23 @@ def write_web_runtime_host_metadata(wav_hash: str) -> None:
         },
     }
     metadata_path = FIXTURE_DIRECTORY / "web-runtime-host-fixture.json"
-    metadata_path.write_text(
-        json.dumps(metadata, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-        newline="\n",
-    )
+    with open(
+        metadata_path, "w", encoding="utf-8", newline="\n"
+    ) as metadata_output:
+        metadata_output.write(
+            json.dumps(metadata, indent=2, sort_keys=True) + "\n"
+        )
 
 
 def main() -> None:
     FIXTURE_DIRECTORY.mkdir(parents=True, exist_ok=True)
     fixtures = {
         "kick.wav": wav_bytes(1, kick_samples()),
+        "mono-44100.wav": wav_bytes(
+            1,
+            [-32_768, 16_384, -8_192, 4_096, -4_096, 2_048, 0, 0],
+            SAMPLE_RATE_44_100,
+        ),
         "snare.wav": wav_bytes(1, snare_samples()),
         "stereo.wav": wav_bytes(
             2,
@@ -285,7 +306,11 @@ def main() -> None:
         "web-runtime-host-short.wav": wav_bytes(1, web_runtime_host_samples()),
     }
     hashes = {
-        name: write_fixture(name, contents)
+        name: write_fixture(
+            name,
+            contents,
+            SAMPLE_RATE_44_100 if name == "mono-44100.wav" else SAMPLE_RATE,
+        )
         for name, contents in fixtures.items()
     }
     with open(FIXTURE_DIRECTORY / "hashes.json", "w", encoding="utf-8") as output:

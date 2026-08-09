@@ -11,6 +11,8 @@
 namespace lmdj::cooker {
 namespace {
 
+constexpr std::uint64_t kMaximumDecodedSourceFrames = 240'000;
+
 foundation::Result<std::shared_ptr<const PcmSample>> unsupported(
     std::string_view message) {
   return foundation::Result<std::shared_ptr<const PcmSample>>::failure(
@@ -128,21 +130,35 @@ foundation::Result<std::shared_ptr<const PcmSample>> decode_wav(
     return unsupported("WAV must contain one fmt and one data chunk");
   }
   if (audio_format != 1 || (channels != 1 && channels != 2) ||
-      sample_rate != 48'000 || bits_per_sample != 16 ||
+      (sample_rate != 44'100 && sample_rate != 48'000) ||
+      bits_per_sample != 16 ||
       block_align != channels * 2U ||
       byte_rate != sample_rate * static_cast<std::uint32_t>(block_align)) {
-    return unsupported("WAV encoding must be 48 kHz PCM16 mono or stereo");
+    return unsupported(
+        "WAV encoding must be 44.1 or 48 kHz PCM16 mono or stereo");
   }
-  if (audio_bytes.size() % block_align != 0) {
+  if (audio_bytes.empty() || audio_bytes.size() % block_align != 0) {
     return unsupported("WAV data is not aligned to complete frames");
   }
-  if (audio_bytes.size() / 2 >
-      static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max())) {
+  const auto source_frames = static_cast<std::uint64_t>(
+      audio_bytes.size() / block_align);
+  if (source_frames > kMaximumDecodedSourceFrames) {
+    return unsupported("WAV decoded frame count exceeds supported range");
+  }
+  if (source_frames >
+      std::numeric_limits<std::uint64_t>::max() / channels) {
+    return unsupported("WAV sample count overflowed");
+  }
+  const auto sample_count = source_frames * channels;
+  if (sample_count >
+      static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max()) ||
+      sample_count > std::numeric_limits<std::uint64_t>::max() / 2U ||
+      sample_count * 2U != audio_bytes.size()) {
     return unsupported("WAV sample count exceeds supported range");
   }
 
   std::vector<std::int16_t> samples;
-  samples.reserve(audio_bytes.size() / 2);
+  samples.reserve(static_cast<std::size_t>(sample_count));
   for (std::size_t index = 0; index < audio_bytes.size(); index += 2) {
     const auto bits = read_u16(audio_bytes, index);
     samples.push_back(std::bit_cast<std::int16_t>(bits));

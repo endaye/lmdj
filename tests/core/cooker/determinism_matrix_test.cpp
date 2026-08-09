@@ -30,9 +30,11 @@ using lmdj::domain::CommandMeta;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::PadSlotId;
+using lmdj::domain::PadPlayback;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::ProjectState;
+using lmdj::domain::TriggerMode;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -53,6 +55,22 @@ constexpr std::array<std::int16_t, 4> kMonoSamples{
     32767, -32768, 123, -456};
 constexpr std::array<std::int16_t, 8> kStereoSamples{
     32767, -32768, -32768, 32767, 123, -789, -456, 1011};
+
+float expected_linear_gain(std::int32_t gain_millidb) {
+  switch (gain_millidb) {
+    case -60'000:
+      return 0x1.0624dep-10F;
+    case -6'000:
+      return 0x1.009b9cp-1F;
+    case -3'000:
+      return 0x1.6a77dep-1F;
+    case 0:
+      return 1.0F;
+    case 6'000:
+      return 0x1.fec982p+0F;
+  }
+  throw std::runtime_error("unexpected gain golden input");
+}
 
 std::string generated_uuid(char family, std::uint64_t seed,
                            std::uint64_t ordinal) {
@@ -285,6 +303,24 @@ GeneratedProject generated_project(
       project,
       Command{AssignPad{meta(), reassigned_slot, stereo}});
 
+  project.banks.at(reassigned_slot.bank).at(reassigned_slot.pad).playback =
+      PadPlayback{
+          seed % 3U,
+          4,
+          static_cast<TriggerMode>(seed % 4U),
+          std::array<std::int32_t, 4>{-60'000, -6'000, 0, 6'000}.at(
+              seed % 4U),
+          (seed & 1U) != 0U,
+      };
+  project.banks.at(mono_slot.bank).at(mono_slot.pad).playback = PadPlayback{
+      1, 3, TriggerMode::gate, -3'000, false};
+  project.banks.at(stereo_slot.bank).at(stereo_slot.pad).playback = PadPlayback{
+      0, std::nullopt, TriggerMode::loop_gate, 0, false};
+  project.banks.at(duplicate_mono_slot.bank)
+      .at(duplicate_mono_slot.pad)
+      .playback = PadPlayback{
+      0, 1, TriggerMode::loop_toggle, 6'000, true};
+
   return GeneratedProject{
       std::move(project),
       pattern_id,
@@ -313,6 +349,11 @@ void check_snapshots_equal(
     LMDJ_CHECK(left.sample->sample_rate == right.sample->sample_rate);
     LMDJ_CHECK(left.sample->channels == right.sample->channels);
     LMDJ_CHECK(left.sample->interleaved == right.sample->interleaved);
+    LMDJ_CHECK(left.playback.start_frame == right.playback.start_frame);
+    LMDJ_CHECK(left.playback.end_frame == right.playback.end_frame);
+    LMDJ_CHECK(left.playback.trigger_mode == right.playback.trigger_mode);
+    LMDJ_CHECK(left.playback.linear_gain == right.playback.linear_gain);
+    LMDJ_CHECK(left.playback.muted == right.playback.muted);
   }
   LMDJ_CHECK(first.events.size() == second.events.size());
   for (std::size_t index = 0; index < first.events.size(); ++index) {
@@ -355,6 +396,7 @@ struct MatrixEvidence {
   std::uint64_t deduplicated_resolutions{};
   std::uint64_t rejected_partial_snapshots{};
   std::uint64_t current_slot_resolutions{};
+  std::uint64_t resolved_playback_values{};
 };
 
 MatrixEvidence run_determinism_matrix() {
@@ -402,6 +444,20 @@ MatrixEvidence run_determinism_matrix() {
                          pads.at(index).slot.pad;
       LMDJ_CHECK(left < right);
     }
+    for (const auto& pad : pads) {
+      const auto& playback = generated.state.banks.at(pad.slot.bank)
+                                 .at(pad.slot.pad)
+                                 .playback;
+      LMDJ_CHECK(pad.playback.start_frame == playback.trim_start_frame);
+      LMDJ_CHECK(
+          pad.playback.end_frame == playback.trim_end_frame.value_or(4));
+      LMDJ_CHECK(pad.playback.trigger_mode == playback.trigger_mode);
+      LMDJ_CHECK(
+          pad.playback.linear_gain ==
+          expected_linear_gain(playback.gain_millidb));
+      LMDJ_CHECK(pad.playback.muted == playback.muted);
+    }
+    ++evidence.resolved_playback_values;
     const auto& events = first.value()->events;
     LMDJ_CHECK(events.at(0).sample != events.at(1).sample);
     LMDJ_CHECK(events.at(1).sample == events.at(2).sample);
@@ -518,6 +574,11 @@ void test_generated_slot_reassignment_resolves_current_asset() {
       determinism_matrix_evidence().current_slot_resolutions == 256);
 }
 
+void test_generated_pad_playback_resolves_deterministically() {
+  LMDJ_CHECK(
+      determinism_matrix_evidence().resolved_playback_values == 256);
+}
+
 }  // namespace
 
 int main() {
@@ -526,6 +587,7 @@ int main() {
     test_generated_artifact_resolution_is_content_deduplicated();
     test_generated_invalid_artifacts_never_publish_partial_snapshot();
     test_generated_slot_reassignment_resolves_current_asset();
+    test_generated_pad_playback_resolves_deterministically();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
