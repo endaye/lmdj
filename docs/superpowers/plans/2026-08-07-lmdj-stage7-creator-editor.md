@@ -286,6 +286,26 @@ The fourth corrective candidate tag text is `lmdj-v1.0.16.4`; creating and
 pushing it is authorized only after the corrective PR is merged, merged-main
 Proof is current, and the exact tag target has been verified.
 
+### Fifth post-freeze corrective patch
+
+Clean-source Core Proof after the immutable `1.0.16.4 · canary` snapshot was
+created found stale exact Product Patch expectations in the CLI and MCP host
+tests, plus stale Product Version fixtures in Creator package/server tests.
+The runtime and independently versioned identities were already correct, but
+the formal Proof gate failed closed. The immutable `1.0.16.4` snapshot remains
+unchanged. Product Build `1.0.16.5 · canary` is allocated for complete test
+identity propagation and must receive a new immutable snapshot plus full
+clean-source Proof.
+
+| Identity | Frozen fourth candidate | Fifth corrective candidate | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.4` | `1.0.16.5` | Complete exact Product Patch propagation in release tests without changing product capability or public Contract semantics. |
+| Modules / Hosts / Contracts / Providers / Models | current | unchanged | No implementation or independently versioned identity changes. |
+
+The fifth corrective candidate tag text is `lmdj-v1.0.16.5`; creating and
+pushing it is authorized only after the corrective PR is merged, merged-main
+Proof is current, and the exact tag target has been verified.
+
 ---
 
 ### Task 1: Define and prove the portable Project Bundle Contract

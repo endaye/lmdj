@@ -27,7 +27,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.2` 已进入 Product Build `1.0.16.4` Assembly。Host 只依赖共享 Web Runtime Platform `0.1.2`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.2` 已进入 Product Build `1.0.16.5` Assembly。Host 只依赖共享 Web Runtime Platform `0.1.2`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
 
 本次 Host SemVer 变化只传播共享 Platform 的精确依赖；诊断 UI、协议 `1`、500-trigger、Take、restart-required 与失败语义没有新增能力。
 
@@ -52,7 +52,7 @@ checksum signature，工具在解析 checksum 前先验证 signature。组装层
 reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
 使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
 evidence v1。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.16.4` 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build `1.0.16.5` 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 

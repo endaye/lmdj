@@ -82,7 +82,7 @@ function fixture() {
     diagnostics: () => ({
       state: "running",
       error_code: null,
-      product_build: "1.0.16.4",
+      product_build: "1.0.16.5",
       host_id: "creator-web",
       host_version: "1.0.2",
       platform_version: "0.1.2",
