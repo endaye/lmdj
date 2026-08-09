@@ -13,6 +13,7 @@ from pathlib import Path
 
 repo_root = Path(__file__).resolve().parents[2]
 runner_path = repo_root / "scripts" / "core-coverage.sh"
+root_cmake_path = repo_root / "CMakeLists.txt"
 
 
 def write_executable(path: Path, content: str) -> None:
@@ -21,6 +22,24 @@ def write_executable(path: Path, content: str) -> None:
 
 
 class CoreCoverageRunnerTest(unittest.TestCase):
+    def test_project_bundle_transfer_test_is_a_coverage_object(self) -> None:
+        root_cmake = root_cmake_path.read_text(encoding="utf-8")
+        coverage_targets_start = root_cmake.index(
+            "    lmdj_coverage_targets\n"
+        )
+        coverage_targets_end = root_cmake.index(
+            "  )\n",
+            coverage_targets_start,
+        )
+        coverage_targets = root_cmake[
+            coverage_targets_start:coverage_targets_end
+        ]
+
+        self.assertIn(
+            "    lmdj_project_bundle_transfer_tests\n",
+            coverage_targets,
+        )
+
     def test_object_probe_keeps_native_audio_device_free(self) -> None:
         runner = runner_path.read_text(encoding="utf-8")
         probe_start = runner.index('probe_root="$run_root/probes"')

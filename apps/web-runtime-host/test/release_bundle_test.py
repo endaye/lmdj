@@ -405,6 +405,21 @@ class ReleaseBundleTest(unittest.TestCase):
         self.assertIn("usage:", completed.stderr)
 
         source_dist = REPO_ROOT / "build/web/host/dist"
+        product_version = json.loads(
+            (REPO_ROOT / "products/lmdj/version.json").read_text(encoding="utf-8")
+        )
+        expected_product_build = ".".join(
+            str(product_version[field])
+            for field in ("milestone", "minor", "build", "patch")
+        )
+        assembly = json.loads(
+            (REPO_ROOT / "products/lmdj/assembly.json").read_text(encoding="utf-8")
+        )
+        expected_host_version = next(
+            host["version"]
+            for host in assembly["hosts"]
+            if host["id"] == "web-runtime-host"
+        )
         archive = self.root / "valid-release.zip"
         with zipfile.ZipFile(archive, "w") as output:
             for path in source_dist.rglob("*"):
@@ -431,9 +446,9 @@ class ReleaseBundleTest(unittest.TestCase):
             "--output-root",
             str(self.output),
             "--expected-product-build",
-            "1.0.15.2",
+            expected_product_build,
             "--expected-host-version",
-            "1.1.2",
+            expected_host_version,
         ]
         checksum = self.write_checksum("0" * 64, archive.name)
         command[command.index("--checksum") + 1] = str(checksum)

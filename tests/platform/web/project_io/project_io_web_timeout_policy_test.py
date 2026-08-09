@@ -29,7 +29,7 @@ def main() -> int:
         source,
     )
     assert timeout is not None, "named Project I/O conformance timeout is missing"
-    assert int(timeout.group(1).replace("_", "")) >= 300_000, (
+    assert int(timeout.group(1).replace("_", "")) >= 600_000, (
         "Project I/O conformance timeout must cover both full fault matrices "
         "on the slow Linux runner"
     )

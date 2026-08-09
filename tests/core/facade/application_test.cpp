@@ -779,6 +779,40 @@ void test_project_bundle_discovery_and_import_are_typed_facade_apis() {
                {uuid(901), fixture.index.size(), std::string(64, 'A')})
            .has_value());
 
+  const auto duplicate_token = uuid(907);
+  const auto index_digest =
+      hash_text(temp.path(), "duplicate-index-hash.bin", fixture.index);
+  LMDJ_CHECK(
+      application
+          .begin_project_bundle_import(
+              {duplicate_token, fixture.index.size(), index_digest})
+          .has_value());
+  LMDJ_CHECK(
+      !application
+           .begin_project_bundle_import(
+               {duplicate_token, fixture.index.size(), index_digest})
+           .has_value());
+  LMDJ_CHECK(
+      application.abort_project_bundle_import(duplicate_token).has_value());
+
+  const std::array<std::byte, 1> one_byte{std::byte{0}};
+  LMDJ_CHECK(
+      !application
+           .append_project_bundle_index(
+               "invalid-token", 0, one_byte, true)
+           .has_value());
+  LMDJ_CHECK(
+      !application
+           .append_project_bundle_entry(
+               "invalid-token", 0, 0, one_byte, true)
+           .has_value());
+  LMDJ_CHECK(
+      !application.commit_project_bundle_import("invalid-token")
+           .has_value());
+  LMDJ_CHECK(
+      !application.abort_project_bundle_import("invalid-token")
+           .has_value());
+
   const auto invalid_offset_token = uuid(902);
   LMDJ_CHECK(
       application
@@ -853,6 +887,28 @@ void test_application_startup_cleans_incomplete_bundle_staging() {
   Application application(config(workspace));
 
   LMDJ_CHECK(!std::filesystem::exists(stale));
+}
+
+void test_project_bundle_host_paths_fail_closed() {
+  TempDirectory temp;
+  const auto list_workspace = temp.path() / "list-workspace";
+  std::filesystem::create_directories(list_workspace);
+  Application list_application(config(list_workspace));
+  std::filesystem::remove_all(list_workspace);
+  write_bytes(list_workspace, "not-a-directory");
+  const auto listed = list_application.list_local_projects();
+  LMDJ_CHECK(!listed.has_value());
+
+  const auto cleanup_workspace = temp.path() / "cleanup-workspace";
+  std::filesystem::create_directories(cleanup_workspace);
+  write_bytes(cleanup_workspace / ".lmdj-host", "not-a-directory");
+  bool cleanup_failed_closed = false;
+  try {
+    Application cleanup_application(config(cleanup_workspace));
+  } catch (const std::runtime_error&) {
+    cleanup_failed_closed = true;
+  }
+  LMDJ_CHECK(cleanup_failed_closed);
 }
 
 void test_render_recooks_after_restart_and_publishes_golden_atomically() {
@@ -1136,6 +1192,38 @@ void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero()
   LMDJ_CHECK(!invalid.has_value());
   LMDJ_CHECK(invalid.error().code == ErrorCode::invalid_argument);
   LMDJ_CHECK(!std::filesystem::exists(invalid_project));
+
+  const auto invalid_pattern_id_project =
+      temp.path() / "invalid-pattern-id.lmdj";
+  const auto invalid_pattern_id = application.create_initial_project(
+      InitialProjectRequest{
+          invalid_pattern_id_project,
+          ProjectId{uuid(995)},
+          120,
+          Pattern{PatternId{"INVALID"}, 1, {}},
+      });
+  LMDJ_CHECK(!invalid_pattern_id.has_value());
+  LMDJ_CHECK(
+      invalid_pattern_id.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!std::filesystem::exists(invalid_pattern_id_project));
+
+  const auto invalid_pattern_event_project =
+      temp.path() / "invalid-pattern-event.lmdj";
+  const auto invalid_pattern_event = application.create_initial_project(
+      InitialProjectRequest{
+          invalid_pattern_event_project,
+          ProjectId{uuid(994)},
+          120,
+          Pattern{
+              PatternId{uuid(993)},
+              1,
+              {{PadSlotId{0, 0}, 0, 0}},
+          },
+      });
+  LMDJ_CHECK(!invalid_pattern_event.has_value());
+  LMDJ_CHECK(
+      invalid_pattern_event.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!std::filesystem::exists(invalid_pattern_event_project));
 }
 
 void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
@@ -1921,6 +2009,7 @@ int main() {
     test_all_operations_share_one_facade_and_revision_contract();
     test_project_bundle_discovery_and_import_are_typed_facade_apis();
     test_application_startup_cleans_incomplete_bundle_staging();
+    test_project_bundle_host_paths_fail_closed();
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();
