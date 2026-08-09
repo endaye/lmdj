@@ -1,19 +1,21 @@
 # Web Runtime Host 公共发布验收记录
 
-## 状态：pre-deploy
+## 状态：pre-deploy 快照（PR #99 合并前）
 
-本记录只描述 Product `1.0.15.2` / Web Runtime Host `1.1.2` 的公共发布前真相。
+本记录只描述 Product `1.0.15.2` / Web Runtime Host `1.1.2` 在采集时的公共发布前真相。
+其中分支、tag、Release 与部署状态均冻结在该证据点，不代表当前远端控制面；当前状态必须
+按运行手册从 canonical origin、GitHub API 和实际 deployment evidence 重新核对。
 本地 deployment-tooling branch 已实现安全修正和 workflow 定义；它尚未 push、review、
 CI 或 merge，也尚未获得远端执行授权。tag target
 `72ae40074620cc5681c462ba04a31a666449734f` 已是 `origin/main` 上 PR #98 的 merge
 commit；这不证明 deployment-tooling branch 已合并。本记录
 不包含 Deploy ID、site ID、immutable URL、workflow run URL 或部署时间，因为这些值
-当前均不存在。本地已存在 signed annotated tag `lmdj-v1.0.15.2`；`git tag -v` 的
+在记录时均不存在。本地已存在 signed annotated tag `lmdj-v1.0.15.2`；`git tag -v` 的
 Good signature primary fingerprint 是 `2B5EE362F058800036AD4FB5116ECE156F954D29`，
 target 是 `72ae40074620cc5681c462ba04a31a666449734f`。该本地 tag 尚未 push，未做远端验证，
 所以这不是远端 tag、Release 或部署存在的结论。
 
-| Gate | Current result |
+| Gate | Recorded result |
 | --- | --- |
 | Local deployment tooling security tests | implemented; final verification recorded in local commit/report only |
 | Deployment-tooling branch push / PR review / CI / merge | not run |
@@ -43,7 +45,7 @@ immutable rule，unknown/source map 保持 `no-store`。HTTP/Chromium 均从 `/`
 redirect 与最终 identity 受限，Chromium 断言 admitted/outcome 各 +1、rejected 不变并在
 close 后保持。
 
-这描述的是工具能力，不是远端事实：没有 GitHub 环境、Netlify site、secret、workflow
+这描述的是记录时的工具能力，不是当前远端事实：当时没有 GitHub 环境、Netlify site、secret、workflow
 run、draft、production alias 变更或 evidence artifact 已创建。deployment-tooling branch
 尚未 push/review/CI/merge；也没有远端 verified tag、Release、Channel promotion 或公共部署结论。
 
@@ -75,7 +77,7 @@ evidence artifact 已审查后补记真实 ID、URL、run 和时间。不能以�
 
 - proof-only Python server 仅用于本地 Proof，不是 Netlify 生产服务；生产将由 Netlify
   静态托管已验证 `dist`。
-- `lmdj-canary` 属于未来 Creator，未创建且不属于 Runtime Host 本 Task。
+- `lmdj-canary` 在记录时留给未来 Creator，未创建且不属于 Runtime Host 本 Task。
 - macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome physical MIDI、iPadOS
   Safari Touch、iPadOS Safari lifecycle 仍为 `deferred / unverified`。
 - 自动化部署 smoke 不构成 Creator Web/PWA、物理设备体验、`beta` 或 `stable` 验收。

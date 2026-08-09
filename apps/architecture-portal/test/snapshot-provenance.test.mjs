@@ -178,6 +178,35 @@ test('schema-2 provenance validates precommit, direct-parent introduction, and f
   }
 });
 
+test('schema-2 provenance accepts an unmodified snapshot through a merge parent', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    const introducing = await commit(fixture.repoRoot, 'snapshot', INTRO_DATE);
+
+    await git(fixture.repoRoot, ['checkout', '-b', 'feature', fixture.revision]);
+    await put(fixture.repoRoot, 'feature.txt', 'feature\n');
+    await commit(fixture.repoRoot, 'feature', '2026-08-04T00:03:00Z');
+    await git(fixture.repoRoot, [
+      '-c', 'commit.gpgsign=false', 'merge', '--no-ff', introducing,
+      '-m', 'merge snapshot parent',
+    ], {
+      env: {
+        GIT_AUTHOR_DATE: '2026-08-04T00:04:00Z',
+        GIT_COMMITTER_DATE: '2026-08-04T00:04:00Z',
+      },
+    });
+    const merged = (await git(fixture.repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+
+    assert.deepEqual(
+      await verifySnapshotProvenance(verifierOptions(fixture, metadata, merged)),
+      [],
+    );
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
 test('schema-2 provenance rejects fake revisions, commit-byte tampering, and snapshot drift', async () => {
   const fixture = await initializeFixture();
   try {

@@ -66,10 +66,15 @@ __pycache__/
 # Headless Core build outputs
 build/core/
 
+# Pinned toolchains installed by Web CI and local proofs
+build/toolchains/
+
 # Formal Web toolchain and browser proof outputs
 build/web/
 tests/platform/web/test-results/
 tests/platform/web/playwright-report/
+# Privacy-safe local Creator acceptance exports
+lmdj-creator-web-*.json
 
 # Reference demo run artifacts (pipeline output packages)
 references/demos/lmdj-song-pipeline/output/

@@ -24,7 +24,7 @@ PACKAGE_TOOL = REPO_ROOT / "apps/web-runtime-host/tools/package.py"
 OPERATOR_SCRIPT = REPO_ROOT / "scripts/web-runtime-host.sh"
 LOCK_PATH = REPO_ROOT / "tools/web-runtime/emscripten.lock.json"
 PRODUCT_VERSION_PATH = REPO_ROOT / "products/lmdj/version.json"
-HOST_CMAKE_PATH = REPO_ROOT / "apps/web-runtime-host/CMakeLists.txt"
+PLATFORM_CMAKE_PATH = REPO_ROOT / "packages/web-runtime-platform/CMakeLists.txt"
 
 
 def load_package_module():
@@ -55,10 +55,10 @@ class PackageTest(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.runtime = self.root / "runtime"
         self.runtime.mkdir()
-        self.runtime_js = self.runtime / "lmdj-web-runtime-host.js"
-        self.runtime_wasm = self.runtime / "lmdj-web-runtime-host.wasm"
+        self.runtime_js = self.runtime / "lmdj-web-runtime.js"
+        self.runtime_wasm = self.runtime / "lmdj-web-runtime.wasm"
         self.runtime_js.write_text(
-            'function findWasmBinary(){return locateFile("lmdj-web-runtime-host.wasm")}\n',
+            'function findWasmBinary(){return locateFile("lmdj-web-runtime.wasm")}\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -252,7 +252,7 @@ class PackageTest(unittest.TestCase):
         self.assertIn('"${formal_host_specs[@]}"', script)
 
     def test_pre_js_declares_configure_and_link_dependencies(self) -> None:
-        cmake = HOST_CMAKE_PATH.read_text(encoding="utf-8")
+        cmake = PLATFORM_CMAKE_PATH.read_text(encoding="utf-8")
         self.assertRegex(
             cmake,
             r"CMAKE_CONFIGURE_DEPENDS[\s\S]*?src/web-runtime-pre\.js",
@@ -314,7 +314,9 @@ class PackageTest(unittest.TestCase):
                 if process.poll() is not None:
                     break
                 time.sleep(0.025)
-            self.assertIsNone(process.poll())
+            exit_code = process.poll()
+            stderr = process.stderr.read() if exit_code is not None else ""
+            self.assertIsNone(exit_code, stderr)
             self.assertIsNotNone(server_pid)
             process.send_signal(signal.SIGTERM)
             self.assertEqual(process.wait(timeout=8), 143)
@@ -437,8 +439,10 @@ class PackageTest(unittest.TestCase):
                 "distribution_contract",
                 "emscripten",
                 "heap_bytes",
+                "host_id",
                 "host_version",
                 "manifest_version",
+                "platform_version",
                 "product_build",
                 "protocol_version",
                 "resource_limits",
@@ -450,7 +454,9 @@ class PackageTest(unittest.TestCase):
         )
         self.assertEqual(manifest["manifest_version"], 1)
         self.assertEqual(manifest["product_build"], current_product_build())
-        self.assertEqual(manifest["host_version"], "1.1.2")
+        self.assertEqual(manifest["host_id"], "web-runtime-host")
+        self.assertEqual(manifest["host_version"], "1.2.2")
+        self.assertEqual(manifest["platform_version"], "0.1.2")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["heap_bytes"], 536_870_912)
         self.assertEqual(
@@ -476,13 +482,14 @@ class PackageTest(unittest.TestCase):
         )
 
         roles = {asset["role"] for asset in manifest["assets"]}
-        self.assertEqual(len(manifest["assets"]), 9)
+        self.assertEqual(len(manifest["assets"]), 13)
         self.assertEqual(
             roles,
             {
                 "host_main",
                 "host_module",
                 "host_style",
+                "platform_module",
                 "runtime_script",
                 "runtime_wasm",
             },
@@ -491,14 +498,18 @@ class PackageTest(unittest.TestCase):
             [(Path(asset["path"]).name.split(".", 1)[0], asset["role"])
              for asset in manifest["assets"]],
             [
+                ("diagnostic-client", "platform_module"),
                 ("diagnostic-project", "host_module"),
-                ("input-adapters", "host_module"),
+                ("input-adapters", "platform_module"),
                 ("main", "host_main"),
-                ("preflight", "host_module"),
-                ("protocol", "host_module"),
+                ("preflight", "platform_module"),
+                ("project-bundle-reader", "platform_module"),
+                ("protocol", "platform_module"),
                 ("runtime", "runtime_script"),
                 ("runtime", "runtime_wasm"),
-                ("state-machine", "host_module"),
+                ("runtime-loader", "platform_module"),
+                ("runtime-session", "platform_module"),
+                ("state-machine", "platform_module"),
                 ("styles", "host_style"),
             ],
         )
@@ -539,7 +550,14 @@ class PackageTest(unittest.TestCase):
             index,
         )
         self.assertIn(
-            '<meta name="lmdj-host-version" content="1.1.2">', index
+            '<meta name="lmdj-host-id" content="web-runtime-host">', index
+        )
+        self.assertIn(
+            '<meta name="lmdj-host-version" content="1.2.2">', index
+        )
+        self.assertIn(
+            '<meta name="lmdj-web-runtime-platform-version" content="0.1.2">',
+            index,
         )
         self.assertIn(
             '<meta name="lmdj-host-protocol-version" content="1">', index

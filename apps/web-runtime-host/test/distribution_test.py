@@ -67,7 +67,7 @@ class DistributionTest(unittest.TestCase):
     def test_built_distribution_is_clean(self) -> None:
         self.module.verify_distribution(DEFAULT_DIST, REPO_ROOT)
         manifest = json.loads((DEFAULT_DIST / "host-manifest.json").read_bytes())
-        self.assertEqual(len(manifest["assets"]), 9)
+        self.assertEqual(len(manifest["assets"]), 13)
         self.assertEqual(
             len([
                 asset for asset in manifest["assets"]
@@ -88,8 +88,10 @@ class DistributionTest(unittest.TestCase):
                 "distribution_contract",
                 "emscripten",
                 "heap_bytes",
+                "host_id",
                 "host_version",
                 "manifest_version",
+                "platform_version",
                 "product_build",
                 "protocol_version",
                 "resource_limits",
@@ -102,7 +104,9 @@ class DistributionTest(unittest.TestCase):
             "ownership": lambda value: value.__setitem__("distribution_contract", "other"),
             "manifest version": lambda value: value.__setitem__("manifest_version", 2),
             "product": lambda value: value.__setitem__("product_build", "999.0.0.0"),
+            "host ID": lambda value: value.__setitem__("host_id", "creator-web"),
             "host": lambda value: value.__setitem__("host_version", "999.0.0"),
+            "platform": lambda value: value.__setitem__("platform_version", "999.0.0"),
             "protocol": lambda value: value.__setitem__("protocol_version", 999),
             "heap": lambda value: value.__setitem__("heap_bytes", 1),
             "limit": lambda value: value["resource_limits"].__setitem__("imported_wav_bytes", 1),
@@ -188,7 +192,7 @@ class DistributionTest(unittest.TestCase):
     def test_index_identity_metadata_is_exactly_bound_to_manifest(self) -> None:
         index_path = self.root / "index.html"
         index = index_path.read_text(encoding="utf-8").replace(
-            'content="1.1.2"', 'content="999.0.0"', 1
+            'content="1.2.2"', 'content="999.0.0"', 1
         )
         index_path.write_text(index, encoding="utf-8", newline="\n")
         with self.assertRaises(self.module.DistributionError):

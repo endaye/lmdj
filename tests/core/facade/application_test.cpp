@@ -21,6 +21,8 @@
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
+#include <lmdj/foundation/artifact.hpp>
+#include <lmdj/foundation/json.hpp>
 #include <lmdj/providers/local_proof_failure/factory.hpp>
 #include <lmdj/providers/local_proof_success/factory.hpp>
 
@@ -166,6 +168,148 @@ std::string read_bytes(const std::filesystem::path& path) {
   };
 }
 
+std::vector<std::byte> byte_vector(std::string_view value) {
+  return {
+      reinterpret_cast<const std::byte*>(value.data()),
+      reinterpret_cast<const std::byte*>(value.data() + value.size()),
+  };
+}
+
+void write_bytes(
+    const std::filesystem::path& path,
+    std::string_view bytes);
+
+std::string hash_text(
+    const std::filesystem::path& scratch,
+    std::string_view name,
+    std::string_view value) {
+  const auto path = scratch / std::string{name};
+  write_bytes(path, value);
+  const auto described =
+      lmdj::foundation::describe_artifact(path, "application/octet-stream");
+  LMDJ_CHECK(described.has_value());
+  std::filesystem::remove(path);
+  return described.value().sha256;
+}
+
+struct FacadeBundleFixture {
+  std::string index;
+  std::vector<std::vector<std::byte>> entries;
+  std::string digest;
+};
+
+FacadeBundleFixture facade_bundle_fixture(
+    const std::filesystem::path& project,
+    const std::filesystem::path& scratch,
+    std::string declared_project_id) {
+  struct Entry {
+    std::string path;
+    std::vector<std::byte> bytes;
+    std::string digest;
+  };
+  std::vector<Entry> entries;
+  for (const auto& item :
+       std::filesystem::recursive_directory_iterator(project)) {
+    LMDJ_CHECK(!item.is_symlink());
+    if (!item.is_regular_file()) {
+      continue;
+    }
+    const auto relative =
+        std::filesystem::relative(item.path(), project).generic_string();
+    const auto content = read_bytes(item.path());
+    const auto described = lmdj::foundation::describe_artifact(
+        item.path(), "application/octet-stream");
+    LMDJ_CHECK(described.has_value());
+    entries.push_back(
+        {relative, byte_vector(content), described.value().sha256});
+  }
+  std::sort(
+      entries.begin(),
+      entries.end(),
+      [](const auto& left, const auto& right) {
+        return std::lexicographical_compare(
+            left.path.begin(),
+            left.path.end(),
+            right.path.begin(),
+            right.path.end(),
+            [](char left_byte, char right_byte) {
+              return static_cast<unsigned char>(left_byte) <
+                     static_cast<unsigned char>(right_byte);
+            });
+      });
+
+  auto encoded_entries = nlohmann::json::array();
+  std::vector<std::vector<std::byte>> payloads;
+  std::uint64_t offset = 0;
+  for (auto& entry : entries) {
+    encoded_entries.push_back(
+        {
+            {"bytes", entry.bytes.size()},
+            {"offset", offset},
+            {"path", entry.path},
+            {"sha256", entry.digest},
+        });
+    offset += entry.bytes.size();
+    payloads.push_back(std::move(entry.bytes));
+  }
+  nlohmann::json index{
+      {"compression", "none"},
+      {"contract", "lmdj.project-bundle.v1"},
+      {"contract_version", "1.0.0"},
+      {"entries", std::move(encoded_entries)},
+      {"project_contract", "lmdj.project.v1"},
+      {"project_id", std::move(declared_project_id)},
+      {"uncompressed_bytes", offset},
+  };
+  const auto digest_source = lmdj::foundation::canonical_json(index);
+  const auto digest = hash_text(scratch, "bundle-digest.bin", digest_source);
+  index["bundle_digest"] = digest;
+  return {
+      lmdj::foundation::canonical_json(index),
+      std::move(payloads),
+      digest,
+  };
+}
+
+void stream_facade_bundle(
+    Application& application,
+    const std::string& token,
+    const FacadeBundleFixture& fixture) {
+  const auto index_bytes = byte_vector(fixture.index);
+  const auto split = std::min<std::size_t>(11, index_bytes.size());
+  auto indexed = application.append_project_bundle_index(
+      token,
+      0,
+      std::span<const std::byte>{index_bytes.data(), split},
+      split == index_bytes.size());
+  LMDJ_CHECK(indexed.has_value());
+  if (split != index_bytes.size()) {
+    LMDJ_CHECK(!indexed.value().has_value());
+    indexed = application.append_project_bundle_index(
+        token,
+        split,
+        std::span<const std::byte>{
+            index_bytes.data() + split, index_bytes.size() - split},
+        true);
+    LMDJ_CHECK(indexed.has_value());
+  }
+  LMDJ_CHECK(indexed.value().has_value());
+  LMDJ_CHECK(indexed.value()->bundle_digest == fixture.digest);
+  for (std::size_t entry_index = 0;
+       entry_index < fixture.entries.size();
+       ++entry_index) {
+    const auto& entry = fixture.entries.at(entry_index);
+    LMDJ_CHECK(
+        application.append_project_bundle_entry(
+            token,
+            static_cast<std::uint32_t>(entry_index),
+            0,
+            entry,
+            true)
+            .has_value());
+  }
+}
+
 void write_bytes(
     const std::filesystem::path& path,
     std::string_view bytes) {
@@ -243,20 +387,20 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "1.2.0"},
+           {"version", "1.3.1"},
            {"api_version", 2},
            {"dependencies",
             {
                 {"foundation", "0.2.0"},
                 {"authoring-domain", "0.1.1"},
-                {"project-io", "0.4.0"},
+                {"project-io", "0.5.0"},
                 {"project-cooker", "0.2.1"},
                 {"audio-runtime", "0.4.0"},
                 {"provider-sdk", "1.1.1"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "0.4.0");
+  LMDJ_CHECK(project_io.at("version") == "0.5.0");
 }
 
 nlohmann::json import_request(
@@ -586,6 +730,187 @@ void test_all_operations_share_one_facade_and_revision_contract() {
       response.at("result").at("candidate_outputs") == expected_outputs);
 }
 
+void test_project_bundle_discovery_and_import_are_typed_facade_apis() {
+  TempDirectory temp;
+  const auto source = temp.path() / "source.lmdj";
+  const auto workspace = temp.path() / "workspace";
+  Application application(config(workspace));
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          source,
+          ProjectId{std::string{kProjectId}},
+          120,
+          Pattern{PatternId{std::string{kPatternId}}, 1, {}},
+      });
+  LMDJ_CHECK(created.has_value());
+  const auto fixture = facade_bundle_fixture(
+      source, temp.path(), std::string{kProjectId});
+  LMDJ_CHECK(application.list_local_projects().value().empty());
+
+  const auto token = uuid(900);
+  const auto session = application.begin_project_bundle_import(
+      {
+          token,
+          fixture.index.size(),
+          hash_text(temp.path(), "index-hash.bin", fixture.index),
+      });
+  LMDJ_CHECK(session.has_value());
+  LMDJ_CHECK(session.value().token == token);
+  LMDJ_CHECK(session.value().expected_index_bytes == fixture.index.size());
+  stream_facade_bundle(application, token, fixture);
+  const auto committed = application.commit_project_bundle_import(token);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().project_id.value() == kProjectId);
+  LMDJ_CHECK(committed.value().pattern_id.value() == kPatternId);
+  LMDJ_CHECK(committed.value().bundle_digest == fixture.digest);
+  const auto listed = application.list_local_projects();
+  LMDJ_CHECK(listed.has_value());
+  LMDJ_CHECK(listed.value().size() == 1);
+  LMDJ_CHECK(listed.value().front() == committed.value());
+
+  LMDJ_CHECK(
+      !application
+           .begin_project_bundle_import(
+               {"invalid-token", fixture.index.size(), std::string(64, '0')})
+           .has_value());
+  LMDJ_CHECK(
+      !application
+           .begin_project_bundle_import(
+               {uuid(901), fixture.index.size(), std::string(64, 'A')})
+           .has_value());
+
+  const auto duplicate_token = uuid(907);
+  const auto index_digest =
+      hash_text(temp.path(), "duplicate-index-hash.bin", fixture.index);
+  LMDJ_CHECK(
+      application
+          .begin_project_bundle_import(
+              {duplicate_token, fixture.index.size(), index_digest})
+          .has_value());
+  LMDJ_CHECK(
+      !application
+           .begin_project_bundle_import(
+               {duplicate_token, fixture.index.size(), index_digest})
+           .has_value());
+  LMDJ_CHECK(
+      application.abort_project_bundle_import(duplicate_token).has_value());
+
+  const std::array<std::byte, 1> one_byte{std::byte{0}};
+  LMDJ_CHECK(
+      !application
+           .append_project_bundle_index(
+               "invalid-token", 0, one_byte, true)
+           .has_value());
+  LMDJ_CHECK(
+      !application
+           .append_project_bundle_entry(
+               "invalid-token", 0, 0, one_byte, true)
+           .has_value());
+  LMDJ_CHECK(
+      !application.commit_project_bundle_import("invalid-token")
+           .has_value());
+  LMDJ_CHECK(
+      !application.abort_project_bundle_import("invalid-token")
+           .has_value());
+
+  const auto invalid_offset_token = uuid(902);
+  LMDJ_CHECK(
+      application
+          .begin_project_bundle_import(
+              {
+                  invalid_offset_token,
+                  fixture.index.size(),
+                  hash_text(temp.path(), "offset-hash.bin", fixture.index),
+              })
+          .has_value());
+  const auto index_bytes = byte_vector(fixture.index);
+  const auto invalid_offset = application.append_project_bundle_index(
+      invalid_offset_token, 1, index_bytes, true);
+  LMDJ_CHECK(!invalid_offset.has_value());
+  LMDJ_CHECK(invalid_offset.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      application.abort_project_bundle_import(invalid_offset_token)
+          .has_value());
+
+  const auto early_final_token = uuid(903);
+  LMDJ_CHECK(
+      application
+          .begin_project_bundle_import(
+              {
+                  early_final_token,
+                  fixture.index.size(),
+                  hash_text(temp.path(), "final-hash.bin", fixture.index),
+              })
+          .has_value());
+  const auto early_final = application.append_project_bundle_index(
+      early_final_token,
+      0,
+      std::span<const std::byte>{index_bytes.data(), 1},
+      true);
+  LMDJ_CHECK(!early_final.has_value());
+  LMDJ_CHECK(early_final.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      application.abort_project_bundle_import(early_final_token)
+          .has_value());
+
+  const auto wrong_identity = facade_bundle_fixture(
+      source, temp.path(), uuid(904));
+  const auto wrong_identity_token = uuid(905);
+  LMDJ_CHECK(
+      application
+          .begin_project_bundle_import(
+              {
+                  wrong_identity_token,
+                  wrong_identity.index.size(),
+                  hash_text(
+                      temp.path(),
+                      "wrong-identity-hash.bin",
+                      wrong_identity.index),
+              })
+          .has_value());
+  stream_facade_bundle(application, wrong_identity_token, wrong_identity);
+  const auto rejected =
+      application.commit_project_bundle_import(wrong_identity_token);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+}
+
+void test_application_startup_cleans_incomplete_bundle_staging() {
+  TempDirectory temp;
+  const auto workspace = temp.path() / "workspace";
+  const auto stale = workspace / ".lmdj-host" / "import-staging" /
+                     uuid(906);
+  std::filesystem::create_directories(stale / "project.lmdj");
+  write_bytes(stale / "project.lmdj" / "partial.bin", "partial");
+  LMDJ_CHECK(std::filesystem::exists(stale));
+
+  Application application(config(workspace));
+
+  LMDJ_CHECK(!std::filesystem::exists(stale));
+}
+
+void test_project_bundle_host_paths_fail_closed() {
+  TempDirectory temp;
+  const auto list_workspace = temp.path() / "list-workspace";
+  std::filesystem::create_directories(list_workspace);
+  Application list_application(config(list_workspace));
+  std::filesystem::remove_all(list_workspace);
+  write_bytes(list_workspace, "not-a-directory");
+  const auto listed = list_application.list_local_projects();
+  LMDJ_CHECK(!listed.has_value());
+
+  const auto cleanup_workspace = temp.path() / "cleanup-workspace";
+  std::filesystem::create_directories(cleanup_workspace);
+  write_bytes(cleanup_workspace / ".lmdj-host", "not-a-directory");
+  bool cleanup_failed_closed = false;
+  try {
+    Application cleanup_application(config(cleanup_workspace));
+  } catch (const std::runtime_error&) {
+    cleanup_failed_closed = true;
+  }
+  LMDJ_CHECK(cleanup_failed_closed);
+}
+
 void test_render_recooks_after_restart_and_publishes_golden_atomically() {
   TempDirectory temp;
   const auto project = temp.path() / "proof-beat.lmdj";
@@ -867,6 +1192,38 @@ void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero()
   LMDJ_CHECK(!invalid.has_value());
   LMDJ_CHECK(invalid.error().code == ErrorCode::invalid_argument);
   LMDJ_CHECK(!std::filesystem::exists(invalid_project));
+
+  const auto invalid_pattern_id_project =
+      temp.path() / "invalid-pattern-id.lmdj";
+  const auto invalid_pattern_id = application.create_initial_project(
+      InitialProjectRequest{
+          invalid_pattern_id_project,
+          ProjectId{uuid(995)},
+          120,
+          Pattern{PatternId{"INVALID"}, 1, {}},
+      });
+  LMDJ_CHECK(!invalid_pattern_id.has_value());
+  LMDJ_CHECK(
+      invalid_pattern_id.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!std::filesystem::exists(invalid_pattern_id_project));
+
+  const auto invalid_pattern_event_project =
+      temp.path() / "invalid-pattern-event.lmdj";
+  const auto invalid_pattern_event = application.create_initial_project(
+      InitialProjectRequest{
+          invalid_pattern_event_project,
+          ProjectId{uuid(994)},
+          120,
+          Pattern{
+              PatternId{uuid(993)},
+              1,
+              {{PadSlotId{0, 0}, 0, 0}},
+          },
+      });
+  LMDJ_CHECK(!invalid_pattern_event.has_value());
+  LMDJ_CHECK(
+      invalid_pattern_event.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(!std::filesystem::exists(invalid_pattern_event_project));
 }
 
 void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
@@ -1650,6 +2007,9 @@ int main() {
   try {
     test_module_versions_and_dependencies_are_exact();
     test_all_operations_share_one_facade_and_revision_contract();
+    test_project_bundle_discovery_and_import_are_typed_facade_apis();
+    test_application_startup_cleans_incomplete_bundle_staging();
+    test_project_bundle_host_paths_fail_closed();
     test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();

@@ -1,0 +1,17 @@
+{
+  "bundle_digest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+  "compression": "none",
+  "contract": "lmdj.project-bundle.v1",
+  "contract_version": "1.0.0",
+  "entries": [
+    {
+      "bytes": 1,
+      "offset": 0,
+      "path": "history/../manifest.json",
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  ],
+  "project_contract": "lmdj.project.v1",
+  "project_id": "12345678-1234-4123-8123-123456789abc",
+  "uncompressed_bytes": 1
+}

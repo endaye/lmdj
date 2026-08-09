@@ -1,0 +1,20 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": false,
+    "exactOptionalPropertyTypes": true,
+    "jsx": "react-jsx",
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "noEmit": true,
+    "noUncheckedIndexedAccess": true,
+    "paths": {
+      "@lmdj/web-runtime-platform/*": ["../../packages/web-runtime-platform/web/*"]
+    },
+    "strict": true,
+    "target": "ES2024",
+    "types": ["node", "vite/client", "vitest/globals"]
+  },
+  "include": ["src", "test", "vite.config.ts"]
+}

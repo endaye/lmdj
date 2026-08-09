@@ -6,6 +6,8 @@ mergeInto(LibraryManager.library, {
     leaseTokens: new Map(),
     leasesByPath: new Map(),
     nextLeaseToken: 1,
+    publicationIntentName: "directory-publication.json",
+    publicationChunkBytes: 1024 * 1024,
 
     async workspace() {
       if (!this.root) this.root = await navigator.storage.getDirectory();
@@ -94,6 +96,35 @@ mergeInto(LibraryManager.library, {
         if (this.isMissingEntry(error)) return false;
         throw error;
       }
+    },
+
+    async listEntries(parts, kind) {
+      const directory = await this.directory(parts, false);
+      const names = [];
+      for await (const entry of directory.values()) {
+        if (entry.kind !== kind) continue;
+        if (kind === "directory") {
+          const destination = this.canonicalPath([...parts, entry.name]);
+          if (await this.publicationState(destination) === "pending") continue;
+        }
+        names.push(entry.name);
+      }
+      names.sort((a, b) => this.compareUtf8(a, b));
+      return names;
+    },
+
+    writeNames(names, output, outputLength) {
+      const encoder = new TextEncoder();
+      const encoded = names.map((name) => encoder.encode(`${name}\0`));
+      const total = encoded.reduce((sum, bytes) => sum + bytes.length, 0);
+      const allocation = _malloc(total || 1);
+      let cursor = allocation;
+      for (const bytes of encoded) {
+        HEAPU8.set(bytes, cursor);
+        cursor += bytes.length;
+      }
+      setValue(output, allocation, "*");
+      setValue(outputLength, total, "i32");
     },
 
     bytes(pointer, length) {
@@ -215,6 +246,324 @@ mergeInto(LibraryManager.library, {
       }
     },
 
+    publicationRecord(source, destination, state) {
+      return {
+        contract: "lmdj.storage.directory-publication.v1",
+        destination,
+        source,
+        state,
+      };
+    },
+
+    validCanonicalWorkspacePath(value) {
+      if (typeof value !== "string" ||
+          !value.startsWith("/lmdj-workspace/") ||
+          value.endsWith("/")) {
+        return false;
+      }
+      try {
+        return this.canonicalPath(this.pathParts(value)) === value;
+      } catch (_) {
+        return false;
+      }
+    },
+
+    validatePublicationRecord(record, destination) {
+      if (!record || Object.keys(record).length !== 4 ||
+          record.contract !== "lmdj.storage.directory-publication.v1" ||
+          record.destination !== destination ||
+          !this.validCanonicalWorkspacePath(record.destination) ||
+          !this.validCanonicalWorkspacePath(record.source) ||
+          record.source === record.destination ||
+          record.source.startsWith(`${record.destination}/`) ||
+          record.destination.startsWith(`${record.source}/`) ||
+          !["pending", "committed"].includes(record.state)) {
+        throw new DOMException("", "InvalidStateError");
+      }
+    },
+
+    async publicationIntent(destination, create) {
+      const scopeKey = await this.pathKey(destination);
+      const directory = await this.intentDirectory(scopeKey, create);
+      if (!directory) return null;
+      try {
+        const handle = await directory.getFileHandle(
+            this.publicationIntentName, {create});
+        return {directory, handle};
+      } catch (error) {
+        if (!create && this.isMissingEntry(error)) return null;
+        throw error;
+      }
+    },
+
+    async readPublicationRecord(handle, destination) {
+      const encoded = await this.readFileBytes(handle);
+      let record;
+      try {
+        record = JSON.parse(new TextDecoder("utf-8", {fatal: true}).decode(encoded));
+      } catch (_) {
+        throw new DOMException("", "InvalidStateError");
+      }
+      this.validatePublicationRecord(record, destination);
+      return record;
+    },
+
+    async publicationState(destination) {
+      const intent = await this.publicationIntent(destination, false);
+      if (!intent) return null;
+      try {
+        return (await this.readPublicationRecord(intent.handle, destination)).state;
+      } catch (_) {
+        return "pending";
+      }
+    },
+
+    async removeTreeParts(parts) {
+      try {
+        const [parent, name] = await this.parent(parts, false);
+        await parent.removeEntry(name, {recursive: true});
+      } catch (error) {
+        if (!this.isMissingEntry(error)) throw error;
+      }
+    },
+
+    async recoverPublicationIntent(lease) {
+      const intent = await this.publicationIntent(lease.projectPath, false);
+      if (!intent) return;
+      let record = null;
+      try {
+        record = await this.readPublicationRecord(
+            intent.handle, lease.projectPath);
+      } catch (_) {}
+      if (record?.state === "committed") {
+        await this.removeTreeParts(this.pathParts(record.source));
+      } else {
+        await this.removeTreeParts(this.pathParts(lease.projectPath));
+      }
+      await intent.directory.removeEntry(this.publicationIntentName);
+    },
+
+    async writePendingPublication(source, destination, observer, fault) {
+      const intent = await this.publicationIntent(destination, true);
+      const record = this.publicationRecord(source, destination, "pending");
+      const encoded = new TextEncoder().encode(JSON.stringify(record));
+      if (observer) {
+        await observer.stopAtFault(fault, "before_intent_write");
+      }
+      if (observer && fault === "during_intent_write") {
+        const access = await intent.handle.createSyncAccessHandle();
+        try {
+          access.truncate(0);
+          const partial = encoded.subarray(
+              0, Math.max(1, Math.floor(encoded.length / 2)));
+          let offset = 0;
+          while (offset < partial.length) {
+            const written = access.write(partial.subarray(offset), {at: offset});
+            if (!Number.isSafeInteger(written) || written <= 0) {
+              throw new DOMException("", "InvalidStateError");
+            }
+            offset += written;
+          }
+          access.flush();
+          await observer.stopAtFault(fault, "during_intent_write");
+        } finally {
+          access.close();
+        }
+      } else {
+        await this.writeSyncComplete(
+            intent.handle, encoded, null, "directory_publication_intent");
+      }
+      const verified = await this.readPublicationRecord(
+          intent.handle, destination);
+      if (verified.state !== "pending" || verified.source !== source) {
+        throw new DOMException("", "InvalidStateError");
+      }
+      if (observer) {
+        await observer.stopAtFault(fault, "after_pending_intent");
+      }
+      return {intent, record};
+    },
+
+    async replacePublicationCommitted(
+        intent, record, observer, fault, onCommitted) {
+      const committed = new TextEncoder().encode(JSON.stringify({
+        ...record,
+        state: "committed",
+      }));
+      const writable = await intent.handle.createWritable({
+        keepExistingData: false,
+      });
+      try {
+        await writable.write(committed);
+        if (observer) {
+          await observer.stopAtFault(fault, "before_commit_close");
+        }
+        await writable.close();
+        onCommitted();
+      } catch (error) {
+        await writable.abort().catch(() => {});
+        throw error;
+      }
+      if (observer) {
+        await observer.stopAtFault(fault, "after_commit_close");
+      }
+      const verified = await this.readPublicationRecord(
+          intent.handle, record.destination);
+      if (verified.state !== "committed" || verified.source !== record.source) {
+        throw new DOMException("", "InvalidStateError");
+      }
+    },
+
+    async sortedDirectoryEntries(directory) {
+      const entries = [];
+      for await (const entry of directory.values()) {
+        if (entry.kind !== "file" && entry.kind !== "directory") {
+          throw new DOMException("", "InvalidStateError");
+        }
+        entries.push(entry);
+      }
+      entries.sort((left, right) => this.compareUtf8(left.name, right.name));
+      return entries;
+    },
+
+    async copyFileBounded(
+        sourceHandle, destinationHandle, observer, fault) {
+      const source = await sourceHandle.getFile();
+      const writable = await destinationHandle.createWritable({
+        keepExistingData: false,
+      });
+      try {
+        for (let offset = 0; offset < source.size;
+          offset += this.publicationChunkBytes) {
+          const bytes = new Uint8Array(await source.slice(
+              offset,
+              Math.min(source.size, offset + this.publicationChunkBytes),
+          ).arrayBuffer());
+          await writable.write(bytes);
+          if (observer) {
+            observer.afterPublicationChunk("copy", bytes.length);
+            await observer.stopAtFault(fault, "during_directory_copy");
+          }
+        }
+        await writable.close();
+      } catch (error) {
+        await writable.abort().catch(() => {});
+        throw error;
+      }
+    },
+
+    async copyDirectoryBounded(source, destination, observer, fault) {
+      for (const entry of await this.sortedDirectoryEntries(source)) {
+        if (entry.kind === "directory") {
+          const child = await destination.getDirectoryHandle(
+              entry.name, {create: true});
+          await this.copyDirectoryBounded(entry, child, observer, fault);
+          continue;
+        }
+        const child = await destination.getFileHandle(entry.name, {create: true});
+        await this.copyFileBounded(entry, child, observer, fault);
+      }
+    },
+
+    async compareFilesBounded(leftHandle, rightHandle, observer, fault) {
+      const left = await leftHandle.getFile();
+      const right = await rightHandle.getFile();
+      if (left.size !== right.size) {
+        throw new DOMException("", "InvalidStateError");
+      }
+      for (let offset = 0; offset < left.size;
+        offset += this.publicationChunkBytes) {
+        const end = Math.min(left.size, offset + this.publicationChunkBytes);
+        const leftBytes = new Uint8Array(
+            await left.slice(offset, end).arrayBuffer());
+        const rightBytes = new Uint8Array(
+            await right.slice(offset, end).arrayBuffer());
+        if (observer) {
+          observer.afterPublicationChunk(
+              "verify", Math.max(leftBytes.length, rightBytes.length));
+          await observer.stopAtFault(fault, "during_directory_verify");
+        }
+        if (leftBytes.length !== rightBytes.length ||
+            leftBytes.some((byte, index) => byte !== rightBytes[index])) {
+          throw new DOMException("", "InvalidStateError");
+        }
+      }
+    },
+
+    async compareDirectoriesBounded(left, right, observer, fault) {
+      const leftEntries = await this.sortedDirectoryEntries(left);
+      const rightEntries = await this.sortedDirectoryEntries(right);
+      if (leftEntries.length !== rightEntries.length) {
+        throw new DOMException("", "InvalidStateError");
+      }
+      for (let index = 0; index < leftEntries.length; ++index) {
+        const leftEntry = leftEntries[index];
+        const rightEntry = rightEntries[index];
+        if (leftEntry.name !== rightEntry.name ||
+            leftEntry.kind !== rightEntry.kind) {
+          throw new DOMException("", "InvalidStateError");
+        }
+        if (leftEntry.kind === "directory") {
+          await this.compareDirectoriesBounded(
+              leftEntry, rightEntry, observer, fault);
+        } else {
+          await this.compareFilesBounded(
+              leftEntry, rightEntry, observer, fault);
+        }
+      }
+    },
+
+    async publishDirectoryIfAbsent(
+        sourceParts, destinationParts, observer = null) {
+      const sourcePath = this.canonicalPath(sourceParts);
+      const destinationPath = this.canonicalPath(destinationParts);
+      const lease = this.activeLease(destinationPath);
+      if (lease.projectPath !== destinationPath) {
+        throw new DOMException("", "InvalidStateError");
+      }
+      if (await this.exists(destinationParts)) return -4;
+      const fault = observer
+        ? await observer.faultForDestination(destinationPath)
+        : null;
+      const [sourceParent, sourceName] = await this.parent(sourceParts, false);
+      const source = await sourceParent.getDirectoryHandle(sourceName);
+      const {intent, record} = await this.writePendingPublication(
+          sourcePath, destinationPath, observer, fault);
+      let committed = false;
+      try {
+        const [destinationParent, destinationName] =
+            await this.parent(destinationParts, true);
+        const destination = await destinationParent.getDirectoryHandle(
+            destinationName, {create: true});
+        await this.copyDirectoryBounded(
+            source, destination, observer, fault);
+        if (observer) {
+          await observer.stopAtFault(fault, "after_directory_copy");
+        }
+        await this.compareDirectoriesBounded(
+            source, destination, observer, fault);
+        await this.replacePublicationCommitted(
+            intent, record, observer, fault, () => { committed = true; });
+        if (observer) {
+          await observer.stopAtFault(fault, "before_source_cleanup");
+        }
+        await this.removeTreeParts(sourceParts);
+        if (observer) {
+          await observer.stopAtFault(fault, "before_intent_cleanup");
+        }
+        await intent.directory.removeEntry(this.publicationIntentName);
+        return 0;
+      } catch (error) {
+        if (!committed) {
+          await this.removeTreeParts(destinationParts).catch(() => {});
+          await intent.directory.removeEntry(this.publicationIntentName)
+              .catch(() => {});
+        }
+        if (committed) return 0;
+        throw error;
+      }
+    },
+
     async createIntent(parts, operation, newBytes) {
       const destination = this.canonicalPath(parts);
       const lease = this.activeLease(destination);
@@ -273,9 +622,12 @@ mergeInto(LibraryManager.library, {
     async recoverIntents(lease) {
       const directory = await this.intentDirectory(lease.scopeKey, false);
       if (!directory) return;
+      await this.recoverPublicationIntent(lease);
       const names = [];
       for await (const entry of directory.values()) {
-        if (entry.kind === "file") names.push(entry.name);
+        if (entry.kind === "file" && entry.name !== this.publicationIntentName) {
+          names.push(entry.name);
+        }
       }
       names.sort((a, b) => this.compareUtf8(a, b));
       for (const name of names) {
@@ -479,6 +831,7 @@ mergeInto(LibraryManager.library, {
   $LmdjOpfsTest: {
     appendFlushes: 0,
     immutableWrites: 0,
+    publicationMaxChunkBytes: 0,
 
     async faultForDestination(destination) {
       try {
@@ -507,6 +860,11 @@ mergeInto(LibraryManager.library, {
 
     async afterWrite(operation) {
       if (operation === "immutable") this.immutableWrites += 1;
+    },
+
+    afterPublicationChunk(_operation, bytes) {
+      this.publicationMaxChunkBytes = Math.max(
+          this.publicationMaxChunkBytes, bytes);
     },
 
     afterFlush(operation) {
@@ -681,29 +1039,80 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_list_names:
       (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
         try {
-          const directory = await LmdjOpfs.directory(
-              LmdjOpfs.parts(path, length), false);
-          const names = [];
-          for await (const entry of directory.values()) {
-            if (entry.kind === "file") names.push(entry.name);
-          }
-          names.sort((a, b) => LmdjOpfs.compareUtf8(a, b));
-          const encoder = new TextEncoder();
-          const encoded = names.map((name) => encoder.encode(`${name}\0`));
-          const total = encoded.reduce((sum, bytes) => sum + bytes.length, 0);
-          const allocation = _malloc(total || 1);
-          let cursor = allocation;
-          for (const bytes of encoded) {
-            HEAPU8.set(bytes, cursor);
-            cursor += bytes.length;
-          }
-          setValue(output, allocation, "*");
-          setValue(outputLength, total, "i32");
+          const names = await LmdjOpfs.listEntries(
+              LmdjOpfs.parts(path, length), "file");
+          LmdjOpfs.writeNames(names, output, outputLength);
           return 0;
         } catch (error) {
           return LmdjOpfs.status(error);
         }
       }),
+
+  lmdj_opfs_list_directories__deps: ["$LmdjOpfs"],
+  lmdj_opfs_list_directories:
+      (path, length, output, outputLength) => Asyncify.handleAsync(async () => {
+        try {
+          const names = await LmdjOpfs.listEntries(
+              LmdjOpfs.parts(path, length), "directory");
+          LmdjOpfs.writeNames(names, output, outputLength);
+          return 0;
+        } catch (error) {
+          return LmdjOpfs.status(error);
+        }
+      }),
+
+  lmdj_opfs_remove_tree__deps: ["$LmdjOpfs"],
+  lmdj_opfs_remove_tree: (path, length) => Asyncify.handleAsync(async () => {
+    try {
+      const [parent, name] = await LmdjOpfs.parent(
+          LmdjOpfs.parts(path, length), false);
+      await parent.removeEntry(name, {recursive: true}).catch((error) => {
+        if (!(error instanceof DOMException) || error.name !== "NotFoundError") {
+          throw error;
+        }
+      });
+      return 0;
+    } catch (error) {
+      return error instanceof DOMException && error.name === "NotFoundError"
+        ? 0
+        : LmdjOpfs.status(error);
+    }
+  }),
+
+  lmdj_opfs_publish_directory_if_absent__deps: ["$LmdjOpfs"],
+  lmdj_opfs_publish_directory_if_absent:
+      (source, sourceLength, destination, destinationLength) =>
+          Asyncify.handleAsync(async () => {
+            try {
+              const sourceParts = LmdjOpfs.parts(source, sourceLength);
+              const destinationParts =
+                  LmdjOpfs.parts(destination, destinationLength);
+              return await LmdjOpfs.publishDirectoryIfAbsent(
+                  sourceParts, destinationParts);
+            } catch (error) {
+              return LmdjOpfs.status(error);
+            }
+          }),
+
+  lmdj_opfs_publish_directory_if_absent_test__deps:
+      ["$LmdjOpfs", "$LmdjOpfsTest"],
+  lmdj_opfs_publish_directory_if_absent_test:
+      (source, sourceLength, destination, destinationLength) =>
+          Asyncify.handleAsync(async () => {
+            try {
+              const sourceParts = LmdjOpfs.parts(source, sourceLength);
+              const destinationParts =
+                  LmdjOpfs.parts(destination, destinationLength);
+              return await LmdjOpfs.publishDirectoryIfAbsent(
+                  sourceParts, destinationParts, LmdjOpfsTest);
+            } catch (error) {
+              return LmdjOpfs.status(error);
+            }
+          }),
+
+  lmdj_opfs_publication_max_chunk_bytes__deps: ["$LmdjOpfsTest"],
+  lmdj_opfs_publication_max_chunk_bytes:
+      () => LmdjOpfsTest.publicationMaxChunkBytes,
 
   lmdj_opfs_validate_tree__deps: ["$LmdjOpfs"],
   lmdj_opfs_validate_tree: (path, length) => Asyncify.handleAsync(async () => {

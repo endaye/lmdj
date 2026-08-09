@@ -201,9 +201,21 @@ function diagnosticResult(state, { errorCode: code, generation } = {}) {
   return Object.freeze(code === undefined ? { state } : { state, error_code: code });
 }
 
-export function createDiagnosticProjectCoordinator({ storage, crypto, transport }) {
-  if (typeof transport?.send !== "function") {
-    throw new TypeError("Diagnostic project requires a transport send seam");
+export function createDiagnosticProjectCoordinator({
+  storage,
+  crypto,
+  session,
+  diagnosticClient,
+}) {
+  if (
+    typeof session?.openProject !== "function" ||
+    typeof session?.inspectProject !== "function" ||
+    typeof session?.reloadSnapshot !== "function" ||
+    typeof diagnosticClient?.createProject !== "function" ||
+    typeof diagnosticClient?.importAsset !== "function" ||
+    typeof diagnosticClient?.assignPad !== "function"
+  ) {
+    throw new TypeError("Diagnostic project requires Runtime Session capabilities");
   }
 
   let state = "idle";
@@ -236,17 +248,30 @@ export function createDiagnosticProjectCoordinator({ storage, crypto, transport 
     if (token !== admission) {
       throw STALE_ADMISSION;
     }
-    const response = await transport.send(
-      { operation, payload },
-      { deadlineMs, sidecar },
-    );
-    if (response?.ok === false) {
-      throw typedError(response.error?.code ?? "HOST_PROTOCOL_MISMATCH");
+    let result;
+    if (operation === "project.open") {
+      result = await session.openProject(
+        payload.project_id,
+        payload.pattern_id,
+        {deadlineMs},
+      );
+    } else if (operation === "project.inspect") {
+      result = await session.inspectProject();
+    } else if (operation === "snapshot.reload") {
+      result = await session.reloadSnapshot(payload.pattern_id);
+    } else if (operation === "project.create") {
+      result = await diagnosticClient.createProject(payload);
+    } else if (operation === "asset.import") {
+      result = await diagnosticClient.importAsset(payload, sidecar);
+    } else if (operation === "pad.assign") {
+      result = await diagnosticClient.assignPad(payload);
+    } else {
+      throw typedError("HOST_PROTOCOL_MISMATCH");
     }
     if (token !== admission) {
       throw STALE_ADMISSION;
     }
-    return response?.ok === true ? response.result : response;
+    return result;
   }
 
   async function openOrCreate(descriptor, token) {

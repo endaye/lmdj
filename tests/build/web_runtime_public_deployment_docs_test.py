@@ -21,6 +21,7 @@ PORTAL_CURRENT_PAGES = (
 TAG = "lmdj-v1.0.15.2"
 TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
 FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+CURRENT_PRODUCT = "1.0.16.3"
 
 
 class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
@@ -28,31 +29,41 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertTrue(path.is_file(), f"missing documentation: {path}")
         return path.read_text(encoding="utf-8")
 
-    def test_current_truth_separates_merged_target_from_unmerged_tooling(self) -> None:
-        for path in (*PORTAL_CURRENT_PAGES, ACCEPTANCE):
+    def test_current_truth_binds_publication_to_the_exact_candidate(self) -> None:
+        for path in PORTAL_CURRENT_PAGES:
             with self.subTest(path=path):
                 source = self.read(path)
-                self.assertIn(TAG, source)
-                self.assertIn(TAG_TARGET, source)
-                self.assertIn(FINGERPRINT, source)
-                self.assertIn("本地已存在", source)
-                self.assertIn("尚未 push", source)
-                self.assertIn("未做远端验证", source)
-                self.assertIn("origin/main", source)
-                self.assertIn("PR #98", source)
-                self.assertIn("deployment-tooling", source)
+                compact = re.sub(r"\s+", "", source)
+                self.assertIn(CURRENT_PRODUCT, source)
+                self.assertIn("evidence", source)
+                self.assertIn("不自动", compact)
+                self.assertNotIn(TAG_TARGET, source)
+                self.assertNotIn(FINGERPRINT, source)
+                self.assertNotIn("deployment-tooling branch", source)
+                self.assertNotIn("尚未 push", source)
+                self.assertNotIn("未做远端验证", source)
 
-    def test_current_truth_never_denies_the_local_signed_tag(self) -> None:
-        deprecated_local_tag_absence = re.compile(
-            r"也没有(?:本候选的)?\s*(?:signed\s+tag|已签名(?:的)?\s*tag)"
-        )
-        for path in (*PORTAL_CURRENT_PAGES, ACCEPTANCE):
-            with self.subTest(path=path):
-                self.assertNotRegex(
-                    self.read(path),
-                    deprecated_local_tag_absence,
-                    "current truth must distinguish absent remote verification from a local signed tag",
-                )
+    def test_predeploy_record_is_explicitly_historical(self) -> None:
+        source = self.read(ACCEPTANCE)
+        for expected in (
+            TAG,
+            TAG_TARGET,
+            FINGERPRINT,
+            "pre-deploy 快照",
+            "在采集时",
+            "不代表当前远端控制面",
+        ):
+            self.assertIn(expected, source)
+
+        runbook = self.read(RUNBOOK)
+        compact_runbook = re.sub(r"\s+", "", runbook)
+        for expected in (
+            "pre-deploy 证据快照",
+            "每次实际操作前",
+            "重新验证",
+        ):
+            self.assertIn(expected, runbook)
+        self.assertIn("不是当前远端控制面的动态真相", compact_runbook)
 
     def test_release_authority_and_header_boundary_are_explicit(self) -> None:
         source = self.read(RUNBOOK)

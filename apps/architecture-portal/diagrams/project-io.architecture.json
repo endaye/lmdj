@@ -1,1 +1,25 @@
-{"schema_version":1,"meta":{"title":"Project I/O Module","summary":"Project Store、Take Journal 与事务式发布"},"boundaries":[],"components":[{"id":"project","label":"Project Truth","detail":"domain input","kind":"host","x":80,"y":190,"width":220,"height":96},{"id":"io","label":"Project I/O","detail":"transaction boundary","kind":"core","x":450,"y":190,"width":250,"height":96},{"id":"temp","label":"Temporary State","detail":"validate first","kind":"core","x":850,"y":190,"width":230,"height":96},{"id":"store","label":"Store + Journal","detail":"atomic publish","kind":"host","x":1230,"y":190,"width":250,"height":96}],"connections":[{"from":"project","to":"io"},{"from":"io","to":"temp"},{"from":"temp","to":"store"}],"cards":[{"title":"Dependencies","body":"Foundation + Authoring Domain."},{"title":"Failure model","body":"Fault matrix prevents partial state becoming Project Truth."},{"title":"Forbidden boundary","body":"Runtime Snapshot is never persisted as authoring truth."}]}
+{
+  "schema_version": 1,
+  "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle 与 journaled atomic publication"},
+  "boundaries": [],
+  "components": [
+    {"id": "project", "label": "Project Truth", "detail": "authoritative state", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
+    {"id": "bundle-in", "label": "Project Bundle", "detail": "transfer-only input", "kind": "host", "x": 50, "y": 390, "width": 220, "height": 96},
+    {"id": "io", "label": "Project I/O", "detail": "validate · pack · publish", "kind": "core", "x": 390, "y": 270, "width": 250,"height": 96},
+    {"id": "stage", "label": "Staging + Journal", "detail": "all-or-nothing", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
+    {"id": "store", "label": "Project Store", "detail": "committed truth", "kind": "host", "x": 1140, "y": 150, "width": 220, "height": 96},
+    {"id": "bundle-out", "label": "Project Bundle", "detail": "canonical export", "kind": "host", "x": 1140, "y": 390, "width": 220, "height": 96}
+  ],
+  "connections": [
+    {"from": "project", "to": "io", "label": "save/export"},
+    {"from": "bundle-in", "to": "io", "label": "stream import"},
+    {"from": "io", "to": "stage", "label": "verify first"},
+    {"from": "stage", "to": "store", "label": "atomic publish"},
+    {"from": "stage", "to": "bundle-out", "label": "canonical pack"}
+  ],
+  "cards": [
+    {"title": "Dependencies", "body": "Foundation + Authoring Domain."},
+    {"title": "Failure model", "body": "Cancellation, crash or invalid bytes cannot expose a partial Project."},
+    {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth."}
+  ]
+}

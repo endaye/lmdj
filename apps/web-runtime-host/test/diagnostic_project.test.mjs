@@ -112,6 +112,38 @@ function scriptedTransport(entries) {
   };
 }
 
+function diagnosticBindings(transport) {
+  const send = (operation, payload, options = {}) =>
+    transport.send({operation, payload}, options);
+  return {
+    session: {
+      openProject(projectId, patternId, options) {
+        return send("project.open", {
+          project_id: projectId,
+          pattern_id: patternId,
+        }, options);
+      },
+      inspectProject() {
+        return send("project.inspect", {});
+      },
+      reloadSnapshot(patternId) {
+        return send("snapshot.reload", {pattern_id: patternId});
+      },
+    },
+    diagnosticClient: {
+      createProject(payload) {
+        return send("project.create", payload, {});
+      },
+      importAsset(payload, sidecar) {
+        return send("asset.import", payload, {deadlineMs: 30_000, sidecar});
+      },
+      assignPad(payload) {
+        return send("pad.assign", payload, {});
+      },
+    },
+  };
+}
+
 function inspector(project, projectRevision) {
   return { project, project_revision: projectRevision };
 }
@@ -187,7 +219,7 @@ function coordinator({ entries, storage = memoryStorage(JSON.stringify(descripto
     coordinator: createDiagnosticProjectCoordinator({
       storage,
       crypto: uuidSource(),
-      transport,
+      ...diagnosticBindings(transport),
     }),
   };
 }
@@ -268,7 +300,7 @@ test("fresh preparation accepts the Host missing-project normalization", async (
   const subject = createDiagnosticProjectCoordinator({
     storage,
     crypto: uuidSource(),
-    transport,
+    ...diagnosticBindings(transport),
   });
 
   assert.deepEqual(await subject.load(), { state: "ready", generation: 1 });
@@ -314,7 +346,7 @@ test("an existing project retries a transient writer handoff", async () => {
   const subject = createDiagnosticProjectCoordinator({
     storage: memoryStorage(JSON.stringify(descriptor())),
     crypto: uuidSource(),
-    transport,
+    ...diagnosticBindings(transport),
   });
 
   assert.deepEqual(await subject.load(), { state: "ready", generation: 2 });
@@ -346,7 +378,7 @@ test("persistent project busy expires without a post-deadline open", async () =>
   const subject = createDiagnosticProjectCoordinator({
     storage: memoryStorage(JSON.stringify(descriptor())),
     crypto: uuidSource(),
-    transport,
+    ...diagnosticBindings(transport),
   });
   let result;
 
@@ -659,10 +691,10 @@ test("late restart-required beats invalidation and seals a queued and direct Loa
   await transport.waitForOperation("asset.import");
   subject.invalidate();
   const queued = subject.load();
-  importSettlement.resolve({
-    ok: false,
-    error: { code: "HOST_RESTART_REQUIRED" },
-  });
+  importSettlement.reject(Object.assign(
+    new Error("HOST_RESTART_REQUIRED"),
+    {code: "HOST_RESTART_REQUIRED"},
+  ));
 
   const terminal = { state: "restart-required", outcome: "unknown" };
   assert.deepEqual(await first, terminal);

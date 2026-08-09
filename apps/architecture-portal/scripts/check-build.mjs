@@ -11,14 +11,16 @@ const requiredRoutes = [
   '/core/overview/', '/core/modules/foundation/', '/core/modules/authoring-domain/',
   '/core/modules/project-io/', '/core/modules/project-cooker/', '/core/modules/audio-runtime/',
   '/core/modules/provider-sdk/', '/core/modules/application-facade/', '/hosts/overview/',
-  '/hosts/core-cli/', '/hosts/core-mcp/', '/hosts/native-test-host/', '/hosts/web-runtime/',
+  '/core/modules/web-runtime-platform/', '/hosts/core-cli/', '/hosts/core-mcp/',
+  '/hosts/native-test-host/', '/hosts/web-runtime/', '/hosts/creator-web/',
   '/providers/overview/', '/providers/local-proof/', '/contracts/overview/',
-  '/contracts/project/', '/contracts/runtime-snapshot/', '/contracts/capability/',
+  '/contracts/project/', '/contracts/project-bundle/', '/contracts/runtime-snapshot/', '/contracts/capability/',
   '/contracts/assembly/', '/contracts/error-module-version/', '/assembly/lmdj/',
   '/platform/native-audio/', '/platform/web-runtime/', '/platform/storage/', '/platform/input/',
   '/operations/testing-and-proof/', '/operations/version-and-release/',
   '/operations/documentation-governance/', '/history/legacy-patch-architecture/',
   '/diagrams/lmdj-product.html', '/diagrams/lmdj-product.svg', '/diagrams/lmdj-core.html',
+  '/diagrams/web-runtime-platform.html', '/diagrams/web-runtime-platform.svg',
 ];
 const errors = await checkBuild({
   buildRoot: path.join(portalRoot, 'build'),

@@ -8,6 +8,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <nlohmann/json.hpp>
 
@@ -67,6 +68,35 @@ struct ArtifactBytesImportRequest {
   std::span<const std::byte> bytes;
 };
 
+struct ProjectBundleImportBeginRequest {
+  std::string import_token;
+  std::uint64_t index_bytes;
+  std::string index_sha256;
+};
+
+struct LocalProjectSummary {
+  foundation::ProjectId project_id;
+  foundation::PatternId pattern_id;
+  std::uint64_t revision;
+  std::uint16_t bpm;
+  std::size_t asset_count;
+  std::size_t assigned_pad_count;
+  std::string bundle_digest;
+  friend bool operator==(const LocalProjectSummary&, const LocalProjectSummary&) =
+      default;
+};
+
+struct ProjectBundleImportSession {
+  std::string token;
+  std::uint64_t expected_index_bytes;
+};
+
+struct ProjectBundleImportIdentity {
+  foundation::ProjectId project_id;
+  std::string bundle_digest;
+  std::uint32_t entry_count;
+};
+
 class Application {
  public:
   explicit Application(ApplicationConfig config);
@@ -87,6 +117,26 @@ class Application {
       const InitialProjectRequest& request);
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(
       const ArtifactBytesImportRequest& request);
+  foundation::Result<std::vector<LocalProjectSummary>> list_local_projects();
+  foundation::Result<ProjectBundleImportSession>
+  begin_project_bundle_import(
+      const ProjectBundleImportBeginRequest& request);
+  foundation::Result<std::optional<ProjectBundleImportIdentity>>
+  append_project_bundle_index(
+      std::string_view token,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes,
+      bool final);
+  foundation::Result<void> append_project_bundle_entry(
+      std::string_view token,
+      std::uint32_t entry_index,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes,
+      bool final);
+  foundation::Result<LocalProjectSummary> commit_project_bundle_import(
+      std::string_view token);
+  foundation::Result<void> abort_project_bundle_import(
+      std::string_view token);
   foundation::Result<void> append_realtime_take_events(
       const std::filesystem::path& project_path,
       foundation::TakeId take_id,

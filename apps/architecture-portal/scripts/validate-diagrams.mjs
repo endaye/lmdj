@@ -7,7 +7,7 @@ import {renderDiagram} from './lib/diagram.mjs';
 const portalRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const sources = await glob('diagrams/*.architecture.json', {cwd: portalRoot, absolute: true});
 const errors = [];
-if (sources.length !== 9) errors.push(`expected 9 diagram sources, found ${sources.length}`);
+if (sources.length !== 10) errors.push(`expected 10 diagram sources, found ${sources.length}`);
 
 for (const file of sources.sort()) {
   const source = JSON.parse(await readFile(file, 'utf8'));
@@ -24,5 +24,5 @@ if (errors.length) {
   console.error(errors.join('\n'));
   process.exitCode = 1;
 } else {
-  console.log('portal diagrams: 9 sources and 18 outputs valid');
+  console.log('portal diagrams: 10 sources and 20 outputs valid');
 }

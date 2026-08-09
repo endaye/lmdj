@@ -44,6 +44,17 @@ function clone(value) {
 }
 
 
+async function setDocumentVisibility(page, hidden) {
+  await page.evaluate((nextHidden) => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: nextHidden ? "hidden" : "visible",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  }, hidden);
+}
+
+
 async function installTransportObservability(page) {
   await page.addInitScript(() => {
     const NativeAudioContext = globalThis.AudioContext;
@@ -917,7 +928,7 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   await waitForDiagnosticProjectReady(page);
   await activateWithGesture(page);
 
-  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
+  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime.js");
   expect(runtimeModuleRequests.filter(
     (pathname) => pathname === runtimeScriptPathname,
   ).length).toBeGreaterThanOrEqual(2);
@@ -1199,7 +1210,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     rejectedAssetId: crypto.randomUUID(),
     takeId: crypto.randomUUID(),
   };
-  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime-host.js");
+  expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime.js");
   expect(runtimeModuleRequests.filter(
     (pathname) => pathname === runtimeScriptPathname,
   ).length).toBeGreaterThanOrEqual(2);
@@ -1238,11 +1249,13 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.diagnostics()))
     .toMatchObject({ state: "running" });
 
-  expect(await page.evaluate(({ takeId, expectedRevision }) =>
-    window.lmdjWebRuntimeController.beginTake(takeId, expectedRevision), {
-    ...identity,
-    expectedRevision: PREPARED_PROJECT_REVISION,
-  })).toBe(true);
+  expect(success(await hostRequest(page, "take.begin", {
+    take_id: identity.takeId,
+    expected_revision: PREPARED_PROJECT_REVISION,
+  }), "take.begin")).toMatchObject({
+    take_id: identity.takeId,
+    capture_state: "arm_pending",
+  });
   await waitForCaptureState(page, "active");
   const takeMarker = await observationMarker(page);
   const takeAdmissions = await triggerThroughController(
@@ -1389,7 +1402,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");
   await activateWithGesture(page);
   const recoveryMarker = await observationMarker(page);
-  await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
+  await setDocumentVisibility(page, true);
   await expect(page.locator("#host-state")).toHaveText("recovering");
   await waitForRecoveryReadiness(page, recoveryMarker.responses);
   await page.locator("#pad-0").click();
@@ -1401,7 +1414,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     window.__lmdjTask11.admittedSequences.slice(start),
   recoveryMarker.admissions);
   await proveExactOutcomes(page, recoverySequence, recoveryMarker.notifications);
-  await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(false));
+  await setDocumentVisibility(page, false);
 
   const finalStatus = success(await hostRequest(page, "host.status", {}),
     "status before clean close");
@@ -1518,7 +1531,7 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   };
   await activateWithGesture(page);
   const marker = await observationMarker(page);
-  await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
+  await setDocumentVisibility(page, true);
   await expect(page.locator("#host-state")).toHaveText("recovering");
   await waitForRecoveryReadiness(page, marker.responses);
   await page.evaluate(() => {
@@ -1528,11 +1541,11 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.length - start,
   marker.admissions)).toBe(1);
-  await expect(page.locator("#host-state")).toHaveText("failed", {
+  await expect(page.locator("#host-state")).toHaveText("restart-required", {
     timeout: 3_000,
   });
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.diagnostics()))
-    .toMatchObject({ state: "failed", error_code: "HOST_TIMEOUT" });
+    .toMatchObject({ state: "restart-required", error_code: "HOST_TIMEOUT" });
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
     .toBe(false);
 
@@ -1611,11 +1624,13 @@ test("Chromium synchronous submit copy cannot move the caller publication cutoff
   expect(await deadlineMutationOutcome(page, requestId)).toMatchObject({
     error: { code: "HOST_TIMEOUT" },
   });
-  await expect(page.locator("#host-state")).toHaveText("failed");
+  await expect(page.locator("#host-state")).toHaveText("restart-required", {
+    timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
+  });
   await expect.poll(() => terminalTransportEvidence(page), {
     timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
   }).toMatchObject({
-    controller: { state: "failed", error_code: "HOST_TIMEOUT" },
+    controller: { state: "restart-required", error_code: "HOST_TIMEOUT" },
     newSubmitCode: "HOST_TIMEOUT",
     terminated: true,
     terminalOwnerReleased: true,
@@ -1733,12 +1748,14 @@ test("Chromium packaged responsive cancellation wins before mutation publication
     expect(outcome, `${selected.name}: ${JSON.stringify(outcome)}`).toMatchObject({
       error: { code: "HOST_TIMEOUT" },
     });
-    await expect(owner.locator("#host-state"), selected.name).toHaveText("failed");
+    await expect(owner.locator("#host-state"), selected.name).toHaveText(
+      "restart-required",
+    );
     await expect.poll(() => terminalTransportEvidence(owner), {
       message: `${selected.name} responsive owner release`,
       timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
     }).toMatchObject({
-      controller: { state: "failed", error_code: "HOST_TIMEOUT" },
+      controller: { state: "restart-required", error_code: "HOST_TIMEOUT" },
       newSubmitCode: "HOST_TIMEOUT",
       terminated: true,
       terminalOwnerReleased: true,
@@ -1882,12 +1899,12 @@ test("Chromium packaged unresponsive cancellation force-terminates and recovers"
   expect(await deadlineMutationOutcome(page, requestId)).toMatchObject({
     error: { code: "HOST_TIMEOUT" },
   });
-  await expect(page.locator("#host-state")).toHaveText("failed", {
+  await expect(page.locator("#host-state")).toHaveText("restart-required", {
     timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
   });
   await page.waitForTimeout(150);
   expect(await terminalTransportEvidence(page)).toMatchObject({
-    controller: { state: "failed", error_code: "HOST_TIMEOUT" },
+    controller: { state: "restart-required", error_code: "HOST_TIMEOUT" },
     newSubmitCode: "HOST_TIMEOUT",
     terminated: true,
     terminalOwnerReleased: false,
@@ -2173,11 +2190,14 @@ test("Chromium claimed asset.import publication hang becomes restart-required an
     cancel_calls: 2,
     last_cancel_result: "publish-claimed",
   });
-  await expect(page.locator("#host-state")).toHaveText("failed", {
+  await expect(page.locator("#host-state")).toHaveText("restart-required", {
     timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
   });
   expect(await terminalTransportEvidence(page)).toMatchObject({
-    controller: { state: "failed", error_code: "HOST_RESTART_REQUIRED" },
+    controller: {
+      state: "restart-required",
+      error_code: "HOST_RESTART_REQUIRED",
+    },
     newSubmitCode: "HOST_RESTART_REQUIRED",
     terminated: true,
     terminalOwnerReleased: false,

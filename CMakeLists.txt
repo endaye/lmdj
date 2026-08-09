@@ -33,6 +33,9 @@ add_subdirectory(packages/application-facade)
 find_program(BASH_EXECUTABLE bash REQUIRED)
 find_package(Python3 3.11 REQUIRED COMPONENTS Interpreter)
 
+add_subdirectory(apps/web-runtime-host)
+add_subdirectory(packages/web-runtime-platform)
+
 if(APPLE AND TARGET lmdj_native_audio_probe)
   lmdj_add_test(
     NAME audio.native_probe_no_device
@@ -48,7 +51,6 @@ endif()
 
 add_subdirectory(apps/core-cli)
 add_subdirectory(apps/native-test-host)
-add_subdirectory(apps/web-runtime-host)
 add_subdirectory(products/lmdj)
 
 lmdj_add_test(
@@ -81,6 +83,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_domain_model_sequence_tests
     lmdj_project_store_tests
     lmdj_project_storage_platform_tests
+    lmdj_project_bundle_transfer_tests
     lmdj_take_journal_tests
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests

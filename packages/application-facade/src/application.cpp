@@ -30,6 +30,7 @@
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/error.hpp>
+#include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 #include <lmdj/provider/capability.hpp>
@@ -41,6 +42,10 @@ using foundation::Error;
 using foundation::ErrorCode;
 
 constexpr std::uint32_t kSampleRate = 48'000;
+constexpr std::uint64_t kMaximumProjectBundleIndexBytes =
+    4U * 1024U * 1024U;
+constexpr std::size_t kMaximumProjectBundleChunkBytes = 1024U * 1024U;
+constexpr std::uint32_t kMaximumProjectBundleEntries = 4096U;
 
 class InvalidRequest final : public std::runtime_error {
  public:
@@ -119,6 +124,21 @@ bool valid_utf8(std::string_view value) {
     offset += length;
   }
   return true;
+}
+
+bool lowercase_sha256(std::string_view value) {
+  return value.size() == 64U &&
+         std::all_of(
+             value.begin(),
+             value.end(),
+             [](unsigned char character) {
+               return (character >= '0' && character <= '9') ||
+                      (character >= 'a' && character <= 'f');
+             });
+}
+
+Error invalid_bundle_import_request(std::string message) {
+  return Error{ErrorCode::invalid_argument, std::move(message)};
 }
 
 bool all_strings_valid(const nlohmann::json& value) {
@@ -987,6 +1007,7 @@ struct Application::Impl {
             project_io::make_default_project_storage_platform()),
         projects(storage_platform),
         journals(storage_platform),
+        bundle_transfers(storage_platform),
         attempts(
             workspace_root,
             std::move(config.provider_policy),
@@ -995,6 +1016,11 @@ struct Application::Impl {
                 : default_timestamp_source()) {
     if (!workspace_root.is_absolute()) {
       throw std::invalid_argument("workspace_root must be absolute");
+    }
+    const auto cleaned = bundle_transfers.cleanup_incomplete(workspace_root);
+    if (!cleaned.has_value()) {
+      throw std::runtime_error(
+          "incomplete Project Bundle staging cleanup failed");
     }
   }
 
@@ -1054,6 +1080,147 @@ struct Application::Impl {
       return provider_selected(request);
     }
     return attempt_inspect(request);
+  }
+
+  foundation::Result<std::vector<LocalProjectSummary>>
+  list_local_projects() {
+    const auto listed =
+        bundle_transfers.list_local_projects(workspace_root);
+    if (!listed.has_value()) {
+      return foundation::Result<std::vector<LocalProjectSummary>>::failure(
+          listed.error());
+    }
+    std::vector<LocalProjectSummary> summaries;
+    summaries.reserve(listed.value().size());
+    for (const auto& item : listed.value()) {
+      summaries.push_back(
+          LocalProjectSummary{
+              item.project_id,
+              item.pattern_id,
+              item.revision,
+              item.bpm,
+              item.asset_count,
+              item.assigned_pad_count,
+              item.bundle_digest,
+          });
+    }
+    return foundation::Result<std::vector<LocalProjectSummary>>::success(
+        std::move(summaries));
+  }
+
+  foundation::Result<ProjectBundleImportSession>
+  begin_project_bundle_import(
+      const ProjectBundleImportBeginRequest& request) {
+    if (!domain::is_valid_uuid(request.import_token) ||
+        request.index_bytes == 0 ||
+        request.index_bytes > kMaximumProjectBundleIndexBytes ||
+        !lowercase_sha256(request.index_sha256)) {
+      return foundation::Result<ProjectBundleImportSession>::failure(
+          invalid_bundle_import_request(
+              "Project Bundle import begin request is invalid"));
+    }
+    const auto begun = bundle_transfers.begin(
+        workspace_root,
+        request.import_token,
+        request.index_bytes,
+        request.index_sha256);
+    if (!begun.has_value()) {
+      return foundation::Result<ProjectBundleImportSession>::failure(
+          begun.error());
+    }
+    return foundation::Result<ProjectBundleImportSession>::success(
+        ProjectBundleImportSession{
+            begun.value().token,
+            begun.value().expected_index_bytes,
+        });
+  }
+
+  foundation::Result<std::optional<ProjectBundleImportIdentity>>
+  append_project_bundle_index(
+      std::string_view token,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes,
+      bool final) {
+    if (!domain::is_valid_uuid(token) || bytes.empty() ||
+        bytes.size() > kMaximumProjectBundleChunkBytes) {
+      return foundation::Result<
+          std::optional<ProjectBundleImportIdentity>>::failure(
+          invalid_bundle_import_request(
+              "Project Bundle index chunk request is invalid"));
+    }
+    const auto appended =
+        bundle_transfers.append_index(token, offset, bytes, final);
+    if (!appended.has_value()) {
+      return foundation::Result<
+          std::optional<ProjectBundleImportIdentity>>::failure(
+          appended.error());
+    }
+    if (!appended.value().has_value()) {
+      return foundation::Result<
+          std::optional<ProjectBundleImportIdentity>>::success(
+          std::nullopt);
+    }
+    const auto& identity = *appended.value();
+    return foundation::Result<
+        std::optional<ProjectBundleImportIdentity>>::success(
+        ProjectBundleImportIdentity{
+            identity.project_id,
+            identity.bundle_digest,
+            identity.entry_count,
+        });
+  }
+
+  foundation::Result<void> append_project_bundle_entry(
+      std::string_view token,
+      std::uint32_t entry_index,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes,
+      bool final) {
+    if (!domain::is_valid_uuid(token) ||
+        entry_index >= kMaximumProjectBundleEntries ||
+        bytes.size() > kMaximumProjectBundleChunkBytes ||
+        (bytes.empty() && !final)) {
+      return foundation::Result<void>::failure(
+          invalid_bundle_import_request(
+              "Project Bundle entry chunk request is invalid"));
+    }
+    return bundle_transfers.append_entry(
+        token, entry_index, offset, bytes, final);
+  }
+
+  foundation::Result<LocalProjectSummary> commit_project_bundle_import(
+      std::string_view token) {
+    if (!domain::is_valid_uuid(token)) {
+      return foundation::Result<LocalProjectSummary>::failure(
+          invalid_bundle_import_request(
+              "Project Bundle commit token is invalid"));
+    }
+    const auto committed = bundle_transfers.commit(token);
+    if (!committed.has_value()) {
+      return foundation::Result<LocalProjectSummary>::failure(
+          committed.error());
+    }
+    const auto& item = committed.value();
+    return foundation::Result<LocalProjectSummary>::success(
+        LocalProjectSummary{
+            item.project_id,
+            item.pattern_id,
+            item.revision,
+            item.bpm,
+            item.asset_count,
+            item.assigned_pad_count,
+            item.bundle_digest,
+        });
+  }
+
+  foundation::Result<void> abort_project_bundle_import(
+      std::string_view token) {
+    if (!domain::is_valid_uuid(token)) {
+      return foundation::Result<void>::failure(
+          invalid_bundle_import_request(
+              "Project Bundle abort token is invalid"));
+    }
+    return bundle_transfers.abort(token);
   }
 
   foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
@@ -1963,6 +2130,7 @@ struct Application::Impl {
   std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform;
   project_io::ProjectStore projects;
   project_io::TakeJournal journals;
+  project_io::ProjectBundleTransfer bundle_transfers;
   provider::AttemptStore attempts;
 };
 
@@ -2064,6 +2232,96 @@ Application::import_artifact_bytes(
     return impl_->import_artifact_bytes(request);
   } catch (...) {
     return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<std::vector<LocalProjectSummary>>
+Application::list_local_projects() {
+  try {
+    return impl_->list_local_projects();
+  } catch (...) {
+    return foundation::Result<std::vector<LocalProjectSummary>>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<ProjectBundleImportSession>
+Application::begin_project_bundle_import(
+    const ProjectBundleImportBeginRequest& request) {
+  try {
+    return impl_->begin_project_bundle_import(request);
+  } catch (...) {
+    return foundation::Result<ProjectBundleImportSession>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<std::optional<ProjectBundleImportIdentity>>
+Application::append_project_bundle_index(
+    std::string_view token,
+    std::uint64_t offset,
+    std::span<const std::byte> bytes,
+    bool final) {
+  try {
+    return impl_->append_project_bundle_index(
+        token, offset, bytes, final);
+  } catch (...) {
+    return foundation::Result<
+        std::optional<ProjectBundleImportIdentity>>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<void> Application::append_project_bundle_entry(
+    std::string_view token,
+    std::uint32_t entry_index,
+    std::uint64_t offset,
+    std::span<const std::byte> bytes,
+    bool final) {
+  try {
+    return impl_->append_project_bundle_entry(
+        token, entry_index, offset, bytes, final);
+  } catch (...) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<LocalProjectSummary>
+Application::commit_project_bundle_import(std::string_view token) {
+  try {
+    return impl_->commit_project_bundle_import(token);
+  } catch (...) {
+    return foundation::Result<LocalProjectSummary>::failure(
+        Error{
+            ErrorCode::internal_error,
+            "unexpected Application Facade Host API failure",
+        });
+  }
+}
+
+foundation::Result<void> Application::abort_project_bundle_import(
+    std::string_view token) {
+  try {
+    return impl_->abort_project_bundle_import(token);
+  } catch (...) {
+    return foundation::Result<void>::failure(
         Error{
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",

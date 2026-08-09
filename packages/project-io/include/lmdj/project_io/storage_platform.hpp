@@ -17,6 +17,8 @@ inline constexpr std::string_view kStorageConditionProjectBusy =
     "project_busy";
 inline constexpr std::string_view kStorageConditionAlreadyExists =
     "already_exists";
+inline constexpr std::string_view kStorageConditionAtomicPublishUnsupported =
+    "atomic_publish_unsupported";
 
 class ProjectWriterLease {
  public:
@@ -52,6 +54,34 @@ class ProjectStoragePlatform {
   // Returns unsigned-byte-sorted direct child names for regular files only.
   virtual foundation::Result<std::vector<std::string>> list_names(
       const std::filesystem::path& path) const = 0;
+  // Returns unsigned-byte-sorted direct child names for directories only.
+  virtual foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path&) const {
+    return foundation::Result<std::vector<std::string>>::failure(
+        foundation::Error{
+            foundation::ErrorCode::internal_error,
+            "storage directory listing is not implemented",
+        });
+  }
+  virtual foundation::Result<void> remove_tree(
+      const std::filesystem::path&) {
+    return foundation::Result<void>::failure(
+        foundation::Error{
+            foundation::ErrorCode::internal_error,
+            "recursive storage removal is not implemented",
+        });
+  }
+  virtual foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path&,
+      const std::filesystem::path&) {
+    return foundation::Result<void>::failure(
+        foundation::Error{
+            foundation::ErrorCode::internal_error,
+            "atomic storage directory publication is not implemented",
+            {{"storage_condition",
+              std::string{kStorageConditionAtomicPublishUnsupported}}},
+        });
+  }
   virtual foundation::Result<bool> directory_exists(
       const std::filesystem::path& path) const {
     const auto names = list_names(path);

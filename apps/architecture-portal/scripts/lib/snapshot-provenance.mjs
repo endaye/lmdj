@@ -17,6 +17,7 @@ const DIAGRAM_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 export const DIAGRAM_IDS = Object.freeze([
   'application-facade', 'audio-runtime', 'authoring-domain', 'foundation',
   'lmdj-core', 'lmdj-product', 'project-cooker', 'project-io', 'provider-sdk',
+  'web-runtime-platform',
 ]);
 
 function canonicalize(value) {
@@ -268,7 +269,7 @@ export async function createSnapshotMetadata({
   revision,
   facts,
   now = () => new Date(),
-  expectedDocCount = 34,
+  expectedDocCount = 37,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
 }) {
@@ -446,7 +447,7 @@ export async function verifySnapshotProvenance({
   portalRoot,
   metadata,
   headRevision,
-  expectedDocCount = 34,
+  expectedDocCount = 37,
   diagramIds = DIAGRAM_IDS,
   projectionPaths,
   readFactsAtRevision: factsReader = readRepoFactsAtRevision,
@@ -605,8 +606,23 @@ export async function verifySnapshotProvenance({
 
   const immutableHistory = (await execGit(repoRoot, [
     'log', '--full-history', '--format=%H', `${introducing}..${headRevision}`, '--', ...immutablePaths(metadata),
-  ])).stdout.trim();
-  if (immutableHistory) {
+  ])).stdout.trim().split('\n').filter(Boolean);
+  let immutableHistoryChanged = false;
+  for (const revision of immutableHistory) {
+    const ancestry = (await execGit(repoRoot, [
+      'rev-list', '--parents', '-n', '1', revision,
+    ])).stdout.trim().split(/\s+/);
+    const matchesParent = await Promise.all(ancestry.slice(1).map(async (parentRevision) =>
+      Boolean(await execGit(repoRoot, [
+        'diff', '--quiet', parentRevision, revision, '--', ...immutablePaths(metadata),
+      ], {allowFailure: true}))
+    ));
+    if (!matchesParent.some(Boolean)) {
+      immutableHistoryChanged = true;
+      break;
+    }
+  }
+  if (immutableHistoryChanged) {
     errors.push('generated immutable snapshot paths changed after introducing commit');
   }
   try {

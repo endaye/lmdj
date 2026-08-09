@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/project/lmdj.project-bundle.v1.schema.json",
+  "x-lmdj-contract-version": "1.0.0",
+  "title": "LMDJ Portable Project Bundle Index v1",
+  "type": "object",
+  "required": [
+    "bundle_digest",
+    "compression",
+    "contract",
+    "contract_version",
+    "entries",
+    "project_contract",
+    "project_id",
+    "uncompressed_bytes"
+  ],
+  "properties": {
+    "bundle_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "compression": {
+      "const": "none"
+    },
+    "contract": {
+      "const": "lmdj.project-bundle.v1"
+    },
+    "contract_version": {
+      "const": "1.0.0"
+    },
+    "entries": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/entry"
+      },
+      "uniqueItems": true
+    },
+    "project_contract": {
+      "const": "lmdj.project.v1"
+    },
+    "project_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "uncompressed_bytes": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 536870912
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "entry": {
+      "type": "object",
+      "required": [
+        "bytes",
+        "offset",
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "bytes": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 67108864
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 536870912
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!.*(?:^|/)\\.{1,2}(?:/|$))[A-Za-z0-9._-]+(?:/[A-Za-z0-9._-]+)*$"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      },
+      "additionalProperties": false
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    }
+  }
+}

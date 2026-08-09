@@ -214,11 +214,14 @@ run_browser_gate() {
   require_playwright
   verify_clean_room_playwright_config "http://127.0.0.1:9"
   cleanup_proof_server
+  cmake -E make_directory "$build_root"
   proof_server_ready_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-server.XXXXXX")"
   ready_file="$proof_server_ready_root/ready.json"
   ready_nonce="$(python3 -c 'import secrets; print(secrets.token_hex(32))')"
-  python3 "$repo_root/apps/web-runtime-host/tools/server.py" \
+  python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
     --root "$selected_dist" \
+    --verifier "$repo_root/apps/web-runtime-host/tools/package.py" \
+    --repo-root "$repo_root" \
     --port "$requested_port" \
     --ready-file "$ready_file" \
     --ready-nonce "$ready_nonce" >"$log_path" 2>&1 &
@@ -382,11 +385,75 @@ PY
 }
 
 run_audio_worklet_conformance() {
+  local log_path="$build_root/audio-conformance-server.log"
+  local port_file
+  local port=""
+  local status=0
   "$repo_root/scripts/web-toolchain-conformance.sh" build-audio-runtime
-  npm --prefix "$web_test_root" test -- \
+  cleanup_proof_server
+  cmake -E make_directory "$build_root"
+  proof_server_ready_root="$(
+    mktemp -d "${TMPDIR:-/tmp}/lmdj-web-host-server.XXXXXX"
+  )"
+  port_file="$proof_server_ready_root/port"
+  python3 "$web_test_root/toolchain/server.py" \
+    --root "$repo_root/build/web/toolchain" \
+    --port 0 \
+    --write-port "$port_file" >"$log_path" 2>&1 &
+  proof_server_pid=$!
+  for _ in {1..100}; do
+    if ! kill -0 "$proof_server_pid" 2>/dev/null; then
+      break
+    fi
+    if [[ -f "$port_file" ]] && port="$(python3 - "$port_file" <<'PY'
+import pathlib
+import sys
+
+try:
+    encoded = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+    value = int(encoded)
+except (OSError, UnicodeDecodeError, ValueError):
+    raise SystemExit(1)
+if encoded != f"{value}\n" or value < 1 or value > 65_535:
+    raise SystemExit(1)
+print(value)
+PY
+)"; then
+      break
+    fi
+    sleep 0.05
+  done
+  if [[ -z "$port" ]] || ! kill -0 "$proof_server_pid" 2>/dev/null; then
+    cleanup_proof_server
+    echo "Web Runtime Host error: AudioWorklet server did not become ready" >&2
+    sed -n '1,120p' "$log_path" >&2 || true
+    return 2
+  fi
+  if ! python3 - "http://127.0.0.1:$port/health.json" <<'PY'
+import json
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=0.5) as response:
+    payload = json.load(response)
+if payload != {"ok": True, "service": "web-toolchain-conformance"}:
+    raise SystemExit(1)
+PY
+  then
+    cleanup_proof_server
+    echo "Web Runtime Host error: owned AudioWorklet server is unreachable" >&2
+    return 2
+  fi
+  LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
+    LMDJ_WEB_HOST_BASE_URL="http://127.0.0.1:$port" \
+    npm --prefix "$web_test_root" test -- \
     --project=chromium \
     audio/realtime_audio_worklet.spec.mjs \
-    audio/realtime_failure.spec.mjs
+    audio/realtime_failure.spec.mjs || status=$?
+  cleanup_proof_server
+  if [[ "$status" -ne 0 ]]; then
+    return "$status"
+  fi
   echo "Web Runtime Host stable AudioWorklet and failure conformance: PASS"
 }
 
@@ -483,8 +550,10 @@ case "$command_name" in
       echo "Web Runtime Host error: build the Host before serving" >&2
       exit 2
     }
-    exec python3 "$repo_root/apps/web-runtime-host/tools/server.py" \
-      --root "$dist_root" "$@"
+    exec python3 "$repo_root/tools/web-runtime/serve_distribution.py" \
+      --root "$dist_root" \
+      --verifier "$repo_root/apps/web-runtime-host/tools/package.py" \
+      --repo-root "$repo_root" "$@"
     ;;
   clean)
     [[ $# -eq 0 ]] || { usage; exit 64; }

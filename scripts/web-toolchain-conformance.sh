@@ -101,7 +101,7 @@ build_project_io() {
     echo "web toolchain error: production Project I/O link output is missing" >&2
     exit 2
   fi
-  if grep -Eq 'test-fault|LmdjOpfsTest|lmdj_opfs_(create_immutable|replace_complete|append_durable)_test|(append_flush|immutable_write)_count' "$production_js"; then
+  if grep -Eq 'test-fault|LmdjOpfsTest|lmdj_opfs_(create_immutable|replace_complete|append_durable|publish_directory_if_absent)_test|(append_flush|immutable_write)_count|publication_max_chunk_bytes' "$production_js"; then
     echo "web toolchain error: production Project I/O link contains test hooks" >&2
     exit 2
   fi
@@ -121,9 +121,9 @@ build_audio_runtime() {
   run_cmake_build "$audio_runtime_cmake_root" \
     --target lmdj_web_runtime_host
   local expected_artifacts=(
-    lmdj-web-runtime-host.html
-    lmdj-web-runtime-host.js
-    lmdj-web-runtime-host.wasm
+    lmdj-web-runtime.html
+    lmdj-web-runtime.js
+    lmdj-web-runtime.wasm
   )
   local actual_artifacts=()
   while IFS= read -r artifact; do

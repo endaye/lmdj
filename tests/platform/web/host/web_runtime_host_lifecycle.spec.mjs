@@ -10,10 +10,14 @@ const sourceRoutes = new Map([
   ["/formal-host/styles.css", resolve(hostRoot, "styles.css")],
   ["/formal-host/src/diagnostic_project.mjs", resolve(hostRoot, "src/diagnostic_project.mjs")],
   ["/formal-host/src/main.mjs", resolve(hostRoot, "src/main.mjs")],
-  ["/formal-host/src/input_adapters.mjs", resolve(hostRoot, "src/input_adapters.mjs")],
-  ["/formal-host/src/preflight.mjs", resolve(hostRoot, "src/preflight.mjs")],
-  ["/formal-host/src/protocol.mjs", resolve(hostRoot, "src/protocol.mjs")],
-  ["/formal-host/src/state_machine.mjs", resolve(hostRoot, "src/state_machine.mjs")],
+  ["/packages/web-runtime-platform/web/diagnostic_client.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/diagnostic_client.mjs")],
+  ["/packages/web-runtime-platform/web/input_adapters.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/input_adapters.mjs")],
+  ["/packages/web-runtime-platform/web/preflight.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/preflight.mjs")],
+  ["/packages/web-runtime-platform/web/project_bundle_reader.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/project_bundle_reader.mjs")],
+  ["/packages/web-runtime-platform/web/protocol.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/protocol.mjs")],
+  ["/packages/web-runtime-platform/web/runtime_loader.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/runtime_loader.mjs")],
+  ["/packages/web-runtime-platform/web/runtime_session.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/runtime_session.mjs")],
+  ["/packages/web-runtime-platform/web/state_machine.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/state_machine.mjs")],
 ]);
 
 test("source shell enforces activation, interruption, one-sequence recovery, and once-only cleanup", async ({ page }) => {
@@ -90,8 +94,8 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         "opfsWritableReplace",
       ].map((name) => [name, true])),
       verifyManifest: async () => ({
-        product_build: "1.0.15.2",
-        host_version: "1.1.2",
+        product_build: "1.0.16.3",
+        host_version: "1.2.2",
         protocol_version: 1,
       }),
       loadRuntime: async () => ({
@@ -200,7 +204,13 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
   });
   await expect.poll(() => page.evaluate(() => window.__task9.operations.filter(({ operation }) => operation === "trigger").length)).toBe(1);
 
-  await page.evaluate(() => window.lmdjWebRuntimeController.observeVisibility(true));
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
   await expect(page.locator("#host-state")).toHaveText("recovering");
   await page.locator("#pad-1").dispatchEvent("pointerdown", {
     isPrimary: true,

@@ -1,0 +1,29 @@
+{
+  "schema_version": 1,
+  "meta": {"title": "Web Runtime Platform Module", "summary": "Creator 与诊断 Host 共用一个受 Product Assembly 约束的浏览器 Runtime"},
+  "boundaries": [
+    {"id": "platform", "label": "packages/web-runtime-platform · product-neutral", "x": 300, "y": 100, "width": 910, "height": 470}
+  ],
+  "components": [
+    {"id": "creator", "label": "Creator Web", "detail": "UI · Project transfer", "kind": "host", "x": 40, "y": 150, "width": 210, "height": 92},
+    {"id": "diagnostic", "label": "Diagnostic Host", "detail": "proof · diagnostics", "kind": "host", "x": 40, "y": 360, "width": 210, "height": 92},
+    {"id": "manifest", "label": "Manifest Gate", "detail": "exact Host allowlist", "kind": "core", "x": 340, "y": 150, "width": 220, "height": 92},
+    {"id": "session", "label": "Runtime Session", "detail": "lifecycle · input", "kind": "core", "x": 650, "y": 255, "width": 230, "height": 92},
+    {"id": "audio", "label": "Web Audio", "detail": "Worker · AudioWorklet", "kind": "core", "x": 950, "y": 150, "width": 220, "height": 92},
+    {"id": "facade", "label": "Application Facade", "detail": "only Core entry", "kind": "core", "x": 1300, "y": 255, "width": 220, "height": 92},
+    {"id": "bundle", "label": "Project Bundle", "detail": "transfer-only bytes", "kind": "host", "x": 950, "y": 410, "width": 220, "height": 92}
+  ],
+  "connections": [
+    {"from": "creator", "to": "manifest", "label": "creator identity"},
+    {"from": "diagnostic", "to": "manifest", "label": "diagnostic identity"},
+    {"from": "manifest", "to": "session", "label": "admit"},
+    {"from": "session", "to": "audio", "label": "render"},
+    {"from": "session", "to": "facade", "label": "typed API"},
+    {"from": "bundle", "to": "facade", "label": "import/export"}
+  ],
+  "cards": [
+    {"title": "Product identity", "body": "Product CMake 注入 Product Build、Platform version 与精确 Host triple。"},
+    {"title": "Shared runtime", "body": "两个 Host 共用同一 Runtime Session、Control bridge、输入与 AudioWorklet 路径。"},
+    {"title": "Forbidden boundary", "body": "Project Bundle 只进入 Facade，不连接 Creator internals，也不替代 Project Truth。"}
+  ]
+}

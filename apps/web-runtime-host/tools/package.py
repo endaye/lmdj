@@ -14,7 +14,9 @@ import tempfile
 from pathlib import Path
 
 
-HOST_VERSION = "1.1.2"
+HOST_ID = "web-runtime-host"
+HOST_VERSION = "1.2.2"
+PLATFORM_VERSION = "0.1.2"
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912
 DISTRIBUTION_CONTRACT = "lmdj.web-runtime-host.distribution.v1"
@@ -45,14 +47,18 @@ MANIFEST_TOOLCHAIN_KEYS = (
     "emcc_version",
 )
 EXPECTED_ASSETS = (
+    ("assets/diagnostic-client.", ".mjs", "platform_module"),
     ("assets/diagnostic-project.", ".mjs", "host_module"),
-    ("assets/input-adapters.", ".mjs", "host_module"),
+    ("assets/input-adapters.", ".mjs", "platform_module"),
     ("assets/main.", ".mjs", "host_main"),
-    ("assets/preflight.", ".mjs", "host_module"),
-    ("assets/protocol.", ".mjs", "host_module"),
+    ("assets/preflight.", ".mjs", "platform_module"),
+    ("assets/project-bundle-reader.", ".mjs", "platform_module"),
+    ("assets/protocol.", ".mjs", "platform_module"),
     ("assets/runtime.", ".js", "runtime_script"),
     ("assets/runtime.", ".wasm", "runtime_wasm"),
-    ("assets/state-machine.", ".mjs", "host_module"),
+    ("assets/runtime-loader.", ".mjs", "platform_module"),
+    ("assets/runtime-session.", ".mjs", "platform_module"),
+    ("assets/state-machine.", ".mjs", "platform_module"),
     ("assets/styles.", ".css", "host_style"),
 )
 HASHED_ASSET_PATTERN = re.compile(
@@ -217,8 +223,9 @@ def build_distribution(
     version = read_json(repo_root / "products/lmdj/version.json", "Product version")
     active_product_build = product_build(version)
     host_root = repo_root / "apps/web-runtime-host"
-    runtime_js_path = require_file(runtime_root / "lmdj-web-runtime-host.js")
-    runtime_wasm_path = require_file(runtime_root / "lmdj-web-runtime-host.wasm")
+    platform_root = repo_root / "packages/web-runtime-platform/web"
+    runtime_js_path = require_file(runtime_root / "lmdj-web-runtime.js")
+    runtime_wasm_path = require_file(runtime_root / "lmdj-web-runtime.wasm")
 
     dist_root.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(
@@ -229,34 +236,110 @@ def build_distribution(
         assets_root.mkdir()
         assets: list[dict] = []
 
-        leaf_assets: dict[str, dict] = {}
-        for name in (
-            "diagnostic_project.mjs",
-            "input_adapters.mjs",
-            "preflight.mjs",
-            "protocol.mjs",
-            "state_machine.mjs",
-        ):
-            payload = require_file(host_root / "src" / name).read_bytes()
+        def write_module(
+            source: Path,
+            stem: str,
+            role: str,
+            dependencies: tuple[tuple[str, dict], ...] = (),
+        ) -> dict:
+            text = require_file(source).read_text(encoding="utf-8")
+            for specifier, dependency in dependencies:
+                text = replace_exact_once(
+                    text,
+                    f'"{specifier}"',
+                    f'"./{Path(dependency["path"]).name}"',
+                    f"{stem} import {specifier}",
+                )
             entry = write_hashed_asset(
                 assets_root,
-                Path(name).stem.replace("_", "-"),
+                stem,
                 ".mjs",
-                payload,
-                "host_module",
+                text.encode("utf-8"),
+                role,
             )
-            leaf_assets[name] = entry
             assets.append(entry)
+            return entry
+
+        diagnostic_client_entry = write_module(
+            platform_root / "diagnostic_client.mjs",
+            "diagnostic-client",
+            "platform_module",
+        )
+        diagnostic_project_entry = write_module(
+            host_root / "src/diagnostic_project.mjs",
+            "diagnostic-project",
+            "host_module",
+        )
+        input_adapters_entry = write_module(
+            platform_root / "input_adapters.mjs",
+            "input-adapters",
+            "platform_module",
+        )
+        preflight_entry = write_module(
+            platform_root / "preflight.mjs",
+            "preflight",
+            "platform_module",
+        )
+        protocol_entry = write_module(
+            platform_root / "protocol.mjs",
+            "protocol",
+            "platform_module",
+        )
+        project_bundle_reader_entry = write_module(
+            platform_root / "project_bundle_reader.mjs",
+            "project-bundle-reader",
+            "platform_module",
+            (("./protocol.mjs", protocol_entry),),
+        )
+        state_machine_entry = write_module(
+            platform_root / "state_machine.mjs",
+            "state-machine",
+            "platform_module",
+        )
+        runtime_loader_entry = write_module(
+            platform_root / "runtime_loader.mjs",
+            "runtime-loader",
+            "platform_module",
+            (("./protocol.mjs", protocol_entry),),
+        )
+        runtime_session_entry = write_module(
+            platform_root / "runtime_session.mjs",
+            "runtime-session",
+            "platform_module",
+            (
+                ("./input_adapters.mjs", input_adapters_entry),
+                ("./diagnostic_client.mjs", diagnostic_client_entry),
+                ("./project_bundle_reader.mjs", project_bundle_reader_entry),
+                ("./runtime_loader.mjs", runtime_loader_entry),
+                ("./preflight.mjs", preflight_entry),
+                ("./protocol.mjs", protocol_entry),
+                ("./state_machine.mjs", state_machine_entry),
+            ),
+        )
 
         main_text = require_file(host_root / "src/main.mjs").read_text(
             encoding="utf-8"
         )
-        for name, entry in leaf_assets.items():
+        for specifier, entry in (
+            (
+                "../../../packages/web-runtime-platform/web/diagnostic_client.mjs",
+                diagnostic_client_entry,
+            ),
+            (
+                "../../../packages/web-runtime-platform/web/input_adapters.mjs",
+                input_adapters_entry,
+            ),
+            (
+                "../../../packages/web-runtime-platform/web/runtime_session.mjs",
+                runtime_session_entry,
+            ),
+            ("./diagnostic_project.mjs", diagnostic_project_entry),
+        ):
             main_text = replace_exact_once(
                 main_text,
-                f'"./{name}"',
+                f'"{specifier}"',
                 f'"./{Path(entry["path"]).name}"',
-                f"main import {name}",
+                f"main import {specifier}",
             )
         main_entry = write_hashed_asset(
             assets_root,
@@ -290,7 +373,7 @@ def build_distribution(
             runtime_text = runtime_payload.decode("utf-8")
         except UnicodeDecodeError as error:
             raise PackageError("runtime JavaScript is not UTF-8") from error
-        original_wasm_name = "lmdj-web-runtime-host.wasm"
+        original_wasm_name = "lmdj-web-runtime.wasm"
         runtime_text = replace_exact_once(
             runtime_text,
             original_wasm_name,
@@ -321,7 +404,9 @@ def build_distribution(
             "distribution_contract": DISTRIBUTION_CONTRACT,
             "manifest_version": 1,
             "product_build": active_product_build,
+            "host_id": HOST_ID,
             "host_version": HOST_VERSION,
+            "platform_version": PLATFORM_VERSION,
             "protocol_version": PROTOCOL_VERSION,
             "heap_bytes": HEAP_BYTES,
             "resource_limits": RESOURCE_LIMITS,
@@ -345,7 +430,10 @@ def build_distribution(
         identity_meta = (
             '\n    <meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
             f'\n    <meta name="lmdj-product-build" content="{active_product_build}">'
+            f'\n    <meta name="lmdj-host-id" content="{HOST_ID}">'
             f'\n    <meta name="lmdj-host-version" content="{HOST_VERSION}">'
+            '\n    <meta name="lmdj-web-runtime-platform-version" '
+            f'content="{PLATFORM_VERSION}">'
             f'\n    <meta name="lmdj-host-protocol-version" content="{PROTOCOL_VERSION}">'
         )
         digest_tag = (
@@ -454,8 +542,10 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         "distribution_contract",
         "emscripten",
         "heap_bytes",
+        "host_id",
         "host_version",
         "manifest_version",
+        "platform_version",
         "product_build",
         "protocol_version",
         "resource_limits",
@@ -468,7 +558,9 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         or type(manifest["manifest_version"]) is not int
         or manifest["manifest_version"] != 1
         or manifest["product_build"] != product_build(version)
+        or manifest["host_id"] != HOST_ID
         or manifest["host_version"] != HOST_VERSION
+        or manifest["platform_version"] != PLATFORM_VERSION
         or type(manifest["protocol_version"]) is not int
         or manifest["protocol_version"] != PROTOCOL_VERSION
         or type(manifest["heap_bytes"]) is not int
@@ -551,7 +643,10 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     for exact_meta in (
         '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">',
         f'<meta name="lmdj-product-build" content="{manifest["product_build"]}">',
+        f'<meta name="lmdj-host-id" content="{manifest["host_id"]}">',
         f'<meta name="lmdj-host-version" content="{manifest["host_version"]}">',
+        '<meta name="lmdj-web-runtime-platform-version" '
+        f'content="{manifest["platform_version"]}">',
         f'<meta name="lmdj-host-protocol-version" content="{manifest["protocol_version"]}">',
     ):
         if index.count(exact_meta) != 1:

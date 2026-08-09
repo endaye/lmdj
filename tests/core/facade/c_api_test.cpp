@@ -576,14 +576,23 @@ void test_transport_failures_null_outputs_and_valid_facade_errors() {
       LMDJ_STATUS_OK);
   LMDJ_CHECK(response == nullptr);
 
-  response = nullptr;
-  LMDJ_CHECK(
-      lmdj_engine_query(
-          engine, "{\"operation\":\"unknown\"}", &response) ==
-      LMDJ_STATUS_OK);
-  LMDJ_CHECK(response != nullptr);
-  LMDJ_CHECK(nlohmann::json::parse(response).at("ok") == false);
-  lmdj_string_free(response);
+  for (const auto operation : {
+           "unknown",
+           "project.bundle.list",
+           "project.bundle.import.begin",
+           "project.bundle.import.commit",
+       }) {
+    response = nullptr;
+    const auto request =
+        nlohmann::json{{"operation", operation}}.dump();
+    LMDJ_CHECK(
+        lmdj_engine_query(engine, request.c_str(), &response) ==
+        LMDJ_STATUS_OK);
+    LMDJ_CHECK(response != nullptr);
+    check_facade_error(
+        nlohmann::json::parse(response), "INVALID_ARGUMENT");
+    lmdj_string_free(response);
+  }
   lmdj_engine_free(engine);
 }
 

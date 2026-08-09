@@ -2,17 +2,12 @@
 
 本运行手册描述正式 Web Runtime Host 的受控发布路径。它是操作说明，**不是**
 执行记录，也不授权创建远端资源、写入 secret、发布 Release、运行 workflow 或部署。
-当前真相见
+最初的 pre-deploy 证据快照见
 [`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`](../quality/2026-08-08-web-runtime-public-deployment-acceptance.md)：
-Product `1.0.15.2` / Host `1.1.2` 的 deployment-tooling branch 已实现但尚未 push、
-review、CI 或 merge，也尚未创建 Netlify 项目、配置 GitHub Environment、运行部署或生成
-公共证据。tag target `72ae40074620cc5681c462ba04a31a666449734f` 已是
-`origin/main` 上 PR #98 的 merge commit；这不证明 deployment-tooling branch 已合并。
-本地 Git 数据库已存在
-signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
-`2B5EE362F058800036AD4FB5116ECE156F954D29` 的 Good signature，且 tag target 是
-`72ae40074620cc5681c462ba04a31a666449734f`；该 tag 尚未 push，未做远端验证，不能由此
-推断远端 tag、Release 或部署存在。
+它冻结 Product `1.0.15.2` / Host `1.1.2` 在记录时的分支、tag 与部署状态，不是当前远端
+控制面的动态真相。每次实际操作前都必须从 canonical origin 和 GitHub API 重新验证 remote
+signed tag、受保护 `main` ancestry、Release 三资产、workflow run 与 deployment evidence；
+不得从该快照、本地同名 tag、Portal 页面或先前命令输出推断当前状态。
 
 ## 发布不变量
 
@@ -35,8 +30,8 @@ signed annotated tag `lmdj-v1.0.15.2`：`git tag -v` 显示 primary fingerprint
 - `scripts/web-runtime-host.sh proof` 的 Python proof-only server 只用于本地
   Proof；它不是生产服务。生产由 Netlify 静态托管已验证的 `dist`，并应用独立 staging
   的 `_headers` deploy-control artifact。
-- 这不是 Creator URL、Creator PWA 或 `lmdj-canary` 的发布。`lmdj-canary` 留给
-  未来 Creator 产品，不能在本 Task 创建、绑定、重定向或作为 Runtime Host 的别名。
+- 这不是 Creator URL、Creator PWA 或 `lmdj-canary` 的发布。`lmdj-canary` 属于
+  Creator 交付边界，不能在本 Task 创建、绑定、重定向或作为 Runtime Host 的别名。
 
 ## 独立授权的 tag、三资产 prerelease 与 dispatch
 

@@ -20,7 +20,7 @@ expected_modules = {
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "0.4.0",
+        "0.5.0",
         1,
         {"foundation": "0.2.0", "authoring-domain": "0.1.1"},
     ),
@@ -32,40 +32,52 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.2.0",
+        "1.3.1",
         2,
         {
             "foundation": "0.2.0",
             "authoring-domain": "0.1.1",
-            "project-io": "0.4.0",
+            "project-io": "0.5.0",
             "project-cooker": "0.2.1",
             "audio-runtime": "0.4.0",
             "provider-sdk": "1.1.1",
         },
     ),
+    "packages/web-runtime-platform/module.json": (
+        "web-runtime-platform",
+        "0.1.2",
+        1,
+        {"application-facade": "1.3.1", "audio-runtime": "0.4.0"},
+    ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.5",
+        "1.0.7",
         2,
-        {"application-facade": "1.2.0"},
+        {"application-facade": "1.3.1"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.1.2",
+        "1.1.4",
         2,
-        {"application-facade": "1.2.0"},
+        {"application-facade": "1.3.1"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.3",
+        "1.0.5",
         1,
-        {"application-facade": "1.2.0", "audio-runtime": "0.4.0"},
+        {"application-facade": "1.3.1", "audio-runtime": "0.4.0"},
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.1.2",
+        "1.2.2",
         1,
-        {"application-facade": "1.2.0", "audio-runtime": "0.4.0"},
+        {"web-runtime-platform": "0.1.2"},
+    ),
+    "apps/creator-web/module.json": (
+        "creator-web",
+        "1.0.2",
+        1,
+        {"web-runtime-platform": "0.1.2"},
     ),
 }
 for relative, (
@@ -84,11 +96,11 @@ for relative, (
     assert manifest["dependencies"] == dependencies
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 15, 2)
-assert str(version) == "1.0.15.2"
-assert version.product_tag() == "lmdj-v1.0.15.2"
+assert version == ProductVersion(1, 0, 16, 3)
+assert str(version) == "1.0.16.3"
+assert version.product_tag() == "lmdj-v1.0.16.3"
 assert version.display("canary", "a" * 40) == (
-    "1.0.15.2 · canary · gaaaaaaaa"
+    "1.0.16.3 · canary · gaaaaaaaa"
 )
 
 for invalid in (
@@ -118,7 +130,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.15.2\n"
+assert tag_name.stdout == "lmdj-v1.0.16.3\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -138,7 +150,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.15.2 · canary · gaaaaaaaa\n"
+assert current.stdout == "1.0.16.3 · canary · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -154,7 +166,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.15.2)\n"
+assert verified.stdout == "version verification: PASS (1.0.16.3)\n"
 assert verified.stderr == ""
 
 
@@ -168,7 +180,7 @@ def write_json(path: Path, value: dict) -> None:
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
 tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
-assert assembly["product"] == {"id": "lmdj", "version": "1.0.15.2"}
+assert assembly["product"] == {"id": "lmdj", "version": "1.0.16.3"}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
@@ -189,6 +201,7 @@ assert assembly["providers"] == [
 ]
 assert assembly["contracts"] == [
     {"id": "lmdj.project.v1", "version": "1.0.0"},
+    {"id": "lmdj.project-bundle.v1", "version": "1.0.0"},
     {"id": "lmdj.capability.v2", "version": "2.0.0"},
     {"id": "lmdj.assembly.v2", "version": "2.0.0"},
     {"id": "lmdj.error.v1", "version": "1.0.0"},
@@ -204,6 +217,7 @@ expected_contract_sources = {
     "contracts/error/lmdj.error.v1.schema.json": "1.0.0",
     "contracts/module/lmdj.module.v1.schema.json": "1.0.0",
     "contracts/project/lmdj.project.v1.schema.json": "1.0.0",
+    "contracts/project/lmdj.project-bundle.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
 actual_contract_sources = sorted(
@@ -247,7 +261,7 @@ compiled_product = re.search(
     compiled_source,
 )
 assert compiled_product is not None
-assert compiled_product.group(1) == "1.0.15.2"
+assert compiled_product.group(1) == "1.0.16.3"
 compiled_components = re.findall(
     r'CompiledComponent\{"([^"]+)",\s*"([^"]+)"\}',
     compiled_source,

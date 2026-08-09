@@ -28,6 +28,7 @@ make_web_project_storage_platform_for_test(bool mounted);
 
 extern "C" int lmdj_opfs_append_flush_count();
 extern "C" int lmdj_opfs_immutable_write_count();
+extern "C" int lmdj_opfs_publication_max_chunk_bytes();
 
 namespace {
 
@@ -111,6 +112,15 @@ nlohmann::json run_suite() {
   require_mount_error(
       unavailable->list_names(unavailable_path), "directory iteration");
   require_mount_error(
+      unavailable->list_directories(unavailable_path),
+      "directory iteration");
+  require_mount_error(
+      unavailable->remove_tree(unavailable_path), "recursive removal");
+  require_mount_error(
+      unavailable->publish_directory_if_absent(
+          unavailable_path, unavailable_path / "published"),
+      "atomic directory publish");
+  require_mount_error(
       unavailable->validate_managed_tree(unavailable_path), "tree validation");
 
   const auto action = query("action");
@@ -137,7 +147,71 @@ nlohmann::json run_suite() {
 
     const auto replacement_path = fault_bundle / "replacement.bin";
     const auto immutable_path = fault_bundle / "immutable.bin";
+    const auto publication_source =
+        std::filesystem::path{"/lmdj-workspace/.lmdj-host/publication-fixtures"} /
+        requested_bundle;
     const auto scenario = query("scenario");
+    if (action == "publish_publication") {
+      auto lease = value(
+          platform->acquire_writer(fault_bundle),
+          "publication destination lease");
+      success(
+          platform->publish_directory_if_absent(
+              publication_source, fault_bundle),
+          "publication fault write");
+      return {{"complete", true}, {"result", {{"state", "published"}}}};
+    }
+    if (action == "inspect_publication" ||
+        action == "recover_publication" ||
+        action == "recover_and_publish") {
+      std::unique_ptr<project_io::ProjectWriterLease> lease;
+      if (action != "inspect_publication") {
+        lease = value(
+            platform->acquire_writer(fault_bundle),
+            "publication recovery lease");
+        if (action == "recover_and_publish" &&
+            !value(
+                platform->directory_exists(fault_bundle),
+                "publication retry destination")) {
+          success(
+              platform->publish_directory_if_absent(
+                  publication_source, fault_bundle),
+              "publication retry");
+        }
+      }
+      const auto workspace = std::filesystem::path{"/lmdj-workspace"};
+      const auto names = value(
+          platform->list_directories(workspace),
+          "publication inventory");
+      const bool visible =
+          std::find(
+              names.begin(), names.end(), fault_bundle.filename().string()) !=
+          names.end();
+      const bool physical = value(
+          platform->directory_exists(fault_bundle),
+          "publication physical destination");
+      bool complete = false;
+      if (physical) {
+        const auto payload = fault_bundle / "nested/payload.bin";
+        complete = value(
+            platform->exists(payload), "publication payload exists");
+        if (complete) {
+          const auto length = value(
+              platform->byte_length(payload), "publication payload length");
+          complete = length == 1048593U;
+        }
+      }
+      return {
+          {"complete", true},
+          {"result",
+           {{"visible", visible},
+            {"physical", physical},
+            {"complete", complete},
+            {"source", value(
+                 platform->directory_exists(publication_source),
+                 "publication source")}}},
+      };
+    }
     if (action == "prepare_replacement") {
       success(platform->ensure_directory(fault_bundle), "replacement directory");
       auto lease = value(
@@ -398,6 +472,64 @@ nlohmann::json run_suite() {
   const auto accented = std::find(names.begin(), names.end(), "\xc3\xa9");
   require(a < z && z < accented, "unsigned UTF-8 sorting");
 
+  const auto staging = contract / "staging-directory";
+  const auto published = contract / "published-directory";
+  success(platform->ensure_directory(staging / "nested"), "staging directory");
+  success(
+      platform->create_immutable(staging / "nested/payload.bin", bytes("complete")),
+      "staging payload");
+  const std::string large_payload(1048593U, 'x');
+  success(
+      platform->create_immutable(
+          staging / "nested/large.bin", bytes(large_payload)),
+      "large staging payload");
+  auto publication_lease = value(
+      platform->acquire_writer(published),
+      "published destination lease");
+  const auto publish =
+      platform->publish_directory_if_absent(staging, published);
+  std::string directory_transfer;
+  if (!publish.has_value()) {
+    throw std::runtime_error("directory publish failed");
+  } else {
+    require(!value(platform->directory_exists(staging), "staging moved"),
+            "staging remained visible after publish");
+    require(value(platform->directory_exists(published), "published exists"),
+            "published directory is missing");
+    require(
+        text(value(
+            platform->read_complete(published / "nested/payload.bin"),
+            "published payload")) == "complete",
+        "published payload changed");
+    require(
+        value(
+            platform->byte_length(published / "nested/large.bin"),
+            "published large payload") == large_payload.size(),
+        "published large payload changed");
+    const auto directory_names =
+        value(platform->list_directories(contract), "directory listing");
+    require(
+        std::find(directory_names.begin(), directory_names.end(),
+                  "published-directory") != directory_names.end(),
+        "published directory was not listed");
+    const auto collision_staging = contract / "collision-staging";
+    success(platform->ensure_directory(collision_staging), "collision staging");
+    const auto collision = platform->publish_directory_if_absent(
+        collision_staging, published);
+    require(
+        !collision.has_value() &&
+            collision.error().details.value("storage_condition", "") ==
+                project_io::kStorageConditionAlreadyExists,
+        "directory publish overwrote an existing destination");
+    success(platform->remove_tree(published), "recursive published removal");
+    success(platform->remove_tree(published), "idempotent recursive removal");
+    success(
+        platform->remove_tree(collision_staging),
+        "collision staging removal");
+    directory_transfer = "pass";
+  }
+  publication_lease.reset();
+
   contract_lease.reset();
 
   return {
@@ -408,9 +540,18 @@ nlohmann::json run_suite() {
           {"appendContracts", "pass"}, {"lease", "pass"},
           {"mountFailure", "pass"}, {"idempotentRemove", "pass"},
           {"immutableShortWrites", "pass"},
+          {"directoryTransfer", directory_transfer},
           {"directoryBarrier", "absent"},
+          {"publicationMaxChunkBytes",
+           lmdj_opfs_publication_max_chunk_bytes()},
           {"replacementFaultPoints", {"before_write", "during_write", "before_close",
-                                        "after_close", "before_cleanup"}}
+                                        "after_close", "before_cleanup"}},
+          {"publicationFaultPoints",
+           {"before_intent_write", "during_intent_write",
+            "after_pending_intent", "during_directory_copy",
+            "after_directory_copy", "during_directory_verify",
+            "before_commit_close", "after_commit_close",
+            "before_source_cleanup", "before_intent_cleanup"}}
       }}
   };
 }

@@ -82,7 +82,6 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.repo.full_name", selector)
 
         for job_name in (
-            "web-toolchain-conformance",
             "web-runtime-host",
             "web-runtime-lab",
             "core-ubuntu",
@@ -96,6 +95,14 @@ class CiRunnerFallbackTest(unittest.TestCase):
                     "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
                     job,
                 )
+
+    def test_resource_intensive_web_gates_use_hosted_runners(self) -> None:
+        for job_name in ("web-toolchain-conformance", "creator-web"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertNotIn("needs: select-ubuntu-runner", job)
+                self.assertIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
 
     def test_linux_fixture_consumers_rehydrate_lfs_before_generation(self) -> None:
         consumers = {
