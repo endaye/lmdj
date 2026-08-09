@@ -11,6 +11,33 @@ const repoRoot = path.resolve(import.meta.dirname, "../../..");
 const orchestrator = path.join(repoRoot, "apps/web-runtime-host/tools/deploy_orchestrator.py");
 const baseHeaders = path.join(repoRoot, "apps/web-runtime-host/deploy/_headers");
 
+function pythonEnvironment(source = process.env) {
+  const environment = { LANG: "C", PATH: source.PATH ?? "" };
+  for (const name of ["LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"]) {
+    if (source[name]) {
+      environment[name] = source[name];
+    }
+  }
+  return environment;
+}
+
+test("Python subprocess environment preserves loader paths but omits credentials", () => {
+  assert.deepEqual(
+    pythonEnvironment({
+      DYLD_LIBRARY_PATH: "/mac-libs",
+      GITHUB_TOKEN: "must-not-leak",
+      LD_LIBRARY_PATH: "/linux-libs",
+      PATH: "/tools",
+    }),
+    {
+      DYLD_LIBRARY_PATH: "/mac-libs",
+      LANG: "C",
+      LD_LIBRARY_PATH: "/linux-libs",
+      PATH: "/tools",
+    },
+  );
+});
+
 test("assembled Netlify headers cache only the nine manifest assets immutably", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "lmdj-netlify-headers-"));
   try {
@@ -33,7 +60,7 @@ test("assembled Netlify headers cache only the nine manifest assets immutably", 
     const rendered = spawnSync(
       "python3",
       [orchestrator, "render-headers", dist, baseHeaders],
-      { encoding: "utf8", env: { LANG: "C", PATH: process.env.PATH ?? "" } },
+      { encoding: "utf8", env: pythonEnvironment() },
     );
     assert.equal(rendered.status, 0, rendered.stderr);
     assert.doesNotMatch(rendered.stdout, /^\/assets\/\*$/m);
