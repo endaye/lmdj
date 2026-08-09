@@ -24,3 +24,26 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
 当前候选 Product tag 文本为 `lmdj-v1.0.16.3`，仅是未来 tag 文本。当前源码身份不宣称远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+
+## Runtime Host 公共发布
+
+Runtime Host 的两阶段发布工具和 workflow 定义已经存在：从 canonical origin 验证 remote
+annotated signed Product tag、protected `main` ancestry，以及 Release 精确三资产 ZIP、
+checksum 和受信 Product key 的 detached armored signature；signature 验证先于 checksum
+解析。发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
+HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
+API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
+以官方 reversible site disable 安全撤下。成功 evidence v2 与恢复 evidence v1 分别保存完整
+HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
+状态必须由与精确身份绑定的 evidence 独立报告。
+
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.16.3` 已获得 remote verified
+tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
+promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
+精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、
+Proof、PR Preview 或 workflow 定义都不能替代它。运营前置条件、恢复和凭据轮换见仓库运行手册
+`docs/deploy/web-runtime-host.md`；其验收真相记录见
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+proof-only Python server 不属于生产面；Netlify 将静态服务经验证的 release `dist`。
+`lmdj-canary` 属于 Creator 交付边界，不能作为 Diagnostic Runtime Host 的项目、别名或 URL。

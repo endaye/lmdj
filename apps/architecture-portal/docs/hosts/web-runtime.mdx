@@ -13,6 +13,8 @@ source_paths:
   - products/lmdj/assembly.json
   - scripts/web-runtime-host.sh
   - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+  - docs/deploy/web-runtime-host.md
+  - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
   - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
   - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
   - tests/platform/web/host/web_runtime_host_browser.spec.mjs
@@ -38,6 +40,27 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 `scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.2`、Platform `0.1.2`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
+
+## 公共发布边界
+
+两阶段 Netlify release/deploy 工具已进入仓库源码：从 canonical origin 获取受保护 `main` 和
+remote annotated signed Product tag，验证 tag commit 是该 `main` 的 ancestor；GitHub
+Release 必须精确包含 ZIP、checksum 和由受信 Product key 签名的 armored detached
+checksum signature，工具在解析 checksum 前先验证 signature。组装层只为 manifest 中的
+九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
+部署前先验证真实 prior immutable/production 身份和 HTTP/Chromium；发布后失败或中断时
+reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
+使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
+evidence v1。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
+自动证明当前 Product Build `1.0.16.3` 已获得 remote verified tag、Release、Deploy ID、
+immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
+工具测试或 PR Preview 上升为当前候选的公开部署结论。
+
+Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
+`lmdj-canary` 属于 Creator 交付边界，不绑定给 Diagnostic Runtime Host，亦不作为其 Runtime URL。
+操作前置条件、失败处置、精确 Deploy-ID 回滚和轮换在仓库运行手册
+`docs/deploy/web-runtime-host.md`；当前 acceptance 记录在
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 
 ## 生命周期门禁
 

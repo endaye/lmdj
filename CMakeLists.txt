@@ -193,6 +193,26 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.web_runtime_deploy_workflow
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/web_runtime_deploy_workflow_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
+
+lmdj_add_test(
+  NAME build.web_runtime_public_deployment_docs
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/web_runtime_public_deployment_docs_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
+
+lmdj_add_test(
   NAME host.mcp_stdio
   TIER host
   COMMAND
