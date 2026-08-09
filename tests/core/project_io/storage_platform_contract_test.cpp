@@ -24,6 +24,7 @@
 
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
+#include <lmdj/project_io/workspace_cache.hpp>
 
 #include "packages/project-io/src/testing_hooks.hpp"
 #include "tests/core/support/test.hpp"
@@ -34,6 +35,7 @@ using lmdj::foundation::ErrorCode;
 using lmdj::project_io::make_default_project_storage_platform;
 using lmdj::project_io::make_native_project_storage_platform;
 using lmdj::project_io::testing::FaultPoint;
+using lmdj::project_io::WorkspaceCacheStore;
 
 FaultPoint expected_fault = FaultPoint::transaction_temp_sync;
 std::filesystem::path expected_final;
@@ -680,6 +682,93 @@ void test_replacement_readers_observe_only_complete_versions() {
   reader.get();
 }
 
+void test_workspace_cache_validates_generated_keys_and_replaces_atomically() {
+  TempDirectory temp;
+  const auto root = temp.path() / ".lmdj-host/workspace-cache";
+  auto platform = make_default_project_storage_platform();
+  WorkspaceCacheStore cache{root, platform};
+  constexpr std::string_view key =
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/"
+      "waveform.v1/max-abs-mirror/256.bin";
+
+  const auto missing = cache.read(key);
+  LMDJ_CHECK(missing.has_value());
+  LMDJ_CHECK(!missing.value().has_value());
+  LMDJ_CHECK(cache.write(key, bytes("first-cache-value")).has_value());
+  const auto first = cache.read(key);
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(first.value().has_value());
+  LMDJ_CHECK(text(*first.value()) == "first-cache-value");
+
+  const auto project = temp.path() / "unrelated-project.lmdj";
+  LMDJ_CHECK(platform->ensure_directory(project).has_value());
+  auto project_lease = platform->acquire_writer(project);
+  LMDJ_CHECK(project_lease.has_value());
+  LMDJ_CHECK(cache.write(key, bytes("second-cache-value")).has_value());
+  const auto second = cache.read(key);
+  LMDJ_CHECK(second.has_value());
+  LMDJ_CHECK(second.value().has_value());
+  LMDJ_CHECK(text(*second.value()) == "second-cache-value");
+  project_lease.value().reset();
+
+  const std::array invalid_keys{
+      std::string{""},
+      std::string{"."},
+      std::string{".."},
+      std::string{"/absolute"},
+      std::string{"a//b"},
+      std::string{"a/./b"},
+      std::string{"a/../b"},
+      std::string{"a/"},
+      std::string{"A/uppercase"},
+      std::string{"user filename.wav"},
+      std::string(256, 'a'),
+  };
+  for (const auto& invalid : invalid_keys) {
+    const auto rejected = cache.write(invalid, bytes("escape"));
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  }
+  LMDJ_CHECK(!std::filesystem::exists(temp.path() / "absolute"));
+}
+
+void test_workspace_cache_corruption_is_a_bounded_miss_and_remove_is_idempotent() {
+  TempDirectory temp;
+  const auto root = temp.path() / ".lmdj-host/workspace-cache";
+  auto platform = make_default_project_storage_platform();
+  WorkspaceCacheStore cache{root, platform};
+  constexpr std::string_view corrupt_key = "aa/waveform.v1/64.bin";
+  constexpr std::string_view sibling_key = "bb/waveform.v1/64.bin";
+  LMDJ_CHECK(cache.write(corrupt_key, bytes("verified")).has_value());
+  LMDJ_CHECK(cache.write(sibling_key, bytes("sibling")).has_value());
+  LMDJ_CHECK(
+      platform->replace_complete(root / corrupt_key, bytes("corrupt"))
+          .has_value());
+
+  const auto corrupt = cache.read(corrupt_key);
+  LMDJ_CHECK(corrupt.has_value());
+  LMDJ_CHECK(!corrupt.value().has_value());
+  LMDJ_CHECK(!platform->exists(root / corrupt_key).value());
+  const auto sibling = cache.read(sibling_key);
+  LMDJ_CHECK(sibling.has_value());
+  LMDJ_CHECK(sibling.value().has_value());
+  LMDJ_CHECK(text(*sibling.value()) == "sibling");
+  LMDJ_CHECK(cache.remove(corrupt_key).has_value());
+  LMDJ_CHECK(cache.remove(corrupt_key).has_value());
+
+  const auto external = temp.path() / "external";
+  std::filesystem::create_directories(external);
+  write_bytes(external / "must-survive", "outside");
+  const auto linked_root = temp.path() / "linked-cache";
+  std::filesystem::create_directory_symlink(external, linked_root);
+  WorkspaceCacheStore linked_cache{linked_root, platform};
+  const auto rejected = linked_cache.write("aa/value.bin", bytes("overwrite"));
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(text(platform->read_complete(external / "must-survive").value()) ==
+             "outside");
+}
+
 void test_complete_read_serializes_compliant_same_inode_mutation() {
   using namespace std::chrono_literals;
   TempDirectory temp;
@@ -826,6 +915,8 @@ int main() {
     test_names_use_unsigned_byte_order();
     test_directory_transfer_primitives_are_atomic_and_path_safe();
     test_replacement_readers_observe_only_complete_versions();
+    test_workspace_cache_validates_generated_keys_and_replaces_atomically();
+    test_workspace_cache_corruption_is_a_bounded_miss_and_remove_is_idempotent();
     test_complete_read_serializes_compliant_same_inode_mutation();
     test_special_files_are_rejected_without_blocking();
     test_managed_tree_rejects_hard_linked_regular_files();

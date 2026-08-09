@@ -5,6 +5,7 @@ import {
   PUBLICATION_FAULT_POINTS,
   REPLACEMENT_FAULT_POINTS,
   STORAGE_CONDITION_FAULTS,
+  replacementReachedCommit,
 } from "./project_io_web_faults.mjs";
 
 const STORAGE_CAPABILITY_ORDER = Object.freeze([
@@ -134,6 +135,23 @@ async function clearFaultControl(page) {
     await host.removeEntry("test-fault.json").catch(() => {});
     await host.removeEntry("test-fault-reached").catch(() => {});
   });
+}
+
+async function readCheckpointShape(page, bundle, revision) {
+  return page.evaluate(async ({bundle, revision}) => {
+    const root = await navigator.storage.getDirectory();
+    const project = await root.getDirectoryHandle(`${bundle}.lmdj`);
+    const history = await project.getDirectoryHandle("history");
+    const checkpoints = await history.getDirectoryHandle("checkpoints");
+    const file = await (await checkpoints.getFileHandle(`${revision}.json`)).getFile();
+    const checkpoint = JSON.parse(await file.text());
+    const pad = checkpoint.banks[0].pads[0];
+    return {
+      contract: checkpoint.contract,
+      padKeys: Object.keys(pad).sort(),
+      playbackKeys: pad.playback ? Object.keys(pad.playback).sort() : [],
+    };
+  }, {bundle, revision});
 }
 
 async function preparePublicationFixture(page, bundle) {
@@ -335,6 +353,21 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
   expect(result.postReleaseAcquisition).toBe("pass");
 });
 
+test("Web Project I/O creates and opens an untouched v1 Project", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const project = await trackedPage(context);
+  const bundle = `v1-round-trip-${Date.now()}`;
+  await project.goto(
+      `/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
+  expect((await waitForResult(project)).revision).toBe(0);
+  expect(await readCheckpointShape(project, bundle, 0)).toEqual({
+    contract: "lmdj.project.v1",
+    padKeys: ["asset_id", "pad"],
+    playbackKeys: [],
+  });
+  await project.close();
+});
+
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
   test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
   trackRuntimeErrors(page);
@@ -456,6 +489,11 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     const prepare = await trackedPage(context);
     await prepare.goto(`/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
     expect((await waitForResult(prepare)).revision).toBe(0);
+    expect(await readCheckpointShape(prepare, bundle, 0)).toEqual({
+      contract: "lmdj.project.v1",
+      padKeys: ["asset_id", "pad"],
+      playbackKeys: [],
+    });
     await writeFaultControl(
         prepare, `/lmdj-workspace/${bundle}.lmdj/manifest.json`, point);
 
@@ -467,8 +505,27 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
     const restarted = await trackedPage(context);
     await restarted.goto(`/project_io/project_io_web_test.html?action=reopen&bundle=${bundle}`);
-    const expectedRevision = ["after_close", "before_cleanup"].includes(point) ? 1 : 0;
+    const expectedRevision = replacementReachedCommit(point) ? 1 : 0;
     expect((await waitForResult(restarted)).revision).toBe(expectedRevision);
+    expect(await readCheckpointShape(restarted, bundle, expectedRevision)).toEqual(
+      expectedRevision === 0
+        ? {
+            contract: "lmdj.project.v1",
+            padKeys: ["asset_id", "pad"],
+            playbackKeys: [],
+          }
+        : {
+            contract: "lmdj.project.v2",
+            padKeys: ["asset_id", "pad", "playback"],
+            playbackKeys: [
+              "gain_millidb",
+              "muted",
+              "trigger_mode",
+              "trim_end_frame",
+              "trim_start_frame",
+            ],
+          },
+    );
     await restarted.close();
     await prepare.close();
   }
@@ -492,7 +549,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     const restarted = await trackedPage(context);
     await restarted.goto(
         `/project_io/project_io_web_test.html?action=reopen_replacement&scenario=absent&bundle=${bundle}`);
-    const expectedState = ["after_close", "before_cleanup"].includes(point)
+    const expectedState = replacementReachedCommit(point)
       ? "new"
       : "absent";
     expect((await waitForResult(restarted)).state).toBe(expectedState);

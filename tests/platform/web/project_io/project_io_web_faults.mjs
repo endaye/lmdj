@@ -6,6 +6,13 @@ export const REPLACEMENT_FAULT_POINTS = Object.freeze([
   "before_cleanup",
 ]);
 
+export function replacementReachedCommit(point) {
+  if (!REPLACEMENT_FAULT_POINTS.includes(point)) {
+    throw new TypeError(`unknown replacement fault point: ${point}`);
+  }
+  return point === "after_close" || point === "before_cleanup";
+}
+
 export const PUBLICATION_FAULT_POINTS = Object.freeze([
   "before_intent_write",
   "during_intent_write",

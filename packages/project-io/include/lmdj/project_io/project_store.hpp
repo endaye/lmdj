@@ -54,6 +54,14 @@ class ProjectStore {
     std::span<const std::byte> bytes;
   };
 
+  struct ImportAssignSampleBytesRequest {
+    domain::CommandMeta meta;
+    domain::PadSlotId slot;
+    foundation::AssetId asset_id;
+    std::string media_type;
+    std::span<const std::byte> bytes;
+  };
+
   foundation::Result<void> create(
       const std::filesystem::path& bundle,
       const domain::ProjectState& initial);
@@ -62,6 +70,12 @@ class ProjectStore {
   foundation::Result<domain::AppliedCommand> execute(
       const std::filesystem::path& bundle,
       const domain::Command& command);
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
+      const domain::UpdatePadPlayback& command);
+  foundation::Result<domain::AppliedCommand> execute(
+      const std::filesystem::path& bundle,
+      const domain::ResetPadPlayback& command);
   foundation::Result<CommandExecution> execute_with_identity(
       const std::filesystem::path& bundle,
       const domain::Command& command);
@@ -71,6 +85,9 @@ class ProjectStore {
   foundation::Result<domain::AppliedCommand> import_artifact_bytes(
       const std::filesystem::path& bundle,
       const ImportArtifactBytesRequest& request);
+  foundation::Result<domain::AppliedCommand> import_assign_sample_bytes(
+      const std::filesystem::path& bundle,
+      const ImportAssignSampleBytesRequest& request);
   foundation::Result<ImportArtifactExecution>
   import_artifact_with_identity(
       const std::filesystem::path& bundle,
