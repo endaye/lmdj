@@ -133,8 +133,9 @@ jobs:
           echo "Using trusted self-hosted runner pool: $eligible_count eligible runner(s)"
 
   web-toolchain-conformance:
-    needs: select-ubuntu-runner
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
+    # bounded test budgets on the heterogeneous self-hosted Linux pool.
+    runs-on: ubuntu-24.04
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
