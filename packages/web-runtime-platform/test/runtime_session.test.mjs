@@ -89,7 +89,7 @@ function fixture({
       hostId: "web-runtime-host",
       hostVersion: "1.2.2",
       platformVersion: "0.1.2",
-      productBuild: "1.0.16.3",
+      productBuild: "1.0.16.4",
       protocolVersion: 1,
     },
     inputConfiguration: {},
@@ -113,7 +113,7 @@ function fixture({
         host_id: "web-runtime-host",
         host_version: "1.2.2",
         platform_version: "0.1.2",
-        product_build: "1.0.16.3",
+        product_build: "1.0.16.4",
         protocol_version: 1,
       }),
     },
@@ -173,7 +173,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
     hostId: "creator-web",
     hostVersion: "1.0.2",
     platformVersion: "0.1.2",
-    productBuild: "1.0.16.3",
+    productBuild: "1.0.16.4",
     protocolVersion: 1,
   };
   const manifestSource = {

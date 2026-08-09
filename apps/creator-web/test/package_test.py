@@ -120,7 +120,7 @@ class CreatorPackageTest(unittest.TestCase):
         manifest = json.loads(manifest_bytes)
         self.assertEqual(self.module.canonical_json(manifest), manifest_bytes)
         self.assertEqual(manifest["distribution_contract"], "lmdj.creator-web.distribution.v1")
-        self.assertEqual(manifest["product_build"], "1.0.16.3")
+        self.assertEqual(manifest["product_build"], "1.0.16.4")
         self.assertEqual(manifest["host_id"], "creator-web")
         self.assertEqual(manifest["host_version"], "1.0.2")
         self.assertEqual(manifest["platform_version"], "0.1.2")

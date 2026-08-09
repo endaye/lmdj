@@ -266,6 +266,26 @@ clean-source Proof before push.
 The third corrective candidate tag text is `lmdj-v1.0.16.3`; creating or
 pushing that tag still requires separate post-merge approval.
 
+### Fourth post-freeze corrective patch
+
+After PR #97 incorporated the PR #99 deployment documentation and was squash
+merged, the merged `main` commit contained both the older `1.0.16.3` snapshot
+source projection and later current-Portal changes. The Portal correctly
+rejected that single squash commit because the frozen source projection was
+neither its direct parent nor squash-equivalent. The immutable `1.0.16.3`
+snapshot remains unchanged. Product Build `1.0.16.4 · canary` is allocated only
+to restore auditable snapshot provenance before release; it must receive a new
+immutable snapshot and full clean-source Proof.
+
+| Identity | Frozen third candidate | Fourth corrective candidate | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.3` | `1.0.16.4` | Repair merged-main snapshot provenance without changing product capability or public Contract semantics. |
+| Modules / Hosts / Contracts / Providers / Models | current | unchanged | No implementation or independently versioned identity changes. |
+
+The fourth corrective candidate tag text is `lmdj-v1.0.16.4`; creating and
+pushing it is authorized only after the corrective PR is merged, merged-main
+Proof is current, and the exact tag target has been verified.
+
 ---
 
 ### Task 1: Define and prove the portable Project Bundle Contract

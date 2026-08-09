@@ -21,7 +21,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.0.2` 已进入 Product Build `1.0.16.3` Assembly。它只依赖共享 Web Runtime Platform `0.1.2`，不直接依赖或绕过 Application Facade。
+<StatusBadge status="implemented" /> Creator Web Host `1.0.2` 已进入 Product Build `1.0.16.4` Assembly。它只依赖共享 Web Runtime Platform `0.1.2`，不直接依赖或绕过 Application Facade。
 
 ## 创作边界
 
@@ -39,9 +39,9 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。`1.0.16.3` corrective candidate 已冻结新的不可变 `canary` 快照，并在包含该快照的 repository revision `ee14a280fec9847c84c5dfd429303b40ef5f0993` 重新完成 Core、Web Toolchain、Formal Web Host 与 Creator clean-source Proof；快照 source revision 是 `8ad5fbf3136074e94492c8408cd1a55befc8322f`。精确命令、计数及 GitHub 来源检查的网络阻断记录在 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`，不沿用 `1.0.16.2` 的历史结论。
+Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。`1.0.16.4` 是仅修复 `1.0.16.3` 合并后快照 provenance 的第四个 corrective candidate；Host、Module、Contract、Provider 与 Model 身份均不变化。`1.0.16.3` 的历史本地 Proof 记录保留在 `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`，但不能替代本候选重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
-该结论是本地自动化验收，不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
+自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 
 ## 非能力
 
