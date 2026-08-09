@@ -96,11 +96,13 @@ class CiRunnerFallbackTest(unittest.TestCase):
                     job,
                 )
 
-    def test_performance_sensitive_web_toolchain_uses_hosted_runner(self) -> None:
-        job = self.workflow_job("web-toolchain-conformance")
-        self.assertNotIn("needs: select-ubuntu-runner", job)
-        self.assertIn("runs-on: ubuntu-24.04", job)
-        self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
+    def test_resource_intensive_web_gates_use_hosted_runners(self) -> None:
+        for job_name in ("web-toolchain-conformance", "creator-web"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertNotIn("needs: select-ubuntu-runner", job)
+                self.assertIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
 
     def test_linux_fixture_consumers_rehydrate_lfs_before_generation(self) -> None:
         consumers = {

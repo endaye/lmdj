@@ -216,8 +216,8 @@ jobs:
           scripts/web-runtime-host.sh proof
 
   creator-web:
-    needs: [select-ubuntu-runner, web-toolchain-conformance, core-ubuntu]
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    needs: [web-toolchain-conformance, core-ubuntu]
+    runs-on: ubuntu-24.04
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
