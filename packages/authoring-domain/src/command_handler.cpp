@@ -183,8 +183,12 @@ foundation::Result<AppliedCommand> apply_new_command(
   }
   auto copy = state;
   auto& pad = copy.banks.at(command.slot.bank).at(command.slot.pad);
+  const bool resets_playback =
+      !command.asset_id.has_value() || pad.asset_id != command.asset_id;
   pad.asset_id = command.asset_id;
-  pad.playback = PadPlayback{};
+  if (resets_playback) {
+    pad.playback = PadPlayback{};
+  }
   return foundation::Result<AppliedCommand>::success(
       applied(std::move(copy), "pad.assigned", command.meta));
 }

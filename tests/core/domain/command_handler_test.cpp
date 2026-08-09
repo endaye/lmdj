@@ -89,9 +89,9 @@ ImportAssignSample import_assign_sample(
     std::string asset_id) {
   return ImportAssignSample{
       meta(std::move(command_id), revision),
-      slot,
       {AssetId{std::move(asset_id)},
        ArtifactRef{kValidSha256, "audio/wav", 1}},
+      slot,
   };
 }
 
@@ -265,7 +265,7 @@ void test_pads_sharing_an_asset_keep_independent_playback() {
   LMDJ_CHECK(state.banks[0][1].playback == second);
 }
 
-void test_assignment_and_explicit_reset_restore_default_playback() {
+void test_same_asset_assignment_preserves_playback() {
   auto state = apply_or_throw(
       new_project(),
       import_assign_sample(
@@ -284,22 +284,84 @@ void test_assignment_and_explicit_reset_restore_default_playback() {
               Command{assign_pad(
                   kAssignCommand1, 2, PadSlotId{0, 0}, AssetId{kAsset1})})
               .state;
+
+  LMDJ_CHECK(
+      state.banks[0][0].playback ==
+      (PadPlayback{10, 90, TriggerMode::loop_gate, -1200, true}));
+}
+
+void test_unassign_resets_playback() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kPlaybackCommand,
+                  1,
+                  PadSlotId{0, 0},
+                  PadPlayback{10, 90, TriggerMode::loop_gate, -1200, true}))
+              .state;
+  state = apply_or_throw(
+              state,
+              Command{AssignPad{
+                  meta(kAssignCommand1, 2), PadSlotId{0, 0}, std::nullopt}})
+              .state;
+
+  LMDJ_CHECK(!state.banks[0][0].asset_id.has_value());
   LMDJ_CHECK(state.banks[0][0].playback == PadPlayback{});
+}
+
+void test_different_asset_assignment_resets_playback() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  state = apply_or_throw(
+              state, Command{import_asset(kImportCommand2, 1, kAsset2)})
+              .state;
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kPlaybackCommand,
+                  2,
+                  PadSlotId{0, 0},
+                  PadPlayback{10, 90, TriggerMode::loop_gate, -1200, true}))
+              .state;
+  state = apply_or_throw(
+              state,
+              Command{assign_pad(
+                  kAssignCommand1, 3, PadSlotId{0, 0}, AssetId{kAsset2})})
+              .state;
+
+  LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset2});
+  LMDJ_CHECK(state.banks[0][0].playback == PadPlayback{});
+}
+
+void test_explicit_reset_restores_default_playback() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
 
   state = apply_or_throw(
               state,
               update_playback(
                   kPlaybackCommand,
-                  3,
+                  1,
                   PadSlotId{0, 0},
                   PadPlayback{5, 15, TriggerMode::gate, 500, false}))
               .state;
   const auto reset = lmdj::domain::apply(
       state,
-      ResetPadPlayback{meta(kResetCommand, 4), PadSlotId{0, 0}},
+      ResetPadPlayback{meta(kResetCommand, 2), PadSlotId{0, 0}},
       {});
   LMDJ_CHECK(reset.has_value());
-  LMDJ_CHECK(reset.value().state.revision == 5);
+  LMDJ_CHECK(reset.value().state.revision == 3);
   LMDJ_CHECK(reset.value().state.banks[0][0].playback == PadPlayback{});
 }
 
@@ -633,7 +695,10 @@ int main() {
     test_update_pad_playback_migrates_an_unassigned_v1_project();
     test_update_pad_playback_accepts_all_modes_bounds_and_nullable_end();
     test_pads_sharing_an_asset_keep_independent_playback();
-    test_assignment_and_explicit_reset_restore_default_playback();
+    test_same_asset_assignment_preserves_playback();
+    test_unassign_resets_playback();
+    test_different_asset_assignment_resets_playback();
+    test_explicit_reset_restores_default_playback();
     test_duplicate_playback_update_replays_without_another_revision();
     test_update_pad_playback_rejects_invalid_values();
     test_assign_pad_rejects_missing_asset();

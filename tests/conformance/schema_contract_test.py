@@ -130,7 +130,7 @@ assert set(playback["required"]) == {
     "trim_end_frame",
     "trigger_mode",
     "gain_millidb",
-    "choke_enabled",
+    "muted",
 }
 assert set(playback["properties"]) == set(playback["required"])
 assert playback["additionalProperties"] is False
@@ -150,7 +150,7 @@ assert playback["properties"]["gain_millidb"] == {
     "minimum": -60000,
     "maximum": 6000,
 }
-assert playback["properties"]["choke_enabled"] == {"type": "boolean"}
+assert playback["properties"]["muted"] == {"type": "boolean"}
 
 capability = schemas["capability"]
 assert set(capability["required"]) == {

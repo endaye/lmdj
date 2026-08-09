@@ -14,12 +14,12 @@
 
 namespace lmdj::domain {
 
-enum class ProjectContract {
+enum class ProjectContract : std::uint8_t {
   v1,
   v2,
 };
 
-enum class TriggerMode {
+enum class TriggerMode : std::uint8_t {
   one_shot,
   gate,
   loop_gate,
@@ -31,7 +31,7 @@ struct PadPlayback {
   std::optional<std::uint64_t> trim_end_frame;
   TriggerMode trigger_mode{TriggerMode::one_shot};
   std::int32_t gain_millidb{0};
-  bool choke_enabled{false};
+  bool muted{false};
 
   bool operator==(const PadPlayback&) const = default;
 };

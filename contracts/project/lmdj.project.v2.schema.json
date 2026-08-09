@@ -149,7 +149,7 @@
         "trim_end_frame",
         "trigger_mode",
         "gain_millidb",
-        "choke_enabled"
+        "muted"
       ],
       "properties": {
         "trim_start_frame": {
@@ -168,7 +168,7 @@
           "minimum": -60000,
           "maximum": 6000
         },
-        "choke_enabled": {
+        "muted": {
           "type": "boolean"
         }
       },

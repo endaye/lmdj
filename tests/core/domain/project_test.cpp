@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include <lmdj/domain/project.hpp>
 
@@ -11,6 +12,13 @@
 namespace {
 
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
+
+static_assert(std::is_same_v<
+    std::underlying_type_t<lmdj::domain::ProjectContract>,
+    std::uint8_t>);
+static_assert(std::is_same_v<
+    std::underlying_type_t<lmdj::domain::TriggerMode>,
+    std::uint8_t>);
 
 void test_uuid_validation_matches_project_contract_grammar() {
   for (const std::string_view valid : {
@@ -66,7 +74,7 @@ void test_pad_playback_defaults_are_project_v2_contract_values() {
   LMDJ_CHECK(!playback.trim_end_frame.has_value());
   LMDJ_CHECK(playback.trigger_mode == lmdj::domain::TriggerMode::one_shot);
   LMDJ_CHECK(playback.gain_millidb == 0);
-  LMDJ_CHECK(!playback.choke_enabled);
+  LMDJ_CHECK(!playback.muted);
 }
 
 void test_project_factory_accepts_only_supported_bpm_range() {

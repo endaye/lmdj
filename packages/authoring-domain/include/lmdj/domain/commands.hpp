@@ -27,8 +27,8 @@ struct AssignPad {
 
 struct ImportAssignSample {
   CommandMeta meta;
-  PadSlotId slot;
   Asset asset;
+  PadSlotId slot;
 };
 
 struct UpdatePadPlayback {
