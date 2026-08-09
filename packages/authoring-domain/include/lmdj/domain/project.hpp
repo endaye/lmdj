@@ -14,6 +14,28 @@
 
 namespace lmdj::domain {
 
+enum class ProjectContract {
+  v1,
+  v2,
+};
+
+enum class TriggerMode {
+  one_shot,
+  gate,
+  loop_gate,
+  loop_toggle,
+};
+
+struct PadPlayback {
+  std::uint64_t trim_start_frame{0};
+  std::optional<std::uint64_t> trim_end_frame;
+  TriggerMode trigger_mode{TriggerMode::one_shot};
+  std::int32_t gain_millidb{0};
+  bool choke_enabled{false};
+
+  bool operator==(const PadPlayback&) const = default;
+};
+
 struct PadSlotId {
   std::uint8_t bank;
   std::uint8_t pad;
@@ -24,6 +46,7 @@ struct PadSlotId {
 struct PadSlot {
   PadSlotId id;
   std::optional<foundation::AssetId> asset_id;
+  PadPlayback playback;
 
   bool operator==(const PadSlot&) const = default;
 };
@@ -68,6 +91,7 @@ struct RawTake {
 };
 
 struct ProjectState {
+  ProjectContract contract;
   foundation::ProjectId id;
   std::uint64_t revision;
   std::uint16_t bpm;

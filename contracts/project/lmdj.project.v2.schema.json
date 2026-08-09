@@ -1,0 +1,546 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://lmdj.dev/contracts/project/lmdj.project.v2.schema.json",
+  "x-lmdj-contract-version": "2.0.0",
+  "title": "LMDJ Project Truth v2",
+  "type": "object",
+  "required": [
+    "contract",
+    "project_id",
+    "revision",
+    "bpm",
+    "banks",
+    "assets",
+    "takes",
+    "patterns"
+  ],
+  "properties": {
+    "contract": {
+      "const": "lmdj.project.v2"
+    },
+    "project_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bpm": {
+      "type": "integer",
+      "minimum": 40,
+      "maximum": 240
+    },
+    "banks": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "items": {
+        "$ref": "#/$defs/bank"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": ["bank"],
+            "properties": {"bank": {"const": 0}}
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["bank"],
+            "properties": {"bank": {"const": 1}}
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["bank"],
+            "properties": {"bank": {"const": 2}}
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": ["bank"],
+            "properties": {"bank": {"const": 3}}
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "assets": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/uuid"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "takes": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/uuid"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/raw_take"
+      }
+    },
+    "patterns": {
+      "type": "object",
+      "propertyNames": {
+        "$ref": "#/$defs/uuid"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/pattern"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "uuid": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "artifact": {
+      "type": "object",
+      "required": ["sha256", "media_type", "byte_length"],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "media_type": {
+          "type": "string",
+          "minLength": 1
+        },
+        "byte_length": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "required": ["artifact"],
+      "properties": {
+        "artifact": {
+          "$ref": "#/$defs/artifact"
+        }
+      },
+      "additionalProperties": false
+    },
+    "playback": {
+      "type": "object",
+      "required": [
+        "trim_start_frame",
+        "trim_end_frame",
+        "trigger_mode",
+        "gain_millidb",
+        "choke_enabled"
+      ],
+      "properties": {
+        "trim_start_frame": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "trim_end_frame": {
+          "type": ["integer", "null"],
+          "minimum": 1
+        },
+        "trigger_mode": {
+          "enum": ["one_shot", "gate", "loop_gate", "loop_toggle"]
+        },
+        "gain_millidb": {
+          "type": "integer",
+          "minimum": -60000,
+          "maximum": 6000
+        },
+        "choke_enabled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pad": {
+      "type": "object",
+      "required": ["pad", "asset_id", "playback"],
+      "properties": {
+        "pad": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        },
+        "asset_id": {
+          "oneOf": [
+            {"$ref": "#/$defs/uuid"},
+            {"type": "null"}
+          ]
+        },
+        "playback": {
+          "$ref": "#/$defs/playback"
+        }
+      },
+      "additionalProperties": false
+    },
+    "bank": {
+      "type": "object",
+      "required": ["bank", "pads"],
+      "properties": {
+        "bank": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "pads": {
+          "type": "array",
+          "minItems": 16,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/pad"
+          },
+          "allOf": [
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 0}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 1}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 2}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 3}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 4}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 5}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 6}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 7}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 8}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 9}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 10}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 11}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 12}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 13}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 14}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            },
+            {
+              "contains": {
+                "type": "object",
+                "required": ["pad"],
+                "properties": {"pad": {"const": 15}}
+              },
+              "minContains": 1,
+              "maxContains": 1
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "slot": {
+      "type": "object",
+      "required": ["bank", "pad"],
+      "properties": {
+        "bank": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "pad": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 15
+        }
+      },
+      "additionalProperties": false
+    },
+    "raw_take_event": {
+      "type": "object",
+      "required": ["slot", "frame_offset", "velocity"],
+      "properties": {
+        "slot": {
+          "$ref": "#/$defs/slot"
+        },
+        "frame_offset": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "velocity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        }
+      },
+      "additionalProperties": false
+    },
+    "raw_take": {
+      "type": "object",
+      "required": ["sample_rate", "events"],
+      "properties": {
+        "sample_rate": {
+          "const": 48000
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/raw_take_event"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "pattern_event": {
+      "type": "object",
+      "required": ["slot", "step", "velocity"],
+      "properties": {
+        "slot": {
+          "$ref": "#/$defs/slot"
+        },
+        "step": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "velocity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 127
+        }
+      },
+      "additionalProperties": false
+    },
+    "pattern": {
+      "type": "object",
+      "required": ["bars", "events"],
+      "properties": {
+        "bars": {
+          "enum": [1, 2, 4, 8]
+        },
+        "events": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pattern_event"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 1
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 15
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 2
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 31
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 4
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 63
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "bars": {
+                "const": 8
+              }
+            },
+            "required": ["bars"]
+          },
+          "then": {
+            "properties": {
+              "events": {
+                "items": {
+                  "properties": {
+                    "step": {
+                      "maximum": 127
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

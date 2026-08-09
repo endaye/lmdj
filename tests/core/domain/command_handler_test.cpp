@@ -1,3 +1,4 @@
+#include <array>
 #include <exception>
 #include <iostream>
 #include <map>
@@ -18,12 +19,17 @@ using lmdj::domain::CommandMeta;
 using lmdj::domain::CommandReceipt;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
+using lmdj::domain::ImportAssignSample;
+using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::RawTake;
 using lmdj::domain::RawTakeEvent;
 using lmdj::domain::RecordTake;
+using lmdj::domain::ResetPadPlayback;
+using lmdj::domain::TriggerMode;
+using lmdj::domain::UpdatePadPlayback;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -39,6 +45,9 @@ constexpr auto kAssignCommand1 = "10000000-0000-4000-8000-000000000003";
 constexpr auto kPatternCommand = "10000000-0000-4000-8000-000000000004";
 constexpr auto kAssignCommand2 = "10000000-0000-4000-8000-000000000005";
 constexpr auto kRecordCommand = "10000000-0000-4000-8000-000000000006";
+constexpr auto kPlaybackCommand = "10000000-0000-4000-8000-000000000007";
+constexpr auto kResetCommand = "10000000-0000-4000-8000-000000000008";
+constexpr auto kImportAssignCommand = "10000000-0000-4000-8000-000000000009";
 constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
@@ -73,16 +82,40 @@ AssignPad assign_pad(std::string command_id, std::uint64_t revision,
       meta(std::move(command_id), revision), slot, std::move(asset_id)};
 }
 
+ImportAssignSample import_assign_sample(
+    std::string command_id,
+    std::uint64_t revision,
+    PadSlotId slot,
+    std::string asset_id) {
+  return ImportAssignSample{
+      meta(std::move(command_id), revision),
+      slot,
+      {AssetId{std::move(asset_id)},
+       ArtifactRef{kValidSha256, "audio/wav", 1}},
+  };
+}
+
+UpdatePadPlayback update_playback(
+    std::string command_id,
+    std::uint64_t revision,
+    PadSlotId slot,
+    PadPlayback playback) {
+  return UpdatePadPlayback{
+      meta(std::move(command_id), revision), slot, playback};
+}
+
+template <typename CommandType>
 AppliedCommand apply_or_throw(const lmdj::domain::ProjectState& state,
-                              const Command& command) {
+                              const CommandType& command) {
   const auto result = lmdj::domain::apply(state, command, {});
   LMDJ_CHECK(result.has_value());
   return result.value();
 }
 
+template <typename CommandType>
 void check_invalid_without_state_change(
     const lmdj::domain::ProjectState& state,
-    const Command& command,
+    const CommandType& command,
     const std::map<CommandId, CommandReceipt>& receipts = {}) {
   const auto before = state;
   const auto result = lmdj::domain::apply(state, command, receipts);
@@ -97,6 +130,7 @@ void test_valid_command_increments_revision_once() {
       initial, Command{import_asset(kImportCommand1, 0, kAsset1)});
 
   LMDJ_CHECK(applied.state.revision == 1);
+  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v2);
   LMDJ_CHECK(applied.state.assets.size() == 1);
   LMDJ_CHECK(!applied.replayed);
   LMDJ_CHECK(applied.event.at("command_id") == kImportCommand1);
@@ -130,6 +164,223 @@ void test_duplicate_command_id_replays_original_successful_outcome() {
   LMDJ_CHECK(replay.value().replayed);
   LMDJ_CHECK(replay.value().state == first.state);
   LMDJ_CHECK(replay.value().event == first.event);
+}
+
+void test_import_assign_sample_is_one_revision_and_resets_playback() {
+  auto initial = new_project();
+  initial.banks[0][0].playback =
+      PadPlayback{20, 40, TriggerMode::loop_toggle, -1200, true};
+
+  const auto result = lmdj::domain::apply(
+      initial,
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1),
+      {});
+
+  LMDJ_CHECK(result.has_value());
+  const auto& state = result.value().state;
+  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v2);
+  LMDJ_CHECK(state.revision == 1);
+  LMDJ_CHECK(state.assets.size() == 1);
+  LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset1});
+  LMDJ_CHECK(state.banks[0][0].playback == PadPlayback{});
+}
+
+void test_update_pad_playback_migrates_an_unassigned_v1_project() {
+  const auto initial = new_project();
+  const auto updated = lmdj::domain::apply(
+      initial,
+      UpdatePadPlayback{
+          meta(kPlaybackCommand, 0),
+          PadSlotId{0, 0},
+          PadPlayback{10, 90, TriggerMode::loop_gate, -1200, false}},
+      {});
+
+  LMDJ_CHECK(updated.has_value());
+  LMDJ_CHECK(updated.value().state.contract ==
+             lmdj::domain::ProjectContract::v2);
+  LMDJ_CHECK(updated.value().state.revision == 1);
+  LMDJ_CHECK(
+      updated.value().state.banks[0][0].playback.trim_start_frame == 10);
+  LMDJ_CHECK(!updated.value().state.banks[0][0].asset_id.has_value());
+}
+
+void test_update_pad_playback_accepts_all_modes_bounds_and_nullable_end() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  const std::array cases{
+      PadPlayback{0, std::nullopt, TriggerMode::one_shot, -60000, false},
+      PadPlayback{10, 90, TriggerMode::gate, -1200, true},
+      PadPlayback{20, 100, TriggerMode::loop_gate, 0, false},
+      PadPlayback{30, 110, TriggerMode::loop_toggle, 6000, true},
+  };
+
+  for (std::size_t index = 0; index < cases.size(); ++index) {
+    const auto applied = lmdj::domain::apply(
+        state,
+        update_playback(
+            kPlaybackCommand,
+            state.revision,
+            PadSlotId{0, 0},
+            cases[index]),
+        {});
+    LMDJ_CHECK(applied.has_value());
+    LMDJ_CHECK(applied.value().state.revision == state.revision + 1);
+    LMDJ_CHECK(applied.value().state.contract ==
+               lmdj::domain::ProjectContract::v2);
+    LMDJ_CHECK(applied.value().state.banks[0][0].playback == cases[index]);
+    state = applied.value().state;
+  }
+}
+
+void test_pads_sharing_an_asset_keep_independent_playback() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  state = apply_or_throw(
+              state,
+              Command{assign_pad(
+                  kAssignCommand1, 1, PadSlotId{0, 1}, AssetId{kAsset1})})
+              .state;
+  const PadPlayback first{10, 90, TriggerMode::loop_gate, -1200, false};
+  const PadPlayback second{30, std::nullopt, TriggerMode::gate, 6000, true};
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kPlaybackCommand, 2, PadSlotId{0, 0}, first))
+              .state;
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kResetCommand, 3, PadSlotId{0, 1}, second))
+              .state;
+
+  LMDJ_CHECK(state.banks[0][0].asset_id == state.banks[0][1].asset_id);
+  LMDJ_CHECK(state.banks[0][0].playback == first);
+  LMDJ_CHECK(state.banks[0][1].playback == second);
+}
+
+void test_assignment_and_explicit_reset_restore_default_playback() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kPlaybackCommand,
+                  1,
+                  PadSlotId{0, 0},
+                  PadPlayback{10, 90, TriggerMode::loop_gate, -1200, true}))
+              .state;
+  state = apply_or_throw(
+              state,
+              Command{assign_pad(
+                  kAssignCommand1, 2, PadSlotId{0, 0}, AssetId{kAsset1})})
+              .state;
+  LMDJ_CHECK(state.banks[0][0].playback == PadPlayback{});
+
+  state = apply_or_throw(
+              state,
+              update_playback(
+                  kPlaybackCommand,
+                  3,
+                  PadSlotId{0, 0},
+                  PadPlayback{5, 15, TriggerMode::gate, 500, false}))
+              .state;
+  const auto reset = lmdj::domain::apply(
+      state,
+      ResetPadPlayback{meta(kResetCommand, 4), PadSlotId{0, 0}},
+      {});
+  LMDJ_CHECK(reset.has_value());
+  LMDJ_CHECK(reset.value().state.revision == 5);
+  LMDJ_CHECK(reset.value().state.banks[0][0].playback == PadPlayback{});
+}
+
+void test_duplicate_playback_update_replays_without_another_revision() {
+  auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                   .state;
+  const auto command = update_playback(
+      kPlaybackCommand,
+      1,
+      PadSlotId{0, 0},
+      PadPlayback{10, 90, TriggerMode::loop_gate, -1200, false});
+  const auto first = apply_or_throw(state, command);
+  const std::map<CommandId, CommandReceipt> receipts{
+      {CommandId{kPlaybackCommand}, {first.state.revision, first.event}},
+  };
+
+  const auto replay = lmdj::domain::apply(first.state, command, receipts);
+  LMDJ_CHECK(replay.has_value());
+  LMDJ_CHECK(replay.value().replayed);
+  LMDJ_CHECK(replay.value().state == first.state);
+  LMDJ_CHECK(replay.value().state.revision == 2);
+  LMDJ_CHECK(replay.value().event == first.event);
+}
+
+void test_update_pad_playback_rejects_invalid_values() {
+  const auto initial = new_project();
+  for (const PadPlayback invalid_playback : {
+           PadPlayback{0, std::nullopt, TriggerMode::one_shot, -60001, false},
+           PadPlayback{0, std::nullopt, TriggerMode::one_shot, 6001, false},
+           PadPlayback{10, 10, TriggerMode::gate, 0, false},
+           PadPlayback{
+               0,
+               std::nullopt,
+               static_cast<TriggerMode>(255),
+               0,
+               false},
+       }) {
+    check_invalid_without_state_change(
+        initial,
+        update_playback(
+            kPlaybackCommand, 0, PadSlotId{0, 0}, invalid_playback));
+  }
+
+}
+
+void test_assign_pad_rejects_missing_asset() {
+  const auto initial = new_project();
+  const auto missing_asset = lmdj::domain::apply(
+      initial,
+      Command{assign_pad(
+          kAssignCommand1, 0, PadSlotId{0, 0}, AssetId{kAsset1})},
+      {});
+
+  LMDJ_CHECK(!missing_asset.has_value());
+  LMDJ_CHECK(missing_asset.error().code == ErrorCode::missing_asset);
+  LMDJ_CHECK(initial.banks[0][0].playback == PadPlayback{});
+  LMDJ_CHECK(!initial.banks[0][0].asset_id.has_value());
+}
+
+void test_update_pad_playback_rejects_stale_revision() {
+  const auto state = apply_or_throw(
+      new_project(),
+      import_assign_sample(
+          kImportAssignCommand, 0, PadSlotId{0, 0}, kAsset1))
+                         .state;
+  const auto result = lmdj::domain::apply(
+      state,
+      update_playback(
+          kPlaybackCommand,
+          0,
+          PadSlotId{0, 0},
+          PadPlayback{10, 90, TriggerMode::loop_gate, -1200, false}),
+      {});
+
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(result.error().code == ErrorCode::revision_conflict);
+  LMDJ_CHECK(state.revision == 1);
+  LMDJ_CHECK(state.banks[0][0].playback == PadPlayback{});
 }
 
 void test_invalid_command_leaves_state_unchanged() {
@@ -378,6 +629,15 @@ int main() {
     test_valid_command_increments_revision_once();
     test_wrong_revision_returns_conflict_without_changing_state();
     test_duplicate_command_id_replays_original_successful_outcome();
+    test_import_assign_sample_is_one_revision_and_resets_playback();
+    test_update_pad_playback_migrates_an_unassigned_v1_project();
+    test_update_pad_playback_accepts_all_modes_bounds_and_nullable_end();
+    test_pads_sharing_an_asset_keep_independent_playback();
+    test_assignment_and_explicit_reset_restore_default_playback();
+    test_duplicate_playback_update_replays_without_another_revision();
+    test_update_pad_playback_rejects_invalid_values();
+    test_assign_pad_rejects_missing_asset();
+    test_update_pad_playback_rejects_stale_revision();
     test_invalid_command_leaves_state_unchanged();
     test_invalid_command_id_is_rejected_before_receipt_lookup();
     test_import_asset_validates_id_and_complete_artifact_reference();
