@@ -606,6 +606,41 @@ void test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2() {
   LMDJ_CHECK(reopened.value() == committed.value().state);
 }
 
+void test_nonzero_revision_v1_history_opens_without_migration() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "historical-v1.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(
+      store.execute(
+               bundle,
+               Command{lmdj::domain::AssignPad{
+                   meta("historical-v1-command", 0),
+                   PadSlotId{0, 0},
+                   std::nullopt,
+               }})
+          .has_value());
+
+  const auto checkpoint_path = bundle / "history/checkpoints/1.json";
+  auto historical = read_json(checkpoint_path);
+  historical["contract"] = "lmdj.project.v1";
+  for (auto& bank : historical["banks"]) {
+    for (auto& pad : bank["pads"]) {
+      pad.erase("playback");
+    }
+  }
+  write_bytes(
+      checkpoint_path,
+      lmdj::foundation::canonical_json(historical) + "\n");
+  const auto before = managed_bundle_snapshot(bundle);
+
+  const auto opened = store.load(bundle);
+  LMDJ_CHECK(opened.has_value());
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v1);
+  LMDJ_CHECK(opened.value().revision == 1);
+  LMDJ_CHECK(managed_bundle_snapshot(bundle) == before);
+}
+
 void test_v2_checkpoint_rejects_extra_playback_keys() {
   TempDirectory temp;
   const auto bundle = temp.path() / "v2-exact-keys.lmdj";
@@ -1091,6 +1126,39 @@ void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() 
   const auto unchanged = store.load(bundle);
   LMDJ_CHECK(unchanged.has_value());
   LMDJ_CHECK(unchanged.value() == imported.value().state);
+}
+
+void test_import_assign_sample_bytes_obeys_generic_artifact_safety_boundary() {
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore store{platform};
+  const auto missing_bundle =
+      std::filesystem::path{"/workspace/missing-project.lmdj"};
+  constexpr std::size_t artifact_safety_limit = 64U * 1024U * 1024U;
+  std::vector<std::byte> bytes(artifact_safety_limit + 1U, std::byte{0x2a});
+  const auto import = [&](std::string_view command_label, std::size_t length) {
+    return store.import_assign_sample_bytes(
+        missing_bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            meta(std::string{command_label}, 0),
+            PadSlotId{0, 0},
+            AssetId{test_uuid(std::string{command_label} + "-asset")},
+            "audio/wav",
+            std::span<const std::byte>{bytes}.first(length),
+        });
+  };
+
+  const auto below = import("sample-boundary-below", artifact_safety_limit - 1U);
+  LMDJ_CHECK(!below.has_value());
+  LMDJ_CHECK(below.error().code == ErrorCode::invalid_project);
+  const auto at = import("sample-boundary-at", artifact_safety_limit);
+  LMDJ_CHECK(!at.has_value());
+  LMDJ_CHECK(at.error().code == ErrorCode::invalid_project);
+  const auto acquisitions_before_over = platform->writer_acquisitions;
+
+  const auto over = import("sample-boundary-over", bytes.size());
+  LMDJ_CHECK(!over.has_value());
+  LMDJ_CHECK(over.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(platform->writer_acquisitions == acquisitions_before_over);
 }
 
 void test_duplicate_command_ids_require_complete_persisted_identity() {
@@ -1703,6 +1771,7 @@ int main() {
     test_default_store_remains_copy_list_initializable();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
     test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2();
+    test_nonzero_revision_v1_history_opens_without_migration();
     test_v2_checkpoint_rejects_extra_playback_keys();
     test_reset_pad_playback_persists_v2_defaults();
     test_persisted_checkpoints_reject_non_contract_shapes();
@@ -1713,6 +1782,7 @@ int main() {
     test_imported_assets_are_content_addressed_and_deduplicated();
     test_byte_backed_import_publishes_immutable_artifact_without_staging();
     test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly();
+    test_import_assign_sample_bytes_obeys_generic_artifact_safety_boundary();
     test_duplicate_command_ids_require_complete_persisted_identity();
     test_import_rejects_invalid_command_before_receipt_and_source_io();
     test_import_rejects_invalid_asset_before_source_io();

@@ -19,6 +19,7 @@
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/take_journal.hpp>
+#include <lmdj/project_io/workspace_cache.hpp>
 
 namespace lmdj::project_io {
 std::shared_ptr<ProjectStoragePlatform> make_web_project_storage_platform();
@@ -112,6 +113,267 @@ std::string query(std::string_view name) {
     stringToUTF8(value, $1, $2);
   }, name.data(), output.data(), output.size());
   return output.data();
+}
+
+constexpr std::string_view kSampleBytes = "RIFF-web-sample";
+
+std::filesystem::path sample_staging_root() {
+  return "/lmdj-workspace/.lmdj-host/sample-staging";
+}
+
+std::filesystem::path workspace_cache_root() {
+  return "/lmdj-workspace/.lmdj-host/workspace-cache";
+}
+
+std::string cache_key(std::string_view bundle, std::string_view suffix) {
+  return "sample-editor.v1/" + std::string{bundle} + "-" +
+         std::string{suffix} + ".bin";
+}
+
+nlohmann::json pad_playback_json(const lmdj::domain::PadSlot& pad) {
+  require(
+      pad.playback.trigger_mode == lmdj::domain::TriggerMode::one_shot,
+      "Sample Pad trigger mode changed");
+  return {
+      {"trimStartFrame", pad.playback.trim_start_frame},
+      {"trimEndFrame",
+       pad.playback.trim_end_frame.has_value()
+           ? nlohmann::json(*pad.playback.trim_end_frame)
+           : nlohmann::json(nullptr)},
+      {"triggerMode", "one_shot"},
+      {"gainMillidb", pad.playback.gain_millidb},
+      {"muted", pad.playback.muted},
+  };
+}
+
+nlohmann::json prepare_sample_cache(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle) {
+  using namespace lmdj;
+  project_io::ProjectStore store{platform};
+  auto initial = value(
+      domain::create_project(foundation::ProjectId{uuid("19")}, 120),
+      "Sample Web Project create state");
+  require(
+      initial.contract == domain::ProjectContract::v1,
+      "Sample Web Project did not start as v1");
+  success(store.create(bundle, initial), "Sample Web Project create");
+
+  const auto staging_root = sample_staging_root();
+  const auto old_staging = staging_root / uuid("20");
+  success(platform->ensure_directory(staging_root), "Sample staging root");
+  auto staging_lease = value(
+      platform->acquire_writer(old_staging), "old Sample staging lease");
+  success(platform->remove_tree(old_staging), "old Sample staging cleanup");
+  success(platform->ensure_directory(old_staging), "old Sample staging seed");
+  const auto marker = nlohmann::json{
+      {"contract", "lmdj.sample-staging.v1"},
+      {"created_unix_seconds", 0},
+      {"state", "incomplete"},
+      {"token", uuid("20")},
+  }.dump() + "\n";
+  success(
+      platform->create_immutable(old_staging / "state.json", bytes(marker)),
+      "old Sample staging marker");
+  success(
+      platform->create_immutable(
+          old_staging / "payload.wav", bytes("old-orphan")),
+      "old Sample staging payload");
+  staging_lease.reset();
+
+  return {
+      {"revision", initial.revision},
+      {"contract", "lmdj.project.v1"},
+      {"oldStagingPresent",
+       value(
+           platform->directory_exists(old_staging),
+           "old Sample staging presence")},
+      {"stagingDirectories",
+       value(platform->list_directories(staging_root), "Sample staging list")},
+  };
+}
+
+nlohmann::json mutate_sample_cache(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle,
+    std::string_view bundle_name) {
+  using namespace lmdj;
+  project_io::ProjectStore store{platform};
+  const auto current = value(store.load(bundle), "Sample Web Project load");
+  const foundation::AssetId asset_id{uuid("22")};
+  const std::string sample_bytes{kSampleBytes};
+  const auto request = project_io::ProjectStore::ImportAssignSampleBytesRequest{
+      domain::CommandMeta{foundation::CommandId{uuid("21")}, current.revision},
+      domain::PadSlotId{2, 7},
+      asset_id,
+      "audio/wav",
+      bytes(sample_bytes),
+  };
+  const auto imported = value(
+      store.import_assign_sample_bytes(bundle, request),
+      "Sample Web Project import and assign");
+  require(!imported.replayed, "first Sample import was replayed");
+  require(
+      imported.state.contract == domain::ProjectContract::v2 &&
+          imported.state.revision == 1,
+      "Sample import did not commit one v2 revision");
+  const auto replayed = value(
+      store.import_assign_sample_bytes(bundle, request),
+      "Sample Web Project exact replay");
+  require(
+      replayed.replayed && replayed.state == imported.state,
+      "Sample import exact replay changed Project Truth");
+
+  const auto& pad = imported.state.banks.at(2).at(7);
+  require(pad.asset_id == asset_id, "Sample Pad assignment changed");
+  const auto& artifact = imported.state.assets.at(asset_id).artifact;
+  const auto artifact_bytes = value(
+      store.read_artifact(bundle, artifact), "Sample Artifact read");
+
+  const auto staging_root = sample_staging_root();
+  const auto old_staging = staging_root / uuid("20");
+  const auto completed_staging = staging_root / uuid("21");
+  const auto staging_directories = value(
+      platform->list_directories(staging_root), "Sample staging inventory");
+
+  const auto cache_root = workspace_cache_root();
+  const auto latest_key = cache_key(bundle_name, "latest");
+  const auto corrupt_key = cache_key(bundle_name, "corrupt");
+  project_io::WorkspaceCacheStore cache{cache_root, platform};
+  success(cache.write(latest_key, bytes("cache-first")), "cache first write");
+  const auto cache_first = value(cache.read(latest_key), "cache first read");
+  require(cache_first.has_value(), "cache first value is missing");
+  success(cache.write(latest_key, bytes("cache-latest")), "cache replacement");
+  const auto cache_latest = value(cache.read(latest_key), "cache latest read");
+  require(cache_latest.has_value(), "cache latest value is missing");
+
+  success(cache.write(corrupt_key, bytes("cache-valid")), "cache corrupt seed");
+  auto cache_lease = value(
+      platform->acquire_writer(cache_root), "cache corruption lease");
+  success(
+      platform->replace_complete(
+          cache_root / corrupt_key, bytes("corrupt-cache-entry")),
+      "cache corruption");
+  cache_lease.reset();
+  const auto corrupt = value(cache.read(corrupt_key), "corrupt cache read");
+
+  return {
+      {"revision", imported.state.revision},
+      {"contract", "lmdj.project.v2"},
+      {"replayed", replayed.replayed},
+      {"padAssetId", pad.asset_id->value()},
+      {"padPlayback", pad_playback_json(pad)},
+      {"assetCount", imported.state.assets.size()},
+      {"artifactSha256", artifact.sha256},
+      {"artifactByteLength", artifact.byte_length},
+      {"artifactBytes", text(artifact_bytes)},
+      {"oldStagingPresent",
+       value(
+           platform->directory_exists(old_staging),
+           "old Sample staging after import")},
+      {"completedStagingPresent",
+       value(
+           platform->directory_exists(completed_staging),
+           "completed Sample staging after import")},
+      {"stagingDirectories", staging_directories},
+      {"cacheFirst", text(*cache_first)},
+      {"cacheLatest", text(*cache_latest)},
+      {"corruptCacheMiss", !corrupt.has_value()},
+      {"corruptCachePresent",
+       value(
+           platform->exists(cache_root / corrupt_key),
+           "corrupt cache cleanup")},
+  };
+}
+
+nlohmann::json reopen_sample_cache(
+    const std::shared_ptr<lmdj::project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle,
+    std::string_view bundle_name) {
+  using namespace lmdj;
+  project_io::ProjectStore store{platform};
+  const auto reopened = value(store.load(bundle), "Sample Web Project reopen");
+  require(
+      reopened.contract == domain::ProjectContract::v2 &&
+          reopened.revision == 1,
+      "reopened Sample Project changed revision or contract");
+  const foundation::AssetId asset_id{uuid("22")};
+  const auto& pad = reopened.banks.at(2).at(7);
+  require(pad.asset_id == asset_id, "reopened Sample Pad assignment changed");
+  const auto& artifact = reopened.assets.at(asset_id).artifact;
+  const auto artifact_bytes = value(
+      store.read_artifact(bundle, artifact), "reopened Sample Artifact read");
+
+  const auto staging_root = sample_staging_root();
+  const auto old_staging = staging_root / uuid("20");
+  const auto completed_staging = staging_root / uuid("21");
+  const auto staging_directories = value(
+      platform->list_directories(staging_root),
+      "reopened Sample staging inventory");
+  const auto cache_root = workspace_cache_root();
+  const auto latest_key = cache_key(bundle_name, "latest");
+  const auto corrupt_key = cache_key(bundle_name, "corrupt");
+  project_io::WorkspaceCacheStore cache{cache_root, platform};
+  const auto cache_latest = value(cache.read(latest_key), "reopened cache read");
+  require(cache_latest.has_value(), "reopened cache value is missing");
+  const auto corrupt = value(cache.read(corrupt_key), "reopened corrupt cache read");
+
+  return {
+      {"revision", reopened.revision},
+      {"contract", "lmdj.project.v2"},
+      {"padAssetId", pad.asset_id->value()},
+      {"padPlayback", pad_playback_json(pad)},
+      {"assetCount", reopened.assets.size()},
+      {"artifactSha256", artifact.sha256},
+      {"artifactByteLength", artifact.byte_length},
+      {"artifactBytes", text(artifact_bytes)},
+      {"oldStagingPresent",
+       value(
+           platform->directory_exists(old_staging),
+           "old Sample staging after reopen")},
+      {"completedStagingPresent",
+       value(
+           platform->directory_exists(completed_staging),
+           "completed Sample staging after reopen")},
+      {"stagingDirectories", staging_directories},
+      {"cacheLatest", text(*cache_latest)},
+      {"corruptCacheMiss", !corrupt.has_value()},
+      {"corruptCachePresent",
+       value(
+           platform->exists(cache_root / corrupt_key),
+           "reopened corrupt cache cleanup")},
+  };
+}
+
+std::optional<nlohmann::json> run_sample_cache_action() {
+  const auto action = query("action");
+  if (action != "prepare_sample_cache" &&
+      action != "mutate_sample_cache" &&
+      action != "reopen_sample_cache") {
+    return std::nullopt;
+  }
+  const auto requested_bundle = query("bundle");
+  require(!requested_bundle.empty(), "Sample/cache bundle is missing");
+  const auto bundle = std::filesystem::path{"/lmdj-workspace"} /
+                      (requested_bundle + ".lmdj");
+  auto platform = lmdj::project_io::make_web_project_storage_platform();
+  require(platform != nullptr, "Web platform factory returned null");
+  if (action == "prepare_sample_cache") {
+    return nlohmann::json{
+        {"complete", true},
+        {"result", prepare_sample_cache(platform, bundle)},
+    };
+  }
+  if (action == "mutate_sample_cache") {
+    return nlohmann::json{
+        {"complete", true},
+        {"result", mutate_sample_cache(platform, bundle, requested_bundle)},
+    };
+  }
+  return nlohmann::json{
+      {"complete", true},
+      {"result", reopen_sample_cache(platform, bundle, requested_bundle)},
+  };
 }
 
 nlohmann::json run_suite() {
@@ -801,7 +1063,8 @@ nlohmann::json run_suite() {
 int main() {
   nlohmann::json report;
   try {
-    report = run_suite();
+    auto sample_cache = run_sample_cache_action();
+    report = sample_cache.has_value() ? std::move(*sample_cache) : run_suite();
   } catch (const std::exception& error) {
     report = {{"complete", true}, {"result", {{"error", error.what()}}}};
   }

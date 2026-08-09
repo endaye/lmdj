@@ -210,19 +210,32 @@ WorkspaceCacheStore::read(std::string_view key) const {
         std::nullopt);
   }
   const auto encoded = platform_->read_complete(path);
-  if (!encoded.has_value()) {
-    (void)platform_->remove(path);
+  if (encoded.has_value()) {
+    auto payload = decode(encoded.value());
+    if (payload.has_value()) {
+      return foundation::Result<std::optional<std::vector<std::byte>>>::success(
+          std::move(payload));
+    }
+  }
+
+  auto cache_lease = platform_->acquire_writer(root_);
+  if (!cache_lease.has_value()) {
     return foundation::Result<std::optional<std::vector<std::byte>>>::success(
         std::nullopt);
   }
-  auto payload = decode(encoded.value());
-  if (!payload.has_value()) {
-    (void)platform_->remove(path);
+  const auto current = platform_->read_complete(path);
+  if (!current.has_value()) {
     return foundation::Result<std::optional<std::vector<std::byte>>>::success(
         std::nullopt);
   }
+  auto current_payload = decode(current.value());
+  if (current_payload.has_value()) {
+    return foundation::Result<std::optional<std::vector<std::byte>>>::success(
+        std::move(current_payload));
+  }
+  (void)platform_->remove(path);
   return foundation::Result<std::optional<std::vector<std::byte>>>::success(
-      std::move(payload));
+      std::nullopt);
 }
 
 foundation::Result<void> WorkspaceCacheStore::write(

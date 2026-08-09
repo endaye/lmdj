@@ -9,6 +9,7 @@
 #include <future>
 #include <iostream>
 #include <iterator>
+#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -34,6 +35,8 @@ namespace {
 using lmdj::foundation::ErrorCode;
 using lmdj::project_io::make_default_project_storage_platform;
 using lmdj::project_io::make_native_project_storage_platform;
+using lmdj::project_io::ProjectStoragePlatform;
+using lmdj::project_io::ProjectWriterLease;
 using lmdj::project_io::testing::FaultPoint;
 using lmdj::project_io::WorkspaceCacheStore;
 
@@ -219,6 +222,137 @@ void write_bytes(
   stream.write(input.data(), static_cast<std::streamsize>(input.size()));
   LMDJ_CHECK(static_cast<bool>(stream));
 }
+
+class CacheRepairInterleavingPlatform final : public ProjectStoragePlatform {
+ public:
+  CacheRepairInterleavingPlatform(
+      std::shared_ptr<ProjectStoragePlatform> delegate,
+      std::filesystem::path cache_root,
+      std::filesystem::path cache_entry,
+      std::vector<std::byte> valid_entry)
+      : delegate_(std::move(delegate)),
+        cache_root_(std::move(cache_root)),
+        cache_entry_(std::move(cache_entry)),
+        valid_entry_(std::move(valid_entry)) {}
+
+  lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>> acquire_writer(
+      const std::filesystem::path& path) override {
+    if (armed_ && path == cache_root_) {
+      const auto published = publish_valid_entry();
+      if (!published.has_value()) {
+        return lmdj::foundation::Result<std::unique_ptr<ProjectWriterLease>>::failure(
+            published.error());
+      }
+    }
+    return delegate_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return delegate_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return delegate_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return delegate_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return delegate_->read_complete(path);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    return delegate_->create_immutable(path, input);
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> input) override {
+    return delegate_->replace_complete(path, input);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> input) override {
+    return delegate_->append_durable(path, valid_prefix_length, input);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    if (armed_ && path == cache_entry_) {
+      const auto published = publish_valid_entry();
+      if (!published.has_value()) {
+        return published;
+      }
+    }
+    return delegate_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return delegate_->list_names(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    return delegate_->list_directories(path);
+  }
+
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    return delegate_->remove_tree(path);
+  }
+
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& source,
+      const std::filesystem::path& destination) override {
+    return delegate_->publish_directory_if_absent(source, destination);
+  }
+
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return delegate_->directory_exists(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& root) const override {
+    return delegate_->validate_managed_tree(root);
+  }
+
+  int publications = 0;
+
+ private:
+  lmdj::foundation::Result<void> publish_valid_entry() {
+    auto writer = delegate_->acquire_writer(cache_root_);
+    if (!writer.has_value()) {
+      return lmdj::foundation::Result<void>::failure(writer.error());
+    }
+    const auto published =
+        delegate_->replace_complete(cache_entry_, valid_entry_);
+    writer.value().reset();
+    if (!published.has_value()) {
+      return published;
+    }
+    armed_ = false;
+    ++publications;
+    return lmdj::foundation::Result<void>::success();
+  }
+
+  std::shared_ptr<ProjectStoragePlatform> delegate_;
+  std::filesystem::path cache_root_;
+  std::filesystem::path cache_entry_;
+  std::vector<std::byte> valid_entry_;
+  bool armed_ = true;
+};
 
 std::filesystem::path normalized_project_path(
     const std::filesystem::path& path) {
@@ -769,6 +903,33 @@ void test_workspace_cache_corruption_is_a_bounded_miss_and_remove_is_idempotent(
              "outside");
 }
 
+void test_workspace_cache_corrupt_read_never_removes_a_concurrent_valid_write() {
+  TempDirectory temp;
+  const auto root = temp.path() / ".lmdj-host/workspace-cache";
+  constexpr std::string_view key = "aa/waveform.v1/64.bin";
+  const auto entry = root / key;
+  auto delegate = make_default_project_storage_platform();
+  WorkspaceCacheStore setup{root, delegate};
+  LMDJ_CHECK(setup.write(key, bytes("concurrent-valid")).has_value());
+  const auto valid_entry = delegate->read_complete(entry);
+  LMDJ_CHECK(valid_entry.has_value());
+  LMDJ_CHECK(
+      delegate->replace_complete(entry, bytes("corrupt-before-read"))
+          .has_value());
+
+  auto interleaving = std::make_shared<CacheRepairInterleavingPlatform>(
+      delegate, root, entry, valid_entry.value());
+  WorkspaceCacheStore cache{root, interleaving};
+  const auto read = cache.read(key);
+
+  LMDJ_CHECK(read.has_value());
+  LMDJ_CHECK(read.value().has_value());
+  LMDJ_CHECK(text(*read.value()) == "concurrent-valid");
+  LMDJ_CHECK(interleaving->publications == 1);
+  LMDJ_CHECK(delegate->exists(entry).value());
+  LMDJ_CHECK(delegate->read_complete(entry).value() == valid_entry.value());
+}
+
 void test_complete_read_serializes_compliant_same_inode_mutation() {
   using namespace std::chrono_literals;
   TempDirectory temp;
@@ -917,6 +1078,7 @@ int main() {
     test_replacement_readers_observe_only_complete_versions();
     test_workspace_cache_validates_generated_keys_and_replaces_atomically();
     test_workspace_cache_corruption_is_a_bounded_miss_and_remove_is_idempotent();
+    test_workspace_cache_corrupt_read_never_removes_a_concurrent_valid_write();
     test_complete_read_serializes_compliant_same_inode_mutation();
     test_special_files_are_rejected_without_blocking();
     test_managed_tree_rejects_hard_linked_regular_files();

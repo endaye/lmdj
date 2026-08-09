@@ -1246,6 +1246,19 @@ foundation::Result<LoadedProject> load_project(
               "initial checkpoint revision is not zero",
               bundle / "history/checkpoints/0.json"));
     }
+    auto checkpoint_json = read_json(platform, bundle / head_checkpoint);
+    if (!checkpoint_json.has_value()) {
+      return foundation::Result<LoadedProject>::failure(
+          checkpoint_json.error());
+    }
+    auto checkpoint =
+        parse_project(checkpoint_json.value(), bundle / head_checkpoint);
+    if (!checkpoint.has_value()) {
+      return foundation::Result<LoadedProject>::failure(checkpoint.error());
+    }
+    const bool replay_as_v1 =
+        initial.value().contract == domain::ProjectContract::v1 &&
+        checkpoint.value().contract == domain::ProjectContract::v1;
 
     LoadedProject loaded{
         std::move(initial.value()),
@@ -1271,13 +1284,16 @@ foundation::Result<LoadedProject> load_project(
       if (!command.has_value()) {
         return foundation::Result<LoadedProject>::failure(command.error());
       }
-      const auto applied =
+      auto applied =
           apply_command(loaded.state, command.value(), loaded.receipts);
       if (!applied.has_value() || applied.value().replayed) {
         return foundation::Result<LoadedProject>::failure(
             invalid_project(
                 "project transaction could not be replayed",
                 bundle / relative));
+      }
+      if (replay_as_v1) {
+        applied.value().state.contract = domain::ProjectContract::v1;
       }
       const auto revision =
           transaction.value().at("revision").get<std::uint64_t>();
@@ -1322,16 +1338,6 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    auto checkpoint_json = read_json(platform, bundle / head_checkpoint);
-    if (!checkpoint_json.has_value()) {
-      return foundation::Result<LoadedProject>::failure(
-          checkpoint_json.error());
-    }
-    auto checkpoint =
-        parse_project(checkpoint_json.value(), bundle / head_checkpoint);
-    if (!checkpoint.has_value()) {
-      return foundation::Result<LoadedProject>::failure(checkpoint.error());
-    }
     if (checkpoint.value() != loaded.state ||
         foundation::canonical_json(checkpoint_json.value()) !=
             foundation::canonical_json(project_json(loaded.state))) {
@@ -2936,6 +2942,14 @@ ProjectStore::import_assign_sample_bytes(
         Error{
             ErrorCode::invalid_argument,
             "artifact media type must not be empty",
+        });
+  }
+  if (request.bytes.size() > kMaximumArtifactBytes) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact exceeds the Project import limit",
+            {{"maximum_byte_length", kMaximumArtifactBytes}},
         });
   }
   const auto artifact = describe_bytes(request.bytes, request.media_type);

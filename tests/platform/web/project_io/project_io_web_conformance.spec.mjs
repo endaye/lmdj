@@ -368,6 +368,77 @@ test("Web Project I/O creates and opens an untouched v1 Project", async ({contex
   await project.close();
 });
 
+test("Web Project I/O persists Sample staging and Workspace cache behavior", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const bundle = `sample-cache-${Date.now()}`;
+  const oldStagingToken = "00000000-0000-4000-8000-000000000020";
+  const assetId = "00000000-0000-4000-8000-000000000022";
+  const artifactSha256 =
+      "2cb46aea89409885d9e92b8c106daa39f364b1b5bda845c5e62b0276581fdb17";
+  const padPlayback = {
+    trimStartFrame: 0,
+    trimEndFrame: null,
+    triggerMode: "one_shot",
+    gainMillidb: 0,
+    muted: false,
+  };
+
+  const prepare = await trackedPage(context);
+  await prepare.goto(
+      `/project_io/project_io_web_test.html?action=prepare_sample_cache&bundle=${bundle}`);
+  expect(await waitForResult(prepare)).toEqual({
+    revision: 0,
+    contract: "lmdj.project.v1",
+    oldStagingPresent: true,
+    stagingDirectories: [oldStagingToken],
+  });
+  await prepare.close();
+
+  const mutate = await trackedPage(context);
+  await mutate.goto(
+      `/project_io/project_io_web_test.html?action=mutate_sample_cache&bundle=${bundle}`);
+  expect(await waitForResult(mutate)).toEqual({
+    revision: 1,
+    contract: "lmdj.project.v2",
+    replayed: true,
+    padAssetId: assetId,
+    padPlayback,
+    assetCount: 1,
+    artifactSha256,
+    artifactByteLength: 15,
+    artifactBytes: "RIFF-web-sample",
+    oldStagingPresent: false,
+    completedStagingPresent: false,
+    stagingDirectories: [],
+    cacheFirst: "cache-first",
+    cacheLatest: "cache-latest",
+    corruptCacheMiss: true,
+    corruptCachePresent: false,
+  });
+  await mutate.close();
+
+  const reopen = await trackedPage(context);
+  await reopen.goto(
+      `/project_io/project_io_web_test.html?action=reopen_sample_cache&bundle=${bundle}`);
+  expect(await waitForResult(reopen)).toEqual({
+    revision: 1,
+    contract: "lmdj.project.v2",
+    padAssetId: assetId,
+    padPlayback,
+    assetCount: 1,
+    artifactSha256,
+    artifactByteLength: 15,
+    artifactBytes: "RIFF-web-sample",
+    oldStagingPresent: false,
+    completedStagingPresent: false,
+    stagingDirectories: [],
+    cacheLatest: "cache-latest",
+    corruptCacheMiss: true,
+    corruptCachePresent: false,
+  });
+  await reopen.close();
+});
+
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
   test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
   trackRuntimeErrors(page);
