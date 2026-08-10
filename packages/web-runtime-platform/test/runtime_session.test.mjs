@@ -9,27 +9,95 @@ import {createRuntimeSession} from "../web/runtime_session.mjs";
 
 const API = [
   "activateAudio",
+  "clearSamplePreview",
   "close",
   "diagnostics",
   "importProject",
+  "importAssignSample",
+  "inspectSample",
   "inspectProject",
   "listLocalProjects",
   "openProject",
+  "queryWaveform",
+  "release",
   "reloadSnapshot",
   "requestMidi",
+  "resetPad",
+  "retryPrepare",
+  "setSamplePreview",
   "start",
   "subscribeDiagnostics",
+  "stopAll",
+  "stopPad",
   "subscribeHostState",
   "subscribeRuntimeOutcome",
+  "subscribeVoiceState",
   "suspendAudio",
   "trigger",
+  "updatePad",
 ].sort();
+
+const PLAYBACK = Object.freeze({
+  trimStartFrame: 10,
+  trimEndFrame: 90,
+  triggerMode: "gate",
+  gainMillidb: -1_200,
+  muted: false,
+});
+
+const WIRE_PLAYBACK = Object.freeze({
+  trim_start_frame: 10,
+  trim_end_frame: 90,
+  trigger_mode: "gate",
+  gain_millidb: -1_200,
+  muted: false,
+});
+
+function success(envelope, result = {}) {
+  return {
+    protocol_version: 1,
+    request_id: envelope.request_id,
+    ok: true,
+    result,
+  };
+}
+
+function defaultResult(operation) {
+  const results = {
+    "audio.activate": {},
+    "audio.suspend": {},
+    "host.close": {},
+    "host.status": {
+      acknowledged_generation: 1,
+      control_generation: 1,
+    },
+    "sample.preview.set": {accepted: true},
+    "sample.preview.clear": {accepted: true},
+    "sample.stop": {accepted: true, scope: "all"},
+    trigger: {accepted: true},
+  };
+  return results[operation] ?? {};
+}
+
+function browserEvent(type, properties = {}) {
+  const event = new Event(type);
+  for (const [name, value] of Object.entries(properties)) {
+    Object.defineProperty(event, name, {value});
+  }
+  return event;
+}
+
+async function drainTasks() {
+  await new Promise((resolvePromise) => setTimeout(resolvePromise, 0));
+}
 
 function fixture({
   send,
+  browserDocument = {},
   browserWindow = {},
   navigator = {},
   capabilities,
+  inputConfiguration = {},
   runtimeTransport,
   runtimeTerminator,
   inputOwnership,
@@ -38,7 +106,7 @@ function fixture({
   let terminated = 0;
   let notificationListener = null;
   let failureListener = null;
-  const context = {
+  const context = Object.assign(new EventTarget(), {
     state: "suspended",
     async resume() {
       this.state = "running";
@@ -46,27 +114,13 @@ function fixture({
     async suspend() {
       this.state = "suspended";
     },
-  };
+  });
   const transport = {
-    async send(envelope) {
+    async send(envelope, transportOptions) {
       if (send) {
-        return send(envelope);
+        return send(envelope, transportOptions);
       }
-      const results = {
-        "audio.activate": {},
-        "audio.suspend": {},
-        "host.close": {},
-        "host.status": {
-          acknowledged_generation: 1,
-          control_generation: 1,
-        },
-      };
-      return {
-        protocol_version: 1,
-        request_id: envelope.request_id,
-        ok: true,
-        result: results[envelope.operation] ?? {},
-      };
+      return success(envelope, defaultResult(envelope.operation));
     },
     subscribe() {
       notificationListener = arguments[0];
@@ -78,7 +132,7 @@ function fixture({
     },
   };
   const session = createRuntimeSession({
-    document: {},
+    document: browserDocument,
     window: browserWindow,
     navigator,
     crypto: {
@@ -97,7 +151,7 @@ function fixture({
       productBuild: "1.0.20.0",
       protocolVersion: 1,
     },
-    inputConfiguration: {},
+    inputConfiguration,
     inputOwnership,
     seams: {
       ...(capabilities === undefined ? {} : {capabilities}),
@@ -427,6 +481,810 @@ test("rejects an unknown input owner", () => {
   );
 });
 
+test("Sample queries bind flat slots to the current Project and validate typed results", async () => {
+  const calls = [];
+  const assetId = "11111111-1111-4111-8111-111111111111";
+  const {session} = fixture({
+    send: async (envelope, transportOptions) => {
+      calls.push({envelope, transportOptions});
+      if (envelope.operation === "sample.inspect") {
+        return success(envelope, {
+          project_revision: 7,
+          slot: {bank: 2, pad: 1},
+          asset_id: assetId,
+          playback: WIRE_PLAYBACK,
+          metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+          waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+        });
+      }
+      if (envelope.operation === "sample.waveform") {
+        return success(envelope, {
+          metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+          algorithm_version: 1,
+          buckets: [
+            {start_frame: 10, end_frame: 20, peak_magnitude: 32_768},
+            {start_frame: 20, end_frame: 30, peak_magnitude: 12},
+          ],
+          project_revision: 7,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.deepEqual(await session.inspectSample(33), {
+    projectRevision: 7,
+    slot: 33,
+    assetId,
+    playback: PLAYBACK,
+    metadata: {sampleRate: 48_000, channels: 2, sourceFrames: 100},
+    waveformCacheIdentity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+  });
+  assert.deepEqual(await session.queryWaveform({
+    slot: 33,
+    window: {startFrame: 10, endFrame: 30, bucketCount: 2},
+  }), {
+    metadata: {sampleRate: 48_000, channels: 2, sourceFrames: 100},
+    algorithmVersion: 1,
+    buckets: [
+      {startFrame: 10, endFrame: 20, peakMagnitude: 32_768},
+      {startFrame: 20, endFrame: 30, peakMagnitude: 12},
+    ],
+    projectRevision: 7,
+  });
+  assert.deepEqual(calls.map(({envelope}) => ({
+    operation: envelope.operation,
+    payload: envelope.payload,
+  })), [
+    {operation: "sample.inspect", payload: {slot: {bank: 2, pad: 1}}},
+    {
+      operation: "sample.waveform",
+      payload: {
+        slot: {bank: 2, pad: 1},
+        window: {start_frame: 10, end_frame: 30, bucket_count: 2},
+      },
+    },
+  ]);
+  assert.deepEqual(
+    calls.map(({transportOptions}) => transportOptions.deadlineMs),
+    [30_000, 30_000],
+  );
+});
+
+test("Sample query rejects malformed Host output instead of exposing partial truth", async () => {
+  const {session} = fixture({
+    send: async (envelope) => success(envelope, {
+      project_revision: 0,
+      slot: {bank: 0, pad: 0},
+      asset_id: null,
+      playback: WIRE_PLAYBACK,
+      metadata: null,
+      waveform_cache_identity: null,
+      project_path: "/private/project.lmdj",
+    }),
+  });
+  await session.start();
+  await assert.rejects(
+    session.inspectSample(0),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+});
+
+test("Project open and Sample mutations share one lane without conflict retry", async () => {
+  const calls = [];
+  let releaseOpen;
+  const openGate = new Promise((resolvePromise) => {
+    releaseOpen = resolvePromise;
+  });
+  const {session} = fixture({
+    send: async (envelope) => {
+      calls.push(envelope);
+      if (envelope.operation === "project.open") {
+        await openGate;
+        return success(envelope, {});
+      }
+      if (envelope.operation === "sample.update_pad") {
+        return {
+          protocol_version: 1,
+          request_id: envelope.request_id,
+          ok: false,
+          error: {
+            code: "REVISION_CONFLICT",
+            message: "Project revision changed",
+            details: {actual_revision: 9, expected_revision: 8},
+          },
+        };
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  const opening = session.openProject(
+    "11111111-1111-4111-8111-111111111111",
+    "22222222-2222-4222-8222-222222222222",
+  );
+  const updating = session.updatePad({
+    slot: 17,
+    expectedRevision: 8,
+    playback: PLAYBACK,
+  });
+  await Promise.resolve();
+  assert.deepEqual(calls.map(({operation}) => operation), ["project.open"]);
+  releaseOpen();
+  await opening;
+  await assert.rejects(
+    updating,
+    (error) => error.code === "REVISION_CONFLICT" &&
+      error.details.actual_revision === 9 &&
+      error.details.expected_revision === 8,
+  );
+  assert.deepEqual(calls.map(({operation}) => operation), [
+    "project.open",
+    "sample.update_pad",
+  ]);
+  assert.match(calls[1].payload.command_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual({...calls[1].payload, command_id: "<generated>"}, {
+    command_id: "<generated>",
+    expected_revision: 8,
+    slot: {bank: 1, pad: 1},
+    playback: WIRE_PLAYBACK,
+  });
+});
+
+test("Sample mutations preserve committed and stale Runtime truth after Cook failure", async () => {
+  const operations = [];
+  const snapshotError = {
+    code: "COOK_FAILED",
+    message: "Sample runtime preparation failed",
+    details: {},
+  };
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push({operation: envelope.operation, payload: envelope.payload});
+      if (envelope.operation === "sample.update_pad") {
+        return success(envelope, {
+          committed_revision: 12,
+          runtime_revision: 11,
+          runtime_published: false,
+          snapshot_error: snapshotError,
+        });
+      }
+      if (envelope.operation === "sample.reset_pad") {
+        return success(envelope, {
+          committed_revision: 13,
+          runtime_revision: 13,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  assert.deepEqual(await session.updatePad({
+    slot: 0,
+    expectedRevision: 11,
+    playback: PLAYBACK,
+  }), {
+    committedRevision: 12,
+    runtimeRevision: 11,
+    runtimePublished: false,
+    snapshotError,
+  });
+  assert.deepEqual(await session.resetPad({slot: 0, expectedRevision: 12}), {
+    committedRevision: 13,
+    runtimeRevision: 13,
+    runtimePublished: true,
+    snapshotError: null,
+  });
+  assert.equal(operations.filter(({operation}) =>
+    operation === "sample.update_pad").length, 1);
+  assert.match(operations[1].payload.command_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  assert.deepEqual({
+    ...operations[1],
+    payload: {...operations[1].payload, command_id: "<generated>"},
+  }, {
+    operation: "sample.reset_pad",
+    payload: {
+      command_id: "<generated>",
+      expected_revision: 12,
+      slot: {bank: 0, pad: 0},
+    },
+  });
+});
+
+test("Sample import streams one bounded hashed sidecar and commits one typed result", async () => {
+  const bytes = new Uint8Array(1_048_576);
+  bytes[0] = 0x52;
+  bytes[bytes.length - 1] = 0x7f;
+  const slices = [];
+  const file = {
+    name: "private-source-name.wav",
+    size: bytes.byteLength,
+    slice(start, end) {
+      slices.push([start, end]);
+      return new Blob([bytes.subarray(start, end)]);
+    },
+  };
+  const calls = [];
+  const progress = [];
+  let importToken = null;
+  const {session} = fixture({
+    send: async (envelope, transportOptions) => {
+      calls.push({envelope, transportOptions});
+      if (envelope.operation === "sample.import.begin") {
+        importToken = envelope.payload.import_token;
+        return success(envelope, {
+          token: importToken,
+          expected_bytes: bytes.byteLength,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        return success(envelope, {
+          received_bytes: bytes.byteLength,
+          final: true,
+        });
+      }
+      if (envelope.operation === "sample.import.commit") {
+        return success(envelope, {
+          committed_revision: 4,
+          runtime_revision: 4,
+          runtime_published: true,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.deepEqual(await session.importAssignSample(file, {
+    slot: 63,
+    expectedRevision: 3,
+    onProgress(value) {
+      progress.push(value);
+    },
+  }), {
+    committedRevision: 4,
+    runtimeRevision: 4,
+    runtimePublished: true,
+    snapshotError: null,
+  });
+  assert.deepEqual(slices, [[0, 1_048_576]]);
+  assert.deepEqual(calls.map(({envelope}) => envelope.operation), [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.commit",
+  ]);
+  const begin = calls[0].envelope.payload;
+  assert.deepEqual(Object.keys(begin).sort(), [
+    "asset_id", "byte_length", "command_id", "expected_revision",
+    "import_token", "slot",
+  ]);
+  assert.equal(begin.import_token, importToken);
+  assert.equal(begin.expected_revision, 3);
+  assert.deepEqual(begin.slot, {bank: 3, pad: 15});
+  assert.equal(begin.byte_length, 1_048_576);
+  assert.notEqual(begin.command_id, begin.import_token);
+  assert.notEqual(begin.asset_id, begin.import_token);
+  assert.notEqual(begin.asset_id, begin.command_id);
+  const chunk = calls[1];
+  assert.deepEqual(chunk.envelope.payload, {
+    import_token: importToken,
+    offset: 0,
+    final: true,
+    sidecar: {
+      sidecar_bytes: 1_048_576,
+      sidecar_sha256:
+        "44c0f55ba202bf8354b1427354c2f6d08b1bc4f2d31a21c810ef15cf51aa8e9a",
+    },
+  });
+  assert.equal(chunk.transportOptions.deadlineMs, 30_000);
+  assert.equal(chunk.transportOptions.sidecar.byteLength, 1_048_576);
+  assert.equal(chunk.transportOptions.sidecar[0], 0x52);
+  assert.equal(chunk.transportOptions.sidecar.at(-1), 0x7f);
+  assert.equal(JSON.stringify(calls.map(({envelope}) => envelope)).includes(
+    file.name,
+  ), false);
+  assert.deepEqual(progress, [
+    {completedBytes: 0, totalBytes: 1_048_576},
+    {completedBytes: 1_048_576, totalBytes: 1_048_576},
+  ]);
+});
+
+test("Sample import cancellation before begin is a no-op and after begin aborts once", async () => {
+  const before = new AbortController();
+  before.abort();
+  const beforeCalls = [];
+  const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
+  const first = fixture({
+    send: async (envelope) => {
+      beforeCalls.push(envelope.operation);
+      return success(envelope, {});
+    },
+  });
+  await first.session.start();
+  await assert.rejects(
+    first.session.importAssignSample(file, {
+      slot: 0,
+      expectedRevision: 0,
+      signal: before.signal,
+    }),
+    (error) => error.name === "AbortError",
+  );
+  assert.deepEqual(beforeCalls, []);
+
+  const during = new AbortController();
+  const duringCalls = [];
+  const second = fixture({
+    send: async (envelope, transportOptions) => {
+      duringCalls.push({
+        operation: envelope.operation,
+        signal: transportOptions.signal,
+      });
+      if (envelope.operation === "sample.import.begin") {
+        return success(envelope, {
+          token: envelope.payload.import_token,
+          expected_bytes: file.size,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        during.abort();
+        return success(envelope, {received_bytes: file.size, final: true});
+      }
+      if (envelope.operation === "sample.import.abort") {
+        return success(envelope, {aborted: true});
+      }
+      throw new Error(`unexpected operation ${envelope.operation}`);
+    },
+  });
+  await second.session.start();
+  await assert.rejects(
+    second.session.importAssignSample(file, {
+      slot: 0,
+      expectedRevision: 0,
+      signal: during.signal,
+    }),
+    (error) => error.name === "AbortError",
+  );
+  assert.deepEqual(duringCalls.map(({operation}) => operation), [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.abort",
+  ]);
+  assert.equal(duringCalls[0].signal, during.signal);
+  assert.equal(duringCalls[1].signal, during.signal);
+  assert.equal(duringCalls[2].signal, undefined);
+});
+
+test("Sample import keeps the primary Host failure while aborting once", async () => {
+  const operations = [];
+  const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.import.begin") {
+        return success(envelope, {
+          token: envelope.payload.import_token,
+          expected_bytes: file.size,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        return {
+          protocol_version: 1,
+          request_id: envelope.request_id,
+          ok: false,
+          error: {
+            code: "IO_ERROR",
+            message: "Sample storage operation failed",
+            details: {},
+          },
+        };
+      }
+      if (envelope.operation === "sample.import.abort") {
+        return success(envelope, {aborted: true});
+      }
+      throw new Error(`unexpected operation ${envelope.operation}`);
+    },
+  });
+  await session.start();
+  await assert.rejects(
+    session.importAssignSample(file, {slot: 0, expectedRevision: 0}),
+    (error) => error.code === "IO_ERROR",
+  );
+  assert.deepEqual(operations, [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.abort",
+  ]);
+});
+
+test("Sample preview, release, stop, and retry use exact Runtime-only envelopes", async () => {
+  const calls = [];
+  const projectId = "11111111-1111-4111-8111-111111111111";
+  const patternId = "22222222-2222-4222-8222-222222222222";
+  const {session} = fixture({
+    send: async (envelope, transportOptions) => {
+      calls.push({envelope, transportOptions});
+      if (envelope.operation === "sample.preview.set" ||
+          envelope.operation === "sample.preview.clear") {
+        return success(envelope, {accepted: true});
+      }
+      if (envelope.operation === "trigger") {
+        return success(envelope, {accepted: true});
+      }
+      if (envelope.operation === "sample.stop") {
+        return success(envelope, {
+          accepted: true,
+          scope: Object.hasOwn(envelope.payload, "slot") ? "slot" : "all",
+        });
+      }
+      if (envelope.operation === "snapshot.retry") {
+        return success(envelope, {
+          project_id: projectId,
+          project_revision: 9,
+          pattern_id: patternId,
+          runtime_ready: false,
+          generation: null,
+          snapshot_error: {
+            code: "COOK_FAILED",
+            message: "Sample runtime preparation failed",
+            details: {},
+          },
+          runtime_revision: 8,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.equal(await session.setSamplePreview(18, PLAYBACK), true);
+  assert.equal(await session.clearSamplePreview(18), true);
+  assert.equal(await session.clearSamplePreview(18), false);
+  assert.equal(await session.release(18, "keyboard"), true);
+  assert.equal(await session.stopPad(18), true);
+  assert.equal(await session.stopAll(), true);
+  assert.deepEqual(await session.retryPrepare(patternId), {
+    projectId,
+    projectRevision: 9,
+    patternId,
+    runtimeReady: false,
+    generation: null,
+    snapshotError: {
+      code: "COOK_FAILED",
+      message: "Sample runtime preparation failed",
+      details: {},
+    },
+    runtimeRevision: 8,
+  });
+  assert.deepEqual(calls.map(({envelope}) => ({
+    operation: envelope.operation,
+    payload: envelope.payload,
+  })), [
+    {
+      operation: "sample.preview.set",
+      payload: {slot: {bank: 1, pad: 2}, playback: WIRE_PLAYBACK},
+    },
+    {
+      operation: "sample.preview.clear",
+      payload: {slot: {bank: 1, pad: 2}},
+    },
+    {operation: "trigger", payload: {slot: 18, kind: "release"}},
+    {operation: "sample.stop", payload: {slot: {bank: 1, pad: 2}}},
+    {operation: "sample.stop", payload: {}},
+    {operation: "snapshot.retry", payload: {pattern_id: patternId}},
+  ]);
+  assert.deepEqual(calls.map(({transportOptions}) =>
+    transportOptions.deadlineMs), [1_000, 1_000, 1_000, 1_000, 1_000, 30_000]);
+});
+
+test("Sample preview ownership is bounded to 64 slots and idempotent on clear", async () => {
+  const operations = [];
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, {accepted: true});
+    },
+  });
+  await session.start();
+  for (let slot = 0; slot < 64; slot += 1) {
+    assert.equal(await session.setSamplePreview(slot, PLAYBACK), true);
+  }
+  await assert.rejects(session.setSamplePreview(64, PLAYBACK), RangeError);
+  assert.equal(await session.clearSamplePreview(0), true);
+  assert.equal(await session.clearSamplePreview(0), false);
+  assert.equal(operations.filter((value) =>
+    value === "sample.preview.set").length, 64);
+  assert.equal(operations.filter((value) =>
+    value === "sample.preview.clear").length, 1);
+});
+
+test("Voice state subscriptions deliver validated events in transport order", async () => {
+  const {emitNotification, session} = fixture();
+  await session.start();
+  const first = [];
+  const second = [];
+  const unsubscribeFirst = session.subscribeVoiceState((event) => {
+    first.push(event);
+  });
+  const unsubscribeSecond = session.subscribeVoiceState((event) => {
+    second.push(event);
+  });
+  emitNotification({
+    protocol_version: 1,
+    event: "runtime.voice_state",
+    payload: {
+      events: [
+        {
+          sequence: 9,
+          slot: 17,
+          state: "started",
+          runtime_frame: 100,
+          source_frame: 20,
+        },
+        {
+          sequence: 9,
+          slot: 17,
+          state: "completed",
+          runtime_frame: 180,
+          source_frame: 100,
+        },
+      ],
+    },
+  });
+  unsubscribeFirst();
+  unsubscribeFirst();
+  emitNotification({
+    protocol_version: 1,
+    event: "runtime.voice_state",
+    payload: {
+      events: [{
+        sequence: 10,
+        slot: 3,
+        state: "stopped",
+        runtime_frame: 181,
+        source_frame: 44,
+      }],
+    },
+  });
+  unsubscribeSecond();
+  assert.deepEqual(first, [
+    {sequence: 9, slot: 17, state: "started", runtimeFrame: 100, sourceFrame: 20},
+    {sequence: 9, slot: 17, state: "completed", runtimeFrame: 180, sourceFrame: 100},
+  ]);
+  assert.deepEqual(second, [
+    ...first,
+    {sequence: 10, slot: 3, state: "stopped", runtimeFrame: 181, sourceFrame: 44},
+  ]);
+});
+
+test("Voice listener count is bounded and malformed events fail closed", async () => {
+  const {emitNotification, session} = fixture();
+  await session.start();
+  const unsubscribers = [];
+  for (let index = 0; index < 64; index += 1) {
+    unsubscribers.push(session.subscribeVoiceState(() => {}));
+  }
+  assert.throws(
+    () => session.subscribeVoiceState(() => {}),
+    (error) => error.code === "WEB_RUNTIME_RESOURCE_LIMIT",
+  );
+  emitNotification({
+    protocol_version: 1,
+    event: "runtime.voice_state",
+    payload: {events: [{sequence: 1, slot: 64, state: "started",
+      runtime_frame: 0, source_frame: 0}]},
+  });
+  assert.equal(session.diagnostics().state, "failed");
+  assert.equal(session.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+  for (const unsubscribe of unsubscribers) unsubscribe();
+});
+
+test("wired Pointer and Keyboard inputs emit one press and exact-source release", async () => {
+  const browserWindow = new EventTarget();
+  const pad = new EventTarget();
+  const calls = [];
+  let sequence = 0;
+  const {session} = fixture({
+    browserWindow,
+    inputConfiguration: {
+      padBindings: [{element: pad, slot: {bank: 1, pad: 1}}],
+      keyboardMapping: {KeyA: 17},
+    },
+    send: async (envelope) => {
+      calls.push(envelope);
+      if (envelope.operation === "trigger" &&
+          Object.hasOwn(envelope.payload, "velocity")) {
+        sequence += 1;
+        return success(envelope, {sequence});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+
+  pad.dispatchEvent(browserEvent("pointerdown", {
+    isPrimary: true,
+    button: 0,
+    pointerId: 7,
+    clientX: 1,
+    clientY: 2,
+  }));
+  pad.dispatchEvent(browserEvent("pointerup", {pointerId: 7, button: 0}));
+  browserWindow.dispatchEvent(browserEvent("keydown", {
+    code: "KeyA",
+    repeat: false,
+  }));
+  browserWindow.dispatchEvent(browserEvent("keydown", {
+    code: "KeyA",
+    repeat: true,
+  }));
+  browserWindow.dispatchEvent(browserEvent("keyup", {code: "KeyA"}));
+  await drainTasks();
+
+  assert.deepEqual(calls.filter(({operation}) => operation === "trigger")
+    .map(({payload}) => payload), [
+    {slot: 17, velocity: 100},
+    {slot: 17, kind: "release"},
+    {slot: 17, velocity: 100},
+    {slot: 17, kind: "release"},
+  ]);
+});
+
+test("wired Pointer ignores unavailable presses without a later release", async () => {
+  const browserWindow = new EventTarget();
+  const pad = new EventTarget();
+  const calls = [];
+  const {session} = fixture({
+    browserWindow,
+    inputConfiguration: {
+      padBindings: [{element: pad, slot: {bank: 0, pad: 0}}],
+    },
+    send: async (envelope) => {
+      calls.push(envelope);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  pad.dispatchEvent(browserEvent("pointerdown", {
+    isPrimary: true,
+    button: 0,
+    pointerId: 1,
+  }));
+  browserWindow.dispatchEvent(browserEvent("pointerup", {
+    button: 0,
+    pointerId: 1,
+  }));
+  await drainTasks();
+
+  assert.deepEqual(calls.filter(({operation}) => operation === "trigger"), []);
+  assert.equal(session.diagnostics().pressed_count, 0);
+});
+
+test("pointercancel and Escape clear previews without an Authoring mutation", async () => {
+  const browserWindow = new EventTarget();
+  const pad = new EventTarget();
+  const calls = [];
+  const {session} = fixture({
+    browserWindow,
+    inputConfiguration: {
+      padBindings: [{element: pad, slot: {bank: 0, pad: 2}}],
+    },
+    send: async (envelope) => {
+      calls.push(envelope);
+      if (envelope.operation === "trigger" &&
+          Object.hasOwn(envelope.payload, "velocity")) {
+        return success(envelope, {sequence: 1});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.setSamplePreview(2, PLAYBACK);
+  pad.dispatchEvent(browserEvent("pointerdown", {
+    isPrimary: true,
+    button: 0,
+    pointerId: 8,
+    clientX: 1,
+    clientY: 2,
+  }));
+  pad.dispatchEvent(browserEvent("pointercancel", {pointerId: 8}));
+  await drainTasks();
+
+  await session.setSamplePreview(3, PLAYBACK);
+  browserWindow.dispatchEvent(browserEvent("keydown", {
+    code: "Escape",
+    repeat: false,
+  }));
+  await drainTasks();
+
+  assert.deepEqual(calls.filter(({operation}) =>
+    operation === "sample.preview.clear").map(({payload}) => payload), [
+    {slot: {bank: 0, pad: 2}},
+    {slot: {bank: 0, pad: 3}},
+  ]);
+  assert.deepEqual(calls.filter(({operation}) =>
+    ["sample.import.begin", "sample.update_pad", "sample.reset_pad"]
+      .includes(operation)), []);
+});
+
+test("suspend and close clear inputs then previews then stop once before transition", async () => {
+  const browserWindow = new EventTarget();
+  const operations = [];
+  let sequence = 0;
+  const {session} = fixture({
+    browserWindow,
+    inputConfiguration: {keyboardMapping: {KeyA: 0}},
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "trigger" &&
+          Object.hasOwn(envelope.payload, "velocity")) {
+        sequence += 1;
+        return success(envelope, {sequence});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.setSamplePreview(0, PLAYBACK);
+  browserWindow.dispatchEvent(browserEvent("keydown", {
+    code: "KeyA",
+    repeat: false,
+  }));
+  await drainTasks();
+  operations.length = 0;
+
+  assert.equal(await session.suspendAudio(), true);
+  assert.deepEqual(operations, [
+    "sample.preview.clear",
+    "sample.stop",
+    "audio.suspend",
+  ]);
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  operations.length = 0;
+
+  assert.equal(await session.close(), true);
+  assert.deepEqual(operations, ["sample.stop", "host.close"]);
+  assert.equal(session.diagnostics().state, "closed");
+});
+
+test("visibility cleanup is once per adverse edge and repeats after a later edge", async () => {
+  const browserWindow = new EventTarget();
+  const browserDocument = new EventTarget();
+  browserDocument.visibilityState = "visible";
+  const operations = [];
+  const {session} = fixture({
+    browserDocument,
+    browserWindow,
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  operations.length = 0;
+
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  await drainTasks();
+  assert.equal(operations.filter((value) => value === "sample.stop").length, 1);
+
+  browserDocument.visibilityState = "visible";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  browserDocument.visibilityState = "hidden";
+  browserDocument.dispatchEvent(new Event("visibilitychange"));
+  await drainTasks();
+  assert.equal(operations.filter((value) => value === "sample.stop").length, 2);
+});
+
 test("returns typed admission and publishes normalized Runtime outcomes", async () => {
   const {emitNotification, session} = fixture({
     send: async (envelope) => ({
@@ -519,6 +1377,10 @@ test("non-persisted pagehide submits clean close without forced termination", as
       },
     },
     send: async (envelope) => {
+      if (envelope.operation === "sample.stop") {
+        lifecycle.push("stop-all");
+        return success(envelope, {accepted: true, scope: "all"});
+      }
       if (envelope.operation === "host.close") {
         lifecycle.push("clean-close");
         closeEnvelope = envelope;
@@ -535,9 +1397,10 @@ test("non-persisted pagehide submits clean close without forced termination", as
   await session.start();
 
   browserWindow.dispatchEvent(new Event("pagehide"));
+  await drainTasks();
 
   assert.equal(forcedTerminations, 0);
-  assert.deepEqual(lifecycle, ["clean-close"]);
+  assert.deepEqual(lifecycle, ["stop-all", "clean-close"]);
   settleClose({
     protocol_version: 1,
     request_id: closeEnvelope.request_id,

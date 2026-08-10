@@ -187,6 +187,32 @@ test("Pointer cancellation and marker expiry never suppress a later genuine mous
   ]);
 });
 
+test("Pointer up releases while pointer cancellation reports a distinct cancellation", () => {
+  const releases = [];
+  const cancellations = [];
+  const pointer = createPointerAdapter({
+    trigger: () => {},
+    velocity: 100,
+    now: () => 0,
+    onRelease: (...arguments_) => releases.push(arguments_),
+    onCancel: (...arguments_) => cancellations.push(arguments_),
+  });
+  pointer.pointerDown({
+    isPrimary: true,
+    button: 0,
+    pointerId: 1,
+  }, 4);
+  assert.equal(pointer.releasePointer({pointerId: 1}), true);
+  pointer.pointerDown({
+    isPrimary: true,
+    button: 0,
+    pointerId: 2,
+  }, 5);
+  assert.equal(pointer.pointerCancel({pointerId: 2}), true);
+  assert.deepEqual(releases, [[4, "pointer"]]);
+  assert.deepEqual(cancellations, [[5, "pointer"]]);
+});
+
 test("Pointer marker mismatch does not suppress an independent mouse activation", () => {
   const calls = [];
   const pointerTarget = {};
@@ -237,10 +263,12 @@ test("Pointer rejects disabled, unavailable, and out-of-range Pads", () => {
 
 test("Keyboard maps physical code, ignores repeat, and preserves fixed velocity", () => {
   const calls = [];
+  const releases = [];
   const keyboard = createKeyboardAdapter({
     trigger: (...args) => calls.push(args),
     mapping: { KeyA: 3, KeyB: 4 },
     velocity: 91,
+    onRelease: (...args) => releases.push(args),
   });
   assert.equal(
     keyboard.keyDown({ code: "KeyA", key: "q", repeat: false }),
@@ -250,7 +278,9 @@ test("Keyboard maps physical code, ignores repeat, and preserves fixed velocity"
     keyboard.keyDown({ code: "KeyB", key: "b", repeat: true }),
     false,
   );
+  assert.equal(keyboard.keyUp({code: "KeyA"}), true);
   assert.deepEqual(calls, [[3, 91, "keyboard"]]);
+  assert.deepEqual(releases, [[3, "keyboard"]]);
 });
 
 test("Keyboard disables shortcuts in editable focus", () => {
