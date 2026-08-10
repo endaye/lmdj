@@ -156,6 +156,22 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     );
   }
 
+  function hasAcceptedLoopToggle(slot: number) {
+    if (loopToggleSlots.has(slot)) return true;
+    return Array.from(admissions.values()).some((admission) =>
+      admission.slot === slot && admission.mode === "loop_toggle" &&
+      admission.muted !== true
+    );
+  }
+
+  function discardLoopToggleAdmissions(slot: number) {
+    for (const [sequence, admission] of admissions) {
+      if (admission.slot === slot && admission.mode === "loop_toggle") {
+        admissions.delete(sequence);
+      }
+    }
+  }
+
   function sampleControl(
     result: Promise<boolean>,
     callbacks: {
@@ -250,6 +266,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       return;
     }
     if (outcome.outcome === "voice_capacity") {
+      admissions.delete(outcome.sequence);
       if (admission.mode === "loop_toggle") {
         loopToggleSlots.delete(admission.slot);
         stoppingLoopSlots.delete(admission.slot);
@@ -423,13 +440,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       type: "sample-action",
       action: {type: "slot-selected", slot},
     });
-    if (loopToggleSlots.has(slot)) {
+    if (hasAcceptedLoopToggle(slot)) {
       if (stoppingLoopSlots.has(slot)) return;
       stoppingLoopSlots.add(slot);
       sampleControl(sampleOptions.session.stopPad(slot), {
         accepted() {
           stoppingLoopSlots.delete(slot);
           loopToggleSlots.delete(slot);
+          discardLoopToggleAdmissions(slot);
           clearSlotGestures(slot);
           dispatch({type: "pad-released", slot});
         },

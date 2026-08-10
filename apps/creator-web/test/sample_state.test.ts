@@ -107,6 +107,26 @@ describe("Creator Sample state", () => {
     expect(creator.sample.selectedSlot).toBe(17);
   });
 
+  test("initializes saved and Runtime revision from a prepared Project reopen", () => {
+    const prepared = creatorReducer(initialCreatorState, {
+      type: "project-ready",
+      project: {
+        projectId: "11111111-1111-4111-8111-111111111111",
+        patternId: "22222222-2222-4222-8222-222222222222",
+        revision: 42,
+        bpm: 120,
+        assetCount: 0,
+        assignedPadCount: 0,
+        bundleDigest: "a".repeat(64),
+        key: "—",
+        pads: [],
+      },
+    });
+
+    expect(prepared.sample.savedRevision).toBe(42);
+    expect(prepared.sample.runtimeRevision).toBe(42);
+  });
+
   test("stores one canonical waveform window without duplicating its cache identity", () => {
     const viewport = zoomSampleViewport(fitSampleViewport(1_000), 2, 500);
     const window = waveformWindowForViewport(viewport, 2);
@@ -485,13 +505,18 @@ describe("Creator Sample state", () => {
     state = reduceSampleState(state, {
       type: "operation-failed",
       pending: state.pendingAction,
-      error: {code: "UNSUPPORTED_AUDIO", message: "Unsupported Sample"},
+      error: {
+        code: "IO_ERROR",
+        message: "file:///private/Creator/samples/secret.wav",
+        details: {storage_condition: "already_exists"},
+      },
     });
     expect(state.pendingAction).toBeNull();
     expect(state.lastError).toEqual({
-      code: "UNSUPPORTED_AUDIO",
-      message: "Unsupported Sample",
+      code: "IO_ERROR",
+      message: "Sample storage operation failed",
       retryPrepare: false,
+      details: {storage_condition: "already_exists"},
     });
     expect(state.savedRevision).toBe(42);
     expect(state.runtimeRevision).toBeNull();
@@ -573,6 +598,29 @@ describe("Creator Sample state", () => {
     expect(state.savedRevision).toBe(44);
     expect(state.lastError?.code).toBe("REVISION_CONFLICT");
     expect(state.auditionPlayback).toBeNull();
+  });
+
+  test("discards a private operation-failure message when no safe details are supplied", () => {
+    let state = beginSamplePending(inspectedState(), {
+      kind: "import",
+      slot: 17,
+      expectedRevision: 42,
+    });
+    state = reduceSampleState(state, {
+      type: "operation-failed",
+      pending: state.pendingAction,
+      error: {
+        code: "IO_ERROR",
+        message: "file:///private/Creator/samples/secret.wav",
+      },
+    });
+
+    expect(state.lastError).toEqual({
+      code: "IO_ERROR",
+      message: "Sample storage operation failed",
+      retryPrepare: false,
+      details: {},
+    });
   });
 
   test("fails a rejected preview without requiring or changing mutation pending truth", () => {

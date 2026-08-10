@@ -5,6 +5,7 @@ import type {
 } from "../runtime/runtime_types";
 import {
   initialSampleState,
+  preparedSampleState,
   reduceSampleState,
   type SampleStateAction,
   type SampleState,
@@ -245,7 +246,7 @@ export function creatorReducer(
         project: {...state.project, phase: "ready", current: action.project},
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         audio: {phase: "inactive"},
-        sample: initialSampleState,
+        sample: preparedSampleState(action.project.revision),
       };
     case "project-error":
       return {

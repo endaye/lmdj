@@ -47,6 +47,7 @@ export interface SampleLastError {
   readonly code: string;
   readonly message: string;
   readonly retryPrepare: boolean;
+  readonly details?: Readonly<Record<string, unknown>>;
 }
 
 export interface SampleVoiceRender {
@@ -264,6 +265,17 @@ export const initialSampleState: SampleState = Object.freeze({
   savedRevision: null,
   runtimeRevision: null,
 });
+
+export function preparedSampleState(projectRevision: number): SampleState {
+  if (!unsignedInteger(projectRevision)) {
+    throw new TypeError("Prepared Project revision is invalid");
+  }
+  return Object.freeze({
+    ...initialSampleState,
+    savedRevision: projectRevision,
+    runtimeRevision: projectRevision,
+  });
+}
 
 function record(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -1058,20 +1070,25 @@ export function applySampleOperationFailure(
   value: unknown,
 ): SampleState {
   requireMatchingPending(state, pendingValue);
-  assertPrivacySafe(value);
-  if (!exactKeys(value, ["code", "message"]) ||
+  const hasDetails = record(value) && Object.hasOwn(value, "details");
+  if (!(exactKeys(value, ["code", "message"]) ||
+    exactKeys(value, ["code", "message", "details"])) ||
     typeof value.code !== "string" || !ALLOWED_ERROR_CODES.has(value.code) ||
     typeof value.message !== "string" || value.message.length === 0 ||
     value.message.length > 512) {
     throw new TypeError("Sample operation failure is invalid");
   }
+  const details = hasDetails
+    ? normalizeSnapshotDetails(value.details)
+    : Object.freeze({});
   return Object.freeze({
     ...state,
     pendingAction: null,
     lastError: Object.freeze({
       code: value.code,
-      message: value.message,
+      message: SAMPLE_PUBLIC_ERROR_MESSAGES[value.code] ?? "Sample operation failed",
       retryPrepare: value.code === "COOK_FAILED",
+      details,
     }),
   });
 }

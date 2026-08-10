@@ -363,6 +363,22 @@ describe("Creator input controller", () => {
     value.controller.dispose();
   });
 
+  test("stops a loop-toggle accepted before its Voice outcome without a duplicate trigger", async () => {
+    const value = sampleFixture({
+      inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
+    });
+    value.controller.keyDown({code: "KeyA", repeat: false, target: document.body});
+    await settle();
+    value.controller.keyUp({code: "KeyA"});
+
+    value.controller.keyDown({code: "KeyA", repeat: false, target: document.body});
+    await settle();
+
+    expect(value.triggers).toHaveLength(1);
+    expect(value.stopped).toEqual([0]);
+    value.controller.dispose();
+  });
+
   test("preserves a loop latch across public physical clear for Bank changes", async () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
