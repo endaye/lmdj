@@ -110,7 +110,7 @@ function requireFunction(value, name) {
 }
 
 function isPositiveInteger(value) {
-  return Number.isInteger(value) && value > 0;
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 function generationsMatch(status) {
@@ -468,22 +468,23 @@ function normalizeSampleCommit(value) {
     "runtime_published",
   ];
   const published = value?.runtime_published;
-  const hasSnapshotError = published === false;
+  const hasSnapshotError = Object.hasOwn(value ?? {}, "snapshot_error");
   if (
     !exactKeys(value, hasSnapshotError ? [...keys, "snapshot_error"] : keys) ||
     !isUnsignedInteger(value.committed_revision) ||
     !(value.runtime_revision === null ||
       isUnsignedInteger(value.runtime_revision)) ||
     typeof published !== "boolean" ||
+    (published && hasSnapshotError) ||
     (published &&
       (value.runtime_revision === null ||
         value.runtime_revision < value.committed_revision))
   ) {
     throw protocolMismatch("Sample mutation result is invalid");
   }
-  const snapshotError = published
-    ? null
-    : normalizeSnapshotError(value.snapshot_error);
+  const snapshotError = hasSnapshotError
+    ? normalizeSnapshotError(value.snapshot_error)
+    : null;
   return Object.freeze({
     committedRevision: value.committed_revision,
     runtimeRevision: value.runtime_revision,
@@ -518,7 +519,7 @@ function normalizeSnapshotPublication(value, expectedPatternId) {
     !(value.runtime_revision === null ||
       isUnsignedInteger(value.runtime_revision)) ||
     (value.runtime_ready &&
-      (!isUnsignedInteger(value.generation) ||
+      (!isPositiveInteger(value.generation) ||
         value.runtime_revision === null ||
         value.runtime_revision !== value.project_revision ||
         value.snapshot_error !== null)) ||
@@ -549,7 +550,7 @@ function normalizeSnapshotNotification(event, payload) {
     const task6 = exactKeys(payload, ["generation", "project_revision"]);
     if (
       (!legacy && !task6) ||
-      !isUnsignedInteger(payload?.generation) ||
+      !isPositiveInteger(payload?.generation) ||
       (task6 && !isUnsignedInteger(payload.project_revision))
     ) {
       throw protocolMismatch("Snapshot published notification is invalid");
@@ -2335,10 +2336,20 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function retryPrepare(patternId) {
-    return serializeProjectAction(async () => normalizeSnapshotPublication(
-      await boundedRequest("snapshot.retry", {pattern_id: patternId}),
-      patternId,
-    ));
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest(
+        "snapshot.retry",
+        {pattern_id: patternId},
+      );
+      try {
+        return normalizeSnapshotPublication(value, patternId);
+      } catch (error) {
+        if (errorCode(error) === "HOST_PROTOCOL_MISMATCH") {
+          fail(error);
+        }
+        throw error;
+      }
+    });
   }
 
   async function listLocalProjects() {

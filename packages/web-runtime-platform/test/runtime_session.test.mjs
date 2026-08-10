@@ -758,6 +758,49 @@ test("Sample mutations preserve committed and stale Runtime truth after Cook fai
   });
 });
 
+test("unassigned Pad mutations accept unpublished truth without a Cook error", async () => {
+  const {session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "sample.update_pad") {
+        return success(envelope, {
+          committed_revision: 7,
+          runtime_revision: 6,
+          runtime_published: false,
+        });
+      }
+      if (envelope.operation === "sample.reset_pad") {
+        return success(envelope, {
+          committed_revision: 8,
+          runtime_revision: null,
+          runtime_published: false,
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  assert.deepEqual(await session.updatePad({
+    slot: 0,
+    expectedRevision: 6,
+    playback: PLAYBACK,
+  }), {
+    committedRevision: 7,
+    runtimeRevision: 6,
+    runtimePublished: false,
+    snapshotError: null,
+  });
+  assert.deepEqual(await session.resetPad({
+    slot: 0,
+    expectedRevision: 7,
+  }), {
+    committedRevision: 8,
+    runtimeRevision: null,
+    runtimePublished: false,
+    snapshotError: null,
+  });
+});
+
 test("Sample mutation output rejects incoherent truth and preserves delayed replay", async () => {
   const error = {
     code: "COOK_FAILED",
@@ -772,7 +815,6 @@ test("Sample mutation output rejects incoherent truth and preserves delayed repl
       runtime_published: true,
       snapshot_error: error,
     },
-    {committed_revision: 2, runtime_revision: 1, runtime_published: false},
     {committed_revision: 2, runtime_revision: 1, runtime_published: true},
     {committed_revision: 2, runtime_revision: 3, runtime_published: true},
     {
@@ -787,7 +829,7 @@ test("Sample mutation output rejects incoherent truth and preserves delayed repl
   });
   await session.start();
   const request = {slot: 0, expectedRevision: 1, playback: PLAYBACK};
-  for (let index = 0; index < 4; index += 1) {
+  for (let index = 0; index < 3; index += 1) {
     await assert.rejects(
       session.updatePad(request),
       (failure) => failure.code === "HOST_PROTOCOL_MISMATCH",
@@ -825,7 +867,7 @@ test("Snapshot retry output enforces ready generation Runtime and error coherenc
     runtime_revision: 9,
     ...overrides,
   });
-  const results = [
+  const invalidResults = [
     result({generation: null}),
     result({runtime_revision: null}),
     result({snapshot_error: error}),
@@ -833,21 +875,30 @@ test("Snapshot retry output enforces ready generation Runtime and error coherenc
       snapshot_error: error}),
     result({runtime_ready: false, generation: null, runtime_revision: 8,
       snapshot_error: null}),
-    result({}),
-    result({runtime_ready: false, generation: null, runtime_revision: 8,
-      snapshot_error: error}),
   ];
-  const {session} = fixture({
-    send: async (envelope) => success(envelope, results.shift()),
-  });
-  await session.start();
-  for (let index = 0; index < 5; index += 1) {
+  const retry = async (wireResult) => {
+    const {session} = fixture({
+      send: async (envelope) => success(
+        envelope,
+        envelope.operation === "snapshot.retry"
+          ? wireResult
+          : defaultResult(envelope.operation),
+      ),
+    });
+    await session.start();
+    return {session, pending: session.retryPrepare(patternId)};
+  };
+  for (const invalid of invalidResults) {
+    const attempt = await retry(invalid);
     await assert.rejects(
-      session.retryPrepare(patternId),
+      attempt.pending,
       (failure) => failure.code === "HOST_PROTOCOL_MISMATCH",
     );
+    await drainTasks();
+    assert.equal(attempt.session.diagnostics().state, "failed");
   }
-  assert.deepEqual(await session.retryPrepare(patternId), {
+  const ready = await retry(result({}));
+  assert.deepEqual(await ready.pending, {
     projectId,
     projectRevision: 9,
     patternId,
@@ -856,7 +907,13 @@ test("Snapshot retry output enforces ready generation Runtime and error coherenc
     snapshotError: null,
     runtimeRevision: 9,
   });
-  assert.deepEqual(await session.retryPrepare(patternId), {
+  const rejected = await retry(result({
+    runtime_ready: false,
+    generation: null,
+    runtime_revision: 8,
+    snapshot_error: error,
+  }));
+  assert.deepEqual(await rejected.pending, {
     projectId,
     projectRevision: 9,
     patternId,
@@ -865,6 +922,55 @@ test("Snapshot retry output enforces ready generation Runtime and error coherenc
     snapshotError: error,
     runtimeRevision: 8,
   });
+});
+
+test("non-positive or unsafe ready generation fails through Runtime safety", async () => {
+  const patternId = "22222222-2222-4222-8222-222222222222";
+  for (const generation of [0, Number.MAX_SAFE_INTEGER + 1]) {
+    const operations = [];
+    const {emitNotification, session} = fixture({
+      send: async (envelope) => {
+        operations.push(envelope.operation);
+        if (envelope.operation === "snapshot.retry") {
+          return success(envelope, {
+            project_id: "11111111-1111-4111-8111-111111111111",
+            project_revision: 9,
+            pattern_id: patternId,
+            runtime_ready: true,
+            generation,
+            snapshot_error: null,
+            runtime_revision: 9,
+          });
+        }
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    emitNotification({
+      protocol_version: 1,
+      event: "snapshot.published",
+      payload: {generation: 6, project_revision: 9},
+    });
+    await session.setSamplePreview(0, PLAYBACK);
+    operations.length = 0;
+
+    await assert.rejects(
+      session.retryPrepare(patternId),
+      (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+    );
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(session.diagnostics().control_generation, 6);
+    await drainTasks();
+    await drainTasks();
+    assert.deepEqual(operations, [
+      "snapshot.retry",
+      "sample.preview.clear",
+      "sample.stop",
+    ]);
+    assert.equal(session.diagnostics().state, "failed");
+    assert.equal(session.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+    assert.equal(session.diagnostics().control_generation, 6);
+  }
 });
 
 test("Sample import streams one bounded hashed sidecar and commits one typed result", async () => {
@@ -1368,6 +1474,50 @@ test("Snapshot notifications accept only the exact legacy and Task 6 variants", 
   await drainTasks();
   assert.equal(session.diagnostics().state, "audio-suspended");
   assert.equal(session.diagnostics().control_generation, 6);
+});
+
+test("non-positive or unsafe published generations fail without mutation", async () => {
+  const payloads = [
+    {generation: 0},
+    {generation: 0, project_revision: 7},
+    {generation: Number.MAX_SAFE_INTEGER + 1},
+    {
+      generation: Number.MAX_SAFE_INTEGER + 1,
+      project_revision: 7,
+    },
+  ];
+  for (const payload of payloads) {
+    const operations = [];
+    const {emitNotification, session} = fixture({
+      send: async (envelope) => {
+        operations.push(envelope.operation);
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    emitNotification({
+      protocol_version: 1,
+      event: "snapshot.published",
+      payload: {generation: 6, project_revision: 6},
+    });
+    await session.setSamplePreview(0, PLAYBACK);
+    operations.length = 0;
+
+    emitNotification({
+      protocol_version: 1,
+      event: "snapshot.published",
+      payload,
+    });
+
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(session.diagnostics().control_generation, 6);
+    await drainTasks();
+    await drainTasks();
+    assert.deepEqual(operations, ["sample.preview.clear", "sample.stop"]);
+    assert.equal(session.diagnostics().state, "failed");
+    assert.equal(session.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
+    assert.equal(session.diagnostics().control_generation, 6);
+  }
 });
 
 test("malformed Snapshot notifications fail after safety without partial state", async () => {
