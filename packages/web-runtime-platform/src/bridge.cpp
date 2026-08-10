@@ -240,6 +240,19 @@ bool supported_operation(std::string_view operation) {
          operations.end();
 }
 
+bool snapshot_notification_operation(std::string_view operation) {
+  static constexpr std::array<std::string_view, 6> operations{
+      "project.open",
+      "snapshot.reload",
+      "snapshot.retry",
+      "sample.import.commit",
+      "sample.update_pad",
+      "sample.reset_pad",
+  };
+  return std::find(operations.begin(), operations.end(), operation) !=
+         operations.end();
+}
+
 }  // namespace
 
 struct ControlBridge::Impl {
@@ -914,8 +927,7 @@ struct ControlBridge::Impl {
           response = bridge_timeout_error();
           terminal_after_response = true;
         } else {
-          if (operation == "project.open" ||
-              operation == "snapshot.reload") {
+          if (snapshot_notification_operation(operation)) {
             notification_slot = reserve_message();
             reservations.notification = notification_slot;
             if (notification_slot == nullptr) {
@@ -960,33 +972,68 @@ struct ControlBridge::Impl {
               response.value("ok", false) &&
               response.contains("result") &&
               response.at("result").is_object();
+          const auto sample_mutation =
+              operation == "sample.import.commit" ||
+              operation == "sample.update_pad" ||
+              operation == "sample.reset_pad";
+          const auto& result = has_result ? response.at("result") : Json{};
+          const auto project_revision =
+              has_result && result.contains("committed_revision")
+                  ? result.at("committed_revision")
+              : has_result && result.contains("project_revision")
+                  ? result.at("project_revision")
+                  : Json(nullptr);
           const auto published =
-              has_result &&
-              response.at("result").value("runtime_ready", false) &&
-              response.at("result").contains("generation") &&
-              response.at("result").at("generation").is_number_unsigned();
+              has_result && project_revision.is_number_unsigned() &&
+              (sample_mutation
+                   ? result.value("runtime_published", false)
+                   : result.value("runtime_ready", false));
           const auto rejected =
-              has_result &&
-              response.at("result").contains("runtime_ready") &&
-              response.at("result").at("runtime_ready") == false &&
-              response.at("result").contains("snapshot_error") &&
-              response.at("result").at("snapshot_error").is_object();
+              has_result && project_revision.is_number_unsigned() &&
+              result.contains("snapshot_error") &&
+              result.at("snapshot_error").is_object() &&
+              (sample_mutation
+                   ? result.contains("runtime_published") &&
+                         result.at("runtime_published") == false
+                   : result.contains("runtime_ready") &&
+                         result.at("runtime_ready") == false);
           if (!published && !rejected) {
             notification_slot->state.store(
                 MessageState::free, std::memory_order_release);
             notification_slot = nullptr;
             reservations.notification = nullptr;
           } else {
+            auto generation =
+                result.contains("generation") &&
+                        result.at("generation").is_number_unsigned()
+                    ? result.at("generation")
+                    : Json(runtime.engine()
+                               .bank_telemetry()
+                               .accepted_publications);
+            auto runtime_revision =
+                result.contains("runtime_revision")
+                    ? result.at("runtime_revision")
+                    : published ? project_revision : Json(nullptr);
+            const auto legacy_snapshot =
+                operation == "project.open" ||
+                operation == "snapshot.reload";
+            auto notification_payload =
+                legacy_snapshot
+                    ? published
+                          ? Json{{"generation", generation}}
+                          : Json{{"error", result.at("snapshot_error")}}
+                    : published
+                          ? Json{{"generation", std::move(generation)},
+                                 {"project_revision", project_revision}}
+                          : Json{{"project_revision", project_revision},
+                                 {"runtime_revision",
+                                  std::move(runtime_revision)},
+                                 {"error", result.at("snapshot_error")}};
             notification = Json{
                 {"protocol_version", 1},
                 {"event",
                  published ? "snapshot.published" : "snapshot.rejected"},
-                {"payload",
-                 published
-                     ? Json{{"generation",
-                             response.at("result").at("generation")}}
-                     : Json{{"error",
-                             response.at("result").at("snapshot_error")}}},
+                {"payload", std::move(notification_payload)},
             };
           }
         }

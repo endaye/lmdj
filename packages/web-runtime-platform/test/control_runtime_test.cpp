@@ -27,6 +27,7 @@
 #include <lmdj/audio/realtime_engine.hpp>
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/facade/application.hpp>
+#include <lmdj/facade/mutation_publish_scope.hpp>
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
@@ -56,6 +57,8 @@ using lmdj::web_runtime::detail::BridgePollStatus;
 using lmdj::web_runtime::detail::BridgeSubmitStatus;
 using lmdj::web_runtime::detail::ControlBridge;
 using lmdj::web_runtime::detail::ControlRuntimeAudioAccess;
+using lmdj::web_runtime::detail::ControlRuntimeClock;
+using lmdj::web_runtime::detail::ControlRuntimeClockAccess;
 using lmdj::web_runtime::detail::kBridgeMaximumEnvelopeBytes;
 using lmdj::web_runtime::detail::kBridgeMaximumSidecarBytes;
 using lmdj::web_runtime::detail::kBridgeMessageSlotCount;
@@ -478,6 +481,44 @@ class ContinuousAudioDriver final {
   RealtimeEngine& engine_;
   std::atomic<bool> running_{true};
   std::thread thread_;
+};
+
+struct FakeRuntimeClock final {
+  static std::chrono::steady_clock::time_point now(void* context) noexcept {
+    return static_cast<FakeRuntimeClock*>(context)->current;
+  }
+
+  ControlRuntimeClock seam() noexcept {
+    return ControlRuntimeClock{this, &FakeRuntimeClock::now};
+  }
+
+  std::chrono::steady_clock::time_point current{
+      std::chrono::seconds(100)};
+};
+
+struct CommitDeadlineCrossing final {
+  static bool claim(void*) noexcept { return true; }
+
+  static void commit(void* context) noexcept {
+    auto& self = *static_cast<CommitDeadlineCrossing*>(context);
+    self.clock.current += std::chrono::seconds(31);
+  }
+
+  static void abort(void*) noexcept {}
+
+  static bool force_failure(void*) noexcept { return false; }
+
+  lmdj::facade::detail::MutationPublishToken token() noexcept {
+    return {
+        this,
+        &CommitDeadlineCrossing::claim,
+        &CommitDeadlineCrossing::commit,
+        &CommitDeadlineCrossing::abort,
+        &CommitDeadlineCrossing::force_failure,
+    };
+  }
+
+  FakeRuntimeClock& clock;
 };
 
 struct FakeCoordinator final {
@@ -1404,6 +1445,78 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
       }));
 }
 
+void test_sample_import_prevents_current_project_switch_until_terminal() {
+  TempDirectory temp;
+  constexpr std::string_view other_project_id =
+      "00000000-0000-4000-8000-000000000002";
+  constexpr std::string_view other_pattern_id =
+      "00000000-0000-4000-8000-000000000020";
+  {
+    auto fixture_builder = make_runtime(temp.path());
+    check_success(fixture_builder->dispatch(
+        "project.create", create_payload(), {}));
+  }
+  {
+    auto fixture_builder = make_runtime(temp.path());
+    check_success(fixture_builder->dispatch(
+        "project.create",
+        create_payload(other_project_id, other_pattern_id),
+        {}));
+  }
+
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch(
+      "project.open",
+      {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
+      {}));
+  const auto wav = mono_pcm16_wav(32);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(411, 412, 0, kAssetId, wav.size()),
+      {}));
+  const auto staging = temp.path() / ".lmdj-host/sample-import-staging" /
+                       uuid(411);
+  LMDJ_CHECK(std::filesystem::exists(staging));
+
+  check_error(
+      runtime->dispatch(
+          "project.open",
+          {{"project_id", other_project_id},
+           {"pattern_id", other_pattern_id}},
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(std::filesystem::exists(staging));
+
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(411, 0, true, wav),
+      wav));
+  const auto committed = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(411)}}, {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(committed.at("committed_revision") == 1);
+  LMDJ_CHECK(committed.at("runtime_revision") == 1);
+  LMDJ_CHECK(committed.at("runtime_published") == true);
+  LMDJ_CHECK(!std::filesystem::exists(staging));
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 1);
+  LMDJ_CHECK(
+      inspect_project(temp.path(), other_project_id)
+          .at("project_revision") == 0);
+
+  const auto opened_other = check_exact_success(
+      runtime->dispatch(
+          "project.open",
+          {{"project_id", other_project_id},
+           {"pattern_id", other_pattern_id}},
+          {}),
+      {"project_id", "project_revision", "pattern_id", "runtime_ready",
+       "generation", "snapshot_error"});
+  LMDJ_CHECK(opened_other.at("project_id") == other_project_id);
+  LMDJ_CHECK(opened_other.at("project_revision") == 0);
+}
+
 void test_sample_import_protocol_failure_aborts_staging() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -1475,6 +1588,88 @@ void test_sample_import_protocol_failure_aborts_staging() {
           "sample.import.abort", {{"import_token", uuid(429)}}, {}),
       {"aborted"});
   LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(429)));
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(461, 462, 0, kAssetId, wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(461, 0, true, wav),
+      wav));
+  const auto malformed_commit = check_error(
+      runtime->dispatch(
+          "sample.import.commit",
+          {{"import_token", uuid(461)}, {"unexpected", true}},
+          {}),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(malformed_commit.at("details").empty());
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(461)));
+  check_error(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(461)}}, {}),
+      "INVALID_ARGUMENT");
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(463, 464, 0, kAssetId, wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(463, 0, false, first_half),
+      first_half));
+  const auto malformed_abort = check_error(
+      runtime->dispatch(
+          "sample.import.abort",
+          {{"import_token", uuid(463)}, {"unexpected", true}},
+          {}),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(malformed_abort.at("details").empty());
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(463)));
+  check_error(
+      runtime->dispatch(
+          "sample.import.abort", {{"import_token", uuid(463)}}, {}),
+      "INVALID_ARGUMENT");
+
+  const auto unowned_abort = check_error(
+      runtime->dispatch(
+          "sample.import.abort",
+          {{"import_token", uuid(465)}, {"unexpected", true}},
+          {}),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(unowned_abort.at("details").empty());
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(466, 467, 0, kAssetId, wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(466, 0, true, wav),
+      wav));
+  check_error(
+      runtime->dispatch(
+          "sample.import.commit",
+          {{"import_token", uuid(466)}},
+          first_half),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(466)));
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(468, 469, 0, kAssetId, wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(468, 0, false, first_half),
+      first_half));
+  check_error(
+      runtime->dispatch(
+          "sample.import.abort",
+          {{"import_token", uuid(468)}},
+          first_half),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(468)));
   LMDJ_CHECK(
       inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
 }
@@ -1532,6 +1727,12 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
   LMDJ_CHECK(first.at("runtime_revision") == 1);
   const auto generation =
       runtime->engine().bank_telemetry().accepted_publications;
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = generation;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
 
   const auto larger_wav = mono_pcm16_wav(8);
   check_success(runtime->dispatch(
@@ -1556,6 +1757,21 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
 
+  const auto stale_preview = runtime->dispatch(
+      "sample.preview.set",
+      {{"slot", slot(0, 0)},
+       {"playback", playback_payload(0, 1, "gate")}},
+      {});
+  LMDJ_CHECK(stale_preview.at("ok") == false);
+  check_error(stale_preview, "HOST_STATE_INVALID");
+  check_exact_success(
+      runtime->dispatch(
+          "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
+      {"accepted"});
+  check_exact_success(
+      runtime->dispatch("sample.stop", {{"slot", slot(0, 0)}}, {}),
+      {"accepted", "scope"});
+
   const auto retried = check_exact_success(
       runtime->dispatch(
           "snapshot.retry", {{"pattern_id", kPatternId}}, {}),
@@ -1567,6 +1783,96 @@ void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
   LMDJ_CHECK(retried.at("snapshot_error").is_object());
   LMDJ_CHECK(
       runtime->engine().bank_telemetry().accepted_publications == generation);
+}
+
+void test_sample_post_claim_deadline_preserves_saved_truth() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  FakeRuntimeClock clock;
+  LMDJ_CHECK(
+      ControlRuntimeClockAccess::install(*runtime, clock.seam()).has_value());
+  check_success(runtime->dispatch(
+      "project.create", create_payload(), {}, clock.current));
+
+  const auto wav = mono_pcm16_wav(32);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(471, 472, 0, kAssetId, wav.size()),
+      {},
+      clock.current));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(471, 0, true, wav),
+      wav,
+      clock.current));
+  const auto first = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit",
+          {{"import_token", uuid(471)}},
+          {},
+          clock.current),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(first.at("runtime_revision") == 1);
+  const auto generation =
+      runtime->engine().bank_telemetry().accepted_publications;
+
+  const auto submitted_at = clock.current;
+  CommitDeadlineCrossing crossing{clock};
+  Json response;
+  {
+    const lmdj::facade::detail::MutationPublishScope publish_scope(
+        crossing.token());
+    response = runtime->dispatch(
+        "sample.update_pad",
+        {{"command_id", uuid(473)},
+         {"expected_revision", 1},
+         {"slot", slot(0, 0)},
+         {"playback", playback_payload(0, 16, "gate", -600)}},
+        {},
+        submitted_at);
+  }
+  LMDJ_CHECK(response.at("ok") == true);
+  const auto saved = check_exact_success(
+      response,
+      {"committed_revision", "runtime_revision", "runtime_published",
+       "snapshot_error"});
+  LMDJ_CHECK(saved.at("committed_revision") == 2);
+  LMDJ_CHECK(saved.at("runtime_revision") == 1);
+  LMDJ_CHECK(saved.at("runtime_published") == false);
+  LMDJ_CHECK(saved.at("snapshot_error").at("code") == "HOST_TIMEOUT");
+  LMDJ_CHECK(!runtime->failed());
+  LMDJ_CHECK(
+      runtime->engine().bank_telemetry().accepted_publications == generation);
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
+
+  const auto second_wav = mono_pcm16_wav(16);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(474, 475, 2, uuid(476), second_wav.size()),
+      {},
+      clock.current));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(474, 0, true, second_wav),
+      second_wav,
+      clock.current));
+  const auto staging = temp.path() / ".lmdj-host/sample-import-staging" /
+                       uuid(474);
+  LMDJ_CHECK(std::filesystem::exists(staging));
+  const auto preclaim_submitted_at = clock.current;
+  clock.current += std::chrono::seconds(31);
+  check_error(
+      runtime->dispatch(
+          "sample.import.commit",
+          {{"import_token", uuid(474)}},
+          {},
+          preclaim_submitted_at),
+      "HOST_TIMEOUT");
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(!std::filesystem::exists(staging));
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
 }
 
 void test_source_frame_limit_is_applied_once_before_44k1_publication() {
@@ -3013,6 +3319,36 @@ void check_no_bridge_message(ControlBridge& bridge) {
   LMDJ_CHECK(required == 0);
 }
 
+void check_snapshot_published_notification(
+    const Json& notification,
+    std::uint64_t generation,
+    std::uint64_t project_revision) {
+  check_exact_keys(notification, {"protocol_version", "event", "payload"});
+  LMDJ_CHECK(notification.at("protocol_version") == 1);
+  LMDJ_CHECK(notification.at("event") == "snapshot.published");
+  LMDJ_CHECK(!notification.contains("request_id"));
+  LMDJ_CHECK((
+      notification.at("payload") ==
+      Json{{"generation", generation},
+           {"project_revision", project_revision}}));
+}
+
+void check_snapshot_rejected_notification(
+    const Json& notification,
+    std::uint64_t project_revision,
+    std::uint64_t runtime_revision,
+    std::string_view error_code) {
+  check_exact_keys(notification, {"protocol_version", "event", "payload"});
+  LMDJ_CHECK(notification.at("protocol_version") == 1);
+  LMDJ_CHECK(notification.at("event") == "snapshot.rejected");
+  LMDJ_CHECK(!notification.contains("request_id"));
+  const auto& payload = notification.at("payload");
+  check_exact_keys(payload, {"project_revision", "runtime_revision", "error"});
+  LMDJ_CHECK(payload.at("project_revision") == project_revision);
+  LMDJ_CHECK(payload.at("runtime_revision") == runtime_revision);
+  LMDJ_CHECK(payload.at("error").at("code") == error_code);
+}
+
 void test_bridge_routes_sample_operations_without_a_project_path() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -3296,6 +3632,30 @@ void test_bridge_release_proxy_failure_is_a_terminal_transport_signal() {
 void test_bridge_emits_only_real_snapshot_notifications_after_response() {
   {
     TempDirectory temp;
+    {
+      auto builder = make_runtime(temp.path());
+      check_success(builder->dispatch(
+          "project.create", create_payload(), {}));
+    }
+    auto runtime = make_runtime(temp.path());
+    FakeProxy proxy;
+    auto bridge = make_bridge(*runtime, proxy);
+    const auto open = encode(request(
+        uuid(900),
+        "project.open",
+        {{"project_id", kProjectId}, {"pattern_id", kPatternId}}));
+    LMDJ_CHECK(
+        bridge->submit(open, {}) == BridgeSubmitStatus::accepted);
+    proxy.pump_one();
+    LMDJ_CHECK(poll_message(*bridge).at("ok") == true);
+    const auto notification = poll_message(*bridge);
+    LMDJ_CHECK(notification.at("event") == "snapshot.published");
+    LMDJ_CHECK((
+        notification.at("payload") == Json{{"generation", 1}}));
+  }
+
+  {
+    TempDirectory temp;
     auto runtime = make_runtime(temp.path());
     FakeProxy proxy;
     auto bridge = make_bridge(*runtime, proxy);
@@ -3387,11 +3747,198 @@ void test_bridge_emits_only_real_snapshot_notifications_after_response() {
         notification, {"protocol_version", "event", "payload"});
     LMDJ_CHECK(notification.at("event") == "snapshot.rejected");
     LMDJ_CHECK(!notification.contains("request_id"));
+    check_exact_keys(notification.at("payload"), {"error"});
     LMDJ_CHECK(
         notification.at("payload").at("error").at("code") ==
         "WEB_RUNTIME_RESOURCE_LIMIT");
     check_no_bridge_message(*bridge);
   }
+}
+
+void test_bridge_emits_sample_publication_notifications_after_response() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(32);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(481, 482, 0, kAssetId, wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(481, 0, true, wav),
+      wav));
+
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto commit = encode(request(
+      uuid(921),
+      "sample.import.commit",
+      {{"import_token", uuid(481)}}));
+  LMDJ_CHECK(
+      bridge->submit(commit, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto commit_response = poll_message(*bridge);
+  LMDJ_CHECK(commit_response.at("request_id") == uuid(921));
+  LMDJ_CHECK(commit_response.at("ok") == true);
+  LMDJ_CHECK(commit_response.at("result").at("committed_revision") == 1);
+  check_snapshot_published_notification(poll_message(*bridge), 1, 1);
+  proxy.pump_one();
+  const auto status_after_commit = check_locked_success_result(
+      runtime->dispatch("host.status", Json::object(), {}));
+  LMDJ_CHECK(status_after_commit.at("control_generation") == 1);
+
+  const auto update = encode(request(
+      uuid(922),
+      "sample.update_pad",
+      {{"command_id", uuid(483)},
+       {"expected_revision", 1},
+       {"slot", slot(0, 0)},
+       {"playback", playback_payload(0, 16, "gate", -600)}}));
+  LMDJ_CHECK(
+      bridge->submit(update, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto update_response = poll_message(*bridge);
+  LMDJ_CHECK(update_response.at("request_id") == uuid(922));
+  LMDJ_CHECK(update_response.at("ok") == true);
+  LMDJ_CHECK(update_response.at("result").at("committed_revision") == 2);
+  check_snapshot_published_notification(poll_message(*bridge), 2, 2);
+  proxy.pump_one();
+
+  const auto reset = encode(request(
+      uuid(923),
+      "sample.reset_pad",
+      {{"command_id", uuid(484)},
+       {"expected_revision", 2},
+       {"slot", slot(0, 0)}}));
+  LMDJ_CHECK(
+      bridge->submit(reset, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto reset_response = poll_message(*bridge);
+  LMDJ_CHECK(reset_response.at("request_id") == uuid(923));
+  LMDJ_CHECK(reset_response.at("ok") == true);
+  LMDJ_CHECK(reset_response.at("result").at("committed_revision") == 3);
+  check_snapshot_published_notification(poll_message(*bridge), 3, 3);
+  proxy.pump_one();
+  const auto status_after_reset = check_locked_success_result(
+      runtime->dispatch("host.status", Json::object(), {}));
+  LMDJ_CHECK(status_after_reset.at("control_generation") == 3);
+
+  const auto malformed = encode(request(
+      uuid(924),
+      "sample.update_pad",
+      {{"command_id", uuid(485)},
+       {"expected_revision", 3},
+       {"slot", slot(0, 0)}}));
+  LMDJ_CHECK(
+      bridge->submit(malformed, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto malformed_response = poll_message(*bridge);
+  LMDJ_CHECK(malformed_response.at("ok") == false);
+  LMDJ_CHECK(
+      malformed_response.at("error").at("code") ==
+      "HOST_PROTOCOL_MISMATCH");
+  check_no_bridge_message(*bridge);
+  proxy.pump_one();
+
+  const auto conflict = encode(request(
+      uuid(925),
+      "sample.reset_pad",
+      {{"command_id", uuid(486)},
+       {"expected_revision", 2},
+       {"slot", slot(0, 0)}}));
+  LMDJ_CHECK(
+      bridge->submit(conflict, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto conflict_response = poll_message(*bridge);
+  LMDJ_CHECK(conflict_response.at("ok") == false);
+  LMDJ_CHECK(
+      conflict_response.at("error").at("code") == "REVISION_CONFLICT");
+  check_no_bridge_message(*bridge);
+}
+
+void test_bridge_emits_rejected_sample_and_retry_notifications() {
+  TempDirectory temp;
+  constexpr RuntimePreparationLimits limits{
+      1'048'576,
+      240'000,
+      16,
+      134'217'728,
+  };
+  auto runtime = make_runtime(temp.path(), limits);
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto first_wav = mono_pcm16_wav(2);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(487, 488, 0, kAssetId, first_wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(487, 0, true, first_wav),
+      first_wav));
+  check_success(runtime->dispatch(
+      "sample.import.commit", {{"import_token", uuid(487)}}, {}));
+
+  const auto larger_wav = mono_pcm16_wav(8);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(489, 490, 1, uuid(491), larger_wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(489, 0, true, larger_wav),
+      larger_wav));
+
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto commit = encode(request(
+      uuid(926),
+      "sample.import.commit",
+      {{"import_token", uuid(489)}}));
+  LMDJ_CHECK(
+      bridge->submit(commit, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  LMDJ_CHECK(response.at("request_id") == uuid(926));
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("committed_revision") == 2);
+  LMDJ_CHECK(response.at("result").at("runtime_revision") == 1);
+  LMDJ_CHECK(response.at("result").at("runtime_published") == false);
+  check_snapshot_rejected_notification(
+      poll_message(*bridge), 2, 1, "WEB_RUNTIME_RESOURCE_LIMIT");
+  proxy.pump_one();
+
+  const auto retry = encode(request(
+      uuid(927),
+      "snapshot.retry",
+      {{"pattern_id", kPatternId}}));
+  LMDJ_CHECK(
+      bridge->submit(retry, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto retry_response = poll_message(*bridge);
+  LMDJ_CHECK(retry_response.at("request_id") == uuid(927));
+  LMDJ_CHECK(retry_response.at("ok") == true);
+  LMDJ_CHECK(retry_response.at("result").at("project_revision") == 2);
+  LMDJ_CHECK(retry_response.at("result").at("runtime_revision") == 1);
+  LMDJ_CHECK(retry_response.at("result").at("runtime_ready") == false);
+  check_snapshot_rejected_notification(
+      poll_message(*bridge), 2, 1, "WEB_RUNTIME_RESOURCE_LIMIT");
+  proxy.pump_one();
+
+  const auto unknown = encode(request(
+      uuid(928),
+      "sample.import.commit",
+      {{"import_token", uuid(492)}}));
+  LMDJ_CHECK(
+      bridge->submit(unknown, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto unknown_response = poll_message(*bridge);
+  LMDJ_CHECK(unknown_response.at("ok") == false);
+  LMDJ_CHECK(
+      unknown_response.at("error").at("code") == "INVALID_ARGUMENT");
+  check_no_bridge_message(*bridge);
+  LMDJ_CHECK(
+      runtime->engine().bank_telemetry().accepted_publications == 1);
 }
 
 void test_bridge_rejects_an_expired_control_request_without_late_success() {
@@ -3602,9 +4149,11 @@ int main() {
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
     test_sample_editing_binds_current_project_and_drives_fixed_controls();
+    test_sample_import_prevents_current_project_switch_until_terminal();
     test_sample_import_protocol_failure_aborts_staging();
     test_sample_import_timeout_aborts_staging_and_fails_closed();
     test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit();
+    test_sample_post_claim_deadline_preserves_saved_truth();
     test_source_frame_limit_is_applied_once_before_44k1_publication();
     test_take_stop_drains_the_final_disarm_quantum();
     test_take_stop_requests_an_acknowledged_final_worklet_quantum();
@@ -3636,6 +4185,8 @@ int main() {
     test_bridge_exception_reuses_the_reserved_response_slot();
     test_bridge_release_proxy_failure_is_a_terminal_transport_signal();
     test_bridge_emits_only_real_snapshot_notifications_after_response();
+    test_bridge_emits_sample_publication_notifications_after_response();
+    test_bridge_emits_rejected_sample_and_retry_notifications();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_cancelled_before_dispatch_skips_facade_work();
     test_bridge_rechecks_deadline_before_success_publication();

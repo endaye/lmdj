@@ -571,6 +571,57 @@ void test_bundle_stream_keeps_the_sixteen_request_slot_bound() {
       bridge.submit(bytes, {}) == BridgeSubmitStatus::queue_full);
 }
 
+void test_snapshot_retry_updates_session_generation_after_response() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  constexpr std::string_view project_id =
+      "00000000-0000-4000-8000-000000000001";
+  constexpr std::string_view pattern_id =
+      "00000000-0000-4000-8000-000000000010";
+  const auto created = runtime->dispatch(
+      "project.create",
+      {{"project_id", project_id},
+       {"bpm", 120},
+       {"initial_pattern",
+        {{"pattern_id", pattern_id},
+         {"bars", 1},
+         {"events", nlohmann::json::array()}}}},
+      {});
+  LMDJ_CHECK(created.at("ok") == true);
+
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+  const auto envelope = nlohmann::json{
+      {"protocol_version", 1},
+      {"request_id", "00000000-0000-4000-8000-000000000980"},
+      {"operation", "snapshot.retry"},
+      {"payload", {{"pattern_id", pattern_id}}},
+  }.dump();
+  const auto bytes = std::span<const std::byte>{
+      reinterpret_cast<const std::byte*>(envelope.data()),
+      envelope.size(),
+  };
+  LMDJ_CHECK(
+      bridge.submit(bytes, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+
+  const auto response = poll_message(bridge);
+  LMDJ_CHECK(response.at("request_id") ==
+             "00000000-0000-4000-8000-000000000980");
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("result").at("generation") == 1);
+  const auto notification = poll_message(bridge);
+  LMDJ_CHECK(notification.at("event") == "snapshot.published");
+  LMDJ_CHECK((
+      notification.at("payload") ==
+      nlohmann::json{{"generation", 1}, {"project_revision", 0}}));
+
+  const auto status = runtime->dispatch(
+      "host.status", nlohmann::json::object(), {});
+  LMDJ_CHECK(status.at("ok") == true);
+  LMDJ_CHECK(status.at("result").at("control_generation") == 1);
+}
+
 }  // namespace
 
 int main() {
@@ -584,6 +635,7 @@ int main() {
     test_realtime_service_tail_request_is_not_lost();
     test_ready_response_pressure_cannot_starve_realtime_service();
     test_bundle_stream_keeps_the_sixteen_request_slot_bound();
+    test_snapshot_retry_updates_session_generation_after_response();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

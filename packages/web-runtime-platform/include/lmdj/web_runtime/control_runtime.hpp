@@ -21,6 +21,7 @@ namespace lmdj::web_runtime {
 
 namespace detail {
 class ControlRuntimeAudioAccess;
+class ControlRuntimeClockAccess;
 }
 
 class ControlRuntime final {
@@ -53,6 +54,7 @@ class ControlRuntime final {
 
   std::shared_ptr<Impl> impl_;
   friend class detail::ControlRuntimeAudioAccess;
+  friend class detail::ControlRuntimeClockAccess;
 };
 
 namespace detail {
@@ -66,11 +68,23 @@ struct AudioQuiescenceCoordinator {
   std::uint64_t (*acknowledged_generation)(void* context) noexcept;
 };
 
+struct ControlRuntimeClock {
+  void* context;
+  std::chrono::steady_clock::time_point (*now)(void* context) noexcept;
+};
+
 class ControlRuntimeAudioAccess final {
  public:
   static foundation::Result<void> install(
       ControlRuntime& runtime,
       AudioQuiescenceCoordinator coordinator) noexcept;
+};
+
+class ControlRuntimeClockAccess final {
+ public:
+  static foundation::Result<void> install(
+      ControlRuntime& runtime,
+      ControlRuntimeClock clock) noexcept;
 };
 
 inline constexpr std::size_t kBridgeMaximumEnvelopeBytes = 65'536;

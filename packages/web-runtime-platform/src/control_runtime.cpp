@@ -542,16 +542,43 @@ struct ControlRuntime::Impl {
            retained_project_path.has_value() && writer_lease.has_value();
   }
 
+  std::chrono::steady_clock::time_point clock_now() const noexcept {
+    return clock.has_value() ? clock->now(clock->context)
+                             : std::chrono::steady_clock::now();
+  }
+
+  void abort_tracked_sample_import(const Json& payload) noexcept {
+    std::string token;
+    try {
+      if (!payload.is_object() || !payload.contains("import_token") ||
+          !payload.at("import_token").is_string()) {
+        return;
+      }
+      token = payload.at("import_token").get<std::string>();
+    } catch (...) {
+      return;
+    }
+    if (!sample_import_tokens.contains(token)) {
+      return;
+    }
+    try {
+      static_cast<void>(application.abort_sample_import(token));
+    } catch (...) {
+    }
+    sample_import_tokens.erase(token);
+    sample_import_slots.erase(token);
+  }
+
   bool request_cancelled() const noexcept {
     return request_deadline.has_value() &&
-           std::chrono::steady_clock::now() >= *request_deadline;
+           clock_now() >= *request_deadline;
   }
 
   std::uint32_t remaining_request_budget_ms() const noexcept {
     if (!request_deadline.has_value()) {
       return 0;
     }
-    const auto now = std::chrono::steady_clock::now();
+    const auto now = clock_now();
     if (now >= *request_deadline) {
       return 0;
     }
@@ -644,28 +671,16 @@ struct ControlRuntime::Impl {
   }
 
   foundation::Result<cooker::ResolvedPlayback> resolve_preview_playback(
-      domain::PadSlotId slot,
+      const facade::SampleInspectResult& inspected,
       const domain::PadPlayback& playback) {
-    if (!retained_project_path.has_value()) {
-      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
-          ErrorCode::invalid_argument,
-          "Sample preview has no current Project",
-      });
-    }
-    const auto inspected = application.inspect_sample(
-        facade::SampleInspectRequest{*retained_project_path, slot});
-    if (!inspected.has_value()) {
-      return foundation::Result<cooker::ResolvedPlayback>::failure(
-          inspected.error());
-    }
-    if (!inspected.value().asset_id.has_value() ||
-        !inspected.value().metadata.has_value()) {
+    if (!inspected.asset_id.has_value() ||
+        !inspected.metadata.has_value()) {
       return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
           ErrorCode::missing_asset,
           "Sample preview Pad is unassigned",
       });
     }
-    const auto& metadata = *inspected.value().metadata;
+    const auto& metadata = *inspected.metadata;
     const auto source_end =
         playback.trim_end_frame.value_or(metadata.source_frames);
     if (metadata.sample_rate == 0 || playback.trim_start_frame >= source_end ||
@@ -783,7 +798,9 @@ struct ControlRuntime::Impl {
     return foundation::Result<void>::success();
   }
 
-  SnapshotResult prepare_and_publish(std::string_view selected_pattern) {
+  SnapshotResult prepare_and_publish(
+      std::string_view selected_pattern,
+      bool preserve_saved_truth = false) {
     const auto reclaimed = engine.reclaim_retired_bank_telemetry();
     if (reclaimed.decoded_pcm_bytes > reserved_live_bytes) {
       throw std::logic_error("runtime Bank reservation underflow");
@@ -878,7 +895,7 @@ struct ControlRuntime::Impl {
           error.at("error"),
       };
     }
-    if (cancel_if_expired()) {
+    if (preserve_saved_truth ? request_cancelled() : cancel_if_expired()) {
       auto error = timeout_error();
       return SnapshotResult{false, false, std::nullopt, error.at("error")};
     }
@@ -942,7 +959,12 @@ struct ControlRuntime::Impl {
     }
     SnapshotResult snapshot;
     if (mutation.runtime_prepare_required) {
-      snapshot = prepare_and_publish(*pattern_id);
+      if (request_cancelled()) {
+        const auto timeout = timeout_error();
+        snapshot.error = timeout.at("error");
+      } else {
+        snapshot = prepare_and_publish(*pattern_id, true);
+      }
     }
     Json result{
         {"committed_revision", mutation.committed_revision},
@@ -1223,6 +1245,7 @@ struct ControlRuntime::Impl {
   std::optional<TakeSession> active_take;
   std::optional<TakeSession> committable_take;
   std::optional<detail::AudioQuiescenceCoordinator> coordinator;
+  std::optional<detail::ControlRuntimeClock> clock;
   std::set<std::string> import_tokens;
   std::set<std::string> sample_import_tokens;
   std::map<std::string, domain::PadSlotId> sample_import_slots;
@@ -1263,7 +1286,7 @@ Json ControlRuntime::dispatch(
     const Json& payload,
     std::span<const std::byte> sidecar) {
   return dispatch(
-      operation, payload, sidecar, std::chrono::steady_clock::now());
+      operation, payload, sidecar, impl_->clock_now());
 }
 
 Json ControlRuntime::dispatch(
@@ -1427,7 +1450,8 @@ Json ControlRuntime::dispatch(
       require(sidecar.empty());
       if (impl_->state == Impl::State::running ||
           impl_->active_take.has_value() ||
-          impl_->committable_take.has_value()) {
+          impl_->committable_take.has_value() ||
+          !impl_->sample_import_tokens.empty()) {
         return state_error();
       }
       const auto project_id = uuid_field(payload, "project_id");
@@ -1477,7 +1501,8 @@ Json ControlRuntime::dispatch(
       require(sidecar.empty());
       if (impl_->state == Impl::State::running ||
           impl_->active_take.has_value() ||
-          impl_->committable_take.has_value()) {
+          impl_->committable_take.has_value() ||
+          !impl_->sample_import_tokens.empty()) {
         return state_error();
       }
       const auto selected_id = uuid_field(payload, "project_id");
@@ -1639,23 +1664,10 @@ Json ControlRuntime::dispatch(
       });
     }
     if (operation == "sample.import.chunk") {
-      const auto abort_malformed = [&] {
-        if (!payload.is_object() || !payload.contains("import_token") ||
-            !payload.at("import_token").is_string()) {
-          return;
-        }
-        const auto token = payload.at("import_token").get<std::string>();
-        if (!impl_->sample_import_tokens.contains(token)) {
-          return;
-        }
-        static_cast<void>(impl_->application.abort_sample_import(token));
-        impl_->sample_import_tokens.erase(token);
-        impl_->sample_import_slots.erase(token);
-      };
       if (!exact_keys(
               payload,
               {"import_token", "offset", "final", "sidecar"})) {
-        abort_malformed();
+        impl_->abort_tracked_sample_import(payload);
         protocol_failure();
       }
       const auto token = uuid_field(payload, "import_token");
@@ -1673,7 +1685,7 @@ Json ControlRuntime::dispatch(
             offset <= std::numeric_limits<std::uint64_t>::max() -
                           sidecar.size());
       } catch (const ProtocolFailure&) {
-        abort_malformed();
+        impl_->abort_tracked_sample_import(payload);
         throw;
       }
       if (impl_->cancel_if_expired()) {
@@ -1695,8 +1707,14 @@ Json ControlRuntime::dispatch(
       });
     }
     if (operation == "sample.import.commit") {
-      require(exact_keys(payload, {"import_token"}));
-      require(sidecar.empty());
+      if (!exact_keys(payload, {"import_token"})) {
+        impl_->abort_tracked_sample_import(payload);
+        protocol_failure();
+      }
+      if (!sidecar.empty()) {
+        impl_->abort_tracked_sample_import(payload);
+        protocol_failure();
+      }
       if (!impl_->session_available()) {
         return state_error();
       }
@@ -1727,14 +1745,17 @@ Json ControlRuntime::dispatch(
       if (!committed.has_value()) {
         return normalized_error(committed.error());
       }
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
       return impl_->sample_mutation_result(committed.value(), selected_slot);
     }
     if (operation == "sample.import.abort") {
-      require(exact_keys(payload, {"import_token"}));
-      require(sidecar.empty());
+      if (!exact_keys(payload, {"import_token"})) {
+        impl_->abort_tracked_sample_import(payload);
+        protocol_failure();
+      }
+      if (!sidecar.empty()) {
+        impl_->abort_tracked_sample_import(payload);
+        protocol_failure();
+      }
       if (!impl_->session_available()) {
         return state_error();
       }
@@ -1782,9 +1803,6 @@ Json ControlRuntime::dispatch(
       if (!updated.has_value()) {
         return normalized_error(updated.error());
       }
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
       return impl_->sample_mutation_result(updated.value(), selected_slot);
     }
     if (operation == "sample.reset_pad") {
@@ -1816,9 +1834,6 @@ Json ControlRuntime::dispatch(
       if (!reset.has_value()) {
         return normalized_error(reset.error());
       }
-      if (impl_->cancel_if_expired()) {
-        return timeout_error();
-      }
       return impl_->sample_mutation_result(reset.value(), selected_slot);
     }
     if (operation == "sample.preview.set") {
@@ -1829,8 +1844,20 @@ Json ControlRuntime::dispatch(
       }
       const auto selected_slot = slot_value(payload.at("slot"));
       const auto playback = playback_value(payload.at("playback"));
+      const auto inspected = impl_->application.inspect_sample(
+          facade::SampleInspectRequest{
+              *impl_->retained_project_path, selected_slot});
+      if (!inspected.has_value()) {
+        return normalized_error(inspected.error());
+      }
+      if (!impl_->runtime_revision.has_value() ||
+          !impl_->runtime_bank_project_id.has_value() ||
+          impl_->runtime_bank_project_id != impl_->project_id ||
+          inspected.value().project_revision != *impl_->runtime_revision) {
+        return state_error("runtime Bank is not current");
+      }
       const auto resolved =
-          impl_->resolve_preview_playback(selected_slot, playback);
+          impl_->resolve_preview_playback(inspected.value(), playback);
       if (!resolved.has_value()) {
         return normalized_error(resolved.error());
       }
@@ -2082,7 +2109,7 @@ Json ControlRuntime::dispatch(
       auto acknowledged = impl_->coordinator->acknowledged_generation(
           impl_->coordinator->context);
       while (acknowledged == 0 &&
-             std::chrono::steady_clock::now() < deadline) {
+             impl_->clock_now() < deadline) {
         std::this_thread::yield();
         acknowledged = impl_->coordinator->acknowledged_generation(
             impl_->coordinator->context);
@@ -2541,6 +2568,26 @@ foundation::Result<void> detail::ControlRuntimeAudioAccess::install(
     });
   }
   runtime.impl_->coordinator = coordinator;
+  return foundation::Result<void>::success();
+}
+
+foundation::Result<void> detail::ControlRuntimeClockAccess::install(
+    ControlRuntime& runtime,
+    ControlRuntimeClock clock) noexcept {
+  if (clock.context == nullptr || clock.now == nullptr) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Control Runtime clock is invalid",
+    });
+  }
+  if (runtime.impl_->state == ControlRuntime::Impl::State::closed ||
+      runtime.impl_->state == ControlRuntime::Impl::State::failed) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Control Runtime clock cannot be installed",
+    });
+  }
+  runtime.impl_->clock = clock;
   return foundation::Result<void>::success();
 }
 
