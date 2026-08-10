@@ -1,0 +1,47 @@
+LMDJ PROPRIETARY LICENSE AND COPYRIGHT NOTICE
+
+Copyright (c) 2026 Zhang Yuancheng (张远程).
+All rights reserved.
+
+1. Scope
+
+This notice applies to the LMDJ software and associated source code,
+documentation, assets, and other materials in this repository for which
+Zhang Yuancheng is the copyright holder (collectively, the "Software"),
+unless a file, directory, component, or distribution is expressly identified
+as being subject to a different license.
+
+2. No License Granted
+
+The Software is proprietary. Except under a separate express written
+authorization or agreement from the copyright holder, no permission is
+granted to use, copy, modify, merge, publish, distribute, sublicense, sell,
+create derivative works from, or otherwise exploit the Software.
+
+Access to this repository does not, by itself, grant any license or permission.
+Authorized collaborators may access and use the Software only within the scope
+of their separate written authorization or agreement.
+
+3. Separately Licensed Components
+
+The copyright holder may release specifically identified files, directories,
+components, or distributions under separate terms, including an open source
+license. Any such license applies only to the materials it expressly covers and
+does not alter the proprietary status of the remaining Software.
+
+4. Third-Party and Contributor Materials
+
+Third-party materials and contributor-owned materials remain subject to their
+respective copyright ownership and license terms. Nothing in this notice
+restricts rights granted under those applicable terms. Submission of a
+contribution does not, by itself, transfer copyright ownership; contribution
+rights must be governed by a separate written agreement or applicable license.
+
+5. Disclaimer
+
+TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, THE SOFTWARE IS PROVIDED
+"AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE,
+AND NON-INFRINGEMENT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY
+CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM, OUT OF, OR IN CONNECTION WITH
+THE SOFTWARE OR ITS USE.
