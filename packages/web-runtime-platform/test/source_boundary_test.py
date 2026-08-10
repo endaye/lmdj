@@ -71,6 +71,14 @@ def main() -> int:
             if re.search(pattern, source, re.IGNORECASE):
                 fail(f"{label} entered Platform web module: {path}")
 
+    browser_owned_sources = [
+        *text_files(PLATFORM_ROOT / "web"),
+        PLATFORM_ROOT / "src" / "web-runtime-pre.js",
+    ]
+    for path in browser_owned_sources:
+        if re.search(r"\bproject_path\b", path.read_text(encoding="utf-8")):
+            fail(f"browser transport owns a Project bundle path: {path}")
+
     creator_root = REPO_ROOT / "apps" / "creator-web"
     if creator_root.exists():
         for path in text_files(creator_root):

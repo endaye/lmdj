@@ -192,14 +192,16 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
     return std::chrono::seconds(10);
   }
   if (operation == "host.status" || operation == "audio.activate" ||
-      operation == "audio.suspend" || operation == "trigger") {
+      operation == "audio.suspend" || operation == "trigger" ||
+      operation == "sample.preview.set" ||
+      operation == "sample.preview.clear" || operation == "sample.stop") {
     return std::chrono::seconds(1);
   }
   return std::chrono::seconds(30);
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 21> operations{
+  static constexpr std::array<std::string_view, 33> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -213,6 +215,18 @@ bool supported_operation(std::string_view operation) {
       "asset.import",
       "pad.assign",
       "snapshot.reload",
+      "snapshot.retry",
+      "sample.inspect",
+      "sample.waveform",
+      "sample.import.begin",
+      "sample.import.chunk",
+      "sample.import.commit",
+      "sample.import.abort",
+      "sample.update_pad",
+      "sample.reset_pad",
+      "sample.preview.set",
+      "sample.preview.clear",
+      "sample.stop",
       "audio.activate",
       "audio.suspend",
       "trigger",
@@ -464,7 +478,8 @@ struct ControlBridge::Impl {
       fail_control();
       return;
     }
-    MessageSlot* message = nullptr;
+    MessageSlot* outcome_message = nullptr;
+    MessageSlot* voice_message = nullptr;
     try {
       static_cast<void>(runtime.drain_capture());
 #if !defined(__EMSCRIPTEN__)
@@ -476,12 +491,14 @@ struct ControlBridge::Impl {
         fail_control();
         return;
       }
-      message = reserve_message();
-      if (message == nullptr) {
+      outcome_message = reserve_message();
+      if (outcome_message == nullptr) {
         return;
       }
       if (runtime.failed()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
         fail_control();
         return;
       }
@@ -492,17 +509,23 @@ struct ControlBridge::Impl {
       }
 #endif
       if (!runtime.validate_realtime_health()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
         fail_control();
         return;
       }
       if (runtime.failed()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
         fail_control();
         return;
       }
       if (outcomes.empty()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
       } else {
 #if defined(__EMSCRIPTEN__) && defined(LMDJ_WEB_AUDIO_CONFORMANCE)
         mirror_conformance_outcomes(outcomes);
@@ -519,7 +542,7 @@ struct ControlBridge::Impl {
           });
         }
         if (!publish_message(
-                *message,
+                *outcome_message,
                 Json{
                     {"protocol_version", 1},
                     {"event", "runtime.trigger_outcomes"},
@@ -527,12 +550,87 @@ struct ControlBridge::Impl {
                 },
                 nullptr,
                 false)) {
-          message->state.store(MessageState::free, std::memory_order_release);
+          outcome_message->state.store(
+              MessageState::free, std::memory_order_release);
+          outcome_message = nullptr;
+          fail_control();
+          return;
         }
+        outcome_message = nullptr;
+      }
+
+      voice_message = reserve_message();
+      if (voice_message == nullptr) {
+        return;
+      }
+      if (runtime.failed()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+        fail_control();
+        return;
+      }
+      const auto voices = runtime.drain_voice_states();
+      if (!runtime.validate_realtime_health()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+        fail_control();
+        return;
+      }
+      if (runtime.failed()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+        fail_control();
+        return;
+      }
+      if (voices.empty()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+      } else {
+        auto events = Json::array();
+        for (const auto& voice : voices) {
+          std::string_view state = "completed";
+          if (voice.state == audio::RuntimeVoiceState::started) {
+            state = "started";
+          } else if (voice.state == audio::RuntimeVoiceState::stopped) {
+            state = "stopped";
+          }
+          events.push_back({
+              {"sequence", voice.sequence},
+              {"slot", voice.slot},
+              {"state", state},
+              {"runtime_frame", voice.runtime_frame},
+              {"source_frame", voice.source_frame},
+          });
+        }
+        if (!publish_message(
+                *voice_message,
+                Json{
+                    {"protocol_version", 1},
+                    {"event", "runtime.voice_state"},
+                    {"payload", {{"events", std::move(events)}}},
+                },
+                nullptr,
+                false)) {
+          voice_message->state.store(
+              MessageState::free, std::memory_order_release);
+          voice_message = nullptr;
+          fail_control();
+          return;
+        }
+        voice_message = nullptr;
       }
     } catch (...) {
-      if (message != nullptr) {
-        message->state.store(MessageState::free, std::memory_order_release);
+      if (outcome_message != nullptr) {
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+      }
+      if (voice_message != nullptr) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
       }
       fail_control();
     }
@@ -2271,6 +2369,12 @@ int main() {
   }
   const auto workspace =
       std::filesystem::path("/lmdj-workspace").lexically_normal();
+  constexpr RuntimePreparationLimits limits{
+      1'048'576,
+      240'000,
+      67'108'864,
+      134'217'728,
+  };
   auto created = ControlRuntime::create(
       workspace,
       Application(ApplicationConfig{
@@ -2278,13 +2382,9 @@ int main() {
           std::make_shared<Registry>(),
           ProviderPolicy{},
           {},
+          limits,
       }),
-      RuntimePreparationLimits{
-          1'048'576,
-          240'000,
-          67'108'864,
-          134'217'728,
-      });
+      limits);
   if (!created.has_value()) {
     return 1;
   }

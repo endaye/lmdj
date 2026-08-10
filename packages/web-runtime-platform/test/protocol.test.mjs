@@ -116,6 +116,18 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "asset.import",
     "pad.assign",
     "snapshot.reload",
+    "snapshot.retry",
+    "sample.inspect",
+    "sample.waveform",
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.commit",
+    "sample.import.abort",
+    "sample.update_pad",
+    "sample.reset_pad",
+    "sample.preview.set",
+    "sample.preview.clear",
+    "sample.stop",
     "audio.activate",
     "audio.suspend",
     "trigger",
@@ -135,8 +147,96 @@ test("exports the locked protocol constants, operations, and notifications", () 
     "midi.disconnected",
     "runtime.warning",
     "runtime.trigger_outcomes",
+    "runtime.voice_state",
     "capture.sealed",
   ]);
+});
+
+test("accepts only exact privacy-safe Sample operation payloads", () => {
+  const playback = {
+    trim_start_frame: 12,
+    trim_end_frame: 48,
+    trigger_mode: "loop_gate",
+    gain_millidb: -1200,
+    muted: false,
+  };
+  const sampleRequests = [
+    ["sample.inspect", {slot: {bank: 0, pad: 3}}],
+    ["sample.waveform", {
+      slot: {bank: 0, pad: 3},
+      window: {start_frame: 0, end_frame: 64, bucket_count: 16},
+    }],
+    ["sample.import.begin", {
+      import_token: requestIdFor(101),
+      command_id: requestIdFor(102),
+      expected_revision: 7,
+      slot: {bank: 0, pad: 3},
+      asset_id: requestIdFor(103),
+      byte_length: 44,
+    }],
+    ["sample.import.chunk", {
+      import_token: requestIdFor(101),
+      offset: 0,
+      final: true,
+      sidecar: {sidecar_bytes: 44, sidecar_sha256: "a".repeat(64)},
+    }],
+    ["sample.import.commit", {import_token: requestIdFor(101)}],
+    ["sample.import.abort", {import_token: requestIdFor(101)}],
+    ["sample.update_pad", {
+      command_id: requestIdFor(104),
+      expected_revision: 7,
+      slot: {bank: 0, pad: 3},
+      playback,
+    }],
+    ["sample.reset_pad", {
+      command_id: requestIdFor(105),
+      expected_revision: 7,
+      slot: {bank: 0, pad: 3},
+    }],
+    ["sample.preview.set", {slot: {bank: 0, pad: 3}, playback}],
+    ["sample.preview.clear", {slot: {bank: 0, pad: 3}}],
+    ["sample.stop", {slot: {bank: 0, pad: 3}}],
+    ["sample.stop", {}],
+    ["snapshot.retry", {pattern_id: requestIdFor(106)}],
+    ["trigger", {slot: 3, kind: "release"}],
+  ];
+  for (const [operation, payload] of sampleRequests) {
+    assert.equal(
+      createRequestEnvelope({
+        operation,
+        payload,
+        crypto: {randomUUID: () => REQUEST_ID},
+      }).operation,
+      operation,
+    );
+  }
+
+  for (const [operation, payload] of sampleRequests.filter(
+    ([candidate]) => candidate.startsWith("sample.") || candidate === "snapshot.retry",
+  )) {
+    assert.throws(
+      () => createRequestEnvelope({
+        operation,
+        payload: {...payload, project_path: "/forbidden/project.lmdj"},
+        crypto: {randomUUID: () => REQUEST_ID},
+      }),
+      expectCode("HOST_PROTOCOL_MISMATCH"),
+    );
+  }
+  assert.throws(
+    () => createRequestEnvelope({
+      operation: "sample.import.chunk",
+      payload: {
+        import_token: requestIdFor(101),
+        offset: 0,
+        final: true,
+        sidecar: {sidecar_bytes: 4, sidecar_sha256: "a".repeat(64)},
+        bytes: [1, 2, 3, 4],
+      },
+      crypto: {randomUUID: () => REQUEST_ID},
+    }),
+    expectCode("HOST_PROTOCOL_MISMATCH"),
+  );
 });
 
 test("strictly decodes UTF-8 and rejects malformed input", () => {
@@ -188,9 +288,15 @@ test("rejects unknown operations and operations disallowed by current state", ()
   );
   assert.throws(
     () =>
-      decodeRequestEnvelope(encode(request({ operation: "trigger" })), {
+      decodeRequestEnvelope(
+        encode(request({
+          operation: "trigger",
+          payload: {slot: 0, velocity: 127},
+        })),
+        {
         allowOperation: () => false,
-      }),
+        },
+      ),
     expectCode("HOST_STATE_INVALID"),
   );
 });
@@ -300,13 +406,29 @@ test("creates lowercase request IDs only through injected crypto", () => {
 });
 
 test("uses exact operation-class deadlines", () => {
-  for (const operation of ["host.status", "audio.activate", "audio.suspend", "trigger"]) {
+  for (const operation of [
+    "host.status",
+    "audio.activate",
+    "audio.suspend",
+    "trigger",
+    "sample.preview.set",
+    "sample.preview.clear",
+    "sample.stop",
+  ]) {
     assert.equal(deadlineForOperation(operation), DEADLINES_MS.short);
   }
   for (const operation of HOST_OPERATIONS.filter(
     (operation) =>
       operation !== "host.close" &&
-      !["host.status", "audio.activate", "audio.suspend", "trigger"].includes(
+      ![
+        "host.status",
+        "audio.activate",
+        "audio.suspend",
+        "trigger",
+        "sample.preview.set",
+        "sample.preview.clear",
+        "sample.stop",
+      ].includes(
         operation,
       ),
   )) {
@@ -348,6 +470,19 @@ test("rejects an asset sidecar above the exact import limit", async () => {
       { crypto: webcrypto },
     ),
     expectCode("WEB_RUNTIME_RESOURCE_LIMIT"),
+  );
+});
+
+test("accepts one verified Sample chunk sidecar at the exact import limit", async () => {
+  const sidecar = new Uint8Array(MAX_ASSET_BYTES);
+  sidecar[0] = 0x52;
+  sidecar[MAX_ASSET_BYTES - 1] = 0x7f;
+  const declaration = {
+    sidecar_bytes: MAX_ASSET_BYTES,
+    sidecar_sha256: await sha256Hex(sidecar),
+  };
+  await assert.doesNotReject(
+    verifyAssetSidecar(declaration, sidecar, {crypto: webcrypto}),
   );
 });
 

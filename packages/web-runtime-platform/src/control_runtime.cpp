@@ -4,6 +4,7 @@
 #include <array>
 #include <chrono>
 #include <cctype>
+#include <cmath>
 #include <limits>
 #include <map>
 #include <optional>
@@ -34,7 +35,9 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
     return std::chrono::seconds(10);
   }
   if (operation == "host.status" || operation == "audio.activate" ||
-      operation == "audio.suspend" || operation == "trigger") {
+      operation == "audio.suspend" || operation == "trigger" ||
+      operation == "sample.preview.set" ||
+      operation == "sample.preview.clear" || operation == "sample.stop") {
     return std::chrono::seconds(1);
   }
   return std::chrono::seconds(30);
@@ -95,6 +98,18 @@ bool bool_field(const Json& value, std::string_view key) {
   return field.get<bool>();
 }
 
+std::int32_t signed_field(
+    const Json& value,
+    std::string_view key,
+    std::int32_t minimum,
+    std::int32_t maximum) {
+  const auto& field = value.at(std::string(key));
+  require(field.is_number_integer());
+  const auto result = field.get<std::int64_t>();
+  require(result >= minimum && result <= maximum);
+  return static_cast<std::int32_t>(result);
+}
+
 std::string uuid_field(const Json& value, std::string_view key) {
   const auto result = string_field(value, key);
   require(domain::is_valid_uuid(result));
@@ -106,6 +121,48 @@ domain::PadSlotId slot_value(const Json& value) {
   return domain::PadSlotId{
       static_cast<std::uint8_t>(unsigned_field(value, "bank", 3)),
       static_cast<std::uint8_t>(unsigned_field(value, "pad", 15)),
+  };
+}
+
+std::uint8_t flatten_slot(domain::PadSlotId slot) noexcept {
+  return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
+}
+
+domain::TriggerMode trigger_mode_value(const Json& value) {
+  require(value.is_string());
+  const auto mode = value.get<std::string_view>();
+  if (mode == "one_shot") {
+    return domain::TriggerMode::one_shot;
+  }
+  if (mode == "gate") {
+    return domain::TriggerMode::gate;
+  }
+  if (mode == "loop_gate") {
+    return domain::TriggerMode::loop_gate;
+  }
+  if (mode == "loop_toggle") {
+    return domain::TriggerMode::loop_toggle;
+  }
+  protocol_failure();
+}
+
+domain::PadPlayback playback_value(const Json& value) {
+  require(exact_keys(
+      value,
+      {"trim_start_frame", "trim_end_frame", "trigger_mode",
+       "gain_millidb", "muted"}));
+  const auto start = unsigned_field(value, "trim_start_frame");
+  std::optional<std::uint64_t> end;
+  if (!value.at("trim_end_frame").is_null()) {
+    end = unsigned_field(value, "trim_end_frame");
+    require(*end > start);
+  }
+  return domain::PadPlayback{
+      start,
+      end,
+      trigger_mode_value(value.at("trigger_mode")),
+      signed_field(value, "gain_millidb", -60'000, 6'000),
+      bool_field(value, "muted"),
   };
 }
 
@@ -586,6 +643,111 @@ struct ControlRuntime::Impl {
     return normalized_facade_success(response);
   }
 
+  foundation::Result<cooker::ResolvedPlayback> resolve_preview_playback(
+      domain::PadSlotId slot,
+      const domain::PadPlayback& playback) {
+    if (!retained_project_path.has_value()) {
+      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sample preview has no current Project",
+      });
+    }
+    const auto inspected = application.inspect_sample(
+        facade::SampleInspectRequest{*retained_project_path, slot});
+    if (!inspected.has_value()) {
+      return foundation::Result<cooker::ResolvedPlayback>::failure(
+          inspected.error());
+    }
+    if (!inspected.value().asset_id.has_value() ||
+        !inspected.value().metadata.has_value()) {
+      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
+          ErrorCode::missing_asset,
+          "Sample preview Pad is unassigned",
+      });
+    }
+    const auto& metadata = *inspected.value().metadata;
+    const auto source_end =
+        playback.trim_end_frame.value_or(metadata.source_frames);
+    if (metadata.sample_rate == 0 || playback.trim_start_frame >= source_end ||
+        source_end > metadata.source_frames ||
+        playback.trim_start_frame >
+            std::numeric_limits<std::uint64_t>::max() / kSampleRate ||
+        source_end >
+            std::numeric_limits<std::uint64_t>::max() / kSampleRate) {
+      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sample preview playback is invalid",
+      });
+    }
+    const auto scaled_start = playback.trim_start_frame * kSampleRate;
+    const auto scaled_end = source_end * kSampleRate;
+    const auto runtime_start = scaled_start / metadata.sample_rate;
+    const auto runtime_end =
+        scaled_end / metadata.sample_rate +
+        (scaled_end % metadata.sample_rate != 0 ? 1U : 0U);
+    const auto prepared_frames =
+        metadata.source_frames * kSampleRate / metadata.sample_rate +
+        (metadata.source_frames * kSampleRate % metadata.sample_rate != 0
+             ? 1U
+             : 0U);
+    const auto gain = static_cast<float>(std::pow(
+        10.0, static_cast<double>(playback.gain_millidb) / 20'000.0));
+    if (runtime_start >= runtime_end || runtime_end > prepared_frames ||
+        runtime_start > std::numeric_limits<std::uint32_t>::max() ||
+        runtime_end > std::numeric_limits<std::uint32_t>::max() ||
+        !std::isfinite(gain)) {
+      return foundation::Result<cooker::ResolvedPlayback>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sample preview playback is invalid",
+      });
+    }
+    return foundation::Result<cooker::ResolvedPlayback>::success(
+        cooker::ResolvedPlayback{
+            static_cast<std::uint32_t>(runtime_start),
+            static_cast<std::uint32_t>(runtime_end),
+            playback.trigger_mode,
+            gain,
+            playback.muted,
+        });
+  }
+
+  std::optional<Json> enqueue_sample_control(
+      audio::PadControlKind kind,
+      domain::PadSlotId slot,
+      cooker::ResolvedPlayback playback = {}) {
+    if (state != State::running || !trigger_admission || !runtime_ready ||
+        runtime_bank_project_id != project_id) {
+      return state_error("runtime control is unavailable");
+    }
+    const auto enqueued = engine.enqueue_control(audio::PadControlEvent{
+        0,
+        flatten_slot(slot),
+        0,
+        kind,
+        playback,
+    });
+    if (enqueued != audio::EnqueueResult::accepted) {
+      return state_error(enqueue_failure_message(enqueued));
+    }
+    return std::nullopt;
+  }
+
+  std::optional<Json> prepare_sample_mutation_controls(
+      domain::PadSlotId slot,
+      bool stop_voice) {
+    if (state != State::running) {
+      return std::nullopt;
+    }
+    if (stop_voice) {
+      const auto stopped = enqueue_sample_control(
+          audio::PadControlKind::stop_slot, slot);
+      if (stopped.has_value()) {
+        return stopped;
+      }
+    }
+    return enqueue_sample_control(audio::PadControlKind::preview_clear, slot);
+  }
+
   struct SnapshotResult {
     bool published = false;
     bool resource_rejected = false;
@@ -617,6 +779,7 @@ struct ControlRuntime::Impl {
     }
     runtime_ready = false;
     runtime_bank_project_id.reset();
+    runtime_revision.reset();
     return foundation::Result<void>::success();
   }
 
@@ -693,7 +856,18 @@ struct ControlRuntime::Impl {
       return SnapshotResult{false, true, std::nullopt, error.at("error")};
     }
 
-    auto bank = audio::PreparedSampleBank::from_snapshot(snapshot, limits);
+    // Application admission already applies the decoded-source frame limit.
+    // The immutable Snapshot contains prepared 48 kHz frames, which can be
+    // larger after 44.1 kHz resampling and must not be compared to that source
+    // limit a second time. Publication retains every byte/live-bank bound.
+    const auto publication_limits = audio::RuntimePreparationLimits{
+        limits.maximum_artifact_bytes,
+        std::numeric_limits<std::uint64_t>::max(),
+        limits.maximum_prepared_bank_bytes,
+        limits.maximum_live_bank_bytes,
+    };
+    auto bank = audio::PreparedSampleBank::from_snapshot(
+        snapshot, publication_limits);
     if (!bank.has_value()) {
       auto error = normalized_error(bank.error());
       return SnapshotResult{
@@ -716,6 +890,7 @@ struct ControlRuntime::Impl {
     reserved_live_bytes = *aggregate;
     runtime_ready = true;
     runtime_bank_project_id = project_id;
+    runtime_revision = snapshot.project_revision;
     pattern_id = std::string(selected_pattern);
     project_revision = snapshot.project_revision;
     const auto generation = engine.bank_telemetry().accepted_publications;
@@ -735,6 +910,51 @@ struct ControlRuntime::Impl {
                                          : Json(nullptr)},
         {"snapshot_error", snapshot.error},
     });
+  }
+
+  Json retry_result(
+      std::string_view selected_pattern,
+      const SnapshotResult& snapshot) const {
+    return success({
+        {"project_id", *project_id},
+        {"project_revision", *project_revision},
+        {"pattern_id", std::string(selected_pattern)},
+        {"runtime_ready", snapshot.published},
+        {"generation",
+         snapshot.generation.has_value() ? Json(*snapshot.generation)
+                                         : Json(nullptr)},
+        {"snapshot_error", snapshot.error},
+        {"runtime_revision",
+         runtime_revision.has_value() ? Json(*runtime_revision)
+                                      : Json(nullptr)},
+    });
+  }
+
+  Json sample_mutation_result(
+      const facade::SampleMutationResult& mutation,
+      domain::PadSlotId slot) {
+    const auto inspected = application.inspect_sample(
+        facade::SampleInspectRequest{*retained_project_path, slot});
+    if (inspected.has_value()) {
+      project_revision = inspected.value().project_revision;
+    } else {
+      project_revision = mutation.committed_revision;
+    }
+    SnapshotResult snapshot;
+    if (mutation.runtime_prepare_required) {
+      snapshot = prepare_and_publish(*pattern_id);
+    }
+    Json result{
+        {"committed_revision", mutation.committed_revision},
+        {"runtime_revision",
+         runtime_revision.has_value() ? Json(*runtime_revision)
+                                      : Json(nullptr)},
+        {"runtime_published", snapshot.published},
+    };
+    if (!snapshot.error.is_null()) {
+      result["snapshot_error"] = snapshot.error;
+    }
+    return success(std::move(result));
   }
 
   foundation::Result<void> drain_capture_events() {
@@ -937,6 +1157,19 @@ struct ControlRuntime::Impl {
       }
       ++current;
     }
+    for (auto current = sample_import_tokens.begin();
+         current != sample_import_tokens.end();) {
+      const auto aborted = application.abort_sample_import(*current);
+      sample_import_slots.erase(*current);
+      if (aborted.has_value()) {
+        current = sample_import_tokens.erase(current);
+        continue;
+      }
+      if (!first_failure.has_value()) {
+        first_failure = aborted.error();
+      }
+      ++current;
+    }
     if (first_failure.has_value()) {
       return foundation::Result<void>::failure(*first_failure);
     }
@@ -986,10 +1219,13 @@ struct ControlRuntime::Impl {
   std::optional<std::uint64_t> project_revision;
   std::optional<std::string> pattern_id;
   std::optional<std::string> runtime_bank_project_id;
+  std::optional<std::uint64_t> runtime_revision;
   std::optional<TakeSession> active_take;
   std::optional<TakeSession> committable_take;
   std::optional<detail::AudioQuiescenceCoordinator> coordinator;
   std::set<std::string> import_tokens;
+  std::set<std::string> sample_import_tokens;
+  std::map<std::string, domain::PadSlotId> sample_import_slots;
   std::uint64_t reserved_live_bytes = 0;
   std::uint64_t next_trigger_sequence = 1;
   bool runtime_ready = false;
@@ -1226,6 +1462,7 @@ Json ControlRuntime::dispatch(
       impl_->project_revision = std::uint64_t{0};
       impl_->pattern_id = initial_pattern_id;
       impl_->runtime_ready = false;
+      impl_->runtime_revision.reset();
       impl_->trigger_admission = false;
       impl_->state = Impl::State::core_ready;
       return success({
@@ -1277,6 +1514,7 @@ Json ControlRuntime::dispatch(
       impl_->pattern_id = selected_pattern;
       if (switched) {
         impl_->runtime_ready = false;
+        impl_->runtime_revision.reset();
       }
       impl_->state = Impl::State::core_ready;
       const auto snapshot = impl_->prepare_and_publish(selected_pattern);
@@ -1304,6 +1542,345 @@ Json ControlRuntime::dispatch(
                 .get<std::uint64_t>();
       }
       return response;
+    }
+    if (operation == "sample.inspect") {
+      require(exact_keys(payload, {"slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto selected_slot = slot_value(payload.at("slot"));
+      auto response = impl_->facade_query(
+          {{"operation", "sample.inspect"},
+           {"project_path", impl_->retained_project_path->generic_string()},
+           {"slot", payload.at("slot")}});
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      if (response.value("ok", false)) {
+        impl_->project_revision =
+            response.at("result").at("project_revision")
+                .get<std::uint64_t>();
+      }
+      static_cast<void>(selected_slot);
+      return response;
+    }
+    if (operation == "sample.waveform") {
+      require(exact_keys(payload, {"slot", "window"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      static_cast<void>(slot_value(payload.at("slot")));
+      const auto& window = payload.at("window");
+      require(exact_keys(
+          window, {"start_frame", "end_frame", "bucket_count"}));
+      const auto start = unsigned_field(window, "start_frame");
+      const auto end = unsigned_field(window, "end_frame");
+      const auto buckets = unsigned_field(window, "bucket_count", 512);
+      require(start < end && buckets != 0);
+      auto response = impl_->facade_query(
+          {{"operation", "sample.waveform"},
+           {"project_path", impl_->retained_project_path->generic_string()},
+           {"slot", payload.at("slot")},
+           {"window", window}});
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      if (response.value("ok", false)) {
+        impl_->project_revision =
+            response.at("result").at("project_revision")
+                .get<std::uint64_t>();
+      }
+      return response;
+    }
+    if (operation == "sample.import.begin") {
+      require(exact_keys(
+          payload,
+          {"import_token", "command_id", "expected_revision", "slot",
+           "asset_id", "byte_length"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto token = uuid_field(payload, "import_token");
+      const auto command_id = uuid_field(payload, "command_id");
+      const auto expected_revision =
+          unsigned_field(payload, "expected_revision");
+      const auto selected_slot = slot_value(payload.at("slot"));
+      const auto asset_id = uuid_field(payload, "asset_id");
+      const auto byte_length = unsigned_field(
+          payload, "byte_length", impl_->limits.maximum_artifact_bytes);
+      require(byte_length != 0);
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto begun = impl_->application.begin_sample_import(
+          facade::SampleImportBeginRequest{
+              token,
+              *impl_->retained_project_path,
+              domain::CommandMeta{
+                  foundation::CommandId{command_id}, expected_revision},
+              selected_slot,
+              foundation::AssetId{asset_id},
+              byte_length,
+          });
+      if (!begun.has_value()) {
+        return normalized_error(begun.error());
+      }
+      impl_->sample_import_tokens.insert(token);
+      impl_->sample_import_slots[token] = selected_slot;
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success({
+          {"token", begun.value().token},
+          {"expected_bytes", begun.value().expected_bytes},
+      });
+    }
+    if (operation == "sample.import.chunk") {
+      const auto abort_malformed = [&] {
+        if (!payload.is_object() || !payload.contains("import_token") ||
+            !payload.at("import_token").is_string()) {
+          return;
+        }
+        const auto token = payload.at("import_token").get<std::string>();
+        if (!impl_->sample_import_tokens.contains(token)) {
+          return;
+        }
+        static_cast<void>(impl_->application.abort_sample_import(token));
+        impl_->sample_import_tokens.erase(token);
+        impl_->sample_import_slots.erase(token);
+      };
+      if (!exact_keys(
+              payload,
+              {"import_token", "offset", "final", "sidecar"})) {
+        abort_malformed();
+        protocol_failure();
+      }
+      const auto token = uuid_field(payload, "import_token");
+      if (!impl_->session_available() ||
+          !impl_->sample_import_tokens.contains(token)) {
+        return state_error();
+      }
+      std::uint64_t offset = 0;
+      bool final = false;
+      try {
+        offset = unsigned_field(payload, "offset");
+        final = bool_field(payload, "final");
+        require_sidecar(payload.at("sidecar"), sidecar);
+        require(
+            offset <= std::numeric_limits<std::uint64_t>::max() -
+                          sidecar.size());
+      } catch (const ProtocolFailure&) {
+        abort_malformed();
+        throw;
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto appended = impl_->application.append_sample_import(
+          token, offset, sidecar, final);
+      if (!appended.has_value()) {
+        impl_->sample_import_tokens.erase(token);
+        impl_->sample_import_slots.erase(token);
+        return normalized_error(appended.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success({
+          {"received_bytes", offset + sidecar.size()},
+          {"final", final},
+      });
+    }
+    if (operation == "sample.import.commit") {
+      require(exact_keys(payload, {"import_token"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto token = uuid_field(payload, "import_token");
+      const auto found = impl_->sample_import_slots.find(token);
+      if (!impl_->sample_import_tokens.contains(token) ||
+          found == impl_->sample_import_slots.end()) {
+        return normalized_error(Error{
+            ErrorCode::invalid_argument,
+            "Sample import token is not active",
+        });
+      }
+      const auto selected_slot = found->second;
+      if (const auto control =
+              impl_->prepare_sample_mutation_controls(selected_slot, true);
+          control.has_value()) {
+        static_cast<void>(impl_->application.abort_sample_import(token));
+        impl_->sample_import_tokens.erase(token);
+        impl_->sample_import_slots.erase(token);
+        return *control;
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto committed = impl_->application.commit_sample_import(token);
+      impl_->sample_import_tokens.erase(token);
+      impl_->sample_import_slots.erase(token);
+      if (!committed.has_value()) {
+        return normalized_error(committed.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return impl_->sample_mutation_result(committed.value(), selected_slot);
+    }
+    if (operation == "sample.import.abort") {
+      require(exact_keys(payload, {"import_token"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto token = uuid_field(payload, "import_token");
+      const auto aborted = impl_->application.abort_sample_import(token);
+      impl_->sample_import_tokens.erase(token);
+      impl_->sample_import_slots.erase(token);
+      if (!aborted.has_value()) {
+        return normalized_error(aborted.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return success({{"aborted", true}});
+    }
+    if (operation == "sample.update_pad") {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "slot", "playback"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto command_id = uuid_field(payload, "command_id");
+      const auto expected_revision =
+          unsigned_field(payload, "expected_revision");
+      const auto selected_slot = slot_value(payload.at("slot"));
+      const auto playback = playback_value(payload.at("playback"));
+      if (const auto control = impl_->prepare_sample_mutation_controls(
+              selected_slot, playback.muted);
+          control.has_value()) {
+        return *control;
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto updated = impl_->application.update_sample_pad(
+          facade::SampleUpdateRequest{
+              *impl_->retained_project_path,
+              domain::CommandMeta{
+                  foundation::CommandId{command_id}, expected_revision},
+              selected_slot,
+              playback,
+          });
+      if (!updated.has_value()) {
+        return normalized_error(updated.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return impl_->sample_mutation_result(updated.value(), selected_slot);
+    }
+    if (operation == "sample.reset_pad") {
+      require(exact_keys(
+          payload, {"command_id", "expected_revision", "slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto command_id = uuid_field(payload, "command_id");
+      const auto expected_revision =
+          unsigned_field(payload, "expected_revision");
+      const auto selected_slot = slot_value(payload.at("slot"));
+      if (const auto control =
+              impl_->prepare_sample_mutation_controls(selected_slot, true);
+          control.has_value()) {
+        return *control;
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto reset = impl_->application.reset_sample_pad(
+          facade::SampleResetRequest{
+              *impl_->retained_project_path,
+              domain::CommandMeta{
+                  foundation::CommandId{command_id}, expected_revision},
+              selected_slot,
+          });
+      if (!reset.has_value()) {
+        return normalized_error(reset.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      return impl_->sample_mutation_result(reset.value(), selected_slot);
+    }
+    if (operation == "sample.preview.set") {
+      require(exact_keys(payload, {"slot", "playback"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto selected_slot = slot_value(payload.at("slot"));
+      const auto playback = playback_value(payload.at("playback"));
+      const auto resolved =
+          impl_->resolve_preview_playback(selected_slot, playback);
+      if (!resolved.has_value()) {
+        return normalized_error(resolved.error());
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      if (const auto control = impl_->enqueue_sample_control(
+              audio::PadControlKind::preview_set,
+              selected_slot,
+              resolved.value());
+          control.has_value()) {
+        return *control;
+      }
+      return success({{"accepted", true}});
+    }
+    if (operation == "sample.preview.clear") {
+      require(exact_keys(payload, {"slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto selected_slot = slot_value(payload.at("slot"));
+      if (const auto control = impl_->enqueue_sample_control(
+              audio::PadControlKind::preview_clear, selected_slot);
+          control.has_value()) {
+        return *control;
+      }
+      return success({{"accepted", true}});
+    }
+    if (operation == "sample.stop") {
+      require(exact_keys(payload, {}) || exact_keys(payload, {"slot"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto stop_all = payload.empty();
+      const auto selected_slot =
+          stop_all ? domain::PadSlotId{0, 0}
+                   : slot_value(payload.at("slot"));
+      if (const auto control = impl_->enqueue_sample_control(
+              stop_all ? audio::PadControlKind::stop_all
+                       : audio::PadControlKind::stop_slot,
+              selected_slot);
+          control.has_value()) {
+        return *control;
+      }
+      return success({
+          {"accepted", true},
+          {"scope", stop_all ? "all" : "slot"},
+      });
     }
     if (operation == "asset.import") {
       require(exact_keys(
@@ -1424,6 +2001,22 @@ Json ControlRuntime::dispatch(
       }
       return impl_->open_result(selected_pattern, snapshot);
     }
+    if (operation == "snapshot.retry") {
+      require(exact_keys(payload, {"pattern_id"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto selected_pattern = uuid_field(payload, "pattern_id");
+      if (selected_pattern != *impl_->pattern_id) {
+        return state_error("retry Pattern is not current");
+      }
+      if (impl_->cancel_if_expired()) {
+        return timeout_error();
+      }
+      const auto snapshot = impl_->prepare_and_publish(selected_pattern);
+      return impl_->retry_result(selected_pattern, snapshot);
+    }
     if (operation == "audio.activate") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -1516,8 +2109,22 @@ Json ControlRuntime::dispatch(
       });
     }
     if (operation == "trigger") {
-      require(exact_keys(payload, {"slot", "velocity"}));
       require(sidecar.empty());
+      if (exact_keys(payload, {"slot", "kind"})) {
+        const auto selected_slot = unsigned_field(payload, "slot", 63);
+        require(string_field(payload, "kind") == "release");
+        const auto structured_slot = domain::PadSlotId{
+            static_cast<std::uint8_t>(selected_slot / 16U),
+            static_cast<std::uint8_t>(selected_slot % 16U),
+        };
+        if (const auto control = impl_->enqueue_sample_control(
+                audio::PadControlKind::release, structured_slot);
+            control.has_value()) {
+          return *control;
+        }
+        return success({{"accepted", true}});
+      }
+      require(exact_keys(payload, {"slot", "velocity"}));
       const auto selected_slot = unsigned_field(payload, "slot", 63);
       const auto velocity = unsigned_field(payload, "velocity", 127);
       require(velocity != 0);
@@ -1530,11 +2137,14 @@ Json ControlRuntime::dispatch(
       if (impl_->cancel_if_expired()) {
         return timeout_error();
       }
-      const auto enqueued = impl_->engine.enqueue(audio::TriggerEvent{
-          sequence,
-          static_cast<std::uint8_t>(selected_slot),
-          static_cast<std::uint8_t>(velocity),
-      });
+      const auto enqueued = impl_->engine.enqueue_control(
+          audio::PadControlEvent{
+              sequence,
+              static_cast<std::uint8_t>(selected_slot),
+              static_cast<std::uint8_t>(velocity),
+              audio::PadControlKind::press,
+              {},
+          });
       if (enqueued != audio::EnqueueResult::accepted) {
         return state_error(enqueue_failure_message(enqueued));
       }
@@ -1818,6 +2428,28 @@ ControlRuntime::drain_outcomes() {
   return result;
 }
 
+std::vector<audio::RuntimeVoiceStateEvent>
+ControlRuntime::drain_voice_states() {
+  if (!validate_realtime_health()) {
+    return {};
+  }
+  std::vector<audio::RuntimeVoiceStateEvent> result;
+  result.reserve(64);
+  std::array<audio::RuntimeVoiceStateEvent, 64> batch{};
+  const auto count = impl_->engine.drain_voice_states(batch);
+  if (count > batch.size()) {
+    fail_and_seal("voice_state_batch_overflow");
+    return {};
+  }
+  for (std::size_t index = 0; index < count; ++index) {
+    result.push_back(batch[index]);
+  }
+  if (!validate_realtime_health()) {
+    return {};
+  }
+  return result;
+}
+
 foundation::Result<void> ControlRuntime::drain_capture() {
   const auto capture = impl_->engine.capture_telemetry();
   if (capture.capture_drops != 0 ||
@@ -1856,6 +2488,12 @@ bool ControlRuntime::validate_realtime_health() noexcept {
   }
   if (impl_->engine.trigger_outcome_telemetry().runtime_outcome_drops != 0) {
     fail_and_seal("trigger_outcome_drop");
+    return false;
+  }
+  const auto voice_state = impl_->engine.voice_state_telemetry();
+  if (voice_state.voice_state_drops != 0 ||
+      voice_state.state == audio::RuntimeVoiceStateStreamState::corrupted) {
+    fail_and_seal("voice_state_drop");
     return false;
   }
   return true;

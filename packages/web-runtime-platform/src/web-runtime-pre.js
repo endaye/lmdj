@@ -463,10 +463,15 @@ if (typeof globalThis.window !== "undefined") {
           "formal Web Host transport is unavailable",
         ));
       }
+      if (options.sidecar !== undefined &&
+          !(options.sidecar instanceof Uint8Array)) {
+        return Promise.reject(transportFailure(
+          "HOST_PROTOCOL_MISMATCH",
+          "formal Web Host sidecar is invalid",
+        ));
+      }
       const envelope = transportEncoder.encode(JSON.stringify(request));
-      const sidecar = options.sidecar instanceof Uint8Array
-        ? options.sidecar
-        : new Uint8Array();
+      const sidecar = options.sidecar ?? new Uint8Array();
       const deadlineMs = Number.isFinite(options.deadlineMs)
         ? Math.min(0xffff_ffff, Math.max(0, options.deadlineMs))
         : 30_000;

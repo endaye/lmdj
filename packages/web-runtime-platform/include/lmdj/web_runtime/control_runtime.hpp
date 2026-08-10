@@ -40,6 +40,7 @@ class ControlRuntime final {
       std::span<const std::byte> sidecar,
       std::chrono::steady_clock::time_point submitted_at);
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
+  std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
   foundation::Result<void> drain_capture();
   bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;

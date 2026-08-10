@@ -53,6 +53,12 @@ class TempDirectory final {
 
 std::unique_ptr<ControlRuntime> make_runtime(
     const std::filesystem::path& root) {
+  constexpr RuntimePreparationLimits limits{
+      1'048'576,
+      240'000,
+      67'108'864,
+      134'217'728,
+  };
   auto created = ControlRuntime::create(
       root,
       Application(ApplicationConfig{
@@ -60,13 +66,9 @@ std::unique_ptr<ControlRuntime> make_runtime(
           std::make_shared<Registry>(),
           ProviderPolicy{},
           [] { return std::string("2026-08-04T00:00:00.000Z"); },
+          limits,
       }),
-      RuntimePreparationLimits{
-          1'048'576,
-          240'000,
-          67'108'864,
-          134'217'728,
-      });
+      limits);
   LMDJ_CHECK(created.has_value());
   return std::move(created.value());
 }
@@ -262,6 +264,13 @@ void test_bridge_emits_only_non_empty_ordered_outcome_batches() {
   LMDJ_CHECK(first_events.size() == 64);
   LMDJ_CHECK(first_events.front().at("sequence") == 1);
   LMDJ_CHECK(first_events.back().at("sequence") == 64);
+  const auto first_voices = poll_message(bridge);
+  LMDJ_CHECK(first_voices.at("event") == "runtime.voice_state");
+  const auto& first_voice_events = first_voices.at("payload").at("events");
+  LMDJ_CHECK(first_voice_events.size() == 64);
+  LMDJ_CHECK(first_voice_events.front().at("sequence") == 1);
+  LMDJ_CHECK(first_voice_events.front().at("state") == "started");
+  LMDJ_CHECK(first_voice_events.back().at("sequence") == 64);
 
   required = 99;
   LMDJ_CHECK(
@@ -273,6 +282,12 @@ void test_bridge_emits_only_non_empty_ordered_outcome_batches() {
   LMDJ_CHECK(second.at("payload").at("events").size() == 1);
   LMDJ_CHECK(
       second.at("payload").at("events").front().at("sequence") == 65);
+  const auto second_voices = poll_message(bridge);
+  LMDJ_CHECK(second_voices.at("event") == "runtime.voice_state");
+  LMDJ_CHECK(second_voices.at("payload").at("events").size() == 1);
+  LMDJ_CHECK(
+      second_voices.at("payload").at("events").front().at("sequence") ==
+      65);
 
   required = 99;
   LMDJ_CHECK(
@@ -282,6 +297,98 @@ void test_bridge_emits_only_non_empty_ordered_outcome_batches() {
   required = 99;
   LMDJ_CHECK(
       bridge.poll(empty_output, required) == BridgePollStatus::empty);
+}
+
+void test_bridge_emits_authoritative_voice_state_edges() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto& engine = runtime->engine();
+  const std::array<float, 1> sample{0.25F};
+  LMDJ_CHECK(engine.load_sample(3, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+  enable_realtime_service(bridge, proxy);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(lmdj::audio::PadControlEvent{
+          77,
+          3,
+          127,
+          lmdj::audio::PadControlKind::press,
+          {},
+      }) == lmdj::audio::EnqueueResult::accepted);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::empty);
+  proxy.pump_one();
+  const auto outcomes = poll_message(bridge);
+  LMDJ_CHECK(outcomes.at("event") == "runtime.trigger_outcomes");
+  const auto voices = poll_message(bridge);
+  LMDJ_CHECK(voices.at("event") == "runtime.voice_state");
+  const auto& events = voices.at("payload").at("events");
+  LMDJ_CHECK(events.size() == 2);
+  LMDJ_CHECK((
+      events.at(0) ==
+      nlohmann::json{
+          {"sequence", 77},
+          {"slot", 3},
+          {"state", "started"},
+          {"runtime_frame", 0},
+          {"source_frame", 0},
+      }));
+  LMDJ_CHECK((
+      events.at(1) ==
+      nlohmann::json{
+          {"sequence", 77},
+          {"slot", 3},
+          {"state", "completed"},
+          {"runtime_frame", 1},
+          {"source_frame", 1},
+      }));
+}
+
+void test_voice_state_overflow_is_a_terminal_bridge_signal() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  auto& engine = runtime->engine();
+  const std::array<float, 1> sample{0.25F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  std::array<lmdj::audio::RuntimeTriggerOutcomeEvent, 1> outcome{};
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeVoiceStateCapacity / 2 + 1;
+       ++sequence) {
+    LMDJ_CHECK(
+        engine.enqueue(lmdj::audio::TriggerEvent{sequence, 0, 127}) ==
+        lmdj::audio::EnqueueResult::accepted);
+    engine.render(left.data(), right.data(), 1);
+    const auto outcome_count = engine.drain_trigger_outcomes(outcome);
+    LMDJ_CHECK(
+        outcome_count ==
+        (sequence <= lmdj::audio::kRealtimeVoiceStateCapacity / 2 ? 1U
+                                                                  : 0U));
+  }
+  LMDJ_CHECK(
+      engine.voice_state_telemetry().state ==
+      lmdj::audio::RuntimeVoiceStateStreamState::corrupted);
+  LMDJ_CHECK(engine.voice_state_telemetry().voice_state_drops == 1);
+
+  FakeProxy proxy;
+  ControlBridge bridge(*runtime, proxy.hooks());
+  enable_realtime_service(bridge, proxy);
+  std::array<std::byte, 1> output{};
+  std::size_t required = 0;
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::empty);
+  proxy.pump_one();
+  LMDJ_CHECK(bridge.failed());
+  LMDJ_CHECK(bridge.poll(output, required) == BridgePollStatus::failed);
 }
 
 void test_outcome_drop_is_a_terminal_bridge_signal() {
@@ -470,6 +577,8 @@ int main() {
   try {
     test_outcome_control_drains_are_bounded_to_64();
     test_bridge_emits_only_non_empty_ordered_outcome_batches();
+    test_bridge_emits_authoritative_voice_state_edges();
+    test_voice_state_overflow_is_a_terminal_bridge_signal();
     test_outcome_drop_is_a_terminal_bridge_signal();
     test_outcome_drop_racing_the_post_drain_check_is_terminal();
     test_realtime_service_tail_request_is_not_lost();

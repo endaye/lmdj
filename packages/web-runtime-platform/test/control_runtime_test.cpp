@@ -12,6 +12,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -108,12 +109,15 @@ std::string uuid(std::uint32_t suffix) {
          std::string(12 - tail.size(), '0') + tail;
 }
 
-Application make_application(const std::filesystem::path& root) {
+Application make_application(
+    const std::filesystem::path& root,
+    RuntimePreparationLimits limits = kWebLimits) {
   return Application(ApplicationConfig{
       root,
       std::make_shared<Registry>(),
       ProviderPolicy{},
       [] { return std::string("2026-08-04T00:00:00.000Z"); },
+      limits,
   });
 }
 
@@ -121,7 +125,7 @@ std::unique_ptr<ControlRuntime> make_runtime(
     const std::filesystem::path& root,
     RuntimePreparationLimits limits = kWebLimits) {
   auto created = ControlRuntime::create(
-      root, make_application(root), limits);
+      root, make_application(root, limits), limits);
   LMDJ_CHECK(created.has_value());
   return std::move(created.value());
 }
@@ -177,7 +181,9 @@ void write_tag(
   }
 }
 
-std::vector<std::byte> mono_pcm16_wav(std::uint32_t frames) {
+std::vector<std::byte> mono_pcm16_wav(
+    std::uint32_t frames,
+    std::uint32_t sample_rate = 48'000) {
   const auto data_bytes = frames * 2U;
   std::vector<std::byte> bytes(44U + data_bytes);
   write_tag(bytes, 0, "RIFF");
@@ -187,8 +193,8 @@ std::vector<std::byte> mono_pcm16_wav(std::uint32_t frames) {
   write_u32(bytes, 16, 16);
   write_u16(bytes, 20, 1);
   write_u16(bytes, 22, 1);
-  write_u32(bytes, 24, 48'000);
-  write_u32(bytes, 28, 96'000);
+  write_u32(bytes, 24, sample_rate);
+  write_u32(bytes, 28, sample_rate * 2U);
   write_u16(bytes, 32, 2);
   write_u16(bytes, 34, 16);
   write_tag(bytes, 36, "data");
@@ -334,6 +340,51 @@ Json assign_payload(
   };
 }
 
+Json playback_payload(
+    std::uint64_t start,
+    std::optional<std::uint64_t> end,
+    std::string_view mode = "one_shot",
+    std::int32_t gain_millidb = 0,
+    bool muted = false) {
+  return {
+      {"trim_start_frame", start},
+      {"trim_end_frame", end.has_value() ? Json(*end) : Json(nullptr)},
+      {"trigger_mode", mode},
+      {"gain_millidb", gain_millidb},
+      {"muted", muted},
+  };
+}
+
+Json sample_begin_payload(
+    std::uint32_t token_suffix,
+    std::uint32_t command_suffix,
+    std::uint64_t expected_revision,
+    std::string_view asset_id,
+    std::size_t byte_length,
+    std::uint8_t pad = 0) {
+  return {
+      {"import_token", uuid(token_suffix)},
+      {"command_id", uuid(command_suffix)},
+      {"expected_revision", expected_revision},
+      {"slot", slot(0, pad)},
+      {"asset_id", asset_id},
+      {"byte_length", byte_length},
+  };
+}
+
+Json sample_chunk_payload(
+    std::uint32_t token_suffix,
+    std::uint64_t offset,
+    bool final,
+    std::span<const std::byte> bytes) {
+  return {
+      {"import_token", uuid(token_suffix)},
+      {"offset", offset},
+      {"final", final},
+      {"sidecar", sidecar_declaration(bytes)},
+  };
+}
+
 void check_success(const Json& response) {
   LMDJ_CHECK(response.is_object());
   LMDJ_CHECK(response.size() == 2);
@@ -351,7 +402,11 @@ Json check_error(const Json& response, std::string_view code) {
   LMDJ_CHECK(response.is_object());
   LMDJ_CHECK(response.size() == 2);
   LMDJ_CHECK(response.at("ok") == false);
-  LMDJ_CHECK(response.at("error").at("code") == code);
+  if (response.at("error").at("code") != code) {
+    throw std::runtime_error(
+        "unexpected response error, wanted " + std::string(code) + ": " +
+        response.dump());
+  }
   LMDJ_CHECK(response.at("error").at("message").is_string());
   LMDJ_CHECK(response.at("error").at("details").is_object());
   return response.at("error");
@@ -361,7 +416,10 @@ void check_exact_keys(
     const Json& value,
     std::initializer_list<std::string_view> keys) {
   LMDJ_CHECK(value.is_object());
-  LMDJ_CHECK(value.size() == keys.size());
+  if (value.size() != keys.size()) {
+    throw std::runtime_error(
+        "exact response key count mismatch: " + value.dump());
+  }
   for (const auto key : keys) {
     LMDJ_CHECK(value.contains(std::string(key)));
   }
@@ -1119,6 +1177,445 @@ void test_exact_payloads_and_facade_owned_project_journey() {
       {}));
 }
 
+void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
+  TempDirectory temp;
+  {
+    auto fixture_builder = make_runtime(temp.path());
+    check_success(fixture_builder->dispatch(
+        "project.create", create_payload(), {}));
+  }
+  const auto manifest_path = temp.path() / "projects" /
+                             (std::string(kProjectId) + ".lmdj") /
+                             "manifest.json";
+  const auto original_manifest = read_bytes(manifest_path);
+  auto runtime = make_runtime(temp.path());
+  check_exact_success(
+      runtime->dispatch(
+          "project.open",
+          {{"project_id", kProjectId}, {"pattern_id", kPatternId}},
+          {}),
+      {"project_id", "project_revision", "pattern_id", "runtime_ready",
+       "generation", "snapshot_error"});
+  const auto legacy = check_exact_success(
+      runtime->dispatch("project.inspect", Json::object(), {}),
+      {"project", "project_revision"});
+  LMDJ_CHECK(legacy.at("project").at("contract") == "lmdj.project.v1");
+  LMDJ_CHECK(read_bytes(manifest_path) == original_manifest);
+
+  auto forbidden_inspect = Json{{"slot", slot(0, 0)}};
+  forbidden_inspect["project_path"] = "/browser-supplied/project.lmdj";
+  check_error(
+      runtime->dispatch("sample.inspect", forbidden_inspect, {}),
+      "HOST_PROTOCOL_MISMATCH");
+  const auto empty = check_exact_success(
+      runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "asset_id", "playback", "metadata",
+       "waveform_cache_identity"});
+  LMDJ_CHECK(empty.at("project_revision") == 0);
+  LMDJ_CHECK(empty.at("asset_id").is_null());
+  LMDJ_CHECK(empty.at("metadata").is_null());
+  LMDJ_CHECK(read_bytes(manifest_path) == original_manifest);
+
+  const auto wav = mono_pcm16_wav(2'400);
+  const auto token = uuid(401);
+  const auto begun = check_exact_success(
+      runtime->dispatch(
+          "sample.import.begin",
+          sample_begin_payload(401, 402, 0, kAssetId, wav.size()),
+          {}),
+      {"token", "expected_bytes"});
+  LMDJ_CHECK(begun.at("token") == token);
+  LMDJ_CHECK(begun.at("expected_bytes") == wav.size());
+
+  const auto midpoint = wav.size() / 2U;
+  const auto first = std::span<const std::byte>(wav).first(midpoint);
+  const auto second = std::span<const std::byte>(wav).subspan(midpoint);
+  const auto first_chunk = check_exact_success(
+      runtime->dispatch(
+          "sample.import.chunk",
+          sample_chunk_payload(401, 0, false, first),
+          first),
+      {"received_bytes", "final"});
+  LMDJ_CHECK(first_chunk.at("received_bytes") == midpoint);
+  LMDJ_CHECK(first_chunk.at("final") == false);
+  const auto final_chunk = check_exact_success(
+      runtime->dispatch(
+          "sample.import.chunk",
+          sample_chunk_payload(401, midpoint, true, second),
+          second),
+      {"received_bytes", "final"});
+  LMDJ_CHECK(final_chunk.at("received_bytes") == wav.size());
+  LMDJ_CHECK(final_chunk.at("final") == true);
+
+  const auto committed = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", token}}, {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(committed.at("committed_revision") == 1);
+  LMDJ_CHECK(committed.at("runtime_revision") == 1);
+  LMDJ_CHECK(committed.at("runtime_published") == true);
+  LMDJ_CHECK(runtime->engine().bank_telemetry().accepted_publications == 2);
+  const auto migrated = check_exact_success(
+      runtime->dispatch("project.inspect", Json::object(), {}),
+      {"project", "project_revision"});
+  LMDJ_CHECK(migrated.at("project_revision") == 1);
+  const auto checkpoint_bytes = read_bytes(
+      manifest_path.parent_path() / "history/checkpoints/1.json");
+  const auto checkpoint_text = std::string_view(
+      reinterpret_cast<const char*>(checkpoint_bytes.data()),
+      checkpoint_bytes.size());
+  LMDJ_CHECK(
+      Json::parse(checkpoint_text).at("contract") == "lmdj.project.v2");
+
+  const auto inspected = check_exact_success(
+      runtime->dispatch("sample.inspect", {{"slot", slot(0, 0)}}, {}),
+      {"project_revision", "slot", "asset_id", "playback", "metadata",
+       "waveform_cache_identity"});
+  LMDJ_CHECK(inspected.at("project_revision") == 1);
+  LMDJ_CHECK(inspected.at("asset_id") == kAssetId);
+  LMDJ_CHECK(inspected.at("metadata").at("source_frames") == 2'400);
+  const auto waveform = check_exact_success(
+      runtime->dispatch(
+          "sample.waveform",
+          {{"slot", slot(0, 0)},
+           {"window",
+            {{"start_frame", 0},
+             {"end_frame", 2'400},
+             {"bucket_count", 32}}}},
+          {}),
+      {"metadata", "algorithm_version", "buckets", "project_revision"});
+  LMDJ_CHECK(waveform.at("algorithm_version") == 1);
+  LMDJ_CHECK(waveform.at("buckets").size() == 32);
+
+  const auto loop_toggle = playback_payload(
+      10, 2'000, "loop_toggle", -600, false);
+  const auto updated = check_exact_success(
+      runtime->dispatch(
+          "sample.update_pad",
+          {{"command_id", uuid(403)},
+           {"expected_revision", 1},
+           {"slot", slot(0, 0)},
+           {"playback", loop_toggle}},
+          {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(updated.at("committed_revision") == 2);
+  LMDJ_CHECK(updated.at("runtime_revision") == 2);
+  LMDJ_CHECK(updated.at("runtime_published") == true);
+
+  const auto conflict = check_error(
+      runtime->dispatch(
+          "sample.update_pad",
+          {{"command_id", uuid(404)},
+           {"expected_revision", 1},
+           {"slot", slot(0, 0)},
+           {"playback", loop_toggle}},
+          {}),
+      "REVISION_CONFLICT");
+  LMDJ_CHECK(conflict.at("details").at("actual_revision") == 2);
+  LMDJ_CHECK(conflict.at("details").at("expected_revision") == 1);
+
+  FakeCoordinator coordinator;
+  coordinator.begin_acknowledgement = 3;
+  LMDJ_CHECK(
+      ControlRuntimeAudioAccess::install(*runtime, coordinator.seam())
+          .has_value());
+  check_success(runtime->dispatch("audio.activate", Json::object(), {}));
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+
+  check_exact_success(
+      runtime->dispatch("trigger", {{"slot", 0}, {"velocity", 127}}, {}),
+      {"sequence", "status"});
+  runtime->engine().render(left.data(), right.data(), 1);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
+  check_exact_success(
+      runtime->dispatch("sample.stop", {{"slot", slot(0, 0)}}, {}),
+      {"accepted", "scope"});
+  runtime->engine().render(left.data(), right.data(), 1);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
+
+  const auto preview = playback_payload(100, 200, "gate", -1'200, false);
+  check_exact_success(
+      runtime->dispatch(
+          "sample.preview.set",
+          {{"slot", slot(0, 0)}, {"playback", preview}},
+          {}),
+      {"accepted"});
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+  runtime->engine().render(left.data(), right.data(), 1);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
+  check_exact_success(
+      runtime->dispatch(
+          "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
+      {"accepted"});
+  runtime->engine().render(left.data(), right.data(), 1);
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
+
+  // A real Worklet continues draining fixed controls while the control thread
+  // prepares and publishes the replacement Bank.
+  ContinuousAudioDriver audio(runtime->engine());
+  const auto release_update = check_exact_success(
+      runtime->dispatch(
+          "sample.update_pad",
+          {{"command_id", uuid(405)},
+           {"expected_revision", 2},
+           {"slot", slot(0, 0)},
+           {"playback", preview}},
+          {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(release_update.at("committed_revision") == 3);
+
+  check_success(runtime->dispatch(
+      "sample.preview.clear", {{"slot", slot(0, 0)}}, {}));
+  check_success(runtime->dispatch(
+      "sample.preview.set",
+      {{"slot", slot(0, 0)},
+       {"playback", playback_payload(0, 2'400, "loop_toggle")}},
+      {}));
+  check_success(runtime->dispatch(
+      "trigger", {{"slot", 0}, {"velocity", 127}}, {}));
+  wait_until([&] {
+    return runtime->engine().telemetry().active_voices == 1;
+  });
+  const auto reset = check_exact_success(
+      runtime->dispatch(
+          "sample.reset_pad",
+          {{"command_id", uuid(406)},
+           {"expected_revision", 3},
+           {"slot", slot(0, 0)}},
+          {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(reset.at("committed_revision") == 4);
+  wait_until([&] {
+    return runtime->engine().telemetry().active_voices == 0;
+  });
+  audio.stop();
+
+  std::array<lmdj::audio::RuntimeVoiceStateEvent, 16> voice_states{};
+  const auto voice_count = runtime->engine().drain_voice_states(voice_states);
+  LMDJ_CHECK(voice_count >= 6);
+  LMDJ_CHECK(voice_states[0].state == lmdj::audio::RuntimeVoiceState::started);
+  LMDJ_CHECK(std::any_of(
+      voice_states.begin(),
+      voice_states.begin() + static_cast<std::ptrdiff_t>(voice_count),
+      [](const auto& event) {
+        return event.state == lmdj::audio::RuntimeVoiceState::stopped;
+      }));
+}
+
+void test_sample_import_protocol_failure_aborts_staging() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(32);
+  const auto staging_root =
+      temp.path() / ".lmdj-host/sample-import-staging";
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(421, 422, 0, kAssetId, wav.size()),
+      {}));
+  auto malformed = sample_chunk_payload(421, 0, true, wav);
+  malformed["sidecar"]["sidecar_sha256"] = std::string(64, '0');
+  check_error(
+      runtime->dispatch("sample.import.chunk", malformed, wav),
+      "HOST_PROTOCOL_MISMATCH");
+  check_error(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(421)}}, {}),
+      "INVALID_ARGUMENT");
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(421)));
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(423, 424, 0, kAssetId, wav.size()),
+      {}));
+  check_error(
+      runtime->dispatch(
+          "sample.import.chunk",
+          sample_chunk_payload(423, 1, true, wav),
+          wav),
+      "INVALID_ARGUMENT");
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(423)));
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(425, 426, 0, kAssetId, wav.size()),
+      {}));
+  const auto first_half = std::span<const std::byte>(wav).first(wav.size() / 2);
+  check_error(
+      runtime->dispatch(
+          "sample.import.chunk",
+          sample_chunk_payload(425, 0, true, first_half),
+          first_half),
+      "INVALID_ARGUMENT");
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(425)));
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(427, 428, 0, kAssetId, wav.size()),
+      {}));
+  const auto overflow_payload = sample_chunk_payload(
+      427,
+      std::numeric_limits<std::uint64_t>::max(),
+      false,
+      first_half);
+  check_error(
+      runtime->dispatch(
+          "sample.import.chunk", overflow_payload, first_half),
+      "HOST_PROTOCOL_MISMATCH");
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(427)));
+
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(429, 430, 0, kAssetId, wav.size()),
+      {}));
+  check_exact_success(
+      runtime->dispatch(
+          "sample.import.abort", {{"import_token", uuid(429)}}, {}),
+      {"aborted"});
+  LMDJ_CHECK(!std::filesystem::exists(staging_root / uuid(429)));
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
+}
+
+void test_sample_import_timeout_aborts_staging_and_fails_closed() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  const auto wav = mono_pcm16_wav(32);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(451, 452, 0, kAssetId, wav.size()),
+      {}));
+  const auto staging = temp.path() / ".lmdj-host/sample-import-staging" /
+                       uuid(451);
+  LMDJ_CHECK(std::filesystem::exists(staging));
+
+  check_error(
+      runtime->dispatch(
+          "sample.inspect",
+          {{"slot", slot(0, 0)}},
+          {},
+          std::chrono::steady_clock::now() - std::chrono::seconds(31)),
+      "HOST_TIMEOUT");
+  LMDJ_CHECK(!std::filesystem::exists(staging));
+  LMDJ_CHECK(runtime->failed());
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
+}
+
+void test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit() {
+  TempDirectory temp;
+  constexpr RuntimePreparationLimits limits{
+      1'048'576,
+      240'000,
+      16,
+      134'217'728,
+  };
+  auto runtime = make_runtime(temp.path(), limits);
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+
+  const auto first_wav = mono_pcm16_wav(2);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(431, 432, 0, kAssetId, first_wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(431, 0, true, first_wav),
+      first_wav));
+  const auto first = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(431)}}, {}),
+      {"committed_revision", "runtime_revision", "runtime_published"});
+  LMDJ_CHECK(first.at("runtime_revision") == 1);
+  const auto generation =
+      runtime->engine().bank_telemetry().accepted_publications;
+
+  const auto larger_wav = mono_pcm16_wav(8);
+  check_success(runtime->dispatch(
+      "sample.import.begin",
+      sample_begin_payload(433, 434, 1, uuid(435), larger_wav.size()),
+      {}));
+  check_success(runtime->dispatch(
+      "sample.import.chunk",
+      sample_chunk_payload(433, 0, true, larger_wav),
+      larger_wav));
+  const auto stale_runtime = check_exact_success(
+      runtime->dispatch(
+          "sample.import.commit", {{"import_token", uuid(433)}}, {}),
+      {"committed_revision", "runtime_revision", "runtime_published",
+       "snapshot_error"});
+  LMDJ_CHECK(stale_runtime.at("committed_revision") == 2);
+  LMDJ_CHECK(stale_runtime.at("runtime_revision") == 1);
+  LMDJ_CHECK(stale_runtime.at("runtime_published") == false);
+  LMDJ_CHECK(
+      stale_runtime.at("snapshot_error").at("code") ==
+      "WEB_RUNTIME_RESOURCE_LIMIT");
+  LMDJ_CHECK(
+      runtime->engine().bank_telemetry().accepted_publications == generation);
+
+  const auto retried = check_exact_success(
+      runtime->dispatch(
+          "snapshot.retry", {{"pattern_id", kPatternId}}, {}),
+      {"project_id", "project_revision", "pattern_id", "runtime_ready",
+       "generation", "snapshot_error", "runtime_revision"});
+  LMDJ_CHECK(retried.at("project_revision") == 2);
+  LMDJ_CHECK(retried.at("runtime_revision") == 1);
+  LMDJ_CHECK(retried.at("runtime_ready") == false);
+  LMDJ_CHECK(retried.at("snapshot_error").is_object());
+  LMDJ_CHECK(
+      runtime->engine().bank_telemetry().accepted_publications == generation);
+}
+
+void test_source_frame_limit_is_applied_once_before_44k1_publication() {
+  {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(220'501, 44'100);
+    check_success(runtime->dispatch(
+        "sample.import.begin",
+        sample_begin_payload(441, 442, 0, kAssetId, wav.size()),
+        {}));
+    check_success(runtime->dispatch(
+        "sample.import.chunk",
+        sample_chunk_payload(441, 0, true, wav),
+        wav));
+    const auto published = check_exact_success(
+        runtime->dispatch(
+            "sample.import.commit", {{"import_token", uuid(441)}}, {}),
+        {"committed_revision", "runtime_revision", "runtime_published"});
+    LMDJ_CHECK(published.at("committed_revision") == 1);
+    LMDJ_CHECK(published.at("runtime_revision") == 1);
+    LMDJ_CHECK(published.at("runtime_published") == true);
+    LMDJ_CHECK(
+        runtime->engine().bank_telemetry().accepted_publications == 1);
+  }
+
+  {
+    TempDirectory temp;
+    auto runtime = make_runtime(temp.path());
+    check_success(runtime->dispatch("project.create", create_payload(), {}));
+    const auto wav = mono_pcm16_wav(240'001, 48'000);
+    check_success(runtime->dispatch(
+        "sample.import.begin",
+        sample_begin_payload(443, 444, 0, kAssetId, wav.size()),
+        {}));
+    check_success(runtime->dispatch(
+        "sample.import.chunk",
+        sample_chunk_payload(443, 0, true, wav),
+        wav));
+    check_error(
+        runtime->dispatch(
+            "sample.import.commit", {{"import_token", uuid(443)}}, {}),
+        "UNSUPPORTED_AUDIO");
+    LMDJ_CHECK(
+        inspect_project(temp.path(), kProjectId).at("project_revision") == 0);
+  }
+}
+
 void test_take_stop_drains_the_final_disarm_quantum() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -1267,6 +1764,32 @@ void test_trigger_queue_full_is_admission_failure() {
       "HOST_STATE_INVALID");
   LMDJ_CHECK(rejected.at("message") == "trigger queue is full");
   LMDJ_CHECK(runtime->engine().telemetry().queue_drops == 1);
+  LMDJ_CHECK(
+      runtime->engine().trigger_outcome_telemetry().published_outcomes == 0);
+
+  const auto preview_rejected = check_error(
+      runtime->dispatch(
+          "sample.preview.set",
+          {{"slot", slot(0, 0)},
+           {"playback", playback_payload(0, 256, "one_shot")}},
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(preview_rejected.at("message") == "trigger queue is full");
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
+
+  const auto mutation_rejected = check_error(
+      runtime->dispatch(
+          "sample.update_pad",
+          {{"command_id", uuid(763)},
+           {"expected_revision", 2},
+           {"slot", slot(0, 0)},
+           {"playback", playback_payload(0, 256, "one_shot")}},
+          {}),
+      "HOST_STATE_INVALID");
+  LMDJ_CHECK(mutation_rejected.at("message") == "trigger queue is full");
+  LMDJ_CHECK(
+      inspect_project(temp.path(), kProjectId).at("project_revision") == 2);
   LMDJ_CHECK(
       runtime->engine().trigger_outcome_telemetry().published_outcomes == 0);
 }
@@ -2490,6 +3013,35 @@ void check_no_bridge_message(ControlBridge& bridge) {
   LMDJ_CHECK(required == 0);
 }
 
+void test_bridge_routes_sample_operations_without_a_project_path() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const auto request_id = uuid(989);
+  const auto envelope = encode(request(
+      request_id, "sample.inspect", {{"slot", slot(0, 0)}}));
+
+  LMDJ_CHECK(
+      bridge->submit(envelope, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto response = poll_message(*bridge);
+  check_exact_keys(
+      response,
+      {"protocol_version", "request_id", "ok", "result"});
+  LMDJ_CHECK(response.at("request_id") == request_id);
+  const auto& result = response.at("result");
+  check_exact_keys(
+      result,
+      {"project_revision", "slot", "asset_id", "playback", "metadata",
+       "waveform_cache_identity"});
+  LMDJ_CHECK(result.at("project_revision") == 0);
+  const auto encoded_request = std::string(
+      reinterpret_cast<const char*>(envelope.data()), envelope.size());
+  LMDJ_CHECK(encoded_request.find("project_path") == std::string::npos);
+}
+
 void test_capture_drop_racing_the_post_drain_check_is_terminal() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -3049,6 +3601,11 @@ int main() {
     test_host_close_aborts_active_project_bundle_import();
     test_runtime_cancellation_precedes_project_mutation();
     test_exact_payloads_and_facade_owned_project_journey();
+    test_sample_editing_binds_current_project_and_drives_fixed_controls();
+    test_sample_import_protocol_failure_aborts_staging();
+    test_sample_import_timeout_aborts_staging_and_fails_closed();
+    test_sample_cook_failure_keeps_old_runtime_and_retry_is_explicit();
+    test_source_frame_limit_is_applied_once_before_44k1_publication();
     test_take_stop_drains_the_final_disarm_quantum();
     test_take_stop_requests_an_acknowledged_final_worklet_quantum();
     test_trigger_queue_full_is_admission_failure();
@@ -3072,6 +3629,7 @@ int main() {
     test_exact_non_fifo_aggregate_accounting_and_prior_bank_retention();
     test_host_close_releases_current_and_retired_runtime_banks();
     test_oversized_project_switch_is_inspectable_but_not_runnable();
+    test_bridge_routes_sample_operations_without_a_project_path();
     test_bridge_defers_parse_dispatch_and_copies_fixed_slots();
     test_bridge_rejects_duplicates_until_response_consumption();
     test_bridge_response_backpressure_fails_before_mutation();
