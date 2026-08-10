@@ -2591,4 +2591,13 @@ foundation::Result<void> detail::ControlRuntimeClockAccess::install(
   return foundation::Result<void>::success();
 }
 
+detail::ControlRuntimeSnapshotTruth
+detail::ControlRuntimeSnapshotAccess::read(
+    const ControlRuntime& runtime) noexcept {
+  return {
+      runtime.impl_->project_revision,
+      runtime.impl_->runtime_revision,
+  };
+}
+
 }  // namespace lmdj::web_runtime

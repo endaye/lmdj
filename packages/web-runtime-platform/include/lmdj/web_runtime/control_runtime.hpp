@@ -22,6 +22,7 @@ namespace lmdj::web_runtime {
 namespace detail {
 class ControlRuntimeAudioAccess;
 class ControlRuntimeClockAccess;
+class ControlRuntimeSnapshotAccess;
 }
 
 class ControlRuntime final {
@@ -55,6 +56,7 @@ class ControlRuntime final {
   std::shared_ptr<Impl> impl_;
   friend class detail::ControlRuntimeAudioAccess;
   friend class detail::ControlRuntimeClockAccess;
+  friend class detail::ControlRuntimeSnapshotAccess;
 };
 
 namespace detail {
@@ -73,6 +75,11 @@ struct ControlRuntimeClock {
   std::chrono::steady_clock::time_point (*now)(void* context) noexcept;
 };
 
+struct ControlRuntimeSnapshotTruth {
+  std::optional<std::uint64_t> project_revision;
+  std::optional<std::uint64_t> runtime_revision;
+};
+
 class ControlRuntimeAudioAccess final {
  public:
   static foundation::Result<void> install(
@@ -85,6 +92,12 @@ class ControlRuntimeClockAccess final {
   static foundation::Result<void> install(
       ControlRuntime& runtime,
       ControlRuntimeClock clock) noexcept;
+};
+
+class ControlRuntimeSnapshotAccess final {
+ public:
+  static ControlRuntimeSnapshotTruth read(
+      const ControlRuntime& runtime) noexcept;
 };
 
 inline constexpr std::size_t kBridgeMaximumEnvelopeBytes = 65'536;

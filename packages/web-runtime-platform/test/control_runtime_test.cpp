@@ -3788,13 +3788,13 @@ void test_bridge_emits_sample_publication_notifications_after_response() {
       runtime->dispatch("host.status", Json::object(), {}));
   LMDJ_CHECK(status_after_commit.at("control_generation") == 1);
 
+  const Json update_payload{
+      {"command_id", uuid(483)},
+      {"expected_revision", 1},
+      {"slot", slot(0, 0)},
+      {"playback", playback_payload(0, 16, "gate", -600)}};
   const auto update = encode(request(
-      uuid(922),
-      "sample.update_pad",
-      {{"command_id", uuid(483)},
-       {"expected_revision", 1},
-       {"slot", slot(0, 0)},
-       {"playback", playback_payload(0, 16, "gate", -600)}}));
+      uuid(922), "sample.update_pad", update_payload));
   LMDJ_CHECK(
       bridge->submit(update, {}) == BridgeSubmitStatus::accepted);
   proxy.pump_one();
@@ -3823,6 +3823,25 @@ void test_bridge_emits_sample_publication_notifications_after_response() {
   const auto status_after_reset = check_locked_success_result(
       runtime->dispatch("host.status", Json::object(), {}));
   LMDJ_CHECK(status_after_reset.at("control_generation") == 3);
+
+  const auto replay = encode(request(
+      uuid(929), "sample.update_pad", update_payload));
+  LMDJ_CHECK(
+      bridge->submit(replay, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto replay_response = poll_message(*bridge);
+  LMDJ_CHECK(replay_response.at("request_id") == uuid(929));
+  LMDJ_CHECK(replay_response.at("ok") == true);
+  LMDJ_CHECK(replay_response.at("result").at("committed_revision") == 2);
+  LMDJ_CHECK(replay_response.at("result").at("runtime_revision") == 3);
+  LMDJ_CHECK(replay_response.at("result").at("runtime_published") == true);
+  check_snapshot_published_notification(poll_message(*bridge), 4, 3);
+  check_no_bridge_message(*bridge);
+  proxy.pump_one();
+  const auto status_after_replay = check_locked_success_result(
+      runtime->dispatch("host.status", Json::object(), {}));
+  LMDJ_CHECK(status_after_replay.at("project_revision") == 3);
+  LMDJ_CHECK(status_after_replay.at("control_generation") == 4);
 
   const auto malformed = encode(request(
       uuid(924),
@@ -3879,10 +3898,21 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   check_success(runtime->dispatch(
       "sample.import.commit", {{"import_token", uuid(487)}}, {}));
 
+  const Json replayed_update_payload{
+      {"command_id", uuid(493)},
+      {"expected_revision", 1},
+      {"slot", slot(0, 0)},
+      {"playback", playback_payload(0, 1, "gate", -300)}};
+  const auto updated = check_locked_success_result(runtime->dispatch(
+      "sample.update_pad", replayed_update_payload, {}));
+  LMDJ_CHECK(updated.at("committed_revision") == 2);
+  LMDJ_CHECK(updated.at("runtime_revision") == 2);
+  LMDJ_CHECK(updated.at("runtime_published") == true);
+
   const auto larger_wav = mono_pcm16_wav(8);
   check_success(runtime->dispatch(
       "sample.import.begin",
-      sample_begin_payload(489, 490, 1, uuid(491), larger_wav.size()),
+      sample_begin_payload(489, 490, 2, uuid(491), larger_wav.size()),
       {}));
   check_success(runtime->dispatch(
       "sample.import.chunk",
@@ -3901,11 +3931,11 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   const auto response = poll_message(*bridge);
   LMDJ_CHECK(response.at("request_id") == uuid(926));
   LMDJ_CHECK(response.at("ok") == true);
-  LMDJ_CHECK(response.at("result").at("committed_revision") == 2);
-  LMDJ_CHECK(response.at("result").at("runtime_revision") == 1);
+  LMDJ_CHECK(response.at("result").at("committed_revision") == 3);
+  LMDJ_CHECK(response.at("result").at("runtime_revision") == 2);
   LMDJ_CHECK(response.at("result").at("runtime_published") == false);
   check_snapshot_rejected_notification(
-      poll_message(*bridge), 2, 1, "WEB_RUNTIME_RESOURCE_LIMIT");
+      poll_message(*bridge), 3, 2, "WEB_RUNTIME_RESOURCE_LIMIT");
   proxy.pump_one();
 
   const auto retry = encode(request(
@@ -3918,11 +3948,30 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
   const auto retry_response = poll_message(*bridge);
   LMDJ_CHECK(retry_response.at("request_id") == uuid(927));
   LMDJ_CHECK(retry_response.at("ok") == true);
-  LMDJ_CHECK(retry_response.at("result").at("project_revision") == 2);
-  LMDJ_CHECK(retry_response.at("result").at("runtime_revision") == 1);
+  LMDJ_CHECK(retry_response.at("result").at("project_revision") == 3);
+  LMDJ_CHECK(retry_response.at("result").at("runtime_revision") == 2);
   LMDJ_CHECK(retry_response.at("result").at("runtime_ready") == false);
   check_snapshot_rejected_notification(
-      poll_message(*bridge), 2, 1, "WEB_RUNTIME_RESOURCE_LIMIT");
+      poll_message(*bridge), 3, 2, "WEB_RUNTIME_RESOURCE_LIMIT");
+  proxy.pump_one();
+
+  const auto replay = encode(request(
+      uuid(930), "sample.update_pad", replayed_update_payload));
+  LMDJ_CHECK(
+      bridge->submit(replay, {}) == BridgeSubmitStatus::accepted);
+  proxy.pump_one();
+  const auto replay_response = poll_message(*bridge);
+  LMDJ_CHECK(replay_response.at("request_id") == uuid(930));
+  LMDJ_CHECK(replay_response.at("ok") == true);
+  LMDJ_CHECK(replay_response.at("result").at("committed_revision") == 2);
+  LMDJ_CHECK(replay_response.at("result").at("runtime_revision") == 2);
+  LMDJ_CHECK(replay_response.at("result").at("runtime_published") == false);
+  LMDJ_CHECK(
+      replay_response.at("result").at("snapshot_error").at("code") ==
+      "WEB_RUNTIME_RESOURCE_LIMIT");
+  check_snapshot_rejected_notification(
+      poll_message(*bridge), 3, 2, "WEB_RUNTIME_RESOURCE_LIMIT");
+  check_no_bridge_message(*bridge);
   proxy.pump_one();
 
   const auto unknown = encode(request(
@@ -3938,7 +3987,7 @@ void test_bridge_emits_rejected_sample_and_retry_notifications() {
       unknown_response.at("error").at("code") == "INVALID_ARGUMENT");
   check_no_bridge_message(*bridge);
   LMDJ_CHECK(
-      runtime->engine().bank_telemetry().accepted_publications == 1);
+      runtime->engine().bank_telemetry().accepted_publications == 2);
 }
 
 void test_bridge_rejects_an_expired_control_request_without_late_success() {

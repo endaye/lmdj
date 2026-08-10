@@ -977,9 +977,13 @@ struct ControlBridge::Impl {
               operation == "sample.update_pad" ||
               operation == "sample.reset_pad";
           const auto& result = has_result ? response.at("result") : Json{};
+          const auto snapshot_truth =
+              sample_mutation && has_result
+                  ? ControlRuntimeSnapshotAccess::read(runtime)
+                  : ControlRuntimeSnapshotTruth{};
           const auto project_revision =
-              has_result && result.contains("committed_revision")
-                  ? result.at("committed_revision")
+              snapshot_truth.project_revision.has_value()
+                  ? Json(*snapshot_truth.project_revision)
               : has_result && result.contains("project_revision")
                   ? result.at("project_revision")
                   : Json(nullptr);
@@ -1011,7 +1015,9 @@ struct ControlBridge::Impl {
                                .bank_telemetry()
                                .accepted_publications);
             auto runtime_revision =
-                result.contains("runtime_revision")
+                snapshot_truth.runtime_revision.has_value()
+                    ? Json(*snapshot_truth.runtime_revision)
+                : result.contains("runtime_revision")
                     ? result.at("runtime_revision")
                     : published ? project_revision : Json(nullptr);
             const auto legacy_snapshot =
