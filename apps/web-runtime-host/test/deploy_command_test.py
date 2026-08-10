@@ -608,7 +608,14 @@ def verify_distribution(dist_root, repo_root):
             import shutil
             import sys
 
-            args = sys.argv[1:]
+            raw_args = sys.argv[1:]
+            args = raw_args.copy()
+            git_config = []
+            while args[:1] == ["-c"]:
+                if len(args) < 2:
+                    raise SystemExit(64)
+                git_config.append(args[1])
+                args = args[2:]
             log = Path(os.environ["COMMAND_LOG"])
             target = os.environ.get("FAKE_TAG_TARGET", {TAG_TARGET!r})
             product_build = os.environ.get("FAKE_PRODUCT_BUILD", {PRODUCT_BUILD!r})
@@ -619,6 +626,30 @@ def verify_distribution(dist_root, repo_root):
             elif args[:2] == ["fetch", "--no-tags"]:
                 if os.environ.get("FAIL_REMOTE_FETCH") == "1":
                     raise SystemExit(1)
+                if os.environ.get("FAKE_PRIVATE_FETCH") == "1":
+                    if os.environ.get("GITHUB_TOKEN") != os.environ["EXPECTED_GITHUB_TOKEN"]:
+                        raise SystemExit("private canonical fetch was not authenticated")
+                    if os.environ.get("NETLIFY_AUTH_TOKEN") or os.environ.get("NETLIFY_RUNTIME_SITE_ID"):
+                        raise SystemExit("Netlify credential reached authenticated Git fetch")
+                    if "credential.username=x-access-token" not in git_config:
+                        raise SystemExit("authenticated Git fetch username was not pinned")
+                    helpers = [
+                        value for value in git_config
+                        if value.startswith("credential.helper=")
+                    ]
+                    if len(helpers) != 1 or "$GITHUB_TOKEN" not in helpers[0]:
+                        raise SystemExit("authenticated Git fetch helper was not pinned")
+                    with Path(os.environ["DETAILS_LOG"]).open("a", encoding="utf-8") as output:
+                        output.write(json.dumps({{
+                            "program": "git-fetch",
+                            "credential_environment": sorted(
+                                name for name in (
+                                    "GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN",
+                                    "NETLIFY_RUNTIME_SITE_ID",
+                                ) if os.environ.get(name)
+                            ),
+                            "credential_in_argv": os.environ["EXPECTED_GITHUB_TOKEN"] in raw_args,
+                        }}, sort_keys=True) + "\\n")
                 with log.open("a", encoding="utf-8") as output:
                     output.write(f"git remote fetch {{args[-1]}}\\n")
             elif args[:2] == ["cat-file", "-t"]:
@@ -1050,6 +1081,19 @@ def verify_distribution(dist_root, repo_root):
             environment={"FAKE_ORIGIN_URL": "https://github.com/endaye/lmdj"},
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
+
+    def test_authenticates_private_canonical_fetch_without_credential_leakage(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"FAKE_PRIVATE_FETCH": "1"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        fetch_details = [
+            detail for detail in self.details() if detail.get("program") == "git-fetch"
+        ]
+        self.assertEqual(len(fetch_details), 2)
+        for detail in fetch_details:
+            self.assertEqual(detail["credential_environment"], ["GITHUB_TOKEN"])
+            self.assertFalse(detail["credential_in_argv"])
 
     def test_rejects_noncanonical_origin_unprotected_main_and_non_main_tag(self) -> None:
         for environment in (
