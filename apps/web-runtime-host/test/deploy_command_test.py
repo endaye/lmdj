@@ -1021,6 +1021,14 @@ def verify_distribution(dist_root, repo_root):
         )
         self.assertNotIn(f"git tag verify {TAG}", self.command_log())
 
+    def test_accepts_actions_checkout_canonical_origin_url(self) -> None:
+        completed = self.run_command(
+            "verify",
+            TAG,
+            environment={"FAKE_ORIGIN_URL": "https://github.com/endaye/lmdj"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+
     def test_rejects_noncanonical_origin_unprotected_main_and_non_main_tag(self) -> None:
         for environment in (
             {"FAKE_ORIGIN_URL": "https://github.com/attacker/lmdj.git"},
