@@ -37,7 +37,8 @@ INITIAL_HOST_DIGEST = (
     "d56a7c99a3c489db068b93fcef70a254"
     "b498adf4bc65919253beccb199f3ad5a"
 )
-TRUSTED_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+TRUSTED_TAG_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+TRUSTED_CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
 GITHUB_TOKEN = "github-secret-value-should-never-leak"
 GITHUB_RUN_ID = "123456789"
 NETLIFY_TOKEN = "netlify-secret-value-should-never-leak"
@@ -342,6 +343,8 @@ class DeployCommandTest(unittest.TestCase):
         key = self.repo / ".github/release-signing-keys/lmdj-product.asc"
         key.parent.mkdir(parents=True)
         key.write_text("test-only public key fixture\n", encoding="utf-8")
+        checksum_key = self.repo / ".github/release-signing-keys/lmdj-release-checksum.asc"
+        checksum_key.write_text("test-only checksum public key fixture\n", encoding="utf-8")
         smoke = self.repo / "apps/web-runtime-host/tools/deployment_smoke.py"
         smoke.write_text(
             textwrap.dedent(
@@ -557,21 +560,39 @@ def verify_distribution(dist_root, repo_root):
             f"""
             #!/bin/sh
             set -eu
+            home=''
+            previous=''
+            for argument in "$@"; do
+              if [ "$previous" = '--homedir' ]; then
+                home="$argument"
+              fi
+              previous="$argument"
+            done
             case " $* " in
               *" --show-keys "*)
-                printf 'pub:-:4096:1:116ECE156F954D29:0:0::::::\nfpr:::::::::{TRUSTED_FINGERPRINT}:\n'
+                printf 'pub:-:4096:1:116ECE156F954D29:0:0::::::\nfpr:::::::::{TRUSTED_TAG_FINGERPRINT}:\n'
                 ;;
               *" --list-keys "*)
-                printf 'pub:-:4096:1:116ECE156F954D29:0:0::::::\nfpr:::::::::{TRUSTED_FINGERPRINT}:\n'
+                fingerprint="$(cat "$home/lmdj-imported-fingerprint")"
+                printf 'pub:-:255:22:AAC3E7019FC1478B:0:0::::::\nfpr:::::::::%s:\n' "$fingerprint"
                 ;;
-              *" --import "*) exit 0 ;;
+              *" --import "*)
+                case " $* " in
+                  *"lmdj-product.asc"*) fingerprint='{TRUSTED_TAG_FINGERPRINT}' ;;
+                  *) fingerprint='{TRUSTED_CHECKSUM_FINGERPRINT}' ;;
+                esac
+                if [ -n "$home" ]; then
+                  printf '%s' "$fingerprint" > "$home/lmdj-imported-fingerprint"
+                fi
+                ;;
               *" --verify "*)
                 for argument in "$@"; do
                   case "$argument" in
                     *.asc) grep -q 'wrong-signature' "$argument" && exit 1 ;;
                   esac
                 done
-                printf '[GNUPG:] VALIDSIG {TRUSTED_FINGERPRINT} 2026-08-09 0 4 0 1 10 00 {TRUSTED_FINGERPRINT}\n'
+                fingerprint="$(cat "$home/lmdj-imported-fingerprint")"
+                printf '[GNUPG:] VALIDSIG %s 2026-08-10 0 4 0 22 8 00 %s\n' "$fingerprint" "$fingerprint"
                 ;;
               *) exit 2 ;;
             esac
@@ -608,7 +629,7 @@ def verify_distribution(dist_root, repo_root):
                 if os.environ.get("FAIL_TAG_VERIFY") == "1":
                     raise SystemExit(1)
                 fingerprint = os.environ.get(
-                    "FAKE_SIGNATURE_FINGERPRINT", {TRUSTED_FINGERPRINT!r}
+                    "FAKE_SIGNATURE_FINGERPRINT", {TRUSTED_TAG_FINGERPRINT!r}
                 )
                 print(
                     f"[GNUPG:] VALIDSIG {{fingerprint}} 2026-08-07 0 4 0 1 10 00 {{fingerprint}}",
@@ -1002,6 +1023,7 @@ def verify_distribution(dist_root, repo_root):
         for environment in (
             {"FAKE_TAG_TYPE": "commit"},
             {"FAKE_SIGNATURE_FINGERPRINT": "A" * 40},
+            {"FAKE_SIGNATURE_FINGERPRINT": TRUSTED_CHECKSUM_FINGERPRINT},
             {"FAIL_TAG_VERIFY": "1"},
         ):
             with self.subTest(environment=environment):
@@ -1133,7 +1155,7 @@ def verify_distribution(dist_root, repo_root):
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertNotIn(f"gh release download {TAG}", self.command_log())
 
-    def test_future_coherent_archive_and_checksum_require_valid_product_signature(self) -> None:
+    def test_future_coherent_archive_and_checksum_require_valid_checksum_signature(self) -> None:
         for environment in (
             {"FAKE_MISSING_SIGNATURE": "1"},
             {"FAKE_WRONG_SIGNATURE": "1"},
@@ -1144,6 +1166,20 @@ def verify_distribution(dist_root, repo_root):
                 self.assertNotEqual(completed.returncode, 0)
                 self.assertNotIn("release_bundle stage", self.command_log())
                 self.assertNotIn("netlify create-draft", self.command_log())
+
+    def test_product_tag_key_cannot_substitute_for_checksum_key(self) -> None:
+        command = self.repo / "scripts/web-runtime-deploy.sh"
+        source = command.read_text(encoding="utf-8")
+        checksum_key = "lmdj-release-checksum.asc"
+        self.assertEqual(source.count(checksum_key), 1)
+        command.write_text(
+            source.replace(checksum_key, "lmdj-product.asc"),
+            encoding="utf-8",
+        )
+        completed = self.run_command("verify", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertNotIn("release_bundle stage", self.command_log())
+        self.assertNotIn("netlify create-draft", self.command_log())
 
     def test_initial_tag_requires_exact_target_and_corrected_host_digest(self) -> None:
         completed = self.run_command(

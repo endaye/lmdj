@@ -34,11 +34,14 @@ https://lmdj-beta.netlify.app/
 字节与身份不变。Documentation impact: required：同步
 `/operations/version-and-release/`、`/hosts/web-runtime/`、`/platform/web-runtime/`。
 
-- 每个 canonical prerelease 必须精确包含 Host ZIP、`<archive>.sha256` 与由受信 Product
-  key 对 checksum 文件签名的 detached armored `<archive>.sha256.asc`。部署器先用仓库
-  public key 的唯一 primary fingerprint
-  `2B5EE362F058800036AD4FB5116ECE156F954D29` 验签，之后才允许解析 checksum；初始
-  tag target 与 archive digest pin 继续保留。私钥与 token 不进入 Release、日志或证据。
+- 每个 canonical prerelease 必须精确包含 Host ZIP、`<archive>.sha256` 与由专用 Release
+  checksum signer 对 checksum 文件签名的 detached armored `<archive>.sha256.asc`。Product
+  tag 继续只信任仓库 Product public key 与主指纹
+  `2B5EE362F058800036AD4FB5116ECE156F954D29`；checksum signature 只信任独立 public key 与
+  主指纹 `CB928A6E89DE498851688EF1AAC3E7019FC1478B`。部署器先验证角色专属签名，之后才允许
+  解析 checksum；两把 key 不得互相替代，初始 tag target 与 archive digest pin 继续保留。
+  checksum 私钥在仓库外的独立 GNUPGHOME 中生成，并在更新 trust anchor 前完成加密私钥与
+  revocation certificate 备份；私钥、密码与 token 不进入 Release、仓库、日志或证据。
 - 本地同名 tag 不具权威性。部署器固定 canonical `endaye/lmdj` origin，fetch 远端
   annotated signed tag 与 `origin/main` 到 scratch refs，验证 tag peel 是 protected
   `origin/main` 的祖先。Release `targetCommitish` 仅是非空辅助 metadata，不是 attestation。
@@ -222,7 +225,7 @@ required files，验证其 immutable Deploy URL 后，再调用 Netlify
 4. 解析 Product Build，并要求 Release inventory 精确为 Host ZIP、detached checksum 与
    canonical armored detached checksum signature 三资产；`targetCommitish` 仅是辅助 metadata；
 5. 下载精确三资产，拒绝 redirect 后名称或数量不匹配；
-6. 用仓库 Product public key 的 exact primary fingerprint 先验证 checksum signature，
+6. 用仓库 Release checksum public key 的 exact primary fingerprint 先验证 checksum signature，
    然后才解析并校验 detached SHA-256；
 7. 安全解压到新建临时目录，拒绝绝对路径、`..`、symlink、hardlink 和额外顶层根；
 8. 使用 tag target 的仓库 verifier 验证 `host-manifest.json`、完整 inventory、资产摘要、

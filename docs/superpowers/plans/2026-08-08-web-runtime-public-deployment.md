@@ -13,9 +13,11 @@
 This amendment is part of the approved plan and supersedes incompatible early task detail below.
 
 - Release authority is exact three-asset inventory: ZIP, `<archive>.sha256`, and canonical detached
-  armored `<archive>.sha256.asc`. `release_bundle.py` verifies the checksum signature with the repository Product
-  public key and exact primary fingerprint before parsing checksum bytes. The initial exact target
-  and digest remain pinned.
+  armored `<archive>.sha256.asc`. Product tags retain the repository Product public key and exact
+  fingerprint; `release_bundle.py` verifies checksum signatures with the separate repository Release
+  checksum public key and fingerprint before parsing checksum bytes. The roles cannot substitute for
+  one another. The initial exact target and digest remain pinned. The checksum private key remains
+  outside the repository and its encrypted backup plus revocation certificate precede trust rotation.
 - Tag authority comes only from a canonical-origin scratch fetch of the remote annotated signed tag.
   Its peeled commit must be an ancestor of freshly fetched, GitHub-proven-protected `origin/main`.
   Local tag shadows are ignored; `targetCommitish` remains nonempty auxiliary metadata only.
@@ -109,6 +111,7 @@ Canonical policy: `docs/governance/version-management.md`.
 | `apps/web-runtime-host/tools/deploy_orchestrator.py` | Parse and project trusted release/deploy metadata, call the canonical Netlify API client, and write secret-free evidence atomically. |
 | `apps/web-runtime-host/test/deploy_command_test.py` | Prove command usage, cleanup, environment gates, tag selection, and that smoke precedes publish. |
 | `.github/release-signing-keys/lmdj-product.asc` | Repository-pinned public key for Product tag verification. |
+| `.github/release-signing-keys/lmdj-release-checksum.asc` | Repository-pinned public key used only for detached checksum signatures. |
 | `.github/workflows/deploy-web-runtime-host.yml` | Release/manual trigger, minimal permissions, GitHub Environment boundary, locked tool setup, deployment, and evidence upload. |
 | `tests/build/web_runtime_deploy_workflow_test.py` | Static contract for workflow triggers, permissions, secrets, concurrency, signed tag, and no branch/PR deploy path. |
 | `CMakeLists.txt` | Register the workflow contract test in the `contract` tier. |
@@ -683,8 +686,8 @@ checkout from that commit and pass it—not the deployment-tooling checkout—to
 Resolve Release metadata with `gh release view --json
 tagName,isDraft,isPrerelease,targetCommitish,assets,url`; treat `targetCommitish` as auxiliary metadata,
 not attestation. Require and download exactly ZIP, `<archive>.sha256`, and canonical detached armored
-`<archive>.sha256.asc`. Verify the checksum signature with the trusted Product key before parsing the
-checksum.
+`<archive>.sha256.asc`. Verify the checksum signature with the dedicated trusted checksum key before
+parsing the checksum; never accept the Product tag signer for this role.
 
 Call the Python tools in order. Build Netlify deploy files from every verified dist file plus `_headers`; never mutate the staged dist. Write evidence atomically only after production smoke passes.
 
@@ -743,6 +746,7 @@ git commit -m "feat(deploy): orchestrate Runtime Host publication"
 
 **Files:**
 - Create: `.github/release-signing-keys/lmdj-product.asc`
+- Create: `.github/release-signing-keys/lmdj-release-checksum.asc`
 - Create: `.github/workflows/deploy-web-runtime-host.yml`
 - Create: `tests/build/web_runtime_deploy_workflow_test.py`
 - Modify: `CMakeLists.txt`
@@ -751,7 +755,7 @@ git commit -m "feat(deploy): orchestrate Runtime Host publication"
 - Consumes: GitHub `release.published` or manual exact tag, GitHub Environment `runtime-canary`, `NETLIFY_RUNTIME_SITE_ID`, `NETLIFY_AUTH_TOKEN`.
 - Produces: one serialized deployment run and uploaded `runtime-host-deployment-evidence` artifact.
 
-- [ ] **Step 1: Pin and verify the Product signing key**
+- [ ] **Step 1: Pin and verify both role-specific signing keys**
 
 On the trusted release workstation:
 
@@ -760,9 +764,17 @@ fingerprint=2B5EE362F058800036AD4FB5116ECE156F954D29
 gpg --batch --armor --export "$fingerprint" > .github/release-signing-keys/lmdj-product.asc
 observed="$({ gpg --batch --show-keys --with-colons .github/release-signing-keys/lmdj-product.asc; } | awk -F: '$1 == "fpr" {print $10; exit}')"
 test "$observed" = "$fingerprint"
+
+checksum_fingerprint=CB928A6E89DE498851688EF1AAC3E7019FC1478B
+gpg --homedir "$HOME/.gnupg-lmdj-release" --batch --armor \
+  --export "$checksum_fingerprint" > .github/release-signing-keys/lmdj-release-checksum.asc
+observed="$({ gpg --batch --show-keys --with-colons .github/release-signing-keys/lmdj-release-checksum.asc; } | awk -F: '$1 == "fpr" {print $10; exit}')"
+test "$observed" = "$checksum_fingerprint"
 ```
 
-The file contains the public key only. Never export or copy private key material.
+Both repository files contain public keys only. Before pinning the checksum key, export its encrypted
+secret-key backup and revocation certificate outside the repository and verify the backup fingerprint.
+Never copy private key material into the repository or CI.
 
 - [ ] **Step 2: Write the workflow contract test**
 

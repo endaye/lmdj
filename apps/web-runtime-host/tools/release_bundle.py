@@ -66,15 +66,15 @@ def parse_detached_checksum(path: Path, expected_name: str) -> str:
 def verify_detached_checksum_signature(
     checksum_path: Path,
     signature_path: Path,
-    product_public_key_path: Path,
-    trusted_primary_fingerprint: str,
+    checksum_public_key_path: Path,
+    trusted_checksum_fingerprint: str,
     *,
     gpg_program: str = "gpg",
 ) -> None:
-    """Verify an armored checksum signature in a keyring containing only the Product key."""
-    fingerprint = trusted_primary_fingerprint.upper()
+    """Verify a checksum signature in a keyring containing only its role key."""
+    fingerprint = trusted_checksum_fingerprint.upper()
     if re.fullmatch(r"[0-9A-F]{40}", fingerprint) is None:
-        raise BundleError("trusted Product key fingerprint is invalid")
+        raise BundleError("trusted checksum signing key fingerprint is invalid")
     try:
         signature_text = signature_path.read_text(encoding="ascii")
     except (OSError, UnicodeDecodeError) as error:
@@ -97,10 +97,10 @@ def verify_detached_checksum_signature(
             raise BundleError("release checksum signature verification failed")
         return completed
 
-    with tempfile.TemporaryDirectory(prefix=".lmdj-product-signature-") as directory:
+    with tempfile.TemporaryDirectory(prefix=".lmdj-checksum-signature-") as directory:
         home = Path(directory)
         home.chmod(0o700)
-        run_gpg(home, ["--import", str(product_public_key_path)])
+        run_gpg(home, ["--import", str(checksum_public_key_path)])
         listed = run_gpg(home, ["--with-colons", "--fingerprint", "--list-keys"])
         primary_fingerprints: list[str] = []
         expecting_primary = False
@@ -115,7 +115,7 @@ def verify_detached_checksum_signature(
             elif record in {"sub", "sec", "ssb"}:
                 expecting_primary = False
         if primary_fingerprints != [fingerprint]:
-            raise BundleError("repository Product public key fingerprint mismatch")
+            raise BundleError("repository checksum signing public key fingerprint mismatch")
         verified = run_gpg(
             home,
             [
@@ -221,8 +221,8 @@ def stage_release_bundle(
     archive_path: Path,
     checksum_path: Path,
     signature_path: Path,
-    product_public_key_path: Path,
-    trusted_primary_fingerprint: str,
+    checksum_public_key_path: Path,
+    trusted_checksum_fingerprint: str,
     output_root: Path,
     expected_product_build: str,
     expected_host_version: str,
@@ -236,7 +236,7 @@ def stage_release_bundle(
         archive_path = archive_path.expanduser().resolve(strict=True)
         checksum_path = checksum_path.expanduser().resolve(strict=True)
         signature_path = signature_path.expanduser().resolve(strict=True)
-        product_public_key_path = product_public_key_path.expanduser().resolve(strict=True)
+        checksum_public_key_path = checksum_public_key_path.expanduser().resolve(strict=True)
         requested_output = output_root.expanduser()
         if not requested_output.is_absolute():
             requested_output = Path.cwd() / requested_output
@@ -249,7 +249,7 @@ def stage_release_bundle(
         or not archive_path.is_file()
         or not checksum_path.is_file()
         or not signature_path.is_file()
-        or not product_public_key_path.is_file()
+        or not checksum_public_key_path.is_file()
     ):
         raise BundleError("release bundle input is unavailable")
     if output_root.exists() or output_root.is_symlink():
@@ -270,8 +270,8 @@ def stage_release_bundle(
         selected_authorizer(
             checksum_path,
             signature_path,
-            product_public_key_path,
-            trusted_primary_fingerprint,
+            checksum_public_key_path,
+            trusted_checksum_fingerprint,
         )
     except BundleError:
         raise
@@ -341,8 +341,8 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     stage.add_argument("--archive", required=True, type=Path)
     stage.add_argument("--checksum", required=True, type=Path)
     stage.add_argument("--checksum-signature", required=True, type=Path)
-    stage.add_argument("--product-public-key", required=True, type=Path)
-    stage.add_argument("--trusted-primary-fingerprint", required=True)
+    stage.add_argument("--checksum-public-key", required=True, type=Path)
+    stage.add_argument("--trusted-checksum-fingerprint", required=True)
     stage.add_argument("--gpg-program", default="gpg")
     stage.add_argument("--output-root", required=True, type=Path)
     stage.add_argument("--expected-product-build", required=True)
@@ -359,8 +359,8 @@ def main(argv: list[str] | None = None) -> int:
             archive_path=options.archive,
             checksum_path=options.checksum,
             signature_path=options.checksum_signature,
-            product_public_key_path=options.product_public_key,
-            trusted_primary_fingerprint=options.trusted_primary_fingerprint,
+            checksum_public_key_path=options.checksum_public_key,
+            trusted_checksum_fingerprint=options.trusted_checksum_fingerprint,
             output_root=options.output_root,
             expected_product_build=options.expected_product_build,
             expected_host_version=options.expected_host_version,

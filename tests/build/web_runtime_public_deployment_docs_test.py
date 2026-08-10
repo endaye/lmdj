@@ -21,6 +21,7 @@ PORTAL_CURRENT_PAGES = (
 TAG = "lmdj-v1.0.15.2"
 TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
 FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
 CURRENT_PRODUCT = "1.0.16.5"
 
 
@@ -39,6 +40,7 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
                 self.assertIn("不自动", compact)
                 self.assertNotIn(TAG_TARGET, source)
                 self.assertNotIn(FINGERPRINT, source)
+                self.assertNotIn(CHECKSUM_FINGERPRINT, source)
                 self.assertNotIn("deployment-tooling branch", source)
                 self.assertNotIn("尚未 push", source)
                 self.assertNotIn("未做远端验证", source)
@@ -71,6 +73,12 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("精确包含三个资产", source)
         self.assertIn("<archive>.sha256.asc", source)
         self.assertIn("才解析 checksum", source)
+        self.assertIn("Product tag signer", source)
+        self.assertIn("Release checksum signer", source)
+        self.assertIn(FINGERPRINT, source)
+        self.assertIn(CHECKSUM_FINGERPRINT, source)
+        self.assertIn("不得用任一角色密钥替代另一角色", source)
+        self.assertIn("revocation certificate", source)
         self.assertIn("独立授权", source)
         self.assertIn("不记录私钥或 token", source)
         self.assertIn("九条", source)
