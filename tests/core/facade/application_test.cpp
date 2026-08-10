@@ -28,6 +28,8 @@
 #include <lmdj/providers/local_proof_failure/factory.hpp>
 #include <lmdj/providers/local_proof_success/factory.hpp>
 
+#include "packages/application-facade/src/testing_hooks.hpp"
+
 #include "tests/core/support/test.hpp"
 
 namespace {
@@ -378,7 +380,9 @@ void write_tag(
   }
 }
 
-std::vector<std::byte> mono_pcm16_wav(std::uint32_t frames) {
+std::vector<std::byte> mono_pcm16_wav(
+    std::uint32_t frames,
+    std::uint32_t sample_rate = 48'000) {
   const auto data_bytes = frames * 2U;
   std::vector<std::byte> bytes(44U + data_bytes);
   write_tag(bytes, 0, "RIFF");
@@ -388,8 +392,8 @@ std::vector<std::byte> mono_pcm16_wav(std::uint32_t frames) {
   write_u32(bytes, 16, 16);
   write_u16(bytes, 20, 1);
   write_u16(bytes, 22, 1);
-  write_u32(bytes, 24, 48'000);
-  write_u32(bytes, 28, 96'000);
+  write_u32(bytes, 24, sample_rate);
+  write_u32(bytes, 28, sample_rate * 2U);
   write_u16(bytes, 32, 2);
   write_u16(bytes, 34, 16);
   write_tag(bytes, 36, "data");
@@ -555,6 +559,56 @@ void check_same_peak_buckets(
   }
 }
 
+class SampleProjectionHookGuard {
+ public:
+  explicit SampleProjectionHookGuard(
+      lmdj::facade::testing::SampleProjectionHook* hook) {
+    lmdj::facade::testing::set_sample_projection_hook(hook);
+  }
+
+  ~SampleProjectionHookGuard() {
+    lmdj::facade::testing::set_sample_projection_hook(nullptr);
+  }
+};
+
+struct SampleBusyHookContext {
+  Application* competitor;
+  std::filesystem::path project;
+  std::optional<RuntimeProjectWriterLease> lease;
+};
+
+void acquire_sample_writer(void* opaque) noexcept {
+  auto& context = *static_cast<SampleBusyHookContext*>(opaque);
+  auto acquired = context.competitor->acquire_project_writer(context.project);
+  if (acquired.has_value()) {
+    context.lease.emplace(std::move(acquired.value()));
+  }
+}
+
+template <typename Operation>
+void check_sample_artifact_busy_error(
+    Application& competitor,
+    const std::filesystem::path& project,
+    Operation operation) {
+  SampleBusyHookContext context{&competitor, project, std::nullopt};
+  lmdj::facade::testing::SampleProjectionHook hook{
+      &context,
+      acquire_sample_writer,
+  };
+  SampleProjectionHookGuard guard(&hook);
+  const auto result = operation();
+  LMDJ_CHECK(context.lease.has_value());
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(result.error().code == ErrorCode::io_error);
+  LMDJ_CHECK((
+      result.error().details ==
+      nlohmann::json{{"storage_condition", "project_busy"}}));
+  LMDJ_CHECK(
+      result.error().message.find(project.generic_string()) ==
+      std::string::npos);
+  context.lease.reset();
+}
+
 void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   TempDirectory temp;
   const auto project = temp.path() / "typed-sample.lmdj";
@@ -586,10 +640,10 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   LMDJ_CHECK(!empty.value().waveform_cache_identity.has_value());
   LMDJ_CHECK(read_bytes(project / "manifest.json") == manifest_before);
 
-  const auto token = uuid(582);
+  const auto malformed_token = uuid(582);
   const auto begun = application.begin_sample_import(
       SampleImportBeginRequest{
-          token,
+          malformed_token,
           project,
           CommandMeta{CommandId{uuid(583)}, 0},
           PadSlotId{0, 0},
@@ -597,18 +651,18 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
           source.size(),
       });
   LMDJ_CHECK(begun.has_value());
-  LMDJ_CHECK(begun.value().token == token);
+  LMDJ_CHECK(begun.value().token == malformed_token);
   LMDJ_CHECK(begun.value().expected_bytes == source.size());
   const auto split = source.size() / 2U;
   LMDJ_CHECK(
       application.append_sample_import(
-          token,
+          malformed_token,
           0,
           std::span<const std::byte>{source.data(), split},
           false)
           .has_value());
   const auto wrong_offset = application.append_sample_import(
-      token,
+      malformed_token,
       split + 1U,
       std::span<const std::byte>{source.data() + split,
                                  source.size() - split},
@@ -616,13 +670,67 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   LMDJ_CHECK(!wrong_offset.has_value());
   LMDJ_CHECK(wrong_offset.error().code == ErrorCode::invalid_argument);
   LMDJ_CHECK(
-      application.append_sample_import(
-          token,
-          split,
-          std::span<const std::byte>{source.data() + split,
-                                     source.size() - split},
-          true)
+      !std::filesystem::exists(
+          temp.path() / ".lmdj-host/sample-import-staging" /
+          (malformed_token + ".wav")));
+  LMDJ_CHECK(
+      !application
+           .append_sample_import(
+               malformed_token,
+               split,
+               std::span<const std::byte>{source.data() + split,
+                                          source.size() - split},
+               true)
+           .has_value());
+  LMDJ_CHECK(
+      !application
+           .begin_sample_import(
+               {malformed_token,
+                project,
+                {CommandId{uuid(583)}, 0},
+                {0, 0},
+                AssetId{uuid(584)},
+                source.size()})
+           .has_value());
+
+  const auto short_final_token = uuid(570);
+  LMDJ_CHECK(
+      application.begin_sample_import(
+          {short_final_token,
+           project,
+           {CommandId{uuid(571)}, 0},
+           {0, 0},
+           AssetId{uuid(572)},
+           source.size()})
           .has_value());
+  const auto short_final = application.append_sample_import(
+      short_final_token,
+      0,
+      std::span<const std::byte>{source.data(), split},
+      true);
+  LMDJ_CHECK(!short_final.has_value());
+  LMDJ_CHECK(short_final.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      !std::filesystem::exists(
+          temp.path() / ".lmdj-host/sample-import-staging" /
+          (short_final_token + ".wav")));
+  LMDJ_CHECK(
+      !std::filesystem::exists(
+          temp.path() / ".lmdj-host/sample-import-staging" /
+          (short_final_token + ".json")));
+
+  const auto token = uuid(589);
+  LMDJ_CHECK(
+      application.begin_sample_import(
+          {token,
+           project,
+           {CommandId{uuid(583)}, 0},
+           {0, 0},
+           AssetId{uuid(584)},
+           source.size()})
+          .has_value());
+  LMDJ_CHECK(
+      application.append_sample_import(token, 0, source, true).has_value());
   const auto committed = application.commit_sample_import(token);
   LMDJ_CHECK(committed.has_value());
   LMDJ_CHECK(committed.value().committed_revision == 1);
@@ -796,6 +904,21 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
       "tests/fixtures/audio/mono-44100-over-web-frame-limit.wav");
   const auto staging_root =
       temp.path() / ".lmdj-host/sample-import-staging";
+  const auto marker_path = [&](std::string_view token) {
+    return staging_root / (std::string{token} + ".json");
+  };
+  const auto write_marker = [&](std::string_view token,
+                                std::uint64_t created_unix_seconds) {
+    write_bytes(
+        marker_path(token),
+        nlohmann::json{
+            {"contract", "lmdj.sample-import-staging.v1"},
+            {"created_unix_seconds", created_unix_seconds},
+            {"state", "incomplete"},
+            {"token", token},
+        }
+            .dump());
+  };
   check_success(
       Application(sample_config(temp.path())).command(create_request(project)),
       0);
@@ -857,9 +980,27 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
   }
   LMDJ_CHECK(std::filesystem::is_regular_file(
       staging_root / (abandoned_token + ".wav")));
+  Application fresh_scavenger(sample_config(temp.path()));
+  LMDJ_CHECK(std::filesystem::is_regular_file(
+      staging_root / (abandoned_token + ".wav")));
+  write_marker(abandoned_token, 0);
   Application application(sample_config(temp.path()));
   LMDJ_CHECK(!std::filesystem::exists(
       staging_root / (abandoned_token + ".wav")));
+  LMDJ_CHECK(!std::filesystem::exists(marker_path(abandoned_token)));
+
+  const auto count_candidate = uuid(609);
+  write_bytes(staging_root / (count_candidate + ".wav"), "orphan");
+  write_marker(count_candidate, 0);
+  for (std::size_t index = 0; index < 64; ++index) {
+    auto name = std::string{"!"} + std::to_string(index);
+    name.insert(1, 3 - std::min<std::size_t>(3, name.size() - 1), '0');
+    write_bytes(staging_root / name, "not-generated");
+  }
+  Application count_scavenger(sample_config(temp.path()));
+  LMDJ_CHECK(!std::filesystem::exists(
+      staging_root / (count_candidate + ".wav")));
+  LMDJ_CHECK(!std::filesystem::exists(marker_path(count_candidate)));
 
   const auto incomplete_token = uuid(606);
   LMDJ_CHECK(
@@ -945,6 +1086,304 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
           .project_revision == revision_before_rejection);
   LMDJ_CHECK(!std::filesystem::exists(
       staging_root / (uuid(603) + ".wav")));
+}
+
+void test_sample_source_frame_limit_is_not_reapplied_after_resampling() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-source-frame-boundary.lmdj";
+  const PatternId pattern_id{uuid(610)};
+  Application application(sample_config(temp.path()));
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{uuid(611)},
+          120,
+          Pattern{
+              pattern_id,
+              1,
+              {{PadSlotId{0, 0}, 0, 127}},
+          },
+      });
+  LMDJ_CHECK(created.has_value());
+
+  const auto source = mono_pcm16_wav(220'501, 44'100);
+  const auto token = uuid(612);
+  LMDJ_CHECK(
+      application.begin_sample_import(
+          {token,
+           project,
+           {CommandId{uuid(613)}, 0},
+           {0, 0},
+           AssetId{uuid(614)},
+           source.size()})
+          .has_value());
+  LMDJ_CHECK(
+      application.append_sample_import(token, 0, source, true).has_value());
+  const auto imported = application.commit_sample_import(token);
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(imported.value().committed_revision == 1);
+
+  const auto prepared = application.prepare_runtime_snapshot(
+      RuntimeSnapshotRequest{project, pattern_id, kStage8WebLimits});
+  LMDJ_CHECK(prepared.has_value());
+  LMDJ_CHECK(prepared.value()->pads.size() == 1);
+  const auto& sample = *prepared.value()->pads.at(0).sample;
+  LMDJ_CHECK(sample.sample_rate == 48'000);
+  LMDJ_CHECK(sample.interleaved.size() / sample.channels == 240'002);
+}
+
+void test_sample_delayed_replays_report_original_committed_revision() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-delayed-replay.lmdj";
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  Application application(sample_config(temp.path()));
+  LMDJ_CHECK(
+      application
+          .create_initial_project(
+              {project,
+               ProjectId{uuid(620)},
+               120,
+               Pattern{PatternId{uuid(621)}, 1, {}}})
+          .has_value());
+
+  const auto import_command = CommandId{uuid(622)};
+  const auto import_asset = AssetId{uuid(623)};
+  const auto import_once = [&](std::string token) {
+    LMDJ_CHECK(
+        application.begin_sample_import(
+            {token,
+             project,
+             {import_command, 0},
+             {0, 0},
+             import_asset,
+             source.size()})
+            .has_value());
+    LMDJ_CHECK(
+        application.append_sample_import(token, 0, source, true).has_value());
+    return application.commit_sample_import(token);
+  };
+  const auto imported = import_once(uuid(624));
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(imported.value().committed_revision == 1);
+
+  const auto advance_after_import = application.update_sample_pad(
+      {project,
+       {CommandId{uuid(625)}, 1},
+       {0, 0},
+       PadPlayback{1, 7, TriggerMode::gate, -300, false}});
+  LMDJ_CHECK(advance_after_import.has_value());
+  LMDJ_CHECK(advance_after_import.value().committed_revision == 2);
+  const auto replayed_import = import_once(uuid(626));
+  LMDJ_CHECK(replayed_import.has_value());
+  LMDJ_CHECK(replayed_import.value().committed_revision == 1);
+
+  const SampleUpdateRequest update{
+      project,
+      {CommandId{uuid(627)}, 2},
+      {0, 0},
+      PadPlayback{2, 6, TriggerMode::loop_gate, -600, true},
+  };
+  const auto updated = application.update_sample_pad(update);
+  LMDJ_CHECK(updated.has_value());
+  LMDJ_CHECK(updated.value().committed_revision == 3);
+  const auto advance_after_update = application.reset_sample_pad(
+      {project, {CommandId{uuid(628)}, 3}, {0, 0}});
+  LMDJ_CHECK(advance_after_update.has_value());
+  LMDJ_CHECK(advance_after_update.value().committed_revision == 4);
+  const auto replayed_update = application.update_sample_pad(update);
+  LMDJ_CHECK(replayed_update.has_value());
+  LMDJ_CHECK(replayed_update.value().committed_revision == 3);
+
+  const SampleResetRequest reset{
+      project,
+      {CommandId{uuid(629)}, 4},
+      {0, 0},
+  };
+  const auto reset_result = application.reset_sample_pad(reset);
+  LMDJ_CHECK(reset_result.has_value());
+  LMDJ_CHECK(reset_result.value().committed_revision == 5);
+  const auto advance_after_reset = application.update_sample_pad(
+      {project,
+       {CommandId{uuid(630)}, 5},
+       {0, 0},
+       PadPlayback{1, 7, TriggerMode::loop_toggle, 0, false}});
+  LMDJ_CHECK(advance_after_reset.has_value());
+  LMDJ_CHECK(advance_after_reset.value().committed_revision == 6);
+  const auto replayed_reset = application.reset_sample_pad(reset);
+  LMDJ_CHECK(replayed_reset.has_value());
+  LMDJ_CHECK(replayed_reset.value().committed_revision == 5);
+}
+
+void test_sample_artifact_busy_errors_remain_storage_errors() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-artifact-busy.lmdj";
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  Application application(sample_config(temp.path()));
+  Application competitor(sample_config(temp.path()));
+  create_single_asset_project(
+      application, project, source, 640, uuid(644), uuid(645));
+
+  check_sample_artifact_busy_error(
+      competitor,
+      project,
+      [&] { return application.inspect_sample({project, {0, 0}}); });
+  check_sample_artifact_busy_error(
+      competitor,
+      project,
+      [&] {
+        return application.query_sample_waveform(
+            {project, {0, 0}, {0, 8, 4}});
+      });
+  check_sample_artifact_busy_error(
+      competitor,
+      project,
+      [&] {
+        return application.update_sample_pad(
+            {project,
+             {CommandId{uuid(646)}, 3},
+             {0, 0},
+             PadPlayback{1, 7, TriggerMode::gate, 0, false}});
+      });
+  LMDJ_CHECK(
+      application.inspect_sample({project, {0, 0}})
+          .value()
+          .project_revision == 3);
+}
+
+struct SampleMutationHookContext {
+  Application* application;
+  std::filesystem::path project;
+  const std::vector<std::byte>* replacement;
+  bool completed = false;
+};
+
+void replace_sample_after_projection_load(void* opaque) noexcept {
+  auto& context = *static_cast<SampleMutationHookContext*>(opaque);
+  const auto imported = context.application->import_artifact_bytes(
+      {context.project,
+       {CommandId{uuid(650)}, 3},
+       AssetId{uuid(651)},
+       "audio/wav",
+       *context.replacement});
+  if (!imported.has_value()) {
+    return;
+  }
+  const auto assigned = context.application->command(
+      assign_request(context.project, 652, 0, uuid(651), 4));
+  context.completed =
+      assigned.is_object() && assigned.value("ok", false) &&
+      assigned.value("project_revision", 0U) == 5;
+}
+
+void test_sample_waveform_json_uses_one_authoritative_projection() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-waveform-projection.lmdj";
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  const auto replacement = mono_pcm16_wav(8);
+  Application application(sample_config(temp.path()));
+  create_single_asset_project(
+      application, project, source, 660, uuid(664), uuid(665));
+
+  SampleMutationHookContext context{
+      &application,
+      project,
+      &replacement,
+  };
+  lmdj::facade::testing::SampleProjectionHook hook{
+      &context,
+      replace_sample_after_projection_load,
+  };
+  SampleProjectionHookGuard guard(&hook);
+  const auto waveform = application.query(
+      {
+          {"operation", "sample.waveform"},
+          {"project_path", project.generic_string()},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"window",
+           {{"start_frame", 0}, {"end_frame", 8}, {"bucket_count", 4}}},
+      });
+  LMDJ_CHECK(context.completed);
+  check_success(waveform, 3);
+  LMDJ_CHECK(
+      waveform.at("result")
+          .at("buckets")
+          .at(0)
+          .at("peak_magnitude") == 32'768);
+  LMDJ_CHECK(
+      application.inspect_sample({project, {0, 0}})
+          .value()
+          .project_revision == 5);
+}
+
+void test_sample_waveform_cache_uses_cooker_full_level_bucket_width() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-waveform-cache-level.lmdj";
+  const auto source = mono_pcm16_wav(5);
+  Application application(sample_config(temp.path()));
+  create_single_asset_project(
+      application, project, source, 670, uuid(674), uuid(675));
+  const auto inspected = application.inspect_sample({project, {0, 0}});
+  LMDJ_CHECK(inspected.has_value());
+  LMDJ_CHECK(inspected.value().waveform_cache_identity.has_value());
+  const auto artifact_sha =
+      inspected.value().waveform_cache_identity->substr(0, 64);
+
+  const auto partial = application.query_sample_waveform(
+      {project, {0, 0}, {0, 4, 1}});
+  LMDJ_CHECK(partial.has_value());
+  LMDJ_CHECK(partial.value().buckets.size() == 1);
+  check_peak_bucket(partial.value().buckets.at(0), 0, 4, 0);
+
+  lmdj::project_io::WorkspaceCacheStore cache(
+      temp.path() / ".lmdj-host/workspace-cache");
+  const auto exact_key =
+      artifact_sha + "/1/max-abs-mirror/3";
+  const auto wrong_key =
+      artifact_sha + "/1/max-abs-mirror/4";
+  const auto cached = cache.read(exact_key);
+  LMDJ_CHECK(cached.has_value());
+  LMDJ_CHECK(cached.value().has_value());
+  LMDJ_CHECK(!cache.read(wrong_key).value().has_value());
+  const auto cached_text = std::string_view{
+      reinterpret_cast<const char*>(cached.value()->data()),
+      cached.value()->size()};
+  const auto cached_json = nlohmann::json::parse(cached_text);
+  LMDJ_CHECK(cached_json.at("frames_per_bucket") == 3);
+  LMDJ_CHECK(cached_json.at("bucket_count") == 2);
+  LMDJ_CHECK(cached_json.at("buckets").at(0).at("start_frame") == 0);
+  LMDJ_CHECK(cached_json.at("buckets").at(0).at("end_frame") == 3);
+  LMDJ_CHECK(cached_json.at("buckets").at(1).at("start_frame") == 3);
+  LMDJ_CHECK(cached_json.at("buckets").at(1).at("end_frame") == 5);
+
+  const auto misaligned_text = nlohmann::json{
+      {"contract", "lmdj.sample-waveform-cache.v1"},
+      {"metadata",
+       {{"sample_rate", 48'000}, {"channels", 1}, {"source_frames", 5}}},
+      {"algorithm_version", 1},
+      {"fold", "max-abs-mirror"},
+      {"frames_per_bucket", 3},
+      {"bucket_count", 2},
+      {"buckets",
+       nlohmann::json::array(
+           {{{"start_frame", 0}, {"end_frame", 2}, {"peak_magnitude", 0}},
+            {{"start_frame", 2}, {"end_frame", 5}, {"peak_magnitude", 0}}})},
+  }.dump();
+  const auto misaligned_bytes = std::as_bytes(std::span<const char>{
+      misaligned_text.data(), misaligned_text.size()});
+  LMDJ_CHECK(cache.write(exact_key, misaligned_bytes).has_value());
+  const auto repaired = application.query_sample_waveform(
+      {project, {0, 0}, {0, 4, 1}});
+  LMDJ_CHECK(repaired.has_value());
+  check_peak_bucket(repaired.value().buckets.at(0), 0, 4, 0);
+  const auto repaired_cache = cache.read(exact_key);
+  LMDJ_CHECK(repaired_cache.has_value());
+  LMDJ_CHECK(repaired_cache.value().has_value());
+  LMDJ_CHECK(repaired_cache.value()->size() != misaligned_bytes.size() ||
+             !std::equal(
+                 repaired_cache.value()->begin(),
+                 repaired_cache.value()->end(),
+                 misaligned_bytes.begin(),
+                 misaligned_bytes.end()));
 }
 
 nlohmann::json pattern_json() {
@@ -2461,6 +2900,11 @@ int main() {
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
     test_sample_import_abort_scavenge_replace_and_manifest_admission();
+    test_sample_source_frame_limit_is_not_reapplied_after_resampling();
+    test_sample_delayed_replays_report_original_committed_revision();
+    test_sample_artifact_busy_errors_remain_storage_errors();
+    test_sample_waveform_json_uses_one_authoritative_projection();
+    test_sample_waveform_cache_uses_cooker_full_level_bucket_width();
     test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank();
     test_take_commit_uses_captured_revision_and_replays_after_cleanup();
     test_asset_and_pad_replay_identity_is_enforced();

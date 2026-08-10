@@ -40,7 +40,29 @@
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/provider/capability.hpp>
 
+#include "testing_hooks.hpp"
+
 namespace lmdj::facade {
+namespace testing {
+namespace {
+
+std::atomic<SampleProjectionHook*> sample_projection_hook{nullptr};
+
+}  // namespace
+
+void set_sample_projection_hook(SampleProjectionHook* hook) noexcept {
+  sample_projection_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_sample_projection_hook() noexcept {
+  auto* hook =
+      sample_projection_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+}  // namespace testing
 namespace {
 
 using foundation::Error;
@@ -55,6 +77,10 @@ constexpr std::size_t kMaximumSampleImportChunkBytes = 1024U * 1024U;
 constexpr std::size_t kMaximumSampleImportSessions = 16U;
 constexpr std::size_t kMaximumRememberedSampleImportTokens = 256U;
 constexpr std::size_t kMaximumSampleScavengeFiles = 64U;
+constexpr std::uint64_t kMaximumSampleStagingMarkerBytes = 4U * 1024U;
+constexpr std::uint64_t kMinimumSampleStagingAgeSeconds = 24U * 60U * 60U;
+constexpr std::string_view kSampleStagingContract =
+    "lmdj.sample-import-staging.v1";
 constexpr std::string_view kWaveformCacheContract =
     "lmdj.sample-waveform-cache.v1";
 constexpr std::string_view kWaveformCacheFold = "max-abs-mirror";
@@ -1192,6 +1218,30 @@ Error sample_project_load_error(const Error& error) {
   return error;
 }
 
+Error sample_artifact_read_error(const Error& error) {
+  if (error.code == ErrorCode::not_found ||
+      error.code == ErrorCode::cook_failed) {
+    return unavailable_sample();
+  }
+  auto details = nlohmann::json::object();
+  if (error.details.is_object()) {
+    const auto storage = error.details.find("storage_condition");
+    if (storage != error.details.end() && storage->is_string()) {
+      const auto& value = storage->get_ref<const std::string&>();
+      if (value == project_io::kStorageConditionProjectBusy ||
+          value == project_io::kStorageConditionAlreadyExists ||
+          value == project_io::kStorageConditionAtomicPublishUnsupported) {
+        details["storage_condition"] = value;
+      }
+    }
+  }
+  return Error{
+      error.code,
+      "Sample Artifact could not be read",
+      std::move(details),
+  };
+}
+
 Error sample_storage_error(const Error& error, std::string message) {
   auto details = nlohmann::json::object();
   if (error.details.is_object() &&
@@ -1333,11 +1383,15 @@ std::optional<cooker::WaveformEnvelope> decode_waveform_cache(
       std::numeric_limits<std::uint16_t>::max());
   const auto source_frames =
       cache_unsigned(encoded.at("metadata"), "source_frames");
+  const auto expected_bucket_count =
+      ceiling_divide(expected_metadata.source_frames,
+                     expected_frames_per_bucket);
   if (!algorithm.has_value() ||
       *algorithm != cooker::kWaveformAlgorithmVersion ||
       !frames_per_bucket.has_value() ||
       *frames_per_bucket != expected_frames_per_bucket ||
       !bucket_count.has_value() ||
+      *bucket_count != expected_bucket_count ||
       encoded.at("buckets").size() != *bucket_count ||
       !sample_rate.has_value() ||
       *sample_rate != expected_metadata.sample_rate ||
@@ -1358,10 +1412,11 @@ std::optional<cooker::WaveformEnvelope> decode_waveform_cache(
     const auto start = cache_unsigned(bucket, "start_frame");
     const auto end = cache_unsigned(bucket, "end_frame");
     const auto peak = cache_unsigned(bucket, "peak_magnitude", 32'768U);
+    const auto expected_end = expected_start + std::min(
+        expected_frames_per_bucket,
+        expected_metadata.source_frames - expected_start);
     if (!start.has_value() || !end.has_value() || !peak.has_value() ||
-        *start != expected_start || *start >= *end ||
-        *end > expected_metadata.source_frames ||
-        *end - *start > expected_frames_per_bucket) {
+        *start != expected_start || *end != expected_end) {
       return std::nullopt;
     }
     buckets.push_back(cooker::PeakBucket{
@@ -1385,7 +1440,10 @@ std::optional<cooker::WaveformEnvelope> cached_waveform_window(
     const cooker::WaveformEnvelope& cached,
     const cooker::WaveformRequest& request,
     std::uint64_t frames_per_bucket) {
-  if (request.start_frame % frames_per_bucket != 0 ||
+  if (ceiling_divide(
+          request.end_frame - request.start_frame,
+          request.bucket_count) != frames_per_bucket ||
+      request.start_frame % frames_per_bucket != 0 ||
       (request.end_frame != cached.metadata.source_frames &&
        request.end_frame % frames_per_bucket != 0)) {
     return std::nullopt;
@@ -1423,16 +1481,29 @@ bool valid_trigger_mode(domain::TriggerMode mode) {
   return false;
 }
 
+foundation::Result<void> remove_sample_staging(
+    const std::shared_ptr<project_io::ProjectStoragePlatform>& platform,
+    const std::filesystem::path& payload,
+    const std::filesystem::path& marker) {
+  const auto payload_removed = platform->remove(payload);
+  const auto marker_removed = platform->remove(marker);
+  if (!payload_removed.has_value()) {
+    return payload_removed;
+  }
+  return marker_removed;
+}
+
 struct SampleStagingCleanup {
   ~SampleStagingCleanup() {
     lease.reset();
     if (platform != nullptr && !path.empty()) {
-      (void)platform->remove(path);
+      (void)remove_sample_staging(platform, path, marker_path);
     }
   }
 
   std::shared_ptr<project_io::ProjectStoragePlatform> platform;
   std::filesystem::path path;
+  std::filesystem::path marker_path;
   std::unique_ptr<project_io::ProjectWriterLease> lease;
 };
 
@@ -1481,6 +1552,7 @@ struct Application::Impl {
   struct SampleImportState {
     SampleImportBeginRequest request;
     std::filesystem::path path;
+    std::filesystem::path marker_path;
     std::uint64_t received_bytes;
     bool finalized;
     std::unique_ptr<project_io::ProjectWriterLease> lease;
@@ -1532,24 +1604,67 @@ struct Application::Impl {
     if (!present.value()) {
       return foundation::Result<void>::success();
     }
+    const auto validated = storage_platform->validate_managed_tree(root);
+    if (!validated.has_value()) {
+      return foundation::Result<void>::failure(sample_storage_error(
+          validated.error(), "Sample staging tree is invalid"));
+    }
     const auto names = storage_platform->list_names(root);
     if (!names.has_value()) {
       return foundation::Result<void>::failure(sample_storage_error(
           names.error(), "Sample staging root could not be listed"));
     }
+    const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                         std::chrono::system_clock::now().time_since_epoch())
+                         .count();
     std::size_t scanned = 0;
     for (const auto& name : names.value()) {
-      if (scanned++ >= kMaximumSampleScavengeFiles) {
-        break;
-      }
       const std::filesystem::path relative{name};
       const auto token = relative.stem().string();
       if (relative.filename() != relative || relative.extension() != ".wav" ||
           relative.filename().string() != token + ".wav" ||
-          !domain::is_valid_uuid(token) || sample_imports.contains(token)) {
+          !domain::is_valid_uuid(token)) {
+        continue;
+      }
+      if (scanned++ >= kMaximumSampleScavengeFiles) {
+        break;
+      }
+      if (sample_imports.contains(token)) {
         continue;
       }
       const auto path = root / relative;
+      const auto marker_path = root / (token + ".json");
+      const auto marker_length = storage_platform->byte_length(marker_path);
+      if (!marker_length.has_value() ||
+          marker_length.value() > kMaximumSampleStagingMarkerBytes) {
+        continue;
+      }
+      const auto marker_bytes = storage_platform->read_complete(marker_path);
+      if (!marker_bytes.has_value()) {
+        continue;
+      }
+      const auto marker_text = std::string_view{
+          reinterpret_cast<const char*>(marker_bytes.value().data()),
+          marker_bytes.value().size()};
+      const auto marker = nlohmann::json::parse(marker_text, nullptr, false);
+      if (marker.is_discarded() ||
+          !exact_keys(
+              marker,
+              {"contract", "created_unix_seconds", "state", "token"}) ||
+          !marker.at("contract").is_string() ||
+          marker.at("contract") != kSampleStagingContract ||
+          !marker.at("state").is_string() ||
+          marker.at("state") != "incomplete" ||
+          !marker.at("token").is_string() || marker.at("token") != token) {
+        continue;
+      }
+      const auto created = cache_unsigned(marker, "created_unix_seconds");
+      if (!created.has_value() || now < 0 ||
+          *created > static_cast<std::uint64_t>(now) ||
+          static_cast<std::uint64_t>(now) - *created <
+              kMinimumSampleStagingAgeSeconds) {
+        continue;
+      }
       auto lease = storage_platform->acquire_writer(path);
       if (!lease.has_value()) {
         if (lease.error().details.is_object() &&
@@ -1562,7 +1677,8 @@ struct Application::Impl {
             lease.error(), "Sample staging cleanup could not acquire writer"));
       }
       lease.value().reset();
-      const auto removed = storage_platform->remove(path);
+      const auto removed =
+          remove_sample_staging(storage_platform, path, marker_path);
       if (!removed.has_value()) {
         return foundation::Result<void>::failure(sample_storage_error(
             removed.error(), "Sample staging cleanup failed"));
@@ -1915,6 +2031,7 @@ struct Application::Impl {
       return foundation::Result<SampleInspectResult>::failure(
           sample_project_load_error(loaded.error()));
     }
+    testing::invoke_sample_projection_hook();
     const auto& pad = loaded.value()
                           .banks.at(request.slot.bank)
                           .at(request.slot.pad);
@@ -1939,7 +2056,7 @@ struct Application::Impl {
         projects.read_artifact(request.project_path, asset->second.artifact);
     if (!bytes.has_value()) {
       return foundation::Result<SampleInspectResult>::failure(
-          unavailable_sample());
+          sample_artifact_read_error(bytes.error()));
     }
     const auto metadata = cooker::inspect_wav(bytes.value());
     if (!metadata.has_value()) {
@@ -1955,7 +2072,8 @@ struct Application::Impl {
   }
 
   foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(
-      const SampleWaveformRequest& request) {
+      const SampleWaveformRequest& request,
+      std::uint64_t* project_revision = nullptr) {
     if (!valid_host_project_path(request.project_path) ||
         !domain::is_valid_slot(request.slot) ||
         request.window.bucket_count == 0 ||
@@ -1969,6 +2087,10 @@ struct Application::Impl {
       return foundation::Result<cooker::WaveformEnvelope>::failure(
           sample_project_load_error(loaded.error()));
     }
+    if (project_revision != nullptr) {
+      *project_revision = loaded.value().revision;
+    }
+    testing::invoke_sample_projection_hook();
     const auto& pad = loaded.value()
                           .banks.at(request.slot.bank)
                           .at(request.slot.pad);
@@ -1985,7 +2107,7 @@ struct Application::Impl {
         projects.read_artifact(request.project_path, asset->second.artifact);
     if (!bytes.has_value()) {
       return foundation::Result<cooker::WaveformEnvelope>::failure(
-          unavailable_sample());
+          sample_artifact_read_error(bytes.error()));
     }
     const auto decoded = cooker::decode_wav(bytes.value());
     if (!decoded.has_value()) {
@@ -2004,22 +2126,24 @@ struct Application::Impl {
         decoded.value()->channels,
         source_frames,
     };
-    const auto frames_per_bucket = ceiling_divide(
+    const auto requested_frames_per_bucket = ceiling_divide(
         request.window.end_frame - request.window.start_frame,
         request.window.bucket_count);
-    const auto key =
-        waveform_cache_key(asset->second.artifact, frames_per_bucket);
     const auto full_bucket_count =
-        ceiling_divide(source_frames, frames_per_bucket);
+        ceiling_divide(source_frames, requested_frames_per_bucket);
+    const auto cache_frames_per_bucket =
+        ceiling_divide(source_frames, full_bucket_count);
+    const auto key = waveform_cache_key(
+        asset->second.artifact, cache_frames_per_bucket);
     bool rebuild_cache = false;
     if (full_bucket_count <= 512U) {
       const auto cached = waveform_cache.read(key);
       if (cached.has_value() && cached.value().has_value()) {
         const auto decoded_cache = decode_waveform_cache(
-            *cached.value(), metadata, frames_per_bucket);
+            *cached.value(), metadata, cache_frames_per_bucket);
         if (decoded_cache.has_value()) {
           const auto window = cached_waveform_window(
-              *decoded_cache, request.window, frames_per_bucket);
+              *decoded_cache, request.window, cache_frames_per_bucket);
           if (window.has_value()) {
             return foundation::Result<cooker::WaveformEnvelope>::success(
                 std::move(*window));
@@ -2047,7 +2171,7 @@ struct Application::Impl {
           });
       if (full.has_value()) {
         const auto encoded =
-            encode_waveform_cache(full.value(), frames_per_bucket);
+            encode_waveform_cache(full.value(), cache_frames_per_bucket);
         (void)waveform_cache.write(key, encoded);
       }
     }
@@ -2095,6 +2219,7 @@ struct Application::Impl {
               validated.error(), "Sample staging tree is invalid"));
     }
     const auto path = root / (request.import_token + ".wav");
+    const auto marker_path = root / (request.import_token + ".json");
     auto lease = storage_platform->acquire_writer(path);
     if (!lease.has_value()) {
       return foundation::Result<SampleImportSession>::failure(
@@ -2102,17 +2227,37 @@ struct Application::Impl {
               lease.error(), "Sample staging writer could not be acquired"));
     }
     const auto present = storage_platform->exists(path);
-    if (!present.has_value()) {
+    const auto marker_present = storage_platform->exists(marker_path);
+    if (!present.has_value() || !marker_present.has_value()) {
       return foundation::Result<SampleImportSession>::failure(
           sample_storage_error(
-              present.error(), "Sample staging could not be inspected"));
+              present.has_value() ? marker_present.error() : present.error(),
+              "Sample staging could not be inspected"));
     }
-    if (present.value()) {
+    if (present.value() || marker_present.value()) {
       return foundation::Result<SampleImportSession>::failure(
           invalid_sample_request("Sample import token was already used"));
     }
-    const auto created = storage_platform->create_immutable(path, {});
+    const auto created_at = std::chrono::duration_cast<std::chrono::seconds>(
+                                std::chrono::system_clock::now()
+                                    .time_since_epoch())
+                                .count();
+    const auto marker_text = nlohmann::json{
+        {"contract", kSampleStagingContract},
+        {"created_unix_seconds", created_at},
+        {"state", "incomplete"},
+        {"token", request.import_token},
+    }.dump();
+    auto created = storage_platform->create_immutable(
+        marker_path,
+        std::as_bytes(std::span<const char>{
+            marker_text.data(), marker_text.size()}));
+    if (created.has_value()) {
+      created = storage_platform->create_immutable(path, {});
+    }
     if (!created.has_value()) {
+      lease.value().reset();
+      (void)remove_sample_staging(storage_platform, path, marker_path);
       return foundation::Result<SampleImportSession>::failure(
           sample_storage_error(
               created.error(), "Sample staging could not be created"));
@@ -2130,6 +2275,7 @@ struct Application::Impl {
         SampleImportState{
             request,
             path,
+            marker_path,
             0,
             false,
             std::move(lease.value()),
@@ -2143,20 +2289,31 @@ struct Application::Impl {
       std::uint64_t offset,
       std::span<const std::byte> bytes,
       bool final) {
-    if (!domain::is_valid_uuid(token) ||
-        bytes.size() > kMaximumSampleImportChunkBytes ||
-        (bytes.empty() && !final)) {
+    if (!domain::is_valid_uuid(token)) {
       return foundation::Result<void>::failure(
           invalid_sample_request("Sample import chunk request is invalid"));
     }
     std::lock_guard lock(sample_mutex);
     const auto found = sample_imports.find(std::string{token});
-    if (found == sample_imports.end() || found->second.finalized ||
+    if (found == sample_imports.end()) {
+      return foundation::Result<void>::failure(
+          invalid_sample_request("Sample import chunk request is invalid"));
+    }
+    if (bytes.size() > kMaximumSampleImportChunkBytes ||
+        (bytes.empty() && !final) || found->second.finalized ||
         offset != found->second.received_bytes ||
         bytes.size() > found->second.request.byte_length -
                            found->second.received_bytes ||
         (final && found->second.received_bytes + bytes.size() !=
                       found->second.request.byte_length)) {
+      found->second.lease.reset();
+      const auto removed = remove_sample_staging(
+          storage_platform, found->second.path, found->second.marker_path);
+      sample_imports.erase(found);
+      if (!removed.has_value()) {
+        return foundation::Result<void>::failure(sample_storage_error(
+            removed.error(), "Sample staging could not be removed"));
+      }
       return foundation::Result<void>::failure(
           invalid_sample_request("Sample import chunk request is invalid"));
     }
@@ -2164,7 +2321,8 @@ struct Application::Impl {
         found->second.path, offset, bytes);
     if (!appended.has_value()) {
       found->second.lease.reset();
-      (void)storage_platform->remove(found->second.path);
+      (void)remove_sample_staging(
+          storage_platform, found->second.path, found->second.marker_path);
       sample_imports.erase(found);
       return foundation::Result<void>::failure(sample_storage_error(
           appended.error(), "Sample staging append failed"));
@@ -2195,6 +2353,7 @@ struct Application::Impl {
     SampleStagingCleanup cleanup{
         storage_platform,
         state.path,
+        state.marker_path,
         std::move(state.lease),
     };
     if (!state.finalized || state.received_bytes != state.request.byte_length) {
@@ -2243,7 +2402,10 @@ struct Application::Impl {
           committed.error());
     }
     return foundation::Result<SampleMutationResult>::success(
-        SampleMutationResult{committed.value().state.revision, true});
+        SampleMutationResult{
+            committed.value().event.at("revision").get<std::uint64_t>(),
+            true,
+        });
   }
 
   foundation::Result<void> abort_sample_import(std::string_view token) {
@@ -2258,7 +2420,8 @@ struct Application::Impl {
           invalid_sample_request("Sample import session does not exist"));
     }
     found->second.lease.reset();
-    const auto removed = storage_platform->remove(found->second.path);
+    const auto removed = remove_sample_staging(
+        storage_platform, found->second.path, found->second.marker_path);
     sample_imports.erase(found);
     if (!removed.has_value()) {
       return foundation::Result<void>::failure(sample_storage_error(
@@ -2280,6 +2443,7 @@ struct Application::Impl {
       return foundation::Result<SampleMutationResult>::failure(
           sample_project_load_error(loaded.error()));
     }
+    testing::invoke_sample_projection_hook();
     if (loaded.value().revision == request.meta.expected_revision) {
       const auto& pad = loaded.value()
                             .banks.at(request.slot.bank)
@@ -2297,7 +2461,7 @@ struct Application::Impl {
           projects.read_artifact(request.project_path, asset->second.artifact);
       if (!bytes.has_value()) {
         return foundation::Result<SampleMutationResult>::failure(
-            unavailable_sample());
+            sample_artifact_read_error(bytes.error()));
       }
       const auto metadata = cooker::inspect_wav(bytes.value());
       if (!metadata.has_value()) {
@@ -2332,7 +2496,7 @@ struct Application::Impl {
                                       .asset_id.has_value();
     return foundation::Result<SampleMutationResult>::success(
         SampleMutationResult{
-            updated.value().state.revision,
+            updated.value().event.at("revision").get<std::uint64_t>(),
             runtime_required,
         });
   }
@@ -2357,7 +2521,7 @@ struct Application::Impl {
                                       .asset_id.has_value();
     return foundation::Result<SampleMutationResult>::success(
         SampleMutationResult{
-            reset.value().state.revision,
+            reset.value().event.at("revision").get<std::uint64_t>(),
             runtime_required,
         });
   }
@@ -2405,12 +2569,8 @@ struct Application::Impl {
         slot_value(request.at("slot")),
         waveform_request_value(request.at("window")),
     };
-    const auto inspected = inspect_sample(
-        SampleInspectRequest{parsed.project_path, parsed.slot});
-    if (!inspected.has_value()) {
-      return sample_error_envelope(inspected.error());
-    }
-    const auto waveform = query_sample_waveform(parsed);
+    std::uint64_t project_revision = 0;
+    const auto waveform = query_sample_waveform(parsed, &project_revision);
     if (!waveform.has_value()) {
       return sample_error_envelope(waveform.error());
     }
@@ -2424,7 +2584,7 @@ struct Application::Impl {
             {"algorithm_version", waveform.value().algorithm_version},
             {"buckets", std::move(buckets)},
         },
-        inspected.value().project_revision);
+        project_revision);
   }
 
   nlohmann::json sample_import_begin(const nlohmann::json& request) {
@@ -2928,7 +3088,24 @@ struct Application::Impl {
                     artifact.byte_length,
                     limits->maximum_artifact_bytes));
           }
-          return projects.read_artifact(path, artifact);
+          auto bytes = projects.read_artifact(path, artifact);
+          if (!bytes.has_value() || !limits.has_value()) {
+            return bytes;
+          }
+          const auto metadata = cooker::inspect_wav(bytes.value());
+          if (!metadata.has_value()) {
+            return foundation::Result<std::vector<std::byte>>::failure(
+                metadata.error());
+          }
+          if (!limits->allows_decoded_frames_per_pad(
+                  metadata.value().source_frames)) {
+            return foundation::Result<std::vector<std::byte>>::failure(
+                runtime_preparation_limit_error(
+                    "decoded_frames_per_pad",
+                    metadata.value().source_frames,
+                    limits->maximum_decoded_frames_per_pad));
+          }
+          return bytes;
         });
     if (!cooked.has_value() || !limits.has_value()) {
       return cooked;
@@ -2947,14 +3124,6 @@ struct Application::Impl {
       }
       const auto frames = static_cast<std::uint64_t>(
           pad.sample->interleaved.size() / pad.sample->channels);
-      if (!limits->allows_decoded_frames_per_pad(frames)) {
-        return foundation::Result<
-            std::shared_ptr<const cooker::RuntimeSnapshot>>::failure(
-            runtime_preparation_limit_error(
-                "decoded_frames_per_pad",
-                frames,
-                limits->maximum_decoded_frames_per_pad));
-      }
       const auto sample_bytes = audio::checked_mono_float_bytes(frames);
       if (!sample_bytes.has_value()) {
         return foundation::Result<
