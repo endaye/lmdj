@@ -23,9 +23,11 @@ using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RuntimePreparationLimits;
 using lmdj::audio::TriggerEvent;
 using lmdj::cooker::PcmSample;
+using lmdj::cooker::ResolvedPlayback;
 using lmdj::cooker::ResolvedPad;
 using lmdj::cooker::RuntimeSnapshot;
 using lmdj::domain::PadSlotId;
+using lmdj::domain::TriggerMode;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::ProjectId;
@@ -61,11 +63,13 @@ RuntimeSnapshot valid_snapshot() {
               PadSlotId{0, 0},
               artifact('a', 10),
               pcm(48'000, 1, {-32'768, -16'384, 0, 16'384, 32'767}),
+              ResolvedPlayback{0, 5, TriggerMode::one_shot, 1.0F, false},
           },
           ResolvedPad{
               PadSlotId{3, 15},
               artifact('b', 8),
               pcm(48'000, 2, {32'767, -32'768, 16'384, 16'384}),
+              ResolvedPlayback{0, 2, TriggerMode::one_shot, 1.0F, false},
           },
       },
       {},
@@ -94,6 +98,14 @@ RuntimeSnapshot large_shared_snapshot(bool one_extra_frame) {
             },
             artifact('c', 1),
             one_extra_frame && slot == 63 ? larger : shared,
+            ResolvedPlayback{
+                0,
+                static_cast<std::uint32_t>(
+                    one_extra_frame && slot == 63 ? 262'145 : 262'144),
+                TriggerMode::one_shot,
+                1.0F,
+                false,
+            },
         });
   }
   return RuntimeSnapshot{
@@ -190,6 +202,58 @@ void validates_control_thread_float_sample_builder() {
   LMDJ_CHECK(bank.sample_count() == 64);
   LMDJ_CHECK(bank.availability_mask() ==
              std::numeric_limits<std::uint64_t>::max());
+}
+
+void validates_resolved_playback_before_storing_fixed_values() {
+  const std::array<float, 4> sample{0.25F, 0.5F, 0.75F, 1.0F};
+  auto accepted = PreparedSampleBank::empty(ProjectId{kProjectId}, 9);
+  LMDJ_CHECK(
+      accepted
+          .set_sample(
+              0,
+              sample,
+              ResolvedPlayback{
+                  1, 3, TriggerMode::loop_gate, 0.5F, false})
+          .has_value());
+
+  const std::array invalid{
+      ResolvedPlayback{1, 1, TriggerMode::one_shot, 1.0F, false},
+      ResolvedPlayback{0, 5, TriggerMode::one_shot, 1.0F, false},
+      ResolvedPlayback{
+          0,
+          4,
+          TriggerMode::one_shot,
+          std::numeric_limits<float>::quiet_NaN(),
+          false},
+      ResolvedPlayback{0, 4, TriggerMode::one_shot, -0.5F, false},
+      ResolvedPlayback{
+          0,
+          4,
+          static_cast<TriggerMode>(255),
+          1.0F,
+          false},
+  };
+  for (std::uint8_t slot = 1; slot <= invalid.size(); ++slot) {
+    auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 9);
+    const auto rejected = bank.set_sample(slot, sample, invalid.at(slot - 1));
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  }
+
+  for (std::size_t mutation = 0; mutation < 3; ++mutation) {
+    auto snapshot = valid_snapshot();
+    if (mutation == 0) {
+      snapshot.pads.at(0).playback.end_frame = 6;
+    } else if (mutation == 1) {
+      snapshot.pads.at(0).playback.start_frame = 5;
+    } else {
+      snapshot.pads.at(0).playback.linear_gain =
+          std::numeric_limits<float>::infinity();
+    }
+    const auto rejected = PreparedSampleBank::from_snapshot(snapshot);
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  }
 }
 
 void accepts_exact_web_limits_and_rejects_boundary_plus_one() {
@@ -342,6 +406,7 @@ int main() {
   renders_exact_mono_and_stereo_pcm16_conversion();
   rejects_invalid_snapshot_sample_shapes_before_publication();
   validates_control_thread_float_sample_builder();
+  validates_resolved_playback_before_storing_fixed_values();
   accepts_exact_web_limits_and_rejects_boundary_plus_one();
   bounded_preparation_rejects_before_allocation_and_retains_prior_bank();
 }

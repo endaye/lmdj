@@ -16,9 +16,9 @@ const fixtureMetadata = JSON.parse(await readFile(
 const fixtureBytes = await readFile(
   resolve(fixtureRoot, fixtureMetadata.wav.path),
 );
-const rejectedFixtureBytes = Buffer.from(fixtureBytes);
-rejectedFixtureBytes.writeUInt32LE(44_100, 24);
-rejectedFixtureBytes.writeUInt32LE(88_200, 28);
+const fixture44100Bytes = Buffer.from(fixtureBytes);
+fixture44100Bytes.writeUInt32LE(44_100, 24);
+fixture44100Bytes.writeUInt32LE(88_200, 28);
 const deadlineFixtureBytes = Buffer.alloc(32_768);
 fixtureBytes.copy(deadlineFixtureBytes);
 const deadlineFixtureSha256 = createHash("sha256")
@@ -1207,7 +1207,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     patternId: descriptor.pattern_id,
     committedPatternId: crypto.randomUUID(),
     assetId: descriptor.asset_id,
-    rejectedAssetId: crypto.randomUUID(),
+    asset44100Id: crypto.randomUUID(),
     takeId: crypto.randomUUID(),
   };
   expect(runtimeModuleRequests).not.toContain("/lmdj-web-runtime.js");
@@ -1348,55 +1348,63 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   await proveExactOutcomes(page, restartedAdmission, restartMarker.notifications);
 
   const priorStatus = success(await hostRequest(page, "host.status", {}),
-    "status before rejected Snapshot");
+    "status before 44.1 kHz Snapshot");
   expect(priorStatus.control_generation).toBe(reopened.generation);
-  const importedRejected = success(await hostRequest(page, "asset.import", {
+  const imported44100 = success(await hostRequest(page, "asset.import", {
     command_id: crypto.randomUUID(),
     expected_revision: COMMITTED_PROJECT_REVISION,
-    asset_id: identity.rejectedAssetId,
+    asset_id: identity.asset44100Id,
     media_type: "audio/wav",
     sidecar: {
-      sidecar_bytes: rejectedFixtureBytes.byteLength,
-      sidecar_sha256: createHash("sha256").update(rejectedFixtureBytes).digest("hex"),
+      sidecar_bytes: fixture44100Bytes.byteLength,
+      sidecar_sha256: createHash("sha256").update(fixture44100Bytes).digest("hex"),
     },
-  }, { sidecar: rejectedFixtureBytes }), "rejected fixture import");
-  expect(importedRejected.project_revision).toBe(COMMITTED_PROJECT_REVISION + 1);
+  }, { sidecar: fixture44100Bytes }), "44.1 kHz fixture import");
+  expect(imported44100.project_revision).toBe(COMMITTED_PROJECT_REVISION + 1);
   expect(success(await hostRequest(page, "pad.assign", {
     command_id: crypto.randomUUID(),
     expected_revision: COMMITTED_PROJECT_REVISION + 1,
     slot: { bank: 0, pad: 0 },
-    asset_id: identity.rejectedAssetId,
-  }), "assign rejected fixture").project_revision).toBe(
+    asset_id: identity.asset44100Id,
+  }), "assign 44.1 kHz fixture").project_revision).toBe(
     COMMITTED_PROJECT_REVISION + 2,
   );
-  const rejectionMarker = await observationMarker(page);
-  const rejectedSnapshot = await hostRequest(page, "snapshot.reload", {
+  const accepted44100Marker = await observationMarker(page);
+  const accepted44100Snapshot = success(await hostRequest(page, "snapshot.reload", {
     pattern_id: identity.committedPatternId,
-  });
-  expect(rejectedSnapshot.ok).toBe(false);
-  expect(rejectedSnapshot.error.code).toBe("UNSUPPORTED_AUDIO");
-  const retainedStatus = success(await hostRequest(page, "host.status", {}),
-    "status after rejected Snapshot");
+  }), "publish 44.1 kHz Snapshot");
+  expect(accepted44100Snapshot.runtime_ready).toBe(true);
+  expect(accepted44100Snapshot.generation).toBeGreaterThan(
+    priorStatus.control_generation,
+  );
+  const accepted44100Status = success(await hostRequest(page, "host.status", {}),
+    "status after accepted 44.1 kHz Snapshot");
   expect(await page.evaluate((start) =>
     window.__lmdjTask11.notifications.slice(start)
       .filter(({ event }) => event === "snapshot.rejected"),
-  rejectionMarker.notifications)).toEqual([]);
-  expect(retainedStatus.control_generation).toBe(priorStatus.control_generation);
-  expect(retainedStatus.acknowledged_generation).toBe(
-    priorStatus.acknowledged_generation,
+  accepted44100Marker.notifications)).toEqual([]);
+  expect(accepted44100Status.control_generation).toBe(
+    accepted44100Snapshot.generation,
+  );
+  expect(accepted44100Status.acknowledged_generation).toBe(
+    accepted44100Snapshot.generation,
+  );
+  expect(success(await hostRequest(page, "project.inspect", {}),
+    "project.inspect after 44.1 kHz publication").project_revision).toBe(
+    COMMITTED_PROJECT_REVISION + 2,
   );
   expect(success(await hostRequest(page, "pad.assign", {
     command_id: crypto.randomUUID(),
     expected_revision: COMMITTED_PROJECT_REVISION + 2,
     slot: { bank: 0, pad: 0 },
     asset_id: identity.assetId,
-  }), "restore accepted fixture").project_revision).toBe(
+  }), "restore original 48 kHz fixture").project_revision).toBe(
     COMMITTED_PROJECT_REVISION + 3,
   );
   const republished = success(await hostRequest(page, "snapshot.reload", {
     pattern_id: identity.committedPatternId,
-  }), "republish after rejected Snapshot");
-  expect(republished.generation).toBeGreaterThan(priorStatus.control_generation);
+  }), "republish after restoring 48 kHz Snapshot");
+  expect(republished.generation).toBeGreaterThan(accepted44100Snapshot.generation);
 
   await page.locator("#audio-suspend").click();
   await expect(page.locator("#host-state")).toHaveText("audio-suspended");

@@ -348,3 +348,149 @@ test("processorerror seals an active Take and the failed session never resumes",
     expect.objectContaining({take_id: identity.takeId}),
   );
 });
+
+
+test("Voice-state overflow terminalizes the real Worklet at production capacity", async ({page}) => {
+  test.setTimeout(120_000);
+  await waitForFormalHost(page);
+  expect((await activateFromClick(page)).ok).toBe(true);
+  const initial = await page.evaluate(async () =>
+    window.lmdjWebRuntimeHostTest.runSharedEngineProof());
+  expect(initial.outcome).toMatchObject({outcome: "voice_started"});
+
+  const result = await page.evaluate(async () => {
+    const delay = (milliseconds) =>
+      new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+
+    const metric = (name) => window.Module.ccall(
+      `lmdj_web_audio_test_voice_state_${name}`, "number", [], []);
+    const capacity = metric("capacity");
+    const idleDeadline = performance.now() + 3_000;
+    while (metric("active_voices") !== 0 && performance.now() < idleDeadline) {
+      await delay(2);
+    }
+    if (metric("active_voices") !== 0) {
+      throw new Error("initial proof Voice did not complete");
+    }
+
+    let published = metric("published");
+    const baseline = published;
+    let batch = 0;
+    while (published < capacity) {
+      const remaining = capacity - published;
+      if (remaining % 2 !== 0) {
+        throw new Error(`odd Voice-state capacity remainder: ${remaining}`);
+      }
+      const voices = Math.min(128, remaining / 2);
+      const accepted = window.Module.ccall(
+        "lmdj_web_audio_test_enqueue_voice_state_batch",
+        "number",
+        ["number", "number"],
+        [batch, voices],
+      );
+      if (accepted !== voices + 2) {
+        throw new Error(`Voice-state batch rejected: ${accepted}`);
+      }
+      const target = published + voices * 2;
+      const batchDeadline = performance.now() + 3_000;
+      while (metric("published") !== target &&
+             performance.now() < batchDeadline) {
+        await delay(2);
+      }
+      published = metric("published");
+      if (published !== target || metric("state") !== 0) {
+        throw new Error(
+          `Voice-state batch did not settle: ${published}/${target}`,
+        );
+      }
+      ++batch;
+    }
+
+    const beforeOverflow = {
+      capacity,
+      baseline,
+      published: metric("published"),
+      state: metric("state"),
+      drops: metric("drops"),
+      outcomeDrops: metric("outcome_drops"),
+    };
+    const overflowAccepted = window.Module.ccall(
+      "lmdj_web_audio_test_enqueue_voice_state_batch",
+      "number",
+      ["number", "number"],
+      [batch, 1],
+    );
+    const overflowDeadline = performance.now() + 3_000;
+    while ((metric("state") !== 1 ||
+            window.Module._lmdj_web_audio_fatal() !== 11 ||
+            metric("process_return") !== 0 ||
+            window.Module._lmdj_web_audio_test_gate_closed() !== 1 ||
+            window.Module._lmdj_web_audio_test_in_flight() !== 0) &&
+           performance.now() < overflowDeadline) {
+      await delay(2);
+    }
+    const afterOverflow = {
+      published: metric("published"),
+      state: metric("state"),
+      drops: metric("drops"),
+      outcomeDrops: metric("outcome_drops"),
+      processReturn: metric("process_return"),
+      fatal: window.Module._lmdj_web_audio_fatal(),
+      gateClosed:
+        window.Module._lmdj_web_audio_test_gate_closed() === 1,
+      callbackInFlight:
+        window.Module._lmdj_web_audio_test_in_flight() === 1,
+      renderCallsAtFatal:
+        window.Module._lmdj_web_audio_test_render_calls(),
+    };
+    await delay(20);
+    afterOverflow.renderCallsAfterFatal =
+      window.Module._lmdj_web_audio_test_render_calls();
+    return {
+      beforeOverflow,
+      overflowAccepted,
+      afterOverflow,
+    };
+  });
+
+  expect(result.beforeOverflow.baseline).toBe(2);
+  expect(result.beforeOverflow.published).toBe(
+    result.beforeOverflow.capacity,
+  );
+  expect(result.beforeOverflow).toMatchObject({
+    state: 0,
+    drops: 0,
+    outcomeDrops: 0,
+  });
+  expect(result.overflowAccepted).toBe(3);
+  expect(result.afterOverflow).toEqual({
+    published: result.beforeOverflow.capacity,
+    state: 1,
+    drops: 1,
+    outcomeDrops: 0,
+    processReturn: 0,
+    fatal: 11,
+    gateClosed: true,
+    callbackInFlight: false,
+    renderCallsAtFatal: expect.any(Number),
+    renderCallsAfterFatal: expect.any(Number),
+  });
+  expect(result.afterOverflow.renderCallsAfterFatal).toBe(
+    result.afterOverflow.renderCallsAtFatal,
+  );
+
+  // Later Host layers own automatic propagation. This existing conformance
+  // seam is used only to commit bounded Control teardown after the real audio
+  // fatal above has already been proven.
+  const cleanup = await page.evaluate(async () => {
+    window.lmdjWebRuntimeHostTest.dispatchProcessorError();
+    return window.lmdjWebRuntimeHostTest.waitForFatal();
+  });
+  expect(cleanup).toMatchObject({
+    fatal: "processor_error",
+    callbackGate: "closed",
+    callbackInFlight: 0,
+    controlFailureCommitted: true,
+  });
+  expect(cleanup.renderCallsAfterFatal).toBe(cleanup.renderCallsAtFatal);
+});

@@ -47,7 +47,7 @@ async function activateFromClick(page, sampleRate) {
 }
 
 
-test("shared RealtimeEngine renders a current Bank in the Wasm AudioWorklet", async ({page}) => {
+test("compatibility press renders the published Bank through the Wasm AudioWorklet", async ({page}) => {
   test.setTimeout(120_000);
   const module = await waitForFormalHost(page);
   expect(module.registrationHelpers).toEqual(["registerAudioContext"]);
