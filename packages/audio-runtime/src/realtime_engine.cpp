@@ -68,6 +68,13 @@ bool valid_playback(
          std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
 }
 
+bool is_default_playback_sentinel(
+    const cooker::ResolvedPlayback& playback) noexcept {
+  return playback.start_frame == 0 && playback.end_frame == 0 &&
+         playback.trigger_mode == domain::TriggerMode::one_shot &&
+         playback.linear_gain == 0.0F && !playback.muted;
+}
+
 bool is_looping(domain::TriggerMode mode) noexcept {
   return mode == domain::TriggerMode::loop_gate ||
          mode == domain::TriggerMode::loop_toggle;
@@ -617,10 +624,12 @@ void RealtimeEngine::render(
     }
 
     const auto& sample = current_sample(event.slot);
-    const auto playback =
-        (preview_mask_ & (std::uint64_t{1} << event.slot)) != 0
-            ? previews_[event.slot]
-            : published_playback(event.slot);
+    auto playback = event.playback;
+    if (is_default_playback_sentinel(playback)) {
+      playback = (preview_mask_ & (std::uint64_t{1} << event.slot)) != 0
+                     ? previews_[event.slot]
+                     : published_playback(event.slot);
+    }
     if (!valid_playback(playback, sample.size())) {
       invalid_events_.fetch_add(1, std::memory_order_relaxed);
       continue;
