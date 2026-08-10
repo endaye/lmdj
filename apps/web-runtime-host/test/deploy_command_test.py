@@ -665,6 +665,7 @@ def verify_distribution(dist_root, repo_root):
                         "program": program,
                         "credential_environment": observed,
                         "credential_in_argv": os.environ["EXPECTED_GITHUB_TOKEN"] in raw_args,
+                        "lfs_skip_smudge": os.environ.get("GIT_LFS_SKIP_SMUDGE", ""),
                     }}, sort_keys=True) + "\\n")
                 if observed:
                     raise SystemExit("deployment credential reached tag checkout")
@@ -674,6 +675,11 @@ def verify_distribution(dist_root, repo_root):
             elif args[:2] == ["update-ref", "-d"]:
                 pass
             elif args[:2] == ["fetch", "--no-tags"]:
+                if git_cwd is not None:
+                    record_uncredentialed_checkout("git-fetch-local")
+                    with log.open("a", encoding="utf-8") as output:
+                        output.write("git fetch detached tag\\n")
+                    raise SystemExit(0)
                 if os.environ.get("FAIL_REMOTE_FETCH") == "1":
                     raise SystemExit(1)
                 if os.environ.get("FAKE_PRIVATE_FETCH") == "1":
@@ -729,8 +735,21 @@ def verify_distribution(dist_root, repo_root):
                 Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
                 with log.open("a", encoding="utf-8") as output:
                     output.write("git clone detached\\n")
+            elif args[:1] == ["init"]:
+                record_uncredentialed_checkout("git-init")
+                checkout = Path(args[-1])
+                checkout.mkdir()
+                checkout.joinpath(".git").mkdir()
+                Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
+                with log.open("a", encoding="utf-8") as output:
+                    output.write("git init detached\\n")
             elif args[:2] == ["checkout", "--detach"] and git_cwd is not None:
                 record_uncredentialed_checkout("git-checkout")
+                if (
+                    os.environ.get("REQUIRE_LFS_SKIP_SMUDGE") == "1"
+                    and os.environ.get("GIT_LFS_SKIP_SMUDGE") != "1"
+                ):
+                    raise SystemExit("LFS smudge was not disabled")
                 populate_checkout(git_cwd)
                 with log.open("a", encoding="utf-8") as output:
                     output.write("git checkout detached\\n")
@@ -987,7 +1006,8 @@ def verify_distribution(dist_root, repo_root):
                 f"git remote fetch refs/tags/{TAG}:refs/lmdj-deploy/tags/{TAG}",
                 "git remote fetch refs/heads/main:refs/lmdj-deploy/origin-main",
                 f"git tag verify refs/lmdj-deploy/tags/{TAG}",
-                "git clone detached",
+                "git init detached",
+                "git fetch detached tag",
                 "git checkout detached",
                 f"gh release view {TAG}",
                 f"gh release download {TAG}",
@@ -1032,16 +1052,52 @@ def verify_distribution(dist_root, repo_root):
             "verify", TAG, environment={"REJECT_LINKED_WORKTREE": "1"}
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn("git clone detached", self.command_log())
+        self.assertIn("git init detached", self.command_log())
+        self.assertIn("git fetch detached tag", self.command_log())
         self.assertIn("git checkout detached", self.command_log())
         checkout_details = [
             detail for detail in self.details()
-            if detail.get("program") in {"git-clone", "git-checkout"}
+            if detail.get("program")
+            in {"git-init", "git-fetch-local", "git-checkout"}
         ]
-        self.assertEqual(len(checkout_details), 2)
+        self.assertEqual(len(checkout_details), 3)
         for detail in checkout_details:
             self.assertEqual(detail["credential_environment"], [])
             self.assertFalse(detail["credential_in_argv"])
+        checkout = next(
+            detail
+            for detail in checkout_details
+            if detail["program"] == "git-checkout"
+        )
+        self.assertEqual(checkout["lfs_skip_smudge"], "1")
+
+    def test_tag_checkout_materializes_remote_ref_without_lfs_smudge(self) -> None:
+        completed = self.run_command(
+            "verify",
+            TAG,
+            environment={"REQUIRE_LFS_SKIP_SMUDGE": "1"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("git clone detached", self.command_log())
+        self.assertIn("git init detached", self.command_log())
+        self.assertIn("git fetch detached tag", self.command_log())
+        self.assertIn("git checkout detached", self.command_log())
+        checkout_details = [
+            detail
+            for detail in self.details()
+            if detail.get("program")
+            in {"git-init", "git-fetch-local", "git-checkout"}
+        ]
+        self.assertEqual(len(checkout_details), 3)
+        for detail in checkout_details:
+            self.assertEqual(detail["credential_environment"], [])
+            self.assertFalse(detail["credential_in_argv"])
+        checkout = next(
+            detail
+            for detail in checkout_details
+            if detail["program"] == "git-checkout"
+        )
+        self.assertEqual(checkout["lfs_skip_smudge"], "1")
 
     def test_publish_accepts_additive_official_response_fields(self) -> None:
         self.server.restore_extra = {
