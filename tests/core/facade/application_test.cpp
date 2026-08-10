@@ -24,6 +24,7 @@
 #include <lmdj/facade/application.hpp>
 #include <lmdj/foundation/artifact.hpp>
 #include <lmdj/foundation/json.hpp>
+#include <lmdj/project_io/storage_platform.hpp>
 #include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/providers/local_proof_failure/factory.hpp>
 #include <lmdj/providers/local_proof_success/factory.hpp>
@@ -107,6 +108,139 @@ class TempDirectory {
 
  private:
   std::filesystem::path path_;
+};
+
+enum class SampleCleanupFailureTarget {
+  payload,
+  marker,
+};
+
+class SampleCleanupFailurePlatform final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  explicit SampleCleanupFailurePlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner)
+      : inner_(std::move(inner)) {}
+
+  void arm(SampleCleanupFailureTarget target, std::string token) {
+    target_ = target;
+    token_ = std::move(token);
+    armed_ = true;
+    triggered_ = false;
+  }
+
+  bool triggered() const noexcept { return triggered_; }
+
+  lmdj::foundation::Result<
+      std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner_->read_complete(path);
+  }
+
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->create_immutable(path, bytes);
+  }
+
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->replace_complete(path, bytes);
+  }
+
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t valid_prefix_length,
+      std::span<const std::byte> bytes) override {
+    return inner_->append_durable(path, valid_prefix_length, bytes);
+  }
+
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    const auto suffix = target_ == SampleCleanupFailureTarget::payload
+                            ? ".wav"
+                            : ".json";
+    if (armed_ &&
+        path.parent_path().filename() == "sample-import-staging" &&
+        path.filename() == token_ + suffix) {
+      return fail_once();
+    }
+    return inner_->remove(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    return inner_->list_directories(path);
+  }
+
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    if (armed_ &&
+        path.parent_path().filename() == "sample-import-staging" &&
+        path.filename() == token_) {
+      return fail_once();
+    }
+    return inner_->remove_tree(path);
+  }
+
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& source,
+      const std::filesystem::path& destination) override {
+    return inner_->publish_directory_if_absent(source, destination);
+  }
+
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return inner_->directory_exists(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& root) const override {
+    return inner_->validate_managed_tree(root);
+  }
+
+ private:
+  lmdj::foundation::Result<void> fail_once() {
+    armed_ = false;
+    triggered_ = true;
+    return lmdj::foundation::Result<void>::failure(
+        lmdj::foundation::Error{
+            ErrorCode::io_error,
+            "injected Sample staging cleanup failure",
+        });
+  }
+
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
+  SampleCleanupFailureTarget target_ = SampleCleanupFailureTarget::payload;
+  std::string token_;
+  bool armed_ = false;
+  bool triggered_ = false;
 };
 
 std::string uuid(std::uint32_t suffix) {
@@ -672,7 +806,7 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   LMDJ_CHECK(
       !std::filesystem::exists(
           temp.path() / ".lmdj-host/sample-import-staging" /
-          (malformed_token + ".wav")));
+          malformed_token));
   LMDJ_CHECK(
       !application
            .append_sample_import(
@@ -713,11 +847,7 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   LMDJ_CHECK(
       !std::filesystem::exists(
           temp.path() / ".lmdj-host/sample-import-staging" /
-          (short_final_token + ".wav")));
-  LMDJ_CHECK(
-      !std::filesystem::exists(
-          temp.path() / ".lmdj-host/sample-import-staging" /
-          (short_final_token + ".json")));
+          short_final_token));
 
   const auto token = uuid(589);
   LMDJ_CHECK(
@@ -904,11 +1034,18 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
       "tests/fixtures/audio/mono-44100-over-web-frame-limit.wav");
   const auto staging_root =
       temp.path() / ".lmdj-host/sample-import-staging";
+  const auto staging_directory = [&](std::string_view token) {
+    return staging_root / std::string{token};
+  };
   const auto marker_path = [&](std::string_view token) {
-    return staging_root / (std::string{token} + ".json");
+    return staging_directory(token) / "state.json";
+  };
+  const auto payload_path = [&](std::string_view token) {
+    return staging_directory(token) / "payload.wav";
   };
   const auto write_marker = [&](std::string_view token,
                                 std::uint64_t created_unix_seconds) {
+    std::filesystem::create_directories(staging_directory(token));
     write_bytes(
         marker_path(token),
         nlohmann::json{
@@ -943,10 +1080,9 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
             false)
             .has_value());
     LMDJ_CHECK(std::filesystem::is_regular_file(
-        staging_root / (aborted_token + ".wav")));
+        payload_path(aborted_token)));
     LMDJ_CHECK(application.abort_sample_import(aborted_token).has_value());
-    LMDJ_CHECK(!std::filesystem::exists(
-        staging_root / (aborted_token + ".wav")));
+    LMDJ_CHECK(!std::filesystem::exists(staging_directory(aborted_token)));
     LMDJ_CHECK(
         !application.begin_sample_import(
              {aborted_token,
@@ -979,28 +1115,24 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
             .has_value());
   }
   LMDJ_CHECK(std::filesystem::is_regular_file(
-      staging_root / (abandoned_token + ".wav")));
+      payload_path(abandoned_token)));
   Application fresh_scavenger(sample_config(temp.path()));
   LMDJ_CHECK(std::filesystem::is_regular_file(
-      staging_root / (abandoned_token + ".wav")));
+      payload_path(abandoned_token)));
   write_marker(abandoned_token, 0);
   Application application(sample_config(temp.path()));
-  LMDJ_CHECK(!std::filesystem::exists(
-      staging_root / (abandoned_token + ".wav")));
-  LMDJ_CHECK(!std::filesystem::exists(marker_path(abandoned_token)));
+  LMDJ_CHECK(!std::filesystem::exists(staging_directory(abandoned_token)));
 
   const auto count_candidate = uuid(609);
-  write_bytes(staging_root / (count_candidate + ".wav"), "orphan");
   write_marker(count_candidate, 0);
+  write_bytes(payload_path(count_candidate), "orphan");
   for (std::size_t index = 0; index < 64; ++index) {
     auto name = std::string{"!"} + std::to_string(index);
     name.insert(1, 3 - std::min<std::size_t>(3, name.size() - 1), '0');
-    write_bytes(staging_root / name, "not-generated");
+    std::filesystem::create_directories(staging_root / name);
   }
   Application count_scavenger(sample_config(temp.path()));
-  LMDJ_CHECK(!std::filesystem::exists(
-      staging_root / (count_candidate + ".wav")));
-  LMDJ_CHECK(!std::filesystem::exists(marker_path(count_candidate)));
+  LMDJ_CHECK(!std::filesystem::exists(staging_directory(count_candidate)));
 
   const auto incomplete_token = uuid(606);
   LMDJ_CHECK(
@@ -1023,8 +1155,7 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
       application.commit_sample_import(incomplete_token);
   LMDJ_CHECK(!incomplete.has_value());
   LMDJ_CHECK(incomplete.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(!std::filesystem::exists(
-      staging_root / (incomplete_token + ".wav")));
+  LMDJ_CHECK(!std::filesystem::exists(staging_directory(incomplete_token)));
   LMDJ_CHECK(
       application.inspect_sample({project, {0, 0}})
           .value()
@@ -1084,8 +1215,120 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
       application.inspect_sample({project, {0, 0}})
           .value()
           .project_revision == revision_before_rejection);
-  LMDJ_CHECK(!std::filesystem::exists(
-      staging_root / (uuid(603) + ".wav")));
+  LMDJ_CHECK(!std::filesystem::exists(staging_directory(uuid(603))));
+}
+
+struct SampleCleanupFailureObservation {
+  bool cleanup_failed;
+  bool complete_candidate_remained;
+  bool unsafe_reuse_rejected;
+  bool old_candidate_scavenged;
+};
+
+SampleCleanupFailureObservation observe_sample_cleanup_failure(
+    SampleCleanupFailureTarget target,
+    std::uint32_t suffix) {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-cleanup-failure.lmdj";
+  const auto token = uuid(suffix);
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  const auto staging_root =
+      temp.path() / ".lmdj-host/sample-import-staging";
+  const auto staging_directory = staging_root / token;
+  const auto marker = staging_directory / "state.json";
+  const auto payload = staging_directory / "payload.wav";
+  const auto legacy_marker = staging_root / (token + ".json");
+  const auto legacy_payload = staging_root / (token + ".wav");
+  auto platform = std::make_shared<SampleCleanupFailurePlatform>(
+      lmdj::project_io::make_native_project_storage_platform(
+          temp.path() / "leases"));
+  auto configuration = sample_config(temp.path());
+  configuration.storage_platform = platform;
+  const SampleImportBeginRequest begin{
+      token,
+      project,
+      {CommandId{uuid(suffix + 1U)}, 0},
+      {0, 0},
+      AssetId{uuid(suffix + 2U)},
+      source.size(),
+  };
+
+  bool cleanup_failed = false;
+  {
+    Application application(configuration);
+    check_success(application.command(create_request(project)), 0);
+    LMDJ_CHECK(application.begin_sample_import(begin).has_value());
+    LMDJ_CHECK(
+        application.append_sample_import(
+            token,
+            0,
+            std::span<const std::byte>{source}.first(8),
+            false)
+            .has_value());
+    platform->arm(target, token);
+    const auto aborted = application.abort_sample_import(token);
+    cleanup_failed = !aborted.has_value() &&
+                     aborted.error().code == ErrorCode::io_error &&
+                     platform->triggered();
+    LMDJ_CHECK(
+        !application
+             .append_sample_import(
+                 token,
+                 8,
+                 std::span<const std::byte>{source}.subspan(8),
+                 true)
+             .has_value());
+  }
+
+  const auto complete_candidate_remained =
+      std::filesystem::is_regular_file(marker) &&
+      std::filesystem::is_regular_file(payload);
+  bool unsafe_reuse_rejected = false;
+  {
+    Application restarted(configuration);
+    unsafe_reuse_rejected =
+        !restarted.begin_sample_import(begin).has_value();
+  }
+
+  if (std::filesystem::is_regular_file(marker)) {
+    auto encoded = nlohmann::json::parse(read_bytes(marker));
+    encoded["created_unix_seconds"] = 0;
+    write_bytes(marker, encoded.dump());
+  } else if (std::filesystem::is_regular_file(legacy_marker)) {
+    auto encoded = nlohmann::json::parse(read_bytes(legacy_marker));
+    encoded["created_unix_seconds"] = 0;
+    write_bytes(legacy_marker, encoded.dump());
+  }
+  Application scavenger(configuration);
+  const auto old_candidate_scavenged =
+      !std::filesystem::exists(staging_directory) &&
+      !std::filesystem::exists(legacy_marker) &&
+      !std::filesystem::exists(legacy_payload);
+  return {
+      cleanup_failed,
+      complete_candidate_remained,
+      unsafe_reuse_rejected,
+      old_candidate_scavenged,
+  };
+}
+
+void test_sample_cleanup_half_failures_leave_one_retryable_unit() {
+  const auto payload = observe_sample_cleanup_failure(
+      SampleCleanupFailureTarget::payload, 680);
+  const auto marker = observe_sample_cleanup_failure(
+      SampleCleanupFailureTarget::marker, 690);
+  const auto valid = [](const SampleCleanupFailureObservation& observed) {
+    return observed.cleanup_failed &&
+           observed.complete_candidate_remained &&
+           observed.unsafe_reuse_rejected &&
+           observed.old_candidate_scavenged;
+  };
+  if (!valid(payload) || !valid(marker)) {
+    throw std::runtime_error(
+        "Sample cleanup retryability failed: payload=" +
+        std::to_string(valid(payload)) +
+        " marker=" + std::to_string(valid(marker)));
+  }
 }
 
 void test_sample_source_frame_limit_is_not_reapplied_after_resampling() {
@@ -1212,6 +1455,139 @@ void test_sample_delayed_replays_report_original_committed_revision() {
   const auto replayed_reset = application.reset_sample_pad(reset);
   LMDJ_CHECK(replayed_reset.has_value());
   LMDJ_CHECK(replayed_reset.value().committed_revision == 5);
+}
+
+void test_sample_json_delayed_replays_report_current_project_revision() {
+  TempDirectory temp;
+  const auto project = temp.path() / "sample-json-delayed-replay.lmdj";
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  Application application(sample_config(temp.path()));
+  LMDJ_CHECK(
+      application
+          .create_initial_project(
+              {project,
+               ProjectId{uuid(720)},
+               120,
+               Pattern{PatternId{uuid(721)}, 1, {}}})
+          .has_value());
+
+  const auto import_once = [&](std::string token) {
+    check_success(
+        application.command(
+            {
+                {"operation", "sample.import.begin"},
+                {"import_token", token},
+                {"project_path", project.generic_string()},
+                {"command_id", uuid(722)},
+                {"expected_revision", 0},
+                {"slot", slot(0, 0)},
+                {"asset_id", uuid(723)},
+                {"byte_length", source.size()},
+            }),
+        nullptr);
+    LMDJ_CHECK(
+        application.append_sample_import(token, 0, source, true).has_value());
+    return application.command(
+        {
+            {"operation", "sample.import.commit"},
+            {"import_token", token},
+        });
+  };
+  const auto imported = import_once(uuid(724));
+  check_success(imported, 1);
+  LMDJ_CHECK(imported.at("result").at("committed_revision") == 1);
+
+  const auto advance_import = application.command(
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(725)},
+          {"expected_revision", 1},
+          {"slot", slot(0, 0)},
+          {"playback",
+           {{"trim_start_frame", 1},
+            {"trim_end_frame", 7},
+            {"trigger_mode", "gate"},
+            {"gain_millidb", -300},
+            {"muted", false}}},
+      });
+  check_success(advance_import, 2);
+  const auto replayed_import = import_once(uuid(726));
+  LMDJ_CHECK(replayed_import.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_import.at("result").at("committed_revision") == 1);
+
+  const nlohmann::json update{
+      {"operation", "sample.update_pad"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(727)},
+      {"expected_revision", 2},
+      {"slot", slot(0, 0)},
+      {"playback",
+       {{"trim_start_frame", 2},
+        {"trim_end_frame", 6},
+        {"trigger_mode", "loop_gate"},
+        {"gain_millidb", -600},
+        {"muted", true}}},
+  };
+  check_success(application.command(update), 3);
+  check_success(
+      application.command(
+          {
+              {"operation", "sample.reset_pad"},
+              {"project_path", project.generic_string()},
+              {"command_id", uuid(728)},
+              {"expected_revision", 3},
+              {"slot", slot(0, 0)},
+          }),
+      4);
+  const auto replayed_update = application.command(update);
+  LMDJ_CHECK(replayed_update.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_update.at("result").at("committed_revision") == 3);
+
+  const nlohmann::json reset{
+      {"operation", "sample.reset_pad"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(729)},
+      {"expected_revision", 4},
+      {"slot", slot(0, 0)},
+  };
+  check_success(application.command(reset), 5);
+  check_success(
+      application.command(
+          {
+              {"operation", "sample.update_pad"},
+              {"project_path", project.generic_string()},
+              {"command_id", uuid(730)},
+              {"expected_revision", 5},
+              {"slot", slot(0, 0)},
+              {"playback",
+               {{"trim_start_frame", 1},
+                {"trim_end_frame", 7},
+                {"trigger_mode", "loop_toggle"},
+                {"gain_millidb", 0},
+                {"muted", false}}},
+          }),
+      6);
+  const auto replayed_reset = application.command(reset);
+  LMDJ_CHECK(replayed_reset.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_reset.at("result").at("committed_revision") == 5);
+
+  const auto import_revision =
+      replayed_import.at("project_revision").get<std::uint64_t>();
+  const auto update_revision =
+      replayed_update.at("project_revision").get<std::uint64_t>();
+  const auto reset_revision =
+      replayed_reset.at("project_revision").get<std::uint64_t>();
+  if (import_revision != 2 || update_revision != 4 || reset_revision != 6) {
+    throw std::runtime_error(
+        "Sample JSON replay revisions are stale: import=" +
+        std::to_string(import_revision) +
+        " update=" + std::to_string(update_revision) +
+        " reset=" + std::to_string(reset_revision));
+  }
 }
 
 void test_sample_artifact_busy_errors_remain_storage_errors() {
@@ -2900,8 +3276,10 @@ int main() {
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
     test_sample_import_abort_scavenge_replace_and_manifest_admission();
+    test_sample_cleanup_half_failures_leave_one_retryable_unit();
     test_sample_source_frame_limit_is_not_reapplied_after_resampling();
     test_sample_delayed_replays_report_original_committed_revision();
+    test_sample_json_delayed_replays_report_current_project_revision();
     test_sample_artifact_busy_errors_remain_storage_errors();
     test_sample_waveform_json_uses_one_authoritative_projection();
     test_sample_waveform_cache_uses_cooker_full_level_bucket_width();

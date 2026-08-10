@@ -7,6 +7,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -800,6 +801,54 @@ void test_sample_operations_have_exact_shapes_and_private_errors() {
       encoded_error.find(missing_project.generic_string()) ==
       std::string::npos);
   LMDJ_CHECK(encoded_error.size() < 512);
+
+  const auto replayed_update = command(
+      engine,
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(705)},
+          {"expected_revision", 2},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"playback", sample_playback(1, 7, "loop_toggle", -1'200, true)},
+      });
+  LMDJ_CHECK(replayed_update.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_update.at("result").at("committed_revision") == 3);
+  const auto advanced = command(
+      engine,
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(712)},
+          {"expected_revision", 4},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"playback", sample_playback(1, 7, "loop_gate", -600, false)},
+      });
+  LMDJ_CHECK(advanced.at("ok") == true);
+  LMDJ_CHECK(advanced.at("project_revision") == 5);
+  const auto replayed_reset = command(
+      engine,
+      {
+          {"operation", "sample.reset_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(706)},
+          {"expected_revision", 3},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+      });
+  LMDJ_CHECK(replayed_reset.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_reset.at("result").at("committed_revision") == 4);
+  const auto update_revision =
+      replayed_update.at("project_revision").get<std::uint64_t>();
+  const auto reset_revision =
+      replayed_reset.at("project_revision").get<std::uint64_t>();
+  if (update_revision != 4 || reset_revision != 5) {
+    throw std::runtime_error(
+        "Sample C ABI replay revisions are stale: update=" +
+        std::to_string(update_revision) +
+        " reset=" + std::to_string(reset_revision));
+  }
 
   lmdj_engine_free(engine);
 }

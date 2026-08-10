@@ -596,6 +596,52 @@ def sample_facade_parity(
         cli, workspace, "query", inspect_request
     )
     assert cli_reset_inspect["result"]["playback"] == playback()
+
+    cli_replayed_update = cli_request(
+        cli,
+        workspace,
+        "command",
+        {"operation": "sample.update_pad", **update_arguments},
+    )
+    check_success(cli_replayed_update, 4)
+    assert cli_replayed_update["result"]["committed_revision"] == 3
+    mcp_replayed_update = mcp.tool(
+        "lmdj.sample.update_pad", update_arguments
+    )
+    assert mcp_replayed_update == cli_replayed_update
+
+    advanced = cli_request(
+        cli,
+        workspace,
+        "command",
+        {
+            "operation": "sample.update_pad",
+            "project_path": str(project),
+            "command_id": uuid(707),
+            "expected_revision": 4,
+            "slot": slot(0, 0),
+            "playback": playback(1, 7, "loop_toggle", -600, False),
+        },
+    )
+    check_success(advanced, 5)
+    reset_arguments = {
+        "project_path": str(project),
+        "command_id": uuid(706),
+        "expected_revision": 3,
+        "slot": slot(0, 0),
+    }
+    mcp_replayed_reset = mcp.tool(
+        "lmdj.sample.reset_pad", reset_arguments
+    )
+    check_success(mcp_replayed_reset, 5)
+    assert mcp_replayed_reset["result"]["committed_revision"] == 4
+    cli_replayed_reset = cli_request(
+        cli,
+        workspace,
+        "command",
+        {"operation": "sample.reset_pad", **reset_arguments},
+    )
+    assert cli_replayed_reset == mcp_replayed_reset
     mcp.close()
 
 

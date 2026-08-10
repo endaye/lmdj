@@ -20,6 +20,10 @@
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
 
+namespace lmdj::project_io {
+class ProjectStoragePlatform;
+}
+
 namespace lmdj::facade {
 
 struct ApplicationConfig {
@@ -29,6 +33,8 @@ struct ApplicationConfig {
   provider::TimestampSource timestamp_source;
   std::optional<audio::RuntimePreparationLimits> runtime_preparation_limits =
       std::nullopt;
+  std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform =
+      nullptr;
 };
 
 struct RuntimeSnapshotRequest {

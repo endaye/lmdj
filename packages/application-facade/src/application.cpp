@@ -1483,27 +1483,20 @@ bool valid_trigger_mode(domain::TriggerMode mode) {
 
 foundation::Result<void> remove_sample_staging(
     const std::shared_ptr<project_io::ProjectStoragePlatform>& platform,
-    const std::filesystem::path& payload,
-    const std::filesystem::path& marker) {
-  const auto payload_removed = platform->remove(payload);
-  const auto marker_removed = platform->remove(marker);
-  if (!payload_removed.has_value()) {
-    return payload_removed;
-  }
-  return marker_removed;
+    const std::filesystem::path& directory) {
+  return platform->remove_tree(directory);
 }
 
 struct SampleStagingCleanup {
   ~SampleStagingCleanup() {
     lease.reset();
-    if (platform != nullptr && !path.empty()) {
-      (void)remove_sample_staging(platform, path, marker_path);
+    if (platform != nullptr && !directory.empty()) {
+      (void)remove_sample_staging(platform, directory);
     }
   }
 
   std::shared_ptr<project_io::ProjectStoragePlatform> platform;
-  std::filesystem::path path;
-  std::filesystem::path marker_path;
+  std::filesystem::path directory;
   std::unique_ptr<project_io::ProjectWriterLease> lease;
 };
 
@@ -1551,8 +1544,8 @@ struct RuntimeProjectWriterLease::Impl {
 struct Application::Impl {
   struct SampleImportState {
     SampleImportBeginRequest request;
-    std::filesystem::path path;
-    std::filesystem::path marker_path;
+    std::filesystem::path directory;
+    std::filesystem::path payload_path;
     std::uint64_t received_bytes;
     bool finalized;
     std::unique_ptr<project_io::ProjectWriterLease> lease;
@@ -1565,7 +1558,9 @@ struct Application::Impl {
                 ? std::move(config.providers)
                 : std::make_shared<provider::Registry>()),
         storage_platform(
-            project_io::make_default_project_storage_platform()),
+            config.storage_platform
+                ? std::move(config.storage_platform)
+                : project_io::make_default_project_storage_platform()),
         sample_limits(config.runtime_preparation_limits),
         projects(storage_platform),
         journals(storage_platform),
@@ -1609,7 +1604,7 @@ struct Application::Impl {
       return foundation::Result<void>::failure(sample_storage_error(
           validated.error(), "Sample staging tree is invalid"));
     }
-    const auto names = storage_platform->list_names(root);
+    const auto names = storage_platform->list_directories(root);
     if (!names.has_value()) {
       return foundation::Result<void>::failure(sample_storage_error(
           names.error(), "Sample staging root could not be listed"));
@@ -1620,10 +1615,8 @@ struct Application::Impl {
     std::size_t scanned = 0;
     for (const auto& name : names.value()) {
       const std::filesystem::path relative{name};
-      const auto token = relative.stem().string();
-      if (relative.filename() != relative || relative.extension() != ".wav" ||
-          relative.filename().string() != token + ".wav" ||
-          !domain::is_valid_uuid(token)) {
+      const auto token = relative.string();
+      if (relative.filename() != relative || !domain::is_valid_uuid(token)) {
         continue;
       }
       if (scanned++ >= kMaximumSampleScavengeFiles) {
@@ -1632,8 +1625,8 @@ struct Application::Impl {
       if (sample_imports.contains(token)) {
         continue;
       }
-      const auto path = root / relative;
-      const auto marker_path = root / (token + ".json");
+      const auto directory = root / relative;
+      const auto marker_path = directory / "state.json";
       const auto marker_length = storage_platform->byte_length(marker_path);
       if (!marker_length.has_value() ||
           marker_length.value() > kMaximumSampleStagingMarkerBytes) {
@@ -1665,7 +1658,7 @@ struct Application::Impl {
               kMinimumSampleStagingAgeSeconds) {
         continue;
       }
-      auto lease = storage_platform->acquire_writer(path);
+      auto lease = storage_platform->acquire_writer(directory);
       if (!lease.has_value()) {
         if (lease.error().details.is_object() &&
             lease.error().details.value(
@@ -1677,8 +1670,7 @@ struct Application::Impl {
             lease.error(), "Sample staging cleanup could not acquire writer"));
       }
       lease.value().reset();
-      const auto removed =
-          remove_sample_staging(storage_platform, path, marker_path);
+      const auto removed = remove_sample_staging(storage_platform, directory);
       if (!removed.has_value()) {
         return foundation::Result<void>::failure(sample_storage_error(
             removed.error(), "Sample staging cleanup failed"));
@@ -2218,25 +2210,33 @@ struct Application::Impl {
           sample_storage_error(
               validated.error(), "Sample staging tree is invalid"));
     }
-    const auto path = root / (request.import_token + ".wav");
-    const auto marker_path = root / (request.import_token + ".json");
-    auto lease = storage_platform->acquire_writer(path);
+    const auto directory = root / request.import_token;
+    const auto marker_path = directory / "state.json";
+    const auto payload_path = directory / "payload.wav";
+    auto lease = storage_platform->acquire_writer(directory);
     if (!lease.has_value()) {
       return foundation::Result<SampleImportSession>::failure(
           sample_storage_error(
               lease.error(), "Sample staging writer could not be acquired"));
     }
-    const auto present = storage_platform->exists(path);
-    const auto marker_present = storage_platform->exists(marker_path);
-    if (!present.has_value() || !marker_present.has_value()) {
+    const auto present = storage_platform->exists(directory);
+    if (!present.has_value()) {
       return foundation::Result<SampleImportSession>::failure(
           sample_storage_error(
-              present.has_value() ? marker_present.error() : present.error(),
+              present.error(),
               "Sample staging could not be inspected"));
     }
-    if (present.value() || marker_present.value()) {
+    if (present.value()) {
       return foundation::Result<SampleImportSession>::failure(
           invalid_sample_request("Sample import token was already used"));
+    }
+    const auto directory_created =
+        storage_platform->ensure_directory(directory);
+    if (!directory_created.has_value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          sample_storage_error(
+              directory_created.error(),
+              "Sample staging could not be created"));
     }
     const auto created_at = std::chrono::duration_cast<std::chrono::seconds>(
                                 std::chrono::system_clock::now()
@@ -2253,11 +2253,11 @@ struct Application::Impl {
         std::as_bytes(std::span<const char>{
             marker_text.data(), marker_text.size()}));
     if (created.has_value()) {
-      created = storage_platform->create_immutable(path, {});
+      created = storage_platform->create_immutable(payload_path, {});
     }
     if (!created.has_value()) {
       lease.value().reset();
-      (void)remove_sample_staging(storage_platform, path, marker_path);
+      (void)remove_sample_staging(storage_platform, directory);
       return foundation::Result<SampleImportSession>::failure(
           sample_storage_error(
               created.error(), "Sample staging could not be created"));
@@ -2274,8 +2274,8 @@ struct Application::Impl {
         request.import_token,
         SampleImportState{
             request,
-            path,
-            marker_path,
+            directory,
+            payload_path,
             0,
             false,
             std::move(lease.value()),
@@ -2308,7 +2308,7 @@ struct Application::Impl {
                       found->second.request.byte_length)) {
       found->second.lease.reset();
       const auto removed = remove_sample_staging(
-          storage_platform, found->second.path, found->second.marker_path);
+          storage_platform, found->second.directory);
       sample_imports.erase(found);
       if (!removed.has_value()) {
         return foundation::Result<void>::failure(sample_storage_error(
@@ -2318,11 +2318,10 @@ struct Application::Impl {
           invalid_sample_request("Sample import chunk request is invalid"));
     }
     const auto appended = storage_platform->append_durable(
-        found->second.path, offset, bytes);
+        found->second.payload_path, offset, bytes);
     if (!appended.has_value()) {
       found->second.lease.reset();
-      (void)remove_sample_staging(
-          storage_platform, found->second.path, found->second.marker_path);
+      (void)remove_sample_staging(storage_platform, found->second.directory);
       sample_imports.erase(found);
       return foundation::Result<void>::failure(sample_storage_error(
           appended.error(), "Sample staging append failed"));
@@ -2333,7 +2332,8 @@ struct Application::Impl {
   }
 
   foundation::Result<SampleMutationResult> commit_sample_import(
-      std::string_view token) {
+      std::string_view token,
+      std::uint64_t* project_revision = nullptr) {
     if (!domain::is_valid_uuid(token)) {
       return foundation::Result<SampleMutationResult>::failure(
           invalid_sample_request("Sample import commit token is invalid"));
@@ -2352,15 +2352,14 @@ struct Application::Impl {
     auto state = std::move(*owned);
     SampleStagingCleanup cleanup{
         storage_platform,
-        state.path,
-        state.marker_path,
+        state.directory,
         std::move(state.lease),
     };
     if (!state.finalized || state.received_bytes != state.request.byte_length) {
       return foundation::Result<SampleMutationResult>::failure(
           invalid_sample_request("Sample import is incomplete"));
     }
-    const auto bytes = storage_platform->read_complete(state.path);
+    const auto bytes = storage_platform->read_complete(state.payload_path);
     if (!bytes.has_value() || bytes.value().size() != state.request.byte_length) {
       return foundation::Result<SampleMutationResult>::failure(
           sample_storage_error(
@@ -2401,6 +2400,9 @@ struct Application::Impl {
       return foundation::Result<SampleMutationResult>::failure(
           committed.error());
     }
+    if (project_revision != nullptr) {
+      *project_revision = committed.value().state.revision;
+    }
     return foundation::Result<SampleMutationResult>::success(
         SampleMutationResult{
             committed.value().event.at("revision").get<std::uint64_t>(),
@@ -2420,8 +2422,8 @@ struct Application::Impl {
           invalid_sample_request("Sample import session does not exist"));
     }
     found->second.lease.reset();
-    const auto removed = remove_sample_staging(
-        storage_platform, found->second.path, found->second.marker_path);
+    const auto removed =
+        remove_sample_staging(storage_platform, found->second.directory);
     sample_imports.erase(found);
     if (!removed.has_value()) {
       return foundation::Result<void>::failure(sample_storage_error(
@@ -2431,7 +2433,8 @@ struct Application::Impl {
   }
 
   foundation::Result<SampleMutationResult> update_sample_pad(
-      const SampleUpdateRequest& request) {
+      const SampleUpdateRequest& request,
+      std::uint64_t* project_revision = nullptr) {
     if (!valid_host_project_path(request.project_path) ||
         !domain::is_valid_uuid(request.meta.command_id.value()) ||
         !domain::is_valid_slot(request.slot)) {
@@ -2490,6 +2493,9 @@ struct Application::Impl {
     if (!updated.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(updated.error());
     }
+    if (project_revision != nullptr) {
+      *project_revision = updated.value().state.revision;
+    }
     const bool runtime_required = updated.value()
                                       .state.banks.at(request.slot.bank)
                                       .at(request.slot.pad)
@@ -2502,7 +2508,8 @@ struct Application::Impl {
   }
 
   foundation::Result<SampleMutationResult> reset_sample_pad(
-      const SampleResetRequest& request) {
+      const SampleResetRequest& request,
+      std::uint64_t* project_revision = nullptr) {
     if (!valid_host_project_path(request.project_path) ||
         !domain::is_valid_uuid(request.meta.command_id.value()) ||
         !domain::is_valid_slot(request.slot)) {
@@ -2514,6 +2521,9 @@ struct Application::Impl {
         domain::ResetPadPlayback{request.meta, request.slot});
     if (!reset.has_value()) {
       return foundation::Result<SampleMutationResult>::failure(reset.error());
+    }
+    if (project_revision != nullptr) {
+      *project_revision = reset.value().state.revision;
     }
     const bool runtime_required = reset.value()
                                       .state.banks.at(request.slot.bank)
@@ -2644,8 +2654,9 @@ struct Application::Impl {
     require(
         exact_keys(request, {"operation", "import_token"}),
         "sample.import.commit request shape is invalid");
-    const auto committed =
-        commit_sample_import(uuid_field(request, "import_token"));
+    std::uint64_t project_revision = 0;
+    const auto committed = commit_sample_import(
+        uuid_field(request, "import_token"), &project_revision);
     if (!committed.has_value()) {
       return sample_error_envelope(committed.error());
     }
@@ -2653,7 +2664,7 @@ struct Application::Impl {
         {{"committed_revision", committed.value().committed_revision},
          {"runtime_prepare_required",
           committed.value().runtime_prepare_required}},
-        committed.value().committed_revision);
+        project_revision);
   }
 
   nlohmann::json sample_import_abort(const nlohmann::json& request) {
@@ -2679,22 +2690,25 @@ struct Application::Impl {
              "slot",
              "playback"}),
         "sample.update_pad request shape is invalid");
-    const auto updated = update_sample_pad(SampleUpdateRequest{
-        absolute_path_field(request, "project_path"),
-        domain::CommandMeta{
-            foundation::CommandId{uuid_field(request, "command_id")},
-            unsigned_field(request, "expected_revision"),
+    std::uint64_t project_revision = 0;
+    const auto updated = update_sample_pad(
+        SampleUpdateRequest{
+            absolute_path_field(request, "project_path"),
+            domain::CommandMeta{
+                foundation::CommandId{uuid_field(request, "command_id")},
+                unsigned_field(request, "expected_revision"),
+            },
+            slot_value(request.at("slot")),
+            playback_value(request.at("playback")),
         },
-        slot_value(request.at("slot")),
-        playback_value(request.at("playback")),
-    });
+        &project_revision);
     if (!updated.has_value()) {
       return sample_error_envelope(updated.error());
     }
     return success_envelope(
         {{"committed_revision", updated.value().committed_revision},
          {"runtime_prepare_required", updated.value().runtime_prepare_required}},
-        updated.value().committed_revision);
+        project_revision);
   }
 
   nlohmann::json sample_reset_pad(const nlohmann::json& request) {
@@ -2707,21 +2721,24 @@ struct Application::Impl {
              "expected_revision",
              "slot"}),
         "sample.reset_pad request shape is invalid");
-    const auto reset = reset_sample_pad(SampleResetRequest{
-        absolute_path_field(request, "project_path"),
-        domain::CommandMeta{
-            foundation::CommandId{uuid_field(request, "command_id")},
-            unsigned_field(request, "expected_revision"),
+    std::uint64_t project_revision = 0;
+    const auto reset = reset_sample_pad(
+        SampleResetRequest{
+            absolute_path_field(request, "project_path"),
+            domain::CommandMeta{
+                foundation::CommandId{uuid_field(request, "command_id")},
+                unsigned_field(request, "expected_revision"),
+            },
+            slot_value(request.at("slot")),
         },
-        slot_value(request.at("slot")),
-    });
+        &project_revision);
     if (!reset.has_value()) {
       return sample_error_envelope(reset.error());
     }
     return success_envelope(
         {{"committed_revision", reset.value().committed_revision},
          {"runtime_prepare_required", reset.value().runtime_prepare_required}},
-        reset.value().committed_revision);
+        project_revision);
   }
 
   foundation::Result<void> append_realtime_take_events(
