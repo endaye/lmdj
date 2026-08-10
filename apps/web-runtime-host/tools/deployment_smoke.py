@@ -28,6 +28,7 @@ REQUIRED_SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "x-robots-tag": "noindex, nofollow, noarchive",
 }
+REQUIRED_ROBOTS_DIRECTIVES = frozenset(("noindex", "nofollow", "noarchive"))
 EXPECTED_ASSETS = (
     ("assets/diagnostic-project.", ".mjs", "host_module"),
     ("assets/input-adapters.", ".mjs", "host_module"),
@@ -152,8 +153,30 @@ def _require_header(headers, *, name: str, expected: str, label: str) -> None:
         )
 
 
+def _require_robots_directives(headers, label: str) -> None:
+    observed = _header_values(headers, "x-robots-tag")
+    directives = [
+        directive.strip()
+        for value in observed
+        for directive in value.split(",")
+    ]
+    if (
+        not directives
+        or any(not directive for directive in directives)
+        or set(directives) != REQUIRED_ROBOTS_DIRECTIVES
+    ):
+        expected = REQUIRED_SECURITY_HEADERS["x-robots-tag"]
+        raise SmokeError(
+            f"{label} x-robots-tag mismatch: expected {[expected]!r}, "
+            f"got {observed!r}"
+        )
+
+
 def _validate_headers(headers, label: str) -> None:
     for name, expected in REQUIRED_SECURITY_HEADERS.items():
+        if name == "x-robots-tag":
+            _require_robots_directives(headers, label)
+            continue
         _require_header(headers, name=name, expected=expected, label=label)
     _require_header(
         headers,

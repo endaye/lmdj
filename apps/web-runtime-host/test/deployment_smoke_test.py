@@ -315,6 +315,10 @@ class DeploymentSmokeTest(unittest.TestCase):
                 self.fixture.omit_header = None
                 self.fixture.header_overrides.clear()
 
+    def test_accepts_redundant_netlify_draft_noindex_header(self) -> None:
+        self.fixture.duplicate_header = ("X-Robots-Tag", "noindex")
+        self.assertEqual(self.smoke()["asset_count"], 9)
+
     def test_rejects_duplicate_security_header_values(self) -> None:
         self.fixture.duplicate_header = ("X-Robots-Tag", "index, follow")
         with self.assertRaisesRegex(SmokeError, "x-robots-tag"):
