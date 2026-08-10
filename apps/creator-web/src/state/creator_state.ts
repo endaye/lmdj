@@ -3,6 +3,12 @@ import type {
   ProjectPadView,
   ProjectView,
 } from "../runtime/runtime_types";
+import {
+  initialSampleState,
+  reduceSampleState,
+  type SampleStateAction,
+  type SampleState,
+} from "./sample_state";
 
 export type {
   LocalProjectSummary,
@@ -55,6 +61,7 @@ export interface CreatorState {
   };
   activeBank: Bank;
   pressed: ReadonlyMap<number, PressOutcome>;
+  sample: SampleState;
 }
 
 export type CreatorAction =
@@ -80,6 +87,7 @@ export type CreatorAction =
   | {type: "bank-selected"; bank: Bank}
   | {type: "pad-pressed"; slot: number; outcome: PressOutcome}
   | {type: "pad-released"; slot: number}
+  | {type: "sample-action"; action: SampleStateAction}
   | {type: "pressed-cleared"};
 
 export const initialCreatorState: CreatorState = {
@@ -103,6 +111,7 @@ export const initialCreatorState: CreatorState = {
   },
   activeBank: 0,
   pressed: new Map(),
+  sample: initialSampleState,
 };
 
 function hasReadyProject(state: CreatorState): boolean {
@@ -186,6 +195,8 @@ export function isCreatorActionAllowed(
     }
     case "pad-released":
       return state.pressed.has(action.slot);
+    case "sample-action":
+      return true;
     case "pressed-cleared":
       return true;
   }
@@ -234,6 +245,7 @@ export function creatorReducer(
         project: {...state.project, phase: "ready", current: action.project},
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         audio: {phase: "inactive"},
+        sample: initialSampleState,
       };
     case "project-error":
       return {
@@ -278,6 +290,8 @@ export function creatorReducer(
       pressed.delete(action.slot);
       return {...state, pressed};
     }
+    case "sample-action":
+      return {...state, sample: reduceSampleState(state.sample, action.action)};
     case "pressed-cleared":
       return state.pressed.size === 0 ? state : {...state, pressed: new Map()};
   }
