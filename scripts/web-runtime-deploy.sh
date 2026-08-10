@@ -101,6 +101,18 @@ with_netlify_credential() {
     "$@"
 }
 
+remove_tag_checkout_path() {
+  local selected_path="$1"
+  [[ \
+    -n "$owned_temp" && \
+    "$selected_path" == "$owned_temp/tag-target" && \
+    -d "$selected_path" && \
+    ! -L "$selected_path" \
+  ]] || return 1
+  rm -rf -- "$selected_path" || return 1
+  [[ ! -e "$selected_path" && ! -L "$selected_path" ]]
+}
+
 cleanup_all() {
   local status=$?
   trap - EXIT INT TERM
@@ -124,9 +136,7 @@ cleanup_all() {
   fi
   without_deploy_secrets git update-ref -d "$remote_main_ref" >/dev/null 2>&1 || status=2
   if [[ -n "$tag_checkout" ]]; then
-    if ! without_deploy_secrets \
-      git worktree remove --force "$tag_checkout" >/dev/null 2>&1
-    then
+    if ! remove_tag_checkout_path "$tag_checkout"; then
       echo "Web Runtime deployment error: detached tag checkout cleanup failed" >&2
       status=2
     fi
@@ -313,16 +323,39 @@ verify_signed_tag() {
 }
 
 create_tag_checkout() {
-  tag_checkout="$owned_temp/tag-target"
+  local candidate="$owned_temp/tag-target"
+  local empty_template="$owned_temp/git-template"
+  local checkout_head=''
+  mkdir -m 700 "$empty_template" || {
+    fail "detached tag checkout template creation failed"
+    return
+  }
   without_deploy_secrets \
-    git worktree add --detach "$tag_checkout" "$tag_target" >/dev/null 2>&1 || {
+    git clone --shared --no-checkout --no-tags --template="$empty_template" \
+      "$repo_root" "$candidate" >/dev/null 2>&1 || {
     fail "detached tag checkout creation failed"
     return
   }
-  [[ -d "$tag_checkout" && ! -L "$tag_checkout" ]] || {
+  without_deploy_secrets \
+    git -C "$candidate" checkout --detach "$tag_target" >/dev/null 2>&1 || {
+    fail "detached tag checkout population failed"
+    return
+  }
+  checkout_head="$(
+    without_deploy_secrets git -C "$candidate" rev-parse --verify HEAD 2>/dev/null
+  )" || {
+    fail "detached tag checkout identity is unavailable"
+    return
+  }
+  [[ "$checkout_head" == "$tag_target" ]] || {
+    fail "detached tag checkout identity mismatch"
+    return
+  }
+  [[ -d "$candidate" && ! -L "$candidate" ]] || {
     fail "detached tag checkout is unsafe"
     return
   }
+  tag_checkout="$candidate"
 }
 
 read_tag_identity() {
@@ -425,8 +458,7 @@ stage_release_assets() {
 }
 
 remove_tag_checkout() {
-  without_deploy_secrets \
-    git worktree remove --force "$tag_checkout" >/dev/null 2>&1 || {
+  remove_tag_checkout_path "$tag_checkout" || {
     fail "detached tag checkout cleanup failed"
     return
   }
