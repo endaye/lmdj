@@ -1599,11 +1599,6 @@ struct Application::Impl {
     if (!present.value()) {
       return foundation::Result<void>::success();
     }
-    const auto validated = storage_platform->validate_managed_tree(root);
-    if (!validated.has_value()) {
-      return foundation::Result<void>::failure(sample_storage_error(
-          validated.error(), "Sample staging tree is invalid"));
-    }
     const auto names = storage_platform->list_directories(root);
     if (!names.has_value()) {
       return foundation::Result<void>::failure(sample_storage_error(
@@ -1626,38 +1621,6 @@ struct Application::Impl {
         continue;
       }
       const auto directory = root / relative;
-      const auto marker_path = directory / "state.json";
-      const auto marker_length = storage_platform->byte_length(marker_path);
-      if (!marker_length.has_value() ||
-          marker_length.value() > kMaximumSampleStagingMarkerBytes) {
-        continue;
-      }
-      const auto marker_bytes = storage_platform->read_complete(marker_path);
-      if (!marker_bytes.has_value()) {
-        continue;
-      }
-      const auto marker_text = std::string_view{
-          reinterpret_cast<const char*>(marker_bytes.value().data()),
-          marker_bytes.value().size()};
-      const auto marker = nlohmann::json::parse(marker_text, nullptr, false);
-      if (marker.is_discarded() ||
-          !exact_keys(
-              marker,
-              {"contract", "created_unix_seconds", "state", "token"}) ||
-          !marker.at("contract").is_string() ||
-          marker.at("contract") != kSampleStagingContract ||
-          !marker.at("state").is_string() ||
-          marker.at("state") != "incomplete" ||
-          !marker.at("token").is_string() || marker.at("token") != token) {
-        continue;
-      }
-      const auto created = cache_unsigned(marker, "created_unix_seconds");
-      if (!created.has_value() || now < 0 ||
-          *created > static_cast<std::uint64_t>(now) ||
-          static_cast<std::uint64_t>(now) - *created <
-              kMinimumSampleStagingAgeSeconds) {
-        continue;
-      }
       auto lease = storage_platform->acquire_writer(directory);
       if (!lease.has_value()) {
         if (lease.error().details.is_object() &&
@@ -1669,8 +1632,84 @@ struct Application::Impl {
         return foundation::Result<void>::failure(sample_storage_error(
             lease.error(), "Sample staging cleanup could not acquire writer"));
       }
-      lease.value().reset();
+
+      const auto validated =
+          storage_platform->validate_managed_tree(directory);
+      if (!validated.has_value()) {
+        return foundation::Result<void>::failure(sample_storage_error(
+            validated.error(), "Sample staging candidate is invalid"));
+      }
+      const auto files = storage_platform->list_names(directory);
+      if (!files.has_value()) {
+        return foundation::Result<void>::failure(sample_storage_error(
+            files.error(), "Sample staging candidate could not be listed"));
+      }
+      const auto directories =
+          storage_platform->list_directories(directory);
+      if (!directories.has_value()) {
+        return foundation::Result<void>::failure(sample_storage_error(
+            directories.error(),
+            "Sample staging candidate could not be listed"));
+      }
+      const auto has_file = [&files](std::string_view name) {
+        return std::find(
+                   files.value().begin(),
+                   files.value().end(),
+                   name) != files.value().end();
+      };
+      const auto has_strict_storage_shape =
+          directories.value().empty() && files.value().size() == 2U &&
+          has_file("state.json") && has_file("payload.wav");
+      const auto marker_path = directory / "state.json";
+      bool retain_candidate = false;
+      if (has_strict_storage_shape) {
+        const auto marker_length =
+            storage_platform->byte_length(marker_path);
+        if (!marker_length.has_value()) {
+          return foundation::Result<void>::failure(sample_storage_error(
+              marker_length.error(),
+              "Sample staging marker could not be inspected"));
+        }
+        if (marker_length.value() <= kMaximumSampleStagingMarkerBytes) {
+          const auto marker_bytes =
+              storage_platform->read_complete(marker_path);
+          if (!marker_bytes.has_value()) {
+            return foundation::Result<void>::failure(sample_storage_error(
+                marker_bytes.error(),
+                "Sample staging marker could not be read"));
+          }
+          const auto marker_text = std::string_view{
+              reinterpret_cast<const char*>(marker_bytes.value().data()),
+              marker_bytes.value().size()};
+          const auto marker =
+              nlohmann::json::parse(marker_text, nullptr, false);
+          if (!marker.is_discarded() &&
+              exact_keys(
+                  marker,
+                  {"contract", "created_unix_seconds", "state", "token"}) &&
+              marker.at("contract").is_string() &&
+              marker.at("contract") == kSampleStagingContract &&
+              marker.at("state").is_string() &&
+              marker.at("state") == "incomplete" &&
+              marker.at("token").is_string() &&
+              marker.at("token") == token) {
+            const auto created =
+                cache_unsigned(marker, "created_unix_seconds");
+            if (created.has_value() && now >= 0 &&
+                *created <= static_cast<std::uint64_t>(now) &&
+                static_cast<std::uint64_t>(now) - *created <
+                    kMinimumSampleStagingAgeSeconds) {
+              retain_candidate = true;
+            }
+          }
+        }
+      }
+      if (retain_candidate) {
+        lease.value().reset();
+        continue;
+      }
       const auto removed = remove_sample_staging(storage_platform, directory);
+      lease.value().reset();
       if (!removed.has_value()) {
         return foundation::Result<void>::failure(sample_storage_error(
             removed.error(), "Sample staging cleanup failed"));

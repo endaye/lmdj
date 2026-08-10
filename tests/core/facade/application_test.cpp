@@ -127,14 +127,35 @@ class SampleCleanupFailurePlatform final
     token_ = std::move(token);
     armed_ = true;
     triggered_ = false;
+    triggered_with_writer_lease_ = false;
+    candidate_validation_seen_ = false;
+    staging_validation_without_writer_ = false;
   }
 
   bool triggered() const noexcept { return triggered_; }
+  bool triggered_with_writer_lease() const noexcept {
+    return triggered_with_writer_lease_;
+  }
+  bool candidate_validation_was_lease_ordered() const noexcept {
+    return candidate_validation_seen_ &&
+           !staging_validation_without_writer_;
+  }
 
   lmdj::foundation::Result<
       std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
   acquire_writer(const std::filesystem::path& path) override {
-    return inner_->acquire_writer(path);
+    auto acquired = inner_->acquire_writer(path);
+    if (!acquired.has_value()) {
+      return acquired;
+    }
+    if (path.parent_path().filename() != "sample-import-staging") {
+      return acquired;
+    }
+    staging_writer_active_ = true;
+    return lmdj::foundation::Result<
+        std::unique_ptr<lmdj::project_io::ProjectWriterLease>>::success(
+        std::make_unique<ObservedWriterLease>(
+            std::move(acquired.value()), &staging_writer_active_));
   }
 
   lmdj::foundation::Result<void> ensure_directory(
@@ -204,6 +225,15 @@ class SampleCleanupFailurePlatform final
     if (armed_ &&
         path.parent_path().filename() == "sample-import-staging" &&
         path.filename() == token_) {
+      const auto child =
+          path / (target_ == SampleCleanupFailureTarget::payload
+                      ? "payload.wav"
+                      : "state.json");
+      const auto partially_removed = inner_->remove(child);
+      if (!partially_removed.has_value()) {
+        return partially_removed;
+      }
+      triggered_with_writer_lease_ = staging_writer_active_;
       return fail_once();
     }
     return inner_->remove_tree(path);
@@ -222,10 +252,39 @@ class SampleCleanupFailurePlatform final
 
   lmdj::foundation::Result<void> validate_managed_tree(
       const std::filesystem::path& root) const override {
+    if (armed_ && root.filename() == "sample-import-staging" &&
+        !staging_writer_active_) {
+      staging_validation_without_writer_ = true;
+    }
+    if (armed_ &&
+        root.parent_path().filename() == "sample-import-staging") {
+      candidate_validation_seen_ = true;
+      if (!staging_writer_active_) {
+        staging_validation_without_writer_ = true;
+      }
+    }
     return inner_->validate_managed_tree(root);
   }
 
  private:
+  class ObservedWriterLease final
+      : public lmdj::project_io::ProjectWriterLease {
+   public:
+    ObservedWriterLease(
+        std::unique_ptr<lmdj::project_io::ProjectWriterLease> inner,
+        bool* active)
+        : inner_(std::move(inner)), active_(active) {}
+
+    ~ObservedWriterLease() override {
+      inner_.reset();
+      *active_ = false;
+    }
+
+   private:
+    std::unique_ptr<lmdj::project_io::ProjectWriterLease> inner_;
+    bool* active_;
+  };
+
   lmdj::foundation::Result<void> fail_once() {
     armed_ = false;
     triggered_ = true;
@@ -241,6 +300,10 @@ class SampleCleanupFailurePlatform final
   std::string token_;
   bool armed_ = false;
   bool triggered_ = false;
+  bool staging_writer_active_ = false;
+  bool triggered_with_writer_lease_ = false;
+  mutable bool candidate_validation_seen_ = false;
+  mutable bool staging_validation_without_writer_ = false;
 };
 
 std::string uuid(std::uint32_t suffix) {
@@ -1134,6 +1197,39 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
   Application count_scavenger(sample_config(temp.path()));
   LMDJ_CHECK(!std::filesystem::exists(staging_directory(count_candidate)));
 
+  const auto corrupt_marker_token = uuid(697);
+  std::filesystem::create_directories(
+      staging_directory(corrupt_marker_token));
+  write_bytes(marker_path(corrupt_marker_token), "{");
+  write_bytes(payload_path(corrupt_marker_token), "orphan");
+  const auto incomplete_marker_token = uuid(698);
+  std::filesystem::create_directories(
+      staging_directory(incomplete_marker_token));
+  write_bytes(
+      marker_path(incomplete_marker_token),
+      nlohmann::json{
+          {"contract", "lmdj.sample-import-staging.v1"},
+          {"token", incomplete_marker_token},
+      }
+          .dump());
+  write_bytes(payload_path(incomplete_marker_token), "orphan");
+  const auto malformed_payload_token = uuid(699);
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  LMDJ_CHECK(now >= 0);
+  write_marker(
+      malformed_payload_token, static_cast<std::uint64_t>(now));
+  std::filesystem::create_directories(
+      payload_path(malformed_payload_token));
+  Application malformed_scavenger(sample_config(temp.path()));
+  LMDJ_CHECK(
+      !std::filesystem::exists(staging_directory(corrupt_marker_token)));
+  LMDJ_CHECK(
+      !std::filesystem::exists(staging_directory(incomplete_marker_token)));
+  LMDJ_CHECK(
+      !std::filesystem::exists(staging_directory(malformed_payload_token)));
+
   const auto incomplete_token = uuid(606);
   LMDJ_CHECK(
       application.begin_sample_import(
@@ -1220,9 +1316,11 @@ void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
 
 struct SampleCleanupFailureObservation {
   bool cleanup_failed;
-  bool complete_candidate_remained;
-  bool unsafe_reuse_rejected;
-  bool old_candidate_scavenged;
+  bool genuine_partial_residue;
+  bool repeated_failure_fail_closed;
+  bool repeated_residue_retryable;
+  bool fresh_scavenger_recovered;
+  bool token_reusable_after_recovery;
 };
 
 SampleCleanupFailureObservation observe_sample_cleanup_failure(
@@ -1239,11 +1337,15 @@ SampleCleanupFailureObservation observe_sample_cleanup_failure(
   const auto payload = staging_directory / "payload.wav";
   const auto legacy_marker = staging_root / (token + ".json");
   const auto legacy_payload = staging_root / (token + ".wav");
-  auto platform = std::make_shared<SampleCleanupFailurePlatform>(
+  auto native_platform =
       lmdj::project_io::make_native_project_storage_platform(
-          temp.path() / "leases"));
+          temp.path() / "leases");
+  auto platform =
+      std::make_shared<SampleCleanupFailurePlatform>(native_platform);
   auto configuration = sample_config(temp.path());
   configuration.storage_platform = platform;
+  auto recovery_configuration = sample_config(temp.path());
+  recovery_configuration.storage_platform = native_platform;
   const SampleImportBeginRequest begin{
       token,
       project,
@@ -1280,35 +1382,48 @@ SampleCleanupFailureObservation observe_sample_cleanup_failure(
              .has_value());
   }
 
-  const auto complete_candidate_remained =
-      std::filesystem::is_regular_file(marker) &&
-      std::filesystem::is_regular_file(payload);
-  bool unsafe_reuse_rejected = false;
-  {
-    Application restarted(configuration);
-    unsafe_reuse_rejected =
-        !restarted.begin_sample_import(begin).has_value();
-  }
+  const auto marker_remained = std::filesystem::is_regular_file(marker);
+  const auto payload_remained = std::filesystem::is_regular_file(payload);
+  const auto genuine_partial_residue =
+      target == SampleCleanupFailureTarget::payload
+          ? marker_remained && !payload_remained
+          : !marker_remained && payload_remained;
 
-  if (std::filesystem::is_regular_file(marker)) {
-    auto encoded = nlohmann::json::parse(read_bytes(marker));
-    encoded["created_unix_seconds"] = 0;
-    write_bytes(marker, encoded.dump());
-  } else if (std::filesystem::is_regular_file(legacy_marker)) {
-    auto encoded = nlohmann::json::parse(read_bytes(legacy_marker));
-    encoded["created_unix_seconds"] = 0;
-    write_bytes(legacy_marker, encoded.dump());
+  platform->arm(target, token);
+  bool repeated_failure_fail_closed = false;
+  try {
+    Application repeated_cleanup(configuration);
+  } catch (const std::runtime_error&) {
+    repeated_failure_fail_closed =
+        platform->triggered() &&
+        platform->triggered_with_writer_lease() &&
+        platform->candidate_validation_was_lease_ordered();
   }
-  Application scavenger(configuration);
-  const auto old_candidate_scavenged =
+  const auto repeated_residue_retryable =
+      std::filesystem::is_directory(staging_directory) &&
+      (std::filesystem::is_regular_file(marker) ||
+       std::filesystem::is_regular_file(payload));
+
+  bool token_reusable_after_recovery = false;
+  {
+    Application recovered(recovery_configuration);
+    const auto reused = recovered.begin_sample_import(begin);
+    token_reusable_after_recovery = reused.has_value();
+    if (reused.has_value()) {
+      LMDJ_CHECK(recovered.abort_sample_import(token).has_value());
+    }
+  }
+  const auto fresh_scavenger_recovered =
       !std::filesystem::exists(staging_directory) &&
       !std::filesystem::exists(legacy_marker) &&
       !std::filesystem::exists(legacy_payload);
   return {
       cleanup_failed,
-      complete_candidate_remained,
-      unsafe_reuse_rejected,
-      old_candidate_scavenged,
+      genuine_partial_residue,
+      repeated_failure_fail_closed,
+      repeated_residue_retryable,
+      fresh_scavenger_recovered,
+      token_reusable_after_recovery,
   };
 }
 
@@ -1319,9 +1434,11 @@ void test_sample_cleanup_half_failures_leave_one_retryable_unit() {
       SampleCleanupFailureTarget::marker, 690);
   const auto valid = [](const SampleCleanupFailureObservation& observed) {
     return observed.cleanup_failed &&
-           observed.complete_candidate_remained &&
-           observed.unsafe_reuse_rejected &&
-           observed.old_candidate_scavenged;
+           observed.genuine_partial_residue &&
+           observed.repeated_failure_fail_closed &&
+           observed.repeated_residue_retryable &&
+           observed.fresh_scavenger_recovered &&
+           observed.token_reusable_after_recovery;
   };
   if (!valid(payload) || !valid(marker)) {
     throw std::runtime_error(
