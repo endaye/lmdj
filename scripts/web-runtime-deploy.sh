@@ -87,6 +87,13 @@ with_pinned_github() {
     "$@"
 }
 
+with_pinned_github_git() {
+  GIT_TERMINAL_PROMPT=0 with_pinned_github git \
+    -c credential.username=x-access-token \
+    -c 'credential.helper=!f() { if test "$1" = get && test -n "${GITHUB_TOKEN:-}"; then printf "%s\n" "username=x-access-token" "password=$GITHUB_TOKEN"; fi; }; f' \
+    "$@"
+}
+
 with_netlify_credential() {
   with_gh_environment_removed \
     -u GITHUB_TOKEN \
@@ -203,12 +210,12 @@ fetch_remote_authority() {
   remote_tag_ref="refs/lmdj-deploy/tags/$tag"
   without_deploy_secrets git update-ref -d "$remote_tag_ref" >/dev/null 2>&1 || true
   without_deploy_secrets git update-ref -d "$remote_main_ref" >/dev/null 2>&1 || true
-  without_deploy_secrets git fetch --no-tags origin \
+  with_pinned_github_git fetch --no-tags origin \
     "refs/tags/$tag:$remote_tag_ref" >/dev/null 2>&1 || {
     fail "canonical remote Product tag fetch failed"
     return
   }
-  without_deploy_secrets git fetch --no-tags origin \
+  with_pinned_github_git fetch --no-tags origin \
     "refs/heads/main:$remote_main_ref" >/dev/null 2>&1 || {
     fail "canonical origin/main fetch failed"
     return
