@@ -10,6 +10,11 @@ FORBIDDEN = (
     "std::ifstream",
     "std::ofstream",
     "filesystem::directory_iterator",
+    "lmdj/cooker/",
+    "sample_analysis.hpp",
+    "wav_reader.hpp",
+    "decode_wav",
+    "WorkspaceCacheStore",
 )
 
 

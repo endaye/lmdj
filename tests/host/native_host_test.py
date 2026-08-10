@@ -514,6 +514,64 @@ def happy_path(
     assert RECORDED_PATTERN_ID in inspected["patterns"]
 
 
+def sample_facade_snapshot_path(
+    host: Path,
+    cli: Path,
+    workspace: Path,
+    assembly: Path,
+    project: Path,
+) -> None:
+    updated = cli_success(
+        cli,
+        workspace,
+        assembly,
+        "command",
+        {
+            "operation": "sample.update_pad",
+            "project_path": str(project),
+            "command_id": uuid(801),
+            "expected_revision": 5,
+            "slot": slot(0, 0),
+            "playback": {
+                "trim_start_frame": 1,
+                "trim_end_frame": 100,
+                "trigger_mode": "one_shot",
+                "gain_millidb": -600,
+                "muted": False,
+            },
+        },
+        6,
+    )
+    assert updated == {
+        "committed_revision": 6,
+        "runtime_prepare_required": True,
+    }
+    inspected = cli_success(
+        cli,
+        workspace,
+        assembly,
+        "query",
+        {
+            "operation": "sample.inspect",
+            "project_path": str(project),
+            "slot": slot(0, 0),
+        },
+        6,
+    )
+    assert inspected["playback"]["trim_end_frame"] == 100
+
+    process = HostProcess(host, workspace, assembly, project)
+    ready = process.read()
+    assert ready["ok"] is True, ready
+    assert ready["result"]["project_revision"] == 6
+    assert ready["result"]["resolved_pad_count"] == 2
+    triggered = process.request(
+        {"operation": "trigger", "slot": slot(0, 0), "velocity": 100}
+    )
+    assert triggered["ok"] is True, triggered
+    process.quit()
+
+
 def writer_failure_path(
     host: Path,
     cli: Path,
@@ -686,12 +744,17 @@ def main() -> int:
         base_project = temp_root / "base.lmdj"
         author_project(cli, workspace, assembly, base_project)
         happy_project = temp_root / "happy.lmdj"
+        sample_project = temp_root / "sample.lmdj"
         failure_project = temp_root / "failure.lmdj"
         conflict_project = temp_root / "conflict.lmdj"
         shutil.copytree(base_project, happy_project)
+        shutil.copytree(base_project, sample_project)
         shutil.copytree(base_project, failure_project)
         shutil.copytree(base_project, conflict_project)
         happy_path(host, cli, workspace, assembly, happy_project)
+        sample_facade_snapshot_path(
+            host, cli, workspace, assembly, sample_project
+        )
         writer_failure_path(
             host, cli, workspace, assembly, failure_project
         )

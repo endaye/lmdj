@@ -102,17 +102,41 @@ class InvokeGateRelease {
   lmdj::facade::testing::InvokeGate& gate_;
 };
 
-void test_32_independent_engines_make_progress_concurrently() {
+void test_32_independent_engines_inspect_samples_concurrently() {
   constexpr std::size_t kEngineCount = 32;
   constexpr std::size_t kQueriesPerEngine = 128;
 
   TempDirectory temp;
   const auto config = config_json(temp.path());
-  const auto request =
-      nlohmann::json{{"operation", "provider.list"}}.dump();
   std::array<lmdj_engine*, kEngineCount> engines{};
-  for (auto& engine : engines) {
-    engine = create_engine(config);
+  std::array<std::string, kEngineCount> requests{};
+  for (std::size_t index = 0; index < kEngineCount; ++index) {
+    engines.at(index) = create_engine(config);
+    const auto project =
+        temp.path() / ("sample-" + std::to_string(index) + ".lmdj");
+    const auto project_suffix = std::to_string(index + 1U);
+    const auto created = nlohmann::json{
+        {"operation", "project.create"},
+        {"project_path", project.generic_string()},
+        {"project_id",
+         "00000000-0000-4000-8000-" +
+             std::string(12U - project_suffix.size(), '0') +
+             project_suffix},
+        {"bpm", 120},
+    }.dump();
+    char* response = nullptr;
+    LMDJ_CHECK(
+        lmdj_engine_command(
+            engines.at(index), created.c_str(), &response) ==
+        LMDJ_STATUS_OK);
+    LMDJ_CHECK(response != nullptr);
+    LMDJ_CHECK(nlohmann::json::parse(response).at("ok") == true);
+    lmdj_string_free(response);
+    requests.at(index) = nlohmann::json{
+        {"operation", "sample.inspect"},
+        {"project_path", project.generic_string()},
+        {"slot", {{"bank", 0}, {"pad", 0}}},
+    }.dump();
   }
 
   std::array<CallResult, kEngineCount> results{};
@@ -128,10 +152,13 @@ void test_32_independent_engines_make_progress_concurrently() {
       for (; progress < kQueriesPerEngine; ++progress) {
         char* response = nullptr;
         const auto status = lmdj_engine_query(
-            engines[index], request.c_str(), &response);
+            engines[index], requests[index].c_str(), &response);
         const bool response_present = response != nullptr;
+        const bool successful =
+            response_present &&
+            nlohmann::json::parse(response).value("ok", false);
         lmdj_string_free(response);
-        if (status != LMDJ_STATUS_OK || !response_present) {
+        if (status != LMDJ_STATUS_OK || !successful) {
           result = CallResult{status, response_present};
           break;
         }
@@ -297,7 +324,7 @@ void test_blocked_engine_does_not_block_unrelated_engine_lifetimes() {
 
 int main() {
   try {
-    test_32_independent_engines_make_progress_concurrently();
+    test_32_independent_engines_inspect_samples_concurrently();
     test_query_and_free_race_never_reuses_stale_handle();
     test_10000_create_free_cycles_keep_all_stale_handles_invalid();
     test_blocked_engine_does_not_block_unrelated_engine_lifetimes();

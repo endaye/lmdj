@@ -694,6 +694,142 @@ def separate_process_authoring(
     return author_golden_project(executable, workspace, temp_root)
 
 
+def sample_facade_contract(
+    executable: Path, workspace: Path, temp_root: Path
+) -> None:
+    project = temp_root / "cli-sample.lmdj"
+    for mode, request, revision in (
+        (
+            "command",
+            {
+                "operation": "project.create",
+                "project_path": str(project),
+                "project_id": uuid(701),
+                "bpm": 120,
+            },
+            0,
+        ),
+        (
+            "command",
+            {
+                "operation": "asset.import",
+                "project_path": str(project),
+                "command_id": uuid(702),
+                "expected_revision": 0,
+                "asset_id": uuid(703),
+                "source_path": str(
+                    REPO_ROOT / "tests/fixtures/audio/mono-44100.wav"
+                ),
+                "media_type": "audio/wav",
+            },
+            1,
+        ),
+        (
+            "command",
+            {
+                "operation": "pad.assign",
+                "project_path": str(project),
+                "command_id": uuid(704),
+                "expected_revision": 1,
+                "slot": slot(0, 0),
+                "asset_id": uuid(703),
+            },
+            2,
+        ),
+    ):
+        check_success(
+            run_request(executable, workspace, mode, request), revision
+        )
+
+    inspected = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "sample.inspect",
+            "project_path": str(project),
+            "slot": slot(0, 0),
+        },
+    )
+    check_success(inspected, 2)
+    assert inspected["result"]["metadata"] == {
+        "sample_rate": 44100,
+        "channels": 1,
+        "source_frames": 8,
+    }
+    waveform = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "sample.waveform",
+            "project_path": str(project),
+            "slot": slot(0, 0),
+            "window": {
+                "start_frame": 0,
+                "end_frame": 8,
+                "bucket_count": 4,
+            },
+        },
+    )
+    check_success(waveform, 2)
+    assert [
+        item["peak_magnitude"] for item in waveform["result"]["buckets"]
+    ] == [32768, 8192, 4096, 0]
+    updated = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "sample.update_pad",
+            "project_path": str(project),
+            "command_id": uuid(705),
+            "expected_revision": 2,
+            "slot": slot(0, 0),
+            "playback": {
+                "trim_start_frame": 1,
+                "trim_end_frame": 7,
+                "trigger_mode": "loop_toggle",
+                "gain_millidb": -1200,
+                "muted": True,
+            },
+        },
+    )
+    check_success(updated, 3)
+    assert updated["result"] == {
+        "committed_revision": 3,
+        "runtime_prepare_required": True,
+    }
+    reset = run_request(
+        executable,
+        workspace,
+        "command",
+        {
+            "operation": "sample.reset_pad",
+            "project_path": str(project),
+            "command_id": uuid(706),
+            "expected_revision": 3,
+            "slot": slot(0, 0),
+        },
+    )
+    check_success(reset, 4)
+
+    private_path = temp_root / "private-missing-sample.lmdj"
+    missing = run_request(
+        executable,
+        workspace,
+        "query",
+        {
+            "operation": "sample.inspect",
+            "project_path": str(private_path),
+            "slot": slot(0, 0),
+        },
+        expected_exit=2,
+    )
+    check_error(missing, "IO_ERROR")
+    assert str(private_path) not in canonical_json(missing)
+
+
 def fresh_process_replay(
     executable: Path,
     workspace: Path,
@@ -896,6 +1032,8 @@ def main() -> int:
             executable, workspace, temp_root
         )
         passed += 1
+        sample_facade_contract(executable, workspace, temp_root)
+        passed += 1
         fresh_process_replay(
             executable, workspace, project, commit_request
         )
@@ -909,8 +1047,8 @@ def main() -> int:
         timeout_policy_contract()
         passed += 1
 
-    assert passed == 11
-    print("cli behavior fixtures: 11 passed")
+    assert passed == 12
+    print("cli behavior fixtures: 12 passed")
     return 0
 
 

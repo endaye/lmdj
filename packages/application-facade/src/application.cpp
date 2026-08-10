@@ -7,9 +7,11 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <deque>
 #include <filesystem>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <set>
@@ -26,6 +28,8 @@
 
 #include <lmdj/audio/offline_renderer.hpp>
 #include <lmdj/cooker/project_cooker.hpp>
+#include <lmdj/cooker/sample_analysis.hpp>
+#include <lmdj/cooker/wav_reader.hpp>
 #include <lmdj/domain/commands.hpp>
 #include <lmdj/domain/project.hpp>
 #include <lmdj/foundation/artifact.hpp>
@@ -33,6 +37,7 @@
 #include <lmdj/project_io/project_bundle_transfer.hpp>
 #include <lmdj/project_io/project_store.hpp>
 #include <lmdj/project_io/take_journal.hpp>
+#include <lmdj/project_io/workspace_cache.hpp>
 #include <lmdj/provider/capability.hpp>
 
 namespace lmdj::facade {
@@ -46,6 +51,13 @@ constexpr std::uint64_t kMaximumProjectBundleIndexBytes =
     4U * 1024U * 1024U;
 constexpr std::size_t kMaximumProjectBundleChunkBytes = 1024U * 1024U;
 constexpr std::uint32_t kMaximumProjectBundleEntries = 4096U;
+constexpr std::size_t kMaximumSampleImportChunkBytes = 1024U * 1024U;
+constexpr std::size_t kMaximumSampleImportSessions = 16U;
+constexpr std::size_t kMaximumRememberedSampleImportTokens = 256U;
+constexpr std::size_t kMaximumSampleScavengeFiles = 64U;
+constexpr std::string_view kWaveformCacheContract =
+    "lmdj.sample-waveform-cache.v1";
+constexpr std::string_view kWaveformCacheFold = "max-abs-mirror";
 
 class InvalidRequest final : public std::runtime_error {
  public:
@@ -70,6 +82,14 @@ const std::map<std::string, OperationKind>& operations() {
       {"provider.select", OperationKind::command},
       {"provider.selected", OperationKind::query},
       {"render.offline", OperationKind::command},
+      {"sample.import.abort", OperationKind::command},
+      {"sample.import.begin", OperationKind::command},
+      {"sample.import.chunk", OperationKind::command},
+      {"sample.import.commit", OperationKind::command},
+      {"sample.inspect", OperationKind::query},
+      {"sample.reset_pad", OperationKind::command},
+      {"sample.update_pad", OperationKind::command},
+      {"sample.waveform", OperationKind::query},
       {"snapshot.cook", OperationKind::query},
       {"take.append", OperationKind::command},
       {"take.begin", OperationKind::command},
@@ -210,6 +230,29 @@ std::uint64_t unsigned_field(
   return parsed;
 }
 
+std::int64_t signed_field(
+    const nlohmann::json& request,
+    std::string_view key,
+    std::int64_t minimum,
+    std::int64_t maximum) {
+  const auto& value = request.at(std::string(key));
+  require(value.is_number_integer(), std::string(key) + " must be an integer");
+  std::int64_t parsed = 0;
+  if (value.is_number_unsigned()) {
+    const auto unsigned_value = value.get<std::uint64_t>();
+    require(
+        unsigned_value <= static_cast<std::uint64_t>(maximum),
+        std::string(key) + " is out of range");
+    parsed = static_cast<std::int64_t>(unsigned_value);
+  } else {
+    parsed = value.get<std::int64_t>();
+  }
+  require(
+      parsed >= minimum && parsed <= maximum,
+      std::string(key) + " is out of range");
+  return parsed;
+}
+
 std::filesystem::path absolute_path_field(
     const nlohmann::json& request,
     std::string_view key) {
@@ -285,6 +328,77 @@ domain::PadSlotId slot_value(const nlohmann::json& encoded) {
   };
 }
 
+domain::TriggerMode trigger_mode_value(const nlohmann::json& encoded) {
+  require(encoded.is_string(), "trigger_mode must be a string");
+  const auto& value = encoded.get_ref<const std::string&>();
+  require(valid_utf8(value), "trigger_mode is not valid UTF-8");
+  if (value == "one_shot") {
+    return domain::TriggerMode::one_shot;
+  }
+  if (value == "gate") {
+    return domain::TriggerMode::gate;
+  }
+  if (value == "loop_gate") {
+    return domain::TriggerMode::loop_gate;
+  }
+  if (value == "loop_toggle") {
+    return domain::TriggerMode::loop_toggle;
+  }
+  invalid("trigger_mode is invalid");
+}
+
+std::string_view trigger_mode_name(domain::TriggerMode mode) {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+      return "one_shot";
+    case domain::TriggerMode::gate:
+      return "gate";
+    case domain::TriggerMode::loop_gate:
+      return "loop_gate";
+    case domain::TriggerMode::loop_toggle:
+      return "loop_toggle";
+  }
+  return "one_shot";
+}
+
+domain::PadPlayback playback_value(const nlohmann::json& encoded) {
+  require(
+      exact_keys(
+          encoded,
+          {"trim_start_frame",
+           "trim_end_frame",
+           "trigger_mode",
+           "gain_millidb",
+           "muted"}),
+      "playback shape is invalid");
+  const auto start = unsigned_field(encoded, "trim_start_frame");
+  std::optional<std::uint64_t> end;
+  if (!encoded.at("trim_end_frame").is_null()) {
+    end = unsigned_field(encoded, "trim_end_frame");
+  }
+  require(encoded.at("muted").is_boolean(), "muted must be a boolean");
+  return domain::PadPlayback{
+      start,
+      end,
+      trigger_mode_value(encoded.at("trigger_mode")),
+      static_cast<std::int32_t>(signed_field(
+          encoded, "gain_millidb", -60'000, 6'000)),
+      encoded.at("muted").get<bool>(),
+  };
+}
+
+cooker::WaveformRequest waveform_request_value(
+    const nlohmann::json& encoded) {
+  require(
+      exact_keys(encoded, {"start_frame", "end_frame", "bucket_count"}),
+      "waveform window shape is invalid");
+  return cooker::WaveformRequest{
+      unsigned_field(encoded, "start_frame"),
+      unsigned_field(encoded, "end_frame"),
+      static_cast<std::uint32_t>(unsigned_field(encoded, "bucket_count", 512)),
+  };
+}
+
 domain::Pattern pattern_value(const nlohmann::json& encoded) {
   require(
       exact_keys(encoded, {"pattern_id", "bars", "events"}),
@@ -340,6 +454,19 @@ domain::RawTakeEvent raw_event_value(const nlohmann::json& encoded) {
 
 nlohmann::json slot_json(domain::PadSlotId slot) {
   return {{"bank", slot.bank}, {"pad", slot.pad}};
+}
+
+nlohmann::json playback_json(const domain::PadPlayback& playback) {
+  return {
+      {"trim_start_frame", playback.trim_start_frame},
+      {"trim_end_frame",
+       playback.trim_end_frame.has_value()
+           ? nlohmann::json(*playback.trim_end_frame)
+           : nlohmann::json(nullptr)},
+      {"trigger_mode", trigger_mode_name(playback.trigger_mode)},
+      {"gain_millidb", playback.gain_millidb},
+      {"muted", playback.muted},
+  };
 }
 
 nlohmann::json raw_event_json(const domain::RawTakeEvent& event) {
@@ -430,6 +557,90 @@ nlohmann::json error_envelope(const Error& error) {
            {"details", std::move(details)},
        }},
   };
+}
+
+std::string_view sample_public_message(ErrorCode code) {
+  switch (code) {
+    case ErrorCode::invalid_argument:
+      return "Sample request is invalid";
+    case ErrorCode::not_found:
+      return "Sample resource was not found";
+    case ErrorCode::revision_conflict:
+      return "Project revision changed";
+    case ErrorCode::duplicate_id:
+      return "Sample identity already exists";
+    case ErrorCode::unsupported_audio:
+      return "Sample audio is unsupported";
+    case ErrorCode::missing_asset:
+      return "Sample Artifact is unavailable";
+    case ErrorCode::invalid_project:
+      return "Project could not be validated";
+    case ErrorCode::cook_failed:
+      return "Sample runtime preparation failed";
+    case ErrorCode::io_error:
+      return "Sample storage operation failed";
+    case ErrorCode::permission_denied:
+      return "Sample operation is not permitted";
+    case ErrorCode::provider_not_found:
+    case ErrorCode::provider_failed:
+    case ErrorCode::internal_error:
+      return "Sample operation failed";
+  }
+  return "Sample operation failed";
+}
+
+nlohmann::json sample_public_details(const Error& error) {
+  auto details = nlohmann::json::object();
+  if (!error.details.is_object()) {
+    return details;
+  }
+  for (const auto* key : {"actual_revision", "expected_revision"}) {
+    const auto found = error.details.find(key);
+    if (found != error.details.end() &&
+        (found->is_number_unsigned() ||
+         (found->is_number_integer() && found->get<std::int64_t>() >= 0))) {
+      details[key] = *found;
+    }
+  }
+  const auto resource = error.details.find("resource");
+  const auto observed = error.details.find("observed");
+  const auto limit = error.details.find("limit");
+  if (resource != error.details.end() && resource->is_string() &&
+      resource->get_ref<const std::string&>().size() <= 64U &&
+      observed != error.details.end() && limit != error.details.end() &&
+      (observed->is_number_unsigned() || observed->is_number_integer()) &&
+      (limit->is_number_unsigned() || limit->is_number_integer())) {
+    details["resource"] = *resource;
+    details["observed"] = *observed;
+    details["limit"] = *limit;
+  }
+  const auto storage = error.details.find("storage_condition");
+  if (storage != error.details.end() && storage->is_string()) {
+    const auto& value = storage->get_ref<const std::string&>();
+    if (value == project_io::kStorageConditionProjectBusy ||
+        value == project_io::kStorageConditionAlreadyExists ||
+        value == project_io::kStorageConditionAtomicPublishUnsupported) {
+      details["storage_condition"] = value;
+    }
+  }
+  return details;
+}
+
+nlohmann::json sample_error_envelope(const Error& error) {
+  return {
+      {"ok", false},
+      {"error",
+       {{"code", foundation::error_code_name(error.code)},
+        {"message", sample_public_message(error.code)},
+        {"details", sample_public_details(error)}}},
+  };
+}
+
+bool sample_operation_request(const nlohmann::json& request) {
+  return request.is_object() && request.contains("operation") &&
+         request.at("operation").is_string() &&
+         request.at("operation").get_ref<const std::string&>().starts_with(
+             "sample.");
 }
 
 nlohmann::json success_envelope(
@@ -955,6 +1166,276 @@ bool valid_host_project_path(const std::filesystem::path& path) {
          path.lexically_normal() == path;
 }
 
+Error invalid_sample_request(std::string message) {
+  return Error{ErrorCode::invalid_argument, std::move(message)};
+}
+
+Error unavailable_sample() {
+  return Error{
+      ErrorCode::missing_asset,
+      "Sample Artifact is unavailable",
+  };
+}
+
+Error sample_project_load_error(const Error& error) {
+  if (error.code == ErrorCode::invalid_project &&
+      error.message == "project asset blob is missing or corrupt") {
+    return unavailable_sample();
+  }
+  if (error.code == ErrorCode::invalid_project &&
+      error.message == "project managed directory is missing or invalid") {
+    return Error{
+        ErrorCode::io_error,
+        "Sample Project is unavailable",
+    };
+  }
+  return error;
+}
+
+Error sample_storage_error(const Error& error, std::string message) {
+  auto details = nlohmann::json::object();
+  if (error.details.is_object() &&
+      error.details.contains("storage_condition") &&
+      error.details.at("storage_condition").is_string()) {
+    details["storage_condition"] =
+        error.details.at("storage_condition");
+  }
+  return Error{ErrorCode::io_error, std::move(message), std::move(details)};
+}
+
+std::uint64_t ceiling_divide(
+    std::uint64_t numerator,
+    std::uint64_t denominator) {
+  return numerator / denominator +
+         (numerator % denominator == 0 ? 0U : 1U);
+}
+
+std::uint64_t canonical_waveform_frames_per_bucket(
+    std::uint64_t source_frames) {
+  const auto bucket_count =
+      std::min<std::uint64_t>(source_frames, 512U);
+  return ceiling_divide(source_frames, bucket_count);
+}
+
+std::string waveform_cache_key(
+    const foundation::ArtifactRef& artifact,
+    std::uint64_t frames_per_bucket) {
+  return artifact.sha256 + "/" +
+         std::to_string(cooker::kWaveformAlgorithmVersion) + "/" +
+         std::string{kWaveformCacheFold} + "/" +
+         std::to_string(frames_per_bucket);
+}
+
+nlohmann::json wav_metadata_json(const cooker::WavMetadata& metadata) {
+  return {
+      {"sample_rate", metadata.sample_rate},
+      {"channels", metadata.channels},
+      {"source_frames", metadata.source_frames},
+  };
+}
+
+nlohmann::json peak_bucket_json(const cooker::PeakBucket& bucket) {
+  return {
+      {"start_frame", bucket.start_frame},
+      {"end_frame", bucket.end_frame},
+      {"peak_magnitude", bucket.peak_magnitude},
+  };
+}
+
+std::vector<std::byte> encode_waveform_cache(
+    const cooker::WaveformEnvelope& envelope,
+    std::uint64_t frames_per_bucket) {
+  auto buckets = nlohmann::json::array();
+  for (const auto& bucket : envelope.buckets) {
+    buckets.push_back(peak_bucket_json(bucket));
+  }
+  const auto encoded = nlohmann::json{
+      {"contract", kWaveformCacheContract},
+      {"metadata", wav_metadata_json(envelope.metadata)},
+      {"algorithm_version", envelope.algorithm_version},
+      {"fold", kWaveformCacheFold},
+      {"frames_per_bucket", frames_per_bucket},
+      {"bucket_count", envelope.buckets.size()},
+      {"buckets", std::move(buckets)},
+  }.dump();
+  const auto* begin = reinterpret_cast<const std::byte*>(encoded.data());
+  return {begin, begin + encoded.size()};
+}
+
+std::optional<std::uint64_t> cache_unsigned(
+    const nlohmann::json& value,
+    std::string_view key,
+    std::uint64_t maximum = std::numeric_limits<std::uint64_t>::max()) {
+  const auto found = value.find(std::string{key});
+  if (found == value.end()) {
+    return std::nullopt;
+  }
+  std::uint64_t parsed = 0;
+  if (found->is_number_unsigned()) {
+    parsed = found->get<std::uint64_t>();
+  } else if (found->is_number_integer()) {
+    const auto signed_value = found->get<std::int64_t>();
+    if (signed_value < 0) {
+      return std::nullopt;
+    }
+    parsed = static_cast<std::uint64_t>(signed_value);
+  } else {
+    return std::nullopt;
+  }
+  return parsed <= maximum ? std::optional<std::uint64_t>{parsed}
+                           : std::nullopt;
+}
+
+std::optional<cooker::WaveformEnvelope> decode_waveform_cache(
+    std::span<const std::byte> bytes,
+    const cooker::WavMetadata& expected_metadata,
+    std::uint64_t expected_frames_per_bucket) {
+  if (bytes.size() > 128U * 1024U) {
+    return std::nullopt;
+  }
+  const auto text = std::string_view{
+      reinterpret_cast<const char*>(bytes.data()), bytes.size()};
+  const auto encoded = nlohmann::json::parse(text, nullptr, false);
+  if (encoded.is_discarded() ||
+      !exact_keys(
+          encoded,
+          {"contract",
+           "metadata",
+           "algorithm_version",
+           "fold",
+           "frames_per_bucket",
+           "bucket_count",
+           "buckets"}) ||
+      !encoded.at("contract").is_string() ||
+      encoded.at("contract") != kWaveformCacheContract ||
+      !encoded.at("fold").is_string() ||
+      encoded.at("fold") != kWaveformCacheFold ||
+      !exact_keys(
+          encoded.at("metadata"),
+          {"sample_rate", "channels", "source_frames"}) ||
+      !encoded.at("buckets").is_array()) {
+    return std::nullopt;
+  }
+  const auto algorithm = cache_unsigned(
+      encoded,
+      "algorithm_version",
+      std::numeric_limits<std::uint32_t>::max());
+  const auto frames_per_bucket =
+      cache_unsigned(encoded, "frames_per_bucket");
+  const auto bucket_count = cache_unsigned(encoded, "bucket_count", 512U);
+  const auto sample_rate = cache_unsigned(
+      encoded.at("metadata"),
+      "sample_rate",
+      std::numeric_limits<std::uint32_t>::max());
+  const auto channels = cache_unsigned(
+      encoded.at("metadata"),
+      "channels",
+      std::numeric_limits<std::uint16_t>::max());
+  const auto source_frames =
+      cache_unsigned(encoded.at("metadata"), "source_frames");
+  if (!algorithm.has_value() ||
+      *algorithm != cooker::kWaveformAlgorithmVersion ||
+      !frames_per_bucket.has_value() ||
+      *frames_per_bucket != expected_frames_per_bucket ||
+      !bucket_count.has_value() ||
+      encoded.at("buckets").size() != *bucket_count ||
+      !sample_rate.has_value() ||
+      *sample_rate != expected_metadata.sample_rate ||
+      !channels.has_value() || *channels != expected_metadata.channels ||
+      !source_frames.has_value() ||
+      *source_frames != expected_metadata.source_frames) {
+    return std::nullopt;
+  }
+  std::vector<cooker::PeakBucket> buckets;
+  buckets.reserve(static_cast<std::size_t>(*bucket_count));
+  std::uint64_t expected_start = 0;
+  for (const auto& bucket : encoded.at("buckets")) {
+    if (!exact_keys(
+            bucket,
+            {"start_frame", "end_frame", "peak_magnitude"})) {
+      return std::nullopt;
+    }
+    const auto start = cache_unsigned(bucket, "start_frame");
+    const auto end = cache_unsigned(bucket, "end_frame");
+    const auto peak = cache_unsigned(bucket, "peak_magnitude", 32'768U);
+    if (!start.has_value() || !end.has_value() || !peak.has_value() ||
+        *start != expected_start || *start >= *end ||
+        *end > expected_metadata.source_frames ||
+        *end - *start > expected_frames_per_bucket) {
+      return std::nullopt;
+    }
+    buckets.push_back(cooker::PeakBucket{
+        *start,
+        *end,
+        static_cast<std::uint16_t>(*peak),
+    });
+    expected_start = *end;
+  }
+  if (expected_start != expected_metadata.source_frames) {
+    return std::nullopt;
+  }
+  return cooker::WaveformEnvelope{
+      expected_metadata,
+      cooker::kWaveformAlgorithmVersion,
+      std::move(buckets),
+  };
+}
+
+std::optional<cooker::WaveformEnvelope> cached_waveform_window(
+    const cooker::WaveformEnvelope& cached,
+    const cooker::WaveformRequest& request,
+    std::uint64_t frames_per_bucket) {
+  if (request.start_frame % frames_per_bucket != 0 ||
+      (request.end_frame != cached.metadata.source_frames &&
+       request.end_frame % frames_per_bucket != 0)) {
+    return std::nullopt;
+  }
+  const auto begin = request.start_frame / frames_per_bucket;
+  const auto count = ceiling_divide(
+      request.end_frame - request.start_frame, frames_per_bucket);
+  if (begin > cached.buckets.size() ||
+      count > cached.buckets.size() - begin || count > request.bucket_count) {
+    return std::nullopt;
+  }
+  std::vector<cooker::PeakBucket> buckets(
+      cached.buckets.begin() + static_cast<std::ptrdiff_t>(begin),
+      cached.buckets.begin() +
+          static_cast<std::ptrdiff_t>(begin + count));
+  if (buckets.empty() || buckets.front().start_frame != request.start_frame ||
+      buckets.back().end_frame != request.end_frame) {
+    return std::nullopt;
+  }
+  return cooker::WaveformEnvelope{
+      cached.metadata,
+      cached.algorithm_version,
+      std::move(buckets),
+  };
+}
+
+bool valid_trigger_mode(domain::TriggerMode mode) {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+    case domain::TriggerMode::gate:
+    case domain::TriggerMode::loop_gate:
+    case domain::TriggerMode::loop_toggle:
+      return true;
+  }
+  return false;
+}
+
+struct SampleStagingCleanup {
+  ~SampleStagingCleanup() {
+    lease.reset();
+    if (platform != nullptr && !path.empty()) {
+      (void)platform->remove(path);
+    }
+  }
+
+  std::shared_ptr<project_io::ProjectStoragePlatform> platform;
+  std::filesystem::path path;
+  std::unique_ptr<project_io::ProjectWriterLease> lease;
+};
+
 foundation::Result<void> validate_initial_pattern(
     const domain::Pattern& pattern) {
   if (!domain::is_valid_uuid(pattern.id.value())) {
@@ -997,6 +1478,14 @@ struct RuntimeProjectWriterLease::Impl {
 };
 
 struct Application::Impl {
+  struct SampleImportState {
+    SampleImportBeginRequest request;
+    std::filesystem::path path;
+    std::uint64_t received_bytes;
+    bool finalized;
+    std::unique_ptr<project_io::ProjectWriterLease> lease;
+  };
+
   explicit Impl(ApplicationConfig config)
       : workspace_root(std::move(config.workspace_root)),
         registry(
@@ -1005,9 +1494,13 @@ struct Application::Impl {
                 : std::make_shared<provider::Registry>()),
         storage_platform(
             project_io::make_default_project_storage_platform()),
+        sample_limits(config.runtime_preparation_limits),
         projects(storage_platform),
         journals(storage_platform),
         bundle_transfers(storage_platform),
+        waveform_cache(
+            workspace_root / ".lmdj-host/workspace-cache",
+            storage_platform),
         attempts(
             workspace_root,
             std::move(config.provider_policy),
@@ -1022,6 +1515,60 @@ struct Application::Impl {
       throw std::runtime_error(
           "incomplete Project Bundle staging cleanup failed");
     }
+    const auto sample_cleaned = cleanup_sample_import_staging();
+    if (!sample_cleaned.has_value()) {
+      throw std::runtime_error("incomplete Sample staging cleanup failed");
+    }
+  }
+
+  foundation::Result<void> cleanup_sample_import_staging() {
+    std::lock_guard lock(sample_mutex);
+    const auto root = workspace_root / ".lmdj-host/sample-import-staging";
+    const auto present = storage_platform->directory_exists(root);
+    if (!present.has_value()) {
+      return foundation::Result<void>::failure(sample_storage_error(
+          present.error(), "Sample staging root could not be inspected"));
+    }
+    if (!present.value()) {
+      return foundation::Result<void>::success();
+    }
+    const auto names = storage_platform->list_names(root);
+    if (!names.has_value()) {
+      return foundation::Result<void>::failure(sample_storage_error(
+          names.error(), "Sample staging root could not be listed"));
+    }
+    std::size_t scanned = 0;
+    for (const auto& name : names.value()) {
+      if (scanned++ >= kMaximumSampleScavengeFiles) {
+        break;
+      }
+      const std::filesystem::path relative{name};
+      const auto token = relative.stem().string();
+      if (relative.filename() != relative || relative.extension() != ".wav" ||
+          relative.filename().string() != token + ".wav" ||
+          !domain::is_valid_uuid(token) || sample_imports.contains(token)) {
+        continue;
+      }
+      const auto path = root / relative;
+      auto lease = storage_platform->acquire_writer(path);
+      if (!lease.has_value()) {
+        if (lease.error().details.is_object() &&
+            lease.error().details.value(
+                "storage_condition", std::string{}) ==
+                project_io::kStorageConditionProjectBusy) {
+          continue;
+        }
+        return foundation::Result<void>::failure(sample_storage_error(
+            lease.error(), "Sample staging cleanup could not acquire writer"));
+      }
+      lease.value().reset();
+      const auto removed = storage_platform->remove(path);
+      if (!removed.has_value()) {
+        return foundation::Result<void>::failure(sample_storage_error(
+            removed.error(), "Sample staging cleanup failed"));
+      }
+    }
+    return foundation::Result<void>::success();
   }
 
   nlohmann::json dispatch(
@@ -1039,6 +1586,30 @@ struct Application::Impl {
 
     if (operation == "project.create") {
       return project_create(request);
+    }
+    if (operation == "sample.inspect") {
+      return sample_inspect(request);
+    }
+    if (operation == "sample.waveform") {
+      return sample_waveform(request);
+    }
+    if (operation == "sample.import.begin") {
+      return sample_import_begin(request);
+    }
+    if (operation == "sample.import.chunk") {
+      return sample_import_chunk(request);
+    }
+    if (operation == "sample.import.commit") {
+      return sample_import_commit(request);
+    }
+    if (operation == "sample.import.abort") {
+      return sample_import_abort(request);
+    }
+    if (operation == "sample.update_pad") {
+      return sample_update_pad(request);
+    }
+    if (operation == "sample.reset_pad") {
+      return sample_reset_pad(request);
     }
     if (operation == "asset.import") {
       return asset_import(request);
@@ -1330,6 +1901,667 @@ struct Application::Impl {
             request.media_type,
             request.bytes,
         });
+  }
+
+  foundation::Result<SampleInspectResult> inspect_sample(
+      const SampleInspectRequest& request) const {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<SampleInspectResult>::failure(
+          invalid_sample_request("Sample inspect request is invalid"));
+    }
+    const auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<SampleInspectResult>::failure(
+          sample_project_load_error(loaded.error()));
+    }
+    const auto& pad = loaded.value()
+                          .banks.at(request.slot.bank)
+                          .at(request.slot.pad);
+    SampleInspectResult result{
+        loaded.value().revision,
+        request.slot,
+        pad.asset_id,
+        pad.playback,
+        std::nullopt,
+        std::nullopt,
+    };
+    if (!pad.asset_id.has_value()) {
+      return foundation::Result<SampleInspectResult>::success(
+          std::move(result));
+    }
+    const auto asset = loaded.value().assets.find(*pad.asset_id);
+    if (asset == loaded.value().assets.end()) {
+      return foundation::Result<SampleInspectResult>::failure(
+          unavailable_sample());
+    }
+    const auto bytes =
+        projects.read_artifact(request.project_path, asset->second.artifact);
+    if (!bytes.has_value()) {
+      return foundation::Result<SampleInspectResult>::failure(
+          unavailable_sample());
+    }
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) {
+      return foundation::Result<SampleInspectResult>::failure(
+          metadata.error());
+    }
+    result.metadata = metadata.value();
+    result.waveform_cache_identity = waveform_cache_key(
+        asset->second.artifact,
+        canonical_waveform_frames_per_bucket(metadata.value().source_frames));
+    return foundation::Result<SampleInspectResult>::success(
+        std::move(result));
+  }
+
+  foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(
+      const SampleWaveformRequest& request) {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_slot(request.slot) ||
+        request.window.bucket_count == 0 ||
+        request.window.bucket_count > 512 ||
+        request.window.start_frame >= request.window.end_frame) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          invalid_sample_request("Sample waveform request is invalid"));
+    }
+    const auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          sample_project_load_error(loaded.error()));
+    }
+    const auto& pad = loaded.value()
+                          .banks.at(request.slot.bank)
+                          .at(request.slot.pad);
+    if (!pad.asset_id.has_value()) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          unavailable_sample());
+    }
+    const auto asset = loaded.value().assets.find(*pad.asset_id);
+    if (asset == loaded.value().assets.end()) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          unavailable_sample());
+    }
+    const auto bytes =
+        projects.read_artifact(request.project_path, asset->second.artifact);
+    if (!bytes.has_value()) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          unavailable_sample());
+    }
+    const auto decoded = cooker::decode_wav(bytes.value());
+    if (!decoded.has_value()) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          decoded.error());
+    }
+    const auto source_frames = static_cast<std::uint64_t>(
+        decoded.value()->interleaved.size() / decoded.value()->channels);
+    if (request.window.end_frame > source_frames) {
+      return foundation::Result<cooker::WaveformEnvelope>::failure(
+          invalid_sample_request(
+              "Sample waveform request is outside source bounds"));
+    }
+    const cooker::WavMetadata metadata{
+        decoded.value()->sample_rate,
+        decoded.value()->channels,
+        source_frames,
+    };
+    const auto frames_per_bucket = ceiling_divide(
+        request.window.end_frame - request.window.start_frame,
+        request.window.bucket_count);
+    const auto key =
+        waveform_cache_key(asset->second.artifact, frames_per_bucket);
+    const auto full_bucket_count =
+        ceiling_divide(source_frames, frames_per_bucket);
+    bool rebuild_cache = false;
+    if (full_bucket_count <= 512U) {
+      const auto cached = waveform_cache.read(key);
+      if (cached.has_value() && cached.value().has_value()) {
+        const auto decoded_cache = decode_waveform_cache(
+            *cached.value(), metadata, frames_per_bucket);
+        if (decoded_cache.has_value()) {
+          const auto window = cached_waveform_window(
+              *decoded_cache, request.window, frames_per_bucket);
+          if (window.has_value()) {
+            return foundation::Result<cooker::WaveformEnvelope>::success(
+                std::move(*window));
+          }
+        } else {
+          (void)waveform_cache.remove(key);
+          rebuild_cache = true;
+        }
+      } else if (cached.has_value()) {
+        rebuild_cache = true;
+      }
+    }
+    const auto computed =
+        cooker::waveform_envelope(*decoded.value(), request.window);
+    if (!computed.has_value()) {
+      return computed;
+    }
+    if (full_bucket_count <= 512U && rebuild_cache) {
+      const auto full = cooker::waveform_envelope(
+          *decoded.value(),
+          cooker::WaveformRequest{
+              0,
+              source_frames,
+              static_cast<std::uint32_t>(full_bucket_count),
+          });
+      if (full.has_value()) {
+        const auto encoded =
+            encode_waveform_cache(full.value(), frames_per_bucket);
+        (void)waveform_cache.write(key, encoded);
+      }
+    }
+    return computed;
+  }
+
+  foundation::Result<SampleImportSession> begin_sample_import(
+      const SampleImportBeginRequest& request) {
+    if (!sample_limits.has_value() ||
+        !domain::is_valid_uuid(request.import_token) ||
+        !valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.meta.command_id.value()) ||
+        !domain::is_valid_slot(request.slot) ||
+        !domain::is_valid_uuid(request.asset_id.value()) ||
+        request.byte_length == 0 ||
+        !sample_limits->allows_artifact_bytes(request.byte_length)) {
+      return foundation::Result<SampleImportSession>::failure(
+          invalid_sample_request("Sample import begin request is invalid"));
+    }
+    std::lock_guard lock(sample_mutex);
+    if (sample_imports.size() >= kMaximumSampleImportSessions) {
+      return foundation::Result<SampleImportSession>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sample import session limit reached",
+          {{"resource", "sample_import_sessions"},
+           {"observed", sample_imports.size() + 1U},
+           {"limit", kMaximumSampleImportSessions}},
+      });
+    }
+    if (used_sample_import_tokens.contains(request.import_token)) {
+      return foundation::Result<SampleImportSession>::failure(
+          invalid_sample_request("Sample import token was already used"));
+    }
+    const auto root = workspace_root / ".lmdj-host/sample-import-staging";
+    const auto ensured = storage_platform->ensure_directory(root);
+    if (!ensured.has_value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          sample_storage_error(
+              ensured.error(), "Sample staging could not be created"));
+    }
+    const auto validated = storage_platform->validate_managed_tree(root);
+    if (!validated.has_value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          sample_storage_error(
+              validated.error(), "Sample staging tree is invalid"));
+    }
+    const auto path = root / (request.import_token + ".wav");
+    auto lease = storage_platform->acquire_writer(path);
+    if (!lease.has_value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          sample_storage_error(
+              lease.error(), "Sample staging writer could not be acquired"));
+    }
+    const auto present = storage_platform->exists(path);
+    if (!present.has_value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          sample_storage_error(
+              present.error(), "Sample staging could not be inspected"));
+    }
+    if (present.value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          invalid_sample_request("Sample import token was already used"));
+    }
+    const auto created = storage_platform->create_immutable(path, {});
+    if (!created.has_value()) {
+      return foundation::Result<SampleImportSession>::failure(
+          sample_storage_error(
+              created.error(), "Sample staging could not be created"));
+    }
+    if (used_sample_import_tokens.size() >=
+        kMaximumRememberedSampleImportTokens) {
+      used_sample_import_tokens.erase(
+          remembered_sample_import_tokens.front());
+      remembered_sample_import_tokens.pop_front();
+    }
+    used_sample_import_tokens.insert(request.import_token);
+    remembered_sample_import_tokens.push_back(request.import_token);
+    sample_imports.emplace(
+        request.import_token,
+        SampleImportState{
+            request,
+            path,
+            0,
+            false,
+            std::move(lease.value()),
+        });
+    return foundation::Result<SampleImportSession>::success(
+        SampleImportSession{request.import_token, request.byte_length});
+  }
+
+  foundation::Result<void> append_sample_import(
+      std::string_view token,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes,
+      bool final) {
+    if (!domain::is_valid_uuid(token) ||
+        bytes.size() > kMaximumSampleImportChunkBytes ||
+        (bytes.empty() && !final)) {
+      return foundation::Result<void>::failure(
+          invalid_sample_request("Sample import chunk request is invalid"));
+    }
+    std::lock_guard lock(sample_mutex);
+    const auto found = sample_imports.find(std::string{token});
+    if (found == sample_imports.end() || found->second.finalized ||
+        offset != found->second.received_bytes ||
+        bytes.size() > found->second.request.byte_length -
+                           found->second.received_bytes ||
+        (final && found->second.received_bytes + bytes.size() !=
+                      found->second.request.byte_length)) {
+      return foundation::Result<void>::failure(
+          invalid_sample_request("Sample import chunk request is invalid"));
+    }
+    const auto appended = storage_platform->append_durable(
+        found->second.path, offset, bytes);
+    if (!appended.has_value()) {
+      found->second.lease.reset();
+      (void)storage_platform->remove(found->second.path);
+      sample_imports.erase(found);
+      return foundation::Result<void>::failure(sample_storage_error(
+          appended.error(), "Sample staging append failed"));
+    }
+    found->second.received_bytes += bytes.size();
+    found->second.finalized = final;
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<SampleMutationResult> commit_sample_import(
+      std::string_view token) {
+    if (!domain::is_valid_uuid(token)) {
+      return foundation::Result<SampleMutationResult>::failure(
+          invalid_sample_request("Sample import commit token is invalid"));
+    }
+    std::optional<SampleImportState> owned;
+    {
+      std::lock_guard lock(sample_mutex);
+      const auto found = sample_imports.find(std::string{token});
+      if (found == sample_imports.end()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            invalid_sample_request("Sample import session does not exist"));
+      }
+      owned.emplace(std::move(found->second));
+      sample_imports.erase(found);
+    }
+    auto state = std::move(*owned);
+    SampleStagingCleanup cleanup{
+        storage_platform,
+        state.path,
+        std::move(state.lease),
+    };
+    if (!state.finalized || state.received_bytes != state.request.byte_length) {
+      return foundation::Result<SampleMutationResult>::failure(
+          invalid_sample_request("Sample import is incomplete"));
+    }
+    const auto bytes = storage_platform->read_complete(state.path);
+    if (!bytes.has_value() || bytes.value().size() != state.request.byte_length) {
+      return foundation::Result<SampleMutationResult>::failure(
+          sample_storage_error(
+              bytes.has_value()
+                  ? invalid_sample_request("Sample staging length changed")
+                  : bytes.error(),
+              "Sample staging could not be read"));
+    }
+    const auto metadata = cooker::inspect_wav(bytes.value());
+    if (!metadata.has_value()) {
+      return foundation::Result<SampleMutationResult>::failure(
+          metadata.error());
+    }
+    if (!sample_limits.has_value() ||
+        !sample_limits->allows_decoded_frames_per_pad(
+            metadata.value().source_frames)) {
+      return foundation::Result<SampleMutationResult>::failure(Error{
+          ErrorCode::unsupported_audio,
+          "Sample exceeds the active decoded frame limit",
+          {{"resource", "decoded_frames_per_pad"},
+           {"observed", metadata.value().source_frames},
+           {"limit",
+            sample_limits.has_value()
+                ? sample_limits->maximum_decoded_frames_per_pad
+                : 0U}},
+      });
+    }
+    const auto committed = projects.import_assign_sample_bytes(
+        state.request.project_path,
+        project_io::ProjectStore::ImportAssignSampleBytesRequest{
+            state.request.meta,
+            state.request.slot,
+            state.request.asset_id,
+            "audio/wav",
+            bytes.value(),
+        });
+    if (!committed.has_value()) {
+      return foundation::Result<SampleMutationResult>::failure(
+          committed.error());
+    }
+    return foundation::Result<SampleMutationResult>::success(
+        SampleMutationResult{committed.value().state.revision, true});
+  }
+
+  foundation::Result<void> abort_sample_import(std::string_view token) {
+    if (!domain::is_valid_uuid(token)) {
+      return foundation::Result<void>::failure(
+          invalid_sample_request("Sample import abort token is invalid"));
+    }
+    std::lock_guard lock(sample_mutex);
+    const auto found = sample_imports.find(std::string{token});
+    if (found == sample_imports.end()) {
+      return foundation::Result<void>::failure(
+          invalid_sample_request("Sample import session does not exist"));
+    }
+    found->second.lease.reset();
+    const auto removed = storage_platform->remove(found->second.path);
+    sample_imports.erase(found);
+    if (!removed.has_value()) {
+      return foundation::Result<void>::failure(sample_storage_error(
+          removed.error(), "Sample staging could not be removed"));
+    }
+    return foundation::Result<void>::success();
+  }
+
+  foundation::Result<SampleMutationResult> update_sample_pad(
+      const SampleUpdateRequest& request) {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.meta.command_id.value()) ||
+        !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<SampleMutationResult>::failure(
+          invalid_sample_request("Sample update request is invalid"));
+    }
+    const auto loaded = projects.load(request.project_path);
+    if (!loaded.has_value()) {
+      return foundation::Result<SampleMutationResult>::failure(
+          sample_project_load_error(loaded.error()));
+    }
+    if (loaded.value().revision == request.meta.expected_revision) {
+      const auto& pad = loaded.value()
+                            .banks.at(request.slot.bank)
+                            .at(request.slot.pad);
+      if (!pad.asset_id.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            unavailable_sample());
+      }
+      const auto asset = loaded.value().assets.find(*pad.asset_id);
+      if (asset == loaded.value().assets.end()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            unavailable_sample());
+      }
+      const auto bytes =
+          projects.read_artifact(request.project_path, asset->second.artifact);
+      if (!bytes.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            unavailable_sample());
+      }
+      const auto metadata = cooker::inspect_wav(bytes.value());
+      if (!metadata.has_value()) {
+        return foundation::Result<SampleMutationResult>::failure(
+            metadata.error());
+      }
+      const auto& playback = request.playback;
+      if (!valid_trigger_mode(playback.trigger_mode) ||
+          playback.gain_millidb < -60'000 ||
+          playback.gain_millidb > 6'000 ||
+          playback.trim_start_frame >= metadata.value().source_frames ||
+          (playback.trim_end_frame.has_value() &&
+           (*playback.trim_end_frame <= playback.trim_start_frame ||
+            *playback.trim_end_frame > metadata.value().source_frames))) {
+        return foundation::Result<SampleMutationResult>::failure(
+            invalid_sample_request("Sample playback selection is invalid"));
+      }
+    }
+    const auto updated = projects.execute(
+        request.project_path,
+        domain::UpdatePadPlayback{
+            request.meta,
+            request.slot,
+            request.playback,
+        });
+    if (!updated.has_value()) {
+      return foundation::Result<SampleMutationResult>::failure(updated.error());
+    }
+    const bool runtime_required = updated.value()
+                                      .state.banks.at(request.slot.bank)
+                                      .at(request.slot.pad)
+                                      .asset_id.has_value();
+    return foundation::Result<SampleMutationResult>::success(
+        SampleMutationResult{
+            updated.value().state.revision,
+            runtime_required,
+        });
+  }
+
+  foundation::Result<SampleMutationResult> reset_sample_pad(
+      const SampleResetRequest& request) {
+    if (!valid_host_project_path(request.project_path) ||
+        !domain::is_valid_uuid(request.meta.command_id.value()) ||
+        !domain::is_valid_slot(request.slot)) {
+      return foundation::Result<SampleMutationResult>::failure(
+          invalid_sample_request("Sample reset request is invalid"));
+    }
+    const auto reset = projects.execute(
+        request.project_path,
+        domain::ResetPadPlayback{request.meta, request.slot});
+    if (!reset.has_value()) {
+      return foundation::Result<SampleMutationResult>::failure(reset.error());
+    }
+    const bool runtime_required = reset.value()
+                                      .state.banks.at(request.slot.bank)
+                                      .at(request.slot.pad)
+                                      .asset_id.has_value();
+    return foundation::Result<SampleMutationResult>::success(
+        SampleMutationResult{
+            reset.value().state.revision,
+            runtime_required,
+        });
+  }
+
+  nlohmann::json sample_inspect(const nlohmann::json& request) const {
+    require(
+        exact_keys(request, {"operation", "project_path", "slot"}),
+        "sample.inspect request shape is invalid");
+    const auto inspected = inspect_sample(SampleInspectRequest{
+        absolute_path_field(request, "project_path"),
+        slot_value(request.at("slot")),
+    });
+    if (!inspected.has_value()) {
+      return sample_error_envelope(inspected.error());
+    }
+    const auto& result = inspected.value();
+    return success_envelope(
+        {
+            {"project_revision", result.project_revision},
+            {"slot", slot_json(result.slot)},
+            {"asset_id",
+             result.asset_id.has_value()
+                 ? nlohmann::json(result.asset_id->value())
+                 : nlohmann::json(nullptr)},
+            {"playback", playback_json(result.playback)},
+            {"metadata",
+             result.metadata.has_value()
+                 ? wav_metadata_json(*result.metadata)
+                 : nlohmann::json(nullptr)},
+            {"waveform_cache_identity",
+             result.waveform_cache_identity.has_value()
+                 ? nlohmann::json(*result.waveform_cache_identity)
+                 : nlohmann::json(nullptr)},
+        },
+        result.project_revision);
+  }
+
+  nlohmann::json sample_waveform(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request, {"operation", "project_path", "slot", "window"}),
+        "sample.waveform request shape is invalid");
+    const SampleWaveformRequest parsed{
+        absolute_path_field(request, "project_path"),
+        slot_value(request.at("slot")),
+        waveform_request_value(request.at("window")),
+    };
+    const auto inspected = inspect_sample(
+        SampleInspectRequest{parsed.project_path, parsed.slot});
+    if (!inspected.has_value()) {
+      return sample_error_envelope(inspected.error());
+    }
+    const auto waveform = query_sample_waveform(parsed);
+    if (!waveform.has_value()) {
+      return sample_error_envelope(waveform.error());
+    }
+    auto buckets = nlohmann::json::array();
+    for (const auto& bucket : waveform.value().buckets) {
+      buckets.push_back(peak_bucket_json(bucket));
+    }
+    return success_envelope(
+        {
+            {"metadata", wav_metadata_json(waveform.value().metadata)},
+            {"algorithm_version", waveform.value().algorithm_version},
+            {"buckets", std::move(buckets)},
+        },
+        inspected.value().project_revision);
+  }
+
+  nlohmann::json sample_import_begin(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation",
+             "import_token",
+             "project_path",
+             "command_id",
+             "expected_revision",
+             "slot",
+             "asset_id",
+             "byte_length"}),
+        "sample.import.begin request shape is invalid");
+    const auto begun = begin_sample_import(SampleImportBeginRequest{
+        uuid_field(request, "import_token"),
+        absolute_path_field(request, "project_path"),
+        domain::CommandMeta{
+            foundation::CommandId{uuid_field(request, "command_id")},
+            unsigned_field(request, "expected_revision"),
+        },
+        slot_value(request.at("slot")),
+        foundation::AssetId{uuid_field(request, "asset_id")},
+        unsigned_field(request, "byte_length", 1'048'576U),
+    });
+    if (!begun.has_value()) {
+      return sample_error_envelope(begun.error());
+    }
+    return success_envelope(
+        {{"token", begun.value().token},
+         {"expected_bytes", begun.value().expected_bytes}},
+        std::nullopt);
+  }
+
+  nlohmann::json sample_import_chunk(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "import_token", "offset", "final", "sidecar"}),
+        "sample.import.chunk request shape is invalid");
+    (void)uuid_field(request, "import_token");
+    (void)unsigned_field(request, "offset");
+    require(request.at("final").is_boolean(), "final must be a boolean");
+    const auto& sidecar = request.at("sidecar");
+    require(
+        exact_keys(sidecar, {"sidecar_bytes", "sidecar_sha256"}),
+        "sample.import.chunk sidecar shape is invalid");
+    (void)unsigned_field(sidecar, "sidecar_bytes", 1'048'576U);
+    const auto& hash = string_field(sidecar, "sidecar_sha256");
+    require(lowercase_sha256(hash), "sidecar_sha256 is invalid");
+    return sample_error_envelope(invalid_sample_request(
+        "Sample import binary sidecar is unavailable on this bridge"));
+  }
+
+  nlohmann::json sample_import_commit(const nlohmann::json& request) {
+    require(
+        exact_keys(request, {"operation", "import_token"}),
+        "sample.import.commit request shape is invalid");
+    const auto committed =
+        commit_sample_import(uuid_field(request, "import_token"));
+    if (!committed.has_value()) {
+      return sample_error_envelope(committed.error());
+    }
+    return success_envelope(
+        {{"committed_revision", committed.value().committed_revision},
+         {"runtime_prepare_required",
+          committed.value().runtime_prepare_required}},
+        committed.value().committed_revision);
+  }
+
+  nlohmann::json sample_import_abort(const nlohmann::json& request) {
+    require(
+        exact_keys(request, {"operation", "import_token"}),
+        "sample.import.abort request shape is invalid");
+    const auto aborted =
+        abort_sample_import(uuid_field(request, "import_token"));
+    if (!aborted.has_value()) {
+      return sample_error_envelope(aborted.error());
+    }
+    return success_envelope({{"aborted", true}}, std::nullopt);
+  }
+
+  nlohmann::json sample_update_pad(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation",
+             "project_path",
+             "command_id",
+             "expected_revision",
+             "slot",
+             "playback"}),
+        "sample.update_pad request shape is invalid");
+    const auto updated = update_sample_pad(SampleUpdateRequest{
+        absolute_path_field(request, "project_path"),
+        domain::CommandMeta{
+            foundation::CommandId{uuid_field(request, "command_id")},
+            unsigned_field(request, "expected_revision"),
+        },
+        slot_value(request.at("slot")),
+        playback_value(request.at("playback")),
+    });
+    if (!updated.has_value()) {
+      return sample_error_envelope(updated.error());
+    }
+    return success_envelope(
+        {{"committed_revision", updated.value().committed_revision},
+         {"runtime_prepare_required", updated.value().runtime_prepare_required}},
+        updated.value().committed_revision);
+  }
+
+  nlohmann::json sample_reset_pad(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation",
+             "project_path",
+             "command_id",
+             "expected_revision",
+             "slot"}),
+        "sample.reset_pad request shape is invalid");
+    const auto reset = reset_sample_pad(SampleResetRequest{
+        absolute_path_field(request, "project_path"),
+        domain::CommandMeta{
+            foundation::CommandId{uuid_field(request, "command_id")},
+            unsigned_field(request, "expected_revision"),
+        },
+        slot_value(request.at("slot")),
+    });
+    if (!reset.has_value()) {
+      return sample_error_envelope(reset.error());
+    }
+    return success_envelope(
+        {{"committed_revision", reset.value().committed_revision},
+         {"runtime_prepare_required", reset.value().runtime_prepare_required}},
+        reset.value().committed_revision);
   }
 
   foundation::Result<void> append_realtime_take_events(
@@ -2128,10 +3360,16 @@ struct Application::Impl {
   std::filesystem::path workspace_root;
   std::shared_ptr<provider::Registry> registry;
   std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform;
+  std::optional<audio::RuntimePreparationLimits> sample_limits;
   project_io::ProjectStore projects;
   project_io::TakeJournal journals;
   project_io::ProjectBundleTransfer bundle_transfers;
+  project_io::WorkspaceCacheStore waveform_cache;
   provider::AttemptStore attempts;
+  mutable std::mutex sample_mutex;
+  std::map<std::string, SampleImportState> sample_imports;
+  std::set<std::string> used_sample_import_tokens;
+  std::deque<std::string> remembered_sample_import_tokens;
 };
 
 Application::Application(ApplicationConfig config)
@@ -2155,8 +3393,10 @@ nlohmann::json Application::command(const nlohmann::json& request) {
   try {
     return impl_->dispatch(request, OperationKind::command);
   } catch (const InvalidRequest& error) {
-    return error_envelope(
-        Error{ErrorCode::invalid_argument, error.what()});
+    const Error invalid_request{ErrorCode::invalid_argument, error.what()};
+    return sample_operation_request(request)
+               ? sample_error_envelope(invalid_request)
+               : error_envelope(invalid_request);
   } catch (...) {
     return internal_error();
   }
@@ -2167,8 +3407,10 @@ nlohmann::json Application::query(
   try {
     return impl_->dispatch(request, OperationKind::query);
   } catch (const InvalidRequest& error) {
-    return error_envelope(
-        Error{ErrorCode::invalid_argument, error.what()});
+    const Error invalid_request{ErrorCode::invalid_argument, error.what()};
+    return sample_operation_request(request)
+               ? sample_error_envelope(invalid_request)
+               : error_envelope(invalid_request);
   } catch (...) {
     return internal_error();
   }
@@ -2326,6 +3568,105 @@ foundation::Result<void> Application::abort_project_bundle_import(
             ErrorCode::internal_error,
             "unexpected Application Facade Host API failure",
         });
+  }
+}
+
+foundation::Result<SampleInspectResult> Application::inspect_sample(
+    const SampleInspectRequest& request) const {
+  try {
+    return impl_->inspect_sample(request);
+  } catch (...) {
+    return foundation::Result<SampleInspectResult>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<cooker::WaveformEnvelope>
+Application::query_sample_waveform(const SampleWaveformRequest& request) {
+  try {
+    return impl_->query_sample_waveform(request);
+  } catch (...) {
+    return foundation::Result<cooker::WaveformEnvelope>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SampleImportSession> Application::begin_sample_import(
+    const SampleImportBeginRequest& request) {
+  try {
+    return impl_->begin_sample_import(request);
+  } catch (...) {
+    return foundation::Result<SampleImportSession>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<void> Application::append_sample_import(
+    std::string_view token,
+    std::uint64_t offset,
+    std::span<const std::byte> bytes,
+    bool final) {
+  try {
+    return impl_->append_sample_import(token, offset, bytes, final);
+  } catch (...) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SampleMutationResult> Application::commit_sample_import(
+    std::string_view token) {
+  try {
+    return impl_->commit_sample_import(token);
+  } catch (...) {
+    return foundation::Result<SampleMutationResult>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<void> Application::abort_sample_import(
+    std::string_view token) {
+  try {
+    return impl_->abort_sample_import(token);
+  } catch (...) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SampleMutationResult> Application::update_sample_pad(
+    const SampleUpdateRequest& request) {
+  try {
+    return impl_->update_sample_pad(request);
+  } catch (...) {
+    return foundation::Result<SampleMutationResult>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
+  }
+}
+
+foundation::Result<SampleMutationResult> Application::reset_sample_pad(
+    const SampleResetRequest& request) {
+  try {
+    return impl_->reset_sample_pad(request);
+  } catch (...) {
+    return foundation::Result<SampleMutationResult>::failure(Error{
+        ErrorCode::internal_error,
+        "unexpected Application Facade Host API failure",
+    });
   }
 }
 
