@@ -196,7 +196,7 @@ fetch_remote_authority() {
     return
   }
   case "$origin_url" in
-    https://github.com/endaye/lmdj.git|https://endaye@github.com/endaye/lmdj.git|git@github.com:endaye/lmdj.git|ssh://git@github.com/endaye/lmdj.git) ;;
+    https://github.com/endaye/lmdj|https://github.com/endaye/lmdj.git|https://endaye@github.com/endaye/lmdj.git|git@github.com:endaye/lmdj.git|ssh://git@github.com/endaye/lmdj.git) ;;
     *) fail "origin remote is not the canonical repository"; return ;;
   esac
   remote_tag_ref="refs/lmdj-deploy/tags/$tag"
