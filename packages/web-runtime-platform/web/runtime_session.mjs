@@ -18,6 +18,7 @@ import {
 import { PREFLIGHT_CAPABILITIES, runPreflight } from "./preflight.mjs";
 import {
   HostProtocolError,
+  MAX_ASSET_BYTES,
   createRequestEnvelope,
   deadlineForOperation,
   validateNotificationEnvelope,
@@ -29,7 +30,6 @@ import { createHostStateMachine } from "./state_machine.mjs";
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
-const SAMPLE_IMPORT_CHUNK_BYTES = 1_048_576;
 const SAMPLE_PREVIEW_SLOT_LIMIT = 64;
 const VOICE_LISTENER_LIMIT = 64;
 const VOICE_NOTIFICATION_EVENT_LIMIT = 4_096;
@@ -318,6 +318,28 @@ function normalizeMetadata(value) {
   });
 }
 
+function canonicalWaveformFramesPerBucket(sourceFrames) {
+  return Math.ceil(sourceFrames / Math.min(sourceFrames, 512));
+}
+
+function normalizeWaveformCacheIdentity(value, metadata) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    throw protocolMismatch("Sample waveform cache identity is invalid");
+  }
+  const match = /^([0-9a-f]{64})\/1\/max-abs-mirror\/([1-9][0-9]*)$/.exec(
+    value,
+  );
+  const framesPerBucket = match === null ? NaN : Number(match[2]);
+  if (
+    match === null ||
+    !isUnsignedInteger(framesPerBucket) ||
+    framesPerBucket !== canonicalWaveformFramesPerBucket(metadata.sourceFrames)
+  ) {
+    throw protocolMismatch("Sample waveform cache identity is invalid");
+  }
+  return value;
+}
+
 function normalizeSnapshotError(value) {
   if (
     !exactKeys(value, ["code", "message", "details"]) ||
@@ -350,11 +372,7 @@ function normalizeSampleInspect(value, expectedSlot) {
     ]) ||
     !isUnsignedInteger(value.project_revision) ||
     !(value.asset_id === null ||
-      (typeof value.asset_id === "string" && UUID_PATTERN.test(value.asset_id))) ||
-    !(value.waveform_cache_identity === null ||
-      (typeof value.waveform_cache_identity === "string" &&
-        value.waveform_cache_identity.length > 0 &&
-        value.waveform_cache_identity.length <= 512))
+      (typeof value.asset_id === "string" && UUID_PATTERN.test(value.asset_id)))
   ) {
     throw protocolMismatch("Sample inspect result is invalid");
   }
@@ -362,13 +380,26 @@ function normalizeSampleInspect(value, expectedSlot) {
   if (slot !== expectedSlot) {
     throw protocolMismatch("Sample inspect slot does not match the request");
   }
+  const metadata = value.metadata === null
+    ? null
+    : normalizeMetadata(value.metadata);
+  if (
+    (value.asset_id === null &&
+      (metadata !== null || value.waveform_cache_identity !== null)) ||
+    (value.asset_id !== null &&
+      (metadata === null || value.waveform_cache_identity === null))
+  ) {
+    throw protocolMismatch("Sample inspect Asset truth is invalid");
+  }
   return Object.freeze({
     projectRevision: value.project_revision,
     slot,
     assetId: value.asset_id,
     playback: normalizePlayback(value.playback),
-    metadata: value.metadata === null ? null : normalizeMetadata(value.metadata),
-    waveformCacheIdentity: value.waveform_cache_identity,
+    metadata,
+    waveformCacheIdentity: metadata === null
+      ? null
+      : normalizeWaveformCacheIdentity(value.waveform_cache_identity, metadata),
   });
 }
 
@@ -381,8 +412,7 @@ function normalizeWaveform(value, request) {
       "project_revision",
     ]) ||
     !isUnsignedInteger(value.project_revision) ||
-    !isUnsignedInteger(value.algorithm_version) ||
-    value.algorithm_version === 0 ||
+    value.algorithm_version !== 1 ||
     !Array.isArray(value.buckets) ||
     value.buckets.length === 0 ||
     value.buckets.length > request.window.bucketCount
@@ -390,14 +420,29 @@ function normalizeWaveform(value, request) {
     throw protocolMismatch("Sample waveform result is invalid");
   }
   const metadata = normalizeMetadata(value.metadata);
+  const windowFrames = request.window.endFrame - request.window.startFrame;
+  const framesPerBucket = Math.ceil(
+    windowFrames / request.window.bucketCount,
+  );
+  const expectedBucketCount = Math.ceil(windowFrames / framesPerBucket);
+  if (
+    metadata.sourceFrames < request.window.endFrame ||
+    value.buckets.length !== expectedBucketCount
+  ) {
+    throw protocolMismatch("Sample waveform result is invalid");
+  }
   const buckets = [];
-  let expectedStart = request.window.startFrame;
-  for (const bucket of value.buckets) {
+  for (const [index, bucket] of value.buckets.entries()) {
+    const expectedStart =
+      request.window.startFrame + index * framesPerBucket;
+    const expectedEnd = Math.min(
+      request.window.endFrame,
+      expectedStart + framesPerBucket,
+    );
     if (
       !exactKeys(bucket, ["start_frame", "end_frame", "peak_magnitude"]) ||
       bucket.start_frame !== expectedStart ||
-      !isUnsignedInteger(bucket.end_frame) ||
-      bucket.end_frame <= bucket.start_frame ||
+      bucket.end_frame !== expectedEnd ||
       !isUnsignedInteger(bucket.peak_magnitude, 32_768)
     ) {
       throw protocolMismatch("Sample waveform bucket is invalid");
@@ -407,10 +452,6 @@ function normalizeWaveform(value, request) {
       endFrame: bucket.end_frame,
       peakMagnitude: bucket.peak_magnitude,
     }));
-    expectedStart = bucket.end_frame;
-  }
-  if (expectedStart !== request.window.endFrame) {
-    throw protocolMismatch("Sample waveform window is incomplete");
   }
   return Object.freeze({
     metadata,
@@ -426,23 +467,28 @@ function normalizeSampleCommit(value) {
     "runtime_revision",
     "runtime_published",
   ];
-  const hasSnapshotError = Object.hasOwn(value ?? {}, "snapshot_error");
+  const published = value?.runtime_published;
+  const hasSnapshotError = published === false;
   if (
     !exactKeys(value, hasSnapshotError ? [...keys, "snapshot_error"] : keys) ||
     !isUnsignedInteger(value.committed_revision) ||
     !(value.runtime_revision === null ||
       isUnsignedInteger(value.runtime_revision)) ||
-    typeof value.runtime_published !== "boolean"
+    typeof published !== "boolean" ||
+    (published &&
+      (value.runtime_revision === null ||
+        value.runtime_revision < value.committed_revision))
   ) {
     throw protocolMismatch("Sample mutation result is invalid");
   }
+  const snapshotError = published
+    ? null
+    : normalizeSnapshotError(value.snapshot_error);
   return Object.freeze({
     committedRevision: value.committed_revision,
     runtimeRevision: value.runtime_revision,
-    runtimePublished: value.runtime_published,
-    snapshotError: hasSnapshotError
-      ? normalizeSnapshotError(value.snapshot_error)
-      : null,
+    runtimePublished: published,
+    snapshotError,
   });
 }
 
@@ -469,9 +515,18 @@ function normalizeSnapshotPublication(value, expectedPatternId) {
     !isUnsignedInteger(value.project_revision) ||
     value.pattern_id !== expectedPatternId ||
     typeof value.runtime_ready !== "boolean" ||
-    !(value.generation === null || isPositiveInteger(value.generation)) ||
     !(value.runtime_revision === null ||
-      isUnsignedInteger(value.runtime_revision))
+      isUnsignedInteger(value.runtime_revision)) ||
+    (value.runtime_ready &&
+      (!isUnsignedInteger(value.generation) ||
+        value.runtime_revision === null ||
+        value.runtime_revision !== value.project_revision ||
+        value.snapshot_error !== null)) ||
+    (!value.runtime_ready &&
+      (value.generation !== null ||
+        value.snapshot_error === null ||
+        (value.runtime_revision !== null &&
+          value.runtime_revision > value.project_revision)))
   ) {
     throw protocolMismatch("Snapshot publication result is invalid");
   }
@@ -485,6 +540,50 @@ function normalizeSnapshotPublication(value, expectedPatternId) {
       ? null
       : normalizeSnapshotError(value.snapshot_error),
     runtimeRevision: value.runtime_revision,
+  });
+}
+
+function normalizeSnapshotNotification(event, payload) {
+  if (event === "snapshot.published") {
+    const legacy = exactKeys(payload, ["generation"]);
+    const task6 = exactKeys(payload, ["generation", "project_revision"]);
+    if (
+      (!legacy && !task6) ||
+      !isUnsignedInteger(payload?.generation) ||
+      (task6 && !isUnsignedInteger(payload.project_revision))
+    ) {
+      throw protocolMismatch("Snapshot published notification is invalid");
+    }
+    return Object.freeze({
+      generation: payload.generation,
+      projectRevision: task6 ? payload.project_revision : null,
+      snapshotError: null,
+      runtimeRevision: null,
+    });
+  }
+
+  const legacy = exactKeys(payload, ["error"]);
+  const task6 = exactKeys(payload, [
+    "project_revision",
+    "runtime_revision",
+    "error",
+  ]);
+  if (
+    (!legacy && !task6) ||
+    (task6 &&
+      (!isUnsignedInteger(payload.project_revision) ||
+        !(payload.runtime_revision === null ||
+          isUnsignedInteger(payload.runtime_revision)) ||
+        (payload.runtime_revision !== null &&
+          payload.runtime_revision > payload.project_revision)))
+  ) {
+    throw protocolMismatch("Snapshot rejected notification is invalid");
+  }
+  return Object.freeze({
+    generation: null,
+    projectRevision: task6 ? payload.project_revision : null,
+    snapshotError: normalizeSnapshotError(payload.error),
+    runtimeRevision: task6 ? payload.runtime_revision : null,
   });
 }
 
@@ -931,6 +1030,7 @@ function createRuntimeSessionController(options = {}) {
     host_version: assemblyIdentity.hostVersion,
     protocol_version: assemblyIdentity.protocolVersion,
   });
+  let verifiedSampleImportLimit = null;
   let runtime = null;
   let audioContext = null;
   let contextHandle = null;
@@ -959,6 +1059,8 @@ function createRuntimeSessionController(options = {}) {
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
   let interruptionReservation = null;
+  let safetyReservation = null;
+  let fatalReservation = null;
   let capabilitySnapshot = Object.freeze({
     secureContext: false,
     crossOriginIsolated: false,
@@ -1049,30 +1151,66 @@ function createRuntimeSessionController(options = {}) {
     renderDiagnostics();
   }
 
-  function clearPreviewsForCancellation(onlySlot = null) {
+  async function clearOwnedPreviews(onlySlot = null, bestEffort = false) {
     const selected = onlySlot === null
       ? [...activePreviewSlots]
       : activePreviewSlots.has(onlySlot) ? [onlySlot] : [];
     for (const flatSlot of selected) {
       activePreviewSlots.delete(flatSlot);
       const slot = flatSlotAddress(flatSlot);
-      void serializeRuntimeAction(async () => {
-        try {
-          normalizeAccepted(await boundedRequest(
-            "sample.preview.clear",
-            {slot},
-          ));
-        } catch {
-          // Cancellation is best effort; local preview ownership is cleared.
+      try {
+        normalizeAccepted(await boundedRequest(
+          "sample.preview.clear",
+          {slot},
+        ));
+      } catch (error) {
+        if (!bestEffort) {
+          throw error;
         }
-      });
+        // Safety and cancellation clear local preview ownership fail closed.
+      }
     }
   }
 
-  function runSafetyCleanup() {
+  function clearPreviewsForCancellation(onlySlot = null) {
+    void serializeRuntimeAction(() =>
+      clearOwnedPreviews(onlySlot, true)).catch(() => {});
+  }
+
+  async function stopAllInRuntimeLane(bestEffort = false) {
+    try {
+      const result = await boundedRequest("sample.stop", {});
+      if (result?.scope !== "all") {
+        throw protocolMismatch("Sample stop scope is invalid");
+      }
+      return normalizeAccepted(result, ["accepted", "scope"]);
+    } catch (error) {
+      if (!bestEffort) {
+        throw error;
+      }
+      return false;
+    }
+  }
+
+  function beginSafetyCleanup(reason) {
+    if (safetyReservation !== null) {
+      return safetyReservation;
+    }
+    const reservation = {reason, promise: null};
+    safetyReservation = reservation;
+    reservation.promise = serializeRuntimeAction(async () => {
+      await clearOwnedPreviews(null, true);
+      return stopAllInRuntimeLane(true);
+    });
+    Object.freeze(reservation);
     clearPressed();
-    clearPreviewsForCancellation();
-    return stopAll().catch(() => false);
+    return reservation;
+  }
+
+  function releaseSafetyReservation(reservation) {
+    if (safetyReservation === reservation && !closing) {
+      safetyReservation = null;
+    }
   }
 
   function cleanupForTransition(targetState) {
@@ -1133,24 +1271,41 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function fail(codeOrError) {
-    if (["restart-required", "failed", "closed"].includes(machine.state)) {
+    if (
+      fatalReservation !== null ||
+      ["restart-required", "failed", "closed"].includes(machine.state)
+    ) {
       return false;
     }
-    lastErrorCode =
+    const code =
       typeof codeOrError === "string"
         ? validatedErrorCode(codeOrError)
         : errorCode(codeOrError);
+    lastErrorCode = code;
     lastErrorDetails =
       typeof codeOrError === "string"
         ? Object.freeze({})
         : safeErrorDetails(codeOrError);
     closing = true;
-    machine.transition(
-      ["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(lastErrorCode)
-        ? "restart-required"
-        : "failed",
-      {reason: lastErrorCode},
-    );
+    const target = ["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(code)
+      ? "restart-required"
+      : "failed";
+    const safety = beginSafetyCleanup(`fatal:${code}`);
+    const reservation = Object.freeze({code, safety, target});
+    fatalReservation = reservation;
+    void safety.promise.then(() => {
+      if (
+        fatalReservation !== reservation ||
+        ["restart-required", "failed", "closed"].includes(machine.state)
+      ) {
+        return;
+      }
+      invalidateProbe();
+      machine.transition(target, {reason: code});
+      renderDiagnostics();
+    }).catch(() => {
+      // The best-effort safety lane absorbs Host cleanup failures.
+    });
     renderDiagnostics();
     return true;
   }
@@ -1245,7 +1400,8 @@ function createRuntimeSessionController(options = {}) {
       velocity > 127 ||
       !TRIGGER_SOURCES.has(source) ||
       closing ||
-      interruptionReservation !== null
+      interruptionReservation !== null ||
+      safetyReservation !== null
     ) {
       return rejectTrigger();
     }
@@ -1393,7 +1549,8 @@ function createRuntimeSessionController(options = {}) {
     }
     const reservation = Object.freeze({reason});
     interruptionReservation = reservation;
-    void runSafetyCleanup().then(async () => {
+    const safety = beginSafetyCleanup(`interruption:${reason}`);
+    void safety.promise.then(async () => {
       if (closing || interruptionReservation !== reservation) {
         return;
       }
@@ -1427,6 +1584,7 @@ function createRuntimeSessionController(options = {}) {
       if (interruptionReservation === reservation) {
         interruptionReservation = null;
       }
+      releaseSafetyReservation(safety);
     });
     return true;
   }
@@ -1664,8 +1822,23 @@ function createRuntimeSessionController(options = {}) {
       }
       return;
     }
-    if (notification.event === "snapshot.published") {
-      controlGeneration = notification.payload?.generation ?? controlGeneration;
+    if (
+      notification.event === "snapshot.published" ||
+      notification.event === "snapshot.rejected"
+    ) {
+      let snapshot;
+      try {
+        snapshot = normalizeSnapshotNotification(
+          notification.event,
+          notification.payload,
+        );
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      if (notification.event === "snapshot.published") {
+        controlGeneration = snapshot.generation;
+      }
     }
     renderDiagnostics();
   }
@@ -1773,11 +1946,16 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function suspendAudio() {
-    if (closing || machine.state !== "running") {
+    if (
+      closing ||
+      safetyReservation !== null ||
+      machine.state !== "running"
+    ) {
       return false;
     }
+    const safety = beginSafetyCleanup("audio.suspend");
     try {
-      await runSafetyCleanup();
+      await safety.promise;
       if (closing || machine.state !== "running") {
         return false;
       }
@@ -1791,6 +1969,8 @@ function createRuntimeSessionController(options = {}) {
     } catch (error) {
       fail(error);
       return false;
+    } finally {
+      releaseSafetyReservation(safety);
     }
   }
 
@@ -1969,11 +2149,17 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw typedError("UNSUPPORTED_AUDIO", "Sample source is invalid");
       }
-      if (file.size > SAMPLE_IMPORT_CHUNK_BYTES) {
+      if (verifiedSampleImportLimit === null) {
+        throw typedError(
+          "HOST_STATE_INVALID",
+          "Verified Sample import limits are unavailable",
+        );
+      }
+      if (file.size > verifiedSampleImportLimit) {
         throw typedError(
           "WEB_RUNTIME_RESOURCE_LIMIT",
           "Sample source exceeds the Web Runtime limit",
-          {limit: SAMPLE_IMPORT_CHUNK_BYTES, observed: file.size},
+          {limit: verifiedSampleImportLimit, observed: file.size},
         );
       }
       const totalBytes = file.size;
@@ -1995,9 +2181,12 @@ function createRuntimeSessionController(options = {}) {
           return;
         }
         abortAttempted = true;
-        await boundedRequest("sample.import.abort", {
+        const aborted = await boundedRequest("sample.import.abort", {
           import_token: importToken,
         });
+        if (!exactKeys(aborted, ["aborted"]) || aborted.aborted !== true) {
+          throw protocolMismatch("Sample import abort result is invalid");
+        }
       };
 
       report(0);
@@ -2023,7 +2212,7 @@ function createRuntimeSessionController(options = {}) {
         let offset = 0;
         while (offset < totalBytes) {
           throwIfAborted(signal);
-          const end = Math.min(offset + SAMPLE_IMPORT_CHUNK_BYTES, totalBytes);
+          const end = Math.min(offset + MAX_ASSET_BYTES, totalBytes);
           const part = file.slice(offset, end);
           if (typeof part?.arrayBuffer !== "function") {
             throw typedError("UNSUPPORTED_AUDIO", "Sample source cannot be read");
@@ -2064,7 +2253,10 @@ function createRuntimeSessionController(options = {}) {
       } catch (error) {
         try {
           await abortOnce();
-        } catch {
+        } catch (abortError) {
+          if (errorCode(abortError) === "HOST_PROTOCOL_MISMATCH") {
+            fail(abortError);
+          }
           // The primary failure or cancellation remains authoritative.
         }
         throw error;
@@ -2075,6 +2267,9 @@ function createRuntimeSessionController(options = {}) {
   async function setSamplePreview(flatSlot, playback) {
     const slot = flatSlotAddress(flatSlot);
     const encoded = wirePlayback(playback);
+    if (closing || safetyReservation !== null) {
+      return false;
+    }
     return serializeRuntimeAction(async () => {
       const accepted = normalizeAccepted(await boundedRequest(
         "sample.preview.set",
@@ -2136,13 +2331,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function stopAll() {
-    return serializeRuntimeAction(async () => {
-      const result = await boundedRequest("sample.stop", {});
-      if (result?.scope !== "all") {
-        throw protocolMismatch("Sample stop scope is invalid");
-      }
-      return normalizeAccepted(result, ["accepted", "scope"]);
-    });
+    return serializeRuntimeAction(() => stopAllInRuntimeLane());
   }
 
   function retryPrepare(patternId) {
@@ -2209,8 +2398,9 @@ function createRuntimeSessionController(options = {}) {
     }
     closing = true;
     invalidateProbe();
+    const safety = beginSafetyCleanup("host.close");
     try {
-      await runSafetyCleanup();
+      await safety.promise;
       await boundedRequest("host.close", {});
       machine.transition("closed", { reason: "pagehide" });
       await terminalCleanup();
@@ -2226,9 +2416,11 @@ function createRuntimeSessionController(options = {}) {
     if (inputOwnership !== "session") {
       return;
     }
+    const hasPointerIdentity = (event) => Number.isInteger(event?.pointerId);
     const inputAvailable = () =>
       !closing &&
       interruptionReservation === null &&
+      safetyReservation === null &&
       (
         machine.state === "running" ||
         (
@@ -2289,7 +2481,10 @@ function createRuntimeSessionController(options = {}) {
       listen(pad, "mousedown", (event) =>
         pointerAdapter.mouseDown(event, flatSlot));
       listen(pad, "pointerup", (event) => {
-        if (!pointerAdapter.releasePointer(event)) {
+        if (
+          !pointerAdapter.releasePointer(event) &&
+          !hasPointerIdentity(event)
+        ) {
           pointerAdapter.pointerUp(event, flatSlot);
         }
       });
@@ -2299,8 +2494,12 @@ function createRuntimeSessionController(options = {}) {
         }
       });
       listen(pad, "pointercancel", (event) => {
-        pointerAdapter.pointerCancel(event);
-        pointerAdapter.pointerUp(event, flatSlot);
+        if (
+          !pointerAdapter.pointerCancel(event) &&
+          !hasPointerIdentity(event)
+        ) {
+          pointerAdapter.pointerUp(event, flatSlot);
+        }
       });
     }
     listen(window, "pointerup", (event) => pointerAdapter.releasePointer(event));
@@ -2358,6 +2557,15 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
       }
+      const importedWavBytes =
+        manifestSource?.resourceLimits?.imported_wav_bytes;
+      if (!isPositiveInteger(importedWavBytes)) {
+        throw typedError(
+          "HOST_PROTOCOL_MISMATCH",
+          "Manifest Sample import limit is invalid",
+        );
+      }
+      verifiedSampleImportLimit = importedWavBytes;
       const capabilities =
         options.capabilities ??
         (preflight === runPreflight ? await defaultCapabilities(window) : {});

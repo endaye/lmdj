@@ -213,6 +213,24 @@ test("Pointer up releases while pointer cancellation reports a distinct cancella
   assert.deepEqual(cancellations, [[5, "pointer"]]);
 });
 
+test("Pointer retains the legacy slot fallback when an event has no identity", () => {
+  const releases = [];
+  const cancellations = [];
+  const pointer = createPointerAdapter({
+    trigger: () => {},
+    velocity: 100,
+    now: () => 0,
+    onRelease: (...arguments_) => releases.push(arguments_),
+    onCancel: (...arguments_) => cancellations.push(arguments_),
+  });
+  pointer.pointerDown({isPrimary: true, button: 0}, 6);
+  assert.equal(pointer.pointerUp({}, 6), true);
+  pointer.pointerDown({isPrimary: true, button: 0}, 7);
+  assert.equal(pointer.pointerCancel({}), true);
+  assert.deepEqual(releases, [[6, "pointer"]]);
+  assert.deepEqual(cancellations, [[7, "pointer"]]);
+});
+
 test("Pointer marker mismatch does not suppress an independent mouse activation", () => {
   const calls = [];
   const pointerTarget = {};

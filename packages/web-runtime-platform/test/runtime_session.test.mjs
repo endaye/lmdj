@@ -101,6 +101,9 @@ function fixture({
   runtimeTransport,
   runtimeTerminator,
   inputOwnership,
+  manifestSource = {
+    resourceLimits: {imported_wav_bytes: 1_048_576},
+  },
 } = {}) {
   let request = 0;
   let terminated = 0;
@@ -142,7 +145,7 @@ function fixture({
       },
       subtle: webcrypto.subtle,
     },
-    manifestSource: {},
+    manifestSource,
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
@@ -185,6 +188,9 @@ function fixture({
       notificationListener?.(value);
     },
     emitFailure(value) {
+      failureListener?.(value);
+    },
+    emitTransportFailure(value) {
       failureListener?.(value);
     },
     session,
@@ -413,6 +419,7 @@ test("Host-state failures expose only allowlisted structured details", async () 
       device_name: "Private MIDI",
     },
   }));
+  await drainTasks();
 
   assert.deepEqual(states.at(-1), {
     state: "failed",
@@ -571,6 +578,62 @@ test("Sample query rejects malformed Host output instead of exposing partial tru
   );
 });
 
+test("Sample query rejects noncanonical cache identity and waveform buckets", async () => {
+  const assetId = "11111111-1111-4111-8111-111111111111";
+  const snapshotError = (envelope, result) => success(envelope, result);
+  const inspect = fixture({
+    send: async (envelope) => snapshotError(envelope, {
+      project_revision: 7,
+      slot: {bank: 0, pad: 0},
+      asset_id: assetId,
+      playback: WIRE_PLAYBACK,
+      metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+      waveform_cache_identity: `${"a".repeat(64)}/1/wrong-fold/1`,
+    }),
+  });
+  await inspect.session.start();
+  await assert.rejects(
+    inspect.session.inspectSample(0),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+
+  let queryCount = 0;
+  const waveform = fixture({
+    send: async (envelope) => {
+      queryCount += 1;
+      return success(envelope, {
+        metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+        algorithm_version: queryCount === 1 ? 2 : 1,
+        buckets: queryCount === 1
+          ? [
+              {start_frame: 0, end_frame: 4, peak_magnitude: 1},
+              {start_frame: 4, end_frame: 8, peak_magnitude: 2},
+              {start_frame: 8, end_frame: 10, peak_magnitude: 3},
+            ]
+          : [
+              {start_frame: 0, end_frame: 3, peak_magnitude: 1},
+              {start_frame: 3, end_frame: 7, peak_magnitude: 2},
+              {start_frame: 7, end_frame: 10, peak_magnitude: 3},
+            ],
+        project_revision: 7,
+      });
+    },
+  });
+  await waveform.session.start();
+  const query = {
+    slot: 0,
+    window: {startFrame: 0, endFrame: 10, bucketCount: 3},
+  };
+  await assert.rejects(
+    waveform.session.queryWaveform(query),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+  await assert.rejects(
+    waveform.session.queryWaveform(query),
+    (error) => error.code === "HOST_PROTOCOL_MISMATCH",
+  );
+});
+
 test("Project open and Sample mutations share one lane without conflict retry", async () => {
   const calls = [];
   let releaseOpen;
@@ -695,6 +758,115 @@ test("Sample mutations preserve committed and stale Runtime truth after Cook fai
   });
 });
 
+test("Sample mutation output rejects incoherent truth and preserves delayed replay", async () => {
+  const error = {
+    code: "COOK_FAILED",
+    message: "Sample runtime preparation failed",
+    details: {},
+  };
+  const results = [
+    {committed_revision: 2, runtime_revision: null, runtime_published: true},
+    {
+      committed_revision: 2,
+      runtime_revision: 2,
+      runtime_published: true,
+      snapshot_error: error,
+    },
+    {committed_revision: 2, runtime_revision: 1, runtime_published: false},
+    {committed_revision: 2, runtime_revision: 1, runtime_published: true},
+    {committed_revision: 2, runtime_revision: 3, runtime_published: true},
+    {
+      committed_revision: 2,
+      runtime_revision: 3,
+      runtime_published: false,
+      snapshot_error: error,
+    },
+  ];
+  const {session} = fixture({
+    send: async (envelope) => success(envelope, results.shift()),
+  });
+  await session.start();
+  const request = {slot: 0, expectedRevision: 1, playback: PLAYBACK};
+  for (let index = 0; index < 4; index += 1) {
+    await assert.rejects(
+      session.updatePad(request),
+      (failure) => failure.code === "HOST_PROTOCOL_MISMATCH",
+    );
+  }
+  assert.deepEqual(await session.updatePad(request), {
+    committedRevision: 2,
+    runtimeRevision: 3,
+    runtimePublished: true,
+    snapshotError: null,
+  });
+  assert.deepEqual(await session.updatePad(request), {
+    committedRevision: 2,
+    runtimeRevision: 3,
+    runtimePublished: false,
+    snapshotError: error,
+  });
+});
+
+test("Snapshot retry output enforces ready generation Runtime and error coherence", async () => {
+  const projectId = "11111111-1111-4111-8111-111111111111";
+  const patternId = "22222222-2222-4222-8222-222222222222";
+  const error = {
+    code: "COOK_FAILED",
+    message: "Sample runtime preparation failed",
+    details: {},
+  };
+  const result = (overrides) => ({
+    project_id: projectId,
+    project_revision: 9,
+    pattern_id: patternId,
+    runtime_ready: true,
+    generation: 4,
+    snapshot_error: null,
+    runtime_revision: 9,
+    ...overrides,
+  });
+  const results = [
+    result({generation: null}),
+    result({runtime_revision: null}),
+    result({snapshot_error: error}),
+    result({runtime_ready: false, generation: 4, runtime_revision: 8,
+      snapshot_error: error}),
+    result({runtime_ready: false, generation: null, runtime_revision: 8,
+      snapshot_error: null}),
+    result({}),
+    result({runtime_ready: false, generation: null, runtime_revision: 8,
+      snapshot_error: error}),
+  ];
+  const {session} = fixture({
+    send: async (envelope) => success(envelope, results.shift()),
+  });
+  await session.start();
+  for (let index = 0; index < 5; index += 1) {
+    await assert.rejects(
+      session.retryPrepare(patternId),
+      (failure) => failure.code === "HOST_PROTOCOL_MISMATCH",
+    );
+  }
+  assert.deepEqual(await session.retryPrepare(patternId), {
+    projectId,
+    projectRevision: 9,
+    patternId,
+    runtimeReady: true,
+    generation: 4,
+    snapshotError: null,
+    runtimeRevision: 9,
+  });
+  assert.deepEqual(await session.retryPrepare(patternId), {
+    projectId,
+    projectRevision: 9,
+    patternId,
+    runtimeReady: false,
+    generation: null,
+    snapshotError: error,
+    runtimeRevision: 8,
+  });
+});
+
 test("Sample import streams one bounded hashed sidecar and commits one typed result", async () => {
   const bytes = new Uint8Array(1_048_576);
   bytes[0] = 0x52;
@@ -791,6 +963,29 @@ test("Sample import streams one bounded hashed sidecar and commits one typed res
     {completedBytes: 0, totalBytes: 1_048_576},
     {completedBytes: 1_048_576, totalBytes: 1_048_576},
   ]);
+});
+
+test("Sample import enforces the verified manifest total before begin", async () => {
+  const operations = [];
+  const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
+  const {session} = fixture({
+    manifestSource: {
+      resourceLimits: {imported_wav_bytes: 3},
+    },
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+
+  await assert.rejects(
+    session.importAssignSample(file, {slot: 0, expectedRevision: 0}),
+    (error) => error.code === "WEB_RUNTIME_RESOURCE_LIMIT" &&
+      error.details.limit === 3 &&
+      error.details.observed === 4,
+  );
+  assert.deepEqual(operations, []);
 });
 
 test("Sample import cancellation before begin is a no-op and after begin aborts once", async () => {
@@ -898,6 +1093,58 @@ test("Sample import keeps the primary Host failure while aborting once", async (
     "sample.import.chunk",
     "sample.import.abort",
   ]);
+});
+
+test("malformed Sample abort response fails the session without hiding the primary error", async () => {
+  const operations = [];
+  const file = new Blob([Uint8Array.of(1, 2, 3, 4)]);
+  const {session} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.import.begin") {
+        return success(envelope, {
+          token: envelope.payload.import_token,
+          expected_bytes: file.size,
+        });
+      }
+      if (envelope.operation === "sample.import.chunk") {
+        return {
+          protocol_version: 1,
+          request_id: envelope.request_id,
+          ok: false,
+          error: {
+            code: "IO_ERROR",
+            message: "Sample storage operation failed",
+            details: {},
+          },
+        };
+      }
+      if (envelope.operation === "sample.import.abort") {
+        return success(envelope, {aborted: false});
+      }
+      if (envelope.operation === "sample.stop") {
+        return success(envelope, {accepted: true, scope: "all"});
+      }
+      throw new Error(`unexpected operation ${envelope.operation}`);
+    },
+  });
+  await session.start();
+  await assert.rejects(
+    session.importAssignSample(file, {slot: 0, expectedRevision: 0}),
+    (error) => error.code === "IO_ERROR",
+  );
+  await drainTasks();
+  assert.deepEqual(operations, [
+    "sample.import.begin",
+    "sample.import.chunk",
+    "sample.import.abort",
+    "sample.stop",
+  ]);
+  assert.equal(session.diagnostics().state, "failed");
+  assert.equal(
+    session.diagnostics().error_code,
+    "HOST_PROTOCOL_MISMATCH",
+  );
 });
 
 test("Sample preview, release, stop, and retry use exact Runtime-only envelopes", async () => {
@@ -1077,9 +1324,122 @@ test("Voice listener count is bounded and malformed events fail closed", async (
     payload: {events: [{sequence: 1, slot: 64, state: "started",
       runtime_frame: 0, source_frame: 0}]},
   });
+  await drainTasks();
   assert.equal(session.diagnostics().state, "failed");
   assert.equal(session.diagnostics().error_code, "HOST_PROTOCOL_MISMATCH");
   for (const unsubscribe of unsubscribers) unsubscribe();
+});
+
+test("Snapshot notifications accept only the exact legacy and Task 6 variants", async () => {
+  const snapshotError = {
+    code: "COOK_FAILED",
+    message: "Sample runtime preparation failed",
+    details: {},
+  };
+  const {emitNotification, session} = fixture();
+  await session.start();
+
+  emitNotification({
+    protocol_version: 1,
+    event: "snapshot.published",
+    payload: {generation: 5},
+  });
+  assert.equal(session.diagnostics().control_generation, 5);
+  emitNotification({
+    protocol_version: 1,
+    event: "snapshot.published",
+    payload: {generation: 6, project_revision: 9},
+  });
+  assert.equal(session.diagnostics().control_generation, 6);
+  emitNotification({
+    protocol_version: 1,
+    event: "snapshot.rejected",
+    payload: {error: snapshotError},
+  });
+  emitNotification({
+    protocol_version: 1,
+    event: "snapshot.rejected",
+    payload: {
+      project_revision: 10,
+      runtime_revision: 9,
+      error: snapshotError,
+    },
+  });
+  await drainTasks();
+  assert.equal(session.diagnostics().state, "audio-suspended");
+  assert.equal(session.diagnostics().control_generation, 6);
+});
+
+test("malformed Snapshot notifications fail after safety without partial state", async () => {
+  const snapshotError = {
+    code: "COOK_FAILED",
+    message: "Sample runtime preparation failed",
+    details: {},
+  };
+  const cases = [
+    {
+      event: "snapshot.published",
+      payload: {generation: "7"},
+    },
+    {
+      event: "snapshot.published",
+      payload: {
+        generation: 7,
+        project_revision: 7,
+        project_path: "/private/project.lmdj",
+      },
+    },
+    {
+      event: "snapshot.rejected",
+      payload: {error: snapshotError, extra: true},
+    },
+    {
+      event: "snapshot.rejected",
+      payload: {
+        project_revision: 7,
+        runtime_revision: "6",
+        error: snapshotError,
+      },
+    },
+    {
+      event: "snapshot.rejected",
+      payload: {
+        project_revision: 7,
+        runtime_revision: 6,
+        error: {...snapshotError, extra: true},
+      },
+    },
+  ];
+  for (const malformed of cases) {
+    const operations = [];
+    const {emitNotification, session} = fixture({
+      send: async (envelope) => {
+        operations.push(envelope.operation);
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    emitNotification({
+      protocol_version: 1,
+      event: "snapshot.published",
+      payload: {generation: 6, project_revision: 6},
+    });
+    await session.setSamplePreview(0, PLAYBACK);
+    operations.length = 0;
+
+    emitNotification({protocol_version: 1, ...malformed});
+
+    assert.equal(session.diagnostics().state, "audio-suspended");
+    assert.equal(session.diagnostics().control_generation, 6);
+    await drainTasks();
+    await drainTasks();
+    assert.deepEqual(operations, ["sample.preview.clear", "sample.stop"]);
+    assert.equal(session.diagnostics().state, "failed");
+    assert.equal(
+      session.diagnostics().error_code,
+      "HOST_PROTOCOL_MISMATCH",
+    );
+  }
 });
 
 test("wired Pointer and Keyboard inputs emit one press and exact-source release", async () => {
@@ -1165,6 +1525,92 @@ test("wired Pointer ignores unavailable presses without a later release", async 
   assert.equal(session.diagnostics().pressed_count, 0);
 });
 
+test("foreign pointerup cannot release the Pointer that owns the Pad", async () => {
+  const browserWindow = new EventTarget();
+  const pad = new EventTarget();
+  const triggerPayloads = [];
+  const {session} = fixture({
+    browserWindow,
+    inputConfiguration: {
+      padBindings: [{element: pad, slot: {bank: 0, pad: 4}}],
+    },
+    send: async (envelope) => {
+      if (envelope.operation === "trigger") {
+        triggerPayloads.push(envelope.payload);
+        return success(envelope, Object.hasOwn(envelope.payload, "velocity")
+          ? {sequence: 1}
+          : {accepted: true});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+
+  pad.dispatchEvent(browserEvent("pointerdown", {
+    isPrimary: true,
+    button: 0,
+    pointerId: 7,
+  }));
+  pad.dispatchEvent(browserEvent("pointerup", {button: 0, pointerId: 8}));
+  await drainTasks();
+  assert.deepEqual(triggerPayloads, [{slot: 4, velocity: 100}]);
+  assert.equal(session.diagnostics().pressed_count, 1);
+
+  pad.dispatchEvent(browserEvent("pointerup", {button: 0, pointerId: 7}));
+  await drainTasks();
+  assert.deepEqual(triggerPayloads, [
+    {slot: 4, velocity: 100},
+    {slot: 4, kind: "release"},
+  ]);
+  assert.equal(session.diagnostics().pressed_count, 0);
+});
+
+test("foreign pointercancel cannot release the owner or clear its preview", async () => {
+  const browserWindow = new EventTarget();
+  const pad = new EventTarget();
+  const operations = [];
+  const {session} = fixture({
+    browserWindow,
+    inputConfiguration: {
+      padBindings: [{element: pad, slot: {bank: 0, pad: 5}}],
+    },
+    send: async (envelope) => {
+      operations.push({operation: envelope.operation, payload: envelope.payload});
+      if (
+        envelope.operation === "trigger" &&
+        Object.hasOwn(envelope.payload, "velocity")
+      ) {
+        return success(envelope, {sequence: 1});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.setSamplePreview(5, PLAYBACK);
+  pad.dispatchEvent(browserEvent("pointerdown", {
+    isPrimary: true,
+    button: 0,
+    pointerId: 7,
+  }));
+  await drainTasks();
+  operations.length = 0;
+
+  pad.dispatchEvent(browserEvent("pointercancel", {pointerId: 8}));
+  await drainTasks();
+  assert.deepEqual(operations, []);
+  assert.equal(session.diagnostics().pressed_count, 1);
+
+  pad.dispatchEvent(browserEvent("pointercancel", {pointerId: 7}));
+  await drainTasks();
+  assert.deepEqual(operations.map(({operation}) => operation), [
+    "trigger",
+    "sample.preview.clear",
+  ]);
+  assert.equal(session.diagnostics().pressed_count, 0);
+});
+
 test("pointercancel and Escape clear previews without an Authoring mutation", async () => {
   const browserWindow = new EventTarget();
   const pad = new EventTarget();
@@ -1211,6 +1657,100 @@ test("pointercancel and Escape clear previews without an Authoring mutation", as
   assert.deepEqual(calls.filter(({operation}) =>
     ["sample.import.begin", "sample.update_pad", "sample.reset_pad"]
       .includes(operation)), []);
+});
+
+test("adverse cleanup drains an in-flight preview before stop and rejects later preview admission", async () => {
+  const browserWindow = new EventTarget();
+  const operations = [];
+  let previewStarted;
+  const previewWasStarted = new Promise((resolvePromise) => {
+    previewStarted = resolvePromise;
+  });
+  let finishPreview;
+  const {session} = fixture({
+    browserWindow,
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.preview.set" && finishPreview === undefined) {
+        previewStarted();
+        return new Promise((resolvePromise) => {
+          finishPreview = () => resolvePromise(success(envelope, {accepted: true}));
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  operations.length = 0;
+
+  const setting = session.setSamplePreview(4, PLAYBACK);
+  await previewWasStarted;
+  browserWindow.dispatchEvent(new Event("blur"));
+  const lateSetting = session.setSamplePreview(5, PLAYBACK);
+  finishPreview();
+
+  assert.equal(await setting, true);
+  assert.equal(await lateSetting, false);
+  await drainTasks();
+  assert.deepEqual(operations.slice(0, 4), [
+    "sample.preview.set",
+    "sample.preview.clear",
+    "sample.stop",
+    "audio.suspend",
+  ]);
+  assert.equal(operations.filter((value) =>
+    value === "sample.preview.set").length, 1);
+});
+
+test("fatal observations clear preview and stop voices before failed is observable", async () => {
+  const operations = [];
+  const {emitNotification, emitTransportFailure, session, terminated} = fixture({
+    send: async (envelope) => {
+      operations.push(envelope.operation);
+      if (
+        envelope.operation === "trigger" &&
+        Object.hasOwn(envelope.payload, "velocity")
+      ) {
+        return success(envelope, {sequence: 1});
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.setSamplePreview(7, PLAYBACK);
+  await session.trigger(7, 100, "pointer");
+  operations.length = 0;
+  const failedObservations = [];
+  session.subscribeHostState(({state}) => {
+    if (state === "failed") {
+      failedObservations.push([...operations]);
+    }
+  });
+
+  const malformedVoice = {
+    protocol_version: 1,
+    event: "runtime.voice_state",
+    payload: {events: [{
+      sequence: 1,
+      slot: 64,
+      state: "started",
+      runtime_frame: 0,
+      source_frame: 0,
+    }]},
+  };
+  emitNotification(malformedVoice);
+  emitNotification(malformedVoice);
+  emitTransportFailure({code: "IO_ERROR"});
+
+  assert.equal(session.diagnostics().state, "running");
+  await drainTasks();
+  await drainTasks();
+  assert.deepEqual(operations, ["sample.preview.clear", "sample.stop"]);
+  assert.equal(session.diagnostics().state, "failed");
+  assert.deepEqual(failedObservations, [["sample.preview.clear", "sample.stop"]]);
+  assert.equal(terminated(), 1);
 });
 
 test("suspend and close clear inputs then previews then stop once before transition", async () => {
@@ -1508,6 +2048,7 @@ test("timeout becomes one terminal restart-required notification", async () => {
   const diagnostic = createDiagnosticClient(session);
 
   await assert.rejects(diagnostic.createProject({}), failure);
+  await drainTasks();
   assert.equal(session.diagnostics().state, "restart-required");
   assert.equal(session.diagnostics().error_code, "HOST_TIMEOUT");
   assert.deepEqual(states, [
@@ -1527,6 +2068,7 @@ test("close after a terminal edge awaits the owned cleanup", async () => {
   });
   await session.start();
   emitFailure(Object.assign(new Error("timeout"), {code: "HOST_TIMEOUT"}));
+  await drainTasks();
   assert.equal(session.diagnostics().state, "restart-required");
 
   let settled = false;
