@@ -261,8 +261,7 @@ class DeployCommandTest(unittest.TestCase):
         self.runner_temp = self.root / "runner-temp"
         self.log_path = self.root / "commands.log"
         self.details_path = self.root / "details.jsonl"
-        self.worktree_path_record = self.root / "worktree-path"
-        self.worktree_removed_record = self.root / "worktree-removed"
+        self.checkout_path_record = self.root / "checkout-path"
         self.block_ready = self.root / "block-ready"
         self.repo.mkdir()
         self.bin.mkdir()
@@ -476,8 +475,8 @@ class DeployCommandTest(unittest.TestCase):
                 if (
                     name.startswith(("FAKE_", "FAIL_", "BLOCK_"))
                     or name in {{
-                        "COMMAND_LOG", "DETAILS_LOG", "WORKTREE_PATH",
-                        "WORKTREE_REMOVED", "BLOCK_READY", "ARCHIVE_DIGEST",
+                        "COMMAND_LOG", "DETAILS_LOG", "CHECKOUT_PATH",
+                        "BLOCK_READY", "ARCHIVE_DIGEST",
                         "EXPECTED_GITHUB_TOKEN", "RUNNER_TEMP",
                     }}
                 ):
@@ -605,7 +604,6 @@ def verify_distribution(dist_root, repo_root):
             import json
             import os
             from pathlib import Path
-            import shutil
             import sys
 
             raw_args = sys.argv[1:]
@@ -616,9 +614,61 @@ def verify_distribution(dist_root, repo_root):
                     raise SystemExit(64)
                 git_config.append(args[1])
                 args = args[2:]
+            git_cwd = None
+            if args[:1] == ["-C"]:
+                if len(args) < 3:
+                    raise SystemExit(64)
+                git_cwd = Path(args[1])
+                args = args[2:]
             log = Path(os.environ["COMMAND_LOG"])
             target = os.environ.get("FAKE_TAG_TARGET", {TAG_TARGET!r})
             product_build = os.environ.get("FAKE_PRODUCT_BUILD", {PRODUCT_BUILD!r})
+
+            def populate_checkout(checkout):
+                checkout.joinpath("products/lmdj").mkdir(parents=True)
+                checkout.joinpath("apps/web-runtime-host/tools").mkdir(parents=True)
+                parts = [int(value) for value in product_build.split(".")]
+                checkout.joinpath("products/lmdj/version.json").write_text(
+                    json.dumps({{
+                        "contract": "lmdj.product-version.v1",
+                        "product": "lmdj",
+                        "milestone": parts[0],
+                        "minor": parts[1],
+                        "build": parts[2],
+                        "patch": parts[3],
+                    }}),
+                    encoding="utf-8",
+                )
+                checkout.joinpath("apps/web-runtime-host/module.json").write_text(
+                    json.dumps({{
+                        "contract": "lmdj.module.v1",
+                        "module": "web-runtime-host",
+                        "version": {HOST_VERSION!r},
+                        "api_version": 1,
+                        "dependencies": {{}},
+                    }}),
+                    encoding="utf-8",
+                )
+                checkout.joinpath("apps/web-runtime-host/tools/package.py").write_text(
+                    {package_verifier!r},
+                    encoding="utf-8",
+                )
+
+            def record_uncredentialed_checkout(program):
+                observed = sorted(
+                    name for name in (
+                        "GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID",
+                    ) if os.environ.get(name)
+                )
+                with Path(os.environ["DETAILS_LOG"]).open("a", encoding="utf-8") as output:
+                    output.write(json.dumps({{
+                        "program": program,
+                        "credential_environment": observed,
+                        "credential_in_argv": os.environ["EXPECTED_GITHUB_TOKEN"] in raw_args,
+                    }}, sort_keys=True) + "\\n")
+                if observed:
+                    raise SystemExit("deployment credential reached tag checkout")
+
             if args[:3] == ["remote", "get-url", "origin"]:
                 print(os.environ.get("FAKE_ORIGIN_URL", "https://github.com/endaye/lmdj.git"))
             elif args[:2] == ["update-ref", "-d"]:
@@ -671,41 +721,25 @@ def verify_distribution(dist_root, repo_root):
             elif args[:2] == ["merge-base", "--is-ancestor"]:
                 if os.environ.get("FAKE_TAG_NOT_MAIN") == "1":
                     raise SystemExit(1)
+            elif args[:1] == ["clone"]:
+                record_uncredentialed_checkout("git-clone")
+                checkout = Path(args[-1])
+                checkout.mkdir()
+                checkout.joinpath(".git").mkdir()
+                Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
+                with log.open("a", encoding="utf-8") as output:
+                    output.write("git clone detached\\n")
+            elif args[:2] == ["checkout", "--detach"] and git_cwd is not None:
+                record_uncredentialed_checkout("git-checkout")
+                populate_checkout(git_cwd)
+                with log.open("a", encoding="utf-8") as output:
+                    output.write("git checkout detached\\n")
             elif args[:3] == ["worktree", "add", "--detach"]:
+                if os.environ.get("REJECT_LINKED_WORKTREE") == "1":
+                    raise SystemExit("linked worktrees are unavailable")
                 checkout = Path(args[3])
-                checkout.joinpath("products/lmdj").mkdir(parents=True)
-                checkout.joinpath("apps/web-runtime-host/tools").mkdir(parents=True)
-                parts = [int(value) for value in product_build.split(".")]
-                checkout.joinpath("products/lmdj/version.json").write_text(
-                    json.dumps({{
-                        "contract": "lmdj.product-version.v1",
-                        "product": "lmdj",
-                        "milestone": parts[0],
-                        "minor": parts[1],
-                        "build": parts[2],
-                        "patch": parts[3],
-                    }}),
-                    encoding="utf-8",
-                )
-                checkout.joinpath("apps/web-runtime-host/module.json").write_text(
-                    json.dumps({{
-                        "contract": "lmdj.module.v1",
-                        "module": "web-runtime-host",
-                        "version": {HOST_VERSION!r},
-                        "api_version": 1,
-                        "dependencies": {{}},
-                    }}),
-                    encoding="utf-8",
-                )
-                checkout.joinpath("apps/web-runtime-host/tools/package.py").write_text(
-                    {package_verifier!r},
-                    encoding="utf-8",
-                )
-                Path(os.environ["WORKTREE_PATH"]).write_text(str(checkout), encoding="utf-8")
-            elif args[:3] == ["worktree", "remove", "--force"]:
-                checkout = Path(args[3])
-                shutil.rmtree(checkout, ignore_errors=True)
-                Path(os.environ["WORKTREE_REMOVED"]).write_text(str(checkout), encoding="utf-8")
+                populate_checkout(checkout)
+                Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
             else:
                 raise SystemExit(97)
             """,
@@ -863,8 +897,7 @@ def verify_distribution(dist_root, repo_root):
                 "PATH": f"{self.bin}{os.pathsep}{environment['PATH']}",
                 "COMMAND_LOG": str(self.log_path),
                 "DETAILS_LOG": str(self.details_path),
-                "WORKTREE_PATH": str(self.worktree_path_record),
-                "WORKTREE_REMOVED": str(self.worktree_removed_record),
+                "CHECKOUT_PATH": str(self.checkout_path_record),
                 "BLOCK_READY": str(self.block_ready),
                 "ARCHIVE_DIGEST": str(self.root / "archive-digest"),
                 "FAILURE_MARKER": str(self.root / "failure-marker"),
@@ -916,8 +949,7 @@ def verify_distribution(dist_root, repo_root):
         for path in (
             self.log_path,
             self.details_path,
-            self.worktree_path_record,
-            self.worktree_removed_record,
+            self.checkout_path_record,
             self.block_ready,
             self.root / "archive-digest",
             self.root / "failure-marker",
@@ -955,6 +987,8 @@ def verify_distribution(dist_root, repo_root):
                 f"git remote fetch refs/tags/{TAG}:refs/lmdj-deploy/tags/{TAG}",
                 "git remote fetch refs/heads/main:refs/lmdj-deploy/origin-main",
                 f"git tag verify refs/lmdj-deploy/tags/{TAG}",
+                "git clone detached",
+                "git checkout detached",
                 f"gh release view {TAG}",
                 f"gh release download {TAG}",
                 "release_bundle stage",
@@ -992,6 +1026,22 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(checkout.name, "tag-target")
         self.assertTrue(str(checkout).startswith(str(self.runner_temp.resolve())))
         self.assertFalse(checkout.exists())
+
+    def test_tag_checkout_does_not_require_linked_worktree_metadata(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"REJECT_LINKED_WORKTREE": "1"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("git clone detached", self.command_log())
+        self.assertIn("git checkout detached", self.command_log())
+        checkout_details = [
+            detail for detail in self.details()
+            if detail.get("program") in {"git-clone", "git-checkout"}
+        ]
+        self.assertEqual(len(checkout_details), 2)
+        for detail in checkout_details:
+            self.assertEqual(detail["credential_environment"], [])
+            self.assertFalse(detail["credential_in_argv"])
 
     def test_publish_accepts_additive_official_response_fields(self) -> None:
         self.server.restore_extra = {
@@ -1436,15 +1486,13 @@ def verify_distribution(dist_root, repo_root):
         self.assertNotIn("netlify create-draft", self.command_log())
         self.assertNotIn("netlify publish same-id", self.command_log())
 
-    def test_owned_worktree_and_temp_are_removed_on_success_and_failure(self) -> None:
+    def test_owned_tag_checkout_and_temp_are_removed_on_success_and_failure(self) -> None:
         for environment in ({}, {"FAIL_IMMUTABLE_SMOKE": "1"}):
             with self.subTest(environment=environment):
                 self.reset_run_records()
                 completed = self.run_command("deploy", TAG, environment=environment)
                 self.assertEqual(completed.returncode == 0, not environment)
-                checkout = Path(self.worktree_path_record.read_text(encoding="utf-8"))
-                removed = Path(self.worktree_removed_record.read_text(encoding="utf-8"))
-                self.assertEqual(checkout, removed)
+                checkout = Path(self.checkout_path_record.read_text(encoding="utf-8"))
                 self.assertFalse(checkout.exists())
                 self.assert_no_owned_temp()
 
@@ -1584,9 +1632,7 @@ def verify_distribution(dist_root, repo_root):
                 self.assert_no_secret_output(completed)
                 self.assertNotIn("netlify publish same-id", self.command_log())
                 self.assertFalse((self.deploy_root / "evidence.json").exists())
-                checkout = Path(self.worktree_path_record.read_text(encoding="utf-8"))
-                removed = Path(self.worktree_removed_record.read_text(encoding="utf-8"))
-                self.assertEqual(checkout, removed)
+                checkout = Path(self.checkout_path_record.read_text(encoding="utf-8"))
                 self.assertFalse(checkout.exists())
                 self.assert_no_owned_temp()
 
