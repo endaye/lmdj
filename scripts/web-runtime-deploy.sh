@@ -325,19 +325,26 @@ verify_signed_tag() {
 create_tag_checkout() {
   local candidate="$owned_temp/tag-target"
   local empty_template="$owned_temp/git-template"
+  local candidate_tag_ref='refs/lmdj-deploy/tag-target'
   local checkout_head=''
   mkdir -m 700 "$empty_template" || {
     fail "detached tag checkout template creation failed"
     return
   }
   without_deploy_secrets \
-    git clone --shared --no-checkout --no-tags --template="$empty_template" \
-      "$repo_root" "$candidate" >/dev/null 2>&1 || {
+    git init --quiet --template="$empty_template" "$candidate" >/dev/null 2>&1 || {
     fail "detached tag checkout creation failed"
     return
   }
   without_deploy_secrets \
-    git -C "$candidate" checkout --detach "$tag_target" >/dev/null 2>&1 || {
+    git -C "$candidate" fetch --no-tags --no-write-fetch-head \
+      "$repo_root" "$remote_tag_ref:$candidate_tag_ref" >/dev/null 2>&1 || {
+    fail "detached tag checkout ref materialization failed"
+    return
+  }
+  without_deploy_secrets \
+    env GIT_LFS_SKIP_SMUDGE=1 \
+      git -C "$candidate" checkout --detach "$tag_target" >/dev/null 2>&1 || {
     fail "detached tag checkout population failed"
     return
   }
