@@ -21,7 +21,7 @@ import release_bundle
 
 
 class ReleaseBundleTest(unittest.TestCase):
-    TRUSTED_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+    TRUSTED_CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
 
     def setUp(self) -> None:
         self.module = release_bundle
@@ -33,14 +33,14 @@ class ReleaseBundleTest(unittest.TestCase):
             "-----BEGIN PGP SIGNATURE-----\nfixture\n-----END PGP SIGNATURE-----\n",
             encoding="ascii",
         )
-        self.public_key = self.root / "product.asc"
-        self.public_key.write_text("fixture public key\n", encoding="ascii")
+        self.checksum_public_key = self.root / "checksum.asc"
+        self.checksum_public_key.write_text("fixture public key\n", encoding="ascii")
         self.fake_gpg = self.root / "fake-gpg"
         self.fake_gpg.write_text(
             "#!/bin/sh\n"
             "case \" $* \" in\n"
-            "  *\" --list-keys \"*) printf 'pub:-:4096:1:KEY::::::\\nfpr:::::::::2B5EE362F058800036AD4FB5116ECE156F954D29:\\n' ;;\n"
-            "  *\" --verify \"*) printf '[GNUPG:] VALIDSIG 2B5EE362F058800036AD4FB5116ECE156F954D29 2026-08-09 0 4 0 1 10 00 2B5EE362F058800036AD4FB5116ECE156F954D29\\n' ;;\n"
+            "  *\" --list-keys \"*) printf 'pub:-:255:22:KEY::::::\\nfpr:::::::::CB928A6E89DE498851688EF1AAC3E7019FC1478B:\\n' ;;\n"
+            "  *\" --verify \"*) printf '[GNUPG:] VALIDSIG CB928A6E89DE498851688EF1AAC3E7019FC1478B 2026-08-10 0 4 0 22 8 00 CB928A6E89DE498851688EF1AAC3E7019FC1478B\\n' ;;\n"
             "esac\n",
             encoding="utf-8",
         )
@@ -75,10 +75,10 @@ class ReleaseBundleTest(unittest.TestCase):
                 str(checksum),
                 "--checksum-signature",
                 str(self.signature),
-                "--product-public-key",
-                str(self.public_key),
-                "--trusted-primary-fingerprint",
-                self.TRUSTED_FINGERPRINT,
+                "--checksum-public-key",
+                str(self.checksum_public_key),
+                "--trusted-checksum-fingerprint",
+                self.TRUSTED_CHECKSUM_FINGERPRINT,
                 "--gpg-program",
                 str(self.fake_gpg),
                 "--output-root",
@@ -91,7 +91,10 @@ class ReleaseBundleTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "LMDJ_TEST_FINGERPRINT": self.TRUSTED_FINGERPRINT},
+            env={
+                **os.environ,
+                "LMDJ_TEST_FINGERPRINT": self.TRUSTED_CHECKSUM_FINGERPRINT,
+            },
         )
 
     def archive_with_member(self, member: str) -> tuple[Path, Path]:
@@ -108,8 +111,8 @@ class ReleaseBundleTest(unittest.TestCase):
             archive_path=archive,
             checksum_path=checksum,
             signature_path=self.signature,
-            product_public_key_path=self.public_key,
-            trusted_primary_fingerprint=self.TRUSTED_FINGERPRINT,
+            checksum_public_key_path=self.checksum_public_key,
+            trusted_checksum_fingerprint=self.TRUSTED_CHECKSUM_FINGERPRINT,
             output_root=self.output,
             expected_product_build="1.0.15.2",
             expected_host_version="1.1.2",
@@ -163,8 +166,8 @@ class ReleaseBundleTest(unittest.TestCase):
                 archive_path=archive,
                 checksum_path=checksum,
                 signature_path=wrong,
-                product_public_key_path=self.public_key,
-                trusted_primary_fingerprint=self.TRUSTED_FINGERPRINT,
+                checksum_public_key_path=self.checksum_public_key,
+                trusted_checksum_fingerprint=self.TRUSTED_CHECKSUM_FINGERPRINT,
                 output_root=self.output,
                 expected_product_build="1.0.15.2",
                 expected_host_version="1.1.2",
@@ -404,43 +407,45 @@ class ReleaseBundleTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 64)
         self.assertIn("usage:", completed.stderr)
 
-        source_dist = REPO_ROOT / "build/web/host/dist"
-        product_version = json.loads(
-            (REPO_ROOT / "products/lmdj/version.json").read_text(encoding="utf-8")
+        tagged_repo = self.root / "tagged-repository"
+        package_path = tagged_repo / "apps/web-runtime-host/tools/package.py"
+        package_path.parent.mkdir(parents=True)
+        package_path.write_text(
+            "def verify_distribution(dist_root, repo_root):\n"
+            "    if not (dist_root / 'host-manifest.json').is_file():\n"
+            "        raise RuntimeError('manifest missing')\n",
+            encoding="utf-8",
         )
-        expected_product_build = ".".join(
-            str(product_version[field])
-            for field in ("milestone", "minor", "build", "patch")
-        )
-        assembly = json.loads(
-            (REPO_ROOT / "products/lmdj/assembly.json").read_text(encoding="utf-8")
-        )
-        expected_host_version = next(
-            host["version"]
-            for host in assembly["hosts"]
-            if host["id"] == "web-runtime-host"
-        )
+        expected_product_build = "1.0.15.2"
+        expected_host_version = "1.1.2"
         archive = self.root / "valid-release.zip"
         with zipfile.ZipFile(archive, "w") as output:
-            for path in source_dist.rglob("*"):
-                if path.is_file():
-                    output.write(path, path.relative_to(source_dist.parent).as_posix())
+            output.writestr("dist/index.html", "<!doctype html>")
+            output.writestr(
+                "dist/host-manifest.json",
+                json.dumps(
+                    {
+                        "host_version": expected_host_version,
+                        "product_build": expected_product_build,
+                    }
+                ),
+            )
         command = [
             sys.executable,
             str(RELEASE_BUNDLE_TOOL),
             "stage",
             "--repo-root",
-            str(REPO_ROOT),
+            str(tagged_repo),
             "--archive",
             str(archive),
             "--checksum",
             "",
             "--checksum-signature",
             str(self.signature),
-            "--product-public-key",
-            str(self.public_key),
-            "--trusted-primary-fingerprint",
-            self.TRUSTED_FINGERPRINT,
+            "--checksum-public-key",
+            str(self.checksum_public_key),
+            "--trusted-checksum-fingerprint",
+            self.TRUSTED_CHECKSUM_FINGERPRINT,
             "--gpg-program",
             str(self.fake_gpg),
             "--output-root",
@@ -457,7 +462,10 @@ class ReleaseBundleTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "LMDJ_TEST_FINGERPRINT": self.TRUSTED_FINGERPRINT},
+            env={
+                **os.environ,
+                "LMDJ_TEST_FINGERPRINT": self.TRUSTED_CHECKSUM_FINGERPRINT,
+            },
         )
         self.assertEqual(completed.returncode, 2)
         self.assertIn("Web Runtime deployment bundle error:", completed.stderr)
@@ -472,7 +480,10 @@ class ReleaseBundleTest(unittest.TestCase):
             check=False,
             capture_output=True,
             text=True,
-            env={**os.environ, "LMDJ_TEST_FINGERPRINT": self.TRUSTED_FINGERPRINT},
+            env={
+                **os.environ,
+                "LMDJ_TEST_FINGERPRINT": self.TRUSTED_CHECKSUM_FINGERPRINT,
+            },
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertEqual(

@@ -16,9 +16,10 @@ signed tag、受保护 `main` ancestry、Release 三资产、workflow run 与 de
 - Release archive 的 SHA-256 必须是
   `d56a7c99a3c489db068b93fcef70a254b498adf4bc65919253beccb199f3ad5a`。
 - canonical prerelease 必须精确包含三个资产：Host ZIP、`<archive>.sha256` 与
-  `<archive>.sha256.asc`。最后一项是受信 Product key 对 checksum 文件的 detached
-  armored signature；部署器用仓库 public key 的唯一 primary fingerprint 验证成功后
-  才解析 checksum。Release creator 与 Product signer 是独立授权角色；不记录私钥或 token。
+  `<archive>.sha256.asc`。最后一项是受信 Release checksum signer 对 checksum 文件的
+  detached armored signature；部署器用该角色专属 public key 的唯一 primary fingerprint
+  验证成功后才解析 checksum。Product tag signer、Release checksum signer、Release creator
+  与 deployment operator 是分离角色；不记录私钥或 token，也不得用任一角色密钥替代另一角色。
 - 已验证的 Release ZIP 未修改。`apps/web-runtime-host/deploy/_headers` 是
   repository-tracked deploy-control artifact：staging 时独立加入 Netlify digest deploy，
   不在 Release bundle 内；不得写入、删除、改名或替换任何已验证 Release `dist` 文件。
@@ -33,19 +34,40 @@ signed tag、受保护 `main` ancestry、Release 三资产、workflow run 与 de
 - 这不是 Creator URL、Creator PWA 或 `lmdj-canary` 的发布。`lmdj-canary` 属于
   Creator 交付边界，不能在本 Task 创建、绑定、重定向或作为 Runtime Host 的别名。
 
+## 签名密钥角色与备份
+
+- Product tag 只信任 `.github/release-signing-keys/lmdj-product.asc`，主指纹为
+  `2B5EE362F058800036AD4FB5116ECE156F954D29`。它保留用于验证既有不可变 Product tag，
+  不授权新的 checksum signature。
+- Release checksum 只信任 `.github/release-signing-keys/lmdj-release-checksum.asc`，主指纹为
+  `CB928A6E89DE498851688EF1AAC3E7019FC1478B`。它不授权 Product tag。
+- checksum 私钥使用权限为 `700` 的独立 `GNUPGHOME`（默认
+  `~/.gnupg-lmdj-release`），由本机 pinentry 交互解锁；不得通过命令行、环境变量、聊天、
+  GitHub secret、Release asset、workflow artifact 或仓库文件传递密码或私钥。
+- 受信公钥进入仓库前，必须先在仓库外导出受密码保护的 armored secret-key backup 和
+  revocation certificate，核对备份主指纹，并把备份复制到不与本机同时丢失的加密介质。
+  没有可恢复备份时不得签名、轮换仓库 trust anchor 或发布。
+- 轮换时生成 dedicated Ed25519 signing key，UID 为 `LMDJ Release Checksum Signer`，有效期
+  两年；先完成备份 gate，再通过受保护 `main` 的独立 PR 更新 public key 与固定指纹。
+  Product tag signer 的未来轮换与新 Product tag 是另一项发布任务。
+
 ## 独立授权的 tag、三资产 prerelease 与 dispatch
 
-下列是获授权后的操作模板，不是本 Task 的执行记录。Product signer 在受信 workstation
-对 checksum 签名；Release operator 独立创建 canonical prerelease；deployment operator
-再独立 dispatch。三者不得在文档、日志或 artifact 中记录私钥/token。
+下列是获授权后的操作模板，不是本 Task 的执行记录。Release checksum signer 在受信
+workstation 对 checksum 签名；Release operator 独立维护 canonical prerelease；deployment
+operator 再独立 dispatch。各角色不得在文档、日志或 artifact 中记录私钥/token。
 
-1. Product signer 先核对 archive filename 与 SHA-256，再在受信 workstation 创建
+1. Release checksum signer 先核对 archive filename 与 SHA-256，再在受信 workstation 创建
    canonical detached armored signature：
 
    ```bash
-   gpg --batch --armor --detach-sign \
+   release_key_home="$HOME/.gnupg-lmdj-release"
+   checksum_signer=CB928A6E89DE498851688EF1AAC3E7019FC1478B
+   gpg --homedir "$release_key_home" --armor --detach-sign \
+     --local-user "$checksum_signer" \
      --output "$archive.sha256.asc" "$archive.sha256"
-   gpg --batch --status-fd 1 --verify "$archive.sha256.asc" "$archive.sha256"
+   gpg --homedir "$release_key_home" --batch --status-fd 1 \
+     --verify "$archive.sha256.asc" "$archive.sha256"
    ```
 
 2. 获得独立 tag-push 授权后，只 push canonical annotated signed tag，并从 canonical

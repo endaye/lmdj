@@ -45,8 +45,9 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 
 两阶段 Netlify release/deploy 工具已进入仓库源码：从 canonical origin 获取受保护 `main` 和
 remote annotated signed Product tag，验证 tag commit 是该 `main` 的 ancestor；GitHub
-Release 必须精确包含 ZIP、checksum 和由受信 Product key 签名的 armored detached
-checksum signature，工具在解析 checksum 前先验证 signature。组装层只为 manifest 中的
+Release 必须精确包含 ZIP、checksum 和由专用 Release checksum key 签名的 armored detached
+checksum signature；Product tag key 与 checksum key 角色分离，工具在解析 checksum 前先
+验证角色专属 signature。组装层只为 manifest 中的
 九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
 部署前先验证真实 prior immutable/production 身份和 HTTP/Chromium；发布后失败或中断时
 reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时

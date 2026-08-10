@@ -42,8 +42,9 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 ## 公共静态托管边界
 
 Runtime Host 发布 tooling 从 canonical origin 获取 remote signed tag 与受保护 `main`，要求 tag
-commit 是该 `main` 的 ancestor；Release inventory 精确为 ZIP、checksum、受信 Product key
-的 detached armored checksum signature，并在解析 checksum 前验证 signature。它会发现并
+commit 是该 `main` 的 ancestor；Release inventory 精确为 ZIP、checksum、受信且专用的
+Release checksum key 的 detached armored checksum signature，并在解析 checksum 前验证
+角色专属 signature；Product tag key 与 checksum key 不能替代。它会发现并
 验证真实 prior Product/Host 身份，在 prior immutable 与 production 上先跑完整
 HTTP/Chromium，再创建 immutable draft；只有 draft smoke 通过才发布同一 ready Deploy ID。
 发布后失败或信号中断会 reconcile alias，必要时恢复 exact prior；首次无 prior 时采用官方

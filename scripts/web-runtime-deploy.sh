@@ -7,7 +7,8 @@ deploy_root="$repo_root/build/deploy/web-runtime-host"
 orchestrator_tool="$repo_root/apps/web-runtime-host/tools/deploy_orchestrator.py"
 tag_pattern='^lmdj-v([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$'
 production_url='https://lmdj-runtime.netlify.app'
-trusted_fingerprint='2B5EE362F058800036AD4FB5116ECE156F954D29'
+trusted_tag_fingerprint='2B5EE362F058800036AD4FB5116ECE156F954D29'
+trusted_checksum_fingerprint='CB928A6E89DE498851688EF1AAC3E7019FC1478B'
 initial_tag='lmdj-v1.0.15.2'
 initial_tag_target='72ae40074620cc5681c462ba04a31a666449734f'
 canonical_repository='endaye/lmdj'
@@ -253,7 +254,7 @@ verify_signed_tag() {
     fail "trusted Product signing key is unavailable"
     return
   }
-  [[ "$key_fingerprint" == "$trusted_fingerprint" ]] || {
+  [[ "$key_fingerprint" == "$trusted_tag_fingerprint" ]] || {
     fail "trusted Product signing key fingerprint mismatch"
     return
   }
@@ -269,7 +270,7 @@ verify_signed_tag() {
     return
   fi
   if ! printf '%s\n' "$verify_status" |
-    awk -v fingerprint="$trusted_fingerprint" '
+    awk -v fingerprint="$trusted_tag_fingerprint" '
       /^\[GNUPG:\] VALIDSIG / {
         for (field = 3; field <= NF; field += 1) {
           if ($field == fingerprint) found = 1
@@ -393,8 +394,8 @@ stage_release_assets() {
         --archive "$archive_path" \
         --checksum "$checksum_path" \
         --checksum-signature "$signature_path" \
-        --product-public-key "$repo_root/.github/release-signing-keys/lmdj-product.asc" \
-        --trusted-primary-fingerprint "$trusted_fingerprint" \
+        --checksum-public-key "$repo_root/.github/release-signing-keys/lmdj-release-checksum.asc" \
+        --trusted-checksum-fingerprint "$trusted_checksum_fingerprint" \
         --output-root "$stage_root" \
         --expected-product-build "$product_build" \
         --expected-host-version "$host_version" 2>/dev/null

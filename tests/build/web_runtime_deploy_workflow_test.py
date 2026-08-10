@@ -13,8 +13,10 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/deploy-web-runtime-host.yml"
 DEPLOY_SCRIPT = REPO_ROOT / "scripts/web-runtime-deploy.sh"
-PUBLIC_KEY = REPO_ROOT / ".github/release-signing-keys/lmdj-product.asc"
-TRUSTED_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+PRODUCT_PUBLIC_KEY = REPO_ROOT / ".github/release-signing-keys/lmdj-product.asc"
+CHECKSUM_PUBLIC_KEY = REPO_ROOT / ".github/release-signing-keys/lmdj-release-checksum.asc"
+TRUSTED_TAG_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
+TRUSTED_CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
 EXPECTED_ACTION_PINS = {
     "actions/checkout": (
         "de0fac2e4500dabe0009e67214ff5f5447ce83dd",
@@ -412,15 +414,22 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         upload = self.step_named(source, "Upload deployment evidence and failure logs")
         self.assertIn("if: always()", upload)
 
-    def test_public_key_has_exactly_one_trusted_primary_fingerprint(self) -> None:
-        self.assertTrue(PUBLIC_KEY.is_file(), "Product signing public key is missing")
-        public_key = PUBLIC_KEY.read_text(encoding="utf-8")
-        self.assertEqual(primary_fingerprints(public_key), [TRUSTED_FINGERPRINT])
-        self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", public_key)
-        self.assertNotIn("PRIVATE KEY", public_key)
+    def test_role_public_keys_have_exactly_one_distinct_trusted_primary(self) -> None:
+        expected = (
+            (PRODUCT_PUBLIC_KEY, TRUSTED_TAG_FINGERPRINT),
+            (CHECKSUM_PUBLIC_KEY, TRUSTED_CHECKSUM_FINGERPRINT),
+        )
+        self.assertNotEqual(TRUSTED_TAG_FINGERPRINT, TRUSTED_CHECKSUM_FINGERPRINT)
+        for public_key_path, fingerprint in expected:
+            with self.subTest(public_key_path=public_key_path):
+                self.assertTrue(public_key_path.is_file(), "signing public key is missing")
+                public_key = public_key_path.read_text(encoding="utf-8")
+                self.assertEqual(primary_fingerprints(public_key), [fingerprint])
+                self.assertIn("BEGIN PGP PUBLIC KEY BLOCK", public_key)
+                self.assertNotIn("PRIVATE KEY", public_key)
 
     def test_public_key_parser_rejects_a_second_armored_key_block(self) -> None:
-        public_key = PUBLIC_KEY.read_text(encoding="utf-8")
+        public_key = PRODUCT_PUBLIC_KEY.read_text(encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "exactly one public key block"):
             primary_fingerprints(public_key + public_key)
 

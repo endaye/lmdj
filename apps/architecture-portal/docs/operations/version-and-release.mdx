@@ -29,8 +29,9 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 
 Runtime Host 的两阶段发布工具和 workflow 定义已经存在：从 canonical origin 验证 remote
 annotated signed Product tag、protected `main` ancestry，以及 Release 精确三资产 ZIP、
-checksum 和受信 Product key 的 detached armored signature；signature 验证先于 checksum
-解析。发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
+checksum 和受信 Release checksum key 的 detached armored signature；Product tag key 与
+checksum key 的固定指纹和用途相互独立，不能替代，signature 验证先于 checksum 解析。
+发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
 HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
 API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
 以官方 reversible site disable 安全撤下。成功 evidence v2 与恢复 evidence v1 分别保存完整
