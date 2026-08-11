@@ -272,6 +272,18 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.publicationFaultPoints).toEqual(PUBLICATION_FAULT_POINTS);
   expect(result.publicationMaxChunkBytes).toBe(1_048_576);
 
+  const unleasedAppend = await trackedPage(context);
+  await unleasedAppend.goto(
+      `/project_io/project_io_web_test.html?action=append_without_lease&bundle=unleased-append-${Date.now()}`);
+  expect(await waitForResult(unleasedAppend)).toEqual({
+    append: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "invalid_state",
+    length: 4,
+    content: "seed",
+  });
+  await unleasedAppend.close();
+
   const leaseInspector = await trackedPage(context);
   const firstLeasePage = await trackedPage(context);
   const competingLeasePage = await trackedPage(context);

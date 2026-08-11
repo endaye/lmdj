@@ -145,6 +145,39 @@ nlohmann::json run_suite() {
       return {{"complete", true}, {"result", {{"lease", "held"}}}};
     }
 
+    if (action == "append_without_lease") {
+      const auto append_path = fault_bundle / "append.bin";
+      success(
+          platform->ensure_directory(fault_bundle),
+          "unleased append directory");
+      auto seed_lease = value(
+          platform->acquire_writer(fault_bundle), "unleased append seed lease");
+      success(
+          platform->create_immutable(append_path, bytes("seed")),
+          "unleased append seed");
+      seed_lease.reset();
+
+      const auto appended =
+          platform->append_durable(append_path, 4, bytes("mutated"));
+      const auto post_call = value(
+          platform->read_complete(append_path), "unleased append post-call read");
+      return {
+          {"complete", true},
+          {"result",
+           {{"append", appended.has_value() ? "succeeded" : "failed"},
+            {"errorCode",
+             appended.has_value()
+                 ? ""
+                 : foundation::error_code_name(appended.error().code)},
+            {"storageCondition",
+             appended.has_value()
+                 ? ""
+                 : appended.error().details.value("storage_condition", "")},
+            {"length", post_call.size()},
+            {"content", text(post_call)}}},
+      };
+    }
+
     const auto replacement_path = fault_bundle / "replacement.bin";
     const auto immutable_path = fault_bundle / "immutable.bin";
     const auto publication_source =

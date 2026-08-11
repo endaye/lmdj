@@ -801,7 +801,10 @@ mergeInto(LibraryManager.library, {
     },
 
     async appendDurable(path, length, prefix, data, dataLength, observer) {
-      const [parent, name] = await this.parent(this.parts(path, length), false);
+      const parts = this.parts(path, length);
+      const destination = this.canonicalPath(parts);
+      this.activeLease(destination);
+      const [parent, name] = await this.parent(parts, false);
       const file = await parent.getFileHandle(name);
       const access = await file.createSyncAccessHandle();
       try {
