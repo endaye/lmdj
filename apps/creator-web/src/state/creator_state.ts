@@ -2,14 +2,30 @@ import type {
   LocalProjectSummary,
   ProjectPadView,
   ProjectView,
+  SampleCommit,
+  SampleInspect,
 } from "../runtime/runtime_types";
 import {
   initialSampleState,
   preparedSampleState,
   reduceSampleState,
+  type SamplePendingAction,
   type SampleStateAction,
   type SampleState,
 } from "./sample_state";
+
+export type SampleProjectionRefresh =
+  | Readonly<{
+      type: "mutation-committed";
+      pending: Readonly<SamplePendingAction>;
+      inspect: Readonly<SampleInspect>;
+      commit: Readonly<SampleCommit>;
+    }>
+  | Readonly<{
+      type: "mutation-conflicted";
+      pending: Readonly<SamplePendingAction>;
+      inspect: Readonly<SampleInspect>;
+    }>;
 
 export type {
   LocalProjectSummary,
@@ -63,6 +79,7 @@ export interface CreatorState {
   activeBank: Bank;
   pressed: ReadonlyMap<number, PressOutcome>;
   sample: SampleState;
+  sampleProjectionRefresh: SampleProjectionRefresh | null;
 }
 
 export type CreatorAction =
@@ -89,14 +106,13 @@ export type CreatorAction =
   | {type: "pad-pressed"; slot: number; outcome: PressOutcome}
   | {type: "pad-released"; slot: number}
   | {type: "sample-action"; action: SampleStateAction}
+  | {type: "sample-projection-refresh-started"; action: SampleProjectionRefresh}
   | {
       type: "sample-project-refreshed";
       project: ProjectView;
-      action: Extract<
-        SampleStateAction,
-        {type: "mutation-committed"} | {type: "mutation-conflicted"}
-      >;
+      action: SampleProjectionRefresh;
     }
+  | {type: "sample-projection-refresh-failed"; errorCode: string}
   | {type: "pressed-cleared"};
 
 export const initialCreatorState: CreatorState = {
@@ -121,6 +137,7 @@ export const initialCreatorState: CreatorState = {
   activeBank: 0,
   pressed: new Map(),
   sample: initialSampleState,
+  sampleProjectionRefresh: null,
 };
 
 function hasReadyProject(state: CreatorState): boolean {
@@ -206,11 +223,24 @@ export function isCreatorActionAllowed(
       return state.pressed.has(action.slot);
     case "sample-action":
       return true;
+    case "sample-projection-refresh-started":
     case "sample-project-refreshed":
+    case "sample-projection-refresh-failed":
       return true;
     case "pressed-cleared":
       return true;
   }
+}
+
+function samePendingMutation(
+  left: SampleProjectionRefresh,
+  right: SampleProjectionRefresh,
+): boolean {
+  return left.type === right.type && left.pending.kind === right.pending.kind &&
+    left.pending.slot === right.pending.slot &&
+    left.pending.expectedRevision === right.pending.expectedRevision &&
+    (left.type !== "mutation-committed" ||
+      (right.type === "mutation-committed" && left.commit === right.commit));
 }
 
 export function creatorReducer(
@@ -257,6 +287,7 @@ export function creatorReducer(
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         audio: {phase: "inactive"},
         sample: preparedSampleState(action.project.revision),
+        sampleProjectionRefresh: null,
       };
     case "project-error":
       return {
@@ -302,6 +333,22 @@ export function creatorReducer(
       return {...state, pressed};
     }
     case "sample-action": {
+      if (action.action.type === "inspect-stored") {
+        const currentProject = state.project.current;
+        const inspected = action.action.inspect;
+        const inspectedRevision = inspected !== null &&
+            typeof inspected === "object" &&
+            Object.hasOwn(inspected, "projectRevision") &&
+            Number.isSafeInteger((inspected as {projectRevision?: unknown}).projectRevision)
+          ? (inspected as {projectRevision: number}).projectRevision
+          : null;
+        if ((currentProject === null && state.project.phase === "error") ||
+          (inspectedRevision !== null &&
+            currentProject !== null &&
+            inspectedRevision !== currentProject.revision)) {
+          return state;
+        }
+      }
       if (action.action.type === "waveform-stored") {
         const current = state.sample.inspect;
         const viewport = state.sample.viewport;
@@ -325,9 +372,21 @@ export function creatorReducer(
       }
       return {...state, sample: reduceSampleState(state.sample, action.action)};
     }
+    case "sample-projection-refresh-started": {
+      if (state.sampleProjectionRefresh !== null) {
+        throw new TypeError("Sample Project refresh is already active");
+      }
+      reduceSampleState(state.sample, action.action);
+      return {
+        ...state,
+        sampleProjectionRefresh: Object.freeze({...action.action}),
+      };
+    }
     case "sample-project-refreshed": {
       const current = state.project.current;
+      const refresh = state.sampleProjectionRefresh;
       if (current === null ||
+        refresh === null || !samePendingMutation(refresh, action.action) ||
         current.projectId !== action.project.projectId ||
         current.patternId !== action.project.patternId) {
         throw new TypeError("Sample Project refresh identity does not match");
@@ -363,6 +422,44 @@ export function creatorReducer(
           current: action.project,
         },
         sample,
+        sampleProjectionRefresh: null,
+      };
+    }
+    case "sample-projection-refresh-failed": {
+      const refresh = state.sampleProjectionRefresh;
+      if (refresh === null || action.errorCode.length === 0) {
+        throw new TypeError("Sample Project refresh failure is invalid");
+      }
+      const cancelled = reduceSampleState(state.sample, {
+        type: "operation-cancelled",
+        pending: refresh.pending,
+      });
+      const committed = refresh.type === "mutation-committed";
+      return {
+        ...state,
+        project: {phase: "error", projects: [], current: null},
+        runtime: {...state.runtime, errorCode: action.errorCode},
+        pressed: new Map(),
+        sample: Object.freeze({
+          ...cancelled,
+          inspect: null,
+          waveform: null,
+          viewport: null,
+          draft: null,
+          auditionPlayback: null,
+          voices: Object.freeze([]),
+          playhead: null,
+          savedRevision: null,
+          runtimeRevision: committed ? refresh.commit.runtimeRevision : null,
+          lastError: Object.freeze({
+            code: action.errorCode,
+            message: committed
+              ? "Sample was saved, but current Project truth could not be refreshed"
+              : "Project changed, but current Project truth could not be refreshed",
+            retryPrepare: false,
+          }),
+        }),
+        sampleProjectionRefresh: null,
       };
     }
     case "pressed-cleared":

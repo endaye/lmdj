@@ -2,7 +2,7 @@ import {readFileSync} from "node:fs";
 
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {afterAll, beforeAll, expect, test} from "vitest";
+import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
@@ -393,6 +393,12 @@ function deferred<T>() {
   return {promise, resolve, reject};
 }
 
+async function flushAsyncTurns(turns = 40) {
+  await act(async () => {
+    for (let turn = 0; turn < turns; ++turn) await Promise.resolve();
+  });
+}
+
 function mutableSampleRuntimeFixture() {
   const assigned = new Map<number, string>([
     [0, "33333333-3333-4333-8333-333333333333"],
@@ -529,6 +535,7 @@ test("commits composed controlled Volume once per pointer and keyboard completio
   expect(updateCount).toBe(0);
   fireEvent.pointerUp(volume, {pointerId: 31});
   await waitFor(() => expect(updateCount).toBe(1));
+  await waitFor(() => expect(volume.hasAttribute("disabled")).toBe(false));
 
   fireEvent.change(volume, {target: {value: "-4.1"}});
   await waitFor(() => expect(previewCount).toBe(2));
@@ -711,6 +718,175 @@ test("converges committed Sample and Project truth across interleaved revisions"
   expect(screen.getByText("4 / 64")).toBeTruthy();
   expect(fixture.calls.filter((call) => call === "openProject")).toHaveLength(1);
   expect(fixture.calls.filter((call) => call === "reloadSnapshot")).toHaveLength(1);
+});
+
+test.each(["NOT_FOUND", "HOST_PROTOCOL_MISMATCH"] as const)(
+  "bounds a committed projection refresh after permanent $code",
+  async (code) => {
+    const fixture = mutableSampleRuntimeFixture();
+    let mutationCommitted = false;
+    let projectReads = 0;
+    fixture.session.updatePad = async (request) => {
+      fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+      fixture.revision = 4;
+      mutationCommitted = true;
+      return {
+        committedRevision: 4,
+        runtimeRevision: 4,
+        runtimePublished: true,
+        snapshotError: null,
+      };
+    };
+    fixture.session.inspectProject = async () => {
+      if (!mutationCommitted) return fixture.inspectProject();
+      projectReads += 1;
+      return code === "HOST_PROTOCOL_MISMATCH"
+        ? {project_revision: "invalid"}
+        : fixture.inspectProject();
+    };
+    fixture.session.listLocalProjects = async () =>
+      mutationCommitted && code === "NOT_FOUND" ? [] : [fixture.summary()];
+
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", {name: "Mute"}));
+      await flushAsyncTurns();
+
+      expect(screen.getByText(
+        "Sample was saved, but current Project truth could not be refreshed",
+      )).toBeTruthy();
+      expect(screen.getByText("Creator unavailable")).toBeTruthy();
+      expect(screen.getByText(code === "HOST_PROTOCOL_MISMATCH"
+        ? "Creator and Runtime could not verify a compatible protocol."
+        : "Creator cannot continue (NOT_FOUND)."),
+      ).toBeTruthy();
+      const pad = screen.getByRole("button", {name: "Pad A1 — empty"});
+      expect(pad.hasAttribute("disabled")).toBe(true);
+      const settledReads = projectReads;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(projectReads).toBe(settledReads);
+      expect(settledReads).toBeGreaterThan(0);
+      expect(settledReads).toBeLessThanOrEqual(4);
+      expect(screen.queryByText("Sample operation failed")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test.each(["update", "reset"] as const)(
+  "resumes a committed $kind projection refresh after Sample remount",
+  async (kind) => {
+    const fixture = mutableSampleRuntimeFixture();
+    let mutationCount = 0;
+    let mutationCommitted = false;
+    let unstableProjection = true;
+    let projectionReads = 0;
+    const commit = async (): Promise<SampleCommit> => {
+      mutationCount += 1;
+      fixture.revision = 4;
+      mutationCommitted = true;
+      return {
+        committedRevision: 4,
+        runtimeRevision: 4,
+        runtimePublished: true,
+        snapshotError: null,
+      };
+    };
+    fixture.session.updatePad = async (request) => {
+      fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+      return commit();
+    };
+    fixture.session.resetPad = async (request) => {
+      fixture.playbacks.set(request.slot, Object.freeze({
+        trimStartFrame: 0,
+        trimEndFrame: 8,
+        triggerMode: "one_shot",
+        gainMillidb: 0,
+        muted: false,
+      }));
+      return commit();
+    };
+    fixture.session.inspectProject = async () => {
+      if (mutationCommitted) projectionReads += 1;
+      return fixture.inspectProject();
+    };
+    fixture.session.listLocalProjects = async () => {
+      const summary = fixture.summary();
+      return [mutationCommitted && unstableProjection
+        ? {...summary, revision: summary.revision + 1}
+        : summary];
+    };
+
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+
+    vi.useFakeTimers();
+    try {
+      if (kind === "update") {
+        fireEvent.click(screen.getByRole("button", {name: "Mute"}));
+      } else {
+        fireEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+        fireEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+      }
+      await flushAsyncTurns();
+      expect(mutationCount).toBe(1);
+      expect(projectionReads).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByRole("button", {name: "Project"}));
+      unstableProjection = false;
+      fireEvent.click(screen.getByRole("button", {name: "Sample"}));
+      await flushAsyncTurns();
+
+      expect(mutationCount).toBe(1);
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})
+        .hasAttribute("disabled")).toBe(false);
+      fireEvent.click(screen.getByRole("button", {name: "Project"}));
+      expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test("keeps pre-commit Sample import abort ownership on mode switch", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let importCount = 0;
+  let abortCount = 0;
+  fixture.session.importAssignSample = async (_file, options) => {
+    importCount += 1;
+    return new Promise<SampleCommit>((_resolve, reject) => {
+      options.signal?.addEventListener("abort", () => {
+        abortCount += 1;
+        reject(new DOMException("cancelled", "AbortError"));
+      }, {once: true});
+    });
+  };
+  const {container} = render(
+    <App initialState={ready} runtimeFactory={() => fixture.session} />,
+  );
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
+  const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
+  await userEvent.upload(input, new File(["wav"], "abort.wav", {type: "audio/wav"}));
+  await waitFor(() => expect(importCount).toBe(1));
+
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await waitFor(() => expect(abortCount).toBe(1));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  const add = await screen.findByRole("button", {name: "Add Sample to Pad A2"});
+  expect(add.hasAttribute("disabled")).toBe(false);
+  expect(importCount).toBe(1);
 });
 
 test("queries bounded multi-resolution Facade windows for local zoom and pan", async () => {

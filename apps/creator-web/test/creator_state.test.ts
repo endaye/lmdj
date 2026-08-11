@@ -252,33 +252,38 @@ describe("Creator state", () => {
       }),
     };
 
-    const after = creatorReducer(before, {
+    const refreshAction = {
+      type: "mutation-committed" as const,
+      pending: {kind: "import" as const, slot: 1, expectedRevision: 4},
+      inspect: {
+        projectRevision: currentRevision,
+        slot: 1,
+        assetId,
+        playback: {
+          trimStartFrame: 0,
+          trimEndFrame: 8,
+          triggerMode: "gate" as const,
+          gainMillidb: 0,
+          muted: false,
+        },
+        metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
+        waveformCacheIdentity: `${"b".repeat(64)}/1/max-abs-mirror/1`,
+      },
+      commit: {
+        committedRevision: 5,
+        runtimeRevision,
+        runtimePublished,
+        snapshotError,
+      },
+    };
+    const refreshing = creatorReducer(before, {
+      type: "sample-projection-refresh-started",
+      action: refreshAction,
+    });
+    const after = creatorReducer(refreshing, {
       type: "sample-project-refreshed",
       project: refreshedProject,
-      action: {
-        type: "mutation-committed",
-        pending: {kind: "import", slot: 1, expectedRevision: 4},
-        inspect: {
-          projectRevision: currentRevision,
-          slot: 1,
-          assetId,
-          playback: {
-            trimStartFrame: 0,
-            trimEndFrame: 8,
-            triggerMode: "gate",
-            gainMillidb: 0,
-            muted: false,
-          },
-          metadata: {sampleRate: 48_000, channels: 1, sourceFrames: 8},
-          waveformCacheIdentity: `${"b".repeat(64)}/1/max-abs-mirror/1`,
-        },
-        commit: {
-          committedRevision: 5,
-          runtimeRevision,
-          runtimePublished,
-          snapshotError,
-        },
-      },
+      action: refreshAction,
     });
 
     expect(after.project.current).toEqual(refreshedProject);

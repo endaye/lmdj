@@ -108,7 +108,6 @@ export function SampleSurface({
   const importController = useRef<AbortController | null>(null);
   const operationPending = useRef<Readonly<SamplePendingAction> | null>(null);
   const importPending = useRef<Readonly<SamplePendingAction> | null>(null);
-  const projectionRefreshTimer = useRef<number | null>(null);
   const previousSession = useRef(session);
   const previewEpoch = useRef(0);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
@@ -128,10 +127,6 @@ export function SampleSurface({
   }, [filePickIntent]);
 
   useEffect(() => () => {
-    if (projectionRefreshTimer.current !== null) {
-      window.clearTimeout(projectionRefreshTimer.current);
-      projectionRefreshTimer.current = null;
-    }
     const pending = importPending.current;
     importPending.current = null;
     if (pending !== null) {
@@ -148,10 +143,6 @@ export function SampleSurface({
   useEffect(() => {
     if (previousSession.current === session) return;
     previousSession.current = session;
-    if (projectionRefreshTimer.current !== null) {
-      window.clearTimeout(projectionRefreshTimer.current);
-      projectionRefreshTimer.current = null;
-    }
     const pending = operationPending.current;
     operationPending.current = null;
     importPending.current = null;
@@ -174,7 +165,8 @@ export function SampleSurface({
   }, [dispatch, selectedSlot, state.activeBank, state.project.current]);
 
   useEffect(() => {
-    if (session === undefined || selectedSlot === null) return;
+    if (session === undefined || selectedSlot === null ||
+      state.project.current === null) return;
     let current = true;
     void inspectSampleJourney(session, selectedSlot).then(
       (value) => {
@@ -190,7 +182,13 @@ export function SampleSurface({
       },
     );
     return () => { current = false; };
-  }, [dispatch, sample.savedRevision, selectedSlot, session]);
+  }, [
+    dispatch,
+    sample.savedRevision,
+    selectedSlot,
+    session,
+    state.project.current,
+  ]);
 
   useEffect(() => {
     if (session === undefined || inspect === null || inspect.metadata === null ||
@@ -222,58 +220,82 @@ export function SampleSurface({
     return () => { current = false; };
   }, [dispatch, inspect, session]);
 
-  const dispatchResolution = async (
-    pending: Readonly<SamplePendingAction>,
-    resolution: SampleMutationResolution,
-  ): Promise<void> => {
+  useEffect(() => {
+    const refresh = state.sampleProjectionRefresh;
     const currentProject = state.project.current;
-    if (session === undefined || currentProject === null ||
-      operationPending.current !== pending) return;
-
-    let currentInspect = resolution.inspect;
-    try {
+    if (refresh === null || session === undefined || currentProject === null) return;
+    let active = true;
+    let retryTimer: number | null = null;
+    const waitForRetry = (milliseconds: number) => new Promise<void>((resolve) => {
+      retryTimer = window.setTimeout(() => {
+        retryTimer = null;
+        resolve();
+      }, milliseconds);
+    });
+    const failRefresh = (errorCode: string) => {
+      if (active) dispatch({type: "sample-projection-refresh-failed", errorCode});
+    };
+    void (async () => {
+      let currentInspect = refresh.inspect;
       for (let attempt = 0; attempt < 4; ++attempt) {
-        if (operationPending.current !== pending) return;
-        const project = await refreshProjectProjectionJourney(
-          session,
-          currentProject,
-        );
+        if (attempt > 0) await waitForRetry(attempt * 25);
+        if (!active) return;
+        let project;
+        try {
+          project = await refreshProjectProjectionJourney(session, currentProject);
+        } catch (error) {
+          failRefresh(publicOperationError(error).code);
+          return;
+        }
+        if (!active) return;
         if (project === null) continue;
         if (project.revision !== currentInspect.projectRevision) {
-          currentInspect = await inspectSampleJourney(session, pending.slot);
+          try {
+            currentInspect = await inspectSampleJourney(session, refresh.pending.slot);
+          } catch (error) {
+            failRefresh(publicOperationError(error).code);
+            return;
+          }
           continue;
         }
-        if (operationPending.current !== pending) return;
-        operationPending.current = null;
-        if (importPending.current === pending) importPending.current = null;
+        if (!active) return;
         dispatch({
           type: "sample-project-refreshed",
           project,
-          action: resolution.kind === "committed"
-            ? {
-                type: "mutation-committed",
-                pending,
-                inspect: currentInspect,
-                commit: resolution.commit,
-              }
-            : {
-                type: "mutation-conflicted",
-                pending,
-                inspect: currentInspect,
-              },
+          action: {...refresh, inspect: currentInspect},
         });
         return;
       }
-    } catch {
-      // The mutation outcome is already authoritative. A projection read failure
-      // must not be reclassified as a failed mutation; retry the read boundary.
-    }
-    if (operationPending.current !== pending ||
-      projectionRefreshTimer.current !== null) return;
-    projectionRefreshTimer.current = window.setTimeout(() => {
-      projectionRefreshTimer.current = null;
-      void dispatchResolution(pending, resolution);
-    }, 25);
+      failRefresh("HOST_TIMEOUT");
+    })();
+    return () => {
+      active = false;
+      if (retryTimer !== null) window.clearTimeout(retryTimer);
+    };
+  }, [dispatch, session, state.project.current, state.sampleProjectionRefresh]);
+
+  const dispatchResolution = (
+    pending: Readonly<SamplePendingAction>,
+    resolution: SampleMutationResolution,
+  ): void => {
+    if (operationPending.current !== pending) return;
+    operationPending.current = null;
+    if (importPending.current === pending) importPending.current = null;
+    dispatch({
+      type: "sample-projection-refresh-started",
+      action: resolution.kind === "committed"
+        ? {
+            type: "mutation-committed",
+            pending,
+            inspect: resolution.inspect,
+            commit: resolution.commit,
+          }
+        : {
+            type: "mutation-conflicted",
+            pending,
+            inspect: resolution.inspect,
+          },
+    });
   };
 
   const isAssigned = (slot: number): boolean =>
@@ -307,7 +329,7 @@ export function SampleSurface({
         playback,
       });
       if (operationPending.current !== pending) return;
-      await dispatchResolution(pending, resolution);
+      dispatchResolution(pending, resolution);
     } catch (error) {
       if (operationPending.current !== pending) return;
       operationPending.current = null;
@@ -380,7 +402,7 @@ export function SampleSurface({
         expectedRevision: inspect.projectRevision,
       });
       if (operationPending.current !== pending) return;
-      await dispatchResolution(pending, resolution);
+      dispatchResolution(pending, resolution);
     } catch (error) {
       if (operationPending.current !== pending) return;
       operationPending.current = null;
@@ -415,7 +437,7 @@ export function SampleSurface({
         signal: controller.signal,
       });
       if (operationPending.current !== pending) return;
-      await dispatchResolution(pending, resolution);
+      dispatchResolution(pending, resolution);
     } catch (error) {
       if (operationPending.current !== pending) return;
       operationPending.current = null;
@@ -448,8 +470,10 @@ export function SampleSurface({
     : `Pad ${padAddress({slot: selectedSlot, assetId: inspect?.assetId ?? null})}`;
   const editablePlayback = sample.auditionPlayback ?? sample.draft?.proposed ?? inspect?.playback;
   const selectedAssigned = inspect?.assetId !== null && inspect?.assetId !== undefined;
-  const actionsDisabled = session === undefined || inspect === null || !selectedAssigned ||
-    sample.pendingAction !== null;
+  const projectUnavailable = state.project.phase !== "ready" ||
+    state.project.current === null;
+  const actionsDisabled = session === undefined || projectUnavailable || inspect === null ||
+    !selectedAssigned || sample.pendingAction !== null;
   const inspectedMetadata = inspect?.metadata;
   const queryViewportWaveform = session === undefined || inspect === null ||
       inspectedMetadata === null || inspectedMetadata === undefined ||
@@ -484,7 +508,8 @@ export function SampleSurface({
           {selectedAssigned && selectedSlot !== null ? (
             <button
               type="button"
-              disabled={session === undefined || sample.pendingAction !== null}
+              disabled={session === undefined || projectUnavailable ||
+                sample.pendingAction !== null}
               onClick={() => chooseFile(selectedSlot)}
             >
               Replace Sample
@@ -528,7 +553,8 @@ export function SampleSurface({
           {selectedSlot === null ? null : (
             <button
               type="button"
-              disabled={session === undefined || sample.pendingAction !== null}
+              disabled={session === undefined || projectUnavailable ||
+                sample.pendingAction !== null}
               onClick={() => chooseFile(selectedSlot)}
             >
               Add Sample to {selectedAddress}
@@ -564,6 +590,7 @@ export function SampleSurface({
                 aria-pressed={selected}
                 aria-label={`Pad ${address} — ${assigned ? "assigned" : "empty"}`}
                 key={pad.slot}
+                disabled={projectUnavailable}
                 onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}
                 onMouseDown={(event) => controller?.pointerDown(event, pad.slot)}
                 onPointerUp={(event) => controller?.pointerUp(event, pad.slot)}
