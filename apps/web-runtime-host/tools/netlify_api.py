@@ -132,6 +132,48 @@ class NetlifyClient:
                 raise NetlifyError("Netlify published deploy identity is invalid")
         return PublishedSite(site_id, state, ssl_url, prior)
 
+    def get_site_file_count(self, *, site_id: str) -> int:
+        """Return the validated number of files in the site's current deploy."""
+        if not site_id:
+            raise NetlifyError("Netlify site identity is invalid")
+        response = self._json_request(
+            "GET", f"/sites/{self._path_segment(site_id)}/files", None, None
+        )
+        if not isinstance(response, list):
+            raise NetlifyError("Netlify site files are invalid")
+        paths: set[str] = set()
+        for item in response:
+            if not isinstance(item, dict) or not {
+                "id", "path", "sha", "mime_type", "size"
+            }.issubset(item):
+                raise NetlifyError("Netlify site files are invalid")
+            identifier = item.get("id")
+            path = item.get("path")
+            digest = item.get("sha")
+            mime_type = item.get("mime_type")
+            size = item.get("size")
+            if (
+                not isinstance(identifier, str)
+                or not identifier
+                or not isinstance(path, str)
+                or not path.startswith("/")
+                or path in paths
+                or not isinstance(digest, str)
+                or not self._sha1_digest(digest)
+                or not isinstance(mime_type, str)
+                or not mime_type
+                or not isinstance(size, int)
+                or isinstance(size, bool)
+                or size < 0
+            ):
+                raise NetlifyError("Netlify site files are invalid")
+            try:
+                self._upload_path(path)
+            except NetlifyError:
+                raise NetlifyError("Netlify site files are invalid") from None
+            paths.add(path)
+        return len(response)
+
     def disable_site(self, *, site_id: str, reason: str) -> int:
         """Disable a site through Netlify's reversible serving control."""
         if not site_id or not reason or "\n" in reason or "\r" in reason:

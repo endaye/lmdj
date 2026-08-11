@@ -123,8 +123,17 @@ Release `targetCommitish` 只作为非空辅助 metadata；tag 已存在时它�
    secret 并提供给受控 workflow。此站点只能由下述 GitHub Actions 路径以 API 创建 draft、
    smoke 后同 ID 发布，禁止手工拖拽/CLI 生产上传。
 
-这一步完成前，任何 `lmdj-runtime` site ID、Deploy ID 或 immutable Deploy URL 都是
-不存在的值，不能用占位符伪造为证据。
+Netlify 创建空站点时可能同时建立一个状态为 `ready`、但当前文件列表精确为空的平台占位
+Deploy。部署 preflight 必须按顺序读取 current site、官方 `GET /sites/{site_id}/files` 清单、
+再读取一次 current site，并要求两次 site projection 完全一致。只有同一 current Deploy 的
+validated file count 精确为 `0` 时，才把它视为“尚无可回滚 prior”，不对 404 占位 URL 运行
+prior smoke，且成功 evidence 的 `prior_good` 保持 `null`。任何非空 current Deploy 仍必须完成
+既有 prior identity 与 immutable/production smoke；清单无效、API 失败或两次 site identity
+不同都在创建新 draft 前 fail closed。
+
+站点创建完成前，任何 `lmdj-runtime` site ID、Deploy ID 或 immutable Deploy URL 都是
+不存在的值，不能用占位符伪造为证据；平台返回的零文件占位 Deploy 也不是 prior-good 或
+已发布 Runtime Host 的证据。
 
 ## GitHub Environment 与 secret
 
@@ -168,7 +177,7 @@ trap - EXIT INT TERM
 
 获授权的 workflow 只接受发布事件的 prerelease tag 或手动输入的精确 Product tag，
 并固定 checkout `main`。它执行：签名 tag/Release/archive 验证 → staging → Netlify
-prior discovery/immutable+production smoke → draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
+current site/file inventory/current site 稳定性 preflight → 非空 prior discovery/immutable+production smoke → draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
 生产 URL HTTP 和 Chromium smoke → artifact evidence。
 
 HTTP smoke 从 `/` 开始，只允许直接 200，或一次严格同源、无 query/fragment 且最终仅到
@@ -230,6 +239,7 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 | 情形 | 操作 |
 | --- | --- |
 | remote tag/signature、三资产 inventory/checksum signature、archive digest 或 bundle identity 失败 | 停止；不要创建 Netlify Deploy。修复 release provenance 后从验证重新开始。 |
+| current site/file inventory/current site preflight 无效、API 失败或身份变化 | 停止；不要把不稳定/未知站点状态分类为首次发布，也不要创建新 draft。 |
 | prior published deploy/identity/smoke 失败 | 停止；未建立本次 prior-good 前不要创建或发布新 Deploy。 |
 | draft 创建或 immutable URL HTTP/Chromium 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
 | publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；当前 ID 只允许 candidate、exact prior，或首次发布时为空；未知第三 ID 必须 recovery FAIL。 |
