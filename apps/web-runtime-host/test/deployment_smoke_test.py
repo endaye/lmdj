@@ -79,6 +79,7 @@ class SmokeFixture:
         self.redirects: dict[str, str] = {}
         self.redirect_cache_overrides: dict[str, str | None] = {}
         self.delays: dict[str, float] = {}
+        self.edge_rejections: dict[str, tuple[HTTPStatus, bytes]] = {}
         self.forced_ok: set[str] = set()
         self.payloads: dict[str, bytes] = {}
         assets = []
@@ -178,6 +179,13 @@ class FixtureHandler(BaseHTTPRequestHandler):
         fixture = self.server.fixture
         if self.path in fixture.delays:
             time.sleep(fixture.delays[self.path])
+        if self.path in fixture.edge_rejections:
+            status, payload = fixture.edge_rejections[self.path]
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path in fixture.redirects:
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", fixture.redirects[self.path])
@@ -444,6 +452,26 @@ class DeploymentSmokeTest(unittest.TestCase):
                 with self.assertRaisesRegex(SmokeError, re.escape(path)):
                     self.smoke()
                 self.fixture.forced_ok.clear()
+
+    def test_accepts_empty_netlify_edge_traversal_rejection(self) -> None:
+        self.fixture.edge_rejections["/%2e%2e/index.html"] = (
+            HTTPStatus.BAD_REQUEST,
+            b"",
+        )
+        self.assertEqual(self.smoke()["asset_count"], 9)
+
+    def test_rejects_wrong_or_nonempty_edge_traversal_rejection(self) -> None:
+        for status, payload in (
+            (HTTPStatus.NOT_FOUND, b""),
+            (HTTPStatus.BAD_REQUEST, b"product response"),
+        ):
+            with self.subTest(status=status, payload=payload):
+                self.fixture.edge_rejections["/%2e%2e/index.html"] = (
+                    status,
+                    payload,
+                )
+                with self.assertRaisesRegex(SmokeError, "/%2e%2e/index.html"):
+                    self.smoke()
 
     def test_rejects_missing_wrong_or_duplicate_negative_route_cache(self) -> None:
         for observed in (None, "public, max-age=31536000, immutable"):
