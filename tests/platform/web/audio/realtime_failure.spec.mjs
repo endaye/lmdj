@@ -152,6 +152,90 @@ async function uncorrelatableResponseEvidence(page, reuseSettledId) {
 }
 
 
+async function pendingRejectionEvidence(page) {
+  return page.evaluate(async () => {
+    const transport = window.lmdjWebRuntimeHost.transport;
+    const conformance = window.lmdjWebRuntimeHostTest;
+    const untrackedRequestId = crypto.randomUUID();
+    const pendingRequestId = crypto.randomUUID();
+    const failures = [];
+    const notifications = [];
+    const terminalFailure = new Promise((resolve) => {
+      transport.subscribeFailure((error) => {
+        const serialized = {
+          code: error.code,
+          message: error.message,
+          details: {...error.details},
+        };
+        failures.push(serialized);
+        resolve(serialized);
+      });
+    });
+    transport.subscribe((notification) => {
+      notifications.push(structuredClone(notification));
+    });
+
+    await conformance.submitUntrackedHostStatus(untrackedRequestId);
+    const pending = transport.send({
+      protocol_version: 1,
+      request_id: pendingRequestId,
+      operation: "host.status",
+      payload: {},
+    });
+    const pendingIdsBefore = conformance.pendingRequestIds();
+    const rejected = await Promise.race([
+      pending.then(
+        () => null,
+        (error) => ({
+          code: error.code,
+          message: error.message,
+          details: {...error.details},
+        }),
+      ),
+      new Promise((resolve) => window.setTimeout(
+        () => resolve({code: "PENDING_REJECTION_TIMEOUT"}),
+        5_000,
+      )),
+    ]);
+    const failure = await Promise.race([
+      terminalFailure,
+      new Promise((_, reject) => window.setTimeout(
+        () => reject(new Error("terminal transport failure timed out")),
+        10_000,
+      )),
+    ]);
+    const pendingIdsAfter = conformance.pendingRequestIds();
+    const laterRejected = await transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "host.status",
+      payload: {},
+    }).then(
+      () => null,
+      (error) => ({
+        code: error.code,
+        message: error.message,
+        details: {...error.details},
+      }),
+    );
+    transport.terminate();
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    return {
+      failure,
+      failures,
+      notifications,
+      rejected,
+      laterRejected,
+      pendingRequestId,
+      pendingIdsBefore,
+      pendingIdsAfter,
+      terminated: transport.terminated,
+      terminalOwnerReleased: transport.terminalOwnerReleased,
+    };
+  });
+}
+
+
 for (const scenario of [
   {name: "unknown response request ID", reuseSettledId: false},
   {
@@ -185,6 +269,23 @@ for (const scenario of [
     },
   );
 }
+
+
+test("unknown response rejects and clears another real pending Browser Main request", async ({page}) => {
+  test.setTimeout(30_000);
+  await waitForFormalHost(page);
+
+  const evidence = await pendingRejectionEvidence(page);
+  expect(evidence.pendingIdsBefore).toEqual([evidence.pendingRequestId]);
+  expect(evidence.pendingIdsAfter).toEqual([]);
+  expect(evidence.failure).toMatchObject({code: "HOST_PROTOCOL_MISMATCH"});
+  expect(evidence.rejected).toEqual(evidence.failure);
+  expect(evidence.laterRejected).toEqual(evidence.failure);
+  expect(evidence.failures).toEqual([evidence.failure]);
+  expect(evidence.notifications).toEqual([]);
+  expect(evidence.terminated).toBe(true);
+  expect(evidence.terminalOwnerReleased).toBe(true);
+});
 
 
 test("processorerror seals an active Take and the failed session never resumes", async ({page}) => {

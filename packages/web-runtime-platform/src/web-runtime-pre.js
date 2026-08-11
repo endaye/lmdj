@@ -879,6 +879,9 @@ if (typeof globalThis.window !== "undefined") {
 
     return Object.freeze({
       submitUntrackedHostStatus,
+      pendingRequestIds() {
+        return Object.freeze([...pendingRequests.keys()]);
+      },
 
       async runSharedEngineProof() {
         const memory = Module.wasmMemory;

@@ -413,6 +413,48 @@ def main() -> int:
         "diagnostic outcome drain must not self-requeue while a mirror is writing",
     )
     failure_spec_text = realtime_failure_spec.read_text(encoding="utf-8")
+    pending_rejection_case = re.search(
+        r'test\("unknown response rejects and clears another real pending '
+        r'Browser Main request".*?\n\}\);',
+        failure_spec_text,
+        re.DOTALL,
+    )
+    require(
+        pending_rejection_case is not None,
+        "real Browser Main pending rejection case is missing",
+    )
+    require(
+        "pendingRejectionEvidence(page)" in pending_rejection_case.group(0)
+        and "pendingIdsBefore" in pending_rejection_case.group(0)
+        and "pendingIdsAfter" in pending_rejection_case.group(0)
+        and "HOST_PROTOCOL_MISMATCH" in pending_rejection_case.group(0)
+        and "terminalOwnerReleased" in pending_rejection_case.group(0),
+        "real Browser Main pending rejection case omits required evidence",
+    )
+    pending_rejection_helper = re.search(
+        r"async function pendingRejectionEvidence\(page\)\s*\{(.*?)\n\}",
+        failure_spec_text,
+        re.DOTALL,
+    )
+    require(
+        pending_rejection_helper is not None,
+        "real Browser Main pending rejection helper is missing",
+    )
+    pending_rejection_body = pending_rejection_helper.group(1)
+    untracked_submit = pending_rejection_body.find(
+        "submitUntrackedHostStatus(untrackedRequestId)"
+    )
+    normal_send = pending_rejection_body.find("const pending = transport.send")
+    require(
+        untracked_submit >= 0 and normal_send > untracked_submit,
+        "pending rejection proof must submit the untracked native response "
+        "before registering the normal transport request",
+    )
+    require(
+        "conformance.pendingRequestIds()" in pending_rejection_body
+        and "PENDING_REJECTION_TIMEOUT" in pending_rejection_body,
+        "pending rejection proof must observe clearing and bound rejection",
+    )
     submission_helper = re.search(
         r"window\.__lmdjRealtimeFailureSubmit\s*=\s*async\s*"
         r"\([^)]*\)\s*=>\s*\{(.*?)\n\s{4}\};",
@@ -826,6 +868,7 @@ def main() -> int:
         for conformance_surface in (
             "createConformanceApi",
             "submitUntrackedHostStatus",
+            "pendingRequestIds",
             "lmdjWebRuntimeHostTest",
             "LMDJ_WEB_AUDIO_CONFORMANCE_API",
             "LMDJ_WEB_AUDIO_CONFORMANCE_INSTALL",
