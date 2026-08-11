@@ -1139,6 +1139,40 @@ if (typeof globalThis.window !== "undefined") {
         };
       },
 
+      async runQuiescenceTimeoutProof(timeoutMs) {
+        const startedAt = performance.now();
+        if (Module.ccall(
+          "lmdj_web_audio_test_quiescence_timeout",
+          "number",
+          ["number"],
+          [timeoutMs],
+        ) !== 1) {
+          throw new Error("quiescence timeout proof was rejected");
+        }
+        const watchdogDeadline = startedAt + 500;
+        let serialized = null;
+        while (performance.now() < watchdogDeadline) {
+          serialized = Module.ccall(
+            "lmdj_web_audio_test_quiescence_timeout_result",
+            "string",
+            [],
+            [],
+          );
+          if (serialized) break;
+          await delay(2);
+        }
+        return {
+          ...(!serialized
+            ? {completed: false}
+            : JSON.parse(serialized)),
+          observed_wall_ms: performance.now() - startedAt,
+          fatal: fatalNames[Module["_lmdj_web_audio_fatal"]()],
+          gate: gateNames[Module["_lmdj_web_audio_test_gate_state"]()],
+          callback_in_flight:
+            Module["_lmdj_web_audio_test_in_flight"](),
+        };
+      },
+
       async runSuspendReactivateProof() {
         const prepared = await prepareProject();
         const firstActivation = await submit("audio.activate", {});
