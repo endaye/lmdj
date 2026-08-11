@@ -353,7 +353,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             "Application/JSON"
         )
         self.fixture.content_type_overrides[main] = (
-            "TEXT/JAVASCRIPT; CHARSET=UTF8"
+            "APPLICATION/JAVASCRIPT; CHARSET=UTF8"
         )
         self.assertEqual(self.smoke()["asset_count"], 9)
 
