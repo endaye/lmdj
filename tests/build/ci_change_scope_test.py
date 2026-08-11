@@ -7,6 +7,7 @@ scope-policy/classifier implementation.
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import os
@@ -26,6 +27,23 @@ LANES = {
     "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
     "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab",
     "package",
+}
+
+LANE_JOBS = {
+    "docs_static": ["docs-static"],
+    "portal": ["portal"],
+    "ci_contract": ["ci-contract"],
+    "core_ubuntu": ["select-ubuntu-runner", "core-ubuntu"],
+    "core_asan": ["select-ubuntu-runner", "core-asan"],
+    "core_coverage": ["select-ubuntu-runner", "core-coverage"],
+    "core_macos": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
+    "web_toolchain": ["web-toolchain-conformance"],
+    "web_runtime_host": ["select-ubuntu-runner", "web-runtime-host"],
+    "creator": ["creator-web"],
+    "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
+    "deploy_contract": ["deploy-contract"],
+    "chameleon_lab": ["chameleon-lab"],
+    "package": ["package"],
 }
 
 CASES = {
@@ -122,7 +140,35 @@ class ChangeScopeTest(unittest.TestCase):
 
     def test_policy_has_exact_closed_lanes_and_all_current_top_levels(self):
         self.assertEqual(set(self.policy["lanes"]), LANES)
+        self.assertEqual(self.policy["lane_jobs"], LANE_JOBS)
         self.assertEqual(set(self.policy["known_top_levels"]), TOP_LEVELS)
+
+    def test_policy_rejects_mutations_that_weaken_the_closed_v1_contract(self):
+        mutations = {
+            "lane removal": lambda policy: (
+                policy["lanes"].remove("core_asan"),
+                policy["lane_jobs"].pop("core_asan"),
+            ),
+            "support job replacement": lambda policy: policy["lane_jobs"].__setitem__(
+                "core_asan", ["select-ubuntu-runner", "different-asan-job"]
+            ),
+            "central control rule removal": lambda policy: policy.__setitem__(
+                "full_rules", [
+                    rule for rule in policy["full_rules"]
+                    if rule["match"] != {"kind": "prefix", "value": "scripts/ci/"}
+                ]
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                policy = copy.deepcopy(self.policy)
+                mutate(policy)
+                with self.assertRaises(ValueError):
+                    self.module.classify(
+                        policy, changed(self.module, "docs/guide.md"),
+                        base_sha="a" * 40, head_sha="b" * 40,
+                        event_name="pull_request", draft=False, labels=(),
+                    )
 
     def test_every_case_uses_union_semantics(self):
         for path, expected in CASES.items():
@@ -208,6 +254,21 @@ class ChangeScopeTest(unittest.TestCase):
         with self.subTest("unknown status"):
             with self.assertRaises(ValueError):
                 self.module.parse_name_status_z(b"X\0docs/guide.md\0")
+        with self.subTest("malformed rename record"):
+            with self.assertRaises(ValueError):
+                self.module.classify(
+                    self.policy, (self.module.ChangedFile(
+                        "Rxyz", ("apps/creator-web/old.js", "apps/web-runtime-host/new.mjs")
+                    ),), base_sha="a" * 40, head_sha="b" * 40,
+                    event_name="pull_request", draft=False, labels=(),
+                )
+        with self.subTest("malformed modified record"):
+            with self.assertRaises(ValueError):
+                self.module.classify(
+                    self.policy, (self.module.ChangedFile("M100", ("docs/guide.md",)),),
+                    base_sha="a" * 40, head_sha="b" * 40,
+                    event_name="pull_request", draft=False, labels=(),
+                )
 
     def test_git_inventory_uses_complete_base_to_head_range_not_last_commit(self):
         with TemporaryGitRepository() as repository:
@@ -255,7 +316,18 @@ class ChangeScopeTest(unittest.TestCase):
                 self.assertFalse(manifest.exists())
             with self.subTest("failed diff"):
                 manifest = repository.path / "failed-diff.json"
-                environment = dict(os.environ, PATH="")
+                fake_bin = repository.path / "fake-bin"
+                fake_bin.mkdir()
+                fake_git = fake_bin / "git"
+                fake_git.write_text(
+                    "#!/bin/sh\n"
+                    "if [ \"$1\" = \"cat-file\" ]; then exit 0; fi\n"
+                    "if [ \"$1\" = \"diff\" ]; then exit 9; fi\n"
+                    "exit 7\n",
+                    encoding="utf-8",
+                )
+                fake_git.chmod(0o755)
+                environment = dict(os.environ, PATH=str(fake_bin))
                 result = invoke(manifest, base, environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(manifest.exists())

@@ -34,6 +34,32 @@ _STATUS_RESULTS = {
     "A": "added", "C": "copied", "D": "deleted", "M": "modified",
     "R": "renamed", "T": "type_changed",
 }
+_CANONICAL_LANES = (
+    "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
+    "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
+    "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab", "package",
+)
+_CANONICAL_LANE_JOBS = {
+    "docs_static": ("docs-static",),
+    "portal": ("portal",),
+    "ci_contract": ("ci-contract",),
+    "core_ubuntu": ("select-ubuntu-runner", "core-ubuntu"),
+    "core_asan": ("select-ubuntu-runner", "core-asan"),
+    "core_coverage": ("select-ubuntu-runner", "core-coverage"),
+    "core_macos": ("select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"),
+    "web_toolchain": ("web-toolchain-conformance",),
+    "web_runtime_host": ("select-ubuntu-runner", "web-runtime-host"),
+    "creator": ("creator-web",),
+    "web_runtime_lab": ("select-ubuntu-runner", "web-runtime-lab"),
+    "deploy_contract": ("deploy-contract",),
+    "chameleon_lab": ("chameleon-lab",),
+    "package": ("package",),
+}
+_MANDATORY_FULL_MATCHES = {
+    ("exact", ".github/workflows/ci.yml"),
+    ("prefix", "scripts/ci/"),
+    ("prefix", ".github/actions/configure-build-acceleration/"),
+}
 _POLICY_KEYS = {
     "schema", "manifest_schema", "lanes", "lane_jobs", "known_top_levels",
     "full_rules", "rules", "expensive_families", "expensive_family_exemptions",
@@ -64,6 +90,19 @@ def _validate_path(path: str) -> None:
         raise ValueError(f"noncanonical path: {path!r}")
 
 
+def _validate_changed_status(status: object) -> str:
+    if not isinstance(status, str) or not status:
+        raise ValueError("unsupported changed-file status")
+    code = status[0]
+    if code in {"A", "D", "M", "T"} and status == code:
+        return code
+    if code in {"C", "R"} and re.fullmatch(r"[CR](?:[0-9]{1,3})?", status):
+        score = status[1:]
+        if not score or int(score) <= 100:
+            return code
+    raise ValueError(f"unsupported changed-file status: {status!r}")
+
+
 def parse_name_status_z(payload: bytes) -> tuple[ChangedFile, ...]:
     """Parse ``git diff --name-status -z`` without losing rename old paths."""
     if not isinstance(payload, bytes) or not payload:
@@ -81,15 +120,14 @@ def parse_name_status_z(payload: bytes) -> tuple[ChangedFile, ...]:
         except UnicodeDecodeError as error:
             raise ValueError("status is not UTF-8") from error
         position += 1
-        if not status or status[0] not in _STATUS_RESULTS or status[0] in {"U", "X"}:
-            raise ValueError(f"unsupported or unmerged status: {status!r}")
-        if status[0] in {"R", "C"}:
-            if not status[1:].isdigit() or position + 1 >= len(fields):
+        code = _validate_changed_status(status)
+        if code in {"R", "C"}:
+            if position + 1 >= len(fields):
                 raise ValueError(f"invalid rename/copy status: {status!r}")
             raw_paths = fields[position:position + 2]
             position += 2
         else:
-            if status != status[0] or position >= len(fields):
+            if position >= len(fields):
                 raise ValueError(f"invalid status: {status!r}")
             raw_paths = fields[position:position + 1]
             position += 1
@@ -121,15 +159,15 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
     if policy["schema"] != "lmdj.ci-scope-policy.v1" or policy["manifest_schema"] != "lmdj.ci-scope.v1":
         raise ValueError("unknown policy schema")
     lanes = policy["lanes"]
-    if not isinstance(lanes, list) or len(lanes) != len(set(lanes)) or not all(isinstance(lane, str) for lane in lanes):
-        raise ValueError("invalid lanes")
+    if not isinstance(lanes, list) or tuple(lanes) != _CANONICAL_LANES:
+        raise ValueError("lanes do not match the closed v1 allowlist")
     lane_set = set(lanes)
     lane_jobs = policy["lane_jobs"]
-    if not isinstance(lane_jobs, dict) or set(lane_jobs) != lane_set:
-        raise ValueError("lane jobs do not close over lanes")
-    for jobs in lane_jobs.values():
-        if not isinstance(jobs, list) or not jobs or len(jobs) != len(set(jobs)) or not all(isinstance(job, str) and job for job in jobs):
-            raise ValueError("invalid lane jobs")
+    if not isinstance(lane_jobs, dict) or {
+        lane: tuple(jobs) if isinstance(jobs, list) else jobs
+        for lane, jobs in lane_jobs.items()
+    } != _CANONICAL_LANE_JOBS:
+        raise ValueError("lane jobs do not match the closed v1 mapping")
     known = policy["known_top_levels"]
     if not isinstance(known, list) or len(known) != len(set(known)) or not all(isinstance(item, str) and item for item in known):
         raise ValueError("invalid known top levels")
@@ -145,6 +183,12 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
         _validate_match(rule["match"])
         if not isinstance(rule["reason"], str) or not rule["reason"]:
             raise ValueError("invalid full rule reason")
+    full_matches = {
+        (rule["match"]["kind"], rule["match"]["value"])
+        for rule in policy["full_rules"]
+    }
+    if not _MANDATORY_FULL_MATCHES.issubset(full_matches):
+        raise ValueError("mandatory full-control rules are missing")
     families = policy["expensive_families"]
     if not isinstance(families, dict) or set(families) != {"core", "web-runtime", "creator", "deploy-package"}:
         raise ValueError("invalid expensive families")
@@ -198,9 +242,8 @@ def classify(
     for record in changed:
         if not isinstance(record, ChangedFile):
             raise ValueError("invalid changed-file record")
-        if not record.status or record.status[0] not in _STATUS_RESULTS:
-            raise ValueError("unsupported changed-file status")
-        required_paths = 2 if record.status[0] in {"R", "C"} else 1
+        code = _validate_changed_status(record.status)
+        required_paths = 2 if code in {"R", "C"} else 1
         if len(record.paths) != required_paths:
             raise ValueError("invalid changed-file path count")
         for path in record.paths:
