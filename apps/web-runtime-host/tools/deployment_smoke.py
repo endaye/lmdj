@@ -71,8 +71,8 @@ NEGATIVE_PATHS = (
     "/src/main.mjs",
     "/missing",
     "/assets/missing.map",
-    "/%2e%2e/index.html",
 )
+TRAVERSAL_PATH = "/%2e%2e/index.html"
 
 
 class SmokeError(RuntimeError):
@@ -369,6 +369,36 @@ def _require_negative(
         raise SmokeError(f"{path} returned HTTP {status}, expected 404")
 
 
+def _require_traversal_rejection(
+    opener, *, url: str, path: str, timeout_seconds: float
+) -> None:
+    request = _request(url, "no-store")
+    try:
+        with opener.open(request, timeout=timeout_seconds) as response:
+            status = response.status
+            headers = response.headers
+            body = response.read(1)
+    except HTTPError as error:
+        try:
+            status = error.code
+            headers = error.headers
+            body = error.read(1)
+        finally:
+            error.close()
+    except SmokeError:
+        raise
+    except (OSError, URLError):
+        raise SmokeError(f"{path} request failed") from None
+    if status == 404:
+        _validate_headers(headers, path)
+        _require_cache_control(headers, expected="no-store", label=path)
+        return
+    if status != 400:
+        raise SmokeError(f"{path} returned HTTP {status}, expected 400 or 404")
+    if body:
+        raise SmokeError(f"{path} returned a non-empty response body")
+
+
 def _manifest_identity(manifest: object) -> tuple[str, str]:
     if not isinstance(manifest, dict) or set(manifest) != MANIFEST_KEYS:
         raise SmokeError("manifest root schema is invalid")
@@ -630,6 +660,12 @@ def smoke_http(
             path=path,
             timeout_seconds=timeout_seconds,
         )
+    _require_traversal_rejection(
+        opener,
+        url=root.rstrip("/") + TRAVERSAL_PATH,
+        path=TRAVERSAL_PATH,
+        timeout_seconds=timeout_seconds,
+    )
 
     result: dict[str, object] = {
         "asset_count": len(assets),
