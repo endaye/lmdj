@@ -364,6 +364,44 @@ def main() -> int:
         'if [[ ${#formal_host_specs[@]} -eq 0 ]]' in web_runtime_host_script_text,
         "formal browser Proof must fail closed when no tracked specs are found",
     )
+    production_boundary = re.search(
+        r"verify_production_source_boundary\(\)\s*\{(.*?)\n\}",
+        web_runtime_host_script_text,
+        re.DOTALL,
+    )
+    require(
+        production_boundary is not None,
+        "stable Web Host build must define a generated production source "
+        "boundary gate",
+    )
+    production_boundary_body = production_boundary.group(1)
+    require(
+        '"$repo_root/apps/web-runtime-host/test/web_host_source_boundary_test.py"'
+        in production_boundary_body
+        and '"$repo_root/apps/web-runtime-host"' in production_boundary_body
+        and '"$link_evidence_path"' in production_boundary_body,
+        "generated production source boundary must pass Host root and exact "
+        "link evidence to the shared validator",
+    )
+    build_host_function = re.search(
+        r"build_host\(\)\s*\{(.*?)\n\}",
+        web_runtime_host_script_text,
+        re.DOTALL,
+    )
+    require(build_host_function is not None, "Web Host build function is missing")
+    build_host_body = build_host_function.group(1)
+    built_target = build_host_body.find(
+        'run_cmake_build "$cmake_root" --target lmdj_web_runtime_host'
+    )
+    generated_boundary = build_host_body.find("verify_production_source_boundary")
+    packaged_host = build_host_body.find("package_host")
+    require(
+        built_target >= 0
+        and generated_boundary > built_target
+        and packaged_host > generated_boundary,
+        "stable Web Host build must validate generated production source "
+        "after linking and before packaging",
+    )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
         bridge_source,
@@ -743,6 +781,17 @@ def main() -> int:
     if len(sys.argv) == 3:
         link_evidence = Path(sys.argv[2])
         require(link_evidence.is_file(), "generated direct-link evidence is missing")
+        generated_cmake_cache = link_evidence.parents[2] / "CMakeCache.txt"
+        require(
+            generated_cmake_cache.is_file(),
+            "generated production CMake cache evidence is missing",
+        )
+        require(
+            "LMDJ_WEB_AUDIO_CONFORMANCE:BOOL=OFF"
+            in generated_cmake_cache.read_text(encoding="utf-8"),
+            "generated Web Host boundary must come from a production "
+            "conformance-OFF build",
+        )
         links = link_evidence.read_text(encoding="utf-8")
         require(
             re.search(r"(?:lmdj::project_io|lmdj_project_io)", links) is None,
