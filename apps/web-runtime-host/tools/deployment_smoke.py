@@ -57,6 +57,9 @@ CONTENT_TYPES = {
     ".mjs": "text/javascript",
     ".wasm": "application/wasm",
 }
+EQUIVALENT_MEDIA_TYPES = {
+    "text/javascript": frozenset(("text/javascript", "application/javascript")),
+}
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
@@ -228,9 +231,10 @@ def _validate_content_type(headers, *, expected: str, label: str) -> None:
             f"{label} content-type mismatch: expected one value, got {values!r}"
         )
     media_type, parameters = _parse_content_type(values[0], label)
-    if media_type != expected:
+    accepted = EQUIVALENT_MEDIA_TYPES.get(expected, frozenset((expected,)))
+    if media_type not in accepted:
         raise SmokeError(
-            f"{label} content-type mismatch: expected {expected!r}, "
+            f"{label} content-type mismatch: expected one of {sorted(accepted)!r}, "
             f"got {media_type!r}"
         )
     if media_type == "application/wasm":
