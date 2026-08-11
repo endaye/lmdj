@@ -143,12 +143,14 @@ not a nineteenth result key, but its own job result must independently be
 
 `Change Scope` and every selected lane or support job contribute timing
 evidence and a pre-Gate critical-path span to the Gate summary. Queue time is
-reported separately; only execution time is compared with an execution SLO.
-Missing timing is non-blocking, and SLO observations are neither timeouts nor
-correctness assertions. Independent job safety limits and test-owned behavior
-timeouts remain hard failures. A slow successful job stays successful; a
-failed compile, Proof, test, sanitizer, or Coverage command is not retried.
-`main` and manual dispatch always run the full manifest.
+reported separately; only execution time is compared when the policy defines
+an execution SLO, otherwise the summary says `SLO not defined`. The Ubuntu and
+macOS selectors do not inherit a consumer lane SLO; `macos-primary` uses the
+defined `core_macos` SLO. Missing timing is non-blocking, and SLO observations
+are neither timeouts nor correctness assertions. Independent job safety limits
+and test-owned behavior timeouts remain hard failures. A slow successful job
+stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
+is not retried. `main` and manual dispatch always run the full manifest.
 
 ## No-Retry Policy
 

@@ -48,6 +48,12 @@ _FORMAL_JOB_DISPLAY_NAMES = {
     "package": ("Core package", "package"),
 }
 _CHANGE_SCOPE_DISPLAY_NAMES = {"Change Scope", "change-scope"}
+_SUPPORT_JOB_SLO_KEYS = {
+    "change-scope": "change_scope",
+    "select-ubuntu-runner": None,
+    "select-macos-runner": None,
+    "macos-primary": "core_macos",
+}
 
 
 @dataclass(frozen=True)
@@ -179,8 +185,9 @@ def _seconds(start: str, end: str) -> float:
 
 
 def _job_slo(policy: Mapping[str, object], job_name: str) -> int | None:
-    if job_name == "change-scope":
-        return policy["slo_seconds"].get("change_scope")
+    if job_name in _SUPPORT_JOB_SLO_KEYS:
+        key = _SUPPORT_JOB_SLO_KEYS[job_name]
+        return policy["slo_seconds"].get(key) if key is not None else None
     values = [policy["slo_seconds"][lane] for lane, jobs in policy["lane_jobs"].items()
               if job_name in jobs and lane in policy["slo_seconds"]]
     return min(values) if values else None
@@ -234,11 +241,12 @@ def render_summary(
             queue_seconds = _seconds(created, started)
             execution_seconds = _seconds(started, completed)
             slo = _job_slo(policy, job_id)
-            status = (
-                "SLO missed"
-                if slo is not None and execution_seconds > slo
-                else "within SLO"
-            )
+            if slo is None:
+                status = "SLO not defined"
+            elif execution_seconds > slo:
+                status = "SLO missed"
+            else:
+                status = "within SLO"
             rows.append(f"| Timing {job_id} | queue {queue_seconds:.0f}s; execution {execution_seconds:.0f}s; {status} |")
             if job_id == "change-scope":
                 change_scope_created = created

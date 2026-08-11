@@ -7,10 +7,10 @@ manifest/result truth-table validator.
 
 from __future__ import annotations
 
-import copy
 import importlib.util
 import json
 from pathlib import Path
+import re
 import sys
 import unittest
 
@@ -18,6 +18,8 @@ import unittest
 ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 GATE_PATH = ROOT / "scripts/ci/pr_gate.py"
+MAIN_WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
+PORTAL_WORKFLOW_PATH = ROOT / ".github/workflows/architecture-portal.yml"
 HEAD_SHA = "a" * 40
 OTHER_HEAD_SHA = "b" * 40
 
@@ -42,26 +44,39 @@ VALID_RESULTS = {
     "package": "skipped",
 }
 
-REAL_WORKFLOW_DISPLAY_NAMES = {
-    "docs-static": "Docs / static",
-    "portal": "Architecture Portal / portal",
-    "ci-contract": "CI contract",
-    "select-ubuntu-runner": "Select Ubuntu runner",
-    "select-macos-runner": "Select macOS runner",
-    "macos-primary": "macOS gates (primary)",
-    "core-ubuntu": "core (ubuntu-latest)",
-    "core-asan": "core-asan",
-    "core-coverage": "core-coverage",
-    "core-macos": "core (macos-latest)",
-    "core-asan-macos": "core-asan-macos",
-    "web-toolchain-conformance": "web-toolchain-conformance",
-    "web-runtime-host": "web-runtime-host",
-    "creator-web": "creator-web",
-    "web-runtime-lab": "web-runtime-lab",
-    "deploy-contract": "Deploy contract",
-    "chameleon-lab": "Chameleon Lab",
-    "package": "Core package",
-}
+def workflow_job(source: str, job_id: str) -> str:
+    match = re.search(
+        rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+        source,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"workflow job is missing: {job_id}")
+    return match.group("body")
+
+
+def declared_job_name(job_id: str, body: str) -> str:
+    match = re.search(r"^    name: (?P<name>[^\n]+)$", body, re.MULTILINE)
+    return match.group("name") if match else job_id
+
+
+def workflow_display_names() -> dict[str, str]:
+    """Derive actual run job names, including the reusable Portal shape."""
+    main_source = MAIN_WORKFLOW_PATH.read_text(encoding="utf-8")
+    portal_source = PORTAL_WORKFLOW_PATH.read_text(encoding="utf-8")
+    names: dict[str, str] = {}
+    for job_id in VALID_RESULTS:
+        body = workflow_job(main_source, job_id)
+        caller_name = declared_job_name(job_id, body)
+        if "uses: ./.github/workflows/architecture-portal.yml" in body:
+            callee_id = "portal"
+            callee_name = declared_job_name(
+                callee_id, workflow_job(portal_source, callee_id)
+            )
+            names[job_id] = f"{caller_name} / {callee_name}"
+        else:
+            names[job_id] = caller_name
+    return names
 
 
 def load_gate():
@@ -255,6 +270,110 @@ class PrGateTest(unittest.TestCase):
             summary,
         )
 
+    def test_long_jobs_without_policy_slos_report_not_defined(self):
+        undefined = {
+            "ci_contract": "ci-contract",
+            "web_runtime_lab": "web-runtime-lab",
+            "deploy_contract": "deploy-contract",
+            "chameleon_lab": "chameleon-lab",
+            "package": "package",
+        }
+        display_names = workflow_display_names()
+        for lane, job_id in undefined.items():
+            with self.subTest(job=job_id):
+                manifest = self.manifest((lane,))
+                results = {job: "skipped" for job in VALID_RESULTS}
+                for required in manifest["required_jobs"]:
+                    results[required] = "success"
+                report = self.validate(manifest=manifest, results=results)
+                summary = self.module.render_summary(
+                    report,
+                    self.policy,
+                    timing_reader=lambda job_id=job_id: [{
+                        "name": display_names[job_id],
+                        "created_at": "2026-08-11T00:00:00Z",
+                        "started_at": "2026-08-11T00:00:01Z",
+                        "completed_at": "2026-08-11T03:00:01Z",
+                    }],
+                )
+                timing = (
+                    f"Timing {job_id} | queue 1s; execution 10800s; "
+                    "SLO not defined"
+                )
+                self.assertTrue(report.ok)
+                self.assertIn(timing, summary)
+                self.assertNotRegex(
+                    summary,
+                    rf"Timing {re.escape(job_id)} .*; (?:within SLO|SLO missed)",
+                )
+
+    def test_web_only_selector_timing_has_no_lane_execution_slo(self):
+        manifest = self.manifest(("web_runtime_host",))
+        results = {job: "skipped" for job in VALID_RESULTS}
+        for required in manifest["required_jobs"]:
+            results[required] = "success"
+        report = self.validate(manifest=manifest, results=results)
+        summary = self.module.render_summary(
+            report,
+            self.policy,
+            timing_reader=lambda: [{
+                "name": workflow_display_names()["select-ubuntu-runner"],
+                "created_at": "2026-08-11T00:00:00Z",
+                "started_at": "2026-08-11T00:00:01Z",
+                "completed_at": "2026-08-11T01:00:01Z",
+            }],
+        )
+        self.assertTrue(report.ok)
+        self.assertIn(
+            "Timing select-ubuntu-runner | queue 1s; execution 3600s; "
+            "SLO not defined",
+            summary,
+        )
+        self.assertNotRegex(
+            summary,
+            r"Timing select-ubuntu-runner .*; (?:within SLO|SLO missed)",
+        )
+
+    def test_macos_selector_has_no_slo_but_primary_keeps_core_macos_slo(self):
+        manifest = self.manifest(("core_macos",))
+        results = {job: "skipped" for job in VALID_RESULTS}
+        for required in manifest["required_jobs"]:
+            results[required] = "success"
+        report = self.validate(manifest=manifest, results=results)
+        display_names = workflow_display_names()
+        summary = self.module.render_summary(
+            report,
+            self.policy,
+            timing_reader=lambda: [
+                {
+                    "name": display_names["select-macos-runner"],
+                    "created_at": "2026-08-11T00:00:00Z",
+                    "started_at": "2026-08-11T00:00:01Z",
+                    "completed_at": "2026-08-11T01:00:01Z",
+                },
+                {
+                    "name": display_names["macos-primary"],
+                    "created_at": "2026-08-11T00:00:00Z",
+                    "started_at": "2026-08-11T00:00:01Z",
+                    "completed_at": "2026-08-11T00:10:02Z",
+                },
+            ],
+        )
+        self.assertTrue(report.ok)
+        self.assertIn(
+            "Timing select-macos-runner | queue 1s; execution 3600s; "
+            "SLO not defined",
+            summary,
+        )
+        self.assertNotRegex(
+            summary,
+            r"Timing select-macos-runner .*; (?:within SLO|SLO missed)",
+        )
+        self.assertIn(
+            "Timing macos-primary | queue 1s; execution 601s; SLO missed",
+            summary,
+        )
+
     def test_timing_uses_workflow_display_names_and_marks_missing_selected_jobs(self):
         manifest = self.manifest(("core_ubuntu", "core_macos"))
         results = {job: "skipped" for job in VALID_RESULTS}
@@ -277,13 +396,14 @@ class PrGateTest(unittest.TestCase):
         manifest = self.manifest(tuple(self.policy["lanes"]))
         results = {job: "success" for job in VALID_RESULTS}
         report = self.validate(manifest=manifest, results=results)
+        display_names = workflow_display_names()
         jobs = [{
             "name": "Change Scope",
             "created_at": "2026-08-11T00:00:00Z",
             "started_at": "2026-08-11T00:00:01Z",
             "completed_at": "2026-08-11T00:00:05Z",
         }]
-        for job_id, display_name in REAL_WORKFLOW_DISPLAY_NAMES.items():
+        for job_id, display_name in display_names.items():
             jobs.append({
                 "name": display_name,
                 "created_at": "2026-08-11T00:00:05Z",
@@ -300,11 +420,11 @@ class PrGateTest(unittest.TestCase):
         )
 
         self.assertTrue(report.ok)
-        self.assertEqual(set(REAL_WORKFLOW_DISPLAY_NAMES), set(VALID_RESULTS))
+        self.assertEqual(set(display_names), set(VALID_RESULTS))
         self.assertEqual(len(VALID_RESULTS), 18)
         self.assertNotIn("change-scope", VALID_RESULTS)
         self.assertIn("Timing change-scope", summary)
-        for job_id in REAL_WORKFLOW_DISPLAY_NAMES:
+        for job_id in display_names:
             with self.subTest(job=job_id):
                 self.assertIn(f"Timing {job_id}", summary)
                 self.assertNotIn(
