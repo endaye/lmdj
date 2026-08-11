@@ -49,20 +49,28 @@ async function installSubmissionHelper(page) {
         payload,
       }));
       const deadline = performance.now() + 30_000;
-      const submitted = window.Module.ccall(
-        "lmdj_web_host_submit",
-        "number",
-        ["array", "number", "array", "number", "number"],
-        [
-          envelope,
-          envelope.byteLength,
-          new Uint8Array(),
-          0,
-          performance.timeOrigin + deadline,
-        ],
-      );
+      let submitted = -1;
+      while (performance.now() < deadline) {
+        submitted = window.Module.ccall(
+          "lmdj_web_host_submit",
+          "number",
+          ["array", "number", "array", "number", "number"],
+          [
+            envelope,
+            envelope.byteLength,
+            new Uint8Array(),
+            0,
+            performance.timeOrigin + deadline,
+          ],
+        );
+        if (submitted === 0) break;
+        if (submitted !== -1) {
+          throw new Error(`Host submit failed: ${operation}: ${submitted}`);
+        }
+        await delay(5);
+      }
       if (submitted !== 0) {
-        throw new Error(`Host submit failed: ${operation}: ${submitted}`);
+        throw new Error(`Host submit timed out: ${operation}`);
       }
       while (performance.now() < deadline) {
         const serialized = window.Module.ccall(

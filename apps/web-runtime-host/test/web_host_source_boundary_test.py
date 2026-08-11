@@ -444,6 +444,16 @@ def main() -> int:
         is not None,
         "realtime failure response polling must retain the monotonic deadline",
     )
+    require(
+        'let submitted = -1;' in helper_body
+        and 'if (submitted === 0) break;' in helper_body
+        and 'if (submitted !== -1)' in helper_body
+        and 'await delay(5);' in helper_body
+        and 'if (submitted !== 0)' in helper_body
+        and 'Host submit timed out' in helper_body,
+        "realtime failure submit helper must retry only the transient native "
+        "bridge-not-ready result within its monotonic deadline",
+    )
     fatal_wait = re.search(
         r"async\s+waitForFatal\(\)\s*\{(.*?)\n\s{6}\},",
         runtime_pre_source,
