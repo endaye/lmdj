@@ -34,6 +34,10 @@ HOST_PATTERN = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
 SHA1_PATTERN = re.compile(r"[0-9a-f]{40}")
 SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 DEPLOY_ID_PATTERN = re.compile(r"[A-Za-z0-9-]+")
+NETLIFY_TIMESTAMP_PATTERN = re.compile(
+    r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})(?:\.([0-9]{1,9}))?Z"
+)
+NETLIFY_REQUEST_ID_PATTERN = re.compile(r"[0-9A-HJKMNP-TV-Z]{26}")
 
 
 class DeployOrchestratorError(RuntimeError):
@@ -419,7 +423,7 @@ def validate_published(
             "Netlify published identity is not the same ready Deploy"
         )
     published_at = value.get("published_at")
-    if published_at is not None and not _valid_timestamp(published_at):
+    if published_at is not None and not _valid_netlify_timestamp(published_at):
         raise DeployOrchestratorError("Netlify published identity timestamp is invalid")
     return {
         "deploy_ssl_url": value["deploy_ssl_url"],
@@ -538,6 +542,16 @@ def _valid_timestamp(value: object) -> bool:
     return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
 
 
+def _valid_netlify_timestamp(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    match = NETLIFY_TIMESTAMP_PATTERN.fullmatch(value)
+    if match is None:
+        return False
+    base = match.group(1) + "Z"
+    return _valid_timestamp(base)
+
+
 def _valid_interval(value: Mapping[str, object]) -> bool:
     return (
         _valid_timestamp(value.get("started_at"))
@@ -651,8 +665,33 @@ def _valid_publish_projection(
         and _valid_deploy_url(value.get("deploy_ssl_url"), deploy_id)
         and (
             value.get("published_at") is None
-            or _valid_timestamp(value.get("published_at"))
+            or _valid_netlify_timestamp(value.get("published_at"))
         )
+    )
+
+
+def _valid_disabled_alias_evidence(value: object) -> bool:
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"ended_at", "result", "started_at", "status"}
+        or value.get("status") != "passed"
+        or not _valid_interval(value)
+    ):
+        return False
+    result = value.get("result")
+    return (
+        isinstance(result, dict)
+        and set(result) == {
+            "base_url", "cache_control", "content_type", "http_status",
+            "request_id", "server",
+        }
+        and result.get("base_url") == CANONICAL_PRODUCTION_URL
+        and result.get("cache_control") == "private, max-age=0"
+        and result.get("content_type") == "text/plain; charset=utf-8"
+        and result.get("http_status") == 404
+        and isinstance(result.get("request_id"), str)
+        and NETLIFY_REQUEST_ID_PATTERN.fullmatch(result["request_id"]) is not None
+        and result.get("server") == "Netlify"
     )
 
 
@@ -893,9 +932,26 @@ def _valid_recovery_evidence(document: dict[str, object]) -> bool:
     if action == "disabled-first-publication":
         if prior is not None or response != {"status_code": 204}:
             return False
+        empty_validation = (
+            validation.get("immutable_browser") == {}
+            and validation.get("immutable_http") == {}
+            and validation.get("production_browser") == {}
+        )
         return (
             (passed and _valid_site_projection(post, site_id=site_id)
-             and post.get("state") == "disabled")
+             and empty_validation and (
+                 (post.get("state") == "disabled"
+                  and validation.get("production_http") == {})
+                 or (
+                     post == reconcile
+                     and post.get("state") == "current"
+                     and isinstance(post.get("published_deploy"), dict)
+                     and post["published_deploy"].get("id") == attempted.get("id")
+                     and _valid_disabled_alias_evidence(
+                         validation.get("production_http")
+                     )
+                 )
+             ))
             or (not passed and (post == {} or _valid_site_projection(post, site_id=site_id)))
         )
     if not isinstance(prior, dict) or not isinstance(response, dict):

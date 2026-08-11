@@ -50,8 +50,11 @@ https://lmdj-beta.netlify.app/
   production alias 各运行完整 HTTP/Chromium。发布后任何 production smoke failure、ERR、
   INT/TERM、受控 timeout 或 publish API error 都先重新 GET reconcile。current ID 只允许
   candidate、exact prior，或首次发布时为空；未知第三 ID 失败。candidate 才可 restore exact
-  prior 或 disable；restore 后 GET 必须确认 exact prior，disable 的 204 后 GET 必须确认
-  disabled。若站点预先 disabled，拒绝自动 enable 或 publication。
+  prior 或 disable；restore 后 GET 必须确认 exact prior。disable 的 204 后，GET 明确为
+  disabled，或 GET 仍为同一 candidate/current 且 canonical alias 通过禁止跳转、精确
+  Netlify 404、私有零缓存和 request ID 绑定的 bounded edge probe，才可确认公网已撤下。
+  API 明确回报站点预先 disabled 时拒绝自动 enable 或 publication；API 滞留旧指针但严格
+  edge probe 证明站点 offline 时，该不可访问指针不是 prior-good，已授权部署按无 prior 继续。
 - tracked `_headers` 只保留 base security/no-store。deploy assembly 从已验证 manifest 生成
   九条 exact immutable asset rules；`/assets/*` blanket 禁止，未知 asset/source map 保持
   `no-store`，Release `dist` 不变。
@@ -68,6 +71,9 @@ https://lmdj-beta.netlify.app/
 - GitHub、Netlify 与本地 helper 使用互斥 credential scope：gh 不接收 Netlify credential；
   Netlify child 不接收 `GITHUB_TOKEN` 或 `GH*`；metadata/stage/evidence/smoke helper 不接收
   任何部署凭据。
+- Workflow 先运行不含 Netlify credential、Node 或 Chromium 的轻量 Release preflight，
+  完成精确三资产、签名、ZIP 安全解包、staging identity 与 headers 组装。只有它通过才进入
+  browser setup 与部署 job；部署 job 在 Netlify mutation 前二次验证相同 Release。
 
 ## 2. 决策
 
@@ -374,8 +380,9 @@ URL、Release asset、tag 和 Git SHA 的组合可以作为某个具体版本的
 
 部署前必须从官方 site response 发现 current published deploy（若有），从其 immutable
 manifest 发现实际 Product/Host identity，并先对 prior immutable 与 production 跑完整
-HTTP/browser，建立本次 prior-good。preflight 若发现 site 已 disabled，拒绝自动 enable 或
-publication。恢复后重跑 prior immutable 与 production；workflow 内部 timeout 必须早于 job
+HTTP/browser，建立本次 prior-good。preflight 若发现 API site state 已 disabled，拒绝自动
+enable 或 publication；若 API 仍为 current/旧指针而 canonical alias 通过严格 disabled edge
+probe，则不建立 prior-good，并在本次已授权 publication 中按无 prior 继续。恢复后重跑 prior immutable 与 production；workflow 内部 timeout 必须早于 job
 timeout，给 reconcile、restore/disable、复验和证据上传留出预算。
 
 ## 13. Secrets 与最小权限

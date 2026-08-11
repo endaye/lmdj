@@ -226,7 +226,9 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         permissions = self.mapping_block(source, "permissions", 0)
         self.assertEqual(self.direct_mapping(permissions, 2), {"contents": "read"})
         self.assertIn("ref: main", source)
+        self.assertIn('scripts/web-runtime-deploy.sh verify "$tag"', source)
         self.assertIn('scripts/web-runtime-deploy.sh deploy "$tag"', source)
+        self.assertIn("needs: preflight", source)
         self.assertIn("NETLIFY_RUNTIME_SITE_ID", source)
         self.assertIn("NETLIFY_AUTH_TOKEN", source)
 
@@ -278,13 +280,32 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             observed[match.group(1)] = (match.group(2), match.group(3))
         self.assertEqual(observed, EXPECTED_ACTION_PINS)
 
-    def test_credentials_exist_only_in_the_deploy_step(self) -> None:
+    def test_credentials_exist_only_in_preflight_and_deploy_steps(self) -> None:
         source = self.workflow_source()
         self.assertNotIn("env", self.direct_mapping(source, 0))
         jobs = self.mapping_block(source, "jobs", 0)
-        self.assertEqual(set(self.direct_mapping(jobs, 2)), {"deploy"})
+        self.assertEqual(
+            set(self.direct_mapping(jobs, 2)), {"preflight", "deploy"}
+        )
+        preflight_job = self.mapping_block(jobs, "preflight", 2)
+        self.assertNotIn("environment", self.direct_mapping(preflight_job, 4))
         deploy_job = self.mapping_block(jobs, "deploy", 2)
         self.assertNotIn("env", self.direct_mapping(deploy_job, 4))
+
+        preflight_step = self.step_named(
+            source, "Verify signed Runtime Host release"
+        )
+        preflight_environment = self.direct_mapping(
+            self.mapping_block(preflight_step, "env", 8),
+            10,
+        )
+        self.assertEqual(
+            preflight_environment,
+            {
+                "GITHUB_TOKEN": "${{ github.token }}",
+                "LMDJ_RELEASE_TAG": "${{ steps.release-tag.outputs.tag }}",
+            },
+        )
 
         deploy_step = self.step_named(source, "Deploy signed Runtime Host release")
         deploy_environment = self.direct_mapping(
@@ -299,12 +320,12 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                     "${{ secrets.NETLIFY_RUNTIME_SITE_ID }}"
                 ),
                 "NETLIFY_AUTH_TOKEN": "${{ secrets.NETLIFY_AUTH_TOKEN }}",
-                "LMDJ_RELEASE_TAG": "${{ steps.release-tag.outputs.tag }}",
+                "LMDJ_RELEASE_TAG": "${{ needs.preflight.outputs.tag }}",
             },
         )
 
         for step in self.workflow_steps(source):
-            if step == deploy_step or "        env:" not in step:
+            if step in {preflight_step, deploy_step} or "        env:" not in step:
                 continue
             environment = self.direct_mapping(
                 self.mapping_block(step, "env", 8),
@@ -326,6 +347,20 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertNotIn("emsdk", source.lower())
         self.assertNotIn("emscripten", source.lower())
         self.assertNotIn("scripts/core.sh", source)
+
+    def test_release_package_preflight_precedes_browser_setup_and_deploy(self) -> None:
+        source = self.workflow_source()
+        jobs = self.mapping_block(source, "jobs", 0)
+        preflight = self.mapping_block(jobs, "preflight", 2)
+        deploy = self.mapping_block(jobs, "deploy", 2)
+        self.assertIn("outputs:", preflight)
+        self.assertIn("tag: ${{ steps.release-tag.outputs.tag }}", preflight)
+        self.assertIn('scripts/web-runtime-deploy.sh verify "$tag"', preflight)
+        self.assertNotIn("setup-node", preflight)
+        self.assertNotIn("playwright", preflight)
+        self.assertIn("needs: preflight", deploy)
+        self.assertIn("setup-node", deploy)
+        self.assertIn("playwright install --with-deps chromium", deploy)
 
     def test_workflow_scopes_secrets_and_always_uploads_evidence(self) -> None:
         source = self.workflow_source()
@@ -366,6 +401,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
             "Install browser smoke dependencies": 5,
             "Install Chromium": 10,
             "Select exact signed Product tag": 2,
+            "Verify signed Runtime Host release": 7,
             "Deploy signed Runtime Host release": 35,
             "Upload deployment evidence and failure logs": 5,
         }
@@ -380,6 +416,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         recovery_browser = 180
         recovery_evidence = 30
         for name, seconds in (
+            ("preflight_probe_timeout_seconds", 15),
             ("recovery_api_timeout_seconds", recovery_api),
             ("recovery_http_timeout_seconds", recovery_http),
             ("recovery_browser_timeout_seconds", recovery_browser),
@@ -395,10 +432,12 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         recovery_kill_budget = 900
         main_budget = 1080
         deploy_step_budget = step_budgets["Deploy signed Runtime Host release"] * 60
-        setup_and_select = sum(
+        deploy_setup = sum(
             minutes
             for name, minutes in step_budgets.items()
             if name not in {
+                "Select exact signed Product tag",
+                "Verify signed Runtime Host release",
                 "Deploy signed Runtime Host release",
                 "Upload deployment evidence and failure logs",
             }
@@ -408,9 +447,10 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertLessEqual(recovery_worst + 60, recovery_kill_budget)
         self.assertLessEqual(main_budget + recovery_kill_budget, deploy_step_budget)
         self.assertLessEqual(
-            setup_and_select + deploy_step_budget + upload_budget + 60,
+            deploy_setup + deploy_step_budget + upload_budget + 60,
             job_budget,
         )
+        self.assertIn("timeout-minutes: 20", source)
         upload = self.step_named(source, "Upload deployment evidence and failure logs")
         self.assertIn("if: always()", upload)
 

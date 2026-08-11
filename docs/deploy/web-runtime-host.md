@@ -167,7 +167,11 @@ trap - EXIT INT TERM
 ## 受控执行与证据检查
 
 获授权的 workflow 只接受发布事件的 prerelease tag 或手动输入的精确 Product tag，
-并固定 checkout `main`。它执行：签名 tag/Release/archive 验证 → staging → Netlify
+并固定 checkout `main`。独立 `preflight` job 只安装 Python，先完成签名 tag、精确三资产、
+checksum signature、ZIP 安全解包、staging identity 与 deploy-control headers 组装；它不安装
+Node/Chromium、不读取 Netlify credential，也不创建 Deploy。只有 preflight 通过，受保护的
+`deploy` job 才安装 browser smoke 依赖，并在接触 Netlify 前二次验证相同 Release，防止
+job 间状态漂移。完整顺序是：签名 tag/Release/archive 验证 → staging → Netlify
 prior discovery/immutable+production smoke → draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
 生产 URL HTTP 和 Chromium smoke → artifact evidence。
 
@@ -207,7 +211,11 @@ python3 -m json.tool evidence/RUN_ID/evidence.json
 其中 `reconcile` 与 `post_recovery_site` 保留失败前后 `GET site` 的 validated secret-safe
 official projection；restore 的 `recovery_response` 使用上述明确 allowlist，disable 只记录
 官方 204 为 `{status_code: 204}`，不伪造 action response，
-`validation` 保留 prior immutable 与 production 的 HTTP/browser 复验结构和恢复状态。
+`validation` 保留 prior immutable 与 production 的 HTTP/browser 复验结构和恢复状态。若
+Netlify 在 disable 后仍由 site API 回报 `current` 与 candidate 指针，恢复只在 canonical
+production alias 同时返回禁止跳转、精确 `404`、`Server: Netlify`、`private, max-age=0`
+以及 header/body request ID 相互绑定的 bounded edge response 时通过；该结构化探测写入
+`validation.production_http`，普通产品 404 或任意第三方 404 均不成立。
 workflow 以 `if: always()` 上传 `evidence.json`、`recovery-evidence.json` 与完整
 `deployment.log`；不得丢弃 HTTP JSON 或 restore response。
 
@@ -234,8 +242,8 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 | draft 创建或 immutable URL HTTP/Chromium 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
 | publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；当前 ID 只允许 candidate、exact prior，或首次发布时为空；未知第三 ID 必须 recovery FAIL。 |
 | alias 指向新 Deploy 且 prior-good 存在 | `POST /sites/{site_id}/deploys/{prior_id}/restore` 恢复 exact prior，随后 GET 必须确认 exact prior，再对 prior immutable 与 production 运行完整 HTTP/Chromium，原子写 recovery evidence。 |
-| alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点；记录 204 后 GET 必须确认 disabled，并写 recovery evidence；不得伪造 rollback。 |
-| preflight 发现站点已 disabled | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
+| alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点；记录 204。GET 明确为 disabled，或 GET 滞留在同一 candidate 且 canonical alias 通过上述 Netlify disabled edge probe，才可写 recovery PASS；不得伪造 rollback。 |
+| preflight 发现站点已 disabled | API 明确回报 disabled 时拒绝自动 enable 或 publication，升级给独立授权操作。API 回报 current/旧指针但 canonical alias 通过上述严格 disabled edge probe 时，将不可访问指针视为历史元数据，在已授权的新部署中按无 prior 继续；不得尝试把它声明为 prior-good。 |
 | evidence artifact 缺失、字段不匹配或含敏感信息 | 将部署视为证据不完整；不要更新 acceptance/Portal 为 deployed，先修复证据链。 |
 
 恢复不是重新构建、重新上传或猜 Deploy ID。prior identity 来自发布前官方 site response 与
@@ -244,6 +252,7 @@ production alias，建立本次 prior-good。publish 后失败即使 API 返回 
 reconcile，而不能假设 alias 未切换。workflow 内部 1,080 秒 timeout 先发送 TERM，另留
 900 秒 kill budget。恢复的三个 API 阶段各 30 秒、两次 HTTP 各 180 秒、两次 Chromium
 各 180 秒、证据写入 30 秒，最坏 840 秒并另留 60 秒；deploy step 为 35 分钟，
+preflight 的 disabled-alias 只读探测上限为 15 秒；
 checkout/setup/install/select/upload 各有显式上限，75 分钟 job timeout 覆盖所有最坏和与
 上传余量。
 

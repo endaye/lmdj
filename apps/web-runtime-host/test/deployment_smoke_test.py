@@ -26,6 +26,7 @@ from deployment_smoke import (  # noqa: E402
     REQUIRED_SECURITY_HEADERS,
     RedirectGuard,
     SmokeError,
+    probe_disabled_alias,
     smoke_http,
 )
 
@@ -68,6 +69,9 @@ def scrubbed_python_environment() -> dict[str, str]:
 
 class SmokeFixture:
     def __init__(self) -> None:
+        self.disabled_response = False
+        self.disabled_request_id = "01KZQH3XQ3P2M6ZXHSMX3NA360"
+        self.disabled_server = "Netlify"
         self.omit_header: str | None = None
         self.redirect_omit_header: str | None = None
         self.redirect_duplicate_header: tuple[str, str] | None = None
@@ -177,6 +181,19 @@ class FixtureHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         fixture = self.server.fixture
+        if self.path == "/" and fixture.disabled_response:
+            payload = (
+                f"Not Found - Request ID: {fixture.disabled_request_id}"
+            ).encode()
+            self.send_response_only(HTTPStatus.NOT_FOUND)
+            self.send_header("Cache-Control", "private, max-age=0")
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Server", fixture.disabled_server)
+            self.send_header("X-Nf-Request-Id", fixture.disabled_request_id)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path in fixture.delays:
             time.sleep(fixture.delays[self.path])
         if self.path in fixture.edge_rejections:
@@ -260,6 +277,44 @@ class DeploymentSmokeTest(unittest.TestCase):
             expected_host_version="1.1.2",
             require_https=False,
         )
+
+    def test_accepts_only_the_bounded_netlify_disabled_alias_response(self) -> None:
+        self.fixture.disabled_response = True
+        self.assertEqual(
+            probe_disabled_alias(
+                base_url=self.server.base_url,
+                require_https=False,
+            ),
+            {
+                "base_url": self.server.base_url,
+                "cache_control": "private, max-age=0",
+                "content_type": "text/plain; charset=utf-8",
+                "http_status": 404,
+                "request_id": "01KZQH3XQ3P2M6ZXHSMX3NA360",
+                "server": "Netlify",
+            },
+        )
+
+    def test_disabled_alias_probe_rejects_live_or_untrusted_responses(self) -> None:
+        with self.assertRaisesRegex(SmokeError, "HTTP 200"):
+            probe_disabled_alias(
+                base_url=self.server.base_url,
+                require_https=False,
+            )
+        self.fixture.disabled_response = True
+        for attribute, value in (
+            ("disabled_server", "example"),
+            ("disabled_request_id", "invalid"),
+        ):
+            with self.subTest(attribute=attribute):
+                original = getattr(self.fixture, attribute)
+                setattr(self.fixture, attribute, value)
+                with self.assertRaises(SmokeError):
+                    probe_disabled_alias(
+                        base_url=self.server.base_url,
+                        require_https=False,
+                    )
+                setattr(self.fixture, attribute, original)
 
     def test_accepts_exact_host_identity_headers_mime_cache_and_negative_routes(self) -> None:
         result = self.smoke()

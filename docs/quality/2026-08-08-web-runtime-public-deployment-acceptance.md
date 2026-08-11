@@ -35,7 +35,9 @@ immutable draft，分别对 draft 和生产别名运行 HTTP/Chromium smoke，�
 同一 Deploy ID 设为生产 alias。staged Release index/manifest digest 必须与 candidate
 immutable 和 production 一致，prior 两个 URL 也必须逐字节一致。publish 后任何失败或
 信号都 GET reconcile；candidate、exact prior、首次无 publication 之外的第三 ID 失败；
-restore/disable 后 GET 必须证明 exact prior/disabled。workflow 目标 Environment 是
+restore 后 GET 必须证明 exact prior；disable 后优先接受 GET 的 explicit disabled，若 API
+滞留为同一 candidate/current，则还必须由 canonical alias 的严格 Netlify 404 edge probe
+证明公网已下线并将结构化结果写入 recovery evidence。workflow 目标 Environment 是
 `runtime-canary`，所需 secret 名称是 `NETLIFY_RUNTIME_SITE_ID` 与
 `NETLIFY_AUTH_TOKEN`。
 
@@ -54,8 +56,13 @@ filename/SHA、Release file digests、canonical Actions run ID/URL、真实 UTC 
 prior-good、immutable HTTP/browser、same-ID publish validated secret-safe official projection
 与 production HTTP/browser。失败恢复 exact contract 是
 `lmdj.web-runtime-host.deployment-recovery-evidence.v1`，包含 reconcile GET、restore/disable
-官方 projection、post-action GET 与四项复验；disable 记录官方 204，不伪造 response。
+官方 projection、post-action GET 与四项复验；disable 记录官方 204，不伪造 response；API
+状态滞留时的公网 disabled proof 位于 `validation.production_http`。
 workflow `always()` 上传两类 JSON 和完整日志。
+
+Workflow 先由无 Netlify credential 的轻量 `preflight` job 完成 Release 三资产、签名、ZIP
+解包、staging identity 与 headers 组装；该 gate 通过后才安装 Node/Chromium 并进入部署
+job，部署 job 在调用 Netlify 前再次验证同一 Release，避免昂贵 browser setup 掩盖打包错误。
 
 ## 固定候选身份
 

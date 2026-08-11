@@ -26,7 +26,10 @@ This amendment is part of the approved plan and supersedes incompatible early ta
   After publication attempt, production failure, ERR, INT/TERM, controlled timeout, and publish API
   error all reconcile the current alias. The only safe current identities are candidate, exact prior,
   or no publication on a first deploy; an unknown third ID fails recovery. Restore/disable only from
-  candidate, then GET must prove exact prior/disabled. Never auto-enable a pre-disabled site.
+  candidate. Restore 后 GET 必须证明 exact prior；disable 后接受 explicit disabled，或 API
+  滞留同一 candidate/current 时由 canonical alias 的严格 Netlify 404 edge probe 证明 offline。
+  Explicit API-disabled site 仍不得自动 enable；stale pointer 加严格 offline proof 不建立
+  prior-good，并在已授权的新 publication 中按无 prior 继续。
 - `_headers` is a tracked base with default `no-store`; deploy assembly appends nine exact immutable
   paths from the verified manifest. No `/assets/*` rule and no released `dist` mutation are allowed.
 - HTTP and Chromium start at `/`. HTTP permits only 200 or one same-origin redirect ending at
@@ -38,13 +41,18 @@ This amendment is part of the approved plan and supersedes incompatible early ta
   always uploads them. Staged Release index/manifest digests bind candidate immutable and production;
   prior immutable and production must match. Netlify evidence uses a validated secret-safe official
   allowlist projection (restore fields include id/site_id/state/ssl_url/deploy_ssl_url/published_at),
-  while disable records status code 204 and a post-disable GET, not a fabricated response. Canonical
+  while disable records status code 204 and a post-disable GET, not a fabricated response. A stale
+  post-disable API projection additionally requires structured public disabled proof in
+  `validation.production_http`. Canonical
   UTC timestamps and every nested HTTP/browser identity are exact. A 1,080-second main TERM timeout,
   900-second kill budget, per-stage recovery bounds, 35-minute deploy step, and 75-minute job cover
   bounded setup, worst-case recovery, evidence, and upload margins.
 - Child credential scope is exclusive: GitHub commands inherit only GitHub deployment authority,
   Netlify commands receive no GitHub/GH variables, and local metadata/stage/evidence/smoke helpers
   receive no deployment credentials.
+- Run a separate Python-only Release preflight job before browser setup. It verifies signatures,
+  the exact three assets, safe ZIP extraction, staged identity, and rendered headers without
+  Netlify credentials; the deploy job repeats verification before its first Netlify mutation.
 
 **Version impact: none.** This is an unpublished deployment-control-plane correction; Product,
 Host, Core, Provider, Contract, Assembly, and released distribution bytes remain unchanged.

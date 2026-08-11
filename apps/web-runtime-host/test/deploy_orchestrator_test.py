@@ -79,6 +79,35 @@ class DeployOrchestratorReleaseTest(unittest.TestCase):
     def test_legacy_v1_evidence_writer_is_not_exposed(self) -> None:
         self.assertFalse(hasattr(deploy_orchestrator, "write_evidence"))
 
+    def test_publish_timestamp_accepts_optional_fractional_seconds_only(self) -> None:
+        base = {
+            "deploy_ssl_url": "https://deploy-456--lmdj-runtime.netlify.app",
+            "id": "deploy-456",
+            "published_at": "2026-08-09T00:00:00.123456789Z",
+            "site_id": "site-123",
+            "ssl_url": "https://lmdj-runtime.netlify.app",
+            "state": "ready",
+        }
+        self.assertEqual(
+            deploy_orchestrator.validate_published(
+                base, site_id="site-123", deploy_id="deploy-456"
+            )["published_at"],
+            "2026-08-09T00:00:00.123456789Z",
+        )
+        for invalid in (
+            "2026-08-09T00:00:00.Z",
+            "2026-08-09T00:00:00.1234567890Z",
+            "2026-08-09T00:00:00.123+00:00",
+        ):
+            with self.subTest(invalid=invalid):
+                document = {**base, "published_at": invalid}
+                with self.assertRaisesRegex(
+                    deploy_orchestrator.DeployOrchestratorError, "timestamp"
+                ):
+                    deploy_orchestrator.validate_published(
+                        document, site_id="site-123", deploy_id="deploy-456"
+                    )
+
 
 class DeployOrchestratorEvidenceTest(unittest.TestCase):
     PRODUCT = "1.0.15.3"

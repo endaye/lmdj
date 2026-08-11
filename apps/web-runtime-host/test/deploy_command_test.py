@@ -360,6 +360,20 @@ class DeployCommandTest(unittest.TestCase):
                         or name in ("GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID")
                     ) and os.environ.get(name):
                         raise SystemExit("deployment credential reached HTTP smoke")
+                if len(sys.argv) > 1 and sys.argv[1] == "probe-disabled-alias":
+                    if os.environ.get("FAKE_DISABLED_ALIAS") != "1":
+                        raise SystemExit("production alias is not disabled")
+                    with Path(os.environ["COMMAND_LOG"]).open("a", encoding="utf-8") as output:
+                        output.write("http-probe disabled-alias\\n")
+                    print(json.dumps({{
+                        "base_url": {PRODUCTION_URL!r},
+                        "cache_control": "private, max-age=0",
+                        "content_type": "text/plain; charset=utf-8",
+                        "http_status": 404,
+                        "request_id": "01KZQH3XQ3P2M6ZXHSMX3NA360",
+                        "server": "Netlify",
+                    }}, sort_keys=True, separators=(",", ":")))
+                    raise SystemExit(0)
                 if len(sys.argv) > 1 and sys.argv[1] == "discover-identity":
                     with Path(os.environ["COMMAND_LOG"]).open("a", encoding="utf-8") as output:
                         output.write("http-discover prior\\n")
@@ -576,6 +590,7 @@ def verify_distribution(dist_root, repo_root):
                 printf 'pub:-:255:22:AAC3E7019FC1478B:0:0::::::\nfpr:::::::::%s:\n' "$fingerprint"
                 ;;
               *" --import "*)
+                case " $* " in *" --no-autostart "*) ;; *) exit 3 ;; esac
                 case " $* " in
                   *"lmdj-product.asc"*) fingerprint='{TRUSTED_TAG_FINGERPRINT}' ;;
                   *) fingerprint='{TRUSTED_CHECKSUM_FINGERPRINT}' ;;
@@ -1109,6 +1124,20 @@ def verify_distribution(dist_root, repo_root):
         self.assertIn("http-smoke production", self.command_log())
         self.assertTrue((self.deploy_root / "evidence.json").is_file())
 
+    def test_publish_accepts_fractional_rfc3339_timestamp(self) -> None:
+        self.server.restore_extra = {
+            "published_at": "2026-08-09T00:00:00.123456Z",
+        }
+        completed = self.run_command("deploy", TAG)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        evidence = json.loads(
+            (self.deploy_root / "evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            evidence["publication"]["response"]["published_at"],
+            "2026-08-09T00:00:00.123456Z",
+        )
+
     def test_rejects_foreign_netlify_site_before_smoke_or_publish(self) -> None:
         self.server.deploy_url = f"https://{DEPLOY_ID}--attacker.netlify.app"
         completed = self.run_command("deploy", TAG)
@@ -1456,6 +1485,43 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(recovery["recovery_response"], {"status_code": 204})
         self.assertEqual(recovery["status"], "failed")
         self.assertEqual(recovery["post_recovery_site"]["state"], "current")
+
+    def test_disable_accepts_stale_api_state_only_with_public_disabled_proof(self) -> None:
+        self.server.current_deploy_id = ""
+        self.server.current_deploy_url = ""
+        self.server.disable_keeps_enabled = True
+        completed = self.run_command(
+            "deploy",
+            TAG,
+            environment={
+                "FAIL_PRODUCTION_SMOKE": "1",
+                "FAKE_DISABLED_ALIAS": "1",
+            },
+        )
+        self.assertNotEqual(completed.returncode, 0)
+        recovery = json.loads(
+            (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(recovery["action"], "disabled-first-publication")
+        self.assertEqual(recovery["post_recovery_site"]["state"], "current")
+        self.assertEqual(recovery["status"], "passed")
+        self.assertEqual(
+            recovery["validation"]["production_http"]["result"]["http_status"],
+            404,
+        )
+
+    def test_preflight_treats_stale_api_pointer_as_no_prior_only_with_public_disabled_proof(self) -> None:
+        completed = self.run_command(
+            "deploy", TAG, environment={"FAKE_DISABLED_ALIAS": "1"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        log = self.command_log()
+        self.assertIn("http-probe disabled-alias", log)
+        self.assertNotIn("http-discover prior", log)
+        evidence = json.loads(
+            (self.deploy_root / "evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(evidence["prior_good"])
 
     def test_failed_production_smoke_restores_prior_and_writes_atomic_recovery_evidence(self) -> None:
         completed = self.run_command(

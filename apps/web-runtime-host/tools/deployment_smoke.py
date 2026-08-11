@@ -62,6 +62,7 @@ EQUIVALENT_MEDIA_TYPES = {
 }
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
+NETLIFY_REQUEST_ID_PATTERN = re.compile(r"^[0-9A-HJKMNP-TV-Z]{26}$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
 MAX_ASSET_BYTES = 64 * 1024 * 1024
@@ -508,6 +509,75 @@ def _decode_manifest(manifest_bytes: bytes) -> object:
         raise SmokeError("manifest is not valid UTF-8 JSON") from None
 
 
+def probe_disabled_alias(
+    *,
+    base_url: str,
+    require_https: bool = True,
+    timeout_seconds: float = 10.0,
+) -> dict[str, object]:
+    """Require Netlify's bounded edge response for an offline production alias."""
+    root = _validated_base_url(
+        base_url,
+        require_https=require_https,
+        timeout_seconds=timeout_seconds,
+    )
+    label = "disabled production alias"
+    opener = build_opener(RedirectGuard())
+    opener.addheaders = []
+    try:
+        with opener.open(
+            _request(root, "private, max-age=0"),
+            timeout=timeout_seconds,
+        ) as response:
+            raise SmokeError(f"{label} returned HTTP {response.status}")
+    except HTTPError as error:
+        try:
+            if error.code != 404:
+                raise SmokeError(f"{label} returned HTTP {error.code}")
+            if error.geturl() != root:
+                raise SmokeError(f"{label} final URL is invalid")
+            _require_header(
+                error.headers,
+                name="server",
+                expected="Netlify",
+                label=label,
+            )
+            _validate_content_type(
+                error.headers,
+                expected="text/plain",
+                label=label,
+            )
+            _require_cache_control(
+                error.headers,
+                expected="private, max-age=0",
+                label=label,
+            )
+            request_ids = _header_values(error.headers, "x-nf-request-id")
+            if (
+                len(request_ids) != 1
+                or NETLIFY_REQUEST_ID_PATTERN.fullmatch(request_ids[0]) is None
+            ):
+                raise SmokeError(f"{label} request ID is invalid")
+            body = _read_bounded(error, limit=256, label=label)
+            expected_body = f"Not Found - Request ID: {request_ids[0]}".encode()
+            if body != expected_body:
+                raise SmokeError(f"{label} response body is invalid")
+        finally:
+            error.close()
+    except SmokeError:
+        raise
+    except (OSError, URLError):
+        raise SmokeError(f"{label} request failed") from None
+    return {
+        "base_url": root.rstrip("/"),
+        "cache_control": "private, max-age=0",
+        "content_type": "text/plain; charset=utf-8",
+        "http_status": 404,
+        "request_id": request_ids[0],
+        "server": "Netlify",
+    }
+
+
 def discover_http_identity(
     *,
     base_url: str,
@@ -683,6 +753,16 @@ def smoke_http(
 
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
+    if argv and argv[0] == "probe-disabled-alias":
+        parser = argparse.ArgumentParser(
+            description="Strictly verify an offline Netlify production alias"
+        )
+        parser.add_argument("base_url")
+        parser.add_argument("--allow-http", action="store_true")
+        parser.add_argument("--timeout", type=float, default=10.0)
+        options = parser.parse_args(argv[1:])
+        options.command = "probe-disabled-alias"
+        return options
     if argv and argv[0] == "discover-identity":
         parser = argparse.ArgumentParser(
             description="Strictly discover published Web Runtime Host identity"
@@ -710,7 +790,13 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     options = parse_arguments(sys.argv[1:] if argv is None else argv)
     try:
-        if options.command == "discover-identity":
+        if options.command == "probe-disabled-alias":
+            result = probe_disabled_alias(
+                base_url=options.base_url,
+                require_https=not options.allow_http,
+                timeout_seconds=options.timeout,
+            )
+        elif options.command == "discover-identity":
             result = discover_http_identity(
                 base_url=options.base_url,
                 require_https=not options.allow_http,

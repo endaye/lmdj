@@ -106,7 +106,13 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("900 秒 kill budget", source)
         self.assertIn("未知第三 ID 必须 recovery FAIL", source)
         self.assertIn("GET 必须确认 exact prior", source)
-        self.assertIn("GET 必须确认 disabled", source)
+        self.assertIn("Netlify disabled edge probe", source)
+        self.assertIn("validation.production_http", source)
+        self.assertIn("header/body request ID 相互绑定", source)
+        self.assertIn("普通产品 404 或任意第三方 404 均不成立", source)
+        self.assertIn("独立 `preflight` job", source)
+        self.assertIn("不读取 Netlify credential", source)
+        self.assertIn("接触 Netlify 前二次验证相同 Release", source)
         self.assertNotIn("NETLIFY_AUTH_TOKEN='authorized-token'", source)
 
     def test_evidence_schemas_preserve_complete_publication_and_recovery_results(self) -> None:

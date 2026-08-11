@@ -85,7 +85,15 @@ def verify_detached_checksum_signature(
     def run_gpg(home: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
         try:
             completed = subprocess.run(
-                [gpg_program, "--batch", "--no-tty", "--homedir", str(home), *arguments],
+                [
+                    gpg_program,
+                    "--batch",
+                    "--no-tty",
+                    "--no-autostart",
+                    "--homedir",
+                    str(home),
+                    *arguments,
+                ],
                 check=False,
                 capture_output=True,
                 text=True,
@@ -97,7 +105,18 @@ def verify_detached_checksum_signature(
             raise BundleError("release checksum signature verification failed")
         return completed
 
-    with tempfile.TemporaryDirectory(prefix=".lmdj-checksum-signature-") as directory:
+    try:
+        short_parent = Path("/tmp").resolve(strict=True)
+    except OSError:
+        raise BundleError(
+            "release checksum signature temporary parent is unavailable"
+        ) from None
+    if not short_parent.is_dir() or short_parent.is_symlink():
+        raise BundleError("release checksum signature temporary parent is unsafe")
+    with tempfile.TemporaryDirectory(
+        prefix=".lmdj-checksum-signature-",
+        dir=short_parent,
+    ) as directory:
         home = Path(directory)
         home.chmod(0o700)
         run_gpg(home, ["--import", str(checksum_public_key_path)])

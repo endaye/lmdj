@@ -17,6 +17,8 @@ remote_main_ref='refs/lmdj-deploy/origin-main'
 python_bin='python3'
 owned_temp=''
 owned_temp_parent=''
+owned_gnupg=''
+owned_gnupg_parent=''
 tag_checkout=''
 publication_attempted=0
 deployment_complete=0
@@ -25,6 +27,7 @@ recovery_api_timeout_seconds=30
 recovery_http_timeout_seconds=180
 recovery_browser_timeout_seconds=180
 recovery_evidence_timeout_seconds=30
+preflight_probe_timeout_seconds=15
 prior_deploy_id=''
 prior_deploy_url=''
 prior_product_build=''
@@ -46,6 +49,7 @@ recovery_immutable_http_result='{}'
 recovery_immutable_browser_result='{}'
 recovery_production_http_result='{}'
 recovery_production_browser_result='{}'
+disabled_alias_probe_result='{}'
 
 usage() {
   cat >&2 <<'EOF'
@@ -142,6 +146,27 @@ cleanup_all() {
     fi
     tag_checkout=''
   fi
+  if [[ -n "$owned_gnupg" ]]; then
+    local resolved_gnupg_parent=''
+    local gnupg_basename=''
+    resolved_gnupg_parent="$(cd "$(dirname "$owned_gnupg")" 2>/dev/null && pwd -P)" || true
+    gnupg_basename="$(basename "$owned_gnupg")"
+    if [[ \
+      -z "$owned_gnupg_parent" || \
+      "$resolved_gnupg_parent" != "$owned_gnupg_parent" || \
+      "$gnupg_basename" != lmdj-web-runtime-gpg.* || \
+      -L "$owned_gnupg" || \
+      ! -d "$owned_gnupg" \
+    ]]; then
+      echo "Web Runtime deployment error: refusing unsafe GnuPG cleanup" >&2
+      status=2
+    elif ! rm -rf -- "$owned_gnupg"; then
+      echo "Web Runtime deployment error: GnuPG cleanup failed" >&2
+      status=2
+    fi
+    owned_gnupg=''
+    unset GNUPGHOME
+  fi
   if [[ -n "$owned_temp" ]]; then
     local resolved_parent=''
     local basename=''
@@ -182,6 +207,26 @@ create_owned_temp() {
     return
   }
   chmod 700 "$owned_temp"
+}
+
+create_owned_gnupg_home() {
+  owned_gnupg_parent="$(cd /tmp && pwd -P)" || {
+    fail "short GnuPG temporary parent is unavailable"
+    return
+  }
+  [[ -d "$owned_gnupg_parent" && ! -L "$owned_gnupg_parent" ]] || {
+    fail "short GnuPG temporary parent is unsafe"
+    return
+  }
+  owned_gnupg="$(mktemp -d "$owned_gnupg_parent/lmdj-web-runtime-gpg.XXXXXX")" || {
+    fail "short GnuPG home creation failed"
+    return
+  }
+  [[ -d "$owned_gnupg" && ! -L "$owned_gnupg" ]] || {
+    fail "short GnuPG home was not created safely"
+    return
+  }
+  chmod 700 "$owned_gnupg"
 }
 
 require_command() {
@@ -249,6 +294,7 @@ verify_signed_tag() {
   local tag_type=''
   local key_fingerprint=''
   local verify_status=''
+  local import_error=''
 
   tag_type="$(
     without_deploy_secrets git cat-file -t "$remote_tag_ref" 2>/dev/null
@@ -261,8 +307,8 @@ verify_signed_tag() {
     return
   }
 
-  mkdir -m 700 "$owned_temp/gnupg"
-  export GNUPGHOME="$owned_temp/gnupg"
+  create_owned_gnupg_home || return
+  export GNUPGHOME="$owned_gnupg"
   key_fingerprint="$(
     without_deploy_secrets \
       gpg --batch --show-keys --with-colons "$key_path" 2>/dev/null |
@@ -275,11 +321,14 @@ verify_signed_tag() {
     fail "trusted Product signing key fingerprint mismatch"
     return
   }
-  without_deploy_secrets \
-    gpg --batch --import "$key_path" >/dev/null 2>&1 || {
+  if ! import_error="$(
+    without_deploy_secrets \
+      gpg --batch --no-autostart --import "$key_path" 2>&1
+  )"; then
+    printf '%s\n' "$import_error" >&2
     fail "trusted Product signing key import failed"
     return
-  }
+  fi
   if ! verify_status="$(
     without_deploy_secrets git verify-tag --raw "$remote_tag_ref" 2>&1
   )"; then
@@ -563,6 +612,11 @@ preflight_prior_good() {
   if [[ -z "$prior_deploy_id" ]]; then
     return
   fi
+  if run_disabled_alias_probe "$production_url" "$preflight_probe_timeout_seconds" 2>/dev/null; then
+    prior_deploy_id=''
+    prior_deploy_url=''
+    return
+  fi
   identity_json="$(
     without_deploy_secrets "$python_bin" \
       "$repo_root/apps/web-runtime-host/tools/deployment_smoke.py" \
@@ -591,6 +645,27 @@ print(value["product_build"] + "\t" + value["host_version"])
   prior_production_http_result="$http_smoke_result"
   run_browser_smoke "$production_url" "$prior_product_build" "$prior_host_version" "$prior_deploy_id"
   prior_production_browser_result="$browser_smoke_result"
+}
+
+run_disabled_alias_probe() {
+  local base_url="$1"
+  local timeout_seconds="${2:-}"
+  local started_at=''
+  local ended_at=''
+  local raw_result=''
+  local -a command=(
+    "$python_bin"
+    "$repo_root/apps/web-runtime-host/tools/deployment_smoke.py"
+    probe-disabled-alias
+    "$base_url"
+  )
+  if [[ -n "$timeout_seconds" ]]; then
+    command+=(--timeout "$timeout_seconds")
+  fi
+  started_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  raw_result="$({ without_deploy_secrets "${command[@]}"; })" || return 2
+  ended_at="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  disabled_alias_probe_result="{\"ended_at\":\"$ended_at\",\"result\":$raw_result,\"started_at\":\"$started_at\",\"status\":\"passed\"}"
 }
 
 restore_exact_deploy() {
@@ -645,7 +720,10 @@ reconcile_publication_failure() {
     recovery_action='disabled-first-publication'
     get_current_site "$recovery_api_timeout_seconds" || return 2
     post_recovery_site_json="$current_site_json"
-    [[ "$current_site_state" == 'disabled' ]] || return 2
+    if [[ "$current_site_state" != 'disabled' ]]; then
+      run_disabled_alias_probe "$production_url" "$recovery_http_timeout_seconds" || return 2
+      recovery_production_http_result="$disabled_alias_probe_result"
+    fi
   fi
   return 0
 }

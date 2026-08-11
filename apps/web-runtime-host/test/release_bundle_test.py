@@ -38,6 +38,7 @@ class ReleaseBundleTest(unittest.TestCase):
         self.fake_gpg = self.root / "fake-gpg"
         self.fake_gpg.write_text(
             "#!/bin/sh\n"
+            "case \" $* \" in *\" --no-autostart \"*) ;; *) exit 3 ;; esac\n"
             "case \" $* \" in\n"
             "  *\" --list-keys \"*) printf 'pub:-:255:22:KEY::::::\\nfpr:::::::::CB928A6E89DE498851688EF1AAC3E7019FC1478B:\\n' ;;\n"
             "  *\" --verify \"*) printf '[GNUPG:] VALIDSIG CB928A6E89DE498851688EF1AAC3E7019FC1478B 2026-08-10 0 4 0 22 8 00 CB928A6E89DE498851688EF1AAC3E7019FC1478B\\n' ;;\n"
