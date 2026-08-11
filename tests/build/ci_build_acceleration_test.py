@@ -71,7 +71,11 @@ class CiBuildAccelerationTest(unittest.TestCase):
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")
-        self.assertIn("needs: change-scope", job)
+        self.assertIn("needs: [change-scope, select-ubuntu-runner]", job)
+        self.assertIn(
+            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
+            job,
+        )
         self.assertIn("lfs: true", job)
         self.assertIn("git lfs checkout -- tests/fixtures/audio", job)
         self.assertIn(

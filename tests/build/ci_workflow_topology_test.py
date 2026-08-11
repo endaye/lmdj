@@ -57,6 +57,7 @@ FORMAL_RESULT_LANE_GUARDS = {
         "core_ubuntu",
         "core_asan",
         "core_coverage",
+        "package",
     },
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
@@ -268,6 +269,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 "core_ubuntu",
                 "core_asan",
                 "core_coverage",
+                "package",
             },
         )
         self.assertIn("if: ${{ !cancelled()", job)
@@ -310,6 +312,23 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}", job
         )
         self.assertIn('--change-scope-result "$CHANGE_SCOPE_RESULT"', job)
+        self.assertIn(
+            "--base-sha \"${{ github.event_name == 'pull_request' && "
+            "github.event.pull_request.base.sha || github.event_name == 'push' && "
+            "github.event.before || github.sha }}\"",
+            job,
+        )
+
+    def test_package_uses_existing_trusted_ubuntu_selector(self) -> None:
+        job = self.workflow_job("package")
+        self.assertEqual(
+            self.job_needs("package"), {"change-scope", "select-ubuntu-runner"}
+        )
+        self.assertIn(
+            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
+            job,
+        )
+        self.assertNotIn("runs-on: ubuntu-24.04", job)
 
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {

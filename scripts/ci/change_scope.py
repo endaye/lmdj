@@ -6,6 +6,7 @@ from __future__ import annotations
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 import argparse
+import html
 import json
 import os
 from pathlib import Path
@@ -53,7 +54,7 @@ _CANONICAL_LANE_JOBS = {
     "web_runtime_lab": ("select-ubuntu-runner", "web-runtime-lab"),
     "deploy_contract": ("deploy-contract",),
     "chameleon_lab": ("chameleon-lab",),
-    "package": ("package",),
+    "package": ("select-ubuntu-runner", "package"),
 }
 _MANDATORY_FULL_MATCHES = {
     ("exact", ".github/workflows/ci.yml"),
@@ -62,8 +63,7 @@ _MANDATORY_FULL_MATCHES = {
 }
 _POLICY_KEYS = {
     "schema", "manifest_schema", "lanes", "lane_jobs", "known_top_levels",
-    "full_rules", "rules", "expensive_families", "expensive_family_exemptions",
-    "draft_lanes", "slo_seconds",
+    "full_rules", "rules", "expensive_families", "draft_lanes", "slo_seconds",
 }
 
 
@@ -194,9 +194,6 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
         raise ValueError("invalid expensive families")
     if any(not isinstance(value, list) or not value or not set(value).issubset(lane_set) for value in families.values()):
         raise ValueError("expensive family references unknown lane")
-    exemptions = policy["expensive_family_exemptions"]
-    if not isinstance(exemptions, list) or not all(isinstance(path, str) and path for path in exemptions):
-        raise ValueError("invalid expensive family exemptions")
     if not isinstance(policy["draft_lanes"], list) or set(policy["draft_lanes"]) != {"docs_static", "ci_contract"}:
         raise ValueError("invalid draft lanes")
     if not isinstance(policy["slo_seconds"], dict) or any(not isinstance(value, int) or value <= 0 for value in policy["slo_seconds"].values()):
@@ -261,8 +258,7 @@ def classify(
             if not path_lanes:
                 reasons.add(f"unclassified path: {path}")
             selected.update(path_lanes)
-            if path not in policy["expensive_family_exemptions"]:
-                family_selected.update(path_lanes)
+            family_selected.update(path_lanes)
             for rule in policy["full_rules"]:
                 if _matches(rule["match"], path):
                     reasons.add(f"full rule: {rule['reason']}")
@@ -325,13 +321,38 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
     lanes = policy["lanes"]
     if not isinstance(manifest["lanes"], dict) or set(manifest["lanes"]) != set(lanes) or not all(isinstance(value, bool) for value in manifest["lanes"].values()):
         raise ValueError("manifest lanes are not closed")
+    enabled_lanes = {
+        lane for lane, enabled in manifest["lanes"].items() if enabled
+    }
+    if manifest["mode"] == "full" and enabled_lanes != set(lanes):
+        raise ValueError("full manifest must select every lane")
+    if manifest["mode"] == "draft" and enabled_lanes != set(policy["draft_lanes"]):
+        raise ValueError("draft manifest must select exactly the draft lanes")
+    if manifest["mode"] == "focused" and enabled_lanes == set(lanes):
+        raise ValueError("focused manifest cannot select every lane")
     if not isinstance(manifest["reasons"], list) or not all(isinstance(reason, str) for reason in manifest["reasons"]):
         raise ValueError("invalid manifest reasons")
     if not isinstance(manifest["changed_files"], list):
         raise ValueError("invalid manifest changed files")
+    seen_paths: set[str] = set()
     for entry in manifest["changed_files"]:
-        if not isinstance(entry, dict) or set(entry) != {"result", "paths"} or entry["result"] not in ALLOWED_RESULTS:
+        if (
+            not isinstance(entry, dict)
+            or set(entry) != {"result", "paths"}
+            or entry["result"] not in ALLOWED_RESULTS
+        ):
             raise ValueError("invalid manifest changed file")
+        paths = entry["paths"]
+        if not isinstance(paths, list):
+            raise ValueError("manifest changed-file paths must be a list")
+        required_path_count = 2 if entry["result"] in {"renamed", "copied"} else 1
+        if len(paths) != required_path_count:
+            raise ValueError("invalid manifest changed-file path count")
+        for path in paths:
+            _validate_path(path)
+            if path in seen_paths:
+                raise ValueError(f"duplicate logical path: {path}")
+            seen_paths.add(path)
     expected_jobs = sorted({job for lane, enabled in manifest["lanes"].items() if enabled for job in policy["lane_jobs"][lane]})
     if manifest["required_jobs"] != expected_jobs:
         raise ValueError("required jobs do not derive from lanes")
@@ -390,17 +411,88 @@ def _write(path: str | Path, contents: str) -> None:
     target.write_text(contents, encoding="utf-8")
 
 
-def _summary(manifest: Mapping[str, object]) -> str:
+def _summary_text(value: object) -> str:
+    escaped_controls = json.dumps(str(value), ensure_ascii=True)[1:-1]
+    return (
+        html.escape(escaped_controls, quote=True)
+        .replace("|", "&#124;")
+        .replace("`", "&#96;")
+    )
+
+
+def _summary(
+    manifest: Mapping[str, object], policy: Mapping[str, object]
+) -> str:
+    validate_manifest(manifest, policy)
     enabled = [lane for lane, selected in manifest["lanes"].items() if selected]
     rows = ["| Field | Value |", "| --- | --- |"]
     rows.extend([
-        f"| Mode | `{manifest['mode']}` |",
-        f"| Base | `{manifest['base_sha']}` |",
-        f"| Head | `{manifest['head_sha']}` |",
-        f"| Lanes | {', '.join(enabled) or 'none'} |",
-        f"| Required jobs | {', '.join(manifest['required_jobs']) or 'none'} |",
-        f"| Reasons | {'; '.join(manifest['reasons']) or 'path ownership'} |",
+        f"| Mode | <code>{_summary_text(manifest['mode'])}</code> |",
+        f"| Base | <code>{_summary_text(manifest['base_sha'])}</code> |",
+        f"| Head | <code>{_summary_text(manifest['head_sha'])}</code> |",
+        "| Lanes | " + (
+            ", ".join(f"<code>{_summary_text(lane)}</code>" for lane in enabled)
+            or "none"
+        ) + " |",
+        "| Required jobs | " + (
+            ", ".join(
+                f"<code>{_summary_text(job)}</code>"
+                for job in manifest["required_jobs"]
+            ) or "none"
+        ) + " |",
     ])
+    rows.extend(["", "### Changed files", ""])
+    for entry in manifest["changed_files"]:
+        paths = " &rarr; ".join(
+            f"<code>{_summary_text(path)}</code>" for path in entry["paths"]
+        )
+        rows.append(
+            f"- <code>{_summary_text(entry['result'])}</code>: {paths}"
+        )
+    if not manifest["changed_files"]:
+        rows.append("- none")
+
+    lane_reasons: dict[str, list[str]] = {lane: [] for lane in enabled}
+    if manifest["mode"] == "full":
+        upgrade_reasons = list(manifest["reasons"]) or ["full mode"]
+        for lane in enabled:
+            lane_reasons[lane].extend(
+                f"full upgrade: {reason}" for reason in upgrade_reasons
+            )
+    elif manifest["mode"] == "draft":
+        for lane in enabled:
+            lane_reasons[lane].append(
+                "draft evidence: lightweight Draft lane; Ready rerun required"
+            )
+        for lane in enabled:
+            lane_reasons[lane].extend(
+                f"draft deferral: {reason}" for reason in manifest["reasons"]
+            )
+    else:
+        for entry in manifest["changed_files"]:
+            for path in entry["paths"]:
+                for rule in policy["rules"]:
+                    if not _matches(rule["match"], path):
+                        continue
+                    match = rule["match"]
+                    reason = (
+                        f"path {path} matched {match['kind']}: {match['value']}"
+                    )
+                    for lane in rule["lanes"]:
+                        if lane in lane_reasons:
+                            lane_reasons[lane].append(reason)
+
+    rows.extend(["", "### Selected lane reasons", ""])
+    for lane in enabled:
+        reasons = sorted(set(lane_reasons[lane]))
+        if not reasons:
+            raise ValueError(f"selected lane lacks an auditable reason: {lane}")
+        rendered = "; ".join(
+            f"<code>{_summary_text(reason)}</code>" for reason in reasons
+        )
+        rows.append(f"- <code>{_summary_text(lane)}</code>: {rendered}")
+    if not enabled:
+        rows.append("- none")
     return "\n".join(rows) + "\n"
 
 
@@ -430,7 +522,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         _write(args.manifest_out, compact)
         with Path(args.github_output).open("a", encoding="utf-8") as output_file:
             output_file.write(f"manifest={compact}\n")
-        _write(args.summary, _summary(manifest))
+        _write(args.summary, _summary(manifest, policy))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"change scope failed closed: {error}", file=sys.stderr)
         return 1

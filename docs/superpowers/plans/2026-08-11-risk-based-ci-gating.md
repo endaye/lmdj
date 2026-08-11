@@ -21,7 +21,7 @@
 - `PR Gate` validates same-run formal lane jobs plus deterministic `select-ubuntu-runner`, `select-macos-runner`, and `macos-primary` support jobs. Conditional `macos-fallback` remains transitively enforced through the published `core-macos` and `core-asan-macos` adjudicators and is not a manifest-required job.
 - A selected lane/support job must be `success`; an unselected lane/support job must be `skipped`. Missing, cancelled, failed, unexpectedly successful, unknown, or SHA-mismatched evidence fails closed.
 - Semantic compile, Proof, test, sanitizer, and Coverage failures are final. Preserve the existing one-time macOS hosted fallback only for missing terminal infrastructure results.
-- Keep Web Toolchain and Creator on GitHub-hosted Ubuntu; keep current self-hosted Linux/macOS selection and ccache behavior. Do not add runners, hosted retry, or cache/toolchain reuse in this implementation.
+- Keep Web Toolchain and Creator on GitHub-hosted Ubuntu; keep current self-hosted Linux/macOS selection and ccache behavior. Route Package through the existing Ubuntu selector with the same fork isolation/hosted fallback, LFS hydration, and ccache disabled. Do not add runners, hosted retry, or cache/toolchain reuse in this implementation.
 - SLOs are summary-only observations. Hard job limits remain independent and must not turn a slow successful job into a semantic failure.
 - The implementation PR must carry `ci:full`, declare expected selected/skipped lanes in its body, and execute the complete old and new matrix before migration.
 - No push, PR, merge, branch-protection mutation, tag, release, deployment, Product Build allocation, or Channel promotion is authorized by this plan.
@@ -32,7 +32,7 @@
 | --- | --- |
 | `scripts/ci/scope_policy.json` | Versioned closed lane/job/path ownership policy. |
 | `scripts/ci/change_scope.py` | Parse exact Git inventory, fetch live PR labels, classify mode/lanes, validate and emit manifest/summary. |
-| `scripts/ci/pr_gate.py` | Validate manifest/SHA/job-result correspondence and render non-blocking timing/SLO observations. |
+| `scripts/ci/pr_gate.py` | Validate manifest/base-head SHA/job-result correspondence and render non-blocking timing/SLO observations. |
 | `tests/build/ci_change_scope_test.py` | Classifier, policy, rename, overlap, unknown-path, Draft/Ready/full and inventory contract tests. |
 | `tests/build/ci_pr_gate_test.py` | Gate truth table, schema closure, SHA and lane/job mapping contract tests. |
 | `tests/build/ci_workflow_topology_test.py` | Event, concurrency, same-run fan-in, lane condition, timeout and no-label-trigger workflow contracts. |
@@ -87,10 +87,7 @@ CASES = {
     },
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
-    ".gitattributes": {
-        "core_ubuntu", "core_asan", "core_coverage", "core_macos",
-        "web_runtime_host", "creator", "package", "ci_contract"
-    },
+    ".gitattributes": LANES,
 }
 ```
 
@@ -161,7 +158,7 @@ Create `scripts/ci/scope_policy.json` with this top-level schema and exact lane-
     "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
-    "package": ["package"]
+    "package": ["select-ubuntu-runner", "package"]
   }
 }
 ```
@@ -204,9 +201,11 @@ Implement these rules literally:
 6. in Draft mode publish only `docs_static` and `ci_contract`, while recording any deferred Ready/full reason in `reasons`;
 7. derive sorted `required_jobs` only from true lanes and `lane_jobs`;
 8. emit deterministic compact JSON using `sort_keys=True, separators=(",", ":")`;
-9. write the manifest file, `manifest=<compact-json>` to `$GITHUB_OUTPUT`, and a human-readable Markdown table to `$GITHUB_STEP_SUMMARY`;
+9. write the manifest file, `manifest=<compact-json>` to `$GITHUB_OUTPUT`, and an escaped summary with the complete status/path inventory plus concrete reasons for every selected lane to `$GITHUB_STEP_SUMMARY`;
 10. fetch current PR metadata with `urllib.request` from `/repos/{repository}/pulls/{number}` using `GITHUB_TOKEN`; accept only the returned `draft` boolean and `labels[].name` strings. Do not request runner or Checks APIs;
 11. run `git cat-file -e SHA^{commit}` for both endpoints and `git diff --name-status -z BASE HEAD`; if either command fails, exit nonzero instead of querying PR Files/Compare.
+
+The final-review closure also requires NUL-safe `git ls-files` coverage proving every current tracked path matches explicit ownership or an explicit full rule. Manifest validation checks exact changed-file keys/results/path counts/canonical paths/no duplicates and enforces `full` = every lane, `draft` = the exact two draft lanes, and `focused` != every lane. It removes all expensive-family exemptions; uses exact Portal workflow names; gives `scripts/core.sh` complete Core + Package; closes `tests/core` public helper/registration and version/package inheritance; assigns Web audio/project-I/O fixtures to their actual consumers; and splits Web-only MJS/source-boundary inputs from native `web-runtime-platform` inputs. Future unknown `scripts/**`, `tests/**`, `.github/**`, packages, or workflows remain unclassified and therefore full.
 
 - [ ] **Step 5: Run focused classifier verification**
 
@@ -243,9 +242,9 @@ Expected committed paths: exactly the three Task 1 files; final task worktree is
 - Create: `tests/build/ci_pr_gate_test.py`
 
 **Interfaces:**
-- Consumes: Task 1 policy and manifest; `needs`-shaped JSON `{job_id: {result: RESULT}}`; current 40-hex head SHA; optional current-run jobs API data used only for summaries.
-- Produces: `validate_gate(policy: Mapping[str, object], manifest: Mapping[str, object], results: Mapping[str, str], expected_head_sha: str) -> GateReport` and exit status `0` only for an exact selected-success/unselected-skipped match.
-- Produces CLI: `python3 scripts/ci/pr_gate.py --policy PATH --manifest-json JSON --results-json JSON --head-sha SHA --summary PATH`.
+- Consumes: Task 1 policy and manifest; `needs`-shaped JSON `{job_id: {result: RESULT}}`; event-derived 40-hex base/head SHAs; optional current-run jobs API data used only for summaries.
+- Produces: `validate_gate(policy, manifest, results, expected_head_sha, *, expected_base_sha, change_scope_result="success") -> GateReport` and exit status `0` only for an exact selected-success/unselected-skipped match.
+- Produces CLI: `python3 scripts/ci/pr_gate.py --policy PATH --manifest-json JSON --results-json JSON --change-scope-result RESULT --base-sha SHA --head-sha SHA --summary PATH`.
 
 - [ ] **Step 1: Write the complete gate truth-table tests**
 
@@ -283,7 +282,7 @@ Add methods with these exact names and assertions:
 - `test_unknown_result_fails`: use `neutral` and require rejection before truth-table evaluation.
 - `test_unknown_schema_mode_lane_manifest_key_or_job_fails`: mutate each closed allowlist independently and require rejection.
 - `test_duplicate_required_job_and_lane_job_conflict_fail`: duplicate `portal`, then remove the job implied by a true lane, and require both to fail.
-- `test_manifest_head_sha_must_equal_current_head_sha`: use two distinct valid 40-hex SHAs and require failure.
+- `test_manifest_head_sha_must_equal_current_head_sha` and the corresponding base-SHA mutation: use distinct valid 40-hex SHAs and require failure.
 - `test_full_manifest_requires_every_formal_job`: set all lanes true and require all 18 lane/support results to be success.
 - `test_core_macos_requires_both_published_adjudicators`: require both `core-macos` and `core-asan-macos` when `core_macos` is true.
 - `test_needs_json_normalizer_ignores_outputs_but_requires_result`: accept arbitrary `outputs`, reject a missing `result`.
@@ -318,7 +317,7 @@ FORMAL_RESULTS = {"success", "failure", "cancelled", "skipped"}
 Validation order must be deterministic:
 
 1. validate policy closure and manifest through the Task 1 manifest validator;
-2. require manifest `head_sha == expected_head_sha`;
+2. require manifest `base_sha == expected_base_sha` and `head_sha == expected_head_sha`;
 3. rebuild expected required jobs from true lanes and compare byte-for-byte after canonical sorting;
 4. require the results key set to equal the policy's complete 18-job lane/support result set;
 5. require each selected job to be `success` and each unselected job to be `skipped`;
@@ -491,7 +490,7 @@ Add these exact test methods to `tests/build/ci_workflow_topology_test.py` befor
 - `test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read`: require fetch-depth zero, Task 1 invocation and PR token; reject npm, pip, CMake, browser, emsdk, runner API and secrets other than `GITHUB_TOKEN`.
 - `test_every_formal_lane_depends_directly_on_change_scope`: loop over all 15 formal lane IDs and require `change-scope` in `needs`; separately require the three deterministic support jobs to depend on `change-scope`.
 - `test_creator_no_longer_needs_web_toolchain_or_core`: reject both old dependencies and retain hosted Ubuntu.
-- `test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected`: require the exact five lane booleans.
+- `test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected`: require the exact six lane booleans, including `package`.
 - `test_macos_selector_runs_only_when_core_macos_is_selected`: require exactly the `core_macos` boolean.
 - `test_portal_is_same_run_reusable_job_and_pr_gate_needs_it`: require local reusable-workflow `uses` and the `portal` fan-in key.
 - `test_pr_gate_has_every_formal_lane_in_static_needs_and_runs_with_always`: compare the complete `needs` set and require `always() && !cancelled()`.
@@ -569,7 +568,8 @@ chameleon-lab:
 
 package:
   timeout-minutes: 35
-  # setup Python 3.11, LFS hydration and bounded acceleration,
+  # use existing trusted Ubuntu selector, then setup Python 3.11,
+  # LFS hydration and bounded acceleration with ccache disabled,
   # then run scripts/core.sh package without publishing a release
 ```
 
@@ -601,7 +601,7 @@ to:
 needs: change-scope
 ```
 
-Preserve its hosted runner and exact proof steps. Make `select-ubuntu-runner` depend on `change-scope` and run only when at least one of `web_runtime_host`, `web_runtime_lab`, `core_ubuntu`, `core_asan`, or `core_coverage` is true. Make `select-macos-runner` depend on `change-scope` and run only for `core_macos`.
+Preserve its hosted runner and exact proof steps. Make `select-ubuntu-runner` depend on `change-scope` and run only when at least one of `web_runtime_host`, `web_runtime_lab`, `core_ubuntu`, `core_asan`, `core_coverage`, or `package` is true. Make Package depend on that selector and use its exact dynamic `runs-on` output; this normally avoids hosted package execution, while untrusted forks and unavailable trusted capacity retain the existing hosted fallback. Make `select-macos-runner` depend on `change-scope` and run only for `core_macos`.
 
 Keep macOS internal topology:
 
@@ -638,11 +638,14 @@ env:
   FORMAL_RESULTS_JSON: >-
     {"docs-static":"${{ needs.docs-static.result }}","portal":"${{ needs.portal.result }}","ci-contract":"${{ needs.ci-contract.result }}","select-ubuntu-runner":"${{ needs.select-ubuntu-runner.result }}","select-macos-runner":"${{ needs.select-macos-runner.result }}","macos-primary":"${{ needs.macos-primary.result }}","core-ubuntu":"${{ needs.core-ubuntu.result }}","core-asan":"${{ needs.core-asan.result }}","core-coverage":"${{ needs.core-coverage.result }}","core-macos":"${{ needs.core-macos.result }}","core-asan-macos":"${{ needs.core-asan-macos.result }}","web-toolchain-conformance":"${{ needs.web-toolchain-conformance.result }}","web-runtime-host":"${{ needs.web-runtime-host.result }}","creator-web":"${{ needs.creator-web.result }}","web-runtime-lab":"${{ needs.web-runtime-lab.result }}","deploy-contract":"${{ needs.deploy-contract.result }}","chameleon-lab":"${{ needs.chameleon-lab.result }}","package":"${{ needs.package.result }}"}
   SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
+  CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
 run: >-
   python3 scripts/ci/pr_gate.py
   --policy scripts/ci/scope_policy.json
   --manifest-json "$SCOPE_MANIFEST"
   --results-json "$FORMAL_RESULTS_JSON"
+  --change-scope-result "$CHANGE_SCOPE_RESULT"
+  --base-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}"
   --head-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
   --summary "$GITHUB_STEP_SUMMARY"
 ```
@@ -742,7 +745,7 @@ These steps are intentionally outside local implementation and require separate 
 5. Merge only after all three required contexts and every selected formal lane succeed.
 6. Verify the merge commit's `main` run is `full`, per-SHA, non-cancelling, and publishes all formal results.
 7. Under separate branch-protection authorization, remove the old two Core contexts; confirm strict branch update and conversation resolution remain enabled.
-8. Observe one week of focused/full ratio, queue/execution P50/P95, hosted minutes, manual `ci:full`, misclassification, selector serialization, and Web bootstrap versus semantic time.
+8. Observe one week of focused/full ratio, queue/execution P50/P95, hosted minutes versus the old unconditional PR/main baseline, manual `ci:full`, Package hosted fallback, misclassification, selector serialization, and Web bootstrap versus semantic time. Normalize the comparison by PR updates and merges; focused savings are expected, not presumed, to offset added control/full-main work. Routine hosted minutes must not remain above that comparable baseline; any sustained regression requires corrective routing/job consolidation or rollback of the permanent migration without weakening evidence.
 9. If rollback is required, keep `PR Gate` required, first merge a configuration that forces every PR to full, prove docs-only PRs publish the old Core contexts, restore those contexts as required, and only then remove `PR Gate`.
 
 No checklist item authorizes the next item automatically.

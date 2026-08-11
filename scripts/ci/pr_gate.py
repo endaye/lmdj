@@ -94,6 +94,7 @@ def _formal_jobs(policy: Mapping[str, object]) -> tuple[str, ...]:
 def validate_gate(
     policy: Mapping[str, object], manifest: Mapping[str, object],
     results: Mapping[str, str], expected_head_sha: str, *,
+    expected_base_sha: str,
     change_scope_result: str = "success",
 ) -> GateReport:
     """Return the exact selected-success/unselected-skipped gate decision."""
@@ -101,6 +102,7 @@ def validate_gate(
         change_scope._validate_policy(policy)
         change_scope.validate_manifest(manifest, policy)
         expected_head = change_scope._validate_sha(expected_head_sha)
+        expected_base = change_scope._validate_sha(expected_base_sha)
     except (KeyError, TypeError, ValueError) as error:
         return _invalid(error)
 
@@ -118,6 +120,10 @@ def validate_gate(
     if change_scope_result != "success":
         errors.append(
             f"change-scope producer is {change_scope_result}, expected success"
+        )
+    if manifest["base_sha"].lower() != expected_base:
+        errors.append(
+            f"manifest base SHA {manifest['base_sha']} does not match expected {expected_base}"
         )
     if manifest["head_sha"].lower() != expected_head:
         errors.append(
@@ -290,6 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest-json", required=True)
     parser.add_argument("--results-json", required=True)
     parser.add_argument("--change-scope-result", required=True)
+    parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--summary", required=True)
     args = parser.parse_args(argv)
@@ -304,6 +311,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             manifest,
             normalize_needs(needs),
             args.head_sha,
+            expected_base_sha=args.base_sha,
             change_scope_result=args.change_scope_result,
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:

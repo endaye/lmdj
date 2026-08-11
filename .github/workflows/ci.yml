@@ -63,7 +63,7 @@ jobs:
   select-ubuntu-runner:
     name: Select Ubuntu runner
     needs: change-scope
-    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab || fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage) }}
+    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab || fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || fromJSON(needs.change-scope.outputs.manifest).lanes.package) }}
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -255,9 +255,9 @@ jobs:
 
   package:
     name: Core package
-    needs: change-scope
+    needs: [change-scope, select-ubuntu-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package }}
-    runs-on: ubuntu-24.04
+    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -494,6 +494,7 @@ jobs:
           --manifest-json "$SCOPE_MANIFEST"
           --results-json "$FORMAL_RESULTS_JSON"
           --change-scope-result "$CHANGE_SCOPE_RESULT"
+          --base-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}"
           --head-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
           --summary "$GITHUB_STEP_SUMMARY"
 

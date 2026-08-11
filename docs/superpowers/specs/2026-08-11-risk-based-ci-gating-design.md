@@ -2,7 +2,7 @@
 
 日期：2026-08-11
 
-状态：规格已批准，尚未实现
+状态：规格已批准，本地实现完成，远端迁移待单独授权
 
 ## 1. 结论
 
@@ -14,7 +14,8 @@ LMDJ 将 Pull Request CI 从“每次修改都运行完整 Core/Web 矩阵”改
 4. 唯一稳定 required check `PR Gate` 按版本化 scope manifest 校验本次应运行的所有 job；
 5. `main` push 与 nightly 继续保留完整验证和压力采样；
 6. CI 时限目标是非阻断 SLO，只有独立的 job 安全上限和测试行为 timeout 会失败；
-7. 本设计不增加 runner，也不增加 GitHub-hosted 日常用量。runner 扩容在独立设计中讨论。
+7. 本设计不增加 runner，并以“归一化 routine GitHub-hosted minutes 不得持续高于旧基线”为
+   预算目标；净效果必须经过观察周确认。runner 扩容在独立设计中讨论。
 
 目标是在不把不确定性静默放行的前提下，将纯文档 Ready PR 的端到端反馈目标缩短到五分钟，
 单一子系统 Ready PR 缩短到十至十五分钟，并让 Core、Web、Portal、Creator、Deploy 和
@@ -48,7 +49,8 @@ GitHub 分支保护当前只硬性要求 `core (ubuntu-latest)` 和 `core (macos
 - Ready PR 的所有适用正式门禁仍是 merge 前证据。
 - 未知、缺失、矛盾或无法解析的分类结果 fail closed。
 - 新 commit 取消同一 PR 的旧运行，但不同 PR 不互相取消。
-- 不增加日常 GitHub-hosted 用量；路径分流应减少现有 hosted job 的启动次数。
+- 以旧无条件 PR/main 矩阵为 hosted-minutes 基线；focused 分流预计抵消新增控制 job 与 full-main
+  工作，但在观察周数据确认前不承诺净用量必然下降。
 - SLO 与 correctness gate 分离，慢但正确的执行不因软目标超时而失败。
 - 保留既有 semantic failure、No-Retry 和 macOS infrastructure fallback 边界。
 
@@ -88,9 +90,10 @@ PR Gate ---- validate manifest, current SHA, expected jobs and actual results
 required branch-protection result
 ```
 
-所有正式 lane 只依赖 `Change Scope`。除了真实 artifact 或环境传递关系，lane 之间不得用
-`needs` 制造顺序；完整结果统一由 `PR Gate` fan-in。macOS primary/fallback/adjudicator 内部
-依赖继续保留，因为它们共同发布一个平台结果。
+所有正式 lane 都直接依赖 `Change Scope`；需要可信 runner 池的 lane 还依赖对应 selector。
+除了 runner 选择、真实 artifact 或环境传递关系，lane 之间不得用 `needs` 制造顺序；完整结果
+统一由 `PR Gate` fan-in。macOS primary/fallback/adjudicator 内部依赖继续保留，因为它们共同
+发布一个平台结果。
 
 ## 6. Change Scope
 
@@ -225,10 +228,10 @@ per-SHA group，`cancel-in-progress: false`；连续 merge 的每个 main SHA �
 被后续 commit 取消的旧 PR run 不构成当前 SHA 的语义失败；当前 SHA 的正式 `PR Gate`
 必须完整发布。
 
-Draft 只运行预计五分钟以内的检查：Change Scope、自身契约、`git diff --check`、workflow
-静态校验、文档影响快速检查，以及不要求完整 CMake build、浏览器或 Web toolchain 的相关
-Python/Node 单测。Draft 不安装 Emscripten/Playwright，不运行 C++ 构建、Core Proof、
-sanitizer、Coverage、macOS 或完整 Portal build。Draft 不能替代转为 Ready 后的新正式结果。
+Draft 只发布轻量的 Change Scope、Docs/static 与 CI Contract 证据：Docs/static 对精确
+base/head 执行 `git diff --check`，CI Contract 执行 pinned actionlint 与 `ci_*` Python 契约。
+Draft 不运行 Portal、Node 产品单测、Emscripten/Playwright、C++ 构建、Core Proof、sanitizer、
+Coverage 或 macOS。转为 Ready 会对同一 head 重新分类；Draft 结果不能替代该正式结果。
 
 ## 8. 路径归属
 
@@ -245,6 +248,7 @@ sanitizer、Coverage、macOS 或完整 Portal build。Draft 不能替代转为 R
 | `docs/governance/**` | Docs static + Portal |
 | `docs/quality/**`、`docs/deploy/architecture-portal.md` | Docs static + Portal |
 | `docs/deploy/web-runtime-host.md` | Docs static + Portal + `deploy_contract` |
+| `apps/README.md` | Docs static + Portal |
 | `apps/architecture-portal/**` | Portal |
 | `apps/creator-web/**` | Creator |
 | `apps/web-runtime-host/**` | Web Runtime Host |
@@ -252,9 +256,9 @@ sanitizer、Coverage、macOS 或完整 Portal build。Draft 不能替代转为 R
 | `apps/chameleon-lab/**` | `chameleon_lab` |
 | `apps/core-cli/**`、`apps/core-mcp/**` | Core Ubuntu Proof；跨平台 Host 变更增加 macOS |
 | `apps/native-test-host/**` | Core Ubuntu + macOS native |
-| `packages/web-runtime-platform/web/**`、仅 MJS 的 test | Web Toolchain + Web Runtime Host |
-| `packages/web-runtime-platform/CMakeLists.txt`、`module.json`、C++ source/test | 完整 Core + Web Toolchain + Web Runtime Host |
-| 其他 `packages/**` | 完整 Core PR 矩阵 |
+| `packages/web-runtime-platform/web/**`、仅 MJS 的 test、source-boundary test | Portal + Web Toolchain + Web Runtime Host |
+| `packages/web-runtime-platform/CMakeLists.txt`、`module.json`、`include/**`、`src/**`、C++ test | Portal + 完整 Core + Web Toolchain + Web Runtime Host |
+| 其他现存 `packages/<module>/**` | Portal + 完整 Core PR 矩阵；新增未知 package 未显式归属时 full |
 | `providers/**` | `core_ubuntu` + `core_asan` + `core_coverage`；Provider/Assembly 路径在 `core_ubuntu` 内增加 E2E |
 | `contracts/**` | full |
 | `products/lmdj/**` | full + Portal |
@@ -281,7 +285,7 @@ Portal 是表中门禁的附加 lane：命中该集合的 Creator、Web Host、C
 | `references/**` | Docs static；冻结参考材料永远不作为 active product source |
 | `output/playwright/**` | Portal；当前是受控说明书截图 |
 | `netlify.toml` | `portal` + `ci_contract` |
-| `.gitattributes` | 完整 Core + `web_runtime_host` + `creator` + `package` + `ci_contract` |
+| `.gitattributes` | ownership 并集为完整 Core + `web_runtime_host` + `creator` + `package` + `ci_contract`，随后按昂贵族规则升级 full |
 | `.gitignore` | full；影响 clean-tree、generated output 与 toolchain cache 边界 |
 | `AGENTS.md`、`CLAUDE.md` | Docs static + Portal |
 | 根 `README.md` | Docs static |
@@ -290,17 +294,20 @@ Portal 是表中门禁的附加 lane：命中该集合的 Creator、Web Host、C
 `testdata/**` 当前没有 active New Headless Core 消费者；若未来代码开始消费它，新增消费者的
 同一 Task 必须更新路径归属和契约测试，不能继续沿用 docs-only。`.gitattributes` 的 LFS 规则
 控制 WAV、二进制和包资产的 checkout/hydration，所以按全部现有 fixture/package 消费者求
-并集，而不是归入普通仓库元数据。
+并集，而不是归入普通仓库元数据；该并集横跨 Core、Web、Creator、package 三个以上昂贵族，
+因此按统一升级规则成为 `full`，没有文件级豁免。
 
 ### 8.3 脚本
 
 | 路径 | focused 正式门禁 |
 | --- | --- |
-| `scripts/core.sh`、`scripts/core-coverage.sh`、Core dependency/build 脚本 | 完整 Core |
+| `scripts/core.sh` | 完整 Core + `package`；它同时拥有 package 子命令 |
+| `scripts/core-coverage.sh`、Core dependency/build 脚本 | 完整 Core |
 | `scripts/web-toolchain-conformance.sh` | Web Toolchain |
 | `scripts/web-runtime-host.sh` | Web Runtime Host |
 | `scripts/creator-web.sh` | Creator |
 | `scripts/web-runtime-lab.sh` | Web Runtime Lab |
+| `scripts/chameleon-lab.sh` | Chameleon Lab |
 | `scripts/architecture-portal.sh` | Portal |
 | `scripts/web-runtime-deploy.sh` | Deploy contract；不部署、不运行 Core |
 | `scripts/version.py`、`scripts/package-core.py` | `core_ubuntu` + `package` |
@@ -314,14 +321,19 @@ Portal 是表中门禁的附加 lane：命中该集合的 Creator、Web Host、C
 | --- | --- |
 | `tests/core/**` | Core Ubuntu + ASan + Coverage |
 | `tests/core/audio/**`、concurrency/stress | 上述门禁 + macOS/native stress |
+| `tests/core/facade/c_api_stress_test.cpp` | 完整 Core，包含 macOS/native stress |
+| `tests/core/support/**`、`tests/core/provider/CMakeLists.txt` | 完整 Core；公共 helper/test registration 输入 |
 | `tests/platform/audio/**` | macOS Core/native sanitizer |
 | `tests/platform/web/toolchain/**` | Web Toolchain |
+| `tests/platform/web/audio/**` | Web Toolchain + Web Runtime Host |
+| `tests/platform/web/project_io/**` | Web Toolchain |
 | `tests/platform/web/host/**` | Web Runtime Host |
 | `tests/platform/web/creator/**` | Creator |
 | `tests/platform/web/deployment/**` | Deploy contract/browser smoke；不实际部署 |
 | `tests/quality/**` | `core_coverage` |
 | `tests/build/ci_*` | `ci_contract`；不运行 Core |
-| `tests/build/web_runtime_deploy_*` | `deploy_contract`；不运行 Core |
+| `tests/build/web_runtime_deploy_*`、`tests/build/web_runtime_public_deployment_docs_test.py` | `deploy_contract`；不运行 Core |
+| `tests/conformance/version_lock_test.py` | `core_ubuntu` + `package` |
 | version/module graph/Contract conformance | `core_ubuntu`；version/package 检查增加 `package` |
 | `tests/host/**`、`tests/e2e/**` | Core Proof；Apple-specific 增加 macOS |
 | `tests/distribution/**` | `package` |
@@ -334,7 +346,7 @@ Portal 是表中门禁的附加 lane：命中该集合的 Creator、Web Host、C
 - `tests/fixtures/audio/**`、Golden WAV/hash：Core audio + Web Runtime Host + Creator；
 - Contract fixture：所有消费对应 Contract 的 Core/Web lane；
 - Project/E2E fixture：Core Proof；
-- `tests/platform/web/package-lock.json`：共享该浏览器工具链的所有 Web lane；
+- `tests/platform/web/package.json`、`package-lock.json`、`playwright.config.mjs`：共享该浏览器工具链的所有 Web lane；
 - Creator lockfile：Creator；Portal lockfile：Portal；
 - Emscripten、Playwright、compiler 或 sanitizer pin：对应执行面的完整门禁；
 - 共享 fixture generator/hash 规则：所有消费者，不仅生成器单测。
@@ -348,8 +360,8 @@ workflow static、actionlint/YAML、runner fallback contract 和 scope/gate cont
 | --- | --- |
 | Change Scope、PR Gate、`.github/workflows/ci.yml` | full（包含 `ci_contract`） |
 | 共享 runner selector、fallback、build acceleration | `ci_contract` + 所有消费者；改变总路由时 full |
-| macOS gate action | `core_macos` + `ci_contract` |
-| Portal workflow | `portal` + `ci_contract` |
+| macOS gate action 与 result assertion script | `core_macos` + `ci_contract` |
+| 精确的 `architecture-portal.yml`、`architecture-portal-smoke.yml` | `portal` + `ci_contract`；相似未知 workflow 名称 full |
 | Deploy workflow | `deploy_contract` + `ci_contract` |
 | Nightly workflow | `ci_contract` + 对应 Core stress/sanitizer lane 的单次验证 |
 | 仅 `tests/build/ci_*` | `ci_contract`；不运行 Runtime |
@@ -363,14 +375,17 @@ workflow static、actionlint/YAML、runner fallback contract 和 scope/gate cont
 - Change Scope 位于每个 PR 的关键路径，必须使用 checkout + shell/Python 3.11 标准库完成；
   不运行 `npm install`、`pip install`、CMake configure、browser 或 toolchain setup，也不访问
   runner inventory API；其正常执行 SLO 不超过三十秒；
-- 各正式 lane 只依赖 Change Scope，并尽可能并行；
+- 各正式 lane 直接依赖 Change Scope；可信池消费者还依赖 selector，其余尽可能并行；
 - 移除 Creator 对 Web Toolchain/Core 的非 artifact 串行依赖；
 - selector 只在至少一个消费者 lane 被选择时运行；纯文档 PR 不查询或占用 Linux/macOS runner；
-- Core、ASan、Coverage、Web Runtime Host 继续优先现有 self-hosted Linux pool；
+- Core、ASan、Coverage、Web Runtime Host 与 Core Package 继续优先现有 self-hosted Linux pool；
 - Web Toolchain 和 Creator 暂时保持当前 GitHub-hosted 路由，但因路径分流减少启动次数；
 - macOS 继续优先受信 M1；
 - fork PR 不进入可信 self-hosted runner；
-- 本设计不增加 runner 或 hosted fallback。
+- Package 保持 LFS hydration、禁用 ccache，并复用现有 Ubuntu selector；正常可信分支优先避免
+  hosted 执行，外部 fork、token/API/池可用性不足时仍使用既有 hosted fallback；
+- 本设计不增加 runner、retry 或新的 fallback 机制；Package 会在 fork、token/API 或可信池容量
+  fallback 时执行 hosted，但复用的是现有 selector 路由。
 
 缓存统计是诊断证据，不替代语义结果。未来 runner 扩容、Web 专用池或 hosted-to-self-hosted
 迁移需要独立设计和现场容量验证。
@@ -382,8 +397,8 @@ PR 多一次短 hosted 查询。该调优不能提前并入本 Task，也不能�
 
 ## 11. PR Gate 合同
 
-`PR Gate` 是唯一长期 required check。它始终读取 current head SHA 对应的 manifest 和静态
-声明的全部 job results，逐项验证 `required_jobs`。
+`PR Gate` 是唯一长期 required check。它始终读取 event 对应的 exact base/head SHA、manifest
+和静态声明的全部 job results，逐项验证 `required_jobs`。
 
 | 条件 | 结果 |
 | --- | --- |
@@ -394,7 +409,7 @@ PR 多一次短 hosted 查询。该调优不能提前并入本 Task，也不能�
 | 未要求的 job 为 `success`、`failure` 或 `cancelled` | fail；说明 scope 与实际拓扑失配 |
 | job result 缺失 | fail |
 | manifest 缺失、schema 未知或非法 | fail |
-| manifest head SHA 与当前 SHA 不同 | fail |
+| manifest base/head SHA 与当前 event SHA 不同 | fail |
 | lane 与 required job 映射矛盾 | fail |
 
 PR workflow 本身始终触发，不使用 workflow 级 `paths` 过滤 required gate。Architecture Portal
@@ -457,7 +472,7 @@ required checks 使用双门禁过渡，禁止先删除旧门禁：
 
 自动化矩阵必须覆盖：
 
-- 每个已知顶层路径有归属；
+- 每个当前 tracked path 都命中显式 ownership 或显式 full rule；新增未知路径仍 fail closed；
 - docs-only 不选择 Core/Web Runtime；
 - 扩展名、目录和文件级重叠规则按 lane 并集计算；
 - Core、Web、Creator、Portal、Deploy 互不误触发；
@@ -473,6 +488,8 @@ required checks 使用双门禁过渡，禁止先删除旧门禁：
 - 未知路径升级 full；
 - diff/API/input failure 阻断；
 - 分类器、PR Gate、主 workflow 的自修改强制 full。
+- changed-file schema、path count/canonical/duplicate 校验与 `draft`/`focused`/`full` lane 一致性；
+- summary 完整列出 rename/copy 双路径、逐 lane 理由并转义不可信 Markdown/control text。
 
 ### 15.2 Gate 契约
 
@@ -505,7 +522,13 @@ fixture hydration contract 要迁移到新拓扑，而不是删除。
 - SLO 达成情况，但不改变 gate result。
 
 实施后观察一周，再用 focused/full 比例、P50/P95 queue、P50/P95 execution、hosted minutes 和
-误分类/人工 `ci:full` 次数评估效果。runner 扩容只使用该报告作为后续设计输入。
+误分类/人工 `ci:full` 次数评估效果。hosted minutes 必须与变更前“每个 PR 与 main 都启动无条件
+矩阵”的可比基线对照，并区分 focused PR 节省、新增 Change Scope/Docs/CI Contract/Gate、
+full-main 工作和 Package hosted fallback。focused 节省预计覆盖这些新增工作，但这是待验证假设。
+按 PR 更新与 merge 数量归一化后，routine hosted minutes 不得持续高于可比基线；任何持续回退
+都要求永久迁移先采用不放宽证据的路由或 job consolidation 修正；无法修正时按 §17 回滚到
+all-PR full 的安全配置并重新评估，不能通过
+增加预算、retry 或弱化门禁掩盖。runner 扩容只使用该报告作为后续独立设计输入。
 
 观察周还必须把 Web lane 的 bootstrap 与 semantic workload 分开计时：emsdk clone/install、
 Emscripten activation、`npm ci`、Playwright browser/system dependency install，以及真正的

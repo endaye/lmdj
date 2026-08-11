@@ -43,29 +43,59 @@ LANE_JOBS = {
     "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
-    "package": ["package"],
+    "package": ["select-ubuntu-runner", "package"],
 }
 
 CASES = {
     "docs/guide.md": {"docs_static"},
     "docs/governance/git-workflow.md": {"docs_static", "portal"},
+    "apps/README.md": {"docs_static", "portal"},
     "apps/creator-web/README.md": {"docs_static", "portal", "creator"},
     "apps/web-runtime-host/src/main.mjs": {"portal", "web_runtime_host"},
     "apps/chameleon-lab/src/main.js": {"portal", "chameleon_lab"},
     "tests/core/audio/render_test.cpp": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"
     },
+    "tests/core/facade/c_api_stress_test.cpp": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/core/support/test.hpp": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
+    "tests/core/provider/CMakeLists.txt": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos"
+    },
     "tests/platform/web/creator/editor.spec.mjs": {"creator"},
+    "tests/platform/web/audio/realtime_audio_worklet.spec.mjs": {
+        "web_toolchain", "web_runtime_host"
+    },
+    "tests/platform/web/project_io/project_io_web_test.cpp": {"web_toolchain"},
     "tests/build/ci_runner_fallback_test.py": {"ci_contract"},
+    "tests/build/web_runtime_public_deployment_docs_test.py": {"deploy_contract"},
+    "tests/conformance/version_lock_test.py": {"core_ubuntu", "package"},
+    "scripts/chameleon-lab.sh": {"chameleon_lab"},
+    "scripts/core.sh": {
+        "core_ubuntu", "core_asan", "core_coverage", "core_macos", "package"
+    },
+    "packages/web-runtime-platform/web/runtime_loader.mjs": {
+        "portal", "web_toolchain", "web_runtime_host"
+    },
+    "packages/web-runtime-platform/test/runtime_loader.test.mjs": {
+        "portal", "web_toolchain", "web_runtime_host"
+    },
+    "packages/web-runtime-platform/test/source_boundary_test.py": {
+        "portal", "web_toolchain", "web_runtime_host"
+    },
+    "packages/web-runtime-platform/test/control_runtime_test.cpp": {
+        "portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos",
+        "web_toolchain", "web_runtime_host"
+    },
     "tools/web-runtime/verify_emscripten.py": {
         "web_toolchain", "web_runtime_host", "creator"
     },
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
-    ".gitattributes": {
-        "core_ubuntu", "core_asan", "core_coverage", "core_macos",
-        "web_runtime_host", "creator", "package", "ci_contract"
-    },
+    ".gitattributes": set(LANES),
 }
 
 TOP_LEVELS = {
@@ -89,6 +119,17 @@ def load_classifier():
 
 def changed(module, *paths):
     return tuple(module.ChangedFile("A", (path,)) for path in paths)
+
+
+def policy_match(match, path):
+    kind, value = match["kind"], match["value"]
+    if kind == "exact":
+        return path == value
+    if kind == "prefix":
+        return path.startswith(value)
+    if kind == "suffix":
+        return path.endswith(value)
+    raise AssertionError(f"unknown policy match kind: {kind}")
 
 
 class TemporaryGitRepository:
@@ -142,6 +183,22 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(set(self.policy["lanes"]), LANES)
         self.assertEqual(self.policy["lane_jobs"], LANE_JOBS)
         self.assertEqual(set(self.policy["known_top_levels"]), TOP_LEVELS)
+        self.assertNotIn("expensive_family_exemptions", self.policy)
+
+    def test_every_tracked_path_has_explicit_ownership_or_full_rule(self):
+        inventory = subprocess.run(
+            ["git", "ls-files", "-z"], cwd=ROOT, check=True, capture_output=True
+        ).stdout
+        paths = [item.decode("utf-8") for item in inventory.split(b"\0") if item]
+        unmatched = [
+            path for path in paths
+            if not any(policy_match(rule["match"], path) for rule in self.policy["rules"])
+            and not any(
+                policy_match(rule["match"], path)
+                for rule in self.policy["full_rules"]
+            )
+        ]
+        self.assertEqual(unmatched, [], "unclassified tracked paths:\n" + "\n".join(unmatched))
 
     def test_policy_rejects_mutations_that_weaken_the_closed_v1_contract(self):
         mutations = {
@@ -209,6 +266,22 @@ class ChangeScopeTest(unittest.TestCase):
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.classify([path])["mode"], "full")
+
+    def test_portal_workflow_rules_are_exact_and_similar_unknown_name_is_full(self):
+        for path in (
+            ".github/workflows/architecture-portal.yml",
+            ".github/workflows/architecture-portal-smoke.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.true_lanes(self.classify([path])),
+                    {"portal", "ci_contract"},
+                )
+        unknown = self.classify([
+            ".github/workflows/architecture-portal-new-control.yml"
+        ])
+        self.assertEqual(unknown["mode"], "full")
+        self.assertEqual(self.true_lanes(unknown), LANES)
 
     def test_three_expensive_families_upgrade_to_full_but_docs_portal_do_not_count(self):
         full = self.classify([
@@ -342,6 +415,50 @@ class ChangeScopeTest(unittest.TestCase):
         invalid["injected"] = True
         with self.assertRaises(ValueError):
             self.module.encode_manifest(invalid)
+
+    def test_summary_explains_focused_lane_paths_without_generic_reason(self):
+        manifest = self.classify(["apps/web-runtime-host/src/main.mjs"])
+        summary = self.module._summary(manifest, self.policy)
+        self.assertIn("apps/web-runtime-host/src/main.mjs", summary)
+        self.assertIn("added", summary)
+        self.assertIn("web_runtime_host", summary)
+        self.assertIn("prefix: apps/web-runtime-host/", summary)
+        self.assertNotIn("path ownership", summary)
+
+    def test_summary_explains_full_upgrade_for_every_lane(self):
+        manifest = self.classify(["future-system/config.json"])
+        summary = self.module._summary(manifest, self.policy)
+        self.assertIn("unknown top-level: future-system", summary)
+        for lane in LANES:
+            with self.subTest(lane=lane):
+                self.assertRegex(summary, rf"(?m)^- <code>{lane}</code>: .*unknown top-level")
+
+    def test_summary_lists_both_rename_paths_and_all_lane_reasons(self):
+        records = self.module.parse_name_status_z(
+            b"R100\0apps/creator-web/src/old.ts\0apps/web-runtime-host/src/new.mjs\0"
+        )
+        manifest = self.module.classify(
+            self.policy, records, base_sha="a" * 40, head_sha="b" * 40,
+            event_name="pull_request", draft=False, labels=(),
+        )
+        summary = self.module._summary(manifest, self.policy)
+        self.assertIn("renamed", summary)
+        self.assertIn("apps/creator-web/src/old.ts", summary)
+        self.assertIn("apps/web-runtime-host/src/new.mjs", summary)
+        for lane in ("portal", "creator", "web_runtime_host"):
+            self.assertRegex(summary, rf"(?m)^- <code>{lane}</code>:")
+
+    def test_summary_escapes_untrusted_markdown_and_control_characters(self):
+        path = "docs/<script>|`line\nfeed`[click](https:example.invalid).md"
+        manifest = self.classify([path])
+        summary = self.module._summary(manifest, self.policy)
+        self.assertNotIn("<script>", summary)
+        self.assertNotIn("|`line\nfeed`", summary)
+        self.assertIn("&lt;script&gt;", summary)
+        self.assertIn("&#124;", summary)
+        self.assertIn("&#96;", summary)
+        self.assertIn(r"\n", summary)
+        self.assertRegex(summary, r"<code>path .*&#124;.* matched prefix:")
 
 
 if __name__ == "__main__":

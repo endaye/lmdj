@@ -117,11 +117,13 @@ inheritance, not component ownership: a shared fixture or tool selects every
 consumer whose behavior could change.
 
 The Ubuntu selector runs only when a selected lane needs the trusted Linux
-pool; the macOS selector runs only for `core_macos`. Fork trust routing,
-GitHub-hosted preflight fallback, labels, LFS hydration, bounded build
-parallelism, and persistent self-hosted `ccache` behavior remain unchanged.
-Selectors do not make a semantic workload conditional on infrastructure
-success: a selected job must still publish its formal result.
+pool, including `package`; the macOS selector runs only for `core_macos`.
+Package retains LFS hydration and explicitly disables ccache while reusing the
+same fork trust and hosted-capacity fallback route. Other GitHub-hosted
+preflight fallback, labels, bounded build parallelism, and persistent
+self-hosted `ccache` behavior remain unchanged. Selectors do not make a
+semantic workload conditional on infrastructure success: a selected job must
+still publish its formal result.
 
 `PR Gate` is the single aggregate decision. It evaluates same-run static
 dependencies and applies this truth table:
@@ -133,8 +135,9 @@ dependencies and applies this truth table:
 | unselected | `skipped` | pass |
 | unselected | `success`, `failure`, `cancelled`, or missing | fail |
 
-The manifest schema, head SHA, lane-to-job mapping, and complete 18-result key
-set must also match. The results are the 15 published lane jobs plus
+The manifest schema, exact event base/head SHAs, lane-to-job mapping, and
+complete 18-result key set must also match. The results are the 15 published
+lane jobs plus
 `select-ubuntu-runner`, `select-macos-runner`, and `macos-primary`;
 `change-scope` is the manifest producer, and conditional `macos-fallback` is
 enforced transitively by `core-macos` and `core-asan-macos`. The producer is

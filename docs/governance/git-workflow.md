@@ -106,12 +106,46 @@ closed lanes, whether `ci:full` is required, and the ownership or upgrade
 reason. The checked-in scope policy remains authoritative; the declaration is
 review evidence, not an override.
 
+Draft runs publish only Change Scope, Docs/static (`git diff --check` on the
+exact range), and CI Contract (pinned actionlint plus `ci_*` contracts). They do
+not establish merge evidence. Marking the Pull Request Ready triggers a new
+classification and formal result for the current head.
+
 To upgrade the current head to full CI, apply `ci:full`, then wait for the
 in-progress run to finish or explicitly cancel it. Because label changes do not
 start a separate workflow event, use GitHub's **Re-run all jobs** on the current
 head after the label is visible. Confirm the new `Change Scope` summary says
 `full`, all 14 lanes are selected, and the same-run `PR Gate` passes. Do not use
 an individual job rerun to change scope.
+
+Required-check migration uses a forward dual-gate sequence. Each numbered
+boundary needs its own authorization; completion never authorizes the next:
+
+1. finish and locally commit the classifier, conditional lanes, and `PR Gate`;
+2. separately authorize branch push and Pull Request creation, apply `ci:full`,
+   and declare all 14 lanes selected with none skipped;
+3. verify the exact base/head manifest, same-run formal results, both legacy
+   Core contexts, and `PR Gate` on that Pull Request;
+4. under separate branch-protection authorization, add `PR Gate` as required
+   while retaining `core (ubuntu-latest)` and `core (macos-latest)`;
+5. separately authorize and perform the merge only after all three required
+   contexts and every selected lane succeed;
+6. verify the resulting `main` SHA runs `full` in a per-SHA non-cancelling run
+   and publishes all formal results;
+7. only then, under a new branch-protection authorization, remove the legacy
+   Core contexts and confirm strict branch update and conversation resolution
+   remain enabled.
+
+The Package lane reuses the existing trusted Ubuntu selector, retains LFS
+hydration, and disables ccache. Trusted same-repository work normally avoids
+hosted Package execution; an untrusted fork or unavailable token/API/idle pool
+still takes the existing hosted fallback. During the observation week compare
+routine hosted minutes against the prior unconditional PR/main matrix,
+including new control/full-main work and Package fallback. Normalize by PR
+updates and merges: routine hosted minutes must not remain above the comparable
+baseline. Any sustained regression requires routing correction or job
+consolidation without weakening evidence; otherwise roll back the permanent
+migration using the sequence below.
 
 Required-check rollback is a fail-closed two-stage operation. Keep `PR Gate`
 required and first merge a configuration that forces every Pull Request to

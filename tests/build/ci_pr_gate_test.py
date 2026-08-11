@@ -22,6 +22,7 @@ MAIN_WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
 PORTAL_WORKFLOW_PATH = ROOT / ".github/workflows/architecture-portal.yml"
 HEAD_SHA = "a" * 40
 OTHER_HEAD_SHA = "b" * 40
+OTHER_BASE_SHA = "c" * 40
 
 VALID_RESULTS = {
     "docs-static": "success",
@@ -104,17 +105,20 @@ class PrGateTest(unittest.TestCase):
             "schema": self.policy["manifest_schema"],
             "base_sha": OTHER_HEAD_SHA,
             "head_sha": HEAD_SHA,
-            "mode": "focused",
+            "mode": "full" if set(enabled) == set(self.policy["lanes"]) else "focused",
             "reasons": ["test fixture"],
             "changed_files": [],
             "lanes": lanes,
             "required_jobs": required_jobs,
         }
 
-    def validate(self, manifest=None, results=None, expected_head_sha=HEAD_SHA):
+    def validate(
+        self, manifest=None, results=None, expected_head_sha=HEAD_SHA,
+        expected_base_sha=OTHER_HEAD_SHA,
+    ):
         return self.module.validate_gate(
             self.policy, manifest or self.manifest(), results or VALID_RESULTS,
-            expected_head_sha,
+            expected_head_sha, expected_base_sha=expected_base_sha,
         )
 
     def test_exact_required_success_and_unrequired_skipped_passes(self):
@@ -129,6 +133,7 @@ class PrGateTest(unittest.TestCase):
                 self.manifest(),
                 VALID_RESULTS,
                 HEAD_SHA,
+                expected_base_sha=OTHER_HEAD_SHA,
                 change_scope_result="failure",
             )
         except TypeError as error:
@@ -199,6 +204,49 @@ class PrGateTest(unittest.TestCase):
                 self.assertFalse(report.ok)
                 self.assertTrue(report.errors)
 
+    def test_manifest_mode_and_lane_selection_must_be_consistent(self):
+        mutations = {}
+        full = self.manifest()
+        full["mode"] = "full"
+        mutations["full with focused lanes"] = full
+        draft = self.manifest(("docs_static",))
+        draft["mode"] = "draft"
+        mutations["draft without exact lightweight lanes"] = draft
+        focused = self.manifest(tuple(self.policy["lanes"]))
+        focused["mode"] = "focused"
+        mutations["focused with every lane"] = focused
+        for name, manifest in mutations.items():
+            with self.subTest(name=name):
+                report = self.validate(manifest=manifest)
+                self.assertFalse(report.ok)
+                self.assertIn("invalid policy or manifest", report.errors[0])
+
+    def test_manifest_changed_file_schema_and_paths_fail_closed(self):
+        malformed_entries = {
+            "unknown key": {
+                "result": "modified", "paths": ["docs/guide.md"], "extra": True,
+            },
+            "unknown result": {"result": "invented", "paths": ["docs/guide.md"]},
+            "string paths": {"result": "modified", "paths": "docs/guide.md"},
+            "rename one path": {"result": "renamed", "paths": ["docs/guide.md"]},
+            "modified two paths": {
+                "result": "modified", "paths": ["docs/a.md", "docs/b.md"],
+            },
+            "noncanonical path": {"result": "modified", "paths": ["../escape.md"]},
+        }
+        for name, entry in malformed_entries.items():
+            with self.subTest(name=name):
+                manifest = self.manifest()
+                manifest["changed_files"] = [entry]
+                self.assertFalse(self.validate(manifest=manifest).ok)
+
+        duplicate = self.manifest()
+        duplicate["changed_files"] = [
+            {"result": "modified", "paths": ["docs/guide.md"]},
+            {"result": "deleted", "paths": ["docs/guide.md"]},
+        ]
+        self.assertFalse(self.validate(manifest=duplicate).ok)
+
     def test_duplicate_required_job_and_lane_job_conflict_fail(self):
         duplicate = self.manifest()
         duplicate["required_jobs"].append("portal")
@@ -210,6 +258,16 @@ class PrGateTest(unittest.TestCase):
     def test_manifest_head_sha_must_equal_current_head_sha(self):
         report = self.validate(expected_head_sha=OTHER_HEAD_SHA)
         self.assertEqual(report.errors, (f"manifest head SHA {HEAD_SHA} does not match expected {OTHER_HEAD_SHA}",))
+
+    def test_manifest_base_sha_must_equal_event_base_sha(self):
+        report = self.validate(expected_base_sha=OTHER_BASE_SHA)
+        self.assertEqual(
+            report.errors,
+            (
+                f"manifest base SHA {OTHER_HEAD_SHA} does not match expected "
+                f"{OTHER_BASE_SHA}",
+            ),
+        )
 
     def test_full_manifest_requires_every_formal_job(self):
         manifest = self.manifest(tuple(self.policy["lanes"]))
