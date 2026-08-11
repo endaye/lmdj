@@ -38,12 +38,15 @@ installed or changed.
 | Browser automation | locked Playwright `1.62.1` |
 
 One initial Core Proof invocation stopped after 1.33 s during Python import and
-was not counted as a pass. Activating emsdk had placed its Python 3.13 ahead of
-the required Python 3.11, producing an unsupported `str | Path` type operation.
-This was a command-scoped setup/operator-environment error, not a semantic
-failure. The PATH was corrected to select Python 3.11.15 and Node 22.16.0, and
-the complete exact Core Proof was rerun successfully. No dependency, toolchain,
-or tracked source was changed.
+was not counted as a pass. Under that exact activation and PATH prefix,
+`python3` resolved to system `/usr/bin/python3` 3.9.6 rather than the required
+Python 3.11. `tests/build/version_test.py:11` imported `scripts.version`, then
+`scripts/version.py:68` raised `TypeError: unsupported operand type(s) for |:
+'type' and 'type'` while evaluating `def load_version(path: str | Path) ->
+ProductVersion`. This was a command-scoped setup/operator-environment error,
+not a semantic failure. The PATH was corrected to select Python 3.11.15 and
+Node 22.16.0, and the complete exact Core Proof was rerun successfully. No
+dependency, toolchain, or tracked source was changed.
 
 The existing ASan profile was configured and built at current HEAD before the
 gate: configure passed in 0.96 s and build passed in 16.33 s. The current TSan
