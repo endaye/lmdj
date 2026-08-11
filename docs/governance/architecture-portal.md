@@ -88,9 +88,11 @@ scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 后续 Channel 晋级复用该快照，在独立发布记录中追加晋级证据。
 
 新快照使用 metadata schema 2。元数据必须自认证完整 source commit，记录 source
-commit time/tree 与投影清单、34 个 source doc hash、source/sidebar 与 snapshot
-hash、九个 diagram ID 对应 18 个 current/versioned 路径、byte size 和 SHA-256、
-source revision 重建的 Product/Assembly facts，以及 freeze time。生成阶段只允许
+commit time/tree 与投影清单、生成器得到的完整 source-document inventory（每个
+source/snapshot document 的路径、byte size 和 SHA-256）、source/sidebar 与 snapshot
+hash、canonical manifest 选中的每个 diagram ID 对应的 current/versioned HTML 与 SVG
+路径、byte size 和 SHA-256、source revision 重建的 Product/Assembly facts，以及
+freeze time。生成阶段只允许
 当前 HEAD 加精确生成边界；提交后和未来 HEAD 必须证明 introducing commit 是当前
 HEAD 的祖先、不可变路径从 introducing commit 起未变化、时间满足
 `source <= freeze <= introducing`，并满足 direct-parent 或已批准的
@@ -101,8 +103,9 @@ source docs/sidebar/diagrams；对象缺失本身不能放宽证据。`versions.
 Product Build 条目必须唯一。既有 schema-1 快照保持只读兼容，不回写。
 
 版本页导航以 Docusaurus active doc ID 解析当前版本的实际 path；缺失或重复 ID
-必须 fail closed。九张架构图先通过 current diagram validation，再把精确 18 个
-HTML/SVG 输出复制到 `static/versions/PRODUCT_BUILD/diagrams/`。schema-2 版本页不得
+必须 fail closed。canonical manifest 选中的每个架构图 ID 都先通过 current diagram
+validation，再把该 ID 对应的 HTML/SVG 输出精确复制到
+`static/versions/PRODUCT_BUILD/diagrams/`。schema-2 版本页不得
 引用可变 `/diagrams/*`；缺失、符号链接、越界、重复或 hash 漂移必须阻断冻结或构建。
 
 快照 commit 不改变 Product/Module/Provider/Contract 的版本语义，只记录该 Product Build 对应的说明书。

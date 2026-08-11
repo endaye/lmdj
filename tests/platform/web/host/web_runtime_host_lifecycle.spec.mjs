@@ -94,8 +94,8 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         "opfsWritableReplace",
       ].map((name) => [name, true])),
       verifyManifest: async () => ({
-        product_build: "1.0.16.5",
-        host_version: "1.2.2",
+        product_build: "1.0.16.8",
+        host_version: "1.2.5",
         protocol_version: 1,
       }),
       loadRuntime: async () => ({

@@ -3,6 +3,7 @@ import {expect, test} from "@playwright/test";
 import {
   PUBLICATION_FAULT_POINTS,
   REPLACEMENT_FAULT_POINTS,
+  STORAGE_CONDITION_FAULTS,
 } from "./project_io_web_faults.mjs";
 
 const STORAGE_CAPABILITY_ORDER = Object.freeze([
@@ -234,6 +235,34 @@ test("Web Project I/O reports page runtime failures without waiting for the suit
   expect(Date.now() - startedAt).toBeLessThan(5_000);
 });
 
+test("Web Project I/O binds every mutation to its same-page platform owner", async ({page, browserName}) => {
+  test.skip(
+      browserName !== "chromium",
+      "owner-binding conformance requires OPFS sync access handles");
+  trackRuntimeErrors(page);
+  const bundle = `distinct-platform-owner-${Date.now()}`;
+  await page.goto(
+      `/project_io/project_io_web_test.html?action=distinct_platform_mutation_ownership&bundle=${bundle}`);
+  const result = await waitForResult(page);
+
+  const projectBusy = {
+    status: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "project_busy",
+  };
+  expect(result.acquisition).toEqual(projectBusy);
+  expect(result.append).toEqual(projectBusy);
+  expect(result.replace).toEqual(projectBusy);
+  expect(result.create).toEqual(projectBusy);
+  expect(result.afterAppend).toEqual({length: 4, content: "seed"});
+  expect(result.afterReplace).toEqual({length: 4, content: "seed"});
+  expect(result.absentAfterCreate).toBe(true);
+  expect(result.intentEntriesAfter).toBe(result.intentEntriesBefore);
+  expect(result.intentInventoryUnchanged).toBe(true);
+  expect(result.ownerContent).toBe("seed-owner");
+  expect(result.postReleaseAcquisition).toBe("pass");
+});
+
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
   test.setTimeout(PROJECT_IO_CONFORMANCE_TIMEOUT_MS);
   trackRuntimeErrors(page);
@@ -271,6 +300,18 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.publicationFaultPoints).toEqual(PUBLICATION_FAULT_POINTS);
   expect(result.publicationMaxChunkBytes).toBe(1_048_576);
 
+  const unleasedAppend = await trackedPage(context);
+  await unleasedAppend.goto(
+      `/project_io/project_io_web_test.html?action=append_without_lease&bundle=unleased-append-${Date.now()}`);
+  expect(await waitForResult(unleasedAppend)).toEqual({
+    append: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "invalid_state",
+    length: 4,
+    content: "seed",
+  });
+  await unleasedAppend.close();
+
   const leaseInspector = await trackedPage(context);
   const firstLeasePage = await trackedPage(context);
   const competingLeasePage = await trackedPage(context);
@@ -296,6 +337,47 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(await compareReacquiredLeaseEntry(leaseInspector)).toBe(true);
   await competingLeasePage.close();
   await leaseInspector.close();
+
+  const storageConditionResults = [];
+  for (const point of STORAGE_CONDITION_FAULTS) {
+    const bundle = `storage-condition-${point}-${Date.now()}`;
+    const controller = await trackedPage(context);
+    await controller.goto("/preflight.html");
+    await writeFaultControl(
+        controller,
+        `/lmdj-workspace/${bundle}.lmdj/replacement.bin`,
+        point);
+
+    const writer = await trackedPage(context);
+    await writer.goto(
+        `/project_io/project_io_web_test.html?action=storage_condition_failure&bundle=${bundle}`);
+    await waitForFault(controller, point);
+    storageConditionResults.push({
+      point,
+      result: await waitForResult(writer),
+    });
+    await clearFaultControl(controller);
+    await writer.close();
+    await controller.close();
+  }
+  expect(storageConditionResults).toEqual([
+    {
+      point: "QuotaExceededError",
+      result: {
+        storage: "failed",
+        errorCode: "IO_ERROR",
+        storageCondition: "quota_exceeded",
+      },
+    },
+    {
+      point: "InvalidStateError",
+      result: {
+        storage: "failed",
+        errorCode: "IO_ERROR",
+        storageCondition: "invalid_state",
+      },
+    },
+  ]);
 
   for (const [index, point] of REPLACEMENT_FAULT_POINTS.entries()) {
     const bundle = `fault-${index}-${Date.now()}`;
@@ -375,7 +457,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(await waitForResult(recovery)).toEqual({
     recovery: "failed",
     errorCode: "IO_ERROR",
-    storageCondition: "",
+    storageCondition: "invalid_state",
   });
   const preservedEvidence = await corruptController.evaluate(async ({bundle}) => {
     const root = await navigator.storage.getDirectory();

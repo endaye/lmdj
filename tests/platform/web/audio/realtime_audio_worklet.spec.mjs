@@ -255,6 +255,30 @@ test("processorerror closes the callback gate and seals the Host", async ({page}
 });
 
 
+test("a stalled callback returns a typed quiescence failure within two caller budgets", async ({page}) => {
+  await waitForFormalHost(page);
+  const timeoutMs = 25;
+  const result = await page.evaluate((timeout) =>
+    window.lmdjWebRuntimeHostTest.runQuiescenceTimeoutProof(timeout),
+  timeoutMs);
+  expect(result).toMatchObject({
+    completed: true,
+    has_value: false,
+    error: {
+      code: "INTERNAL_ERROR",
+      message:
+        "Wasm AudioWorklet quiescence timed out with callback still in flight",
+    },
+    fatal: "quiescence_timeout",
+    gate: "terminal",
+    callback_in_flight: 1,
+  });
+  expect(result.elapsed_ms).toBeGreaterThanOrEqual(timeoutMs);
+  expect(result.elapsed_ms).toBeLessThan(timeoutMs * 2 + 250);
+  expect(result.observed_wall_ms).toBeLessThan(500);
+});
+
+
 test("start is exactly-once and suspend can reactivate the same processor", async ({page}) => {
   await waitForFormalHost(page);
   const start = await page.evaluate(async () => {

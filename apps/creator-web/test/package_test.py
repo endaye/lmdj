@@ -43,7 +43,7 @@ class CreatorPackageTest(unittest.TestCase):
             "milestone": 1,
             "minor": 0,
             "build": 16,
-            "patch": 5,
+            "patch": 8,
         }
         lock = json.loads(
             (REPO_ROOT / "tools/web-runtime/emscripten.lock.json").read_text(
@@ -120,13 +120,13 @@ class CreatorPackageTest(unittest.TestCase):
         manifest = json.loads(manifest_bytes)
         self.assertEqual(self.module.canonical_json(manifest), manifest_bytes)
         self.assertEqual(manifest["distribution_contract"], "lmdj.creator-web.distribution.v1")
-        self.assertEqual(manifest["product_build"], "1.0.16.5")
+        self.assertEqual(manifest["product_build"], "1.0.16.8")
         self.assertEqual(manifest["host_id"], "creator-web")
-        self.assertEqual(manifest["host_version"], "1.0.2")
-        self.assertEqual(manifest["platform_version"], "0.1.2")
+        self.assertEqual(manifest["host_version"], "1.0.5")
+        self.assertEqual(manifest["platform_version"], "0.1.5")
         self.assertEqual(
             manifest["compatible_hosts"],
-            [{"host_id": "web-runtime-host", "host_version": "1.2.2"}],
+            [{"host_id": "web-runtime-host", "host_version": "1.2.5"}],
         )
         self.assertEqual(
             [entry["role"] for entry in manifest["assets"]],

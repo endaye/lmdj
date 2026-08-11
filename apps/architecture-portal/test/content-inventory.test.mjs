@@ -3,6 +3,7 @@ import test from 'node:test';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {readFile} from 'node:fs/promises';
+import {readRepoFacts} from '../scripts/lib/repo-facts.mjs';
 
 const docsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../docs');
 const versionedDocsRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../versioned_docs');
@@ -84,11 +85,26 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   }
 
   const capability = await readFile(path.join(docsRoot, 'product/capability-map.mdx'), 'utf8');
-  assert.match(capability, /Creator Web Host `1\.0\.2` 与 Formal Web Runtime Host `1\.2\.2` 已装配/);
+  const facts = await readRepoFacts({repoRoot, revision: 'current', channel: 'canary'});
+  const creatorWeb = facts.hosts.find(({id}) => id === 'creator-web');
+  const webRuntime = facts.hosts.find(({id}) => id === 'web-runtime-host');
+  assert.ok(creatorWeb, 'current assembly includes Creator Web Host');
+  assert.ok(webRuntime, 'current assembly includes Formal Web Runtime Host');
+  assert.ok(
+    capability.includes(
+      `Creator Web Host \`${creatorWeb.version}\` 与 Formal Web Runtime Host \`${webRuntime.version}\` 已装配`,
+    ),
+    'capability map uses current generated Host identities',
+  );
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
-  assert.match(proof, /Product Build `1\.0\.16\.5`/);
+  assert.match(proof, /Product Build `1\.0\.16\.8`/);
+  assert.match(proof, /Task 12[^\n]+完成[^\n]+冻结/);
+  assert.match(proof, /docs\/quality\/2026-08-11-web-runtime-hardening-acceptance\.md/);
+  assert.match(proof, /1\.0\.16\.6[^\n]+abandoned/);
+  assert.match(proof, /1\.0\.16\.7[^\n]+abandoned/);
+  assert.match(proof, /pending promise[^\n]+清除/);
   assert.match(proof, /scripts\/creator-web\.sh/);
   assert.match(proof, /不继承历史 Build 的 PR、CI 或 merge 结论/);
   assert.doesNotMatch(proof, /Pull Request CI[^。]+pending/);

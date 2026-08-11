@@ -422,6 +422,11 @@ export function createProtocolTransport({
     }
     const entry = pending.get(validated.request_id);
     if (!entry) {
+      failClosed(
+        protocolError("Response request_id does not match a pending request", {
+          request_id: validated.request_id,
+        }),
+      );
       return false;
     }
     if (now() >= entry.deadlineAt) {

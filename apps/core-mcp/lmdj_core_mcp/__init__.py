@@ -1,3 +1,3 @@
 """LMDJ Headless Core MCP stdio Host."""
 
-__version__ = "1.1.4"
+__version__ = "1.1.6"

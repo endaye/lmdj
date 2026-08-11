@@ -122,7 +122,9 @@ Browser Main Thread
 Emscripten Dedicated Control Worker / pthread
   ├─ Application Facade
   ├─ Project I/O Web platform primitives
-  ├─ OPFS mount and Project writer lease
+  ├─ WasmFS/OPFS availability and mount capability probe
+  ├─ Project I/O semantic storage obligations via Asyncify `lmdj_opfs_*` JavaScript library imports
+  ├─ Project writer lease
   ├─ Runtime Snapshot preparation
   ├─ Prepared Sample Bank publication
   ├─ Trigger Outcome drain
@@ -200,8 +202,17 @@ transaction logic:
 ProjectStore / TakeJournal common logic
   └─ ProjectStoragePlatform
        ├─ Native POSIX implementation
-       └─ Emscripten WasmFS + OPFS implementation
+       └─ Web implementation
+            ├─ WasmFS/OPFS availability and mount capability probe
+            └─ Asyncify `lmdj_opfs_*` JavaScript library imports → OPFS semantic storage realization
 ```
+
+WasmFS/OPFS establishes that the required backend is available and can be
+mounted; it is not the production Project I/O path. Production Web Project I/O
+uses the `lmdj_opfs_*` JavaScript library imports in
+`packages/project-io/src/web/library_opfs_storage.js`; Asyncify bridges those
+imports' asynchronous OPFS operations so the platform can fulfill the semantic
+obligations below.
 
 The platform boundary owns:
 
@@ -406,6 +417,12 @@ The minimum required build features are:
 -sALLOW_MEMORY_GROWTH=0
 ```
 
+This is the minimum conceptual feature list, not a second exact toolchain
+declaration. The authoritative exact build lock is
+[`tools/web-runtime/emscripten.lock.json`](../../../tools/web-runtime/emscripten.lock.json);
+it additionally locks `-sPROXY_TO_PTHREAD`, `-sASYNCIFY=1`, and the precise
+Asyncify import set.
+
 Emscripten documents that `-pthread` may be combined with a Wasm AudioWorklet,
 which itself runs as a Wasm Worker. What remains unproven is the exact
 combination with the WasmFS OPFS backend and the Stage 6 Control Worker.
@@ -419,8 +436,10 @@ contains no Product behavior, and must prove all of:
 2. shared `WebAssembly.Memory` written by the Control Worker is observed by the
    Audio Worklet;
 3. the Worklet callback reports exactly 128 frames per channel;
-4. WasmFS OPFS synchronous file access succeeds from the thread that will own
-   the Application Facade;
+4. the WasmFS/OPFS availability and mount capability probe succeeds from the
+   thread that will own the Application Facade, while production Project I/O
+   uses Asyncify `lmdj_opfs_*` JavaScript library imports to fulfill the §6.3
+   semantic storage obligations;
 5. the §6.3 writer lease, sorted iteration, flush, whole-file replacement, and
    restart cases pass;
 6. no main-thread proxying call deadlocks while the Worklet is rendering;
@@ -702,13 +721,15 @@ The externally visible Host states are:
 | `recovering` | browser requires a new gesture | `audio-suspended` |
 | `recovering` | a new adverse edge follows a usable Context before probe completion | `interrupted` |
 | any nonterminal state | `host.close` completes cleanly | `closed` |
+| any nonterminal state | deadline cancellation wins and returns `HOST_TIMEOUT` | `restart-required` |
+| any nonterminal state | claimed Project publication settlement remains unknown after its 1,000 ms watchdog | `restart-required` |
 | any nonterminal state | fatal capability, storage, Worker, Worklet, protocol, or resource failure | `failed` |
 
-`failed` and `closed` are terminal externally visible states. Failure cleanup
-still releases Workers, audio resources, OPFS handles, and the writer lease, but
-does not relabel the terminal state as `closed`. `recovering` is distinct because
-the §11.2 recovery test has three observable conditions and the Host is not
-`running` while they are incomplete.
+`restart-required`, `failed`, and `closed` are terminal externally visible
+states. Terminal cleanup still releases Workers, audio resources, OPFS handles,
+and the writer lease, but does not relabel the terminal state as `closed`.
+`recovering` is distinct because the §11.2 recovery test has three observable
+conditions and the Host is not `running` while they are incomplete.
 
 ### 11.1 State rules
 
@@ -807,7 +828,7 @@ Every response echoes `request_id` and `protocol_version` and uses the existing
 `ok` plus `error {code, message, details}` envelope shape. Facade errors preserve
 their Contract error code. Host-local failures use exact codes tested with Web
 Runtime Host `1.0.0`, including `UNSUPPORTED_WEB_RUNTIME`, `PROJECT_BUSY`,
-`WEB_RUNTIME_RESOURCE_LIMIT`, `HOST_STATE_INVALID`, `HOST_TIMEOUT`, and
+`WEB_RUNTIME_RESOURCE_LIMIT`, `HOST_STATE_INVALID`, `HOST_TIMEOUT`,
 `HOST_RESTART_REQUIRED`, and `HOST_PROTOCOL_MISMATCH`. Notifications have an
 `event` field and no `request_id`.
 
@@ -843,27 +864,30 @@ terminator deadline retain their lifecycle-specific authority.
 For Project mutation requests, the caller deadline is a hard upper bound only
 while authoritative publication remains open and cancellable. If deadline
 cancellation wins `open -> cancelled`, the Host returns `HOST_TIMEOUT`, enters
-`failed`, publishes no new Project Truth, seals the transport, rejects new
-submissions, and releases or force-terminates the Control owner. If publication
-claims first, that claim is the cancellation cutoff: crossing the caller
-deadline cannot convert the claimed operation into `HOST_TIMEOUT`; the Host
-delivers its real success or typed error.
+the terminal `restart-required` state, publishes no new Project Truth, seals the
+transport, rejects new submissions, and releases or force-terminates the
+Control owner. If publication claims first, that claim is the cancellation
+cutoff: crossing the caller deadline cannot convert the claimed operation into
+`HOST_TIMEOUT`; the Host delivers its real success or typed error.
 
 Claimed publication settlement is nevertheless bounded. The production
 watchdog is exactly 1,000 ms. If settlement remains unknown at that bound, the
 Host returns `HOST_RESTART_REQUIRED` with `terminal_state:
-"restart-required"` and `mutation_outcome: "unknown"`, remains `failed`, seals
-and terminates the transport owner, and requires reopen recovery before inspect
-or retry. Reopen accepts old-or-new authoritative truth and removes uncommitted
-files that are not referenced by the manifest. Response and notification
-delivery remains once-only; late terminal messages cannot revive the Host.
+"restart-required"` and `mutation_outcome: "unknown"`, enters the first-class
+terminal `restart-required` Host state, seals the transport owner, and requires
+reopen recovery before inspect or retry. Reopen accepts old-or-new authoritative
+truth and removes uncommitted files that are not referenced by the manifest.
+Response and notification delivery remains once-only; late terminal messages
+cannot revive the Host.
 The terminal BroadcastChannel is only a wake-up path: Control atomically
 authorizes one release, records one post-release completion, and Browser Main
 atomically consumes that native completion once. A forged, duplicate, or
 replayed channel acknowledgement cannot manufacture native completion; at most
 one channel event can consume an actual completion, and later events are
-rejected. Without native completion, an unresponsive Control owner still
-reaches the 100 ms force-termination fallback.
+rejected. The independent terminal-owner native-completion grace is 5,000 ms;
+without native completion by that bound, the Host force-terminates the Control
+owner. This grace does not extend or replace the independent 1,000 ms
+publication-settlement watchdog.
 
 ### 12.2 Required operations
 

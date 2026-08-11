@@ -1311,6 +1311,14 @@ struct OutcomeDiagnostic {
 OutcomeDiagnostic outcome_diagnostic;
 std::array<char, lmdj::web_runtime::detail::kBridgeMaximumEnvelopeBytes + 1>
     diagnostic_poll_buffer{};
+
+struct QuiescenceTimeoutDiagnostic {
+  std::atomic<std::uint32_t> state{0};
+  std::atomic<std::uint32_t> timeout_ms{0};
+  std::string serialized_result;
+};
+
+QuiescenceTimeoutDiagnostic quiescence_timeout_diagnostic;
 #endif
 
 bool schedule_control(
@@ -1486,6 +1494,36 @@ bool schedule_audio_install(void*) noexcept {
 }
 
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+void run_quiescence_timeout_on_control(void*) noexcept {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr) {
+    quiescence_timeout_diagnostic.serialized_result =
+        R"({"completed":false,"reason":"adapter_unavailable"})";
+    quiescence_timeout_diagnostic.state.store(2, std::memory_order_release);
+    return;
+  }
+  const auto timeout_ms =
+      quiescence_timeout_diagnostic.timeout_ms.load(std::memory_order_acquire);
+  const auto started_at = std::chrono::steady_clock::now();
+  const auto result = adapter->await_quiescent(timeout_ms);
+  const auto elapsed_ms = std::chrono::duration<double, std::milli>(
+                              std::chrono::steady_clock::now() - started_at)
+                              .count();
+  nlohmann::json serialized{
+      {"completed", true},
+      {"elapsed_ms", elapsed_ms},
+      {"has_value", result.has_value()},
+  };
+  if (!result.has_value()) {
+    serialized["error"] = {
+        {"code", lmdj::foundation::error_code_name(result.error().code)},
+        {"message", result.error().message},
+    };
+  }
+  quiescence_timeout_diagnostic.serialized_result = serialized.dump();
+  quiescence_timeout_diagnostic.state.store(2, std::memory_order_release);
+}
+
 void fail_processor_error_on_control(void*) noexcept {
   if (web_runtime != nullptr) {
     auto* adapter = web_audio.load(std::memory_order_acquire);
@@ -2008,6 +2046,42 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_generation_matches(
                      expected_generation)
              ? 1
              : 0;
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_quiescence_timeout(
+    std::uint32_t timeout_ms) {
+  auto* adapter = web_audio.load(std::memory_order_acquire);
+  if (adapter == nullptr || web_proxy_queue == nullptr) {
+    return 0;
+  }
+  std::uint32_t expected = 0;
+  if (!quiescence_timeout_diagnostic.state.compare_exchange_strong(
+          expected,
+          1,
+          std::memory_order_acq_rel,
+          std::memory_order_acquire)) {
+    return 0;
+  }
+  quiescence_timeout_diagnostic.timeout_ms.store(
+      timeout_ms, std::memory_order_release);
+  if (!adapter->mark_callback_in_flight_for_conformance() ||
+      emscripten_proxy_async(
+          web_proxy_queue,
+          web_control_thread,
+          &run_quiescence_timeout_on_control,
+          nullptr) == 0) {
+    quiescence_timeout_diagnostic.state.store(0, std::memory_order_release);
+    return 0;
+  }
+  return 1;
+}
+
+EMSCRIPTEN_KEEPALIVE const char*
+lmdj_web_audio_test_quiescence_timeout_result() {
+  return quiescence_timeout_diagnostic.state.load(std::memory_order_acquire) ==
+                 2
+             ? quiescence_timeout_diagnostic.serialized_result.c_str()
+             : nullptr;
 }
 
 EMSCRIPTEN_KEEPALIVE int lmdj_web_audio_test_processor_error() {
