@@ -16,10 +16,10 @@ import tempfile
 
 
 HOST_ID = "creator-web"
-HOST_VERSION = "1.0.3"
-PLATFORM_VERSION = "0.1.3"
+HOST_VERSION = "1.0.4"
+PLATFORM_VERSION = "0.1.4"
 COMPATIBLE_HOSTS = [
-    {"host_id": "web-runtime-host", "host_version": "1.2.3"},
+    {"host_id": "web-runtime-host", "host_version": "1.2.4"},
 ]
 PROTOCOL_VERSION = 1
 HEAP_BYTES = 536_870_912

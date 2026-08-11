@@ -107,8 +107,8 @@ function fixture() {
       return Object.freeze({
         state,
         error_code: null,
-        product_build: "1.0.16.6",
-        host_version: "1.2.3",
+        product_build: "1.0.16.7",
+        host_version: "1.2.4",
         protocol_version: 1,
       });
     },

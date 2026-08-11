@@ -13,8 +13,8 @@ from the active tree and remains recoverable from Git history.
 
 - Designed: full product and Core architecture.
 - Implemented: M1 Headless Core Proof, the Formal Native Host, Creator Web
-  Host `1.0.3`, and Formal Web Runtime Host `1.2.3` in Product Build
-  `1.0.16.6`. Both Web Hosts use Web Runtime Platform `0.1.3`, OPFS Project
+  Host `1.0.4`, and Formal Web Runtime Host `1.2.4` in Product Build
+  `1.0.16.7`. Both Web Hosts use Web Runtime Platform `0.1.4`, OPFS Project
   I/O, and C++ Audio Runtime through the same Wasm AudioWorklet.
 - Not implemented: complete Creator editing, installable/offline PWA behavior, Sample
   intelligence, Sequence editing, production Providers, or cloud deployment.
