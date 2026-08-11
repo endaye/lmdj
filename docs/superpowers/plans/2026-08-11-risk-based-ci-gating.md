@@ -4,7 +4,7 @@
 
 **Goal:** Replace the unconditional Pull Request matrix with a fail-closed, path-aware `Change Scope` classifier and one manifest-driven `PR Gate`, while preserving every selected lane's existing semantic and infrastructure behavior.
 
-**Architecture:** A dependency-free Python classifier reads the exact base/head Git diff and a checked-in JSON policy, then emits a closed `lmdj.ci-scope.v1` manifest. Every formal lane is conditionally selected from that manifest and fans into a Python gate validator in the same workflow run; the Architecture Portal is called as a reusable workflow job so it participates in the same `needs` graph. Runner selectors remain internal dependencies of their consumers, and macOS primary/fallback/adjudication semantics remain unchanged.
+**Architecture:** A dependency-free Python classifier reads the exact base/head Git diff and a checked-in JSON policy, then emits a closed `lmdj.ci-scope.v1` manifest. Every formal lane and its deterministic selector/primary support jobs are conditionally selected from that manifest and fan into a Python gate validator in the same workflow run; the Architecture Portal is called as a reusable workflow job so it participates in the same `needs` graph. The conditional macOS fallback remains an internal dependency, and existing primary/fallback/adjudication semantics remain unchanged.
 
 **Tech Stack:** GitHub Actions YAML, Python 3.11 standard library, JSON policy files, Bash, existing CMake/Core scripts, Node.js 22, Docusaurus, actionlint.
 
@@ -18,8 +18,8 @@
 - Paths use union semantics: every matching rule adds lanes; no first-match rule and no rule may subtract a lane.
 - Unknown top-level paths, central CI self-modification, root/shared CMake, shared fixtures, Contracts, Product Assembly, `ci:full`, `main` push, and manual dispatch select `full`.
 - Draft mode runs only lightweight evidence and cannot replace the Ready event's formal result.
-- `PR Gate` validates only same-run formal lane jobs. Runner selectors and macOS primary/fallback jobs remain transitive internal dependencies; the published `core-macos` and `core-asan-macos` adjudicators are the formal gate surfaces.
-- A selected formal job must be `success`; an unselected formal job must be `skipped`. Missing, cancelled, failed, unexpectedly successful, unknown, or SHA-mismatched evidence fails closed.
+- `PR Gate` validates same-run formal lane jobs plus deterministic `select-ubuntu-runner`, `select-macos-runner`, and `macos-primary` support jobs. Conditional `macos-fallback` remains transitively enforced through the published `core-macos` and `core-asan-macos` adjudicators and is not a manifest-required job.
+- A selected lane/support job must be `success`; an unselected lane/support job must be `skipped`. Missing, cancelled, failed, unexpectedly successful, unknown, or SHA-mismatched evidence fails closed.
 - Semantic compile, Proof, test, sanitizer, and Coverage failures are final. Preserve the existing one-time macOS hosted fallback only for missing terminal infrastructure results.
 - Keep Web Toolchain and Creator on GitHub-hosted Ubuntu; keep current self-hosted Linux/macOS selection and ccache behavior. Do not add runners, hosted retry, or cache/toolchain reuse in this implementation.
 - SLOs are summary-only observations. Hard job limits remain independent and must not turn a slow successful job into a semantic failure.
@@ -151,14 +151,14 @@ Create `scripts/ci/scope_policy.json` with this top-level schema and exact lane-
     "docs_static": ["docs-static"],
     "portal": ["portal"],
     "ci_contract": ["ci-contract"],
-    "core_ubuntu": ["core-ubuntu"],
-    "core_asan": ["core-asan"],
-    "core_coverage": ["core-coverage"],
-    "core_macos": ["core-macos", "core-asan-macos"],
+    "core_ubuntu": ["select-ubuntu-runner", "core-ubuntu"],
+    "core_asan": ["select-ubuntu-runner", "core-asan"],
+    "core_coverage": ["select-ubuntu-runner", "core-coverage"],
+    "core_macos": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
     "web_toolchain": ["web-toolchain-conformance"],
-    "web_runtime_host": ["web-runtime-host"],
+    "web_runtime_host": ["select-ubuntu-runner", "web-runtime-host"],
     "creator": ["creator-web"],
-    "web_runtime_lab": ["web-runtime-lab"],
+    "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
     "package": ["package"]
@@ -256,6 +256,9 @@ VALID_RESULTS = {
     "docs-static": "success",
     "portal": "success",
     "ci-contract": "skipped",
+    "select-ubuntu-runner": "success",
+    "select-macos-runner": "skipped",
+    "macos-primary": "skipped",
     "core-ubuntu": "skipped",
     "core-asan": "skipped",
     "core-coverage": "skipped",
@@ -281,7 +284,7 @@ Add methods with these exact names and assertions:
 - `test_unknown_schema_mode_lane_manifest_key_or_job_fails`: mutate each closed allowlist independently and require rejection.
 - `test_duplicate_required_job_and_lane_job_conflict_fail`: duplicate `portal`, then remove the job implied by a true lane, and require both to fail.
 - `test_manifest_head_sha_must_equal_current_head_sha`: use two distinct valid 40-hex SHAs and require failure.
-- `test_full_manifest_requires_every_formal_job`: set all lanes true and require all 15 formal results to be success.
+- `test_full_manifest_requires_every_formal_job`: set all lanes true and require all 18 lane/support results to be success.
 - `test_core_macos_requires_both_published_adjudicators`: require both `core-macos` and `core-asan-macos` when `core_macos` is true.
 - `test_needs_json_normalizer_ignores_outputs_but_requires_result`: accept arbitrary `outputs`, reject a missing `result`.
 - `test_timing_api_failure_is_a_warning_and_never_changes_gate_result`: inject an HTTP failure, retain a passing gate, and require `timing unavailable` in the summary.
@@ -317,10 +320,10 @@ Validation order must be deterministic:
 1. validate policy closure and manifest through the Task 1 manifest validator;
 2. require manifest `head_sha == expected_head_sha`;
 3. rebuild expected required jobs from true lanes and compare byte-for-byte after canonical sorting;
-4. require the results key set to equal the policy's complete formal job set;
+4. require the results key set to equal the policy's complete 18-job lane/support result set;
 5. require each selected job to be `success` and each unselected job to be `skipped`;
 6. accumulate every mismatch into the summary, print errors to stderr, and return exit `1`;
-7. normalize GitHub `toJSON(needs)` objects by reading only each direct dependency's `result` field. The workflow must pass only formal lane jobs, not runner selectors or macOS primary/fallback internals.
+7. normalize GitHub `toJSON(needs)` objects by reading only each direct dependency's `result` field. The workflow must pass the 15 formal lane jobs plus `select-ubuntu-runner`, `select-macos-runner`, and `macos-primary`; it must not pass `change-scope` or conditional `macos-fallback` as result keys.
 
 Add an optional standard-library Actions jobs API reader for the current run. It may compute `created_at -> started_at` queue time and `started_at -> completed_at` execution time for completed formal jobs and compare them with `slo_seconds`; API absence, pagination failure, or incomplete timestamps prints `timing unavailable` and never changes `GateReport.ok`.
 
@@ -481,7 +484,7 @@ Add these exact test methods to `tests/build/ci_workflow_topology_test.py` befor
 - `test_pr_events_exclude_labeled_and_unlabeled`: compare the event type set exactly with the five approved types.
 - `test_pr_group_is_per_pr_and_cancels_but_main_group_is_per_sha_and_does_not_cancel`: require PR number, SHA, and event-dependent cancel expression.
 - `test_change_scope_has_three_minute_limit_zero_dependency_install_and_live_pr_read`: require fetch-depth zero, Task 1 invocation and PR token; reject npm, pip, CMake, browser, emsdk, runner API and secrets other than `GITHUB_TOKEN`.
-- `test_every_formal_lane_depends_directly_on_change_scope`: loop over all 15 formal IDs and require `change-scope` in `needs`.
+- `test_every_formal_lane_depends_directly_on_change_scope`: loop over all 15 formal lane IDs and require `change-scope` in `needs`; separately require the three deterministic support jobs to depend on `change-scope`.
 - `test_creator_no_longer_needs_web_toolchain_or_core`: reject both old dependencies and retain hosted Ubuntu.
 - `test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected`: require the exact five lane booleans.
 - `test_macos_selector_runs_only_when_core_macos_is_selected`: require exactly the `core_macos` boolean.
@@ -603,7 +606,7 @@ change-scope -> select-macos-runner -> macos-primary -> optional macos-fallback
                                                 \-> core-asan-macos
 ```
 
-Do not expose selector/primary/fallback as formal gate-result keys. Their failure or unintended skip must propagate to a required published adjudicator, which the gate then rejects.
+Expose `select-ubuntu-runner`, `select-macos-runner`, and `macos-primary` as conditional support result keys. Do not expose `macos-fallback`: it is legitimately skipped after a successful primary and remains transitively enforced through the two required published adjudicators.
 
 - [ ] **Step 6: Call Portal in the same run and add the single PR Gate**
 
@@ -620,14 +623,14 @@ portal:
     head_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
 ```
 
-Add `pr-gate` with display name exactly `PR Gate`, `runs-on: ubuntu-24.04`, `timeout-minutes: 3`, and static `needs` containing `change-scope` plus all 15 formal job IDs from Task 2. Use `if: ${{ always() && !cancelled() }}`. Pass only the 15 formal result entries to Task 2; do not pass `change-scope` as a formal result. Use Task 2's optional Actions API timing read only for summaries; correctness comes exclusively from same-run `needs` and the manifest.
+Add `pr-gate` with display name exactly `PR Gate`, `runs-on: ubuntu-24.04`, `timeout-minutes: 3`, and static `needs` containing `change-scope` plus all 18 lane/support job IDs from Task 2. Use `if: ${{ always() && !cancelled() }}`. Pass exactly the 18 result entries to Task 2; do not pass `change-scope` or `macos-fallback` as a manifest result. Use Task 2's optional Actions API timing read only for summaries; correctness comes exclusively from same-run `needs` and the manifest.
 
 Construct the result object explicitly rather than passing raw `toJSON(needs)`:
 
 ```yaml
 env:
   FORMAL_RESULTS_JSON: >-
-    {"docs-static":"${{ needs.docs-static.result }}","portal":"${{ needs.portal.result }}","ci-contract":"${{ needs.ci-contract.result }}","core-ubuntu":"${{ needs.core-ubuntu.result }}","core-asan":"${{ needs.core-asan.result }}","core-coverage":"${{ needs.core-coverage.result }}","core-macos":"${{ needs.core-macos.result }}","core-asan-macos":"${{ needs.core-asan-macos.result }}","web-toolchain-conformance":"${{ needs.web-toolchain-conformance.result }}","web-runtime-host":"${{ needs.web-runtime-host.result }}","creator-web":"${{ needs.creator-web.result }}","web-runtime-lab":"${{ needs.web-runtime-lab.result }}","deploy-contract":"${{ needs.deploy-contract.result }}","chameleon-lab":"${{ needs.chameleon-lab.result }}","package":"${{ needs.package.result }}"}
+    {"docs-static":"${{ needs.docs-static.result }}","portal":"${{ needs.portal.result }}","ci-contract":"${{ needs.ci-contract.result }}","select-ubuntu-runner":"${{ needs.select-ubuntu-runner.result }}","select-macos-runner":"${{ needs.select-macos-runner.result }}","macos-primary":"${{ needs.macos-primary.result }}","core-ubuntu":"${{ needs.core-ubuntu.result }}","core-asan":"${{ needs.core-asan.result }}","core-coverage":"${{ needs.core-coverage.result }}","core-macos":"${{ needs.core-macos.result }}","core-asan-macos":"${{ needs.core-asan-macos.result }}","web-toolchain-conformance":"${{ needs.web-toolchain-conformance.result }}","web-runtime-host":"${{ needs.web-runtime-host.result }}","creator-web":"${{ needs.creator-web.result }}","web-runtime-lab":"${{ needs.web-runtime-lab.result }}","deploy-contract":"${{ needs.deploy-contract.result }}","chameleon-lab":"${{ needs.chameleon-lab.result }}","package":"${{ needs.package.result }}"}
   SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
 run: >-
   python3 scripts/ci/pr_gate.py
