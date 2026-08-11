@@ -27,6 +27,11 @@
 
 namespace {
 
+// High-volume repetition belongs to facade.c_api_stress. Keep this component
+// proof bounded so its sanitizer build retains headroom under the tier timeout.
+constexpr std::size_t kComponentRepetitions = 128;
+static_assert(kComponentRepetitions <= 256);
+
 class TempDirectory {
  public:
   TempDirectory() {
@@ -200,7 +205,7 @@ void test_create_command_query_and_owned_strings() {
       {"operation", "project.inspect"},
       {"project_path", project.generic_string()},
   }.dump();
-  for (std::size_t index = 0; index < 1000; ++index) {
+  for (std::size_t index = 0; index < kComponentRepetitions; ++index) {
     response = reinterpret_cast<char*>(0x1);
     LMDJ_CHECK(
         lmdj_engine_query(engine, inspect.c_str(), &response) ==
@@ -628,7 +633,7 @@ void test_stale_unknown_aba_and_racing_free_are_safe() {
   std::atomic<bool> started{false};
   std::thread worker([&] {
     started.store(true);
-    for (std::size_t index = 0; index < 1000; ++index) {
+    for (std::size_t index = 0; index < kComponentRepetitions; ++index) {
       char* local = nullptr;
       const auto status =
           lmdj_engine_query(second, unknown.c_str(), &local);
@@ -762,8 +767,8 @@ void test_repeated_create_free_keeps_stale_handles_dead() {
   TempDirectory temp;
   const auto config = config_json(temp.path());
   std::vector<lmdj_engine*> stale;
-  stale.reserve(1000);
-  for (std::size_t index = 0; index < 1000; ++index) {
+  stale.reserve(kComponentRepetitions);
+  for (std::size_t index = 0; index < kComponentRepetitions; ++index) {
     lmdj_engine* engine = nullptr;
     char* error = nullptr;
     LMDJ_CHECK(
