@@ -235,7 +235,12 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertIn("github.event.release.tag_name", source)
         self.assertIn("github.event.release.prerelease", source)
         self.assertIn("inputs.tag", source)
-        self.assertIn('[[ "$release_prerelease" == "true" ]]', source)
+        self.assertIn(
+            "RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}",
+            source,
+        )
+        self.assertIn('[[ "$RELEASE_IS_PRERELEASE" == "true" ]]', source)
+        self.assertNotIn('release_prerelease="$RELEASE_PRERELEASE"', source)
         self.assertIn(
             "^lmdj-v[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$",
             source,
