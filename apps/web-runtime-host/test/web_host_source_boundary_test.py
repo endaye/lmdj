@@ -431,6 +431,32 @@ def main() -> int:
         == 1,
         "the browser proof must allow exactly one reload handoff recovery",
     )
+    recovery_outcome_timeout = re.search(
+        r'test\("Chromium recovery outcome timeout is terminal and releases '
+        r'the lease".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        recovery_outcome_timeout is not None,
+        "recovery outcome timeout browser proof is missing",
+    )
+    recovery_outcome_timeout_body = recovery_outcome_timeout.group(0)
+    terminal_release_evidence = recovery_outcome_timeout_body.find(
+        "terminalTransportEvidence(page)"
+    )
+    reopened_page = recovery_outcome_timeout_body.find(
+        "const reopenedPage = await context.newPage()"
+    )
+    require(
+        terminal_release_evidence >= 0
+        and reopened_page > terminal_release_evidence
+        and "terminalOwnerReleased: true" in recovery_outcome_timeout_body
+        and "timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS"
+        in recovery_outcome_timeout_body,
+        "recovery outcome timeout must prove terminal owner release before "
+        "a new page competes for the OPFS writer lease",
+    )
     for diagnostic_test_name in (
         "Chromium binds the verified packaged runtime to the real AudioWorklet",
         "Chromium visible diagnostic project completes the packaged runtime journey",
