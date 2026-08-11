@@ -3,7 +3,10 @@
 **Goal:** Close the four defense-in-depth gaps found by the 2026-08-11 Stage 6
 design-and-code review: an unbounded terminal quiescence wait in the Wasm
 AudioWorklet, lost Web storage error distinction, an unguarded `append_durable`
-platform primitive, and a silently ignored unknown-response protocol path.
+platform primitive, and a silently ignored unknown-response protocol path. The
+executed supplemental Task 4A is a docs-only errata that reconciles the Stage 6
+design authority with the same accepted review; it does not add runtime
+behavior.
 
 **Architecture:** Every change strengthens an existing failure boundary without
 adding behavior. The Audio Runtime terminal wait becomes bounded and typed; the
@@ -16,10 +19,11 @@ operation, Project Truth, or Host protocol envelope shape changes.
 Review provenance: findings 1–4 of the Stage 6 review recorded against
 `main` revision `38a8c13` on 2026-08-11, reviewing
 `docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md`
-and the merged Stage 6/7 implementation. The two documentation-drift findings
-from the same review (the `restart-required` terminal state and the actual
-OPFS storage topology never being written back into the Stage 6 design) are
-explicitly out of scope here and need a separate docs Task.
+and the merged Stage 6/7 implementation. The accepted review also recorded
+design-authority drift D1–D3: the `restart-required` terminal state, the actual
+OPFS storage topology, and the terminal-owner grace. Task 4A resolves that
+documentation drift, plus its two editorial findings, without changing code,
+version identities, generated Portal facts, or immutable versioned snapshots.
 
 ## Global Constraints
 
@@ -149,6 +153,32 @@ response instead of surfacing it.
 Files: `packages/web-runtime-platform/web/protocol.mjs`,
 `packages/web-runtime-platform/test/protocol.test.mjs`.
 
+### Task 4A: Reconcile the Stage 6 design authority with the accepted review
+
+Executed as a docs-only errata after Tasks 1–4. Correct the Stage 6 formal
+design to record D1–D3 as current implementation truth: `restart-required` is
+a first-class terminal Host state; WasmFS/OPFS is an availability/mount probe
+while production Project I/O uses Asyncify `lmdj_opfs_*` JavaScript library
+imports for semantic storage obligations; and terminal-owner native completion
+has a 5,000 ms grace before force termination, independent of the 1,000 ms
+publication-settlement watchdog. Also correct the duplicate English `and` in
+the Host-local error-code list and link the conceptual feature list to the
+authoritative exact Emscripten lock, including its `-sPROXY_TO_PTHREAD` and
+`-sASYNCIFY=1` entries.
+
+- Scope is only the Stage 6 design authority and this executed plan. It changes
+  no runtime code, version identity, generated Portal fact, or immutable
+  versioned snapshot, and it claims no new capability or evidence.
+- F5/F6 remain separately triaged cleanup/backlog and are not implemented or
+  otherwise folded into this docs Task.
+- Verify the corrected design against the current state machine, Project I/O
+  implementation, toolchain lock, and Portal current truth; search it for the
+  stale claims; then run `scripts/architecture-portal.sh check` and
+  `bash tests/build/test_active_tree.sh`.
+
+Files: `docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md`,
+`docs/superpowers/plans/2026-08-11-lmdj-web-runtime-hardening.md`.
+
 ### Task 5: Integrate versions, Assembly, and Portal current truth
 
 - Apply the exact version movements in `## Version Management` to every
@@ -185,6 +215,10 @@ files, `apps/architecture-portal/docs/**` current pages and diagram sources.
 ## Version Management
 
 Canonical policy: `docs/governance/version-management.md`.
+
+Task 4A version impact: none. It documents behavior already present in the
+current implementation; Product, Module, Host, Provider, Contract, and Assembly
+identities do not change in this Task.
 
 | Identity | Baseline | Target | Reason |
 | --- | --- | --- | --- |
@@ -231,9 +265,9 @@ Documentation impact: required.
 - This plan changes the Product Build and Assembly, so `Documentation impact:
   none` is not permitted; the immutable `1.0.16.6 · canary` snapshot in
   Task 6 is mandatory before any team-testing or release allocation.
-- The Stage 6 design errata (the `restart-required` terminal state and the
-  actual OPFS storage topology) remain a separate documentation Task and are
-  not silently folded into this plan.
+- Task 4A corrects Stage 6 design authority only. Current Portal routes are
+  updated in Task 5; Task 4A neither changes generated Portal facts nor rewrites
+  immutable versioned snapshots.
 
 ## Pull Request and Completion Boundary
 
