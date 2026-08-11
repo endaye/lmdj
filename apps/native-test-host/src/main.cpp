@@ -53,7 +53,7 @@ constexpr std::size_t kMaximumCommandBytes = 64U * 1024U;
 constexpr int kMaximumJsonContainerDepth = 32;
 constexpr std::uint32_t kNoDeviceRenderFrames = 128;
 constexpr auto kControlDeadline = std::chrono::seconds(2);
-constexpr std::string_view kHostVersion = "1.0.6";
+constexpr std::string_view kHostVersion = "1.0.7";
 #if !defined(LMDJ_NATIVE_PRODUCT_BUILD)
 #error "Native Test Host Product Build identity is required"
 #endif

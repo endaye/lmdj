@@ -5,10 +5,10 @@ import {createAcceptanceReport} from "../src/report/acceptance_report";
 test("emits only deterministic privacy-safe acceptance facts", () => {
   const report = createAcceptanceReport({
     identity: {
-      productBuild: "1.0.16.7",
+      productBuild: "1.0.16.8",
       hostId: "creator-web",
-      hostVersion: "1.0.4",
-      platformVersion: "0.1.4",
+      hostVersion: "1.0.5",
+      platformVersion: "0.1.5",
       protocolVersion: 1,
     },
     capabilities: {
@@ -38,10 +38,10 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
 
   expect(report).toEqual({
     contract: "lmdj.creator-web.acceptance.v1",
-    product_build: "1.0.16.7",
+    product_build: "1.0.16.8",
     host_id: "creator-web",
-    host_version: "1.0.4",
-    platform_version: "0.1.4",
+    host_version: "1.0.5",
+    platform_version: "0.1.5",
     protocol_version: 1,
     capabilities: {
       secure_context: true,

@@ -82,10 +82,10 @@ function sessionFixture(name: string) {
     diagnostics: () => ({
       state: hostState,
       error_code: errorCode,
-      product_build: "1.0.16.7",
+      product_build: "1.0.16.8",
       host_id: "creator-web",
-      host_version: "1.0.4",
-      platform_version: "0.1.4",
+      host_version: "1.0.5",
+      platform_version: "0.1.5",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

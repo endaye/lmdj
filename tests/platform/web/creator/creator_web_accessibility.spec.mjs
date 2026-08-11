@@ -15,7 +15,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
   expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "1.2.4"},
+    {host_id: "web-runtime-host", host_version: "1.2.5"},
   ]);
   expect(manifest.assets.map(({role}) => role)).toEqual([
     "host_main", "runtime_script", "runtime_wasm", "host_style",

@@ -99,7 +99,11 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
-  assert.match(proof, /Product Build `1\.0\.16\.7`/);
+  assert.match(proof, /Product Build `1\.0\.16\.8`/);
+  assert.match(proof, /Task 12[^\n]+仍须/);
+  assert.match(proof, /1\.0\.16\.6[^\n]+abandoned/);
+  assert.match(proof, /1\.0\.16\.7[^\n]+abandoned/);
+  assert.match(proof, /pending promise[^\n]+清除/);
   assert.match(proof, /scripts\/creator-web\.sh/);
   assert.match(proof, /不继承历史 Build 的 PR、CI 或 merge 结论/);
   assert.doesNotMatch(proof, /Pull Request CI[^。]+pending/);
