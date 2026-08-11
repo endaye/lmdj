@@ -29,8 +29,8 @@
 | --- | ---: | --- |
 | 高 | 0 | — |
 | 中 | 3 | D1、D2 未排期；F1 已排期（PR #105 计划 Task 1） |
-| 低 | 6 | F2–F4 已排期（Task 2–4）；D3、F5 未排期 |
-| 编辑/清理 | 3 | 未排期 |
+| 低 | 4 | F2–F4 已排期（Task 2–4）；D3 未排期 |
+| 编辑/清理 | 4 | F5、F6 与两个编辑项未排期 |
 
 ## 二、设计文档评审
 
@@ -77,7 +77,7 @@ D1–D3 的共同修复形态是给 Stage 6 spec 增加一个勘误/演进段，
 | §12.1 settlement watchdog | `PUBLICATION_SETTLEMENT_WATCHDOG_MS = 1_000`（`web-runtime-pre.js:3`）；`HOST_RESTART_REQUIRED` 携带 `terminal_state`/`mutation_outcome: "unknown"` |
 | §12.1 终局通道防伪造 | BroadcastChannel `lmdj.web-runtime-host.terminal.v1` 消息携带 `crypto.randomUUID()` token，native completion 原子单次消费；伪造/重放事件不能制造完成 |
 | §12 manifest gate | canonical JSON 回验、exact keys、SHA-256、宿主身份白名单、asset 路径安全检查、恰好一个 `runtime_script` 与一个 `runtime_wasm`（`manifest_gate.cpp`） |
-| §11 状态表 | 转移表逐行匹配（含 `audio-suspended→recovering` 需 recovery epoch、interrupted/终态 seal Take、`audio.suspend` 幂等）；`state_machine.mjs` |
+| §11 状态表 | 除 D1 所述终态集合漂移外，其余转移逐行匹配（含 `audio-suspended→recovering` 需 recovery epoch、interrupted/终态 seal Take、`audio.suspend` 幂等）；`state_machine.mjs` |
 | §11.2 恢复探针 | 恢复 epoch 单调、探针窗口单次预留、跨 epoch outcome 不能完成当前 epoch、`RECOVERY_OUTCOME_DEADLINE_MS = 1_000`（`runtime_session.mjs`） |
 | §6.4/§6.5 音频回调纪律 | 48 kHz / 128 帧硬校验并 latch fatal；回调只做 render + 原子操作；shape 校验、重入检测（`realtime_audio_worklet.cpp:62-153`） |
 | §9.2 outcome 恰好一次 | 每个 dequeued Trigger 恰好一个 `voice_started`/`voice_capacity`，ring 满计 `runtime_outcome_drops`（`realtime_engine.cpp:414-451`） |
@@ -92,7 +92,7 @@ D1–D3 的共同修复形态是给 Stage 6 spec 增加一个勘误/演进段，
 
 | ID | 严重度 | 位置 | 内容 | 处置 |
 | --- | --- | --- | --- | --- |
-| F1 | 低-中 | `packages/audio-runtime/src/web/realtime_audio_worklet.cpp:415-426` | `await_quiescent` 超时 latch fatal 后进入 `while (in_flight)` 的无限 futex 等待；Worklet 线程 render 中途死亡时 Control Worker 永久阻塞。浏览器主线程有 deadline + 强杀兜底，Host 整体不挂死，但违反 §13.2 "must not hang indefinitely" 的精神 | 已排期：PR #105 计划 Task 1 |
+| F1 | 中 | `packages/audio-runtime/src/web/realtime_audio_worklet.cpp:415-426` | `await_quiescent` 超时 latch fatal 后进入 `while (in_flight)` 的无限 futex 等待；Worklet 线程 render 中途死亡时 Control Worker 永久阻塞。浏览器主线程有 deadline + 强杀兜底，Host 整体不挂死，但违反 §13.2 "must not hang indefinitely" 的精神 | 已排期：PR #105 计划 Task 1 |
 | F2 | 低 | `packages/project-io/src/web/storage_platform.cpp:42-56` | JS 层区分 `QuotaExceededError`(-6)/`InvalidStateError`(-5)/`NoModificationAllowedError`(-7)，`web_error` 仅为 -3/-4/-8 附 `storage_condition`，quota 失败折叠成无细节 `io_error`。类型仍满足 §13.2，诊断信息丢失 | 已排期：Task 2 |
 | F3 | 低 | `packages/project-io/src/web/library_opfs_storage.js:802-827` | `appendDurable` 不经 `activeLease` 即打开文件；`replaceComplete`/`createImmutable` 均经 `createIntent→activeLease` 强制持锁。common code 总在持锁下调用且有 mutex，不构成漏洞，但三个变更原语义务不对称 | 已排期：Task 3 |
 | F4 | 低 | `packages/web-runtime-platform/web/protocol.mjs:423-425` | transport `receive` 对未知/重复 `request_id` 的 response 静默 `return false`。same-build 私有传输上这是协议违规，§11.2 对 outcome 同类情况要求 `HOST_PROTOCOL_MISMATCH` fail-closed | 已排期：Task 4 |
@@ -114,7 +114,9 @@ D1–D3 的共同修复形态是给 Stage 6 spec 增加一个勘误/演进段，
   验收对真实 Netlify 行为的逐例放宽（冗余 noindex、JS MIME 变体、
   紧凑 cache 指令、traversal 拒绝形态），每次放宽都有独立提交与
   理由，模式健康；建议在部署验收文档中维持"放宽清单"以防漂移
-  成默许。
+  成默许。**本条目的审计基线止于 #112**：其后部署烟测又发现
+  Netlify 发布时间戳格式与禁用站点仍保留 current 指针两项问题
+  （PR #114 处理中），因此本节不能作为当前部署链路的完整审计引用。
 
 ## 六、建议
 
