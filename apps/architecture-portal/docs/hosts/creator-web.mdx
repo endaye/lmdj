@@ -21,7 +21,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.0.2` 已进入 Product Build `1.0.16.5` Assembly。它只依赖共享 Web Runtime Platform `0.1.2`，不直接依赖或绕过 Application Facade。
+<StatusBadge status="implemented" /> Creator Web Host `1.0.3` 已进入 Product Build `1.0.16.6` Assembly。它只依赖共享 Web Runtime Platform `0.1.3`，不直接依赖或绕过 Application Facade。
 
 ## 创作边界
 
@@ -39,7 +39,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。`1.0.16.5` 是在 `1.0.16.4` 冻结后修正残留 Product Patch 断言与 Creator package/server fixture 的第五个 corrective candidate；Host、Module、Contract、Provider 与 Model 身份均不变化。历史候选的本地 Proof 不能替代本候选重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness 与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 创作旅程及 WebKit capability boundary。Product Build `1.0.16.6` 集成 Web Runtime failure-path hardening；Creator Web Host 更新为 `1.0.3` 并绑定 Web Runtime Platform `0.1.3`，Formal Web Runtime Host 相应更新为 `1.2.3`，其余 Host/Module identity 按精确依赖或行为边界更新，Contract、Provider 与 Model 身份保持不变。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 
