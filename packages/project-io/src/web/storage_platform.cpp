@@ -48,6 +48,10 @@ foundation::Error web_error(int status, std::string_view operation) {
     error.details["storage_condition"] = kStorageConditionProjectBusy;
   } else if (status == -4) {
     error.details["storage_condition"] = kStorageConditionAlreadyExists;
+  } else if (status == -5) {
+    error.details["storage_condition"] = kStorageConditionInvalidState;
+  } else if (status == -6) {
+    error.details["storage_condition"] = kStorageConditionQuotaExceeded;
   } else if (status == -8) {
     error.details["storage_condition"] =
         kStorageConditionAtomicPublishUnsupported;

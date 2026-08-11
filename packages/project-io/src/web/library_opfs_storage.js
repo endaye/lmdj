@@ -749,6 +749,7 @@ mergeInto(LibraryManager.library, {
       const fault = observer
         ? await observer.faultForDestination(destination)
         : null;
+      if (observer) await observer.throwStorageConditionFault(fault);
       if (observer) await observer.stopAtFault(fault, "before_write");
       const [parent, name] = await this.parent(parts, false);
       const file = await parent.getFileHandle(name, {create: true});
@@ -846,12 +847,24 @@ mergeInto(LibraryManager.library, {
 
     async stopAtFault(point, phase) {
       if (point !== phase) return;
+      await this.markFault(phase);
+      await new Promise(() => {});
+    },
+
+    async throwStorageConditionFault(point) {
+      if (point !== "QuotaExceededError" && point !== "InvalidStateError") {
+        return;
+      }
+      await this.markFault(point);
+      throw new DOMException("", point);
+    },
+
+    async markFault(point) {
       const host = await LmdjOpfs.directory([".lmdj-host"], true);
       const marker = await host.getFileHandle("test-fault-reached", {create: true});
       const writable = await marker.createWritable({keepExistingData: false});
-      await writable.write(phase);
+      await writable.write(point);
       await writable.close();
-      await new Promise(() => {});
     },
 
     writeChunkSize(operation, remaining) {

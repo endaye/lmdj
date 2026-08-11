@@ -3,6 +3,7 @@ import {expect, test} from "@playwright/test";
 import {
   PUBLICATION_FAULT_POINTS,
   REPLACEMENT_FAULT_POINTS,
+  STORAGE_CONDITION_FAULTS,
 } from "./project_io_web_faults.mjs";
 
 const STORAGE_CAPABILITY_ORDER = Object.freeze([
@@ -297,6 +298,47 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   await competingLeasePage.close();
   await leaseInspector.close();
 
+  const storageConditionResults = [];
+  for (const point of STORAGE_CONDITION_FAULTS) {
+    const bundle = `storage-condition-${point}-${Date.now()}`;
+    const controller = await trackedPage(context);
+    await controller.goto("/preflight.html");
+    await writeFaultControl(
+        controller,
+        `/lmdj-workspace/${bundle}.lmdj/replacement.bin`,
+        point);
+
+    const writer = await trackedPage(context);
+    await writer.goto(
+        `/project_io/project_io_web_test.html?action=storage_condition_failure&bundle=${bundle}`);
+    await waitForFault(controller, point);
+    storageConditionResults.push({
+      point,
+      result: await waitForResult(writer),
+    });
+    await clearFaultControl(controller);
+    await writer.close();
+    await controller.close();
+  }
+  expect(storageConditionResults).toEqual([
+    {
+      point: "QuotaExceededError",
+      result: {
+        storage: "failed",
+        errorCode: "IO_ERROR",
+        storageCondition: "quota_exceeded",
+      },
+    },
+    {
+      point: "InvalidStateError",
+      result: {
+        storage: "failed",
+        errorCode: "IO_ERROR",
+        storageCondition: "invalid_state",
+      },
+    },
+  ]);
+
   for (const [index, point] of REPLACEMENT_FAULT_POINTS.entries()) {
     const bundle = `fault-${index}-${Date.now()}`;
     const prepare = await trackedPage(context);
@@ -375,7 +417,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(await waitForResult(recovery)).toEqual({
     recovery: "failed",
     errorCode: "IO_ERROR",
-    storageCondition: "",
+    storageCondition: "invalid_state",
   });
   const preservedEvidence = await corruptController.evaluate(async ({bundle}) => {
     const root = await navigator.storage.getDirectory();

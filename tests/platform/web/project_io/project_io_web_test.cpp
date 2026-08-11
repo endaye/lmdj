@@ -151,6 +151,29 @@ nlohmann::json run_suite() {
         std::filesystem::path{"/lmdj-workspace/.lmdj-host/publication-fixtures"} /
         requested_bundle;
     const auto scenario = query("scenario");
+    if (action == "storage_condition_failure") {
+      success(
+          platform->ensure_directory(fault_bundle),
+          "storage condition directory");
+      auto lease = value(
+          platform->acquire_writer(fault_bundle), "storage condition lease");
+      const auto write =
+          platform->replace_complete(replacement_path, bytes("condition"));
+      if (write.has_value()) {
+        return {
+            {"complete", true},
+            {"result", {{"storage", "unexpected-success"}}},
+        };
+      }
+      return {
+          {"complete", true},
+          {"result",
+           {{"storage", "failed"},
+            {"errorCode", foundation::error_code_name(write.error().code)},
+            {"storageCondition",
+             write.error().details.value("storage_condition", "")}}},
+      };
+    }
     if (action == "publish_publication") {
       auto lease = value(
           platform->acquire_writer(fault_bundle),
