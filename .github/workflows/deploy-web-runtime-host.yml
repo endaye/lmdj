@@ -62,14 +62,13 @@ jobs:
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
           MANUAL_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          release_prerelease="$RELEASE_PRERELEASE"
           case "$EVENT_NAME" in
             release)
-              [[ "$release_prerelease" == "true" ]] || {
+              [[ "$RELEASE_IS_PRERELEASE" == "true" ]] || {
                 echo "Published release must be a prerelease" >&2
                 exit 2
               }
