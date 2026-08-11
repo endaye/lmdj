@@ -182,7 +182,25 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "not found"})
 
     def do_GET(self) -> None:
-        if urlsplit(self.path).path != f"/api/v1/sites/{SITE_ID}":
+        path = urlsplit(self.path).path
+        if path == f"/api/v1/sites/{SITE_ID}/files":
+            self.server.authorization_headers.append(
+                self.headers.get("Authorization", "")
+            )
+            self.server.append_log("netlify get-current-files")
+            self.send_json(
+                200,
+                self.server.site_files_response
+                if self.server.current_deploy_id
+                else [],
+            )
+            if self.server.change_site_after_files:
+                self.server.current_deploy_id = "other-789"
+                self.server.current_deploy_url = (
+                    "https://other-789--lmdj-runtime.netlify.app"
+                )
+            return
+        if path != f"/api/v1/sites/{SITE_ID}":
             self.send_json(404, {"error": "not found"})
             return
         self.server.authorization_headers.append(self.headers.get("Authorization", ""))
@@ -245,6 +263,8 @@ class FakeNetlifyServer(ThreadingHTTPServer):
     disable_keeps_enabled: bool
     reconcile_override_deploy_id: str
     reconcile_override_deploy_url: str
+    site_files_response: object
+    change_site_after_files: bool
 
     def append_log(self, value: str) -> None:
         with self.command_log.open("a", encoding="utf-8") as output:
@@ -307,6 +327,16 @@ class DeployCommandTest(unittest.TestCase):
         self.server.disable_keeps_enabled = False
         self.server.reconcile_override_deploy_id = ""
         self.server.reconcile_override_deploy_url = ""
+        self.server.site_files_response = [
+            {
+                "id": "prior-index",
+                "path": "/index.html",
+                "sha": "a" * 40,
+                "mime_type": "text/html",
+                "size": 13,
+            }
+        ]
+        self.server.change_site_after_files = False
         self.server.create_extra = {}
         self.server.restore_extra = {}
         self.server.authorization_headers = []
@@ -1013,6 +1043,8 @@ def verify_distribution(dist_root, repo_root):
                 f"gh release download {TAG}",
                 "release_bundle stage",
                 "netlify get-current-site",
+                "netlify get-current-files",
+                "netlify get-current-site",
                 "http-discover prior",
                 "http-smoke prior-immutable",
                 "playwright prior-immutable",
@@ -1033,8 +1065,35 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(len([path for path in files if path.startswith("/assets/")]), 9)
         self.assertEqual(
             self.server.authorization_headers,
-            [f"Bearer {NETLIFY_TOKEN}"] * 3,
+            [f"Bearer {NETLIFY_TOKEN}"] * 5,
         )
+
+    def test_empty_initial_published_deploy_is_treated_as_first_publication(self) -> None:
+        self.server.site_files_response = []
+        completed = self.run_command("deploy", TAG)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        log = self.command_log()
+        self.assertEqual(
+            log[log.index("release_bundle stage") + 1 : log.index("netlify create-draft")],
+            [
+                "netlify get-current-site",
+                "netlify get-current-files",
+                "netlify get-current-site",
+            ],
+        )
+        self.assertNotIn("http-discover prior", log)
+        evidence = json.loads(
+            (self.deploy_root / "evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(evidence["prior_good"])
+
+    def test_site_identity_change_during_file_inventory_fails_before_draft(self) -> None:
+        self.server.site_files_response = []
+        self.server.change_site_after_files = True
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("changed during file inventory", completed.stderr)
+        self.assertNotIn("netlify create-draft", self.command_log())
 
     def test_release_stage_uses_real_bundle_wrapper_and_detached_tag_checkout(self) -> None:
         completed = self.run_command("verify", TAG)
@@ -1257,7 +1316,9 @@ def verify_distribution(dist_root, repo_root):
     def test_each_child_receives_only_its_required_deployment_credentials(self) -> None:
         completed = self.run_command("deploy", TAG)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        netlify_commands = {"create-draft", "publish", "site-current", "disable-site"}
+        netlify_commands = {
+            "create-draft", "publish", "site-current", "site-preflight", "disable-site"
+        }
         for detail in self.details():
             if detail.get("program") != "python3":
                 continue

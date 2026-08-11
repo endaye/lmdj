@@ -492,6 +492,32 @@ def current_site(
     return result
 
 
+def current_site_preflight(
+    *, site_id: str, token: str, client: NetlifyClient | None = None
+) -> dict[str, object]:
+    selected = (
+        _SecretCheckingNetlifyClient(token=token, secrets=_secret_values())
+        if client is None
+        else client
+    )
+    before = current_site(site_id=site_id, token=token, client=selected)
+    file_count = selected.get_site_file_count(site_id=site_id)
+    after = current_site(site_id=site_id, token=token, client=selected)
+    if before != after:
+        raise DeployOrchestratorError(
+            "Netlify site changed during file inventory"
+        )
+    if (
+        not isinstance(file_count, int)
+        or isinstance(file_count, bool)
+        or file_count < 0
+    ):
+        raise DeployOrchestratorError("Netlify site file count is invalid")
+    result: dict[str, object] = {"file_count": file_count, "site": after}
+    reject_secret_material(result, label="Netlify site preflight")
+    return result
+
+
 def disable_site(
     *, site_id: str, reason: str, token: str, client: NetlifyClient | None = None
 ) -> dict[str, int]:
@@ -1040,6 +1066,9 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     site = commands.add_parser("site-current")
     site.add_argument("site_id")
 
+    site_preflight = commands.add_parser("site-preflight")
+    site_preflight.add_argument("site_id")
+
     disable = commands.add_parser("disable-site")
     disable.add_argument("site_id")
     disable.add_argument("reason")
@@ -1113,6 +1142,16 @@ def run(options: argparse.Namespace) -> None:
         print(
             canonical_json(
                 current_site(
+                    site_id=options.site_id,
+                    token=require_environment("NETLIFY_AUTH_TOKEN"),
+                )
+            )
+        )
+        return
+    if options.command == "site-preflight":
+        print(
+            canonical_json(
+                current_site_preflight(
                     site_id=options.site_id,
                     token=require_environment("NETLIFY_AUTH_TOKEN"),
                 )

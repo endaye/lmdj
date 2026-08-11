@@ -12,6 +12,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "apps/web-runtime-host/tools"))
 import deploy_orchestrator
+import netlify_api
 
 
 class DeployOrchestratorReleaseTest(unittest.TestCase):
@@ -78,6 +79,70 @@ class DeployOrchestratorReleaseTest(unittest.TestCase):
 
     def test_legacy_v1_evidence_writer_is_not_exposed(self) -> None:
         self.assertFalse(hasattr(deploy_orchestrator, "write_evidence"))
+
+
+class DeployOrchestratorSitePreflightTest(unittest.TestCase):
+    SITE = "site-123"
+
+    def site(self, deploy_id: str = "prior-123") -> netlify_api.PublishedSite:
+        return netlify_api.PublishedSite(
+            id=self.SITE,
+            state="current",
+            ssl_url="https://lmdj-runtime.netlify.app",
+            published_deploy=netlify_api.DraftDeploy(
+                id=deploy_id,
+                site_id=self.SITE,
+                deploy_ssl_url=(
+                    f"https://{deploy_id}--lmdj-runtime.netlify.app"
+                ),
+                state="ready",
+            ),
+        )
+
+    class Client:
+        def __init__(
+            self,
+            *,
+            sites: list[netlify_api.PublishedSite],
+            file_count: int,
+        ) -> None:
+            self.sites = sites
+            self.file_count = file_count
+            self.calls: list[str] = []
+
+        def get_site(self, *, site_id: str) -> netlify_api.PublishedSite:
+            self.calls.append("site")
+            return self.sites.pop(0)
+
+        def get_site_file_count(self, *, site_id: str) -> int:
+            self.calls.append("files")
+            return self.file_count
+
+    def test_current_site_preflight_binds_file_count_to_stable_site_identity(self) -> None:
+        site = self.site()
+        for file_count in (0, 12):
+            with self.subTest(file_count=file_count):
+                client = self.Client(sites=[site, site], file_count=file_count)
+                result = deploy_orchestrator.current_site_preflight(
+                    site_id=self.SITE, token="unused", client=client
+                )
+                self.assertEqual(result["file_count"], file_count)
+                self.assertEqual(result["site"]["published_deploy"]["id"], "prior-123")
+                self.assertEqual(client.calls, ["site", "files", "site"])
+
+    def test_current_site_preflight_rejects_identity_change_during_inventory(self) -> None:
+        client = self.Client(
+            sites=[self.site("prior-123"), self.site("other-456")],
+            file_count=0,
+        )
+        with self.assertRaisesRegex(
+            deploy_orchestrator.DeployOrchestratorError,
+            "changed during file inventory",
+        ):
+            deploy_orchestrator.current_site_preflight(
+                site_id=self.SITE, token="unused", client=client
+            )
+        self.assertEqual(client.calls, ["site", "files", "site"])
 
 
 class DeployOrchestratorEvidenceTest(unittest.TestCase):

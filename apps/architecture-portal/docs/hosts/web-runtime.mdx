@@ -49,7 +49,9 @@ Release 必须精确包含 ZIP、checksum 和由专用 Release checksum key 签�
 checksum signature；Product tag key 与 checksum key 角色分离，工具在解析 checksum 前先
 验证角色专属 signature。组装层只为 manifest 中的
 九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
-部署前先验证真实 prior immutable/production 身份和 HTTP/Chromium；发布后失败或中断时
+部署前以 current site/file inventory/current site 双读确认站点身份稳定；只有同一 ready
+current Deploy 的 validated file count 精确为零时，才按“无可回滚 prior”的首次发布继续，
+非空 current Deploy 仍须验证真实 prior immutable/production 身份和 HTTP/Chromium。发布后失败或中断时
 reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
 使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
 evidence v1。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
