@@ -44,14 +44,25 @@ class ArchitecturePortalWorkflowTopologyTest(unittest.TestCase):
         required: false
         type: string
         default: ""
+      pull_request_body:
+        required: false
+        type: string
+        default: ""
 '''
         self.assertIn(expected, self.source)
 
     def test_portal_impact_check_uses_explicit_base_and_head_inputs(self) -> None:
         step = self.called_impact_step()
         self.assertIn("if: ${{ inputs.check_documentation_impact }}", step)
+        self.assertIn("PORTAL_PR_BODY: ${{ inputs.pull_request_body }}", step)
         self.assertIn("PORTAL_BASE_SHA: ${{ inputs.base_sha }}", step)
         self.assertIn("PORTAL_HEAD_SHA: ${{ inputs.head_sha }}", step)
+        self.assertIn(
+            '[[ "$PORTAL_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]', step
+        )
+        self.assertIn(
+            '[[ "$PORTAL_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]', step
+        )
         self.assertIn(
             'git diff --name-only "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA"', step
         )
@@ -61,6 +72,7 @@ class ArchitecturePortalWorkflowTopologyTest(unittest.TestCase):
     def test_portal_reusable_job_keeps_fetch_depth_zero_node_22_and_full_check(self) -> None:
         self.assertIn("fetch-depth: 0", self.source)
         self.assertIn('node-version: "22"', self.source)
+        self.assertIn("scripts/architecture-portal.sh install", self.source)
         self.assertIn("scripts/architecture-portal.sh check", self.source)
 
     def test_portal_does_not_use_checks_api_or_cross_run_polling(self) -> None:

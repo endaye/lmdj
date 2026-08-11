@@ -15,6 +15,10 @@ on:
         required: false
         type: string
         default: ""
+      pull_request_body:
+        required: false
+        type: string
+        default: ""
   pull_request:
     branches: [main]
     paths:
@@ -79,6 +83,7 @@ jobs:
       - name: Check Pull Request documentation impact
         if: ${{ inputs.check_documentation_impact }}
         env:
+          PORTAL_PR_BODY: ${{ inputs.pull_request_body }}
           PORTAL_BASE_SHA: ${{ inputs.base_sha }}
           PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
         run: |
