@@ -45,6 +45,21 @@ VALID_RESULTS = {
     "package": "skipped",
 }
 
+FOCUSED_PATH_FIXTURES = {
+    frozenset(("docs_static", "portal", "web_runtime_host")): (
+        "apps/web-runtime-host/README.md",
+    ),
+    frozenset(("docs_static",)): ("docs/guide.md",),
+    frozenset(("ci_contract",)): ("tests/build/ci_example_test.py",),
+    frozenset(("core_macos",)): ("tests/platform/audio/device_test.cpp",),
+    frozenset(("web_runtime_host",)): ("scripts/web-runtime-host.sh",),
+    frozenset(("web_runtime_lab",)): ("scripts/web-runtime-lab.sh",),
+    frozenset(("deploy_contract",)): ("scripts/web-runtime-deploy.sh",),
+    frozenset(("chameleon_lab",)): ("scripts/chameleon-lab.sh",),
+    frozenset(("package",)): ("tests/distribution/archive_test.py",),
+    frozenset(("core_ubuntu", "core_macos")): ("tests/host/cli_test.py",),
+}
+
 def workflow_job(source: str, job_id: str) -> str:
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
@@ -97,20 +112,37 @@ class PrGateTest(unittest.TestCase):
         cls.module = load_gate()
 
     def manifest(self, enabled=("docs_static", "portal", "web_runtime_host")):
+        enabled = tuple(enabled)
         lanes = {lane: lane in enabled for lane in self.policy["lanes"]}
         required_jobs = sorted({
             job for lane in enabled for job in self.policy["lane_jobs"][lane]
         })
+        enabled_set = frozenset(enabled)
+        mode = "full" if enabled_set == frozenset(self.policy["lanes"]) else "focused"
+        paths = (
+            (".github/workflows/ci.yml",)
+            if mode == "full"
+            else FOCUSED_PATH_FIXTURES[enabled_set]
+        )
         return {
             "schema": self.policy["manifest_schema"],
             "base_sha": OTHER_HEAD_SHA,
             "head_sha": HEAD_SHA,
-            "mode": "full" if set(enabled) == set(self.policy["lanes"]) else "focused",
+            "mode": mode,
             "reasons": ["test fixture"],
-            "changed_files": [],
+            "changed_files": [
+                {"result": "modified", "paths": [path]} for path in paths
+            ],
             "lanes": lanes,
             "required_jobs": required_jobs,
         }
+
+    @staticmethod
+    def matching_results(manifest):
+        results = {job: "skipped" for job in VALID_RESULTS}
+        for job in manifest["required_jobs"]:
+            results[job] = "success"
+        return results
 
     def validate(
         self, manifest=None, results=None, expected_head_sha=HEAD_SHA,
@@ -246,6 +278,45 @@ class PrGateTest(unittest.TestCase):
             {"result": "deleted", "paths": ["docs/guide.md"]},
         ]
         self.assertFalse(self.validate(manifest=duplicate).ok)
+
+    def test_focused_manifest_rejects_core_path_downgraded_to_docs(self):
+        manifest = self.manifest(("docs_static",))
+        manifest["changed_files"] = [{
+            "result": "modified",
+            "paths": ["tests/core/facade/application_test.cpp"],
+        }]
+        report = self.validate(
+            manifest=manifest,
+            results=self.matching_results(manifest),
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("focused manifest", "\n".join(report.errors))
+
+    def test_focused_manifest_rejects_web_path_without_portal_consumer(self):
+        manifest = self.manifest(("web_runtime_host",))
+        manifest["changed_files"] = [{
+            "result": "modified",
+            "paths": ["apps/web-runtime-host/src/main.mjs"],
+        }]
+        report = self.validate(
+            manifest=manifest,
+            results=self.matching_results(manifest),
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("focused manifest", "\n".join(report.errors))
+
+    def test_focused_manifest_rejects_central_full_rule_path(self):
+        manifest = self.manifest(("docs_static",))
+        manifest["changed_files"] = [{
+            "result": "modified",
+            "paths": [".github/workflows/ci.yml"],
+        }]
+        report = self.validate(
+            manifest=manifest,
+            results=self.matching_results(manifest),
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("requires full", "\n".join(report.errors))
 
     def test_duplicate_required_job_and_lane_job_conflict_fail(self):
         duplicate = self.manifest()

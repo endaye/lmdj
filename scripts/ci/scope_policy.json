@@ -103,6 +103,8 @@
     {"match": {"kind": "exact", "value": "scripts/package-core.py"}, "lanes": ["core_ubuntu", "package"]},
     {"match": {"kind": "prefix", "value": "tests/core/audio/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "exact", "value": "tests/core/facade/c_api_stress_test.cpp"}, "lanes": ["core_macos"]},
+    {"match": {"kind": "exact", "value": "tests/core/project_io/storage_platform_contract_test.cpp"}, "lanes": ["core_macos"]},
+    {"match": {"kind": "exact", "value": "tests/core/project_io/project_bundle_transfer_test.cpp"}, "lanes": ["core_macos"]},
     {"match": {"kind": "prefix", "value": "tests/core/support/"}, "lanes": ["core_macos"]},
     {"match": {"kind": "exact", "value": "tests/core/provider/CMakeLists.txt"}, "lanes": ["core_macos"]},
     {"match": {"kind": "prefix", "value": "tests/core/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage"]},

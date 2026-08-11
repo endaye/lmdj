@@ -223,6 +223,38 @@ def _changed_file_json(record: ChangedFile) -> dict[str, object]:
     return {"result": result, "paths": list(record.paths)}
 
 
+def _evaluate_ready_paths(
+    policy: Mapping[str, object], paths: Sequence[str]
+) -> tuple[set[str], set[str]]:
+    """Return the exact Ready lane union and any reasons that require full."""
+    selected: set[str] = set()
+    full_reasons: set[str] = set()
+    for path in paths:
+        _validate_path(path)
+        top_level = path.split("/", 1)[0]
+        if top_level not in policy["known_top_levels"]:
+            full_reasons.add(f"unknown top-level: {top_level}")
+        path_lanes: set[str] = set()
+        for rule in policy["rules"]:
+            if _matches(rule["match"], path):
+                path_lanes.update(rule["lanes"])
+        if not path_lanes:
+            full_reasons.add(f"unclassified path: {path}")
+        selected.update(path_lanes)
+        for rule in policy["full_rules"]:
+            if _matches(rule["match"], path):
+                full_reasons.add(f"full rule: {rule['reason']}")
+
+    active_families = sorted(
+        name
+        for name, family_lanes in policy["expensive_families"].items()
+        if selected.intersection(family_lanes)
+    )
+    if len(active_families) >= 3:
+        full_reasons.add("three expensive families: " + ", ".join(active_families))
+    return selected, full_reasons
+
+
 def classify(
     policy: Mapping[str, object], changed: Sequence[ChangedFile], *, base_sha: str,
     head_sha: str, event_name: str, draft: bool, labels: Collection[str],
@@ -232,9 +264,6 @@ def classify(
     _validate_policy(policy)
     base_sha, head_sha = _validate_sha(base_sha), _validate_sha(head_sha)
     lanes = set(policy["lanes"])
-    selected: set[str] = set()
-    family_selected: set[str] = set()
-    reasons: set[str] = set()
     all_paths: set[str] = set()
     for record in changed:
         if not isinstance(record, ChangedFile):
@@ -248,21 +277,8 @@ def classify(
             if path in all_paths:
                 raise ValueError(f"duplicate logical path: {path}")
             all_paths.add(path)
-            top_level = path.split("/", 1)[0]
-            if top_level not in policy["known_top_levels"]:
-                reasons.add(f"unknown top-level: {top_level}")
-            path_lanes = set()
-            for rule in policy["rules"]:
-                if _matches(rule["match"], path):
-                    path_lanes.update(rule["lanes"])
-            if not path_lanes:
-                reasons.add(f"unclassified path: {path}")
-            selected.update(path_lanes)
-            family_selected.update(path_lanes)
-            for rule in policy["full_rules"]:
-                if _matches(rule["match"], path):
-                    reasons.add(f"full rule: {rule['reason']}")
-    full_reasons = set(reasons)
+    selected, full_reasons = _evaluate_ready_paths(policy, sorted(all_paths))
+    reasons = set(full_reasons)
     label_set = set(labels)
     if not all(isinstance(label, str) for label in label_set):
         raise ValueError("labels must be strings")
@@ -272,12 +288,6 @@ def classify(
         full_reasons.add("ci:full label")
     if event_name in {"push", "workflow_dispatch"}:
         full_reasons.add(f"full event: {event_name}")
-    families = policy["expensive_families"]
-    active_families = sorted(
-        name for name, family_lanes in families.items() if family_selected.intersection(family_lanes)
-    )
-    if len(active_families) >= 3:
-        full_reasons.add("three expensive families: " + ", ".join(active_families))
     if full_reasons:
         mode = "full"
         true_lanes = lanes
@@ -335,6 +345,7 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
     if not isinstance(manifest["changed_files"], list):
         raise ValueError("invalid manifest changed files")
     seen_paths: set[str] = set()
+    changed_paths: list[str] = []
     for entry in manifest["changed_files"]:
         if (
             not isinstance(entry, dict)
@@ -353,6 +364,28 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
             if path in seen_paths:
                 raise ValueError(f"duplicate logical path: {path}")
             seen_paths.add(path)
+            changed_paths.append(path)
+    if manifest["mode"] == "focused":
+        expected_lanes, full_reasons = _evaluate_ready_paths(
+            policy, changed_paths
+        )
+        if full_reasons:
+            raise ValueError(
+                "focused manifest path inventory requires full: "
+                + "; ".join(sorted(full_reasons))
+            )
+        if enabled_lanes != expected_lanes:
+            missing = sorted(expected_lanes - enabled_lanes)
+            extra = sorted(enabled_lanes - expected_lanes)
+            details = []
+            if missing:
+                details.append("missing " + ", ".join(missing))
+            if extra:
+                details.append("extra " + ", ".join(extra))
+            raise ValueError(
+                "focused manifest lanes do not match path ownership: "
+                + "; ".join(details)
+            )
     expected_jobs = sorted({job for lane, enabled in manifest["lanes"].items() if enabled for job in policy["lane_jobs"][lane]})
     if manifest["required_jobs"] != expected_jobs:
         raise ValueError("required jobs do not derive from lanes")

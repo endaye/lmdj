@@ -106,6 +106,15 @@ TOP_LEVELS = {
     "tools", "workers",
 }
 
+CONCURRENCY_STRESS_SOURCES = (
+    "tests/core/project_io/storage_platform_contract_test.cpp",
+    "tests/core/project_io/project_bundle_transfer_test.cpp",
+    "tests/core/audio/fixed_spsc_queue_test.cpp",
+    "tests/core/audio/realtime_engine_test.cpp",
+    "tests/core/audio/realtime_engine_stress_test.cpp",
+    "tests/core/facade/c_api_stress_test.cpp",
+)
+
 
 def load_classifier():
     spec = importlib.util.spec_from_file_location("change_scope", CLASSIFIER_PATH)
@@ -231,6 +240,25 @@ class ChangeScopeTest(unittest.TestCase):
         for path, expected in CASES.items():
             with self.subTest(path=path):
                 self.assertEqual(self.true_lanes(self.classify([path])), expected)
+
+    def test_all_six_current_concurrency_stress_sources_include_macos(self):
+        self.assertEqual(len(CONCURRENCY_STRESS_SOURCES), 6)
+        self.assertEqual(len(set(CONCURRENCY_STRESS_SOURCES)), 6)
+        for path in CONCURRENCY_STRESS_SOURCES:
+            with self.subTest(path=path):
+                self.assertIn("core_macos", self.true_lanes(self.classify([path])))
+
+    def test_focused_manifest_validation_recomputes_ready_path_union(self):
+        manifest = self.classify([
+            "tests/core/facade/application_test.cpp",
+        ])
+        manifest["lanes"] = {
+            lane: lane == "docs_static" for lane in self.policy["lanes"]
+        }
+        manifest["required_jobs"] = ["docs-static"]
+
+        with self.assertRaisesRegex(ValueError, "focused manifest"):
+            self.module.validate_manifest(manifest, self.policy)
 
     def test_rename_classifies_old_and_new_paths(self):
         records = self.module.parse_name_status_z(

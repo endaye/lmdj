@@ -133,7 +133,13 @@ manifest 记录原因。无法证明完整性时分类 job 失败。
   "mode": "focused",
   "reasons": ["apps/web-runtime-host/** changed"],
   "changed_files": [
-    {"status": "modified", "path": "apps/web-runtime-host/tools/example.py"}
+    {
+      "result": "renamed",
+      "paths": [
+        "apps/web-runtime-host/README-old.md",
+        "apps/web-runtime-host/README.md"
+      ]
+    }
   ],
   "lanes": {
     "docs_static": true,
@@ -151,7 +157,9 @@ manifest 记录原因。无法证明完整性时分类 job 失败。
     "chameleon_lab": false,
     "package": false
   },
-  "required_jobs": ["docs-static", "portal", "web-runtime-host"]
+  "required_jobs": [
+    "docs-static", "portal", "select-ubuntu-runner", "web-runtime-host"
+  ]
 }
 ```
 
@@ -170,6 +178,11 @@ stress 属于 `core_macos`。因此路径归属表不得产生枚举外值。
 job；未被选择的支持 job 不得运行。未知字段、未知枚举、重复或冲突 job、SHA 不匹配和非
 canonical path 必须拒绝。manifest 同时写入 job summary 并上传为
 artifact；summary 必须解释每个被选择或升级 lane 的具体理由。
+
+`changed_files` 的闭合字段是 `result` 与 `paths`。普通增删改记录恰好一个 path；rename/copy
+记录恰好两个 path，并按旧路径与新路径的消费者并集分类。对 `focused` manifest，validator
+必须在 normal Ready/no-label 语义下从该 inventory 重新计算 ownership 与昂贵族升级：lane map
+必须与路径并集完全相等；未知、未归属、full-rule 或三个昂贵族都拒绝 focused 编码。
 
 ### 6.3 模式
 
@@ -322,6 +335,7 @@ Portal 是表中门禁的附加 lane：命中该集合的 Creator、Web Host、C
 | `tests/core/**` | Core Ubuntu + ASan + Coverage |
 | `tests/core/audio/**`、concurrency/stress | 上述门禁 + macOS/native stress |
 | `tests/core/facade/c_api_stress_test.cpp` | 完整 Core，包含 macOS/native stress |
+| `tests/core/project_io/storage_platform_contract_test.cpp`、`project_bundle_transfer_test.cpp` | 完整 Core，包含 macOS/native concurrency/stress |
 | `tests/core/support/**`、`tests/core/provider/CMakeLists.txt` | 完整 Core；公共 helper/test registration 输入 |
 | `tests/platform/audio/**` | macOS Core/native sanitizer |
 | `tests/platform/web/toolchain/**` | Web Toolchain |
@@ -489,6 +503,7 @@ required checks 使用双门禁过渡，禁止先删除旧门禁：
 - diff/API/input failure 阻断；
 - 分类器、PR Gate、主 workflow 的自修改强制 full。
 - changed-file schema、path count/canonical/duplicate 校验与 `draft`/`focused`/`full` lane 一致性；
+- focused manifest 从 inventory 重算 Ready ownership，拒绝 lane 降级、遗漏消费者与 full trigger；
 - summary 完整列出 rename/copy 双路径、逐 lane 理由并转义不可信 Markdown/control text。
 
 ### 15.2 Gate 契约
