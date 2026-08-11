@@ -61,10 +61,28 @@ class CiBuildAccelerationTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn(
+                    "needs: [change-scope, select-ubuntu-runner]", job
+                )
+                self.assertIn(
                     "uses: ./.github/actions/configure-build-acceleration", job
                 )
                 self.assertIn(expected_cache_selector, job)
                 self.assertIn("ccache --show-log-stats", job)
+
+    def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
+        job = self.workflow_job("package")
+        self.assertIn("needs: [change-scope, select-ubuntu-runner]", job)
+        self.assertIn(
+            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
+            job,
+        )
+        self.assertIn("lfs: true", job)
+        self.assertIn("git lfs checkout -- tests/fixtures/audio", job)
+        self.assertIn(
+            "uses: ./.github/actions/configure-build-acceleration", job
+        )
+        self.assertIn("use-ccache: false", job)
+        self.assertIn("scripts/core.sh package", job)
 
     def test_web_builds_use_bounded_parallelism_without_ccache(self) -> None:
         for job_name in ("web-toolchain-conformance", "web-runtime-host"):

@@ -88,6 +88,73 @@ The default seed is `0`; a different seed must be fixed in the test command or
 fixture. Time, network access, and machine-local state are not random-seed
 substitutes and must be controlled or injected.
 
+## Risk-Based PR Selection
+
+The main CI workflow triggers for every Pull Request without a workflow-level
+path filter. `Change Scope` checks out the complete history, diffs the exact PR
+base and head, and reads current Draft and `ci:full` label state. Its retained
+`ci-scope-<head-sha>` artifact and job summary record one closed manifest with
+14 lane booleans and the formal jobs derived from them. Artifact upload uses
+same-run overwrite semantics so rerunning `Change Scope` cannot collide with
+the retained manifest from its earlier attempt.
+
+Selection has three modes:
+
+- `draft` runs only `docs_static` and `ci_contract`; a transition to Ready
+  starts a new classification for the current head;
+- `focused` takes the union of every changed path's owners and inherits every
+  consumer test lane for shared code, contracts, fixtures, generated inputs,
+  renames, and deletions; and
+- `full` selects all 14 lanes for `ci:full`, central CI control changes,
+  unknown or unclassified ownership, broad cross-family risk, every `main`
+  push, and every manual dispatch.
+
+The closed lanes are `docs_static`, `portal`, `ci_contract`, `core_ubuntu`,
+`core_asan`, `core_coverage`, `core_macos`, `web_toolchain`,
+`web_runtime_host`, `creator`, `web_runtime_lab`, `deploy_contract`,
+`chameleon_lab`, and `package`. Path ownership is conservative test
+inheritance, not component ownership: a shared fixture or tool selects every
+consumer whose behavior could change.
+
+The Ubuntu selector runs only when a selected lane needs the trusted Linux
+pool, including `package`; the macOS selector runs only for `core_macos`.
+Package retains LFS hydration and explicitly disables ccache while reusing the
+same fork trust and hosted-capacity fallback route. Other GitHub-hosted
+preflight fallback, labels, bounded build parallelism, and persistent
+self-hosted `ccache` behavior remain unchanged. Selectors do not make a
+semantic workload conditional on infrastructure success: a selected job must
+still publish its formal result.
+
+`PR Gate` is the single aggregate decision. It evaluates same-run static
+dependencies and applies this truth table:
+
+| Manifest selection | Job result | Gate result |
+| --- | --- | --- |
+| selected | `success` | pass |
+| selected | `skipped`, `failure`, `cancelled`, or missing | fail |
+| unselected | `skipped` | pass |
+| unselected | `success`, `failure`, `cancelled`, or missing | fail |
+
+The manifest schema, exact event base/head SHAs, lane-to-job mapping, and
+complete 18-result key set must also match. The results are the 15 published
+lane jobs plus
+`select-ubuntu-runner`, `select-macos-runner`, and `macos-primary`;
+`change-scope` is the manifest producer, and conditional `macos-fallback` is
+enforced transitively by `core-macos` and `core-asan-macos`. The producer is
+not a nineteenth result key, but its own job result must independently be
+`success`; a manifest output cannot make a later artifact-upload failure pass.
+
+`Change Scope` and every selected lane or support job contribute timing
+evidence and a pre-Gate critical-path span to the Gate summary. Queue time is
+reported separately; only execution time is compared when the policy defines
+an execution SLO, otherwise the summary says `SLO not defined`. The Ubuntu and
+macOS selectors do not inherit a consumer lane SLO; `macos-primary` uses the
+defined `core_macos` SLO. Missing timing is non-blocking, and SLO observations
+are neither timeouts nor correctness assertions. Independent job safety limits
+and test-owned behavior timeouts remain hard failures. A slow successful job
+stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
+is not retried. `main` and manual dispatch always run the full manifest.
+
 ## No-Retry Policy
 
 An automated test runs once per requested command. A failure is evidence to
@@ -117,10 +184,10 @@ results.
 The macOS CI fallback is infrastructure recovery, not a test retry. Runner
 selection uses GitHub-hosted macOS immediately when the trusted self-hosted
 runner is unavailable. When the self-hosted lane is selected, GitHub-hosted
-macOS may run the same gates only if checkout, setup, runner communication, or
-the 30-minute job limit prevents that lane from publishing a terminal result.
-A published preparation, Core Proof, or sanitizer failure is final and must not
-start the fallback lane.
+macOS may run the same gates only if checkout, acceleration/`ccache` setup,
+runner communication, or the 30-minute job limit prevents that lane from
+publishing a terminal result. A published preparation, Core Proof, or
+sanitizer failure is final and must not start the fallback lane.
 
 Local Mac preflight may run additional focused, Proof, or browser checks before
 push, but local results do not replace the commit-bound GitHub required checks.
