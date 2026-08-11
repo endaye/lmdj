@@ -35,6 +35,18 @@ instantiates that helper. Browser Main instead owns its transport in
 path and supersede `1.0.16.6` as a releasable candidate without rewriting any
 Task 6 evidence or immutable snapshot.
 
+Final corrective review: Tasks 1–9 remain immutable executed history, but the
+review found two remaining evidence gaps. First, the worker-global OPFS lease
+lookup was path-aware but owner-unaware for the three file mutators, allowing a
+distinct same-page `ProjectStoragePlatform` to reuse another platform's lease
+after its own acquisition correctly returned `PROJECT_BUSY`. Second, the real
+Browser Main mismatch cases did not actually hold another production request
+pending while `failClosed` rejected and cleared `pendingRequests`. Tasks 10,
+10A, 11, and 12 close those gaps without rewriting either existing schema-2
+snapshot. Product Builds `1.0.16.6` and `1.0.16.7` are immutable, unshipped,
+abandoned canary candidates and are never reused, tagged, released, deployed,
+published, or promoted.
+
 ## Global Constraints
 
 - Work happens on `fix/web-runtime-hardening` in an isolated worktree; `main`
@@ -266,6 +278,71 @@ browser conformance spec, this plan, and the Web Host source-boundary test.
   no push, PR, merge, tag, Release, deployment, publication, or Channel
   promotion.
 
+### Task 10: Bind all Web file mutations to the owning platform
+
+- Through the real C++/Emscripten/OPFS bridge, hold platform A's writer lease
+  and prove distinct same-page platform B receives `PROJECT_BUSY` on
+  acquisition and on direct append, replace, and immutable-create mutations.
+  Each mutation must fail before target or intent access; existing bytes,
+  absent-target state, and storage/publication-intent inventory remain exact.
+- Pass `platform_identity_` through production and test private imports for all
+  three file mutators. `activeLease(destination, platformIdentity)` returns
+  `InvalidStateError` when no lease covers the path and
+  `NoModificationAllowedError` for a different owner; each mutation boundary
+  maps the latter to the existing `project_busy` condition.
+- Preserve successful owner mutation/release, recovery, short-write, flush,
+  held-lease, and publication behavior. Version identities move only in Task
+  11; no public C ABI, Facade operation, Contract, or Project Truth field is
+  added.
+
+### Task 10A: Prove real Browser Main pending rejection and clearing
+
+- In the existing Chromium audio failure spec, queue an untracked native
+  `host.status` response through the conformance native-submit seam, then start
+  a different normal `transport.send(host.status)` before the production poll.
+  The real `_lmdj_web_host_poll -> pollTransport()` missing-pending branch must
+  terminate once with `HOST_PROTOCOL_MISMATCH`, reject that pending promise
+  with the same terminal error, clear its ID, deliver no notification, seal
+  later sends, and release the terminal owner once.
+- Prove the case detects a missing production clear/reject loop with a
+  controlled temporary mutation, then restore the already-correct production
+  implementation. Any read-only pending-ID observation stays in the stripped
+  `LMDJ_WEB_AUDIO_CONFORMANCE` surface and is rejected by generated-production
+  boundary checks.
+- Version impact: none. Production behavior is unchanged; only conformance and
+  exact current Portal evidence wording change.
+
+### Task 11: Propagate exact corrective identities and current truth
+
+- Immediately before editing, live-check that Stage 8 remains unmerged and
+  Product Build `1.0.16.8` is free of local/remote tag, GitHub Release, Portal
+  registry, snapshot, and metadata. Stop before propagation if allocation is
+  invalid.
+- Apply the exact corrective allocation below to authoritative manifests,
+  direct dependencies, Product Assembly and compiled identity, generated
+  locks, fixtures, active README text, and all affected mutable current Portal
+  routes. Audio Runtime and every unlisted identity remain unchanged. Neither
+  prior snapshot may change.
+- Current Portal records owner-aware all-mutator enforcement, the exact pending
+  rejection evidence, both abandoned candidates, and Task 12 as the remaining
+  local Proof/snapshot boundary.
+
+### Task 12: Run corrective Proof and freeze `1.0.16.8 canary`
+
+- From the clean committed Task 11 source boundary, use only the locked
+  Emscripten 6.0.5/Node 22.16.0, Python 3.11.15, and git-lfs tools to run full
+  Project I/O Chromium/WebKit, Core Proof, fresh ASan and TSan full, release
+  stress, Web Runtime Host Proof, Creator Proof, active-tree, and pre-snapshot
+  Portal checks. Infrastructure/setup failures are distinct from semantic
+  failures; no semantic failure is waived.
+- Recheck remote main, Stage 8, clean source, and zero changes under both prior
+  snapshots. Only then freeze `1.0.16.8 · canary`, inventory generator output,
+  update acceptance and directly required mutable current testing/release
+  pages, and run full post-commit Portal/active-tree/provenance audits.
+- Acceptance retains exactly five physical rows as `deferred / unverified` and
+  separately records that no push, PR, CI, merge, tag, Release, deployment,
+  publication, public smoke, or Channel promotion has occurred.
+
 ## Version Management
 
 Canonical policy: `docs/governance/version-management.md`.
@@ -273,6 +350,9 @@ Canonical policy: `docs/governance/version-management.md`.
 Task 4A version impact: none. It documents behavior already present in the
 current implementation; Product, Module, Host, Provider, Contract, and Assembly
 identities do not change in this Task.
+
+Task 10A version impact: none. It strengthens only conformance evidence and
+corrects current Portal wording for production behavior already implemented.
 
 The following table records the executed Tasks 1–6 allocation as historical
 evidence. The corrective table below owns every future identity action.
@@ -315,6 +395,29 @@ the candidate was abandoned by final review. Any later tag consideration must
 use the corrective Product Build and still requires separate authorization
 after squash merge, full CI, merged-main Proof, and exact identity verification.
 
+### Corrective allocation after final corrective review
+
+Product Builds `1.0.16.6` and `1.0.16.7` are immutable, unshipped, abandoned
+canary candidates. Their existing versioned Portal snapshots, metadata,
+sidebars, and registry identities remain read-only historical evidence. Task
+10 changes Project I/O behavior, Task 10A strengthens evidence without a
+version impact, Task 11 performs all identity/current-truth propagation, and
+Task 12 runs the complete gates and freezes the only new candidate.
+
+| Identity | Abandoned baseline | Corrective target | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.7` | `1.0.16.8` | owner-aware Web mutation correction and exact production evidence |
+| Project I/O | `0.5.1` | `0.5.2` | bind all three Web file mutators to the owning platform |
+| Application Facade | `1.3.2` | `1.3.3` | exact Project I/O dependency update only |
+| Web Runtime Platform | `0.1.4` | `0.1.5` | exact Facade/Project I/O dependency propagation |
+| Core CLI | `1.0.8` | `1.0.9` | exact Facade dependency update only |
+| Core MCP | `1.1.5` | `1.1.6` | exact Facade dependency update only |
+| Native Test Host | `1.0.6` | `1.0.7` | exact Facade dependency update only |
+| Web Runtime Host | `1.2.4` | `1.2.5` | exact Web Runtime Platform dependency update only |
+| Creator Web | `1.0.4` | `1.0.5` | exact Web Runtime Platform dependency update only |
+| Audio Runtime | `0.4.1` | unchanged | no additional Audio behavior or dependency impact |
+| All other identities | `1.0.16.7` candidate identities | unchanged | no behavior or direct dependency impact |
+
 - Compatibility: every change tightens a failure path. Successful operations,
   Project Truth, `lmdj.project.v1`, `lmdj.storage.intent.v1`, protocol
   envelope shapes, and all existing passing journeys are unchanged. The new
@@ -329,7 +432,7 @@ after squash merge, full CI, merged-main Proof, and exact identity verification.
   `1.0.17.x` patch identity and this table is corrected before the PR.
 - Tag condition: only after squash merge to `main`, full CI, merged-main
   Proof, and exact identity verification may the Integration Owner create
-  signed annotated tag `lmdj-v1.0.16.7`. This plan authorizes neither push,
+  signed annotated tag `lmdj-v1.0.16.8`. This plan authorizes neither push,
   PR, merge, tag, Release, deployment, publication, nor Channel promotion.
 - Rollback reuses the immutable prior Product tag; tags are never moved.
 
@@ -354,10 +457,17 @@ Documentation impact: required.
   the affected current Portal routes and identities. Task 9 creates the new
   immutable `1.0.16.7 · canary` snapshot; the `1.0.16.6` snapshot remains
   untouched.
+- Task 10 updates `platform/web-runtime` and `operations/testing-and-proof` for
+  owner-aware file-mutation semantics. Task 10A corrects the production
+  pending-rejection evidence on `hosts/web-runtime` and
+  `operations/testing-and-proof`. Task 11 updates every affected mutable
+  current identity route. Task 12 creates the mandatory immutable
+  `1.0.16.8 · canary` snapshot and records completed local evidence; both prior
+  snapshot families remain untouched.
 
 ## Pull Request and Completion Boundary
 
-After Task 9, inspect every commit and staged file list, run
+After Task 12, inspect every commit and staged file list, run
 `git diff --cached --check` per commit, and request code review before any
 push authorization. A green local Proof does not authorize push; a green
 pushed PR does not authorize merge; a squash merge does not authorize tag,

@@ -58,6 +58,47 @@ std::string text(const std::vector<std::byte>& input) {
   return {reinterpret_cast<const char*>(input.data()), input.size()};
 }
 
+using IntentInventory = std::vector<std::pair<std::string, std::string>>;
+
+IntentInventory storage_intent_inventory(
+    const lmdj::project_io::ProjectStoragePlatform& platform) {
+  const auto root = std::filesystem::path{
+      "/lmdj-workspace/.lmdj-host/storage-intents"};
+  if (!value(platform.directory_exists(root), "storage intent root exists")) {
+    return {};
+  }
+  IntentInventory inventory;
+  const auto directories =
+      value(platform.list_directories(root), "storage intent directories");
+  for (const auto& directory : directories) {
+    inventory.emplace_back(directory + "/", "");
+    const auto scope = root / directory;
+    const auto names = value(
+        platform.list_names(scope), "storage intent names");
+    for (const auto& name : names) {
+      inventory.emplace_back(
+          directory + "/" + name,
+          text(value(
+              platform.read_complete(scope / name),
+              "storage intent content")));
+    }
+  }
+  return inventory;
+}
+
+nlohmann::json mutation_result(const Result<void>& result) {
+  if (result.has_value()) {
+    return {{"status", "succeeded"}, {"errorCode", ""},
+            {"storageCondition", ""}};
+  }
+  return {
+      {"status", "failed"},
+      {"errorCode", lmdj::foundation::error_code_name(result.error().code)},
+      {"storageCondition",
+       result.error().details.value("storage_condition", "")},
+  };
+}
+
 std::string uuid(std::string_view suffix) {
   return "00000000-0000-4000-8000-" + std::string(12 - suffix.size(), '0') +
          std::string{suffix};
@@ -175,6 +216,93 @@ nlohmann::json run_suite() {
                  : appended.error().details.value("storage_condition", "")},
             {"length", post_call.size()},
             {"content", text(post_call)}}},
+      };
+    }
+
+    if (action == "distinct_platform_mutation_ownership") {
+      const auto existing_path = fault_bundle / "existing.bin";
+      const auto absent_path = fault_bundle / "absent.bin";
+      success(
+          platform->ensure_directory(fault_bundle),
+          "distinct platform ownership directory");
+      auto owner_lease = value(
+          platform->acquire_writer(fault_bundle),
+          "distinct platform owner lease");
+      success(platform->remove(existing_path), "ownership existing cleanup");
+      success(platform->remove(absent_path), "ownership absent cleanup");
+      success(
+          platform->create_immutable(existing_path, bytes("seed")),
+          "ownership existing seed");
+
+      const auto intent_inventory_before = storage_intent_inventory(*platform);
+      const auto distinct_platform =
+          project_io::make_web_project_storage_platform();
+      const auto competing_acquisition =
+          distinct_platform->acquire_writer(fault_bundle);
+      const auto append = distinct_platform->append_durable(
+          existing_path, 4, bytes("-append-bypass"));
+      const auto after_append = value(
+          platform->read_complete(existing_path),
+          "ownership existing after append");
+      const auto replace = distinct_platform->replace_complete(
+          existing_path, bytes("replace-bypass"));
+      const auto after_replace = value(
+          platform->read_complete(existing_path),
+          "ownership existing after replace");
+      const auto create = distinct_platform->create_immutable(
+          absent_path, bytes("create-bypass"));
+      const bool absent_after_create = !value(
+          platform->exists(absent_path), "ownership absent after create");
+      const auto intent_inventory_after = storage_intent_inventory(*platform);
+
+      const auto before_owner_mutation = value(
+          platform->read_complete(existing_path),
+          "ownership existing before owner mutation");
+      success(
+          platform->append_durable(
+              existing_path, before_owner_mutation.size(), bytes("-owner")),
+          "ownership owner append");
+      const auto owner_content = text(value(
+          platform->read_complete(existing_path),
+          "ownership existing after owner mutation"));
+      owner_lease.reset();
+      auto post_release_lease = value(
+          distinct_platform->acquire_writer(fault_bundle),
+          "ownership distinct acquisition after release");
+      post_release_lease.reset();
+
+      return {
+          {"complete", true},
+          {"result",
+           {{"acquisition",
+             competing_acquisition.has_value()
+                 ? nlohmann::json{{"status", "succeeded"},
+                                  {"errorCode", ""},
+                                  {"storageCondition", ""}}
+                 : nlohmann::json{
+                       {"status", "failed"},
+                       {"errorCode",
+                        foundation::error_code_name(
+                            competing_acquisition.error().code)},
+                       {"storageCondition",
+                        competing_acquisition.error().details.value(
+                            "storage_condition", "")}}},
+            {"append", mutation_result(append)},
+            {"replace", mutation_result(replace)},
+            {"create", mutation_result(create)},
+            {"afterAppend",
+             {{"length", after_append.size()},
+              {"content", text(after_append)}}},
+            {"afterReplace",
+             {{"length", after_replace.size()},
+              {"content", text(after_replace)}}},
+            {"absentAfterCreate", absent_after_create},
+            {"intentEntriesBefore", intent_inventory_before.size()},
+            {"intentEntriesAfter", intent_inventory_after.size()},
+            {"intentInventoryUnchanged",
+             intent_inventory_before == intent_inventory_after},
+            {"ownerContent", owner_content},
+            {"postReleaseAcquisition", "pass"}}},
       };
     }
 

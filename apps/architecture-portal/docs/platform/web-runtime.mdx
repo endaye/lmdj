@@ -25,7 +25,7 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 
 ## 共享 Platform
 
-两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Project I/O 的所有写入路径（包括 `append_durable`）都要求目标 Project 的有效 writer lease；无 lease 的 append 以 `IO_ERROR` + `storage_condition=invalid_state` 失败且不改变已有字节。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
+两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_complete`、`create_immutable`）都要求目标 Project 的有效 writer lease，且 lease 必须属于发起调用的同一 `ProjectStoragePlatform`；无覆盖 lease 时以 `IO_ERROR` + `storage_condition=invalid_state` 失败，不同 same-page platform 试图复用 owner lease 时以 `IO_ERROR` + `storage_condition=project_busy` 在打开 target 或 intent 前失败。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
 
 ## 分发与服务
 
