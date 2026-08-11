@@ -721,6 +721,7 @@ The externally visible Host states are:
 | `recovering` | browser requires a new gesture | `audio-suspended` |
 | `recovering` | a new adverse edge follows a usable Context before probe completion | `interrupted` |
 | any nonterminal state | `host.close` completes cleanly | `closed` |
+| any nonterminal state | deadline cancellation wins and returns `HOST_TIMEOUT` | `restart-required` |
 | any nonterminal state | claimed Project publication settlement remains unknown after its 1,000 ms watchdog | `restart-required` |
 | any nonterminal state | fatal capability, storage, Worker, Worklet, protocol, or resource failure | `failed` |
 
@@ -827,7 +828,7 @@ Every response echoes `request_id` and `protocol_version` and uses the existing
 `ok` plus `error {code, message, details}` envelope shape. Facade errors preserve
 their Contract error code. Host-local failures use exact codes tested with Web
 Runtime Host `1.0.0`, including `UNSUPPORTED_WEB_RUNTIME`, `PROJECT_BUSY`,
-`WEB_RUNTIME_RESOURCE_LIMIT`, `HOST_STATE_INVALID`, `HOST_TIMEOUT`, and
+`WEB_RUNTIME_RESOURCE_LIMIT`, `HOST_STATE_INVALID`, `HOST_TIMEOUT`,
 `HOST_RESTART_REQUIRED`, and `HOST_PROTOCOL_MISMATCH`. Notifications have an
 `event` field and no `request_id`.
 
@@ -863,11 +864,11 @@ terminator deadline retain their lifecycle-specific authority.
 For Project mutation requests, the caller deadline is a hard upper bound only
 while authoritative publication remains open and cancellable. If deadline
 cancellation wins `open -> cancelled`, the Host returns `HOST_TIMEOUT`, enters
-`failed`, publishes no new Project Truth, seals the transport, rejects new
-submissions, and releases or force-terminates the Control owner. If publication
-claims first, that claim is the cancellation cutoff: crossing the caller
-deadline cannot convert the claimed operation into `HOST_TIMEOUT`; the Host
-delivers its real success or typed error.
+the terminal `restart-required` state, publishes no new Project Truth, seals the
+transport, rejects new submissions, and releases or force-terminates the
+Control owner. If publication claims first, that claim is the cancellation
+cutoff: crossing the caller deadline cannot convert the claimed operation into
+`HOST_TIMEOUT`; the Host delivers its real success or typed error.
 
 Claimed publication settlement is nevertheless bounded. The production
 watchdog is exactly 1,000 ms. If settlement remains unknown at that bound, the
