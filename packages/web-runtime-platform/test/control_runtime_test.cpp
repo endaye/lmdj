@@ -4058,6 +4058,41 @@ void test_bridge_cancelled_before_dispatch_skips_facade_work() {
       (std::string(kProjectId) + ".lmdj") / "history/transactions"));
 }
 
+void test_bridge_benign_query_cancel_does_not_fail_the_runtime() {
+  TempDirectory temp;
+  auto runtime = make_runtime(temp.path());
+  check_success(runtime->dispatch("project.create", create_payload(), {}));
+  FakeProxy proxy;
+  auto bridge = make_bridge(*runtime, proxy);
+  const std::array<std::pair<std::string_view, Json>, 4> queries{{
+      {"sample.inspect", {{"slot", slot(0, 0)}}},
+      {"sample.waveform",
+       {{"slot", slot(0, 0)},
+        {"window",
+         {{"start_frame", 0}, {"end_frame", 1}, {"bucket_count", 1}}}}},
+      {"project.inspect", Json::object()},
+      {"project.list", Json::object()},
+  }};
+
+  for (std::size_t index = 0; index < queries.size(); ++index) {
+    const auto request_id = uuid(988 + index);
+    const auto query = encode(request(
+        request_id, queries[index].first, queries[index].second));
+    LMDJ_CHECK(
+        bridge->submit(query, {}) == BridgeSubmitStatus::accepted);
+    LMDJ_CHECK(
+        bridge->cancel_query(request_id) == BridgeCancelStatus::cancelled);
+    proxy.pump_one();
+    const auto response = poll_message(*bridge);
+    LMDJ_CHECK(response.at("request_id") == request_id);
+    LMDJ_CHECK(response.at("ok") == false);
+    LMDJ_CHECK(response.at("error").at("code") == "HOST_STATE_INVALID");
+    proxy.pump_one();
+    check_no_bridge_message(*bridge);
+  }
+  check_success(runtime->dispatch("host.status", Json::object(), {}));
+}
+
 void test_bridge_rechecks_deadline_before_success_publication() {
   TempDirectory temp;
   auto runtime = make_runtime(temp.path());
@@ -4238,6 +4273,7 @@ int main() {
     test_bridge_emits_rejected_sample_and_retry_notifications();
     test_bridge_rejects_an_expired_control_request_without_late_success();
     test_bridge_cancelled_before_dispatch_skips_facade_work();
+    test_bridge_benign_query_cancel_does_not_fail_the_runtime();
     test_bridge_rechecks_deadline_before_success_publication();
     test_bridge_uses_the_caller_deadline_as_the_authoritative_upper_bound();
     test_bridge_rechecks_deadline_before_error_publication();

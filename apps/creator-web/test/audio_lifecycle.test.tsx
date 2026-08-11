@@ -1,4 +1,4 @@
-import {render, screen, waitFor} from "@testing-library/react";
+import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {expect, test} from "vitest";
 
@@ -6,6 +6,7 @@ import {App} from "../src/app";
 import {activateCreatorAudio} from "../src/runtime/runtime_context";
 import type {
   CreatorRuntimeSession,
+  CreatorSampleRuntimeSession,
   LocalProjectSummary,
   RuntimeDiagnostics,
   RuntimeHostState,
@@ -116,10 +117,14 @@ function sessionFixture(name: string) {
     if (value.state !== "recovering") recoveryProbeReady = false;
     for (const listener of hostListeners) listener(normalized);
   }
+  function outcome(value: RuntimeOutcome) {
+    for (const listener of outcomeListeners) listener(value);
+  }
   return {
     session,
     calls,
     emit,
+    outcome,
     setRecoveryProbeReady(value: boolean) {
       recoveryProbeReady = value;
       const diagnostic = session.diagnostics();
@@ -291,4 +296,166 @@ test("audio activation consumes only an explicit trusted gesture", async () => {
   await expect(activateCreatorAudio(value.session, {isTrusted: true}))
     .resolves.toBe(true);
   expect(token).toEqual({kind: "lmdj.web-runtime.user-gesture"});
+});
+
+test("gives an assigned Project Pad keyboard press semantics", async () => {
+  const value = sessionFixture("project-keyboard");
+  let triggerCount = 0;
+  value.session.trigger = async (slot, velocity, source) => {
+    triggerCount += 1;
+    return {sequence: triggerCount, slot, velocity, source};
+  };
+  render(<App runtimeFactory={() => value.session} />);
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await act(async () => value.emit({state: "running", errorCode: null}));
+
+  const pad = screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"});
+  fireEvent.keyDown(pad, {key: "Enter", code: "Enter", repeat: false});
+  fireEvent.keyDown(pad, {key: "Enter", code: "Enter", repeat: true});
+  await waitFor(() => {
+    expect(triggerCount).toBe(1);
+    expect(pad.dataset.outcome).toBe("admitted");
+  });
+  fireEvent.keyUp(pad, {key: "Enter", code: "Enter"});
+  await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
+});
+
+test("lifecycle matrix clears fresh loop toggles without duplicate Session stop ownership", async () => {
+  const value = sessionFixture("sample");
+  let triggerCount = 0;
+  let stopPadCount = 0;
+  let stopAllCount = 0;
+  let voiceSubscriptions = 0;
+  let voiceUnsubscriptions = 0;
+  const sampleSession: CreatorSampleRuntimeSession = {
+    ...value.session,
+    inspectSample: async (slot) => ({
+      projectRevision: 3,
+      slot,
+      assetId: slot === 0 ? "33333333-3333-4333-8333-333333333333" : null,
+      playback: {
+        trimStartFrame: 0,
+        trimEndFrame: slot === 0 ? 8 : null,
+        triggerMode: "loop_toggle",
+        gainMillidb: 0,
+        muted: false,
+      },
+      metadata: slot === 0
+        ? {sampleRate: 48_000, channels: 1, sourceFrames: 8}
+        : null,
+      waveformCacheIdentity: slot === 0
+        ? `${"a".repeat(64)}/1/max-abs-mirror/1`
+        : null,
+    }),
+    queryWaveform: async () => { throw new Error("unused"); },
+    importAssignSample: async () => { throw new Error("unused"); },
+    updatePad: async () => { throw new Error("unused"); },
+    resetPad: async () => { throw new Error("unused"); },
+    setSamplePreview: async () => true,
+    clearSamplePreview: async () => true,
+    release: async () => true,
+    stopPad: async () => { stopPadCount += 1; return true; },
+    stopAll: async () => { stopAllCount += 1; return true; },
+    retryPrepare: async () => { throw new Error("unused"); },
+    subscribeVoiceState: () => {
+      voiceSubscriptions += 1;
+      return () => { voiceUnsubscriptions += 1; };
+    },
+    trigger: async (slot, velocity, source) => {
+      triggerCount += 1;
+      return {sequence: triggerCount, slot, velocity, source};
+    },
+  };
+  const replacementSession: CreatorSampleRuntimeSession = {...sampleSession};
+  const sessions = [sampleSession, replacementSession];
+  let sessionIndex = 0;
+  render(<App runtimeFactory={() => sessions[Math.min(sessionIndex++, 1)]!} />);
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
+  const latch = async (expectedCount: number) => {
+    fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
+    await waitFor(() => expect(triggerCount).toBe(expectedCount));
+    await act(async () => value.outcome({
+      sequence: expectedCount,
+      outcome: "voice_started",
+      runtimeFrame: expectedCount * 128,
+    }));
+    fireEvent.keyUp(window, {code: "KeyQ"});
+    await waitFor(() => expect(pad.dataset.outcome).toBe("started"));
+  };
+
+  await latch(1);
+  fireEvent(window, new Event("blur"));
+  await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
+
+  await latch(2);
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: "hidden",
+  });
+  fireEvent(document, new Event("visibilitychange"));
+  delete (document as {visibilityState?: string}).visibilityState;
+  await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
+
+  await latch(3);
+  await userEvent.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
+
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await latch(4);
+  await act(async () => value.emit({state: "recovering", errorCode: null}));
+  await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
+  const subscriptionsBeforeDuplicate = voiceSubscriptions;
+  const unsubscriptionsBeforeDuplicate = voiceUnsubscriptions;
+  await act(async () => value.emit({state: "recovering", errorCode: null}));
+  expect(voiceSubscriptions).toBe(subscriptionsBeforeDuplicate);
+  expect(voiceUnsubscriptions).toBe(unsubscriptionsBeforeDuplicate);
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await latch(5);
+
+  await act(async () => value.emit({state: "audio-suspended", errorCode: null}));
+  await waitFor(() => expect(pad.dataset.outcome).toBe("idle"));
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await latch(6);
+  await act(async () => value.emit({state: "audio-suspended", errorCode: null}));
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  await userEvent.click(screen.getByRole("button", {name: "Open local"}));
+  await userEvent.click(screen.getByRole("button", {name: "Open Project 11111111"}));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
+  await waitFor(() => expect(triggerCount).toBe(7));
+  await act(async () => value.outcome({
+    sequence: 7,
+    outcome: "voice_started",
+    runtimeFrame: 896,
+  }));
+  fireEvent.keyUp(window, {code: "KeyQ"});
+
+  await act(async () => value.emit({
+    state: "restart-required",
+    errorCode: "HOST_RESTART_REQUIRED",
+  }));
+  await waitFor(() => expect(
+    value.calls.filter((call) => call === "sample:start"),
+  ).toHaveLength(2));
+  await waitFor(() => expect(
+    value.calls.filter((call) => call === "sample:open"),
+  ).toHaveLength(3));
+  fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
+  await waitFor(() => expect(triggerCount).toBe(8));
+
+  expect(voiceSubscriptions - voiceUnsubscriptions).toBe(1);
+  expect(stopPadCount).toBe(0);
+  expect(stopAllCount).toBe(0);
 });

@@ -238,8 +238,13 @@ const SAMPLE_PUBLIC_ERROR_MESSAGES: Readonly<Record<string, string>> =
     HOST_RESTART_REQUIRED: "Restart the Sample runtime and try again",
     HOST_PROTOCOL_MISMATCH: "Sample Host response was invalid",
   });
-const PRIVATE_HOST_MESSAGE_PATTERN =
-  /(?:\bopfs\b|file:\/\/|(?:^|[\s"'(])\/(?:[^\s]*)|\b[a-z]:\\|[a-z0-9._-]+\.(?:wav|wave|aiff?|flac|mp3|ogg|lmdj)\b)/i;
+const PRIVATE_HOST_MESSAGE_PATTERN = new RegExp([
+  String.raw`\bopfs\b`,
+  "file://",
+  String.raw`(?:^|[\s"'(])/(?:[^\s]*)`,
+  String.raw`\b[a-z]:\\`,
+  String.raw`[a-z0-9._-]+\.(?:wav|wave|aiff?|flac|mp3|ogg|lmdj)\b`,
+].join("|"), "i");
 
 export const SAMPLE_VOICE_RENDER_LIMIT = 64;
 

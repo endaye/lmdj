@@ -152,6 +152,7 @@ class ControlBridge final {
       std::span<std::byte> output,
       std::size_t& required) noexcept;
   BridgeCancelStatus cancel(std::string_view request_id) noexcept;
+  BridgeCancelStatus cancel_query(std::string_view request_id) noexcept;
   bool configure_deadline_proof(
       std::string_view request_id,
       std::uint8_t gate,

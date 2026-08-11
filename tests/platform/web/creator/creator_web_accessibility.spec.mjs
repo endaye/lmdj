@@ -128,25 +128,38 @@ for (const viewport of [
       expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
       expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
     }
-    for (const mode of ["Sample", "Sequence", "Perform"]) {
+    await expect(page.getByRole("button", {name: "Sample"})).toBeEnabled();
+    for (const mode of ["Sequence", "Perform"]) {
       await expect(page.getByRole("button", {name: new RegExp(`^${mode}`)}))
         .toBeDisabled();
     }
     await page.getByRole("button", {name: "Activate audio"}).focus();
     const focusOrder = [];
-    for (let index = 0; index < 5; index += 1) {
+    for (let index = 0; index < 6; index += 1) {
       await page.keyboard.press("Tab");
       focusOrder.push(await page.evaluate(() =>
         document.activeElement?.textContent?.trim()));
     }
     expect(focusOrder).toEqual([
-      "Enable MIDI", "Export report", "PProject", "Open local", "Import .lmdj",
+      "Enable MIDI", "Export report", "PProject", "SSample", "Open local", "Import .lmdj",
     ]);
+    await page.getByRole("button", {name: "Sample"}).click();
+    await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+    const picker = page.locator("input.sample-file-input");
+    await expect(picker).toHaveCount(1);
+    await expect(picker).toHaveAttribute("accept", ".wav,audio/wav,audio/wave");
+    const samplePads = page.getByRole("button", {name: /^Pad A\d+ — assigned$/});
+    await expect(samplePads).toHaveCount(16);
+    for (let index = 0; index < 16; index += 1) {
+      const box = await samplePads.nth(index).boundingBox();
+      expect(box?.width ?? 0).toBeGreaterThanOrEqual(44);
+      expect(box?.height ?? 0).toBeGreaterThanOrEqual(44);
+    }
     expect(await page.evaluate(() =>
       document.documentElement.scrollWidth <= document.documentElement.clientWidth,
     )).toBe(true);
     await page.screenshot({
-      path: testInfo.outputPath(`creator-ready-${viewport.width}x${viewport.height}.png`),
+      path: testInfo.outputPath(`creator-sample-${viewport.width}x${viewport.height}.png`),
       fullPage: true,
     });
   });

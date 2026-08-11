@@ -161,7 +161,9 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
         setPhase("restart-required");
         startAutomaticReplacement();
       } else if (state === "failed") {
-        setPhase("failed");
+        setPhase(observedError === "UNSUPPORTED_WEB_RUNTIME"
+          ? "unsupported"
+          : "failed");
       } else if (state === "closed") {
         setPhase("closed");
       }

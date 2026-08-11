@@ -68,7 +68,7 @@ function fixture() {
       current: {
         projectId: "11111111-1111-4111-8111-111111111111",
         patternId: "22222222-2222-4222-8222-222222222222",
-        revision: 1,
+        revision: 42,
         bpm: 120,
         assetCount: 64,
         assignedPadCount: 64,
@@ -367,11 +367,11 @@ describe("Creator input controller", () => {
     const value = sampleFixture({
       inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
     });
-    value.controller.keyDown({code: "KeyA", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
     await settle();
-    value.controller.keyUp({code: "KeyA"});
+    value.controller.keyUp({code: "KeyQ"});
 
-    value.controller.keyDown({code: "KeyA", repeat: false, target: document.body});
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
     await settle();
 
     expect(value.triggers).toHaveLength(1);
@@ -393,6 +393,25 @@ describe("Creator input controller", () => {
     expect(value.state().pressed.size).toBe(0);
     value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
     await settle();
+    expect(value.triggers).toHaveLength(1);
+    expect(value.stopped).toEqual([0]);
+    value.controller.dispose();
+  });
+
+  test("preserves a pending loop admission across public physical clear", async () => {
+    const value = sampleFixture({
+      inspectSample: async (slot) => sampleInspect(slot, "loop_toggle"),
+    });
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    await settle();
+    value.controller.keyUp({code: "KeyQ"});
+    value.controller.clearPressed();
+    value.outcome({sequence: 1, outcome: "voice_started", runtimeFrame: 128});
+    await settle();
+
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    await settle();
+
     expect(value.triggers).toHaveLength(1);
     expect(value.stopped).toEqual([0]);
     value.controller.dispose();
@@ -455,6 +474,107 @@ describe("Creator input controller", () => {
       value.controller.dispose();
     },
   );
+
+  test("serializes rapid Sample inspect and trigger journeys across Pads", async () => {
+    const first = deferred<SampleInspect>();
+    const value = sampleFixture({
+      inspectSample: (slot) => slot === 0
+        ? first.promise
+        : Promise.resolve(sampleInspect(slot, "one_shot")),
+    });
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyW", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyW"});
+    await settle();
+
+    expect(value.inspectCalls).toEqual([0]);
+    expect(value.triggers).toEqual([]);
+
+    first.resolve(sampleInspect(0, "one_shot"));
+    await settle();
+    await settle();
+    expect(value.inspectCalls).toEqual([0, 1]);
+    expect(value.triggers.map(({slot}) => slot)).toEqual([0, 1]);
+    value.controller.dispose();
+  });
+
+  test("preserves distinct rapid presses on the same Pad while inspect is pending", async () => {
+    const first = deferred<SampleInspect>();
+    let inspectCount = 0;
+    const value = sampleFixture({
+      inspectSample: (slot) => {
+        inspectCount += 1;
+        return inspectCount === 1
+          ? first.promise
+          : Promise.resolve(sampleInspect(slot, "one_shot"));
+      },
+    });
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyQ"});
+    await settle();
+
+    expect(value.inspectCalls).toEqual([0]);
+    expect(value.triggers).toEqual([]);
+
+    first.resolve(sampleInspect(0, "one_shot"));
+    await settle();
+    await settle();
+    expect(value.inspectCalls).toEqual([0, 0]);
+    expect(value.triggers.map(({slot}) => slot)).toEqual([0, 0]);
+    value.controller.dispose();
+  });
+
+  test("turns a queued second loop-toggle press into a stop after first admission", async () => {
+    const first = deferred<SampleInspect>();
+    let inspectCount = 0;
+    const value = sampleFixture({
+      inspectSample: (slot) => {
+        inspectCount += 1;
+        return inspectCount === 1
+          ? first.promise
+          : Promise.resolve(sampleInspect(slot, "loop_toggle"));
+      },
+    });
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyQ"});
+    await settle();
+
+    first.resolve(sampleInspect(0, "loop_toggle"));
+    await settle();
+    await settle();
+
+    expect(value.triggers).toHaveLength(1);
+    expect(value.stopped).toEqual([0]);
+    value.controller.dispose();
+  });
+
+  test("preserves released queued one-shots across a public Bank clear", async () => {
+    const first = deferred<SampleInspect>();
+    const value = sampleFixture({
+      inspectSample: (slot) => slot === 0
+        ? first.promise
+        : Promise.resolve(sampleInspect(slot, "one_shot")),
+    });
+    value.controller.keyDown({code: "KeyQ", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyQ"});
+    value.controller.keyDown({code: "KeyW", repeat: false, target: document.body});
+    value.controller.keyUp({code: "KeyW"});
+    value.controller.clearPressed();
+    await settle();
+
+    expect(value.inspectCalls).toEqual([0]);
+    first.resolve(sampleInspect(0, "one_shot"));
+    await settle();
+    await settle();
+    expect(value.inspectCalls).toEqual([0, 1]);
+    expect(value.triggers.map(({slot}) => slot)).toEqual([0, 1]);
+    value.controller.dispose();
+  });
 
   test("always cancels pointercancel before inspect resolves", async () => {
     const pending = deferred<SampleInspect>();

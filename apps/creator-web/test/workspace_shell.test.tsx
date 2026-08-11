@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
+import {SampleSurface} from "../src/components/sample_surface";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import type {
   CreatorRuntimeSession,
@@ -177,7 +178,7 @@ test("orders assigned Pad metadata, waveform, controls, Bank, and all Pads", asy
   }
 });
 
-test("contains Replace focus, cancels with Escape, and restores the target Pad", async () => {
+test("bounds and escapes Replace display names, warns, cancels, and restores focus", async () => {
   const assigned: CreatorState = {
     ...ready,
     project: {
@@ -197,8 +198,9 @@ test("contains Replace focus, cancels with Escape, and restores the target Pad",
   await userEvent.click(sampleMode);
   const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
   pad.focus();
+  const sourceName = `${"<img src=x onerror=private>".repeat(8)}.wav`;
   fireEvent.drop(pad, {
-    dataTransfer: {files: [new File(["wav"], "replace.wav", {type: "audio/wav"})]},
+    dataTransfer: {files: [new File(["wav"], sourceName, {type: "audio/wav"})]},
   });
 
   const dialog = screen.getByRole("dialog", {name: "Replace Pad A1?"});
@@ -207,6 +209,13 @@ test("contains Replace focus, cancels with Escape, and restores the target Pad",
   expect(dialog.getAttribute("aria-modal")).toBe("true");
   expect(document.activeElement).toBe(cancel);
   expect(sampleMode.closest("[inert]")).not.toBeNull();
+  const displayedName = dialog.querySelector("p")?.textContent ?? "";
+  expect(Array.from(displayedName)).toHaveLength(96);
+  expect(displayedName.endsWith("…")).toBe(true);
+  expect(dialog.querySelector("img")).toBeNull();
+  expect(dialog.textContent).toContain(
+    "Replacing the Sample resets Start, End, trigger, Loop, Volume, and Mute.",
+  );
 
   confirm.focus();
   fireEvent.keyDown(dialog, {key: "Tab"});
@@ -214,6 +223,8 @@ test("contains Replace focus, cancels with Escape, and restores the target Pad",
   fireEvent.keyDown(dialog, {key: "Escape"});
   expect(screen.queryByRole("dialog", {name: "Replace Pad A1?"})).toBeNull();
   expect(document.activeElement).toBe(pad);
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
 });
 
 const listedSummary: LocalProjectSummary = {
@@ -819,7 +830,9 @@ test.each([
       expect(screen.getByText("Creator unavailable")).toBeTruthy();
       expect(screen.getByText(code === "HOST_PROTOCOL_MISMATCH"
         ? "Creator and Runtime could not verify a compatible protocol."
-        : "Creator cannot continue (NOT_FOUND)."),
+        : code === "HOST_RESTART_REQUIRED"
+          ? "Runtime must be restarted before continuing."
+          : "Creator cannot continue (NOT_FOUND)."),
       ).toBeTruthy();
       const pad = screen.getByRole("button", {name: "Pad A1 — empty"});
       expect(pad.hasAttribute("disabled")).toBe(true);
@@ -882,7 +895,7 @@ test.each(["project", "sample"] as const)(
       expect(screen.getByText(
         "Sample was saved, but current Project truth could not be refreshed",
       )).toBeTruthy();
-      expect(screen.getByText("HOST_TIMEOUT")).toBeTruthy();
+      expect(screen.getByText("Runtime must be restarted before continuing.")).toBeTruthy();
       expect(fixture.mutationCount).toBe(1);
       expect(fixture.busyCount).toBe(4);
       const settledBusyCount = fixture.busyCount;
@@ -1277,6 +1290,230 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   ]);
   expect(fixture.calls.filter((call) => call === "openProject")).toHaveLength(1);
   expect(fixture.calls.filter((call) => call === "reloadSnapshot")).toHaveLength(1);
+});
+
+test("uses the same accept-filtered import path and keeps selection on unsupported audio", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let importCount = 0;
+  fixture.session.importAssignSample = async () => {
+    importCount += 1;
+    throw Object.assign(new Error("/private/opfs/source-name.wav is unsupported"), {
+      code: "UNSUPPORTED_AUDIO",
+    });
+  };
+  const {container} = render(
+    <App initialState={ready} runtimeFactory={() => fixture.session} />,
+  );
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
+
+  const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
+  expect(input.accept).toBe(".wav,audio/wav,audio/wave");
+  fireEvent.change(input, {target: {files: []}});
+  expect(importCount).toBe(0);
+
+  const pad = screen.getByRole("button", {name: "Pad A2 — empty"});
+  fireEvent.drop(pad, {
+    dataTransfer: {files: [new File(["not-wav"], "private-source.mp3", {
+      type: "audio/mpeg",
+    })]},
+  });
+
+  await screen.findByText("Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz");
+  expect(screen.getByText("Pad A2", {selector: ".selected-sample strong"})).toBeTruthy();
+  expect(screen.queryByText("private-source.mp3")).toBeNull();
+  expect(screen.queryByText("/private/opfs")).toBeNull();
+  expect(importCount).toBe(1);
+  await userEvent.upload(input, new File(["not-wav"], "second-private.wav", {
+    type: "audio/wav",
+  }));
+  await waitFor(() => expect(importCount).toBe(2));
+  expect(screen.getByText(
+    "Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz",
+  )).toBeTruthy();
+  expect(screen.queryByText("second-private.wav")).toBeNull();
+  await userEvent.click(screen.getByRole("button", {name: "Project"}));
+  expect(screen.getByText("3", {selector: ".project-summary dd"})).toBeTruthy();
+});
+
+test.each(["mute", "reset", "replace"] as const)(
+  "%s stops an admitted Pad before mutation without waiting for Voice projection",
+  async (kind) => {
+    const fixture = mutableSampleRuntimeFixture();
+    const order: string[] = [];
+    let triggerCount = 0;
+    fixture.session.trigger = async (slot, velocity, source) => {
+      triggerCount += 1;
+      return {sequence: triggerCount, slot, velocity, source};
+    };
+    fixture.session.stopPad = async (slot) => {
+      order.push(`stop:${slot}`);
+      return true;
+    };
+    fixture.session.updatePad = async (request) => {
+      order.push(`mute:${request.slot}`);
+      fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+      fixture.revision = 4;
+      return {
+        committedRevision: 4,
+        runtimeRevision: 4,
+        runtimePublished: true,
+        snapshotError: null,
+      };
+    };
+    fixture.session.resetPad = async (request) => {
+      order.push(`reset:${request.slot}`);
+      fixture.playbacks.set(request.slot, Object.freeze({
+        trimStartFrame: 0,
+        trimEndFrame: 8,
+        triggerMode: "one_shot",
+        gainMillidb: 0,
+        muted: false,
+      }));
+      fixture.revision = 4;
+      return {
+        committedRevision: 4,
+        runtimeRevision: 4,
+        runtimePublished: true,
+        snapshotError: null,
+      };
+    };
+    fixture.session.importAssignSample = async (_file, options) => {
+      order.push(`replace:${options.slot}`);
+      fixture.assigned.set(options.slot, "44444444-4444-4444-8444-444444444444");
+      fixture.playbacks.set(options.slot, Object.freeze({
+        trimStartFrame: 0,
+        trimEndFrame: 8,
+        triggerMode: "one_shot",
+        gainMillidb: 0,
+        muted: false,
+      }));
+      fixture.revision = 4;
+      return {
+        committedRevision: 4,
+        runtimeRevision: 4,
+        runtimePublished: true,
+        snapshotError: null,
+      };
+    };
+    const {container} = render(
+      <App initialState={ready} runtimeFactory={() => fixture.session} />,
+    );
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+    fireEvent.keyDown(screen.getByRole("button", {name: "Pad A1 — assigned"}), {
+      key: "Enter",
+      code: "Enter",
+      repeat: false,
+    });
+    await waitFor(() => expect(triggerCount).toBe(1));
+
+    if (kind === "mute") {
+      await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+    } else if (kind === "reset") {
+      await userEvent.click(screen.getByRole("button", {name: "Reset Pad to Defaults"}));
+      await userEvent.click(screen.getByRole("button", {name: "Confirm reset"}));
+    } else {
+      await userEvent.click(screen.getByRole("button", {name: "Replace Sample"}));
+      const input = container.querySelector<HTMLInputElement>(".sample-file-input")!;
+      await userEvent.upload(input, new File(["wav"], "replace.wav", {
+        type: "audio/wav",
+      }));
+      await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+    }
+
+    await waitFor(() => expect(order).toEqual([`stop:0`, `${kind}:0`]));
+    expect(fixture.revision).toBe(4);
+  },
+);
+
+test("clears one owned Host preview when the Sample surface unmounts", async () => {
+  const fixture = sampleRuntimeFixture();
+  let clearCount = 0;
+  fixture.session.clearSamplePreview = async (slot) => {
+    expect(slot).toBe(0);
+    clearCount += 1;
+    return true;
+  };
+  const previewState: CreatorState = {
+    ...ready,
+    project: {
+      ...ready.project,
+      current: {...ready.project.current!, revision: 3},
+    },
+    sample: {
+      ...ready.sample,
+      selectedSlot: 0,
+      inspect: fixture.inspect,
+      auditionPlayback: fixture.inspect.playback,
+      savedRevision: 3,
+      runtimeRevision: 3,
+    },
+  };
+  const view = render(
+    <SampleSurface
+      state={previewState}
+      session={fixture.session}
+      filePickIntent={{current: () => {}}}
+      dispatch={vi.fn()}
+    />,
+  );
+
+  view.unmount();
+  await waitFor(() => expect(clearCount).toBe(1));
+  expect(clearCount).toBe(1);
+});
+
+test("shows saved and stale Runtime revisions and retries Prepare explicitly", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  let updateCount = 0;
+  let retryCount = 0;
+  fixture.session.updatePad = async (request) => {
+    updateCount += 1;
+    fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+    fixture.revision = 4;
+    return {
+      committedRevision: 4,
+      runtimeRevision: 3,
+      runtimePublished: false,
+      snapshotError: {
+        code: "COOK_FAILED",
+        message: "Runtime preparation failed",
+        details: {},
+      },
+    };
+  };
+  fixture.session.retryPrepare = async (patternId) => {
+    retryCount += 1;
+    return {
+      projectId: listedSummary.projectId,
+      projectRevision: 4,
+      patternId,
+      runtimeReady: true,
+      generation: 2,
+      snapshotError: null,
+      runtimeRevision: 4,
+    };
+  };
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+  expect(screen.getByText("Activate Audio to preview")).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+  expect(await screen.findByText(
+    "Saved at revision 4; Runtime is still revision 3",
+  )).toBeTruthy();
+  expect(updateCount).toBe(1);
+  await userEvent.click(screen.getByRole("button", {name: "Retry Prepare"}));
+  await waitFor(() => expect(retryCount).toBe(1));
+  await waitFor(() => expect(screen.queryByText(
+    "Saved at revision 4; Runtime is still revision 3",
+  )).toBeNull());
 });
 
 test("gates Project actions while the Runtime is booting", async () => {

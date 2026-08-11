@@ -1,4 +1,4 @@
-import {useEffect, useRef, useState} from "react";
+import {useCallback, useEffect, useRef, useState} from "react";
 
 import {BankSelector} from "./bank_selector";
 import {ConfirmationDialog, SampleControls} from "./sample_controls";
@@ -45,6 +45,11 @@ interface SampleSurfaceProps {
 interface PendingFile {
   readonly slot: number;
   readonly file: File;
+}
+
+interface PreviewOwner {
+  readonly session: CreatorSampleRuntimeSession;
+  readonly slot: number;
 }
 
 const SAMPLE_ERROR_CODES = new Set([
@@ -110,10 +115,22 @@ export function SampleSurface({
   const importPending = useRef<Readonly<SamplePendingAction> | null>(null);
   const previousSession = useRef(session);
   const previewEpoch = useRef(0);
+  const previewOwner = useRef<PreviewOwner | null>(null);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
   const sample = state.sample;
   const inspect = sample.inspect;
   const selectedSlot = sample.selectedSlot;
+
+  const clearOwnedPreview = useCallback(() => {
+    const owner = previewOwner.current;
+    if (owner === null) return;
+    previewOwner.current = null;
+    previewEpoch.current += 1;
+    void cancelSamplePreviewJourney(owner.session, owner.slot).then(
+      () => dispatch({type: "sample-action", action: {type: "preview-cleared"}}),
+      () => {},
+    );
+  }, [dispatch]);
 
   useEffect(() => {
     filePickIntent.current = (slot) => {
@@ -127,6 +144,7 @@ export function SampleSurface({
   }, [filePickIntent]);
 
   useEffect(() => () => {
+    clearOwnedPreview();
     const pending = importPending.current;
     importPending.current = null;
     if (pending !== null) {
@@ -138,10 +156,18 @@ export function SampleSurface({
     }
     importController.current?.abort();
     importController.current = null;
-  }, [dispatch]);
+  }, [clearOwnedPreview, dispatch]);
+
+  useEffect(() => {
+    if (session !== undefined && selectedSlot !== null &&
+      sample.auditionPlayback !== null && previewOwner.current === null) {
+      previewOwner.current = {session, slot: selectedSlot};
+    }
+  }, [sample.auditionPlayback, selectedSlot, session]);
 
   useEffect(() => {
     if (previousSession.current === session) return;
+    clearOwnedPreview();
     previousSession.current = session;
     const pending = operationPending.current;
     operationPending.current = null;
@@ -154,7 +180,7 @@ export function SampleSurface({
         action: {type: "operation-cancelled", pending},
       });
     }
-  }, [dispatch, session]);
+  }, [clearOwnedPreview, dispatch, session]);
 
   useEffect(() => {
     if (selectedSlot !== null || state.project.current === null) return;
@@ -307,8 +333,8 @@ export function SampleSurface({
       state.project.current?.pads[slot]?.assetId !== undefined) ||
     (inspect?.slot === slot && inspect.assetId !== null);
 
-  const stopIfActive = async (slot: number) => {
-    if (session === undefined || !sample.voices.some((voice) => voice.slot === slot)) return;
+  const stopBeforeMutation = async (slot: number) => {
+    if (session === undefined) return;
     if (await session.stopPad(slot) !== true) {
       throw Object.assign(new Error("Sample stop failed"), {code: "HOST_STATE_INVALID"});
     }
@@ -325,16 +351,23 @@ export function SampleSurface({
     });
     operationPending.current = pending;
     dispatch({type: "sample-action", action: {type: "pending-began", pending}});
+    let mutationStarted = false;
     try {
-      if (playback.muted !== inspect.playback.muted) await stopIfActive(inspect.slot);
+      if (playback.muted !== inspect.playback.muted) {
+        await stopBeforeMutation(inspect.slot);
+      }
+      mutationStarted = true;
       const resolution = await updateSampleJourney(session, {
         slot: inspect.slot,
         expectedRevision: inspect.projectRevision,
         playback,
       });
+      previewOwner.current = null;
       if (operationPending.current !== pending) return;
       dispatchResolution(pending, resolution);
     } catch (error) {
+      if (mutationStarted) previewOwner.current = null;
+      else clearOwnedPreview();
       if (operationPending.current !== pending) return;
       operationPending.current = null;
       dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
@@ -350,6 +383,7 @@ export function SampleSurface({
     if (session === undefined || inspect === null || sample.pendingAction !== null ||
       operationPending.current !== null) return;
     const epoch = ++previewEpoch.current;
+    previewOwner.current = {session, slot: inspect.slot};
     const draft = updateSampleDraft(
       beginSampleDraft(inspect.playback, inspect.projectRevision),
       playback,
@@ -372,6 +406,7 @@ export function SampleSurface({
       },
       () => {
         if (previewEpoch.current === epoch) {
+          previewOwner.current = null;
           dispatch({type: "sample-action", action: {type: "preview-failed"}});
         }
       },
@@ -379,14 +414,8 @@ export function SampleSurface({
   };
 
   const cancelPreview = () => {
-    previewEpoch.current += 1;
     dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
-    if (session !== undefined && selectedSlot !== null) {
-      void cancelSamplePreviewJourney(session, selectedSlot).then(
-        () => dispatch({type: "sample-action", action: {type: "preview-cleared"}}),
-        () => {},
-      );
-    }
+    clearOwnedPreview();
   };
 
   const reset = async () => {
@@ -399,15 +428,20 @@ export function SampleSurface({
     });
     operationPending.current = pending;
     dispatch({type: "sample-action", action: {type: "pending-began", pending}});
+    let mutationStarted = false;
     try {
-      await stopIfActive(inspect.slot);
+      await stopBeforeMutation(inspect.slot);
+      mutationStarted = true;
       const resolution = await resetSampleJourney(session, {
         slot: inspect.slot,
         expectedRevision: inspect.projectRevision,
       });
+      previewOwner.current = null;
       if (operationPending.current !== pending) return;
       dispatchResolution(pending, resolution);
     } catch (error) {
+      if (mutationStarted) previewOwner.current = null;
+      else clearOwnedPreview();
       if (operationPending.current !== pending) return;
       operationPending.current = null;
       dispatch({
@@ -434,15 +468,17 @@ export function SampleSurface({
     operationPending.current = pending;
     importPending.current = pending;
     try {
-      if (assigned) await stopIfActive(slot);
+      if (assigned) await stopBeforeMutation(slot);
       const resolution = await importAssignSampleJourney(session, file, {
         slot,
         expectedRevision,
         signal: controller.signal,
       });
+      previewOwner.current = null;
       if (operationPending.current !== pending) return;
       dispatchResolution(pending, resolution);
     } catch (error) {
+      clearOwnedPreview();
       if (operationPending.current !== pending) return;
       operationPending.current = null;
       importPending.current = null;

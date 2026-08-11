@@ -559,6 +559,50 @@ test("Sample queries bind flat slots to the current Project and validate typed r
   );
 });
 
+test("Sample queries never overlap on the packaged Host request lane", async () => {
+  let releaseFirst;
+  const firstGate = new Promise((resolvePromise) => {
+    releaseFirst = resolvePromise;
+  });
+  const calls = [];
+  let inFlight = 0;
+  let maximumInFlight = 0;
+  const {session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation !== "sample.inspect") {
+        return success(envelope, defaultResult(envelope.operation));
+      }
+      calls.push(envelope.payload.slot);
+      inFlight += 1;
+      maximumInFlight = Math.max(maximumInFlight, inFlight);
+      if (calls.length === 1) await firstGate;
+      inFlight -= 1;
+      return success(envelope, {
+        project_revision: 7,
+        slot: envelope.payload.slot,
+        asset_id: "11111111-1111-4111-8111-111111111111",
+        playback: WIRE_PLAYBACK,
+        metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+        waveform_cache_identity: `${"a".repeat(64)}/1/max-abs-mirror/1`,
+      });
+    },
+  });
+  await session.start();
+
+  const first = session.inspectSample(0);
+  await drainTasks();
+  const second = session.inspectSample(1);
+  await drainTasks();
+  assert.deepEqual(calls, [{bank: 0, pad: 0}]);
+  assert.equal(maximumInFlight, 1);
+
+  releaseFirst();
+  const values = await Promise.all([first, second]);
+  assert.deepEqual(values.map(({slot}) => slot), [0, 1]);
+  assert.deepEqual(calls, [{bank: 0, pad: 0}, {bank: 0, pad: 1}]);
+  assert.equal(maximumInFlight, 1);
+});
+
 test("Sample query rejects malformed Host output instead of exposing partial truth", async () => {
   const {session} = fixture({
     send: async (envelope) => success(envelope, {
@@ -1851,6 +1895,170 @@ test("adverse cleanup drains an in-flight preview before stop and rejects later 
   ]);
   assert.equal(operations.filter((value) =>
     value === "sample.preview.set").length, 1);
+});
+
+test("adverse cleanup cancels an in-flight Sample query before the safety stop", async () => {
+  const browserWindow = new EventTarget();
+  const operations = [];
+  const querySignals = [];
+  const queryCancellations = [];
+  let releaseQuery;
+  let waveformAttempts = 0;
+  const {session} = fixture({
+    browserWindow,
+    send: async (envelope, transportOptions) => {
+      operations.push(envelope.operation);
+      if (envelope.operation === "sample.waveform") {
+        waveformAttempts += 1;
+        querySignals.push(transportOptions.signal);
+        queryCancellations.push(transportOptions.cancelQuery);
+        if (waveformAttempts > 1) {
+          return success(envelope, {
+            metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+            algorithm_version: 1,
+            buckets: [{
+              start_frame: 0,
+              end_frame: 100,
+              peak_magnitude: 1,
+            }],
+            project_revision: 7,
+          });
+        }
+        return new Promise((resolvePromise, rejectPromise) => {
+          releaseQuery = () => resolvePromise(success(envelope, {
+            metadata: {sample_rate: 48_000, channels: 2, source_frames: 100},
+            algorithm_version: 1,
+            buckets: [{
+              start_frame: 0,
+              end_frame: 100,
+              peak_magnitude: 1,
+            }],
+            project_revision: 7,
+          }));
+          transportOptions.signal.addEventListener("abort", () => {
+            rejectPromise(new DOMException("cancelled", "AbortError"));
+          }, {once: true});
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  await session.setSamplePreview(4, PLAYBACK);
+  operations.length = 0;
+
+  const query = session.queryWaveform({
+    slot: 4,
+    window: {startFrame: 0, endFrame: 100, bucketCount: 1},
+  });
+  const queryResult = query.then(
+    (value) => ({value}),
+    (error) => ({error}),
+  );
+  await drainTasks();
+  browserWindow.dispatchEvent(new Event("blur"));
+  await drainTasks();
+  await drainTasks();
+
+  try {
+    assert.equal(querySignals[0]?.aborted, true);
+    assert.equal(queryCancellations[0], true);
+    const settled = await queryResult;
+    assert.equal(settled.error, undefined);
+    assert.equal(settled.value.projectRevision, 7);
+    assert.deepEqual(operations.slice(0, 4), [
+      "sample.waveform",
+      "sample.preview.clear",
+      "sample.stop",
+      "audio.suspend",
+    ]);
+    assert.equal(operations.filter((operation) =>
+      operation === "sample.waveform").length, 2);
+    assert.equal(queryCancellations[1], true);
+  } finally {
+    releaseQuery?.();
+    await query.catch(() => {});
+  }
+});
+
+test("adverse cleanup interrupts Project reads and retries them after the safety stop", async () => {
+  const summary = {
+    project_id: "10000000-0000-4000-8000-000000000001",
+    pattern_id: "20000000-0000-4000-8000-000000000002",
+    revision: 7,
+    bpm: 120,
+    asset_count: 1,
+    assigned_pad_count: 1,
+    bundle_digest: "a".repeat(64),
+  };
+  const cases = [
+    {
+      operation: "project.inspect",
+      query: (session) => session.inspectProject(),
+      result: {project_revision: 7},
+    },
+    {
+      operation: "project.list",
+      query: (session) => session.listLocalProjects(),
+      result: {projects: [summary]},
+    },
+  ];
+
+  for (const item of cases) {
+    const browserWindow = new EventTarget();
+    const operations = [];
+    const querySignals = [];
+    let attempts = 0;
+    let releaseQuery;
+    const {session} = fixture({
+      browserWindow,
+      send: async (envelope, transportOptions) => {
+        operations.push(envelope.operation);
+        if (envelope.operation === item.operation) {
+          attempts += 1;
+          querySignals.push(transportOptions.signal);
+          if (attempts > 1) return success(envelope, item.result);
+          return new Promise((resolvePromise, rejectPromise) => {
+            releaseQuery = () => resolvePromise(success(envelope, item.result));
+            transportOptions.signal?.addEventListener("abort", () => {
+              rejectPromise(new DOMException("cancelled", "AbortError"));
+            }, {once: true});
+          });
+        }
+        return success(envelope, defaultResult(envelope.operation));
+      },
+    });
+    await session.start();
+    await session.activateAudio(createUserGestureToken({isTrusted: true}));
+    await session.setSamplePreview(4, PLAYBACK);
+    operations.length = 0;
+
+    const query = item.query(session);
+    const queryResult = query.then(
+      (value) => ({value}),
+      (error) => ({error}),
+    );
+    await drainTasks();
+    browserWindow.dispatchEvent(new Event("blur"));
+    await drainTasks();
+    await drainTasks();
+
+    try {
+      assert.equal(querySignals[0]?.aborted, true, item.operation);
+      const settled = await queryResult;
+      assert.equal(settled.error, undefined, item.operation);
+      assert.equal(attempts, 2, item.operation);
+      const stopIndex = operations.indexOf("sample.stop");
+      const retryIndex = operations.lastIndexOf(item.operation);
+      assert.ok(stopIndex >= 0, item.operation);
+      assert.ok(retryIndex > stopIndex, item.operation);
+    } finally {
+      releaseQuery?.();
+      await query.catch(() => {});
+      await session.close();
+    }
+  }
 });
 
 test("fatal observations clear preview and stop voices before failed is observable", async () => {

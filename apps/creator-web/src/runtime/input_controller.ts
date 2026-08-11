@@ -130,15 +130,55 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     : () => true;
   const activeGestures = new Set<string>();
   const gestureModes = new Map<string, SampleTriggerMode>();
-  const sampleGestureTokens = new Map<string, SampleGestureToken>();
+  const sampleGestureTokens = new Map<string, SampleGestureToken[]>();
   const runtimeAgnosticGestures = new Set<string>();
   const loopToggleSlots = new Map<number, number>();
   const stoppingLoopSlots = new Set<number>();
   const admissions = new Map<number, AdmissionRecord>();
   const earlyOutcomes = new Map<number, RuntimeOutcome>();
+  let sampleTriggerTail: Promise<void> | null = null;
   let disposed = false;
 
   const gesture = (source: RuntimeTriggerSource, slot: number) => `${source}:${slot}`;
+
+  function currentSampleToken(currentGesture: string) {
+    return sampleGestureTokens.get(currentGesture)?.at(-1);
+  }
+
+  function addSampleToken(currentGesture: string, token: SampleGestureToken) {
+    const tokens = sampleGestureTokens.get(currentGesture);
+    if (tokens === undefined) {
+      sampleGestureTokens.set(currentGesture, [token]);
+      return;
+    }
+    tokens.push(token);
+  }
+
+  function hasSampleToken(currentGesture: string, token: SampleGestureToken) {
+    return sampleGestureTokens.get(currentGesture)?.includes(token) === true;
+  }
+
+  function removeSampleToken(currentGesture: string, token: SampleGestureToken) {
+    const tokens = sampleGestureTokens.get(currentGesture);
+    if (tokens === undefined) return;
+    const next = tokens.filter((candidate) => candidate !== token);
+    if (next.length === 0) sampleGestureTokens.delete(currentGesture);
+    else sampleGestureTokens.set(currentGesture, next);
+  }
+
+  function clearSampleAttempt(
+    currentGesture: string,
+    token: SampleGestureToken,
+  ) {
+    const ownsGesture = currentSampleToken(currentGesture) === token;
+    removeSampleToken(currentGesture, token);
+    if (ownsGesture) {
+      activeGestures.delete(currentGesture);
+      gestureModes.delete(currentGesture);
+      runtimeAgnosticGestures.delete(currentGesture);
+    }
+    return ownsGesture;
+  }
 
   function clearSlotGestures(slot: number) {
     for (const source of ["pointer", "keyboard", "midi"] as const) {
@@ -170,6 +210,26 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         admissions.delete(sequence);
       }
     }
+  }
+
+  function stopAcceptedLoopToggle(slot: number) {
+    if (!hasAcceptedLoopToggle(slot)) return false;
+    if (stoppingLoopSlots.has(slot)) return true;
+    if (sampleOptions === null) return false;
+    stoppingLoopSlots.add(slot);
+    sampleControl(sampleOptions.session.stopPad(slot), {
+      accepted() {
+        stoppingLoopSlots.delete(slot);
+        loopToggleSlots.delete(slot);
+        discardLoopToggleAdmissions(slot);
+        clearSlotGestures(slot);
+        dispatch({type: "pad-released", slot});
+      },
+      rejected() {
+        stoppingLoopSlots.delete(slot);
+      },
+    });
+    return true;
   }
 
   function sampleControl(
@@ -212,12 +272,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   function release(slot: number, source: RuntimeTriggerSource) {
     const currentGesture = gesture(source, slot);
     const mode = gestureModes.get(currentGesture);
-    const sampleToken = sampleGestureTokens.get(currentGesture);
+    const sampleToken = currentSampleToken(currentGesture);
     if (sampleOptions !== null) {
       if (runtimeAgnosticGestures.has(currentGesture)) {
         const wasActive = activeGestures.delete(currentGesture);
         runtimeAgnosticGestures.delete(currentGesture);
-        sampleGestureTokens.delete(currentGesture);
+        if (sampleToken !== undefined) {
+          removeSampleToken(currentGesture, sampleToken);
+        }
         dispatch({type: "pad-released", slot});
         if (wasActive) {
           sampleControl(sampleOptions.session.release(slot, source));
@@ -235,7 +297,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     }
     const wasActive = activeGestures.delete(currentGesture);
     gestureModes.delete(currentGesture);
-    sampleGestureTokens.delete(currentGesture);
+    if (sampleToken !== undefined) {
+      removeSampleToken(currentGesture, sampleToken);
+    }
     dispatch({type: "pad-released", slot});
     if (sampleOptions !== null && wasActive &&
       (mode === "gate" || mode === "loop_gate")) {
@@ -251,7 +315,10 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         mode === "gate" || mode === "loop_gate");
     activeGestures.delete(currentGesture);
     gestureModes.delete(currentGesture);
-    sampleGestureTokens.delete(currentGesture);
+    const sampleToken = currentSampleToken(currentGesture);
+    if (sampleToken !== undefined) {
+      removeSampleToken(currentGesture, sampleToken);
+    }
     runtimeAgnosticGestures.delete(currentGesture);
     dispatch({type: "pad-released", slot});
     if (sampleOptions !== null && shouldRelease) {
@@ -261,7 +328,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
 
   function applyOutcome(outcome: RuntimeOutcome, admission: AdmissionRecord) {
     const tokenCurrent = admission.sampleToken === undefined ||
-      sampleGestureTokens.get(admission.gesture) === admission.sampleToken;
+      hasSampleToken(admission.gesture, admission.sampleToken);
     if (!tokenCurrent) {
       return;
     }
@@ -274,11 +341,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       dispatch({type: "pad-pressed", slot: admission.slot, outcome: "capacity"});
       if (admission.sampleToken?.released === true ||
           !activeGestures.has(admission.gesture)) {
-        activeGestures.delete(admission.gesture);
-        gestureModes.delete(admission.gesture);
-        sampleGestureTokens.delete(admission.gesture);
-        runtimeAgnosticGestures.delete(admission.gesture);
-        dispatch({type: "pad-released", slot: admission.slot});
+        const clearedGesture = admission.sampleToken === undefined
+          ? activeGestures.delete(admission.gesture)
+          : clearSampleAttempt(admission.gesture, admission.sampleToken);
+        if (admission.sampleToken === undefined) {
+          gestureModes.delete(admission.gesture);
+          runtimeAgnosticGestures.delete(admission.gesture);
+        }
+        if (clearedGesture) {
+          dispatch({type: "pad-released", slot: admission.slot});
+        }
       }
       return;
     }
@@ -288,7 +360,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       return;
     }
     if (!activeGestures.has(admission.gesture)) {
-      sampleGestureTokens.delete(admission.gesture);
+      if (admission.sampleToken !== undefined) {
+        removeSampleToken(admission.gesture, admission.sampleToken);
+      }
       gestureModes.delete(admission.gesture);
       return;
     }
@@ -324,7 +398,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     });
     const admission = admissions.get(event.sequence);
     const admissionCurrent = admission?.sampleToken === undefined ||
-      sampleGestureTokens.get(admission.gesture) === admission.sampleToken;
+      hasSampleToken(admission.gesture, admission.sampleToken);
     if (event.state === "started" && admission?.mode === "loop_toggle" &&
         !admission.muted && admissionCurrent) {
       loopToggleSlots.set(event.slot, event.sequence);
@@ -339,11 +413,17 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       }
       let clearedGesture = false;
       if (admission !== undefined && admissionCurrent) {
-        activeGestures.delete(admission.gesture);
-        gestureModes.delete(admission.gesture);
-        sampleGestureTokens.delete(admission.gesture);
-        runtimeAgnosticGestures.delete(admission.gesture);
-        clearedGesture = true;
+        if (admission.sampleToken === undefined) {
+          activeGestures.delete(admission.gesture);
+          gestureModes.delete(admission.gesture);
+          runtimeAgnosticGestures.delete(admission.gesture);
+          clearedGesture = true;
+        } else {
+          clearedGesture = clearSampleAttempt(
+            admission.gesture,
+            admission.sampleToken,
+          );
+        }
       }
       admissions.delete(event.sequence);
       if ((matchedLatch || clearedGesture) && !slotHasActiveGesture(event.slot)) {
@@ -361,30 +441,33 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     sampleToken?: SampleGestureToken,
     muted = false,
   ) {
-    void session.trigger(slot, velocity, source).then(
+    const clearRejectedAttempt = () => {
+      if (sampleToken === undefined) {
+        activeGestures.delete(currentGesture);
+        gestureModes.delete(currentGesture);
+        runtimeAgnosticGestures.delete(currentGesture);
+        return true;
+      }
+      return clearSampleAttempt(currentGesture, sampleToken);
+    };
+    return session.trigger(slot, velocity, source).then(
       (admission) => {
         if (disposed) return;
         const currentSampleAttempt = sampleToken === undefined ||
-          sampleGestureTokens.get(currentGesture) === sampleToken;
+          hasSampleToken(currentGesture, sampleToken);
         if (admission === false) {
           if (currentSampleAttempt) {
-            activeGestures.delete(currentGesture);
-            gestureModes.delete(currentGesture);
-            sampleGestureTokens.delete(currentGesture);
+            const clearedGesture = clearRejectedAttempt();
             if (mode === "loop_toggle") loopToggleSlots.delete(slot);
-            runtimeAgnosticGestures.delete(currentGesture);
-            dispatch({type: "pad-released", slot});
+            if (clearedGesture) dispatch({type: "pad-released", slot});
           }
           return;
         }
         if (!admissionMatches(admission, slot, velocity, source)) {
           if (currentSampleAttempt) {
-            activeGestures.delete(currentGesture);
-            gestureModes.delete(currentGesture);
-            sampleGestureTokens.delete(currentGesture);
+            const clearedGesture = clearRejectedAttempt();
             if (mode === "loop_toggle") loopToggleSlots.delete(slot);
-            runtimeAgnosticGestures.delete(currentGesture);
-            dispatch({type: "pad-released", slot});
+            if (clearedGesture) dispatch({type: "pad-released", slot});
           }
           dispatch({
             type: "runtime-changed",
@@ -413,14 +496,11 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       (error: unknown) => {
         if (!disposed) {
           const currentSampleAttempt = sampleToken === undefined ||
-            sampleGestureTokens.get(currentGesture) === sampleToken;
+            hasSampleToken(currentGesture, sampleToken);
           if (currentSampleAttempt) {
-            activeGestures.delete(currentGesture);
-            gestureModes.delete(currentGesture);
-            sampleGestureTokens.delete(currentGesture);
+            const clearedGesture = clearRejectedAttempt();
             if (mode === "loop_toggle") loopToggleSlots.delete(slot);
-            runtimeAgnosticGestures.delete(currentGesture);
-            dispatch({type: "pad-released", slot});
+            if (clearedGesture) dispatch({type: "pad-released", slot});
           }
           dispatch(inputErrorAction(error));
         }
@@ -440,23 +520,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       type: "sample-action",
       action: {type: "slot-selected", slot},
     });
-    if (hasAcceptedLoopToggle(slot)) {
-      if (stoppingLoopSlots.has(slot)) return;
-      stoppingLoopSlots.add(slot);
-      sampleControl(sampleOptions.session.stopPad(slot), {
-        accepted() {
-          stoppingLoopSlots.delete(slot);
-          loopToggleSlots.delete(slot);
-          discardLoopToggleAdmissions(slot);
-          clearSlotGestures(slot);
-          dispatch({type: "pad-released", slot});
-        },
-        rejected() {
-          stoppingLoopSlots.delete(slot);
-        },
-      });
-      return;
-    }
+    if (stopAcceptedLoopToggle(slot)) return;
     if (!sampleOptions.isAssigned(slot)) {
       sampleOptions.onFilePickIntent(slot, source);
       return;
@@ -465,7 +529,7 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
 
     const sampleToken: SampleGestureToken = {released: false};
     activeGestures.add(currentGesture);
-    sampleGestureTokens.set(currentGesture, sampleToken);
+    addSampleToken(currentGesture, sampleToken);
     if (!sampleOptions.isRuntimeCurrent()) {
       runtimeAgnosticGestures.add(currentGesture);
       sessionTrigger(
@@ -478,29 +542,36 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
       );
       return;
     }
-    void inspectSampleJourney(sampleOptions.session, slot).then(
-      (inspect) => {
-        if (disposed ||
-          sampleGestureTokens.get(currentGesture) !== sampleToken) {
+    const action = async () => {
+      if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
+        return;
+      }
+      if (stopAcceptedLoopToggle(slot)) {
+        removeSampleToken(currentGesture, sampleToken);
+        return;
+      }
+      try {
+        const inspect = await inspectSampleJourney(sampleOptions.session, slot);
+        if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
           return;
         }
         if (inspect.assetId === null) {
-          activeGestures.delete(currentGesture);
-          sampleGestureTokens.delete(currentGesture);
-          dispatch({type: "pad-released", slot});
+          if (clearSampleAttempt(currentGesture, sampleToken)) {
+            dispatch({type: "pad-released", slot});
+          }
           sampleOptions.onFilePickIntent(slot, source);
           return;
         }
         if (!sampleOptions.isAvailable(slot)) {
-          activeGestures.delete(currentGesture);
-          sampleGestureTokens.delete(currentGesture);
-          dispatch({type: "pad-released", slot});
+          if (clearSampleAttempt(currentGesture, sampleToken)) {
+            dispatch({type: "pad-released", slot});
+          }
           return;
         }
         if (!sampleOptions.isRuntimeCurrent()) {
           runtimeAgnosticGestures.add(currentGesture);
           if (sampleToken.released) activeGestures.add(currentGesture);
-          sessionTrigger(
+          await sessionTrigger(
             slot,
             velocity,
             source,
@@ -518,9 +589,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
             effectivePlayback = projectSamplePlayback(auditionPlayback);
           }
         } catch {
-          activeGestures.delete(currentGesture);
-          sampleGestureTokens.delete(currentGesture);
-          dispatch({type: "pad-released", slot});
+          if (clearSampleAttempt(currentGesture, sampleToken)) {
+            dispatch({type: "pad-released", slot});
+          }
           dispatch({
             type: "runtime-changed",
             phase: "failed",
@@ -530,9 +601,9 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
         }
         const mode = effectivePlayback.triggerMode;
         if (!SAMPLE_TRIGGER_MODES.has(mode)) {
-          activeGestures.delete(currentGesture);
-          sampleGestureTokens.delete(currentGesture);
-          dispatch({type: "pad-released", slot});
+          if (clearSampleAttempt(currentGesture, sampleToken)) {
+            dispatch({type: "pad-released", slot});
+          }
           dispatch({
             type: "runtime-changed",
             phase: "failed",
@@ -540,15 +611,14 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
           });
           return;
         }
-        gestureModes.set(currentGesture, mode);
+        const ownsGesture = currentSampleToken(currentGesture) === sampleToken;
+        if (ownsGesture) gestureModes.set(currentGesture, mode);
         if (sampleToken.released &&
           (mode === "gate" || mode === "loop_gate")) {
-          activeGestures.delete(currentGesture);
-          gestureModes.delete(currentGesture);
-          sampleGestureTokens.delete(currentGesture);
+          clearSampleAttempt(currentGesture, sampleToken);
           return;
         }
-        sessionTrigger(
+        await sessionTrigger(
           slot,
           velocity,
           source,
@@ -557,18 +627,27 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
           sampleToken,
           effectivePlayback.muted,
         );
-      },
-      (error: unknown) => {
-        if (disposed || sampleGestureTokens.get(currentGesture) !== sampleToken) {
+      } catch (error: unknown) {
+        if (disposed || !hasSampleToken(currentGesture, sampleToken)) {
           return;
         }
-        activeGestures.delete(currentGesture);
-        gestureModes.delete(currentGesture);
-        sampleGestureTokens.delete(currentGesture);
-        dispatch({type: "pad-released", slot});
+        if (clearSampleAttempt(currentGesture, sampleToken)) {
+          dispatch({type: "pad-released", slot});
+        }
         dispatch(inputErrorAction(error));
-      },
+      }
+    };
+    const journey = sampleTriggerTail === null
+      ? action()
+      : sampleTriggerTail.then(action);
+    const completion = journey.then(
+      () => undefined,
+      () => undefined,
     );
+    sampleTriggerTail = completion;
+    void completion.then(() => {
+      if (sampleTriggerTail === completion) sampleTriggerTail = null;
+    });
   }
 
   const resolveSlot = (localSlot: number) => getActiveBank() * 16 + localSlot;
@@ -644,10 +723,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     midi.clearPressed();
     activeGestures.clear();
     gestureModes.clear();
-    sampleGestureTokens.clear();
+    for (const [currentGesture, tokens] of sampleGestureTokens) {
+      const released = tokens.filter((token) => token.released);
+      if (released.length === 0) sampleGestureTokens.delete(currentGesture);
+      else sampleGestureTokens.set(currentGesture, released);
+    }
     runtimeAgnosticGestures.clear();
-    admissions.clear();
-    earlyOutcomes.clear();
+    if (sampleOptions === null) {
+      admissions.clear();
+      earlyOutcomes.clear();
+    }
     dispatch({type: "pressed-cleared"});
   }
 

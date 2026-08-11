@@ -39,6 +39,24 @@ function focusableElements(dialog: HTMLDialogElement): HTMLElement[] {
   ));
 }
 
+function validFocusTarget(element: HTMLElement | null): element is HTMLElement {
+  return element !== null && element.isConnected && element.tabIndex >= 0 &&
+    !element.matches(":disabled") &&
+    element.closest('[inert], [aria-hidden="true"]') === null;
+}
+
+function restoreConfirmationFocus(returnFocus: HTMLElement | null): void {
+  if (validFocusTarget(returnFocus)) {
+    returnFocus.focus();
+    return;
+  }
+  const fallback = Array.from(document.querySelectorAll<HTMLElement>(
+    'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+  )).find((element) => validFocusTarget(element) &&
+    element.closest(".sample-modal-backdrop") === null);
+  fallback?.focus();
+}
+
 export function ConfirmationDialog({
   labelledBy,
   returnFocus,
@@ -82,7 +100,7 @@ export function ConfirmationDialog({
         if (ariaHidden === null) element.removeAttribute("aria-hidden");
         else element.setAttribute("aria-hidden", ariaHidden);
       }
-      if (returnFocus?.isConnected) returnFocus.focus();
+      restoreConfirmationFocus(returnFocus);
     };
   }, [returnFocus]);
 

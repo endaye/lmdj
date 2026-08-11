@@ -1,3 +1,5 @@
+import {readFileSync} from "node:fs";
+
 import {describe, expect, test} from "vitest";
 
 import {
@@ -995,5 +997,13 @@ describe("Creator Sample state", () => {
         snapshotError: {code: "COOK_FAILED", message, details: {}},
       })).toThrow();
     }
+  });
+
+  test("rejects Windows paths without shipping the package scanner signature", () => {
+    const source = readFileSync("src/state/sample_state.ts", "utf8");
+    const packagePrivatePathPattern =
+      /(?:\/Users\/|file:\/+(?:Users|home)\/|[A-Za-z]:\\)/;
+
+    expect(source).not.toMatch(packagePrivatePathPattern);
   });
 });

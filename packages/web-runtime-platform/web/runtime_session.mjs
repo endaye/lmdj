@@ -33,6 +33,13 @@ const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
 const SAMPLE_PREVIEW_SLOT_LIMIT = 64;
 const VOICE_LISTENER_LIMIT = 64;
 const VOICE_NOTIFICATION_EVENT_LIMIT = 4_096;
+const SAFETY_QUERY_RETRY_LIMIT = 4;
+const SAFETY_INTERRUPTIBLE_HOST_OPERATIONS = new Set([
+  "project.inspect",
+  "project.list",
+  "sample.inspect",
+  "sample.waveform",
+]);
 const TRIGGER_SOURCES = new Set(["pointer", "keyboard", "midi"]);
 const SAFE_ERROR_DETAIL_NAMES = new Set([
   "mutation_outcome",
@@ -588,16 +595,20 @@ function normalizeSnapshotNotification(event, payload) {
   });
 }
 
+function abortError(message) {
+  if (typeof DOMException === "function") {
+    return new DOMException(message, "AbortError");
+  }
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
 function throwIfAborted(signal) {
   if (signal?.aborted !== true) {
     return;
   }
-  if (typeof DOMException === "function") {
-    throw new DOMException("Sample import was cancelled", "AbortError");
-  }
-  const error = new Error("Sample import was cancelled");
-  error.name = "AbortError";
-  throw error;
+  throw abortError("Sample import was cancelled");
 }
 function metaContent(document, name) {
   return document
@@ -1057,6 +1068,9 @@ function createRuntimeSessionController(options = {}) {
   let triggerAdmittedCount = 0;
   let triggerOutcomeCount = 0;
   let triggerRejectedCount = 0;
+  let hostRequestTail = null;
+  let hostQueryGeneration = 0;
+  let activeHostQueryAbort = null;
   let runtimeActionTail = Promise.resolve();
   let projectActionTail = Promise.resolve();
   let interruptionReservation = null;
@@ -1197,6 +1211,8 @@ function createRuntimeSessionController(options = {}) {
     if (safetyReservation !== null) {
       return safetyReservation;
     }
+    hostQueryGeneration += 1;
+    activeHostQueryAbort?.abort();
     const reservation = {reason, promise: null};
     safetyReservation = reservation;
     reservation.promise = serializeRuntimeAction(async () => {
@@ -1319,7 +1335,7 @@ function createRuntimeSessionController(options = {}) {
     listenerDisposers.push(() => target.removeEventListener(type, listener));
   }
 
-  async function boundedRequest(operation, payload, requestOptions = {}) {
+  async function dispatchBoundedRequest(operation, payload, requestOptions = {}) {
     const request = createRequestEnvelope({ operation, payload, crypto });
     const transportOptions = {
       deadlineMs: requestOptions.deadlineMs ?? deadlineForOperation(operation),
@@ -1329,6 +1345,9 @@ function createRuntimeSessionController(options = {}) {
     }
     if (requestOptions.signal !== undefined) {
       transportOptions.signal = requestOptions.signal;
+    }
+    if (requestOptions.cancelQuery === true) {
+      transportOptions.cancelQuery = true;
     }
     const response = validateResponseEnvelope(
       await transport.send(request, transportOptions),
@@ -1346,6 +1365,77 @@ function createRuntimeSessionController(options = {}) {
       );
     }
     return response.result;
+  }
+
+  function boundedRequest(operation, payload, requestOptions = {}) {
+    const interruptible = SAFETY_INTERRUPTIBLE_HOST_OPERATIONS.has(operation);
+    const queryGeneration = hostQueryGeneration;
+    const action = async () => {
+      if (interruptible && queryGeneration !== hostQueryGeneration) {
+        throw abortError("Host query was cancelled for Runtime safety");
+      }
+      if (!interruptible) {
+        return dispatchBoundedRequest(operation, payload, requestOptions);
+      }
+      const controller = new AbortController();
+      activeHostQueryAbort = controller;
+      try {
+        return await dispatchBoundedRequest(operation, payload, {
+          ...requestOptions,
+          signal: controller.signal,
+          cancelQuery: true,
+        });
+      } finally {
+        if (activeHostQueryAbort === controller) activeHostQueryAbort = null;
+      }
+    };
+    const pending = hostRequestTail === null
+      ? action()
+      : hostRequestTail.then(action);
+    const completion = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    hostRequestTail = completion;
+    void completion.then(() => {
+      if (hostRequestTail === completion) hostRequestTail = null;
+    });
+    return pending;
+  }
+
+  async function recoverableQuery(operation, payload) {
+    for (let attempt = 0; attempt < SAFETY_QUERY_RETRY_LIMIT; ++attempt) {
+      const queryGeneration = hostQueryGeneration;
+      try {
+        return await boundedRequest(operation, payload);
+      } catch (error) {
+        const safety = safetyReservation;
+        if (
+          error?.name !== "AbortError" ||
+          queryGeneration === hostQueryGeneration ||
+          safety === null ||
+          closing ||
+          ["restart-required", "failed", "closed"].includes(machine.state)
+        ) {
+          throw error;
+        }
+        try {
+          await safety.promise;
+        } catch {
+          throw error;
+        }
+        if (
+          closing ||
+          ["restart-required", "failed", "closed"].includes(machine.state)
+        ) {
+          throw error;
+        }
+      }
+    }
+    throw typedError(
+      "HOST_TIMEOUT",
+      "Host query could not recover after Runtime safety",
+    );
   }
 
   /**
@@ -2056,7 +2146,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function inspectProject() {
-    return boundedRequest("project.inspect", {});
+    return recoverableQuery("project.inspect", {});
   }
 
   async function reloadSnapshot(patternId) {
@@ -2065,7 +2155,7 @@ function createRuntimeSessionController(options = {}) {
 
   async function inspectSample(flatSlot) {
     const slot = flatSlotAddress(flatSlot);
-    const result = await boundedRequest("sample.inspect", {slot});
+    const result = await recoverableQuery("sample.inspect", {slot});
     return normalizeSampleInspect(result, flatSlot);
   }
 
@@ -2085,7 +2175,7 @@ function createRuntimeSessionController(options = {}) {
     ) {
       throw new TypeError("Sample waveform query is invalid");
     }
-    const result = await boundedRequest("sample.waveform", {
+    const result = await recoverableQuery("sample.waveform", {
       slot: flatSlotAddress(request.slot),
       window: {
         start_frame: request.window.startFrame,
@@ -2377,7 +2467,7 @@ function createRuntimeSessionController(options = {}) {
     if (closing || !started) {
       throw typedError("HOST_STATE_INVALID", "Project discovery is unavailable");
     }
-    const result = await boundedRequest("project.list", {});
+    const result = await recoverableQuery("project.list", {});
     if (!exactKeys(result, ["projects"]) || !Array.isArray(result.projects)) {
       throw typedError(
         "HOST_PROTOCOL_MISMATCH",

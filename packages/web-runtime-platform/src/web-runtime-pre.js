@@ -243,6 +243,58 @@ if (typeof globalThis.window !== "undefined") {
     }
   }
 
+  function cancelQueryRequest(requestId) {
+    if (!host.runtimeInitialized) return -1;
+    try {
+      return Module.ccall(
+        "lmdj_web_host_cancel_query",
+        "number",
+        ["string", "number"],
+        [requestId, requestId.length],
+      );
+    } catch {
+      return -1;
+    }
+  }
+
+  function transportAbortError() {
+    const error = new Error("formal Web Host request was cancelled");
+    error.name = "AbortError";
+    return error;
+  }
+
+  function detachPendingAbort(pending) {
+    if (pending.abortSignal && pending.abortListener) {
+      pending.abortSignal.removeEventListener("abort", pending.abortListener);
+    }
+    pending.abortSignal = null;
+    pending.abortListener = null;
+  }
+
+  function abortPendingRequest(requestId, pending) {
+    if (
+      transportTerminated ||
+      pendingRequests.get(requestId) !== pending ||
+      pending.abortError !== null
+    ) {
+      return;
+    }
+    pending.abortError = transportAbortError();
+    const cancellation = cancelQueryRequest(requestId);
+    if (cancellation < -1 || cancellation > 1) {
+      failClosed(transportFailure(
+        "HOST_TIMEOUT", "formal Web Host request cancellation failed"));
+      return;
+    }
+    window.clearTimeout(pending.timeout);
+    pending.deadlineAt = performance.now();
+    pending.deadlineLinearized = true;
+    pending.settlementDeadlineAt =
+      performance.now() + publicationSettlementWatchdogMs;
+    linearizeRequestDeadline(requestId, pending);
+    scheduleTransportPoll();
+  }
+
   function deliverTerminalFailure() {
     if (terminalFailureDelivered) return;
     terminalFailureDelivered = true;
@@ -324,6 +376,7 @@ if (typeof globalThis.window !== "undefined") {
     for (const [requestId, pending] of entries) {
       cancelControlRequest(requestId);
       window.clearTimeout(pending.timeout);
+      detachPendingAbort(pending);
       pending.reject(error);
     }
     releaseTerminalOwner();
@@ -421,7 +474,12 @@ if (typeof globalThis.window !== "undefined") {
           if (pending) {
             pendingRequests.delete(message.request_id);
             window.clearTimeout(pending.timeout);
-            pending.resolve(message);
+            detachPendingAbort(pending);
+            if (pending.abortError !== null) {
+              pending.reject(pending.abortError);
+            } else {
+              pending.resolve(message);
+            }
           } else {
             failClosed(transportFailure(
               "HOST_PROTOCOL_MISMATCH",
@@ -470,6 +528,9 @@ if (typeof globalThis.window !== "undefined") {
           "formal Web Host sidecar is invalid",
         ));
       }
+      if (options.cancelQuery === true && options.signal?.aborted === true) {
+        return Promise.reject(transportAbortError());
+      }
       const envelope = transportEncoder.encode(JSON.stringify(request));
       const sidecar = options.sidecar ?? new Uint8Array();
       const deadlineMs = Number.isFinite(options.deadlineMs)
@@ -504,9 +565,23 @@ if (typeof globalThis.window !== "undefined") {
           deadlineAt,
           deadlineLinearized: false,
           settlementDeadlineAt: null,
+          abortError: null,
+          abortSignal: null,
+          abortListener: null,
         };
         pendingRequests.set(request.request_id, pending);
-        linearizeRequestDeadline(request.request_id, pending);
+        if (options.cancelQuery === true && options.signal !== undefined) {
+          pending.abortSignal = options.signal;
+          pending.abortListener = () =>
+            abortPendingRequest(request.request_id, pending);
+          options.signal.addEventListener("abort", pending.abortListener, {
+            once: true,
+          });
+          if (options.signal.aborted === true) pending.abortListener();
+        }
+        if (pending.abortError === null) {
+          linearizeRequestDeadline(request.request_id, pending);
+        }
         scheduleTransportPoll();
       });
     },

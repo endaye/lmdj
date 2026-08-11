@@ -263,6 +263,27 @@ async function report(page) {
   return JSON.parse(await readFile(await (await pending).path(), "utf8"));
 }
 
+async function enterLoopToggleSample(page) {
+  await page.getByRole("button", {name: "Sample"}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
+  const loop = page.getByRole("button", {name: "Loop"});
+  if (await loop.getAttribute("aria-pressed") !== "true") {
+    await loop.click();
+    await expect(loop).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+    await expect(page.getByRole("button", {name: "Hold"})).toBeEnabled();
+  }
+}
+
+async function latchLoopToggle(page, expectedAdmissions) {
+  const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  await pad.focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await report(page)).trigger_admitted_count, {
+    timeout: 30_000,
+  }).toBe(expectedAdmissions);
+}
+
 async function reopenWithVisibleBusyRetry(page) {
   const heading = page.getByRole("heading", {name: "Project 00000000"});
   const open = () => page.getByRole("button", {
@@ -292,15 +313,18 @@ async function reopenWithVisibleBusyRetry(page) {
   await expect(alert).toHaveCount(0);
 }
 
-test("suspend and reload require explicit reopen and explicit reactivation", async ({page, browserName}) => {
+test("suspend, restart, and reopen clear an active loop toggle before reactivation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
   await page.goto("/index.html");
   await importAndActivate(page);
+  await enterLoopToggleSample(page);
+  await latchLoopToggle(page, 1);
   await page.getByRole("button", {name: "Suspend audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await latchLoopToggle(page, 2);
 
   await page.reload();
   await expect(page.getByRole("button", {name: "Open Project 00000000"}))
@@ -310,7 +334,58 @@ test("suspend and reload require explicit reopen and explicit reactivation", asy
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-  expect((await report(page)).state).toBe("running");
+  await enterLoopToggleSample(page);
+  await latchLoopToggle(page, 1);
+  const value = await report(page);
+  expect(value.state).toBe("running");
+  expect(value.sample).toEqual({
+    project_revision: expect.any(Number),
+    runtime_revision: expect.any(Number),
+    operation_outcomes: [],
+    trigger_mode_coverage: [],
+  });
+  expect(value.sample.runtime_revision).toBe(value.sample.project_revision);
+  expect(JSON.stringify(value.sample)).not.toMatch(
+    /file_name|opfs|project_json|waveform_buckets|audio_bytes/i,
+  );
+});
+
+test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await importAndActivate(page);
+  await enterLoopToggleSample(page);
+  await latchLoopToggle(page, 1);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: 30_000,
+  });
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
+  await latchLoopToggle(page, 2);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: 30_000,
+  });
+  await page.evaluate(() => {
+    delete document.visibilityState;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
+  await latchLoopToggle(page, 3);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
 });
 
 test("persisted page lifecycle retains the Project and live input surface", async ({page, browserName}) => {

@@ -1,6 +1,6 @@
 import {readFileSync} from "node:fs";
 
-import {fireEvent, render, screen} from "@testing-library/react";
+import {fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import {useState} from "react";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
@@ -184,6 +184,37 @@ test("contains Reset focus, cancels with Escape, and restores its trigger", asyn
   fireEvent.keyDown(dialog, {key: "Escape"});
   expect(screen.queryByRole("dialog", {name: "Reset Pad A1?"})).toBeNull();
   expect(document.activeElement).toBe(reset);
+});
+
+test("restores Reset confirmation focus to a safe enabled fallback", async () => {
+  const user = userEvent.setup();
+  function DisablingResetControls() {
+    const [disabled, setDisabled] = useState(false);
+    return (
+      <div>
+        <button type="button">Safe focus fallback</button>
+        <SampleControls
+          padLabel="Pad A1"
+          playback={playback}
+          audioSuspended={false}
+          disabled={disabled}
+          onPreview={() => {}}
+          onCommit={() => {}}
+          onReset={() => setDisabled(true)}
+        />
+      </div>
+    );
+  }
+
+  render(<DisablingResetControls />);
+  const reset = screen.getByRole("button", {name: "Reset Pad to Defaults"});
+  await user.click(reset);
+  await user.click(screen.getByRole("button", {name: "Confirm reset"}));
+
+  await waitFor(() => expect(reset.hasAttribute("disabled")).toBe(true));
+  expect(document.activeElement).toBe(
+    screen.getByRole("button", {name: "Safe focus fallback"}),
+  );
 });
 
 test("keeps editing available while audio preview is suspended", () => {

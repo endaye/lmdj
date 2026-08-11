@@ -31,6 +31,23 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
       project_id: "11111111-1111-4111-8111-111111111111",
       absolute_path: "/Users/private/Music/beat.wav",
       midi_device_name: "Private Controller",
+      project: {contract: "lmdj.project.v2", banks: [], assets: {}},
+      waveform_buckets: [16_384, 32_768],
+      audio_bytes: [82, 73, 70, 70],
+    },
+    sampleEvidence: {
+      projectRevision: 9,
+      runtimeRevision: 8,
+      operationOutcomes: [
+        {operation: "replace", outcome: "committed", errorCode: null},
+        {operation: "prepare", outcome: "failed", errorCode: "COOK_FAILED"},
+      ],
+      triggerModeCoverage: ["one_shot", "gate", "loop_gate", "loop_toggle"],
+      sourceFileName: "private-source.wav",
+      opfsPath: "/private/opfs/sample.wav",
+      projectJson: {contract: "lmdj.project.v2"},
+      waveformBuckets: [16_384, 32_768],
+      audioBytes: new Uint8Array([82, 73, 70, 70]),
     },
     bankCount: 4,
     padCount: 64,
@@ -61,6 +78,15 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
     trigger_outcome_count: 31,
     trigger_rejected_count: 1,
     error_code: null,
+    sample: {
+      project_revision: 9,
+      runtime_revision: 8,
+      operation_outcomes: [
+        {operation: "replace", outcome: "committed", error_code: null},
+        {operation: "prepare", outcome: "failed", error_code: "COOK_FAILED"},
+      ],
+      trigger_mode_coverage: ["one_shot", "gate", "loop_gate", "loop_toggle"],
+    },
     physical: {
       macos_safari_pointer: "deferred / unverified",
       macos_chrome_pointer: "deferred / unverified",
@@ -73,4 +99,9 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
   expect(serialized).not.toContain("11111111");
   expect(serialized).not.toContain("/Users/private");
   expect(serialized).not.toContain("Private Controller");
+  expect(serialized).not.toContain("private-source.wav");
+  expect(serialized).not.toContain("/private/opfs");
+  expect(serialized).not.toContain("lmdj.project.v2");
+  expect(serialized).not.toContain("16384");
+  expect(serialized).not.toContain("82,73,70,70");
 });

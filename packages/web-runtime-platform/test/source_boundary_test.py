@@ -79,6 +79,20 @@ def main() -> int:
         if re.search(r"\bproject_path\b", path.read_text(encoding="utf-8")):
             fail(f"browser transport owns a Project bundle path: {path}")
 
+    transport_source = (
+        PLATFORM_ROOT / "src" / "web-runtime-pre.js"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "options.signal.addEventListener(\"abort\"",
+        "options.cancelQuery === true",
+        "abortPendingRequest(request.request_id, pending)",
+        "lmdj_web_host_cancel_query",
+        "pending.abortError",
+        "pending.abortSignal.removeEventListener(\"abort\"",
+    ):
+        if required not in transport_source:
+            fail("formal Host transport lacks settled request cancellation: " + required)
+
     creator_root = REPO_ROOT / "apps" / "creator-web"
     if creator_root.exists():
         for path in text_files(creator_root):

@@ -19,6 +19,7 @@ import {
   type ProjectActionToken,
 } from "./runtime/project_actions";
 import {createCreatorInputController} from "./runtime/input_controller";
+import {retryPrepareJourney} from "./runtime/sample_actions";
 import {
   activateCreatorAudio,
   RuntimeProvider,
@@ -60,6 +61,37 @@ type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
 
+interface SampleRetryToken {
+  readonly session: CreatorSampleRuntimeSession;
+  readonly pending: Readonly<{
+    kind: "retry-prepare";
+    slot: number;
+    expectedRevision: number;
+  }>;
+}
+
+const SAMPLE_ERROR_CODES = new Set([
+  "INVALID_ARGUMENT",
+  "NOT_FOUND",
+  "REVISION_CONFLICT",
+  "DUPLICATE_ID",
+  "UNSUPPORTED_AUDIO",
+  "MISSING_ASSET",
+  "INVALID_PROJECT",
+  "COOK_FAILED",
+  "PROVIDER_NOT_FOUND",
+  "PROVIDER_FAILED",
+  "PERMISSION_DENIED",
+  "IO_ERROR",
+  "INTERNAL_ERROR",
+  "UNSUPPORTED_WEB_RUNTIME",
+  "PROJECT_BUSY",
+  "WEB_RUNTIME_RESOURCE_LIMIT",
+  "HOST_STATE_INVALID",
+  "HOST_TIMEOUT",
+  "HOST_RESTART_REQUIRED",
+  "HOST_PROTOCOL_MISMATCH",
+]);
 function errorCode(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
     return "ABORTED";
@@ -108,16 +140,34 @@ function Workspace({
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
+  const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
+  const sampleRetryAction = useRef<SampleRetryToken | null>(null);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
+  const inputAdverseState = useRef<string | null>(null);
   const sampleFilePickIntent = useRef<(slot: number) => void>(() => {});
   const stateRef = useRef(state);
   stateRef.current = state;
 
+  const resetInputForAdverseLifecycle = () => {
+    const current = inputController.current;
+    if (current !== null) {
+      inputController.current = null;
+      current.dispose();
+      setInputControllerEpoch((epoch) => epoch + 1);
+    }
+    if (stateRef.current.sample.draft !== null ||
+      stateRef.current.sample.auditionPlayback !== null) {
+      dispatch({type: "sample-action", action: {type: "draft-cancelled"}});
+    }
+  };
+
   useEffect(() => () => {
     projectActions.invalidate();
     const retiringImport = importController.current;
+    sampleRetryAction.current = null;
+    inputAdverseState.current = null;
     importController.current = null;
     retiringImport?.abort();
     if (retiringImport) dispatch({type: "transfer-ended"});
@@ -162,18 +212,22 @@ function Workspace({
         });
     inputController.current = controller;
     return () => {
-      if (inputController.current === controller) inputController.current = null;
-      controller.dispose();
+      if (inputController.current === controller) {
+        inputController.current = null;
+        controller.dispose();
+      }
     };
-  }, [session, runtimePhase]);
+  }, [session, runtimePhase, inputControllerEpoch]);
 
   useEffect(() => {
     if (!runtimeHostState) return;
     if (runtimeHostState === "running") {
+      inputAdverseState.current = null;
       dispatch({type: "audio-changed", phase: "running"});
     } else if (
       runtimeHostState === "recovering" && runtimeRecoveryProbeReady === true
     ) {
+      inputAdverseState.current = null;
       dispatch({type: "audio-changed", phase: "recovering"});
     } else if (
       runtimeHostState === "interrupted" ||
@@ -181,6 +235,10 @@ function Workspace({
       (runtimeHostState === "audio-suspended" &&
         stateRef.current.audio.phase !== "inactive")
     ) {
+      if (inputAdverseState.current !== runtimeHostState) {
+        inputAdverseState.current = runtimeHostState;
+        resetInputForAdverseLifecycle();
+      }
       dispatch({type: "audio-changed", phase: "suspended"});
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
@@ -289,7 +347,9 @@ function Workspace({
     kind: "open" | "import",
     requireSelector = true,
   ): ProjectActionToken | null => {
-    if (!session || projectActions.busy) return null;
+    if (!session || projectActions.busy ||
+      sampleRetryAction.current !== null ||
+      stateRef.current.sample.pendingAction !== null) return null;
     if (requireSelector) {
       const allowed = kind === "open"
         ? selectCanOpenProject(stateRef.current)
@@ -310,6 +370,7 @@ function Workspace({
     const token = beginProjectAction("open");
     if (!token) return false;
     dispatch({type: "project-opening"});
+    resetInputForAdverseLifecycle();
     try {
       const project = await openProjectJourney(token.session, summary);
       if (!ownsProjectAction(token)) return false;
@@ -331,6 +392,7 @@ function Workspace({
     if (!token) return false;
     const controller = new AbortController();
     importController.current = controller;
+    resetInputForAdverseLifecycle();
     dispatch({type: "transfer-started", totalBytes: file.size});
     try {
       const project = await importProjectJourney(
@@ -388,8 +450,55 @@ function Workspace({
   const suspendAudio = async () => {
     if (!session) return;
     if (await session.suspendAudio()) {
-      inputController.current?.clearPressed();
+      if (inputAdverseState.current !== "audio-suspended") {
+        inputAdverseState.current = "audio-suspended";
+        resetInputForAdverseLifecycle();
+      }
       dispatch({type: "audio-changed", phase: "suspended"});
+    }
+  };
+
+  const retryPrepare = async () => {
+    if (!isSampleSession(session) || projectActions.busy ||
+      sampleRetryAction.current !== null) return;
+    const current = stateRef.current;
+    const slot = current.sample.selectedSlot;
+    const expectedRevision = current.sample.savedRevision;
+    const patternId = current.project.current?.patternId;
+    if (slot === null || expectedRevision === null || patternId === undefined ||
+      current.sample.pendingAction !== null ||
+      current.sample.lastError?.retryPrepare !== true) return;
+    const pending = Object.freeze({
+      kind: "retry-prepare" as const,
+      slot,
+      expectedRevision,
+    });
+    const token = Object.freeze({session, pending});
+    sampleRetryAction.current = token;
+    dispatch({type: "sample-action", action: {type: "pending-began", pending}});
+    try {
+      const publication = await retryPrepareJourney(session, patternId);
+      if (sampleRetryAction.current === token) {
+        dispatch({
+          type: "sample-action",
+          action: {type: "retry-published", pending, publication},
+        });
+      }
+    } catch (error) {
+      if (sampleRetryAction.current === token) {
+        const candidate = errorCode(error);
+        const code = SAMPLE_ERROR_CODES.has(candidate) ? candidate : "INTERNAL_ERROR";
+        dispatch({
+          type: "sample-action",
+          action: {
+            type: "operation-failed",
+            pending,
+            error: {code, message: "Sample operation failed"},
+          },
+        });
+      }
+    } finally {
+      if (sampleRetryAction.current === token) sampleRetryAction.current = null;
     }
   };
 
@@ -408,6 +517,14 @@ function Workspace({
       diagnostics,
       bankCount: 4,
       padCount: 64,
+      sampleEvidence: {
+        projectRevision: state.project.current?.revision ?? state.sample.savedRevision,
+        runtimeRevision: state.sample.runtimeRevision,
+        operationOutcomes: state.sample.lastError?.code === "COOK_FAILED"
+          ? [{operation: "prepare", outcome: "failed", errorCode: "COOK_FAILED"}]
+          : [],
+        triggerModeCoverage: [],
+      },
     });
     const url = URL.createObjectURL(new Blob(
       [serializeAcceptanceReport(report)],
@@ -422,10 +539,17 @@ function Workspace({
 
   const canOpenProject = session !== undefined &&
     !projectActions.busy &&
+    sampleRetryAction.current === null &&
+    state.sample.pendingAction === null &&
     selectCanOpenProject(state);
   const canImportProject = session !== undefined &&
     !projectActions.busy &&
+    sampleRetryAction.current === null &&
+    state.sample.pendingAction === null &&
     selectCanImportProject(state);
+  const staleSampleRuntime = state.sample.lastError?.code === "COOK_FAILED" &&
+    state.sample.lastError.retryPrepare && state.sample.savedRevision !== null &&
+    state.sample.runtimeRevision !== state.sample.savedRevision;
 
   return (
     <div className="workspace">
@@ -473,13 +597,38 @@ function Workspace({
           </section>
         </>
       ) : (
-        <SampleSurface
-          state={state}
-          dispatch={dispatch}
-          filePickIntent={sampleFilePickIntent}
-          {...(isSampleSession(session) ? {session} : {})}
-          {...(inputController.current ? {controller: inputController.current} : {})}
-        />
+        <>
+          <SampleSurface
+            state={state}
+            dispatch={dispatch}
+            filePickIntent={sampleFilePickIntent}
+            {...(isSampleSession(session) ? {session} : {})}
+            {...(inputController.current ? {controller: inputController.current} : {})}
+          />
+          {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
+            <p className="sample-error" role="status">
+              Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
+            </p>
+          ) : null}
+          {staleSampleRuntime ? (
+            <section className="sample-runtime-stale" aria-label="Sample Runtime status">
+              <p role="status">
+                Saved at revision {state.sample.savedRevision}; Runtime is still revision{
+                  " "}{state.sample.runtimeRevision === null
+                  ? "unavailable"
+                  : state.sample.runtimeRevision}
+              </p>
+              <button
+                type="button"
+                disabled={sampleRetryAction.current !== null ||
+                  state.sample.pendingAction !== null}
+                onClick={() => { void retryPrepare(); }}
+              >
+                Retry Prepare
+              </button>
+            </section>
+          ) : null}
+        </>
       )}
       <ErrorPanel
         code={state.runtime.errorCode}

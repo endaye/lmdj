@@ -126,6 +126,7 @@ enum class PublicationState : std::uint8_t {
   publish_claimed,
   committed,
   aborted,
+  query_cancelled,
 };
 
 bool exact_keys(
@@ -185,6 +186,23 @@ Json bridge_timeout_error() {
            {"details", Json::object()},
        }},
   };
+}
+
+Json bridge_query_cancelled_error() {
+  return {
+      {"ok", false},
+      {"error",
+       {
+           {"code", "HOST_STATE_INVALID"},
+           {"message", "host query was cancelled"},
+           {"details", Json::object()},
+       }},
+  };
+}
+
+bool safety_interruptible_query(std::string_view operation) {
+  return operation == "project.inspect" || operation == "project.list" ||
+         operation == "sample.inspect" || operation == "sample.waveform";
 }
 
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
@@ -337,6 +355,7 @@ struct ControlBridge::Impl {
       return true;
     }
     if (state == PublicationState::cancelled ||
+        state == PublicationState::query_cancelled ||
         std::chrono::steady_clock::now() >= request.deadline) {
       auto expected = PublicationState::open;
       request.publication.compare_exchange_strong(
@@ -918,9 +937,12 @@ struct ControlBridge::Impl {
         }
         request.deadline = deadline;
         has_deadline = true;
-        if (request.publication.load(std::memory_order_acquire) ==
-                PublicationState::cancelled ||
-            std::chrono::steady_clock::now() >= deadline) {
+        const auto initial_publication =
+            request.publication.load(std::memory_order_acquire);
+        if (initial_publication == PublicationState::query_cancelled) {
+          response = bridge_query_cancelled_error();
+        } else if (initial_publication == PublicationState::cancelled ||
+                   std::chrono::steady_clock::now() >= deadline) {
           request.publication.store(
               PublicationState::cancelled, std::memory_order_release);
           runtime.fail_and_seal("request_timeout");
@@ -948,8 +970,11 @@ struct ControlBridge::Impl {
           });
           mark_entered_facade(request);
           wait_for_responsive_cancellation_proof(request);
-          if (request.publication.load(std::memory_order_acquire) ==
-              PublicationState::cancelled) {
+          const auto dispatch_publication =
+              request.publication.load(std::memory_order_acquire);
+          if (dispatch_publication == PublicationState::query_cancelled) {
+            response = bridge_query_cancelled_error();
+          } else if (dispatch_publication == PublicationState::cancelled) {
             response = bridge_timeout_error();
           } else {
             response = runtime.dispatch(
@@ -1062,7 +1087,15 @@ struct ControlBridge::Impl {
           std::memory_order_acquire);
       publication = request.publication.load(std::memory_order_acquire);
     }
-    if (has_deadline && publication == PublicationState::cancelled) {
+    if (has_deadline && publication == PublicationState::query_cancelled) {
+      response = bridge_query_cancelled_error();
+      if (notification_slot != nullptr) {
+        notification_slot->state.store(
+            MessageState::free, std::memory_order_release);
+        notification_slot = nullptr;
+        reservations.notification = nullptr;
+      }
+    } else if (has_deadline && publication == PublicationState::cancelled) {
       mark_publication(request, PublicationState::cancelled);
       request.publication.notify_all();
       runtime.fail_and_seal("request_timeout");
@@ -1240,6 +1273,53 @@ BridgeCancelStatus ControlBridge::cancel(
     return BridgeCancelStatus::publish_claimed;
   }
   impl_->record_deadline_cancel(request_id, BridgeCancelStatus::not_found);
+  return BridgeCancelStatus::not_found;
+}
+
+BridgeCancelStatus ControlBridge::cancel_query(
+    std::string_view request_id) noexcept {
+  try {
+    if (!valid_request_id(Json(request_id))) {
+      return BridgeCancelStatus::not_found;
+    }
+  } catch (...) {
+    return BridgeCancelStatus::not_found;
+  }
+  std::lock_guard lock(impl_->request_id_mutex);
+  for (auto& request : impl_->requests) {
+    if (request.state.load(std::memory_order_acquire) == RequestState::free) {
+      continue;
+    }
+    try {
+      const auto* first = reinterpret_cast<const char*>(request.envelope.data());
+      const std::string_view bytes(first, request.envelope_size);
+      const auto parsed = foundation::valid_utf8(bytes)
+                              ? foundation::parse_bounded_json(bytes)
+                              : std::nullopt;
+      if (!parsed.has_value() || !parsed->is_object() ||
+          !parsed->contains("request_id") ||
+          !parsed->at("request_id").is_string() ||
+          parsed->at("request_id").get_ref<const std::string&>() != request_id ||
+          !parsed->contains("operation") ||
+          !parsed->at("operation").is_string() ||
+          !safety_interruptible_query(
+              parsed->at("operation").get_ref<const std::string&>())) {
+        continue;
+      }
+    } catch (...) {
+      continue;
+    }
+    auto expected = PublicationState::open;
+    if (request.publication.compare_exchange_strong(
+            expected,
+            PublicationState::query_cancelled,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      request.publication.notify_all();
+      return BridgeCancelStatus::cancelled;
+    }
+    return BridgeCancelStatus::publish_claimed;
+  }
   return BridgeCancelStatus::not_found;
 }
 
@@ -1835,6 +1915,22 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_request(
         lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
   }
   return static_cast<int>(bridge->cancel(
+      std::string_view(request_id, request_id_size)));
+}
+
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_query(
+    const char* request_id,
+    std::size_t request_id_size) {
+  if (request_id == nullptr || request_id_size != 36) {
+    return static_cast<int>(
+        lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
+  }
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  if (bridge == nullptr) {
+    return static_cast<int>(
+        lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
+  }
+  return static_cast<int>(bridge->cancel_query(
       std::string_view(request_id, request_id_size)));
 }
 
