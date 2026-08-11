@@ -23,7 +23,13 @@ WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、O
 ## Creator Web Proof
 `scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
-Product Build `1.0.16.5` 是 `1.0.16.4` 冻结后的第五个 corrective candidate，仅修复 clean-source Core Proof 发现的 CLI/MCP exact Product Patch 断言和 Creator package/server fixture。产品实现和全部 Module/Host/Contract 身份保持不变；历史候选结果不能替代本候选在新不可变快照上重新执行的 clean-source Proof、Portal、CI 与发布门禁。
+Product Build `1.0.16.6` 集成以下新增 conformance case，但 case 已进入源码不等于 Task 6 的完整 Proof 已执行：
+
+- Chromium/Emscripten AudioWorklet case 人为保持 callback in-flight，验证首个 quiescence timeout 锁存 fatal 后，terminal wait 在第二个同长度 caller budget 内返回 `INTERNAL_ERROR`，而不是无限阻塞 Control Worker。
+- Chromium real OPFS Project I/O case 注入 `QuotaExceededError` / `InvalidStateError`，验证 `storage_condition` 分别为 `quota_exceeded` / `invalid_state`；另一个 case 在 seed lease 释放后调用 unleased `append_durable`，验证类型化 `invalid_state` 且原有 `seed` 字节不变。
+- Node protocol case 覆盖 unknown request ID 与已 settlement response 的 duplicate：transport 仅 terminate 一次，所有其余 pending request 收到 `HOST_PROTOCOL_MISMATCH`，request identity 清空。它的 packaged Chromium journey 仍属于 Task 6 的 Host Proof 边界。
+
+Task 6 仍须从完成的、干净已提交 source boundary 运行 Core Proof、ASan/TSan/stress、Diagnostic Host Proof、Creator Proof、active-tree 与 Portal 全门禁，并冻结 `1.0.16.6 · canary` immutable snapshot。当前页面不声明这些结果，也不声明 CI、tag、Release、部署或 Channel promotion；历史候选结果不能替代本候选证据。
 ## Web 分发 HTTP 门禁
 proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任
@@ -37,6 +43,6 @@ macOS Core Proof 与 native ASan 优先选择带 `lmdj` 标签、在线且空闲
 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 commit 的 GitHub required checks。
 ## 证据分离
-本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。Product Build `1.0.16.5` 的 Core、Web Toolchain、Diagnostic Host 与 Creator Proof 必须绑定同一可审计 revision；它不继承历史 Build 的 PR、CI 或 merge 结论。匹配 Build 的快照 provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari lifecycle `deferred / unverified`。
+本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。Product Build `1.0.16.6` 的 Core、Web Toolchain、Diagnostic Host 与 Creator Proof 必须绑定同一可审计 revision；它不继承历史 Build 的 PR、CI 或 merge 结论。匹配 Build 的快照 provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari lifecycle `deferred / unverified`。
 ## 门户责任
 页面状态必须链接实际测试/Proof，并明确自动化无法证明的体验范围。

@@ -14,7 +14,21 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前本地候选 Product Build 是 `1.0.16.5 · canary · g<short-sha>`。它是 `1.0.16.4` 冻结后的第五个 corrective candidate：`1.0.16.4` 重新建立了合并后 Portal provenance，但随后 clean-source Core Proof 发现 CLI/MCP exact-version 断言和 Creator package/server fixture 仍记录旧 Patch。`1.0.16.5` 只修复这些发布验证身份，不改变 Module、Host、Contract、Provider、Model、产品能力或公开 Contract。`1.0.16.0` 至 `1.0.16.4` 的不可变快照均不被重写。
+当前本地候选 Product Build 是 `1.0.16.6 · canary · g<short-sha>`，用于集成 Web Runtime failure-path hardening。当前 Assembly 的变化如下；版本值由 active manifests 与 lock 派生，Contract、Provider 和 Model identity 保持不变。
+
+| Identity | 当前版本 | 变化边界 |
+| --- | --- | --- |
+| Audio Runtime | `0.4.1` | terminal quiescence 等待有界化 |
+| Project I/O | `0.5.1` | 类型化 Web storage condition 与统一 writer lease obligation |
+| Application Facade | `1.3.2` | 精确依赖更新到 Project I/O `0.5.1`、Audio Runtime `0.4.1` |
+| Web Runtime Platform | `0.1.3` | uncorrelatable response fail closed 与精确依赖更新 |
+| Core CLI | `1.0.8` | 精确 Facade 依赖更新 |
+| Core MCP | `1.1.5` | 精确 Facade 依赖更新 |
+| Native Test Host | `1.0.6` | 精确 Facade/Audio 依赖更新 |
+| Web Runtime Host | `1.2.3` | 精确 Platform 依赖更新 |
+| Creator Web | `1.0.3` | 精确 Platform 依赖更新 |
+
+这些 compatible Patch 只收紧失败路径；成功操作、Project Truth、公开 Contract envelope 与 protocol shape 不变。`1.0.16.0` 至 `1.0.16.5` 的不可变快照均不被重写。`1.0.16.6` 的 current 页面已经更新，但 immutable `canary` snapshot 仍必须在 Task 6 从干净、已提交的 source boundary 生成；在此之前不能把该 Build 视为已分配给团队测试或发布。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 ## 不可变性
@@ -23,7 +37,7 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.16.5`，仅是未来 tag 文本。当前源码身份不宣称远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+当前候选 Product tag 文本为 `lmdj-v1.0.16.6`，仅是未来 tag 文本。当前源码身份不宣称 Task 6 Proof、远端 CI、merge、signed annotated tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 
@@ -38,7 +52,7 @@ API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact pri
 HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
 状态必须由与精确身份绑定的 evidence 独立报告。
 
-该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.16.5` 已获得 remote verified
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.16.6` 已获得 remote verified
 tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
 promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
 精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、

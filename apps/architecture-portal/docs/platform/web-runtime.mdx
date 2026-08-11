@@ -21,11 +21,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 当前组成
 
-Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.1.2`、Diagnostic Web Runtime Host `1.2.2` 与 Creator Web Host `1.0.2` 组成，并锁入 Product Build `1.0.16.5`。
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.1.3`、Diagnostic Web Runtime Host `1.2.3` 与 Creator Web Host `1.0.3` 组成，并锁入 Product Build `1.0.16.6`。
 
 ## 共享 Platform
 
-两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。
+两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Project I/O 的所有写入路径（包括 `append_durable`）都要求目标 Project 的有效 writer lease；无 lease 的 append 以 `IO_ERROR` + `storage_condition=invalid_state` 失败且不改变已有字节。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
 
 ## 分发与服务
 
@@ -33,7 +33,7 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 
 ## 线程与生命周期
 
-主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。Manifest mismatch、publication outcome unknown、终止与重启恢复 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
+主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。AudioWorklet 的 terminal quiescence 在首个 caller budget 超时并锁存 fatal 后，只再等待一个同长度的 terminal budget；callback 仍未退出时返回类型化 `INTERNAL_ERROR`，不再无限 futex 等待。Transport 收到无法关联到 pending request 的未知或重复 response 时会原子 fail closed：仅终止一次、以 `HOST_PROTOCOL_MISMATCH` 拒绝其余 pending request，并清空 pending/active identity。Manifest mismatch、publication outcome unknown、终止与重启恢复同样 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
 
 ## 自动化范围
 
@@ -59,7 +59,7 @@ Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python s
 `docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 
 发布工具、workflow、历史 Build 的 tag/Release 或任何部署证据，都不自动证明当前 Product
-Build `1.0.16.5` 已发布。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
+Build `1.0.16.6` 已发布。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
 record；本地 Proof 或 PR Preview 不能替代公共部署证据。
 
 ## 非能力与下一门禁
