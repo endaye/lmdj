@@ -92,7 +92,10 @@ export type CreatorAction =
   | {
       type: "sample-project-refreshed";
       project: ProjectView;
-      action: Extract<SampleStateAction, {type: "mutation-committed"}>;
+      action: Extract<
+        SampleStateAction,
+        {type: "mutation-committed"} | {type: "mutation-conflicted"}
+      >;
     }
   | {type: "pressed-cleared"};
 
@@ -298,8 +301,30 @@ export function creatorReducer(
       pressed.delete(action.slot);
       return {...state, pressed};
     }
-    case "sample-action":
+    case "sample-action": {
+      if (action.action.type === "waveform-stored") {
+        const current = state.sample.inspect;
+        const viewport = state.sample.viewport;
+        const request = action.action.request;
+        const envelope = action.action.envelope;
+        const envelopeRevision = envelope !== null &&
+            typeof envelope === "object" &&
+            Object.hasOwn(envelope, "projectRevision") &&
+            Number.isSafeInteger((envelope as {projectRevision?: unknown}).projectRevision)
+          ? (envelope as {projectRevision: number}).projectRevision
+          : null;
+        if (current === null || viewport === null ||
+          request.slot !== current.slot ||
+          request.waveformCacheIdentity !== current.waveformCacheIdentity ||
+          request.window.startFrame !== viewport.startFrame ||
+          request.window.endFrame !== viewport.endFrame ||
+          (envelopeRevision !== null &&
+            envelopeRevision !== current.projectRevision)) {
+          return state;
+        }
+      }
       return {...state, sample: reduceSampleState(state.sample, action.action)};
+    }
     case "sample-project-refreshed": {
       const current = state.project.current;
       if (current === null ||
@@ -309,7 +334,8 @@ export function creatorReducer(
       }
       const sample = reduceSampleState(state.sample, action.action);
       if (sample.savedRevision !== action.project.revision ||
-        sample.inspect?.projectRevision !== action.project.revision) {
+        (sample.inspect !== null &&
+          sample.inspect.projectRevision !== action.project.revision)) {
         throw new TypeError("Sample Project refresh revision does not match");
       }
       const summary: LocalProjectSummary = {

@@ -326,6 +326,41 @@ test("queries each viewport at its own resolution and suppresses stale responses
   expect(path.getAttribute("d")).toBe(newestPath);
 });
 
+test("does not reuse an accepted viewport envelope after the next query fails", async () => {
+  const baseEnvelope: WaveformEnvelope = {
+    ...envelope,
+    buckets: [{startFrame: 0, endFrame: 8, peakMagnitude: 0}],
+  };
+  let query = 0;
+  const onQueryWaveform = vi.fn(async () => {
+    query += 1;
+    if (query === 1) {
+      return {
+        ...envelope,
+        buckets: [{startFrame: 2, endFrame: 6, peakMagnitude: 32_768}],
+      };
+    }
+    throw new Error("waveform unavailable");
+  });
+  const {container} = renderEditor({
+    envelope: baseEnvelope,
+    onQueryWaveform,
+  });
+
+  await userEvent.click(screen.getByRole("button", {name: "Zoom In"}));
+  await waitFor(() => expect(
+    container.querySelector<SVGPathElement>("path[data-waveform]")
+      ?.getAttribute("d"),
+  ).toContain(" 16"));
+
+  await userEvent.click(screen.getByRole("button", {name: "Pan Right"}));
+  await waitFor(() => expect(onQueryWaveform).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(
+    container.querySelector<SVGPathElement>("path[data-waveform]")
+      ?.getAttribute("d"),
+  ).not.toContain(" 16"));
+});
+
 test("does not let an old Project query hide the current revision waveform", async () => {
   let resolveOld: ((value: WaveformEnvelope) => void) | undefined;
   const onQueryWaveform = vi.fn(() => new Promise<WaveformEnvelope>((resolve) => {

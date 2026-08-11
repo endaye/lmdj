@@ -2,6 +2,7 @@ import {readFileSync} from "node:fs";
 
 import {fireEvent, render, screen} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import {useState} from "react";
 import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
 import {SampleControls} from "../src/components/sample_controls";
@@ -103,6 +104,47 @@ test("commits Volume once when the pointer is released off the control", () => {
   expect(onCommit).toHaveBeenCalledTimes(1);
   expect(onCommit).toHaveBeenCalledWith({...playback, gainMillidb: -2_500});
 });
+
+test.each(["pointer", "keyboard"] as const)(
+  "commits controlled Volume feedback once on $completion completion",
+  (completion) => {
+    const onPreview = vi.fn();
+    const onCommit = vi.fn();
+    function ControlledControls() {
+      const [current, setCurrent] = useState(playback);
+      return (
+        <SampleControls
+          padLabel="Pad A1"
+          playback={current}
+          audioSuspended={false}
+          onPreview={(next) => {
+            onPreview(next);
+            setCurrent(next);
+          }}
+          onCommit={onCommit}
+          onReset={() => {}}
+        />
+      );
+    }
+    render(<ControlledControls />);
+    const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+
+    if (completion === "pointer") {
+      fireEvent.pointerDown(volume, {pointerId: 14});
+    }
+    fireEvent.change(volume, {target: {value: "-4.5"}});
+    expect(onPreview).toHaveBeenCalledTimes(1);
+    expect(onCommit).not.toHaveBeenCalled();
+    if (completion === "pointer") {
+      fireEvent.pointerUp(volume, {pointerId: 14});
+    } else {
+      fireEvent.keyUp(volume, {key: "ArrowLeft"});
+    }
+
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith({...playback, gainMillidb: -4_500});
+  },
+);
 
 test("Reset requires an explicit accessible confirmation", async () => {
   const user = userEvent.setup();

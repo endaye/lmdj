@@ -28,6 +28,11 @@ interface ContainedBackground {
   ariaHidden: string | null;
 }
 
+interface GainGesture {
+  base: Readonly<PadPlayback>;
+  latest: Readonly<PadPlayback>;
+}
+
 function focusableElements(dialog: HTMLDialogElement): HTMLElement[] {
   return Array.from(dialog.querySelectorAll<HTMLElement>(
     'button:not([disabled]), input:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
@@ -153,7 +158,7 @@ export function SampleControls({
   const [confirmingReset, setConfirmingReset] = useState(false);
   const resetTrigger = useRef<HTMLButtonElement | null>(null);
   const [draftGain, setDraftGain] = useState<number | null>(null);
-  const gainGesture = useRef<Readonly<PadPlayback> | null>(null);
+  const gainGesture = useRef<GainGesture | null>(null);
   const gainPointerId = useRef<number | null>(null);
   const commitGainRef = useRef<() => void>(() => {});
   const cancelGainRef = useRef<() => void>(() => {});
@@ -172,14 +177,17 @@ export function SampleControls({
   }, []);
 
   const beginGain = () => {
-    if (gainGesture.current === null) gainGesture.current = playback;
+    if (gainGesture.current === null) {
+      gainGesture.current = {base: playback, latest: playback};
+    }
   };
   const previewGain = (decibels: number) => {
     if (!Number.isFinite(decibels)) return;
     beginGain();
     const gainMillidb = Math.min(6_000, Math.max(-60_000, Math.round(decibels * 1_000)));
-    const next = {...playback, gainMillidb};
-    gainGesture.current = next;
+    const current = gainGesture.current!;
+    const next = {...current.latest, gainMillidb};
+    gainGesture.current = {base: current.base, latest: next};
     setDraftGain(gainMillidb);
     onPreview(next);
   };
@@ -189,7 +197,9 @@ export function SampleControls({
     gainPointerId.current = null;
     gainGesture.current = null;
     setDraftGain(null);
-    if (current.gainMillidb !== playback.gainMillidb) onCommit(current);
+    if (current.base.gainMillidb !== current.latest.gainMillidb) {
+      onCommit(current.latest);
+    }
   };
   const cancelGain = () => {
     if (gainGesture.current === null) return;

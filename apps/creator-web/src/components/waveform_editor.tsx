@@ -39,6 +39,19 @@ interface EditGesture {
   latest: Readonly<PadPlayback>;
 }
 
+interface AcceptedViewportEnvelope {
+  readonly viewport: Readonly<SampleViewport>;
+  readonly envelope: Readonly<WaveformEnvelope>;
+}
+
+function sameViewport(
+  left: Readonly<SampleViewport>,
+  right: Readonly<SampleViewport>,
+): boolean {
+  return left.sourceFrames === right.sourceFrames &&
+    left.startFrame === right.startFrame && left.endFrame === right.endFrame;
+}
+
 function validEnvelope(
   value: Readonly<WaveformEnvelope> | null,
 ): value is Readonly<WaveformEnvelope> {
@@ -120,19 +133,22 @@ export function WaveformEditor({
   onQueryWaveform,
 }: WaveformEditorProps) {
   const [viewportEnvelope, setViewportEnvelope] =
-    useState<Readonly<WaveformEnvelope> | null>(null);
-  const activeEnvelope = viewportEnvelope ?? envelope;
+    useState<AcceptedViewportEnvelope | null>(null);
   const metadataIsValid = validMetadata(metadata);
   const sourceFrames = metadataIsValid ? metadata.sourceFrames : 1;
   const sampleRate = metadataIsValid ? metadata.sampleRate : 48_000;
+  const [viewport, setViewport] = useState<Readonly<SampleViewport>>(() =>
+    fitSampleViewport(sourceFrames)
+  );
+  const activeEnvelope = viewportEnvelope !== null &&
+      sameViewport(viewportEnvelope.viewport, viewport)
+    ? viewportEnvelope.envelope
+    : envelope;
   const envelopeIsValid = metadataIsValid && validEnvelope(activeEnvelope) &&
     activeEnvelope.projectRevision === projectRevision &&
     activeEnvelope.metadata.sourceFrames === metadata.sourceFrames &&
     activeEnvelope.metadata.sampleRate === metadata.sampleRate &&
     activeEnvelope.metadata.channels === metadata.channels;
-  const [viewport, setViewport] = useState<Readonly<SampleViewport>>(() =>
-    fitSampleViewport(sourceFrames)
-  );
   const [draftPlayback, setDraftPlayback] = useState<Readonly<PadPlayback> | null>(null);
   const gesture = useRef<EditGesture | null>(null);
   const gesturePointerId = useRef<number | null>(null);
@@ -172,7 +188,7 @@ export function WaveformEditor({
   useEffect(() => {
     setViewportEnvelope((current) => {
       if (current === null || envelope === null ||
-        current.projectRevision === envelope.projectRevision) {
+        current.envelope.projectRevision === envelope.projectRevision) {
         return current;
       }
       return null;
@@ -277,6 +293,7 @@ export function WaveformEditor({
     : [];
 
   const applyViewport = (next: Readonly<SampleViewport>) => {
+    setViewportEnvelope(null);
     setViewport(next);
     if (onQueryWaveform === undefined) return;
     const epoch = ++queryEpoch.current;
@@ -290,7 +307,7 @@ export function WaveformEditor({
           )) {
           return;
         }
-        setViewportEnvelope(queried);
+        setViewportEnvelope({viewport: next, envelope: queried});
       },
       () => {},
     );

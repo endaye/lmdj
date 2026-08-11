@@ -108,6 +108,7 @@ export function SampleSurface({
   const importController = useRef<AbortController | null>(null);
   const operationPending = useRef<Readonly<SamplePendingAction> | null>(null);
   const importPending = useRef<Readonly<SamplePendingAction> | null>(null);
+  const projectionRefreshTimer = useRef<number | null>(null);
   const previousSession = useRef(session);
   const previewEpoch = useRef(0);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
@@ -127,6 +128,10 @@ export function SampleSurface({
   }, [filePickIntent]);
 
   useEffect(() => () => {
+    if (projectionRefreshTimer.current !== null) {
+      window.clearTimeout(projectionRefreshTimer.current);
+      projectionRefreshTimer.current = null;
+    }
     const pending = importPending.current;
     importPending.current = null;
     if (pending !== null) {
@@ -143,6 +148,10 @@ export function SampleSurface({
   useEffect(() => {
     if (previousSession.current === session) return;
     previousSession.current = session;
+    if (projectionRefreshTimer.current !== null) {
+      window.clearTimeout(projectionRefreshTimer.current);
+      projectionRefreshTimer.current = null;
+    }
     const pending = operationPending.current;
     operationPending.current = null;
     importPending.current = null;
@@ -181,7 +190,7 @@ export function SampleSurface({
       },
     );
     return () => { current = false; };
-  }, [dispatch, selectedSlot, session]);
+  }, [dispatch, sample.savedRevision, selectedSlot, session]);
 
   useEffect(() => {
     if (session === undefined || inspect === null || inspect.metadata === null ||
@@ -216,49 +225,55 @@ export function SampleSurface({
   const dispatchResolution = async (
     pending: Readonly<SamplePendingAction>,
     resolution: SampleMutationResolution,
-  ) => {
-    if (resolution.kind === "committed") {
-      const currentProject = state.project.current;
-      if (session === undefined || currentProject === null) {
-        throw Object.assign(new Error("Current Project is unavailable"), {
-          code: "HOST_STATE_INVALID",
+  ): Promise<void> => {
+    const currentProject = state.project.current;
+    if (session === undefined || currentProject === null ||
+      operationPending.current !== pending) return;
+
+    let currentInspect = resolution.inspect;
+    try {
+      for (let attempt = 0; attempt < 4; ++attempt) {
+        if (operationPending.current !== pending) return;
+        const project = await refreshProjectProjectionJourney(
+          session,
+          currentProject,
+        );
+        if (project === null) continue;
+        if (project.revision !== currentInspect.projectRevision) {
+          currentInspect = await inspectSampleJourney(session, pending.slot);
+          continue;
+        }
+        if (operationPending.current !== pending) return;
+        operationPending.current = null;
+        if (importPending.current === pending) importPending.current = null;
+        dispatch({
+          type: "sample-project-refreshed",
+          project,
+          action: resolution.kind === "committed"
+            ? {
+                type: "mutation-committed",
+                pending,
+                inspect: currentInspect,
+                commit: resolution.commit,
+              }
+            : {
+                type: "mutation-conflicted",
+                pending,
+                inspect: currentInspect,
+              },
         });
+        return;
       }
-      const project = await refreshProjectProjectionJourney(
-        session,
-        currentProject,
-      );
-      if (project.revision !== resolution.inspect.projectRevision) {
-        throw Object.assign(new Error("Sample Project refresh is not current"), {
-          code: "HOST_PROTOCOL_MISMATCH",
-        });
-      }
-      if (operationPending.current !== pending) return;
-      operationPending.current = null;
-      if (importPending.current === pending) importPending.current = null;
-      dispatch({
-        type: "sample-project-refreshed",
-        project,
-        action: {
-          type: "mutation-committed",
-          pending,
-          inspect: resolution.inspect,
-          commit: resolution.commit,
-        },
-      });
-    } else {
-      if (operationPending.current !== pending) return;
-      operationPending.current = null;
-      if (importPending.current === pending) importPending.current = null;
-      dispatch({
-        type: "sample-action",
-        action: {
-          type: "mutation-conflicted",
-          pending,
-          inspect: resolution.inspect,
-        },
-      });
+    } catch {
+      // The mutation outcome is already authoritative. A projection read failure
+      // must not be reclassified as a failed mutation; retry the read boundary.
     }
+    if (operationPending.current !== pending ||
+      projectionRefreshTimer.current !== null) return;
+    projectionRefreshTimer.current = window.setTimeout(() => {
+      projectionRefreshTimer.current = null;
+      void dispatchResolution(pending, resolution);
+    }, 25);
   };
 
   const isAssigned = (slot: number): boolean =>
