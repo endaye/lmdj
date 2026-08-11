@@ -10,6 +10,7 @@ import type {
   CreatorRuntimeSession,
   CreatorSampleRuntimeSession,
   LocalProjectSummary,
+  RuntimeHostState,
   WaveformEnvelope,
   WaveformQuery,
 } from "../src/runtime/runtime_types";
@@ -465,7 +466,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
   ]);
   const triggers: number[] = [];
   const projectionCalls: string[] = [];
-  let hostListener: ((state: {state: string; errorCode: string | null}) => void) | undefined;
+  let hostListener: ((state: RuntimeHostState) => void) | undefined;
   let revision = 3;
   const summary = (): LocalProjectSummary => ({
     ...listedSummary,
@@ -569,6 +570,7 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
     diagnostics: () => ({
       state: "audio-suspended",
       error_code: null,
+      error_details: {},
       product_build: "1.0.16.5",
       host_id: "creator-web",
       host_version: "1.0.2",
@@ -611,7 +613,11 @@ test("keeps an imported empty Pad assigned and playable after selecting another 
     <App initialState={initialState} runtimeFactory={() => fixture.session} />,
   );
   await screen.findByText("3", {selector: ".project-summary dd"});
-  await act(async () => hostListener?.({state: "running", errorCode: null}));
+  await act(async () => hostListener?.({
+    state: "running",
+    errorCode: null,
+    errorDetails: {},
+  }));
   await screen.findByText("Audio running");
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");

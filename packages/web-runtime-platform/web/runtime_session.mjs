@@ -1348,6 +1348,11 @@ function createRuntimeSessionController(options = {}) {
     return response.result;
   }
 
+  /**
+   * @template T
+   * @param {() => T} action
+   * @returns {Promise<Awaited<T>>}
+   */
   function serializeRuntimeAction(action) {
     const pending = runtimeActionTail.then(action);
     runtimeActionTail = pending.then(
@@ -1357,6 +1362,11 @@ function createRuntimeSessionController(options = {}) {
     return pending;
   }
 
+  /**
+   * @template T
+   * @param {() => T} action
+   * @returns {Promise<Awaited<T>>}
+   */
   function serializeProjectAction(action) {
     const pending = projectActionTail.then(action);
     projectActionTail = pending.then(
@@ -1391,6 +1401,17 @@ function createRuntimeSessionController(options = {}) {
     return false;
   }
 
+  /**
+   * @param {number} flatSlot
+   * @param {number} velocity
+   * @param {"pointer" | "keyboard" | "midi"} source
+   * @returns {Promise<false | Readonly<{
+   *   sequence: number,
+   *   slot: number,
+   *   velocity: number,
+   *   source: "pointer" | "keyboard" | "midi",
+   * }>>}
+   */
   async function dispatchTrigger(flatSlot, velocity, source) {
     if (
       !Number.isInteger(flatSlot) ||

@@ -89,11 +89,13 @@ function fixture() {
     suspendAudio: async () => true,
     trigger: async () => false,
     requestMidi: async () => true,
+    subscribeDiagnostics: () => () => {},
     subscribeHostState: (_listener: (state: RuntimeHostState) => void) => () => {},
     subscribeRuntimeOutcome: (_listener: (outcome: RuntimeOutcome) => void) => () => {},
     diagnostics: () => ({
       state: "running",
       error_code: null,
+      error_details: {},
       product_build: "1.0.16.3",
       host_id: "creator-web",
       host_version: "1.0.2",
