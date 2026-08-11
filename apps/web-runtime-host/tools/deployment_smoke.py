@@ -109,9 +109,8 @@ class RedirectGuard(HTTPRedirectHandler):
         expected_cache = getattr(req, "lmdj_expected_cache", None)
         if expected_cache is None:
             raise SmokeError("redirect request cache contract is missing")
-        _require_header(
+        _require_cache_control(
             headers,
-            name="cache-control",
             expected=expected_cache,
             label="redirect response",
         )
@@ -153,6 +152,20 @@ def _require_header(headers, *, name: str, expected: str, label: str) -> None:
     if observed != [expected]:
         raise SmokeError(
             f"{label} {name} mismatch: expected {[expected]!r}, got {observed!r}"
+        )
+
+
+def _require_cache_control(headers, *, expected: str, label: str) -> None:
+    observed = _header_values(headers, "cache-control")
+    normalized = []
+    if len(observed) == 1:
+        normalized = [
+            ", ".join(directive.strip() for directive in observed[0].split(","))
+        ]
+    if normalized != [expected]:
+        raise SmokeError(
+            f"{label} cache-control mismatch: expected {[expected]!r}, "
+            f"got {observed!r}"
         )
 
 
@@ -302,9 +315,8 @@ def _fetch(
             _validate_content_type(
                 response.headers, expected=content_type, label=label
             )
-            _require_header(
+            _require_cache_control(
                 response.headers,
-                name="cache-control",
                 expected=cache_control,
                 label=label,
             )
@@ -331,9 +343,8 @@ def _require_negative(
             _validate_headers(response.headers, path)
             response.read(1)
             if status == 404:
-                _require_header(
+                _require_cache_control(
                     response.headers,
-                    name="cache-control",
                     expected="no-store",
                     label=path,
                 )
@@ -343,9 +354,8 @@ def _require_negative(
             status = error.code
             error.read(1)
             if status == 404:
-                _require_header(
+                _require_cache_control(
                     error.headers,
-                    name="cache-control",
                     expected="no-store",
                     label=path,
                 )

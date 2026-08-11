@@ -357,6 +357,16 @@ class DeploymentSmokeTest(unittest.TestCase):
         )
         self.assertEqual(self.smoke()["asset_count"], 9)
 
+    def test_accepts_cache_control_with_optional_whitespace(self) -> None:
+        main = next(
+            "/" + entry["path"] for entry in self.fixture.manifest["assets"]
+            if entry["role"] == "host_main"
+        )
+        self.fixture.cache_overrides[main] = (
+            "public,max-age=31536000,immutable"
+        )
+        self.assertEqual(self.smoke()["asset_count"], 9)
+
     def test_rejects_wrong_or_malformed_content_types(self) -> None:
         wasm = next(
             "/" + entry["path"] for entry in self.fixture.manifest["assets"]
