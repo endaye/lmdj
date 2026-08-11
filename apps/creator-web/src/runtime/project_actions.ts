@@ -143,6 +143,27 @@ export async function openProjectJourney(
   return projectView(summary, inspected);
 }
 
+export async function refreshProjectProjectionJourney(
+  session: CreatorRuntimeSession,
+  identity: Readonly<Pick<LocalProjectSummary, "projectId" | "patternId">>,
+): Promise<ProjectView> {
+  const inspected = await session.inspectProject();
+  const projects = await listLocalProjectsJourney(session);
+  const summary = projects.find(({projectId, patternId}) =>
+    projectId === identity.projectId && patternId === identity.patternId,
+  );
+  if (summary === undefined) {
+    throw Object.assign(new Error("Current Project is not listed"), {
+      code: "NOT_FOUND",
+    });
+  }
+  if (!record(inspected) || !integer(inspected.project_revision) ||
+    summary.revision !== inspected.project_revision) {
+    throw protocolMismatch("Project projection sources are not current");
+  }
+  return projectView(summary, inspected);
+}
+
 export async function importProjectJourney(
   session: CreatorRuntimeSession,
   file: File,

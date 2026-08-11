@@ -89,6 +89,11 @@ export type CreatorAction =
   | {type: "pad-pressed"; slot: number; outcome: PressOutcome}
   | {type: "pad-released"; slot: number}
   | {type: "sample-action"; action: SampleStateAction}
+  | {
+      type: "sample-project-refreshed";
+      project: ProjectView;
+      action: Extract<SampleStateAction, {type: "mutation-committed"}>;
+    }
   | {type: "pressed-cleared"};
 
 export const initialCreatorState: CreatorState = {
@@ -198,6 +203,8 @@ export function isCreatorActionAllowed(
       return state.pressed.has(action.slot);
     case "sample-action":
       return true;
+    case "sample-project-refreshed":
+      return true;
     case "pressed-cleared":
       return true;
   }
@@ -293,6 +300,45 @@ export function creatorReducer(
     }
     case "sample-action":
       return {...state, sample: reduceSampleState(state.sample, action.action)};
+    case "sample-project-refreshed": {
+      const current = state.project.current;
+      if (current === null ||
+        current.projectId !== action.project.projectId ||
+        current.patternId !== action.project.patternId) {
+        throw new TypeError("Sample Project refresh identity does not match");
+      }
+      const sample = reduceSampleState(state.sample, action.action);
+      if (sample.savedRevision !== action.project.revision ||
+        sample.inspect?.projectRevision !== action.project.revision) {
+        throw new TypeError("Sample Project refresh revision does not match");
+      }
+      const summary: LocalProjectSummary = {
+        projectId: action.project.projectId,
+        patternId: action.project.patternId,
+        revision: action.project.revision,
+        bpm: action.project.bpm,
+        assetCount: action.project.assetCount,
+        assignedPadCount: action.project.assignedPadCount,
+        bundleDigest: action.project.bundleDigest,
+      };
+      let replaced = false;
+      const projects = state.project.projects.map((project) => {
+        if (project.projectId !== summary.projectId ||
+          project.patternId !== summary.patternId) return project;
+        replaced = true;
+        return summary;
+      });
+      if (!replaced) projects.push(summary);
+      return {
+        ...state,
+        project: {
+          phase: "ready",
+          projects,
+          current: action.project,
+        },
+        sample,
+      };
+    }
     case "pressed-cleared":
       return state.pressed.size === 0 ? state : {...state, pressed: new Map()};
   }
