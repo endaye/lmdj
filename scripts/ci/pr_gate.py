@@ -27,6 +27,13 @@ _SCOPE_SPEC.loader.exec_module(change_scope)
 
 
 FORMAL_RESULTS = {"success", "failure", "cancelled", "skipped"}
+_FORMAL_JOB_DISPLAY_NAMES = {
+    "select-ubuntu-runner": "Select Ubuntu runner",
+    "core-ubuntu": "core (ubuntu-latest)",
+    "select-macos-runner": "Select macOS runner",
+    "macos-primary": "macOS gates (primary)",
+    "core-macos": "core (macos-latest)",
+}
 
 
 @dataclass(frozen=True)
@@ -101,19 +108,17 @@ def validate_gate(
         errors.append(f"result key set mismatch: missing {job}")
     for job in sorted(result_keys - expected_keys):
         errors.append(f"result key set mismatch: extra {job}")
-    if errors:
-        return GateReport(False, tuple(errors), requested, skipped)
     for job in formal:
+        if job not in results:
+            continue
         result = results[job]
         if not isinstance(result, str) or result not in FORMAL_RESULTS:
             errors.append(f"unknown result for {job}: {result}")
-    if errors:
-        return GateReport(False, tuple(errors), requested, skipped)
     for job in requested:
-        if results[job] != "success":
+        if job in results and results[job] in FORMAL_RESULTS and results[job] != "success":
             errors.append(f"selected job {job} is {results[job]}, expected success")
     for job in skipped:
-        if results[job] != "skipped":
+        if job in results and results[job] in FORMAL_RESULTS and results[job] != "skipped":
             errors.append(f"unselected job {job} is {results[job]}, expected skipped")
     return GateReport(not errors, tuple(errors), requested, skipped)
 
@@ -157,6 +162,15 @@ def _job_slo(policy: Mapping[str, object], job_name: str) -> int | None:
     return min(values) if values else None
 
 
+def _formal_job_id(formal_jobs: set[str], display_name: object) -> str | None:
+    if not isinstance(display_name, str):
+        return None
+    for job in formal_jobs:
+        if display_name == _FORMAL_JOB_DISPLAY_NAMES.get(job, job):
+            return job
+    return None
+
+
 def render_summary(
     report: GateReport, policy: Mapping[str, object],
     timing_reader: Callable[[], Sequence[Mapping[str, object]]] | None = None,
@@ -176,24 +190,23 @@ def render_summary(
         if not isinstance(jobs, Sequence):
             raise ValueError("jobs response is not a sequence")
         formal = set(_formal_jobs(policy))
-        timing_rows = 0
-        timing_incomplete = False
+        timed_jobs: set[str] = set()
         for job in jobs:
-            name = job.get("name")
-            if not isinstance(name, str) or name not in formal:
+            job_id = _formal_job_id(formal, job.get("name"))
+            if job_id is None:
                 continue
             created, started, completed = (job.get("created_at"), job.get("started_at"), job.get("completed_at"))
             if not all(isinstance(value, str) for value in (created, started, completed)):
-                timing_incomplete = True
                 continue
             queue_seconds = _seconds(created, started)
             execution_seconds = _seconds(started, completed)
-            slo = _job_slo(policy, name)
+            slo = _job_slo(policy, job_id)
             status = "SLO missed" if slo is not None and max(queue_seconds, execution_seconds) > slo else "within SLO"
-            rows.append(f"| Timing {name} | queue {queue_seconds:.0f}s; execution {execution_seconds:.0f}s; {status} |")
-            timing_rows += 1
-        if not timing_rows or timing_incomplete:
-            rows.append("| Timing | timing unavailable |")
+            rows.append(f"| Timing {job_id} | queue {queue_seconds:.0f}s; execution {execution_seconds:.0f}s; {status} |")
+            timed_jobs.add(job_id)
+        for job in report.requested_jobs:
+            if job not in timed_jobs:
+                rows.append(f"| Timing {job} | timing unavailable |")
     except (OSError, ValueError, TypeError, KeyError):
         rows.append("| Timing | timing unavailable |")
     return "\n".join(rows) + "\n"

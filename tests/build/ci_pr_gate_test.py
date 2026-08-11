@@ -115,6 +115,19 @@ class PrGateTest(unittest.TestCase):
         report = self.validate(results=dict(VALID_RESULTS, **{"portal": "neutral"}))
         self.assertEqual(report.errors, ("unknown result for portal: neutral",))
 
+    def test_key_set_unknown_result_and_truth_table_mismatches_all_accumulate(self):
+        results = dict(VALID_RESULTS, **{
+            "invented-job": "skipped",
+            "ci-contract": "neutral",
+            "portal": "failure",
+        })
+        report = self.validate(results=results)
+        self.assertEqual(report.errors, (
+            "result key set mismatch: extra invented-job",
+            "unknown result for ci-contract: neutral",
+            "selected job portal is failure, expected success",
+        ))
+
     def test_unknown_schema_mode_lane_manifest_key_or_job_fails(self):
         mutations = {
             "schema": lambda manifest: manifest.__setitem__("schema", "unknown"),
@@ -183,6 +196,24 @@ class PrGateTest(unittest.TestCase):
         }])
         self.assertTrue(report.ok)
         self.assertIn("SLO missed", summary)
+
+    def test_timing_uses_workflow_display_names_and_marks_missing_selected_jobs(self):
+        manifest = self.manifest(("core_ubuntu", "core_macos"))
+        results = {job: "skipped" for job in VALID_RESULTS}
+        for job in manifest["required_jobs"]:
+            results[job] = "success"
+        report = self.validate(manifest=manifest, results=results)
+        summary = self.module.render_summary(report, self.policy, timing_reader=lambda: [
+            {"name": "Select Ubuntu runner", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
+            {"name": "core (ubuntu-latest)", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
+            {"name": "macOS gates (primary)", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
+            {"name": "core (macos-latest)", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
+            {"name": "core-asan-macos", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
+        ])
+        self.assertTrue(report.ok)
+        for job in ("select-ubuntu-runner", "core-ubuntu", "macos-primary", "core-macos", "core-asan-macos"):
+            self.assertIn(f"Timing {job}", summary)
+        self.assertIn("Timing select-macos-runner | timing unavailable", summary)
 
 
 if __name__ == "__main__":
