@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/web-toolchain-conformance.sh, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/web-toolchain-conformance.sh, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -23,13 +23,13 @@ WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、O
 ## Creator Web Proof
 `scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
 
-Product Build `1.0.16.8` 已在 source revision `56b726092e05821bb76ac1e458c84764b228efcd` 完成以下 conformance case 与 Task 12 完整本地 Proof；精确命令、计数、时长与外部非声明记录在 `docs/quality/2026-08-11-web-runtime-hardening-acceptance.md`：
+Product Build `1.0.16.8` 集成以下 conformance case，但 case 已进入源码不等于 Task 12 的完整本地 Proof 已执行：
 
 - Chromium/Emscripten AudioWorklet case 人为保持 callback in-flight，验证首个 quiescence timeout 锁存 fatal 后，terminal wait 在第二个同长度 caller budget 内返回 `INTERNAL_ERROR`，而不是无限阻塞 Control Worker。
 - Chromium real C++/Emscripten/OPFS Project I/O case 注入 `QuotaExceededError` / `InvalidStateError`，验证 `storage_condition` 分别为 `quota_exceeded` / `invalid_state`；unleased append case 在 seed lease 释放后验证类型化 `invalid_state` 且原有 `seed` 字节不变；owner-binding case 则在 platform A 持有 lease 时让 distinct same-page platform B 依次直接调用 append、replace 与 immutable create，验证三者均为 `project_busy`，已有/缺席 target 与 storage/publication intent inventory 不变，随后 A 仍可 mutation、释放并由 B 重新获取。
 - Task 7 的两个 Chromium production Browser Main case 通过 `_lmdj_web_host_poll` 提交 unknown request ID 与已 settlement response 的 duplicate；它们证明 missing-pending 分支只 terminate 一次、后续 send 以 `HOST_PROTOCOL_MISMATCH` sealed、notification 不会投递且 terminal-owner release 完成，但当时没有让另一个 production request 保持 pending。Task 10A 的第三个 case 先经 native-submit seam 提交 untracked `host.status`，再在同一次 scheduled poll 前用真实 `transport.send(host.status)` 注册不同 ID；它证明该 pending promise 收到同一 terminal error并被拒绝、ID 从真实 `pendingRequests` 清除、failure callback/owner release 仍各一次且 notification 为零。完整 packaged journey 仍属于 Task 12 的 Host Proof 边界。
 
-`1.0.16.6` 已有冻结本地证据但因 helper-only production F4 缺口成为 abandoned、unshipped candidate；`1.0.16.7` 也已冻结，但因 same-worker mutator 可复用其他 platform 的 lease 以及 production pending-rejection 证据需纠正而成为 abandoned、unshipped candidate。Task 12 已从干净、已提交的 `1.0.16.8` source boundary 完成 Project I/O Chromium/WebKit、Core Proof、ASan/TSan/stress、Diagnostic Host Proof、Creator Proof、active-tree 与 Portal 全门禁，并冻结 `1.0.16.8 · canary` immutable snapshot。它仍只证明本地自动化与快照：五项物理记录继续未验证，且不声明 push、PR、CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。
+`1.0.16.6` 已有冻结本地证据但因 helper-only production F4 缺口成为 abandoned、unshipped candidate；`1.0.16.7` 也已冻结，但因 same-worker mutator 可复用其他 platform 的 lease 以及证据文字需纠正而成为 abandoned、unshipped candidate。Task 12 仍须从完成的、干净已提交 `1.0.16.8` source boundary 运行 Core Proof、ASan/TSan/stress、Diagnostic Host Proof、Creator Proof、active-tree 与 Portal 全门禁，并冻结 `1.0.16.8 · canary` immutable snapshot。当前页面不声明这些结果，也不声明 CI、tag、Release、部署或 Channel promotion。
 ## Web 分发 HTTP 门禁
 proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任

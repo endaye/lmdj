@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, scripts/version.py]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -28,7 +28,7 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 | Web Runtime Host | `1.2.5` | 精确 Platform 依赖更新 |
 | Creator Web | `1.0.5` | 精确 Platform 依赖更新 |
 
-这些 compatible Patch 只收紧失败路径；成功操作、Project Truth、公开 Contract envelope 与 protocol shape 不变。`1.0.16.6` 因 helper-only production F4 缺口成为 abandoned、unshipped candidate；`1.0.16.7` 因 owner-unaware same-worker mutator bypass 及 production pending-rejection 证据纠正成为 abandoned、unshipped candidate。两者的冻结本地快照都是只读历史证据，不被重写也不会发布。Task 12 已从干净、已提交的 source revision `56b726092e05821bb76ac1e458c84764b228efcd` 生成并验证 `1.0.16.8 · canary` immutable snapshot；精确 source tree、source projection、Assembly Lock、门禁计数与外部非声明见 `docs/quality/2026-08-11-web-runtime-hardening-acceptance.md`。该本地 snapshot 是已分配的不可变候选证据，不等于团队测试、Release 或 Channel promotion。
+这些 compatible Patch 只收紧失败路径；成功操作、Project Truth、公开 Contract envelope 与 protocol shape 不变。`1.0.16.6` 因 helper-only production F4 缺口成为 abandoned、unshipped candidate；`1.0.16.7` 因 owner-unaware same-worker mutator bypass 及证据纠正成为 abandoned、unshipped candidate。两者的冻结本地快照都是只读历史证据，不被重写也不会发布。`1.0.16.8` 的 immutable `canary` snapshot 仍必须在 Task 12 从干净、已提交的 source boundary 生成；在此之前不能把该 Build 视为已分配给团队测试或发布。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 ## 不可变性
@@ -37,7 +37,7 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.16.8`，仅是未来 tag 文本；只能在 squash merge、完整 CI、merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份仅声明 Task 12 的本地 Proof 与 immutable snapshot 已完成；不宣称 push、PR、远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+当前候选 Product tag 文本为 `lmdj-v1.0.16.8`，仅是未来 tag 文本；只能在 squash merge、完整 CI、merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称 Task 12 Proof、远端 CI、merge、tag、Release、部署、发布或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 

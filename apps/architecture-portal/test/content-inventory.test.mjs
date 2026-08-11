@@ -100,7 +100,8 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
   assert.match(proof, /Product Build `1\.0\.16\.8`/);
-  assert.match(proof, /Task 12[^\n]+仍须/);
+  assert.match(proof, /Task 12[^\n]+完成[^\n]+冻结/);
+  assert.match(proof, /docs\/quality\/2026-08-11-web-runtime-hardening-acceptance\.md/);
   assert.match(proof, /1\.0\.16\.6[^\n]+abandoned/);
   assert.match(proof, /1\.0\.16\.7[^\n]+abandoned/);
   assert.match(proof, /pending promise[^\n]+清除/);
