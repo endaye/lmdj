@@ -81,8 +81,9 @@ Remote operations require separate authorization. When authorized:
 
 1. push the task branch;
 2. open a Pull Request targeting `main`;
-3. require every configured PR CI job to pass, including supported-platform,
-   sanitizer, and coverage gates where applicable;
+3. require every manifest-selected formal lane plus `PR Gate` to pass,
+   including supported-platform, sanitizer, and coverage gates selected for
+   the change;
 4. resolve review findings in new task-local commits;
 5. update the branch from the latest `main` and rerun required checks when the
    protection rules report it as behind;
@@ -97,6 +98,27 @@ an implicit part of updating a branch.
 Squash merging means branch ancestry alone may not prove that cleanup is safe.
 Before deleting a branch, verify its Pull Request state and patch equivalence
 with `main`, and verify its worktree is clean.
+
+### CI scope operations
+
+Every Pull Request body declares its expected CI mode, selected and skipped
+closed lanes, whether `ci:full` is required, and the ownership or upgrade
+reason. The checked-in scope policy remains authoritative; the declaration is
+review evidence, not an override.
+
+To upgrade the current head to full CI, apply `ci:full`, then wait for the
+in-progress run to finish or explicitly cancel it. Because label changes do not
+start a separate workflow event, use GitHub's **Re-run all jobs** on the current
+head after the label is visible. Confirm the new `Change Scope` summary says
+`full`, all 14 lanes are selected, and the same-run `PR Gate` passes. Do not use
+an individual job rerun to change scope.
+
+Required-check rollback is a fail-closed two-stage operation. Keep `PR Gate`
+required and first merge a configuration that forces every Pull Request to
+full. Prove that a docs-only Pull Request again publishes the old Core check
+contexts, then restore those contexts as required branch-protection checks.
+Only after the old protection is active may a separately authorized operation
+remove `PR Gate`. No stage authorizes the next one.
 
 ## 6. Releases and urgent fixes
 

@@ -3,19 +3,66 @@ name: Core CI
 on:
   pull_request:
     branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, converted_to_draft]
   push:
     branches: [main]
+  workflow_dispatch:
 
 permissions:
   contents: read
+  pull-requests: read
+  actions: read
 
 concurrency:
-  group: core-ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'pull_request' && format('core-ci-pr-{0}', github.event.pull_request.number) || format('core-ci-sha-{0}', github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
+  change-scope:
+    name: Change Scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    outputs:
+      manifest: ${{ steps.scope.outputs.manifest }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Classify the complete change inventory
+        id: scope
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          MANIFEST_PATH: ${{ runner.temp }}/ci-scope.json
+        run: |
+          set -euo pipefail
+          python3 scripts/ci/change_scope.py \
+            --policy scripts/ci/scope_policy.json \
+            --event "$EVENT_NAME" \
+            --base-sha "$BASE_SHA" \
+            --head-sha "$HEAD_SHA" \
+            --repository "$REPOSITORY" \
+            --pr-number "$PR_NUMBER" \
+            --manifest-out "$MANIFEST_PATH" \
+            --github-output "$GITHUB_OUTPUT" \
+            --summary "$GITHUB_STEP_SUMMARY"
+      - name: Retain the scope manifest
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-scope-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}/ci-scope.json
+          if-no-files-found: error
+          retention-days: 14
+
   select-ubuntu-runner:
     name: Select Ubuntu runner
+    needs: change-scope
+    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab || fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage) }}
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -132,10 +179,107 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           echo "Using trusted self-hosted runner pool: $eligible_count eligible runner(s)"
 
+  docs-static:
+    name: Docs / static
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Validate the exact selected revision range
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
+          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: git diff --check "$BASE_SHA" "$HEAD_SHA"
+
+  portal:
+    name: Architecture Portal
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal }}
+    uses: ./.github/workflows/architecture-portal.yml
+    with:
+      check_documentation_impact: ${{ github.event_name == 'pull_request' }}
+      base_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+      head_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      pull_request_body: ${{ github.event_name == 'pull_request' && github.event.pull_request.body || '' }}
+
+  ci-contract:
+    name: CI contract
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Validate workflows with pinned actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Run every CI-control contract
+        run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
+
+  deploy-contract:
+    name: Deploy contract
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.deploy_contract }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - run: python3 tests/build/web_runtime_deploy_workflow_test.py
+      - run: python3 tests/build/web_runtime_public_deployment_docs_test.py
+
+  chameleon-lab:
+    name: Chameleon Lab
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.chameleon_lab }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - run: scripts/chameleon-lab.sh test
+
+  package:
+    name: Core package
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          lfs: true
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Configure bounded build acceleration
+        uses: ./.github/actions/configure-build-acceleration
+        with:
+          use-ccache: false
+      - run: scripts/core.sh package
+
   web-toolchain-conformance:
     # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
     # bounded test budgets on the heterogeneous self-hosted Linux pool.
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
@@ -171,8 +315,10 @@ jobs:
           scripts/web-toolchain-conformance.sh proof
 
   web-runtime-host:
-    needs: select-ubuntu-runner
+    needs: [change-scope, select-ubuntu-runner]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    timeout-minutes: 45
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
@@ -216,8 +362,10 @@ jobs:
           scripts/web-runtime-host.sh proof
 
   creator-web:
-    needs: [web-toolchain-conformance, core-ubuntu]
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.creator }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 35
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
@@ -260,7 +408,8 @@ jobs:
           scripts/creator-web.sh proof
 
   web-runtime-lab:
-    needs: select-ubuntu-runner
+    needs: [change-scope, select-ubuntu-runner]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
@@ -274,8 +423,10 @@ jobs:
 
   core-ubuntu:
     name: core (ubuntu-latest)
-    needs: select-ubuntu-runner
+    needs: [change-scope, select-ubuntu-runner]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
         with:
@@ -321,8 +472,32 @@ jobs:
           ccache --show-log-stats
           || echo 'warning: ccache statistics are unavailable' >&2
 
+  pr-gate:
+    name: PR Gate
+    needs: [change-scope, docs-static, portal, ci-contract, select-ubuntu-runner, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
+    if: ${{ always() && !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v6
+      - name: Adjudicate the same-run formal lane results
+        env:
+          FORMAL_RESULTS_JSON: >-
+            {"docs-static":{"result":"${{ needs.docs-static.result }}"},"portal":{"result":"${{ needs.portal.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"select-ubuntu-runner":{"result":"${{ needs.select-ubuntu-runner.result }}"},"select-macos-runner":{"result":"${{ needs.select-macos-runner.result }}"},"macos-primary":{"result":"${{ needs.macos-primary.result }}"},"core-ubuntu":{"result":"${{ needs.core-ubuntu.result }}"},"core-asan":{"result":"${{ needs.core-asan.result }}"},"core-coverage":{"result":"${{ needs.core-coverage.result }}"},"core-macos":{"result":"${{ needs.core-macos.result }}"},"core-asan-macos":{"result":"${{ needs.core-asan-macos.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"package":{"result":"${{ needs.package.result }}"}}
+          SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/ci/pr_gate.py
+          --policy scripts/ci/scope_policy.json
+          --manifest-json "$SCOPE_MANIFEST"
+          --results-json "$FORMAL_RESULTS_JSON"
+          --head-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          --summary "$GITHUB_STEP_SUMMARY"
+
   select-macos-runner:
     name: Select macOS runner
+    needs: change-scope
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -442,7 +617,8 @@ jobs:
 
   macos-primary:
     name: macOS gates (primary)
-    needs: select-macos-runner
+    needs: [change-scope, select-macos-runner]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
     runs-on: ${{ fromJSON(needs.select-macos-runner.outputs.runner) }}
     timeout-minutes: 30
     # Infrastructure failure is adjudicated by the fallback and final gate
@@ -523,8 +699,8 @@ jobs:
 
   core-macos:
     name: core (macos-latest)
-    needs: [select-macos-runner, macos-primary, macos-fallback]
-    if: ${{ !cancelled() }}
+    needs: [change-scope, select-macos-runner, macos-primary, macos-fallback]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -540,8 +716,8 @@ jobs:
 
   core-asan-macos:
     name: core-asan-macos
-    needs: [select-macos-runner, macos-primary, macos-fallback]
-    if: ${{ !cancelled() }}
+    needs: [change-scope, select-macos-runner, macos-primary, macos-fallback]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_macos }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
@@ -556,8 +732,10 @@ jobs:
         run: bash .github/scripts/assert-macos-gate-result.sh asan
 
   core-asan:
-    needs: select-ubuntu-runner
+    needs: [change-scope, select-ubuntu-runner]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
         with:
@@ -585,8 +763,10 @@ jobs:
           || echo 'warning: ccache statistics are unavailable' >&2
 
   core-coverage:
-    needs: select-ubuntu-runner
+    needs: [change-scope, select-ubuntu-runner]
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
         with:

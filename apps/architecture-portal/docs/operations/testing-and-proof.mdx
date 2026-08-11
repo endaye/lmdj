@@ -27,13 +27,17 @@ Product Build `1.0.16.5` 是 `1.0.16.4` 冻结后的第五个 corrective candida
 ## Web 分发 HTTP 门禁
 proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
 ## CI 责任
-Linux ASAN 负责 Python-hosted 覆盖，macOS ASAN 只覆盖 native label；两者和 stress 都是 PR 门禁。
+主 CI 对每个 PR 运行 `Change Scope`：以完整 Git 历史验证精确 base/head 差异，并读取实时 Draft 与 `ci:full` 标签。分类结果写入 job summary，同时保留 `ci-scope-<head-sha>` manifest artifact。Draft 只选择 Docs/static 与 CI Contract；Ready PR 按版本化路径归属取所有消费者 lane 的并集；中央 CI、未知归属、跨多个昂贵家族或 `ci:full` 升级为全量。`main` push 和手动 dispatch 始终选择全部 14 个 lane，且按 SHA 分组、不取消较早的 `main` run。
 
-正式 CI 保留 Web Runtime Lab、macOS、Ubuntu、Linux ASan、macOS native ASan 与 Coverage，并新增 Formal Web Host lane：校验固定 emsdk revision/release mapping/`emcc 6.0.5`，执行 `npm ci`，显式安装 Chromium/WebKit，再运行 `scripts/web-runtime-host.sh proof`。Nightly 继续保留 TSan 与重复 Stress lane。工作流定义不是远端执行结果；实际 Pull Request CI URL 与状态只能在 CI 产生后记录。
+正式 lane 包含 Docs/static、Architecture Portal、CI Contract、Ubuntu Core、Linux ASan、Coverage、macOS Core/native ASan、Web Toolchain、Formal Web Runtime Host、Creator、Web Runtime Lab、Deploy Contract、Chameleon Lab 与 Core Package。Linux ASan 负责 Python-hosted sanitizer 覆盖，macOS ASan 只覆盖 native label；stress 仍随对应 Core ASan 门禁执行，Nightly 继续保留 TSan 与重复 Stress lane。Formal Web Host 继续校验固定 emsdk revision/release mapping/`emcc 6.0.5`、locked npm、Chromium/WebKit 与 `scripts/web-runtime-host.sh proof`。
 
-PR 与 `main` 的 Web、Ubuntu Core、Linux ASan 和 Coverage 重负载任务优先选择至少一台在线、空闲且带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 runner；selector 不再绑定机器名称，GitHub 会把任务分配给任意满足标签的空闲 runner。外部 fork、状态密钥缺失、Runner API 失败或池中没有在线空闲匹配 runner 时，任务在开始前改用 GitHub-hosted Ubuntu。当前 Contabo 池由两个独立 runner service 构成，最多并发两个任务，其余排队；所有 CI CMake build 均限制为 3 路并行。Linux 原生任务共享 checkout 外持久 `ccache`，Emscripten 任务明确绕过该缓存；M1 原生任务使用本机持久 `ccache`，GitHub-hosted fallback 只保留 3 路并行、不依赖 runner 本地缓存。选定 lane 的语义失败是最终结果，不会换机器重试；每个任务输出的缓存统计只作诊断证据。
+Portal 不再独立触发 PR 或 `main` workflow；主 CI 在同一次 run 内调用 reusable Portal，并显式传入 documentation-impact 开关、base/head 与 PR body。`PR Gate` 静态 fan-in 15 个 lane job 加 `select-ubuntu-runner`、`select-macos-runner`、`macos-primary` 共 18 个结果：manifest 选中的结果必须是 `success`，未选中的必须是 `skipped`，缺失、额外、失败、取消、SHA 或 schema 不一致都 fail closed。`Change Scope` 是 manifest producer，不是结果键；条件性 `macos-fallback` 由 `core (macos-latest)` 与 `core-asan-macos` 两个 adjudicator 传递裁决。
 
-macOS Core Proof 与 native ASan 优先选择带 `lmdj` 标签、在线且空闲的受信 self-hosted runner；外部 fork、状态密钥缺失、Runner API 失败、机器离线/忙碌/缺失/标签不符时直接使用 GitHub-hosted macOS。self-hosted lane 若因 checkout/setup、通信中断或 30 分钟超时而没有发布终态结果，GitHub-hosted macOS 才完整执行一次备用 lane；已发布的准备、Proof 或 sanitizer 失败不会触发备用执行。最终门禁仍以 `core (macos-latest)` 与 `core-asan-macos` 对外报告，避免 runner 实现细节改变受保护分支契约。
+只有 selected Linux pool consumer 存在时才运行 Ubuntu selector；只有 `core_macos` 被选中时才运行 macOS selector。Web、Ubuntu Core、Linux ASan 和 Coverage 重负载任务继续优先至少一台在线、空闲且带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 runner；外部 fork、状态密钥缺失、Runner API 失败或池中没有在线空闲匹配 runner 时，在 workload 开始前选择 GitHub-hosted Ubuntu。当前 Contabo 池由两个独立 runner service 构成，最多并发两个任务，其余排队；所有 CI CMake build 均限制为 3 路并行。Linux 原生任务共享 checkout 外持久 `ccache`，Emscripten 明确绕过；M1 原生任务使用本机持久 `ccache`，GitHub-hosted lane 不依赖 runner 本地缓存。
+
+macOS Core Proof 与 native ASan 继续优先带 `lmdj` 标签、在线且空闲的受信 self-hosted runner。外部 fork、状态密钥缺失、Runner API 失败、机器离线/忙碌/缺失/标签不符时直接选择 GitHub-hosted macOS。self-hosted lane 只有在 checkout/setup、通信中断或 30 分钟上限导致未发布终态时，才执行一次 GitHub-hosted fallback；已发布的准备、Proof 或 sanitizer 失败是最终语义结果，不触发 fallback。对外 check name 仍为 `core (macos-latest)` 与 `core-asan-macos`。
+
+Change Scope、各 lane、排队与执行时长会作为 SLO evidence 写入 summary；SLO 只用于观察和容量决策，不把慢但成功的 job 改为失败。独立 job 安全上限和测试自己的行为 timeout 仍是硬失败。编译、Proof、测试、sanitizer 与 Coverage 不自动 retry；缓存统计也只作诊断证据。工作流定义与本地结果都不是远端执行结果，实际 Pull Request URL、同 SHA manifest、formal results 和 `PR Gate` 状态只能在 CI 产生后记录。
 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 commit 的 GitHub required checks。
 ## 证据分离

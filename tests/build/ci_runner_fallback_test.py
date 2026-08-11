@@ -64,6 +64,8 @@ class CiRunnerFallbackTest(unittest.TestCase):
 
     def test_workflow_routes_linux_gates_to_contabo_when_selected(self) -> None:
         selector = self.workflow_job("select-ubuntu-runner")
+        self.assertIn("needs: change-scope", selector)
+        self.assertIn("needs.change-scope.outputs.manifest", selector)
         self.assertNotIn("TARGET_RUNNER_NAME", selector)
         self.assertNotIn("contabo-lmdj-linux", selector)
         self.assertNotIn(".name ==", selector)
@@ -90,7 +92,9 @@ class CiRunnerFallbackTest(unittest.TestCase):
         ):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("needs: select-ubuntu-runner", job)
+                self.assertIn(
+                    "needs: [change-scope, select-ubuntu-runner]", job
+                )
                 self.assertIn(
                     "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
                     job,
@@ -101,8 +105,28 @@ class CiRunnerFallbackTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertNotIn("needs: select-ubuntu-runner", job)
+                self.assertIn("needs: change-scope", job)
                 self.assertIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
+
+    def test_macos_jobs_keep_selector_fallback_and_adjudicator_topology(self) -> None:
+        selector = self.workflow_job("select-macos-runner")
+        primary = self.workflow_job("macos-primary")
+        fallback = self.workflow_job("macos-fallback")
+        core = self.workflow_job("core-macos")
+        asan = self.workflow_job("core-asan-macos")
+
+        self.assertIn("needs: change-scope", selector)
+        self.assertIn("needs.change-scope.outputs.manifest", selector)
+        self.assertIn(
+            "needs: [change-scope, select-macos-runner]", primary
+        )
+        self.assertIn("needs: [select-macos-runner, macos-primary]", fallback)
+        expected_adjudicator_needs = (
+            "needs: [change-scope, select-macos-runner, macos-primary, macos-fallback]"
+        )
+        self.assertIn(expected_adjudicator_needs, core)
+        self.assertIn(expected_adjudicator_needs, asan)
 
     def test_linux_fixture_consumers_rehydrate_lfs_before_generation(self) -> None:
         consumers = {
