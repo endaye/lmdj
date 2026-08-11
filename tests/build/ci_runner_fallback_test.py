@@ -28,6 +28,18 @@ class CiRunnerFallbackTest(unittest.TestCase):
         assert match is not None
         return match.group("body")
 
+    def action_step(self, step_name: str) -> str:
+        source = ACTION.read_text(encoding="utf-8")
+        match = re.search(
+            rf"^    - name: {re.escape(step_name)}\n"
+            r"(?P<body>.*?)(?=^    - name:|\Z)",
+            source,
+            flags=re.MULTILINE | re.DOTALL,
+        )
+        self.assertIsNotNone(match, f"composite action step is missing: {step_name}")
+        assert match is not None
+        return match.group("body")
+
     def run_gate(
         self,
         gate: str,
@@ -158,11 +170,28 @@ class CiRunnerFallbackTest(unittest.TestCase):
 
     def test_composite_action_publishes_results_instead_of_retrying_tests(self) -> None:
         source = ACTION.read_text(encoding="utf-8")
-        self.assertEqual(source.count("continue-on-error: true"), 3)
+        self.assertEqual(source.count("continue-on-error: true"), 4)
         self.assertEqual(source.count("scripts/core.sh proof"), 1)
         self.assertEqual(source.count("scripts/core.sh configure asan"), 1)
         self.assertEqual(source.count("ctest --preset asan -L '^native$'"), 1)
         self.assertIn("echo 'completed=true'", source)
+
+    def test_acceleration_failure_leaves_completion_unset_for_hosted_fallback(self) -> None:
+        acceleration = self.action_step("Configure bounded build acceleration")
+        prepare = self.action_step("Prepare deterministic Core inputs")
+        publisher = self.action_step("Publish semantic gate results")
+
+        self.assertIn("id: acceleration", acceleration)
+        self.assertIn("continue-on-error: true", acceleration)
+        self.assertIn(
+            "if: ${{ steps.acceleration.outcome == 'success' }}", prepare
+        )
+        self.assertIn(
+            "if: ${{ always() && steps.acceleration.outcome == 'success' }}",
+            publisher,
+        )
+        self.assertIn("echo 'completed=true'", publisher)
+        self.assertIn("PREPARE_RESULT: ${{ steps.prepare.outcome }}", publisher)
 
     def test_primary_semantic_success_passes(self) -> None:
         completed = self.run_gate(

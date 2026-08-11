@@ -42,6 +42,27 @@ VALID_RESULTS = {
     "package": "skipped",
 }
 
+REAL_WORKFLOW_DISPLAY_NAMES = {
+    "docs-static": "Docs / static",
+    "portal": "Architecture Portal / portal",
+    "ci-contract": "CI contract",
+    "select-ubuntu-runner": "Select Ubuntu runner",
+    "select-macos-runner": "Select macOS runner",
+    "macos-primary": "macOS gates (primary)",
+    "core-ubuntu": "core (ubuntu-latest)",
+    "core-asan": "core-asan",
+    "core-coverage": "core-coverage",
+    "core-macos": "core (macos-latest)",
+    "core-asan-macos": "core-asan-macos",
+    "web-toolchain-conformance": "web-toolchain-conformance",
+    "web-runtime-host": "web-runtime-host",
+    "creator-web": "creator-web",
+    "web-runtime-lab": "web-runtime-lab",
+    "deploy-contract": "Deploy contract",
+    "chameleon-lab": "Chameleon Lab",
+    "package": "Core package",
+}
+
 
 def load_gate():
     spec = importlib.util.spec_from_file_location("pr_gate", GATE_PATH)
@@ -85,6 +106,25 @@ class PrGateTest(unittest.TestCase):
         report = self.validate()
         self.assertTrue(report.ok)
         self.assertEqual(report.errors, ())
+
+    def test_change_scope_failure_after_manifest_output_fails_gate(self):
+        try:
+            report = self.module.validate_gate(
+                self.policy,
+                self.manifest(),
+                VALID_RESULTS,
+                HEAD_SHA,
+                change_scope_result="failure",
+            )
+        except TypeError as error:
+            self.fail(f"producer result is not independently validated: {error}")
+        self.assertFalse(report.ok)
+        self.assertEqual(
+            report.errors,
+            ("change-scope producer is failure, expected success",),
+        )
+        self.assertEqual(len(VALID_RESULTS), 18)
+        self.assertNotIn("change-scope", VALID_RESULTS)
 
     def test_required_skipped_failure_and_cancelled_fail(self):
         for result in ("skipped", "failure", "cancelled"):
@@ -186,6 +226,7 @@ class PrGateTest(unittest.TestCase):
         summary = self.module.render_summary(report, self.policy, timing_reader=fail)
         self.assertTrue(report.ok)
         self.assertIn("timing unavailable", summary)
+        self.assertIn("Pre-Gate critical path | timing unavailable", summary)
 
     def test_slo_overage_is_reported_but_success_stays_success(self):
         report = self.validate()
@@ -196,6 +237,23 @@ class PrGateTest(unittest.TestCase):
         }])
         self.assertTrue(report.ok)
         self.assertIn("SLO missed", summary)
+
+    def test_queue_delay_does_not_count_against_execution_slo(self):
+        report = self.validate()
+        summary = self.module.render_summary(report, self.policy, timing_reader=lambda: [{
+            "name": "docs-static", "created_at": "2026-08-11T00:00:00Z",
+            "started_at": "2026-08-11T00:10:00Z",
+            "completed_at": "2026-08-11T00:10:10Z",
+        }])
+        self.assertTrue(report.ok)
+        self.assertIn(
+            "Timing docs-static | queue 600s; execution 10s; within SLO",
+            summary,
+        )
+        self.assertNotIn(
+            "Timing docs-static | queue 600s; execution 10s; SLO missed",
+            summary,
+        )
 
     def test_timing_uses_workflow_display_names_and_marks_missing_selected_jobs(self):
         manifest = self.manifest(("core_ubuntu", "core_macos"))
@@ -214,6 +272,45 @@ class PrGateTest(unittest.TestCase):
         for job in ("select-ubuntu-runner", "core-ubuntu", "macos-primary", "core-macos", "core-asan-macos"):
             self.assertIn(f"Timing {job}", summary)
         self.assertIn("Timing select-macos-runner | timing unavailable", summary)
+
+    def test_all_real_display_names_and_change_scope_feed_pre_gate_critical_path(self):
+        manifest = self.manifest(tuple(self.policy["lanes"]))
+        results = {job: "success" for job in VALID_RESULTS}
+        report = self.validate(manifest=manifest, results=results)
+        jobs = [{
+            "name": "Change Scope",
+            "created_at": "2026-08-11T00:00:00Z",
+            "started_at": "2026-08-11T00:00:01Z",
+            "completed_at": "2026-08-11T00:00:05Z",
+        }]
+        for job_id, display_name in REAL_WORKFLOW_DISPLAY_NAMES.items():
+            jobs.append({
+                "name": display_name,
+                "created_at": "2026-08-11T00:00:05Z",
+                "started_at": "2026-08-11T00:00:06Z",
+                "completed_at": (
+                    "2026-08-11T00:10:00Z"
+                    if job_id == "package"
+                    else "2026-08-11T00:00:07Z"
+                ),
+            })
+
+        summary = self.module.render_summary(
+            report, self.policy, timing_reader=lambda: jobs
+        )
+
+        self.assertTrue(report.ok)
+        self.assertEqual(set(REAL_WORKFLOW_DISPLAY_NAMES), set(VALID_RESULTS))
+        self.assertEqual(len(VALID_RESULTS), 18)
+        self.assertNotIn("change-scope", VALID_RESULTS)
+        self.assertIn("Timing change-scope", summary)
+        for job_id in REAL_WORKFLOW_DISPLAY_NAMES:
+            with self.subTest(job=job_id):
+                self.assertIn(f"Timing {job_id}", summary)
+                self.assertNotIn(
+                    f"Timing {job_id} | timing unavailable", summary
+                )
+        self.assertIn("Pre-Gate critical path | 600s", summary)
 
 
 if __name__ == "__main__":

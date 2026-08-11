@@ -57,6 +57,7 @@ jobs:
           name: ci-scope-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}/ci-scope.json
           if-no-files-found: error
+          overwrite: true
           retention-days: 14
 
   select-ubuntu-runner:
@@ -485,12 +486,14 @@ jobs:
           FORMAL_RESULTS_JSON: >-
             {"docs-static":{"result":"${{ needs.docs-static.result }}"},"portal":{"result":"${{ needs.portal.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"select-ubuntu-runner":{"result":"${{ needs.select-ubuntu-runner.result }}"},"select-macos-runner":{"result":"${{ needs.select-macos-runner.result }}"},"macos-primary":{"result":"${{ needs.macos-primary.result }}"},"core-ubuntu":{"result":"${{ needs.core-ubuntu.result }}"},"core-asan":{"result":"${{ needs.core-asan.result }}"},"core-coverage":{"result":"${{ needs.core-coverage.result }}"},"core-macos":{"result":"${{ needs.core-macos.result }}"},"core-asan-macos":{"result":"${{ needs.core-asan-macos.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"package":{"result":"${{ needs.package.result }}"}}
           SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
+          CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: >-
           python3 scripts/ci/pr_gate.py
           --policy scripts/ci/scope_policy.json
           --manifest-json "$SCOPE_MANIFEST"
           --results-json "$FORMAL_RESULTS_JSON"
+          --change-scope-result "$CHANGE_SCOPE_RESULT"
           --head-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
           --summary "$GITHUB_STEP_SUMMARY"
 

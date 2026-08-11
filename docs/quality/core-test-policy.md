@@ -94,7 +94,9 @@ The main CI workflow triggers for every Pull Request without a workflow-level
 path filter. `Change Scope` checks out the complete history, diffs the exact PR
 base and head, and reads current Draft and `ci:full` label state. Its retained
 `ci-scope-<head-sha>` artifact and job summary record one closed manifest with
-14 lane booleans and the formal jobs derived from them.
+14 lane booleans and the formal jobs derived from them. Artifact upload uses
+same-run overwrite semantics so rerunning `Change Scope` cannot collide with
+the retained manifest from its earlier attempt.
 
 Selection has three modes:
 
@@ -135,13 +137,18 @@ The manifest schema, head SHA, lane-to-job mapping, and complete 18-result key
 set must also match. The results are the 15 published lane jobs plus
 `select-ubuntu-runner`, `select-macos-runner`, and `macos-primary`;
 `change-scope` is the manifest producer, and conditional `macos-fallback` is
-enforced transitively by `core-macos` and `core-asan-macos`.
+enforced transitively by `core-macos` and `core-asan-macos`. The producer is
+not a nineteenth result key, but its own job result must independently be
+`success`; a manifest output cannot make a later artifact-upload failure pass.
 
-Execution SLOs are observations written to the Gate summary, not timeouts and
-not correctness assertions. Independent job safety limits and test-owned
-behavior timeouts remain hard failures. A slow successful job stays
-successful; a failed compile, Proof, test, sanitizer, or Coverage command is
-not retried. `main` and manual dispatch always run the full manifest.
+`Change Scope` and every selected lane or support job contribute timing
+evidence and a pre-Gate critical-path span to the Gate summary. Queue time is
+reported separately; only execution time is compared with an execution SLO.
+Missing timing is non-blocking, and SLO observations are neither timeouts nor
+correctness assertions. Independent job safety limits and test-owned behavior
+timeouts remain hard failures. A slow successful job stays successful; a
+failed compile, Proof, test, sanitizer, or Coverage command is not retried.
+`main` and manual dispatch always run the full manifest.
 
 ## No-Retry Policy
 
@@ -172,10 +179,10 @@ results.
 The macOS CI fallback is infrastructure recovery, not a test retry. Runner
 selection uses GitHub-hosted macOS immediately when the trusted self-hosted
 runner is unavailable. When the self-hosted lane is selected, GitHub-hosted
-macOS may run the same gates only if checkout, setup, runner communication, or
-the 30-minute job limit prevents that lane from publishing a terminal result.
-A published preparation, Core Proof, or sanitizer failure is final and must not
-start the fallback lane.
+macOS may run the same gates only if checkout, acceleration/`ccache` setup,
+runner communication, or the 30-minute job limit prevents that lane from
+publishing a terminal result. A published preparation, Core Proof, or
+sanitizer failure is final and must not start the fallback lane.
 
 Local Mac preflight may run additional focused, Proof, or browser checks before
 push, but local results do not replace the commit-bound GitHub required checks.

@@ -35,6 +35,32 @@ SUPPORT_JOBS = (
     "macos-primary",
 )
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
+FORMAL_RESULT_LANE_GUARDS = {
+    "docs-static": {"docs_static"},
+    "portal": {"portal"},
+    "ci-contract": {"ci_contract"},
+    "core-ubuntu": {"core_ubuntu"},
+    "core-asan": {"core_asan"},
+    "core-coverage": {"core_coverage"},
+    "core-macos": {"core_macos"},
+    "core-asan-macos": {"core_macos"},
+    "web-toolchain-conformance": {"web_toolchain"},
+    "web-runtime-host": {"web_runtime_host"},
+    "creator-web": {"creator"},
+    "web-runtime-lab": {"web_runtime_lab"},
+    "deploy-contract": {"deploy_contract"},
+    "chameleon-lab": {"chameleon_lab"},
+    "package": {"package"},
+    "select-ubuntu-runner": {
+        "web_runtime_host",
+        "web_runtime_lab",
+        "core_ubuntu",
+        "core_asan",
+        "core_coverage",
+    },
+    "select-macos-runner": {"core_macos"},
+    "macos-primary": {"core_macos"},
+}
 
 
 class CiWorkflowTopologyTest(unittest.TestCase):
@@ -213,6 +239,17 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             with self.subTest(support=job_name):
                 self.assertIn("change-scope", self.job_needs(job_name))
 
+    def test_formal_result_jobs_have_exact_manifest_lane_guards(self) -> None:
+        self.assertEqual(set(FORMAL_RESULT_LANE_GUARDS), set(FORMAL_RESULTS))
+        for job_name, expected_lanes in FORMAL_RESULT_LANE_GUARDS.items():
+            with self.subTest(job=job_name):
+                self.assertEqual(
+                    set(re.findall(
+                        r"lanes\.([a-z_]+)", self.workflow_job(job_name)
+                    )),
+                    expected_lanes,
+                )
+
     def test_creator_no_longer_needs_web_toolchain_or_core(self) -> None:
         job = self.workflow_job("creator-web")
         self.assertEqual(self.job_needs("creator-web"), {"change-scope"})
@@ -269,6 +306,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(result_keys, set(FORMAL_RESULTS))
         self.assertNotIn('"change-scope":', job)
         self.assertNotIn('"macos-fallback":', job)
+        self.assertIn(
+            "CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}", job
+        )
+        self.assertIn('--change-scope-result "$CHANGE_SCOPE_RESULT"', job)
 
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {
@@ -298,6 +339,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         job = self.workflow_job("change-scope")
         self.assertIn("uses: actions/upload-artifact@v4", job)
         self.assertIn("name: ci-scope-${{", job)
+        self.assertIn("overwrite: true", job)
         self.assertIn("github.event.pull_request.head.sha", job)
         self.assertIn("$GITHUB_OUTPUT", job)
         self.assertIn("$GITHUB_STEP_SUMMARY", job)

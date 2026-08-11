@@ -28,12 +28,26 @@ _SCOPE_SPEC.loader.exec_module(change_scope)
 
 FORMAL_RESULTS = {"success", "failure", "cancelled", "skipped"}
 _FORMAL_JOB_DISPLAY_NAMES = {
-    "select-ubuntu-runner": "Select Ubuntu runner",
-    "core-ubuntu": "core (ubuntu-latest)",
-    "select-macos-runner": "Select macOS runner",
-    "macos-primary": "macOS gates (primary)",
-    "core-macos": "core (macos-latest)",
+    "docs-static": ("Docs / static", "docs-static"),
+    "portal": ("Architecture Portal / portal", "Architecture Portal", "portal"),
+    "ci-contract": ("CI contract", "ci-contract"),
+    "select-ubuntu-runner": ("Select Ubuntu runner",),
+    "select-macos-runner": ("Select macOS runner",),
+    "macos-primary": ("macOS gates (primary)",),
+    "core-ubuntu": ("core (ubuntu-latest)",),
+    "core-asan": ("core-asan",),
+    "core-coverage": ("core-coverage",),
+    "core-macos": ("core (macos-latest)",),
+    "core-asan-macos": ("core-asan-macos",),
+    "web-toolchain-conformance": ("web-toolchain-conformance",),
+    "web-runtime-host": ("web-runtime-host",),
+    "creator-web": ("creator-web",),
+    "web-runtime-lab": ("web-runtime-lab",),
+    "deploy-contract": ("Deploy contract", "deploy-contract"),
+    "chameleon-lab": ("Chameleon Lab", "chameleon-lab"),
+    "package": ("Core package", "package"),
 }
+_CHANGE_SCOPE_DISPLAY_NAMES = {"Change Scope", "change-scope"}
 
 
 @dataclass(frozen=True)
@@ -73,7 +87,8 @@ def _formal_jobs(policy: Mapping[str, object]) -> tuple[str, ...]:
 
 def validate_gate(
     policy: Mapping[str, object], manifest: Mapping[str, object],
-    results: Mapping[str, str], expected_head_sha: str,
+    results: Mapping[str, str], expected_head_sha: str, *,
+    change_scope_result: str = "success",
 ) -> GateReport:
     """Return the exact selected-success/unselected-skipped gate decision."""
     try:
@@ -94,6 +109,10 @@ def validate_gate(
         )
     skipped = tuple(job for job in _formal_jobs(policy) if job not in requested)
     errors: list[str] = []
+    if change_scope_result != "success":
+        errors.append(
+            f"change-scope producer is {change_scope_result}, expected success"
+        )
     if manifest["head_sha"].lower() != expected_head:
         errors.append(
             f"manifest head SHA {manifest['head_sha']} does not match expected {expected_head}"
@@ -151,12 +170,17 @@ def read_actions_jobs(repository: str, run_id: str, token: str | None = None) ->
         page += 1
 
 
+def _instant(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
 def _seconds(start: str, end: str) -> float:
-    return (datetime.fromisoformat(end.replace("Z", "+00:00")) -
-            datetime.fromisoformat(start.replace("Z", "+00:00"))).total_seconds()
+    return (_instant(end) - _instant(start)).total_seconds()
 
 
 def _job_slo(policy: Mapping[str, object], job_name: str) -> int | None:
+    if job_name == "change-scope":
+        return policy["slo_seconds"].get("change_scope")
     values = [policy["slo_seconds"][lane] for lane, jobs in policy["lane_jobs"].items()
               if job_name in jobs and lane in policy["slo_seconds"]]
     return min(values) if values else None
@@ -166,7 +190,7 @@ def _formal_job_id(formal_jobs: set[str], display_name: object) -> str | None:
     if not isinstance(display_name, str):
         return None
     for job in formal_jobs:
-        if display_name == _FORMAL_JOB_DISPLAY_NAMES.get(job, job):
+        if display_name in _FORMAL_JOB_DISPLAY_NAMES.get(job, (job,)):
             return job
     return None
 
@@ -184,16 +208,25 @@ def render_summary(
         rows.append(f"| Error | {error} |")
     if timing_reader is None:
         rows.append("| Timing | timing unavailable |")
+        rows.append("| Pre-Gate critical path | timing unavailable |")
         return "\n".join(rows) + "\n"
     try:
         jobs = timing_reader()
         if not isinstance(jobs, Sequence):
             raise ValueError("jobs response is not a sequence")
         formal = set(_formal_jobs(policy))
+        requested = set(report.requested_jobs)
         timed_jobs: set[str] = set()
+        change_scope_created: str | None = None
+        selected_completed: dict[str, str] = {}
+        change_scope_timed = False
         for job in jobs:
-            job_id = _formal_job_id(formal, job.get("name"))
-            if job_id is None:
+            display_name = job.get("name")
+            if display_name in _CHANGE_SCOPE_DISPLAY_NAMES:
+                job_id = "change-scope"
+            else:
+                job_id = _formal_job_id(formal, display_name)
+            if job_id is None or (job_id != "change-scope" and job_id not in requested):
                 continue
             created, started, completed = (job.get("created_at"), job.get("started_at"), job.get("completed_at"))
             if not all(isinstance(value, str) for value in (created, started, completed)):
@@ -201,14 +234,35 @@ def render_summary(
             queue_seconds = _seconds(created, started)
             execution_seconds = _seconds(started, completed)
             slo = _job_slo(policy, job_id)
-            status = "SLO missed" if slo is not None and max(queue_seconds, execution_seconds) > slo else "within SLO"
+            status = (
+                "SLO missed"
+                if slo is not None and execution_seconds > slo
+                else "within SLO"
+            )
             rows.append(f"| Timing {job_id} | queue {queue_seconds:.0f}s; execution {execution_seconds:.0f}s; {status} |")
-            timed_jobs.add(job_id)
+            if job_id == "change-scope":
+                change_scope_created = created
+                change_scope_timed = True
+            else:
+                timed_jobs.add(job_id)
+                selected_completed[job_id] = completed
+        if not change_scope_timed:
+            rows.append("| Timing change-scope | timing unavailable |")
         for job in report.requested_jobs:
             if job not in timed_jobs:
                 rows.append(f"| Timing {job} | timing unavailable |")
-    except (OSError, ValueError, TypeError, KeyError):
+        if (
+            change_scope_created is not None
+            and requested == set(selected_completed)
+        ):
+            last_completed = max(selected_completed.values(), key=_instant)
+            span_seconds = _seconds(change_scope_created, last_completed)
+            rows.append(f"| Pre-Gate critical path | {span_seconds:.0f}s |")
+        else:
+            rows.append("| Pre-Gate critical path | timing unavailable |")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
         rows.append("| Timing | timing unavailable |")
+        rows.append("| Pre-Gate critical path | timing unavailable |")
     return "\n".join(rows) + "\n"
 
 
@@ -227,6 +281,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--policy", required=True)
     parser.add_argument("--manifest-json", required=True)
     parser.add_argument("--results-json", required=True)
+    parser.add_argument("--change-scope-result", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--summary", required=True)
     args = parser.parse_args(argv)
@@ -236,7 +291,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         needs = _load_json(args.results_json)
         if not isinstance(manifest, Mapping):
             raise ValueError("manifest JSON must be an object")
-        report = validate_gate(policy, manifest, normalize_needs(needs), args.head_sha)
+        report = validate_gate(
+            policy,
+            manifest,
+            normalize_needs(needs),
+            args.head_sha,
+            change_scope_result=args.change_scope_result,
+        )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         report = GateReport(False, (f"PR gate failed closed: {error}",), (), ())
     repository, run_id = os.environ.get("GITHUB_REPOSITORY"), os.environ.get("GITHUB_RUN_ID")
