@@ -363,7 +363,7 @@ Expected committed paths: exactly the two Task 2 files; final task worktree is c
 - Create: `tests/build/ci_workflow_topology_test.py`
 
 **Interfaces:**
-- Consumes: `workflow_call` inputs `check_documentation_impact: boolean`, `base_sha: string`, and `head_sha: string`.
+- Consumes: `workflow_call` inputs `check_documentation_impact: boolean`, `base_sha: string`, `head_sha: string`, and `pull_request_body: string`.
 - Produces: reusable workflow job result `portal`, callable as `uses: ./.github/workflows/architecture-portal.yml` from Task 4's main CI workflow.
 
 - [ ] **Step 1: Write reusable-workflow contract tests**
@@ -389,6 +389,10 @@ workflow_call:
       type: string
       default: ""
     head_sha:
+      required: false
+      type: string
+      default: ""
+    pull_request_body:
       required: false
       type: string
       default: ""
@@ -419,6 +423,7 @@ Use input-based impact checking only for called runs:
 - name: Check Pull Request documentation impact
   if: ${{ inputs.check_documentation_impact }}
   env:
+    PORTAL_PR_BODY: ${{ inputs.pull_request_body }}
     PORTAL_BASE_SHA: ${{ inputs.base_sha }}
     PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
   run: |
@@ -621,6 +626,7 @@ portal:
     check_documentation_impact: ${{ github.event_name == 'pull_request' }}
     base_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
     head_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+    pull_request_body: ${{ github.event_name == 'pull_request' && github.event.pull_request.body || '' }}
 ```
 
 Add `pr-gate` with display name exactly `PR Gate`, `runs-on: ubuntu-24.04`, `timeout-minutes: 3`, and static `needs` containing `change-scope` plus all 18 lane/support job IDs from Task 2. Use `if: ${{ always() && !cancelled() }}`. Pass exactly the 18 result entries to Task 2; do not pass `change-scope` or `macos-fallback` as a manifest result. Use Task 2's optional Actions API timing read only for summaries; correctness comes exclusively from same-run `needs` and the manifest.
