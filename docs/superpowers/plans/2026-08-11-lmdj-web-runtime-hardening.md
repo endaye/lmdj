@@ -343,6 +343,25 @@ browser conformance spec, this plan, and the Web Host source-boundary test.
   separately records that no push, PR, CI, merge, tag, Release, deployment,
   publication, public smoke, or Channel promotion has occurred.
 
+### Task 13: Repair merged-main squash provenance without rewriting `1.0.16.8`
+
+- Merged-main verification found that Task 12's direct-parent source relation
+  became a divergent projection after GitHub squash merge: the immutable
+  snapshot still byte-matched source `56b726092e05821bb76ac1e458c84764b228efcd`,
+  while two legitimate mutable current pages and non-projection evidence were
+  also folded into introducing commit `7555cfd40472297e62a90c6a1b08f5ed979d847d`.
+- Add RED/GREEN coverage for the real history shape, including a fresh clone
+  with no source commit object. Generate a version-specific reverse-delta
+  witness and accept it only when a temporary Git index reconstructs the exact
+  source tree and raw source commit already authenticated by schema-2
+  metadata. Missing, malformed, tampered, incomplete, or identity-mismatched
+  witnesses remain fail closed.
+- Version impact: none. No Product, Assembly, Module, Host, Provider, Contract,
+  or Channel identity changes, and the immutable `1.0.16.8` snapshot is not
+  edited. Documentation impact: required for
+  `/operations/documentation-governance/` and the canonical Portal governance
+  rule; document the authenticated witness boundary in this Task.
+
 ## Version Management
 
 Canonical policy: `docs/governance/version-management.md`.
@@ -353,6 +372,10 @@ identities do not change in this Task.
 
 Task 10A version impact: none. It strengthens only conformance evidence and
 corrects current Portal wording for production behavior already implemented.
+
+Task 13 version impact: none. It restores verifiability of the already frozen
+`1.0.16.8` source relation after squash without changing Product or component
+behavior and without rewriting the snapshot.
 
 The following table records the executed Tasks 1–6 allocation as historical
 evidence. The corrective table below owns every future identity action.
@@ -464,10 +487,14 @@ Documentation impact: required.
   current identity route. Task 12 creates the mandatory immutable
   `1.0.16.8 · canary` snapshot and records completed local evidence; both prior
   snapshot families remain untouched.
+- Task 13 updates `/operations/documentation-governance/` and canonical
+  governance with the authenticated squash-witness rule. It adds only external
+  provenance evidence for `1.0.16.8`; all immutable `.6`, `.7`, and `.8`
+  snapshot paths remain unchanged.
 
 ## Pull Request and Completion Boundary
 
-After Task 12, inspect every commit and staged file list, run
+After Task 13, inspect every commit and staged file list, run
 `git diff --cached --check` per commit, and request code review before any
 push authorization. A green local Proof does not authorize push; a green
 pushed PR does not authorize merge; a squash merge does not authorize tag,
