@@ -206,7 +206,7 @@ python3 -m json.tool evidence/RUN_ID/evidence.json
 | `git_revision`, `tag`, `release_url`, `product_build`, `host_version`, `site_id`, `channel` | 已验证 provenance 与 live identity。 |
 | `prior_good` | `null`，或发布前 `GET site` 的 validated secret-safe official projection、发现的 prior Product/Host、prior immutable 与 production 的 HTTP/browser 结构化结果及时间；两 URL 的 index/manifest digest 必须一致。 |
 | `immutable` | `{deploy_id, deploy_url, http, browser}`；`http.result` 保留完整 HTTP smoke JSON。 |
-| `publication` | `{same_deploy_id, response}`；`response` 是字段 allowlist 为 `id/site_id/state/ssl_url/deploy_ssl_url/published_at` 的 validated secret-safe official projection，不声称保存 raw exact response。 |
+| `publication` | `{same_deploy_id, response}`；`response` 是字段 allowlist 为 `id/site_id/state/ssl_url/deploy_ssl_url/published_at` 的 validated secret-safe official projection；Netlify 的 `published_at` 允许并原样保留 UTC `Z` 时间戳中的可选小数秒，不声称保存 raw exact response。 |
 | `production` | `{url, http, browser}`；HTTP/browser 均含结构化结果和时间。 |
 
 失败恢复写入独立、原子替换的 `recovery-evidence.json`，contract 为
@@ -239,13 +239,13 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 | 情形 | 操作 |
 | --- | --- |
 | remote tag/signature、三资产 inventory/checksum signature、archive digest 或 bundle identity 失败 | 停止；不要创建 Netlify Deploy。修复 release provenance 后从验证重新开始。 |
-| current site/file inventory/current site preflight 无效、API 失败或身份变化 | 停止；不要把不稳定/未知站点状态分类为首次发布，也不要创建新 draft。 |
+| current site/file inventory/current site preflight 无效、API 失败或身份变化 | 停止；official site response 的 `disabled: true` 必须规范化为 validated projection 的 `state: disabled`；不要把不稳定、禁用或未知站点状态分类为首次发布，也不要创建新 draft。 |
 | prior published deploy/identity/smoke 失败 | 停止；未建立本次 prior-good 前不要创建或发布新 Deploy。 |
 | draft 创建或 immutable URL HTTP/Chromium 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
 | publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；当前 ID 只允许 candidate、exact prior，或首次发布时为空；未知第三 ID 必须 recovery FAIL。 |
 | alias 指向新 Deploy 且 prior-good 存在 | `POST /sites/{site_id}/deploys/{prior_id}/restore` 恢复 exact prior，随后 GET 必须确认 exact prior，再对 prior immutable 与 production 运行完整 HTTP/Chromium，原子写 recovery evidence。 |
 | alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点；记录 204 后 GET 必须确认 disabled，并写 recovery evidence；不得伪造 rollback。 |
-| preflight 发现站点已 disabled | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
+| preflight 发现 official `disabled: true`（validated projection 为 `state: disabled`） | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
 | evidence artifact 缺失、字段不匹配或含敏感信息 | 将部署视为证据不完整；不要更新 acceptance/Portal 为 deployed，先修复证据链。 |
 
 恢复不是重新构建、重新上传或猜 Deploy ID。prior identity 来自发布前官方 site response 与

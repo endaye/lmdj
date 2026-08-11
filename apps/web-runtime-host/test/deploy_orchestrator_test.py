@@ -145,6 +145,49 @@ class DeployOrchestratorSitePreflightTest(unittest.TestCase):
         self.assertEqual(client.calls, ["site", "files", "site"])
 
 
+class DeployOrchestratorPublishedProjectionTest(unittest.TestCase):
+    def published(self, published_at: object) -> dict[str, object]:
+        return {
+            "deploy_ssl_url": "https://deploy-456--lmdj-runtime.netlify.app",
+            "id": "deploy-456",
+            "published_at": published_at,
+            "site_id": "site-123",
+            "ssl_url": "https://lmdj-runtime.netlify.app",
+            "state": "ready",
+        }
+
+    def test_accepts_netlify_utc_timestamp_with_optional_fractional_seconds(self) -> None:
+        for published_at in (
+            "2026-08-09T00:00:00Z",
+            "2026-08-09T00:00:00.740Z",
+            "2026-08-09T00:00:00.123456789Z",
+        ):
+            with self.subTest(published_at=published_at):
+                result = deploy_orchestrator.validate_published(
+                    self.published(published_at),
+                    site_id="site-123",
+                    deploy_id="deploy-456",
+                )
+                self.assertEqual(result["published_at"], published_at)
+
+    def test_rejects_non_utc_or_malformed_netlify_timestamp(self) -> None:
+        for published_at in (
+            "2026-08-09T00:00:00+00:00",
+            "2026-08-09T00:00:00.Z",
+            "2026-02-30T00:00:00.740Z",
+        ):
+            with self.subTest(published_at=published_at):
+                with self.assertRaisesRegex(
+                    deploy_orchestrator.DeployOrchestratorError,
+                    "timestamp is invalid",
+                ):
+                    deploy_orchestrator.validate_published(
+                        self.published(published_at),
+                        site_id="site-123",
+                        deploy_id="deploy-456",
+                    )
+
+
 class DeployOrchestratorEvidenceTest(unittest.TestCase):
     PRODUCT = "1.0.15.3"
     HOST = "1.1.2"

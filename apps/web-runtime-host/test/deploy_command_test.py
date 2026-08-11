@@ -224,6 +224,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
             {
                 "id": SITE_ID,
                 "state": self.server.site_state,
+                "disabled": self.server.site_disabled,
                 "ssl_url": PRODUCTION_URL,
                 "published_deploy": prior,
             },
@@ -233,7 +234,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
         if urlsplit(self.path).path == f"/api/v1/sites/{SITE_ID}/disable":
             self.server.authorization_headers.append(self.headers.get("Authorization", ""))
             if not self.server.disable_keeps_enabled:
-                self.server.site_state = "disabled"
+                self.server.site_disabled = True
             self.server.append_log("netlify disable-site")
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -257,6 +258,7 @@ class FakeNetlifyServer(ThreadingHTTPServer):
     current_deploy_id: str
     current_deploy_url: str
     site_state: str
+    site_disabled: bool
     publish_switches_alias: bool
     publish_error_after_switch: bool
     restore_keeps_candidate: bool
@@ -321,6 +323,7 @@ class DeployCommandTest(unittest.TestCase):
             f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app"
         )
         self.server.site_state = "current"
+        self.server.site_disabled = False
         self.server.publish_switches_alias = True
         self.server.publish_error_after_switch = False
         self.server.restore_keeps_candidate = False
@@ -1160,7 +1163,7 @@ def verify_distribution(dist_root, repo_root):
 
     def test_publish_accepts_additive_official_response_fields(self) -> None:
         self.server.restore_extra = {
-            "published_at": "2026-08-09T00:00:00Z",
+            "published_at": "2026-08-09T00:00:00.740Z",
             "admin_url": "https://app.netlify.com/sites/lmdj-runtime",
         }
         completed = self.run_command("deploy", TAG)
@@ -1549,13 +1552,15 @@ def verify_distribution(dist_root, repo_root):
         self.assertIn("netlify publish same-id", log)
         self.assertIn("netlify disable-site", log)
         self.assertNotIn("netlify restore prior-id", log)
-        self.assertEqual(self.server.site_state, "disabled")
+        self.assertTrue(self.server.site_disabled)
         recovery = json.loads(
             (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
         )
         self.assertEqual(recovery["action"], "disabled-first-publication")
         self.assertIsNone(recovery["prior_deploy"])
         self.assertEqual(recovery["recovery_response"], {"status_code": 204})
+        self.assertEqual(recovery["status"], "passed")
+        self.assertEqual(recovery["post_recovery_site"]["state"], "disabled")
 
     def test_publish_api_error_reconciles_alias_and_restores_exact_prior(self) -> None:
         self.server.publish_error_after_switch = True
@@ -1597,7 +1602,7 @@ def verify_distribution(dist_root, repo_root):
         self.assertIsNone(recovery["reconcile"]["published_deploy"])
 
     def test_pre_disabled_site_refuses_automatic_enable_or_publication(self) -> None:
-        self.server.site_state = "disabled"
+        self.server.site_disabled = True
         completed = self.run_command("deploy", TAG)
         self.assertNotEqual(completed.returncode, 0)
         self.assertNotIn("netlify create-draft", self.command_log())

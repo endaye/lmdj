@@ -109,15 +109,17 @@ class NetlifyClient:
             "GET", f"/sites/{self._path_segment(site_id)}", None, None
         )
         if not isinstance(response, dict) or not {
-            "id", "state", "ssl_url", "published_deploy"
+            "id", "state", "disabled", "ssl_url", "published_deploy"
         }.issubset(response):
             raise NetlifyError("Netlify API response is invalid")
         state = response.get("state")
+        disabled = response.get("disabled")
         ssl_url = response.get("ssl_url")
         if (
             response.get("id") != site_id
             or not isinstance(state, str)
             or not state
+            or not isinstance(disabled, bool)
             or not self._https_url(ssl_url)
         ):
             raise NetlifyError("Netlify site identity is invalid")
@@ -130,7 +132,8 @@ class NetlifyClient:
                 raise NetlifyError("Netlify published deploy identity is invalid") from None
             if prior.state != "ready":
                 raise NetlifyError("Netlify published deploy identity is invalid")
-        return PublishedSite(site_id, state, ssl_url, prior)
+        serving_state = "disabled" if disabled or state == "disabled" else state
+        return PublishedSite(site_id, serving_state, ssl_url, prior)
 
     def get_site_file_count(self, *, site_id: str) -> int:
         """Return the validated number of files in the site's current deploy."""

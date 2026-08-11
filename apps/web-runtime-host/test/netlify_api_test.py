@@ -135,6 +135,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 or {
                     "id": "site-123",
                     "state": "current",
+                    "disabled": False,
                     "ssl_url": "https://runtime.example",
                     "published_deploy": {
                         "id": "prior-123",
@@ -413,6 +414,7 @@ class NetlifyClientTest(unittest.TestCase):
         self.server.site_response = {
             "id": "site-123",
             "state": "current",
+            "disabled": False,
             "ssl_url": "https://runtime.example",
             "published_deploy": None,
         }
@@ -426,11 +428,27 @@ class NetlifyClientTest(unittest.TestCase):
                 self.server.site_response = {
                     "id": "site-123",
                     "state": "current",
+                    "disabled": False,
                     "ssl_url": "https://runtime.example",
                     "published_deploy": prior,
                 }
                 with self.assertRaisesRegex(netlify_api.NetlifyError, "published deploy"):
                     self.client.get_site(site_id="site-123")
+
+    def test_get_site_uses_official_disabled_flag_as_serving_state(self) -> None:
+        self.server.site_response = {
+            "id": "site-123",
+            "state": "current",
+            "disabled": True,
+            "ssl_url": "https://runtime.example",
+            "published_deploy": {
+                "id": "prior-123",
+                "site_id": "site-123",
+                "deploy_ssl_url": "https://prior-123--runtime.netlify.app",
+                "state": "ready",
+            },
+        }
+        self.assertEqual(self.client.get_site(site_id="site-123").state, "disabled")
 
     def test_get_site_file_count_accepts_exact_file_inventory(self) -> None:
         self.assertEqual(self.client.get_site_file_count(site_id="site-123"), 1)

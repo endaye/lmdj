@@ -419,7 +419,7 @@ def validate_published(
             "Netlify published identity is not the same ready Deploy"
         )
     published_at = value.get("published_at")
-    if published_at is not None and not _valid_timestamp(published_at):
+    if published_at is not None and not _valid_netlify_timestamp(published_at):
         raise DeployOrchestratorError("Netlify published identity timestamp is invalid")
     return {
         "deploy_ssl_url": value["deploy_ssl_url"],
@@ -564,6 +564,22 @@ def _valid_timestamp(value: object) -> bool:
     return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
 
 
+def _valid_netlify_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,9})?Z",
+        value,
+    )
+    if match is None:
+        return False
+    try:
+        datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return False
+    return True
+
+
 def _valid_interval(value: Mapping[str, object]) -> bool:
     return (
         _valid_timestamp(value.get("started_at"))
@@ -677,7 +693,7 @@ def _valid_publish_projection(
         and _valid_deploy_url(value.get("deploy_ssl_url"), deploy_id)
         and (
             value.get("published_at") is None
-            or _valid_timestamp(value.get("published_at"))
+            or _valid_netlify_timestamp(value.get("published_at"))
         )
     )
 
