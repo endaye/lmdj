@@ -214,9 +214,10 @@ files, `apps/architecture-portal/docs/**` current pages and diagram sources.
   `scripts/core.sh test release stress`, `scripts/web-runtime-host.sh proof`,
   `scripts/creator-web.sh proof`, `bash tests/build/test_active_tree.sh`, and
   `scripts/architecture-portal.sh check`.
-- Freeze the immutable `1.0.16.6 · canary` Portal snapshot with
-  `scripts/architecture-portal.sh version 1.0.16.6 canary` only from a clean
-  committed source boundary.
+- Historical Task 6 execution froze the immutable `1.0.16.6 · canary` Portal
+  snapshot with `scripts/architecture-portal.sh version 1.0.16.6 canary` from
+  a clean committed source boundary. Final review later classified that
+  unshipped candidate as abandoned; the snapshot remains evidence only.
 - Record automated acceptance evidence in
   `docs/quality/2026-08-11-web-runtime-hardening-acceptance.md`, keeping the
   five deferred physical rows accurately deferred and claiming no push, PR,
@@ -273,6 +274,9 @@ Task 4A version impact: none. It documents behavior already present in the
 current implementation; Product, Module, Host, Provider, Contract, and Assembly
 identities do not change in this Task.
 
+The following table records the executed Tasks 1–6 allocation as historical
+evidence. The corrective table below owns every future identity action.
+
 | Identity | Baseline | Target | Reason |
 | --- | --- | --- | --- |
 | Product Build | `1.0.16.5` | `1.0.16.6` | hardening-only canary candidate |
@@ -325,7 +329,7 @@ after squash merge, full CI, merged-main Proof, and exact identity verification.
   `1.0.17.x` patch identity and this table is corrected before the PR.
 - Tag condition: only after squash merge to `main`, full CI, merged-main
   Proof, and exact identity verification may the Integration Owner create
-  signed annotated tag `lmdj-v1.0.16.6`. This plan authorizes neither push,
+  signed annotated tag `lmdj-v1.0.16.7`. This plan authorizes neither push,
   PR, merge, tag, Release, deployment, publication, nor Channel promotion.
 - Rollback reuses the immutable prior Product tag; tags are never moved.
 
@@ -339,8 +343,10 @@ Documentation impact: required.
   `operations/version-and-release` (new Product Build and module identities),
   `operations/testing-and-proof` (new conformance cases).
 - This plan changes the Product Build and Assembly, so `Documentation impact:
-  none` is not permitted; the immutable `1.0.16.6 · canary` snapshot in
-  Task 6 is mandatory before any team-testing or release allocation.
+  none` is not permitted; the immutable `1.0.16.7 · canary` snapshot in
+  Task 9 is mandatory before any team-testing or release allocation. The
+  Task 6 `1.0.16.6 · canary` snapshot is retained only as immutable evidence
+  for the abandoned, unshipped candidate and satisfies no future allocation.
 - Task 4A corrects Stage 6 design authority only. Current Portal routes are
   updated in Task 5; Task 4A neither changes generated Portal facts nor rewrites
   immutable versioned snapshots.

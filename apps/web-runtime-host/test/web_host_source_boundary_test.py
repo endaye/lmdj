@@ -17,6 +17,36 @@ def combined_text(paths: list[Path]) -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
+def require_uncorrelatable_response_fail_closed(
+    runtime_pre_source: str,
+    label: str,
+) -> None:
+    correlation = re.search(
+        r"const pending = pendingRequests\.get\(message\.request_id\);\s*"
+        r"if\s*\(pending\)\s*\{.*?\n\s*\}\s*else\s*\{"
+        r"(?P<missing_pending>.*?)\n\s*\}\s*\n\s*\}\s*else\s*\{\s*"
+        r"for\s*\(const subscriber of notificationSubscribers\)",
+        runtime_pre_source,
+        re.DOTALL,
+    )
+    require(
+        correlation is not None,
+        f"{label} Browser Main response correlation branch is missing",
+    )
+    missing_pending = correlation.group("missing_pending")
+    require(
+        re.fullmatch(
+            r'\s*failClosed\(transportFailure\(\s*"HOST_PROTOCOL_MISMATCH"'
+            r",.*?\)\);\s*return;\s*",
+            missing_pending,
+            re.DOTALL,
+        )
+        is not None,
+        f"{label} missing-pending response branch must fail closed with "
+        "HOST_PROTOCOL_MISMATCH and return",
+    )
+
+
 def main() -> int:
     require(
         len(sys.argv) in {2, 3},
@@ -671,22 +701,31 @@ def main() -> int:
         in runtime_pre_source,
         "Web Host transport polling must use the named bounded cadence",
     )
-    uncorrelatable_response = re.search(
-        r'if\s*\(typeof message\.request_id === "string"\)\s*\{'
-        r'(.*?)\n\s*\}\s*else\s*\{\s*\n\s*for\s*\('
-        r"const subscriber of notificationSubscribers\)",
+    require_uncorrelatable_response_fail_closed(
         runtime_pre_source,
-        re.DOTALL,
+        "source",
+    )
+    missing_return_source = runtime_pre_source.replace(
+        "            return;\n          }\n        } else {",
+        "          }\n        } else {",
+        1,
     )
     require(
-        uncorrelatable_response is not None
-        and 'pendingRequests.get(message.request_id)'
-        in uncorrelatable_response.group(1)
-        and '"HOST_PROTOCOL_MISMATCH"' in uncorrelatable_response.group(1)
-        and "failClosed(transportFailure(" in uncorrelatable_response.group(1),
-        "production Browser Main polling must fail closed when a response "
-        "request ID is not pending",
+        missing_return_source != runtime_pre_source,
+        "source-boundary terminal-return mutation was not applied",
     )
+    try:
+        require_uncorrelatable_response_fail_closed(
+            missing_return_source,
+            "missing-return mutation",
+        )
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(
+            "Web Host source boundary accepted a missing-pending branch "
+            "without its terminal return"
+        )
     require(
         re.search(
             r"const\s+TERMINAL_OWNER_RELEASE_GRACE_MS\s*=\s*5_000\s*;",
@@ -713,6 +752,30 @@ def main() -> int:
             re.search(r"lmdj_provider_local_", links) is None,
             "generated Host direct links contain Product Providers",
         )
+        generated_runtime_pre = link_evidence.parent / "web-runtime-pre.js"
+        require(
+            generated_runtime_pre.is_file(),
+            "generated production pre-JS evidence is missing",
+        )
+        generated_runtime_pre_source = generated_runtime_pre.read_text(
+            encoding="utf-8"
+        )
+        require_uncorrelatable_response_fail_closed(
+            generated_runtime_pre_source,
+            "generated production pre-JS",
+        )
+        for conformance_surface in (
+            "createConformanceApi",
+            "submitUntrackedHostStatus",
+            "lmdjWebRuntimeHostTest",
+            "LMDJ_WEB_AUDIO_CONFORMANCE_API",
+            "LMDJ_WEB_AUDIO_CONFORMANCE_INSTALL",
+        ):
+            require(
+                conformance_surface not in generated_runtime_pre_source,
+                "generated production pre-JS exposes conformance surface: "
+                f"{conformance_surface}",
+            )
 
     print("web Host source boundary: PASS")
     return 0
