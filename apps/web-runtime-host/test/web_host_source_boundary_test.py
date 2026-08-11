@@ -451,11 +451,13 @@ def main() -> int:
     require(
         terminal_release_evidence >= 0
         and reopened_page > terminal_release_evidence
+        and 'newSubmitCode: "HOST_STATE_INVALID"' in recovery_outcome_timeout_body
         and "terminalOwnerReleased: true" in recovery_outcome_timeout_body
         and "timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS"
         in recovery_outcome_timeout_body,
-        "recovery outcome timeout must prove terminal owner release before "
-        "a new page competes for the OPFS writer lease",
+        "recovery outcome timeout must expose the terminated transport state "
+        "and prove terminal owner release before a new page competes for the "
+        "OPFS writer lease",
     )
     for diagnostic_test_name in (
         "Chromium binds the verified packaged runtime to the real AudioWorklet",

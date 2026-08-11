@@ -1553,7 +1553,7 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
     timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
   }).toMatchObject({
     controller: { state: "restart-required", error_code: "HOST_TIMEOUT" },
-    newSubmitCode: "HOST_TIMEOUT",
+    newSubmitCode: "HOST_STATE_INVALID",
     terminated: true,
     terminalOwnerReleased: true,
   });
