@@ -244,7 +244,9 @@ export function SampleSurface({
         try {
           project = await refreshProjectProjectionJourney(session, currentProject);
         } catch (error) {
-          failRefresh(publicOperationError(error).code);
+          const code = publicOperationError(error).code;
+          if (code === "PROJECT_BUSY") continue;
+          failRefresh(code);
           return;
         }
         if (!active) return;
@@ -253,10 +255,12 @@ export function SampleSurface({
           try {
             currentInspect = await inspectSampleJourney(session, refresh.pending.slot);
           } catch (error) {
-            failRefresh(publicOperationError(error).code);
+            const code = publicOperationError(error).code;
+            if (code === "PROJECT_BUSY") continue;
+            failRefresh(code);
             return;
           }
-          continue;
+          if (project.revision !== currentInspect.projectRevision) continue;
         }
         if (!active) return;
         dispatch({

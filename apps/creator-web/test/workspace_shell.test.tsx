@@ -504,6 +504,56 @@ function mutableSampleRuntimeFixture() {
   };
 }
 
+function busyProjectionFixture(
+  source: "project" | "sample",
+  busyFailures: number | null,
+) {
+  const fixture = mutableSampleRuntimeFixture();
+  let mutationCount = 0;
+  let mutationCommitted = false;
+  let resolutionInspectSeen = false;
+  let busyCount = 0;
+  fixture.session.updatePad = async (request) => {
+    mutationCount += 1;
+    fixture.playbacks.set(request.slot, Object.freeze({...request.playback}));
+    fixture.revision = 4;
+    mutationCommitted = true;
+    return {
+      committedRevision: 4,
+      runtimeRevision: 4,
+      runtimePublished: true,
+      snapshotError: null,
+    };
+  };
+  fixture.session.inspectProject = async () => {
+    if (source === "project" && mutationCommitted &&
+      (busyFailures === null || busyCount < busyFailures)) {
+      busyCount += 1;
+      throw Object.assign(new Error("busy"), {code: "PROJECT_BUSY"});
+    }
+    return fixture.inspectProject();
+  };
+  fixture.session.inspectSample = async (slot) => {
+    const inspected = fixture.inspectSample(slot);
+    if (!mutationCommitted || source !== "sample") return inspected;
+    if (!resolutionInspectSeen) {
+      resolutionInspectSeen = true;
+      fixture.revision = 5;
+      return inspected;
+    }
+    if (busyFailures === null || busyCount < busyFailures) {
+      busyCount += 1;
+      throw Object.assign(new Error("busy"), {code: "PROJECT_BUSY"});
+    }
+    return inspected;
+  };
+  return {
+    ...fixture,
+    get mutationCount() { return mutationCount; },
+    get busyCount() { return busyCount; },
+  };
+}
+
 test("commits composed controlled Volume once per pointer and keyboard completion", async () => {
   const fixture = mutableSampleRuntimeFixture();
   let previewCount = 0;
@@ -720,7 +770,11 @@ test("converges committed Sample and Project truth across interleaved revisions"
   expect(fixture.calls.filter((call) => call === "reloadSnapshot")).toHaveLength(1);
 });
 
-test.each(["NOT_FOUND", "HOST_PROTOCOL_MISMATCH"] as const)(
+test.each([
+  "NOT_FOUND",
+  "HOST_PROTOCOL_MISMATCH",
+  "HOST_RESTART_REQUIRED",
+] as const)(
   "bounds a committed projection refresh after permanent $code",
   async (code) => {
     const fixture = mutableSampleRuntimeFixture();
@@ -740,9 +794,11 @@ test.each(["NOT_FOUND", "HOST_PROTOCOL_MISMATCH"] as const)(
     fixture.session.inspectProject = async () => {
       if (!mutationCommitted) return fixture.inspectProject();
       projectReads += 1;
-      return code === "HOST_PROTOCOL_MISMATCH"
-        ? {project_revision: "invalid"}
-        : fixture.inspectProject();
+      if (code === "HOST_PROTOCOL_MISMATCH") return {project_revision: "invalid"};
+      if (code === "HOST_RESTART_REQUIRED") {
+        throw Object.assign(new Error("restart"), {code});
+      }
+      return fixture.inspectProject();
     };
     fixture.session.listLocalProjects = async () =>
       mutationCommitted && code === "NOT_FOUND" ? [] : [fixture.summary()];
@@ -773,6 +829,65 @@ test.each(["NOT_FOUND", "HOST_PROTOCOL_MISMATCH"] as const)(
       expect(settledReads).toBeGreaterThan(0);
       expect(settledReads).toBeLessThanOrEqual(4);
       expect(screen.queryByText("Sample operation failed")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+test.each([
+  {source: "project" as const, busyFailures: 1},
+  {source: "project" as const, busyFailures: 2},
+  {source: "sample" as const, busyFailures: 1},
+  {source: "sample" as const, busyFailures: 2},
+])(
+  "retries $busyFailures transient PROJECT_BUSY response(s) from $source inspection",
+  async ({source, busyFailures}) => {
+    const fixture = busyProjectionFixture(source, busyFailures);
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+    await userEvent.click(screen.getByRole("button", {name: "Mute"}));
+
+    await waitFor(() => expect(screen.getByRole("button", {
+      name: "Reset Pad to Defaults",
+    }).hasAttribute("disabled")).toBe(false));
+    expect(fixture.mutationCount).toBe(1);
+    expect(fixture.busyCount).toBe(busyFailures);
+    expect(screen.queryByRole("alert")).toBeNull();
+    await userEvent.click(screen.getByRole("button", {name: "Project"}));
+    expect(screen.getByText(source === "sample" ? "5" : "4", {
+      selector: ".project-summary dd",
+    })).toBeTruthy();
+  },
+);
+
+test.each(["project", "sample"] as const)(
+  "bounds persistent PROJECT_BUSY from $source inspection",
+  async (source) => {
+    const fixture = busyProjectionFixture(source, null);
+    render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+    await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+    await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+    await screen.findByText("Asset 33333333");
+
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole("button", {name: "Mute"}));
+      await flushAsyncTurns();
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      await flushAsyncTurns();
+
+      expect(screen.getByText(
+        "Sample was saved, but current Project truth could not be refreshed",
+      )).toBeTruthy();
+      expect(screen.getByText("HOST_TIMEOUT")).toBeTruthy();
+      expect(fixture.mutationCount).toBe(1);
+      expect(fixture.busyCount).toBe(4);
+      const settledBusyCount = fixture.busyCount;
+      await act(async () => { await vi.advanceTimersByTimeAsync(5_000); });
+      expect(fixture.busyCount).toBe(settledBusyCount);
     } finally {
       vi.useRealTimers();
     }
