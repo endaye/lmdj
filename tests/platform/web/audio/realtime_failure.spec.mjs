@@ -79,6 +79,106 @@ async function installSubmissionHelper(page) {
 }
 
 
+async function uncorrelatableResponseEvidence(page, reuseSettledId) {
+  return page.evaluate(async (reuseSettledRequestId) => {
+    const transport = window.lmdjWebRuntimeHost.transport;
+    const requestId = crypto.randomUUID();
+    const failures = [];
+    const notifications = [];
+    const terminalFailure = new Promise((resolve) => {
+      transport.subscribeFailure((error) => {
+        failures.push({
+          code: error.code,
+          message: error.message,
+          details: {...error.details},
+        });
+        resolve(failures.at(-1));
+      });
+    });
+    transport.subscribe((notification) => {
+      notifications.push(structuredClone(notification));
+    });
+
+    let settled = null;
+    if (reuseSettledRequestId) {
+      settled = await transport.send({
+        protocol_version: 1,
+        request_id: requestId,
+        operation: "host.status",
+        payload: {},
+      });
+    }
+    await window.lmdjWebRuntimeHostTest.submitUntrackedHostStatus(requestId);
+    const failure = await Promise.race([
+      terminalFailure,
+      new Promise((_, reject) => window.setTimeout(
+        () => reject(new Error("terminal transport failure timed out")),
+        10_000,
+      )),
+    ]);
+    const rejected = await transport.send({
+      protocol_version: 1,
+      request_id: crypto.randomUUID(),
+      operation: "host.status",
+      payload: {},
+    }).then(
+      () => null,
+      (error) => ({
+        code: error.code,
+        message: error.message,
+        details: {...error.details},
+      }),
+    );
+    transport.terminate();
+    await new Promise((resolve) => window.setTimeout(resolve, 50));
+    return {
+      failure,
+      failures,
+      notifications,
+      rejected,
+      settled,
+      terminated: transport.terminated,
+      terminalOwnerReleased: transport.terminalOwnerReleased,
+    };
+  }, reuseSettledId);
+}
+
+
+for (const scenario of [
+  {name: "unknown response request ID", reuseSettledId: false},
+  {
+    name: "response request ID whose first request already settled",
+    reuseSettledId: true,
+  },
+]) {
+  test(
+    `${scenario.name} terminally seals the Browser Main transport`,
+    async ({page}) => {
+      test.setTimeout(30_000);
+      await waitForFormalHost(page);
+
+      const evidence = await uncorrelatableResponseEvidence(
+        page,
+        scenario.reuseSettledId,
+      );
+      if (scenario.reuseSettledId) {
+        expect(evidence.settled).toMatchObject({ok: true});
+      } else {
+        expect(evidence.settled).toBeNull();
+      }
+      expect(evidence).toMatchObject({
+        failure: {code: "HOST_PROTOCOL_MISMATCH"},
+        failures: [{code: "HOST_PROTOCOL_MISMATCH"}],
+        notifications: [],
+        rejected: {code: "HOST_PROTOCOL_MISMATCH"},
+        terminated: true,
+        terminalOwnerReleased: true,
+      });
+    },
+  );
+}
+
+
 test("processorerror seals an active Take and the failed session never resumes", async ({page}) => {
   test.setTimeout(120_000);
   await waitForFormalHost(page);

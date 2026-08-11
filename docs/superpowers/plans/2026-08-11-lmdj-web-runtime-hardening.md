@@ -25,6 +25,16 @@ OPFS storage topology, and the terminal-owner grace. Task 4A resolves that
 documentation drift, plus its two editorial findings, without changing code,
 version identities, generated Portal facts, or immutable versioned snapshots.
 
+Final branch review correction: Tasks 1–6 below are retained as executed
+history, but the review proved that Task 4 changed only the standalone
+`createProtocolTransport()` helper. The production Runtime Session never
+instantiates that helper. Browser Main instead owns its transport in
+`packages/web-runtime-platform/src/web-runtime-pre.js`, whose production
+`pollTransport()` still silently ignored a response with a string
+`request_id` absent from `pendingRequests`. Tasks 7–9 correct that production
+path and supersede `1.0.16.6` as a releasable candidate without rewriting any
+Task 6 evidence or immutable snapshot.
+
 ## Global Constraints
 
 - Work happens on `fix/web-runtime-hardening` in an isolated worktree; `main`
@@ -212,6 +222,49 @@ files, `apps/architecture-portal/docs/**` current pages and diagram sources.
   five deferred physical rows accurately deferred and claiming no push, PR,
   merge, tag, Release, deployment, or Channel promotion.
 
+### Task 7: Deliver F4 on the real Browser Main transport
+
+- Add Chromium conformance cases that submit a real native response through
+  `_lmdj_web_host_poll` into the production `pollTransport()` branch, covering
+  both an unknown request ID and an ID whose first request already settled.
+  The conformance-only native-submit seam remains inside the existing
+  `LMDJ_WEB_AUDIO_CONFORMANCE` block and is stripped from production packages.
+- Each case proves once-only terminal `HOST_PROTOCOL_MISMATCH`, rejection and
+  sealing of further requests, no notification delivery, and the existing
+  terminal-owner release behavior.
+- Make production `pollTransport()` call the existing `failClosed` path and
+  return when a string `request_id` has no matching `pendingRequests` entry.
+  Preserve known responses, notifications, malformed-message handling,
+  deadlines, settlement, polling, and once-only terminal cleanup.
+- Retain a production source-boundary assertion so conformance stripping
+  cannot leave the packaged Browser Main path able to silently ignore an
+  uncorrelatable response.
+
+Files: `packages/web-runtime-platform/src/web-runtime-pre.js`, the focused
+browser conformance spec, this plan, and the Web Host source-boundary test.
+
+### Task 8: Propagate corrective identities and Portal current truth
+
+- Apply the corrective `1.0.16.7` allocation in the exact identity and
+  dependency files listed below, regenerate the Product Assembly lock, and
+  update the affected current Portal routes. Do not modify any path under the
+  immutable `1.0.16.6` snapshot.
+- Verify the exact Product/Module/Host dependency graph, Assembly lock,
+  version policy, Portal current truth, and active-tree boundary before the
+  Task commit.
+
+### Task 9: Rerun complete gates, freeze `1.0.16.7 canary`, and update acceptance
+
+- Rerun every complete Task 6 gate against the corrective committed source:
+  Core Proof, ASan full, TSan full, release stress, Web Runtime Host Proof,
+  Creator Web Proof, active-tree, and Architecture Portal checks.
+- From a clean committed boundary, freeze a new immutable
+  `1.0.16.7 · canary` Portal snapshot and update acceptance with exact fresh
+  evidence. The existing `1.0.16.6` snapshot is never modified.
+- Keep the five physical rows deferred unless separately performed, and claim
+  no push, PR, merge, tag, Release, deployment, publication, or Channel
+  promotion.
+
 ## Version Management
 
 Canonical policy: `docs/governance/version-management.md`.
@@ -234,6 +287,29 @@ identities do not change in this Task.
 | Creator Web | `1.0.2` | `1.0.3` | exact Platform dependency update only |
 | Contracts | current | unchanged | no envelope, schema, or wire shape changes |
 | Providers, Models | current | unchanged | no Provider behavior change |
+
+### Corrective allocation after final branch review
+
+Product Build `1.0.16.6` is an immutable, unshipped, abandoned canary
+candidate. It cannot be reused, tagged, released, deployed, published, or
+promoted. Its existing versioned Portal snapshot remains immutable and is
+never rewritten. Task 7 changes the production behavior; Task 8 performs all
+identity, Product Assembly, Assembly lock, and current-Portal propagation;
+Task 9 reruns the complete gates and freezes the new immutable candidate.
+
+| Identity | Abandoned candidate | Corrective target | Reason |
+| --- | --- | --- | --- |
+| Product Build | `1.0.16.6` | `1.0.16.7` | corrective canary after production-path F4 completion |
+| Web Runtime Platform | `0.1.3` | `0.1.4` | production Browser Main unknown-response fail-closed behavior |
+| Web Runtime Host | `1.2.3` | `1.2.4` | exact Web Runtime Platform dependency update only |
+| Creator Web | `1.0.3` | `1.0.4` | exact Web Runtime Platform dependency update only |
+| All other Modules and Hosts | `1.0.16.6` candidate identities | unchanged | no additional implementation or dependency impact |
+| Contracts, Providers, Models | `1.0.16.6` candidate identities | unchanged | no Contract, Provider, or Model behavior change |
+
+The earlier `lmdj-v1.0.16.6` tag condition is no longer actionable because
+the candidate was abandoned by final review. Any later tag consideration must
+use the corrective Product Build and still requires separate authorization
+after squash merge, full CI, merged-main Proof, and exact identity verification.
 
 - Compatibility: every change tightens a failure path. Successful operations,
   Project Truth, `lmdj.project.v1`, `lmdj.storage.intent.v1`, protocol
@@ -268,10 +344,14 @@ Documentation impact: required.
 - Task 4A corrects Stage 6 design authority only. Current Portal routes are
   updated in Task 5; Task 4A neither changes generated Portal facts nor rewrites
   immutable versioned snapshots.
+- Task 7 amends this plan and production-path conformance only. Task 8 updates
+  the affected current Portal routes and identities. Task 9 creates the new
+  immutable `1.0.16.7 · canary` snapshot; the `1.0.16.6` snapshot remains
+  untouched.
 
 ## Pull Request and Completion Boundary
 
-After Task 6, inspect every commit and staged file list, run
+After Task 9, inspect every commit and staged file list, run
 `git diff --cached --check` per commit, and request code review before any
 push authorization. A green local Proof does not authorize push; a green
 pushed PR does not authorize merge; a squash merge does not authorize tag,

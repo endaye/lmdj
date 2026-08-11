@@ -403,6 +403,12 @@ if (typeof globalThis.window !== "undefined") {
             pendingRequests.delete(message.request_id);
             window.clearTimeout(pending.timeout);
             pending.resolve(message);
+          } else {
+            failClosed(transportFailure(
+              "HOST_PROTOCOL_MISMATCH",
+              "formal Web Host response request ID is not pending",
+            ));
+            return;
           }
         } else {
           for (const subscriber of notificationSubscribers) {
@@ -597,6 +603,39 @@ if (typeof globalThis.window !== "undefined") {
   /* LMDJ_WEB_AUDIO_CONFORMANCE_API_BEGIN */
   function createConformanceApi() {
     const encoder = new TextEncoder();
+
+    async function submitUntrackedHostStatus(requestId) {
+      const envelope = encoder.encode(JSON.stringify({
+        protocol_version: 1,
+        request_id: requestId,
+        operation: "host.status",
+        payload: {},
+      }));
+      const deadline = performance.now() + 30_000;
+      while (performance.now() < deadline) {
+        const submitted = Module.ccall(
+          "lmdj_web_host_submit",
+          "number",
+          ["array", "number", "array", "number", "number"],
+          [
+            envelope,
+            envelope.byteLength,
+            new Uint8Array(),
+            0,
+            performance.timeOrigin + deadline,
+          ],
+        );
+        if (submitted === 0) {
+          scheduleTransportPoll();
+          return;
+        }
+        if (submitted !== -1) {
+          throw new Error(`Host submit failed: host.status: ${submitted}`);
+        }
+        await delay(5);
+      }
+      throw new Error("Host submit timed out: host.status");
+    }
 
     async function submit(operation, payload, sidecar = new Uint8Array()) {
       const requestId = crypto.randomUUID();
@@ -839,6 +878,8 @@ if (typeof globalThis.window !== "undefined") {
     }
 
     return Object.freeze({
+      submitUntrackedHostStatus,
+
       async runSharedEngineProof() {
         const memory = Module.wasmMemory;
         const initialBuffer = memory.buffer;

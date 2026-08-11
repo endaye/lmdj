@@ -671,6 +671,22 @@ def main() -> int:
         in runtime_pre_source,
         "Web Host transport polling must use the named bounded cadence",
     )
+    uncorrelatable_response = re.search(
+        r'if\s*\(typeof message\.request_id === "string"\)\s*\{'
+        r'(.*?)\n\s*\}\s*else\s*\{\s*\n\s*for\s*\('
+        r"const subscriber of notificationSubscribers\)",
+        runtime_pre_source,
+        re.DOTALL,
+    )
+    require(
+        uncorrelatable_response is not None
+        and 'pendingRequests.get(message.request_id)'
+        in uncorrelatable_response.group(1)
+        and '"HOST_PROTOCOL_MISMATCH"' in uncorrelatable_response.group(1)
+        and "failClosed(transportFailure(" in uncorrelatable_response.group(1),
+        "production Browser Main polling must fail closed when a response "
+        "request ID is not pending",
+    )
     require(
         re.search(
             r"const\s+TERMINAL_OWNER_RELEASE_GRACE_MS\s*=\s*5_000\s*;",
