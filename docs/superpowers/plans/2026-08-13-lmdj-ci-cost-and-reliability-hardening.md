@@ -60,11 +60,15 @@ the Actions jobs API for the runs cited):
 - Within those hosted minutes, `creator-web` (176) and
   `web-toolchain-conformance` (171) are 44 percent of the total. Both are
   pinned to `runs-on: ubuntu-24.04` by
-  `tests/build/ci_runner_fallback_test.py::test_resource_intensive_web_gates_use_hosted_runners`,
-  an invariant deliberately frozen by the risk-based CI gating plan
-  (`docs/superpowers/plans/2026-08-11-risk-based-ci-gating.md`, "Do not add
-  runners ... in this implementation"). Task 2's caching makes these lanes
-  cheaper per run but leaves them entirely on paid infrastructure.
+  `tests/build/ci_runner_fallback_test.py::test_resource_intensive_web_gates_use_hosted_runners`.
+  **Correction, established during Task 5 implementation:** this is not the
+  capacity decision it looked like from the billing data. `ci.yml` has carried
+  the reason since `c39d8b6` — the full Wasm/OPFS fault matrix is
+  timing-sensitive and has exceeded bounded test budgets on the heterogeneous
+  self-hosted pool. That is a determinism constraint, and neither extra runner
+  slots nor Task 2's toolchain caching addresses it. These 347 minutes per 30
+  runs are the price of a deterministic gate, not waste, and Task 5 leaves
+  them where they are.
 - `select-ubuntu-runner` resolves once, before any workload job starts, and
   requires `.status == "online" and .busy == false`. Because the trusted pool
   holds two runner services while a full manifest needs six Linux lanes, a
@@ -214,7 +218,7 @@ corrective candidate must find all of them or burn a full CI cycle per miss.
 
 Files: the five test files above.
 
-### Task 5: Route Linux and macOS work to the trusted pools the repository owns
+### Task 5: Route Linux and macOS work to the trusted pools the repository owns — IMPLEMENTED with one bullet withdrawn (`5fd7d2f`)
 
 The selectors treat a *busy* trusted pool the same as an *absent* one, so a
 single saturated instant diverts a whole 25-minute manifest to paid
@@ -227,24 +231,37 @@ infrastructure, and two lanes never consult the pool at all.
   missing-token, and Runner-API-failure fallbacks keep their current
   fail-to-hosted behavior unchanged, because those are trust and availability
   conditions rather than load.
-- Operational precondition (not a repository change): run three runner
-  services per contabo VM so the trusted Linux pool offers six slots and a
-  full manifest's six Linux lanes stop serializing behind two. This adds no
-  host and no spend. Record the resulting slot count in
-  `docs/quality/core-test-policy.md`, which currently states two.
-- Move `web-toolchain-conformance` and `creator-web` onto
+- Operational precondition, **still outstanding** (not a repository change):
+  run three runner services per contabo VM so the trusted Linux pool offers
+  six slots and a full manifest's six Linux lanes stop serializing behind two.
+  This adds no host and no spend. Without it the routing change is still
+  correct and still stops the diversion to paid runners, but a saturated pool
+  queues for longer. `docs/quality/core-test-policy.md` now states that pool
+  concurrency equals the number of online runner services — currently two —
+  and that raising it is an operational change on the existing hosts, so the
+  document stays accurate before and after the step is taken.
+- ~~Move `web-toolchain-conformance` and `creator-web` onto
   `select-ubuntu-runner`, overturning
-  `test_resource_intensive_web_gates_use_hosted_runners`. That invariant
-  protected two browser-heavy suites from a two-slot pool; with six slots and
-  Task 2's toolchain caches the premise no longer holds. Rewrite the test to
-  assert the selector topology for these jobs instead of deleting it, so the
-  routing stays pinned in the opposite direction.
-- Bound the macOS hosted fallback by event rather than leaving it unbounded:
-  `push` to `main`, `workflow_dispatch`, and release candidates may still
-  select GitHub-hosted macOS immediately; a Pull Request run queues for
-  `endaye-mbp-m1`. The infrastructure-recovery semantics of `macos-fallback`
-  itself — one attempt, only for a missing terminal result, never after a
-  published semantic failure — are unchanged.
+  `test_resource_intensive_web_gates_use_hosted_runners`.~~ **Withdrawn.** The
+  premise stated here — that the invariant protected two browser-heavy suites
+  from a two-slot pool, so six slots plus Task 2's caches removed it — is
+  wrong. The reason recorded in `ci.yml` since `c39d8b6` is timing
+  sensitivity: the full Wasm/OPFS fault matrix has exceeded bounded test
+  budgets on the heterogeneous self-hosted pool. Slots and warm toolchains do
+  not make a timing-sensitive fault matrix deterministic, so moving these
+  lanes would trade money for flaky red Pull Requests — the same friction this
+  plan exists to remove. Instead both jobs now carry the reason inline and a
+  contract test pins the reason alongside the routing, so a later cost pass
+  cannot repeat this mistake.
+- Apply the same busy-versus-absent rule to `select-macos-runner`, rather than
+  bounding the hosted fallback by event as this plan first proposed. Event
+  bounding would make a Pull Request queue behind a sleeping laptop runner,
+  which hangs the Pull Request instead of delaying it; that is a worse trade
+  than the fallback's cost. A busy trusted Mac now queues; offline, missing,
+  or mislabeled still selects GitHub-hosted macOS immediately. The
+  infrastructure-recovery semantics of `macos-fallback` itself — one attempt,
+  only for a missing terminal result, never after a published semantic
+  failure — are unchanged.
 - Gate boundary: routing decides which machine executes a lane, never whether
   its result is required. The `PR Gate` truth table, the 18-result key set,
   the no-retry policy, fork isolation, LFS hydration, and package ccache
