@@ -49,7 +49,53 @@ test('Stage 7 acceptance and review distinguish historical, candidate, and exter
     assert.match(review, new RegExp(`\\| D${finding} \\|[^\n]+resolved`));
   }
   assert.match(review, /T1[^\n]+open/);
-  assert.match(review, /G1[^\n]+open/);
+  assert.match(review, /G1[^\n]+corrected/);
+});
+
+test('Stage 7 current closure audit accounts for every review finding exactly once', async () => {
+  const acceptance = await readRepo('docs/quality/2026-08-07-stage7-creator-editor-acceptance.md');
+  const review = await readRepo('docs/quality/2026-08-12-stage7-creator-editor-review.md');
+  const evidence = await readRepo('docs/release-evidence/2026-08-13-stage7-remediation-canary.md');
+  const remediationDesign = await readRepo('docs/superpowers/specs/2026-08-13-lmdj-stage7-review-remediation-design.md');
+  const remediationPlan = await readRepo('docs/superpowers/plans/2026-08-13-lmdj-stage7-review-remediation.md');
+  const audit = review.match(
+    /### Final finding closure audit\n(?<body>[\s\S]+?)\n### Remaining integration gates/,
+  )?.groups?.body;
+  assert.ok(audit, 'current final finding closure audit is missing');
+
+  const resolved = [
+    ...Array.from({length: 10}, (_, index) => `D${index + 1}`),
+    ...Array.from({length: 15}, (_, index) => `F${index + 1}`),
+    ...Array.from({length: 6}, (_, index) => `T${index + 2}`),
+    ...Array.from({length: 4}, (_, index) => `G${index + 2}`),
+    ...Array.from({length: 4}, (_, index) => `N${index + 1}`),
+  ];
+  for (const finding of resolved) {
+    assert.equal(
+      (audit.match(new RegExp(`^\\| ${finding} \\|`, 'gm')) ?? []).length,
+      1,
+      `${finding} must have exactly one current audit row`,
+    );
+    assert.match(audit, new RegExp(`^\\| ${finding} \\| resolved`, 'm'));
+  }
+  assert.equal((audit.match(/^\| T1 \|/gm) ?? []).length, 1);
+  assert.match(audit, /^\| T1 \| open — awaiting human execution \|/m);
+  assert.equal((audit.match(/^\| G1 \|/gm) ?? []).length, 1);
+  assert.match(audit, /^\| G1 \| corrected — historical Proof recovered \|/m);
+
+  for (const body of [acceptance, review, evidence]) {
+    assert.match(body, /31327104838/);
+    assert.match(body, /31529410253/);
+    assert.match(body, /38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f/);
+    assert.match(body, /336a27c0799035b2f8d6455b32259ee227df20f6/);
+  }
+  assert.match(review, /documentation binding gap[\s\S]+not a Proof execution gap/);
+  assert.match(review, /1\.0\.18\.0[\s\S]+future merged-main Proof/);
+  for (const body of [remediationDesign, remediationPlan]) {
+    assert.match(body, /G1[\s\S]+historical Proof recovered/);
+    assert.match(body, /1\.0\.18\.0[\s\S]+future merged-main Proof/);
+    assert.doesNotMatch(body, /T1 or G1 (?:is|remains?) open/);
+  }
 });
 
 test('release governance forbids PATCH assembly drift and binds release evidence', async () => {

@@ -125,7 +125,7 @@ revision、结果和剩余边界。任何 ID 缺行、使用模糊的“相关�
 | T5 | input controller tests | visibilitychange 释放 pressed state |
 | T6 | acceptance evidence | 标注 synthetic bfcache 证明边界 |
 | T7 | acceptance evidence | 标注 synthetic key-repeat 证明边界 |
-| G1 | merged-main evidence | exact merged revision required Proof |
+| G1 | merged-main evidence | historical Proof recovered and bound; current Build keeps a separate exact-merge gate |
 | G2 | Stage 7 acceptance | current external state addendum |
 | G3 | version governance | BUILD/PATCH Assembly 规则消歧 |
 | G4 | version/release evidence | 权威 tag 与 source/snapshot/Proof binding chain |
@@ -292,8 +292,15 @@ Stage 7 acceptance External state 更新为查询当时的准确状态，不把�
 
 ### 7.3 Merged-main Proof（G1）
 
-分支 Proof 只能证明候选。代码合并后必须从 exact merged `main` revision 重跑 required
-Proof，并提交独立 evidence addendum。由于创建该 evidence commit 会再次推进 `main`，
+2026-08-13 的 GitHub Actions 原始记录更正了 review 的历史前提：签名 tag
+`lmdj-v1.0.16.5`/`lmdj-v1.0.16.8` 的精确 revisions 已分别有 successful
+full-mode `main` push run `31327104838`/`31529410253`。因此 G1 是
+documentation binding gap, not a Proof execution gap；本整改 evidence/ledger
+完成 historical Proof recovered binding，不再把历史运行写成未执行。
+
+这个更正不放宽当前 Product Build 的集成门禁。分支 Proof 只能证明候选；
+`1.0.18.0` 代码合并后仍必须从 exact merged `main` revision 重跑 required Proof，
+并提交独立 evidence addendum。由于创建该 evidence commit 会再次推进 `main`，
 记录必须区分：
 
 1. 被验证的 product/source merge revision；
@@ -346,7 +353,7 @@ gate。Task 之间按依赖顺序推进，不能把尚未验证的后续整改�
 6. spec/plan/governance/Portal 回写；
 7. version allocation、snapshot、full candidate Proof；
 8. 人工 canary；
-9. 经授权 PR/merge 后的 merged-main Proof 与最终 ledger。
+9. 经授权 PR/merge 后的 `1.0.18.0` future merged-main Proof 与 evidence addendum。
 
 ## 10. Version Management
 

@@ -35,22 +35,22 @@ Creator 面零功能改动（仅身份常量同步），首轮 37 项发现中 *
 1 中 3 低共 4 项新问题。两处 Web OPFS 中危缺陷（F1/F2）的修复已在
 `fix/opfs-publication-recovery` 分支完成但未合入。
 
-主要问题仍集中在三类，且第一类在复核后**升级**：
+第二轮原结论曾把问题归为三类，并把 G1 升级；2026-08-13 的 GitHub run 级
+复核证伪了该升级前提：
 
-- **收尾证据缺口（升级为 2 项高危）**：手动 canary 验收仍无任何记录（T1）；
-  merged-main Proof 缺口的"tag 已打而前置证据缺失"模式在复核期间对
-  `lmdj-v1.0.16.8` 第二次重复（G1）——hardening 计划明文要求 merged-main
-  Proof 作为 tag 前置条件，签名 tag 已存在而仓库内查无该 Proof 记录。
+- **收尾证据缺口（1 项高危）**：手动 canary 验收仍无任何记录（T1）。
+  历史 G1 是文档未绑定既有绿色 run，不是 Proof 未执行；run `31327104838`
+  与 `31529410253` 分别在两个签名 tag 的精确 revision 上成功。
 - **Web OPFS 发布层两处可用性缺陷（F1/F2）**：main 上原样存在；修复待合入。
 - **文档漂移**：Stage 7 规格/计划自首轮起零提交，五项漂移原样保留；两份验收
   记录（Stage 7 与 hardening）的 External state 均已与 main 实况脱节。
 
-复核后统计：
+下表保留第二轮统计，并加入第三轮事实更正；当前整改 closure 以第十节为准：
 
 | 严重度 | 数量 | 说明 |
 | --- | --- | --- |
-| 高 | 2 | T1（维持）、G1（自中偏高升级：违反前置的模式已重复两次） |
-| 中 | 15 | 首轮 14 项全部仍成立（G1 移出后）+ 新增 N1 |
+| 高 | 1 | T1（维持） |
+| 中 | 15 | 第二轮发现加 G1 文档绑定缺口；G1 的“前置未执行”升级已撤回 |
 | 低 | 23 | 首轮 20 项仍成立（G5 已解决移出）+ 新增 N2/N3/N4 |
 | 已解决 | 1 | G5，由 #118 squash witness 机制化解决 |
 | 编辑·信息 | 若干 | 正文列出，无需单独排期 |
@@ -355,20 +355,21 @@ candidate。完整自动候选门禁已在 clean revision
 Proof；精确命令、工具链身份、结果与未执行的人工表单见
 `docs/release-evidence/2026-08-13-stage7-remediation-canary.md`。
 
-### D1-D10 correction map
+### G1 factual correction
 
-| ID | Status | Current evidence |
-| --- | --- | --- |
-| D1 | resolved | 原计划把后置 R1 段标为 retired/non-executable，Task 2 Step 4 成为唯一执行定义；`docs(stage7): reconcile review and release contracts`。 |
-| D2 | resolved | 规格新增 `1.0.16.0` 至 `1.0.16.9` 不可变历史轨迹，完成条件不再钉死 `.0`；同上文档提交。 |
-| D3 | resolved | 计划与 Portal 明确 persisted `pagehide` 保留共享 Runtime，non-persisted terminal `pagehide` 才 close；打包生命周期证据 `f4722de`。 |
-| D4 | resolved | `.2/.4/.5` 明确为 retrospective candidate records，并以触发、身份、门禁、授权边界和本 addendum 结构化，不伪装为执行前 Task；同上文档提交。 |
-| D5 | resolved | 规格、计划和 Portal 统一为 managed Bundle path 的 ASCII segment subset；Project payload text 仍为 UTF-8；同上文档提交。 |
-| D6 | resolved | packaged reload -> same Project/revision -> Audio inactive -> explicit activate -> running 已在 Task 10 映射并由 `f4722de` Proof 覆盖。 |
-| D7 | resolved | synthetic held-key burst 的完整 tuple 固定为 16 admissions、16 outcomes、0 rejection、`running`；`f4722de`。 |
-| D8 | resolved | ready/running 会话在 `768x1024` 与 `1024x768` 间 resize，Project/revision/Audio/counters 连续；`f4722de`。 |
-| D9 | resolved | Creator 对 `HOST_PROTOCOL_MISMATCH`、`IO_ERROR`、`INTERNAL_ERROR` 的 allowlisted 文案/details/transition 测试已由 `0e921be` 增补，恢复归一化由 `ef2b06b` 覆盖。 |
-| D10 | resolved | replacement 前旧 generation 的 Worker/transport、MIDI listener、BroadcastChannel、AudioContext、window lifecycle listener 归零；ownership `767eeae`、packaged Proof `f4722de`。 |
+第二轮把 G1 升为高危时，用“仓库内没有 Proof 文档”推断“Proof 没有执行”，再推断
+两个签名 tag 违反前置条件。GitHub Actions 原始记录直接否定该推断：
+
+| Product Build | Signed tag revision | `main` push run | Result |
+| --- | --- | --- | --- |
+| `1.0.16.5` | `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f` | `31327104838` | `success`; 12 success / 1 designed fallback skip |
+| `1.0.16.8` | `336a27c0799035b2f8d6455b32259ee227df20f6` | `31529410253` | `success`; 20 success / 1 designed fallback skip |
+
+两个 annotated tag 均通过 GPG 验签。`.github/workflows/ci.yml` 在 push 到 `main`
+时运行，`scripts/ci/change_scope.py` 把 `push` 强制为 `full` 且要求 full manifest
+选择全部 lane。G1 是 documentation binding gap, not a Proof execution gap；这个
+历史事实更正不能替代 Product Build `1.0.18.0` 在未来合并 revision 上的
+future merged-main Proof。
 
 ### Candidate automated Proof
 
@@ -386,13 +387,65 @@ boundary，不能替代人工听感、实体输入、Safari/iPadOS 或 merged-ma
 schema-2 provenance 在测试 revision 上验证通过。证据文档晚于受测 revision，
 不会伪称其 documentation commit 本身已经运行产品 Proof。
 
-### Still-open completion boundaries
+### Final finding closure audit
+
+下列是当前修复分支的唯一现行 closure ledger；第二至七节仍保留各历史基线下的
+原始发现与复核，不应被当作当前状态。所有 source-changing commit 后均在
+`c44517bc7bde30cea4a40a7cab495a081028eb7e` 重跑完整候选门禁，详见
+[`2026-08-13-stage7-remediation-canary.md`](../release-evidence/2026-08-13-stage7-remediation-canary.md)。
 
 | ID | Status | Current evidence |
 | --- | --- | --- |
-| T1 | open — awaiting human execution | 未执行的人工作业表已落档；尚无操作者、浏览器版本、逐步观察、听感或 privacy-safe report hash。physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`。 |
-| G1 | open — requires future merged-main Proof | 历史签名 tag 的 post-merge Proof 记录缺口不由 branch-local remediation Proof 倒推填补；任何新 Product tag 必须先绑定精确 merged `main` revision 重跑 Proof。 |
+| D1 | resolved | Stage 7 plan 将后置 R1 段标为 retired/non-executable，Task 2 成为唯一执行定义；`6103c35`。 |
+| D2 | resolved | Spec 回写 `1.0.16.0`–`1.0.16.9` 历史轨迹并解除固定 `.0` 完成条件；`6103c35`。 |
+| D3 | resolved | Plan/Portal 统一 persisted `pagehide` 保留 Runtime、non-persisted terminal `pagehide` close；`6103c35`、`f4722de`。 |
+| D4 | resolved | `.2/.4/.5` 已标成 retrospective candidate record，并记录触发、身份、门禁与授权边界；`6103c35`。 |
+| D5 | resolved | Spec/plan/Portal 统一 managed Bundle ASCII segment subset，Project payload text 保持 UTF-8；`6103c35`。 |
+| D6 | resolved | Packaged reload -> reopen same Project/revision -> explicit activate -> running；`f4722de`。 |
+| D7 | resolved | Packaged synthetic burst 固定 16 admissions、16 outcomes、0 rejection、`running`；`f4722de`。 |
+| D8 | resolved | Active Session 在 `768x1024`/`1024x768` 间 resize 后 Project/revision/Audio/counters 连续；`f4722de`。 |
+| D9 | resolved | Creator 对 `HOST_PROTOCOL_MISMATCH`、`IO_ERROR`、`INTERNAL_ERROR` 的 allowlisted details/transition 测试；`0e921be`、`ef2b06b`。 |
+| D10 | resolved | Replacement 前旧 generation 的 Worker/transport、MIDI listener、BroadcastChannel、AudioContext 与 lifecycle listener 归零；`767eeae`、`f4722de`。 |
+| F1 | resolved | PR #127 / `ea22934` 已使 publication rollback 仅在 destination 确认删除后移除 intent；当前树 conformance 与完整 candidate Proof 通过。 |
+| F2 | resolved | PR #127 / `ea22934` 已使 torn per-file intent 安全恢复、未知完整 Contract 继续 fail-closed；当前树 conformance 与完整 candidate Proof 通过。 |
+| F3 | resolved | Runtime 自动重建次数在 running 后复位，并提供 guarded `Retry runtime`；`ef2b06b`。 |
+| F4 | resolved | `isCreatorActionAllowed` 在 reducer 内拒绝非法源状态，覆盖非法 transition；`0e921be`。 |
+| F5 | resolved | 两个 Host 从 generated Runtime identity 消费 Product/Platform/toolchain truth；`6292648`。 |
+| F6 | resolved | ErrorPanel allowlist 显示 resource observed/limit 与 storage condition；`0e921be`。 |
+| F7 | resolved | Native managed regular file 要求 `st_nlink == 1`，hardlink contract test 保证拒绝且不改树；`6c26153`。 |
+| F8 | resolved | Shared integrity module 使用 segment-aware dot-segment guard，positive/negative path tests 通过；`6d21a63`。 |
+| F9 | resolved | 未进入 active Facade 的 `beginTake`/`stopTake`/`allowsOperation`/`activeTake` Web dead surface 已删除；`6d21a63`。 |
+| F10 | resolved | Creator 与 Platform 共用 `DEFAULT_KEYBOARD_MAPPING` 单一 truth；`767eeae`。 |
+| F11 | resolved | Creator 显式拥有输入 wiring，Platform 不再创建第二套闲置 listener；`767eeae`。 |
+| F12 | resolved | `canonicalJson`/`exactKeys`/SHA-256 收敛到 `integrity.mjs`，两消费者共用；`6d21a63`。 |
+| F13 | resolved | `subscribeDiagnostics` 事件通知取代 16 ms diagnostics polling；`ef2b06b`。 |
+| F14 | resolved | 自动 reopen 与用户 Open/Import 共用 generation/session-bound Project action lane；`0e921be`。 |
+| F15 | resolved | Opened Project Surface 显示 BPM；spec 明确自动持久化且无虚假 `Save Local` command；`0e921be`。 |
+| T1 | open — awaiting human execution | 十步 human canary sheet 已落档但全部 `NOT RUN`；操作者、浏览器版本、听感、逐步观察与 report hash 均待填写。 |
+| T2 | resolved | Busy retry 上限 8 次、transition-based waits、最终 alert count 0；`8553467`。 |
+| T3 | resolved | Packaged keyboard-only Import、reload 后 Open、Bank selection 完成型旅程；`8553467`。 |
+| T4 | resolved | Packaged outcome timeout -> restart-required -> old generation cleanup -> replacement -> explicit activation；`f4722de`。 |
+| T5 | resolved | Hidden visibility 与 blur 均清 held key，重复 cleanup 幂等且后续 keydown 可重新 admission；`8553467`。 |
+| T6 | resolved | Persisted lifecycle 仍明确为 synthetic contract boundary；产品断言与文档均禁止把它写成真实 bfcache/Safari pass；`f4722de`、`6103c35`。 |
+| T7 | resolved | Component 直接覆盖 `repeat:true` rejection，packaged burst 明确标为 synthetic；不冒充 OS auto-repeat physical evidence；`f4722de`、`6103c35`。 |
+| G1 | corrected — historical Proof recovered | Run `31327104838`/`31529410253` 精确绑定签名 tag revisions；原高危“Proof 未执行”结论撤回，文档绑定缺口由本 ledger/evidence 补齐。 |
+| G2 | resolved | Acceptance External state 已分离历史 PR/tag/Proof、当前 branch-local candidate 与未授权外部状态；`6103c35` 及本次更正。 |
+| G3 | resolved | Governance 明确 PATCH 不得改变 Assembly/lock，任一 module/provider/Host/dependency identity change 分配新 BUILD；`6103c35`。 |
+| G4 | resolved | Product Build -> signed tag -> tag revision -> merged PR -> source -> snapshot witness -> Proof -> evidence revision 权威链已成文；`6103c35`。 |
+| G5 | resolved | Squash witness/fail-closed provenance 已存在，`1.0.16.9` 的实际 merge-parent断点由 authenticated witness 修复；`217dc10`。 |
+| N1 | resolved | `publishDirectoryIfAbsent` 要求 exact `platformIdentity` owner，distinct-platform publish regression 覆盖；`6c26153`。 |
+| N2 | resolved | `createImmutable` 先保留 existing-file `ALREADY_EXISTS`，absent/no-owner 才 `PROJECT_BUSY`；`6c26153`。 |
+| N3 | resolved | Owner mismatch 到 public `PROJECT_BUSY` 集中在单一 JS status adapter，删除七份 inline remap；`6c26153`。 |
+| N4 | resolved | Web Project I/O conformance actions 共用 generic `mutation_result` JSON helper；`6c26153`。 |
 
-因此本节只把 D1-D10 标记为已修复；只要 T1 或 G1 仍 open，就不能把 Stage 7 或
-本修复任务报告为最终完成。候选完整 Proof 已通过；其余 F/T/G/N 项的最终 closure
-audit 仍须等待人工 canary 与获授权的 post-merge 流程，不能提前制造结论。
+### Remaining integration gates
+
+| Gate | Status | Current evidence |
+| --- | --- | --- |
+| T1 human canary | `open — awaiting human execution` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从自动化结果推导 pass。 |
+| Product Build `1.0.18.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 当前仅有 branch-local candidate Proof；合并后必须在 exact merged `main` revision 重跑 Task 13 全部命令并落 evidence-only addendum。 |
+
+因此当前源代码、自动化、文档与历史 G1 更正都已纳入 closure ledger，但 T1 尚未
+执行，且 `1.0.18.0` 尚未经过获授权的 PR/merge 与 post-merge Proof。本修复任务
+仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
+promotion。

@@ -107,14 +107,18 @@ screen recovery, or long-session stability on those platforms.
 | Historical Stage 7 PR | PR #97 is `MERGED` as `c39d8b6`; follow-up PR #101 is `MERGED` as `488ffa7`, and #102 is `MERGED` as `38a8c13` |
 | Historical hardening PR | PR #117 is `MERGED` as `7555cfd`; squash-witness PR #118 is `MERGED` as `336a27c` |
 | Historical Product tags | signed annotated `lmdj-v1.0.16.5` targets `38a8c13`; signed annotated `lmdj-v1.0.16.8` targets `336a27c` |
-| Historical merged-main Proof | `open`; no repository evidence located that binds the required post-merge Proof to either signed tag revision |
+| Historical merged-main Proof | recovered and bound: `main` push run `31327104838` succeeded at `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f` (`1.0.16.5`, 12 success/1 designed skip); run `31529410253` succeeded at `336a27c0799035b2f8d6455b32259ee227df20f6` (`1.0.16.8`, 20 success/1 designed skip) |
 | Current remediation push / PR / CI / merge | not performed; current branch-local Proof is not merged-main Proof |
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
 | Manual canary | `open — awaiting human execution` |
 
-The historical rows were refreshed from live Git/GitHub on 2026-08-13. The
-current remediation rows must be refreshed again after any separately
-authorized push or external transition. T1 (manual canary) and G1 (merged-main
-Proof before any new Product tag) remain open and prevent a Stage 7 completion
-claim. The five physical rows continue to block physical-pass, `beta`, and
-`stable`.
+The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
+historical Proof runs were always present; the review's prior inference from a
+missing repository document to a missing execution was incorrect. G1 is now a
+recovered documentation binding, not a historical Proof execution failure.
+
+The current remediation rows must be refreshed again after any separately
+authorized push or external transition. T1 remains `open — awaiting human
+execution`, and Product Build `1.0.18.0` still requires a future Proof at its
+exact merged `main` revision before any new Product tag. The five physical rows
+continue to block physical-pass, `beta`, and `stable`.

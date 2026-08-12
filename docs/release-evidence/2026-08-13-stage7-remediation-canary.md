@@ -19,12 +19,32 @@ acceptance, Release, deployment, publication, or Channel promotion.
 | Snapshot relationship | The tested revision is a descendant; the snapshot bytes and Assembly Lock identity are unchanged and passed schema-2 provenance validation. |
 | Host OS for automated Proof | macOS `26.6.1` (`25G76`), Darwin `25.6.0`, arm64 |
 | T1 | `open — awaiting human execution` |
-| G1 | `open — requires future merged-main Proof` |
+| Historical G1 | `corrected — historical Proof recovered` |
+| Current 1.0.18.0 integration gate | `pending — requires future merged-main Proof after authorized merge` |
 
 The evidence document is committed after the tested revision, so its own
 documentation commit is not the tested product revision. The immutable Portal
 snapshot correctly binds its earlier clean source revision rather than claiming
 that a later evidence-only commit was the source used to freeze it.
+
+## Recovered historical merged-main Proof
+
+Live GitHub Actions and signed-tag verification on 2026-08-13 established that
+the two historical Stage 7 tags already had successful full-mode `main` push
+runs at their exact tag revisions. The missing artifact was a repository
+binding from Product Build/tag to run, not the Proof execution itself.
+
+| Product Build | Signed tag revision | GitHub Actions run | Event / result |
+| --- | --- | --- | --- |
+| `1.0.16.5` | `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f` | `31327104838` | `push` / `success`; 12 success, 1 designed fallback skip |
+| `1.0.16.8` | `336a27c0799035b2f8d6455b32259ee227df20f6` | `31529410253` | `push` / `success`; 20 success, 1 designed fallback skip |
+
+Both annotated tags passed local GPG verification. `.github/workflows/ci.yml`
+runs on pushes to `main`, and `scripts/ci/change_scope.py` forces `push` events
+to `full` mode and requires a full manifest to select every lane. This corrects
+historical G1 as a documentation binding gap, not a Proof execution gap. It
+does not satisfy the separate future merged-main Proof gate for Product Build
+`1.0.18.0`.
 
 ## Automated toolchain identity
 
@@ -140,5 +160,6 @@ No blank field or automated result may be interpreted as a pass.
 | iPadOS Safari touch and lifecycle | `deferred / unverified` |
 
 Until a named human fills and signs this sheet, T1 remains open. Even a signed
-T1 canary does not by itself close G1, create merged-main Proof, or authorize a
-push, PR, merge, tag, Release, deployment, publication, or Channel promotion.
+T1 canary does not by itself establish Product Build `1.0.18.0` merged-main
+Proof or authorize a push, PR, merge, tag, Release, deployment, publication, or
+Channel promotion.

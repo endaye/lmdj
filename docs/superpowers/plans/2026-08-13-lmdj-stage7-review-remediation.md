@@ -33,8 +33,8 @@
 | T1 | 13 |
 | T2, T3, T4, T5 | 8, 9 |
 | T6, T7 | 9, 10 |
-| G1 | 14 |
-| G2, G3, G4 | 10, 12, 14 |
+| G1 | 10, 13 |
+| G2, G3, G4 | 10, 12 |
 | G5 | 1 |
 | N1, N2, N3, N4 | 2 |
 
@@ -952,6 +952,13 @@ The Core Proof summary must derive Product Build from `products/lmdj/version.jso
 
 - [ ] Mark T1 exactly `open — awaiting human execution`. Keep physical MIDI, physical keyboard, Safari, iPadOS, and hearing rows `deferred / unverified` until the named human actually performs them.
 
+- [ ] Correct historical G1 from live GitHub/tag evidence: historical Proof recovered
+  means run `31327104838` is a successful full-mode `main` push at signed-tag
+  revision `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f`, and run `31529410253`
+  is the same at `336a27c0799035b2f8d6455b32259ee227df20f6`. Record this as a
+  documentation binding gap, not a Proof execution gap. Keep Product Build
+  `1.0.18.0` future merged-main Proof as a separate integration gate.
+
 - [ ] Commit automated evidence and the unexecuted canary sheet:
 
 ```bash
@@ -965,7 +972,7 @@ git commit -m "docs(stage7): record remediation candidate proof"
 
 - [ ] Pause for the user/human operator to run and sign the manual canary. Do not manufacture a pass. After signed results are supplied, validate the evidence fields and commit only that evidence update as `docs(stage7): record manual remediation canary`.
 
-## Task 14: Post-Merge Proof and Final Binding (Integration Owner)
+## Task 14: Product Build 1.0.18.0 Post-Merge Proof and Final Binding (Integration Owner)
 
 This Task is intentionally blocked until the user separately authorizes push, PR, and merge, and the protected-branch PR Gate succeeds. It is not performed from the feature branch.
 
@@ -993,5 +1000,6 @@ merged-main Proof result
 
 - [ ] Use `rg` to enumerate D1-D10, F1-F15, T1-T7, G1-G5, and N1-N4 in the review and prove that every ID has one current status plus evidence link.
 - [ ] Confirm there are no unexplained tracked/untracked changes in any modified worktree.
-- [ ] Confirm the task is not reported complete while T1 or G1 is open.
+- [ ] Confirm historical G1 is recorded as corrected from the exact signed-tag/run bindings, while T1 remains open until human execution.
+- [ ] Confirm the task is not reported complete while T1 or the Product Build `1.0.18.0` future merged-main Proof gate remains open.
 - [ ] Confirm no push/tag/Release/deployment/Channel action occurred without explicit authorization.
