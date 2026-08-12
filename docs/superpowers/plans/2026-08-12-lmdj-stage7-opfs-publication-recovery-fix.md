@@ -152,10 +152,17 @@ Files: `packages/project-io/src/web/library_opfs_storage.js`,
 `tests/platform/web/project_io/project_io_web_conformance.spec.mjs`,
 `tests/platform/web/project_io/project_io_web_test.cpp`.
 
-### Task 3: Integrate versions, Assembly, and Portal current truth — BLOCKED
+### Task 3: Integrate versions, Assembly, and Portal current truth — IMPLEMENTED (`b229400`, `26f67c7`)
 
-Blocked on Task 4: the Portal's current truth binds Product Build identity to
-proof evidence, so the identity move and the Proof must land together.
+Implemented after the browser conformance evidence existed on CI. The
+identity move landed as `b229400` (66 files, authored portal narrative, no
+textual substitution of proof-bearing sentences; `1.0.16.8` recorded as the
+tagged, superseded Build rather than abandoned) and the immutable
+`1.0.16.9 · canary` snapshot froze at that clean boundary as `26f67c7`. Two
+follow-up alignment commits closed literal forms the token pass could not
+see: numeric `"patch": 8` assertions in the CLI/MCP/Creator tests
+(`1e2b1e2`) and the Build embedded in the Creator acceptance-report filename
+(`1d0fad3`).
 
 - Apply the exact version movements in `## Version Management` to every module
   manifest, Product `version.json`, `assembly.json`, and README identity text,
@@ -188,14 +195,16 @@ proof evidence, so the identity move and the Proof must land together.
   `tests/conformance/version_lock_test.py`,
   `tests/conformance/module_graph_test.py`, and the Portal check.
 
-### Task 4: Final Proof, snapshot, and acceptance evidence — BLOCKED
+### Task 4: Final Proof, snapshot, and acceptance evidence — EVIDENCE RECORDED
 
-Blocked on a Web toolchain environment. `scripts/web-toolchain-conformance.sh`
-and `scripts/web-runtime-host.sh` require a provisioned
-`build/toolchains/emsdk` and Playwright `1.62.1`; neither is present on the
-authoring machine, and the scripts do not bootstrap them. The new browser
-conformance cases and the new C++ harness actions in Tasks 1–2 have therefore
-never been compiled or executed.
+The authoring machine has no `emsdk`/Playwright, so the Proof evidence came
+from CI `workflow_dispatch` full-mode runs instead of a local clean-room run;
+`docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md` records the
+per-lane conclusions bound to run IDs and revisions, including the two new
+conformance cases passing in Chromium and four self-hosted Linux lanes
+recorded as ENVIRONMENT BLOCKED (dependency downloads failing on the
+`contabo` runners) rather than PASS, each with a green run at a
+lane-equivalent tree.
 
 - Run the full gate set on the completed branch: `scripts/core.sh proof`,
   `scripts/core.sh test asan full`, `scripts/web-toolchain-conformance.sh proof`,
