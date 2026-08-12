@@ -99,6 +99,65 @@ These results prove the automated candidate contract only. Designed WebKit
 capability skips are not Safari product acceptance, and synthetic keyboard/MIDI
 events are not physical-device or hearing evidence.
 
+## 人工 Canary 验收表（中文快速执行版）
+
+T1 状态：`尚未执行 — 等待具名人员验收`。
+
+本节是下方英文规范表的逐项中文操作版，方便现场执行；两者验收标准
+完全相同。如文字理解存在歧义，以下方英文规范表为准。自动化结果或空白项
+不得当作人工通过。
+
+### 开始前记录
+
+| 字段 | 填写内容 |
+| --- | --- |
+| 操作人姓名 | `待填写` |
+| 执行日期、时间及时区 | `待填写` |
+| 浏览器及精确版本 | `待填写` |
+| 设备及操作系统 | `待填写` |
+| 包对应的源码 revision | `c44517bc7bde30cea4a40a7cab495a081028eb7e` |
+| Product Build | `1.0.18.0` |
+| Creator Host Manifest SHA-256 | `9dda47e70d26b53dcd3c7d7460c716c401f6ace7d764669f449786745b8ca367` |
+| 正式测试工程及 SHA-256 | `stage7-canary.lmdj` / `d5e17c74777cbf05cef239f79e16cce04ae0e3a380c3c00a93b553a17739aa4c` |
+| 隐私安全验收报告 SHA-256 | `待填写 / 尚未生成` |
+| 人工签字确认 | `待填写` |
+
+### 十步操作
+
+在每一步的“人工结果”中填写 `通过` 或 `失败：具体表现`，不要只写“已完成”。
+
+| 步骤 | 操作与必须观察的结果 | 人工结果 |
+| ---: | --- | --- |
+| 1 | 打开 Creator。确认页面正常加载，且未自行播放声音。 | `未执行` |
+| 2 | 导入正式测试工程 `stage7-canary.lmdj`。 | `未执行` |
+| 3 | 记录 Project ID、revision、BPM 和 Pad 占用情况。期望值分别为 `00000000-0000-4000-8000-000000000001`、`66`、`120`、64 个 Pad 全部已占用。 | `未执行` |
+| 4 | 点击 **Activate Audio**，确认音频成功激活。 | `未执行` |
+| 5 | 在 Bank A 中，先用鼠标逐个点击 16 个 Pad，再用实体键盘按 `A S D F G H J K` 和 `Q W E R T Y U I` 逐个触发；逐项确认能听到声音。 | `未执行` |
+| 6 | 依次切换到 Bank B、C、D；每个 Bank 抽查 Pad 地址与声音是否对应。 | `未执行` |
+| 7 | 点击 **Suspend**，确认停止；然后再次点击 **Activate Audio**，确认可以恢复触发。 | `未执行` |
+| 8 | 刷新页面，重新打开同一 Project，再次激活音频。 | `未执行` |
+| 9 | 确认没有重复触发、漏触发、按下状态卡住、未激活便自动播放，且 Project ID、revision、BPM 和 64 Pad 数据没有丢失。 | `未执行` |
+| 10 | 点击 **Export report** 导出隐私安全验收报告；检查内容后运行 `shasum -a 256 <报告文件>`，把 SHA-256 填入上表。 | `未执行` |
+
+### 必须单独记录的观察结果
+
+| 观察项 | 人工结果 |
+| --- | --- |
+| Bank A：鼠标逐 Pad 是否听到声音 | `延期 / 未验证` |
+| Bank A：实体键盘逐键是否听到声音 | `延期 / 未验证` |
+| Bank B/C/D：抽查地址与声音是否对应 | `延期 / 未验证` |
+| 是否出现重复触发 | `延期 / 未验证` |
+| 是否出现漏触发 | `延期 / 未验证` |
+| 是否出现按下状态卡住 | `延期 / 未验证` |
+| 显式激活前或刷新后是否自动播放 | `延期 / 未验证` |
+| 刷新并重开后 Project ID/revision/BPM/Pad 占用是否保持 | `延期 / 未验证` |
+| Suspend 后再次激活是否恢复 | `延期 / 未验证` |
+| 是否检查报告并记录 SHA-256 | `延期 / 未验证` |
+
+具名操作人填写并签字前，T1 仍保持开放。完成 T1 也不代表已经取得
+Product Build `1.0.18.0` 的 merged-main Proof，亦不授权 push、PR、merge、
+tag、Release、部署、发布或 Channel promotion。
+
 ## Human canary sheet — not executed
 
 T1 status: `open — awaiting human execution`.
@@ -115,7 +174,7 @@ No blank field or automated result may be interpreted as a pass.
 | Package source revision | `c44517bc7bde30cea4a40a7cab495a081028eb7e` |
 | Product Build | `1.0.18.0` |
 | Creator host manifest SHA-256 | `9dda47e70d26b53dcd3c7d7460c716c401f6ace7d764669f449786745b8ca367` |
-| Formal fixture filename and SHA-256 | `pending` |
+| Formal fixture filename and SHA-256 | `stage7-canary.lmdj` / `d5e17c74777cbf05cef239f79e16cce04ae0e3a380c3c00a93b553a17739aa4c` |
 | Privacy-safe acceptance report SHA-256 | `pending / not generated` |
 | Human signature / sign-off | `pending` |
 
