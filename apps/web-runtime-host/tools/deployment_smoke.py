@@ -42,6 +42,7 @@ MANIFEST_KEYS = {
     "protocol_version",
     "resource_limits",
 }
+LEGACY_MANIFEST_KEYS = MANIFEST_KEYS - {"host_id", "platform_version"}
 CONTENT_TYPES = {
     ".css": "text/css",
     ".js": "text/javascript",
@@ -407,7 +408,10 @@ def _require_traversal_rejection(
 
 
 def _manifest_identity(manifest: object) -> tuple[str, str]:
-    if not isinstance(manifest, dict) or set(manifest) != MANIFEST_KEYS:
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) not in (MANIFEST_KEYS, LEGACY_MANIFEST_KEYS)
+    ):
         raise SmokeError("manifest root schema is invalid")
     if manifest["distribution_contract"] != "lmdj.web-runtime-host.distribution.v1":
         raise SmokeError("manifest distribution identity is invalid")
@@ -419,6 +423,13 @@ def _manifest_identity(manifest: object) -> tuple[str, str]:
         raise SmokeError("Product Build identity is invalid")
     if not isinstance(host_version, str) or not host_version:
         raise SmokeError("Host version identity is invalid")
+    if set(manifest) == MANIFEST_KEYS and (
+        not isinstance(manifest["host_id"], str)
+        or not manifest["host_id"]
+        or not isinstance(manifest["platform_version"], str)
+        or not manifest["platform_version"]
+    ):
+        raise SmokeError("manifest extended identity is invalid")
     return product_build, host_version
 
 
@@ -440,6 +451,7 @@ def _validate_manifest(
             f"got {host_version!r}"
         )
     assert isinstance(manifest, dict)
+    legacy_manifest = set(manifest) == LEGACY_MANIFEST_KEYS
     assets = manifest["assets"]
     if not isinstance(assets, list) or not assets:
         raise SmokeError("manifest asset inventory is invalid")
@@ -477,7 +489,11 @@ def _validate_manifest(
         validated.append(entry)
     if any(role_counts[role] != 1 for role in SINGLETON_ASSET_ROLES):
         raise SmokeError("manifest required asset role inventory is invalid")
-    if role_counts["host_module"] < 1 or role_counts["platform_module"] < 1:
+    if role_counts["host_module"] < 1:
+        raise SmokeError("manifest required asset role inventory is invalid")
+    if legacy_manifest and role_counts["platform_module"] != 0:
+        raise SmokeError("manifest required asset role inventory is invalid")
+    if not legacy_manifest and role_counts["platform_module"] < 1:
         raise SmokeError("manifest required asset role inventory is invalid")
     return validated
 

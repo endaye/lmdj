@@ -45,6 +45,9 @@ ASSET_LAYOUT = (
     ("state-machine", ".mjs", "platform_module"),
     ("styles", ".css", "host_style"),
 )
+LEGACY_OMITTED_ASSET_STEMS = frozenset(
+    ("diagnostic-client", "project-bundle-reader", "runtime-loader", "runtime-session")
+)
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
     ".json": "application/json; charset=utf-8",
@@ -113,6 +116,22 @@ class SmokeFixture:
             "protocol_version": 1,
             "resource_limits": {},
         }
+        self.update_manifest(update_index=True)
+
+    def use_legacy_manifest(self) -> None:
+        self.manifest.pop("host_id")
+        self.manifest.pop("platform_version")
+        self.manifest["assets"] = [
+            entry
+            for entry in self.manifest["assets"]
+            if not any(
+                entry["path"].startswith(f"assets/{stem}.")
+                for stem in LEGACY_OMITTED_ASSET_STEMS
+            )
+        ]
+        for entry in self.manifest["assets"]:
+            if entry["role"] == "platform_module":
+                entry["role"] = "host_module"
         self.update_manifest(update_index=True)
 
     def update_manifest(self, *, update_index: bool) -> None:
@@ -286,6 +305,10 @@ class DeploymentSmokeTest(unittest.TestCase):
                 "root_request_path": "/",
             },
         )
+
+    def test_accepts_legacy_v1_manifest_as_a_prior_published_rollback_anchor(self) -> None:
+        self.fixture.use_legacy_manifest()
+        self.assertEqual(self.smoke()["asset_count"], 9)
 
     def test_starts_at_root_and_allows_only_a_secure_no_store_redirect_to_index(self) -> None:
         self.fixture.redirects["/"] = "/index.html"
