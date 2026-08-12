@@ -37,6 +37,7 @@
     {"match": {"kind": "exact", "value": "tests/build/test_test_taxonomy.py"}, "reason": "test taxonomy"}
   ],
   "rules": [
+    {"match": {"kind": "exact", "value": "LICENSE"}, "lanes": ["docs_static"]},
     {"match": {"kind": "suffix", "value": ".md"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": "docs/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": "docs/governance/"}, "lanes": ["portal"]},
