@@ -137,8 +137,15 @@ prior smoke，且成功 evidence 的 `prior_good` 保持 `null`。任何非空 c
 
 ## GitHub Environment 与 secret
 
-workflow `.github/workflows/deploy-web-runtime-host.yml` 使用 GitHub Environment
-`runtime-canary`。site ID 本质上不是 secret，但按已批准的 scoped configuration contract
+workflow `.github/workflows/deploy-web-runtime-host.yml` 分为两个 job。`preflight` 不声明
+`environment`，因此拿不到下述任何 Environment secret：它只用 Python 和 GitHub Actions 短期
+`GITHUB_TOKEN` 运行 `scripts/web-runtime-deploy.sh` 的只读 `verify` 子命令，完成 signed
+tag、protected `main` ancestry、Release 三资产与角色分离 checksum signature 的验证以及资产
+staging，并且不安装 Node/Chromium。只有它通过后，`deploy` job 才使用 GitHub Environment
+`runtime-canary`，并在任何 Netlify mutation 之前对同一 Release 重新验证一次。也就是说，
+Netlify credential 与浏览器工具链都只在 Release 已被证明可信之后才进入运行环境。
+
+site ID 本质上不是 secret，但按已批准的 scoped configuration contract
 存为 Environment secret；不得与 token 混淆。它可以进入实际的 evidence artifact 和后续
 验收记录，供核对 deploy identity；token 不得进入任何 evidence、验收记录或日志。当前
 tracked runbook、Portal 和日志不写入尚未创建站点的真实 site ID；该限制不把 site ID

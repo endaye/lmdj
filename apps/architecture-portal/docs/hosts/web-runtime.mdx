@@ -43,11 +43,15 @@ proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WAS
 
 ## 公共发布边界
 
-两阶段 Netlify release/deploy 工具已进入仓库源码：从 canonical origin 获取受保护 `main` 和
-remote annotated signed Product tag，验证 tag commit 是该 `main` 的 ancestor；GitHub
-Release 必须精确包含 ZIP、checksum 和由专用 Release checksum key 签名的 armored detached
-checksum signature；Product tag key 与 checksum key 角色分离，工具在解析 checksum 前先
-验证角色专属 signature。组装层只为 manifest 中的
+两阶段 Netlify release/deploy 工具已进入仓库源码：部署 workflow 先运行不加入
+`runtime-canary` environment、因而读不到 Netlify credential 的 preflight job，它只用 Python
+和 scoped `github.token` 执行 `scripts/web-runtime-deploy.sh verify TAG`——从 canonical
+origin 获取受保护 `main` 和 remote annotated signed Product tag，验证 tag commit 是该
+`main` 的 ancestor；GitHub Release 必须精确包含 ZIP、checksum 和由专用 Release checksum
+key 签名的 armored detached checksum signature；Product tag key 与 checksum key 角色分离，
+工具在解析 checksum 前先验证角色专属 signature，并完成资产下载与 staging。只有该 job 通过
+后，持有 Netlify credential 的 deploy job 才会安装 Node/Chromium 并在任何 Netlify mutation
+之前对同一 Release 重新执行同一次验证。组装层只为 manifest 中的
 九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
 部署前以 current site/file inventory/current site 双读确认站点身份稳定；只有同一 ready
 current Deploy 的 validated file count 精确为零时，才按“无可回滚 prior”的首次发布继续，
