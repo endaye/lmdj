@@ -6,6 +6,62 @@ import {expect, test} from "@playwright/test";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
+const MAX_BUSY_RETRIES = 8;
+// Bound one user attempt across a request deadline and one automatic reopen.
+const OPEN_TRANSITION_TIMEOUT_MS = 65_000;
+const RETRY_SETTLE_TIMEOUT_MS = 35_000;
+
+test("keyboard-only Project and Bank journey preserves native activation", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
+    timeout: 30_000,
+  });
+
+  const importButton = page.getByRole("button", {name: "Import .lmdj"});
+  await importButton.focus();
+  await expect(importButton).toBeFocused();
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.keyboard.press("Enter");
+  await (await chooserPromise).setFiles(bundle);
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
+    .toBeVisible({timeout: 120_000});
+
+  await page.reload();
+  const heading = page.getByRole("heading", {name: "Project 00000000"});
+  const openButton = page.getByRole("button", {name: "Open Project 00000000"});
+  await expect(openButton).toBeVisible({timeout: 60_000});
+  await openButton.focus();
+  await expect(openButton).toBeFocused();
+  await page.keyboard.press("Enter");
+  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt += 1) {
+    if (await heading.isVisible()) break;
+    const retry = page.getByRole("button", {name: "Retry project"});
+    await expect.poll(async () =>
+      await heading.isVisible() ? "ready" : await retry.isVisible() ? "retry" : "",
+    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
+    if (await heading.isVisible()) break;
+    await retry.focus();
+    await expect(retry).toBeFocused();
+    await page.keyboard.press("Enter");
+    try {
+      await expect(heading).toBeVisible({timeout: RETRY_SETTLE_TIMEOUT_MS});
+      break;
+    } catch {
+      await expect(retry).toBeVisible();
+    }
+  }
+  await expect(heading).toBeVisible();
+
+  const bankB = page.getByRole("button", {name: "Bank B"});
+  await bankB.focus();
+  await expect(bankB).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(bankB).toHaveAttribute("aria-pressed", "true");
+  await expect(page.getByRole("button", {name: /^Pad B\d+ — assigned$/}))
+    .toHaveCount(16);
+});
 
 test("packaged Creator owns an exact local-only asset inventory", async ({request, baseURL, browserName}) => {
   test.skip(browserName !== "chromium");

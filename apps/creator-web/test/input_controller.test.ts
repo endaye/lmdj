@@ -321,4 +321,49 @@ describe("Creator input controller", () => {
     await settle();
     expect(value.triggers).toHaveLength(1);
   });
+
+  test("hidden visibility and blur clear a held key idempotently before later admission", async () => {
+    const value = fixture();
+    const originalVisibility = Object.getOwnPropertyDescriptor(
+      document,
+      "visibilityState",
+    );
+    const setVisibility = (visibilityState: DocumentVisibilityState) => {
+      Object.defineProperty(document, "visibilityState", {
+        configurable: true,
+        value: visibilityState,
+      });
+      document.dispatchEvent(new Event("visibilitychange"));
+    };
+    const controller = createCreatorInputController({
+      session: value.session,
+      getActiveBank: () => 0,
+      isAssigned: (slot) => slot === 0,
+      dispatch: value.dispatch,
+    });
+    try {
+      window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyA"}));
+      await settle();
+      expect(value.triggers).toHaveLength(1);
+      expect(value.state().pressed.get(0)).toBe("admitted");
+
+      setVisibility("hidden");
+      expect(value.state().pressed.size).toBe(0);
+      setVisibility("hidden");
+      window.dispatchEvent(new Event("blur"));
+      window.dispatchEvent(new Event("blur"));
+      expect(value.state().pressed.size).toBe(0);
+
+      setVisibility("visible");
+      window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyA"}));
+      await settle();
+      expect(value.triggers).toHaveLength(2);
+      expect(value.state().pressed.get(0)).toBe("admitted");
+    } finally {
+      controller.dispose();
+      if (originalVisibility) {
+        Object.defineProperty(document, "visibilityState", originalVisibility);
+      }
+    }
+  });
 });

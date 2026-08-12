@@ -5,6 +5,11 @@ import {expect, test} from "@playwright/test";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
+const MAX_BUSY_RETRIES = 8;
+// One visible attempt may cross the 30 s request deadline and one 30 s
+// generation-replacement reopen before it reaches a stable UI transition.
+const OPEN_TRANSITION_TIMEOUT_MS = 65_000;
+const RETRY_SETTLE_TIMEOUT_MS = 35_000;
 
 async function importAndActivate(page) {
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
@@ -31,20 +36,27 @@ async function reopenWithVisibleBusyRetry(page) {
     name: "Open Project 00000000",
   });
   const alert = page.getByRole("alert");
-  const deadline = Date.now() + 120_000;
   await open().click();
-  while (Date.now() < deadline) {
+  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt += 1) {
     await expect.poll(async () =>
-      await heading.isVisible() || await alert.isVisible(),
-    {timeout: 35_000}).toBe(true);
-    if (await heading.isVisible()) return;
-    await expect(alert).toContainText("PROJECT_BUSY");
-    await page.getByRole("button", {name: "Retry"}).click();
-    // The next PROJECT_BUSY may replace the alert before Playwright can observe
-    // an empty render. Let this attempt settle, then retry from the visible state.
-    await page.waitForTimeout(250);
+      await heading.isVisible() ? "ready" : await alert.textContent(),
+    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
+    if (await heading.isVisible()) break;
+    await expect(alert).toContainText(
+      "The local Project is busy in another tab or process.",
+    );
+    await page.getByRole("button", {name: "Retry project"}).click();
+    try {
+      await expect(heading).toBeVisible({timeout: RETRY_SETTLE_TIMEOUT_MS});
+      break;
+    } catch {
+      await expect(alert).toContainText(
+        "The local Project is busy in another tab or process.",
+      );
+    }
   }
-  throw new Error("Project writer lease did not become available after Retry");
+  await expect(heading).toBeVisible();
+  await expect(alert).toHaveCount(0);
 }
 
 test("suspend and reload require explicit reopen and explicit reactivation", async ({page, browserName}) => {
