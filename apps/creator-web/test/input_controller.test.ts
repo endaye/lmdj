@@ -72,6 +72,7 @@ function fixture() {
       return {sequence: nextSequence++, slot, velocity, source};
     },
     requestMidi: async () => true,
+    subscribeDiagnostics: () => () => {},
     subscribeHostState(listener) {
       hostListeners.add(listener);
       return () => hostListeners.delete(listener);
@@ -83,6 +84,7 @@ function fixture() {
     diagnostics: () => ({
       state: "running",
       error_code: null,
+      error_details: {},
       product_build: "1.0.16.9",
       host_id: "creator-web",
       host_version: "1.0.6",

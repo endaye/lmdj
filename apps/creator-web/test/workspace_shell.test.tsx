@@ -122,11 +122,13 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
     suspendAudio: async () => true,
     trigger: async () => false,
     requestMidi: async () => true,
+    subscribeDiagnostics: () => () => {},
     subscribeHostState: () => () => {},
     subscribeRuntimeOutcome: () => () => {},
     diagnostics: () => ({
       state: "audio-suspended",
       error_code: null,
+      error_details: {},
       product_build: "1.0.16.9",
       host_id: "creator-web",
       host_version: "1.0.6",

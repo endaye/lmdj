@@ -13,6 +13,8 @@ import {createUserGestureToken} from
 
 import type {
   CreatorRuntimeSession,
+  RuntimeHostState,
+  RuntimeIssue,
   RuntimeSessionFactory,
   TypedRuntimeError,
 } from "./runtime_types";
@@ -29,11 +31,14 @@ interface RuntimeContextValue {
   session: CreatorRuntimeSession;
   phase: RuntimeProviderPhase;
   errorCode: string | null;
+  issue: RuntimeIssue | null;
   hostState: string;
   recoveryProbeReady: boolean;
+  retryRuntime: () => void;
 }
 
 const RuntimeContext = createContext<RuntimeContextValue | null>(null);
+const EMPTY_DETAILS = Object.freeze({});
 
 export function activateCreatorAudio(
   session: CreatorRuntimeSession,
@@ -51,6 +56,13 @@ function phaseForError(error: unknown): RuntimeProviderPhase {
   return "failed";
 }
 
+function detailsForError(error: unknown): Readonly<Record<string, unknown>> {
+  const details = (error as TypedRuntimeError | null)?.details;
+  return details !== null && typeof details === "object" && !Array.isArray(details)
+    ? details
+    : EMPTY_DETAILS;
+}
+
 interface RuntimeProviderProps {
   factory: RuntimeSessionFactory;
   children: ReactNode;
@@ -62,10 +74,14 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
   const [session, setSession] = useState<CreatorRuntimeSession>(() => factory());
   const [phase, setPhase] = useState<RuntimeProviderPhase>("booting");
   const [errorCode, setErrorCode] = useState<string | null>(null);
+  const [errorDetails, setErrorDetails] =
+    useState<Readonly<Record<string, unknown>>>(EMPTY_DETAILS);
   const [hostState, setHostState] = useState("cold");
   const [recoveryProbeReady, setRecoveryProbeReady] = useState(false);
   const closePromises = useRef(new WeakMap<CreatorRuntimeSession, Promise<unknown>>());
-  const restartCount = useRef(0);
+  const generation = useRef(0);
+  const automaticRestartAvailable = useRef(true);
+  const manualRetryInFlight = useRef(false);
   const closeOnce = useCallback((target: CreatorRuntimeSession) => {
     let pending = closePromises.current.get(target);
     if (!pending) {
@@ -75,53 +91,75 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
     return pending;
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    let replacementStarted = false;
-    let recoveryTimer: number | null = null;
+  const retryRuntime = useCallback(() => {
+    if (manualRetryInFlight.current) return;
+    manualRetryInFlight.current = true;
+    automaticRestartAvailable.current = true;
+    const replacementGeneration = generation.current + 1;
+    generation.current = replacementGeneration;
     setPhase("booting");
     setErrorCode(null);
+    setErrorDetails(EMPTY_DETAILS);
+    setHostState("cold");
+    setRecoveryProbeReady(false);
+    void closeOnce(session).then(() => {
+      if (generation.current === replacementGeneration) {
+        setSession(factoryRef.current());
+      }
+    });
+  }, [closeOnce, session]);
+
+  useEffect(() => {
+    const ownedGeneration = generation.current + 1;
+    generation.current = ownedGeneration;
+    let active = true;
+    let replacementStarted = false;
+    manualRetryInFlight.current = false;
+    setPhase("booting");
+    setErrorCode(null);
+    setErrorDetails(EMPTY_DETAILS);
     setHostState("cold");
     setRecoveryProbeReady(false);
 
-    const stopRecoveryProbeWatch = () => {
-      if (recoveryTimer !== null) window.clearTimeout(recoveryTimer);
-      recoveryTimer = null;
-    };
-    const watchRecoveryProbe = () => {
-      if (!active) return;
-      const diagnostics = session.diagnostics();
-      if (diagnostics.state !== "recovering") {
-        setRecoveryProbeReady(false);
-        recoveryTimer = null;
+    const ownsGeneration = () =>
+      active && generation.current === ownedGeneration;
+
+    const startAutomaticReplacement = () => {
+      if (
+        replacementStarted ||
+        automaticRestartAvailable.current !== true ||
+        !ownsGeneration()
+      ) {
         return;
       }
-      setRecoveryProbeReady(diagnostics.recovery_probe_ready === true);
-      recoveryTimer = window.setTimeout(watchRecoveryProbe, 16);
+      replacementStarted = true;
+      automaticRestartAvailable.current = false;
+      const replacementGeneration = generation.current + 1;
+      generation.current = replacementGeneration;
+      void closeOnce(session).then(() => {
+        if (generation.current === replacementGeneration) {
+          setSession(factoryRef.current());
+        }
+      });
     };
 
-    const observe = ({state, errorCode: observedError}: {
-      state: string;
-      errorCode: string | null;
-    }) => {
-      if (!active) return;
+    const observe = ({
+      state,
+      errorCode: observedError,
+      errorDetails: observedDetails,
+    }: RuntimeHostState) => {
+      if (!ownsGeneration()) return;
       setHostState(state);
       setErrorCode(observedError);
-      stopRecoveryProbeWatch();
-      if (state === "recovering") {
-        watchRecoveryProbe();
-      } else {
+      setErrorDetails(observedDetails);
+      if (state !== "recovering") {
         setRecoveryProbeReady(false);
       }
-      if (state === "restart-required") {
+      if (state === "running") {
+        automaticRestartAvailable.current = true;
+      } else if (state === "restart-required") {
         setPhase("restart-required");
-        if (restartCount.current === 0 && !replacementStarted) {
-          restartCount.current += 1;
-          replacementStarted = true;
-          void closeOnce(session).then(() => {
-            if (active) setSession(factoryRef.current());
-          });
-        }
+        startAutomaticReplacement();
       } else if (state === "failed") {
         setPhase("failed");
       } else if (state === "closed") {
@@ -129,48 +167,101 @@ export function RuntimeProvider({factory, children}: RuntimeProviderProps) {
       }
     };
     const unsubscribeHostState = session.subscribeHostState(observe);
+    const unsubscribeDiagnostics = session.subscribeDiagnostics((value) => {
+      if (!ownsGeneration()) return;
+      setRecoveryProbeReady(
+        value.state === "recovering" && value.recovery_probe_ready === true,
+      );
+    });
     const pagehide = (event: PageTransitionEvent) => {
-      if (event.persisted) return;
-      if (active) setPhase("closed");
+      if (event.persisted || !ownsGeneration()) return;
+      generation.current += 1;
+      setPhase("closed");
       void closeOnce(session);
     };
     window.addEventListener("pagehide", pagehide);
     void session.start().then(
       (started) => {
-        if (!active) return;
+        if (!ownsGeneration()) return;
         const diagnostics = session.diagnostics();
         setHostState(diagnostics.state);
+        setErrorCode(diagnostics.error_code);
+        setErrorDetails(diagnostics.error_details);
+        setRecoveryProbeReady(
+          diagnostics.state === "recovering" &&
+          diagnostics.recovery_probe_ready === true,
+        );
         if (!started) {
           const code = diagnostics.error_code ?? "HOST_STATE_INVALID";
-          setErrorCode(code);
-          observe({state: diagnostics.state, errorCode: code});
           if (code === "UNSUPPORTED_WEB_RUNTIME") {
             setPhase("unsupported");
-          } else if (!["restart-required", "failed", "closed"].includes(diagnostics.state)) {
+          } else if (diagnostics.state === "restart-required") {
+            observe({
+              state: diagnostics.state,
+              errorCode: code,
+              errorDetails: diagnostics.error_details,
+            });
+          } else if (!["failed", "closed"].includes(diagnostics.state)) {
             setPhase(phaseForError(Object.assign(new Error(code), {code})));
+          } else {
+            setPhase(diagnostics.state as "failed" | "closed");
           }
           return;
         }
         setPhase("ready");
       },
       (error: unknown) => {
-        if (!active) return;
-        setErrorCode((error as TypedRuntimeError | null)?.code ?? "INTERNAL_ERROR");
-        setPhase(phaseForError(error));
+        if (!ownsGeneration()) return;
+        const code = (error as TypedRuntimeError | null)?.code ?? "INTERNAL_ERROR";
+        const details = detailsForError(error);
+        setErrorCode(code);
+        setErrorDetails(details);
+        if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
+          observe({
+            state: "restart-required",
+            errorCode: code,
+            errorDetails: details,
+          });
+        } else {
+          setPhase(phaseForError(error));
+        }
       },
     );
     return () => {
       active = false;
-      stopRecoveryProbeWatch();
+      generation.current += 1;
       window.removeEventListener("pagehide", pagehide);
+      unsubscribeDiagnostics();
       unsubscribeHostState();
       void closeOnce(session);
     };
   }, [closeOnce, session]);
 
+  const issue = useMemo<RuntimeIssue | null>(
+    () => errorCode === null
+      ? null
+      : Object.freeze({code: errorCode, details: errorDetails}),
+    [errorCode, errorDetails],
+  );
   const value = useMemo(
-    () => ({session, phase, errorCode, hostState, recoveryProbeReady}),
-    [session, phase, errorCode, hostState, recoveryProbeReady],
+    () => ({
+      session,
+      phase,
+      errorCode,
+      issue,
+      hostState,
+      recoveryProbeReady,
+      retryRuntime,
+    }),
+    [
+      session,
+      phase,
+      errorCode,
+      issue,
+      hostState,
+      recoveryProbeReady,
+      retryRuntime,
+    ],
   );
   return <RuntimeContext value={value}>{children}</RuntimeContext>;
 }

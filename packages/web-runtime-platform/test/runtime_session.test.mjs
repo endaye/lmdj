@@ -18,6 +18,7 @@ const API = [
   "reloadSnapshot",
   "requestMidi",
   "start",
+  "subscribeDiagnostics",
   "subscribeHostState",
   "subscribeRuntimeOutcome",
   "suspendAudio",
@@ -35,6 +36,7 @@ function fixture({
   let request = 0;
   let terminated = 0;
   let notificationListener = null;
+  let failureListener = null;
   const context = {
     state: "suspended",
     async resume() {
@@ -69,7 +71,8 @@ function fixture({
       notificationListener = arguments[0];
       return () => {};
     },
-    subscribeFailure() {
+    subscribeFailure(listener) {
+      failureListener = listener;
       return () => {};
     },
   };
@@ -124,6 +127,9 @@ function fixture({
     context,
     emitNotification(value) {
       notificationListener?.(value);
+    },
+    emitFailure(value) {
+      failureListener?.(value);
     },
     session,
     terminated: () => terminated,
@@ -311,8 +317,58 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
   assert.equal(await session.close(), true);
   unsubscribe();
 
-  assert.deepEqual(states.at(-1), {state: "closed", errorCode: null});
+  assert.deepEqual(states.at(-1), {
+    state: "closed",
+    errorCode: null,
+    errorDetails: {},
+  });
   assert.equal(terminated(), 1);
+});
+
+test("pushes immutable diagnostics and honors unsubscribe", async () => {
+  const {session} = fixture();
+  const values = [];
+  const unsubscribe = session.subscribeDiagnostics((value) => values.push(value));
+  assert.equal(await session.start(), true);
+  assert.equal(values.length > 0, true);
+  assert.equal(Object.isFrozen(values.at(-1)), true);
+  assert.equal(values.at(-1).state, "audio-suspended");
+  const delivered = values.length;
+  unsubscribe();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+  assert.equal(values.length, delivered);
+});
+
+test("Host-state failures expose only allowlisted structured details", async () => {
+  const {emitFailure, session} = fixture();
+  const states = [];
+  session.subscribeHostState((value) => states.push(value));
+  await session.start();
+  emitFailure(Object.assign(new Error("/Users/private/project"), {
+    code: "WEB_RUNTIME_RESOURCE_LIMIT",
+    stack: "private stack",
+    details: {
+      resource: "decoded_frames_per_pad",
+      observed: 240_001,
+      limit: 240_000,
+      storage_condition: "quota_exceeded",
+      path: "/Users/private/project",
+      request_id: "11111111-1111-4111-8111-111111111111",
+      device_name: "Private MIDI",
+    },
+  }));
+
+  assert.deepEqual(states.at(-1), {
+    state: "failed",
+    errorCode: "WEB_RUNTIME_RESOURCE_LIMIT",
+    errorDetails: {
+      resource: "decoded_frames_per_pad",
+      observed: 240_001,
+      limit: 240_000,
+      storage_condition: "quota_exceeded",
+    },
+  });
+  assert.deepEqual(session.diagnostics().error_details, states.at(-1).errorDetails);
 });
 
 test("defaults diagnostics to session-owned input listeners", async () => {
@@ -590,7 +646,7 @@ test("timeout becomes one terminal restart-required notification", async () => {
   assert.equal(session.diagnostics().state, "restart-required");
   assert.equal(session.diagnostics().error_code, "HOST_TIMEOUT");
   assert.deepEqual(states, [
-    {state: "restart-required", errorCode: "HOST_TIMEOUT"},
+    {state: "restart-required", errorCode: "HOST_TIMEOUT", errorDetails: {}},
   ]);
   await Promise.resolve();
   assert.equal(terminated(), 1);

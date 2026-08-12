@@ -7,6 +7,7 @@ import {activateCreatorAudio} from "../src/runtime/runtime_context";
 import type {
   CreatorRuntimeSession,
   LocalProjectSummary,
+  RuntimeDiagnostics,
   RuntimeHostState,
   RuntimeOutcome,
 } from "../src/runtime/runtime_types";
@@ -48,9 +49,11 @@ function inspectResult() {
 function sessionFixture(name: string) {
   const calls: string[] = [];
   const hostListeners = new Set<(state: RuntimeHostState) => void>();
+  const diagnosticListeners = new Set<(value: RuntimeDiagnostics) => void>();
   const outcomeListeners = new Set<(outcome: RuntimeOutcome) => void>();
   let hostState = "audio-suspended";
   let errorCode: string | null = null;
+  let errorDetails: Readonly<Record<string, unknown>> = {};
   let recoveryProbeReady = false;
   const session: CreatorRuntimeSession = {
     start: async () => { calls.push(`${name}:start`); return true; },
@@ -71,6 +74,10 @@ function sessionFixture(name: string) {
     },
     trigger: async () => false,
     requestMidi: async () => true,
+    subscribeDiagnostics(listener) {
+      diagnosticListeners.add(listener);
+      return () => diagnosticListeners.delete(listener);
+    },
     subscribeHostState(listener) {
       hostListeners.add(listener);
       return () => hostListeners.delete(listener);
@@ -82,6 +89,7 @@ function sessionFixture(name: string) {
     diagnostics: () => ({
       state: hostState,
       error_code: errorCode,
+      error_details: errorDetails,
       product_build: "1.0.16.9",
       host_id: "creator-web",
       host_version: "1.0.6",
@@ -98,17 +106,25 @@ function sessionFixture(name: string) {
       recovery_probe_ready: recoveryProbeReady,
     }),
   };
-  function emit(value: RuntimeHostState) {
+  function emit(value: Omit<RuntimeHostState, "errorDetails"> & {
+    errorDetails?: Readonly<Record<string, unknown>>;
+  }) {
+    const normalized = {...value, errorDetails: value.errorDetails ?? {}};
     hostState = value.state;
     errorCode = value.errorCode;
+    errorDetails = normalized.errorDetails;
     if (value.state !== "recovering") recoveryProbeReady = false;
-    for (const listener of hostListeners) listener(value);
+    for (const listener of hostListeners) listener(normalized);
   }
   return {
     session,
     calls,
     emit,
-    setRecoveryProbeReady(value: boolean) { recoveryProbeReady = value; },
+    setRecoveryProbeReady(value: boolean) {
+      recoveryProbeReady = value;
+      const diagnostic = session.diagnostics();
+      for (const listener of diagnosticListeners) listener(diagnostic);
+    },
   };
 }
 

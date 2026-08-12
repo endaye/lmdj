@@ -46,11 +46,18 @@ export interface RuntimeOutcome {
 export interface RuntimeHostState {
   state: string;
   errorCode: string | null;
+  errorDetails: Readonly<Record<string, unknown>>;
+}
+
+export interface RuntimeIssue {
+  code: string;
+  details: Readonly<Record<string, unknown>>;
 }
 
 export interface RuntimeDiagnostics {
   state: string;
   error_code: string | null;
+  error_details: Readonly<Record<string, unknown>>;
   product_build: string;
   host_id: string;
   host_version: string;
@@ -99,6 +106,7 @@ export interface CreatorRuntimeSession {
     source: RuntimeTriggerSource,
   ): Promise<TriggerAdmission | false>;
   requestMidi(): Promise<boolean>;
+  subscribeDiagnostics(listener: (value: RuntimeDiagnostics) => void): () => void;
   subscribeHostState(listener: (state: RuntimeHostState) => void): () => void;
   subscribeRuntimeOutcome(listener: (outcome: RuntimeOutcome) => void): () => void;
   diagnostics(): RuntimeDiagnostics;
@@ -108,4 +116,5 @@ export type RuntimeSessionFactory = () => CreatorRuntimeSession;
 
 export interface TypedRuntimeError extends Error {
   code?: string;
+  details?: Readonly<Record<string, unknown>>;
 }

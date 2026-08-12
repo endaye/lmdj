@@ -30,6 +30,12 @@ const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
 const TRIGGER_SOURCES = new Set(["pointer", "keyboard", "midi"]);
+const SAFE_ERROR_DETAIL_NAMES = new Set([
+  "mutation_outcome",
+  "resource",
+  "storage_condition",
+  "terminal_state",
+]);
 const ALLOWED_TYPED_ERROR_CODES = new Set([
   "INVALID_ARGUMENT",
   "NOT_FOUND",
@@ -66,6 +72,27 @@ function validatedErrorCode(value, fallback = "HOST_STATE_INVALID") {
 
 function errorCode(error, fallback = "HOST_STATE_INVALID") {
   return validatedErrorCode(error?.code, fallback);
+}
+
+function safeErrorDetails(error) {
+  const source = error?.details;
+  if (source === null || typeof source !== "object" || Array.isArray(source)) {
+    return Object.freeze({});
+  }
+  const details = {};
+  for (const name of ["observed", "limit"]) {
+    const value = source[name];
+    if (Number.isSafeInteger(value) && value >= 0) {
+      details[name] = value;
+    }
+  }
+  for (const name of SAFE_ERROR_DETAIL_NAMES) {
+    const value = source[name];
+    if (typeof value === "string" && /^[a-z0-9._-]{1,64}$/.test(value)) {
+      details[name] = value;
+    }
+  }
+  return Object.freeze(details);
 }
 
 function requireFunction(value, name) {
@@ -625,6 +652,7 @@ function createRuntimeSessionController(options = {}) {
   let activationReservation = null;
   let probeReservation = null;
   let lastErrorCode = null;
+  let lastErrorDetails = Object.freeze({});
   let controlGeneration = null;
   let acknowledgedGeneration = null;
   let triggerAdmittedCount = 0;
@@ -647,6 +675,7 @@ function createRuntimeSessionController(options = {}) {
   const listenerDisposers = [];
   const hostStateListeners = new Set();
   const runtimeOutcomeListeners = new Set();
+  const diagnosticsListeners = new Set();
 
   const padBindings = [...(options.padBindings ?? [])];
 
@@ -675,6 +704,7 @@ function createRuntimeSessionController(options = {}) {
     return Object.freeze({
       state: machine.state,
       error_code: lastErrorCode,
+      error_details: lastErrorDetails,
       product_build: manifest.product_build,
       host_id: assemblyIdentity.hostId,
       host_version: manifest.host_version,
@@ -697,7 +727,11 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function renderDiagnostics() {
-    options.onDiagnostics?.(diagnostics());
+    const value = diagnostics();
+    options.onDiagnostics?.(value);
+    for (const listener of [...diagnosticsListeners]) {
+      listener(value);
+    }
   }
 
   function clearPressed() {
@@ -726,6 +760,7 @@ function createRuntimeSessionController(options = {}) {
         const value = Object.freeze({
           state: payload.state,
           errorCode: lastErrorCode,
+          errorDetails: lastErrorDetails,
         });
         for (const listener of hostStateListeners) {
           listener(value);
@@ -754,7 +789,10 @@ function createRuntimeSessionController(options = {}) {
     }
     midiAdapter?.dispose();
     terminalCleanupPromise = Promise.resolve()
-      .then(() => runtimeTerminator({ runtime, audioContext }))
+      .then(() => {
+        diagnosticsListeners.clear();
+        return runtimeTerminator({ runtime, audioContext });
+      })
       .catch(() => {});
     return terminalCleanupPromise;
   }
@@ -767,6 +805,10 @@ function createRuntimeSessionController(options = {}) {
       typeof codeOrError === "string"
         ? validatedErrorCode(codeOrError)
         : errorCode(codeOrError);
+    lastErrorDetails =
+      typeof codeOrError === "string"
+        ? Object.freeze({})
+        : safeErrorDetails(codeOrError);
     closing = true;
     machine.transition(
       ["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(lastErrorCode)
@@ -1336,6 +1378,12 @@ function createRuntimeSessionController(options = {}) {
     return () => hostStateListeners.delete(listener);
   }
 
+  function subscribeDiagnostics(listener) {
+    requireFunction(listener, "Runtime diagnostics listener");
+    diagnosticsListeners.add(listener);
+    return () => diagnosticsListeners.delete(listener);
+  }
+
   function subscribeRuntimeOutcome(listener) {
     requireFunction(listener, "Runtime outcome listener");
     runtimeOutcomeListeners.add(listener);
@@ -1573,6 +1621,7 @@ function createRuntimeSessionController(options = {}) {
     suspendAudio,
     requestMidi: enableMidi,
     close,
+    subscribeDiagnostics,
     subscribeHostState,
     subscribeRuntimeOutcome,
     diagnostics,
