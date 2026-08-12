@@ -12,6 +12,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(REPO_ROOT / "apps/web-runtime-host/tools"))
 import deploy_orchestrator
+import netlify_api
 
 
 class DeployOrchestratorReleaseTest(unittest.TestCase):
@@ -78,6 +79,113 @@ class DeployOrchestratorReleaseTest(unittest.TestCase):
 
     def test_legacy_v1_evidence_writer_is_not_exposed(self) -> None:
         self.assertFalse(hasattr(deploy_orchestrator, "write_evidence"))
+
+
+class DeployOrchestratorSitePreflightTest(unittest.TestCase):
+    SITE = "site-123"
+
+    def site(self, deploy_id: str = "prior-123") -> netlify_api.PublishedSite:
+        return netlify_api.PublishedSite(
+            id=self.SITE,
+            state="current",
+            ssl_url="https://lmdj-runtime.netlify.app",
+            published_deploy=netlify_api.DraftDeploy(
+                id=deploy_id,
+                site_id=self.SITE,
+                deploy_ssl_url=(
+                    f"https://{deploy_id}--lmdj-runtime.netlify.app"
+                ),
+                state="ready",
+            ),
+        )
+
+    class Client:
+        def __init__(
+            self,
+            *,
+            sites: list[netlify_api.PublishedSite],
+            file_count: int,
+        ) -> None:
+            self.sites = sites
+            self.file_count = file_count
+            self.calls: list[str] = []
+
+        def get_site(self, *, site_id: str) -> netlify_api.PublishedSite:
+            self.calls.append("site")
+            return self.sites.pop(0)
+
+        def get_site_file_count(self, *, site_id: str) -> int:
+            self.calls.append("files")
+            return self.file_count
+
+    def test_current_site_preflight_binds_file_count_to_stable_site_identity(self) -> None:
+        site = self.site()
+        for file_count in (0, 12):
+            with self.subTest(file_count=file_count):
+                client = self.Client(sites=[site, site], file_count=file_count)
+                result = deploy_orchestrator.current_site_preflight(
+                    site_id=self.SITE, token="unused", client=client
+                )
+                self.assertEqual(result["file_count"], file_count)
+                self.assertEqual(result["site"]["published_deploy"]["id"], "prior-123")
+                self.assertEqual(client.calls, ["site", "files", "site"])
+
+    def test_current_site_preflight_rejects_identity_change_during_inventory(self) -> None:
+        client = self.Client(
+            sites=[self.site("prior-123"), self.site("other-456")],
+            file_count=0,
+        )
+        with self.assertRaisesRegex(
+            deploy_orchestrator.DeployOrchestratorError,
+            "changed during file inventory",
+        ):
+            deploy_orchestrator.current_site_preflight(
+                site_id=self.SITE, token="unused", client=client
+            )
+        self.assertEqual(client.calls, ["site", "files", "site"])
+
+
+class DeployOrchestratorPublishedProjectionTest(unittest.TestCase):
+    def published(self, published_at: object) -> dict[str, object]:
+        return {
+            "deploy_ssl_url": "https://deploy-456--lmdj-runtime.netlify.app",
+            "id": "deploy-456",
+            "published_at": published_at,
+            "site_id": "site-123",
+            "ssl_url": "https://lmdj-runtime.netlify.app",
+            "state": "ready",
+        }
+
+    def test_accepts_netlify_utc_timestamp_with_optional_fractional_seconds(self) -> None:
+        for published_at in (
+            "2026-08-09T00:00:00Z",
+            "2026-08-09T00:00:00.740Z",
+            "2026-08-09T00:00:00.123456789Z",
+        ):
+            with self.subTest(published_at=published_at):
+                result = deploy_orchestrator.validate_published(
+                    self.published(published_at),
+                    site_id="site-123",
+                    deploy_id="deploy-456",
+                )
+                self.assertEqual(result["published_at"], published_at)
+
+    def test_rejects_non_utc_or_malformed_netlify_timestamp(self) -> None:
+        for published_at in (
+            "2026-08-09T00:00:00+00:00",
+            "2026-08-09T00:00:00.Z",
+            "2026-02-30T00:00:00.740Z",
+        ):
+            with self.subTest(published_at=published_at):
+                with self.assertRaisesRegex(
+                    deploy_orchestrator.DeployOrchestratorError,
+                    "timestamp is invalid",
+                ):
+                    deploy_orchestrator.validate_published(
+                        self.published(published_at),
+                        site_id="site-123",
+                        deploy_id="deploy-456",
+                    )
 
 
 class DeployOrchestratorEvidenceTest(unittest.TestCase):
@@ -312,6 +420,26 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
             self.write(document, document["contract"]),
             json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
         )
+
+    def test_success_evidence_accepts_manifest_verified_asset_count(self) -> None:
+        document = self.success_document()
+        document["immutable"]["http"]["result"]["asset_count"] = 13
+        document["production"]["http"]["result"]["asset_count"] = 13
+        self.assertIn(
+            '"asset_count":13', self.write(document, document["contract"])
+        )
+
+    def test_success_evidence_rejects_invalid_asset_count(self) -> None:
+        for asset_count in (0, -1, True):
+            with self.subTest(asset_count=asset_count):
+                document = self.success_document()
+                document["production"]["http"]["result"][
+                    "asset_count"
+                ] = asset_count
+                with self.assertRaisesRegex(
+                    deploy_orchestrator.DeployOrchestratorError, "schema"
+                ):
+                    self.write(document, document["contract"])
 
     def test_success_evidence_accepts_verified_root_redirect(self) -> None:
         document = self.success_document()

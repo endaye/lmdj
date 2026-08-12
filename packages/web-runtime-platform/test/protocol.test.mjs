@@ -514,6 +514,73 @@ test("a malformed response atomically fails closed and later replies have no eff
   assert.equal(appliedMutations, 0);
 });
 
+test("an unknown response request ID atomically fails closed", async () => {
+  let terminateCalls = 0;
+  const transport = createProtocolTransport({
+    send: () => {},
+    terminate: () => {
+      terminateCalls += 1;
+    },
+    now: () => 0,
+    setTimer: () => ({ active: true }),
+    clearTimer: (timer) => {
+      timer.active = false;
+    },
+  });
+  const first = transport.request(request({ request_id: requestIdFor(1) }));
+  const second = transport.request(request({ request_id: requestIdFor(2) }));
+
+  assert.equal(
+    transport.receive({
+      protocol_version: PROTOCOL_VERSION,
+      request_id: requestIdFor(3),
+      ok: true,
+      result: {},
+    }),
+    false,
+  );
+  assert.equal(transport.terminated, true);
+  await assert.rejects(first, expectCode("HOST_PROTOCOL_MISMATCH"));
+  await assert.rejects(second, expectCode("HOST_PROTOCOL_MISMATCH"));
+  assert.equal(transport.terminated, true);
+  assert.equal(terminateCalls, 1);
+  assert.equal(transport.pendingCount, 0);
+  assert.equal(transport.activeRequestIdCount, 0);
+});
+
+test("a duplicate response after settlement atomically fails closed", async () => {
+  let terminateCalls = 0;
+  const transport = createProtocolTransport({
+    send: () => {},
+    terminate: () => {
+      terminateCalls += 1;
+    },
+    now: () => 0,
+    setTimer: () => ({ active: true }),
+    clearTimer: (timer) => {
+      timer.active = false;
+    },
+  });
+  const first = transport.request(request({ request_id: requestIdFor(1) }));
+  const second = transport.request(request({ request_id: requestIdFor(2) }));
+  const response = {
+    protocol_version: PROTOCOL_VERSION,
+    request_id: requestIdFor(1),
+    ok: true,
+    result: { settled: true },
+  };
+
+  assert.equal(transport.receive(response), true);
+  assert.deepEqual(await first, { settled: true });
+  assert.equal(transport.receive(response), false);
+  assert.equal(transport.terminated, true);
+  await assert.rejects(second, expectCode("HOST_PROTOCOL_MISMATCH"));
+  assert.equal(transport.terminated, true);
+  assert.equal(terminateCalls, 1);
+  assert.equal(transport.pendingCount, 0);
+  assert.equal(transport.activeRequestIdCount, 0);
+});
+
 test("request identity storage stays bounded and completed IDs may be reused", async () => {
   const transport = createProtocolTransport({
     send: () => {},

@@ -88,9 +88,11 @@ scripts/architecture-portal.sh version MILESTONE.MINOR.BUILD.PATCH CHANNEL
 后续 Channel 晋级复用该快照，在独立发布记录中追加晋级证据。
 
 新快照使用 metadata schema 2。元数据必须自认证完整 source commit，记录 source
-commit time/tree 与投影清单、34 个 source doc hash、source/sidebar 与 snapshot
-hash、九个 diagram ID 对应 18 个 current/versioned 路径、byte size 和 SHA-256、
-source revision 重建的 Product/Assembly facts，以及 freeze time。生成阶段只允许
+commit time/tree 与投影清单、生成器得到的完整 source-document inventory（每个
+source/snapshot document 的路径、byte size 和 SHA-256）、source/sidebar 与 snapshot
+hash、canonical manifest 选中的每个 diagram ID 对应的 current/versioned HTML 与 SVG
+路径、byte size 和 SHA-256、source revision 重建的 Product/Assembly facts，以及
+freeze time。生成阶段只允许
 当前 HEAD 加精确生成边界；提交后和未来 HEAD 必须证明 introducing commit 是当前
 HEAD 的祖先、不可变路径从 introducing commit 起未变化、时间满足
 `source <= freeze <= introducing`，并满足 direct-parent 或已批准的
@@ -100,9 +102,20 @@ commit object，验证器仍须用冻结的 raw commit bytes 自认证 canonical
 source docs/sidebar/diagrams；对象缺失本身不能放宽证据。`versions.json` 允许追加未来版本，但每个
 Product Build 条目必须唯一。既有 schema-1 快照保持只读兼容，不回写。
 
+若 squash introducing tree 合法包含冻结之后的 mutable current/non-projection
+更新，因而不能逐字等同 source projection，必须另行提交由
+`scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION`
+生成的 source-tree witness。witness 只记录从 exact introducing tree 反向恢复 source
+tree 所需的有序差异；验证器必须把差异应用到临时 Git index，重建出 raw source
+commit 已认证的精确 tree hash，并重新物化相同 commit object 后，才能读取和核对
+projection、facts、source docs/sidebar/diagrams。缺失、重复、非 canonical base64、
+身份不匹配或不能得到精确 source tree/commit 的 witness 一律 fail closed；它不能
+替代普通 direct-parent 或 byte-identical squash，也不能改写任何不可变快照文件。
+
 版本页导航以 Docusaurus active doc ID 解析当前版本的实际 path；缺失或重复 ID
-必须 fail closed。九张架构图先通过 current diagram validation，再把精确 18 个
-HTML/SVG 输出复制到 `static/versions/PRODUCT_BUILD/diagrams/`。schema-2 版本页不得
+必须 fail closed。canonical manifest 选中的每个架构图 ID 都先通过 current diagram
+validation，再把该 ID 对应的 HTML/SVG 输出精确复制到
+`static/versions/PRODUCT_BUILD/diagrams/`。schema-2 版本页不得
 引用可变 `/diagrams/*`；缺失、符号链接、越界、重复或 hash 漂移必须阻断冻结或构建。
 
 快照 commit 不改变 Product/Module/Provider/Contract 的版本语义，只记录该 Product Build 对应的说明书。

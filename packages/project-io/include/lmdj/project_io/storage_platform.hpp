@@ -19,6 +19,10 @@ inline constexpr std::string_view kStorageConditionAlreadyExists =
     "already_exists";
 inline constexpr std::string_view kStorageConditionAtomicPublishUnsupported =
     "atomic_publish_unsupported";
+inline constexpr std::string_view kStorageConditionQuotaExceeded =
+    "quota_exceeded";
+inline constexpr std::string_view kStorageConditionInvalidState =
+    "invalid_state";
 
 class ProjectWriterLease {
  public:

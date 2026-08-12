@@ -1,0 +1,35 @@
+---
+title: 产品定位
+area: product
+status: partial
+owners: [product]
+source_paths:
+  - docs/prd/decision-log.md
+  - docs/prd/open-questions.md
+  - docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 产品承诺
+
+LMDJ 是面向现场演奏与节拍创作的 **64-Pad Playable Beat Instrument**：用户组织素材、编排 Pattern、通过 Pad Slot 触发演奏，并在确定的音频生命周期内获得即时反馈。
+
+## 当前范围
+
+<StatusBadge status="partial" /> Headless Core 已证明 Project、Cook、Runtime、Provider、Host 和 Assembly 边界可以组合；这不等于完整创作者产品已经交付。
+
+## 非目标与边界
+
+Core 不拥有产品 GUI，也不把 Provider 选择或 Provider 失败写入 Project Truth。Pattern event 指向 Pad Slot，不直接指向 Asset。产品专属接线不进入产品中立 Module。
+
+## 成功证据
+
+自动化 Proof、CI、正式 Product Build 和物理设备体验验收分别记录。任何一项通过都不能替代其他项。
+
+## 下一批准门禁
+
+未决产品交互与并发 Contract 必须进入 decision log/open questions，经批准后才能改变页面状态或进入实现。

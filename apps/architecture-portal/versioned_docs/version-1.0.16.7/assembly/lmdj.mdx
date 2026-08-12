@@ -1,0 +1,24 @@
+---
+title: LMDJ Product Assembly
+area: assembly
+status: implemented
+owners: [product, core, release]
+source_paths: [products/lmdj, products/lmdj/assembly.lock.json]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 当前组合
+Product Build `1.0.16.7` 的 LMDJ Assembly 组合八个 Core Module、五个 Host、两个本地 Proof Provider 与七个 active Contract。它集成 Browser Main unknown/duplicate-response 的 fail-closed 修复，不新增产品能力或公开 Contract；Project I/O `0.5.1`、Audio Runtime `0.4.1`、Application Facade `1.3.2`、Web Runtime Platform `0.1.4`、CLI `1.0.8`、MCP `1.1.5`、Native Test Host `1.0.6`、Web Runtime Host `1.2.4` 与 Creator Web Host `1.0.4` 是本构建锁定的精确变更身份，Contract、Provider 与 model identity 保持不变。
+## 编译接线
+`products/lmdj/src/compiled_assembly.cpp` 是产品专属 wiring；产品中立模块不知道 LMDJ 的具体组合。
+Product CMake 只在 Emscripten `lmdj_web_runtime_host` target 存在时链接 compiled catalog object，并注入 Product Build、Platform version 以及 Creator/Diagnostic 两组精确 distribution-contract/Host identity。两个 Web Host 只声明 Web Runtime Platform 依赖；Platform 声明 Facade/Audio 依赖，Provider wiring 仍只属于 Product Assembly。
+## Policy
+当前 Provider policy 仅允许 local/public/proof.execute 范围，与 Proof-only Provider 相符。
+## 身份与完整性
+Product Build、每个组件版本和 source hash 被锁定；门户事实生成会拒绝任何漂移。
+新增的 Project Bundle Contract 是 portable transfer 边界；同构建 Web transport 仍不是公开 Contract。Provider、Capability 与 model identity 未变化。
+## 限制
+Creator 的完整编辑、生产 Provider、云能力、物理 Web 验收与 `beta`/`stable` 均不能由当前 Assembly 成员关系或门户快照推导。Build Identity 只证明当前页面绑定的 Product/Assembly 身份。

@@ -21,12 +21,12 @@ using lmdj::web_runtime::ManifestGate;
 using lmdj::web_runtime::ManifestGateStatus;
 
 constexpr std::array<ManifestExpectation::ComponentIdentity, 2> kAllowedHosts{{
-    {"lmdj.creator-web.distribution.v1", "creator-web", "1.0.2"},
-    {"lmdj.web-runtime-host.distribution.v1", "web-runtime-host", "1.2.2"},
+    {"lmdj.creator-web.distribution.v1", "creator-web", "1.0.5"},
+    {"lmdj.web-runtime-host.distribution.v1", "web-runtime-host", "1.2.5"},
 }};
 constexpr ManifestExpectation kExpected{
-    "1.0.16.5",
-    "0.1.2",
+    "1.0.16.8",
+    "0.1.5",
     kAllowedHosts,
     1,
 };
@@ -50,14 +50,14 @@ nlohmann::json asset(
 }
 
 nlohmann::json manifest_json(
-    std::string_view product = "1.0.16.5",
-    std::string_view host = "1.2.2",
+    std::string_view product = "1.0.16.8",
+    std::string_view host = "1.2.5",
     std::uint32_t protocol = 1) {
   return {
       {"distribution_contract", "lmdj.web-runtime-host.distribution.v1"},
       {"manifest_version", 1},
       {"product_build", product},
-      {"platform_version", "0.1.2"},
+      {"platform_version", "0.1.5"},
       {"host_id", "web-runtime-host"},
       {"host_version", host},
       {"protocol_version", protocol},
@@ -95,8 +95,8 @@ nlohmann::json manifest_json(
 }
 
 std::string canonical_manifest(
-    std::string_view product = "1.0.16.5",
-    std::string_view host = "1.2.2",
+    std::string_view product = "1.0.16.8",
+    std::string_view host = "1.2.5",
     std::uint32_t protocol = 1) {
   return lmdj::foundation::canonical_json(
       manifest_json(product, host, protocol));
@@ -145,12 +145,12 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
   const auto valid = canonical_manifest();
   for (const auto& [manifest, digest] : {
            std::pair{valid, std::string(64, '0')},
-           std::pair{canonical_manifest("1.0.24.0"),
-                     sha256(canonical_manifest("1.0.24.0"))},
-           std::pair{canonical_manifest("1.0.16.5", "1.0.2"),
-                     sha256(canonical_manifest("1.0.16.5", "1.0.2"))},
-           std::pair{canonical_manifest("1.0.16.5", "1.2.2", 2),
-                     sha256(canonical_manifest("1.0.16.5", "1.2.2", 2))},
+           std::pair{canonical_manifest("1.0.34.0"),
+                     sha256(canonical_manifest("1.0.34.0"))},
+           std::pair{canonical_manifest("1.0.16.8", "1.0.3"),
+                     sha256(canonical_manifest("1.0.16.8", "1.0.3"))},
+           std::pair{canonical_manifest("1.0.16.8", "1.2.5", 2),
+                     sha256(canonical_manifest("1.0.16.8", "1.2.5", 2))},
        }) {
     ManifestGate gate;
     LMDJ_CHECK(
@@ -164,9 +164,9 @@ void test_creator_contract_and_compatibility_inventory_are_bound() {
   auto creator = manifest_json();
   creator["distribution_contract"] = "lmdj.creator-web.distribution.v1";
   creator["host_id"] = "creator-web";
-  creator["host_version"] = "1.0.2";
+  creator["host_version"] = "1.0.5";
   creator["compatible_hosts"] = nlohmann::json::array({
-      {{"host_id", "web-runtime-host"}, {"host_version", "1.2.2"}},
+      {{"host_id", "web-runtime-host"}, {"host_version", "1.2.5"}},
   });
   auto encoded = lmdj::foundation::canonical_json(creator);
   ManifestGate accepted;

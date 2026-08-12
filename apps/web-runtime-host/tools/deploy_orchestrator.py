@@ -297,7 +297,7 @@ def collect_deploy_files(dist_root: Path, headers_path: Path) -> dict[str, bytes
 
 
 def render_deploy_headers(dist_root: Path, headers_path: Path) -> bytes:
-    """Append immutable cache rules for only the manifest-authorized nine assets."""
+    """Append immutable cache rules for every manifest-authorized asset."""
     try:
         dist_root = dist_root.resolve(strict=True)
         headers_path = headers_path.resolve(strict=True)
@@ -315,7 +315,7 @@ def render_deploy_headers(dist_root: Path, headers_path: Path) -> bytes:
         or re.search(r"^/assets/\*$", base, re.MULTILINE) is not None
         or not isinstance(manifest, dict)
         or not isinstance(manifest.get("assets"), list)
-        or len(manifest["assets"]) != 9
+        or not manifest["assets"]
     ):
         raise DeployOrchestratorError("Netlify response rules are invalid")
     paths: list[str] = []
@@ -419,7 +419,7 @@ def validate_published(
             "Netlify published identity is not the same ready Deploy"
         )
     published_at = value.get("published_at")
-    if published_at is not None and not _valid_timestamp(published_at):
+    if published_at is not None and not _valid_netlify_timestamp(published_at):
         raise DeployOrchestratorError("Netlify published identity timestamp is invalid")
     return {
         "deploy_ssl_url": value["deploy_ssl_url"],
@@ -492,6 +492,32 @@ def current_site(
     return result
 
 
+def current_site_preflight(
+    *, site_id: str, token: str, client: NetlifyClient | None = None
+) -> dict[str, object]:
+    selected = (
+        _SecretCheckingNetlifyClient(token=token, secrets=_secret_values())
+        if client is None
+        else client
+    )
+    before = current_site(site_id=site_id, token=token, client=selected)
+    file_count = selected.get_site_file_count(site_id=site_id)
+    after = current_site(site_id=site_id, token=token, client=selected)
+    if before != after:
+        raise DeployOrchestratorError(
+            "Netlify site changed during file inventory"
+        )
+    if (
+        not isinstance(file_count, int)
+        or isinstance(file_count, bool)
+        or file_count < 0
+    ):
+        raise DeployOrchestratorError("Netlify site file count is invalid")
+    result: dict[str, object] = {"file_count": file_count, "site": after}
+    reject_secret_material(result, label="Netlify site preflight")
+    return result
+
+
 def disable_site(
     *, site_id: str, reason: str, token: str, client: NetlifyClient | None = None
 ) -> dict[str, int]:
@@ -536,6 +562,22 @@ def _valid_timestamp(value: object) -> bool:
     except ValueError:
         return False
     return parsed.strftime("%Y-%m-%dT%H:%M:%SZ") == value
+
+
+def _valid_netlify_timestamp(value: object) -> bool:
+    if not isinstance(value, str) or not value.endswith("Z"):
+        return False
+    match = re.fullmatch(
+        r"(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.\d{1,9})?Z",
+        value,
+    )
+    if match is None:
+        return False
+    try:
+        datetime.strptime(match.group(1), "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return False
+    return True
 
 
 def _valid_interval(value: Mapping[str, object]) -> bool:
@@ -593,7 +635,7 @@ def _valid_http_evidence(
     return (
         set(result) == expected_keys
         and type(result.get("asset_count")) is int
-        and result.get("asset_count") == 9
+        and result.get("asset_count") > 0
         and result.get("host_version") == host
         and result.get("product_build") == product
         and result.get("index_sha256") == index_sha256
@@ -651,7 +693,7 @@ def _valid_publish_projection(
         and _valid_deploy_url(value.get("deploy_ssl_url"), deploy_id)
         and (
             value.get("published_at") is None
-            or _valid_timestamp(value.get("published_at"))
+            or _valid_netlify_timestamp(value.get("published_at"))
         )
     )
 
@@ -1040,6 +1082,9 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     site = commands.add_parser("site-current")
     site.add_argument("site_id")
 
+    site_preflight = commands.add_parser("site-preflight")
+    site_preflight.add_argument("site_id")
+
     disable = commands.add_parser("disable-site")
     disable.add_argument("site_id")
     disable.add_argument("reason")
@@ -1113,6 +1158,16 @@ def run(options: argparse.Namespace) -> None:
         print(
             canonical_json(
                 current_site(
+                    site_id=options.site_id,
+                    token=require_environment("NETLIFY_AUTH_TOKEN"),
+                )
+            )
+        )
+        return
+    if options.command == "site-preflight":
+        print(
+            canonical_json(
+                current_site_preflight(
                     site_id=options.site_id,
                     token=require_environment("NETLIFY_AUTH_TOKEN"),
                 )

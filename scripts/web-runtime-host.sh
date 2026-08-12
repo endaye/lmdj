@@ -13,6 +13,8 @@ fi
 cmake_root="$build_root/cmake"
 runtime_root="$build_root/runtime"
 dist_root="$build_root/dist"
+platform_cmake_root="$cmake_root/packages/web-runtime-platform"
+link_evidence_path="$platform_cmake_root/lmdj_web_runtime_host.link-libraries.txt"
 identity_path="$repo_root/build/web/toolchain/toolchain-identity.json"
 web_test_root="$repo_root/tests/platform/web"
 fixture_source_root="$repo_root/tests/fixtures/audio"
@@ -180,6 +182,13 @@ package_host() {
     --dist-root "$dist_root"
 }
 
+verify_production_source_boundary() {
+  python3 \
+    "$repo_root/apps/web-runtime-host/test/web_host_source_boundary_test.py" \
+    "$repo_root/apps/web-runtime-host" \
+    "$link_evidence_path"
+}
+
 build_host() {
   activate_toolchain
   if [[ ! -f "$cmake_root/CMakeCache.txt" ]]; then
@@ -188,6 +197,7 @@ build_host() {
     python3 "$repo_root/tools/web-runtime/verify_emscripten.py"
   fi
   run_cmake_build "$cmake_root" --target lmdj_web_runtime_host
+  verify_production_source_boundary
   package_host
 }
 

@@ -22,7 +22,7 @@ TAG = "lmdj-v1.0.15.2"
 TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
 FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
-CURRENT_PRODUCT = "1.0.16.5"
+CURRENT_PRODUCT = "1.0.16.8"
 
 
 class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
@@ -102,7 +102,8 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
         self.assertIn("publish 后失败即使 API 返回 error", source)
         self.assertIn("恢复 exact prior", source)
         self.assertIn("reversible `PUT /sites/{site_id}/disable`", source)
-        self.assertIn("preflight 发现站点已 disabled", source)
+        self.assertIn("preflight 发现 official `disabled: true`", source)
+        self.assertIn("时间戳中的可选小数秒", source)
         self.assertIn("900 秒 kill budget", source)
         self.assertIn("未知第三 ID 必须 recovery FAIL", source)
         self.assertIn("GET 必须确认 exact prior", source)
