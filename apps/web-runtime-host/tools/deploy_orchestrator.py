@@ -635,7 +635,7 @@ def _valid_http_evidence(
     return (
         set(result) == expected_keys
         and type(result.get("asset_count")) is int
-        and result.get("asset_count") == 9
+        and result.get("asset_count") > 0
         and result.get("host_version") == host
         and result.get("product_build") == product
         and result.get("index_sha256") == index_sha256

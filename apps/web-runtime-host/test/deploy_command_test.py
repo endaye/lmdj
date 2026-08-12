@@ -436,7 +436,7 @@ class DeployCommandTest(unittest.TestCase):
                 expected_product = sys.argv[2]
                 expected_host = sys.argv[3]
                 result = {{
-                    "asset_count": 9,
+                    "asset_count": 9 if prior else 13,
                     "host_version": expected_host,
                     "index_sha256": index_sha256,
                     "manifest_sha256": manifest_sha256,
@@ -1657,13 +1657,25 @@ def verify_distribution(dist_root, repo_root):
         )
         self.assertEqual(evidence["immutable"]["deploy_id"], DEPLOY_ID)
         self.assertEqual(evidence["immutable"]["http"]["status"], "passed")
+        self.assertEqual(
+            evidence["immutable"]["http"]["result"]["asset_count"], 13
+        )
         self.assertEqual(evidence["immutable"]["browser"]["status"], "passed")
         self.assertEqual(evidence["publication"]["same_deploy_id"], DEPLOY_ID)
         self.assertEqual(evidence["publication"]["response"]["id"], DEPLOY_ID)
         self.assertEqual(evidence["production"]["url"], PRODUCTION_URL)
         self.assertEqual(evidence["production"]["http"]["status"], "passed")
+        self.assertEqual(
+            evidence["production"]["http"]["result"]["asset_count"], 13
+        )
         self.assertEqual(evidence["production"]["browser"]["status"], "passed")
         self.assertEqual(evidence["prior_good"]["deploy_id"], PRIOR_DEPLOY_ID)
+        self.assertEqual(
+            evidence["prior_good"]["immutable"]["http"]["result"][
+                "asset_count"
+            ],
+            9,
+        )
         self.assertRegex(evidence["started_at"], r"Z$")
         self.assertRegex(evidence["ended_at"], r"Z$")
         self.assertEqual(

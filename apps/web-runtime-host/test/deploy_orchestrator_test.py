@@ -421,6 +421,26 @@ class DeployOrchestratorEvidenceTest(unittest.TestCase):
             json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n",
         )
 
+    def test_success_evidence_accepts_manifest_verified_asset_count(self) -> None:
+        document = self.success_document()
+        document["immutable"]["http"]["result"]["asset_count"] = 13
+        document["production"]["http"]["result"]["asset_count"] = 13
+        self.assertIn(
+            '"asset_count":13', self.write(document, document["contract"])
+        )
+
+    def test_success_evidence_rejects_invalid_asset_count(self) -> None:
+        for asset_count in (0, -1, True):
+            with self.subTest(asset_count=asset_count):
+                document = self.success_document()
+                document["production"]["http"]["result"][
+                    "asset_count"
+                ] = asset_count
+                with self.assertRaisesRegex(
+                    deploy_orchestrator.DeployOrchestratorError, "schema"
+                ):
+                    self.write(document, document["contract"])
+
     def test_success_evidence_accepts_verified_root_redirect(self) -> None:
         document = self.success_document()
         result = document["production"]["http"]["result"]
