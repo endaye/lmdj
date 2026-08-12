@@ -823,13 +823,14 @@ done
 
 Expected: no newer allocation conflicts. If assumptions changed, revise the table and this plan before code edits.
 
-- [ ] Update manifests/assertions, regenerate identity, then regenerate Assembly lock only through:
+- [ ] Update manifests/assertions, regenerate Assembly lock, then regenerate Runtime identity only through. The identity generator validates the lock first and must fail closed while it is stale:
 
 ```bash
-python3 tools/web-runtime/generate_runtime_identity.py
 python3 scripts/version.py lock \
+  --version-file products/lmdj/version.json \
   --assembly products/lmdj/assembly.json \
   --output products/lmdj/assembly.lock.json
+python3 tools/web-runtime/generate_runtime_identity.py
 python3 scripts/version.py verify \
   --version-file products/lmdj/version.json \
   --assembly products/lmdj/assembly.json \
@@ -844,7 +845,7 @@ python3 tests/build/version_test.py
 python3 tests/conformance/module_graph_test.py
 python3 tests/conformance/version_lock_test.py
 bash tests/build/test_active_tree.sh
-scripts/architecture-portal.sh check
+npm --prefix apps/architecture-portal run check:current
 ```
 
 - [ ] Commit the complete identity/current-doc update while the snapshot is still absent:
@@ -869,11 +870,13 @@ git commit -m "fix(product): assemble Stage 7 remediation candidate"
 - Create: Docusaurus versioned docs/sidebars/diagrams/metadata for the final Product Build
 - Modify: `apps/architecture-portal/versions.json`
 
-- [ ] Require a clean tree and run the complete current Portal check:
+- [ ] Require a clean tree and run the current-source Portal preflight. The full
+  release-doc check intentionally remains unavailable until this Task creates
+  the matching immutable snapshot:
 
 ```bash
 test -z "$(git status --porcelain=v1 --untracked-files=all)"
-scripts/architecture-portal.sh check
+npm --prefix apps/architecture-portal run check:current
 ```
 
 - [ ] Freeze the exact current Product Build from a clean commit:

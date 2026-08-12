@@ -22,7 +22,7 @@ expected_modules = {
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "0.5.3",
+        "0.5.4",
         1,
         {"foundation": "0.2.0", "authoring-domain": "0.1.1"},
     ),
@@ -34,12 +34,12 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.3.4",
+        "1.3.5",
         2,
         {
             "foundation": "0.2.0",
             "authoring-domain": "0.1.1",
-            "project-io": "0.5.3",
+            "project-io": "0.5.4",
             "project-cooker": "0.2.1",
             "audio-runtime": "0.4.1",
             "provider-sdk": "1.1.1",
@@ -47,39 +47,39 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "0.1.6",
+        "0.2.0",
         1,
-        {"application-facade": "1.3.4", "audio-runtime": "0.4.1"},
+        {"application-facade": "1.3.5", "audio-runtime": "0.4.1"},
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.10",
+        "1.0.11",
         2,
-        {"application-facade": "1.3.4"},
+        {"application-facade": "1.3.5"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.1.7",
+        "1.1.8",
         2,
-        {"application-facade": "1.3.4"},
+        {"application-facade": "1.3.5"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.8",
+        "1.0.9",
         1,
-        {"application-facade": "1.3.4", "audio-runtime": "0.4.1"},
+        {"application-facade": "1.3.5", "audio-runtime": "0.4.1"},
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.2.6",
+        "1.2.7",
         1,
-        {"web-runtime-platform": "0.1.6"},
+        {"web-runtime-platform": "0.2.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.0.6",
+        "1.1.0",
         1,
-        {"web-runtime-platform": "0.1.6"},
+        {"web-runtime-platform": "0.2.0"},
     ),
 }
 for relative, (
@@ -98,11 +98,11 @@ for relative, (
     assert manifest["dependencies"] == dependencies
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 16, 9)
-assert str(version) == "1.0.16.9"
-assert version.product_tag() == "lmdj-v1.0.16.9"
+assert version == ProductVersion(1, 0, 18, 0)
+assert str(version) == "1.0.18.0"
+assert version.product_tag() == "lmdj-v1.0.18.0"
 assert version.display("canary", "a" * 40) == (
-    "1.0.16.9 · canary · gaaaaaaaa"
+    "1.0.18.0 · canary · gaaaaaaaa"
 )
 
 for invalid in (
@@ -132,7 +132,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.16.9\n"
+assert tag_name.stdout == "lmdj-v1.0.18.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -152,7 +152,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.16.9 · canary · gaaaaaaaa\n"
+assert current.stdout == "1.0.18.0 · canary · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -168,7 +168,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.16.9)\n"
+assert verified.stdout == "version verification: PASS (1.0.18.0)\n"
 assert verified.stderr == ""
 
 
@@ -182,7 +182,7 @@ def write_json(path: Path, value: dict) -> None:
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
 tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
-assert assembly["product"] == {"id": "lmdj", "version": "1.0.16.9"}
+assert assembly["product"] == {"id": "lmdj", "version": "1.0.18.0"}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
@@ -263,7 +263,7 @@ compiled_product = re.search(
     compiled_source,
 )
 assert compiled_product is not None
-assert compiled_product.group(1) == "1.0.16.9"
+assert compiled_product.group(1) == "1.0.18.0"
 compiled_components = re.findall(
     r'CompiledComponent\{"([^"]+)",\s*"([^"]+)"\}',
     compiled_source,
@@ -437,6 +437,6 @@ cmake_source = (
     repo_root / "packages/web-runtime-platform/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
-assert '"product_build":"1.0.16.9"' not in cmake_source
+assert '"product_build":"1.0.18.0"' not in cmake_source
 
 print("product version tests: PASS")

@@ -92,9 +92,9 @@ function fixture({
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
-      hostVersion: "1.2.6",
-      platformVersion: "0.1.6",
-      productBuild: "1.0.16.9",
+      hostVersion: "1.2.7",
+      platformVersion: "0.2.0",
+      productBuild: "1.0.18.0",
       protocolVersion: 1,
     },
     inputConfiguration: {},
@@ -118,9 +118,9 @@ function fixture({
       transport,
       verifyManifest: async () => ({
         host_id: "web-runtime-host",
-        host_version: "1.2.6",
-        platform_version: "0.1.6",
-        product_build: "1.0.16.9",
+        host_version: "1.2.7",
+        platform_version: "0.2.0",
+        product_build: "1.0.18.0",
         protocol_version: 1,
       }),
     },
@@ -183,7 +183,7 @@ test("reports the exact assembly identity and resolved browser capabilities", as
     webMidi: true,
   });
   assert.equal(session.diagnostics().host_id, "web-runtime-host");
-  assert.equal(session.diagnostics().platform_version, "0.1.6");
+  assert.equal(session.diagnostics().platform_version, "0.2.0");
 });
 
 test("accepts only the declared compatible Host inventory in packaged manifests", async () => {
@@ -198,9 +198,9 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
   const assemblyIdentity = {
     distributionContract: "lmdj.creator-web.distribution.v1",
     hostId: "creator-web",
-    hostVersion: "1.0.6",
-    platformVersion: "0.1.6",
-    productBuild: "1.0.16.9",
+    hostVersion: "1.1.0",
+    platformVersion: "0.2.0",
+    productBuild: "1.0.18.0",
     protocolVersion: 1,
   };
   const manifestSource = {
@@ -212,7 +212,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
       emsdk_revision: "b".repeat(40),
       emsdk_tag: "6.0.5",
     },
-    compatibleHosts: [{host_id: "web-runtime-host", host_version: "1.2.6"}],
+    compatibleHosts: [{host_id: "web-runtime-host", host_version: "1.2.7"}],
     expectedAssets: [{
       prefix: "assets/main.", suffix: ".js", role: "host_main",
     }],

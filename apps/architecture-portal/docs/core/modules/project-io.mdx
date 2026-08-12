@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 事务式保存/加载 Project Truth、导入/导出 portable Project Bundle 并维护 Take Journal；不 Cook、渲染或拥有 Host UI。
 ## 2. 当前实现状态
-Project Store、Journal、streaming Bundle parser/packer 与 crash-safe publication 已实现。
+Project I/O `0.5.4` 的 Store、Journal、streaming Bundle parser/packer 与 crash-safe publication 已实现；Web directory publication 绑定发起 platform identity，Native publication 复核目标 link count，并集中映射 private storage status。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain；平台适配不能改变领域语义。
 ## 4. 架构与数据流
@@ -29,7 +29,7 @@ Facade 提交 Project 或 Bundle stream；Project I/O 先完整验证并 staged�
 ## 7. 产品使用方
 Application Facade 使用；Host 不直接解析 bundle。
 ## 8. 测试与证据
-Project store、Bundle parser/round trip/publication、Take journal、fault matrix 与 storage platform contract 测试。
+Project store、Bundle parser/round trip/publication、Take journal、fault matrix、distinct-platform publication ownership、Native link-count 与 storage platform contract 测试。
 ## 9. 限制与下一门禁
 云同步和协同冲突策略未批准，不能从本地存储能力推断。
 ## 10. 版本身份

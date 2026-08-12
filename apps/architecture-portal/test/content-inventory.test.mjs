@@ -99,7 +99,7 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   assert.match(capability, /Web Runtime Lab[^。]+独立实验工具/);
 
   const proof = await readFile(path.join(docsRoot, 'operations/testing-and-proof.mdx'), 'utf8');
-  assert.match(proof, /Product Build `1\.0\.16\.9`/);
+  assert.match(proof, /Product Build `1\.0\.18\.0`/);
   assert.match(proof, /Task 12[^\n]+完成[^\n]+冻结/);
   assert.match(proof, /docs\/quality\/2026-08-11-web-runtime-hardening-acceptance\.md/);
   assert.match(proof, /docs\/quality\/2026-08-12-opfs-publication-recovery-acceptance\.md/);

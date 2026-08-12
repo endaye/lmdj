@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 提供 Host 唯一 Core 入口并编排模块；不承载 Host UI、协议或产品特例。
 ## 2. 当前实现状态
-Application、Assembly Loader、C API、动态加载及 streaming Project Bundle import/export 已实现。
+Application Facade `1.3.5` 的 Application、Assembly Loader、C API、动态加载及 streaming Project Bundle import/export 已实现；版本变化只传播精确 Project I/O `0.5.4` 依赖。
 ## 3. 所有权与依赖
 依赖全部六个下层 Module；Native/CLI/MCP Host 只依赖本 Facade，浏览器 Host 只依赖封装本 Facade 的 Web Runtime Platform。
 ## 4. 架构与数据流

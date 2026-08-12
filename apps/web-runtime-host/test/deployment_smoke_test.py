@@ -111,7 +111,7 @@ class SmokeFixture:
             "host_id": "lmdj-web-runtime-host",
             "host_version": "1.1.2",
             "manifest_version": 1,
-            "platform_version": "0.1.6",
+            "platform_version": "0.2.0",
             "product_build": "1.0.15.2",
             "protocol_version": 1,
             "resource_limits": {},

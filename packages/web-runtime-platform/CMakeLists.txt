@@ -339,6 +339,11 @@ if(BUILD_TESTING AND NOT EMSCRIPTEN)
       lmdj::foundation
       lmdj_picosha2
   )
+  target_compile_definitions(
+    lmdj_web_manifest_gate_tests
+    PRIVATE
+      LMDJ_WEB_RUNTIME_IDENTITY_PATH="${lmdj_web_runtime_identity_path}"
+  )
   lmdj_target_warnings(lmdj_web_manifest_gate_tests)
   lmdj_target_sanitizers(lmdj_web_manifest_gate_tests)
   lmdj_add_test(

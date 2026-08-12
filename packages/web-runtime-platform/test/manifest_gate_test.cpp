@@ -22,9 +22,13 @@ using lmdj::web_runtime::ManifestExpectation;
 using lmdj::web_runtime::ManifestGate;
 using lmdj::web_runtime::ManifestGateStatus;
 
+#if !defined(LMDJ_WEB_RUNTIME_IDENTITY_PATH)
+#error "Web Runtime identity fixture path is required"
+#endif
+
 const nlohmann::json& runtime_identity() {
   static const auto identity = [] {
-    std::ifstream input("products/lmdj/generated/web-runtime-identity.json");
+    std::ifstream input(LMDJ_WEB_RUNTIME_IDENTITY_PATH);
     if (!input) {
       throw std::runtime_error("generated Web Runtime identity is unavailable");
     }
@@ -257,7 +261,7 @@ void test_every_identity_schema_and_inventory_drift_fails_closed() {
   changed["manifest_version"] = 2;
   invalid.push_back(changed);
   changed = manifest_json();
-  changed["platform_version"] = "0.2.0";
+  changed["platform_version"] = "9.9.9";
   invalid.push_back(changed);
   changed = manifest_json();
   changed["host_id"] = "creator-web";

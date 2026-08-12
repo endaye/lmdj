@@ -769,8 +769,8 @@ def host_boundary_and_identity(executable: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 16,
-        "patch": 9,
+        "build": 18,
+        "patch": 0,
     }
     manifest = json.loads(
         (REPO_ROOT / "apps/core-cli/module.json").read_text(
@@ -780,9 +780,9 @@ def host_boundary_and_identity(executable: Path) -> None:
     assert manifest == {
         "contract": "lmdj.module.v1",
         "module": "core-cli",
-        "version": "1.0.10",
+        "version": "1.0.11",
         "api_version": 2,
-        "dependencies": {"application-facade": "1.3.4"},
+        "dependencies": {"application-facade": "1.3.5"},
     }
 
     root_cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

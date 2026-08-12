@@ -129,10 +129,10 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       state: "audio-suspended",
       error_code: null,
       error_details: {},
-      product_build: "1.0.16.9",
+      product_build: "1.0.18.0",
       host_id: "creator-web",
-      host_version: "1.0.6",
-      platform_version: "0.1.6",
+      host_version: "1.1.0",
+      platform_version: "0.2.0",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

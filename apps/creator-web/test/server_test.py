@@ -47,8 +47,8 @@ class CreatorServerTest(unittest.TestCase):
             "product": "lmdj",
             "milestone": 1,
             "minor": 0,
-            "build": 16,
-            "patch": 9,
+            "build": 18,
+            "patch": 0,
         }
         lock = json.loads(
             (REPO_ROOT / "tools/web-runtime/emscripten.lock.json").read_text(

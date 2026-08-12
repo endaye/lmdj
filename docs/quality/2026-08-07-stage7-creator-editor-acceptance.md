@@ -18,13 +18,15 @@ local evidence proved.
 
 As of the live Git check on 2026-08-13, `origin/main` is
 `d1d8bb6a629b6e05b86b3c8843870ef27edcfe5c`. The remediation branch
-`fix/stage7-review-remediation` is unpublished and has not yet allocated its
-final Product Assembly identity. Creator Web clean-source Proof passed at
+`fix/stage7-review-remediation` is unpublished and allocates Product Build
+`1.0.18.0`, Creator Web `1.1.0`, Web Runtime Platform `0.2.0`, Web Runtime Host
+`1.2.7`, Project I/O `0.5.4`, and Application Facade `1.3.5`. Creator Web
+clean-source Proof passed at
 `f4722de` plus the preceding remediation commits: Chromium reported 13 passed
 and 1 intentionally skipped physical-MIDI row; the WebKit capability boundary
 reported 1 passed. This branch-local candidate evidence is not merged-main Proof.
-The complete multi-product candidate audit and immutable snapshot are still later
-Tasks.
+The complete multi-product candidate audit and immutable `1.0.18.0` snapshot
+are still later Tasks.
 
 Manual canary is `open — awaiting human execution`. Physical/hearing/Safari/
 iPadOS/MIDI observations remain `deferred / unverified`; no automated result is

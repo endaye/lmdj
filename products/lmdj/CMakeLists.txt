@@ -50,13 +50,13 @@ if(TARGET lmdj_web_runtime_host)
     lmdj_web_runtime_host
     PRIVATE
       LMDJ_WEB_PRODUCT_BUILD="${lmdj_web_product_build}"
-      LMDJ_WEB_PLATFORM_VERSION="0.1.6"
+      LMDJ_WEB_PLATFORM_VERSION="0.2.0"
       LMDJ_WEB_CREATOR_DISTRIBUTION_CONTRACT="lmdj.creator-web.distribution.v1"
       LMDJ_WEB_CREATOR_HOST_ID="creator-web"
-      LMDJ_WEB_CREATOR_HOST_VERSION="1.0.6"
+      LMDJ_WEB_CREATOR_HOST_VERSION="1.1.0"
       LMDJ_WEB_DIAGNOSTIC_DISTRIBUTION_CONTRACT="lmdj.web-runtime-host.distribution.v1"
       LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"
-      LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.6"
+      LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.7"
   )
   target_link_libraries(
     lmdj_web_runtime_host
