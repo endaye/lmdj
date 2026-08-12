@@ -2,6 +2,7 @@
   "emsdk_tag": "6.0.5",
   "emsdk_revision": "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190",
   "emscripten_releases_revision": "dbd755b5da399329c2576f6e3dfa7f419f5d8409",
+  "emcc_version": "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)",
   "initial_memory": 536870912,
   "allow_memory_growth": false,
   "node": "22",

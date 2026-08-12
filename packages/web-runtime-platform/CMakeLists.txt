@@ -1,3 +1,28 @@
+set(
+  lmdj_web_runtime_identity_path
+  "${CMAKE_SOURCE_DIR}/products/lmdj/generated/web-runtime-identity.json"
+)
+set_property(
+  DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+  "${lmdj_web_runtime_identity_path}"
+)
+file(READ "${lmdj_web_runtime_identity_path}" lmdj_web_runtime_identity)
+string(JSON lmdj_web_product_build GET "${lmdj_web_runtime_identity}" product_build)
+string(JSON lmdj_web_platform_version GET "${lmdj_web_runtime_identity}" platform version)
+string(JSON lmdj_web_protocol_version GET "${lmdj_web_runtime_identity}" protocol_version)
+string(JSON lmdj_web_heap_bytes GET "${lmdj_web_runtime_identity}" heap_bytes)
+string(JSON lmdj_web_host_contract GET "${lmdj_web_runtime_identity}" hosts web-runtime-host distribution_contract)
+string(JSON lmdj_web_host_id GET "${lmdj_web_runtime_identity}" hosts web-runtime-host id)
+string(JSON lmdj_web_host_version GET "${lmdj_web_runtime_identity}" hosts web-runtime-host version)
+string(JSON lmdj_web_emcc_version GET "${lmdj_web_runtime_identity}" emscripten emcc_version)
+string(JSON lmdj_web_releases_revision GET "${lmdj_web_runtime_identity}" emscripten emscripten_releases_revision)
+string(JSON lmdj_web_emsdk_revision GET "${lmdj_web_runtime_identity}" emscripten emsdk_revision)
+string(JSON lmdj_web_emsdk_tag GET "${lmdj_web_runtime_identity}" emscripten emsdk_tag)
+string(JSON lmdj_web_limit_bank GET "${lmdj_web_runtime_identity}" resource_limits decoded_float_pcm_bytes_per_bank)
+string(JSON lmdj_web_limit_total GET "${lmdj_web_runtime_identity}" resource_limits decoded_float_pcm_bytes_total)
+string(JSON lmdj_web_limit_frames GET "${lmdj_web_runtime_identity}" resource_limits decoded_frames_per_pad)
+string(JSON lmdj_web_limit_import GET "${lmdj_web_runtime_identity}" resource_limits imported_wav_bytes)
+
 add_library(
   lmdj_web_runtime_control
   STATIC
@@ -78,7 +103,7 @@ if(EMSCRIPTEN)
     )
     set(
       LMDJ_WEB_CONFORMANCE_MANIFEST
-      "{\"assets\":[{\"bytes\":48,\"path\":\"assets/diagnostic-project.0000000000000000000000000000000000000000000000000000000000000000.mjs\",\"role\":\"host_module\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"bytes\":49,\"path\":\"assets/input-adapters.1111111111111111111111111111111111111111111111111111111111111111.mjs\",\"role\":\"host_module\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"bytes\":50,\"path\":\"assets/main.2222222222222222222222222222222222222222222222222222222222222222.mjs\",\"role\":\"host_main\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"bytes\":51,\"path\":\"assets/preflight.3333333333333333333333333333333333333333333333333333333333333333.mjs\",\"role\":\"host_module\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"bytes\":52,\"path\":\"assets/protocol.4444444444444444444444444444444444444444444444444444444444444444.mjs\",\"role\":\"host_module\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"},{\"bytes\":53,\"path\":\"assets/runtime.5555555555555555555555555555555555555555555555555555555555555555.js\",\"role\":\"runtime_script\",\"sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\"},{\"bytes\":54,\"path\":\"assets/runtime.6666666666666666666666666666666666666666666666666666666666666666.wasm\",\"role\":\"runtime_wasm\",\"sha256\":\"6666666666666666666666666666666666666666666666666666666666666666\"},{\"bytes\":55,\"path\":\"assets/state-machine.7777777777777777777777777777777777777777777777777777777777777777.mjs\",\"role\":\"host_module\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"},{\"bytes\":56,\"path\":\"assets/styles.8888888888888888888888888888888888888888888888888888888888888888.css\",\"role\":\"host_style\",\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\"}],\"distribution_contract\":\"lmdj.web-runtime-host.distribution.v1\",\"emscripten\":{\"emcc_version\":\"emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) 6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)\",\"emscripten_releases_revision\":\"dbd755b5da399329c2576f6e3dfa7f419f5d8409\",\"emsdk_revision\":\"dfb9d1a46c3bb8f52e1e6324be23123b9d73c190\",\"emsdk_tag\":\"6.0.5\"},\"heap_bytes\":536870912,\"host_id\":\"web-runtime-host\",\"host_version\":\"1.2.6\",\"manifest_version\":1,\"platform_version\":\"0.1.6\",\"product_build\":\"1.0.16.9\",\"protocol_version\":1,\"resource_limits\":{\"decoded_float_pcm_bytes_per_bank\":67108864,\"decoded_float_pcm_bytes_total\":134217728,\"decoded_frames_per_pad\":240000,\"imported_wav_bytes\":1048576}}"
+      "{\"assets\":[{\"bytes\":48,\"path\":\"assets/diagnostic-project.0000000000000000000000000000000000000000000000000000000000000000.mjs\",\"role\":\"host_module\",\"sha256\":\"0000000000000000000000000000000000000000000000000000000000000000\"},{\"bytes\":49,\"path\":\"assets/input-adapters.1111111111111111111111111111111111111111111111111111111111111111.mjs\",\"role\":\"host_module\",\"sha256\":\"1111111111111111111111111111111111111111111111111111111111111111\"},{\"bytes\":50,\"path\":\"assets/main.2222222222222222222222222222222222222222222222222222222222222222.mjs\",\"role\":\"host_main\",\"sha256\":\"2222222222222222222222222222222222222222222222222222222222222222\"},{\"bytes\":51,\"path\":\"assets/preflight.3333333333333333333333333333333333333333333333333333333333333333.mjs\",\"role\":\"host_module\",\"sha256\":\"3333333333333333333333333333333333333333333333333333333333333333\"},{\"bytes\":52,\"path\":\"assets/protocol.4444444444444444444444444444444444444444444444444444444444444444.mjs\",\"role\":\"host_module\",\"sha256\":\"4444444444444444444444444444444444444444444444444444444444444444\"},{\"bytes\":53,\"path\":\"assets/runtime.5555555555555555555555555555555555555555555555555555555555555555.js\",\"role\":\"runtime_script\",\"sha256\":\"5555555555555555555555555555555555555555555555555555555555555555\"},{\"bytes\":54,\"path\":\"assets/runtime.6666666666666666666666666666666666666666666666666666666666666666.wasm\",\"role\":\"runtime_wasm\",\"sha256\":\"6666666666666666666666666666666666666666666666666666666666666666\"},{\"bytes\":55,\"path\":\"assets/state-machine.7777777777777777777777777777777777777777777777777777777777777777.mjs\",\"role\":\"host_module\",\"sha256\":\"7777777777777777777777777777777777777777777777777777777777777777\"},{\"bytes\":56,\"path\":\"assets/styles.8888888888888888888888888888888888888888888888888888888888888888.css\",\"role\":\"host_style\",\"sha256\":\"8888888888888888888888888888888888888888888888888888888888888888\"}],\"distribution_contract\":\"${lmdj_web_host_contract}\",\"emscripten\":{\"emcc_version\":\"${lmdj_web_emcc_version}\",\"emscripten_releases_revision\":\"${lmdj_web_releases_revision}\",\"emsdk_revision\":\"${lmdj_web_emsdk_revision}\",\"emsdk_tag\":\"${lmdj_web_emsdk_tag}\"},\"heap_bytes\":${lmdj_web_heap_bytes},\"host_id\":\"${lmdj_web_host_id}\",\"host_version\":\"${lmdj_web_host_version}\",\"manifest_version\":1,\"platform_version\":\"${lmdj_web_platform_version}\",\"product_build\":\"${lmdj_web_product_build}\",\"protocol_version\":${lmdj_web_protocol_version},\"resource_limits\":{\"decoded_float_pcm_bytes_per_bank\":${lmdj_web_limit_bank},\"decoded_float_pcm_bytes_total\":${lmdj_web_limit_total},\"decoded_frames_per_pad\":${lmdj_web_limit_frames},\"imported_wav_bytes\":${lmdj_web_limit_import}}}"
     )
     string(
       REPLACE

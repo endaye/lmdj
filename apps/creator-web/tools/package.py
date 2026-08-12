@@ -15,46 +15,11 @@ import sys
 import tempfile
 
 
-HOST_ID = "creator-web"
-HOST_VERSION = "1.0.6"
-PLATFORM_VERSION = "0.1.6"
-COMPATIBLE_HOSTS = [
-    {"host_id": "web-runtime-host", "host_version": "1.2.6"},
-]
-PROTOCOL_VERSION = 1
-HEAP_BYTES = 536_870_912
-DISTRIBUTION_CONTRACT = "lmdj.creator-web.distribution.v1"
-EMCC_VERSION = (
-    "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) "
-    "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)"
-)
-RESOURCE_LIMITS = {
-    "imported_wav_bytes": 1_048_576,
-    "decoded_frames_per_pad": 240_000,
-    "decoded_float_pcm_bytes_per_bank": 67_108_864,
-    "decoded_float_pcm_bytes_total": 134_217_728,
-}
-TOOLCHAIN_KEYS = {
-    "emsdk_tag",
-    "emsdk_revision",
-    "emscripten_releases_revision",
-    "initial_memory",
-    "allow_memory_growth",
-    "node",
-    "playwright",
-    "linker_flags",
-}
 MANIFEST_TOOLCHAIN_KEYS = (
     "emsdk_tag",
     "emsdk_revision",
     "emscripten_releases_revision",
     "emcc_version",
-)
-EXPECTED_ASSETS = (
-    ("assets/main.", ".js", "host_main"),
-    ("assets/runtime.", ".js", "runtime_script"),
-    ("assets/runtime.", ".wasm", "runtime_wasm"),
-    ("assets/styles.", ".css", "host_style"),
 )
 HASHED_ASSET_PATTERN = re.compile(
     r"^assets/[a-z0-9-]+\.[0-9a-f]{64}\.(?:css|js|mjs|wasm)$"
@@ -128,19 +93,37 @@ def require_clean_source(repo_root: Path) -> None:
         raise PackageError("Creator package requires a clean Git source tree")
 
 
+def load_runtime_identity(repo_root: Path) -> dict:
+    identity = read_json(
+        repo_root / "products/lmdj/generated/web-runtime-identity.json",
+        "generated Runtime identity",
+    )
+    try:
+        host = identity["hosts"]["creator-web"]
+        if (
+            identity["platform"]["id"] != "web-runtime-platform"
+            or host["id"] != "creator-web"
+            or not isinstance(host["expected_assets"], list)
+        ):
+            raise KeyError
+    except (KeyError, TypeError) as error:
+        raise PackageError("generated Runtime identity is invalid") from error
+    return identity
+
+
 def validate_identity(repo_root: Path, identity_path: Path) -> dict:
-    lock = read_json(repo_root / "tools/web-runtime/emscripten.lock.json", "toolchain lock")
+    runtime_identity = load_runtime_identity(repo_root)
+    expected = runtime_identity["emscripten"]
     identity = read_json(identity_path, "toolchain identity")
-    if set(lock) != TOOLCHAIN_KEYS:
-        raise PackageError("toolchain lock keys are invalid")
-    if set(identity) != TOOLCHAIN_KEYS | {"emcc_version"}:
+    if set(identity) != set(expected):
         raise PackageError("toolchain identity keys are invalid")
-    for key in TOOLCHAIN_KEYS:
-        if type(identity[key]) is not type(lock[key]) or identity[key] != lock[key]:
+    for key, expected_value in expected.items():
+        if type(identity[key]) is not type(expected_value) or identity[key] != expected_value:
             raise PackageError(f"toolchain identity mismatch for {key}")
-    if identity["emcc_version"] != EMCC_VERSION:
-        raise PackageError("toolchain identity mismatch for emcc_version")
-    if identity["initial_memory"] != HEAP_BYTES or identity["allow_memory_growth"] is not False:
+    if (
+        identity["initial_memory"] != runtime_identity["heap_bytes"]
+        or identity["allow_memory_growth"] is not False
+    ):
         raise PackageError("toolchain identity mismatch for fixed heap")
     return identity
 
@@ -217,10 +200,14 @@ def build_distribution(
     identity_path = identity_path.expanduser().resolve(strict=True)
     require_clean_source(repo_root)
     dist_root, initial_target = safe_dist_root(dist_root, repo_root)
+    runtime_identity = load_runtime_identity(repo_root)
+    host_identity = runtime_identity["hosts"]["creator-web"]
     identity = validate_identity(repo_root, identity_path)
     active_product_build = product_build(
         read_json(repo_root / "products/lmdj/version.json", "Product version")
     )
+    if active_product_build != runtime_identity["product_build"]:
+        raise PackageError("generated Runtime identity is stale for Product Build")
 
     source_index = require_file(ui_root / "index.html", "Vite index").read_text(
         encoding="utf-8"
@@ -264,17 +251,17 @@ def build_distribution(
         entries = [main_entry, runtime_entry, wasm_entry, style_entry]
         manifest = {
             "assets": entries,
-            "compatible_hosts": COMPATIBLE_HOSTS,
-            "distribution_contract": DISTRIBUTION_CONTRACT,
+            "compatible_hosts": host_identity["compatible_hosts"],
+            "distribution_contract": host_identity["distribution_contract"],
             "emscripten": {key: identity[key] for key in MANIFEST_TOOLCHAIN_KEYS},
-            "heap_bytes": HEAP_BYTES,
-            "host_id": HOST_ID,
-            "host_version": HOST_VERSION,
+            "heap_bytes": runtime_identity["heap_bytes"],
+            "host_id": host_identity["id"],
+            "host_version": host_identity["version"],
             "manifest_version": 1,
-            "platform_version": PLATFORM_VERSION,
+            "platform_version": runtime_identity["platform"]["version"],
             "product_build": active_product_build,
-            "protocol_version": PROTOCOL_VERSION,
-            "resource_limits": RESOURCE_LIMITS,
+            "protocol_version": runtime_identity["protocol_version"],
+            "resource_limits": runtime_identity["resource_limits"],
         }
         manifest_bytes = canonical_json(manifest)
         (staged / "host-manifest.json").write_bytes(manifest_bytes)
@@ -292,10 +279,10 @@ def build_distribution(
             f'\n    <meta name="lmdj-host-manifest-sha256" content="{manifest_digest}">'
             '\n    <meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
             f'\n    <meta name="lmdj-product-build" content="{active_product_build}">'
-            f'\n    <meta name="lmdj-host-id" content="{HOST_ID}">'
-            f'\n    <meta name="lmdj-host-version" content="{HOST_VERSION}">'
-            f'\n    <meta name="lmdj-web-runtime-platform-version" content="{PLATFORM_VERSION}">'
-            f'\n    <meta name="lmdj-host-protocol-version" content="{PROTOCOL_VERSION}">'
+            f'\n    <meta name="lmdj-host-id" content="{host_identity["id"]}">'
+            f'\n    <meta name="lmdj-host-version" content="{host_identity["version"]}">'
+            f'\n    <meta name="lmdj-web-runtime-platform-version" content="{runtime_identity["platform"]["version"]}">'
+            f'\n    <meta name="lmdj-host-protocol-version" content="{runtime_identity["protocol_version"]}">'
         )
         index = index[:charset.end()] + metadata + index[charset.end():]
         (staged / "index.html").write_text(index, encoding="utf-8", newline="\n")
@@ -367,34 +354,39 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     }:
         raise DistributionError("manifest root schema is invalid")
     version = read_json(repo_root / "products/lmdj/version.json", "Product version")
-    lock = read_json(repo_root / "tools/web-runtime/emscripten.lock.json", "toolchain lock")
+    runtime_identity = load_runtime_identity(repo_root)
+    host_identity = runtime_identity["hosts"]["creator-web"]
+    expected_assets = host_identity["expected_assets"]
+    expected_emscripten = {
+        key: runtime_identity["emscripten"][key]
+        for key in MANIFEST_TOOLCHAIN_KEYS
+    }
     if (
-        manifest["distribution_contract"] != DISTRIBUTION_CONTRACT
+        manifest["distribution_contract"] != host_identity["distribution_contract"]
         or manifest["manifest_version"] != 1
         or manifest["product_build"] != product_build(version)
-        or manifest["host_id"] != HOST_ID
-        or manifest["host_version"] != HOST_VERSION
-        or manifest["platform_version"] != PLATFORM_VERSION
-        or manifest["compatible_hosts"] != COMPATIBLE_HOSTS
-        or manifest["protocol_version"] != PROTOCOL_VERSION
-        or manifest["heap_bytes"] != HEAP_BYTES
-        or manifest["resource_limits"] != RESOURCE_LIMITS
-        or manifest["emscripten"] != {
-            "emcc_version": EMCC_VERSION,
-            "emscripten_releases_revision": lock["emscripten_releases_revision"],
-            "emsdk_revision": lock["emsdk_revision"],
-            "emsdk_tag": lock["emsdk_tag"],
-        }
+        or manifest["product_build"] != runtime_identity["product_build"]
+        or manifest["host_id"] != host_identity["id"]
+        or manifest["host_version"] != host_identity["version"]
+        or manifest["platform_version"] != runtime_identity["platform"]["version"]
+        or manifest["compatible_hosts"] != host_identity["compatible_hosts"]
+        or manifest["protocol_version"] != runtime_identity["protocol_version"]
+        or manifest["heap_bytes"] != runtime_identity["heap_bytes"]
+        or manifest["resource_limits"] != runtime_identity["resource_limits"]
+        or manifest["emscripten"] != expected_emscripten
     ):
         raise DistributionError("manifest identity is invalid")
     assets = manifest["assets"]
-    if not isinstance(assets, list) or len(assets) != len(EXPECTED_ASSETS):
+    if not isinstance(assets, list) or len(assets) != len(expected_assets):
         raise DistributionError("manifest production inventory is invalid")
     expected_files = {"index.html", "host-manifest.json"}
-    for entry, (prefix, suffix, role) in zip(assets, EXPECTED_ASSETS, strict=True):
+    for entry, expected_asset in zip(assets, expected_assets, strict=True):
         if not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256", "role"}:
             raise DistributionError("manifest asset entry is invalid")
         relative = entry["path"]
+        prefix = expected_asset["prefix"]
+        suffix = expected_asset["suffix"]
+        role = expected_asset["role"]
         if (
             not isinstance(relative, str)
             or HASHED_ASSET_PATTERN.fullmatch(relative) is None
@@ -435,10 +427,10 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
         f'<meta name="lmdj-host-manifest-sha256" content="{digest}">',
         '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">',
         f'<meta name="lmdj-product-build" content="{manifest["product_build"]}">',
-        f'<meta name="lmdj-host-id" content="{HOST_ID}">',
-        f'<meta name="lmdj-host-version" content="{HOST_VERSION}">',
-        f'<meta name="lmdj-web-runtime-platform-version" content="{PLATFORM_VERSION}">',
-        f'<meta name="lmdj-host-protocol-version" content="{PROTOCOL_VERSION}">',
+        f'<meta name="lmdj-host-id" content="{host_identity["id"]}">',
+        f'<meta name="lmdj-host-version" content="{host_identity["version"]}">',
+        f'<meta name="lmdj-web-runtime-platform-version" content="{runtime_identity["platform"]["version"]}">',
+        f'<meta name="lmdj-host-protocol-version" content="{runtime_identity["protocol_version"]}">',
     ):
         if index.count(exact) != 1:
             raise DistributionError("index identity metadata mismatch")

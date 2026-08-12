@@ -34,6 +34,10 @@ EXPECTED_LOCK = {
     "emsdk_tag": "6.0.5",
     "emsdk_revision": "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190",
     "emscripten_releases_revision": "dbd755b5da399329c2576f6e3dfa7f419f5d8409",
+    "emcc_version": (
+        "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) "
+        "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)"
+    ),
     "initial_memory": 536870912,
     "allow_memory_growth": False,
     "node": "22",
@@ -83,28 +87,26 @@ def assert_lock_contract(verifier) -> None:
         del mutated[key]
         must_reject(f"missing {key}", mutated)
 
-    for key, value in (
-        ("emsdk_tag", "6.0.4"),
-        ("emsdk_revision", "0" * 40),
-        ("emscripten_releases_revision", "f" * 40),
-        ("initial_memory", 536_870_911),
-        ("allow_memory_growth", True),
-        ("node", "23"),
-        ("playwright", "1.62.0"),
-    ):
+    invalid_values = (
+        ("emsdk_tag", ""),
+        ("emsdk_revision", None),
+        ("emscripten_releases_revision", 1),
+        ("emcc_version", ""),
+        ("initial_memory", 0),
+        ("allow_memory_growth", "false"),
+        ("node", ""),
+        ("playwright", None),
+        ("linker_flags", []),
+    )
+    for key, value in invalid_values:
         mutated = copy.deepcopy(EXPECTED_LOCK)
         mutated[key] = value
-        must_reject(f"wrong {key}", mutated)
-
-    for flag in REQUIRED_LINKER_FLAGS:
-        mutated = copy.deepcopy(EXPECTED_LOCK)
-        mutated["linker_flags"].remove(flag)
-        must_reject(f"missing flag {flag}", mutated)
+        must_reject(f"invalid {key}", mutated)
 
     mutated = copy.deepcopy(EXPECTED_LOCK)
     mutated["unexpected"] = True
     must_reject("unexpected key", mutated)
-    assert len(rejected) == len(EXPECTED_LOCK) + 7 + len(REQUIRED_LINKER_FLAGS) + 1
+    assert len(rejected) == len(EXPECTED_LOCK) + len(invalid_values) + 1
 
 
 def assert_browser_package() -> None:

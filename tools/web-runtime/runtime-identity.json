@@ -1,0 +1,121 @@
+{
+  "heap_bytes": 536870912,
+  "hosts": {
+    "creator-web": {
+      "compatible_hosts": [
+        "web-runtime-host"
+      ],
+      "distribution_contract": "lmdj.creator-web.distribution.v1",
+      "expected_assets": [
+        {
+          "prefix": "assets/main.",
+          "role": "host_main",
+          "suffix": ".js"
+        },
+        {
+          "prefix": "assets/runtime.",
+          "role": "runtime_script",
+          "suffix": ".js"
+        },
+        {
+          "prefix": "assets/runtime.",
+          "role": "runtime_wasm",
+          "suffix": ".wasm"
+        },
+        {
+          "prefix": "assets/styles.",
+          "role": "host_style",
+          "suffix": ".css"
+        }
+      ]
+    },
+    "web-runtime-host": {
+      "compatible_hosts": [],
+      "distribution_contract": "lmdj.web-runtime-host.distribution.v1",
+      "expected_assets": [
+        {
+          "prefix": "assets/diagnostic-client.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/diagnostic-project.",
+          "role": "host_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/input-adapters.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/integrity.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/main.",
+          "role": "host_main",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/preflight.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/project-bundle-reader.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/protocol.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/runtime.",
+          "role": "runtime_script",
+          "suffix": ".js"
+        },
+        {
+          "prefix": "assets/runtime.",
+          "role": "runtime_wasm",
+          "suffix": ".wasm"
+        },
+        {
+          "prefix": "assets/runtime-loader.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/runtime-session.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/state-machine.",
+          "role": "platform_module",
+          "suffix": ".mjs"
+        },
+        {
+          "prefix": "assets/styles.",
+          "role": "host_style",
+          "suffix": ".css"
+        },
+        {
+          "prefix": "assets/web-runtime-identity.",
+          "role": "product_identity",
+          "suffix": ".mjs"
+        }
+      ]
+    }
+  },
+  "protocol_version": 1,
+  "resource_limits": {
+    "decoded_float_pcm_bytes_per_bank": 67108864,
+    "decoded_float_pcm_bytes_total": 134217728,
+    "decoded_frames_per_pad": 240000,
+    "imported_wav_bytes": 1048576
+  }
+}

@@ -4,94 +4,9 @@ import {createUserGestureToken} from
   "../../../packages/web-runtime-platform/web/input_adapters.mjs";
 import {createRuntimeSession} from
   "../../../packages/web-runtime-platform/web/runtime_session.mjs";
+import {WEB_RUNTIME_IDENTITY} from
+  "../../../products/lmdj/generated/web-runtime-identity.mjs";
 import {createDiagnosticProjectCoordinator} from "./diagnostic_project.mjs";
-
-
-const ASSEMBLY_IDENTITY = Object.freeze({
-  distributionContract: "lmdj.web-runtime-host.distribution.v1",
-  hostId: "web-runtime-host",
-  hostVersion: "1.2.6",
-  platformVersion: "0.1.6",
-  productBuild: "1.0.16.9",
-  protocolVersion: 1,
-});
-const MANIFEST_SOURCE = Object.freeze({
-  heapBytes: 536_870_912,
-  resourceLimits: Object.freeze({
-    decoded_float_pcm_bytes_per_bank: 67_108_864,
-    decoded_float_pcm_bytes_total: 134_217_728,
-    decoded_frames_per_pad: 240_000,
-    imported_wav_bytes: 1_048_576,
-  }),
-  emscripten: Object.freeze({
-    emcc_version:
-      "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) " +
-      "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)",
-    emscripten_releases_revision:
-      "dbd755b5da399329c2576f6e3dfa7f419f5d8409",
-    emsdk_revision: "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190",
-    emsdk_tag: "6.0.5",
-  }),
-  expectedAssets: Object.freeze([
-    Object.freeze({
-      prefix: "assets/diagnostic-client.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({
-      prefix: "assets/diagnostic-project.",
-      suffix: ".mjs",
-      role: "host_module",
-    }),
-    Object.freeze({
-      prefix: "assets/input-adapters.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({prefix: "assets/main.", suffix: ".mjs", role: "host_main"}),
-    Object.freeze({
-      prefix: "assets/preflight.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({
-      prefix: "assets/project-bundle-reader.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({
-      prefix: "assets/protocol.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({
-      prefix: "assets/runtime.",
-      suffix: ".js",
-      role: "runtime_script",
-    }),
-    Object.freeze({
-      prefix: "assets/runtime.",
-      suffix: ".wasm",
-      role: "runtime_wasm",
-    }),
-    Object.freeze({
-      prefix: "assets/runtime-loader.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({
-      prefix: "assets/runtime-session.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({
-      prefix: "assets/state-machine.",
-      suffix: ".mjs",
-      role: "platform_module",
-    }),
-    Object.freeze({prefix: "assets/styles.", suffix: ".css", role: "host_style"}),
-  ]),
-});
 
 function isPositiveInteger(value) {
   return Number.isInteger(value) && value > 0;
@@ -132,13 +47,34 @@ export function createWebRuntimeHostController(options = {}) {
     }
   }
 
+  const hostIdentity = WEB_RUNTIME_IDENTITY.hosts["web-runtime-host"];
+  const generatedAssemblyIdentity = {
+    distributionContract: hostIdentity.distribution_contract,
+    hostId: hostIdentity.id,
+    hostVersion: hostIdentity.version,
+    platformVersion: WEB_RUNTIME_IDENTITY.platform.version,
+    productBuild: WEB_RUNTIME_IDENTITY.product_build,
+    protocolVersion: WEB_RUNTIME_IDENTITY.protocol_version,
+  };
+  const generatedManifestSource = {
+    heapBytes: WEB_RUNTIME_IDENTITY.heap_bytes,
+    resourceLimits: WEB_RUNTIME_IDENTITY.resource_limits,
+    emscripten: {
+      emcc_version: WEB_RUNTIME_IDENTITY.emscripten.emcc_version,
+      emscripten_releases_revision:
+        WEB_RUNTIME_IDENTITY.emscripten.emscripten_releases_revision,
+      emsdk_revision: WEB_RUNTIME_IDENTITY.emscripten.emsdk_revision,
+      emsdk_tag: WEB_RUNTIME_IDENTITY.emscripten.emsdk_tag,
+    },
+    expectedAssets: hostIdentity.expected_assets,
+  };
   session = options.session ?? createRuntimeSession({
     document,
     window,
     navigator: options.navigator ?? window?.navigator,
     crypto,
-    manifestSource: options.manifestSource ?? MANIFEST_SOURCE,
-    assemblyIdentity: options.assemblyIdentity ?? ASSEMBLY_IDENTITY,
+    manifestSource: options.manifestSource ?? generatedManifestSource,
+    assemblyIdentity: options.assemblyIdentity ?? generatedAssemblyIdentity,
     inputConfiguration: {
       padBindings: pads.map((pad) => Object.freeze({
         element: pad,

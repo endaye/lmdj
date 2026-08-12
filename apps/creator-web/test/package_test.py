@@ -33,7 +33,7 @@ class CreatorPackageTest(unittest.TestCase):
         self.runtime = self.root / "runtime"
         self.identity = self.root / "toolchain-identity.json"
         self.repo.mkdir()
-        (self.repo / "products/lmdj").mkdir(parents=True)
+        (self.repo / "products/lmdj/generated").mkdir(parents=True)
         (self.repo / "tools/web-runtime").mkdir(parents=True)
         self.ui.joinpath("assets").mkdir(parents=True)
         self.runtime.mkdir()
@@ -53,10 +53,14 @@ class CreatorPackageTest(unittest.TestCase):
         (self.repo / "products/lmdj/version.json").write_text(
             json.dumps(version), encoding="utf-8"
         )
+        shutil.copyfile(
+            REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json",
+            self.repo / "products/lmdj/generated/web-runtime-identity.json",
+        )
         (self.repo / "tools/web-runtime/emscripten.lock.json").write_text(
             json.dumps(lock), encoding="utf-8"
         )
-        identity = {**lock, "emcc_version": load_package_module().EMCC_VERSION}
+        identity = dict(lock)
         self.identity.write_text(json.dumps(identity), encoding="utf-8")
         (self.ui / "index.html").write_text(
             "<!doctype html>\n<html><head><meta charset=\"UTF-8\" />"

@@ -3,7 +3,6 @@
 import json
 import os
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -12,25 +11,16 @@ import sys
 REPO_ROOT = Path(__file__).resolve().parents[2]
 LOCK_PATH = REPO_ROOT / "tools/web-runtime/emscripten.lock.json"
 OUTPUT_PATH = REPO_ROOT / "build/web/toolchain/toolchain-identity.json"
-EXPECTED_LOCK = {
-    "emsdk_tag": "6.0.5",
-    "emsdk_revision": "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190",
-    "emscripten_releases_revision": "dbd755b5da399329c2576f6e3dfa7f419f5d8409",
-    "initial_memory": 536_870_912,
-    "allow_memory_growth": False,
-    "node": "22",
-    "playwright": "1.62.1",
-    "linker_flags": [
-        "-pthread",
-        "-sWASMFS",
-        "-sAUDIO_WORKLET",
-        "-sWASM_WORKERS",
-        "-sPROXY_TO_PTHREAD",
-        "-sINITIAL_MEMORY=536870912",
-        "-sALLOW_MEMORY_GROWTH=0",
-        "-sASYNCIFY=1",
-        "-sASYNCIFY_IMPORTS=['lmdj_opfs_acquire_writer','lmdj_opfs_replace_complete','lmdj_opfs_list_names']",
-    ],
+LOCK_KEYS = {
+    "allow_memory_growth",
+    "emcc_version",
+    "emscripten_releases_revision",
+    "emsdk_revision",
+    "emsdk_tag",
+    "initial_memory",
+    "linker_flags",
+    "node",
+    "playwright",
 }
 
 
@@ -46,19 +36,31 @@ def validate_lock(value: object) -> dict:
     if not isinstance(value, dict):
         raise VerificationError("lock root must be an object")
     actual_keys = set(value)
-    expected_keys = set(EXPECTED_LOCK)
+    expected_keys = LOCK_KEYS
     if actual_keys != expected_keys:
         missing = sorted(expected_keys - actual_keys)
         unexpected = sorted(actual_keys - expected_keys)
         raise VerificationError(
             f"lock keys mismatch: missing={missing}, unexpected={unexpected}"
         )
-    for key, expected in EXPECTED_LOCK.items():
-        actual = value[key]
-        if type(actual) is not type(expected) or actual != expected:
-            raise VerificationError(
-                f"lock value mismatch for {key}: expected {expected!r}, got {actual!r}"
-            )
+    for key in (
+        "emcc_version",
+        "emscripten_releases_revision",
+        "emsdk_revision",
+        "emsdk_tag",
+        "node",
+        "playwright",
+    ):
+        if not isinstance(value[key], str) or not value[key]:
+            raise VerificationError(f"lock value is invalid for {key}")
+    if type(value["initial_memory"]) is not int or value["initial_memory"] < 1:
+        raise VerificationError("lock initial_memory is invalid")
+    if type(value["allow_memory_growth"]) is not bool:
+        raise VerificationError("lock allow_memory_growth is invalid")
+    if not isinstance(value["linker_flags"], list) or not value["linker_flags"] or not all(
+        isinstance(flag, str) and flag for flag in value["linker_flags"]
+    ):
+        raise VerificationError("lock linker_flags are invalid")
     return dict(value)
 
 
@@ -128,15 +130,13 @@ def verify_active_sdk(lock: dict) -> dict:
     )
     version_output = run_checked([str(emcc), "--version"], "emcc version")
     version_line = version_output.splitlines()[0] if version_output else ""
-    if re.search(r"(?<![0-9.])6\.0\.5(?![0-9.])", version_line) is None:
+    if version_line != lock["emcc_version"]:
         raise VerificationError(
-            f"emcc version mismatch: expected 6.0.5, got {version_line!r}"
+            "emcc version mismatch: "
+            f"expected {lock['emcc_version']!r}, got {version_line!r}"
         )
 
-    return {
-        **lock,
-        "emcc_version": version_line,
-    }
+    return dict(lock)
 
 
 def main() -> int:

@@ -2,8 +2,10 @@
 
 #include <array>
 #include <cstddef>
+#include <fstream>
 #include <iostream>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -20,16 +22,49 @@ using lmdj::web_runtime::ManifestExpectation;
 using lmdj::web_runtime::ManifestGate;
 using lmdj::web_runtime::ManifestGateStatus;
 
-constexpr std::array<ManifestExpectation::ComponentIdentity, 2> kAllowedHosts{{
-    {"lmdj.creator-web.distribution.v1", "creator-web", "1.0.6"},
-    {"lmdj.web-runtime-host.distribution.v1", "web-runtime-host", "1.2.6"},
-}};
-constexpr ManifestExpectation kExpected{
-    "1.0.16.9",
-    "0.1.6",
-    kAllowedHosts,
-    1,
-};
+const nlohmann::json& runtime_identity() {
+  static const auto identity = [] {
+    std::ifstream input("products/lmdj/generated/web-runtime-identity.json");
+    if (!input) {
+      throw std::runtime_error("generated Web Runtime identity is unavailable");
+    }
+    const auto parsed = lmdj::foundation::parse_bounded_json(input);
+    if (!parsed.has_value()) {
+      throw std::runtime_error("generated Web Runtime identity is invalid");
+    }
+    return *parsed;
+  }();
+  return identity;
+}
+
+const nlohmann::json& host_identity(std::string_view id) {
+  return runtime_identity().at("hosts").at(id);
+}
+
+ManifestExpectation expected() {
+  static const std::array identities{
+      ManifestExpectation::ComponentIdentity{
+          host_identity("creator-web").at("distribution_contract")
+              .get_ref<const std::string&>(),
+          host_identity("creator-web").at("id").get_ref<const std::string&>(),
+          host_identity("creator-web").at("version")
+              .get_ref<const std::string&>()},
+      ManifestExpectation::ComponentIdentity{
+          host_identity("web-runtime-host").at("distribution_contract")
+              .get_ref<const std::string&>(),
+          host_identity("web-runtime-host").at("id")
+              .get_ref<const std::string&>(),
+          host_identity("web-runtime-host").at("version")
+              .get_ref<const std::string&>()},
+  };
+  const auto& identity = runtime_identity();
+  return {
+      identity.at("product_build").get_ref<const std::string&>(),
+      identity.at("platform").at("version").get_ref<const std::string&>(),
+      identities,
+      identity.at("protocol_version").get<std::uint32_t>(),
+  };
+}
 
 std::string repeated(char value) {
   return std::string(64, value);
@@ -50,34 +85,38 @@ nlohmann::json asset(
 }
 
 nlohmann::json manifest_json(
-    std::string_view product = "1.0.16.9",
-    std::string_view host = "1.2.6",
-    std::uint32_t protocol = 1) {
+    std::string_view product = {},
+    std::string_view host = {},
+    std::uint32_t protocol = 0) {
+  const auto& identity = runtime_identity();
+  const auto& runtime_host = host_identity("web-runtime-host");
+  if (product.empty()) {
+    product = identity.at("product_build").get_ref<const std::string&>();
+  }
+  if (host.empty()) {
+    host = runtime_host.at("version").get_ref<const std::string&>();
+  }
+  if (protocol == 0) {
+    protocol = identity.at("protocol_version").get<std::uint32_t>();
+  }
+  const auto& emscripten = identity.at("emscripten");
   return {
-      {"distribution_contract", "lmdj.web-runtime-host.distribution.v1"},
+      {"distribution_contract", runtime_host.at("distribution_contract")},
       {"manifest_version", 1},
       {"product_build", product},
-      {"platform_version", "0.1.6"},
-      {"host_id", "web-runtime-host"},
+      {"platform_version", identity.at("platform").at("version")},
+      {"host_id", runtime_host.at("id")},
       {"host_version", host},
       {"protocol_version", protocol},
-      {"heap_bytes", 536'870'912},
-      {"resource_limits",
-       {
-           {"imported_wav_bytes", 1'048'576},
-           {"decoded_frames_per_pad", 240'000},
-           {"decoded_float_pcm_bytes_per_bank", 67'108'864},
-           {"decoded_float_pcm_bytes_total", 134'217'728},
-       }},
+      {"heap_bytes", identity.at("heap_bytes")},
+      {"resource_limits", identity.at("resource_limits")},
       {"emscripten",
        {
-           {"emsdk_tag", "6.0.5"},
-           {"emsdk_revision", "dfb9d1a46c3bb8f52e1e6324be23123b9d73c190"},
+           {"emsdk_tag", emscripten.at("emsdk_tag")},
+           {"emsdk_revision", emscripten.at("emsdk_revision")},
            {"emscripten_releases_revision",
-            "dbd755b5da399329c2576f6e3dfa7f419f5d8409"},
-           {"emcc_version",
-            "emcc (Emscripten gcc/clang-like replacement + linker emulating GNU ld) "
-            "6.0.5 (1db513782be24469589d7cb8a1f1834e9a33f271)"},
+            emscripten.at("emscripten_releases_revision")},
+           {"emcc_version", emscripten.at("emcc_version")},
        }},
       {"assets",
        nlohmann::json::array({
@@ -95,9 +134,9 @@ nlohmann::json manifest_json(
 }
 
 std::string canonical_manifest(
-    std::string_view product = "1.0.16.9",
-    std::string_view host = "1.2.6",
-    std::uint32_t protocol = 1) {
+    std::string_view product = {},
+    std::string_view host = {},
+    std::uint32_t protocol = 0) {
   return lmdj::foundation::canonical_json(
       manifest_json(product, host, protocol));
 }
@@ -119,7 +158,7 @@ void test_accepts_once_before_runtime_creation() {
   ManifestGate gate;
   const auto manifest = canonical_manifest();
   LMDJ_CHECK(
-      gate.initialize(as_bytes(manifest), sha256(manifest), kExpected) ==
+      gate.initialize(as_bytes(manifest), sha256(manifest), expected()) ==
       ManifestGateStatus::accepted);
   LMDJ_CHECK(gate.begin_runtime());
   LMDJ_CHECK(gate.ready());
@@ -134,7 +173,7 @@ void test_missing_malformed_oversized_and_noncanonical_fail_closed() {
        }) {
     ManifestGate gate;
     LMDJ_CHECK(
-        gate.initialize(as_bytes(manifest), sha256(manifest), kExpected) ==
+        gate.initialize(as_bytes(manifest), sha256(manifest), expected()) ==
         ManifestGateStatus::protocol_mismatch);
     LMDJ_CHECK(!gate.begin_runtime());
     LMDJ_CHECK(!gate.ready());
@@ -143,18 +182,29 @@ void test_missing_malformed_oversized_and_noncanonical_fail_closed() {
 
 void test_digest_and_exact_identity_mismatches_fail_closed() {
   const auto valid = canonical_manifest();
+  const auto configuration = expected();
+  const auto runtime_host_version = host_identity("web-runtime-host")
+                                        .at("version")
+                                        .get_ref<const std::string&>();
   for (const auto& [manifest, digest] : {
            std::pair{valid, std::string(64, '0')},
            std::pair{canonical_manifest("1.0.34.0"),
                      sha256(canonical_manifest("1.0.34.0"))},
-           std::pair{canonical_manifest("1.0.16.9", "1.0.3"),
-                     sha256(canonical_manifest("1.0.16.9", "1.0.3"))},
-           std::pair{canonical_manifest("1.0.16.9", "1.2.6", 2),
-                     sha256(canonical_manifest("1.0.16.9", "1.2.6", 2))},
+           std::pair{canonical_manifest(configuration.product_build, "1.0.3"),
+                     sha256(canonical_manifest(
+                         configuration.product_build, "1.0.3"))},
+           std::pair{canonical_manifest(
+                         configuration.product_build,
+                         runtime_host_version,
+                         configuration.protocol_version + 1),
+                     sha256(canonical_manifest(
+                         configuration.product_build,
+                         runtime_host_version,
+                         configuration.protocol_version + 1))},
        }) {
     ManifestGate gate;
     LMDJ_CHECK(
-        gate.initialize(as_bytes(manifest), digest, kExpected) ==
+        gate.initialize(as_bytes(manifest), digest, expected()) ==
         ManifestGateStatus::protocol_mismatch);
     LMDJ_CHECK(!gate.begin_runtime());
   }
@@ -162,22 +212,24 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
 
 void test_creator_contract_and_compatibility_inventory_are_bound() {
   auto creator = manifest_json();
-  creator["distribution_contract"] = "lmdj.creator-web.distribution.v1";
-  creator["host_id"] = "creator-web";
-  creator["host_version"] = "1.0.6";
+  const auto& creator_host = host_identity("creator-web");
+  const auto& runtime_host = host_identity("web-runtime-host");
+  creator["distribution_contract"] = creator_host.at("distribution_contract");
+  creator["host_id"] = creator_host.at("id");
+  creator["host_version"] = creator_host.at("version");
   creator["compatible_hosts"] = nlohmann::json::array({
-      {{"host_id", "web-runtime-host"}, {"host_version", "1.2.6"}},
+      {{"host_id", runtime_host.at("id")},
+       {"host_version", runtime_host.at("version")}},
   });
   auto encoded = lmdj::foundation::canonical_json(creator);
   ManifestGate accepted;
   LMDJ_CHECK(
-      accepted.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      accepted.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
       ManifestGateStatus::accepted);
 
-  creator["distribution_contract"] =
-      "lmdj.web-runtime-host.distribution.v1";
+  creator["distribution_contract"] = runtime_host.at("distribution_contract");
   check_rejected(creator);
-  creator["distribution_contract"] = "lmdj.creator-web.distribution.v1";
+  creator["distribution_contract"] = creator_host.at("distribution_contract");
   creator["compatible_hosts"][0]["host_version"] = "9.9.9";
   check_rejected(creator);
 }
@@ -186,7 +238,7 @@ void check_rejected(nlohmann::json manifest) {
   const auto encoded = lmdj::foundation::canonical_json(manifest);
   ManifestGate gate;
   LMDJ_CHECK(
-      gate.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      gate.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
       ManifestGateStatus::protocol_mismatch);
   LMDJ_CHECK(!gate.begin_runtime());
   LMDJ_CHECK(!gate.ready());
@@ -270,7 +322,7 @@ void test_generic_bounded_inventory_accepts_host_owned_assets() {
   auto encoded = lmdj::foundation::canonical_json(manifest);
   ManifestGate minimal;
   LMDJ_CHECK(
-      minimal.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      minimal.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
       ManifestGateStatus::accepted);
 
   for (std::size_t index = 0; index < 62; ++index) {
@@ -284,7 +336,7 @@ void test_generic_bounded_inventory_accepts_host_owned_assets() {
   encoded = lmdj::foundation::canonical_json(manifest);
   ManifestGate maximum;
   LMDJ_CHECK(
-      maximum.initialize(as_bytes(encoded), sha256(encoded), kExpected) ==
+      maximum.initialize(as_bytes(encoded), sha256(encoded), expected()) ==
       ManifestGateStatus::accepted);
 
   manifest["assets"].push_back(
@@ -298,10 +350,10 @@ void test_repeated_or_late_initialization_is_terminal_before_mutation() {
   {
     ManifestGate gate;
     LMDJ_CHECK(
-        gate.initialize(as_bytes(manifest), digest, kExpected) ==
+        gate.initialize(as_bytes(manifest), digest, expected()) ==
         ManifestGateStatus::accepted);
     LMDJ_CHECK(
-        gate.initialize(as_bytes(manifest), digest, kExpected) ==
+        gate.initialize(as_bytes(manifest), digest, expected()) ==
         ManifestGateStatus::protocol_mismatch);
     int mutation_calls = 0;
     if (gate.begin_runtime()) {
@@ -313,7 +365,7 @@ void test_repeated_or_late_initialization_is_terminal_before_mutation() {
     ManifestGate gate;
     LMDJ_CHECK(!gate.begin_runtime());
     LMDJ_CHECK(
-        gate.initialize(as_bytes(manifest), digest, kExpected) ==
+        gate.initialize(as_bytes(manifest), digest, expected()) ==
         ManifestGateStatus::protocol_mismatch);
     LMDJ_CHECK(!gate.begin_runtime());
   }

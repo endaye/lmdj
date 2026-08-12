@@ -482,7 +482,7 @@ class PackageTest(unittest.TestCase):
         )
 
         roles = {asset["role"] for asset in manifest["assets"]}
-        self.assertEqual(len(manifest["assets"]), 14)
+        self.assertEqual(len(manifest["assets"]), 15)
         self.assertEqual(
             roles,
             {
@@ -490,6 +490,7 @@ class PackageTest(unittest.TestCase):
                 "host_module",
                 "host_style",
                 "platform_module",
+                "product_identity",
                 "runtime_script",
                 "runtime_wasm",
             },
@@ -512,7 +513,19 @@ class PackageTest(unittest.TestCase):
                 ("runtime-session", "platform_module"),
                 ("state-machine", "platform_module"),
                 ("styles", "host_style"),
+                ("web-runtime-identity", "product_identity"),
             ],
+        )
+        main_asset = next(
+            asset for asset in manifest["assets"] if asset["role"] == "host_main"
+        )
+        identity_asset = next(
+            asset for asset in manifest["assets"]
+            if asset["role"] == "product_identity"
+        )
+        self.assertIn(
+            f'"./{Path(identity_asset["path"]).name}"',
+            (self.dist / main_asset["path"]).read_text(encoding="utf-8"),
         )
         diagnostic_modules = [
             asset for asset in manifest["assets"]

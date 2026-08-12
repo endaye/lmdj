@@ -38,7 +38,7 @@ class CreatorServerTest(unittest.TestCase):
         self.runtime = self.root / "runtime"
         self.identity = self.root / "toolchain-identity.json"
         self.dist = self.root / "dist"
-        self.repo.joinpath("products/lmdj").mkdir(parents=True)
+        self.repo.joinpath("products/lmdj/generated").mkdir(parents=True)
         self.repo.joinpath("tools/web-runtime").mkdir(parents=True)
         self.ui.joinpath("assets").mkdir(parents=True)
         self.runtime.mkdir()
@@ -58,12 +58,16 @@ class CreatorServerTest(unittest.TestCase):
         self.repo.joinpath("products/lmdj/version.json").write_text(
             json.dumps(version), encoding="utf-8"
         )
+        shutil.copyfile(
+            REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json",
+            self.repo / "products/lmdj/generated/web-runtime-identity.json",
+        )
         self.repo.joinpath("tools/web-runtime/emscripten.lock.json").write_text(
             json.dumps(lock), encoding="utf-8"
         )
         package = load_module("lmdj_creator_package_fixture", PACKAGE_TOOL)
         self.identity.write_text(
-            json.dumps({**lock, "emcc_version": package.EMCC_VERSION}),
+            json.dumps(lock),
             encoding="utf-8",
         )
         self.ui.joinpath("index.html").write_text(

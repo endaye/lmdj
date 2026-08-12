@@ -1,5 +1,7 @@
 import json
+import importlib.util
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -347,5 +349,94 @@ with tempfile.TemporaryDirectory() as temp_dir:
         pass
     else:
         raise AssertionError("accepted an incomplete assembly lock")
+
+runtime_identity_generator_path = (
+    repo_root / "tools/web-runtime/generate_runtime_identity.py"
+)
+assert runtime_identity_generator_path.is_file(), "missing Runtime identity generator"
+generator_spec = importlib.util.spec_from_file_location(
+    "lmdj_runtime_identity_generator", runtime_identity_generator_path
+)
+assert generator_spec is not None and generator_spec.loader is not None
+runtime_identity_generator = importlib.util.module_from_spec(generator_spec)
+generator_spec.loader.exec_module(runtime_identity_generator)
+
+with tempfile.TemporaryDirectory() as temp_dir:
+    fixture_root = Path(temp_dir) / "repo"
+    for relative in (
+        "products/lmdj/version.json",
+        "products/lmdj/assembly.json",
+        "products/lmdj/assembly.lock.json",
+        "packages/web-runtime-platform/module.json",
+        "apps/creator-web/module.json",
+        "apps/web-runtime-host/module.json",
+        "tools/web-runtime/emscripten.lock.json",
+        "tools/web-runtime/runtime-identity.json",
+    ):
+        destination = fixture_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(repo_root / relative, destination)
+
+    baseline = runtime_identity_generator.generate(fixture_root)
+    mutations = (
+        ("products/lmdj/version.json", "patch", 10),
+        ("apps/creator-web/module.json", "version", "9.9.9"),
+        ("packages/web-runtime-platform/module.json", "version", "9.9.9"),
+        ("products/lmdj/assembly.lock.json", "assembly_sha256", "f" * 64),
+        (
+            "tools/web-runtime/runtime-identity.json",
+            ("resource_limits", "imported_wav_bytes"),
+            1,
+        ),
+        (
+            "tools/web-runtime/emscripten.lock.json",
+            "emcc_version",
+            "emcc changed",
+        ),
+    )
+    for relative, key, replacement in mutations:
+        path = fixture_root / relative
+        original = path.read_bytes()
+        value = json.loads(original)
+        if isinstance(key, tuple):
+            value[key[0]][key[1]] = replacement
+        else:
+            value[key] = replacement
+        write_json(path, value)
+        try:
+            try:
+                changed = runtime_identity_generator.generate(fixture_root)
+            except runtime_identity_generator.IdentityError:
+                pass
+            else:
+                assert changed != baseline, f"identity mutation had no effect: {relative}"
+        finally:
+            path.write_bytes(original)
+
+for host_main, package_tool in (
+    ("apps/creator-web/src/main.tsx", "apps/creator-web/tools/package.py"),
+    ("apps/web-runtime-host/src/main.mjs", "apps/web-runtime-host/tools/package.py"),
+):
+    assert "ASSEMBLY_IDENTITY = Object.freeze" not in (
+        repo_root / host_main
+    ).read_text(encoding="utf-8")
+    package_source = (repo_root / package_tool).read_text(encoding="utf-8")
+    for copied_name in (
+        "HOST_VERSION =",
+        "PLATFORM_VERSION =",
+        "PROTOCOL_VERSION =",
+        "HEAP_BYTES =",
+        "EMCC_VERSION =",
+        "RESOURCE_LIMITS =",
+    ):
+        assert copied_name not in package_source, (
+            f"copied Runtime identity remains in {package_tool}: {copied_name}"
+        )
+
+cmake_source = (
+    repo_root / "packages/web-runtime-platform/CMakeLists.txt"
+).read_text(encoding="utf-8")
+assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
+assert '"product_build":"1.0.16.9"' not in cmake_source
 
 print("product version tests: PASS")
