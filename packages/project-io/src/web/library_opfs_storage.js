@@ -657,9 +657,18 @@ mergeInto(LibraryManager.library, {
         const handle = await directory.getFileHandle(name);
         let record;
         try {
-          record = JSON.parse(new TextDecoder().decode(await this.readFileBytes(handle)));
+          record = JSON.parse(new TextDecoder("utf-8", {fatal: true})
+              .decode(await this.readFileBytes(handle)));
         } catch (_) {
-          throw new DOMException("", "InvalidStateError");
+          // Torn metadata proves the mutation never began: createIntent writes
+          // and read-back-verifies the record before any destination write, and
+          // refuses to reuse an existing intent file. There is nothing to roll
+          // back, so the unusable record is removed rather than locking every
+          // later writer acquisition out of the Project. A record that parses
+          // but fails validation below stays fail-closed on purpose: it may
+          // carry rollback state from a newer Contract revision.
+          await directory.removeEntry(name);
+          continue;
         }
         this.validateIntent(record, lease);
         if (name !== `${await this.pathKey(record.destination)}.json`) {

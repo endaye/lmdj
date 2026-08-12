@@ -215,6 +215,21 @@ async function readPublicationIntentState(page, bundle) {
   }, {scope});
 }
 
+async function writeStorageIntentBody(page, bundle, body) {
+  const {scope, replacement} = await intentScopeKeys(page, bundle);
+  await page.evaluate(async ({scope, replacement, body}) => {
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host", {create: true});
+    const intents = await host.getDirectoryHandle(
+        "storage-intents", {create: true});
+    const directory = await intents.getDirectoryHandle(scope, {create: true});
+    const handle = await directory.getFileHandle(replacement, {create: true});
+    const writable = await handle.createWritable({keepExistingData: false});
+    await writable.write(body);
+    await writable.close();
+  }, {scope, replacement, body});
+}
+
 async function snapshotLeaseEntries(page) {
   await page.evaluate(async () => {
     const root = await navigator.storage.getDirectory();
@@ -657,4 +672,37 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   await cleanupInspector.close();
   await cleanupController.close();
 
+  const tornBundle = `storage-intent-torn-${Date.now()}`;
+  const tornController = await trackedPage(context);
+  await tornController.goto("/preflight.html");
+  const tornPrepare = await trackedPage(context);
+  await tornPrepare.goto(
+      `/project_io/project_io_web_test.html?action=prepare_replacement&bundle=${tornBundle}&scenario=existing`);
+  await waitForResult(tornPrepare);
+  await tornPrepare.close();
+  // A torn intent can only be produced before the destination is touched, so
+  // recovery clears it instead of locking every later writer out.
+  await writeStorageIntentBody(
+      tornController, tornBundle, "{\"contract\":\"lmdj.storage");
+  const tornRecovery = await trackedPage(context);
+  await tornRecovery.goto(
+      `/project_io/project_io_web_test.html?action=acquire_after_intent&bundle=${tornBundle}`);
+  expect(await waitForResult(tornRecovery)).toEqual({
+    acquire: "ok",
+    content: "old",
+    intentFiles: 0,
+  });
+  await tornRecovery.close();
+  // A record that parses but fails validation may carry rollback state from a
+  // newer Contract revision, so it stays fail-closed.
+  await writeStorageIntentBody(
+      tornController,
+      tornBundle,
+      JSON.stringify({contract: "lmdj.storage.intent.v2", destination: "x"}));
+  const tornGuard = await trackedPage(context);
+  await tornGuard.goto(
+      `/project_io/project_io_web_test.html?action=acquire_after_intent&bundle=${tornBundle}`);
+  expect((await waitForResult(tornGuard)).acquire).toBe("failed");
+  await tornGuard.close();
+  await tornController.close();
 });

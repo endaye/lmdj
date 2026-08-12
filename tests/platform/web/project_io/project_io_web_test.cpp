@@ -365,6 +365,33 @@ nlohmann::json run_suite() {
              foundation::error_code_name(publish.error().code)}}},
       };
     }
+    if (action == "acquire_after_intent") {
+      auto acquire = platform->acquire_writer(fault_bundle);
+      if (!acquire.has_value()) {
+        return {
+            {"complete", true},
+            {"result",
+             {{"acquire", "failed"},
+              {"errorCode",
+               foundation::error_code_name(acquire.error().code)}}},
+        };
+      }
+      auto lease = std::move(acquire.value());
+      const auto inventory = storage_intent_inventory(*platform);
+      std::size_t intent_files = 0;
+      for (const auto& entry : inventory) {
+        if (!entry.first.empty() && entry.first.back() != '/') ++intent_files;
+      }
+      return {
+          {"complete", true},
+          {"result",
+           {{"acquire", "ok"},
+            {"content", text(value(
+                 platform->read_complete(replacement_path),
+                 "recovered replacement content"))},
+            {"intentFiles", intent_files}}},
+      };
+    }
     if (action == "inspect_publication" ||
         action == "recover_publication" ||
         action == "recover_and_publish") {
