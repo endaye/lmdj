@@ -2,11 +2,34 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  DEFAULT_KEYBOARD_MAPPING,
   createKeyboardAdapter,
   createMidiAdapter,
   createPointerAdapter,
   flattenPadSlot,
 } from "../web/input_adapters.mjs";
+
+test("exports one frozen default keyboard mapping", () => {
+  assert.equal(Object.isFrozen(DEFAULT_KEYBOARD_MAPPING), true);
+  assert.deepEqual(DEFAULT_KEYBOARD_MAPPING, {
+    KeyA: 0,
+    KeyS: 1,
+    KeyD: 2,
+    KeyF: 3,
+    KeyG: 4,
+    KeyH: 5,
+    KeyJ: 6,
+    KeyK: 7,
+    KeyQ: 8,
+    KeyW: 9,
+    KeyE: 10,
+    KeyR: 11,
+    KeyT: 12,
+    KeyY: 13,
+    KeyU: 14,
+    KeyI: 15,
+  });
+});
 
 test("flattens a Project Pad address at the input boundary", () => {
   assert.equal(flattenPadSlot({bank: 3, pad: 15}), 63);

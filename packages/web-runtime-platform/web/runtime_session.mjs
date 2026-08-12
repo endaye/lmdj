@@ -1,4 +1,5 @@
 import {
+  DEFAULT_KEYBOARD_MAPPING,
   createUserGestureToken,
   createKeyboardAdapter,
   createMidiAdapter,
@@ -512,27 +513,6 @@ async function loadPackagedRuntime({ document, window, crypto, manifest }) {
   return runtime;
 }
 
-function defaultKeyboardMapping() {
-  return Object.freeze({
-    KeyA: 0,
-    KeyS: 1,
-    KeyD: 2,
-    KeyF: 3,
-    KeyG: 4,
-    KeyH: 5,
-    KeyJ: 6,
-    KeyK: 7,
-    KeyQ: 8,
-    KeyW: 9,
-    KeyE: 10,
-    KeyR: 11,
-    KeyT: 12,
-    KeyY: 13,
-    KeyU: 14,
-    KeyI: 15,
-  });
-}
-
 function createRuntimeSessionController(options = {}) {
   const document = options.document;
   const window = options.window;
@@ -540,6 +520,10 @@ function createRuntimeSessionController(options = {}) {
   const crypto = options.crypto ?? window?.crypto;
   const assemblyIdentity = options.assemblyIdentity;
   const manifestSource = options.manifestSource;
+  const inputOwnership = options.inputOwnership ?? "session";
+  if (inputOwnership !== "session" && inputOwnership !== "host") {
+    throw new TypeError("Runtime Session input ownership is invalid");
+  }
   const verifyManifest =
     options.verifyManifest ??
     (() => verifyDocumentManifest({
@@ -1333,6 +1317,9 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function enableMidi() {
+    if (inputOwnership !== "session" || midiAdapter === undefined) {
+      return false;
+    }
     try {
       await midiAdapter.requestPermission();
       renderDiagnostics();
@@ -1442,6 +1429,9 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function wireInputs() {
+    if (inputOwnership !== "session") {
+      return;
+    }
     pointerAdapter = createPointerAdapter({
       trigger,
       velocity: options.pointerVelocity ?? 100,
@@ -1450,7 +1440,7 @@ function createRuntimeSessionController(options = {}) {
     });
     keyboardAdapter = createKeyboardAdapter({
       trigger,
-      mapping: options.keyboardMapping ?? defaultKeyboardMapping(),
+      mapping: options.keyboardMapping ?? DEFAULT_KEYBOARD_MAPPING,
       velocity: options.keyboardVelocity ?? 100,
       onPressedChange: renderDiagnostics,
     });
@@ -1613,6 +1603,7 @@ export function createRuntimeSession({
   manifestSource,
   assemblyIdentity,
   inputConfiguration = {},
+  inputOwnership = "session",
   seams = {},
 }) {
   return createRuntimeSessionController({
@@ -1622,6 +1613,7 @@ export function createRuntimeSession({
     crypto,
     manifestSource,
     assemblyIdentity,
+    inputOwnership,
     ...inputConfiguration,
     ...seams,
   });

@@ -95,3 +95,42 @@ test("uses transport termination without directly terminating its workers", asyn
   assert.equal(transportTerminations, 1);
   assert.equal(workerTerminations, 0);
 });
+
+test("awaits transport terminal ownership before closing audio resources", async () => {
+  const order = [];
+  let resolveTransport;
+  const transportClosed = new Promise((resolve) => {
+    resolveTransport = resolve;
+  });
+  const pending = defaultRuntimeTerminator({
+    runtime: {
+      workers: [{terminate() { order.push("direct-worker"); }}],
+      transport: {
+        terminate() {
+          order.push("transport");
+          return transportClosed;
+        },
+        async send() {},
+      },
+      worklet: {
+        disconnect() { order.push("worklet"); },
+        port: {close() { order.push("port"); }},
+      },
+    },
+    audioContext: {
+      state: "running",
+      close() { order.push("audio"); },
+    },
+    window: {
+      crypto: {
+        randomUUID: () => "00000000-0000-0000-0000-000000000001",
+      },
+    },
+  });
+
+  await Promise.resolve();
+  assert.deepEqual(order, ["transport"]);
+  resolveTransport();
+  await pending;
+  assert.deepEqual(order, ["transport", "worklet", "port", "audio"]);
+});

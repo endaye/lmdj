@@ -1,4 +1,5 @@
 import {describe, expect, test} from "vitest";
+import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
 
 import {createCreatorInputController} from "../src/runtime/input_controller";
 import type {
@@ -246,11 +247,15 @@ describe("Creator input controller", () => {
       "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
       "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
     ];
+    expect(Object.keys(DEFAULT_KEYBOARD_MAPPING)).toEqual(codes);
     for (const code of codes) {
       expect(controller.keyDown({code, repeat: false, target: document.body})).toBe(true);
     }
     await settle();
     expect(value.triggers).toHaveLength(16);
+    expect(value.triggers.map(({slot}) => slot)).toEqual(
+      Object.values(DEFAULT_KEYBOARD_MAPPING),
+    );
     expect(value.state().pressed.size).toBe(16);
     for (let sequence = 1; sequence <= 16; sequence += 1) {
       value.outcome({

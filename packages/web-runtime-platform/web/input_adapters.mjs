@@ -4,6 +4,25 @@ const ignoreRelease = (_slot, _source) => {};
 /** @type {number | null} */
 const allMidiChannels = null;
 
+export const DEFAULT_KEYBOARD_MAPPING = Object.freeze({
+  KeyA: 0,
+  KeyS: 1,
+  KeyD: 2,
+  KeyF: 3,
+  KeyG: 4,
+  KeyH: 5,
+  KeyJ: 6,
+  KeyK: 7,
+  KeyQ: 8,
+  KeyW: 9,
+  KeyE: 10,
+  KeyR: 11,
+  KeyT: 12,
+  KeyY: 13,
+  KeyU: 14,
+  KeyI: 15,
+});
+
 
 export function createUserGestureToken(event) {
   if (event === null || typeof event !== "object" || event.isTrusted !== true) {

@@ -59,10 +59,7 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
     crypto,
     assemblyIdentity: ASSEMBLY_IDENTITY,
     manifestSource: MANIFEST_SOURCE,
-    inputConfiguration: {
-      keyboardMapping: {},
-      padBindings: [],
-    },
+    inputOwnership: "host",
   }) as CreatorRuntimeSession;
 }
 

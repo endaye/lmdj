@@ -204,6 +204,11 @@ if (typeof globalThis.window !== "undefined") {
   let terminalOwnerReleased = false;
   let terminalFailureDelivered = false;
   let terminalAckTimeout = 0;
+  let terminalCleanupCompleted = false;
+  let resolveTerminalCleanup;
+  const terminalCleanupPromise = new Promise((resolve) => {
+    resolveTerminalCleanup = resolve;
+  });
   let host;
 
   function transportFailure(code, message, details = {}) {
@@ -252,16 +257,33 @@ if (typeof globalThis.window !== "undefined") {
     failureSubscribers.clear();
   }
 
+  function completeTerminalCleanup() {
+    if (terminalCleanupCompleted) return;
+    terminalCleanupCompleted = true;
+    window.clearTimeout(terminalAckTimeout);
+    terminateRuntimeWorkers();
+    try {
+      terminalChannel.close();
+    } catch {
+      // The release attempt is terminal even if the browser channel is gone.
+    }
+    deliverTerminalFailure();
+    resolveTerminalCleanup();
+  }
+
   function releaseTerminalOwner() {
-    terminalChannel.postMessage({
-      type: "release-and-close",
-      token: terminalToken,
-    });
+    try {
+      terminalChannel.postMessage({
+        type: "release-and-close",
+        token: terminalToken,
+      });
+    } catch {
+      completeTerminalCleanup();
+      return;
+    }
     terminalAckTimeout = window.setTimeout(() => {
       consumeTerminalOwnerRelease();
-      terminateRuntimeWorkers();
-      terminalChannel.close();
-      deliverTerminalFailure();
+      completeTerminalCleanup();
     }, TERMINAL_OWNER_RELEASE_GRACE_MS);
   }
 
@@ -316,10 +338,7 @@ if (typeof globalThis.window !== "undefined") {
       return;
     }
     if (!consumeTerminalOwnerRelease()) return;
-    window.clearTimeout(terminalAckTimeout);
-    terminateRuntimeWorkers();
-    terminalChannel.close();
-    deliverTerminalFailure();
+    completeTerminalCleanup();
   });
 
   function linearizeRequestDeadline(requestId, pending) {
@@ -512,6 +531,7 @@ if (typeof globalThis.window !== "undefined") {
     terminate() {
       failClosed(transportFailure(
         "HOST_STATE_INVALID", "formal Web Host transport is terminated"));
+      return terminalCleanupPromise;
     },
     get terminated() {
       return transportTerminated;

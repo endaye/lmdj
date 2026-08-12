@@ -30,6 +30,7 @@ function fixture({
   navigator = {},
   capabilities,
   runtimeTransport,
+  inputOwnership,
 } = {}) {
   let request = 0;
   let terminated = 0;
@@ -93,6 +94,7 @@ function fixture({
       protocolVersion: 1,
     },
     inputConfiguration: {},
+    inputOwnership,
     seams: {
       ...(capabilities === undefined ? {} : {capabilities}),
       createAudioContext: () => context,
@@ -125,6 +127,23 @@ function fixture({
     },
     session,
     terminated: () => terminated,
+  };
+}
+
+function trackedEventTarget() {
+  const listeners = new Map();
+  return {
+    addEventListener(type, listener) {
+      const values = listeners.get(type) ?? new Set();
+      values.add(listener);
+      listeners.set(type, values);
+    },
+    removeEventListener(type, listener) {
+      listeners.get(type)?.delete(listener);
+    },
+    count(type) {
+      return listeners.get(type)?.size ?? 0;
+    },
   };
 }
 
@@ -294,6 +313,60 @@ test("owns the exact Host-neutral surface and lifecycle", async () => {
 
   assert.deepEqual(states.at(-1), {state: "closed", errorCode: null});
   assert.equal(terminated(), 1);
+});
+
+test("defaults diagnostics to session-owned input listeners", async () => {
+  const browserWindow = trackedEventTarget();
+  const {session} = fixture({browserWindow});
+  assert.equal(await session.start(), true);
+  for (const type of [
+    "pointerup",
+    "pointercancel",
+    "mouseup",
+    "blur",
+    "keydown",
+    "keyup",
+  ]) {
+    assert.equal(browserWindow.count(type), 1, type);
+  }
+  await session.close();
+  assert.equal(browserWindow.count("keydown"), 0);
+});
+
+test("host-owned input creates no session input listeners or MIDI adapter", async () => {
+  const browserWindow = trackedEventTarget();
+  let midiRequests = 0;
+  const {session} = fixture({
+    browserWindow,
+    inputOwnership: "host",
+    navigator: {
+      async requestMIDIAccess() {
+        midiRequests += 1;
+        return {};
+      },
+    },
+  });
+  assert.equal(await session.start(), true);
+  for (const type of [
+    "pointerup",
+    "pointercancel",
+    "mouseup",
+    "blur",
+    "keydown",
+    "keyup",
+  ]) {
+    assert.equal(browserWindow.count(type), 0, type);
+  }
+  assert.equal(browserWindow.count("pagehide"), 1);
+  assert.equal(await session.requestMidi(), false);
+  assert.equal(midiRequests, 0);
+});
+
+test("rejects an unknown input owner", () => {
+  assert.throws(
+    () => fixture({inputOwnership: "both"}),
+    /input ownership is invalid/,
+  );
 });
 
 test("returns typed admission and publishes normalized Runtime outcomes", async () => {

@@ -1,4 +1,5 @@
 import {
+  DEFAULT_KEYBOARD_MAPPING,
   createKeyboardAdapter,
   createMidiAdapter,
   createPointerAdapter,
@@ -12,25 +13,6 @@ import type {
   TriggerAdmission,
   TypedRuntimeError,
 } from "./runtime_types";
-
-const KEYBOARD_MAPPING = Object.freeze({
-  KeyA: 0,
-  KeyS: 1,
-  KeyD: 2,
-  KeyF: 3,
-  KeyG: 4,
-  KeyH: 5,
-  KeyJ: 6,
-  KeyK: 7,
-  KeyQ: 8,
-  KeyW: 9,
-  KeyE: 10,
-  KeyR: 11,
-  KeyT: 12,
-  KeyY: 13,
-  KeyU: 14,
-  KeyI: 15,
-});
 
 interface PointerInput {
   type?: string;
@@ -176,7 +158,7 @@ export function createCreatorInputController({
   });
   const keyboard = createKeyboardAdapter({
     trigger,
-    mapping: KEYBOARD_MAPPING,
+    mapping: DEFAULT_KEYBOARD_MAPPING,
     velocity: 100,
     resolveSlot,
     isAvailable: isAssigned,

@@ -29,9 +29,12 @@ export async function defaultRuntimeTerminator({
   window,
 }) {
   let transportTerminated = false;
+  let transportTermination = null;
   try {
-    runtime?.transport?.terminate?.();
-    transportTerminated = typeof runtime?.transport?.terminate === "function";
+    if (typeof runtime?.transport?.terminate === "function") {
+      transportTermination = Promise.resolve(runtime.transport.terminate());
+      transportTerminated = true;
+    }
   } catch {
     // Fall through to direct Worker termination.
   }
@@ -57,6 +60,10 @@ export async function defaultRuntimeTerminator({
       .catch(() => null);
   } catch {
     // A clean close attempt cannot delay terminal Worker termination.
+  }
+
+  if (transportTermination !== null) {
+    await transportTermination.catch(() => {});
   }
 
   await Promise.resolve()
