@@ -4,11 +4,12 @@
 
 Stage 8 automated local acceptance passed on `feat/stage8-sample-editor` at
 verified implementation revision `5f4299d5044ae1181951d004f2e680801ee0602a`
-on 2026-08-12. After a conflict-free rebase onto current `main`
-`5bf4ace5bf418d6a6d7749586f541fbb7192e9aa`, the patch-equivalent current
-implementation revision is `397afae374f1866751642a87a0a9839bf608bc83`;
-`git range-diff` marked all 35 Stage 8 commits equivalent and the branch was
-0 behind / 35 ahead. The allocated Product identity is `1.0.17.0 canary`. Its
+on 2026-08-12. After conflict-free rebases onto current `main`
+`5b69ab901e8b211132979c158216840bacfeec51`, the patch-equivalent current
+implementation revision is `3f17fbc7e23ec9dcf39c71499d2bc68c07262885`;
+the latest `git range-diff` marked all 36 existing Stage 8 commits equivalent
+and the branch was 0 behind / 36 ahead. The allocated Product identity is
+`1.0.17.0 canary`. Its
 immutable Architecture Portal snapshot records source revision
 `195001b494f1c74995dc83fd35b5add00154edfd`; later commits hardened Creator
 recovery lifecycle ownership and refreshed acceptance evidence without changing
