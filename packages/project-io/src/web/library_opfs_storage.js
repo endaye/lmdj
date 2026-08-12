@@ -550,6 +550,9 @@ mergeInto(LibraryManager.library, {
         }
         await this.compareDirectoriesBounded(
             source, destination, observer, fault);
+        if (observer) {
+          await observer.throwAtFault(fault, "destination_cleanup_failure");
+        }
         await this.replacePublicationCommitted(
             intent, record, observer, fault, () => { committed = true; });
         if (observer) {
@@ -562,12 +565,24 @@ mergeInto(LibraryManager.library, {
         await intent.directory.removeEntry(this.publicationIntentName);
         return 0;
       } catch (error) {
-        if (!committed) {
-          await this.removeTreeParts(destinationParts).catch(() => {});
+        if (committed) return 0;
+        // The pending intent is the only thing that hides a half-built
+        // destination from enumeration and drives its later recovery, so it
+        // may be removed only once the destination is confirmed absent.
+        let removed = false;
+        try {
+          if (observer) {
+            await observer.throwAtFault(fault, "destination_cleanup_failure");
+          }
+          await this.removeTreeParts(destinationParts);
+          removed = !(await this.exists(destinationParts));
+        } catch (_) {
+          removed = false;
+        }
+        if (removed) {
           await intent.directory.removeEntry(this.publicationIntentName)
               .catch(() => {});
         }
-        if (committed) return 0;
         throw error;
       }
     },
@@ -642,9 +657,18 @@ mergeInto(LibraryManager.library, {
         const handle = await directory.getFileHandle(name);
         let record;
         try {
-          record = JSON.parse(new TextDecoder().decode(await this.readFileBytes(handle)));
+          record = JSON.parse(new TextDecoder("utf-8", {fatal: true})
+              .decode(await this.readFileBytes(handle)));
         } catch (_) {
-          throw new DOMException("", "InvalidStateError");
+          // Torn metadata proves the mutation never began: createIntent writes
+          // and read-back-verifies the record before any destination write, and
+          // refuses to reuse an existing intent file. There is nothing to roll
+          // back, so the unusable record is removed rather than locking every
+          // later writer acquisition out of the Project. A record that parses
+          // but fails validation below stays fail-closed on purpose: it may
+          // carry rollback state from a newer Contract revision.
+          await directory.removeEntry(name);
+          continue;
         }
         this.validateIntent(record, lease);
         if (name !== `${await this.pathKey(record.destination)}.json`) {
@@ -866,6 +890,12 @@ mergeInto(LibraryManager.library, {
       if (point !== phase) return;
       await this.markFault(phase);
       await new Promise(() => {});
+    },
+
+    async throwAtFault(point, phase) {
+      if (point !== phase) return;
+      await this.markFault(phase);
+      throw new DOMException("", "InvalidStateError");
     },
 
     async throwStorageConditionFault(point) {

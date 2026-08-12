@@ -1,6 +1,7 @@
 import {expect, test} from "@playwright/test";
 
 import {
+  PUBLICATION_CLEANUP_FAULT,
   PUBLICATION_FAULT_POINTS,
   REPLACEMENT_FAULT_POINTS,
   STORAGE_CONDITION_FAULTS,
@@ -180,6 +181,69 @@ async function writeMalformedPublicationIntent(page, bundle) {
     await writable.write("{");
     await writable.close();
   }, {bundle});
+}
+
+async function intentScopeKeys(page, bundle) {
+  return page.evaluate(async ({bundle}) => {
+    const hex = async (input) => {
+      const digest = new Uint8Array(await crypto.subtle.digest(
+          "SHA-256", new TextEncoder().encode(input)));
+      return [...digest].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    };
+    const project = `/lmdj-workspace/${bundle}.lmdj`;
+    return {
+      scope: await hex(project),
+      replacement: `${await hex(`${project}/replacement.bin`)}.json`,
+    };
+  }, {bundle});
+}
+
+async function readPublicationIntentState(page, bundle) {
+  const {scope} = await intentScopeKeys(page, bundle);
+  return page.evaluate(async ({scope}) => {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const host = await root.getDirectoryHandle(".lmdj-host");
+      const intents = await host.getDirectoryHandle("storage-intents");
+      const directory = await intents.getDirectoryHandle(scope);
+      const file = await (await directory.getFileHandle(
+          "directory-publication.json")).getFile();
+      return JSON.parse(await file.text()).state;
+    } catch (_) {
+      return "absent";
+    }
+  }, {scope});
+}
+
+async function storageIntentPresent(page, bundle) {
+  const {scope, replacement} = await intentScopeKeys(page, bundle);
+  return page.evaluate(async ({scope, replacement}) => {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const host = await root.getDirectoryHandle(".lmdj-host");
+      const intents = await host.getDirectoryHandle("storage-intents");
+      const directory = await intents.getDirectoryHandle(scope);
+      await directory.getFileHandle(replacement);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }, {scope, replacement});
+}
+
+async function writeStorageIntentBody(page, bundle, body) {
+  const {scope, replacement} = await intentScopeKeys(page, bundle);
+  await page.evaluate(async ({scope, replacement, body}) => {
+    const root = await navigator.storage.getDirectory();
+    const host = await root.getDirectoryHandle(".lmdj-host", {create: true});
+    const intents = await host.getDirectoryHandle(
+        "storage-intents", {create: true});
+    const directory = await intents.getDirectoryHandle(scope, {create: true});
+    const handle = await directory.getFileHandle(replacement, {create: true});
+    const writable = await handle.createWritable({keepExistingData: false});
+    await writable.write(body);
+    await writable.close();
+  }, {scope, replacement, body});
 }
 
 async function snapshotLeaseEntries(page) {
@@ -582,4 +646,81 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect((await waitForResult(legacyInspector)).visible).toBe(true);
   await legacyInspector.close();
   await legacyController.close();
+
+  const cleanupBundle = `publication-cleanup-${Date.now()}`;
+  const cleanupController = await trackedPage(context);
+  await cleanupController.goto("/preflight.html");
+  await preparePublicationFixture(cleanupController, cleanupBundle);
+  await writeFaultControl(
+      cleanupController,
+      `/lmdj-workspace/${cleanupBundle}.lmdj`,
+      PUBLICATION_CLEANUP_FAULT);
+  const cleanupWriter = await trackedPage(context);
+  await cleanupWriter.goto(
+      `/project_io/project_io_web_test.html?action=publish_publication_failure&bundle=${cleanupBundle}`);
+  expect((await waitForResult(cleanupWriter)).publish).toBe("failed");
+  await cleanupWriter.close();
+  await clearFaultControl(cleanupController);
+  // The destination copy survives a failed cleanup, so the pending intent must
+  // survive with it; deleting the intent would expose an uncommitted tree and
+  // leave no recovery path.
+  expect(await readPublicationIntentState(cleanupController, cleanupBundle))
+      .toBe("pending");
+  const cleanupInspector = await trackedPage(context);
+  await cleanupInspector.goto(
+      `/project_io/project_io_web_test.html?action=inspect_publication&bundle=${cleanupBundle}`);
+  expect(await waitForResult(cleanupInspector)).toEqual({
+    visible: false,
+    physical: true,
+    complete: true,
+    source: true,
+  });
+  const cleanupRecovery = await trackedPage(context);
+  await cleanupRecovery.goto(
+      `/project_io/project_io_web_test.html?action=recover_and_publish&bundle=${cleanupBundle}`);
+  expect(await waitForResult(cleanupRecovery)).toEqual({
+    visible: true,
+    physical: true,
+    complete: true,
+    source: false,
+  });
+  await cleanupRecovery.close();
+  await cleanupInspector.close();
+  await cleanupController.close();
+
+  const tornBundle = `storage-intent-torn-${Date.now()}`;
+  const tornController = await trackedPage(context);
+  await tornController.goto("/preflight.html");
+  const tornPrepare = await trackedPage(context);
+  await tornPrepare.goto(
+      `/project_io/project_io_web_test.html?action=prepare_replacement&bundle=${tornBundle}&scenario=existing`);
+  await waitForResult(tornPrepare);
+  await tornPrepare.close();
+  // A torn intent can only be produced before the destination is touched, so
+  // recovery clears it instead of locking every later writer out.
+  await writeStorageIntentBody(
+      tornController, tornBundle, "{\"contract\":\"lmdj.storage");
+  const tornRecovery = await trackedPage(context);
+  await tornRecovery.goto(
+      `/project_io/project_io_web_test.html?action=acquire_after_intent&bundle=${tornBundle}`);
+  expect(await waitForResult(tornRecovery)).toEqual({
+    acquire: "ok",
+    content: "old",
+  });
+  // Recovery must consume exactly this Project's torn record; intents left by
+  // earlier phases of this suite are deliberately not counted.
+  expect(await storageIntentPresent(tornController, tornBundle)).toBe(false);
+  await tornRecovery.close();
+  // A record that parses but fails validation may carry rollback state from a
+  // newer Contract revision, so it stays fail-closed.
+  await writeStorageIntentBody(
+      tornController,
+      tornBundle,
+      JSON.stringify({contract: "lmdj.storage.intent.v2", destination: "x"}));
+  const tornGuard = await trackedPage(context);
+  await tornGuard.goto(
+      `/project_io/project_io_web_test.html?action=acquire_after_intent&bundle=${tornBundle}`);
+  expect((await waitForResult(tornGuard)).acquire).toBe("failed");
+  await tornGuard.close();
+  await tornController.close();
 });
