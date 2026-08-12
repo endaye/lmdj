@@ -3,7 +3,7 @@
 ## Current status
 
 Stage 8 automated local acceptance passed on `feat/stage8-sample-editor` at
-implementation revision `a7bbe10d1a57392959c10cf82c5c122063e0eee9` on
+implementation revision `bff318b21cb4c37769ccac7007a4b78818238624` on
 2026-08-12. The allocated Product identity is `1.0.17.0 canary`. Its immutable
 Architecture Portal snapshot records source revision
 `195001b494f1c74995dc83fd35b5add00154edfd`; later commits changed acceptance,
@@ -33,7 +33,7 @@ the Project mutation.
 ## Automated results
 
 All commands below ran from a clean tracked tree at implementation revision
-`a7bbe10d1a57392959c10cf82c5c122063e0eee9`. Browser and Creator gates used the
+`bff318b21cb4c37769ccac7007a4b78818238624`. Browser and Creator gates used the
 locked Emscripten 6.0.5 toolchain, Node 22.16.0, and its bundled Python 3.13.3.
 
 | Gate | Result |
