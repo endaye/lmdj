@@ -116,8 +116,8 @@ Run:
 
 ```bash
 scripts/core.sh configure dev
-cmake --build build/core/dev --target lmdj_project_io_storage_platform_contract_tests --parallel
-ctest --test-dir build/core/dev -R project_io.storage_platform_contract --output-on-failure
+cmake --build build/core/dev --target lmdj_project_storage_platform_tests --parallel
+ctest --test-dir build/core/dev -R '^project_io\.storage_platform$' --output-on-failure
 scripts/web-toolchain-conformance.sh build-project-io
 npm --prefix tests/platform/web test -- --project=chromium \
   tests/platform/web/project_io/project_io_web_conformance.spec.mjs

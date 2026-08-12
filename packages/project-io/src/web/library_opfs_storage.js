@@ -50,7 +50,7 @@ mergeInto(LibraryManager.library, {
     status(error) {
       const table = Object.freeze({
         NotFoundError: -2,
-        NoModificationAllowedError: -7,
+        NoModificationAllowedError: -3,
         QuotaExceededError: -6,
         InvalidStateError: -5,
       });
@@ -522,10 +522,10 @@ mergeInto(LibraryManager.library, {
     },
 
     async publishDirectoryIfAbsent(
-        sourceParts, destinationParts, observer = null) {
+        sourceParts, destinationParts, platformIdentity, observer = null) {
       const sourcePath = this.canonicalPath(sourceParts);
       const destinationPath = this.canonicalPath(destinationParts);
-      const lease = this.coveringLease(destinationPath);
+      const lease = this.activeLease(destinationPath, platformIdentity);
       if (lease.projectPath !== destinationPath) {
         throw new DOMException("", "InvalidStateError");
       }
@@ -816,8 +816,8 @@ mergeInto(LibraryManager.library, {
         path, length, data, dataLength, platformIdentity, observer) {
       const parts = this.parts(path, length);
       const destination = this.canonicalPath(parts);
-      this.activeLease(destination, platformIdentity);
       if ((await this.fileState(parts)).state !== "absent") return -4;
+      this.activeLease(destination, platformIdentity);
       const payload = this.bytes(data, dataLength);
       const intent = await this.createIntent(
           parts, "create_immutable", payload, platformIdentity);
@@ -937,8 +937,7 @@ mergeInto(LibraryManager.library, {
     try {
       return await LmdjOpfs.acquireWriter(path, length, platformIdentity);
     } catch (error) {
-      const status = LmdjOpfs.status(error);
-      return status === -7 ? -3 : status;
+      return LmdjOpfs.status(error);
     }
   }),
 
@@ -1011,8 +1010,7 @@ mergeInto(LibraryManager.library, {
           return await LmdjOpfs.createImmutable(
               path, length, data, dataLength, platformIdentity, null);
         } catch (error) {
-          const status = LmdjOpfs.status(error);
-          return status === -7 ? -3 : status;
+          return LmdjOpfs.status(error);
         }
       }),
 
@@ -1023,8 +1021,7 @@ mergeInto(LibraryManager.library, {
           return await LmdjOpfs.createImmutable(
               path, length, data, dataLength, platformIdentity, LmdjOpfsTest);
         } catch (error) {
-          const status = LmdjOpfs.status(error);
-          return status === -7 ? -3 : status;
+          return LmdjOpfs.status(error);
         }
       }),
 
@@ -1036,8 +1033,7 @@ mergeInto(LibraryManager.library, {
               path, length, data, dataLength, platformIdentity, null);
           return 0;
         } catch (error) {
-          const status = LmdjOpfs.status(error);
-          return status === -7 ? -3 : status;
+          return LmdjOpfs.status(error);
         }
       }),
 
@@ -1049,8 +1045,7 @@ mergeInto(LibraryManager.library, {
               path, length, data, dataLength, platformIdentity, LmdjOpfsTest);
           return 0;
         } catch (error) {
-          const status = LmdjOpfs.status(error);
-          return status === -7 ? -3 : status;
+          return LmdjOpfs.status(error);
         }
       }),
 
@@ -1061,8 +1056,7 @@ mergeInto(LibraryManager.library, {
           return await LmdjOpfs.appendDurable(
               path, length, prefix, data, dataLength, platformIdentity, null);
         } catch (error) {
-          const status = LmdjOpfs.status(error);
-          return status === -7 ? -3 : status;
+          return LmdjOpfs.status(error);
         }
       }),
 
@@ -1074,8 +1068,7 @@ mergeInto(LibraryManager.library, {
               path, length, prefix, data, dataLength, platformIdentity,
               LmdjOpfsTest);
         } catch (error) {
-          const status = LmdjOpfs.status(error);
-          return status === -7 ? -3 : status;
+          return LmdjOpfs.status(error);
         }
       }),
 
@@ -1149,14 +1142,14 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_publish_directory_if_absent__deps: ["$LmdjOpfs"],
   lmdj_opfs_publish_directory_if_absent:
-      (source, sourceLength, destination, destinationLength) =>
+      (source, sourceLength, destination, destinationLength, platformIdentity) =>
           Asyncify.handleAsync(async () => {
             try {
               const sourceParts = LmdjOpfs.parts(source, sourceLength);
               const destinationParts =
                   LmdjOpfs.parts(destination, destinationLength);
               return await LmdjOpfs.publishDirectoryIfAbsent(
-                  sourceParts, destinationParts);
+                  sourceParts, destinationParts, platformIdentity);
             } catch (error) {
               return LmdjOpfs.status(error);
             }
@@ -1165,14 +1158,14 @@ mergeInto(LibraryManager.library, {
   lmdj_opfs_publish_directory_if_absent_test__deps:
       ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_publish_directory_if_absent_test:
-      (source, sourceLength, destination, destinationLength) =>
+      (source, sourceLength, destination, destinationLength, platformIdentity) =>
           Asyncify.handleAsync(async () => {
             try {
               const sourceParts = LmdjOpfs.parts(source, sourceLength);
               const destinationParts =
                   LmdjOpfs.parts(destination, destinationLength);
               return await LmdjOpfs.publishDirectoryIfAbsent(
-                  sourceParts, destinationParts, LmdjOpfsTest);
+                  sourceParts, destinationParts, platformIdentity, LmdjOpfsTest);
             } catch (error) {
               return LmdjOpfs.status(error);
             }

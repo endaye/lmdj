@@ -86,7 +86,8 @@ IntentInventory storage_intent_inventory(
   return inventory;
 }
 
-nlohmann::json mutation_result(const Result<void>& result) {
+template <typename T>
+nlohmann::json mutation_result(const Result<T>& result) {
   if (result.has_value()) {
     return {{"status", "succeeded"}, {"errorCode", ""},
             {"storageCondition", ""}};
@@ -222,6 +223,8 @@ nlohmann::json run_suite() {
     if (action == "distinct_platform_mutation_ownership") {
       const auto existing_path = fault_bundle / "existing.bin";
       const auto absent_path = fault_bundle / "absent.bin";
+      const auto publication_source = fault_bundle / "publication-source";
+      const auto publication_destination = fault_bundle / "published";
       success(
           platform->ensure_directory(fault_bundle),
           "distinct platform ownership directory");
@@ -233,6 +236,16 @@ nlohmann::json run_suite() {
       success(
           platform->create_immutable(existing_path, bytes("seed")),
           "ownership existing seed");
+      success(
+          platform->ensure_directory(publication_source),
+          "ownership publication source");
+      success(
+          platform->create_immutable(
+              publication_source / "payload.bin", bytes("publication")),
+          "ownership publication payload");
+      auto publication_owner_lease = value(
+          platform->acquire_writer(publication_destination),
+          "ownership publication destination lease");
 
       const auto intent_inventory_before = storage_intent_inventory(*platform);
       const auto distinct_platform =
@@ -251,8 +264,18 @@ nlohmann::json run_suite() {
           "ownership existing after replace");
       const auto create = distinct_platform->create_immutable(
           absent_path, bytes("create-bypass"));
+      const auto existing_create = distinct_platform->create_immutable(
+          existing_path, bytes("existing-bypass"));
+      const auto publish = distinct_platform->publish_directory_if_absent(
+          publication_source, publication_destination);
       const bool absent_after_create = !value(
           platform->exists(absent_path), "ownership absent after create");
+      const bool publication_source_after = value(
+          platform->directory_exists(publication_source),
+          "ownership publication source after publish");
+      const bool publication_destination_after = value(
+          platform->directory_exists(publication_destination),
+          "ownership publication destination after publish");
       const auto intent_inventory_after = storage_intent_inventory(*platform);
 
       const auto before_owner_mutation = value(
@@ -274,22 +297,12 @@ nlohmann::json run_suite() {
       return {
           {"complete", true},
           {"result",
-           {{"acquisition",
-             competing_acquisition.has_value()
-                 ? nlohmann::json{{"status", "succeeded"},
-                                  {"errorCode", ""},
-                                  {"storageCondition", ""}}
-                 : nlohmann::json{
-                       {"status", "failed"},
-                       {"errorCode",
-                        foundation::error_code_name(
-                            competing_acquisition.error().code)},
-                       {"storageCondition",
-                        competing_acquisition.error().details.value(
-                            "storage_condition", "")}}},
+           {{"acquisition", mutation_result(competing_acquisition)},
             {"append", mutation_result(append)},
             {"replace", mutation_result(replace)},
             {"create", mutation_result(create)},
+            {"existingCreate", mutation_result(existing_create)},
+            {"publish", mutation_result(publish)},
             {"afterAppend",
              {{"length", after_append.size()},
               {"content", text(after_append)}}},
@@ -297,6 +310,8 @@ nlohmann::json run_suite() {
              {{"length", after_replace.size()},
               {"content", text(after_replace)}}},
             {"absentAfterCreate", absent_after_create},
+            {"publicationSourceAfter", publication_source_after},
+            {"publicationDestinationAfter", publication_destination_after},
             {"intentEntriesBefore", intent_inventory_before.size()},
             {"intentEntriesAfter", intent_inventory_after.size()},
             {"intentInventoryUnchanged",

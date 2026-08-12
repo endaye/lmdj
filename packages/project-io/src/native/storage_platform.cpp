@@ -621,11 +621,13 @@ foundation::Result<void> validate_directory_contents(
         ::closedir(stream);
         return validated;
       }
-    } else if (!S_ISREG(metadata.st_mode)) {
+    } else if (!S_ISREG(metadata.st_mode) || metadata.st_nlink != 1) {
       ::closedir(stream);
       return foundation::Result<void>::failure(
           invalid_storage_path(
-              "managed storage tree contains a special file",
+              S_ISREG(metadata.st_mode)
+                  ? "managed storage tree contains a hard-linked file"
+                  : "managed storage tree contains a special file",
               entry_path));
     }
   }

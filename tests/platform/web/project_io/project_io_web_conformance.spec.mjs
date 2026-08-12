@@ -318,9 +318,17 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
   expect(result.append).toEqual(projectBusy);
   expect(result.replace).toEqual(projectBusy);
   expect(result.create).toEqual(projectBusy);
+  expect(result.existingCreate).toEqual({
+    status: "failed",
+    errorCode: "IO_ERROR",
+    storageCondition: "already_exists",
+  });
+  expect(result.publish).toEqual(projectBusy);
   expect(result.afterAppend).toEqual({length: 4, content: "seed"});
   expect(result.afterReplace).toEqual({length: 4, content: "seed"});
   expect(result.absentAfterCreate).toBe(true);
+  expect(result.publicationSourceAfter).toBe(true);
+  expect(result.publicationDestinationAfter).toBe(false);
   expect(result.intentEntriesAfter).toBe(result.intentEntriesBefore);
   expect(result.intentInventoryUnchanged).toBe(true);
   expect(result.ownerContent).toBe("seed-owner");

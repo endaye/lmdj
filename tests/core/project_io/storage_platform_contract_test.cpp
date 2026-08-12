@@ -751,6 +751,25 @@ void test_special_files_are_rejected_without_blocking() {
   LMDJ_CHECK(managed_tree.error().code == ErrorCode::invalid_project);
 }
 
+void test_managed_tree_rejects_hard_linked_regular_files() {
+  TempDirectory temp;
+  const auto managed = temp.path() / "hard-linked-tree";
+  const auto payload = managed / "payload.bin";
+  const auto alias = managed / "alias.bin";
+  std::filesystem::create_directories(managed);
+  write_bytes(payload, "project");
+  std::filesystem::create_hard_link(payload, alias);
+
+  struct stat metadata {};
+  LMDJ_CHECK(::stat(payload.c_str(), &metadata) == 0);
+  LMDJ_CHECK(metadata.st_nlink == 2);
+
+  auto platform = make_default_project_storage_platform();
+  const auto rejected = platform->validate_managed_tree(managed);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+}
+
 void test_symlinks_are_rejected_and_system_failures_are_typed() {
   TempDirectory temp;
   const auto managed = temp.path() / "managed";
@@ -809,6 +828,7 @@ int main() {
     test_replacement_readers_observe_only_complete_versions();
     test_complete_read_serializes_compliant_same_inode_mutation();
     test_special_files_are_rejected_without_blocking();
+    test_managed_tree_rejects_hard_linked_regular_files();
     test_symlinks_are_rejected_and_system_failures_are_typed();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -32,14 +32,14 @@ int lmdj_opfs_replace_complete_test(
 int lmdj_opfs_append_durable_test(
     const char*, int, double, const void*, int, int);
 int lmdj_opfs_publish_directory_if_absent_test(
-    const char*, int, const char*, int);
+    const char*, int, const char*, int, int);
 #endif
 int lmdj_opfs_remove(const char*, int);
 int lmdj_opfs_list_names(const char*, int, char**, int*);
 int lmdj_opfs_list_directories(const char*, int, char**, int*);
 int lmdj_opfs_remove_tree(const char*, int);
 int lmdj_opfs_publish_directory_if_absent(
-    const char*, int, const char*, int);
+    const char*, int, const char*, int, int);
 int lmdj_opfs_validate_tree(const char*, int);
 }
 
@@ -256,7 +256,8 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
         source_path.data(),
         source_path.size(),
         destination_path.data(),
-        destination_path.size());
+        destination_path.size(),
+        platform_identity_);
     return status < 0
                ? foundation::Result<void>::failure(
                      web_error(status, "atomic directory publish"))
