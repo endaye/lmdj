@@ -902,7 +902,7 @@ jq '{product_build,revision,assembly_lock_sha256,channel}' \
 ```bash
 git add -- apps/architecture-portal/versioned_docs/version-1.0.18.0 \
   apps/architecture-portal/versioned_sidebars/version-1.0.18.0-sidebars.json \
-  apps/architecture-portal/versioned_diagrams/1.0.18.0 \
+  apps/architecture-portal/static/versions/1.0.18.0 \
   apps/architecture-portal/versioned_metadata/version-1.0.18.0.json \
   apps/architecture-portal/versions.json
 git diff --cached --name-status
