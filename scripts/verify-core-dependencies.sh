@@ -54,8 +54,12 @@ grep -q "$pico_upstream_commit" "$third_party/README.md"
 verify_root="$(mktemp -d)"
 trap 'rm -rf "$verify_root"' EXIT
 
-tar -tJf "$json_archive" | grep -q '^json/LICENSE.MIT$'
-tar -tJf "$json_archive" | grep -q '^json/single_include/nlohmann/json.hpp$'
+# Read the listing once: piping tar into `grep -q` makes grep exit on the first
+# match, and GNU tar then reports a write error that `pipefail` turns into a
+# failure. BSD tar stays quiet, so this only reproduces on Linux.
+json_listing="$(tar -tJf "$json_archive")"
+grep -qx 'json/LICENSE.MIT' <<<"$json_listing"
+grep -qx 'json/single_include/nlohmann/json.hpp' <<<"$json_listing"
 cmake -S "$pico_root" -B "$verify_root/pico-build" \
   -DPICOSHA2_TEST=OFF -DPICOSHA2_EXAMPLE=OFF >/dev/null
 
