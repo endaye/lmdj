@@ -345,6 +345,26 @@ nlohmann::json run_suite() {
           "publication fault write");
       return {{"complete", true}, {"result", {{"state", "published"}}}};
     }
+    if (action == "publish_publication_failure") {
+      auto lease = value(
+          platform->acquire_writer(fault_bundle),
+          "publication failure destination lease");
+      const auto publish = platform->publish_directory_if_absent(
+          publication_source, fault_bundle);
+      if (publish.has_value()) {
+        return {
+            {"complete", true},
+            {"result", {{"publish", "unexpected-success"}}},
+        };
+      }
+      return {
+          {"complete", true},
+          {"result",
+           {{"publish", "failed"},
+            {"errorCode",
+             foundation::error_code_name(publish.error().code)}}},
+      };
+    }
     if (action == "inspect_publication" ||
         action == "recover_publication" ||
         action == "recover_and_publish") {
