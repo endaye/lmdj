@@ -193,18 +193,28 @@ diagnose, not a reason to retry until it passes. A deliberate rerun after a
 code or environment correction must be recorded as a new result.
 
 The PR and `main` Core CI Linux workloads prefer the repository's trusted
-runner pool whenever at least one online, idle runner carries the
-`self-hosted`, `Linux`, `X64`, `lmdj-linux`, and `contabo` labels. Selection is
-label-based rather than bound to a runner name, so GitHub assigns each selected
-job to any matching free runner. The selector uses GitHub-hosted Ubuntu for an
-untrusted fork, a missing status token, a Runner API failure, or a pool with no
-online idle matching runner. Selection happens before the workload jobs start;
-a semantic failure on the selected lane is final and is not retried on a
-GitHub-hosted runner.
+runner pool whenever at least one online runner carries the `self-hosted`,
+`Linux`, `X64`, `lmdj-linux`, and `contabo` labels. Selection is label-based
+rather than bound to a runner name, so GitHub assigns each selected job to any
+matching free runner. The selector uses GitHub-hosted Ubuntu for an untrusted
+fork, a missing status token, a Runner API failure, or a pool with no online
+matching runner. Selection happens before the workload jobs start; a semantic
+failure on the selected lane is final and is not retried on a GitHub-hosted
+runner.
 
-The trusted Linux pool currently contains two independent runner services and
-therefore executes at most two selected jobs concurrently; additional jobs
-queue. Each CI CMake build is capped at three parallel jobs. Native Linux jobs
+Eligibility deliberately ignores whether a matching runner is currently busy.
+GitHub already queues a label-matched job against a loaded pool, so a busy
+runner is a latency condition while an absent pool is an availability
+condition. Because the selector resolves once for the whole run, treating the
+two alike diverted an entire manifest to paid infrastructure whenever
+concurrent runs saturated the pool for an instant — the dominant cost driver
+in the 2026-08-12 run history. A saturated pool now queues, and the selector
+reports online and idle counts as diagnostics.
+
+The trusted Linux pool's concurrency equals the number of online runner
+services, currently two; additional selected jobs queue behind them. Raising
+that number is an operational change on the existing hosts, not a workflow
+change. Each CI CMake build is capped at three parallel jobs. Native Linux jobs
 use the pool's shared checkout-external persistent `ccache`, while Emscripten
 jobs deliberately bypass it. The trusted M1 runner uses its own persistent
 `ccache` with the same three-job build cap. GitHub-hosted Linux and macOS lanes
@@ -214,7 +224,13 @@ results.
 
 The macOS CI fallback is infrastructure recovery, not a test retry. Runner
 selection uses GitHub-hosted macOS immediately when the trusted self-hosted
-runner is unavailable. When the self-hosted lane is selected, GitHub-hosted
+runner is offline, missing, or mislabeled. A busy trusted Mac queues instead,
+on the same reasoning as the Linux pool and with more weight behind it:
+GitHub-hosted macOS bills at 10.3 times the Linux rate and was 57 percent of
+the 2026-08-01..13 Actions spend on 11 percent of the minutes. Offline is
+still an availability condition, because a single laptop runner that is
+asleep would otherwise hold a Pull Request in the queue rather than merely
+delay it. When the self-hosted lane is selected, GitHub-hosted
 macOS may run the same gates only if checkout, acceleration/`ccache` setup,
 runner communication, or the 30-minute job limit prevents that lane from
 publishing a terminal result. A published preparation, Core Proof, or

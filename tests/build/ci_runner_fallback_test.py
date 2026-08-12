@@ -121,6 +121,66 @@ class CiRunnerFallbackTest(unittest.TestCase):
                 self.assertIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
 
+    def test_hosted_web_gates_record_why_they_are_not_a_capacity_decision(self) -> None:
+        """The routing reason must survive, or a later cost pass will undo it.
+
+        These lanes are hosted because the Wasm/OPFS fault matrix is
+        timing-sensitive and exceeded bounded budgets on the heterogeneous
+        self-hosted pool. Extra runner slots and toolchain caches do not
+        address timing sensitivity, so neither is grounds for moving them.
+        """
+        for job_name in ("web-toolchain-conformance", "creator-web"):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn("timing-sensitive", job)
+                self.assertIn("bounded test budgets", job)
+                self.assertIn("for determinism, not for capacity", job)
+
+    def test_selectors_queue_on_a_busy_pool_instead_of_paying_for_hosted(self) -> None:
+        """A loaded trusted pool must queue, never divert to paid runners.
+
+        `select-*` resolves once, before any workload job starts. Treating a
+        momentarily busy pool as unavailable sent an entire six-lane manifest
+        to GitHub-hosted infrastructure, which is what made concurrent retries
+        expensive rather than merely slow.
+        """
+        for selector_name in ("select-ubuntu-runner", "select-macos-runner"):
+            with self.subTest(selector=selector_name):
+                selector = self.workflow_job(selector_name)
+                eligibility = re.search(
+                    r'eligible_count="\$\(\n(?P<body>.*?)\n          \)"',
+                    selector,
+                    flags=re.DOTALL,
+                )
+                self.assertIsNotNone(
+                    eligibility, f"{selector_name} has no eligibility expression"
+                )
+                assert eligibility is not None
+                body = eligibility.group("body")
+                self.assertNotIn(".busy == false", body)
+                self.assertIn('.status == "online"', body)
+
+    def test_selectors_still_fall_back_when_no_trusted_runner_is_online(self) -> None:
+        ubuntu = self.workflow_job("select-ubuntu-runner")
+        macos = self.workflow_job("select-macos-runner")
+        self.assertIn(
+            "select_hosted 'no online trusted self-hosted runner is available'",
+            ubuntu,
+        )
+        self.assertIn(
+            "select_hosted 'self-hosted runner is offline, missing, or mislabeled'",
+            macos,
+        )
+        for selector in (ubuntu, macos):
+            self.assertIn("untrusted fork pull request", selector)
+            self.assertIn("runner status token is unavailable", selector)
+
+    def test_ubuntu_selector_still_reports_idle_capacity_as_diagnostics(self) -> None:
+        selector = self.workflow_job("select-ubuntu-runner")
+        self.assertIn("idle_count=", selector)
+        self.assertIn(".busy == false", selector)
+        self.assertIn("selected jobs queue instead of using paid runners", selector)
+
     def test_macos_jobs_keep_selector_fallback_and_adjudicator_topology(self) -> None:
         selector = self.workflow_job("select-macos-runner")
         primary = self.workflow_job("macos-primary")
