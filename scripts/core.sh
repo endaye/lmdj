@@ -130,6 +130,7 @@ case "$command_name" in
       --version-file products/lmdj/version.json \
       --assembly "$assembly_path" \
       --lock "$assembly_lock_path"
+    product_tag="$(python3 scripts/version.py tag-name --version-file products/lmdj/version.json)"
 
     cmake --preset release
     cmake --build --preset release
@@ -187,7 +188,7 @@ case "$command_name" in
     cmake -E remove_directory "$proof_run_root"
     trap - EXIT
     echo "Headless Core Proof: PASS"
-    echo "Product Build: 1.0.16.9"
+    echo "Product Build: ${product_tag#lmdj-v}"
     echo "Channel: canary"
     echo "Assembly lock: MATCH"
     ;;

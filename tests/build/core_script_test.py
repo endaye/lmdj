@@ -116,6 +116,22 @@ class CoreScriptTest(unittest.TestCase):
             proof_source,
         )
 
+    def test_proof_reports_product_build_from_version_authority(self) -> None:
+        script_source = CORE_SCRIPT.read_text(encoding="utf-8")
+        proof_source = script_source.split("  proof)\n", maxsplit=1)[1].split(
+            "  clean)\n", maxsplit=1
+        )[0]
+        self.assertIn(
+            'product_tag="$(python3 scripts/version.py tag-name '
+            '--version-file products/lmdj/version.json)"',
+            proof_source,
+        )
+        self.assertIn(
+            'echo "Product Build: ${product_tag#lmdj-v}"',
+            proof_source,
+        )
+        self.assertNotRegex(proof_source, r'Product Build: [0-9]+(?:\.[0-9]+){3}')
+
     def test_unknown_test_mode_is_a_usage_error(self) -> None:
         completed = self.run_core("test", "dev", "unknown")
         self.assertEqual(completed.returncode, 64)

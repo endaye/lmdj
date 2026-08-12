@@ -914,6 +914,8 @@ git commit -m "docs(portal): freeze 1.0.18.0 canary snapshot"
 
 **Files:**
 
+- Modify: `scripts/core.sh` if candidate Proof reports an identity different from the verified manifest
+- Modify: `tests/build/core_script_test.py` for the corresponding identity regression
 - Modify: `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`
 - Modify: `docs/quality/2026-08-12-stage7-creator-editor-review.md`
 - Create: `docs/release-evidence/2026-08-13-stage7-remediation-canary.md`
@@ -941,6 +943,8 @@ python3 scripts/version.py verify \
 ```
 
 Expected: every automated gate passes. Record exact revision, toolchain identity, commands, and result. A failure is fixed in the owning Task with a new atomic commit; do not edit evidence to mask it.
+
+The Core Proof summary must derive Product Build from `products/lmdj/version.json`; a literal or stale reported identity is a gate failure even when the underlying tests exit zero.
 
 - [ ] Produce a human canary sheet containing revision, Product Build, host manifest SHA-256, browser/version, ten manual steps from Stage 7 §13.3, heard/not-heard results, duplicate/missing/stuck press observations, autoplay behavior, Project data preservation, and privacy-safe report hash.
 
