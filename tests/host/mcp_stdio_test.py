@@ -534,14 +534,16 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     version = json.loads(
         (REPO_ROOT / "products/lmdj/version.json").read_text(encoding="utf-8")
     )
-    assert version == {
-        "contract": "lmdj.product-version.v1",
-        "product": "lmdj",
-        "milestone": 1,
-        "minor": 0,
-        "build": 16,
-        "patch": 9,
+    # Shape and types, not a duplicated copy of the current identity.
+    assert set(version) == {
+        "contract", "product", "milestone", "minor", "build", "patch",
     }
+    assert version["contract"] == "lmdj.product-version.v1"
+    assert version["product"] == "lmdj"
+    assert all(
+        isinstance(version[part], int) and version[part] >= 0
+        for part in ("milestone", "minor", "build", "patch")
+    )
 
     workspace = temp_root / "workspace"
     workspace.mkdir()

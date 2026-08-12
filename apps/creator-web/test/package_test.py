@@ -12,6 +12,28 @@ import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def expected_product_build() -> str:
+    """The Product Build the packaged manifest must carry, read from source."""
+    version = json.loads(
+        (REPO_ROOT / "products/lmdj/version.json").read_text(encoding="utf-8")
+    )
+    return (
+        f"{version['milestone']}.{version['minor']}"
+        f".{version['build']}.{version['patch']}"
+    )
+
+
+def module_version(module_directory: str) -> str:
+    """The declared version of a Module or Host, read from its manifest."""
+    manifest = json.loads(
+        (REPO_ROOT / module_directory / "module.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    return manifest["version"]
+
 PACKAGE_TOOL = REPO_ROOT / "apps/creator-web/tools/package.py"
 
 
@@ -37,14 +59,13 @@ class CreatorPackageTest(unittest.TestCase):
         (self.repo / "tools/web-runtime").mkdir(parents=True)
         self.ui.joinpath("assets").mkdir(parents=True)
         self.runtime.mkdir()
-        version = {
-            "contract": "lmdj.product-version.v1",
-            "product": "lmdj",
-            "milestone": 1,
-            "minor": 0,
-            "build": 16,
-            "patch": 9,
-        }
+        # Derive the fixture from the real identity so it cannot drift out of
+        # step with the Product Build the packaging tool reads.
+        version = json.loads(
+            (REPO_ROOT / "products/lmdj/version.json").read_text(
+                encoding="utf-8"
+            )
+        )
         lock = json.loads(
             (REPO_ROOT / "tools/web-runtime/emscripten.lock.json").read_text(
                 encoding="utf-8"
@@ -120,10 +141,15 @@ class CreatorPackageTest(unittest.TestCase):
         manifest = json.loads(manifest_bytes)
         self.assertEqual(self.module.canonical_json(manifest), manifest_bytes)
         self.assertEqual(manifest["distribution_contract"], "lmdj.creator-web.distribution.v1")
-        self.assertEqual(manifest["product_build"], "1.0.16.9")
+        self.assertEqual(manifest["product_build"], expected_product_build())
         self.assertEqual(manifest["host_id"], "creator-web")
-        self.assertEqual(manifest["host_version"], "1.0.6")
-        self.assertEqual(manifest["platform_version"], "0.1.6")
+        self.assertEqual(
+            manifest["host_version"], module_version("apps/creator-web")
+        )
+        self.assertEqual(
+            manifest["platform_version"],
+            module_version("packages/web-runtime-platform"),
+        )
         self.assertEqual(
             manifest["compatible_hosts"],
             [{"host_id": "web-runtime-host", "host_version": "1.2.6"}],
