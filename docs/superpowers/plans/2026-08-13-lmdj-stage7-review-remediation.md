@@ -882,8 +882,9 @@ npm --prefix apps/architecture-portal run check:current
 - [ ] Freeze the exact current Product Build from a clean commit:
 
 ```bash
-PRODUCT_BUILD="$(python3 scripts/version.py current \
-  --version-file products/lmdj/version.json)"
+PRODUCT_BUILD="$(jq -r \
+  '[.milestone, .minor, .build, .patch] | join(".")' \
+  products/lmdj/version.json)"
 test "$PRODUCT_BUILD" = "1.0.18.0"
 scripts/architecture-portal.sh version "$PRODUCT_BUILD" canary
 ```
