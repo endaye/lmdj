@@ -7,6 +7,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: >-
+          Comma-separated lanes to run, e.g. "web_toolchain,creator". Leave
+          empty to run every lane, which is what a dispatch does today.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -43,6 +50,7 @@ jobs:
           PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MANIFEST_PATH: ${{ runner.temp }}/ci-scope.json
+          REQUESTED_LANES: ${{ inputs.lanes }}
         run: |
           set -euo pipefail
           python3 scripts/ci/change_scope.py \
@@ -54,7 +62,8 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --manifest-out "$MANIFEST_PATH" \
             --github-output "$GITHUB_OUTPUT" \
-            --summary "$GITHUB_STEP_SUMMARY"
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --lanes "${REQUESTED_LANES:-}"
       - name: Retain the scope manifest
         uses: actions/upload-artifact@v4
         with:

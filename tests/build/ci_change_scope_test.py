@@ -342,6 +342,80 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(self.true_lanes(manifest), {"docs_static", "ci_contract"})
         self.assertTrue(any("deferred" in reason for reason in manifest["reasons"]))
 
+    def test_dispatch_without_lanes_still_selects_every_lane(self):
+        manifest = self.classify(
+            ["docs/guide.md"], event_name="workflow_dispatch"
+        )
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(self.true_lanes(manifest), set(self.policy["lanes"]))
+
+    def test_dispatch_with_lanes_runs_exactly_those_lanes(self):
+        manifest = self.classify(
+            ["docs/guide.md"],
+            event_name="workflow_dispatch",
+            requested_lanes=["web_toolchain", "creator"],
+        )
+        self.assertEqual(manifest["mode"], "requested")
+        self.assertEqual(self.true_lanes(manifest), {"web_toolchain", "creator"})
+        self.assertEqual(
+            manifest["required_jobs"], ["creator-web", "web-toolchain-conformance"]
+        )
+        self.assertTrue(
+            any("requested lanes" in reason for reason in manifest["reasons"]),
+            "a requested manifest must say the lanes were requested",
+        )
+
+    def test_requested_lanes_are_independent_of_the_changed_paths(self):
+        # The point of the input is to verify a lane the diff does not select.
+        manifest = self.classify(
+            ["docs/guide.md"],
+            event_name="workflow_dispatch",
+            requested_lanes=["core_asan"],
+        )
+        self.assertEqual(self.true_lanes(manifest), {"core_asan"})
+
+    def test_lane_selection_fails_closed(self):
+        with self.subTest("unknown lane"):
+            with self.assertRaises(ValueError):
+                self.classify(
+                    ["docs/guide.md"],
+                    event_name="workflow_dispatch",
+                    requested_lanes=["not_a_lane"],
+                )
+        with self.subTest("empty lane name"):
+            with self.assertRaises(ValueError):
+                self.classify(
+                    ["docs/guide.md"],
+                    event_name="workflow_dispatch",
+                    requested_lanes=[" "],
+                )
+        for event in ("push", "pull_request"):
+            with self.subTest(event=event):
+                with self.assertRaises(ValueError):
+                    self.classify(
+                        ["docs/guide.md"],
+                        event_name=event,
+                        requested_lanes=["docs_static"],
+                    )
+
+    def test_requested_manifest_must_select_a_nonempty_lane_subset(self):
+        manifest = self.classify(
+            ["docs/guide.md"],
+            event_name="workflow_dispatch",
+            requested_lanes=["docs_static"],
+        )
+        broken = json.loads(json.dumps(manifest))
+        broken["lanes"] = {lane: False for lane in broken["lanes"]}
+        broken["required_jobs"] = []
+        with self.assertRaises(ValueError):
+            self.module.validate_manifest(broken, self.policy)
+
+    def test_dispatch_lane_input_is_declared_and_threaded(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        self.assertIn("      lanes:", workflow)
+        self.assertIn("REQUESTED_LANES: ${{ inputs.lanes }}", workflow)
+        self.assertIn('--lanes "${REQUESTED_LANES:-}"', workflow)
+
     def test_invalid_sha_noncanonical_path_duplicate_path_and_unknown_status_fail(self):
         with self.subTest("invalid sha"):
             with self.assertRaises(ValueError):
