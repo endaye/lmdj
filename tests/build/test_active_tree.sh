@@ -49,6 +49,7 @@ done
 coverage_artifact="$(
   find "$repo_root" \
     -path "$repo_root/build/core" -prune -o \
+    -path "$repo_root/.worktrees" -prune -o \
     -type f \
     \( \
       -name '*.profraw' -o \
