@@ -103,7 +103,7 @@ TOP_LEVELS = {
     "CMakeLists.txt", "CMakePresets.json", "README.md", "apps", "cmake",
     "contracts", "docs", "netlify.toml", "output", "packages", "packaging",
     "products", "providers", "references", "scripts", "testdata", "tests",
-    "tools", "workers",
+    "third_party", "tools", "workers",
 }
 
 CONCURRENCY_STRESS_SOURCES = (
