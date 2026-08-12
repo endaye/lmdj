@@ -12,12 +12,14 @@ const sourceRoutes = new Map([
   ["/formal-host/src/main.mjs", resolve(hostRoot, "src/main.mjs")],
   ["/packages/web-runtime-platform/web/diagnostic_client.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/diagnostic_client.mjs")],
   ["/packages/web-runtime-platform/web/input_adapters.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/input_adapters.mjs")],
+  ["/packages/web-runtime-platform/web/integrity.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/integrity.mjs")],
   ["/packages/web-runtime-platform/web/preflight.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/preflight.mjs")],
   ["/packages/web-runtime-platform/web/project_bundle_reader.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/project_bundle_reader.mjs")],
   ["/packages/web-runtime-platform/web/protocol.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/protocol.mjs")],
   ["/packages/web-runtime-platform/web/runtime_loader.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/runtime_loader.mjs")],
   ["/packages/web-runtime-platform/web/runtime_session.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/runtime_session.mjs")],
   ["/packages/web-runtime-platform/web/state_machine.mjs", resolve(repoRoot, "packages/web-runtime-platform/web/state_machine.mjs")],
+  ["/products/lmdj/generated/web-runtime-identity.mjs", resolve(repoRoot, "products/lmdj/generated/web-runtime-identity.mjs")],
 ]);
 
 test("source shell enforces activation, interruption, one-sequence recovery, and once-only cleanup", async ({ page }) => {
