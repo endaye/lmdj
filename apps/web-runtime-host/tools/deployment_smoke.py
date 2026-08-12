@@ -29,24 +29,15 @@ REQUIRED_SECURITY_HEADERS = {
     "x-robots-tag": "noindex, nofollow, noarchive",
 }
 REQUIRED_ROBOTS_DIRECTIVES = frozenset(("noindex", "nofollow", "noarchive"))
-EXPECTED_ASSETS = (
-    ("assets/diagnostic-project.", ".mjs", "host_module"),
-    ("assets/input-adapters.", ".mjs", "host_module"),
-    ("assets/main.", ".mjs", "host_main"),
-    ("assets/preflight.", ".mjs", "host_module"),
-    ("assets/protocol.", ".mjs", "host_module"),
-    ("assets/runtime.", ".js", "runtime_script"),
-    ("assets/runtime.", ".wasm", "runtime_wasm"),
-    ("assets/state-machine.", ".mjs", "host_module"),
-    ("assets/styles.", ".css", "host_style"),
-)
 MANIFEST_KEYS = {
     "assets",
     "distribution_contract",
     "emscripten",
     "heap_bytes",
+    "host_id",
     "host_version",
     "manifest_version",
+    "platform_version",
     "product_build",
     "protocol_version",
     "resource_limits",
@@ -61,6 +52,22 @@ EQUIVALENT_MEDIA_TYPES = {
     "text/javascript": frozenset(("text/javascript", "application/javascript")),
 }
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+HASHED_ASSET_PATTERN = re.compile(
+    r"^assets/[a-z0-9-]+\.([0-9a-f]{64})\.(?:css|js|mjs|wasm)$"
+)
+ALLOWED_ASSET_ROLES = frozenset(
+    (
+        "host_main",
+        "host_module",
+        "host_style",
+        "platform_module",
+        "runtime_script",
+        "runtime_wasm",
+    )
+)
+SINGLETON_ASSET_ROLES = frozenset(
+    ("host_main", "host_style", "runtime_script", "runtime_wasm")
+)
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -434,11 +441,12 @@ def _validate_manifest(
         )
     assert isinstance(manifest, dict)
     assets = manifest["assets"]
-    if not isinstance(assets, list) or len(assets) != len(EXPECTED_ASSETS):
+    if not isinstance(assets, list) or not assets:
         raise SmokeError("manifest asset inventory is invalid")
     validated: list[dict[str, object]] = []
     seen: set[str] = set()
-    for entry, (prefix, suffix, role) in zip(assets, EXPECTED_ASSETS, strict=True):
+    role_counts = {role: 0 for role in ALLOWED_ASSET_ROLES}
+    for entry in assets:
         if not isinstance(entry, dict) or set(entry) != {
             "bytes", "path", "role", "sha256"
         }:
@@ -446,19 +454,31 @@ def _validate_manifest(
         path = entry["path"]
         digest = entry["sha256"]
         size = entry["bytes"]
+        role = entry["role"]
+        path_match = (
+            HASHED_ASSET_PATTERN.fullmatch(path)
+            if isinstance(path, str)
+            else None
+        )
         if (
-            not isinstance(path, str)
+            path_match is None
             or not isinstance(digest, str)
             or HASH_PATTERN.fullmatch(digest) is None
-            or path != f"{prefix}{digest}{suffix}"
-            or entry["role"] != role
+            or path_match.group(1) != digest
+            or not isinstance(role, str)
+            or role not in ALLOWED_ASSET_ROLES
             or path in seen
         ):
             raise SmokeError("manifest asset inventory is invalid")
         if type(size) is not int or size < 1 or size > MAX_ASSET_BYTES:
             raise SmokeError(f"manifest asset bytes are invalid: {path}")
         seen.add(path)
+        role_counts[role] += 1
         validated.append(entry)
+    if any(role_counts[role] != 1 for role in SINGLETON_ASSET_ROLES):
+        raise SmokeError("manifest required asset role inventory is invalid")
+    if role_counts["host_module"] < 1 or role_counts["platform_module"] < 1:
+        raise SmokeError("manifest required asset role inventory is invalid")
     return validated
 
 
