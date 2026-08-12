@@ -31,6 +31,7 @@ function fixture({
   navigator = {},
   capabilities,
   runtimeTransport,
+  runtimeTerminator,
   inputOwnership,
 } = {}) {
   let request = 0;
@@ -110,8 +111,9 @@ function fixture({
           : {transport: runtimeTransport}),
       }),
       preflight: async () => {},
-      runtimeTerminator: async () => {
+      runtimeTerminator: async (...arguments_) => {
         terminated += 1;
+        await runtimeTerminator?.(...arguments_);
       },
       transport,
       verifyManifest: async () => ({
@@ -650,6 +652,29 @@ test("timeout becomes one terminal restart-required notification", async () => {
   ]);
   await Promise.resolve();
   assert.equal(terminated(), 1);
+});
+
+test("close after a terminal edge awaits the owned cleanup", async () => {
+  let releaseCleanup;
+  const cleanup = new Promise((resolvePromise) => {
+    releaseCleanup = resolvePromise;
+  });
+  const {emitFailure, session} = fixture({
+    runtimeTerminator: () => cleanup,
+  });
+  await session.start();
+  emitFailure(Object.assign(new Error("timeout"), {code: "HOST_TIMEOUT"}));
+  assert.equal(session.diagnostics().state, "restart-required");
+
+  let settled = false;
+  const closing = session.close().then((value) => {
+    settled = true;
+    return value;
+  });
+  await Promise.resolve();
+  assert.equal(settled, false);
+  releaseCleanup();
+  assert.equal(await closing, false);
 });
 
 async function oneEntryBundle() {

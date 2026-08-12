@@ -497,7 +497,6 @@ async function loadPackagedRuntime({ document, window, crypto, manifest }) {
     throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
   }
   window.Module = {
-    ...(window.Module ?? {}),
     lmdjHostManifestBytes: manifest.canonical_bytes,
     lmdjHostManifestSha256: manifest.manifest_sha256,
     wasmBinary: wasmBytes,
@@ -1458,6 +1457,10 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function close() {
+    if (terminalCleanupStarted) {
+      await terminalCleanupPromise;
+      return false;
+    }
     if (closing || machine.state === "closed" || machine.state === "failed") {
       return false;
     }

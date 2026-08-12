@@ -232,10 +232,19 @@ if(EMSCRIPTEN)
     lmdj_web_runtime_pre_js_path
     "${CMAKE_CURRENT_BINARY_DIR}/web-runtime-pre.js"
   )
-  file(WRITE "${lmdj_web_runtime_pre_js_path}" "${lmdj_web_runtime_pre_js}")
+  set(
+    lmdj_web_runtime_post_js_path
+    "${CMAKE_CURRENT_BINARY_DIR}/web-runtime-post.js"
+  )
+  file(
+    WRITE "${lmdj_web_runtime_pre_js_path}"
+    ";(() => {\n${lmdj_web_runtime_pre_js}"
+  )
+  file(WRITE "${lmdj_web_runtime_post_js_path}" "\n})();\n")
   set_property(
     TARGET lmdj_web_runtime_host APPEND PROPERTY LINK_DEPENDS
     "${lmdj_web_runtime_pre_js_path}"
+    "${lmdj_web_runtime_post_js_path}"
   )
   target_link_options(
     lmdj_web_runtime_host
@@ -250,6 +259,7 @@ if(EMSCRIPTEN)
       -sEXIT_RUNTIME=0
       -sENVIRONMENT=web,worker
       "--pre-js=${lmdj_web_runtime_pre_js_path}"
+      "--post-js=${lmdj_web_runtime_post_js_path}"
       "-sDEFAULT_LIBRARY_FUNCS_TO_INCLUDE=['$emscriptenRegisterAudioObject']"
       "-sEXPORTED_FUNCTIONS=${lmdj_web_runtime_exports_csv}"
       -sEXPORTED_RUNTIME_METHODS=ccall
