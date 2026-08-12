@@ -62,7 +62,7 @@ Creator 面零功能改动（仅身份常量同步），首轮 37 项发现中 *
 - 规格自带 Rejected Directions（§16）与 Self-review Checklist（§18），
   Non-goals（§5）明确到功能粒度；计划自带 Requirement-to-Task 覆盖表，§4 十二项
   范围、S7-D1–D9 决策、§13.1 十四门、15 条 portal 路由全部可逐一落到具名
-  Task/测试，全文无 `TBD`/`TODO`。
+  Task/测试，全文无待办占位符。
 - R1 OPFS publication 修订（writer lease、pending→committed intent、≤1 MiB 分块
   复制、逐字节比较、枚举隐藏与恢复三规则）在计划中被逐要素忠实展开。
 - Build 重分配规则被正确预置：计划 Task 11 Step 1 以
@@ -343,3 +343,37 @@ RED→GREEN 逻辑验证（14 项断言，修复前文件恰好 5 项针对性�
 | 验收记录 | `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`（锚定 1.0.16.3，两轮间零变更） |
 | 相关修复分支 | `fix/opfs-publication-recovery`（F1/F2 修复，未合入） |
 | 参照体例 | `docs/quality/2026-08-11-stage6-web-runtime-host-review.md` |
+
+## 十、Remediation status — 2026-08-13
+
+本节是第三次、以修复分支为对象的增量记录；不会改写上述两轮审查在各自基线下的
+历史结论。实时刷新时 `origin/main` 为 `d1d8bb6`；PR #97/#101/#102/#117/#118
+均已合并，签名 tag `lmdj-v1.0.16.5` 与 `lmdj-v1.0.16.8` 验签通过。当前
+`fix/stage7-review-remediation` 仍是未 push、无 PR、未 merge 的 branch-local
+candidate，因此其 Proof 不是 merged-main Proof。
+
+### D1-D10 correction map
+
+| ID | Status | Current evidence |
+| --- | --- | --- |
+| D1 | resolved | 原计划把后置 R1 段标为 retired/non-executable，Task 2 Step 4 成为唯一执行定义；`docs(stage7): reconcile review and release contracts`。 |
+| D2 | resolved | 规格新增 `1.0.16.0` 至 `1.0.16.9` 不可变历史轨迹，完成条件不再钉死 `.0`；同上文档提交。 |
+| D3 | resolved | 计划与 Portal 明确 persisted `pagehide` 保留共享 Runtime，non-persisted terminal `pagehide` 才 close；打包生命周期证据 `f4722de`。 |
+| D4 | resolved | `.2/.4/.5` 明确为 retrospective candidate records，并以触发、身份、门禁、授权边界和本 addendum 结构化，不伪装为执行前 Task；同上文档提交。 |
+| D5 | resolved | 规格、计划和 Portal 统一为 managed Bundle path 的 ASCII segment subset；Project payload text 仍为 UTF-8；同上文档提交。 |
+| D6 | resolved | packaged reload -> same Project/revision -> Audio inactive -> explicit activate -> running 已在 Task 10 映射并由 `f4722de` Proof 覆盖。 |
+| D7 | resolved | synthetic held-key burst 的完整 tuple 固定为 16 admissions、16 outcomes、0 rejection、`running`；`f4722de`。 |
+| D8 | resolved | ready/running 会话在 `768x1024` 与 `1024x768` 间 resize，Project/revision/Audio/counters 连续；`f4722de`。 |
+| D9 | resolved | Creator 对 `HOST_PROTOCOL_MISMATCH`、`IO_ERROR`、`INTERNAL_ERROR` 的 allowlisted 文案/details/transition 测试已由 `0e921be` 增补，恢复归一化由 `ef2b06b` 覆盖。 |
+| D10 | resolved | replacement 前旧 generation 的 Worker/transport、MIDI listener、BroadcastChannel、AudioContext、window lifecycle listener 归零；ownership `767eeae`、packaged Proof `f4722de`。 |
+
+### Still-open completion boundaries
+
+| ID | Status | Current evidence |
+| --- | --- | --- |
+| T1 | open — awaiting human execution | 尚无签署的 Stage 7 手动 canary；physical/hearing/Safari/iPadOS/MIDI 保持 `deferred / unverified`。 |
+| G1 | open — requires future merged-main Proof | 历史签名 tag 的 post-merge Proof 记录缺口不由 branch-local remediation Proof 倒推填补；任何新 Product tag 必须先绑定精确 merged `main` revision 重跑 Proof。 |
+
+因此本节只把 D1-D10 标记为已修复；只要 T1 或 G1 仍 open，就不能把 Stage 7 或
+本修复任务报告为最终完成。其余 F/T/G/N 项的最终 closure audit 在候选完整 Proof、
+人工 canary 与获授权的 post-merge 流程后更新，不能提前制造结论。

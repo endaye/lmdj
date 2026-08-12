@@ -31,6 +31,12 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 这些 compatible Patch 只收紧失败路径；成功操作、Project Truth、公开 Contract envelope 与 protocol shape 不变。`1.0.16.6` 因 helper-only production F4 缺口成为 abandoned、unshipped candidate；`1.0.16.7` 因 owner-unaware same-worker mutator bypass 及 production pending-rejection 证据纠正成为 abandoned、unshipped candidate。两者的冻结本地快照都是只读历史证据，不被重写也不会发布。`1.0.16.8` 与它们不同：它已签名 tag `lmdj-v1.0.16.8` 并进入 `main`，是被 `1.0.16.9` 取代的既发 Build，其冻结快照与验收记录同样只读保留。`1.0.16.9` 的精确 source tree、Assembly Lock、逐 lane 门禁结论与外部非声明见 `docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md`；已分配的不可变候选证据不等于团队测试、Release 或 Channel promotion。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
+
+## PATCH、Assembly 与证据链
+
+PATCH may not change Product Assembly identity or `assembly.lock`. Any module/provider/Host/dependency identity change allocates a new BUILD. Historical `1.0.16.x` events remain historical facts and are not rewritten；它们用于解释为什么规则被收紧，不构成再次偏离的先例。New Product tags require merged-main Proof first，且该 Proof 必须绑定未来 tag target 的精确 `main` revision、Product Build 与 lock hash。
+
+权威链必须逐环核验并分别记录：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。branch-local Proof、快照、CI、tag 或后写的证据文档都不能替代链中其他一环。
 ## 不可变性
 已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
 schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。

@@ -1,21 +1,34 @@
 # Stage 7 Creator Editor Acceptance — 2026-08-07
 
-## Current status
+## Historical acceptance
 
-Stage 7 automated local product acceptance is `PASS` at repository revision
-`ee14a280fec9847c84c5dfd429303b40ef5f0993`. Its immutable Portal snapshot
+The original Stage 7 branch-local product acceptance was `PASS` at repository
+revision `ee14a280fec9847c84c5dfd429303b40ef5f0993`. Its immutable Portal snapshot
 projects product/current-doc source revision
-`8ad5fbf3136074e94492c8408cd1a55befc8322f`. The verified third corrective
-candidate is Product Build `1.0.16.3`, Channel `canary`,
-Creator Web Host `1.0.2`, shared Web Runtime Platform `0.1.2`, Formal Web
-Runtime Host `1.2.2`, and Application Facade `1.3.1`. This evidence-only update
-is committed after that revision and does not change Product, Host, Module,
-Contract, Provider, snapshot, or test source.
+`8ad5fbf3136074e94492c8408cd1a55befc8322f`. That point-in-time evidence covered
+Product Build `1.0.16.3`, Creator Web Host `1.0.2`, shared Web Runtime Platform
+`0.1.2`, Formal Web Runtime Host `1.2.2`, and Application Facade `1.3.1`.
 
-This result establishes the implemented local candidate and its clean-source
-Proof boundary. It does not establish remote CI, merge, a signed Product tag,
-Release, deployment, publication, Channel promotion, or physical-device
-acceptance.
+This historical branch-local Proof never established merged-main Proof,
+physical acceptance, or later Release/deployment state. Subsequent merge and tag
+facts are recorded separately below; they do not retroactively change what this
+local evidence proved.
+
+## Current remediation candidate
+
+As of the live Git check on 2026-08-13, `origin/main` is
+`d1d8bb6a629b6e05b86b3c8843870ef27edcfe5c`. The remediation branch
+`fix/stage7-review-remediation` is unpublished and has not yet allocated its
+final Product Assembly identity. Creator Web clean-source Proof passed at
+`f4722de` plus the preceding remediation commits: Chromium reported 13 passed
+and 1 intentionally skipped physical-MIDI row; the WebKit capability boundary
+reported 1 passed. This branch-local candidate evidence is not merged-main Proof.
+The complete multi-product candidate audit and immutable snapshot are still later
+Tasks.
+
+Manual canary is `open — awaiting human execution`. Physical/hearing/Safari/
+iPadOS/MIDI observations remain `deferred / unverified`; no automated result is
+promoted into those claims.
 
 ## Automated local evidence
 
@@ -60,17 +73,17 @@ screen recovery, or long-session stability on those platforms.
 
 | State transition | Status |
 | --- | --- |
-| Push | authorized but not yet performed at the proof evidence point; the remote feature branch still reported `a2c2d02b50c2bd4f556d41177bfe827dbdf45e98` before the authorized push |
-| Pull Request | Draft PR #97 is open against `main`, but did not yet contain the `1.0.16.3` corrective candidate at the proof evidence point |
-| Pull Request CI | no current result existed for repository revision `ee14a280fec9847c84c5dfd429303b40ef5f0993` at the proof evidence point; results attached to the older remote revision are not evidence for this candidate |
-| Merge | not authorized / not performed |
-| Product tag or GitHub Release | not authorized / not created |
-| Deployment or publication | not authorized / not performed |
-| Channel promotion | not authorized / not performed |
+| Historical Stage 7 PR | PR #97 is `MERGED` as `c39d8b6`; follow-up PR #101 is `MERGED` as `488ffa7`, and #102 is `MERGED` as `38a8c13` |
+| Historical hardening PR | PR #117 is `MERGED` as `7555cfd`; squash-witness PR #118 is `MERGED` as `336a27c` |
+| Historical Product tags | signed annotated `lmdj-v1.0.16.5` targets `38a8c13`; signed annotated `lmdj-v1.0.16.8` targets `336a27c` |
+| Historical merged-main Proof | `open`; no repository evidence located that binds the required post-merge Proof to either signed tag revision |
+| Current remediation push / PR / CI / merge | not performed; current branch-local Proof is not merged-main Proof |
+| Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
+| Manual canary | `open — awaiting human execution` |
 
-This table is a point-in-time evidence record; live remote SHA and CI state must
-be checked after the authorized push. Stage 7 remains a locally proven canary
-candidate until the current required CI is green, manual canary acceptance is
-recorded, the separately authorized merge workflow completes, and merged
-`main` passes the required Proof. The five physical rows remain accurately
-deferred and continue to block physical-pass, `beta`, and `stable`.
+The historical rows were refreshed from live Git/GitHub on 2026-08-13. The
+current remediation rows must be refreshed again after any separately
+authorized push or external transition. T1 (manual canary) and G1 (merged-main
+Proof before any new Product tag) remain open and prevent a Stage 7 completion
+claim. The five physical rows continue to block physical-pass, `beta`, and
+`stable`.

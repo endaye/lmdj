@@ -96,6 +96,12 @@ M1 的第一个可构建集成版本为 `1.0.1.0`。
 
 `PATCH` 是同一 Build 分支上的修订号。
 
+The prospective rule is unambiguous: PATCH may not change Product Assembly identity or `assembly.lock`.
+Any module/provider/Host/dependency identity change allocates a new BUILD.
+Historical `1.0.16.x` events remain historical facts and are not rewritten;
+their recorded deviations are evidence for tightening this rule, not precedent
+for another PATCH-level Assembly change.
+
 - 新 Build 的 `PATCH` 从 `0` 开始。
 - 只有从同一 Build 修复缺陷、且不增加公开能力或改变 Contract 语义时才增加。
 - Patch 必须保留原 Build 的 Milestone、Minor 和 Build 三段。
@@ -152,6 +158,8 @@ LMDJ 1.0.12.0 · dev · g34236c06
 Build Manifest 是 checkout 后由构建流程生成的产物，不能反向写回同一个源码
 commit。源码中的 `assembly.lock.json` 也不能保存包含它自身的 Git SHA，否则会形成
 无法收敛的自引用。
+
+发布身份的权威核验链按此顺序记录，任何一环都不能由另一环推断：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。分支本地 Proof 不能填充 merged-main Proof 一环；后写的证据文档也不能把自己的 revision 伪装成被验证的产品 revision。
 
 ## 5. Tag 规范
 
@@ -228,6 +236,10 @@ lmdj-v1.0.12.1
 
 Product tag 只指向已合入 `main`、CI 通过并生成匹配 Build Manifest 的提交。Channel
 不写入 tag 名称。
+
+New Product tags require merged-main Proof first. 该 Proof 必须绑定将成为 tag target
+的精确 `main` revision、Product Build 与 Assembly lock hash；创建、签名、push tag、
+Release、部署和 Channel promotion 仍是分别授权和分别验证的动作。
 
 ### 5.4 Module、Contract 与 Provider tag
 

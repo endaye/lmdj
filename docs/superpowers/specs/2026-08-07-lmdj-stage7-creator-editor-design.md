@@ -204,7 +204,8 @@ Stage 7 新增 `lmdj.project-bundle.v1`，用于可移植 `.lmdj` 文件的传�
 
 - 携带 `lmdj.project.v1` manifest、Assets、History 与 Recovery 文件；
 - 记录每个 regular file 的规范相对路径、字节长度和 SHA-256；
-- 使用 UTF-8 路径和稳定排序；
+- managed Bundle paths use the portable ASCII segment subset `[A-Za-z0-9._/-]`
+  and stable unsigned-byte sorting; Project payload text remains UTF-8;
 - 拒绝绝对路径、`..`、空路径、重复路径、大小写折叠冲突、NUL、symlink、hardlink、
   device node 与未声明 entry；
 - 每个 Project Artifact 继续受 64 MiB Project I/O 上限约束；
@@ -568,6 +569,18 @@ scripts/architecture-portal.sh version 1.0.16.0 canary
 
 Tag 创建、tag push、PR、merge、部署和 Channel promotion 仍分别需要授权。
 
+### 14.1 Historical corrective trajectory
+
+This is a retrospective history, not a rewrite of the approved initial target:
+`1.0.16.0` -> `1.0.16.1` -> `1.0.16.2` -> `1.0.16.3` -> `1.0.16.4` -> `1.0.16.5` -> `1.0.16.6` -> `1.0.16.7` -> `1.0.16.8` -> `1.0.16.9`.
+The `.0` through `.5` snapshots record Stage 7 delivery corrections; `.6` and
+`.7` are abandoned, unshipped hardening candidates; signed `.8` records merged
+hardening and `.9` records the later OPFS recovery candidate on `main`. Every
+frozen snapshot remains immutable. This design records the trajectory so that
+the original `1.0.16.0` target is not mistaken for current acceptance truth.
+
+The evidence boundaries are also explicit: synthetic lifecycle and synthetic key repeat are automated contract only. physical/hearing/Safari/iPadOS/MIDI remain `deferred / unverified` until performed and recorded by a named human.
+
 ## 15. Rollback and Compatibility
 
 - `creator-web` 可以从 Assembly 移除而不改变 `lmdj.project.v1`；
@@ -607,7 +620,7 @@ Contract 塞进 Editor 基础设施 Task。
 
 Stage 7 只有在以下证据全部成立时才完成：
 
-- 本文的 D1–D8 决策均由实现与测试覆盖；
+- 本文的 S7-D1–D9 决策均由实现与测试覆盖；
 - `web-runtime-platform` 是唯一共享 Browser Runtime Session 实现；
 - `web-runtime-host` 仍是独立产品中立诊断 Host，现有完整 Proof 通过；
 - `creator-web` 进入 active `apps/` 和 Product Assembly；
@@ -620,7 +633,8 @@ Stage 7 只有在以下证据全部成立时才完成：
 - Creator clean package 可重复、可本地 serve，并通过 Chromium/WebKit 自动化边界；
 - Core Proof、Web Runtime Host Proof、Creator Proof、版本、依赖、Assembly 与 Portal
   门禁全部通过；
-- `1.0.16.0 · canary` current docs 与不可变 Portal snapshot 匹配；
+- 交付候选的 current docs、Product identity 与对应不可变 Portal snapshot 匹配；
+  `1.0.16.0 · canary` 只保留为初始冻结历史，不是 current 状态；
 - 分支经 Review、squash merge 到 `main`，并从 merged `main` 重跑 required Proof；
 - 五项实体物理门槛继续准确标为 `deferred / unverified`；
 - 没有把 tag、Release、deployment、`beta` 或 `stable` 伪装成 Stage 7 完成结果。
@@ -640,4 +654,4 @@ Stage 7 只有在以下证据全部成立时才完成：
 - 自动化 WebKit 不被描述为实体 Safari 验收。
 - Product Build、Module、Host 和 Contract 版本身份彼此独立。
 - Documentation impact、快照、tag、merge、deployment 和 Channel 权限边界明确。
-- 文档没有 `TBD`、`TODO`、占位门槛或未说明的成功状态。
+- 文档没有未完成的待办占位符、占位门槛或未说明的成功状态。

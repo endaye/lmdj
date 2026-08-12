@@ -35,6 +35,12 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 
 主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。AudioWorklet 的 terminal quiescence 在首个 caller budget 超时并锁存 fatal 后，只再等待一个同长度的 terminal budget；callback 仍未退出时返回类型化 `INTERNAL_ERROR`，不再无限 futex 等待。Transport 收到无法关联到 pending request 的未知或重复 response 时会原子 fail closed：仅终止一次、以 `HOST_PROTOCOL_MISMATCH` 拒绝其余 pending request，并清空 pending/active identity。真实 Chromium Browser Main conformance 会在 unknown response 进入 scheduled production poll 前保持另一个 production request pending，并直接观察该 promise 被同一 terminal error 拒绝且 ID 清除。Manifest mismatch、publication outcome unknown、终止与重启恢复同样 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
 
+Runtime Session 是 input 与 terminal cleanup 的唯一 owner。每个终止或 replacement
+generation 都必须释放 Worker/transport、MIDI listeners、BroadcastChannel、AudioContext
+和 window lifecycle listeners；新 generation 不得在旧 generation 仍持有这些资源时
+成为 owner。persisted page lifecycle 保留共享 Runtime，non-persisted terminal
+pagehide 才进入 close。
+
 ## 自动化范围
 
 共享 C++/Node tests 固定 manifest、transport、input、recovery 与 realtime session；Creator 和 Diagnostic 的 packaged Playwright proof 分别验证创作旅程与诊断压力/Take/lifecycle 路径。WebKit capability smoke 只有在 mandatory primitive 可用时才能升级为完整自动化 PASS。

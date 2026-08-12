@@ -306,6 +306,37 @@ The fifth corrective candidate tag text is `lmdj-v1.0.16.5`; creating and
 pushing it is authorized only after the corrective PR is merged, merged-main
 Proof is current, and the exact tag target has been verified.
 
+## Retrospective correction addendum — 2026-08-13
+
+This section is a post-delivery correction record, not a claim about what the
+original plan said before execution. Historical Product Build snapshots and
+`1.0.16.x` events remain immutable facts. The current remediation work binds
+the Stage 7 review findings to the following Task/commit evidence:
+
+| Finding | Corrected record and evidence |
+| --- | --- |
+| D1 | The R1 protocol is defined and implemented once in Task 2 Step 4. The later duplicate pseudo-Task has been retired by `docs(stage7): reconcile review and release contracts`; it is not a second RED/GREEN sequence. |
+| D2 | The approved design now records the historical `1.0.16.0` through `1.0.16.9` trajectory and no longer treats `1.0.16.0` as current completion truth; corrected by `docs(stage7): reconcile review and release contracts`. |
+| D3 | Task 8 now distinguishes persisted and terminal page lifecycle; corrected by `docs(stage7): reconcile review and release contracts` and exercised by `f4722de`. |
+| D4 | The `.2`, `.4`, and `.5` headings above are retrospective candidate records, not executable Tasks. Their trigger, affected identity, required gates, and external authorization boundary are captured in their narrative/table and this addendum; corrected by `docs(stage7): reconcile review and release contracts`. |
+| D5 | The design now states that managed Bundle paths use the portable ASCII segment subset while Project payload text remains UTF-8; corrected by `docs(stage7): reconcile review and release contracts`. |
+| D6 | Packaged reload -> reopen -> explicit audio reactivation and Project identity continuity are explicit Task 10 assertions, with final packaged evidence in `f4722de`. |
+| D7 | The synthetic held-key burst requires the full tuple: 16 admissions, 16 outcomes, 0 rejection, and Host state `running`; enforced by `f4722de`. |
+| D8 | Active-session continuity across `768x1024` and `1024x768` resize is explicit packaged evidence in `f4722de`. |
+| D9 | Creator handling for allowlisted `HOST_PROTOCOL_MISMATCH`, `IO_ERROR`, and `INTERNAL_ERROR` is mapped to typed visible details and transition tests by `0e921be`; public normalization/retry behavior is additionally covered by `ef2b06b`. |
+| D10 | Replacement proves the retiring generation releases Worker/transport, MIDI listeners, BroadcastChannel, AudioContext, and lifecycle listeners before the new generation becomes sole owner; ownership work is in `767eeae` and packaged evidence in `f4722de`. |
+
+The corrected lifecycle and evidence language is normative for later work:
+
+- persisted `pagehide` retains the shared Runtime and exercises only the
+  recovery contract;
+- non-persisted terminal `pagehide` performs close;
+- managed Bundle paths use the ASCII segment subset `[A-Za-z0-9._/-]`; Project
+  payload text remains UTF-8;
+- synthetic lifecycle and synthetic key repeat are automated contract only;
+- physical/hearing/Safari/iPadOS/MIDI remain `deferred / unverified` until a
+  named human performs and records them.
+
 ---
 
 ### Task 1: Define and prove the portable Project Bundle Contract
@@ -858,7 +889,11 @@ git diff --cached --check
 git commit -m "refactor(web): share browser runtime session"
 ```
 
-### Task 5R1: Replace the unavailable Web directory move with journaled publication
+### Retired duplicate R1 record (non-executable)
+
+This section is retained only to explain the historical edit. Do not execute
+the steps below: Task 2 Step 4 is the sole R1 implementation sequence, and its
+GREEN result makes a later RED expectation invalid.
 
 **Files:**
 
@@ -883,7 +918,7 @@ git commit -m "refactor(web): share browser runtime session"
 - Pending/malformed publication is invisible; committed/no-intent publication is
   visible. Recovery owns the same destination writer lease as publication.
 
-- [ ] **Step 1: Write failing Chromium crash-boundary tests**
+- **Historical Step 1 (superseded): Write Chromium crash-boundary tests**
 
 Add deterministic fault points:
 
@@ -912,7 +947,7 @@ the prior list; the final three must expose the complete Project. Also prove:
 - copy/verify slices are at most 1 MiB;
 - no internal marker/path appears in Host errors or Project inventory.
 
-- [ ] **Step 2: Run RED**
+- **Historical Step 2 (superseded): The original RED expectation**
 
 ```bash
 scripts/web-toolchain-conformance.sh build-project-io
@@ -920,10 +955,11 @@ npm --prefix tests/platform/web test -- --project=chromium \
   project_io/project_io_web_conformance.spec.mjs
 ```
 
-Expected: FAIL because shipping Chromium has no directory move and journaled
-publication/fault recovery is absent.
+Historical text expected failure because directory-move replacement and
+journaled publication were absent. That premise stopped being true when R1 was
+folded into Task 2 and therefore is not an executable gate.
 
-- [ ] **Step 3: Implement the minimal R1 publication state machine**
+- **Historical Step 3 (superseded): Implement the R1 publication state machine**
 
 Extend the existing lease-scoped storage-intent machinery rather than adding a
 second catalog. Persist/read back pending before destination creation; copy and
@@ -932,7 +968,7 @@ committed; then clean source and intent. Filter pending/malformed destinations
 from Web directory enumeration and recover exact-destination intent on writer
 lease acquisition.
 
-- [ ] **Step 4: Run GREEN and cross-platform regressions**
+- **Historical Step 4 (superseded): Run cross-platform regressions**
 
 ```bash
 scripts/core.sh build dev
@@ -947,7 +983,7 @@ scripts/web-runtime-host.sh proof
 Expected: common Native tests, the full Chromium publication fault matrix, and
 the unchanged diagnostic Host Proof PASS without a directory-move capability.
 
-- [ ] **Step 5: Run Portal gate and commit**
+- **Historical Step 5 (superseded): Run Portal gate and commit**
 
 ```bash
 scripts/architecture-portal.sh check
@@ -1198,7 +1234,8 @@ git commit -m "feat(creator): add project workspace shell"
 
 - `openProjectJourney(session, summary)` calls `openProject`, `inspectProject`, `reloadSnapshot(summary.patternId)`, then emits one ready View Model.
 - `importProjectJourney(session, file, signal, progress)` calls `importProject` then the same open journey.
-- React creates exactly one Runtime Session and closes it once on terminal unmount/pagehide.
+- React creates exactly one Runtime Session. persisted `pagehide` retains the shared Runtime;
+  non-persisted terminal `pagehide` and terminal unmount perform close exactly once.
 
 ```ts
 export interface ProjectView extends LocalProjectSummary {
@@ -1391,9 +1428,22 @@ for (const bank of ['A', 'B', 'C', 'D']) {
 The tests must reject `page.evaluate()` calls into Runtime/Bridge for the positive journey.
 They select each Bank and activate every visible Pad once, then assert 64 unique
 flat-slot admissions, 64 matching outcomes, zero rejection, and final Host
-state `running`. A separate synchronous Bank-A burst asserts 16 admissions and
-16 outcomes. Synthetic Web MIDI proves notes `36..51`, permission rejection,
-and listener cleanup.
+state `running`. A separate synchronous Bank-A synthetic held-key burst asserts
+16 admissions, 16 outcomes, 0 rejection, and final Host state `running`.
+Synthetic Web MIDI proves notes `36..51`, permission rejection, and listener
+cleanup.
+
+`creator_web_lifecycle.spec.mjs` must reload the packaged Creator, reopen the
+same Project with the same revision, keep Audio inactive, require a visible
+Activate audio gesture, and then return to `running`. It also drives the
+restart-required replacement path and proves the prior generation releases its
+Worker/transport, MIDI listeners, BroadcastChannel, AudioContext, and window
+lifecycle listeners before the replacement generation becomes the sole owner.
+`creator_web_browser.spec.mjs` captures ready/running identity and counters,
+resizes the active page through `768x1024` and `1024x768`, and requires Project,
+revision, Audio state, admissions, and outcomes to remain continuous. Creator
+unit tests map `HOST_PROTOCOL_MISMATCH`, `IO_ERROR`, and `INTERNAL_ERROR` to the
+same allowlisted visible-detail behavior as all other public errors.
 
 `creator_web_accessibility.spec.mjs` runs at `768×1024`, `1024×768`, and
 `1440×900`, asserts no workspace overflow, 16 visible `44×44` or larger Pads,
