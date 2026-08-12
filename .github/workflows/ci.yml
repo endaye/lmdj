@@ -358,7 +358,13 @@ jobs:
     needs: [change-scope, select-ubuntu-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
-    timeout-minutes: 45
+    # 45 was calibrated to GitHub-hosted speed (16-19 min observed). The
+    # trusted pool runs this lane about 2.2x slower: one success at 40 min
+    # and one cancellation at exactly 45. The limit is a hang detector, not
+    # a performance budget -- the suite owns its own behavior timeouts -- so
+    # it must clear the slow machine with room for pool contention, which
+    # rises as runner services per host go up.
+    timeout-minutes: 75
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8

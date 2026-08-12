@@ -175,6 +175,22 @@ class CiRunnerFallbackTest(unittest.TestCase):
             self.assertIn("untrusted fork pull request", selector)
             self.assertIn("runner status token is unavailable", selector)
 
+    def test_slow_pool_lane_keeps_headroom_over_its_observed_duration(self) -> None:
+        """The job limit must clear the slowest trusted runner, not the fastest.
+
+        web-runtime-host was observed at 40 minutes on the trusted pool and
+        cancelled at exactly 45 once, against 16-19 minutes GitHub-hosted.
+        Removing the busy-based diversion raises how often it lands on the
+        slow pool, so a limit calibrated to hosted speed would convert a cost
+        saving into an intermittent red Pull Request.
+        """
+        job = self.workflow_job("web-runtime-host")
+        match = re.search(r"timeout-minutes: (\d+)", job)
+        self.assertIsNotNone(match, "web-runtime-host declares no timeout")
+        assert match is not None
+        self.assertGreaterEqual(int(match.group(1)), 60)
+        self.assertIn("hang detector, not", job)
+
     def test_ubuntu_selector_still_reports_idle_capacity_as_diagnostics(self) -> None:
         selector = self.workflow_job("select-ubuntu-runner")
         self.assertIn("idle_count=", selector)
