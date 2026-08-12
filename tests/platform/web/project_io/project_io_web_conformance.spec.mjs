@@ -215,6 +215,22 @@ async function readPublicationIntentState(page, bundle) {
   }, {scope});
 }
 
+async function storageIntentPresent(page, bundle) {
+  const {scope, replacement} = await intentScopeKeys(page, bundle);
+  return page.evaluate(async ({scope, replacement}) => {
+    try {
+      const root = await navigator.storage.getDirectory();
+      const host = await root.getDirectoryHandle(".lmdj-host");
+      const intents = await host.getDirectoryHandle("storage-intents");
+      const directory = await intents.getDirectoryHandle(scope);
+      await directory.getFileHandle(replacement);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }, {scope, replacement});
+}
+
 async function writeStorageIntentBody(page, bundle, body) {
   const {scope, replacement} = await intentScopeKeys(page, bundle);
   await page.evaluate(async ({scope, replacement, body}) => {
@@ -690,8 +706,10 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(await waitForResult(tornRecovery)).toEqual({
     acquire: "ok",
     content: "old",
-    intentFiles: 0,
   });
+  // Recovery must consume exactly this Project's torn record; intents left by
+  // earlier phases of this suite are deliberately not counted.
+  expect(await storageIntentPresent(tornController, tornBundle)).toBe(false);
   await tornRecovery.close();
   // A record that parses but fails validation may carry rollback state from a
   // newer Contract revision, so it stays fail-closed.

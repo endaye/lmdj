@@ -377,19 +377,13 @@ nlohmann::json run_suite() {
         };
       }
       auto lease = std::move(acquire.value());
-      const auto inventory = storage_intent_inventory(*platform);
-      std::size_t intent_files = 0;
-      for (const auto& entry : inventory) {
-        if (!entry.first.empty() && entry.first.back() != '/') ++intent_files;
-      }
       return {
           {"complete", true},
           {"result",
            {{"acquire", "ok"},
             {"content", text(value(
                  platform->read_complete(replacement_path),
-                 "recovered replacement content"))},
-            {"intentFiles", intent_files}}},
+                 "recovered replacement content"))}}},
       };
     }
     if (action == "inspect_publication" ||
