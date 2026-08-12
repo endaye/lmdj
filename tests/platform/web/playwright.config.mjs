@@ -10,6 +10,7 @@ const cleanRoom = process.env.LMDJ_WEB_HOST_CLEAN_ROOM === "1";
 const creatorExternal = process.env.LMDJ_CREATOR_WEB_EXTERNAL_SERVER === "1";
 const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1" ||
   process.env.LMDJ_CREATOR_WEB_FULL_CHROMIUM === "1";
+const sampleEditorSpec = /creator_web_sample_editor\.spec\.mjs/;
 const externalServer =
   cleanRoom || creatorExternal ||
   process.env.LMDJ_WEB_HOST_EXTERNAL_SERVER === "1";
@@ -64,6 +65,19 @@ export default defineConfig({
     },
     {
       name: "webkit",
+      use: { ...devices["Desktop Safari"] },
+    },
+    {
+      name: "creator-sample-chromium",
+      testMatch: sampleEditorSpec,
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(fullChromium ? { channel: "chromium" } : {}),
+      },
+    },
+    {
+      name: "creator-sample-webkit",
+      testMatch: sampleEditorSpec,
       use: { ...devices["Desktop Safari"] },
     },
   ],

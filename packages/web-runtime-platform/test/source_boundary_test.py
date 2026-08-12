@@ -89,6 +89,10 @@ def main() -> int:
         "lmdj_web_host_cancel_query",
         "pending.abortError",
         "pending.abortSignal.removeEventListener(\"abort\"",
+        "const sidecarPointer = sidecar.byteLength === 0",
+        "HEAPU8.set(sidecar, sidecarPointer)",
+        '["number", "number", "number", "number", "number"]',
+        "if (sidecarPointer !== 0) _free(sidecarPointer)",
     ):
         if required not in transport_source:
             fail("formal Host transport lacks settled request cancellation: " + required)

@@ -537,18 +537,45 @@ if (typeof globalThis.window !== "undefined") {
         ? Math.min(0xffff_ffff, Math.max(0, options.deadlineMs))
         : 30_000;
       const deadlineAt = performance.now() + deadlineMs;
-      const submitted = Module.ccall(
-        "lmdj_web_host_submit",
-        "number",
-        ["array", "number", "array", "number", "number"],
-        [
-          envelope,
-          envelope.byteLength,
-          sidecar,
-          sidecar.byteLength,
-          performance.timeOrigin + deadlineAt,
-        ],
-      );
+      const envelopePointer = envelope.byteLength === 0
+        ? 0
+        : _malloc(envelope.byteLength);
+      const sidecarPointer = sidecar.byteLength === 0
+        ? 0
+        : _malloc(sidecar.byteLength);
+      if ((envelope.byteLength !== 0 && envelopePointer === 0) ||
+          (sidecar.byteLength !== 0 && sidecarPointer === 0)) {
+        if (sidecarPointer !== 0) _free(sidecarPointer);
+        if (envelopePointer !== 0) _free(envelopePointer);
+        return Promise.reject(transportFailure(
+          "HOST_STATE_INVALID",
+          "formal Web Host transport is unavailable",
+        ));
+      }
+      let submitted;
+      try {
+        if (envelope.byteLength !== 0) {
+          HEAPU8.set(envelope, envelopePointer);
+        }
+        if (sidecar.byteLength !== 0) {
+          HEAPU8.set(sidecar, sidecarPointer);
+        }
+        submitted = Module.ccall(
+          "lmdj_web_host_submit",
+          "number",
+          ["number", "number", "number", "number", "number"],
+          [
+            envelopePointer,
+            envelope.byteLength,
+            sidecarPointer,
+            sidecar.byteLength,
+            performance.timeOrigin + deadlineAt,
+          ],
+        );
+      } finally {
+        if (sidecarPointer !== 0) _free(sidecarPointer);
+        if (envelopePointer !== 0) _free(envelopePointer);
+      }
       if (submitted !== 0) {
         return Promise.reject(transportFailure(
           submitted === 1 || submitted === 2

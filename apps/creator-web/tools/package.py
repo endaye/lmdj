@@ -28,6 +28,20 @@ LOCAL_PATH_PATTERN = re.compile(rb"(?:/Users/|file:/+(?:Users|home)/|[A-Za-z]:\\
 SOURCE_SUFFIXES = {
     ".c", ".cc", ".cpp", ".cxx", ".h", ".hh", ".hpp", ".py", ".map",
 }
+REQUIRED_SAMPLE_EDITOR_MARKERS = (
+    b"Sample editor",
+    b"Replace Sample",
+    b"Reset Pad to Defaults",
+    b"Retry Prepare",
+    b"Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz",
+)
+FORBIDDEN_CREATOR_PAYLOAD_MARKERS = (
+    b"lmdj.patch.v1",
+    b"lmdj.materials.v1",
+    b"parseProjectBundle",
+    b"decodeAudioData(",
+    b"sourceMappingURL=",
+)
 
 
 class PackageError(RuntimeError):
@@ -380,6 +394,7 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
     if not isinstance(assets, list) or len(assets) != len(expected_assets):
         raise DistributionError("manifest production inventory is invalid")
     expected_files = {"index.html", "host-manifest.json"}
+    payloads_by_role = {}
     for entry, expected_asset in zip(assets, expected_assets, strict=True):
         if not isinstance(entry, dict) or set(entry) != {"path", "bytes", "sha256", "role"}:
             raise DistributionError("manifest asset entry is invalid")
@@ -406,7 +421,17 @@ def verify_distribution(dist_root: Path, repo_root: Path) -> None:
             raise DistributionError(f"asset content mismatch: {relative}")
         if LOCAL_PATH_PATTERN.search(payload) is not None or str(repo_root).encode() in payload:
             raise DistributionError(f"absolute local path in asset: {relative}")
+        payloads_by_role[role] = payload
         expected_files.add(relative)
+    host_main = payloads_by_role["host_main"]
+    if any(marker not in host_main for marker in REQUIRED_SAMPLE_EDITOR_MARKERS):
+        raise DistributionError("Stage 8 Sample Editor surface is missing")
+    if any(
+        marker in payload
+        for payload in payloads_by_role.values()
+        for marker in FORBIDDEN_CREATOR_PAYLOAD_MARKERS
+    ):
+        raise DistributionError("forbidden Creator payload is present")
     actual_files = {
         path.relative_to(dist_root).as_posix()
         for path in dist_root.rglob("*") if path.is_file()

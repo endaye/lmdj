@@ -35,6 +35,15 @@ def module_version(module_directory: str) -> str:
     return manifest["version"]
 
 PACKAGE_TOOL = REPO_ROOT / "apps/creator-web/tools/package.py"
+CREATOR_SCRIPT = REPO_ROOT / "scripts/creator-web.sh"
+CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+SAMPLE_EDITOR_MARKERS = (
+    "Sample editor",
+    "Replace Sample",
+    "Reset Pad to Defaults",
+    "Retry Prepare",
+    "Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz",
+)
 
 
 def load_package_module():
@@ -93,7 +102,11 @@ class CreatorPackageTest(unittest.TestCase):
             newline="\n",
         )
         (self.ui / "assets/index-source.js").write_text(
-            "console.log('creator');\n", encoding="utf-8", newline="\n"
+            "const sampleEditorProof = "
+            + json.dumps(SAMPLE_EDITOR_MARKERS)
+            + "; console.log(sampleEditorProof);\n",
+            encoding="utf-8",
+            newline="\n",
         )
         (self.ui / "assets/index-source.css").write_text(
             "body{margin:0}\n", encoding="utf-8", newline="\n"
@@ -235,6 +248,50 @@ class CreatorPackageTest(unittest.TestCase):
             self.module.DistributionError, "absolute local path"
         ):
             self.build(destination)
+
+    def test_requires_stage8_sample_surface_and_rejects_dev_audio_paths(self) -> None:
+        source = self.ui / "assets/index-source.js"
+        valid = source.read_text(encoding="utf-8")
+
+        source.write_text(
+            valid.replace("Retry Prepare", "Retry missing"),
+            encoding="utf-8",
+            newline="\n",
+        )
+        with self.assertRaisesRegex(
+            self.module.DistributionError, "Stage 8 Sample Editor"
+        ):
+            self.build(self.root / "missing-sample-surface")
+
+        for index, forbidden in enumerate(
+            (
+                "lmdj.patch.v1",
+                "lmdj.materials.v1",
+                "parseProjectBundle",
+                "decodeAudioData(",
+                "//# sourceMappingURL=fixture.map",
+            )
+        ):
+            with self.subTest(forbidden=forbidden):
+                source.write_text(
+                    valid + f"\nconsole.log({json.dumps(forbidden)});\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
+                with self.assertRaisesRegex(
+                    self.module.DistributionError, "forbidden Creator payload"
+                ):
+                    self.build(self.root / f"forbidden-{index}")
+        source.write_text(valid, encoding="utf-8", newline="\n")
+
+    def test_proof_and_ci_require_the_packaged_sample_editor_lane(self) -> None:
+        script = CREATOR_SCRIPT.read_text(encoding="utf-8")
+        workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        required = "tests/platform/web/creator/creator_web_sample_editor.spec.mjs"
+
+        self.assertIn(f'required_sample_editor_spec="$repo_root/{required}"', script)
+        self.assertIn('LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle"', script)
+        self.assertIn("Prove the packaged Creator Sample Editor", workflow)
 
     def test_cli_has_a_bounded_usage_failure(self) -> None:
         completed = subprocess.run(

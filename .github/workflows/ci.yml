@@ -492,7 +492,7 @@ jobs:
       - name: Install Chromium and WebKit
         working-directory: tests/platform/web
         run: npx --no-install playwright install --with-deps chromium webkit
-      - name: Prove the packaged Creator Web Host
+      - name: Prove the packaged Creator Sample Editor
         run: |
           source build/toolchains/emsdk/emsdk_env.sh
           scripts/creator-web.sh proof
