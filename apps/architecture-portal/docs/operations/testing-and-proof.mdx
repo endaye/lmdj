@@ -42,7 +42,7 @@ Portal 不再独立触发 PR 或 `main` workflow；主 CI 在同一次 run 内�
 
 只有 selected Linux pool consumer 存在时才运行 Ubuntu selector；Package 也是该 selector 的消费者，保留 LFS hydration 并明确禁用 ccache。只有 `core_macos` 被选中时才运行 macOS selector。Formal Web Runtime Host、Web Runtime Lab、Ubuntu Core、Linux ASan、Coverage 和 Package 重负载任务继续优先至少一台在线且带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 runner；外部 fork、状态密钥缺失、Runner API 失败或池中没有在线匹配 runner 时，在 workload 开始前选择 GitHub-hosted Ubuntu。
 
-资格判定刻意不看 runner 是否 busy。GitHub 本来就会让 label 匹配的 job 在满载池上排队，因此 busy 是延迟条件，只有池不存在才是可用性条件。selector 对整个 run 只解析一次，把两者等同处理会让并发 run 偶然占满池的瞬间把整份 manifest 转到付费基础设施——这正是 2026-08-12 运行历史中的主要成本来源。现在满载只排队，selector 把 online 与 idle 数量作为诊断输出。受信 Linux 池的并发度等于在线 runner service 数量，当前为二，其余排队；提高该数量是既有主机上的运维改动，不是 workflow 改动。
+资格判定刻意不看 runner 是否 busy。GitHub 本来就会让 label 匹配的 job 在满载池上排队，因此 busy 是延迟条件，只有池不存在才是可用性条件。selector 对整个 run 只解析一次，把两者等同处理会让并发 run 偶然占满池的瞬间把整份 manifest 转到付费基础设施——这正是 2026-08-12 运行历史中的主要成本来源。现在满载只排队，selector 把 online 与 idle 数量作为诊断输出。受信 Linux 池的并发度等于在线 runner service 数量，当前为二（每台主机一个），其余排队；提高该数量是既有主机上的运维改动，不是 workflow 改动。已批准的目标是每台主机两个 service、池并发四。取有界值而非最大值，是因为每次 CI CMake build 已限制为 3 路并行，主机上的 service 数量会与之相乘：每台两个即最多 6 个并发编译进程，主机可以吸收；三个则是 9 个，会拖慢该机器上的每个 job。`web-runtime-host` 是最受该争用影响的 lane——池上约 40 分钟，GitHub-hosted 上 16–19 分钟——无论池提供多少槽位，它都决定池的关键路径，其 job 上限因此按池速度校准为 75 分钟，而非按 hosted 速度的 45 分钟。
 
 Web Toolchain 与 Creator 两条 lane 明确留在 GitHub-hosted Ubuntu：完整 Wasm/OPFS fault matrix 时序敏感，曾在异构自建池上超出限定测试预算。这是确定性决策而非容量决策，因此增加 runner 槽位或 toolchain 缓存都不构成迁移理由；契约测试同时固定其托管路由与该理由。Package 因此通常避免 hosted 执行，但 fallback 仍可能消耗 hosted minutes。所有 CI CMake build 均限制为 3 路并行。Linux 原生任务共享 checkout 外持久 `ccache`，Emscripten 与 Package 明确绕过；M1 原生任务使用本机持久 `ccache`，GitHub-hosted lane 不依赖 runner 本地缓存。
 

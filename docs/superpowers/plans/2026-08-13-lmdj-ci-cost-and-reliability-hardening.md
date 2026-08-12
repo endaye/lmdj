@@ -232,14 +232,24 @@ infrastructure, and two lanes never consult the pool at all.
   fail-to-hosted behavior unchanged, because those are trust and availability
   conditions rather than load.
 - Operational precondition, **still outstanding** (not a repository change):
-  run three runner services per contabo VM so the trusted Linux pool offers
-  six slots and a full manifest's six Linux lanes stop serializing behind two.
-  This adds no host and no spend. Without it the routing change is still
-  correct and still stops the diversion to paid runners, but a saturated pool
-  queues for longer. `docs/quality/core-test-policy.md` now states that pool
-  concurrency equals the number of online runner services — currently two —
-  and that raising it is an operational change on the existing hosts, so the
-  document stays accurate before and after the step is taken.
+  run **two** runner services per contabo VM, giving a pool concurrency of
+  four. This adds no host and no spend. The plan originally said three
+  services (concurrency six); that was revised down during implementation
+  because each CI CMake build is already capped at three parallel jobs, so
+  services per host multiply into concurrent compile jobs per host — three
+  services would mean nine per machine and would slow every job on it, with
+  `web-runtime-host` (about 40 minutes on the pool) hurt worst. Without the
+  step the routing change is still correct and still stops the diversion to
+  paid runners; a saturated pool simply queues for longer.
+  `docs/quality/core-test-policy.md` states the current value (two services,
+  one per host) and the approved target separately, so it stays accurate
+  before and after the step is taken.
+- Owner decision taken during implementation: `web-runtime-host` stays on the
+  selector rather than being pinned to GitHub-hosted. It sets the pool's
+  critical path at roughly 40 minutes against 16-19 hosted, so pinning it
+  would have cut the Linux critical path to about 18 minutes for roughly
+  `$0.11` per run. The owner chose the free path; the exposure is bounded by
+  the recalibrated 75-minute limit rather than by routing.
 - ~~Move `web-toolchain-conformance` and `creator-web` onto
   `select-ubuntu-runner`, overturning
   `test_resource_intensive_web_gates_use_hosted_runners`.~~ **Withdrawn.** The

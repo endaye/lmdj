@@ -212,9 +212,18 @@ in the 2026-08-12 run history. A saturated pool now queues, and the selector
 reports online and idle counts as diagnostics.
 
 The trusted Linux pool's concurrency equals the number of online runner
-services, currently two; additional selected jobs queue behind them. Raising
-that number is an operational change on the existing hosts, not a workflow
-change. Each CI CMake build is capped at three parallel jobs. Native Linux jobs
+services, currently two — one per host; additional selected jobs queue behind
+them. Raising that number is an operational change on the existing hosts, not
+a workflow change. The approved target is two services per host, giving a pool
+concurrency of four. It is bounded rather than maximal because each CI CMake
+build is already capped at three parallel jobs, so services per host multiply
+into concurrent compile jobs per host: two services means at most six, which
+the hosts absorb, while three would mean nine and would slow every job on the
+machine. `web-runtime-host` is the lane most exposed to that contention, at
+roughly 40 minutes on the pool against 16-19 GitHub-hosted, and it sets the
+pool's critical path regardless of how many slots the pool offers.
+
+Each CI CMake build is capped at three parallel jobs. Native Linux jobs
 use the pool's shared checkout-external persistent `ccache`, while Emscripten
 jobs deliberately bypass it. The trusted M1 runner uses its own persistent
 `ccache` with the same three-job build cap. GitHub-hosted Linux and macOS lanes
