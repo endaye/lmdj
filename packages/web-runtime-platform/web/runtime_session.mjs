@@ -22,6 +22,7 @@ import {
   validateNotificationEnvelope,
   validateResponseEnvelope,
 } from "./protocol.mjs";
+import {canonicalJson, exactKeys, sha256Hex} from "./integrity.mjs";
 import { createHostStateMachine } from "./state_machine.mjs";
 
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
@@ -169,52 +170,6 @@ async function defaultCapabilities(scope) {
       "audioWorklet" in scope.AudioContext.prototype,
     ...controlWorker,
   };
-}
-
-async function sha256(text, crypto) {
-  if (typeof crypto?.subtle?.digest !== "function") {
-    throw typedError("HOST_PROTOCOL_MISMATCH", "SHA-256 is unavailable");
-  }
-  const digest = await crypto.subtle.digest(
-    "SHA-256",
-    new TextEncoder().encode(text),
-  );
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-async function sha256Bytes(bytes, crypto) {
-  if (typeof crypto?.subtle?.digest !== "function") {
-    throw typedError("HOST_PROTOCOL_MISMATCH", "SHA-256 is unavailable");
-  }
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
-}
-
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  if (value !== null && typeof value === "object") {
-    return `{${Object.keys(value)
-      .sort()
-      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
-      .join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function exactKeys(value, keys) {
-  return (
-    value !== null &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    Object.keys(value).length === keys.length &&
-    keys.every((key) => Object.hasOwn(value, key))
-  );
 }
 
 function metaContent(document, name) {
@@ -392,7 +347,7 @@ async function verifyPackagedManifest({
       { cache: "no-store", credentials: "same-origin" },
     );
     const bytes = await readBoundedResponse(response, HOST_MANIFEST_MAXIMUM_BYTES);
-    const actualDigest = await sha256Bytes(bytes, crypto);
+    const actualDigest = await sha256Hex(bytes, crypto);
     if (actualDigest !== expectedDigest) {
       throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest digest does not match");
     }
@@ -438,7 +393,7 @@ async function verifySourceShellManifest({
   if (typeof expected !== "string" || expected.length !== 64) {
     throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest digest is absent");
   }
-  const actual = await sha256(manifestText, crypto);
+  const actual = await sha256Hex(new TextEncoder().encode(manifestText), crypto);
   if (actual !== expected) {
     throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest digest does not match");
   }
@@ -509,7 +464,7 @@ async function loadPackagedRuntime({ document, window, crypto, manifest }) {
   const wasmBytes = await readBoundedResponse(wasmResponse, runtimeWasm.bytes);
   if (
     wasmBytes.byteLength !== runtimeWasm.bytes ||
-    (await sha256Bytes(wasmBytes, crypto)) !== runtimeWasm.sha256
+    (await sha256Hex(wasmBytes, crypto)) !== runtimeWasm.sha256
   ) {
     throw typedError("HOST_PROTOCOL_MISMATCH", "Runtime Wasm asset mismatch");
   }
@@ -794,7 +749,6 @@ function createRuntimeSessionController(options = {}) {
       }
     },
     cleanup: cleanupForTransition,
-    sealTake: options.sealTake,
   });
 
   function terminalCleanup() {
@@ -978,26 +932,6 @@ function createRuntimeSessionController(options = {}) {
       () => undefined,
     );
     return pending;
-  }
-
-  async function beginTake(takeId, expectedRevision) {
-    if (closing || machine.state !== "running") {
-      return false;
-    }
-    try {
-      machine.beginTake(takeId);
-      await boundedRequest("take.begin", {
-        take_id: takeId,
-        expected_revision: expectedRevision,
-      });
-      if (closing || machine.state !== "running") {
-        return false;
-      }
-      return true;
-    } catch (error) {
-      fail(error);
-      return false;
-    }
   }
 
   function completeRecovery(status) {

@@ -3,7 +3,10 @@ import {webcrypto} from "node:crypto";
 import test from "node:test";
 
 import {HostProtocolError} from "../web/protocol.mjs";
-import {importProjectBundle} from "../web/project_bundle_reader.mjs";
+import {
+  importProjectBundle,
+  validBundlePath,
+} from "../web/project_bundle_reader.mjs";
 
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
@@ -108,6 +111,14 @@ function successfulSend(calls, index) {
     return {};
   };
 }
+
+test("validates Bundle paths by complete segment", () => {
+  assert.equal(validBundlePath("pads/...sample.wav"), true);
+  assert.equal(validBundlePath("foo/.hidden/sample.wav"), true);
+  assert.equal(validBundlePath("foo/../sample.wav"), false);
+  assert.equal(validBundlePath("./sample.wav"), false);
+  assert.equal(validBundlePath("foo/./sample.wav"), false);
+});
 
 test("streams a validated bundle in bounded ordered chunks and returns a summary", async () => {
   const fixture = await bundleFixture();

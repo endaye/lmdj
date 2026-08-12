@@ -40,7 +40,6 @@ export class HostStateError extends Error {
 export function createHostStateMachine({
   initialState = "cold",
   notify = () => {},
-  sealTake = () => {},
   cleanup = () => {},
 } = {}) {
   if (!STATE_SET.has(initialState)) {
@@ -48,14 +47,12 @@ export function createHostStateMachine({
   }
   if (
     typeof notify !== "function" ||
-    typeof sealTake !== "function" ||
     typeof cleanup !== "function"
   ) {
     throw new TypeError("Host state side effects must be injected functions");
   }
 
   let state = initialState;
-  let activeTakeId = null;
   let transitionInProgress = false;
 
   function invalid(message, details = {}) {
@@ -87,20 +84,6 @@ export function createHostStateMachine({
     return NEXT_STATES[state]?.includes(nextState) ?? false;
   }
 
-  function sealActiveTake(reason) {
-    if (activeTakeId === null) {
-      return null;
-    }
-    const sealed = Object.freeze({
-      take_id: activeTakeId,
-      outcome: "capture_incomplete",
-      reason,
-    });
-    activeTakeId = null;
-    sealTake(sealed);
-    return sealed;
-  }
-
   function transition(
     nextState,
     { reason = "host_lifecycle", recoveryEpoch = false } = {},
@@ -124,18 +107,11 @@ export function createHostStateMachine({
         nextState === "restart-required" ||
         nextState === "failed" ||
         nextState === "closed";
-      const requiresCaptureSeal =
-        requiresCleanup ||
-        (previousState === "running" && nextState === "audio-suspended");
-      const sealed = requiresCaptureSeal ? sealActiveTake(reason) : null;
       if (requiresCleanup) {
         cleanup(nextState, { reason });
       }
 
       state = nextState;
-      if (sealed !== null) {
-        notify("capture.sealed", sealed);
-      }
       notify("host.state_changed", {
         previous_state: previousState,
         state: nextState,
@@ -150,19 +126,6 @@ export function createHostStateMachine({
     } finally {
       transitionInProgress = false;
     }
-  }
-
-  function allowsOperation(operation) {
-    if (transitionInProgress) {
-      return false;
-    }
-    if (operation === "trigger" || operation === "take.begin") {
-      return state === "running";
-    }
-    if (operation === "audio.suspend") {
-      return state === "running" || state === "audio-suspended";
-    }
-    return !TERMINAL_STATES.has(state);
   }
 
   function handleOperation(operation) {
@@ -184,46 +147,11 @@ export function createHostStateMachine({
     return Object.freeze({ state, changed: true });
   }
 
-  function beginTake(takeId) {
-    rejectMutationDuringTransition("take.begin");
-    if (state !== "running") {
-      invalid("take.begin requires the running Host state", {
-        operation: "take.begin",
-      });
-    }
-    if (typeof takeId !== "string" || takeId.length === 0) {
-      throw new TypeError("take_id must be a non-empty string");
-    }
-    if (activeTakeId !== null) {
-      invalid("A Take is already active", { operation: "take.begin" });
-    }
-    activeTakeId = takeId;
-    return Object.freeze({ take_id: activeTakeId });
-  }
-
-  function stopTake() {
-    rejectMutationDuringTransition("take.stop");
-    if (state !== "running" || activeTakeId === null) {
-      invalid("take.stop requires an active Take in running state", {
-        operation: "take.stop",
-      });
-    }
-    const stopped = Object.freeze({ take_id: activeTakeId });
-    activeTakeId = null;
-    return stopped;
-  }
-
   return Object.freeze({
     transition,
-    allowsOperation,
     handleOperation,
-    beginTake,
-    stopTake,
     get state() {
       return state;
-    },
-    get activeTake() {
-      return activeTakeId;
     },
   });
 }

@@ -2,6 +2,7 @@ import {
   HostProtocolError,
   MAX_ASSET_BYTES,
 } from "./protocol.mjs";
+import {canonicalJson, exactKeys, sha256Hex} from "./integrity.mjs";
 
 
 const MAGIC = new TextEncoder().encode("LMDJBND1");
@@ -15,7 +16,7 @@ const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
 const PATH_PATTERN =
-  /^(?!.*(?:^\/)\.{1,2}(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
+  /^(?!.*(?:^|\/)\.{1,2}(?:\/|$))[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*$/;
 const ROOT_KEYS = [
   "bundle_digest",
   "compression",
@@ -49,42 +50,13 @@ function resourceLimit(message) {
   return typedError("WEB_RUNTIME_RESOURCE_LIMIT", message);
 }
 
-function exactKeys(value, expected) {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    return false;
-  }
-  const keys = Object.keys(value).sort();
-  return keys.length === expected.length &&
-    keys.every((key, index) => key === expected[index]);
-}
-
-function canonicalJson(value) {
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalJson).join(",")}]`;
-  }
-  if (value !== null && typeof value === "object") {
-    return `{${Object.keys(value).sort().map((key) =>
-      `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
-  }
-  return JSON.stringify(value);
-}
-
 function bytesEqual(left, right) {
   return left.byteLength === right.byteLength &&
     left.every((byte, index) => byte === right[index]);
 }
 
-async function sha256(bytes, crypto) {
-  if (typeof crypto?.subtle?.digest !== "function") {
-    throw typedError(
-      "HOST_PROTOCOL_MISMATCH",
-      "Project Bundle import requires SHA-256",
-    );
-  }
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  return [...new Uint8Array(digest)]
-    .map((byte) => byte.toString(16).padStart(2, "0"))
-    .join("");
+export function validBundlePath(path) {
+  return typeof path === "string" && PATH_PATTERN.test(path);
 }
 
 async function readExact(file, start, end) {
@@ -169,9 +141,7 @@ async function validateIndex(indexBytes, fileSize, crypto) {
       entry.bytes < 0 ||
       !Number.isSafeInteger(entry.offset) ||
       entry.offset < 0 ||
-      typeof entry.path !== "string" ||
-      !PATH_PATTERN.test(entry.path) ||
-      entry.path.split("/").some((segment) => segment === "." || segment === "..") ||
+      !validBundlePath(entry.path) ||
       new TextEncoder().encode(entry.path).byteLength > MAX_PATH_BYTES ||
       !SHA256_PATTERN.test(entry.sha256)
     ) {
@@ -206,7 +176,7 @@ async function validateIndex(indexBytes, fileSize, crypto) {
     throw invalid("Project Bundle payload boundary is invalid");
   }
   const {bundle_digest: _removed, ...digestSource} = index;
-  const digest = await sha256(
+  const digest = await sha256Hex(
     new TextEncoder().encode(canonicalJson(digestSource)),
     crypto,
   );
@@ -231,7 +201,7 @@ function throwIfAborted(signal) {
 async function sidecarDeclaration(bytes, crypto) {
   return {
     sidecar_bytes: bytes.byteLength,
-    sidecar_sha256: await sha256(bytes, crypto),
+    sidecar_sha256: await sha256Hex(bytes, crypto),
   };
 }
 
@@ -333,7 +303,7 @@ export async function importProjectBundle(file, {
   report(HEADER_BYTES);
   const indexBytes = await readIndex(file, indexByteLength, report);
   const index = await validateIndex(indexBytes, totalBytes, crypto);
-  const indexSha256 = await sha256(indexBytes, crypto);
+  const indexSha256 = await sha256Hex(indexBytes, crypto);
   const importToken = crypto.randomUUID();
   if (!UUID_PATTERN.test(importToken)) {
     throw typedError(

@@ -50,6 +50,7 @@ EXPECTED_ASSETS = (
     ("assets/diagnostic-client.", ".mjs", "platform_module"),
     ("assets/diagnostic-project.", ".mjs", "host_module"),
     ("assets/input-adapters.", ".mjs", "platform_module"),
+    ("assets/integrity.", ".mjs", "platform_module"),
     ("assets/main.", ".mjs", "host_main"),
     ("assets/preflight.", ".mjs", "platform_module"),
     ("assets/project-bundle-reader.", ".mjs", "platform_module"),
@@ -285,11 +286,20 @@ def build_distribution(
             "protocol",
             "platform_module",
         )
+        integrity_entry = write_module(
+            platform_root / "integrity.mjs",
+            "integrity",
+            "platform_module",
+            (("./protocol.mjs", protocol_entry),),
+        )
         project_bundle_reader_entry = write_module(
             platform_root / "project_bundle_reader.mjs",
             "project-bundle-reader",
             "platform_module",
-            (("./protocol.mjs", protocol_entry),),
+            (
+                ("./protocol.mjs", protocol_entry),
+                ("./integrity.mjs", integrity_entry),
+            ),
         )
         state_machine_entry = write_module(
             platform_root / "state_machine.mjs",
@@ -313,6 +323,7 @@ def build_distribution(
                 ("./runtime_loader.mjs", runtime_loader_entry),
                 ("./preflight.mjs", preflight_entry),
                 ("./protocol.mjs", protocol_entry),
+                ("./integrity.mjs", integrity_entry),
                 ("./state_machine.mjs", state_machine_entry),
             ),
         )

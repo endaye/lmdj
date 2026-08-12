@@ -39,6 +39,14 @@ test("exports exactly the externally visible Host states", () => {
   ]);
 });
 
+test("exposes only the active Stage 7 state-machine surface", () => {
+  assert.deepEqual(Object.keys(createHostStateMachine()).sort(), [
+    "handleOperation",
+    "state",
+    "transition",
+  ]);
+});
+
 test("exercises every locked nonterminal state-table row", () => {
   const startup = createHostStateMachine();
   advanceToRunning(startup);
@@ -118,133 +126,70 @@ test("audio.suspend is idempotent only in audio-suspended", () => {
   }
 });
 
-test("audio.suspend seals an active Take before audio-suspended is observable", () => {
+test("audio.suspend publishes the new state after the transition", () => {
   const observations = [];
   let machine;
   machine = createHostStateMachine({
     initialState: "running",
-    sealTake: (take) => {
-      observations.push({
-        step: "seal",
-        state: machine.state,
-        activeTake: machine.activeTake,
-        take,
-      });
-    },
-    notify: (event, payload) => {
-      observations.push({
-        step: `notify:${event}`,
-        state: machine.state,
-        activeTake: machine.activeTake,
-        payload,
-      });
-    },
+    notify: (event, payload) => observations.push({
+      event,
+      payload,
+      state: machine.state,
+    }),
   });
-  machine.beginTake("take-suspend");
 
   assert.deepEqual(machine.handleOperation("audio.suspend"), {
     state: "audio-suspended",
     changed: true,
   });
-
-  assert.equal(machine.activeTake, null);
-  assert.deepEqual(observations[0], {
-    step: "seal",
-    state: "running",
-    activeTake: null,
-    take: {
-      take_id: "take-suspend",
-      outcome: "capture_incomplete",
-      reason: "audio.suspend",
-    },
-  });
-  assert.deepEqual(
-    observations.slice(1).map(({ step }) => step),
-    ["notify:capture.sealed", "notify:host.state_changed"],
-  );
-  for (const observation of observations.slice(1)) {
-    assert.equal(observation.state, "audio-suspended", observation.step);
-    assert.equal(observation.activeTake, null, observation.step);
-  }
+  assert.deepEqual(observations, [{
+    event: "host.state_changed",
+    payload: {previous_state: "running", state: "audio-suspended"},
+    state: "audio-suspended",
+  }]);
 });
 
-test("Trigger and take.begin are accepted only while running", () => {
-  for (const state of HOST_STATES) {
-    const machine = createHostStateMachine({ initialState: state });
-    assert.equal(machine.allowsOperation("trigger"), state === "running", state);
-    assert.equal(machine.allowsOperation("take.begin"), state === "running", state);
-  }
-});
-
-test("interruption seals an active Take and emits exact notifications", () => {
+test("interruption emits exact notifications", () => {
   const notifications = [];
-  const sealed = [];
   const machine = createHostStateMachine({
     initialState: "running",
     notify: (event, payload) => notifications.push({ event, payload }),
-    sealTake: (take) => sealed.push(take),
   });
-  machine.beginTake("take-1");
   machine.transition("interrupted", { reason: "audio_statechange" });
 
-  assert.equal(machine.activeTake, null);
-  assert.deepEqual(sealed, [
-    {
-      take_id: "take-1",
-      outcome: "capture_incomplete",
-      reason: "audio_statechange",
-    },
-  ]);
   assert.deepEqual(
     notifications.map(({ event }) => event),
-    ["capture.sealed", "host.state_changed", "audio.interrupted"],
+    ["host.state_changed", "audio.interrupted"],
   );
 });
 
-test("seals and cleans before terminal or interrupted state becomes observable", () => {
+test("cleans before terminal or interrupted state becomes observable", () => {
   for (const nextState of ["interrupted", "restart-required", "failed", "closed"]) {
     const observations = [];
     let machine;
     machine = createHostStateMachine({
       initialState: "running",
-      sealTake: () => {
-        observations.push({
-          step: "seal",
-          state: machine.state,
-          activeTake: machine.activeTake,
-        });
-      },
       cleanup: (targetState) => {
         observations.push({
           step: `cleanup:${targetState}`,
           state: machine.state,
-          activeTake: machine.activeTake,
         });
       },
       notify: (event) => {
         observations.push({
           step: `notify:${event}`,
           state: machine.state,
-          activeTake: machine.activeTake,
         });
       },
     });
-    machine.beginTake(`take-${nextState}`);
     machine.transition(nextState);
 
     assert.deepEqual(observations[0], {
-      step: "seal",
-      state: "running",
-      activeTake: null,
-    });
-    assert.deepEqual(observations[1], {
       step: `cleanup:${nextState}`,
       state: "running",
-      activeTake: null,
     });
-    for (const observation of observations.slice(2)) {
+    for (const observation of observations.slice(1)) {
       assert.equal(observation.state, nextState, observation.step);
-      assert.equal(observation.activeTake, null, observation.step);
     }
   }
 });
@@ -257,7 +202,6 @@ test("reentrant notification cannot recover during an interrupted transition", (
     notify: (event) => {
       if (event === "host.state_changed") {
         assert.equal(machine.state, "interrupted");
-        assert.equal(machine.activeTake, null);
         try {
           machine.transition("recovering");
         } catch (error) {
@@ -266,45 +210,23 @@ test("reentrant notification cannot recover during an interrupted transition", (
       }
     },
   });
-  machine.beginTake("take-reentrant");
   machine.transition("interrupted");
   assert.equal(machine.state, "interrupted");
   assert.equal(reentrantErrors.length, 1);
   assert.equal(reentrantErrors[0].code, "HOST_STATE_INVALID");
 });
 
-function exerciseAdmissionBarrier(callbackName, nextState) {
-  const sideEffects = {
-    trigger: 0,
-    beginTake: 0,
-    stopTake: 0,
-  };
-  const admissions = [];
+function exerciseAdmissionBarrier(nextState) {
   const rejected = [];
   let machine;
 
   function probeAdmission() {
-    const triggerAllowed = machine.allowsOperation("trigger");
-    admissions.push({
-      trigger: triggerAllowed,
-      beginTake: machine.allowsOperation("take.begin"),
-      hostStatus: machine.allowsOperation("host.status"),
-    });
-    if (triggerAllowed) {
-      sideEffects.trigger += 1;
-    }
     for (const [operation, mutate] of [
-      ["take.begin", () => machine.beginTake("take-reentrant")],
-      ["take.stop", () => machine.stopTake()],
+      ["transition", () => machine.transition("audio-suspended")],
       ["audio.suspend", () => machine.handleOperation("audio.suspend")],
     ]) {
       try {
         mutate();
-        if (operation === "take.begin") {
-          sideEffects.beginTake += 1;
-        } else if (operation === "take.stop") {
-          sideEffects.stopTake += 1;
-        }
       } catch (error) {
         rejected.push({ operation, error });
       }
@@ -313,25 +235,14 @@ function exerciseAdmissionBarrier(callbackName, nextState) {
 
   machine = createHostStateMachine({
     initialState: "running",
-    sealTake: callbackName === "sealTake" ? probeAdmission : () => {},
-    cleanup: callbackName === "cleanup" ? probeAdmission : () => {},
+    cleanup: probeAdmission,
   });
-  machine.beginTake("take-active");
   machine.transition(nextState);
 
   assert.equal(machine.state, nextState);
-  assert.equal(machine.activeTake, null);
-  assert.deepEqual(admissions, [
-    { trigger: false, beginTake: false, hostStatus: false },
-  ]);
-  assert.deepEqual(sideEffects, {
-    trigger: 0,
-    beginTake: 0,
-    stopTake: 0,
-  });
   assert.deepEqual(
     rejected.map(({ operation }) => operation),
-    ["take.begin", "take.stop", "audio.suspend"],
+    ["transition", "audio.suspend"],
   );
   for (const { error } of rejected) {
     assert.equal(error instanceof HostStateError, true);
@@ -340,33 +251,17 @@ function exerciseAdmissionBarrier(callbackName, nextState) {
   }
 }
 
-test("sealTake callback cannot admit Trigger or mutate Take state", () => {
+test("cleanup callback cannot mutate Host state", () => {
   for (const nextState of ["interrupted", "failed", "closed"]) {
-    exerciseAdmissionBarrier("sealTake", nextState);
+    exerciseAdmissionBarrier(nextState);
   }
 });
 
-test("cleanup callback cannot admit Trigger or mutate Take state", () => {
-  for (const nextState of ["interrupted", "failed", "closed"]) {
-    exerciseAdmissionBarrier("cleanup", nextState);
-  }
-});
-
-test("fatal failure seals an active Take and terminal states are immutable", () => {
-  const sealed = [];
+test("terminal states are immutable", () => {
   const failed = createHostStateMachine({
     initialState: "running",
-    sealTake: (take) => sealed.push(take),
   });
-  failed.beginTake("take-2");
   failed.transition("failed", { reason: "WORKLET_PROCESSOR_ERROR" });
-  assert.deepEqual(sealed, [
-    {
-      take_id: "take-2",
-      outcome: "capture_incomplete",
-      reason: "WORKLET_PROCESSOR_ERROR",
-    },
-  ]);
   assert.throws(() => failed.transition("closed"), HostStateError);
   assert.equal(failed.state, "failed");
 
@@ -375,38 +270,15 @@ test("fatal failure seals an active Take and terminal states are immutable", () 
   assert.equal(closed.state, "closed");
 });
 
-test("supports repeated interruption and both recovery paths without reviving a sealed Take", () => {
-  const sealed = [];
-  const machine = createHostStateMachine({
-    initialState: "running",
-    sealTake: (take) => sealed.push(take),
-  });
-  machine.beginTake("take-first");
+test("supports repeated interruption and both recovery paths", () => {
+  const machine = createHostStateMachine({initialState: "running"});
   machine.transition("interrupted");
   machine.transition("recovering");
   machine.transition("running");
-  assert.equal(machine.activeTake, null);
 
-  machine.beginTake("take-second");
   machine.transition("interrupted");
   machine.transition("recovering");
   machine.transition("audio-suspended");
   machine.transition("running");
-  assert.equal(machine.activeTake, null);
-  assert.deepEqual(
-    sealed.map(({ take_id }) => take_id),
-    ["take-first", "take-second"],
-  );
-});
-
-test("take.stop ends the active Take without incomplete sealing", () => {
-  const sealed = [];
-  const machine = createHostStateMachine({
-    initialState: "running",
-    sealTake: (take) => sealed.push(take),
-  });
-  machine.beginTake("take-clean");
-  assert.deepEqual(machine.stopTake(), { take_id: "take-clean" });
-  assert.equal(machine.activeTake, null);
-  assert.deepEqual(sealed, []);
+  assert.equal(machine.state, "running");
 });
