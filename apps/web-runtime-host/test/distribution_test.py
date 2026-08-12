@@ -67,15 +67,24 @@ class DistributionTest(unittest.TestCase):
     def test_built_distribution_is_clean(self) -> None:
         self.module.verify_distribution(DEFAULT_DIST, REPO_ROOT)
         manifest = json.loads((DEFAULT_DIST / "host-manifest.json").read_bytes())
-        self.assertEqual(len(manifest["assets"]), 13)
-        self.assertEqual(
-            len([
-                asset for asset in manifest["assets"]
-                if asset["path"].startswith("assets/diagnostic-project.")
-                and asset["path"].endswith(".mjs")
-            ]),
-            1,
+        runtime_identity = json.loads(
+            (REPO_ROOT / "products/lmdj/generated/web-runtime-identity.json").read_bytes()
         )
+        expected_assets = runtime_identity["hosts"]["web-runtime-host"][
+            "expected_assets"
+        ]
+        self.assertEqual(len(manifest["assets"]), len(expected_assets))
+        for expected in expected_assets:
+            with self.subTest(role=expected["role"]):
+                self.assertEqual(
+                    len([
+                        asset for asset in manifest["assets"]
+                        if asset["role"] == expected["role"]
+                        and asset["path"].startswith(expected["prefix"])
+                        and asset["path"].endswith(expected["suffix"])
+                    ]),
+                    1,
+                )
         self.assertFalse(any(DEFAULT_DIST.rglob("*.wav")))
         self.assertEqual(
             manifest["distribution_contract"],

@@ -916,6 +916,7 @@ git commit -m "docs(portal): freeze 1.0.18.0 canary snapshot"
 
 - Modify: `scripts/core.sh` if candidate Proof reports an identity different from the verified manifest
 - Modify: `tests/build/core_script_test.py` for the corresponding identity regression
+- Modify: `apps/web-runtime-host/test/distribution_test.py` if the generated Host inventory and built-distribution assertion drift
 - Modify: `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`
 - Modify: `docs/quality/2026-08-12-stage7-creator-editor-review.md`
 - Create: `docs/release-evidence/2026-08-13-stage7-remediation-canary.md`
