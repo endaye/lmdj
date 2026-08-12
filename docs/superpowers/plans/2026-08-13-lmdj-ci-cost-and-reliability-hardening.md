@@ -167,7 +167,7 @@ Chromium+WebKit, on every run. Hosted core lanes rebuild cold every time.
 Files: `.github/workflows/ci.yml`,
 `.github/actions/configure-build-acceleration/action.yml`.
 
-### Task 3: Lane selection input for workflow_dispatch
+### Task 3: Lane selection input for workflow_dispatch — IMPLEMENTED (`48a51b1`)
 
 Policy sends every manual dispatch to full mode — all 14 lanes — so a
 targeted verification (one browser suite, one host proof) burns the entire
@@ -176,10 +176,15 @@ matrix. On 2026-08-12 that multiplied every retry.
 - Add an optional `lanes` input to `workflow_dispatch` (comma-separated lane
   names validated against the policy's canonical list). Empty input keeps
   the current behavior: full mode, all lanes.
-- Thread the input through `Change Scope`: a non-empty selection produces a
-  `focused` manifest with exactly the requested lanes plus their required
-  jobs; `PR Gate` adjudicates that manifest as it already does for focused
-  Ready PRs. Draft, Ready, push, and label semantics are untouched.
+- **Correction, established during Task 3 implementation:** the selection
+  gets its own manifest mode, `requested`, rather than the planned `focused`.
+  `validate_manifest` enforces that a `focused` manifest's lanes equal the
+  path-ownership union, and a dispatch selection is deliberately independent
+  of the diff — that independence is the whole point. Reusing `focused` would
+  have required weakening that invariant for every Ready pull request. The new
+  mode validates a non-empty subset of the canonical lanes. `PR Gate` reads
+  lane results, not `mode`, so it is unaffected. Draft, Ready, push, and label
+  semantics are untouched.
 - Extend `scripts/ci/change_scope.py` validation and
   `tests/build/ci_runner_fallback_test.py` / scope tests for the new input,
   including rejection of unknown lane names (fail closed).
@@ -190,7 +195,7 @@ matrix. On 2026-08-12 that multiplied every retry.
 Files: `.github/workflows/ci.yml`, `scripts/ci/change_scope.py`,
 `scripts/ci/scope_policy.json` (if a schema field is needed), scope tests.
 
-### Task 4: Single-source Product identity in tests
+### Task 4: Single-source Product identity in tests — IMPLEMENTED (`62d7487`)
 
 Four literal shapes of the Product Build live in tests and specs; every
 corrective candidate must find all of them or burn a full CI cycle per miss.
@@ -212,9 +217,16 @@ corrective candidate must find all of them or burn a full CI cycle per miss.
   (`apps/creator-web/src/main.tsx` / `apps/web-runtime-host/src/main.mjs`,
   Stage 7 review F5) are product source with a manifest gate behind them;
   single-sourcing them is a product Task, not a CI Task.
-- Verify: `scripts/core.sh proof`, `creator-web` lane; then a rehearsal bump
-  of `version.json` on a scratch branch must fail only the version gates,
-  not the host/creator identity tests.
+- Verified by that rehearsal: bumping `version.json` alone, and then together
+  with `assembly.json` and a regenerated lock, fails only the version and lock
+  gates — assembly-product mismatch, compiled assembly, and lock digests, each
+  of which a real bump is supposed to update. No host, creator, scope, or
+  module-graph test fails on an identity change any more.
+- **Audit note:** other files still name the Build (`assembly_loader_test.cpp`,
+  `native_host_test.py`, `version_lock_test.py`,
+  `web_runtime_host_lifecycle.spec.mjs`, and the Creator component fixtures).
+  The rehearsal shows they either derive already or belong to the version and
+  lock gates that must move with a bump, so they are deliberately left alone.
 
 Files: the five test files above.
 
