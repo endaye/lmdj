@@ -3,8 +3,9 @@
 **Goal:** Remove the two structural causes of the 2026-08-12 CI incident day —
 every lane downloading pinned third-party sources from `github.com` on every
 run, and every web lane reinstalling its multi-hundred-megabyte toolchain from
-scratch — and stop identity bumps from costing full CI cycles per missed
-literal.
+scratch — stop identity bumps from costing full CI cycles per missed literal,
+and stop paid GitHub-hosted infrastructure from absorbing work the repository
+already owns idle hardware to run.
 
 **Architecture:** No product source, Module API, Contract, or Proof semantics
 change. Task 1 moves the two pinned dependencies into the repository so builds
@@ -15,7 +16,14 @@ Playwright browsers, and hosted-runner ccache, keyed on the pinned versions.
 Task 3 adds an optional lane filter to `workflow_dispatch` without changing
 Ready-PR or push semantics. Task 4 makes the test suite read Product identity
 from the manifests it already trusts instead of hard-coding it in four literal
-forms.
+forms. Task 5 corrects runner routing so that a momentarily busy trusted pool
+queues instead of diverting an entire run to paid infrastructure. Task 6 adds
+a local pre-flight that runs the same lane commands on the developer's machine
+before a push, so a correctable failure costs no remote cycle at all.
+
+Tasks 1 through 4 reduce the cost of one CI run. Tasks 5 and 6 reduce which
+machine pays for that run, and how many runs are needed. The billing evidence
+below shows the second pair dominates the invoice.
 
 Incident provenance (2026-08-12, all auditable in this repository's run
 history):
@@ -35,6 +43,45 @@ history):
   see uniformly: dotted strings, `ProductVersion(1, 0, 16, 8)` positional
   arguments, numeric `"patch": 8` JSON fields, and a Build embedded in an
   acceptance-report filename.
+
+Cost provenance (GitHub billing usage API, 2026-08-01 through 2026-08-13, and
+the Actions jobs API for the runs cited):
+
+- Billed this period: `Actions Linux` 6,259 minutes at `$0.006` (gross
+  `$37.55`, net `$31.64`) and `Actions macOS 3-core` 795 minutes at `$0.062`
+  (gross `$49.28`, net `$36.69`). macOS is 11 percent of the minutes and 57
+  percent of the money; no Task above addresses it.
+- A 100-run sample of `ci.yml` job records attributes 752 GitHub-hosted Ubuntu
+  minutes, 419 self-hosted minutes, and 39 GitHub-hosted macOS minutes to the
+  30 most recent runs — which span `2026-08-12T12:46Z` to
+  `2026-08-12T19:01Z`, a single six-hour window on one Pull Request. The
+  invoice is driven by the number of remote round trips, which no current Task
+  reduces.
+- Within those hosted minutes, `creator-web` (176) and
+  `web-toolchain-conformance` (171) are 44 percent of the total. Both are
+  pinned to `runs-on: ubuntu-24.04` by
+  `tests/build/ci_runner_fallback_test.py::test_resource_intensive_web_gates_use_hosted_runners`,
+  an invariant deliberately frozen by the risk-based CI gating plan
+  (`docs/superpowers/plans/2026-08-11-risk-based-ci-gating.md`, "Do not add
+  runners ... in this implementation"). Task 2's caching makes these lanes
+  cheaper per run but leaves them entirely on paid infrastructure.
+- `select-ubuntu-runner` resolves once, before any workload job starts, and
+  requires `.status == "online" and .busy == false`. Because the trusted pool
+  holds two runner services while a full manifest needs six Linux lanes, a
+  pool that is merely busy at that instant sends the *entire* run to
+  GitHub-hosted Ubuntu rather than queueing — the documented "at most two
+  selected jobs concurrently; additional jobs queue" behavior in
+  `docs/quality/core-test-policy.md` only applies once the pool has already
+  been selected. Concurrent retries make each other's runs expensive.
+- `select-macos-runner` has the same all-or-nothing shape against a single
+  laptop runner (`endaye-mbp-m1`). Every run started while that machine is
+  asleep, offline, or busy buys GitHub-hosted macOS at 10.3x the Linux rate,
+  with no cap, no warning, and no distinction between a Draft Pull Request and
+  a release candidate.
+- All three trusted runners (`contabo-lmdj-linux`, `contabo-lmdj-linux-02`,
+  `endaye-mbp-m1`) report `online` and `busy == false` at the time of writing,
+  so "re-enabling the contabo runners" is no longer the open question the
+  owner-decision list below recorded.
 
 ## Global Constraints
 
@@ -167,6 +214,106 @@ corrective candidate must find all of them or burn a full CI cycle per miss.
 
 Files: the five test files above.
 
+### Task 5: Route Linux and macOS work to the trusted pools the repository owns
+
+The selectors treat a *busy* trusted pool the same as an *absent* one, so a
+single saturated instant diverts a whole 25-minute manifest to paid
+infrastructure, and two lanes never consult the pool at all.
+
+- Change trusted-pool eligibility in `select-ubuntu-runner` from
+  `.status == "online" and .busy == false` to `.status == "online"`. GitHub
+  already queues label-matched jobs against a busy pool; the selector's real
+  responsibility is detecting an *absent* pool, not a loaded one. The fork,
+  missing-token, and Runner-API-failure fallbacks keep their current
+  fail-to-hosted behavior unchanged, because those are trust and availability
+  conditions rather than load.
+- Operational precondition (not a repository change): run three runner
+  services per contabo VM so the trusted Linux pool offers six slots and a
+  full manifest's six Linux lanes stop serializing behind two. This adds no
+  host and no spend. Record the resulting slot count in
+  `docs/quality/core-test-policy.md`, which currently states two.
+- Move `web-toolchain-conformance` and `creator-web` onto
+  `select-ubuntu-runner`, overturning
+  `test_resource_intensive_web_gates_use_hosted_runners`. That invariant
+  protected two browser-heavy suites from a two-slot pool; with six slots and
+  Task 2's toolchain caches the premise no longer holds. Rewrite the test to
+  assert the selector topology for these jobs instead of deleting it, so the
+  routing stays pinned in the opposite direction.
+- Bound the macOS hosted fallback by event rather than leaving it unbounded:
+  `push` to `main`, `workflow_dispatch`, and release candidates may still
+  select GitHub-hosted macOS immediately; a Pull Request run queues for
+  `endaye-mbp-m1`. The infrastructure-recovery semantics of `macos-fallback`
+  itself — one attempt, only for a missing terminal result, never after a
+  published semantic failure — are unchanged.
+- Gate boundary: routing decides which machine executes a lane, never whether
+  its result is required. The `PR Gate` truth table, the 18-result key set,
+  the no-retry policy, fork isolation, LFS hydration, and package ccache
+  suppression are all untouched.
+- Verify: `tests/build/ci_runner_fallback_test.py`,
+  `tests/build/ci_build_acceleration_test.py`,
+  `tests/build/ci_workflow_topology_test.py`; a full-mode dispatch issued
+  while the pool is deliberately saturated must show queued self-hosted jobs
+  rather than `GitHub Actions` runner names; compare hosted minutes for the
+  same manifest through the Actions jobs API before and after.
+
+Files: `.github/workflows/ci.yml`, `tests/build/ci_runner_fallback_test.py`,
+`docs/quality/core-test-policy.md`,
+`apps/architecture-portal/docs/operations/testing-and-proof.mdx`.
+
+### Task 6: Local pre-flight that reuses the CI scope decision
+
+Nothing today lets a developer learn a lane's verdict without spending a
+remote cycle, and nothing lets an unchanged lane be skipped between
+iterations. Task 3 narrows a manual dispatch but still round-trips.
+
+- Add `scripts/ci/local_preflight.py` and a thin `scripts/local-ci.sh`
+  entry point. The pre-flight runs `scripts/ci/change_scope.py` against
+  `git diff` of the working branch versus `origin/main` to obtain the same
+  `lmdj.ci-scope.v1` manifest CI would compute, then executes each selected
+  lane locally.
+- The lane-to-local-command mapping lives in `scripts/ci/local_lanes.json`,
+  keyed by the policy's canonical lane list, with a contract test asserting
+  key equality against `policy["lanes"]` so the pre-flight cannot silently
+  drift from the workflow.
+- Cache each lane verdict under `~/.cache/lmdj/preflight/` keyed by a digest
+  of the lane name, its resolved command, and the content hashes of every
+  path the policy maps to that lane. A lane whose inputs are unchanged since
+  its last local pass reports `cached-pass` and does not re-execute. The
+  cache lives outside the worktree and has no path into a CI result.
+- Report honestly rather than optimistically. Lanes that cannot execute on
+  the developer's platform — `core_asan`'s Python-hosted sanitizer coverage
+  on arm64 macOS, `core_coverage`'s Linux toolchain — report
+  `not-runnable-here`, never `pass`. The pre-flight is an advisory filter and
+  produces no evidence: `PR Gate` remains the single aggregate decision, and
+  a green local run authorizes no push, merge, or state transition.
+- Provide `--install-hook` to write a `pre-push` hook that runs the
+  pre-flight and refuses the push on a hard failure, with `--no-verify`
+  documented as the deliberate escape.
+- Add scope rules for the new files. `change_scope.py` sends any path that
+  matches no rule to full mode (`unclassified path`), so
+  `scripts/local-ci.sh`, `scripts/ci/local_lanes.json`, and the new test must
+  be classified — the two `scripts/ci/` paths already inherit the central
+  control-plane full rule; `scripts/local-ci.sh` needs an explicit
+  `ci_contract` mapping.
+- Verify: `tests/build/ci_local_preflight_test.py` covering manifest reuse,
+  cache-key invalidation on a touched input, and the `not-runnable-here`
+  classification; a docs-only working tree selects exactly `docs_static`; a
+  `packages/foundation/` edit selects the core lanes; a second consecutive
+  invocation with no edits reports every lane cached.
+
+Files: `scripts/ci/local_preflight.py`, `scripts/ci/local_lanes.json`,
+`scripts/local-ci.sh`, `tests/build/ci_local_preflight_test.py`,
+`scripts/ci/scope_policy.json`, `docs/governance/git-workflow.md`,
+`docs/quality/core-test-policy.md`.
+
+## Task order and independence
+
+Tasks 5 and 6 are independent of each other and of Tasks 1 through 4, and
+both should land before Task 3: Task 3 makes a targeted remote run cheaper,
+while Tasks 5 and 6 remove remote runs and paid runners from the loop
+entirely. Task 6 touches no workflow file and can proceed while Task 5's
+runner provisioning is still in progress.
+
 ## Owner decisions deliberately not taken here
 
 - Reducing the double-clean-build byte-identity proofs (they are the
@@ -175,13 +322,25 @@ Files: the five test files above.
 - Playwright worker parallelism inside the conformance suites (the 6-minute
   single-worker Project I/O spec is timing-sensitive around fault
   injection; parallelizing risks flakiness for ~4 minutes saved).
-- Re-enabling the contabo runners (operational: with Task 1 landed, runner-side
-  github.com health no longer matters for the dependency gate).
 - Hosted ccache: `ci_build_acceleration_test` currently forbids it, and the
   value is uncertain on ephemeral runners because the ccache directory must
   round-trip through `actions/cache` on a parallelism-3 build. Enabling it
   means changing that contract test, which is an owner decision. The three
   Ubuntu compile lanes keep today's self-hosted-only behavior.
+- Re-enabling the contabo runners is no longer open: all three trusted
+  runners report `online` and idle, so Task 5 addresses slot count and
+  selector eligibility instead of service availability.
+- Adding trusted hosts. Task 5 raises Linux capacity by running more runner
+  services on the existing VMs; buying a second Mac or more Linux capacity is
+  a spending decision left to the owner, and the pre-flight in Task 6 is the
+  cheaper answer to the same pressure.
+- A hard spending cap or budget alert on GitHub-hosted minutes. Task 5 bounds
+  when hosted macOS may be selected, which is a routing rule; an account-level
+  cap is an owner-side billing control outside this repository.
+- Replacing GitHub Actions with a purely local gate. `main` is protected and
+  the governance model depends on externally auditable run records for portal
+  snapshots and release evidence; Task 6 deliberately produces an advisory
+  filter rather than a substitute for `PR Gate`.
 
 ## Version Management
 
@@ -189,8 +348,11 @@ Canonical policy: `docs/governance/version-management.md`.
 
 Version impact: none.
 Reason: No Module, Host, Provider, Contract, or Assembly identity changes.
-Tasks change build supply, workflow caching, CI control plane, and test
-plumbing; built Product artifacts remain byte-identical (same pinned inputs),
+Tasks change build supply, workflow caching, CI control plane, runner routing,
+local developer tooling, and test plumbing. Tasks 5 and 6 in particular change
+only which machine executes a lane and whether a developer learns its verdict
+before pushing; neither alters a lane's command, its required status, or its
+inputs. Built Product artifacts remain byte-identical (same pinned inputs),
 which the unchanged double-clean-build gates continue to prove. Precedent:
 #115/#116 (CI control plane) carried no version impact. If review concludes
 that vendoring constitutes an Assembly-visible change, the fallback is a
@@ -202,7 +364,16 @@ Documentation impact: required.
 
 - Affected portal routes: `/operations/testing-and-proof/` (dependency gate
   now verifies vendored sources offline; toolchain caching and its
-  determinism boundary; dispatch lane selection).
+  determinism boundary; dispatch lane selection; Task 5's selector
+  eligibility rule, trusted Linux slot count, web-lane routing, and the
+  event-bounded macOS fallback).
+- `docs/quality/core-test-policy.md` is updated by Tasks 5 and 6: the
+  two-concurrent-job statement, the "busy" selector condition, the
+  hosted-by-design web lanes, the macOS fallback trigger set, and the new
+  advisory pre-flight and its explicit non-evidence status.
+- `docs/governance/git-workflow.md` is updated by Task 6 with the pre-flight
+  invocation, the optional `pre-push` hook, and a restatement that a local
+  pass authorizes no push, Pull Request, merge, or later state transition.
 - No Product Build or Assembly change is planned, so no immutable snapshot
   is required; if the fallback PATCH allocation triggers, the snapshot
   obligation follows automatically.
@@ -218,3 +389,12 @@ complete only when the approved PR is squash-merged, required checks pass on
 current code, and merged `main` re-runs Core, Web Runtime Host, Creator Web,
 and Portal Proof — with the second consecutive run demonstrating the intended
 cache-hit wall-clock reduction.
+
+Tasks 5 and 6 add one further completion condition, measured rather than
+asserted: after the merged `main` run, the Actions jobs API for that run must
+attribute the six Linux lanes and `macos-primary` to named self-hosted
+runners rather than `GitHub Actions` runner names, and the following billing
+period must show hosted Ubuntu and hosted macOS minutes below the
+2026-08-01..13 baseline recorded in the cost provenance above. A routing
+change that does not move minutes has not achieved its goal, whatever the
+workflow file says.
