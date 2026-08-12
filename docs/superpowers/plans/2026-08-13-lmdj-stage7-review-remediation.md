@@ -50,11 +50,11 @@
 ```bash
 jq -r '.revision' apps/architecture-portal/versioned_metadata/version-1.0.16.9.json
 git rev-list --all --objects | rg '^b2294005c09975d8414105861a0b4c0939cabd7f '
-git rev-parse 3ebe27aa53bdc7c8221a01324c9e3862aa5a07eb^{commit}
+git rev-parse ea2293448b374d7963e029db6c0eb1fb11002e04^{commit}
 test ! -e apps/architecture-portal/versioned_provenance/version-1.0.16.9-squash-witness.json
 ```
 
-Expected: metadata revision is `b2294005c09975d8414105861a0b4c0939cabd7f`; introducing revision resolves to `3ebe27aa53bdc7c8221a01324c9e3862aa5a07eb`; witness is absent.
+Expected: metadata revision is `b2294005c09975d8414105861a0b4c0939cabd7f`; the metadata path's single-parent introducing revision resolves to `ea2293448b374d7963e029db6c0eb1fb11002e04`; witness is absent. The later two-parent merge `3ebe27aa53bdc7c8221a01324c9e3862aa5a07eb` is current-history context, not the introducing revision accepted by the provenance validator.
 
 - [ ] Run the current fail-closed check as RED:
 
@@ -69,7 +69,7 @@ Expected: all portal content tests pass, then release-docs fails because 1.0.16.
 ```bash
 scripts/architecture-portal.sh witness \
   1.0.16.9 \
-  3ebe27aa53bdc7c8221a01324c9e3862aa5a07eb
+  ea2293448b374d7963e029db6c0eb1fb11002e04
 ```
 
 Do not edit versioned metadata or immutable snapshot content.

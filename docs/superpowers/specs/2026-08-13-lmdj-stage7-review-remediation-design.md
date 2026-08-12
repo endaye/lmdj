@@ -278,10 +278,14 @@ revision。tag 指向测试-only follow-up 的历史事实可以记录，但新�
 Proof 成功后才允许创建 Product tag。
 
 对当前基线，1.0.16.9 metadata 记录的 source revision 是 `b2294005c09975d8414105861a0b4c0939cabd7f`，
-而 snapshot 在现行历史中被解析为由 `3ebe27aa53bdc7c8221a01324c9e3862aa5a07eb`
-引入。第一项治理 Task 必须用现有 fail-closed generator 为这对精确 revision 创建
+而 snapshot metadata path 在现行拓扑中由单父提交
+`ea2293448b374d7963e029db6c0eb1fb11002e04` 首次加入；后续双父 merge
+`3ebe27aa53bdc7c8221a01324c9e3862aa5a07eb` 不是 provenance 校验器定义的 introducing
+revision。第一项治理 Task 必须用现有 authenticated generator 为精确的
+source/introducing revision 对创建
 1.0.16.9 authenticated witness，验证它能重建 source commit/tree；不得重写 immutable
-snapshot 或 metadata 来让门禁变绿。
+snapshot 或 metadata 来让门禁变绿；现有 release-docs verifier 对错误 identity 保持
+fail closed。
 
 Stage 7 acceptance External state 更新为查询当时的准确状态，不把旧的“未合并”叙述
 保留为 current truth。历史事实与 current state 分栏，避免时间漂移。
