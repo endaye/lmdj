@@ -221,7 +221,7 @@ mergeInto(LibraryManager.library, {
       }
     },
 
-    activeLease(destination) {
+    coveringLease(destination) {
       let match = null;
       for (const state of this.leasesByPath.values()) {
         const contained = destination === state.projectPath ||
@@ -231,6 +231,14 @@ mergeInto(LibraryManager.library, {
         }
       }
       if (!match) throw new DOMException("", "InvalidStateError");
+      return match;
+    },
+
+    activeLease(destination, platformIdentity) {
+      const match = this.coveringLease(destination);
+      if (match.platformIdentity !== platformIdentity) {
+        throw new DOMException("", "NoModificationAllowedError");
+      }
       return match;
     },
 
@@ -517,7 +525,7 @@ mergeInto(LibraryManager.library, {
         sourceParts, destinationParts, observer = null) {
       const sourcePath = this.canonicalPath(sourceParts);
       const destinationPath = this.canonicalPath(destinationParts);
-      const lease = this.activeLease(destinationPath);
+      const lease = this.coveringLease(destinationPath);
       if (lease.projectPath !== destinationPath) {
         throw new DOMException("", "InvalidStateError");
       }
@@ -542,6 +550,9 @@ mergeInto(LibraryManager.library, {
         }
         await this.compareDirectoriesBounded(
             source, destination, observer, fault);
+        if (observer) {
+          await observer.throwAtFault(fault, "destination_cleanup_failure");
+        }
         await this.replacePublicationCommitted(
             intent, record, observer, fault, () => { committed = true; });
         if (observer) {
@@ -554,19 +565,31 @@ mergeInto(LibraryManager.library, {
         await intent.directory.removeEntry(this.publicationIntentName);
         return 0;
       } catch (error) {
-        if (!committed) {
-          await this.removeTreeParts(destinationParts).catch(() => {});
+        if (committed) return 0;
+        // The pending intent is the only thing that hides a half-built
+        // destination from enumeration and drives its later recovery, so it
+        // may be removed only once the destination is confirmed absent.
+        let removed = false;
+        try {
+          if (observer) {
+            await observer.throwAtFault(fault, "destination_cleanup_failure");
+          }
+          await this.removeTreeParts(destinationParts);
+          removed = !(await this.exists(destinationParts));
+        } catch (_) {
+          removed = false;
+        }
+        if (removed) {
           await intent.directory.removeEntry(this.publicationIntentName)
               .catch(() => {});
         }
-        if (committed) return 0;
         throw error;
       }
     },
 
-    async createIntent(parts, operation, newBytes) {
+    async createIntent(parts, operation, newBytes, platformIdentity) {
       const destination = this.canonicalPath(parts);
-      const lease = this.activeLease(destination);
+      const lease = this.activeLease(destination, platformIdentity);
       const directory = await this.intentDirectory(lease.scopeKey, true);
       const name = `${await this.pathKey(destination)}.json`;
       try {
@@ -634,9 +657,18 @@ mergeInto(LibraryManager.library, {
         const handle = await directory.getFileHandle(name);
         let record;
         try {
-          record = JSON.parse(new TextDecoder().decode(await this.readFileBytes(handle)));
+          record = JSON.parse(new TextDecoder("utf-8", {fatal: true})
+              .decode(await this.readFileBytes(handle)));
         } catch (_) {
-          throw new DOMException("", "InvalidStateError");
+          // Torn metadata proves the mutation never began: createIntent writes
+          // and read-back-verifies the record before any destination write, and
+          // refuses to reuse an existing intent file. There is nothing to roll
+          // back, so the unusable record is removed rather than locking every
+          // later writer acquisition out of the Project. A record that parses
+          // but fails validation below stays fail-closed on purpose: it may
+          // carry rollback state from a newer Contract revision.
+          await directory.removeEntry(name);
+          continue;
         }
         this.validateIntent(record, lease);
         if (name !== `${await this.pathKey(record.destination)}.json`) {
@@ -741,14 +773,17 @@ mergeInto(LibraryManager.library, {
       }
     },
 
-    async replaceComplete(path, length, data, dataLength, observer) {
+    async replaceComplete(
+        path, length, data, dataLength, platformIdentity, observer) {
       const parts = this.parts(path, length);
       const replacement = this.bytes(data, dataLength);
-      const intent = await this.createIntent(parts, "replace_complete", replacement);
+      const intent = await this.createIntent(
+          parts, "replace_complete", replacement, platformIdentity);
       const destination = this.canonicalPath(parts);
       const fault = observer
         ? await observer.faultForDestination(destination)
         : null;
+      if (observer) await observer.throwStorageConditionFault(fault);
       if (observer) await observer.stopAtFault(fault, "before_write");
       const [parent, name] = await this.parent(parts, false);
       const file = await parent.getFileHandle(name, {create: true});
@@ -777,12 +812,15 @@ mergeInto(LibraryManager.library, {
       await intent.directory.removeEntry(intent.name);
     },
 
-    async createImmutable(path, length, data, dataLength, observer) {
+    async createImmutable(
+        path, length, data, dataLength, platformIdentity, observer) {
       const parts = this.parts(path, length);
+      const destination = this.canonicalPath(parts);
+      this.activeLease(destination, platformIdentity);
       if ((await this.fileState(parts)).state !== "absent") return -4;
       const payload = this.bytes(data, dataLength);
-      const intent = await this.createIntent(parts, "create_immutable", payload);
-      const destination = this.canonicalPath(parts);
+      const intent = await this.createIntent(
+          parts, "create_immutable", payload, platformIdentity);
       const fault = observer
         ? await observer.faultForDestination(destination)
         : null;
@@ -799,8 +837,12 @@ mergeInto(LibraryManager.library, {
       return 0;
     },
 
-    async appendDurable(path, length, prefix, data, dataLength, observer) {
-      const [parent, name] = await this.parent(this.parts(path, length), false);
+    async appendDurable(
+        path, length, prefix, data, dataLength, platformIdentity, observer) {
+      const parts = this.parts(path, length);
+      const destination = this.canonicalPath(parts);
+      this.activeLease(destination, platformIdentity);
+      const [parent, name] = await this.parent(parts, false);
       const file = await parent.getFileHandle(name);
       const access = await file.createSyncAccessHandle();
       try {
@@ -846,12 +888,30 @@ mergeInto(LibraryManager.library, {
 
     async stopAtFault(point, phase) {
       if (point !== phase) return;
+      await this.markFault(phase);
+      await new Promise(() => {});
+    },
+
+    async throwAtFault(point, phase) {
+      if (point !== phase) return;
+      await this.markFault(phase);
+      throw new DOMException("", "InvalidStateError");
+    },
+
+    async throwStorageConditionFault(point) {
+      if (point !== "QuotaExceededError" && point !== "InvalidStateError") {
+        return;
+      }
+      await this.markFault(point);
+      throw new DOMException("", point);
+    },
+
+    async markFault(point) {
       const host = await LmdjOpfs.directory([".lmdj-host"], true);
       const marker = await host.getFileHandle("test-fault-reached", {create: true});
       const writable = await marker.createWritable({keepExistingData: false});
-      await writable.write(phase);
+      await writable.write(point);
       await writable.close();
-      await new Promise(() => {});
     },
 
     writeChunkSize(operation, remaining) {
@@ -946,68 +1006,76 @@ mergeInto(LibraryManager.library, {
 
   lmdj_opfs_create_immutable__deps: ["$LmdjOpfs"],
   lmdj_opfs_create_immutable:
-      (path, length, data, dataLength) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
         try {
           return await LmdjOpfs.createImmutable(
-              path, length, data, dataLength, null);
+              path, length, data, dataLength, platformIdentity, null);
         } catch (error) {
-          return LmdjOpfs.status(error);
+          const status = LmdjOpfs.status(error);
+          return status === -7 ? -3 : status;
         }
       }),
 
   lmdj_opfs_create_immutable_test__deps: ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_create_immutable_test:
-      (path, length, data, dataLength) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
         try {
           return await LmdjOpfs.createImmutable(
-              path, length, data, dataLength, LmdjOpfsTest);
+              path, length, data, dataLength, platformIdentity, LmdjOpfsTest);
         } catch (error) {
-          return LmdjOpfs.status(error);
+          const status = LmdjOpfs.status(error);
+          return status === -7 ? -3 : status;
         }
       }),
 
   lmdj_opfs_replace_complete__deps: ["$LmdjOpfs"],
   lmdj_opfs_replace_complete:
-      (path, length, data, dataLength) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
         try {
-          await LmdjOpfs.replaceComplete(path, length, data, dataLength, null);
+          await LmdjOpfs.replaceComplete(
+              path, length, data, dataLength, platformIdentity, null);
           return 0;
         } catch (error) {
-          return LmdjOpfs.status(error);
+          const status = LmdjOpfs.status(error);
+          return status === -7 ? -3 : status;
         }
       }),
 
   lmdj_opfs_replace_complete_test__deps: ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_replace_complete_test:
-      (path, length, data, dataLength) => Asyncify.handleAsync(async () => {
+      (path, length, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
         try {
           await LmdjOpfs.replaceComplete(
-              path, length, data, dataLength, LmdjOpfsTest);
+              path, length, data, dataLength, platformIdentity, LmdjOpfsTest);
           return 0;
         } catch (error) {
-          return LmdjOpfs.status(error);
+          const status = LmdjOpfs.status(error);
+          return status === -7 ? -3 : status;
         }
       }),
 
   lmdj_opfs_append_durable__deps: ["$LmdjOpfs"],
   lmdj_opfs_append_durable:
-      (path, length, prefix, data, dataLength) => Asyncify.handleAsync(async () => {
+      (path, length, prefix, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
         try {
           return await LmdjOpfs.appendDurable(
-              path, length, prefix, data, dataLength, null);
+              path, length, prefix, data, dataLength, platformIdentity, null);
         } catch (error) {
-          return LmdjOpfs.status(error);
+          const status = LmdjOpfs.status(error);
+          return status === -7 ? -3 : status;
         }
       }),
 
   lmdj_opfs_append_durable_test__deps: ["$LmdjOpfs", "$LmdjOpfsTest"],
   lmdj_opfs_append_durable_test:
-      (path, length, prefix, data, dataLength) => Asyncify.handleAsync(async () => {
+      (path, length, prefix, data, dataLength, platformIdentity) => Asyncify.handleAsync(async () => {
         try {
           return await LmdjOpfs.appendDurable(
-              path, length, prefix, data, dataLength, LmdjOpfsTest);
+              path, length, prefix, data, dataLength, platformIdentity,
+              LmdjOpfsTest);
         } catch (error) {
-          return LmdjOpfs.status(error);
+          const status = LmdjOpfs.status(error);
+          return status === -7 ? -3 : status;
         }
       }),
 

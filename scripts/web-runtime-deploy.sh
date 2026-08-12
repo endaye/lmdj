@@ -34,6 +34,7 @@ prior_manifest_sha256=''
 staged_index_sha256=''
 staged_manifest_sha256=''
 current_site_json='{}'
+current_site_file_count=0
 prior_immutable_http_result='{}'
 prior_immutable_browser_result='{}'
 prior_production_http_result='{}'
@@ -87,11 +88,30 @@ with_pinned_github() {
     "$@"
 }
 
+with_pinned_github_git() {
+  GIT_TERMINAL_PROMPT=0 with_pinned_github git \
+    -c credential.username=x-access-token \
+    -c 'credential.helper=!f() { if test "$1" = get && test -n "${GITHUB_TOKEN:-}"; then printf "%s\n" "username=x-access-token" "password=$GITHUB_TOKEN"; fi; }; f' \
+    "$@"
+}
+
 with_netlify_credential() {
   with_gh_environment_removed \
     -u GITHUB_TOKEN \
     -u GITHUB_ENTERPRISE_TOKEN \
     "$@"
+}
+
+remove_tag_checkout_path() {
+  local selected_path="$1"
+  [[ \
+    -n "$owned_temp" && \
+    "$selected_path" == "$owned_temp/tag-target" && \
+    -d "$selected_path" && \
+    ! -L "$selected_path" \
+  ]] || return 1
+  rm -rf -- "$selected_path" || return 1
+  [[ ! -e "$selected_path" && ! -L "$selected_path" ]]
 }
 
 cleanup_all() {
@@ -117,9 +137,7 @@ cleanup_all() {
   fi
   without_deploy_secrets git update-ref -d "$remote_main_ref" >/dev/null 2>&1 || status=2
   if [[ -n "$tag_checkout" ]]; then
-    if ! without_deploy_secrets \
-      git worktree remove --force "$tag_checkout" >/dev/null 2>&1
-    then
+    if ! remove_tag_checkout_path "$tag_checkout"; then
       echo "Web Runtime deployment error: detached tag checkout cleanup failed" >&2
       status=2
     fi
@@ -203,12 +221,12 @@ fetch_remote_authority() {
   remote_tag_ref="refs/lmdj-deploy/tags/$tag"
   without_deploy_secrets git update-ref -d "$remote_tag_ref" >/dev/null 2>&1 || true
   without_deploy_secrets git update-ref -d "$remote_main_ref" >/dev/null 2>&1 || true
-  without_deploy_secrets git fetch --no-tags origin \
+  with_pinned_github_git fetch --no-tags origin \
     "refs/tags/$tag:$remote_tag_ref" >/dev/null 2>&1 || {
     fail "canonical remote Product tag fetch failed"
     return
   }
-  without_deploy_secrets git fetch --no-tags origin \
+  with_pinned_github_git fetch --no-tags origin \
     "refs/heads/main:$remote_main_ref" >/dev/null 2>&1 || {
     fail "canonical origin/main fetch failed"
     return
@@ -306,16 +324,46 @@ verify_signed_tag() {
 }
 
 create_tag_checkout() {
-  tag_checkout="$owned_temp/tag-target"
+  local candidate="$owned_temp/tag-target"
+  local empty_template="$owned_temp/git-template"
+  local candidate_tag_ref='refs/lmdj-deploy/tag-target'
+  local checkout_head=''
+  mkdir -m 700 "$empty_template" || {
+    fail "detached tag checkout template creation failed"
+    return
+  }
   without_deploy_secrets \
-    git worktree add --detach "$tag_checkout" "$tag_target" >/dev/null 2>&1 || {
+    git init --quiet --template="$empty_template" "$candidate" >/dev/null 2>&1 || {
     fail "detached tag checkout creation failed"
     return
   }
-  [[ -d "$tag_checkout" && ! -L "$tag_checkout" ]] || {
+  without_deploy_secrets \
+    git -C "$candidate" fetch --no-tags --no-write-fetch-head \
+      "$repo_root" "$remote_tag_ref:$candidate_tag_ref" >/dev/null 2>&1 || {
+    fail "detached tag checkout ref materialization failed"
+    return
+  }
+  without_deploy_secrets \
+    env GIT_LFS_SKIP_SMUDGE=1 \
+      git -C "$candidate" checkout --detach "$tag_target" >/dev/null 2>&1 || {
+    fail "detached tag checkout population failed"
+    return
+  }
+  checkout_head="$(
+    without_deploy_secrets git -C "$candidate" rev-parse --verify HEAD 2>/dev/null
+  )" || {
+    fail "detached tag checkout identity is unavailable"
+    return
+  }
+  [[ "$checkout_head" == "$tag_target" ]] || {
+    fail "detached tag checkout identity mismatch"
+    return
+  }
+  [[ -d "$candidate" && ! -L "$candidate" ]] || {
     fail "detached tag checkout is unsafe"
     return
   }
+  tag_checkout="$candidate"
 }
 
 read_tag_identity() {
@@ -418,8 +466,7 @@ stage_release_assets() {
 }
 
 remove_tag_checkout() {
-  without_deploy_secrets \
-    git worktree remove --force "$tag_checkout" >/dev/null 2>&1 || {
+  remove_tag_checkout_path "$tag_checkout" || {
     fail "detached tag checkout cleanup failed"
     return
   }
@@ -504,10 +551,49 @@ get_current_site() {
   IFS=$'\t' read -r current_site_state current_deploy_id current_deploy_url <<<"$fields"
 }
 
+get_current_site_preflight() {
+  local preflight_json=''
+  local fields=''
+  preflight_json="$(
+    with_netlify_credential \
+      "$python_bin" "$orchestrator_tool" site-preflight \
+        "$NETLIFY_RUNTIME_SITE_ID"
+  )" || {
+    fail "Netlify current published deploy preflight failed"
+    return
+  }
+  current_site_json="$(
+    without_deploy_secrets "$python_bin" -c '
+import json,sys
+value=json.load(sys.stdin)
+print(json.dumps(value["site"], sort_keys=True, separators=(",", ":")))
+' <<<"$preflight_json"
+  )" || {
+    fail "Netlify current published deploy preflight output is invalid"
+    return
+  }
+  fields="$(
+    without_deploy_secrets "$python_bin" -c '
+import json,sys
+value=json.load(sys.stdin)
+site=value["site"]
+prior=site.get("published_deploy")
+if prior is None:
+    print(site["state"] + "|||" + str(value["file_count"]))
+else:
+    print(site["state"] + "|" + prior["id"] + "|" + prior["deploy_ssl_url"] + "|" + str(value["file_count"]))
+' <<<"$preflight_json"
+  )" || {
+    fail "Netlify current published deploy preflight output is invalid"
+    return
+  }
+  IFS='|' read -r current_site_state current_deploy_id current_deploy_url current_site_file_count <<<"$fields"
+}
+
 preflight_prior_good() {
   local identity_json=''
   local fields=''
-  get_current_site
+  get_current_site_preflight
   [[ "$current_site_state" != 'disabled' ]] || {
     fail "Netlify site is already disabled; refusing automatic enable or publication"
     return
@@ -515,6 +601,15 @@ preflight_prior_good() {
   prior_deploy_id="$current_deploy_id"
   prior_deploy_url="$current_deploy_url"
   if [[ -z "$prior_deploy_id" ]]; then
+    [[ "$current_site_file_count" == '0' ]] || {
+      fail "Netlify site file inventory has no published deploy identity"
+      return
+    }
+    return
+  fi
+  if [[ "$current_site_file_count" == '0' ]]; then
+    prior_deploy_id=''
+    prior_deploy_url=''
     return
   fi
   identity_json="$(

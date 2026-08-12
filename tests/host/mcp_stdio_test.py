@@ -484,9 +484,9 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
     assert module == {
         "contract": "lmdj.module.v1",
         "module": "core-mcp",
-        "version": "1.1.4",
+        "version": "1.1.7",
         "api_version": 2,
-        "dependencies": {"application-facade": "1.3.1"},
+        "dependencies": {"application-facade": "1.3.4"},
     }
     pyproject = tomllib.loads(
         (REPO_ROOT / "apps/core-mcp/pyproject.toml").read_text(
@@ -494,8 +494,8 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         )
     )
     assert pyproject["project"]["name"] == "lmdj-core-mcp"
-    assert pyproject["project"]["version"] == "1.1.4"
-    assert __version__ == "1.1.4"
+    assert pyproject["project"]["version"] == "1.1.7"
+    assert __version__ == "1.1.7"
     assert pyproject["project"]["dependencies"] == []
     assert pyproject["tool"]["lmdj"]["c-abi"] == "lmdj_core_c@1"
     host_paths = sorted(
@@ -540,7 +540,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "milestone": 1,
         "minor": 0,
         "build": 16,
-        "patch": 5,
+        "patch": 9,
     }
 
     workspace = temp_root / "workspace"
@@ -668,7 +668,7 @@ def lifecycle(library: Path, temp_root: Path) -> None:
         "result": {
             "protocolVersion": PROTOCOL_VERSION,
             "capabilities": {"tools": {"listChanged": False}},
-            "serverInfo": {"name": "lmdj-core-mcp", "version": "1.1.4"},
+            "serverInfo": {"name": "lmdj-core-mcp", "version": "1.1.7"},
         },
     }
     assert host.request(4, "ping")["result"] == {}

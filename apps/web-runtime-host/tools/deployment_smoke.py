@@ -28,35 +28,47 @@ REQUIRED_SECURITY_HEADERS = {
     "x-content-type-options": "nosniff",
     "x-robots-tag": "noindex, nofollow, noarchive",
 }
-EXPECTED_ASSETS = (
-    ("assets/diagnostic-project.", ".mjs", "host_module"),
-    ("assets/input-adapters.", ".mjs", "host_module"),
-    ("assets/main.", ".mjs", "host_main"),
-    ("assets/preflight.", ".mjs", "host_module"),
-    ("assets/protocol.", ".mjs", "host_module"),
-    ("assets/runtime.", ".js", "runtime_script"),
-    ("assets/runtime.", ".wasm", "runtime_wasm"),
-    ("assets/state-machine.", ".mjs", "host_module"),
-    ("assets/styles.", ".css", "host_style"),
-)
+REQUIRED_ROBOTS_DIRECTIVES = frozenset(("noindex", "nofollow", "noarchive"))
 MANIFEST_KEYS = {
     "assets",
     "distribution_contract",
     "emscripten",
     "heap_bytes",
+    "host_id",
     "host_version",
     "manifest_version",
+    "platform_version",
     "product_build",
     "protocol_version",
     "resource_limits",
 }
+LEGACY_MANIFEST_KEYS = MANIFEST_KEYS - {"host_id", "platform_version"}
 CONTENT_TYPES = {
     ".css": "text/css",
     ".js": "text/javascript",
     ".mjs": "text/javascript",
     ".wasm": "application/wasm",
 }
+EQUIVALENT_MEDIA_TYPES = {
+    "text/javascript": frozenset(("text/javascript", "application/javascript")),
+}
 HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+HASHED_ASSET_PATTERN = re.compile(
+    r"^assets/[a-z0-9-]+\.([0-9a-f]{64})\.(?:css|js|mjs|wasm)$"
+)
+ALLOWED_ASSET_ROLES = frozenset(
+    (
+        "host_main",
+        "host_module",
+        "host_style",
+        "platform_module",
+        "runtime_script",
+        "runtime_wasm",
+    )
+)
+SINGLETON_ASSET_ROLES = frozenset(
+    ("host_main", "host_style", "runtime_script", "runtime_wasm")
+)
 DEPLOY_ID_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
 MAX_INDEX_BYTES = 2 * 1024 * 1024
 MAX_MANIFEST_BYTES = 2 * 1024 * 1024
@@ -67,8 +79,8 @@ NEGATIVE_PATHS = (
     "/src/main.mjs",
     "/missing",
     "/assets/missing.map",
-    "/%2e%2e/index.html",
 )
+TRAVERSAL_PATH = "/%2e%2e/index.html"
 
 
 class SmokeError(RuntimeError):
@@ -105,9 +117,8 @@ class RedirectGuard(HTTPRedirectHandler):
         expected_cache = getattr(req, "lmdj_expected_cache", None)
         if expected_cache is None:
             raise SmokeError("redirect request cache contract is missing")
-        _require_header(
+        _require_cache_control(
             headers,
-            name="cache-control",
             expected=expected_cache,
             label="redirect response",
         )
@@ -152,8 +163,44 @@ def _require_header(headers, *, name: str, expected: str, label: str) -> None:
         )
 
 
+def _require_cache_control(headers, *, expected: str, label: str) -> None:
+    observed = _header_values(headers, "cache-control")
+    normalized = []
+    if len(observed) == 1:
+        normalized = [
+            ", ".join(directive.strip() for directive in observed[0].split(","))
+        ]
+    if normalized != [expected]:
+        raise SmokeError(
+            f"{label} cache-control mismatch: expected {[expected]!r}, "
+            f"got {observed!r}"
+        )
+
+
+def _require_robots_directives(headers, label: str) -> None:
+    observed = _header_values(headers, "x-robots-tag")
+    directives = [
+        directive.strip()
+        for value in observed
+        for directive in value.split(",")
+    ]
+    if (
+        not directives
+        or any(not directive for directive in directives)
+        or set(directives) != REQUIRED_ROBOTS_DIRECTIVES
+    ):
+        expected = REQUIRED_SECURITY_HEADERS["x-robots-tag"]
+        raise SmokeError(
+            f"{label} x-robots-tag mismatch: expected {[expected]!r}, "
+            f"got {observed!r}"
+        )
+
+
 def _validate_headers(headers, label: str) -> None:
     for name, expected in REQUIRED_SECURITY_HEADERS.items():
+        if name == "x-robots-tag":
+            _require_robots_directives(headers, label)
+            continue
         _require_header(headers, name=name, expected=expected, label=label)
     _require_header(
         headers,
@@ -205,9 +252,10 @@ def _validate_content_type(headers, *, expected: str, label: str) -> None:
             f"{label} content-type mismatch: expected one value, got {values!r}"
         )
     media_type, parameters = _parse_content_type(values[0], label)
-    if media_type != expected:
+    accepted = EQUIVALENT_MEDIA_TYPES.get(expected, frozenset((expected,)))
+    if media_type not in accepted:
         raise SmokeError(
-            f"{label} content-type mismatch: expected {expected!r}, "
+            f"{label} content-type mismatch: expected one of {sorted(accepted)!r}, "
             f"got {media_type!r}"
         )
     if media_type == "application/wasm":
@@ -275,9 +323,8 @@ def _fetch(
             _validate_content_type(
                 response.headers, expected=content_type, label=label
             )
-            _require_header(
+            _require_cache_control(
                 response.headers,
-                name="cache-control",
                 expected=cache_control,
                 label=label,
             )
@@ -304,9 +351,8 @@ def _require_negative(
             _validate_headers(response.headers, path)
             response.read(1)
             if status == 404:
-                _require_header(
+                _require_cache_control(
                     response.headers,
-                    name="cache-control",
                     expected="no-store",
                     label=path,
                 )
@@ -316,9 +362,8 @@ def _require_negative(
             status = error.code
             error.read(1)
             if status == 404:
-                _require_header(
+                _require_cache_control(
                     error.headers,
-                    name="cache-control",
                     expected="no-store",
                     label=path,
                 )
@@ -332,8 +377,41 @@ def _require_negative(
         raise SmokeError(f"{path} returned HTTP {status}, expected 404")
 
 
+def _require_traversal_rejection(
+    opener, *, url: str, path: str, timeout_seconds: float
+) -> None:
+    request = _request(url, "no-store")
+    try:
+        with opener.open(request, timeout=timeout_seconds) as response:
+            status = response.status
+            headers = response.headers
+            body = response.read(1)
+    except HTTPError as error:
+        try:
+            status = error.code
+            headers = error.headers
+            body = error.read(1)
+        finally:
+            error.close()
+    except SmokeError:
+        raise
+    except (OSError, URLError):
+        raise SmokeError(f"{path} request failed") from None
+    if status == 404:
+        _validate_headers(headers, path)
+        _require_cache_control(headers, expected="no-store", label=path)
+        return
+    if status != 400:
+        raise SmokeError(f"{path} returned HTTP {status}, expected 400 or 404")
+    if body:
+        raise SmokeError(f"{path} returned a non-empty response body")
+
+
 def _manifest_identity(manifest: object) -> tuple[str, str]:
-    if not isinstance(manifest, dict) or set(manifest) != MANIFEST_KEYS:
+    if (
+        not isinstance(manifest, dict)
+        or set(manifest) not in (MANIFEST_KEYS, LEGACY_MANIFEST_KEYS)
+    ):
         raise SmokeError("manifest root schema is invalid")
     if manifest["distribution_contract"] != "lmdj.web-runtime-host.distribution.v1":
         raise SmokeError("manifest distribution identity is invalid")
@@ -345,6 +423,13 @@ def _manifest_identity(manifest: object) -> tuple[str, str]:
         raise SmokeError("Product Build identity is invalid")
     if not isinstance(host_version, str) or not host_version:
         raise SmokeError("Host version identity is invalid")
+    if set(manifest) == MANIFEST_KEYS and (
+        not isinstance(manifest["host_id"], str)
+        or not manifest["host_id"]
+        or not isinstance(manifest["platform_version"], str)
+        or not manifest["platform_version"]
+    ):
+        raise SmokeError("manifest extended identity is invalid")
     return product_build, host_version
 
 
@@ -366,12 +451,14 @@ def _validate_manifest(
             f"got {host_version!r}"
         )
     assert isinstance(manifest, dict)
+    legacy_manifest = set(manifest) == LEGACY_MANIFEST_KEYS
     assets = manifest["assets"]
-    if not isinstance(assets, list) or len(assets) != len(EXPECTED_ASSETS):
+    if not isinstance(assets, list) or not assets:
         raise SmokeError("manifest asset inventory is invalid")
     validated: list[dict[str, object]] = []
     seen: set[str] = set()
-    for entry, (prefix, suffix, role) in zip(assets, EXPECTED_ASSETS, strict=True):
+    role_counts = {role: 0 for role in ALLOWED_ASSET_ROLES}
+    for entry in assets:
         if not isinstance(entry, dict) or set(entry) != {
             "bytes", "path", "role", "sha256"
         }:
@@ -379,19 +466,35 @@ def _validate_manifest(
         path = entry["path"]
         digest = entry["sha256"]
         size = entry["bytes"]
+        role = entry["role"]
+        path_match = (
+            HASHED_ASSET_PATTERN.fullmatch(path)
+            if isinstance(path, str)
+            else None
+        )
         if (
-            not isinstance(path, str)
+            path_match is None
             or not isinstance(digest, str)
             or HASH_PATTERN.fullmatch(digest) is None
-            or path != f"{prefix}{digest}{suffix}"
-            or entry["role"] != role
+            or path_match.group(1) != digest
+            or not isinstance(role, str)
+            or role not in ALLOWED_ASSET_ROLES
             or path in seen
         ):
             raise SmokeError("manifest asset inventory is invalid")
         if type(size) is not int or size < 1 or size > MAX_ASSET_BYTES:
             raise SmokeError(f"manifest asset bytes are invalid: {path}")
         seen.add(path)
+        role_counts[role] += 1
         validated.append(entry)
+    if any(role_counts[role] != 1 for role in SINGLETON_ASSET_ROLES):
+        raise SmokeError("manifest required asset role inventory is invalid")
+    if role_counts["host_module"] < 1:
+        raise SmokeError("manifest required asset role inventory is invalid")
+    if legacy_manifest and role_counts["platform_module"] != 0:
+        raise SmokeError("manifest required asset role inventory is invalid")
+    if not legacy_manifest and role_counts["platform_module"] < 1:
+        raise SmokeError("manifest required asset role inventory is invalid")
     return validated
 
 
@@ -593,6 +696,12 @@ def smoke_http(
             path=path,
             timeout_seconds=timeout_seconds,
         )
+    _require_traversal_rejection(
+        opener,
+        url=root.rstrip("/") + TRAVERSAL_PATH,
+        path=TRAVERSAL_PATH,
+        timeout_seconds=timeout_seconds,
+    )
 
     result: dict[str, object] = {
         "asset_count": len(assets),

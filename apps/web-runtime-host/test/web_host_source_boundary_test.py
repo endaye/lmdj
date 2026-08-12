@@ -17,6 +17,36 @@ def combined_text(paths: list[Path]) -> str:
     return "\n".join(path.read_text(encoding="utf-8") for path in paths)
 
 
+def require_uncorrelatable_response_fail_closed(
+    runtime_pre_source: str,
+    label: str,
+) -> None:
+    correlation = re.search(
+        r"const pending = pendingRequests\.get\(message\.request_id\);\s*"
+        r"if\s*\(pending\)\s*\{.*?\n\s*\}\s*else\s*\{"
+        r"(?P<missing_pending>.*?)\n\s*\}\s*\n\s*\}\s*else\s*\{\s*"
+        r"for\s*\(const subscriber of notificationSubscribers\)",
+        runtime_pre_source,
+        re.DOTALL,
+    )
+    require(
+        correlation is not None,
+        f"{label} Browser Main response correlation branch is missing",
+    )
+    missing_pending = correlation.group("missing_pending")
+    require(
+        re.fullmatch(
+            r'\s*failClosed\(transportFailure\(\s*"HOST_PROTOCOL_MISMATCH"'
+            r",.*?\)\);\s*return;\s*",
+            missing_pending,
+            re.DOTALL,
+        )
+        is not None,
+        f"{label} missing-pending response branch must fail closed with "
+        "HOST_PROTOCOL_MISMATCH and return",
+    )
+
+
 def main() -> int:
     require(
         len(sys.argv) in {2, 3},
@@ -334,6 +364,44 @@ def main() -> int:
         'if [[ ${#formal_host_specs[@]} -eq 0 ]]' in web_runtime_host_script_text,
         "formal browser Proof must fail closed when no tracked specs are found",
     )
+    production_boundary = re.search(
+        r"verify_production_source_boundary\(\)\s*\{(.*?)\n\}",
+        web_runtime_host_script_text,
+        re.DOTALL,
+    )
+    require(
+        production_boundary is not None,
+        "stable Web Host build must define a generated production source "
+        "boundary gate",
+    )
+    production_boundary_body = production_boundary.group(1)
+    require(
+        '"$repo_root/apps/web-runtime-host/test/web_host_source_boundary_test.py"'
+        in production_boundary_body
+        and '"$repo_root/apps/web-runtime-host"' in production_boundary_body
+        and '"$link_evidence_path"' in production_boundary_body,
+        "generated production source boundary must pass Host root and exact "
+        "link evidence to the shared validator",
+    )
+    build_host_function = re.search(
+        r"build_host\(\)\s*\{(.*?)\n\}",
+        web_runtime_host_script_text,
+        re.DOTALL,
+    )
+    require(build_host_function is not None, "Web Host build function is missing")
+    build_host_body = build_host_function.group(1)
+    built_target = build_host_body.find(
+        'run_cmake_build "$cmake_root" --target lmdj_web_runtime_host'
+    )
+    generated_boundary = build_host_body.find("verify_production_source_boundary")
+    packaged_host = build_host_body.find("package_host")
+    require(
+        built_target >= 0
+        and generated_boundary > built_target
+        and packaged_host > generated_boundary,
+        "stable Web Host build must validate generated production source "
+        "after linking and before packaging",
+    )
     diagnostic_drain = re.search(
         r"void drain_outcomes_on_control\(void\*\)\s+noexcept\s*\{(.*?)\n\}",
         bridge_source,
@@ -345,6 +413,48 @@ def main() -> int:
         "diagnostic outcome drain must not self-requeue while a mirror is writing",
     )
     failure_spec_text = realtime_failure_spec.read_text(encoding="utf-8")
+    pending_rejection_case = re.search(
+        r'test\("unknown response rejects and clears another real pending '
+        r'Browser Main request".*?\n\}\);',
+        failure_spec_text,
+        re.DOTALL,
+    )
+    require(
+        pending_rejection_case is not None,
+        "real Browser Main pending rejection case is missing",
+    )
+    require(
+        "pendingRejectionEvidence(page)" in pending_rejection_case.group(0)
+        and "pendingIdsBefore" in pending_rejection_case.group(0)
+        and "pendingIdsAfter" in pending_rejection_case.group(0)
+        and "HOST_PROTOCOL_MISMATCH" in pending_rejection_case.group(0)
+        and "terminalOwnerReleased" in pending_rejection_case.group(0),
+        "real Browser Main pending rejection case omits required evidence",
+    )
+    pending_rejection_helper = re.search(
+        r"async function pendingRejectionEvidence\(page\)\s*\{(.*?)\n\}",
+        failure_spec_text,
+        re.DOTALL,
+    )
+    require(
+        pending_rejection_helper is not None,
+        "real Browser Main pending rejection helper is missing",
+    )
+    pending_rejection_body = pending_rejection_helper.group(1)
+    untracked_submit = pending_rejection_body.find(
+        "submitUntrackedHostStatus(untrackedRequestId)"
+    )
+    normal_send = pending_rejection_body.find("const pending = transport.send")
+    require(
+        untracked_submit >= 0 and normal_send > untracked_submit,
+        "pending rejection proof must submit the untracked native response "
+        "before registering the normal transport request",
+    )
+    require(
+        "conformance.pendingRequestIds()" in pending_rejection_body
+        and "PENDING_REJECTION_TIMEOUT" in pending_rejection_body,
+        "pending rejection proof must observe clearing and bound rejection",
+    )
     submission_helper = re.search(
         r"window\.__lmdjRealtimeFailureSubmit\s*=\s*async\s*"
         r"\([^)]*\)\s*=>\s*\{(.*?)\n\s{4}\};",
@@ -375,6 +485,16 @@ def main() -> int:
         )
         is not None,
         "realtime failure response polling must retain the monotonic deadline",
+    )
+    require(
+        'let submitted = -1;' in helper_body
+        and 'if (submitted === 0) break;' in helper_body
+        and 'if (submitted !== -1)' in helper_body
+        and 'await delay(5);' in helper_body
+        and 'if (submitted !== 0)' in helper_body
+        and 'Host submit timed out' in helper_body,
+        "realtime failure submit helper must retry only the transient native "
+        "bridge-not-ready result within its monotonic deadline",
     )
     fatal_wait = re.search(
         r"async\s+waitForFatal\(\)\s*\{(.*?)\n\s{6}\},",
@@ -430,6 +550,34 @@ def main() -> int:
         )
         == 1,
         "the browser proof must allow exactly one reload handoff recovery",
+    )
+    recovery_outcome_timeout = re.search(
+        r'test\("Chromium recovery outcome timeout is terminal and releases '
+        r'the lease".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        recovery_outcome_timeout is not None,
+        "recovery outcome timeout browser proof is missing",
+    )
+    recovery_outcome_timeout_body = recovery_outcome_timeout.group(0)
+    terminal_release_evidence = recovery_outcome_timeout_body.find(
+        "terminalTransportEvidence(page)"
+    )
+    reopened_page = recovery_outcome_timeout_body.find(
+        "const reopenedPage = await context.newPage()"
+    )
+    require(
+        terminal_release_evidence >= 0
+        and reopened_page > terminal_release_evidence
+        and 'newSubmitCode: "HOST_STATE_INVALID"' in recovery_outcome_timeout_body
+        and "terminalOwnerReleased: true" in recovery_outcome_timeout_body
+        and "timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS"
+        in recovery_outcome_timeout_body,
+        "recovery outcome timeout must expose the terminated transport state "
+        "and prove terminal owner release before a new page competes for the "
+        "OPFS writer lease",
     )
     for diagnostic_test_name in (
         "Chromium binds the verified packaged runtime to the real AudioWorklet",
@@ -643,6 +791,31 @@ def main() -> int:
         in runtime_pre_source,
         "Web Host transport polling must use the named bounded cadence",
     )
+    require_uncorrelatable_response_fail_closed(
+        runtime_pre_source,
+        "source",
+    )
+    missing_return_source = runtime_pre_source.replace(
+        "            return;\n          }\n        } else {",
+        "          }\n        } else {",
+        1,
+    )
+    require(
+        missing_return_source != runtime_pre_source,
+        "source-boundary terminal-return mutation was not applied",
+    )
+    try:
+        require_uncorrelatable_response_fail_closed(
+            missing_return_source,
+            "missing-return mutation",
+        )
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError(
+            "Web Host source boundary accepted a missing-pending branch "
+            "without its terminal return"
+        )
     require(
         re.search(
             r"const\s+TERMINAL_OWNER_RELEASE_GRACE_MS\s*=\s*5_000\s*;",
@@ -660,6 +833,17 @@ def main() -> int:
     if len(sys.argv) == 3:
         link_evidence = Path(sys.argv[2])
         require(link_evidence.is_file(), "generated direct-link evidence is missing")
+        generated_cmake_cache = link_evidence.parents[2] / "CMakeCache.txt"
+        require(
+            generated_cmake_cache.is_file(),
+            "generated production CMake cache evidence is missing",
+        )
+        require(
+            "LMDJ_WEB_AUDIO_CONFORMANCE:BOOL=OFF"
+            in generated_cmake_cache.read_text(encoding="utf-8"),
+            "generated Web Host boundary must come from a production "
+            "conformance-OFF build",
+        )
         links = link_evidence.read_text(encoding="utf-8")
         require(
             re.search(r"(?:lmdj::project_io|lmdj_project_io)", links) is None,
@@ -669,6 +853,31 @@ def main() -> int:
             re.search(r"lmdj_provider_local_", links) is None,
             "generated Host direct links contain Product Providers",
         )
+        generated_runtime_pre = link_evidence.parent / "web-runtime-pre.js"
+        require(
+            generated_runtime_pre.is_file(),
+            "generated production pre-JS evidence is missing",
+        )
+        generated_runtime_pre_source = generated_runtime_pre.read_text(
+            encoding="utf-8"
+        )
+        require_uncorrelatable_response_fail_closed(
+            generated_runtime_pre_source,
+            "generated production pre-JS",
+        )
+        for conformance_surface in (
+            "createConformanceApi",
+            "submitUntrackedHostStatus",
+            "pendingRequestIds",
+            "lmdjWebRuntimeHostTest",
+            "LMDJ_WEB_AUDIO_CONFORMANCE_API",
+            "LMDJ_WEB_AUDIO_CONFORMANCE_INSTALL",
+        ):
+            require(
+                conformance_surface not in generated_runtime_pre_source,
+                "generated production pre-JS exposes conformance surface: "
+                f"{conformance_surface}",
+            )
 
     print("web Host source boundary: PASS")
     return 0

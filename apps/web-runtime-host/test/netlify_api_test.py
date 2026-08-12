@@ -44,6 +44,15 @@ class FakeNetlifyServer(ThreadingHTTPServer):
         self.create_response: object | None = None
         self.deploy_response: object | None = None
         self.restore_response: object | None = None
+        self.site_files_response: object = [
+            {
+                "id": "file-123",
+                "path": "/index.html",
+                "sha": "a" * 40,
+                "mime_type": "text/html",
+                "size": 5,
+            }
+        ]
         self.site_response: object | None = None
         self.fail_upload = False
         self.poll_states: list[str] = ["ready"]
@@ -115,6 +124,9 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         self._record()
+        if urlsplit(self.path).path == "/api/v1/sites/site-123/files":
+            self.server.response(self, 200, self.server.site_files_response)
+            return
         if urlsplit(self.path).path == "/api/v1/sites/site-123":
             self.server.response(
                 self,
@@ -123,6 +135,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
                 or {
                     "id": "site-123",
                     "state": "current",
+                    "disabled": False,
                     "ssl_url": "https://runtime.example",
                     "published_deploy": {
                         "id": "prior-123",
@@ -401,6 +414,7 @@ class NetlifyClientTest(unittest.TestCase):
         self.server.site_response = {
             "id": "site-123",
             "state": "current",
+            "disabled": False,
             "ssl_url": "https://runtime.example",
             "published_deploy": None,
         }
@@ -414,11 +428,61 @@ class NetlifyClientTest(unittest.TestCase):
                 self.server.site_response = {
                     "id": "site-123",
                     "state": "current",
+                    "disabled": False,
                     "ssl_url": "https://runtime.example",
                     "published_deploy": prior,
                 }
                 with self.assertRaisesRegex(netlify_api.NetlifyError, "published deploy"):
                     self.client.get_site(site_id="site-123")
+
+    def test_get_site_uses_official_disabled_flag_as_serving_state(self) -> None:
+        self.server.site_response = {
+            "id": "site-123",
+            "state": "current",
+            "disabled": True,
+            "ssl_url": "https://runtime.example",
+            "published_deploy": {
+                "id": "prior-123",
+                "site_id": "site-123",
+                "deploy_ssl_url": "https://prior-123--runtime.netlify.app",
+                "state": "ready",
+            },
+        }
+        self.assertEqual(self.client.get_site(site_id="site-123").state, "disabled")
+
+    def test_get_site_file_count_accepts_exact_file_inventory(self) -> None:
+        self.assertEqual(self.client.get_site_file_count(site_id="site-123"), 1)
+        self.assertEqual(self.server.requests[-1].method, "GET")
+        self.assertEqual(
+            self.server.requests[-1].path, "/api/v1/sites/site-123/files"
+        )
+
+        self.server.site_files_response = []
+        self.assertEqual(self.client.get_site_file_count(site_id="site-123"), 0)
+
+    def test_get_site_file_count_rejects_malformed_or_duplicate_inventory(self) -> None:
+        valid = {
+            "id": "file-123",
+            "path": "/index.html",
+            "sha": "a" * 40,
+            "mime_type": "text/html",
+            "size": 5,
+        }
+        for response in (
+            {},
+            [None],
+            [{**valid, "path": "index.html"}],
+            [{**valid, "path": "/../index.html"}],
+            [{**valid, "sha": "not-a-sha1"}],
+            [{**valid, "size": -1}],
+            [valid, {**valid, "id": "file-456"}],
+        ):
+            with self.subTest(response=response):
+                self.server.site_files_response = response
+                with self.assertRaisesRegex(
+                    netlify_api.NetlifyError, "site files are invalid"
+                ):
+                    self.client.get_site_file_count(site_id="site-123")
 
     def test_disable_site_uses_official_reversible_endpoint(self) -> None:
         status_code = self.client.disable_site(

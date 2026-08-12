@@ -20,13 +20,17 @@ int lmdj_opfs_exists(const char*, int);
 int lmdj_opfs_directory_exists(const char*, int);
 double lmdj_opfs_byte_length(const char*, int);
 int lmdj_opfs_read_complete(const char*, int, void**, int*);
-int lmdj_opfs_create_immutable(const char*, int, const void*, int);
-int lmdj_opfs_replace_complete(const char*, int, const void*, int);
-int lmdj_opfs_append_durable(const char*, int, double, const void*, int);
+int lmdj_opfs_create_immutable(const char*, int, const void*, int, int);
+int lmdj_opfs_replace_complete(const char*, int, const void*, int, int);
+int lmdj_opfs_append_durable(
+    const char*, int, double, const void*, int, int);
 #if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
-int lmdj_opfs_create_immutable_test(const char*, int, const void*, int);
-int lmdj_opfs_replace_complete_test(const char*, int, const void*, int);
-int lmdj_opfs_append_durable_test(const char*, int, double, const void*, int);
+int lmdj_opfs_create_immutable_test(
+    const char*, int, const void*, int, int);
+int lmdj_opfs_replace_complete_test(
+    const char*, int, const void*, int, int);
+int lmdj_opfs_append_durable_test(
+    const char*, int, double, const void*, int, int);
 int lmdj_opfs_publish_directory_if_absent_test(
     const char*, int, const char*, int);
 #endif
@@ -48,6 +52,10 @@ foundation::Error web_error(int status, std::string_view operation) {
     error.details["storage_condition"] = kStorageConditionProjectBusy;
   } else if (status == -4) {
     error.details["storage_condition"] = kStorageConditionAlreadyExists;
+  } else if (status == -5) {
+    error.details["storage_condition"] = kStorageConditionInvalidState;
+  } else if (status == -6) {
+    error.details["storage_condition"] = kStorageConditionQuotaExceeded;
   } else if (status == -8) {
     error.details["storage_condition"] =
         kStorageConditionAtomicPublishUnsupported;
@@ -185,7 +193,8 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 #else
         lmdj_opfs_append_durable(
 #endif
-        path.data(), path.size(), static_cast<double>(prefix), bytes.data(), bytes.size());
+        path.data(), path.size(), static_cast<double>(prefix), bytes.data(),
+        bytes.size(), platform_identity_);
     return status < 0 ? foundation::Result<void>::failure(web_error(status, "durable append"))
                       : foundation::Result<void>::success();
   }
@@ -262,7 +271,7 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
 
  private:
   using PathCall = int (*)(const char*, int);
-  using ByteCall = int (*)(const char*, int, const void*, int);
+  using ByteCall = int (*)(const char*, int, const void*, int, int);
   using ListCall = int (*)(const char*, int, char**, int*);
 
   bool mounted_;
@@ -286,11 +295,13 @@ class WebProjectStoragePlatform final : public ProjectStoragePlatform {
                       : foundation::Result<void>::success();
   }
 
-  static foundation::Result<void> call_bytes(
+  foundation::Result<void> call_bytes(
       const std::filesystem::path& input, std::span<const std::byte> bytes,
-      ByteCall call, std::string_view operation) {
+      ByteCall call, std::string_view operation) const {
     const auto path = web_path(input);
-    const int status = call(path.data(), path.size(), bytes.data(), bytes.size());
+    const int status = call(
+        path.data(), path.size(), bytes.data(), bytes.size(),
+        platform_identity_);
     return status < 0 ? foundation::Result<void>::failure(web_error(status, operation))
                       : foundation::Result<void>::success();
   }

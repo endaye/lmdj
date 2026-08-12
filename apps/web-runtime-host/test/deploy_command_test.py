@@ -182,7 +182,25 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": "not found"})
 
     def do_GET(self) -> None:
-        if urlsplit(self.path).path != f"/api/v1/sites/{SITE_ID}":
+        path = urlsplit(self.path).path
+        if path == f"/api/v1/sites/{SITE_ID}/files":
+            self.server.authorization_headers.append(
+                self.headers.get("Authorization", "")
+            )
+            self.server.append_log("netlify get-current-files")
+            self.send_json(
+                200,
+                self.server.site_files_response
+                if self.server.current_deploy_id
+                else [],
+            )
+            if self.server.change_site_after_files:
+                self.server.current_deploy_id = "other-789"
+                self.server.current_deploy_url = (
+                    "https://other-789--lmdj-runtime.netlify.app"
+                )
+            return
+        if path != f"/api/v1/sites/{SITE_ID}":
             self.send_json(404, {"error": "not found"})
             return
         self.server.authorization_headers.append(self.headers.get("Authorization", ""))
@@ -206,6 +224,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
             {
                 "id": SITE_ID,
                 "state": self.server.site_state,
+                "disabled": self.server.site_disabled,
                 "ssl_url": PRODUCTION_URL,
                 "published_deploy": prior,
             },
@@ -215,7 +234,7 @@ class FakeNetlifyHandler(BaseHTTPRequestHandler):
         if urlsplit(self.path).path == f"/api/v1/sites/{SITE_ID}/disable":
             self.server.authorization_headers.append(self.headers.get("Authorization", ""))
             if not self.server.disable_keeps_enabled:
-                self.server.site_state = "disabled"
+                self.server.site_disabled = True
             self.server.append_log("netlify disable-site")
             self.send_response(204)
             self.send_header("Content-Length", "0")
@@ -239,12 +258,15 @@ class FakeNetlifyServer(ThreadingHTTPServer):
     current_deploy_id: str
     current_deploy_url: str
     site_state: str
+    site_disabled: bool
     publish_switches_alias: bool
     publish_error_after_switch: bool
     restore_keeps_candidate: bool
     disable_keeps_enabled: bool
     reconcile_override_deploy_id: str
     reconcile_override_deploy_url: str
+    site_files_response: object
+    change_site_after_files: bool
 
     def append_log(self, value: str) -> None:
         with self.command_log.open("a", encoding="utf-8") as output:
@@ -261,8 +283,7 @@ class DeployCommandTest(unittest.TestCase):
         self.runner_temp = self.root / "runner-temp"
         self.log_path = self.root / "commands.log"
         self.details_path = self.root / "details.jsonl"
-        self.worktree_path_record = self.root / "worktree-path"
-        self.worktree_removed_record = self.root / "worktree-removed"
+        self.checkout_path_record = self.root / "checkout-path"
         self.block_ready = self.root / "block-ready"
         self.repo.mkdir()
         self.bin.mkdir()
@@ -302,12 +323,23 @@ class DeployCommandTest(unittest.TestCase):
             f"https://{PRIOR_DEPLOY_ID}--lmdj-runtime.netlify.app"
         )
         self.server.site_state = "current"
+        self.server.site_disabled = False
         self.server.publish_switches_alias = True
         self.server.publish_error_after_switch = False
         self.server.restore_keeps_candidate = False
         self.server.disable_keeps_enabled = False
         self.server.reconcile_override_deploy_id = ""
         self.server.reconcile_override_deploy_url = ""
+        self.server.site_files_response = [
+            {
+                "id": "prior-index",
+                "path": "/index.html",
+                "sha": "a" * 40,
+                "mime_type": "text/html",
+                "size": 13,
+            }
+        ]
+        self.server.change_site_after_files = False
         self.server.create_extra = {}
         self.server.restore_extra = {}
         self.server.authorization_headers = []
@@ -404,7 +436,7 @@ class DeployCommandTest(unittest.TestCase):
                 expected_product = sys.argv[2]
                 expected_host = sys.argv[3]
                 result = {{
-                    "asset_count": 9,
+                    "asset_count": 9 if prior else 13,
                     "host_version": expected_host,
                     "index_sha256": index_sha256,
                     "manifest_sha256": manifest_sha256,
@@ -476,8 +508,8 @@ class DeployCommandTest(unittest.TestCase):
                 if (
                     name.startswith(("FAKE_", "FAIL_", "BLOCK_"))
                     or name in {{
-                        "COMMAND_LOG", "DETAILS_LOG", "WORKTREE_PATH",
-                        "WORKTREE_REMOVED", "BLOCK_READY", "ARCHIVE_DIGEST",
+                        "COMMAND_LOG", "DETAILS_LOG", "CHECKOUT_PATH",
+                        "BLOCK_READY", "ARCHIVE_DIGEST",
                         "EXPECTED_GITHUB_TOKEN", "RUNNER_TEMP",
                     }}
                 ):
@@ -605,43 +637,27 @@ def verify_distribution(dist_root, repo_root):
             import json
             import os
             from pathlib import Path
-            import shutil
             import sys
 
-            args = sys.argv[1:]
+            raw_args = sys.argv[1:]
+            args = raw_args.copy()
+            git_config = []
+            while args[:1] == ["-c"]:
+                if len(args) < 2:
+                    raise SystemExit(64)
+                git_config.append(args[1])
+                args = args[2:]
+            git_cwd = None
+            if args[:1] == ["-C"]:
+                if len(args) < 3:
+                    raise SystemExit(64)
+                git_cwd = Path(args[1])
+                args = args[2:]
             log = Path(os.environ["COMMAND_LOG"])
             target = os.environ.get("FAKE_TAG_TARGET", {TAG_TARGET!r})
             product_build = os.environ.get("FAKE_PRODUCT_BUILD", {PRODUCT_BUILD!r})
-            if args[:3] == ["remote", "get-url", "origin"]:
-                print(os.environ.get("FAKE_ORIGIN_URL", "https://github.com/endaye/lmdj.git"))
-            elif args[:2] == ["update-ref", "-d"]:
-                pass
-            elif args[:2] == ["fetch", "--no-tags"]:
-                if os.environ.get("FAIL_REMOTE_FETCH") == "1":
-                    raise SystemExit(1)
-                with log.open("a", encoding="utf-8") as output:
-                    output.write(f"git remote fetch {{args[-1]}}\\n")
-            elif args[:2] == ["cat-file", "-t"]:
-                print(os.environ.get("FAKE_TAG_TYPE", "tag"))
-            elif args[:2] == ["verify-tag", "--raw"]:
-                with log.open("a", encoding="utf-8") as output:
-                    output.write(f"git tag verify {{args[2]}}\\n")
-                if os.environ.get("FAIL_TAG_VERIFY") == "1":
-                    raise SystemExit(1)
-                fingerprint = os.environ.get(
-                    "FAKE_SIGNATURE_FINGERPRINT", {TRUSTED_TAG_FINGERPRINT!r}
-                )
-                print(
-                    f"[GNUPG:] VALIDSIG {{fingerprint}} 2026-08-07 0 4 0 1 10 00 {{fingerprint}}",
-                    file=sys.stderr,
-                )
-            elif args[:2] == ["rev-parse", "--verify"]:
-                print(target)
-            elif args[:2] == ["merge-base", "--is-ancestor"]:
-                if os.environ.get("FAKE_TAG_NOT_MAIN") == "1":
-                    raise SystemExit(1)
-            elif args[:3] == ["worktree", "add", "--detach"]:
-                checkout = Path(args[3])
+
+            def populate_checkout(checkout):
                 checkout.joinpath("products/lmdj").mkdir(parents=True)
                 checkout.joinpath("apps/web-runtime-host/tools").mkdir(parents=True)
                 parts = [int(value) for value in product_build.split(".")]
@@ -670,11 +686,112 @@ def verify_distribution(dist_root, repo_root):
                     {package_verifier!r},
                     encoding="utf-8",
                 )
-                Path(os.environ["WORKTREE_PATH"]).write_text(str(checkout), encoding="utf-8")
-            elif args[:3] == ["worktree", "remove", "--force"]:
+
+            def record_uncredentialed_checkout(program):
+                observed = sorted(
+                    name for name in (
+                        "GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN", "NETLIFY_RUNTIME_SITE_ID",
+                    ) if os.environ.get(name)
+                )
+                with Path(os.environ["DETAILS_LOG"]).open("a", encoding="utf-8") as output:
+                    output.write(json.dumps({{
+                        "program": program,
+                        "credential_environment": observed,
+                        "credential_in_argv": os.environ["EXPECTED_GITHUB_TOKEN"] in raw_args,
+                        "lfs_skip_smudge": os.environ.get("GIT_LFS_SKIP_SMUDGE", ""),
+                    }}, sort_keys=True) + "\\n")
+                if observed:
+                    raise SystemExit("deployment credential reached tag checkout")
+
+            if args[:3] == ["remote", "get-url", "origin"]:
+                print(os.environ.get("FAKE_ORIGIN_URL", "https://github.com/endaye/lmdj.git"))
+            elif args[:2] == ["update-ref", "-d"]:
+                pass
+            elif args[:2] == ["fetch", "--no-tags"]:
+                if git_cwd is not None:
+                    record_uncredentialed_checkout("git-fetch-local")
+                    with log.open("a", encoding="utf-8") as output:
+                        output.write("git fetch detached tag\\n")
+                    raise SystemExit(0)
+                if os.environ.get("FAIL_REMOTE_FETCH") == "1":
+                    raise SystemExit(1)
+                if os.environ.get("FAKE_PRIVATE_FETCH") == "1":
+                    if os.environ.get("GITHUB_TOKEN") != os.environ["EXPECTED_GITHUB_TOKEN"]:
+                        raise SystemExit("private canonical fetch was not authenticated")
+                    if os.environ.get("NETLIFY_AUTH_TOKEN") or os.environ.get("NETLIFY_RUNTIME_SITE_ID"):
+                        raise SystemExit("Netlify credential reached authenticated Git fetch")
+                    if "credential.username=x-access-token" not in git_config:
+                        raise SystemExit("authenticated Git fetch username was not pinned")
+                    helpers = [
+                        value for value in git_config
+                        if value.startswith("credential.helper=")
+                    ]
+                    if len(helpers) != 1 or "$GITHUB_TOKEN" not in helpers[0]:
+                        raise SystemExit("authenticated Git fetch helper was not pinned")
+                    with Path(os.environ["DETAILS_LOG"]).open("a", encoding="utf-8") as output:
+                        output.write(json.dumps({{
+                            "program": "git-fetch",
+                            "credential_environment": sorted(
+                                name for name in (
+                                    "GITHUB_TOKEN", "NETLIFY_AUTH_TOKEN",
+                                    "NETLIFY_RUNTIME_SITE_ID",
+                                ) if os.environ.get(name)
+                            ),
+                            "credential_in_argv": os.environ["EXPECTED_GITHUB_TOKEN"] in raw_args,
+                        }}, sort_keys=True) + "\\n")
+                with log.open("a", encoding="utf-8") as output:
+                    output.write(f"git remote fetch {{args[-1]}}\\n")
+            elif args[:2] == ["cat-file", "-t"]:
+                print(os.environ.get("FAKE_TAG_TYPE", "tag"))
+            elif args[:2] == ["verify-tag", "--raw"]:
+                with log.open("a", encoding="utf-8") as output:
+                    output.write(f"git tag verify {{args[2]}}\\n")
+                if os.environ.get("FAIL_TAG_VERIFY") == "1":
+                    raise SystemExit(1)
+                fingerprint = os.environ.get(
+                    "FAKE_SIGNATURE_FINGERPRINT", {TRUSTED_TAG_FINGERPRINT!r}
+                )
+                print(
+                    f"[GNUPG:] VALIDSIG {{fingerprint}} 2026-08-07 0 4 0 1 10 00 {{fingerprint}}",
+                    file=sys.stderr,
+                )
+            elif args[:2] == ["rev-parse", "--verify"]:
+                print(target)
+            elif args[:2] == ["merge-base", "--is-ancestor"]:
+                if os.environ.get("FAKE_TAG_NOT_MAIN") == "1":
+                    raise SystemExit(1)
+            elif args[:1] == ["clone"]:
+                record_uncredentialed_checkout("git-clone")
+                checkout = Path(args[-1])
+                checkout.mkdir()
+                checkout.joinpath(".git").mkdir()
+                Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
+                with log.open("a", encoding="utf-8") as output:
+                    output.write("git clone detached\\n")
+            elif args[:1] == ["init"]:
+                record_uncredentialed_checkout("git-init")
+                checkout = Path(args[-1])
+                checkout.mkdir()
+                checkout.joinpath(".git").mkdir()
+                Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
+                with log.open("a", encoding="utf-8") as output:
+                    output.write("git init detached\\n")
+            elif args[:2] == ["checkout", "--detach"] and git_cwd is not None:
+                record_uncredentialed_checkout("git-checkout")
+                if (
+                    os.environ.get("REQUIRE_LFS_SKIP_SMUDGE") == "1"
+                    and os.environ.get("GIT_LFS_SKIP_SMUDGE") != "1"
+                ):
+                    raise SystemExit("LFS smudge was not disabled")
+                populate_checkout(git_cwd)
+                with log.open("a", encoding="utf-8") as output:
+                    output.write("git checkout detached\\n")
+            elif args[:3] == ["worktree", "add", "--detach"]:
+                if os.environ.get("REJECT_LINKED_WORKTREE") == "1":
+                    raise SystemExit("linked worktrees are unavailable")
                 checkout = Path(args[3])
-                shutil.rmtree(checkout, ignore_errors=True)
-                Path(os.environ["WORKTREE_REMOVED"]).write_text(str(checkout), encoding="utf-8")
+                populate_checkout(checkout)
+                Path(os.environ["CHECKOUT_PATH"]).write_text(str(checkout), encoding="utf-8")
             else:
                 raise SystemExit(97)
             """,
@@ -832,8 +949,7 @@ def verify_distribution(dist_root, repo_root):
                 "PATH": f"{self.bin}{os.pathsep}{environment['PATH']}",
                 "COMMAND_LOG": str(self.log_path),
                 "DETAILS_LOG": str(self.details_path),
-                "WORKTREE_PATH": str(self.worktree_path_record),
-                "WORKTREE_REMOVED": str(self.worktree_removed_record),
+                "CHECKOUT_PATH": str(self.checkout_path_record),
                 "BLOCK_READY": str(self.block_ready),
                 "ARCHIVE_DIGEST": str(self.root / "archive-digest"),
                 "FAILURE_MARKER": str(self.root / "failure-marker"),
@@ -885,8 +1001,7 @@ def verify_distribution(dist_root, repo_root):
         for path in (
             self.log_path,
             self.details_path,
-            self.worktree_path_record,
-            self.worktree_removed_record,
+            self.checkout_path_record,
             self.block_ready,
             self.root / "archive-digest",
             self.root / "failure-marker",
@@ -924,9 +1039,14 @@ def verify_distribution(dist_root, repo_root):
                 f"git remote fetch refs/tags/{TAG}:refs/lmdj-deploy/tags/{TAG}",
                 "git remote fetch refs/heads/main:refs/lmdj-deploy/origin-main",
                 f"git tag verify refs/lmdj-deploy/tags/{TAG}",
+                "git init detached",
+                "git fetch detached tag",
+                "git checkout detached",
                 f"gh release view {TAG}",
                 f"gh release download {TAG}",
                 "release_bundle stage",
+                "netlify get-current-site",
+                "netlify get-current-files",
                 "netlify get-current-site",
                 "http-discover prior",
                 "http-smoke prior-immutable",
@@ -948,8 +1068,35 @@ def verify_distribution(dist_root, repo_root):
         self.assertEqual(len([path for path in files if path.startswith("/assets/")]), 9)
         self.assertEqual(
             self.server.authorization_headers,
-            [f"Bearer {NETLIFY_TOKEN}"] * 3,
+            [f"Bearer {NETLIFY_TOKEN}"] * 5,
         )
+
+    def test_empty_initial_published_deploy_is_treated_as_first_publication(self) -> None:
+        self.server.site_files_response = []
+        completed = self.run_command("deploy", TAG)
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        log = self.command_log()
+        self.assertEqual(
+            log[log.index("release_bundle stage") + 1 : log.index("netlify create-draft")],
+            [
+                "netlify get-current-site",
+                "netlify get-current-files",
+                "netlify get-current-site",
+            ],
+        )
+        self.assertNotIn("http-discover prior", log)
+        evidence = json.loads(
+            (self.deploy_root / "evidence.json").read_text(encoding="utf-8")
+        )
+        self.assertIsNone(evidence["prior_good"])
+
+    def test_site_identity_change_during_file_inventory_fails_before_draft(self) -> None:
+        self.server.site_files_response = []
+        self.server.change_site_after_files = True
+        completed = self.run_command("deploy", TAG)
+        self.assertNotEqual(completed.returncode, 0)
+        self.assertIn("changed during file inventory", completed.stderr)
+        self.assertNotIn("netlify create-draft", self.command_log())
 
     def test_release_stage_uses_real_bundle_wrapper_and_detached_tag_checkout(self) -> None:
         completed = self.run_command("verify", TAG)
@@ -962,9 +1109,61 @@ def verify_distribution(dist_root, repo_root):
         self.assertTrue(str(checkout).startswith(str(self.runner_temp.resolve())))
         self.assertFalse(checkout.exists())
 
+    def test_tag_checkout_does_not_require_linked_worktree_metadata(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"REJECT_LINKED_WORKTREE": "1"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn("git init detached", self.command_log())
+        self.assertIn("git fetch detached tag", self.command_log())
+        self.assertIn("git checkout detached", self.command_log())
+        checkout_details = [
+            detail for detail in self.details()
+            if detail.get("program")
+            in {"git-init", "git-fetch-local", "git-checkout"}
+        ]
+        self.assertEqual(len(checkout_details), 3)
+        for detail in checkout_details:
+            self.assertEqual(detail["credential_environment"], [])
+            self.assertFalse(detail["credential_in_argv"])
+        checkout = next(
+            detail
+            for detail in checkout_details
+            if detail["program"] == "git-checkout"
+        )
+        self.assertEqual(checkout["lfs_skip_smudge"], "1")
+
+    def test_tag_checkout_materializes_remote_ref_without_lfs_smudge(self) -> None:
+        completed = self.run_command(
+            "verify",
+            TAG,
+            environment={"REQUIRE_LFS_SKIP_SMUDGE": "1"},
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertNotIn("git clone detached", self.command_log())
+        self.assertIn("git init detached", self.command_log())
+        self.assertIn("git fetch detached tag", self.command_log())
+        self.assertIn("git checkout detached", self.command_log())
+        checkout_details = [
+            detail
+            for detail in self.details()
+            if detail.get("program")
+            in {"git-init", "git-fetch-local", "git-checkout"}
+        ]
+        self.assertEqual(len(checkout_details), 3)
+        for detail in checkout_details:
+            self.assertEqual(detail["credential_environment"], [])
+            self.assertFalse(detail["credential_in_argv"])
+        checkout = next(
+            detail
+            for detail in checkout_details
+            if detail["program"] == "git-checkout"
+        )
+        self.assertEqual(checkout["lfs_skip_smudge"], "1")
+
     def test_publish_accepts_additive_official_response_fields(self) -> None:
         self.server.restore_extra = {
-            "published_at": "2026-08-09T00:00:00Z",
+            "published_at": "2026-08-09T00:00:00.740Z",
             "admin_url": "https://app.netlify.com/sites/lmdj-runtime",
         }
         completed = self.run_command("deploy", TAG)
@@ -1051,6 +1250,19 @@ def verify_distribution(dist_root, repo_root):
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
 
+    def test_authenticates_private_canonical_fetch_without_credential_leakage(self) -> None:
+        completed = self.run_command(
+            "verify", TAG, environment={"FAKE_PRIVATE_FETCH": "1"}
+        )
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        fetch_details = [
+            detail for detail in self.details() if detail.get("program") == "git-fetch"
+        ]
+        self.assertEqual(len(fetch_details), 2)
+        for detail in fetch_details:
+            self.assertEqual(detail["credential_environment"], ["GITHUB_TOKEN"])
+            self.assertFalse(detail["credential_in_argv"])
+
     def test_rejects_noncanonical_origin_unprotected_main_and_non_main_tag(self) -> None:
         for environment in (
             {"FAKE_ORIGIN_URL": "https://github.com/attacker/lmdj.git"},
@@ -1107,7 +1319,9 @@ def verify_distribution(dist_root, repo_root):
     def test_each_child_receives_only_its_required_deployment_credentials(self) -> None:
         completed = self.run_command("deploy", TAG)
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        netlify_commands = {"create-draft", "publish", "site-current", "disable-site"}
+        netlify_commands = {
+            "create-draft", "publish", "site-current", "site-preflight", "disable-site"
+        }
         for detail in self.details():
             if detail.get("program") != "python3":
                 continue
@@ -1338,13 +1552,15 @@ def verify_distribution(dist_root, repo_root):
         self.assertIn("netlify publish same-id", log)
         self.assertIn("netlify disable-site", log)
         self.assertNotIn("netlify restore prior-id", log)
-        self.assertEqual(self.server.site_state, "disabled")
+        self.assertTrue(self.server.site_disabled)
         recovery = json.loads(
             (self.deploy_root / "recovery-evidence.json").read_text(encoding="utf-8")
         )
         self.assertEqual(recovery["action"], "disabled-first-publication")
         self.assertIsNone(recovery["prior_deploy"])
         self.assertEqual(recovery["recovery_response"], {"status_code": 204})
+        self.assertEqual(recovery["status"], "passed")
+        self.assertEqual(recovery["post_recovery_site"]["state"], "disabled")
 
     def test_publish_api_error_reconciles_alias_and_restores_exact_prior(self) -> None:
         self.server.publish_error_after_switch = True
@@ -1386,21 +1602,19 @@ def verify_distribution(dist_root, repo_root):
         self.assertIsNone(recovery["reconcile"]["published_deploy"])
 
     def test_pre_disabled_site_refuses_automatic_enable_or_publication(self) -> None:
-        self.server.site_state = "disabled"
+        self.server.site_disabled = True
         completed = self.run_command("deploy", TAG)
         self.assertNotEqual(completed.returncode, 0)
         self.assertNotIn("netlify create-draft", self.command_log())
         self.assertNotIn("netlify publish same-id", self.command_log())
 
-    def test_owned_worktree_and_temp_are_removed_on_success_and_failure(self) -> None:
+    def test_owned_tag_checkout_and_temp_are_removed_on_success_and_failure(self) -> None:
         for environment in ({}, {"FAIL_IMMUTABLE_SMOKE": "1"}):
             with self.subTest(environment=environment):
                 self.reset_run_records()
                 completed = self.run_command("deploy", TAG, environment=environment)
                 self.assertEqual(completed.returncode == 0, not environment)
-                checkout = Path(self.worktree_path_record.read_text(encoding="utf-8"))
-                removed = Path(self.worktree_removed_record.read_text(encoding="utf-8"))
-                self.assertEqual(checkout, removed)
+                checkout = Path(self.checkout_path_record.read_text(encoding="utf-8"))
                 self.assertFalse(checkout.exists())
                 self.assert_no_owned_temp()
 
@@ -1443,13 +1657,25 @@ def verify_distribution(dist_root, repo_root):
         )
         self.assertEqual(evidence["immutable"]["deploy_id"], DEPLOY_ID)
         self.assertEqual(evidence["immutable"]["http"]["status"], "passed")
+        self.assertEqual(
+            evidence["immutable"]["http"]["result"]["asset_count"], 13
+        )
         self.assertEqual(evidence["immutable"]["browser"]["status"], "passed")
         self.assertEqual(evidence["publication"]["same_deploy_id"], DEPLOY_ID)
         self.assertEqual(evidence["publication"]["response"]["id"], DEPLOY_ID)
         self.assertEqual(evidence["production"]["url"], PRODUCTION_URL)
         self.assertEqual(evidence["production"]["http"]["status"], "passed")
+        self.assertEqual(
+            evidence["production"]["http"]["result"]["asset_count"], 13
+        )
         self.assertEqual(evidence["production"]["browser"]["status"], "passed")
         self.assertEqual(evidence["prior_good"]["deploy_id"], PRIOR_DEPLOY_ID)
+        self.assertEqual(
+            evidence["prior_good"]["immutable"]["http"]["result"][
+                "asset_count"
+            ],
+            9,
+        )
         self.assertRegex(evidence["started_at"], r"Z$")
         self.assertRegex(evidence["ended_at"], r"Z$")
         self.assertEqual(
@@ -1540,9 +1766,7 @@ def verify_distribution(dist_root, repo_root):
                 self.assert_no_secret_output(completed)
                 self.assertNotIn("netlify publish same-id", self.command_log())
                 self.assertFalse((self.deploy_root / "evidence.json").exists())
-                checkout = Path(self.worktree_path_record.read_text(encoding="utf-8"))
-                removed = Path(self.worktree_removed_record.read_text(encoding="utf-8"))
-                self.assertEqual(checkout, removed)
+                checkout = Path(self.checkout_path_record.read_text(encoding="utf-8"))
                 self.assertFalse(checkout.exists())
                 self.assert_no_owned_temp()
 

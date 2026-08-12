@@ -101,6 +101,7 @@ class RealtimeAudioWorklet final {
   bool invoke_invalid_shape_for_conformance(std::int32_t frames) noexcept;
   bool generation_matches_for_conformance(
       std::uint64_t expected_generation) const noexcept;
+  bool mark_callback_in_flight_for_conformance() noexcept;
 #endif
 
  private:

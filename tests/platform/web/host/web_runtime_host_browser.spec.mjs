@@ -1548,6 +1548,15 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
     .toMatchObject({ state: "restart-required", error_code: "HOST_TIMEOUT" });
   expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
     .toBe(false);
+  await expect.poll(() => terminalTransportEvidence(page), {
+    message: "recovery outcome timeout terminal owner release",
+    timeout: TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS,
+  }).toMatchObject({
+    controller: { state: "restart-required", error_code: "HOST_TIMEOUT" },
+    newSubmitCode: "HOST_STATE_INVALID",
+    terminated: true,
+    terminalOwnerReleased: true,
+  });
 
   const reopenedPage = await context.newPage();
   await openPackagedHost(reopenedPage);

@@ -7,6 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
 import {
+  createSquashWitness,
   createSnapshotMetadata,
   freezeDiagramAssets,
   verifySnapshotProvenance,
@@ -105,6 +106,16 @@ async function generateWorkingSnapshot(fixture) {
   });
   await put(repoRoot, `apps/architecture-portal/versioned_metadata/version-${VERSION}.json`, `${JSON.stringify(metadata, null, 2)}\n`);
   return metadata;
+}
+
+async function writeSquashWitness(fixture, metadata, introducingRevision) {
+  const witness = await createSquashWitness({
+    repoRoot: fixture.repoRoot,
+    metadata,
+    introducingRevision,
+  });
+  await put(fixture.repoRoot, `apps/architecture-portal/versioned_provenance/version-${metadata.product_build}-squash-witness.json`, `${JSON.stringify(witness, null, 2)}\n`);
+  return witness;
 }
 
 function verifierOptions(fixture, metadata, headRevision) {
@@ -299,6 +310,8 @@ test('schema-2 provenance accepts a fresh-clone squash without the source object
   const fixture = await initializeFixture();
   let cloneParent;
   try {
+    await put(fixture.repoRoot, 'source-private-parent.txt', 'not reachable from the squash parent\n');
+    fixture.revision = await commit(fixture.repoRoot, 'final source with private parent', '2026-08-04T00:00:30Z');
     const source = fixture.revision;
     const metadata = await generateWorkingSnapshot(fixture);
     const directIntroduction = await commit(fixture.repoRoot, 'direct snapshot', INTRO_DATE);
@@ -398,6 +411,64 @@ test('schema-2 provenance accepts a fresh-clone squash without the source object
     await git(fixture.repoRoot, ['update-ref', 'refs/heads/main', badIntro]);
     await git(fixture.repoRoot, ['reset', '--hard', badIntro]);
     assert.match((await verifySnapshotProvenance(verifierOptions(fixture, metadata, badIntro))).join('\n'), /source projection is neither direct-parent nor squash-equivalent/);
+  } finally {
+    if (cloneParent) await rm(cloneParent, {recursive: true, force: true});
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('schema-2 provenance authenticates a divergent squash through a source-tree witness', async () => {
+  const fixture = await initializeFixture();
+  let cloneParent;
+  try {
+    await put(fixture.repoRoot, 'source-private-parent.txt', 'not reachable from the squash parent\n');
+    fixture.revision = await commit(fixture.repoRoot, 'final source with private parent', '2026-08-04T00:00:30Z');
+    const source = fixture.revision;
+    const metadata = await generateWorkingSnapshot(fixture);
+    await put(fixture.repoRoot, 'apps/architecture-portal/docs/overview/index.mdx', 'post-freeze current overview\n');
+    await put(fixture.repoRoot, 'post-freeze-evidence.txt', 'not part of the frozen projection\n');
+    const directIntroduction = await commit(fixture.repoRoot, 'snapshot plus current edits', INTRO_DATE);
+    const introductionTree = (await git(fixture.repoRoot, ['rev-parse', `${directIntroduction}^{tree}`])).stdout.trim();
+    const squashIntroduction = (await git(fixture.repoRoot, ['commit-tree', introductionTree, '-p', fixture.base, '-m', 'divergent squash introduction'], {
+      env: {GIT_AUTHOR_DATE: INTRO_DATE, GIT_COMMITTER_DATE: INTRO_DATE},
+    })).stdout.trim();
+    await git(fixture.repoRoot, ['update-ref', 'refs/heads/main', squashIntroduction]);
+    await git(fixture.repoRoot, ['reset', '--hard', squashIntroduction]);
+    assert.match(
+      (await verifySnapshotProvenance(verifierOptions(fixture, metadata, squashIntroduction))).join('\n'),
+      /source projection is neither direct-parent nor squash-equivalent/,
+    );
+
+    const witness = await writeSquashWitness(fixture, metadata, squashIntroduction);
+    const corrected = await commit(fixture.repoRoot, 'add authenticated squash witness', '2026-08-04T00:03:00Z');
+    assert.equal((await verifySnapshotProvenance(verifierOptions(fixture, metadata, corrected))).length, 0);
+
+    cloneParent = await mkdtemp(path.join(os.tmpdir(), 'portal-witness-clone-'));
+    const cloneRoot = path.join(cloneParent, 'repo');
+    await git(fixture.repoRoot, ['clone', '--no-local', '--single-branch', '--branch', 'main', fixture.repoRoot, cloneRoot]);
+    await git(cloneRoot, ['config', 'user.email', 'portal@example.test']);
+    await git(cloneRoot, ['config', 'user.name', 'Portal Test']);
+    await assert.rejects(() => git(cloneRoot, ['cat-file', '-e', `${source}^{commit}`]));
+    const clonedFixture = {
+      repoRoot: cloneRoot,
+      portalRoot: path.join(cloneRoot, 'apps/architecture-portal'),
+    };
+    const clonedMetadata = JSON.parse(await readFile(
+      path.join(clonedFixture.portalRoot, `versioned_metadata/version-${VERSION}.json`),
+      'utf8',
+    ));
+    assert.equal((await verifySnapshotProvenance(verifierOptions(clonedFixture, clonedMetadata, corrected))).length, 0);
+
+    const tampered = structuredClone(witness);
+    const blobEntry = tampered.entries.find((entry) => entry.source_base64);
+    assert.ok(blobEntry);
+    blobEntry.source_base64 = Buffer.from('tampered\n').toString('base64');
+    await put(clonedFixture.repoRoot, `apps/architecture-portal/versioned_provenance/version-${VERSION}-squash-witness.json`, `${JSON.stringify(tampered, null, 2)}\n`);
+    const tamperedHead = await commit(clonedFixture.repoRoot, 'tamper squash witness', '2026-08-04T00:04:00Z');
+    assert.match(
+      (await verifySnapshotProvenance(verifierOptions(clonedFixture, clonedMetadata, tamperedHead))).join('\n'),
+      /squash witness does not reconstruct the authenticated source tree/,
+    );
   } finally {
     if (cloneParent) await rm(cloneParent, {recursive: true, force: true});
     await rm(fixture.repoRoot, {recursive: true, force: true});

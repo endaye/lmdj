@@ -1,47 +1,32 @@
 name: Architecture Portal
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - ".github/pull_request_template.md"
-      - ".github/workflows/architecture-portal.yml"
-      - "apps/**"
-      - "packages/**"
-      - "providers/**"
-      - "workers/**"
-      - "contracts/**"
-      - "products/lmdj/**"
-      - "docs/governance/**"
-      - "scripts/architecture-portal.sh"
-  push:
-    branches: [main]
-    paths:
-      - "AGENTS.md"
-      - "CLAUDE.md"
-      - ".github/pull_request_template.md"
-      - ".github/workflows/architecture-portal.yml"
-      - "apps/**"
-      - "packages/**"
-      - "providers/**"
-      - "workers/**"
-      - "contracts/**"
-      - "products/lmdj/**"
-      - "docs/governance/**"
-      - "scripts/architecture-portal.sh"
+  workflow_call:
+    inputs:
+      check_documentation_impact:
+        required: false
+        type: boolean
+        default: false
+      base_sha:
+        required: false
+        type: string
+        default: ""
+      head_sha:
+        required: false
+        type: string
+        default: ""
+      pull_request_body:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
 
-concurrency:
-  group: architecture-portal-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   portal:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
@@ -54,12 +39,15 @@ jobs:
       - name: Install locked portal dependencies
         run: scripts/architecture-portal.sh install
       - name: Check Pull Request documentation impact
-        if: github.event_name == 'pull_request'
+        if: ${{ inputs.check_documentation_impact }}
         env:
-          PORTAL_PR_BODY: ${{ github.event.pull_request.body }}
-          PORTAL_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PORTAL_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PORTAL_PR_BODY: ${{ inputs.pull_request_body }}
+          PORTAL_BASE_SHA: ${{ inputs.base_sha }}
+          PORTAL_HEAD_SHA: ${{ inputs.head_sha }}
         run: |
+          set -euo pipefail
+          [[ "$PORTAL_BASE_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
+          [[ "$PORTAL_HEAD_SHA" =~ ^[0-9a-fA-F]{40}$ ]]
           changed_files="$(git diff --name-only "$PORTAL_BASE_SHA" "$PORTAL_HEAD_SHA")"
           PORTAL_CHANGED_FILES="$changed_files" npm --prefix apps/architecture-portal run check:impact
       - name: Verify architecture portal

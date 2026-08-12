@@ -18,3 +18,10 @@ export const PUBLICATION_FAULT_POINTS = Object.freeze([
   "before_source_cleanup",
   "before_intent_cleanup",
 ]);
+
+export const PUBLICATION_CLEANUP_FAULT = "destination_cleanup_failure";
+
+export const STORAGE_CONDITION_FAULTS = Object.freeze([
+  "QuotaExceededError",
+  "InvalidStateError",
+]);

@@ -123,13 +123,29 @@ Release `targetCommitish` 只作为非空辅助 metadata；tag 已存在时它�
    secret 并提供给受控 workflow。此站点只能由下述 GitHub Actions 路径以 API 创建 draft、
    smoke 后同 ID 发布，禁止手工拖拽/CLI 生产上传。
 
-这一步完成前，任何 `lmdj-runtime` site ID、Deploy ID 或 immutable Deploy URL 都是
-不存在的值，不能用占位符伪造为证据。
+Netlify 创建空站点时可能同时建立一个状态为 `ready`、但当前文件列表精确为空的平台占位
+Deploy。部署 preflight 必须按顺序读取 current site、官方 `GET /sites/{site_id}/files` 清单、
+再读取一次 current site，并要求两次 site projection 完全一致。只有同一 current Deploy 的
+validated file count 精确为 `0` 时，才把它视为“尚无可回滚 prior”，不对 404 占位 URL 运行
+prior smoke，且成功 evidence 的 `prior_good` 保持 `null`。任何非空 current Deploy 仍必须完成
+既有 prior identity 与 immutable/production smoke；清单无效、API 失败或两次 site identity
+不同都在创建新 draft 前 fail closed。
+
+站点创建完成前，任何 `lmdj-runtime` site ID、Deploy ID 或 immutable Deploy URL 都是
+不存在的值，不能用占位符伪造为证据；平台返回的零文件占位 Deploy 也不是 prior-good 或
+已发布 Runtime Host 的证据。
 
 ## GitHub Environment 与 secret
 
-workflow `.github/workflows/deploy-web-runtime-host.yml` 使用 GitHub Environment
-`runtime-canary`。site ID 本质上不是 secret，但按已批准的 scoped configuration contract
+workflow `.github/workflows/deploy-web-runtime-host.yml` 分为两个 job。`preflight` 不声明
+`environment`，因此拿不到下述任何 Environment secret：它只用 Python 和 GitHub Actions 短期
+`GITHUB_TOKEN` 运行 `scripts/web-runtime-deploy.sh` 的只读 `verify` 子命令，完成 signed
+tag、protected `main` ancestry、Release 三资产与角色分离 checksum signature 的验证以及资产
+staging，并且不安装 Node/Chromium。只有它通过后，`deploy` job 才使用 GitHub Environment
+`runtime-canary`，并在任何 Netlify mutation 之前对同一 Release 重新验证一次。也就是说，
+Netlify credential 与浏览器工具链都只在 Release 已被证明可信之后才进入运行环境。
+
+site ID 本质上不是 secret，但按已批准的 scoped configuration contract
 存为 Environment secret；不得与 token 混淆。它可以进入实际的 evidence artifact 和后续
 验收记录，供核对 deploy identity；token 不得进入任何 evidence、验收记录或日志。当前
 tracked runbook、Portal 和日志不写入尚未创建站点的真实 site ID；该限制不把 site ID
@@ -168,7 +184,7 @@ trap - EXIT INT TERM
 
 获授权的 workflow 只接受发布事件的 prerelease tag 或手动输入的精确 Product tag，
 并固定 checkout `main`。它执行：签名 tag/Release/archive 验证 → staging → Netlify
-prior discovery/immutable+production smoke → draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
+current site/file inventory/current site 稳定性 preflight → 非空 prior discovery/immutable+production smoke → draft → immutable URL HTTP 和 Chromium smoke → 同 Deploy ID production publication →
 生产 URL HTTP 和 Chromium smoke → artifact evidence。
 
 HTTP smoke 从 `/` 开始，只允许直接 200，或一次严格同源、无 query/fragment 且最终仅到
@@ -197,7 +213,7 @@ python3 -m json.tool evidence/RUN_ID/evidence.json
 | `git_revision`, `tag`, `release_url`, `product_build`, `host_version`, `site_id`, `channel` | 已验证 provenance 与 live identity。 |
 | `prior_good` | `null`，或发布前 `GET site` 的 validated secret-safe official projection、发现的 prior Product/Host、prior immutable 与 production 的 HTTP/browser 结构化结果及时间；两 URL 的 index/manifest digest 必须一致。 |
 | `immutable` | `{deploy_id, deploy_url, http, browser}`；`http.result` 保留完整 HTTP smoke JSON。 |
-| `publication` | `{same_deploy_id, response}`；`response` 是字段 allowlist 为 `id/site_id/state/ssl_url/deploy_ssl_url/published_at` 的 validated secret-safe official projection，不声称保存 raw exact response。 |
+| `publication` | `{same_deploy_id, response}`；`response` 是字段 allowlist 为 `id/site_id/state/ssl_url/deploy_ssl_url/published_at` 的 validated secret-safe official projection；Netlify 的 `published_at` 允许并原样保留 UTC `Z` 时间戳中的可选小数秒，不声称保存 raw exact response。 |
 | `production` | `{url, http, browser}`；HTTP/browser 均含结构化结果和时间。 |
 
 失败恢复写入独立、原子替换的 `recovery-evidence.json`，contract 为
@@ -230,12 +246,13 @@ Chromium path。它不替代 macOS Safari、physical MIDI、iPadOS Touch/lifecyc
 | 情形 | 操作 |
 | --- | --- |
 | remote tag/signature、三资产 inventory/checksum signature、archive digest 或 bundle identity 失败 | 停止；不要创建 Netlify Deploy。修复 release provenance 后从验证重新开始。 |
+| current site/file inventory/current site preflight 无效、API 失败或身份变化 | 停止；official site response 的 `disabled: true` 必须规范化为 validated projection 的 `state: disabled`；不要把不稳定、禁用或未知站点状态分类为首次发布，也不要创建新 draft。 |
 | prior published deploy/identity/smoke 失败 | 停止；未建立本次 prior-good 前不要创建或发布新 Deploy。 |
 | draft 创建或 immutable URL HTTP/Chromium 失败 | 不发布该 draft；保存 workflow artifact/log，诊断后创建新的 draft。失败 draft 没有生产资格。 |
 | publish API error、production HTTP/Chromium failure、ERR、INT/TERM 或内部 timeout | workflow 自动重新 `GET /sites/{site_id}` reconcile；当前 ID 只允许 candidate、exact prior，或首次发布时为空；未知第三 ID 必须 recovery FAIL。 |
 | alias 指向新 Deploy 且 prior-good 存在 | `POST /sites/{site_id}/deploys/{prior_id}/restore` 恢复 exact prior，随后 GET 必须确认 exact prior，再对 prior immutable 与 production 运行完整 HTTP/Chromium，原子写 recovery evidence。 |
 | alias 指向新 Deploy 且首次没有 prior | 使用官方 reversible `PUT /sites/{site_id}/disable` 撤下站点；记录 204 后 GET 必须确认 disabled，并写 recovery evidence；不得伪造 rollback。 |
-| preflight 发现站点已 disabled | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
+| preflight 发现 official `disabled: true`（validated projection 为 `state: disabled`） | 拒绝自动 enable 或 publication，升级给独立授权操作。 |
 | evidence artifact 缺失、字段不匹配或含敏感信息 | 将部署视为证据不完整；不要更新 acceptance/Portal 为 deployed，先修复证据链。 |
 
 恢复不是重新构建、重新上传或猜 Deploy ID。prior identity 来自发布前官方 site response 与

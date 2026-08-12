@@ -35,10 +35,17 @@ EXPECTED_ACTION_PINS = {
         "v4.6.2",
     ),
 }
-CREDENTIAL_ENVIRONMENT = {
-    "GITHUB_TOKEN",
+NETLIFY_CREDENTIALS = {
     "NETLIFY_RUNTIME_SITE_ID",
     "NETLIFY_AUTH_TOKEN",
+}
+CREDENTIAL_ENVIRONMENT = NETLIFY_CREDENTIALS | {"GITHUB_TOKEN"}
+# `github.token` is the scoped, ephemeral Actions token and the workflow grants it
+# only `contents: read`, so the credential-free preflight may read Release metadata
+# with it. The Netlify secrets are environment-scoped and stay in the deploy job.
+GITHUB_TOKEN_STEPS = {
+    "Verify signed Runtime Host release",
+    "Deploy signed Runtime Host release",
 }
 
 
@@ -205,6 +212,20 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                 return step
         self.fail(f"workflow step is missing: {name}")
 
+    def job_block(self, source: str, name: str) -> str:
+        return self.mapping_block(self.mapping_block(source, "jobs", 0), name, 2)
+
+    def shell_function(self, script: str, name: str) -> str:
+        lines = script.splitlines()
+        try:
+            start = lines.index(f"{name}() {{")
+        except ValueError:
+            self.fail(f"shell function is missing: {name}")
+        for index in range(start + 1, len(lines)):
+            if lines[index] == "}":
+                return "\n".join(lines[start + 1 : index])
+        self.fail(f"shell function is unterminated: {name}")
+
     def test_workflow_only_deploys_published_release_or_exact_manual_tag(
         self,
     ) -> None:
@@ -235,7 +256,12 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertIn("github.event.release.tag_name", source)
         self.assertIn("github.event.release.prerelease", source)
         self.assertIn("inputs.tag", source)
-        self.assertIn('[[ "$release_prerelease" == "true" ]]', source)
+        self.assertIn(
+            "RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}",
+            source,
+        )
+        self.assertIn('[[ "$RELEASE_IS_PRERELEASE" == "true" ]]', source)
+        self.assertNotIn('release_prerelease="$RELEASE_PRERELEASE"', source)
         self.assertIn(
             "^lmdj-v[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$",
             source,
@@ -282,7 +308,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         source = self.workflow_source()
         self.assertNotIn("env", self.direct_mapping(source, 0))
         jobs = self.mapping_block(source, "jobs", 0)
-        self.assertEqual(set(self.direct_mapping(jobs, 2)), {"deploy"})
+        self.assertEqual(set(self.direct_mapping(jobs, 2)), {"preflight", "deploy"})
         deploy_job = self.mapping_block(jobs, "deploy", 2)
         self.assertNotIn("env", self.direct_mapping(deploy_job, 4))
 
@@ -299,21 +325,96 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                     "${{ secrets.NETLIFY_RUNTIME_SITE_ID }}"
                 ),
                 "NETLIFY_AUTH_TOKEN": "${{ secrets.NETLIFY_AUTH_TOKEN }}",
-                "LMDJ_RELEASE_TAG": "${{ steps.release-tag.outputs.tag }}",
+                "LMDJ_RELEASE_TAG": "${{ needs.preflight.outputs.tag }}",
             },
         )
 
         for step in self.workflow_steps(source):
             if step == deploy_step or "        env:" not in step:
                 continue
+            name = step.splitlines()[0].removeprefix("      - name: ")
             environment = self.direct_mapping(
                 self.mapping_block(step, "env", 8),
                 10,
             )
             self.assertTrue(
-                CREDENTIAL_ENVIRONMENT.isdisjoint(environment),
-                f"credential leaked to non-deploy step: {step.splitlines()[0]}",
+                NETLIFY_CREDENTIALS.isdisjoint(environment),
+                f"Netlify credential leaked to non-deploy step: {name}",
             )
+            if name not in GITHUB_TOKEN_STEPS:
+                self.assertNotIn(
+                    "GITHUB_TOKEN",
+                    environment,
+                    f"GitHub token leaked to an unrelated step: {name}",
+                )
+
+    def test_preflight_verifies_the_release_without_credentials_or_browsers(
+        self,
+    ) -> None:
+        source = self.workflow_source()
+        preflight_job = self.job_block(source, "preflight")
+        preflight_mapping = self.direct_mapping(preflight_job, 4)
+        self.assertNotIn("env", preflight_mapping)
+        self.assertNotIn("needs", preflight_mapping)
+        self.assertNotIn(
+            "environment",
+            preflight_mapping,
+            "preflight must not join the deployment environment",
+        )
+        self.assertEqual(
+            self.direct_mapping(self.mapping_block(preflight_job, "outputs", 4), 6),
+            {"tag": "${{ steps.release-tag.outputs.tag }}"},
+        )
+
+        preflight_steps = self.workflow_steps(preflight_job)
+        self.assertEqual(
+            [step.splitlines()[0].removeprefix("      - name: ") for step in preflight_steps],
+            [
+                "Checkout protected main tooling",
+                "Set up Python",
+                "Select exact signed Product tag",
+                "Verify signed Runtime Host release",
+            ],
+        )
+        for step in preflight_steps:
+            if "        env:" not in step:
+                continue
+            environment = self.direct_mapping(self.mapping_block(step, "env", 8), 10)
+            self.assertTrue(
+                NETLIFY_CREDENTIALS.isdisjoint(environment),
+                f"preflight must stay credential-free: {step.splitlines()[0]}",
+            )
+        for forbidden in ("setup-node", "npm ci", "playwright", "chromium"):
+            self.assertNotIn(
+                forbidden,
+                preflight_job,
+                f"preflight must not install the browser toolchain: {forbidden}",
+            )
+
+        verify_step = self.step_named(preflight_job, "Verify signed Runtime Host release")
+        self.assertIn('scripts/web-runtime-deploy.sh verify "$tag"', verify_step)
+        self.assertIn("timeout --signal=TERM --kill-after=30s 300s", verify_step)
+        self.assertEqual(
+            self.direct_mapping(self.mapping_block(verify_step, "env", 8), 10),
+            {
+                "GITHUB_TOKEN": "${{ github.token }}",
+                "LMDJ_RELEASE_TAG": "${{ steps.release-tag.outputs.tag }}",
+            },
+        )
+
+        deploy_job = self.job_block(source, "deploy")
+        self.assertEqual(self.direct_mapping(deploy_job, 4).get("needs"), "preflight")
+        self.assertNotIn(
+            "Select exact signed Product tag",
+            deploy_job,
+            "tag selection belongs to preflight only",
+        )
+
+        self.assertIn(
+            'verify_release "$tag"',
+            self.shell_function(DEPLOY_SCRIPT.read_text(encoding="utf-8"), "deploy_release"),
+            "the deploy job must re-verify the same Release before mutating Netlify",
+        )
 
     def test_workflow_installs_only_deployment_dependencies(self) -> None:
         source = self.workflow_source()
@@ -359,20 +460,45 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         )
         self.assertIn("timeout-minutes: 75", source)
 
+        preflight_budgets = {
+            "Checkout protected main tooling": 5,
+            "Set up Python": 3,
+            "Select exact signed Product tag": 2,
+            "Verify signed Runtime Host release": 7,
+        }
         step_budgets = {
             "Checkout protected main tooling": 5,
             "Set up Python": 3,
             "Set up Node": 3,
             "Install browser smoke dependencies": 5,
             "Install Chromium": 10,
-            "Select exact signed Product tag": 2,
             "Deploy signed Runtime Host release": 35,
             "Upload deployment evidence and failure logs": 5,
         }
-        for name, minutes in step_budgets.items():
-            with self.subTest(step=name):
-                step = self.step_named(source, name)
-                self.assertIn(f"timeout-minutes: {minutes}", step)
+        for job, budgets in (
+            ("preflight", preflight_budgets),
+            ("deploy", step_budgets),
+        ):
+            job_source = self.job_block(source, job)
+            for name, minutes in budgets.items():
+                with self.subTest(job=job, step=name):
+                    step = self.step_named(job_source, name)
+                    self.assertIn(f"timeout-minutes: {minutes}", step)
+
+        preflight_job_budget = 20
+        self.assertIn(f"timeout-minutes: {preflight_job_budget}", self.job_block(source, "preflight"))
+        self.assertLessEqual(
+            sum(preflight_budgets.values()) * 60 + 60,
+            preflight_job_budget * 60,
+        )
+        verify_step = self.step_named(
+            self.job_block(source, "preflight"), "Verify signed Runtime Host release"
+        )
+        self.assertIn("kill-after=30s 300s", verify_step)
+        self.assertLessEqual(
+            300 + 30,
+            preflight_budgets["Verify signed Runtime Host release"] * 60,
+        )
 
         script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
         recovery_api = 30
@@ -395,7 +521,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         recovery_kill_budget = 900
         main_budget = 1080
         deploy_step_budget = step_budgets["Deploy signed Runtime Host release"] * 60
-        setup_and_select = sum(
+        setup_budget = sum(
             minutes
             for name, minutes in step_budgets.items()
             if name not in {
@@ -408,7 +534,7 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
         self.assertLessEqual(recovery_worst + 60, recovery_kill_budget)
         self.assertLessEqual(main_budget + recovery_kill_budget, deploy_step_budget)
         self.assertLessEqual(
-            setup_and_select + deploy_step_budget + upload_budget + 60,
+            setup_budget + deploy_step_budget + upload_budget + 60,
             job_budget,
         )
         upload = self.step_named(source, "Upload deployment evidence and failure logs")

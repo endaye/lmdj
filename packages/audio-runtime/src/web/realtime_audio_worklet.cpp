@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 
 #include <emscripten/threading.h>
 #include <emscripten/webaudio.h>
@@ -413,16 +412,33 @@ foundation::Result<void> RealtimeAudioWorklet::await_quiescent(
     const auto now = std::chrono::steady_clock::now();
     if (now >= deadline) {
       impl_->latch_fatal(RealtimeAudioWorkletFatal::quiescence_timeout);
+      const auto terminal_deadline =
+          now + std::chrono::milliseconds(timeout_ms);
       while (impl_->in_flight.load(std::memory_order_acquire)) {
         const auto terminal_signal =
             impl_->quiescence_signal.load(std::memory_order_acquire);
         if (!impl_->in_flight.load(std::memory_order_acquire)) {
           break;
         }
+        const auto terminal_now = std::chrono::steady_clock::now();
+        if (terminal_now >= terminal_deadline) {
+          return foundation::Result<void>::failure(worklet_error(
+              "Wasm AudioWorklet quiescence timed out with callback still in "
+              "flight"));
+        }
+        const auto terminal_remaining =
+            std::chrono::duration<double, std::milli>(
+                terminal_deadline - terminal_now)
+                .count();
+        const auto terminal_wait_ms = std::min(
+            terminal_remaining,
+            std::chrono::duration<double, std::milli>(
+                kQuiescenceRecheckInterval)
+                .count());
         static_cast<void>(emscripten_futex_wait(
             &impl_->quiescence_signal,
             terminal_signal,
-            std::numeric_limits<double>::infinity()));
+            terminal_wait_ms));
       }
       return foundation::Result<void>::failure(
           worklet_error("Wasm AudioWorklet quiescence timed out"));
@@ -544,6 +560,15 @@ bool RealtimeAudioWorklet::invoke_invalid_shape_for_conformance(
 bool RealtimeAudioWorklet::generation_matches_for_conformance(
     std::uint64_t expected_generation) const noexcept {
   return acknowledged_generation() == expected_generation;
+}
+
+bool RealtimeAudioWorklet::mark_callback_in_flight_for_conformance() noexcept {
+  bool expected = false;
+  return impl_->in_flight.compare_exchange_strong(
+      expected,
+      true,
+      std::memory_order_acq_rel,
+      std::memory_order_acquire);
 }
 #endif
 

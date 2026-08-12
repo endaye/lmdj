@@ -6,6 +6,14 @@
 
 <!-- Exact commands and retained evidence. -->
 
+## CI Scope
+
+Expected mode: focused
+Expected selected lanes: <!-- Closed lane names, space-separated. -->
+Expected skipped lanes: <!-- Closed lane names, space-separated. -->
+`ci:full` required: no
+Reason: <!-- Explain path ownership or the full-upgrade trigger. -->
+
 ## Version Management
 
 Version impact: none

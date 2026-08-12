@@ -399,8 +399,8 @@ def happy_path(
     }
     assert ready["result"]["resolved_pad_count"] == 2
     assert ready["result"]["project_revision"] == 5
-    assert ready["result"]["host_version"] == "1.0.5"
-    assert ready["result"]["product_build"] == "1.0.16.5"
+    assert ready["result"]["host_version"] == "1.0.8"
+    assert ready["result"]["product_build"] == "1.0.16.9"
 
     for pad in (0, 1):
         triggered = process.request(

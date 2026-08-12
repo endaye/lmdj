@@ -31,15 +31,22 @@ from deployment_smoke import (  # noqa: E402
 
 
 ASSET_LAYOUT = (
+    ("diagnostic-client", ".mjs", "platform_module"),
     ("diagnostic-project", ".mjs", "host_module"),
-    ("input-adapters", ".mjs", "host_module"),
+    ("input-adapters", ".mjs", "platform_module"),
     ("main", ".mjs", "host_main"),
-    ("preflight", ".mjs", "host_module"),
-    ("protocol", ".mjs", "host_module"),
+    ("preflight", ".mjs", "platform_module"),
+    ("project-bundle-reader", ".mjs", "platform_module"),
+    ("protocol", ".mjs", "platform_module"),
     ("runtime", ".js", "runtime_script"),
     ("runtime", ".wasm", "runtime_wasm"),
-    ("state-machine", ".mjs", "host_module"),
+    ("runtime-loader", ".mjs", "platform_module"),
+    ("runtime-session", ".mjs", "platform_module"),
+    ("state-machine", ".mjs", "platform_module"),
     ("styles", ".css", "host_style"),
+)
+LEGACY_OMITTED_ASSET_STEMS = frozenset(
+    ("diagnostic-client", "project-bundle-reader", "runtime-loader", "runtime-session")
 )
 CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -79,6 +86,7 @@ class SmokeFixture:
         self.redirects: dict[str, str] = {}
         self.redirect_cache_overrides: dict[str, str | None] = {}
         self.delays: dict[str, float] = {}
+        self.edge_rejections: dict[str, tuple[HTTPStatus, bytes]] = {}
         self.forced_ok: set[str] = set()
         self.payloads: dict[str, bytes] = {}
         assets = []
@@ -100,12 +108,30 @@ class SmokeFixture:
             "distribution_contract": "lmdj.web-runtime-host.distribution.v1",
             "emscripten": {},
             "heap_bytes": 536_870_912,
+            "host_id": "lmdj-web-runtime-host",
             "host_version": "1.1.2",
             "manifest_version": 1,
+            "platform_version": "0.1.6",
             "product_build": "1.0.15.2",
             "protocol_version": 1,
             "resource_limits": {},
         }
+        self.update_manifest(update_index=True)
+
+    def use_legacy_manifest(self) -> None:
+        self.manifest.pop("host_id")
+        self.manifest.pop("platform_version")
+        self.manifest["assets"] = [
+            entry
+            for entry in self.manifest["assets"]
+            if not any(
+                entry["path"].startswith(f"assets/{stem}.")
+                for stem in LEGACY_OMITTED_ASSET_STEMS
+            )
+        ]
+        for entry in self.manifest["assets"]:
+            if entry["role"] == "platform_module":
+                entry["role"] = "host_module"
         self.update_manifest(update_index=True)
 
     def update_manifest(self, *, update_index: bool) -> None:
@@ -178,6 +204,13 @@ class FixtureHandler(BaseHTTPRequestHandler):
         fixture = self.server.fixture
         if self.path in fixture.delays:
             time.sleep(fixture.delays[self.path])
+        if self.path in fixture.edge_rejections:
+            status, payload = fixture.edge_rejections[self.path]
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+            return
         if self.path in fixture.redirects:
             self.send_response(HTTPStatus.FOUND)
             self.send_header("Location", fixture.redirects[self.path])
@@ -258,7 +291,7 @@ class DeploymentSmokeTest(unittest.TestCase):
         self.assertEqual(
             result,
             {
-                "asset_count": 9,
+                "asset_count": 13,
                 "host_version": "1.1.2",
                 "index_sha256": hashlib.sha256(
                     self.fixture.payloads["/index.html"]
@@ -272,6 +305,10 @@ class DeploymentSmokeTest(unittest.TestCase):
                 "root_request_path": "/",
             },
         )
+
+    def test_accepts_legacy_v1_manifest_as_a_prior_published_rollback_anchor(self) -> None:
+        self.fixture.use_legacy_manifest()
+        self.assertEqual(self.smoke()["asset_count"], 9)
 
     def test_starts_at_root_and_allows_only_a_secure_no_store_redirect_to_index(self) -> None:
         self.fixture.redirects["/"] = "/index.html"
@@ -315,6 +352,10 @@ class DeploymentSmokeTest(unittest.TestCase):
                 self.fixture.omit_header = None
                 self.fixture.header_overrides.clear()
 
+    def test_accepts_redundant_netlify_draft_noindex_header(self) -> None:
+        self.fixture.duplicate_header = ("X-Robots-Tag", "noindex")
+        self.assertEqual(self.smoke()["asset_count"], 13)
+
     def test_rejects_duplicate_security_header_values(self) -> None:
         self.fixture.duplicate_header = ("X-Robots-Tag", "index, follow")
         with self.assertRaisesRegex(SmokeError, "x-robots-tag"):
@@ -349,9 +390,19 @@ class DeploymentSmokeTest(unittest.TestCase):
             "Application/JSON"
         )
         self.fixture.content_type_overrides[main] = (
-            "TEXT/JAVASCRIPT; CHARSET=UTF8"
+            "APPLICATION/JAVASCRIPT; CHARSET=UTF8"
         )
-        self.assertEqual(self.smoke()["asset_count"], 9)
+        self.assertEqual(self.smoke()["asset_count"], 13)
+
+    def test_accepts_cache_control_with_optional_whitespace(self) -> None:
+        main = next(
+            "/" + entry["path"] for entry in self.fixture.manifest["assets"]
+            if entry["role"] == "host_main"
+        )
+        self.fixture.cache_overrides[main] = (
+            "public,max-age=31536000,immutable"
+        )
+        self.assertEqual(self.smoke()["asset_count"], 13)
 
     def test_rejects_wrong_or_malformed_content_types(self) -> None:
         wasm = next(
@@ -408,11 +459,16 @@ class DeploymentSmokeTest(unittest.TestCase):
                 self.fixture.update_manifest(update_index=True)
 
     def test_rejects_incomplete_or_unbounded_manifest_inventory(self) -> None:
-        removed = self.fixture.manifest["assets"].pop(0)
+        removed_index = next(
+            index
+            for index, entry in enumerate(self.fixture.manifest["assets"])
+            if entry["role"] == "runtime_wasm"
+        )
+        removed = self.fixture.manifest["assets"].pop(removed_index)
         self.fixture.update_manifest(update_index=True)
         with self.assertRaisesRegex(SmokeError, "inventory"):
             self.smoke()
-        self.fixture.manifest["assets"].insert(0, removed)
+        self.fixture.manifest["assets"].insert(removed_index, removed)
         self.fixture.manifest["assets"][0]["bytes"] = 100_000_000
         self.fixture.update_manifest(update_index=True)
         with self.assertRaisesRegex(SmokeError, "asset bytes"):
@@ -430,6 +486,26 @@ class DeploymentSmokeTest(unittest.TestCase):
                 with self.assertRaisesRegex(SmokeError, re.escape(path)):
                     self.smoke()
                 self.fixture.forced_ok.clear()
+
+    def test_accepts_empty_netlify_edge_traversal_rejection(self) -> None:
+        self.fixture.edge_rejections["/%2e%2e/index.html"] = (
+            HTTPStatus.BAD_REQUEST,
+            b"",
+        )
+        self.assertEqual(self.smoke()["asset_count"], 13)
+
+    def test_rejects_wrong_or_nonempty_edge_traversal_rejection(self) -> None:
+        for status, payload in (
+            (HTTPStatus.NOT_FOUND, b""),
+            (HTTPStatus.BAD_REQUEST, b"product response"),
+        ):
+            with self.subTest(status=status, payload=payload):
+                self.fixture.edge_rejections["/%2e%2e/index.html"] = (
+                    status,
+                    payload,
+                )
+                with self.assertRaisesRegex(SmokeError, "/%2e%2e/index.html"):
+                    self.smoke()
 
     def test_rejects_missing_wrong_or_duplicate_negative_route_cache(self) -> None:
         for observed in (None, "public, max-age=31536000, immutable"):
@@ -461,7 +537,7 @@ class DeploymentSmokeTest(unittest.TestCase):
                 expected_host_version="1.1.2",
                 require_https=False,
             )["asset_count"],
-            9,
+            13,
         )
         with self.assertRaisesRegex(SmokeError, "request failed"):
             smoke_http(
@@ -622,7 +698,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             completed.stdout,
             json.dumps(
                 {
-                    "asset_count": 9,
+                    "asset_count": 13,
                     "host_version": "1.1.2",
                     "index_sha256": hashlib.sha256(
                         self.fixture.payloads["/index.html"]

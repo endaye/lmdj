@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {execFile} from 'node:child_process';
 import {constants as fsConstants} from 'node:fs';
 import {
-  copyFile, lstat, mkdir, mkdtemp, readFile, rm,
+  copyFile, lstat, mkdir, mkdtemp, readFile, rm, writeFile,
 } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
@@ -70,10 +70,11 @@ function safeJoin(root, relative) {
   return resolved;
 }
 
-async function execGit(repoRoot, args, {buffer = false, allowFailure = false} = {}) {
+async function execGit(repoRoot, args, {buffer = false, allowFailure = false, env = {}} = {}) {
   try {
     return await execFileAsync('git', args, {
       cwd: repoRoot,
+      env: {...process.env, ...env},
       encoding: buffer ? 'buffer' : 'utf8',
       maxBuffer: 64 * 1024 * 1024,
     });
@@ -95,45 +96,13 @@ async function gitBlob(repoRoot, revision, relative) {
   return Buffer.from(result.stdout);
 }
 
-async function gitCommitEvidence(repoRoot, revision) {
+function parseRawCommitEvidence(revision, raw) {
   validateRevision(revision);
-  if (!await gitCommitExists(repoRoot, revision)) throw new Error(`snapshot revision ${revision} does not exist`);
-  const raw = Buffer.from((await execGit(repoRoot, ['cat-file', 'commit', revision], {buffer: true})).stdout);
   const authenticated = createHash('sha1')
     .update(Buffer.from(`commit ${raw.length}\0`))
     .update(raw)
     .digest('hex');
   if (authenticated !== revision) throw new Error('raw commit bytes do not authenticate the snapshot revision');
-  const committedAt = (await execGit(repoRoot, ['show', '-s', '--format=%cI', revision])).stdout.trim();
-  const tree = (await execGit(repoRoot, ['rev-parse', `${revision}^{tree}`])).stdout.trim();
-  return {
-    raw_base64: raw.toString('base64'),
-    committed_at_utc: new Date(committedAt).toISOString(),
-    tree,
-  };
-}
-
-function authenticateRecordedCommit(revision, sourceCommit) {
-  validateRevision(revision);
-  if (!sourceCommit || typeof sourceCommit !== 'object' || Array.isArray(sourceCommit)) {
-    throw new Error('source commit evidence must be an object');
-  }
-  if (!sameJson(Object.keys(sourceCommit).sort(), ['committed_at_utc', 'raw_base64', 'tree'])) {
-    throw new Error('source commit evidence fields are invalid');
-  }
-  const encoded = sourceCommit.raw_base64;
-  if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length % 4 !== 0 ||
-      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
-    throw new Error('source commit raw_base64 is not canonical base64');
-  }
-  const raw = Buffer.from(encoded, 'base64');
-  if (raw.toString('base64') !== encoded) throw new Error('source commit raw_base64 is not canonical base64');
-  const authenticated = createHash('sha1')
-    .update(Buffer.from(`commit ${raw.length}\0`))
-    .update(raw)
-    .digest('hex');
-  if (authenticated !== revision) throw new Error('raw commit bytes do not authenticate the snapshot revision');
-
   const separator = raw.indexOf(Buffer.from('\n\n'));
   if (separator <= 0) throw new Error('raw commit headers are malformed');
   const headerBytes = raw.subarray(0, separator);
@@ -156,11 +125,192 @@ function authenticateRecordedCommit(revision, sourceCommit) {
   }
   const committedAt = new Date(epochSeconds * 1000);
   if (Number.isNaN(committedAt.valueOf())) throw new Error('raw commit committer header is malformed');
-  if (treeMatch[1] !== sourceCommit.tree) throw new Error('raw commit tree does not match recorded source commit tree');
+  return {tree: treeMatch[1], committedAt};
+}
+
+async function gitCommitEvidence(repoRoot, revision) {
+  validateRevision(revision);
+  if (!await gitCommitExists(repoRoot, revision)) throw new Error(`snapshot revision ${revision} does not exist`);
+  const raw = Buffer.from((await execGit(repoRoot, ['cat-file', 'commit', revision], {buffer: true})).stdout);
+  const {tree, committedAt} = parseRawCommitEvidence(revision, raw);
+  return {
+    raw_base64: raw.toString('base64'),
+    committed_at_utc: committedAt.toISOString(),
+    tree,
+  };
+}
+
+function authenticateRecordedCommit(revision, sourceCommit) {
+  validateRevision(revision);
+  if (!sourceCommit || typeof sourceCommit !== 'object' || Array.isArray(sourceCommit)) {
+    throw new Error('source commit evidence must be an object');
+  }
+  if (!sameJson(Object.keys(sourceCommit).sort(), ['committed_at_utc', 'raw_base64', 'tree'])) {
+    throw new Error('source commit evidence fields are invalid');
+  }
+  const encoded = sourceCommit.raw_base64;
+  if (typeof encoded !== 'string' || encoded.length === 0 || encoded.length % 4 !== 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)) {
+    throw new Error('source commit raw_base64 is not canonical base64');
+  }
+  const raw = Buffer.from(encoded, 'base64');
+  if (raw.toString('base64') !== encoded) throw new Error('source commit raw_base64 is not canonical base64');
+  const {tree, committedAt} = parseRawCommitEvidence(revision, raw);
+  if (tree !== sourceCommit.tree) throw new Error('raw commit tree does not match recorded source commit tree');
   if (committedAt.toISOString() !== sourceCommit.committed_at_utc) {
     throw new Error('raw commit committer time does not match recorded source commit time');
   }
-  return {tree: treeMatch[1], committedAt};
+  return {tree, committedAt};
+}
+
+function squashWitnessRelativePath(version) {
+  return `apps/architecture-portal/versioned_provenance/version-${version}-squash-witness.json`;
+}
+
+function parseSquashWitness(bytes, metadata, introducing) {
+  let witness;
+  try {
+    witness = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    throw new Error('authenticated squash witness is not valid JSON');
+  }
+  if (!witness || typeof witness !== 'object' || Array.isArray(witness)) {
+    throw new Error('authenticated squash witness must be an object');
+  }
+  const expectedFields = [
+    'entries', 'introducing_revision', 'product_build', 'schema_version', 'source_revision', 'source_tree',
+  ];
+  if (!sameJson(Object.keys(witness).sort(), expectedFields)) {
+    throw new Error('authenticated squash witness fields are invalid');
+  }
+  if (witness.schema_version !== 1 || witness.product_build !== metadata.product_build ||
+      witness.source_revision !== metadata.revision || witness.introducing_revision !== introducing ||
+      witness.source_tree !== metadata.source_commit.tree) {
+    throw new Error('authenticated squash witness identity does not match snapshot metadata');
+  }
+  if (!Array.isArray(witness.entries)) throw new Error('authenticated squash witness entries must be an array');
+  const paths = [];
+  const entries = witness.entries.map((entry) => {
+    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
+      throw new Error('authenticated squash witness entry must be an object');
+    }
+    const relative = validateRelativePath(entry.path);
+    paths.push(relative);
+    if (entry.source_absent === true) {
+      if (!sameJson(Object.keys(entry).sort(), ['path', 'source_absent'])) {
+        throw new Error(`authenticated squash witness absent entry is invalid: ${relative}`);
+      }
+      return {path: relative, sourceAbsent: true};
+    }
+    if (!sameJson(Object.keys(entry).sort(), ['mode', 'path', 'source_base64']) ||
+        !['100644', '100755', '120000'].includes(entry.mode) || typeof entry.source_base64 !== 'string' ||
+        entry.source_base64.length % 4 !== 0 ||
+        !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(entry.source_base64)) {
+      throw new Error(`authenticated squash witness source entry is invalid: ${relative}`);
+    }
+    const source = Buffer.from(entry.source_base64, 'base64');
+    if (source.toString('base64') !== entry.source_base64) {
+      throw new Error(`authenticated squash witness source is not canonical base64: ${relative}`);
+    }
+    return {path: relative, mode: entry.mode, source};
+  });
+  const sorted = [...paths].sort();
+  if (new Set(paths).size !== paths.length || !sameJson(paths, sorted)) {
+    throw new Error('authenticated squash witness paths must be unique and sorted');
+  }
+  return entries;
+}
+
+async function readSquashWitness(repoRoot, portalRoot, headRevision, version) {
+  const relative = squashWitnessRelativePath(version);
+  const committed = await execGit(repoRoot, ['cat-file', 'blob', `${headRevision}:${relative}`], {
+    buffer: true,
+    allowFailure: true,
+  });
+  if (committed) return Buffer.from(committed.stdout);
+  const checkedOut = (await execGit(repoRoot, ['rev-parse', 'HEAD'])).stdout.trim();
+  if (checkedOut !== headRevision) throw new Error('authenticated squash witness is unavailable');
+  const worktreePath = safeJoin(portalRoot, `versioned_provenance/version-${version}-squash-witness.json`);
+  const info = await lstat(worktreePath).catch(() => null);
+  if (!info?.isFile() || info.isSymbolicLink()) throw new Error('authenticated squash witness is unavailable');
+  return readFile(worktreePath);
+}
+
+async function reconstructAuthenticatedSourceCommit({
+  repoRoot, portalRoot, metadata, headRevision, introducing,
+}) {
+  const bytes = await readSquashWitness(repoRoot, portalRoot, headRevision, metadata.product_build);
+  const entries = parseSquashWitness(bytes, metadata, introducing);
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'portal-squash-witness-'));
+  const indexPath = path.join(temporary, 'index');
+  const gitEnvironment = {GIT_INDEX_FILE: indexPath};
+  try {
+    await execGit(repoRoot, ['read-tree', introducing], {env: gitEnvironment});
+    let sourceIndex = 0;
+    for (const entry of entries) {
+      if (entry.sourceAbsent) {
+        await execGit(repoRoot, ['update-index', '--force-remove', '--', entry.path], {env: gitEnvironment});
+        continue;
+      }
+      const sourcePath = path.join(temporary, `source-${sourceIndex}`);
+      sourceIndex += 1;
+      await writeFile(sourcePath, entry.source);
+      const object = (await execGit(repoRoot, ['hash-object', '-w', sourcePath])).stdout.trim();
+      await execGit(repoRoot, ['update-index', '--add', '--cacheinfo', entry.mode, object, entry.path], {env: gitEnvironment});
+    }
+    const reconstructedTree = (await execGit(repoRoot, ['write-tree'], {env: gitEnvironment})).stdout.trim();
+    if (reconstructedTree !== metadata.source_commit.tree) {
+      throw new Error('squash witness does not reconstruct the authenticated source tree');
+    }
+    const rawCommitPath = path.join(temporary, 'source.commit');
+    await writeFile(rawCommitPath, Buffer.from(metadata.source_commit.raw_base64, 'base64'));
+    const reconstructedCommit = (await execGit(repoRoot, [
+      'hash-object', '-t', 'commit', '-w', rawCommitPath,
+    ])).stdout.trim();
+    if (reconstructedCommit !== metadata.revision) {
+      throw new Error('squash witness does not reconstruct the authenticated source commit');
+    }
+    return reconstructedCommit;
+  } finally {
+    await rm(temporary, {recursive: true, force: true});
+  }
+}
+
+export async function createSquashWitness({repoRoot, metadata, introducingRevision}) {
+  validateRevision(metadata.revision);
+  validateRevision(introducingRevision);
+  authenticateRecordedCommit(metadata.revision, metadata.source_commit);
+  if (!await gitCommitExists(repoRoot, metadata.revision)) {
+    throw new Error(`snapshot revision ${metadata.revision} does not exist`);
+  }
+  if (!await gitCommitExists(repoRoot, introducingRevision)) {
+    throw new Error(`snapshot introducing revision ${introducingRevision} does not exist`);
+  }
+  const changed = Buffer.from((await execGit(repoRoot, [
+    'diff', '--no-renames', '--name-only', '-z', metadata.revision, introducingRevision,
+  ], {buffer: true})).stdout).toString('utf8').split('\0').filter(Boolean).map(validateRelativePath).sort();
+  const entries = [];
+  for (const relative of changed) {
+    const listing = Buffer.from((await execGit(repoRoot, [
+      'ls-tree', '-z', metadata.revision, '--', relative,
+    ], {buffer: true})).stdout).toString('utf8');
+    if (!listing) {
+      entries.push({path: relative, source_absent: true});
+      continue;
+    }
+    const match = /^(100644|100755|120000) blob [0-9a-f]{40}\t([^\0]+)\0$/.exec(listing);
+    if (!match || match[2] !== relative) throw new Error(`unsupported source tree entry for ${relative}`);
+    const source = await gitBlob(repoRoot, metadata.revision, relative);
+    entries.push({path: relative, mode: match[1], source_base64: source.toString('base64')});
+  }
+  return {
+    schema_version: 1,
+    product_build: metadata.product_build,
+    source_revision: metadata.revision,
+    introducing_revision: introducingRevision,
+    source_tree: metadata.source_commit.tree,
+    entries,
+  };
 }
 
 async function worktreeEvidence(root, relative, label) {
@@ -472,15 +622,48 @@ export async function verifySnapshotProvenance({
     }
   }
 
-  const sourceObjectExists = await gitCommitExists(repoRoot, metadata.revision);
-  if (!sourceObjectExists && !postcommit) return [`snapshot revision ${metadata.revision} does not exist`];
-
   let recordedCommit;
   try {
     recordedCommit = authenticateRecordedCommit(metadata.revision, metadata.source_commit);
   } catch (error) {
-    errors.push(sourceObjectExists ? error.message : `snapshot revision ${metadata.revision} does not exist and ${error.message}`);
+    const exists = await gitCommitExists(repoRoot, metadata.revision);
+    errors.push(exists ? error.message : `snapshot revision ${metadata.revision} does not exist and ${error.message}`);
     return errors;
+  }
+  let sourceObjectExists = await gitCommitExists(repoRoot, metadata.revision);
+  if (!sourceObjectExists && !postcommit) return [`snapshot revision ${metadata.revision} does not exist`];
+  let squashRelationError = null;
+
+  if (postcommit && parent !== metadata.revision) {
+    let projectionMatches = false;
+    try {
+      const introducingProjection = await projectionManifest(
+        repoRoot,
+        introducing,
+        metadata.source_projection.files.map((entry) => entry.path),
+      );
+      projectionMatches = sameJson(introducingProjection, metadata.source_projection);
+    } catch {
+      projectionMatches = false;
+    }
+    if (!projectionMatches) {
+      try {
+        await reconstructAuthenticatedSourceCommit({
+          repoRoot, portalRoot, metadata, headRevision, introducing,
+        });
+        sourceObjectExists = true;
+      } catch (error) {
+        if (error.message === 'authenticated squash witness is unavailable') {
+          squashRelationError = 'source projection is neither direct-parent nor squash-equivalent and authenticated squash witness is unavailable';
+        } else {
+          squashRelationError = error.message;
+        }
+        if (sourceObjectExists) {
+          errors.push(squashRelationError);
+          return errors;
+        }
+      }
+    }
   }
   if (sourceObjectExists) {
     try {
@@ -638,19 +821,6 @@ export async function verifySnapshotProvenance({
   if (freezeTime && (Number.isNaN(introducingTime.valueOf()) || freezeTime > introducingTime)) {
     errors.push('snapshot timestamp order must satisfy freeze <= introducing');
   }
-  if (parent !== metadata.revision) {
-    try {
-      const introducingProjection = await projectionManifest(
-        repoRoot,
-        introducing,
-        metadata.source_projection.files.map((entry) => entry.path),
-      );
-      if (!sameJson(introducingProjection, metadata.source_projection)) {
-        errors.push('source projection is neither direct-parent nor squash-equivalent');
-      }
-    } catch {
-      errors.push('source projection is neither direct-parent nor squash-equivalent');
-    }
-  }
+  if (squashRelationError) errors.push(squashRelationError);
   return errors;
 }
