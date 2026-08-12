@@ -13,6 +13,10 @@ permissions:
   pull-requests: read
   actions: read
 
+env:
+  LMDJ_EMSDK_REVISION: dfb9d1a46c3bb8f52e1e6324be23123b9d73c190
+  LMDJ_EMSDK_VERSION: "6.0.5"
+
 concurrency:
   group: ${{ github.event_name == 'pull_request' && format('core-ci-pr-{0}', github.event.pull_request.number) || format('core-ci-sha-{0}', github.sha) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -296,17 +300,30 @@ jobs:
         uses: ./.github/actions/configure-build-acceleration
         with:
           use-ccache: false
+      - name: Restore pinned emsdk
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: build/toolchains/emsdk
+          key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - name: Clone pinned emsdk
+        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
         run: |
           git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
-          git -C build/toolchains/emsdk checkout dfb9d1a46c3bb8f52e1e6324be23123b9d73c190
-      - name: Install and activate Emscripten 6.0.5
-        run: |
-          build/toolchains/emsdk/emsdk install 6.0.5
-          build/toolchains/emsdk/emsdk activate 6.0.5
+          git -C build/toolchains/emsdk checkout "$LMDJ_EMSDK_REVISION"
+      - name: Install pinned Emscripten
+        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
+        run: build/toolchains/emsdk/emsdk install "$LMDJ_EMSDK_VERSION"
+      - name: Activate pinned Emscripten
+        run: build/toolchains/emsdk/emsdk activate "$LMDJ_EMSDK_VERSION"
       - name: Install locked browser runner
         working-directory: tests/platform/web
         run: npm ci
+      - name: Restore Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
       - name: Install Chromium and WebKit
         working-directory: tests/platform/web
         run: npx --no-install playwright install --with-deps chromium webkit
@@ -339,17 +356,30 @@ jobs:
         uses: ./.github/actions/configure-build-acceleration
         with:
           use-ccache: false
+      - name: Restore pinned emsdk
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: build/toolchains/emsdk
+          key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - name: Clone pinned emsdk
+        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
         run: |
           git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
-          git -C build/toolchains/emsdk checkout dfb9d1a46c3bb8f52e1e6324be23123b9d73c190
-      - name: Install and activate Emscripten 6.0.5
-        run: |
-          build/toolchains/emsdk/emsdk install 6.0.5
-          build/toolchains/emsdk/emsdk activate 6.0.5
+          git -C build/toolchains/emsdk checkout "$LMDJ_EMSDK_REVISION"
+      - name: Install pinned Emscripten
+        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
+        run: build/toolchains/emsdk/emsdk install "$LMDJ_EMSDK_VERSION"
+      - name: Activate pinned Emscripten
+        run: build/toolchains/emsdk/emsdk activate "$LMDJ_EMSDK_VERSION"
       - name: Install locked browser runner
         working-directory: tests/platform/web
         run: npm ci
+      - name: Restore Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
       - name: Install Chromium and WebKit
         working-directory: tests/platform/web
         run: npx --no-install playwright install --with-deps chromium webkit
@@ -386,20 +416,33 @@ jobs:
         uses: ./.github/actions/configure-build-acceleration
         with:
           use-ccache: false
+      - name: Restore pinned emsdk
+        id: emsdk-cache
+        uses: actions/cache@v4
+        with:
+          path: build/toolchains/emsdk
+          key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
       - name: Clone pinned emsdk
+        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
         run: |
           git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
-          git -C build/toolchains/emsdk checkout dfb9d1a46c3bb8f52e1e6324be23123b9d73c190
-      - name: Install and activate Emscripten 6.0.5
-        run: |
-          build/toolchains/emsdk/emsdk install 6.0.5
-          build/toolchains/emsdk/emsdk activate 6.0.5
+          git -C build/toolchains/emsdk checkout "$LMDJ_EMSDK_REVISION"
+      - name: Install pinned Emscripten
+        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
+        run: build/toolchains/emsdk/emsdk install "$LMDJ_EMSDK_VERSION"
+      - name: Activate pinned Emscripten
+        run: build/toolchains/emsdk/emsdk activate "$LMDJ_EMSDK_VERSION"
       - name: Install locked Creator dependencies
         working-directory: apps/creator-web
         run: npm ci
       - name: Install locked browser runner
         working-directory: tests/platform/web
         run: npm ci
+      - name: Restore Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
       - name: Install Chromium and WebKit
         working-directory: tests/platform/web
         run: npx --no-install playwright install --with-deps chromium webkit

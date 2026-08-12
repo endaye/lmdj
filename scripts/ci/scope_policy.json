@@ -18,7 +18,7 @@
     "chameleon_lab": ["chameleon-lab"],
     "package": ["select-ubuntu-runner", "package"]
   },
-  "known_top_levels": [".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "tools", "workers"],
+  "known_top_levels": [".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
   "full_rules": [
     {"match": {"kind": "exact", "value": ".gitignore"}, "reason": "shared repository metadata"},
     {"match": {"kind": "exact", "value": "CMakeLists.txt"}, "reason": "root CMake"},
@@ -27,6 +27,7 @@
     {"match": {"kind": "prefix", "value": "contracts/"}, "reason": "contract change"},
     {"match": {"kind": "prefix", "value": "products/lmdj/"}, "reason": "product assembly"},
     {"match": {"kind": "prefix", "value": "workers/"}, "reason": "worker ownership is not safely classified"},
+    {"match": {"kind": "prefix", "value": "third_party/"}, "reason": "vendored build dependency affects every compiled artifact"},
     {"match": {"kind": "exact", "value": ".github/workflows/ci.yml"}, "reason": "central CI control plane"},
     {"match": {"kind": "prefix", "value": "scripts/ci/"}, "reason": "central CI control plane"},
     {"match": {"kind": "prefix", "value": ".github/actions/configure-build-acceleration/"}, "reason": "shared build control plane"},
@@ -36,6 +37,7 @@
     {"match": {"kind": "exact", "value": "tests/build/test_test_taxonomy.py"}, "reason": "test taxonomy"}
   ],
   "rules": [
+    {"match": {"kind": "exact", "value": "LICENSE"}, "lanes": ["docs_static"]},
     {"match": {"kind": "suffix", "value": ".md"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": "docs/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "prefix", "value": "docs/governance/"}, "lanes": ["portal"]},
