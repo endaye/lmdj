@@ -350,7 +350,10 @@ RED→GREEN 逻辑验证（14 项断言，修复前文件恰好 5 项针对性�
 历史结论。实时刷新时 `origin/main` 为 `d1d8bb6`；PR #97/#101/#102/#117/#118
 均已合并，签名 tag `lmdj-v1.0.16.5` 与 `lmdj-v1.0.16.8` 验签通过。当前
 `fix/stage7-review-remediation` 仍是未 push、无 PR、未 merge 的 branch-local
-candidate，因此其 Proof 不是 merged-main Proof。
+candidate。完整自动候选门禁已在 clean revision
+`c44517bc7bde30cea4a40a7cab495a081028eb7e` 通过，但仍不是 merged-main
+Proof；精确命令、工具链身份、结果与未执行的人工表单见
+`docs/release-evidence/2026-08-13-stage7-remediation-canary.md`。
 
 ### D1-D10 correction map
 
@@ -367,13 +370,29 @@ candidate，因此其 Proof 不是 merged-main Proof。
 | D9 | resolved | Creator 对 `HOST_PROTOCOL_MISMATCH`、`IO_ERROR`、`INTERNAL_ERROR` 的 allowlisted 文案/details/transition 测试已由 `0e921be` 增补，恢复归一化由 `ef2b06b` 覆盖。 |
 | D10 | resolved | replacement 前旧 generation 的 Worker/transport、MIDI listener、BroadcastChannel、AudioContext、window lifecycle listener 归零；ownership `767eeae`、packaged Proof `f4722de`。 |
 
+### Candidate automated Proof
+
+Product Build `1.0.18.0` 的 full/stress/coverage/Core Proof、Web Toolchain
+Conformance Proof、Web Runtime Host Proof、Creator Web Proof、完整 Portal check、
+vendored dependency、active-tree 与 version/Assembly Lock 门禁均在上述精确 revision
+通过。Creator packaged Chromium 为 13 passed/1 designed physical-MIDI skip，
+WebKit capability boundary 为 1 passed；自动 Chromium 是 Google Chrome for
+Testing `151.0.7922.34`。这些结果只关闭 branch-local automated candidate
+boundary，不能替代人工听感、实体输入、Safari/iPadOS 或 merged-main Proof。
+
+不可变 `1.0.18.0 · canary` Portal snapshot 绑定 pre-snapshot source revision
+`561fa2d6324d2fe2025eaf692026e5eedcb350bb` 与 Assembly Lock SHA-256
+`3cd490099b7e7f15204d7af719f73bf7983077fe208e7644ce55cdc8c2809407`；
+schema-2 provenance 在测试 revision 上验证通过。证据文档晚于受测 revision，
+不会伪称其 documentation commit 本身已经运行产品 Proof。
+
 ### Still-open completion boundaries
 
 | ID | Status | Current evidence |
 | --- | --- | --- |
-| T1 | open — awaiting human execution | 尚无签署的 Stage 7 手动 canary；physical/hearing/Safari/iPadOS/MIDI 保持 `deferred / unverified`。 |
+| T1 | open — awaiting human execution | 未执行的人工作业表已落档；尚无操作者、浏览器版本、逐步观察、听感或 privacy-safe report hash。physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`。 |
 | G1 | open — requires future merged-main Proof | 历史签名 tag 的 post-merge Proof 记录缺口不由 branch-local remediation Proof 倒推填补；任何新 Product tag 必须先绑定精确 merged `main` revision 重跑 Proof。 |
 
 因此本节只把 D1-D10 标记为已修复；只要 T1 或 G1 仍 open，就不能把 Stage 7 或
-本修复任务报告为最终完成。其余 F/T/G/N 项的最终 closure audit 在候选完整 Proof、
-人工 canary 与获授权的 post-merge 流程后更新，不能提前制造结论。
+本修复任务报告为最终完成。候选完整 Proof 已通过；其余 F/T/G/N 项的最终 closure
+audit 仍须等待人工 canary 与获授权的 post-merge 流程，不能提前制造结论。
