@@ -55,7 +55,7 @@ history):
 
 ## Tasks
 
-### Task 1: Vendor the pinned third-party sources
+### Task 1: Vendor the pinned third-party sources — IMPLEMENTED (`15a798b`)
 
 `scripts/verify-core-dependencies.sh` curls the nlohmann/json release archive
 and fetches PicoSHA2 from `github.com` on every core lane of every run, and
@@ -86,7 +86,7 @@ Files: `third_party/**`, `scripts/verify-core-dependencies.sh`,
 `cmake/LmdjDependencies.cmake`, `scripts/ci/scope_policy.json`,
 `tests/build/test_active_tree.sh`.
 
-### Task 2: Cache toolchains and compiler state on hosted runners
+### Task 2: Cache toolchains and compiler state on hosted runners — IMPLEMENTED without ccache (`dbf4497`)
 
 Every web lane clones emsdk and runs `emsdk install 6.0.5` (hundreds of
 megabytes from GitHub's release infrastructure), then installs Playwright
@@ -100,10 +100,10 @@ Chromium+WebKit, on every run. Hosted core lanes rebuild cold every time.
   Playwright version from the relevant lockfile; keep
   `playwright install --with-deps` as the miss path (`--with-deps` system
   packages still install each run; browsers do not re-download).
-- Enable ccache on hosted core lanes: `use-ccache=true` through the existing
-  `configure-build-acceleration` action backed by `actions/cache` keyed on
-  compiler/preset, with a bounded size. Self-hosted runner-persistent
-  behavior is unchanged.
+- Hosted ccache is **not** implemented. `tests/build/ci_build_acceleration_test.py`
+  pins ccache to the self-hosted lane and asserts `actions/cache` never appears
+  inside the acceleration action, so hosted ccache would require overturning an
+  existing deliberate invariant. Recorded below as an owner decision instead.
 - Determinism boundary: caches supply *inputs* (toolchain, browsers,
   compiler object cache) only. The double-clean-build byte-identity gates in
   the web proofs are unchanged and keep proving that outputs do not depend
@@ -175,10 +175,13 @@ Files: the five test files above.
 - Playwright worker parallelism inside the conformance suites (the 6-minute
   single-worker Project I/O spec is timing-sensitive around fault
   injection; parallelizing risks flakiness for ~4 minutes saved).
-- Re-enabling the contabo runners (operational: before restarting the
-  services, verify `curl -fsSL` of the pinned release URL succeeds from the
-  VM; with Task 1 landed, runner-side github.com health stops mattering for
-  the gates).
+- Re-enabling the contabo runners (operational: with Task 1 landed, runner-side
+  github.com health no longer matters for the dependency gate).
+- Hosted ccache: `ci_build_acceleration_test` currently forbids it, and the
+  value is uncertain on ephemeral runners because the ccache directory must
+  round-trip through `actions/cache` on a parallelism-3 build. Enabling it
+  means changing that contract test, which is an owner decision. The three
+  Ubuntu compile lanes keep today's self-hosted-only behavior.
 
 ## Version Management
 
