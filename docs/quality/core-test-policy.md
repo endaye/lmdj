@@ -155,6 +155,37 @@ and test-owned behavior timeouts remain hard failures. A slow successful job
 stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
 is not retried. `main` and manual dispatch always run the full manifest.
 
+### Local Pre-Flight
+
+`scripts/local-ci.sh` (implemented by `scripts/ci/local_preflight.py` and the
+lane command table `scripts/ci/local_lanes.json`) runs the selected lanes on a
+developer machine before a push. It reuses `scripts/ci/change_scope.py` and
+`scripts/ci/scope_policy.json` directly, so its lane selection is the workflow's
+selection rather than a second opinion, and a contract test asserts the command
+table covers exactly the canonical lane list.
+
+The pre-flight is advisory and is never evidence. It publishes no job result,
+participates in no `needs` graph, and cannot satisfy a manifest-required job.
+`PR Gate` remains the single aggregate decision. Four verdicts are reported:
+`pass`, `cached-pass`, `fail`, and `not-runnable-here`. A lane whose platform,
+toolchain, or working-tree precondition is unmet reports `not-runnable-here`
+and never `pass`; the Linux-only core lanes on macOS and `package` against a
+modified working tree are the ordinary cases.
+
+Cached verdicts are keyed by a digest of the lane name, its resolved commands,
+and the content identity of every repository path the policy maps to that lane.
+Paths that force full mode — shared CMake, Contracts, the CI control plane, and
+any path the policy does not classify — are inputs to every lane, so a shared
+edit cannot leave a stale cached pass behind. A bounded set of recent passing
+states is retained per lane so that reverting an edit returns to a cached pass
+instead of re-running. The cache lives outside the worktree under
+`~/.cache/lmdj/preflight/` and has no path into a CI result.
+
+The command table records, per lane, the CI steps the pre-flight deliberately
+does not reproduce — toolchain provisioning, `actionlint`, LFS fixture
+rehydration, and the Pull Request body the Portal impact check reads. Those
+notes are the declared divergence; anything else diverging is a defect.
+
 ## No-Retry Policy
 
 An automated test runs once per requested command. A failure is evidence to

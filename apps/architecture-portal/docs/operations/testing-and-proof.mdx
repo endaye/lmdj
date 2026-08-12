@@ -49,6 +49,8 @@ Change Scope 和全部 selected lane/support job 的排队与执行时长，以�
 Hosted 用量是预算目标，不是未经验证的保证。观察周必须按 PR updates 与 merges 归一化，把 routine hosted minutes 与旧的无条件 PR/main 矩阵基线对比，分开记录 focused 节省、新增控制/full-main 工作与 Package fallback。Routine hosted minutes 不得持续高于可比基线；任何持续回退都先修正路由或合并 job，无法在不削弱证据的前提下修正时回滚永久迁移，不用增加预算或 retry 掩盖。
 
 本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 commit 的 GitHub required checks。
+
+`scripts/local-ci.sh` 是该预检的稳定入口：它直接调用 `scripts/ci/change_scope.py` 与 `scripts/ci/scope_policy.json`，因此 lane 选择就是 workflow 的选择，而不是第二套判断；契约测试断言命令表恰好覆盖全部 14 个 canonical lane。四种结论是 `pass`、`cached-pass`、`fail` 与 `not-runnable-here`：平台、toolchain 或工作树前置条件不满足的 lane 必须报告 `not-runnable-here`，绝不报告 `pass`，macOS 上的 Linux-only Core lane 与工作树被修改时的 `package` 是常规情形。缓存结论以 lane 名、已解析命令与该 lane 所有输入路径的内容标识做摘要；升级为 full 的路径——共享 CMake、Contract、中央 CI 控制面与任何未分类路径——是每条 lane 的输入，因此共享改动不会留下过期的 cached pass。每条 lane 保留有限个最近通过状态，撤回一次编辑即可回到已证明的状态而无需重跑。缓存位于工作树之外的 `~/.cache/lmdj/preflight/`，没有任何路径进入 CI 结果。命令表按 lane 记录预检刻意不复现的 CI 步骤：toolchain provisioning、`actionlint`、LFS fixture rehydration 与 Portal impact check 读取的 PR body。预检不发布 job result、不参与任何 `needs` 图、不能满足 manifest 要求的 job；`PR Gate` 仍是唯一的聚合裁决，本地通过不授权 push、Pull Request、merge 或任何后续状态转移。
 ## 证据分离
 本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。Product Build `1.0.16.9` 的 Core、Web Toolchain、Diagnostic Host 与 Creator Proof 必须绑定同一可审计 revision；它不继承历史 Build 的 PR、CI 或 merge 结论。匹配 Build 的快照 provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari lifecycle `deferred / unverified`。
 ## 门户责任

@@ -1,0 +1,179 @@
+{
+  "schema": "lmdj.ci-local-lanes.v1",
+  "lanes": {
+    "docs_static": {
+      "requires": {},
+      "commands": [
+        "git diff --check {base} {head}"
+      ],
+      "ci_only": []
+    },
+    "portal": {
+      "requires": {
+        "commands": ["node", "npm"]
+      },
+      "commands": [
+        "scripts/architecture-portal.sh install",
+        "scripts/architecture-portal.sh check"
+      ],
+      "ci_only": [
+        "npm --prefix apps/architecture-portal run check:impact reads the Pull Request body, which does not exist locally"
+      ]
+    },
+    "ci_contract": {
+      "requires": {},
+      "commands": [
+        "python3 -m unittest discover -s tests/build -p 'ci_*_test.py'"
+      ],
+      "ci_only": [
+        "actionlint runs from a pinned release archive the lane downloads"
+      ]
+    },
+    "core_ubuntu": {
+      "requires": {
+        "os": ["linux"]
+      },
+      "commands": [
+        "python3 tests/fixtures/audio/make_fixtures.py",
+        "python3 tests/fixtures/golden/reference_render.py",
+        "bash scripts/verify-core-dependencies.sh",
+        "scripts/core.sh proof"
+      ],
+      "ci_only": [
+        "the Apple-only audio target absence check, which asserts a property of the Ubuntu build itself"
+      ]
+    },
+    "core_asan": {
+      "requires": {
+        "os": ["linux"]
+      },
+      "commands": [
+        "python3 tests/fixtures/audio/make_fixtures.py",
+        "python3 tests/fixtures/golden/reference_render.py",
+        "bash scripts/verify-core-dependencies.sh",
+        "scripts/core.sh configure asan",
+        "scripts/core.sh build asan",
+        "scripts/core.sh test asan full",
+        "scripts/core.sh test asan stress"
+      ],
+      "ci_only": []
+    },
+    "core_coverage": {
+      "requires": {
+        "os": ["linux"],
+        "commands": ["clang-18"]
+      },
+      "commands": [
+        "python3 tests/fixtures/audio/make_fixtures.py",
+        "python3 tests/fixtures/golden/reference_render.py",
+        "bash scripts/verify-core-dependencies.sh",
+        "scripts/core-coverage.sh check"
+      ],
+      "ci_only": [
+        "apt-get installs clang-18 and llvm-18 and pins CC/CXX with /usr/lib/llvm-18/bin on PATH"
+      ]
+    },
+    "core_macos": {
+      "requires": {
+        "os": ["darwin"]
+      },
+      "commands": [
+        "python3 tests/fixtures/audio/make_fixtures.py",
+        "python3 tests/fixtures/golden/reference_render.py",
+        "bash scripts/verify-core-dependencies.sh",
+        "scripts/core.sh proof",
+        "scripts/core.sh configure asan",
+        "scripts/core.sh build asan",
+        "ctest --preset asan -L '^native$' --output-on-failure"
+      ],
+      "ci_only": [
+        "the Apple-only sanitizer target presence check"
+      ]
+    },
+    "web_toolchain": {
+      "requires": {
+        "commands": ["cmake", "node", "npm"],
+        "any_of": [
+          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
+          {"env": "EMSDK"}
+        ]
+      },
+      "commands": [
+        "scripts/web-toolchain-conformance.sh proof"
+      ],
+      "ci_only": [
+        "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist"
+      ]
+    },
+    "web_runtime_host": {
+      "requires": {
+        "commands": ["cmake", "node", "npm"],
+        "any_of": [
+          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
+          {"env": "EMSDK"}
+        ]
+      },
+      "commands": [
+        "python3 tools/web-runtime/verify_emscripten.py",
+        "scripts/web-runtime-host.sh proof"
+      ],
+      "ci_only": [
+        "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist",
+        "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
+      ]
+    },
+    "creator": {
+      "requires": {
+        "commands": ["cmake", "node", "npm"],
+        "any_of": [
+          {"path": "build/toolchains/emsdk/emsdk_env.sh"},
+          {"env": "EMSDK"}
+        ]
+      },
+      "commands": [
+        "scripts/creator-web.sh proof"
+      ],
+      "ci_only": [
+        "emsdk install/activate and playwright install --with-deps provision the toolchain the local run expects to already exist",
+        "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
+      ]
+    },
+    "web_runtime_lab": {
+      "requires": {
+        "commands": ["node", "npm"]
+      },
+      "commands": [
+        "scripts/web-runtime-lab.sh test"
+      ],
+      "ci_only": []
+    },
+    "deploy_contract": {
+      "requires": {},
+      "commands": [
+        "python3 tests/build/web_runtime_deploy_workflow_test.py",
+        "python3 tests/build/web_runtime_public_deployment_docs_test.py"
+      ],
+      "ci_only": []
+    },
+    "chameleon_lab": {
+      "requires": {
+        "commands": ["node", "npm"]
+      },
+      "commands": [
+        "scripts/chameleon-lab.sh test"
+      ],
+      "ci_only": []
+    },
+    "package": {
+      "requires": {
+        "clean_worktree": true
+      },
+      "commands": [
+        "scripts/core.sh package"
+      ],
+      "ci_only": [
+        "git lfs checkout -- tests/fixtures/audio rehydrates the deterministic audio fixtures"
+      ]
+    }
+  }
+}

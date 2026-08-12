@@ -101,6 +101,7 @@
     {"match": {"kind": "exact", "value": "scripts/chameleon-lab.sh"}, "lanes": ["chameleon_lab"]},
     {"match": {"kind": "exact", "value": "scripts/architecture-portal.sh"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "scripts/web-runtime-deploy.sh"}, "lanes": ["deploy_contract"]},
+    {"match": {"kind": "exact", "value": "scripts/local-ci.sh"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "exact", "value": "scripts/version.py"}, "lanes": ["core_ubuntu", "package"]},
     {"match": {"kind": "exact", "value": "scripts/package-core.py"}, "lanes": ["core_ubuntu", "package"]},
     {"match": {"kind": "prefix", "value": "tests/core/audio/"}, "lanes": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
