@@ -38,13 +38,13 @@ test("Python subprocess environment preserves loader paths but omits credentials
   );
 });
 
-test("assembled Netlify headers cache only the nine manifest assets immutably", async () => {
+test("assembled Netlify headers cache every manifest asset immutably", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "lmdj-netlify-headers-"));
   try {
     const dist = path.join(root, "dist");
     const assetsRoot = path.join(dist, "assets");
     await mkdir(assetsRoot, { recursive: true });
-    const assets = Array.from({ length: 9 }, (_, index) => ({
+    const assets = Array.from({ length: 13 }, (_, index) => ({
       bytes: 1,
       path: `assets/asset-${index}.${String(index).repeat(64)}.mjs`,
       role: "host_module",

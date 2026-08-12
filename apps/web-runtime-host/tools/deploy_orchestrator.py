@@ -297,7 +297,7 @@ def collect_deploy_files(dist_root: Path, headers_path: Path) -> dict[str, bytes
 
 
 def render_deploy_headers(dist_root: Path, headers_path: Path) -> bytes:
-    """Append immutable cache rules for only the manifest-authorized nine assets."""
+    """Append immutable cache rules for every manifest-authorized asset."""
     try:
         dist_root = dist_root.resolve(strict=True)
         headers_path = headers_path.resolve(strict=True)
@@ -315,7 +315,7 @@ def render_deploy_headers(dist_root: Path, headers_path: Path) -> bytes:
         or re.search(r"^/assets/\*$", base, re.MULTILINE) is not None
         or not isinstance(manifest, dict)
         or not isinstance(manifest.get("assets"), list)
-        or len(manifest["assets"]) != 9
+        or not manifest["assets"]
     ):
         raise DeployOrchestratorError("Netlify response rules are invalid")
     paths: list[str] = []
