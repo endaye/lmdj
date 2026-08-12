@@ -9,6 +9,51 @@ import type {
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
+export interface ProjectActionToken {
+  readonly generation: number;
+  readonly session: CreatorRuntimeSession;
+}
+
+export interface ProjectActionLane {
+  claim(session: CreatorRuntimeSession): ProjectActionToken | null;
+  owns(
+    token: ProjectActionToken,
+    session: CreatorRuntimeSession,
+  ): boolean;
+  finish(token: ProjectActionToken): void;
+  invalidate(): void;
+  readonly busy: boolean;
+}
+
+export function createProjectActionLane(): ProjectActionLane {
+  let generation = 0;
+  let active: ProjectActionToken | null = null;
+  return Object.freeze({
+    claim(session: CreatorRuntimeSession) {
+      if (active !== null) return null;
+      active = Object.freeze({generation: ++generation, session});
+      return active;
+    },
+    owns(token: ProjectActionToken, session: CreatorRuntimeSession) {
+      return active === token &&
+        token.generation === generation &&
+        token.session === session;
+    },
+    finish(token: ProjectActionToken) {
+      if (active === token && token.generation === generation) {
+        active = null;
+      }
+    },
+    invalidate() {
+      generation += 1;
+      active = null;
+    },
+    get busy() {
+      return active !== null;
+    },
+  });
+}
+
 function protocolMismatch(message: string): Error & {code: string} {
   return Object.assign(new Error(message), {code: "HOST_PROTOCOL_MISMATCH"});
 }

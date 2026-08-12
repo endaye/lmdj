@@ -71,6 +71,7 @@ export function ProjectSurface({
         <dl className="project-summary">
           <div><dt>Project ID</dt><dd>{project.projectId}</dd></div>
           <div><dt>Revision</dt><dd>{project.revision}</dd></div>
+          <div><dt>BPM</dt><dd>{project.bpm}</dd></div>
           <div><dt>Assigned Pads</dt><dd>{project.assignedPadCount} / 64</dd></div>
           <div><dt>Assets</dt><dd>{project.assetCount}</dd></div>
         </dl>

@@ -11,9 +11,11 @@ import {
   serializeAcceptanceReport,
 } from "./report/acceptance_report";
 import {
+  createProjectActionLane,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
+  type ProjectActionToken,
 } from "./runtime/project_actions";
 import {createCreatorInputController} from "./runtime/input_controller";
 import {
@@ -46,18 +48,15 @@ interface WorkspaceProps {
   session?: CreatorRuntimeSession;
   runtimePhase?: RuntimeProviderPhase;
   runtimeErrorCode?: string | null;
+  runtimeErrorDetails?: Readonly<Record<string, unknown>> | undefined;
   runtimeHostState?: string;
   runtimeRecoveryProbeReady?: boolean;
+  onRetryRuntime?: () => void;
 }
 
 type BusyRetry =
   | {kind: "list"}
   | {kind: "open"; project: LocalProjectSummary};
-
-interface ProjectActionToken {
-  readonly epoch: number;
-  readonly session: CreatorRuntimeSession;
-}
 
 function errorCode(error: unknown): string {
   if (error instanceof DOMException && error.name === "AbortError") {
@@ -66,28 +65,35 @@ function errorCode(error: unknown): string {
   return (error as TypedRuntimeError | null)?.code ?? "INTERNAL_ERROR";
 }
 
+function errorDetails(error: unknown): Readonly<Record<string, unknown>> {
+  const details = (error as TypedRuntimeError | null)?.details;
+  return details !== null && typeof details === "object" && !Array.isArray(details)
+    ? details
+    : {};
+}
+
 function Workspace({
   initialState,
   session,
   runtimePhase,
   runtimeErrorCode,
+  runtimeErrorDetails,
   runtimeHostState,
   runtimeRecoveryProbeReady,
+  onRetryRuntime,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const importController = useRef<AbortController | null>(null);
-  const projectAction = useRef<ProjectActionToken | null>(null);
-  const projectActionEpoch = useRef(0);
+  const projectActions = useRef(createProjectActionLane()).current;
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const stateRef = useRef(state);
   stateRef.current = state;
 
   useEffect(() => () => {
-    projectActionEpoch.current += 1;
-    projectAction.current = null;
+    projectActions.invalidate();
     importController.current?.abort();
     importController.current = null;
   }, [session]);
@@ -136,6 +142,7 @@ function Workspace({
       type: "runtime-changed",
       phase: runtimePhase,
       errorCode: runtimeErrorCode ?? null,
+      errorDetails: runtimeErrorDetails ?? {},
     });
     if (runtimePhase !== "ready") return;
     let active = true;
@@ -147,18 +154,29 @@ function Workspace({
         dispatch({type: "projects-loaded", projects});
         const retained = stateRef.current.project.current;
         if (!retained) return;
+        const token = beginProjectAction("open", false);
+        if (!token) return;
+        dispatch({type: "project-opening"});
         const summary = projects.find(({projectId, patternId}) =>
           projectId === retained.projectId && patternId === retained.patternId);
         if (!summary) {
-          dispatch({type: "project-error", errorCode: "NOT_FOUND"});
+          if (active && ownsProjectAction(token)) {
+            dispatch({type: "project-error", errorCode: "NOT_FOUND"});
+          }
+          finishProjectAction(token);
           return;
         }
-        dispatch({type: "project-opening"});
         try {
-          const project = await openProjectJourney(session, summary);
-          if (active) dispatch({type: "project-ready", project});
+          const project = await openProjectJourney(token.session, summary);
+          if (active && ownsProjectAction(token)) {
+            dispatch({type: "project-ready", project});
+          }
         } catch (error) {
-          if (active) reportProjectError(error, {kind: "open", project: summary});
+          if (active && ownsProjectAction(token)) {
+            reportProjectError(error, {kind: "open", project: summary});
+          }
+        } finally {
+          finishProjectAction(token);
         }
       },
       (error: unknown) => {
@@ -166,16 +184,36 @@ function Workspace({
         const code = errorCode(error);
         setBusyRetry(code === "PROJECT_BUSY" ? {kind: "list"} : null);
         if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
-          dispatch({type: "runtime-changed", phase: "restart-required", errorCode: code});
+          dispatch({
+            type: "runtime-changed",
+            phase: "restart-required",
+            errorCode: code,
+            errorDetails: errorDetails(error),
+          });
         } else if (code === "UNSUPPORTED_WEB_RUNTIME") {
-          dispatch({type: "runtime-changed", phase: "unsupported", errorCode: code});
+          dispatch({
+            type: "runtime-changed",
+            phase: "unsupported",
+            errorCode: code,
+            errorDetails: errorDetails(error),
+          });
         } else {
-          dispatch({type: "project-error", errorCode: code});
+          dispatch({
+            type: "project-error",
+            errorCode: code,
+            errorDetails: errorDetails(error),
+          });
         }
       },
     );
     return () => { active = false; };
-  }, [session, runtimePhase, runtimeErrorCode, listAttempt]);
+  }, [
+    session,
+    runtimePhase,
+    runtimeErrorCode,
+    runtimeErrorDetails,
+    listAttempt,
+  ]);
 
   const reportProjectError = (
     error: unknown,
@@ -183,37 +221,39 @@ function Workspace({
   ) => {
     if (error instanceof DOMException && error.name === "AbortError") return;
     const code = errorCode(error);
+    const details = errorDetails(error);
     setBusyRetry(code === "PROJECT_BUSY" ? retry : null);
     if (code === "HOST_RESTART_REQUIRED" || code === "HOST_TIMEOUT") {
-      dispatch({type: "runtime-changed", phase: "restart-required", errorCode: code});
+      dispatch({
+        type: "runtime-changed",
+        phase: "restart-required",
+        errorCode: code,
+        errorDetails: details,
+      });
       return;
     }
-    dispatch({type: "project-error", errorCode: code});
+    dispatch({type: "project-error", errorCode: code, errorDetails: details});
   };
 
   const beginProjectAction = (
     kind: "open" | "import",
+    requireSelector = true,
   ): ProjectActionToken | null => {
-    if (!session || projectAction.current !== null) return null;
-    const allowed = kind === "open"
-      ? selectCanOpenProject(stateRef.current)
-      : selectCanImportProject(stateRef.current);
-    if (!allowed) return null;
-    const token = Object.freeze({
-      epoch: ++projectActionEpoch.current,
-      session,
-    });
-    projectAction.current = token;
-    return token;
+    if (!session || projectActions.busy) return null;
+    if (requireSelector) {
+      const allowed = kind === "open"
+        ? selectCanOpenProject(stateRef.current)
+        : selectCanImportProject(stateRef.current);
+      if (!allowed) return null;
+    }
+    return projectActions.claim(session);
   };
 
   const ownsProjectAction = (token: ProjectActionToken): boolean =>
-    projectAction.current === token &&
-    projectActionEpoch.current === token.epoch &&
-    token.session === session;
+    session !== undefined && projectActions.owns(token, session);
 
   const finishProjectAction = (token: ProjectActionToken) => {
-    if (ownsProjectAction(token)) projectAction.current = null;
+    if (ownsProjectAction(token)) projectActions.finish(token);
   };
 
   const openProject = async (summary: LocalProjectSummary) => {
@@ -281,6 +321,7 @@ function Workspace({
         if (diagnostics.error_code) {
           reportProjectError(Object.assign(new Error(diagnostics.error_code), {
             code: diagnostics.error_code,
+            details: diagnostics.error_details,
           }));
         } else {
           dispatch({type: "audio-changed", phase: "inactive"});
@@ -289,8 +330,8 @@ function Workspace({
         dispatch({type: "audio-changed", phase: "running"});
       }
     } catch (error) {
-      dispatch({type: "audio-changed", phase: "inactive"});
       if (!(error instanceof TypeError)) reportProjectError(error);
+      dispatch({type: "audio-changed", phase: "inactive"});
     }
   };
 
@@ -330,10 +371,10 @@ function Workspace({
   };
 
   const canOpenProject = session !== undefined &&
-    projectAction.current === null &&
+    !projectActions.busy &&
     selectCanOpenProject(state);
   const canImportProject = session !== undefined &&
-    projectAction.current === null &&
+    !projectActions.busy &&
     selectCanImportProject(state);
 
   return (
@@ -374,8 +415,9 @@ function Workspace({
       </section>
       <ErrorPanel
         code={state.runtime.errorCode}
+        details={state.runtime.errorDetails}
         {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
-          ? {onRetry: () => {
+          ? {onRetryProject: () => {
               if (busyRetry.kind === "list") {
                 setListAttempt((attempt) => attempt + 1);
               } else {
@@ -383,6 +425,10 @@ function Workspace({
               }
             }}
           : {})}
+        {...(state.runtime.errorCode === "HOST_RESTART_REQUIRED" ||
+          state.runtime.errorCode === "HOST_TIMEOUT") && onRetryRuntime
+          ? {onRetryRuntime}
+          : {}}
       />
     </div>
   );
@@ -396,8 +442,10 @@ function ManagedWorkspace({initialState}: {initialState: CreatorState}) {
       session={runtime.session}
       runtimePhase={runtime.phase}
       runtimeErrorCode={runtime.errorCode}
+      runtimeErrorDetails={runtime.issue?.details}
       runtimeHostState={runtime.hostState}
       runtimeRecoveryProbeReady={runtime.recoveryProbeReady}
+      onRetryRuntime={runtime.retryRuntime}
     />
   );
 }

@@ -273,6 +273,8 @@ test("lists, opens, and imports through the injected Runtime Session", async () 
   expect(fixture.calls).toEqual(["start", "listLocalProjects"]);
   await user.click(open);
   await screen.findByRole("heading", {name: "Project 11111111"});
+  expect(screen.getAllByText("BPM").at(-1)?.nextElementSibling?.textContent)
+    .toBe("120");
   expect(fixture.calls).toEqual([
     "start",
     "listLocalProjects",
@@ -305,8 +307,9 @@ test("presents Project busy with an explicit retry", async () => {
     },
   });
   render(<App runtimeFactory={() => fixture.session} />);
-  expect((await screen.findByRole("alert")).textContent).toContain("PROJECT_BUSY");
-  await user.click(screen.getByRole("button", {name: "Retry"}));
+  expect((await screen.findByRole("alert")).textContent)
+    .toContain("The local Project is busy in another tab or process.");
+  await user.click(screen.getByRole("button", {name: "Retry project"}));
   await screen.findByText("No local Project is open.");
   expect(attempts).toBe(2);
 });
@@ -329,10 +332,10 @@ test("retries a busy Project open only after the visible Retry action", async ()
     name: "Open Project 11111111",
   }));
   expect((await screen.findByRole("alert")).textContent)
-    .toContain("PROJECT_BUSY");
+    .toContain("The local Project is busy in another tab or process.");
   expect(openAttempts).toBe(1);
 
-  await user.click(screen.getByRole("button", {name: "Retry"}));
+  await user.click(screen.getByRole("button", {name: "Retry project"}));
   await screen.findByRole("heading", {name: "Project 11111111"});
   expect(fixture.calls.filter((call) => call === "listLocalProjects"))
     .toHaveLength(1);
@@ -340,15 +343,30 @@ test("retries a busy Project open only after the visible Retry action", async ()
 });
 
 test.each([
-  "INVALID_PROJECT",
-  "DUPLICATE_ID",
-  "WEB_RUNTIME_RESOURCE_LIMIT",
-  "HOST_RESTART_REQUIRED",
-])("presents a safe typed %s import failure without exposing the filename", async (code) => {
+  ["INVALID_PROJECT", {}, "The Project Bundle is invalid."],
+  ["DUPLICATE_ID", {}, "The Project conflicts with existing local data."],
+  ["WEB_RUNTIME_RESOURCE_LIMIT", {
+    resource: "decoded_frames_per_pad", observed: 240001, limit: 240000,
+  }, "decoded_frames_per_pad: observed 240001, limit 240000."],
+  ["IO_ERROR", {storage_condition: "quota_exceeded"},
+    "Storage condition: quota_exceeded."],
+  ["HOST_PROTOCOL_MISMATCH", {},
+    "Creator and Runtime could not verify a compatible protocol."],
+  ["INTERNAL_ERROR", {}, "Creator encountered an internal failure."],
+  ["HOST_RESTART_REQUIRED", {terminal_state: "restart-required"},
+    "Runtime must be restarted before continuing."],
+] as const)("presents a safe typed %s import failure without exposing private detail", async (
+  code,
+  details,
+  visible,
+) => {
   const user = userEvent.setup();
   const fixture = runtimeFixture({
     importProject: async () => {
-      throw Object.assign(new Error("private implementation detail"), {code});
+      throw Object.assign(new Error("/Users/private/private-name.lmdj"), {
+        code,
+        details,
+      });
     },
   });
   const {container} = render(<App runtimeFactory={() => fixture.session} />);
@@ -356,9 +374,11 @@ test.each([
   const input = container.querySelector<HTMLInputElement>('input[type="file"]');
   await user.upload(input!, new File(["bundle"], "private-name.lmdj"));
 
-  expect((await screen.findByRole("alert")).textContent).toContain(code);
+  expect((await screen.findByRole("alert")).textContent).toContain(visible);
+  expect(screen.getByRole("alert").textContent).not.toContain("/Users/private");
   expect(screen.queryByText("private-name.lmdj")).toBeNull();
   if (code === "HOST_RESTART_REQUIRED") {
     expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
+    expect(screen.getByRole("button", {name: "Retry runtime"})).toBeTruthy();
   }
 });

@@ -43,6 +43,7 @@ export interface CreatorState {
       | "failed"
       | "closed";
     errorCode: string | null;
+    errorDetails?: Readonly<Record<string, unknown>>;
   };
   audio: {
     phase: "inactive" | "activating" | "recovering" | "running" | "suspended";
@@ -61,12 +62,17 @@ export type CreatorAction =
       type: "runtime-changed";
       phase: CreatorState["runtime"]["phase"];
       errorCode: string | null;
+      errorDetails?: Readonly<Record<string, unknown>>;
     }
   | {type: "projects-listing"}
   | {type: "projects-loaded"; projects: LocalProjectSummary[]}
   | {type: "project-opening"}
   | {type: "project-ready"; project: ProjectView}
-  | {type: "project-error"; errorCode: string}
+  | {
+      type: "project-error";
+      errorCode: string;
+      errorDetails?: Readonly<Record<string, unknown>>;
+    }
   | {type: "transfer-started"; totalBytes: number}
   | {type: "transfer-progressed"; completedBytes: number}
   | {type: "transfer-ended"}
@@ -85,6 +91,7 @@ export const initialCreatorState: CreatorState = {
   runtime: {
     phase: "booting",
     errorCode: null,
+    errorDetails: {},
   },
   audio: {
     phase: "inactive",
@@ -98,21 +105,112 @@ export const initialCreatorState: CreatorState = {
   pressed: new Map(),
 };
 
+function hasReadyProject(state: CreatorState): boolean {
+  return state.project.phase === "ready" && state.project.current !== null;
+}
+
+export function isCreatorActionAllowed(
+  state: CreatorState,
+  action: CreatorAction,
+): boolean {
+  switch (action.type) {
+    case "runtime-changed":
+      return true;
+    case "projects-listing":
+      return state.runtime.phase === "ready" &&
+        state.transfer.phase === "idle" &&
+        state.project.phase !== "opening";
+    case "projects-loaded":
+      return state.runtime.phase === "ready" && state.project.phase === "listing";
+    case "project-opening":
+      return state.runtime.phase === "ready" &&
+        state.transfer.phase === "idle" &&
+        ["empty", "ready", "error"].includes(state.project.phase);
+    case "project-ready":
+      return state.runtime.phase === "ready" &&
+        (state.project.phase === "opening" || state.transfer.phase === "importing");
+    case "project-error":
+      return state.runtime.phase === "ready" && (
+        state.project.phase === "listing" ||
+        state.project.phase === "opening" ||
+        state.transfer.phase === "importing" ||
+        state.audio.phase === "activating"
+      );
+    case "transfer-started":
+      return selectCanImportProject(state) &&
+        Number.isSafeInteger(action.totalBytes) && action.totalBytes >= 0;
+    case "transfer-progressed":
+      return state.transfer.phase === "importing" &&
+        Number.isSafeInteger(action.completedBytes) &&
+        action.completedBytes >= state.transfer.completedBytes &&
+        action.completedBytes <= state.transfer.totalBytes;
+    case "transfer-ended":
+      return state.transfer.phase === "importing";
+    case "audio-changed":
+      if (action.phase === "inactive") {
+        return state.audio.phase !== "inactive";
+      }
+      if (action.phase === "activating") {
+        return selectCanActivateAudio(state);
+      }
+      if (action.phase === "recovering") {
+        return state.runtime.phase === "ready" && hasReadyProject(state) &&
+          state.transfer.phase === "idle" && state.audio.phase === "suspended";
+      }
+      if (action.phase === "running") {
+        return state.runtime.phase === "ready" && hasReadyProject(state) &&
+          state.transfer.phase === "idle" &&
+          ["inactive", "activating", "recovering", "suspended"]
+            .includes(state.audio.phase);
+      }
+      return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        state.transfer.phase === "idle" &&
+        ["activating", "recovering", "running"].includes(state.audio.phase);
+    case "bank-selected":
+      return state.runtime.phase === "ready" && hasReadyProject(state) &&
+        state.transfer.phase === "idle";
+    case "pad-pressed": {
+      if (!selectCanTrigger(state)) return false;
+      const firstSlot = state.activeBank * 16;
+      if (
+        action.slot < firstSlot ||
+        action.slot >= firstSlot + 16 ||
+        state.project.current?.pads[action.slot]?.assetId == null
+      ) {
+        return false;
+      }
+      const current = state.pressed.get(action.slot);
+      return action.outcome === "admitted"
+        ? current === undefined
+        : current === "admitted";
+    }
+    case "pad-released":
+      return state.pressed.has(action.slot);
+    case "pressed-cleared":
+      return true;
+  }
+}
+
 export function creatorReducer(
   state: CreatorState,
   action: CreatorAction,
 ): CreatorState {
+  if (!isCreatorActionAllowed(state, action)) return state;
   switch (action.type) {
     case "runtime-changed":
       return {
         ...state,
-        runtime: {phase: action.phase, errorCode: action.errorCode},
+        runtime: {
+          phase: action.phase,
+          errorCode: action.errorCode,
+          errorDetails: action.errorDetails ?? {},
+        },
       };
     case "projects-listing":
       return {
         ...state,
         project: {...state.project, phase: "listing"},
-        runtime: {...state.runtime, errorCode: null},
+        runtime: {...state.runtime, errorCode: null, errorDetails: {}},
       };
     case "projects-loaded":
       return {
@@ -122,26 +220,30 @@ export function creatorReducer(
           projects: [...action.projects],
           current: state.project.current,
         },
-        runtime: {...state.runtime, errorCode: null},
+        runtime: {...state.runtime, errorCode: null, errorDetails: {}},
       };
     case "project-opening":
       return {
         ...state,
         project: {...state.project, phase: "opening"},
-        runtime: {...state.runtime, errorCode: null},
+        runtime: {...state.runtime, errorCode: null, errorDetails: {}},
       };
     case "project-ready":
       return {
         ...state,
         project: {...state.project, phase: "ready", current: action.project},
-        runtime: {...state.runtime, errorCode: null},
+        runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         audio: {phase: "inactive"},
       };
     case "project-error":
       return {
         ...state,
         project: {...state.project, phase: "error"},
-        runtime: {...state.runtime, errorCode: action.errorCode},
+        runtime: {
+          ...state.runtime,
+          errorCode: action.errorCode,
+          errorDetails: action.errorDetails ?? {},
+        },
       };
     case "transfer-started":
       return {
@@ -177,7 +279,7 @@ export function creatorReducer(
       return {...state, pressed};
     }
     case "pressed-cleared":
-      return {...state, pressed: new Map()};
+      return state.pressed.size === 0 ? state : {...state, pressed: new Map()};
   }
 }
 

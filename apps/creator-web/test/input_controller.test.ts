@@ -55,7 +55,29 @@ function fixture() {
   const outcomeListeners = new Set<(outcome: RuntimeOutcome) => void>();
   const hostListeners = new Set<(state: RuntimeHostState) => void>();
   let nextSequence = 1;
-  let state: CreatorState = initialCreatorState;
+  let state: CreatorState = {
+    ...initialCreatorState,
+    project: {
+      phase: "ready",
+      projects: [],
+      current: {
+        projectId: "11111111-1111-4111-8111-111111111111",
+        patternId: "22222222-2222-4222-8222-222222222222",
+        revision: 1,
+        bpm: 120,
+        assetCount: 64,
+        assignedPadCount: 64,
+        bundleDigest: "a".repeat(64),
+        key: "—",
+        pads: Array.from({length: 64}, (_, slot) => ({
+          slot,
+          assetId: `asset-${slot}`,
+        })),
+      },
+    },
+    runtime: {phase: "ready", errorCode: null},
+    audio: {phase: "running"},
+  };
   const actions: CreatorAction[] = [];
   const session: CreatorRuntimeSession = {
     start: async () => true,
@@ -109,6 +131,9 @@ function fixture() {
     },
     actions,
     state: () => state,
+    selectBank(bank: 0 | 1 | 2 | 3) {
+      state = creatorReducer(state, {type: "bank-selected", bank});
+    },
     outcome(outcome: RuntimeOutcome) {
       for (const listener of outcomeListeners) listener(outcome);
     },
@@ -124,6 +149,7 @@ describe("Creator input controller", () => {
   test("maps physical keys through the current Bank and follows admission/outcome", async () => {
     const value = fixture();
     let bank: 0 | 1 | 2 | 3 = 2;
+    value.selectBank(bank);
     const controller = createCreatorInputController({
       session: value.session,
       getActiveBank: () => bank,
@@ -145,6 +171,7 @@ describe("Creator input controller", () => {
     expect(value.state().pressed.has(32)).toBe(false);
 
     bank = 3;
+    value.selectBank(bank);
     expect(controller.keyDown({code: "KeyA", repeat: false, target: document.body})).toBe(true);
     await settle();
     expect(value.triggers.at(-1)?.slot).toBe(48);
@@ -186,6 +213,7 @@ describe("Creator input controller", () => {
     const input = fakeMidiInput();
     const access = fakeMidiAccess(input);
     let bank: 0 | 1 | 2 | 3 = 1;
+    value.selectBank(bank);
     const controller = createCreatorInputController({
       session: value.session,
       getActiveBank: () => bank,
@@ -204,6 +232,7 @@ describe("Creator input controller", () => {
     expect(value.state().pressed.has(16)).toBe(false);
 
     bank = 2;
+    value.selectBank(bank);
     input.emit([0x90, 36, 91]);
     await settle();
     expect(value.triggers.at(-1)).toEqual({slot: 32, velocity: 91, source: "midi"});

@@ -1,6 +1,7 @@
 import {describe, expect, test} from "vitest";
 
 import {
+  createProjectActionLane,
   importProjectJourney,
   listLocalProjectsJourney,
   openProjectJourney,
@@ -100,6 +101,23 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
 }
 
 describe("Project journeys", () => {
+  test("serializes one generation-scoped Project action and rejects stale owners", () => {
+    const first = sessionFixture().session;
+    const second = sessionFixture().session;
+    const lane = createProjectActionLane();
+    const token = lane.claim(first);
+    expect(token).not.toBeNull();
+    expect(lane.claim(first)).toBeNull();
+    expect(lane.owns(token!, first)).toBe(true);
+    expect(lane.owns(token!, second)).toBe(false);
+    lane.invalidate();
+    expect(lane.owns(token!, first)).toBe(false);
+    const replacement = lane.claim(second);
+    expect(lane.owns(replacement!, second)).toBe(true);
+    lane.finish(replacement!);
+    expect(lane.busy).toBe(false);
+  });
+
   test("sorts the local inventory and preserves an empty inventory", async () => {
     const second = {...summary, projectId: "00000000-0000-4000-8000-000000000002"};
     const first = {...summary, projectId: "00000000-0000-4000-8000-000000000001"};

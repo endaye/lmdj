@@ -162,6 +162,41 @@ test("suspend stays explicit and restart rebuilds, lists, and reopens without au
   expect(screen.getByTestId("audio-state").textContent).toBe("Audio inactive");
 });
 
+test("automatic reopen owns the same Project action lane until completion", async () => {
+  const user = userEvent.setup();
+  const first = sessionFixture("lane-first");
+  const second = sessionFixture("lane-second");
+  let finishReopen: (() => void) | undefined;
+  const reopen = new Promise<void>((resolve) => { finishReopen = resolve; });
+  second.session.openProject = async () => {
+    second.calls.push("lane-second:open");
+    await reopen;
+    return {};
+  };
+  const sessions = [first, second];
+  let creations = 0;
+  render(<App runtimeFactory={() => sessions[creations++]!.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  first.emit({
+    state: "restart-required",
+    errorCode: "HOST_RESTART_REQUIRED",
+  });
+  await waitFor(() => expect(second.calls).toContain("lane-second:open"));
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(true);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
+    .toBe(true);
+
+  finishReopen?.();
+  await waitFor(() => expect(second.calls).toContain("lane-second:reload"));
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(false);
+});
+
 test("a failed Runtime Session start never becomes ready", async () => {
   const failed = sessionFixture("failed");
   failed.session.start = async () => false;

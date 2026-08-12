@@ -3,11 +3,13 @@ import {describe, expect, test} from "vitest";
 import {
   creatorReducer,
   initialCreatorState,
+  isCreatorActionAllowed,
   selectCanActivateAudio,
   selectCanTrigger,
   selectCreatorPhase,
   selectVisiblePads,
   type CreatorState,
+  type CreatorAction,
   type ProjectView,
 } from "../src/state/creator_state";
 
@@ -82,10 +84,14 @@ describe("Creator state", () => {
     expect(selectVisiblePads(bankC).map(({slot}) => slot)).toEqual(
       Array.from({length: 16}, (_, index) => 32 + index),
     );
-    const pressed = creatorReducer(bankC, {
+    const running = {
+      ...bankC,
+      audio: {phase: "running"} as const,
+    };
+    const pressed = creatorReducer(running, {
       type: "pad-pressed", slot: 32, outcome: "admitted",
     });
-    expect(bankC.pressed.has(32)).toBe(false);
+    expect(running.pressed.has(32)).toBe(false);
     expect(pressed.pressed.get(32)).toBe("admitted");
     const released = creatorReducer(pressed, {type: "pad-released", slot: 32});
     expect(released.pressed.has(32)).toBe(false);
@@ -102,5 +108,58 @@ describe("Creator state", () => {
       ...running,
       transfer: {phase: "importing", completedBytes: 0, totalBytes: 1},
     })).toBe(false);
+  });
+
+  test.each<[string, CreatorState, CreatorAction]>([
+    ["list while Runtime is booting", initialCreatorState, {type: "projects-listing"}],
+    ["load before listing", readyState(), {type: "projects-loaded", projects: []}],
+    ["open while listing", {
+      ...readyState(), project: {...readyState().project, phase: "listing"},
+    }, {type: "project-opening"}],
+    ["publish Project before open or import", readyState(), {
+      type: "project-ready", project,
+    }],
+    ["report Project error while idle", readyState(), {
+      type: "project-error", errorCode: "IO_ERROR",
+    }],
+    ["start transfer while audio runs", {
+      ...readyState(), audio: {phase: "running"},
+    }, {type: "transfer-started", totalBytes: 8}],
+    ["progress outside transfer", readyState(), {
+      type: "transfer-progressed", completedBytes: 4,
+    }],
+    ["end absent transfer", readyState(), {type: "transfer-ended"}],
+    ["activate without Project", {
+      ...readyState(), project: {phase: "empty", projects: [], current: null},
+    }, {type: "audio-changed", phase: "activating"}],
+    ["recover without suspend", readyState(), {
+      type: "audio-changed", phase: "recovering",
+    }],
+    ["select Bank while importing", {
+      ...readyState(),
+      transfer: {phase: "importing", completedBytes: 0, totalBytes: 8},
+    }, {type: "bank-selected", bank: 1}],
+    ["press while audio is inactive", readyState(), {
+      type: "pad-pressed", slot: 0, outcome: "admitted",
+    }],
+    ["release a Pad that is not pressed", readyState(), {
+      type: "pad-released", slot: 0,
+    }],
+  ])("rejects illegal %s from the reducer boundary", (_name, state, action) => {
+    expect(isCreatorActionAllowed(state, action)).toBe(false);
+    expect(creatorReducer(state, action)).toBe(state);
+  });
+
+  test("keeps lifecycle cleanup legal after the Runtime becomes terminal", () => {
+    const state: CreatorState = {
+      ...readyState(),
+      runtime: {phase: "restart-required", errorCode: "HOST_TIMEOUT"},
+      transfer: {phase: "importing", completedBytes: 4, totalBytes: 8},
+      pressed: new Map([[0, "admitted"]]),
+    };
+    const cleared = creatorReducer(state, {type: "pressed-cleared"});
+    expect(cleared.pressed.size).toBe(0);
+    const ended = creatorReducer(cleared, {type: "transfer-ended"});
+    expect(ended.transfer.phase).toBe("idle");
   });
 });

@@ -293,7 +293,7 @@ replacement 并在 `close()` 后才成立；该 old-or-new 语义由
 
 ```text
 ┌─────────────────────────────────────────────────────────┐
-│ LMDJ · Project ID · BPM · Key — · Save Local · Audio   │
+│ LMDJ · Project ID · BPM · Key — · Audio                │
 ├────────────┬────────────────────────────────────────────┤
 │ Project    │                                            │
 │ Sample S8  │              Mode Surface                  │
@@ -316,6 +316,9 @@ Stage 7 的 Project Surface 提供：
 - local/validating/ready/resource-rejected 状态；
 - Pad occupancy 汇总；
 - 对 Stage 8–10 的只读阶段说明。
+
+Stage 7 的 Project mutation 由 Core 在本地自动持久化；界面不提供也不承诺单独的
+`Save Local` 命令。打开和导入只是选择或建立本地 Project，不制造额外保存语义。
 
 ### 8.2 Disabled future modes
 
