@@ -85,6 +85,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_project_storage_platform_tests
     lmdj_project_bundle_transfer_tests
     lmdj_take_journal_tests
+    lmdj_project_cooker_sample_analysis_tests
     lmdj_project_cooker_tests
     lmdj_project_cooker_determinism_matrix_tests
     lmdj_audio_runtime_tests

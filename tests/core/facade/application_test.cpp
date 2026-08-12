@@ -1089,6 +1089,41 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   LMDJ_CHECK(missing.error().code == ErrorCode::missing_asset);
 }
 
+void test_typed_sample_surface_rejects_invalid_boundary_values() {
+  TempDirectory temp;
+  Application application(sample_config(temp.path()));
+  const auto invalid = [](const auto& result) {
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+  };
+
+  invalid(application.inspect_sample(
+      SampleInspectRequest{"relative-project.lmdj", {0, 0}}));
+  invalid(application.query_sample_waveform(
+      SampleWaveformRequest{
+          temp.path() / "missing-project.lmdj",
+          {0, 0},
+          {0, 1, 0},
+      }));
+  invalid(application.append_sample_import(
+      "not-a-uuid", 0, std::span<const std::byte>{}, false));
+  invalid(application.commit_sample_import("not-a-uuid"));
+  invalid(application.abort_sample_import("not-a-uuid"));
+  invalid(application.update_sample_pad(
+      SampleUpdateRequest{
+          "relative-project.lmdj",
+          CommandMeta{CommandId{uuid(589)}, 0},
+          {0, 0},
+          {},
+      }));
+  invalid(application.reset_sample_pad(
+      SampleResetRequest{
+          "relative-project.lmdj",
+          CommandMeta{CommandId{uuid(590)}, 0},
+          {0, 0},
+      }));
+}
+
 void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
   TempDirectory temp;
   const auto project = temp.path() / "sample-lifecycle.lmdj";
@@ -3392,6 +3427,7 @@ int main() {
     test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
+    test_typed_sample_surface_rejects_invalid_boundary_values();
     test_sample_import_abort_scavenge_replace_and_manifest_admission();
     test_sample_cleanup_half_failures_leave_one_retryable_unit();
     test_sample_source_frame_limit_is_not_reapplied_after_resampling();
