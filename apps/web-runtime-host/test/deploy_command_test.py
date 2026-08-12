@@ -436,7 +436,7 @@ class DeployCommandTest(unittest.TestCase):
                 expected_product = sys.argv[2]
                 expected_host = sys.argv[3]
                 result = {{
-                    "asset_count": 9,
+                    "asset_count": 9 if prior else 13,
                     "host_version": expected_host,
                     "index_sha256": index_sha256,
                     "manifest_sha256": manifest_sha256,
