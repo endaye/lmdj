@@ -1,0 +1,55 @@
+---
+title: Testing 与 Proof
+area: operations
+status: implemented
+owners: [core, quality]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/core.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/web-toolchain-conformance.sh, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 测试层级
+unit/component 验证局部边界，integration/e2e 验证组合，stress 验证锁自由/并发，Proof 验证 Headless Core 交付链。
+## 稳定命令
+`scripts/core.sh test dev full` 运行除 stress 外的完整层级；stress 必须显式运行；`scripts/core.sh proof` 也不包含 stress。
+## Web Runtime Host Proof
+`scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
+
+Chromium journey 的第一段只通过可见控件执行 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`。fresh origin 首次准备必须恰好产生一次 create、一次 import、64 次 assignment 与 revision `65`；Pointer 和 Keyboard 必须各产生一个 admission 和一个 `voice_started` outcome；reload 后同一 browser-local descriptor 必须零重复 mutation、revision 不变并再次进入 `running`，且 descriptor 的三个 UUID 不得进入 DOM diagnostics。随后对 500 个 paced Trigger 保存所有 admitted sequence，排空并比较完整 outcome 集合，拒绝 missing、duplicate、unknown、`voice_capacity`、queue/Bank transition/Outcome Ring drop；Take 路径证明 20 个 capture event、stop 后第 21 个 Trigger 不进入已停止 Take、Facade commit/inspect、page/Worker restart、OPFS reopen 与重新发布。失败路径覆盖 44.1 kHz Snapshot 拒绝且旧 generation 留存、显式 suspend/recovery、竞争 writer 的 `PROJECT_BUSY`、mutation 前 protocol mismatch、精确 recovery outcome timeout、timeout 后 lease 重获与 clean close。
+
+WebKit smoke 只有在所有 mandatory primitive 可用时才运行 protocol、OPFS、restart 与 lifecycle；否则必须输出结构化 `UNSUPPORTED_WEB_RUNTIME` limitation。当前 Playwright WebKit 缺少 `opfsSyncAccessHandle` 与 `opfsWritableReplace`，因此是明确限制记录，不是完整 PASS。
+## Creator Web Proof
+`scripts/creator-web.sh configure|build|test|proof|package|serve|clean` 是 Creator 的稳定入口。`test` 覆盖 UI/Runtime Session、deterministic package 与 secure server；`proof` 从真实 Core 生成包含 64 个 assigned Pad 的 portable Bundle，验证 Bundle pack 可复现性、两次 clean Creator build/package 字节一致性，再从隔离 dist 运行 Chromium 创作旅程与 WebKit capability boundary。Creator 与 Diagnostic Host 使用同一 shared native Runtime，不使用 mock Core 或 shim。
+
+Product Build `1.0.16.8` 已在 source revision `56b726092e05821bb76ac1e458c84764b228efcd` 完成以下 conformance case 与 Task 12 完整本地 Proof；精确命令、计数、时长与外部非声明记录在 `docs/quality/2026-08-11-web-runtime-hardening-acceptance.md`：
+
+- Chromium/Emscripten AudioWorklet case 人为保持 callback in-flight，验证首个 quiescence timeout 锁存 fatal 后，terminal wait 在第二个同长度 caller budget 内返回 `INTERNAL_ERROR`，而不是无限阻塞 Control Worker。
+- Chromium real C++/Emscripten/OPFS Project I/O case 注入 `QuotaExceededError` / `InvalidStateError`，验证 `storage_condition` 分别为 `quota_exceeded` / `invalid_state`；unleased append case 在 seed lease 释放后验证类型化 `invalid_state` 且原有 `seed` 字节不变；owner-binding case 则在 platform A 持有 lease 时让 distinct same-page platform B 依次直接调用 append、replace 与 immutable create，验证三者均为 `project_busy`，已有/缺席 target 与 storage/publication intent inventory 不变，随后 A 仍可 mutation、释放并由 B 重新获取。
+- Task 7 的两个 Chromium production Browser Main case 通过 `_lmdj_web_host_poll` 提交 unknown request ID 与已 settlement response 的 duplicate；它们证明 missing-pending 分支只 terminate 一次、后续 send 以 `HOST_PROTOCOL_MISMATCH` sealed、notification 不会投递且 terminal-owner release 完成，但当时没有让另一个 production request 保持 pending。Task 10A 的第三个 case 先经 native-submit seam 提交 untracked `host.status`，再在同一次 scheduled poll 前用真实 `transport.send(host.status)` 注册不同 ID；它证明该 pending promise 收到同一 terminal error并被拒绝、ID 从真实 `pendingRequests` 清除、failure callback/owner release 仍各一次且 notification 为零。完整 packaged journey 仍属于 Task 12 的 Host Proof 边界。
+
+`1.0.16.6` 已有冻结本地证据但因 helper-only production F4 缺口成为 abandoned、unshipped candidate；`1.0.16.7` 也已冻结，但因 same-worker mutator 可复用其他 platform 的 lease 以及 production pending-rejection 证据需纠正而成为 abandoned、unshipped candidate。Task 12 已从干净、已提交的 `1.0.16.8` source boundary 完成 Project I/O Chromium/WebKit、Core Proof、ASan/TSan/stress、Diagnostic Host Proof、Creator Proof、active-tree 与 Portal 全门禁，并冻结 `1.0.16.8 · canary` immutable snapshot。它仍只证明本地自动化与快照：五项物理记录继续未验证，且不声明 push、PR、CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。
+Product Build `1.0.16.9` 是当前已分配的本地候选，只收窄 Web OPFS 恢复路径，不改变任何成功操作、Project Truth、storage 记录形状或 protocol envelope。`publishDirectoryIfAbsent` 的失败清理改为只有在正向确认目标目录消失后才删除 pending publication intent；确认不成立时保留该 intent，由下一次 writer 获取时的恢复流程接管，因为 intent 是唯一让半成品目标对枚举隐藏并驱动其恢复的记录。`recoverIntents` 把无法解码或解析的 Host storage intent 记录判定为 torn 并删除后继续恢复：`createIntent` 在任何目标写入前已写入并回读校验该记录，且拒绝复用既有 intent 文件，因此撕裂记录对应的 mutation 从未开始，没有需要回滚的状态；能解析但`validateIntent` 失败、文件名与声明目标哈希不匹配，或目标状态与 `next`/`previous` 都不匹配的记录继续 fail closed，以免旧读者销毁更新 Contract 修订写下的回滚状态。新增 Chromium conformance case 覆盖两条路径：注入目标清理失败的发布必须保留 pending intent、目标对枚举不可见但物理完整，且随后取锁恢复可重新发布；撕裂 intent 必须被恢复清除、目标字节不变、项目可重新打开，而未知 `contract` 值仍必须 fail closed。精确命令、计数、lane 结论与外部非声明记录在 `docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md`。
+## Web 分发 HTTP 门禁
+proof-only server 在 bind 前运行完整 dist verifier；它以 dynamic port、新进程 PID 和一次性 nonce 的 ownership record 建立 readiness，端口已被旧进程占用时不能误判为成功。每次读取都用目录文件描述符、`O_NOFOLLOW` 和同一已 `fstat` 的文件描述符，并再次匹配启动时的资产 hash，因此符号链接、路径交换和普通文件替换均不会被服务。所有响应设置精确 COOP/COEP/CORP/CSP 与 `nosniff`，Wasm 为 `application/wasm`；仅 index/manifest 为 `no-store`，内容哈希资产为 immutable。Traversal、目录、Range 与未知路径返回 404，不支持的方法返回 405。EXIT/INT/TERM 都清理 Host 所拥有的 server PID 与临时 readiness 目录。该服务只用于本地 Proof，不是生产发布入口。
+## CI 责任
+主 CI 对每个 PR 运行 `Change Scope`：以完整 Git 历史验证精确 base/head 差异，并读取实时 Draft 与 `ci:full` 标签。分类结果写入 job summary，列出完整 status/path inventory 与每个 selected lane 的具体规则/升级理由，同时以同一次 run 可安全覆盖的方式保留 `ci-scope-<head-sha>` manifest artifact。Draft 只选择 Docs/static 与 CI Contract；转为 Ready 会对同一 head 重新分类并产生正式结果。Ready PR 按版本化路径归属取所有消费者 lane 的并集；中央 CI、未知归属、跨多个昂贵家族或 `ci:full` 升级为全量。`main` push 和手动 dispatch 始终选择全部 14 个 lane，且按 SHA 分组、不取消较早的 `main` run。
+
+正式 lane 包含 Docs/static、Architecture Portal、CI Contract、Ubuntu Core、Linux ASan、Coverage、macOS Core/native ASan、Web Toolchain、Formal Web Runtime Host、Creator、Web Runtime Lab、Deploy Contract、Chameleon Lab 与 Core Package。Linux ASan 负责 Python-hosted sanitizer 覆盖，macOS ASan 只覆盖 native label；stress 仍随对应 Core ASan 门禁执行，Nightly 继续保留 TSan 与重复 Stress lane。Formal Web Host 继续校验固定 emsdk revision/release mapping/`emcc 6.0.5`、locked npm、Chromium/WebKit 与 `scripts/web-runtime-host.sh proof`。
+
+Portal 不再独立触发 PR 或 `main` workflow；主 CI 在同一次 run 内调用 reusable Portal，并显式传入 documentation-impact 开关、base/head 与 PR body。`PR Gate` 静态 fan-in 15 个 lane job 加 `select-ubuntu-runner`、`select-macos-runner`、`macos-primary` 共 18 个结果：manifest 选中的结果必须是 `success`，未选中的必须是 `skipped`，缺失、额外、失败、取消、exact base/head SHA、mode/lane、changed-file schema 或 lane/job 映射不一致都 fail closed。`Change Scope` 是 manifest producer，不是结果键，但 producer job 本身仍必须为 `success`，因此 manifest output 已产生但后置 artifact 上传失败也不能通过；条件性 `macos-fallback` 由 `core (macos-latest)` 与 `core-asan-macos` 两个 adjudicator 传递裁决。
+
+只有 selected Linux pool consumer 存在时才运行 Ubuntu selector；Package 也是该 selector 的消费者，保留 LFS hydration 并明确禁用 ccache。只有 `core_macos` 被选中时才运行 macOS selector。Web、Ubuntu Core、Linux ASan、Coverage 和 Package 重负载任务继续优先至少一台在线、空闲且带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 runner；外部 fork、状态密钥缺失、Runner API 失败或池中没有在线空闲匹配 runner 时，在 workload 开始前选择 GitHub-hosted Ubuntu。Package 因此通常避免 hosted 执行，但 fallback 仍可能消耗 hosted minutes。当前 Contabo 池由两个独立 runner service 构成，最多并发两个任务，其余排队；所有 CI CMake build 均限制为 3 路并行。Linux 原生任务共享 checkout 外持久 `ccache`，Emscripten 与 Package 明确绕过；M1 原生任务使用本机持久 `ccache`，GitHub-hosted lane 不依赖 runner 本地缓存。
+
+macOS Core Proof 与 native ASan 继续优先带 `lmdj` 标签、在线且空闲的受信 self-hosted runner。外部 fork、状态密钥缺失、Runner API 失败、机器离线/忙碌/缺失/标签不符时直接选择 GitHub-hosted macOS。self-hosted lane 只有在 checkout、加速/`ccache` setup、通信中断或 30 分钟上限导致未发布终态时，才执行一次 GitHub-hosted fallback；加速 setup 成功后已发布的准备、Proof 或 sanitizer 失败是最终语义结果，不触发 fallback。对外 check name 仍为 `core (macos-latest)` 与 `core-asan-macos`。
+
+Change Scope 和全部 selected lane/support job 的排队与执行时长，以及从 Change Scope 创建到最晚 selected job 完成的 pre-Gate critical-path span，会作为 evidence 写入 summary；排队单独记录，只有执行时长在 policy 已定义 execution SLO 时参与比较，未定义时明确显示 `SLO not defined`。Ubuntu/macOS selector 不继承消费者 lane SLO，`macos-primary` 使用 `core_macos` SLO；timing 缺失仍不阻断。SLO 只用于观察和容量决策，不把慢但成功的 job 改为失败。独立 job 安全上限和测试自己的行为 timeout 仍是硬失败。编译、Proof、测试、sanitizer 与 Coverage 不自动 retry；缓存统计也只作诊断证据。工作流定义与本地结果都不是远端执行结果，实际 Pull Request URL、同 SHA manifest、formal results 和 `PR Gate` 状态只能在 CI 产生后记录。
+
+Hosted 用量是预算目标，不是未经验证的保证。观察周必须按 PR updates 与 merges 归一化，把 routine hosted minutes 与旧的无条件 PR/main 矩阵基线对比，分开记录 focused 节省、新增控制/full-main 工作与 Package fallback。Routine hosted minutes 不得持续高于可比基线；任何持续回退都先修正路由或合并 job，无法在不削弱证据的前提下修正时回滚永久迁移，不用增加预算或 retry 掩盖。
+
+本地 Mac 可以在 push 前承担额外的 focused、Proof 或浏览器预检，但这些结果不替代绑定具体 commit 的 GitHub required checks。
+## 证据分离
+本地通过、clean-room Proof、CI 绿色、正式 tag、Channel promotion、门户快照和物理设备验收分别报告。Product Build `1.0.16.9` 的 Core、Web Toolchain、Diagnostic Host 与 Creator Proof 必须绑定同一可审计 revision；它不继承历史 Build 的 PR、CI 或 merge 结论。匹配 Build 的快照 provenance 由 Portal 门禁单独判定，不由 Host Proof 推断。五项物理记录分别是：macOS Safari Pointer `deferred / unverified`、macOS Chrome Pointer `deferred / unverified`、macOS Chrome Physical MIDI `deferred / unverified`、iPadOS Safari Touch `deferred / unverified`、iPadOS Safari lifecycle `deferred / unverified`。
+## 门户责任
+页面状态必须链接实际测试/Proof，并明确自动化无法证明的体验范围。
