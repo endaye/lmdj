@@ -260,7 +260,7 @@ Files: `.github/workflows/ci.yml`, `tests/build/ci_runner_fallback_test.py`,
 `docs/quality/core-test-policy.md`,
 `apps/architecture-portal/docs/operations/testing-and-proof.mdx`.
 
-### Task 6: Local pre-flight that reuses the CI scope decision
+### Task 6: Local pre-flight that reuses the CI scope decision — IMPLEMENTED (`3cbcf55`)
 
 Nothing today lets a developer learn a lane's verdict without spending a
 remote cycle, and nothing lets an unchanged lane be skipped between
@@ -295,6 +295,10 @@ iterations. Task 3 narrows a manual dispatch but still round-trips.
   be classified — the two `scripts/ci/` paths already inherit the central
   control-plane full rule; `scripts/local-ci.sh` needs an explicit
   `ci_contract` mapping.
+- Implementation note: the cache retains a bounded set of recent passing
+  states per lane rather than a single slot. Editing a file and reverting it
+  is an ordinary development move, and a one-slot cache re-runs the lane on
+  the way back to a state it already proved.
 - Verify: `tests/build/ci_local_preflight_test.py` covering manifest reuse,
   cache-key invalidation on a touched input, and the `not-runnable-here`
   classification; a docs-only working tree selects exactly `docs_static`; a
