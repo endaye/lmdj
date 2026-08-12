@@ -282,7 +282,8 @@ run_browser_gate() {
   local tracked
   while IFS= read -r tracked; do
     specs+=("${tracked#tests/platform/web/}")
-  done < <(git -C "$repo_root" ls-files 'tests/platform/web/creator/*.spec.mjs')
+  done < <(git -C "$repo_root" ls-files \
+    'tests/platform/web/creator/creator_web_*.spec.mjs')
   [[ ${#specs[@]} -gt 0 ]] || {
     echo "Creator Web error: no tracked Creator browser specs" >&2
     return 2

@@ -68,7 +68,7 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
     ];
   }, {timeout: 30_000}).toEqual(["running", 64, 64, 0]);
 });
-test("one held-key Bank-A burst has exactly 16 admissions and outcomes", async ({page, browserName}) => {
+test("one synthetic held-key Bank-A burst preserves the full Runtime tuple", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(120_000);
   await page.goto("/index.html");
@@ -89,4 +89,56 @@ test("one held-key Bank-A burst has exactly 16 admissions and outcomes", async (
       report.state,
     ];
   }, {timeout: 30_000}).toEqual([16, 16, 0, "running"]);
+});
+
+test("ready active Runtime survives portrait and landscape resize", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await importProject(page);
+  await activate(page);
+  await page.keyboard.press("KeyA");
+  await expect.poll(async () => {
+    const value = await downloadReport(page);
+    return [value.trigger_admitted_count, value.trigger_outcome_count];
+  }, {timeout: 30_000}).toEqual([1, 1]);
+
+  const heading = page.getByRole("heading", {name: "Project 00000000"});
+  const revision = page.locator(".project-summary div").filter({
+    has: page.getByText("Revision", {exact: true}),
+  }).getByRole("definition");
+  const before = await downloadReport(page);
+  const expectedRevision = await revision.textContent();
+
+  for (const viewport of [
+    {width: 768, height: 1024},
+    {width: 1024, height: 768},
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect(heading).toBeVisible();
+    await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+    await expect(revision).toHaveText(expectedRevision);
+    const after = await downloadReport(page);
+    expect({
+      product_build: after.product_build,
+      host_id: after.host_id,
+      host_version: after.host_version,
+      platform_version: after.platform_version,
+      protocol_version: after.protocol_version,
+      state: after.state,
+      trigger_admitted_count: after.trigger_admitted_count,
+      trigger_outcome_count: after.trigger_outcome_count,
+      trigger_rejected_count: after.trigger_rejected_count,
+    }).toEqual({
+      product_build: before.product_build,
+      host_id: before.host_id,
+      host_version: before.host_version,
+      platform_version: before.platform_version,
+      protocol_version: before.protocol_version,
+      state: before.state,
+      trigger_admitted_count: before.trigger_admitted_count,
+      trigger_outcome_count: before.trigger_outcome_count,
+      trigger_rejected_count: before.trigger_rejected_count,
+    });
+  }
 });
