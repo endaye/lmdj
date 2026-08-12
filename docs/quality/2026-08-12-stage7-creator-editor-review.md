@@ -35,12 +35,11 @@ Creator 面零功能改动（仅身份常量同步），首轮 37 项发现中 *
 1 中 3 低共 4 项新问题。两处 Web OPFS 中危缺陷（F1/F2）的修复已在
 `fix/opfs-publication-recovery` 分支完成但未合入。
 
-主要问题仍集中在三类，且第一类在复核后**升级**：
+主要问题仍集中在三类：
 
-- **收尾证据缺口（升级为 2 项高危）**：手动 canary 验收仍无任何记录（T1）；
-  merged-main Proof 缺口的"tag 已打而前置证据缺失"模式在复核期间对
-  `lmdj-v1.0.16.8` 第二次重复（G1）——hardening 计划明文要求 merged-main
-  Proof 作为 tag 前置条件，签名 tag 已存在而仓库内查无该 Proof 记录。
+- **收尾证据缺口（1 项高危）**：手动 canary 验收仍无任何记录（T1）。
+  G1 原被本报告升为高危，理由是"tag 已打而前置证据缺失"；该前提经第三轮
+  取证证伪，已降级为记录缺口（见第十节）。
 - **Web OPFS 发布层两处可用性缺陷（F1/F2）**：main 上原样存在；修复待合入。
 - **文档漂移**：Stage 7 规格/计划自首轮起零提交，五项漂移原样保留；两份验收
   记录（Stage 7 与 hardening）的 External state 均已与 main 实况脱节。
@@ -49,8 +48,8 @@ Creator 面零功能改动（仅身份常量同步），首轮 37 项发现中 *
 
 | 严重度 | 数量 | 说明 |
 | --- | --- | --- |
-| 高 | 2 | T1（维持）、G1（自中偏高升级：违反前置的模式已重复两次） |
-| 中 | 15 | 首轮 14 项全部仍成立（G1 移出后）+ 新增 N1 |
+| 高 | 1 | T1（维持） |
+| 中 | 15 | 首轮 14 项仍成立 + 新增 N1；G1 降级后计入本档 |
 | 低 | 23 | 首轮 20 项仍成立（G5 已解决移出）+ 新增 N2/N3/N4 |
 | 已解决 | 1 | G5，由 #118 squash witness 机制化解决 |
 | 编辑·信息 | 若干 | 正文列出，无需单独排期 |
@@ -240,7 +239,7 @@ tag `lmdj-v1.0.16.8` → `336a27c`（验签通过）；platform 测试 76→78�
 | ID | 严重度 | 复核状态 | 现证据与说明 |
 | --- | --- | --- | --- |
 | T1 | 高 | 仍成立 | 手动 canary 仍零记录：计划 Task 14 复选框全 `[ ]`、`docs/quality/evidence/` 无条目、`git log --all --grep="manual canary"` 为空 |
-| G1 | 中偏高→**高** | 仍成立且模式重复 | Stage 7（1.0.16.5）merged-main Proof 仍无记录；复核期间同一模式对 1.0.16.8 第二次成立——hardening 计划行 456–459 明文 "only after … merged-main Proof … may the Integration Owner create signed annotated tag lmdj-v1.0.16.8"，签名 tag 已存在（→`336a27c`），而 hardening 验收锚定合并前分支 revision `56b7260` 且其 External state 自记 "Merge not performed"；main 上无任何 #117 之后从 main 运行的 Proof 记录。违反前置的 tag 已发生两次，升级为高 |
+| G1 | 中偏高→**高**（第三轮撤回，见第十节） | 前提证伪 | Stage 7（1.0.16.5）merged-main Proof 仍无记录；复核期间同一模式对 1.0.16.8 第二次成立——hardening 计划行 456–459 明文 "only after … merged-main Proof … may the Integration Owner create signed annotated tag lmdj-v1.0.16.8"，签名 tag 已存在（→`336a27c`），而 hardening 验收锚定合并前分支 revision `56b7260` 且其 External state 自记 "Merge not performed"；main 上无任何 #117 之后从 main 运行的 Proof 记录。违反前置的 tag 已发生两次，升级为高 |
 | D1–D5 | 中×2低×3 | 全部仍成立 | spec 与 plan 两文件自 `0b5d2d6` 起零提交 |
 | D6 | 低 | 仍成立 | lifecycle spec 现行断言结构见 `creator_web_lifecycle.spec.mjs:28-48,60-68` |
 | D7 | 低 | 仍成立 | 计划措辞缺口不变 |
@@ -302,9 +301,10 @@ RED→GREEN 逻辑验证（14 项断言，修复前文件恰好 5 项针对性�
 
 ## 八、建议（按复核后优先级）
 
-1. **止血证据缺口（T1、G1、G2）**：这是唯二高危且模式在扩大。从当前 `main`
-   （`5bf4ace`）运行 required Proof 并落档 merged-main 记录，一次覆盖
-   1.0.16.5 与 1.0.16.8 两个已 tag 的 Build；执行并记录 Stage 7 §13.3 手动
+1. **止血证据缺口（T1、G2；G1 已降级）**：T1 是唯一高危。从当前 `main`
+   merged-main 记录已落档（`docs/quality/2026-08-13-merged-main-proof.md`，
+   覆盖 1.0.16.5、1.0.16.8 的既有绿色 run 与 1.0.16.9 的当前 Proof）；剩下的是
+   执行并记录 Stage 7 §13.3 手动
    canary 验收；为两份验收文档（Stage 7 与 hardening）各追加 post-merge
    addendum，对齐 merge 事实与 tag。在此之前不应再创建任何新的签名 tag。
 2. **合入 F1/F2 修复**：将 `fix/opfs-publication-recovery` 的两个修复提交
@@ -337,9 +337,55 @@ RED→GREEN 逻辑验证（14 项断言，修复前文件恰好 5 项针对性�
 | 首轮 Product Build | `1.0.16.5 · canary`（签名 tag `lmdj-v1.0.16.5` → `38a8c13`） |
 | 第二轮复核日期 | 2026-08-12 |
 | 第二轮基线 | `main` `5bf4ace`（新增 #117/#118/#119–#125） |
+| 第三轮更正日期 | 2026-08-13 |
+| 第三轮更正基线 | `main` `d1d8bb6`；证据 run 31327104838 / 31529410253 / 31634688566 |
 | 第二轮 Product Build | `1.0.16.8 · canary`（签名 tag `lmdj-v1.0.16.8` → `336a27c`） |
 | 设计规格 | `docs/superpowers/specs/2026-08-07-lmdj-stage7-creator-editor-design.md`（两轮间零变更） |
 | 实施计划 | `docs/superpowers/plans/2026-08-07-lmdj-stage7-creator-editor.md`（两轮间零变更） |
 | 验收记录 | `docs/quality/2026-08-07-stage7-creator-editor-acceptance.md`（锚定 1.0.16.3，两轮间零变更） |
 | 相关修复分支 | `fix/opfs-publication-recovery`（F1/F2 修复，未合入） |
 | 参照体例 | `docs/quality/2026-08-11-stage6-web-runtime-host-review.md` |
+
+## 十、第三轮更正 — G1 降级（2026-08-13）
+
+### 撤回的结论
+
+本报告第二轮把 G1 从"中（偏高）"升为"高"，理由是"签名 tag 已创建而其明文前置
+条件 merged-main Proof 在仓库内查无记录"，并称该模式对 `lmdj-v1.0.16.5` 与
+`lmdj-v1.0.16.8` 重复两次。**该前提不成立，结论撤回。**
+
+### 证伪它的证据
+
+`.github/workflows/ci.yml` 声明 `on: push: branches: [main]`，而
+`scripts/ci/change_scope.py` 对 `push` 事件强制 **full 模式（全部 lane）**。因此
+每次合并到 `main` 之后，全量 Proof 都会在被合并的 revision 上自动运行——它不是
+需要谁记得触发的动作。按两个 tag 各自指向的 revision 直接查 CI：
+
+| Product Build | 签名 tag → revision | `main` `push` run | 结果 |
+| --- | --- | --- | --- |
+| `1.0.16.5` | `lmdj-v1.0.16.5` → `38a8c13` | 31327104838 | success（12 绿 / 1 设计跳过） |
+| `1.0.16.8` | `lmdj-v1.0.16.8` → `336a27c` | 31529410253 | success（20 绿 / 1 设计跳过） |
+
+两次唯一的非成功作业都是 `macOS gates (GitHub-hosted fallback)`，它在
+`macOS gates (primary)` 于受信 Mac 上通过时按设计 `skipped`。两次均为 full
+模式；作业数差异只反映期间新增的 lane，不是更窄的选择。
+
+**两个 tag 的前置条件都没有被违反。** 缺的从来只是"从 tag 到 run"的文档绑定。
+完整证据与 `1.0.16.9` 的当前 merged-main Proof 记录在
+`docs/quality/2026-08-13-merged-main-proof.md`。
+
+### 更正后的 G1
+
+| ID | 严重度 | 内容 |
+| --- | --- | --- |
+| G1 | 中 | merged-main Proof 的 run 一直存在且在 tag 指向的 revision 上为绿，但从未有文档把它们绑定到 Build 身份；且 2026-08-12 期间连续四次 `main` push run 为红（依赖限流、快照 provenance 未认证、`LICENSE` 未分类）而无人处置或记录。真正的缺口是"红的 merged-main run 被放置不管"，不是"Proof 未运行"。 |
+
+### 方法论教训
+
+第二轮的错误来自**用文档缺失推断动作缺失**：没有找到 Proof 记录，就断定 Proof
+未运行，进而推断 tag 违反前置条件。正确做法是直接查 tag 指向 revision 上的 CI
+结论——一次 API 查询即可证伪。本报告其余以 `file:line` 或 run 级证据为锚的发现
+不受影响；受影响的只有这一条以"仓库内查无记录"为唯一依据的推断。
+
+对后续审查的约束：**"查无记录"只能支持记录缺口类结论，不能支持行为未发生类
+结论**，除非同时给出该行为若发生必然留下的痕迹也不存在。
