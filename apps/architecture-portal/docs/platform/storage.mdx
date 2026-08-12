@@ -15,7 +15,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 ## 事务模型
 写入先进入临时状态，完整校验后发布；故障不得留下被误认作权威 Project 的半成品。
 ## Journal
-Take Journal、Project Store 与 Bundle publication journal 的生命周期分开，恢复规则由 Project I/O 统一执行。
+Take Journal、Project Store 与 Bundle publication journal 的生命周期分开，恢复规则由 Project I/O 统一执行。Web 目录发布的 pending intent 是唯一让半成品目标对枚举隐藏并驱动其恢复的记录，因此发布失败时只有在正向确认目标目录已消失后才删除该 intent；确认不成立时保留 intent，交由下一次 writer 获取时的恢复流程清理。已提交的发布不因随后的 staging 或 intent 清理失败而回退目标。恢复对 storage intent 分两类处置：无法解码或解析的记录判定为 torn 并删除后继续，因为 intent 在任何目标写入前已写入并回读校验、且不复用既有 intent 文件，撕裂记录对应的 mutation 从未开始；能解析但校验失败、文件名与声明目标不匹配或目标状态两边都不匹配的记录继续 fail closed，避免旧读者销毁更新 Contract 修订写下的回滚状态。
 ## Portable transfer
 `lmdj.project-bundle.v1` 只传输完整 Project 内容。导入在临时 staging 中完成路径、大小、顺序与 hash 验证，再通过 journal 原子发布；Host 不解释或直接写入 Project internals。
 ## 证据
