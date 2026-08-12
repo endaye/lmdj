@@ -118,6 +118,9 @@ export function SampleSurface({
   const previewOwner = useRef<PreviewOwner | null>(null);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
   const sample = state.sample;
+  const audioSuspended = state.audio.phase !== "running" &&
+    state.audio.phase !== "recovering";
+  const previousAudioSuspended = useRef(audioSuspended);
   const inspect = sample.inspect;
   const selectedSlot = sample.selectedSlot;
 
@@ -164,6 +167,14 @@ export function SampleSurface({
       previewOwner.current = {session, slot: selectedSlot};
     }
   }, [sample.auditionPlayback, selectedSlot, session]);
+
+  useEffect(() => {
+    const wasSuspended = previousAudioSuspended.current;
+    previousAudioSuspended.current = audioSuspended;
+    if (!audioSuspended || wasSuspended) return;
+    previewEpoch.current += 1;
+    previewOwner.current = null;
+  }, [audioSuspended]);
 
   useEffect(() => {
     if (previousSession.current === session) return;
@@ -579,7 +590,7 @@ export function SampleSurface({
           <SampleControls
             padLabel={selectedAddress}
             playback={editablePlayback}
-            audioSuspended={state.audio.phase !== "running" && state.audio.phase !== "recovering"}
+            audioSuspended={audioSuspended}
             disabled={actionsDisabled}
             onPreview={preview}
             onCommit={(playback) => { void performUpdate(playback); }}

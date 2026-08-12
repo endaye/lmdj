@@ -283,6 +283,61 @@ test("recovery keeps the Project playable for the required probe Trigger", async
   await screen.findByText("Audio running");
 });
 
+test("an admitted recovery probe stays owned after readiness is consumed", async () => {
+  const value = sessionFixture("probe-owner");
+  let resolveTrigger: ((admission: {
+    sequence: number;
+    slot: number;
+    velocity: number;
+    source: "keyboard";
+  }) => void) | null = null;
+  value.session.trigger = (slot, velocity, source) => {
+    value.calls.push(`probe-owner:trigger:${slot}:${velocity}:${source}`);
+    return new Promise((resolve) => {
+      resolveTrigger = (admission) => resolve(admission);
+    });
+  };
+  render(<App runtimeFactory={() => value.session} />);
+
+  await userEvent.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await screen.findByText("Audio running");
+  await act(async () => value.emit({state: "interrupted", errorCode: null}));
+  await screen.findByText("Audio suspended");
+  await act(async () => value.emit({state: "recovering", errorCode: null}));
+  value.setRecoveryProbeReady(true);
+  await screen.findByText("Audio recovering");
+
+  const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
+  fireEvent.keyDown(window, {code: "KeyA", repeat: false});
+  await waitFor(() => expect(value.calls).toContain(
+    "probe-owner:trigger:0:100:keyboard",
+  ));
+  await act(async () => {
+    value.setRecoveryProbeReady(false);
+    await new Promise((resolve) => window.setTimeout(resolve, 40));
+  });
+  expect(screen.getByTestId("audio-state").textContent).toBe("Audio recovering");
+
+  await act(async () => resolveTrigger?.({
+    sequence: 1,
+    slot: 0,
+    velocity: 100,
+    source: "keyboard",
+  }));
+  await waitFor(() => expect(pad.dataset.outcome).toBe("admitted"));
+  await act(async () => value.outcome({
+    sequence: 1,
+    outcome: "voice_started",
+    runtimeFrame: 128,
+  }));
+  await waitFor(() => expect(pad.dataset.outcome).toBe("started"));
+  fireEvent.keyUp(window, {code: "KeyA"});
+});
+
 test("audio activation consumes only an explicit trusted gesture", async () => {
   const value = sessionFixture("gesture");
   let token: unknown = null;
@@ -382,6 +437,12 @@ test("lifecycle matrix clears fresh loop toggles without duplicate Session stop 
   await userEvent.click(screen.getByRole("button", {name: "Sample"}));
   await screen.findByText("Asset 33333333");
   const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
+  const volume = screen.getByRole("slider", {name: "Pad A1 Volume"});
+  fireEvent.change(volume, {target: {value: "-6"}});
+  await waitFor(() => expect((volume as HTMLInputElement).value).toBe("-6"));
+  await act(async () => value.emit({state: "interrupted", errorCode: null}));
+  await waitFor(() => expect((volume as HTMLInputElement).value).toBe("0"));
+  await act(async () => value.emit({state: "running", errorCode: null}));
   const latch = async (expectedCount: number) => {
     fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
     await waitFor(() => expect(triggerCount).toBe(expectedCount));

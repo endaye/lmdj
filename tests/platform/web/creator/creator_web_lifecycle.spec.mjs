@@ -275,13 +275,43 @@ async function enterLoopToggleSample(page) {
   }
 }
 
-async function latchLoopToggle(page, expectedAdmissions) {
+async function armPadOutcomeObservation(pad) {
+  await pad.evaluate((element) => {
+    element.removeAttribute("data-proof-outcome-observed");
+    const observeOutcome = () => {
+      const outcome = element.getAttribute("data-outcome");
+      if (outcome !== null && outcome !== "idle") {
+        element.setAttribute("data-proof-outcome-observed", outcome);
+        return true;
+      }
+      return false;
+    };
+    if (observeOutcome()) return;
+    const observer = new MutationObserver((records) => {
+      const observed = records.some((record) =>
+        record.oldValue !== null && record.oldValue !== "idle"
+      );
+      if (observed || observeOutcome()) {
+        element.setAttribute("data-proof-outcome-observed", "true");
+        observer.disconnect();
+      }
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ["data-outcome"],
+      attributeOldValue: true,
+    });
+  });
+}
+
+async function latchLoopToggle(page) {
+  await expect(page.getByRole("button", {name: "Loop"}))
+    .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
   const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.focus();
   await page.keyboard.press("Enter");
-  await expect.poll(async () => (await report(page)).trigger_admitted_count, {
-    timeout: 30_000,
-  }).toBe(expectedAdmissions);
+  await expect(pad).toHaveAttribute("data-outcome", "started", {timeout: 30_000});
 }
 
 async function reopenWithVisibleBusyRetry(page) {
@@ -319,12 +349,12 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await page.goto("/index.html");
   await importAndActivate(page);
   await enterLoopToggleSample(page);
-  await latchLoopToggle(page, 1);
+  await latchLoopToggle(page);
   await page.getByRole("button", {name: "Suspend audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-  await latchLoopToggle(page, 2);
+  await latchLoopToggle(page);
 
   await page.reload();
   await expect(page.getByRole("button", {name: "Open Project 00000000"}))
@@ -335,7 +365,7 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
   await enterLoopToggleSample(page);
-  await latchLoopToggle(page, 1);
+  await latchLoopToggle(page);
   const value = await report(page);
   expect(value.state).toBe("running");
   expect(value.sample).toEqual({
@@ -356,7 +386,7 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
   await page.goto("/index.html");
   await importAndActivate(page);
   await enterLoopToggleSample(page);
-  await latchLoopToggle(page, 1);
+  await latchLoopToggle(page);
 
   await page.evaluate(() => window.dispatchEvent(new Event("blur")));
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
@@ -364,7 +394,7 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
   });
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
-  await latchLoopToggle(page, 2);
+  await latchLoopToggle(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 
@@ -384,7 +414,7 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
   });
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
-  await latchLoopToggle(page, 3);
+  await latchLoopToggle(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
 });
 
@@ -405,11 +435,21 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: 30_000,
   });
+  const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  await armPadOutcomeObservation(pad);
   await page.keyboard.down("KeyA");
-  await expect.poll(async () => {
-    const value = await report(page);
-    return [value.state, value.trigger_admitted_count, value.trigger_outcome_count];
-  }, {timeout: 30_000}).toEqual(["running", 1, 1]);
+  await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: 30_000,
+  });
+  const value = await report(page);
+  expect([
+    value.state,
+    value.trigger_admitted_count,
+    value.trigger_outcome_count,
+  ]).toEqual(["running", 1, 1]);
   await page.keyboard.up("KeyA");
 });
 

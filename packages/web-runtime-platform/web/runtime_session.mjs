@@ -1135,6 +1135,7 @@ function createRuntimeSessionController(options = {}) {
       recovery_probe_ready:
         machine.state === "recovering" &&
         recoveryEpoch?.probeWindow === true &&
+        safetyReservation === null &&
         probeReservation === null,
       trigger_admitted_count: triggerAdmittedCount,
       trigger_outcome_count: triggerOutcomeCount,
@@ -1227,6 +1228,7 @@ function createRuntimeSessionController(options = {}) {
   function releaseSafetyReservation(reservation) {
     if (safetyReservation === reservation && !closing) {
       safetyReservation = null;
+      renderDiagnostics();
     }
   }
 

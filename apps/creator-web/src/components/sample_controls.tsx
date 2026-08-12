@@ -194,6 +194,14 @@ export function SampleControls({
     }
   }, []);
 
+  useEffect(() => {
+    if (!audioSuspended) return;
+    gainPointerId.current = null;
+    gainGesture.current = null;
+    setDraftGain(null);
+    setConfirmingReset(false);
+  }, [audioSuspended]);
+
   const beginGain = () => {
     if (gainGesture.current === null) {
       gainGesture.current = {base: playback, latest: playback};

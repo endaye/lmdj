@@ -2353,6 +2353,37 @@ test("diagnostics expose only the armed recovery probe window", async () => {
   assert.equal(session.diagnostics().recovery_probe_ready, false);
 });
 
+test("recovery probe readiness waits until Runtime safety releases", async () => {
+  const browserWindow = new EventTarget();
+  const {session} = fixture({
+    browserWindow,
+    send: async (envelope) => success(
+      envelope,
+      envelope.operation === "trigger"
+        ? {sequence: 8}
+        : envelope.operation === "host.status"
+          ? {acknowledged_generation: 1, control_generation: 1}
+          : defaultResult(envelope.operation),
+    ),
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+
+  browserWindow.dispatchEvent(browserEvent("pagehide", {persisted: true}));
+  for (let attempt = 0; attempt < 100; ++attempt) {
+    if (session.diagnostics().recovery_probe_ready === true) break;
+    await Promise.resolve();
+  }
+
+  assert.equal(session.diagnostics().recovery_probe_ready, true);
+  assert.deepEqual(await session.trigger(0, 100, "keyboard"), {
+    sequence: 8,
+    slot: 0,
+    velocity: 100,
+    source: "keyboard",
+  });
+});
+
 test("close disposes MIDI input listeners exactly once", async () => {
   let added = 0;
   let removed = 0;

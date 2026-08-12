@@ -227,7 +227,6 @@ function Workspace({
     } else if (
       runtimeHostState === "recovering" && runtimeRecoveryProbeReady === true
     ) {
-      inputAdverseState.current = null;
       dispatch({type: "audio-changed", phase: "recovering"});
     } else if (
       runtimeHostState === "interrupted" ||
@@ -238,8 +237,8 @@ function Workspace({
       if (inputAdverseState.current !== runtimeHostState) {
         inputAdverseState.current = runtimeHostState;
         resetInputForAdverseLifecycle();
+        dispatch({type: "audio-changed", phase: "suspended"});
       }
-      dispatch({type: "audio-changed", phase: "suspended"});
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
 
