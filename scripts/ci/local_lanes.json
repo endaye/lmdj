@@ -150,6 +150,8 @@
     "deploy_contract": {
       "requires": {},
       "commands": [
+        "python3 tests/build/release_audit_test.py",
+        "python3 tests/build/release_audit_workflow_test.py",
         "python3 tests/build/release_publish_workflow_test.py",
         "python3 tests/build/web_runtime_deploy_workflow_test.py",
         "python3 tests/build/web_runtime_public_deployment_docs_test.py",

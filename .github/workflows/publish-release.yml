@@ -99,3 +99,12 @@ jobs:
           set -euo pipefail
           scripts/release.sh publish-draft \
             "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
+
+      - name: Audit the exact published tag
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh audit --remote --tag "$RELEASE_TAG"

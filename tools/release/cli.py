@@ -15,6 +15,12 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandError, CommandRunner  # noqa: E402
+from tools.release.audit import (  # noqa: E402
+    AuditContext,
+    audit,
+    format_report,
+    write_report,
+)
 from tools.release.git_repository import GitRepository, GitRepositoryError  # noqa: E402
 from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
 from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError  # noqa: E402
@@ -66,6 +72,12 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     for name in ("prepare", "push-tag", "create-draft", "cleanup"):
         selected = rehearsal_commands.add_parser(name)
         selected.add_argument("tag")
+    audited = commands.add_parser("audit")
+    mode = audited.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--local", action="store_true")
+    mode.add_argument("--remote", action="store_true")
+    audited.add_argument("--tag")
+    audited.add_argument("--json", type=Path)
     return parser.parse_args(argv)
 
 
@@ -105,10 +117,45 @@ def build_context(
     )
 
 
+def build_audit_context(root: Path) -> AuditContext:
+    """Build an audit context without contacting remote state."""
+    policy, ledger = load_authority_documents(root)
+    selected_git = GitRepository(root)
+    runner = selected_git.runner
+    home = Path(os.environ.get("GNUPGHOME", Path.home() / ".gnupg"))
+    runtime = ProfileRuntime(
+        runner=runner,
+        checksum_verifier=OpenPgpVerifier(),
+        checksum_home=home,
+        checksum_fingerprint=policy.checksum_fingerprint,
+    )
+    return AuditContext(
+        repo_root=root,
+        policy=policy,
+        ledger=ledger,
+        git=selected_git,
+        github=GitHubClient(),
+        profile_verifier=default_profile_verifier(runtime),
+        proof_reader=read_product_snapshot_proof,
+        tag_signer_fingerprint=policy.product_fingerprint,
+        checksum_signer_fingerprint=policy.checksum_fingerprint,
+        authority_reader=load_authority_documents,
+    )
+
+
 def main(argv: list[str] | None = None) -> int:
     try:
         options = parse_arguments(argv if argv is not None else sys.argv[1:])
         root = options.repo_root.expanduser().resolve(strict=True)
+        if options.command == "audit":
+            report = audit(
+                build_audit_context(root), remote=options.remote, tag=options.tag,
+            )
+            if options.json is not None:
+                destination = options.json if options.json.is_absolute() else root / options.json
+                write_report(report, destination)
+            print(format_report(report))
+            return report.exit_code
         context = build_context(root)
         if options.command == "prepare":
             prepared = prepare(options.tag, context)

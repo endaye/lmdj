@@ -152,6 +152,13 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         ):
             self.assertNotIn(forbidden, lowered)
 
+    def test_publication_finishes_with_exact_tag_read_only_audit(self) -> None:
+        publish = self.job("publish")
+        publish_index = publish.index("scripts/release.sh publish-draft")
+        audit_index = publish.index("scripts/release.sh audit --remote --tag")
+        self.assertLess(publish_index, audit_index)
+        self.assertIn('"$RELEASE_TAG"', publish[audit_index:])
+
 
 if __name__ == "__main__":
     unittest.main()
