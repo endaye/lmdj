@@ -56,6 +56,8 @@ class FakeGit:
         self.remote: LocalTag | None = None
         self.fetches = 0
         self.pushes = 0
+        self.push_raises_after_write = False
+        self.push_raises_without_write = False
         self.main_contains_target = True
 
     def fetch_authority(self, repository: str, branch: str) -> None:
@@ -78,7 +80,11 @@ class FakeGit:
 
     def push_tag(self, tag: str) -> None:
         self.pushes += 1
+        if self.push_raises_without_write:
+            raise RuntimeError("network failure before write")
         self.remote = self.local
+        if self.push_raises_after_write:
+            raise RuntimeError("network failure after write")
 
     @contextmanager
     def detached_worktree(self, target: str):
@@ -235,6 +241,15 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertNotIn("--tags", runner.commands[0])
         self.assertNotIn("--force", runner.commands[0])
 
+    def test_fetch_authority_prunes_deleted_tags_from_the_scratch_namespace(self) -> None:
+        runner = RecordingRunner()
+        GitRepository(self.root, runner=runner).fetch_authority("endaye/lmdj", "main")
+        self.assertEqual(runner.commands, [[
+            "git", "fetch", "--no-tags", "--prune", "https://github.com/endaye/lmdj.git",
+            "+refs/heads/main:refs/lmdj-release/origin-main",
+            "+refs/tags/*:refs/lmdj-release/tags/*",
+        ]])
+
     def test_push_refetches_and_reconciles_remote_object(self) -> None:
         result = push_tag(self.tag, self.context())
         self.assertEqual(result.status, "pushed")
@@ -244,6 +259,16 @@ class ReleaseTransitionsTest(unittest.TestCase):
         result = push_tag(self.tag, self.context())
         self.assertEqual(result.status, "already-pushed")
         self.assertEqual(self.git.pushes, 0)
+
+    def test_uncertain_push_requires_the_fresh_remote_object(self) -> None:
+        self.git.push_raises_after_write = True
+        result = push_tag(self.tag, self.context())
+        self.assertEqual(result.status, "pushed")
+        self.git.remote = None
+        self.git.push_raises_after_write = False
+        self.git.push_raises_without_write = True
+        with self.assertRaisesRegex(TransitionError, "freshly fetched remote tag"):
+            push_tag(self.tag, self.context())
 
     def test_push_rejects_remote_conflict_without_mutation(self) -> None:
         self.git.remote = LocalTag("c" * 40, self.target, self.policy.product_fingerprint)
@@ -372,6 +397,72 @@ class ReleaseTransitionsTest(unittest.TestCase):
         with self.assertRaisesRegex(GitHubApiError, "pagination"):
             client.list_release_assets("endaye/lmdj", 17)
 
+    def test_github_client_paginates_runs_and_rejects_cycles(self) -> None:
+        first = "/repos/endaye/lmdj/actions/runs?head_sha=" + self.target + "&per_page=100"
+        second = first + "&page=2"
+        pages = {
+            first: HttpResponse(
+                200, {"Link": f'<https://api.github.com{second}>; rel="next"'},
+                json.dumps({"total_count": 2, "workflow_runs": [self._run_json(1)]}).encode(),
+            ),
+            second: HttpResponse(
+                200, {}, json.dumps({"total_count": 2, "workflow_runs": [self._run_json(2)]}).encode(),
+            ),
+        }
+        client = GitHubClient(http_transport=lambda method, url, headers, body: pages[url])
+        self.assertEqual([run.id for run in client.list_runs_for_sha("endaye/lmdj", self.target)], [1, 2])
+        pages[second] = HttpResponse(
+            200, {"Link": f'<https://api.github.com{first}>; rel="next"'},
+            json.dumps({"total_count": 2, "workflow_runs": []}).encode(),
+        )
+        with self.assertRaisesRegex(GitHubApiError, "pagination"):
+            client.list_runs_for_sha("endaye/lmdj", self.target)
+
+    def test_github_run_pagination_rejects_a_truncated_total(self) -> None:
+        client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+            200, {}, json.dumps({
+                "total_count": 2, "workflow_runs": [self._run_json(1)],
+            }).encode(),
+        ))
+        with self.assertRaisesRegex(GitHubApiError, "pagination"):
+            client.list_runs_for_sha("endaye/lmdj", self.target)
+
+    def test_github_release_and_asset_urls_are_bound_to_numeric_identities(self) -> None:
+        release = self._release_json(17)
+        release["upload_url"] = "https://uploads.github.com/repos/endaye/lmdj/releases/18/assets{?name,label}"
+        client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+            200, {}, json.dumps(release).encode(),
+        ))
+        with self.assertRaisesRegex(GitHubApiError, "projection"):
+            client.get_release("endaye/lmdj", 17)
+
+        release = self._release_json(17)
+        release["url"] = "https://api.github.com/repos/endaye/lmdj/releases/18"
+        client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+            200, {}, json.dumps(release).encode(),
+        ))
+        with self.assertRaisesRegex(GitHubApiError, "projection"):
+            client.get_release("endaye/lmdj", 17)
+
+        bad_asset = self._asset_json(7, "asset.zip")
+        bad_asset["url"] = "https://api.github.com/repos/endaye/lmdj/releases/assets/8"
+        client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+            200, {}, json.dumps([bad_asset]).encode(),
+        ))
+        with self.assertRaisesRegex(GitHubApiError, "projection"):
+            client.list_release_assets("endaye/lmdj", 17)
+
+    def test_asset_pagination_cannot_switch_release_identity(self) -> None:
+        first = "/repos/endaye/lmdj/releases/17/assets?per_page=100"
+        response = HttpResponse(
+            200,
+            {"Link": '<https://api.github.com/repos/endaye/lmdj/releases/18/assets?per_page=100&page=2>; rel="next"'},
+            b"[]",
+        )
+        client = GitHubClient(http_transport=lambda method, url, headers, body: response)
+        with self.assertRaisesRegex(GitHubApiError, "pagination"):
+            client.list_release_assets("endaye/lmdj", 17)
+
     def test_github_client_uses_numeric_ids_one_encoded_upload_name_and_secret_safe_errors(self) -> None:
         requests: list[tuple[str, str, dict[str, str], bytes | None]] = []
 
@@ -410,6 +501,23 @@ class ReleaseTransitionsTest(unittest.TestCase):
             "id": identifier, "name": name, "size": 7,
             "url": f"https://api.github.com/repos/endaye/lmdj/releases/assets/{identifier}",
             "browser_download_url": f"https://github.com/endaye/lmdj/releases/download/test/{name}",
+        }
+
+    def _run_json(self, identifier: int) -> dict[str, object]:
+        return {
+            "id": identifier, "event": "push", "head_sha": self.target,
+            "head_branch": "main", "name": "Core CI", "status": "completed",
+            "conclusion": "success",
+        }
+
+    def _release_json(self, identifier: int) -> dict[str, object]:
+        return {
+            "id": identifier, "tag_name": self.tag, "name": "LMDJ 1.0.21.0",
+            "body": "body", "draft": True, "prerelease": True,
+            "url": f"https://api.github.com/repos/endaye/lmdj/releases/{identifier}",
+            "html_url": "https://github.com/endaye/lmdj/releases/tag/lmdj-v1.0.21.0",
+            "upload_url": f"https://uploads.github.com/repos/endaye/lmdj/releases/{identifier}/assets{{?name,label}}",
+            "assets": [],
         }
 
 

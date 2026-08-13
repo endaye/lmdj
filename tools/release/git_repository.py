@@ -36,7 +36,7 @@ class GitRepository:
     def fetch_authority(self, repository: str, branch: str) -> None:
         remote = f"https://github.com/{repository}.git"
         self._run([
-            "git", "fetch", "--no-tags", remote,
+            "git", "fetch", "--no-tags", "--prune", remote,
             f"+refs/heads/{branch}:{self._main_ref}",
             f"+refs/tags/*:{self._tag_prefix}*",
         ])
