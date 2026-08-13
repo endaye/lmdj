@@ -411,6 +411,17 @@ Product Build `1.0.20.0`、Web Runtime Platform `0.2.1`、Creator Web `1.1.2`
 `1.0.19.0` 的 branch-local Proof 仍是其精确 revision 的历史事实，但不能替代
 `1.0.20.0` 自动化、人工或 merged-main 证据；T1 继续从步骤 1 开始。
 
+`1.0.20.0` 随后通过完整十步人工 Canary。独立的实体 MIDI 行在 macOS Chrome
+获得权限后没有 Trigger；CoreMIDI 抓包确认受测 MPD218 在 PAD BANK A 的
+PAD1/PAD16 分别发送 Channel 10 Note 36/51，而 Creator 额外硬编码 Channel 1。
+修复分配 Product Build `1.0.21.0` 与 Creator Web `1.1.3`，移除 Creator 的单
+channel filter；Platform `0.2.1`、Formal Host `1.2.8`、Project Truth、Contract、
+Provider 与 Model identity 不变。自动化 Channel 10 回归不替代候选上的实体复验。
+不可变 `1.0.21.0 · canary` snapshot 与完整 branch-local 自动化 Proof 已在 clean
+revision `1a7e84e94fd00030c44b48cd9f597cc42d5ca37a` 通过；精确 hashes、计数和实体
+复验表见
+[`2026-08-13-stage7-midi-channel-canary-1.0.21.0.md`](../release-evidence/2026-08-13-stage7-midi-channel-canary-1.0.21.0.md)。
+
 ### Final finding closure audit
 
 下列是当前修复分支的唯一现行 closure ledger；第二至七节仍保留各历史基线下的
@@ -471,12 +482,15 @@ Product Build `1.0.20.0`、Web Runtime Platform `0.2.1`、Creator Web `1.1.2`
 | Product Build `1.0.19.0` historical branch-local Proof | `passed, superseded for current mapping acceptance` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
 | Product Build `1.0.20.0` branch-local Proof | `passed` | clean revision `7d409b5`：Creator、Formal Host、Core、dependency/identity 与 Portal 全量 Proof 通过；snapshot source `6a1cd97`，Assembly Lock `85c607…913`；详见 `docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`。 |
 | Product Build `1.0.20.0` merged-main Proof | `in progress` | 另一个进程已直接 push candidate history 到 `origin/main` `ccd0aec`，无关联 PR；full `main` push run `31665186166` 正在运行，尚无 terminal success。人工验收 addendum `95ae181` 仍只在本地。 |
+| Product Build `1.0.21.0` branch-local candidate | `automated Proof and physical MIDI passed` | clean revision `1a7e84e` 的 full Proof 与 immutable snapshot 已通过；endaye 完成 MPD218 Channel 10 实体复验，详见独立 canary evidence。 |
+| macOS Chrome physical MIDI | `passed on 1.0.21.0` | MPD218 PAD BANK A 的 16 Pad、Creator B/C/D 地址、拔插单 listener、Suspend/re-authorize 与 reload/reopen 均确认；最终报告 `1/1/0`、SHA-256 `b0491e…603`。 |
+| macOS Safari Bundle import | `manual observation passed` | endaye 未遇到导入 `stage7-canary.lmdj` 后超过 20 秒仍停在 `importing`；不推导 Safari Pointer 或 iPadOS 通过。 |
 
 因此当前源代码、branch-local 自动化、文档与历史 G1 更正都已纳入 closure ledger，
-T1 已在正确候选上关闭，且 candidate source 已由外部直接 push 到 `main`，但
-run `31665186166` 尚未结束，人工验收 addendum 也仍未发布。本修复任务
-仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
-promotion。
+T1 的十步键盘/听感 Canary 已在 `1.0.20.0` 关闭，但实体 MIDI 缺陷要求新的
+`1.0.21.0` 候选。该候选的 full Proof、snapshot 与 Chrome 实体 MIDI UI 复验均已
+完成；Safari Pointer 和 iPadOS 仍未验证。本修复任务尚不能报告为完整 physical
+matrix 关闭，也没有授权 push、tag、Release、deployment 或 Channel promotion。
 
 ## 十一、第三轮更正 — G1 降级（2026-08-13）
 

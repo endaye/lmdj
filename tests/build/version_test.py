@@ -82,7 +82,7 @@ expected_modules = {
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.1.2",
+        "1.1.3",
         1,
         {"web-runtime-platform": "0.2.1"},
     ),
@@ -470,6 +470,6 @@ cmake_source = (
     repo_root / "packages/web-runtime-platform/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
-assert '"product_build":"1.0.20.0"' not in cmake_source
+assert '"product_build":"1.0.21.0"' not in cmake_source
 
 print("product version tests: PASS")

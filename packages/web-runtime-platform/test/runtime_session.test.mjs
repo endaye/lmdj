@@ -94,7 +94,7 @@ function fixture({
       hostId: "web-runtime-host",
       hostVersion: "1.2.8",
       platformVersion: "0.2.1",
-      productBuild: "1.0.20.0",
+      productBuild: "1.0.21.0",
       protocolVersion: 1,
     },
     inputConfiguration: {},
@@ -120,7 +120,7 @@ function fixture({
         host_id: "web-runtime-host",
         host_version: "1.2.8",
         platform_version: "0.2.1",
-        product_build: "1.0.20.0",
+        product_build: "1.0.21.0",
         protocol_version: 1,
       }),
     },
@@ -198,9 +198,9 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
   const assemblyIdentity = {
     distributionContract: "lmdj.creator-web.distribution.v1",
     hostId: "creator-web",
-    hostVersion: "1.1.2",
+    hostVersion: "1.1.3",
     platformVersion: "0.2.1",
-    productBuild: "1.0.20.0",
+    productBuild: "1.0.21.0",
     protocolVersion: 1,
   };
   const manifestSource = {

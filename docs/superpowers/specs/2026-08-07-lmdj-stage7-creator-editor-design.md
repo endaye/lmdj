@@ -339,6 +339,10 @@ Sample、Sequence、Perform 在 Rail 中展示阶段编号，但使用真正的 
 - empty Pad 是真实 disabled trigger target，不触发占位声音；
 - Pointer/Touch target 最小 `44 × 44 CSS px`；
 - Keyboard 与 MIDI mapping 由 Creator 配置注入共享 input adapter；
+- Creator 在用户明确授权后监听每个可用 MIDI input，并在 MIDI channels 1–16
+  上接受 Note On `36..51`；Note On velocity `0` 与对应 Note Off 释放 Pad，其他
+  note 保持忽略；
+- Platform adapter 仍保留可选的单 channel filter，但 Creator 不启用该限制；
 - 所有输入最终调用同一个 serialized `trigger()` 路径；
 - UI press feedback 来自 admission/outcome，不用计时器伪造声音成功。
 

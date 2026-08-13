@@ -107,9 +107,9 @@ function fixture() {
       state: "running",
       error_code: null,
       error_details: {},
-      product_build: "1.0.20.0",
+      product_build: "1.0.21.0",
       host_id: "creator-web",
-      host_version: "1.1.2",
+      host_version: "1.1.3",
       platform_version: "0.2.1",
       protocol_version: 1,
       capabilities: {
@@ -219,7 +219,7 @@ describe("Creator input controller", () => {
     controller.dispose();
   });
 
-  test("maps MIDI 36..51 on channel 1 to the selected Bank and removes listeners", async () => {
+  test("maps MIDI 36..51 on every channel to the selected Bank and removes listeners", async () => {
     const value = fixture();
     const input = fakeMidiInput();
     const access = fakeMidiAccess(input);
@@ -233,13 +233,12 @@ describe("Creator input controller", () => {
       requestMIDIAccess: async () => access,
     });
     expect(await controller.enableMidi()).toBe(true);
-    input.emit([0x90, 36, 73]);
-    input.emit([0x91, 36, 73]);
-    input.emit([0x90, 52, 73]);
+    input.emit([0x99, 36, 73]);
+    input.emit([0x99, 52, 73]);
     await settle();
     expect(value.triggers).toEqual([{slot: 16, velocity: 73, source: "midi"}]);
     expect(value.state().pressed.get(16)).toBe("admitted");
-    input.emit([0x90, 36, 0]);
+    input.emit([0x89, 36, 64]);
     expect(value.state().pressed.has(16)).toBe(false);
 
     bank = 2;
