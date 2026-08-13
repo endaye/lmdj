@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="768bc09a299bddf08309ae29c09749f5973e101d5800028e0e378fd9f45ff43b">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="898c40a9a37cd252cda781a89f6a05501bbadcc5b819076d87b36aa50b94c786">
   <title id="title">Project Cooker Module</title><desc id="description">Project Truth 与 Artifact 确定性派生 Runtime Snapshot</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -19,13 +19,13 @@
       <rect class="node-mask" x="66" y="186" width="258" height="104" rx="18"/>
       <rect class="node" x="70" y="190" width="250" height="96" rx="14"/>
       <text class="node-title" x="86" y="222">Project + Artifacts</text>
-      <text class="node-detail" x="86" y="248">validated inputs</text>
+      <text class="node-detail" x="86" y="248">Project v2 + WAV</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="466" y="186" width="258" height="104" rx="18"/>
       <rect class="node" x="470" y="190" width="250" height="96" rx="14"/>
       <text class="node-title" x="486" y="222">Project Cooker</text>
-      <text class="node-detail" x="486" y="248">deterministic derive</text>
+      <text class="node-detail" x="486" y="248">inspect · waveform · prepare</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="876" y="186" width="258" height="104" rx="18"/>
@@ -40,6 +40,6 @@
       <text class="node-detail" x="1306" y="248">read-only consumer</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Authoring Domain.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Evidence</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Cook tests and determinism matrix.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Evidence</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">PCM16 mono/stereo inspect, canonical waveform buckets and deterministic trim/gain/mute preparation.</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No persistence, device I/O or mutation of Project Truth.</div></foreignObject></g>
 </svg>

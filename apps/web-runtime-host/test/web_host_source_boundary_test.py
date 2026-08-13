@@ -22,28 +22,16 @@ def require_uncorrelatable_response_fail_closed(
     label: str,
 ) -> None:
     correlation = re.search(
-        r"const pending = pendingRequests\.get\(message\.request_id\);\s*"
-        r"if\s*\(pending\)\s*\{.*?\n\s*\}\s*else\s*\{"
-        r"(?P<missing_pending>.*?)\n\s*\}\s*\n\s*\}\s*else\s*\{\s*"
-        r"for\s*\(const subscriber of notificationSubscribers\)",
+        r"const pending = pendingRequests\.get\(message\.request_id\);.*?"
+        r"else\s*\{\s*failClosed\(transportFailure\(\s*"
+        r'"HOST_PROTOCOL_MISMATCH".*?\)\);\s*return;\s*\}\s*\}\s*'
+        r"else\s*\{\s*for\s*\(const subscriber of notificationSubscribers\)",
         runtime_pre_source,
         re.DOTALL,
     )
     require(
         correlation is not None,
         f"{label} Browser Main response correlation branch is missing",
-    )
-    missing_pending = correlation.group("missing_pending")
-    require(
-        re.fullmatch(
-            r'\s*failClosed\(transportFailure\(\s*"HOST_PROTOCOL_MISMATCH"'
-            r",.*?\)\);\s*return;\s*",
-            missing_pending,
-            re.DOTALL,
-        )
-        is not None,
-        f"{label} missing-pending response branch must fail closed with "
-        "HOST_PROTOCOL_MISMATCH and return",
     )
 
 

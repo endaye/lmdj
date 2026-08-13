@@ -110,7 +110,17 @@ describe("Creator Sample state", () => {
   });
 
   test("initializes saved and Runtime revision from a prepared Project reopen", () => {
-    const prepared = creatorReducer(initialCreatorState, {
+    const ready = creatorReducer(initialCreatorState, {
+      type: "runtime-changed",
+      phase: "ready",
+      errorCode: null,
+    });
+    const listed = creatorReducer(ready, {
+      type: "projects-loaded",
+      projects: [],
+    });
+    const opening = creatorReducer(listed, {type: "project-opening"});
+    const prepared = creatorReducer(opening, {
       type: "project-ready",
       project: {
         projectId: "11111111-1111-4111-8111-111111111111",

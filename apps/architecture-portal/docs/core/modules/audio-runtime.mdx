@@ -17,15 +17,15 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 准备样本、调度 Pattern/Pad 事件并离线或实时渲染；不修改 Project Truth。
 ## 2. 当前实现状态
-Prepared Sample Bank、Realtime Engine、Offline Renderer 与 WAV writer 已实现。
+Prepared Sample Bank、per-Pad published/preview playback、One-shot/Gate/Loop/Hold、stop/release、Voice state、Realtime Engine、Offline Renderer 与 WAV writer 已实现。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Project Cooker；平台输出位于适配边界。
 ## 4. 架构与数据流
-Runtime Snapshot → 样本准备 → 有界事件队列 → 音频线程 → 输出 sink。
+Runtime Snapshot → Sample Bank 准备/发布 → fixed SPSC control 与 Voice-state 队列 → 音频线程 → 输出 sink；preview 只覆盖 Runtime，不进入 Project Truth。
 ## 5. API 与 Artifact 边界
-消费不可变快照与已准备样本，不在实时回调解析 Project bundle。
+消费不可变快照、resolved playback 与已准备样本，不在实时回调解析 Project/WAV、分配内存、加锁或调用 Host。
 ## 6. 状态、错误与并发
-固定 SPSC 队列和压力测试覆盖并发；实时路径避免无界工作。
+固定 SPSC 队列和压力测试覆盖 control/Voice 并发；overflow fail closed，实时路径避免无界工作。
 ## 7. 产品使用方
 Native Test Host 与未来正式平台 Host 通过 Facade/适配层使用。
 ## 8. 测试与证据

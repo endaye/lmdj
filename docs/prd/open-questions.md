@@ -1,6 +1,6 @@
 # 开放问题
 
-更新时间：2026-08-03
+更新时间：2026-08-12
 
 这里记录 2026-07-18 Stage Memo 和 2026-07-24 本地决策之后仍未确认的问题。已经解决的旧问题已转入 [decision-log.md](decision-log.md)，不继续以“待决”状态保留。
 
@@ -29,7 +29,6 @@
 | 问题 | 为什么重要 | 处理时点 | 状态 |
 | --- | --- | --- | --- |
 | 当前 empty Pad 后续按什么规则填充素材和功能？ | 16 个数据槽已经固定，但后续角色分配仍会影响 Patch Mapping。 | 首条 Creator 切片通过后，单独设计填充策略。 | 延后 |
-| Sampler Edit 第一版最小参数集是否只含 Start/End、Loop、One-shot、Mute、Volume、Swap？ | 决定第二条 Stage 1 切片是否还能保持纵向闭环。 | Sampler Edit + Take 设计会。 | 待决 |
 | Take 是只记录 Pad/MIDI 事件，还是同时生成音频 Bounce？ | 决定 Take contract、Web Audio 录制和 Export Pack。 | Sampler Edit + Take 设计会。 | 待决 |
 | Prompt/Voice 首个 Generation Provider 使用第三方 API 还是本地模型？ | 影响成本、延迟、授权、失败恢复和 Agent Orchestration。 | Creator 基础闭环通过后。 | 延后 |
 | Production Separator 最终选择哪个 checkpoint？ | 影响 Stem 质量、资源成本和生产 Runner 迁移。 | Phase 1D benchmark / blind listening review。 | 待验证 |

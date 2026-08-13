@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="6a3e307d8e0f2c991eb6c11f38949eab8102f478f2c3bcb208543d57396842d0">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="f5ae2e9cc4e63a7618a07b95d88f7d1b6458a7d71a1779688337ed9861ef6030">
   <title id="title">Audio Runtime Module</title><desc id="description">准备样本、有界事件队列与实时/离线输出</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -25,13 +25,13 @@
       <rect class="node-mask" x="406" y="186" width="278" height="104" rx="18"/>
       <rect class="node" x="410" y="190" width="270" height="96" rx="14"/>
       <text class="node-title" x="426" y="222">Prepared Sample Bank</text>
-      <text class="node-detail" x="426" y="248">non-realtime prepare</text>
+      <text class="node-detail" x="426" y="248">PCM · playback bounds</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="796" y="186" width="248" height="104" rx="18"/>
       <rect class="node" x="800" y="190" width="240" height="96" rx="14"/>
       <text class="node-title" x="816" y="222">Realtime Engine</text>
-      <text class="node-detail" x="816" y="248">bounded callback</text>
+      <text class="node-detail" x="816" y="248">mode · preview · Voice</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="1186" y="186" width="238" height="104" rx="18"/>
@@ -40,6 +40,6 @@
       <text class="node-detail" x="1206" y="248">offline / device</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependencies</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation + Project Cooker.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Concurrency</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed SPSC queue and explicit realtime lifecycle.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Concurrency</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Fixed control and Voice-state SPSC rings; overflow and corrupt state fail closed.</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Acceptance split</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Automation does not replace physical latency and device evidence.</div></foreignObject></g>
 </svg>

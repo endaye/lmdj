@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver Product Build `1.0.17.0 · canary` with a formal Sample mode that imports or replaces bounded PCM16 WAV artifacts, edits per-Pad playback truth, renders a deterministic waveform, and auditions all four trigger modes through the existing Application Facade and realtime Web Runtime.
+**Goal:** Deliver Product Build `1.0.22.0 · canary` with a formal Sample mode that imports or replaces bounded PCM16 WAV artifacts, edits per-Pad playback truth, renders a deterministic waveform, and auditions all four trigger modes through the existing Application Facade and realtime Web Runtime.
 
 **Architecture:** Extend Authoring Domain and Project I/O with dual-read `lmdj.project.v1`/`lmdj.project.v2` truth and atomic Sample mutations; extend Project Cooker with deterministic WAV analysis, waveform envelopes, 44.1→48 kHz preparation, and resolved playback values; extend Audio Runtime with fixed-size press/release/preview control messages. Application Facade remains the typed authority for Sample queries and mutations, Web Runtime Platform transports those operations without parsing Project Truth, and Creator owns only selected Pad, viewport, gesture draft, pending action, and render state.
 
@@ -372,32 +372,36 @@ Update `docs/prd/decision-log.md` with the approved Stage 8 parameter/ownership 
 
 Canonical policy: `docs/governance/version-management.md`.
 
-The current stacked baseline is Product Build `1.0.16.3`, not the older `1.0.16.2` named in the design preface. The target remains a new minor Build because Stage 8 adds Product behavior and a Project Contract.
+The live merged baseline at Task 12 integration is Product Build `1.0.20.0`.
+The target remains a new minor Build because Stage 8 adds Product behavior and
+a Project Contract. Patch-only Host targets below were advanced from this live
+baseline after the earlier planned identities were consumed by merged Stage 6
+hardening builds.
 
 | Identity | Current stacked baseline | Planned target | API | Reason |
 | --- | --- | --- | --- | --- |
-| Product Build | `1.0.16.3` | `1.0.17.0` | n/a | New Project Contract and complete Sample mode. |
+| Product Build | `1.0.20.0` | `1.0.22.0` | n/a | New Project Contract and complete Sample mode. |
 | `lmdj.project.v1` | `1.0.0` | unchanged | n/a | Legacy read/import remains supported. |
 | `lmdj.project.v2` | absent | `2.0.0` | n/a | Complete per-Pad playback and forward migration. |
 | `authoring-domain` | `0.1.1` | `0.2.0` | stays 1 | New Project value and Commands. |
-| `project-io` | `0.5.0` | `0.6.0` | stays 1 | Dual-read/v2-write and atomic Sample transaction. |
+| `project-io` | `0.5.4` | `0.6.0` | stays 1 | Dual-read/v2-write and atomic Sample transaction. |
 | `project-cooker` | `0.2.1` | `0.3.0` | stays 1 | Analysis, waveform, resampling, resolved playback. |
-| `audio-runtime` | `0.4.0` | `0.5.0` | stays 1 | Trigger modes, preview, stop controls. |
-| `application-facade` | `1.3.1` | `1.4.0` | stays 2 | Typed Sample query/mutation surface. |
-| `web-runtime-platform` | `0.1.2` | `0.2.0` | stays 1 | Typed Sample transport and audition lifecycle. |
-| `creator-web` | `1.0.2` | `1.1.0` | stays 1 | Enables formal Sample mode. |
-| `web-runtime-host` | `1.2.2` | `1.2.3` | stays 1 | Exact Platform dependency propagation only. |
-| `core-cli` | `1.0.7` | `1.0.8` | stays 2 | Exact Facade dependency propagation only. |
-| `core-mcp` | `1.1.4` | `1.1.5` | stays 2 | Exact Facade dependency/Python identity propagation only. |
-| `native-test-host` | `1.0.5` | `1.0.6` | stays 1 | Exact Facade dependency and parity coverage. |
+| `audio-runtime` | `0.4.1` | `0.5.0` | stays 1 | Trigger modes, preview, stop controls. |
+| `application-facade` | `1.3.5` | `1.4.0` | stays 2 | Typed Sample query/mutation surface. |
+| `web-runtime-platform` | `0.2.1` | `0.3.0` | stays 1 | Typed Sample transport and audition lifecycle. |
+| `creator-web` | `1.1.2` | `1.2.0` | stays 1 | Enables formal Sample mode. |
+| `web-runtime-host` | `1.2.8` | `1.2.9` | stays 1 | Exact Platform dependency propagation only. |
+| `core-cli` | `1.0.11` | `1.0.12` | stays 2 | Exact Facade dependency propagation only. |
+| `core-mcp` | `1.1.8` | `1.1.9` | stays 2 | Exact Facade dependency/Python identity propagation only. |
+| `native-test-host` | `1.0.9` | `1.0.10` | stays 1 | Exact Facade dependency and parity coverage. |
 | `lmdj.project-bundle.v1` | `1.0.0` | unchanged | n/a | Imports v1 only; Stage 8 adds no bundle export. |
 | `lmdj.error.v1` | `1.0.0` | unchanged | n/a | Existing typed errors are sufficient. |
 
 - Before writing any identity, fetch and read merged `origin/main`, `products/lmdj/version.json`, all affected manifests, and the immutable snapshot inventory. If any planned identity was consumed, revise this table and every downstream reference to the next legal identity before editing files.
 - Regenerate `products/lmdj/assembly.lock.json` only with `python3 scripts/version.py lock`; never hand-edit it.
-- From a clean committed source boundary run `scripts/architecture-portal.sh version 1.0.17.0 canary`. The immutable snapshot is a separate commit from current-truth integration.
-- Future tag text is `lmdj-v1.0.17.0`; tag creation and push are outside this plan's local authorization.
-- Rollback is a forward-compatible corrective build that retains v2 readers and Core behavior while disabling faulty Creator mutation entry. Never overwrite migrated workspaces with a `1.0.16.x` artifact or downgrade v2 truth to v1.
+- From a clean committed source boundary run `scripts/architecture-portal.sh version 1.0.22.0 canary`. The immutable snapshot is a separate commit from current-truth integration.
+- Future tag text is `lmdj-v1.0.22.0`; tag creation and push are outside this plan's local authorization.
+- Rollback is a forward-compatible corrective build that retains v2 readers and Core behavior while disabling faulty Creator mutation entry. Never overwrite migrated workspaces with a `1.0.20.0` artifact or downgrade v2 truth to v1.
 
 ---
 
@@ -1291,7 +1295,7 @@ git commit -m "test(creator): prove the packaged sample editor"
 
 **Interfaces:**
 - Consumes: completed Tasks 1–11 and merged Stage 7 `main` baseline.
-- Produces: coherent `1.0.17.0 · canary` current truth; no immutable snapshot yet.
+- Produces: coherent `1.0.22.0 · canary` current truth; no immutable snapshot yet.
 
 - [ ] **Step 1: Revalidate the integration gate before editing**
 
@@ -1313,7 +1317,7 @@ find packages apps -name module.json -print0 | xargs -0 jq -r '[.module // .host
 ls apps/architecture-portal/versioned_metadata
 ```
 
-Expected: `1.0.17.0` and every planned component target are unused. If not, update this plan's Version Management table and use the next legal identities consistently.
+Expected: `1.0.22.0` and every planned component target are unused. If not, update this plan's Version Management table and use the next legal identities consistently.
 
 - [ ] **Step 3: Update manifests and regenerate Assembly lock**
 
@@ -1342,7 +1346,7 @@ scripts/creator-web.sh test
 scripts/creator-web.sh proof
 ```
 
-Expected: all current manifests, source diagrams, Host packages, and functional suites agree on `1.0.17.0`; full excludes stress by policy.
+Expected: all current manifests, source diagrams, Host packages, and functional suites agree on `1.0.22.0`; full excludes stress by policy.
 
 - [ ] **Step 6: Commit Task 12**
 
@@ -1380,14 +1384,14 @@ git diff --cached --name-status
 git commit -m "feat(product): allocate stage 8 sample editor candidate"
 ```
 
-### Task 13: Freeze the immutable `1.0.17.0 · canary` Portal snapshot
+### Task 13: Freeze the immutable `1.0.22.0 · canary` Portal snapshot
 
 **Files:**
 - Modify: `apps/architecture-portal/versions.json`
-- Create: `apps/architecture-portal/versioned_docs/version-1.0.17.0/**`
-- Create: `apps/architecture-portal/versioned_sidebars/version-1.0.17.0-sidebars.json`
-- Create: `apps/architecture-portal/versioned_metadata/version-1.0.17.0.json`
-- Create: `apps/architecture-portal/static/versions/1.0.17.0/**`
+- Create: `apps/architecture-portal/versioned_docs/version-1.0.22.0/**`
+- Create: `apps/architecture-portal/versioned_sidebars/version-1.0.22.0-sidebars.json`
+- Create: `apps/architecture-portal/versioned_metadata/version-1.0.22.0.json`
+- Create: `apps/architecture-portal/static/versions/1.0.22.0/**`
 
 **Interfaces:**
 - Consumes: clean committed Task 12 source boundary.
@@ -1405,7 +1409,7 @@ Expected: no output from status and HEAD is Task 12.
 - [ ] **Step 2: Generate the immutable snapshot**
 
 ```bash
-scripts/architecture-portal.sh version 1.0.17.0 canary
+scripts/architecture-portal.sh version 1.0.22.0 canary
 ```
 
 Expected: exactly one new version namespace; older versioned files are byte-for-byte untouched.
@@ -1423,10 +1427,10 @@ Expected: current and every immutable version pass.
 
 ```bash
 git add apps/architecture-portal/versions.json \
-  apps/architecture-portal/versioned_docs/version-1.0.17.0 \
-  apps/architecture-portal/versioned_sidebars/version-1.0.17.0-sidebars.json \
-  apps/architecture-portal/versioned_metadata/version-1.0.17.0.json \
-  apps/architecture-portal/static/versions/1.0.17.0
+  apps/architecture-portal/versioned_docs/version-1.0.22.0 \
+  apps/architecture-portal/versioned_sidebars/version-1.0.22.0-sidebars.json \
+  apps/architecture-portal/versioned_metadata/version-1.0.22.0.json \
+  apps/architecture-portal/static/versions/1.0.22.0
 git commit -m "docs(product): freeze stage 8 canary architecture snapshot"
 ```
 
@@ -1515,6 +1519,6 @@ Expected: all pass and the branch is clean.
 
 - Keep the Stage 8 branch stacked until Stage 7 is in `main`; do not mark it merge-ready while the ancestor gate fails.
 - Before any push/PR request, rebase onto merged `origin/main`, rerun Task 14 revision-sensitive gates, and verify the declared PR base is `main`.
-- The PR must declare `Documentation impact: required` with the routes above and `Version impact: Product 1.0.17.0; new lmdj.project.v2 2.0.0; affected Module/Host versions as verified at integration time`.
+- The PR must declare `Documentation impact: required` with the routes above and `Version impact: Product 1.0.22.0; new lmdj.project.v2 2.0.0; affected Module/Host versions as verified at integration time`.
 - Automated green plus immutable canary snapshot permits implementation review only. It does not claim physical-pass, Beta, Stable, release, publication, or deployment.
-- Do not create or push `lmdj-v1.0.17.0`, merge the PR, publish artifacts, deploy a Host, or promote a Channel without separate authorization.
+- Do not create or push `lmdj-v1.0.22.0`, merge the PR, publish artifacts, deploy a Host, or promote a Channel without separate authorization.

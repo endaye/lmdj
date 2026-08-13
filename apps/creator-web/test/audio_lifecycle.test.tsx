@@ -91,10 +91,10 @@ function sessionFixture(name: string) {
       state: hostState,
       error_code: errorCode,
       error_details: errorDetails,
-      product_build: "1.0.20.0",
+      product_build: "1.0.22.0",
       host_id: "creator-web",
-      host_version: "1.1.2",
-      platform_version: "0.2.1",
+      host_version: "1.2.0",
+      platform_version: "0.3.0",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,
@@ -311,8 +311,10 @@ test("an admitted recovery probe stays owned after readiness is consumed", async
   value.setRecoveryProbeReady(true);
   await screen.findByText("Audio recovering");
 
-  const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
-  fireEvent.keyDown(window, {code: "KeyA", repeat: false});
+  const pad = screen.getByRole("button", {
+    name: "Pad A1 — assigned — Key Q",
+  });
+  fireEvent.keyDown(window, {code: "KeyQ", repeat: false});
   await waitFor(() => expect(value.calls).toContain(
     "probe-owner:trigger:0:100:keyboard",
   ));
@@ -335,7 +337,7 @@ test("an admitted recovery probe stays owned after readiness is consumed", async
     runtimeFrame: 128,
   }));
   await waitFor(() => expect(pad.dataset.outcome).toBe("started"));
-  fireEvent.keyUp(window, {code: "KeyA"});
+  fireEvent.keyUp(window, {code: "KeyQ"});
 });
 
 test("audio activation consumes only an explicit trusted gesture", async () => {

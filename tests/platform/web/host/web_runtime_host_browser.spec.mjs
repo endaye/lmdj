@@ -90,7 +90,11 @@ async function installTransportObservability(page) {
           payload: structuredClone(request.payload),
           response: structuredClone(response),
         });
-        if (request.operation === "trigger" && response?.ok === true) {
+        if (
+          request.operation === "trigger" &&
+          Object.hasOwn(request.payload, "velocity") &&
+          response?.ok === true
+        ) {
           observations.admittedSequences.push(response.result.sequence);
         }
         return response;
@@ -1025,7 +1029,10 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     window.__lmdjTask11.responses.slice(start)
       .filter(({ operation }) => operation === "trigger")
       .map(({ payload }) => payload),
-  pointerMarker.responses)).toEqual([{ slot: 0, velocity: 100 }]);
+  pointerMarker.responses)).toEqual([
+    { slot: 0, velocity: 100 },
+    { slot: 0, kind: "release" },
+  ]);
 
   const keyboardMarker = await observationMarker(page);
   await page.keyboard.press("s");
@@ -1045,7 +1052,10 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     window.__lmdjTask11.responses.slice(start)
       .filter(({ operation }) => operation === "trigger")
       .map(({ payload }) => payload),
-  keyboardMarker.responses)).toEqual([{ slot: 9, velocity: 100 }]);
+  keyboardMarker.responses)).toEqual([
+    { slot: 9, velocity: 100 },
+    { slot: 9, kind: "release" },
+  ]);
 
   const burstCodes = [
     "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
@@ -1071,7 +1081,7 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
   }, burstMarker)).toEqual({
     state: "running",
     admissions: burstCodes.length,
-    responses: burstCodes.length,
+    responses: burstCodes.length * 2,
   });
   const burstAdmissions = await page.evaluate((start) =>
     window.__lmdjTask11.admittedSequences.slice(start),
@@ -1086,7 +1096,10 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
       .filter(({ operation }) => operation === "trigger")
       .map(({ payload }) => payload),
   burstMarker.responses)).toEqual(
-    burstCodes.map((_, slot) => ({ slot, velocity: 100 })),
+    burstCodes.flatMap((_, slot) => [
+      { slot, velocity: 100 },
+      { slot, kind: "release" },
+    ]),
   );
 
   const descriptor = await page.evaluate((storageKey) =>

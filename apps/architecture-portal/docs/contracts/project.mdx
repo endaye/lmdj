@@ -3,19 +3,21 @@ title: Project Contract
 area: contracts
 status: implemented
 owners: [core, product]
-contracts: [lmdj.project.v1]
-source_paths: [contracts/project/lmdj.project.v1.schema.json, packages/authoring-domain]
+contracts: [lmdj.project.v1, lmdj.project.v2]
+source_paths: [contracts/project/lmdj.project.v1.schema.json, contracts/project/lmdj.project.v2.schema.json, packages/authoring-domain]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 <BuildIdentity kind="contracts" id="lmdj.project.v1" />
 
+<BuildIdentity kind="contracts" id="lmdj.project.v2" />
+
 ## 权威内容
-`lmdj.project.v1` 表达可编辑的 Project Truth：素材引用、Pad Slot、Pattern 和创作结构。
+`lmdj.project.v1` 保持兼容读取；`lmdj.project.v2` 是当前写入真相，表达素材引用、Pad Slot、完整 per-Pad playback（trim、trigger mode、gain、mute）、Pattern 和创作结构。v1 缺失 playback 时读取层投影固定默认值，任何第一次成功 mutation 才原子写出 v2。
 ## 明确排除
 Runtime Snapshot、Provider 选择、Attempt failure、设备句柄和 Host 偏好不属于 Project Truth。
 ## 引用不变量
-Pattern event 引用 Pad Slot，Slot 再关联 Asset；事件不直接绑定 Asset。
+Pattern event 引用 Pad Slot，Slot 再关联 Asset；事件不直接绑定 Asset。playback 属于 Slot，不属于不可变 Asset，同一 WAV 可被多个 Slot 以不同参数引用。
 ## 使用方与证据
-Authoring Domain、Project I/O 与 Cooker 消费该 Contract，并由领域/I/O/Cooker 测试验证。
+Authoring Domain、Project I/O、Cooker 与 Facade 消费该 Contract，并由 schema、领域、dual-read/v2-write、Cook 与 packaged v1→v2 Creator Proof 验证。

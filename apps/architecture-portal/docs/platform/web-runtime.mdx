@@ -13,6 +13,7 @@ source_paths:
   - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
   - docs/quality/web-runtime-lab-acceptance.md
   - docs/architecture/2026-08-01-web-realtime-audio-threshold-decision.md
+  - docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -21,11 +22,13 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 当前组成
 
-Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.2.1`、Diagnostic Web Runtime Host `1.2.8` 与 Creator Web Host `1.1.2` 组成，并锁入 Product Build `1.0.20.0`。
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.3.0`、Diagnostic Web Runtime Host `1.2.9` 与 Creator Web Host `1.2.0` 组成，并锁入 Product Build `1.0.22.0`。
 
 ## 共享 Platform
 
-两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_complete`、`create_immutable`）都要求目标 Project 的有效 writer lease，且 lease 必须属于发起调用的同一 `ProjectStoragePlatform`；无覆盖 lease 时以 `IO_ERROR` + `storage_condition=invalid_state` 失败，不同 same-page platform 试图复用 owner lease 时以 `IO_ERROR` + `storage_condition=project_busy` 在打开 target 或 intent 前失败。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
+两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Stage 8 在同一有界 Host lane 上加入 Sample inspect、waveform、streamed import、update、reset、preview、release、stop 与 Snapshot retry，并把权威 Voice started/stopped/completed 状态按序投影给 Creator。Project 路径只由 retained current Project 注入，Browser payload 不得携带 `project_path`；verified sidecar 的长度、SHA-256、offset 与 final 标记在进入 Facade 前精确校验。
+
+Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_complete`、`create_immutable`）都要求目标 Project 的有效 writer lease，且 lease 必须属于发起调用的同一 `ProjectStoragePlatform`；无覆盖 lease 时以 `IO_ERROR` + `storage_condition=invalid_state` 失败，不同 same-page platform 试图复用 owner lease 时以 `IO_ERROR` + `storage_condition=project_busy` 在打开 target 或 intent 前失败。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
 
 ## 分发与服务
 
@@ -33,7 +36,9 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 
 ## 线程与生命周期
 
-主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。AudioWorklet 的 terminal quiescence 在首个 caller budget 超时并锁存 fatal 后，只再等待一个同长度的 terminal budget；callback 仍未退出时返回类型化 `INTERNAL_ERROR`，不再无限 futex 等待。Transport 收到无法关联到 pending request 的未知或重复 response 时会原子 fail closed：仅终止一次、以 `HOST_PROTOCOL_MISMATCH` 拒绝其余 pending request，并清空 pending/active identity。真实 Chromium Browser Main conformance 会在 unknown response 进入 scheduled production poll 前保持另一个 production request pending，并直接观察该 promise 被同一 terminal error 拒绝且 ID 清除。Manifest mismatch、publication outcome unknown、终止与重启恢复同样 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
+主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。Project open/import 与 Sample mutation 共用可恢复 action tail；每次 Pad press 的 inspect→trigger admission 串行，避免并发 Facade query 进入同一 native owner，同时不会形成 inspect backlog。adverse lifecycle 会取消可安全重试的纯读请求，使 preview clear 与 `sample.stop(all)` 不被长查询阻塞；已提交 mutation 的 Project/Runtime 分离结果仍由后续权威 refresh 收敛，不重放 mutation。
+
+AudioWorklet 的 terminal quiescence 在首个 caller budget 超时并锁存 fatal 后，只再等待一个同长度的 terminal budget；callback 仍未退出时返回类型化 `INTERNAL_ERROR`，不再无限 futex 等待。Transport 收到无法关联到 pending request 的未知或重复 response 时会原子 fail closed：仅终止一次、以 `HOST_PROTOCOL_MISMATCH` 拒绝其余 pending request，并清空 pending/active identity。真实 Chromium Browser Main conformance 会在 unknown response 进入 scheduled production poll 前保持另一个 production request pending，并直接观察该 promise 被同一 terminal error 拒绝且 ID 清除。Manifest mismatch、publication outcome unknown、Voice ring overflow、终止与重启恢复同样 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
 
 Runtime Session 是 input 与 terminal cleanup 的唯一 owner。每个终止或 replacement
 generation 都必须释放 Worker/transport、MIDI listeners、BroadcastChannel、AudioContext
@@ -67,7 +72,7 @@ Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python s
 `docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 
 发布工具、workflow、历史 Build 的 tag/Release 或任何部署证据，都不自动证明当前 Product
-Build `1.0.20.0` 已进入 current source，尚未发布。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
+Build `1.0.22.0` 已进入 current source，尚未发布。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
 record；本地 Proof 或 PR Preview 不能替代公共部署证据。
 
 ## 非能力与下一门禁

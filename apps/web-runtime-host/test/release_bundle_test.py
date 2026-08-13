@@ -86,7 +86,7 @@ class ReleaseBundleTest(unittest.TestCase):
                 "--expected-product-build",
                 "1.0.15.2",
                 "--expected-host-version",
-                "1.1.2",
+                "1.2.0",
             ],
             check=False,
             capture_output=True,
@@ -115,7 +115,7 @@ class ReleaseBundleTest(unittest.TestCase):
             trusted_checksum_fingerprint=self.TRUSTED_CHECKSUM_FINGERPRINT,
             output_root=self.output,
             expected_product_build="1.0.15.2",
-            expected_host_version="1.1.2",
+            expected_host_version="1.2.0",
             verifier=verifier,
             checksum_authorizer=extra.pop(
                 "checksum_authorizer", lambda checksum, signature, key, fingerprint: None
@@ -125,7 +125,7 @@ class ReleaseBundleTest(unittest.TestCase):
 
     def stage_valid(self, **extra):
         manifest = {
-            "host_version": "1.1.2",
+            "host_version": "1.2.0",
             "product_build": "1.0.15.2",
         }
         archive = self.write_zip(
@@ -170,7 +170,7 @@ class ReleaseBundleTest(unittest.TestCase):
                 trusted_checksum_fingerprint=self.TRUSTED_CHECKSUM_FINGERPRINT,
                 output_root=self.output,
                 expected_product_build="1.0.15.2",
-                expected_host_version="1.1.2",
+                expected_host_version="1.2.0",
                 verifier=lambda root, repo: None,
             )
 
@@ -232,9 +232,9 @@ class ReleaseBundleTest(unittest.TestCase):
 
     def test_rejects_missing_or_mismatched_manifest_identity(self) -> None:
         for manifest, message in (
-            ({"host_version": "1.1.2"}, "release bundle manifest is invalid"),
+            ({"host_version": "1.2.0"}, "release bundle manifest is invalid"),
             (
-                {"host_version": "1.1.2", "product_build": "1.0.15.3"},
+                {"host_version": "1.2.0", "product_build": "1.0.15.3"},
                 "release bundle Product Build mismatch",
             ),
             (
@@ -309,7 +309,7 @@ class ReleaseBundleTest(unittest.TestCase):
         self.assertNotEqual(observed[0][0], bundle.dist_root)
         self.assertEqual(observed[0][1], REPO_ROOT)
         self.assertEqual(bundle.product_build, "1.0.15.2")
-        self.assertEqual(bundle.host_version, "1.1.2")
+        self.assertEqual(bundle.host_version, "1.2.0")
         self.assertRegex(bundle.archive_sha256, r"^[0-9a-f]{64}$")
         self.assertEqual(bundle.dist_root, (self.output / "dist").resolve())
         self.assertEqual(
@@ -318,7 +318,7 @@ class ReleaseBundleTest(unittest.TestCase):
                 {
                     "archive_sha256": bundle.archive_sha256,
                     "dist_root": str(bundle.dist_root),
-                    "host_version": "1.1.2",
+                    "host_version": "1.2.0",
                     "product_build": "1.0.15.2",
                 },
                 sort_keys=True,
@@ -333,7 +333,7 @@ class ReleaseBundleTest(unittest.TestCase):
             output.writestr("dist/", b"")
             output.writestr(
                 "dist/host-manifest.json",
-                b'{"host_version":"1.1.2","product_build":"1.0.15.2"}',
+                b'{"host_version":"1.2.0","product_build":"1.0.15.2"}',
             )
         checksum = self.write_checksum(
             hashlib.sha256(archive.read_bytes()).hexdigest(), archive.name
@@ -417,7 +417,7 @@ class ReleaseBundleTest(unittest.TestCase):
             encoding="utf-8",
         )
         expected_product_build = "1.0.15.2"
-        expected_host_version = "1.1.2"
+        expected_host_version = "1.2.0"
         archive = self.root / "valid-release.zip"
         with zipfile.ZipFile(archive, "w") as output:
             output.writestr("dist/index.html", "<!doctype html>")

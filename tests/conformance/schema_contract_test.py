@@ -467,7 +467,7 @@ invalid_project_v2_violations = json_schema.validate(
     invalid_project_v2, project_v2
 )
 assert any(
-    "gain_millidb: value 6001 is above maximum 6000" in violation
+    "#/banks/0/pads/0/playback/gain_millidb: above maximum 6000" in violation
     for violation in invalid_project_v2_violations
 ), invalid_project_v2_violations
 for unknown_target in (

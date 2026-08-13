@@ -455,8 +455,8 @@ class PackageTest(unittest.TestCase):
         self.assertEqual(manifest["manifest_version"], 1)
         self.assertEqual(manifest["product_build"], current_product_build())
         self.assertEqual(manifest["host_id"], "web-runtime-host")
-        self.assertEqual(manifest["host_version"], "1.2.8")
-        self.assertEqual(manifest["platform_version"], "0.2.1")
+        self.assertEqual(manifest["host_version"], "1.2.9")
+        self.assertEqual(manifest["platform_version"], "0.3.0")
         self.assertEqual(manifest["protocol_version"], 1)
         self.assertEqual(manifest["heap_bytes"], 536_870_912)
         self.assertEqual(
@@ -567,10 +567,10 @@ class PackageTest(unittest.TestCase):
             '<meta name="lmdj-host-id" content="web-runtime-host">', index
         )
         self.assertIn(
-            '<meta name="lmdj-host-version" content="1.2.8">', index
+            '<meta name="lmdj-host-version" content="1.2.9">', index
         )
         self.assertIn(
-            '<meta name="lmdj-web-runtime-platform-version" content="0.2.1">',
+            '<meta name="lmdj-web-runtime-platform-version" content="0.3.0">',
             index,
         )
         self.assertIn(

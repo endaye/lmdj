@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="be0f32d0a1c48216e1075c5188104323f027138f3cb19fcde3c8bcfe75afa298">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="5ca11a01224574a79f5453e0ca52227eb21a5ee8de8a5cf679a67be58b40a10d">
   <title id="title">LMDJ Headless Core</title><desc id="description">八个产品中立 Module、Host/Provider 隔离及不可变 Runtime Snapshot 数据流</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -51,13 +51,13 @@
       <rect class="node-mask" x="561" y="146" width="198" height="100" rx="18"/>
       <rect class="node" x="565" y="150" width="190" height="92" rx="14"/>
       <text class="node-title" x="581" y="182">Authoring Domain</text>
-      <text class="node-detail" x="581" y="208">Project Truth</text>
+      <text class="node-detail" x="581" y="208">Project v2 · Sample</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="801" y="146" width="188" height="100" rx="18"/>
       <rect class="node" x="805" y="150" width="180" height="92" rx="14"/>
       <text class="node-title" x="821" y="182">Project Cooker</text>
-      <text class="node-detail" x="821" y="208">deterministic</text>
+      <text class="node-detail" x="821" y="208">WAV · waveform · derive</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="1031" y="146" width="198" height="100" rx="18"/>
@@ -69,13 +69,13 @@
       <rect class="node-mask" x="1271" y="146" width="188" height="100" rx="18"/>
       <rect class="node" x="1275" y="150" width="180" height="92" rx="14"/>
       <text class="node-title" x="1291" y="182">Audio Runtime</text>
-      <text class="node-detail" x="1291" y="208">realtime</text>
+      <text class="node-detail" x="1291" y="208">modes · preview · Voice</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="561" y="386" width="198" height="100" rx="18"/>
       <rect class="node" x="565" y="390" width="190" height="92" rx="14"/>
       <text class="node-title" x="581" y="422">Project I/O</text>
-      <text class="node-detail" x="581" y="448">Store · Bundle · Journal</text>
+      <text class="node-detail" x="581" y="448">Store · staging · cache</text>
     </g>
     <g class="component kind-core">
       <rect class="node-mask" x="801" y="386" width="188" height="100" rx="18"/>
@@ -90,6 +90,6 @@
       <text class="node-detail" x="1051" y="448">Artifact sink</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Foundation</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Artifact、JSON、typed error 为所有路径提供共同底座。</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Contracts</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Bundle 只负责 transfer；Project Truth 与 Runtime Snapshot 语义不变。</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Contracts</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project v1 只读兼容、v2 写入；Bundle 只负责 transfer，Runtime Snapshot 仍是不可变派生。</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">禁止路径</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Host 不解析 Bundle；Provider 不接收 Project；Snapshot 不反写 Project Truth。</div></foreignObject></g>
 </svg>

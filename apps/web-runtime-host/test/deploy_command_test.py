@@ -34,7 +34,7 @@ PRODUCT_BUILD = "1.0.15.3"
 TAG_TARGET = "b" * 40
 INITIAL_TAG = "lmdj-v1.0.15.2"
 INITIAL_TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
-HOST_VERSION = "1.1.2"
+HOST_VERSION = "1.2.0"
 INITIAL_HOST_DIGEST = (
     "d56a7c99a3c489db068b93fcef70a254"
     "b498adf4bc65919253beccb199f3ad5a"
@@ -1367,7 +1367,7 @@ def verify_distribution(dist_root, repo_root):
     def test_rejects_duplicate_or_mismatched_release_assets(self) -> None:
         failures = (
             {"FAKE_DUPLICATE_ARCHIVE": "1"},
-            {"FAKE_ARCHIVE_NAME": "lmdj-web-runtime-host-1.1.2-product-1.0.99.0.zip"},
+            {"FAKE_ARCHIVE_NAME": "lmdj-web-runtime-host-1.2.0-product-1.0.99.0.zip"},
             {"FAKE_ARCHIVE_NAME": "lmdj-web-runtime-host-9.9.9-product-1.0.15.3.zip"},
             {"FAKE_CHECKSUM_NAME": "wrong.zip.sha256"},
             {"FAKE_SIGNATURE_NAME": "wrong.zip.sha256.asc"},

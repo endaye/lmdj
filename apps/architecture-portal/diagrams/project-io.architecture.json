@@ -3,10 +3,10 @@
   "meta": {"title": "Project I/O Module", "summary": "Project Store、portable Bundle 与 journaled atomic publication"},
   "boundaries": [],
   "components": [
-    {"id": "project", "label": "Project Truth", "detail": "authoritative state", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
+    {"id": "project", "label": "Project Truth", "detail": "v1 read · v2 write", "kind": "host", "x": 50, "y": 150, "width": 220, "height": 96},
     {"id": "bundle-in", "label": "Project Bundle", "detail": "transfer-only input", "kind": "host", "x": 50, "y": 390, "width": 220, "height": 96},
     {"id": "io", "label": "Project I/O", "detail": "validate · pack · publish", "kind": "core", "x": 390, "y": 270, "width": 250,"height": 96},
-    {"id": "stage", "label": "Staging + Journal", "detail": "all-or-nothing", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
+    {"id": "stage", "label": "Staging + Journal", "detail": "Project + Sample import", "kind": "core", "x": 770, "y": 270, "width": 240, "height": 96},
     {"id": "store", "label": "Project Store", "detail": "committed truth", "kind": "host", "x": 1140, "y": 150, "width": 220, "height": 96},
     {"id": "bundle-out", "label": "Project Bundle", "detail": "canonical export", "kind": "host", "x": 1140, "y": 390, "width": 220, "height": 96}
   ],
@@ -19,7 +19,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Foundation + Authoring Domain."},
-    {"title": "Failure model", "body": "Cancellation, crash or invalid bytes cannot expose a partial Project."},
+    {"title": "Failure model", "body": "Directory-scoped Sample staging and journaled publication keep cancellation, crash and invalid bytes atomic and retryable."},
     {"title": "Forbidden boundary", "body": "Bundle is transfer-only; Runtime Snapshot is never persisted as Project Truth."}
   ]
 }

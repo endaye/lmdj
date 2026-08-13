@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="16ba32300597fce4baa816cb116b69ec3e740b75dff647cf344e4cb6e693d7af">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1560 820" role="img" aria-labelledby="title description" data-source-sha256="9522ac660b37aeffc5396278a9a22457e778832c59c3bb8be8ece74eef20fadf">
   <title id="title">Authoring Domain Module</title><desc id="description">命令、Project Truth 与 Pad Slot 引用不变量</desc>
   <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>
   <style>
@@ -31,7 +31,7 @@
       <rect class="node-mask" x="846" y="186" width="258" height="104" rx="18"/>
       <rect class="node" x="850" y="190" width="250" height="96" rx="14"/>
       <text class="node-title" x="866" y="222">Project Truth</text>
-      <text class="node-detail" x="866" y="248">authoritative state</text>
+      <text class="node-detail" x="866" y="248">v2 Sample playback truth</text>
     </g>
     <g class="component kind-host">
       <rect class="node-mask" x="1236" y="186" width="268" height="104" rx="18"/>
@@ -40,6 +40,6 @@
       <text class="node-detail" x="1256" y="248">read / persist</text>
     </g>
   <g class="card"><rect x="40" y="638" width="481" height="132" rx="14"/><text class="card-title" x="58" y="670">Dependency</text><foreignObject x="58" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Foundation only.</div></foreignObject></g>
-<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Owned state</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Truth and command semantics.</div></foreignObject></g>
+<g class="card"><rect x="539" y="638" width="481" height="132" rx="14"/><text class="card-title" x="557" y="670">Owned state</text><foreignObject x="557" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">Project Truth, Sample assignment/playback defaults and command replay semantics.</div></foreignObject></g>
 <g class="card"><rect x="1038" y="638" width="481" height="132" rx="14"/><text class="card-title" x="1056" y="670">Forbidden boundary</text><foreignObject x="1056" y="684" width="445" height="70"><div xmlns="http://www.w3.org/1999/xhtml" class="card-body">No Runtime Snapshot, Provider choice, storage or audio.</div></foreignObject></g>
 </svg>

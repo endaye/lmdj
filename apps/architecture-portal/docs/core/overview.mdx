@@ -18,7 +18,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <DiagramFrame title="LMDJ Headless Core" diagramId="lmdj-core" />
 
-Foundation 提供基础类型；Authoring Domain 拥有 Project Truth；Project I/O 持久化并发布 portable Bundle；Project Cooker 生成不可变 Runtime Snapshot；Audio Runtime 消费快照；Provider SDK 隔离 Capability/Attempt；Application Facade 是 Host 唯一 Core 入口；Web Runtime Platform 为浏览器 Host 复用 Facade、输入、生命周期与 AudioWorklet 接线。
+Foundation 提供基础类型；Authoring Domain 通过 `lmdj.project.v1/v2` 拥有含 per-Pad playback 的 Project Truth；Project I/O 双读 v1/v2、只写 v2，并原子发布 Sample mutation 与 portable Bundle；Project Cooker 验证 WAV、生成 waveform/48 kHz resolved playback；Audio Runtime 消费不可变 prepared bank；Provider SDK 隔离 Capability/Attempt；Application Facade 是 Host 唯一 Core/Sample 入口；Web Runtime Platform 为浏览器 Host 复用 Facade、输入、Voice state、生命周期与 AudioWorklet 接线。
 
 ## 边界不变量
 
