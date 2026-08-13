@@ -109,7 +109,11 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   assert.match(proof, /scripts\/creator-web\.sh/);
   assert.match(proof, /不继承历史 Build 的 PR、CI 或 merge 结论/);
   assert.doesNotMatch(proof, /Pull Request CI[^。]+pending/);
-  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 5);
+  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 4);
+  assert.match(
+    proof,
+    /macOS Chrome Physical MIDI `failed on 1\.0\.20\.0 \/ pending retest on 1\.0\.21\.0`/,
+  );
 
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
   assert.match(overview, /Build Identity[^。]+current[^。]+不可变正式快照/);

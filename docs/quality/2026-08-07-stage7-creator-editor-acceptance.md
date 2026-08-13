@@ -43,21 +43,26 @@ ten-step sheet are recorded in
 Before that blank human sheet was executed, review of the physical keyboard
 journey found that its lower `A..K` row addressed Pads 1–8 while the upper
 `Q..I` row addressed Pads 9–16, opposite the Creator's ascending visual order.
-The current correction allocates Product Build `1.0.20.0`, Web Runtime Platform
+That correction allocated Product Build `1.0.20.0`, Web Runtime Platform
 `0.2.1`, Creator Web `1.1.2`, and Formal Web Runtime Host `1.2.8`. The single
 shared map now assigns `Q..I -> Pad 1..8` and `A..K -> Pad 9..16`; every Pad
 shows an accessible key hint derived from that same map. Pointer, MIDI, stable
 Slot, Project, Bundle, Runtime Snapshot, and audio lifecycle semantics remain
-unchanged. A new `1.0.20.0` Proof and ten-step sheet are required; no automated
-or manual result transfers from `1.0.19.0`.
+unchanged. Product `1.0.20.0` subsequently passed the complete ten-step human
+Canary, but its separate physical MIDI row failed: Chrome granted permission,
+yet no Trigger reached Creator. macOS CoreMIDI capture showed PAD BANK A PAD1
+and PAD16 sending Channel 10 Note 36/51 while Creator was hard-coded to Channel
+1. The current correction therefore allocates Product Build `1.0.21.0` and
+Creator Web `1.1.3`; Platform `0.2.1` and Formal Host `1.2.8` remain unchanged.
+Creator now accepts the bounded Note `36..51` mapping on channels 1–16.
 
 This remains branch-local candidate evidence, not merged-main Proof. No push,
 PR, merge, tag, Release, deployment, publication, or Channel promotion is
 claimed by this record.
 
-Manual canary is `open — corrected candidate must restart at step 1`. Physical Keyboard/MIDI,
-hearing, Safari, and iPadOS observations remain `deferred / unverified`; no
-automated result is promoted into those claims.
+The `1.0.20.0` ten-step keyboard/hearing canary remains passed historical
+evidence. Physical MIDI on `1.0.21.0`, Safari Pointer, and iPadOS observations
+remain independently scoped; no automated result is promoted into those claims.
 
 ## Abandoned 1.0.18.0 automated candidate evidence
 
@@ -124,10 +129,10 @@ not Safari product acceptance.
 
 | Platform | Browser | Input / journey | Status |
 | --- | --- | --- | --- |
-| macOS | Safari | Pointer | `deferred / unverified` |
+| macOS | Safari | Pointer | `deferred / unverified`; separate Bundle import check did not reproduce >20 s `importing` |
 | macOS | Chrome | Pointer | `deferred / unverified` |
 | macOS | Chrome | Physical keyboard + hearing | `PASS — 1.0.20.0 ten-step Canary confirmed by endaye; report SHA-256 7e2a2b…333a` |
-| macOS | Chrome | Physical MIDI | `deferred / unverified` |
+| macOS | Chrome | Physical MIDI | `FAIL — 1.0.20.0 filtered MPD218 Channel 10; pending retest on 1.0.21.0` |
 | iPadOS | Safari | Touch | `deferred / unverified` |
 | iPadOS | Safari | Lifecycle | `deferred / unverified` |
 
@@ -148,6 +153,7 @@ screen recovery, or long-session stability on those platforms.
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
 | Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
 | Product Build `1.0.20.0` | corrected keyboard spatial mapping; clean local Proof and immutable snapshot passed at `7d409b5`; candidate source/evidence through `ccd0aec` is now on `origin/main`; ten-step human Canary passed; `main` run `31665186166` remains in progress |
+| Product Build `1.0.21.0` | branch-local Creator `1.1.3` candidate accepts bounded MIDI mapping on channels 1–16; automated Proof and immutable snapshot pending |
 | Manual canary | `T1 passed — endaye confirmed all ten 1.0.20.0 steps with no issue; report SHA-256 7e2a2b…333a` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
@@ -157,7 +163,9 @@ recovered documentation binding, not a historical Proof execution failure.
 
 The current remediation rows must be refreshed when run `31665186166` reaches a
 terminal result or when the local manual-acceptance addendum is published. T1 is closed for the `1.0.20.0`
-branch-local candidate; physical MIDI, Safari, and iPadOS remain unverified.
+branch-local candidate; physical MIDI failed on that Build, Safari import was
+checked separately without reproducing the importing stall, and Safari Pointer
+plus iPadOS remain unverified. Physical MIDI on `1.0.21.0` remains pending.
 Product Build `1.0.20.0` still requires a successful terminal result for the
 full Proof at exact `main` revision `ccd0aec` before any new Product tag. The physical rows
 remain authoritative for their individual platforms and continue to block

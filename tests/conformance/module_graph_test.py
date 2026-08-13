@@ -138,7 +138,7 @@ assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "1.1.2",
+    "version": "1.1.3",
     "api_version": 1,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
@@ -196,7 +196,7 @@ assert web_host_link is not None, (
 )
 for identity in (
     'LMDJ_WEB_CREATOR_HOST_ID="creator-web"',
-    'LMDJ_WEB_CREATOR_HOST_VERSION="1.1.2"',
+    'LMDJ_WEB_CREATOR_HOST_VERSION="1.1.3"',
     'LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"',
     'LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.8"',
 ):

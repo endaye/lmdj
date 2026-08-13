@@ -124,11 +124,11 @@
 - Consumes: Creator behavior commit from Task 1 and the active Assembly/version policy.
 - Produces: one self-consistent `1.0.21.0` Assembly with Creator `1.1.3`, Platform `0.2.1`, and diagnostic Host `1.2.8`.
 
-- [ ] **Step 1: Write RED identity expectations**
+- [x] **Step 1: Write RED identity expectations**
 
   Update the authoritative test expectations first to Product `1.0.21.0` and Creator `1.1.3`, leaving Platform and diagnostic Host unchanged. Update current acceptance/review text so `1.0.20.0` remains immutable passed keyboard evidence while the new physical-MIDI correction is a fresh, unproven candidate.
 
-- [ ] **Step 2: Run RED identity gates**
+- [x] **Step 2: Run RED identity gates**
 
   ```bash
   python3 tests/build/version_test.py
@@ -138,7 +138,7 @@
 
   Expected: failures identify stale Product/Creator manifests, compiled Assembly, generated identity, and lock data.
 
-- [ ] **Step 3: Update manifests and regenerate derived truth**
+- [x] **Step 3: Update manifests and regenerate derived truth**
 
   Set the target Product and Creator identities, update exact Assembly consumers, then run:
 
@@ -154,11 +154,11 @@
     --lock products/lmdj/assembly.lock.json
   ```
 
-- [ ] **Step 4: Update current Portal and acceptance truth**
+- [x] **Step 4: Update current Portal and acceptance truth**
 
   Document channels 1–16 as the Creator default, retain the configurable Platform filter, update Product/Creator identities, and mark physical MIDI as `failed on 1.0.20.0 / pending retest on 1.0.21.0`. Preserve Safari and iPadOS as separately observed states; do not rewrite immutable `1.0.20.0` snapshot content.
 
-- [ ] **Step 5: Run GREEN behavior, identity, and current-doc gates**
+- [x] **Step 5: Run GREEN behavior, identity, and current-doc gates**
 
   ```bash
   npm --prefix apps/creator-web test -- --run
@@ -172,7 +172,7 @@
 
   Expected: all pass.
 
-- [ ] **Step 6: Commit Task 2 atomically**
+- [x] **Step 6: Commit Task 2 atomically**
 
   Stage only Task 2 paths, inspect staged paths/checks, and commit:
 
