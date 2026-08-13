@@ -121,6 +121,23 @@ def build_audit_context(root: Path) -> AuditContext:
     """Build an audit context without contacting remote state."""
     policy, ledger = load_authority_documents(root)
     selected_git = GitRepository(root)
+    selected_github = GitHubClient()
+    return _audit_context_for_authority(
+        root, policy, ledger, selected_git, selected_github,
+        authority_reader=load_authority_documents,
+    )
+
+
+def _audit_context_for_authority(
+    root: Path,
+    policy,
+    ledger,
+    selected_git,
+    selected_github,
+    *,
+    authority_reader=None,
+) -> AuditContext:
+    """Rebuild every path/key-dependent audit verifier for one authority tree."""
     runner = selected_git.runner
     home = Path(os.environ.get("GNUPGHOME", Path.home() / ".gnupg"))
     runtime = ProfileRuntime(
@@ -134,13 +151,40 @@ def build_audit_context(root: Path) -> AuditContext:
         policy=policy,
         ledger=ledger,
         git=selected_git,
-        github=GitHubClient(),
+        github=selected_github,
         profile_verifier=default_profile_verifier(runtime),
         proof_reader=read_product_snapshot_proof,
         tag_signer_fingerprint=policy.product_fingerprint,
         checksum_signer_fingerprint=policy.checksum_fingerprint,
-        authority_reader=load_authority_documents,
+        trust_anchor_verifier=lambda authority_root, canonical_policy: (
+            _verify_audit_trust_anchors(
+                authority_root, canonical_policy, OpenPgpVerifier(runner=runner),
+            )
+        ),
+        authority_reader=authority_reader,
+        authority_context_builder=lambda authority_root, canonical_policy, canonical_ledger: (
+            _audit_context_for_authority(
+                authority_root, canonical_policy, canonical_ledger,
+                selected_git, selected_github,
+            )
+        ),
     )
+
+
+def _verify_audit_trust_anchors(root: Path, policy, verifier: OpenPgpVerifier) -> None:
+    """Import each canonical public key alone and prove its primary role anchor."""
+    import tempfile
+
+    for name, fingerprint in (
+        ("lmdj-product.asc", policy.product_fingerprint),
+        ("lmdj-release-checksum.asc", policy.checksum_fingerprint),
+    ):
+        with tempfile.TemporaryDirectory(prefix="lmdj-release-audit-key-") as directory:
+            home = Path(directory)
+            home.chmod(0o700)
+            verifier.import_public_key(
+                home, root / ".github/release-signing-keys" / name, fingerprint,
+            )
 
 
 def main(argv: list[str] | None = None) -> int:

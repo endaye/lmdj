@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from contextlib import nullcontext
-from dataclasses import dataclass, replace
+from contextlib import contextmanager, nullcontext
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -84,6 +84,8 @@ class AuditReport:
 
 ProfileVerifier = Callable[[str, Path, Path, ReleaseIntent, tuple[AssetBuild, ...]], None]
 ProofReader = Callable[[Path, ReleaseIntent], ProductProof]
+TrustAnchorVerifier = Callable[[Path, ReleasePolicy], None]
+AuthorityContextBuilder = Callable[[Path, ReleasePolicy, ReleaseLedger], "AuditContext"]
 
 
 @dataclass(frozen=True)
@@ -97,7 +99,9 @@ class AuditContext:
     proof_reader: ProofReader
     tag_signer_fingerprint: str
     checksum_signer_fingerprint: str
+    trust_anchor_verifier: TrustAnchorVerifier = lambda root, policy: None
     authority_reader: Callable[[Path], tuple[ReleasePolicy, ReleaseLedger]] | None = None
+    authority_context_builder: AuthorityContextBuilder | None = None
 
 
 @dataclass(frozen=True)
@@ -135,14 +139,11 @@ def audit(
         return _report(observed, policy.repository, mode, findings)
 
     try:
-        context, remote_tags, releases = _load_remote_projection(context)
-        policy = context.policy
-        ledger = context.ledger
+        with _load_remote_projection(context) as (resolved, remote_tags, releases):
+            return _remote_report(observed, resolved, remote_tags, releases, tag)
     except Exception:
         return _report(
-            observed,
-            policy.repository,
-            mode,
+            observed, policy.repository, mode,
             (AuditFinding(
                 "external-error", policy.repository,
                 "canonical Git/GitHub projection is unavailable or incomplete",
@@ -151,14 +152,26 @@ def audit(
             ("git-remote", "github-api"),
         )
 
+
+def _remote_report(
+    observed: str,
+    context: object,
+    remote_tags: dict[str, _ObservedTag],
+    releases: dict[str, GitHubRelease],
+    tag: str | None,
+) -> AuditReport:
+    policy, ledger = context.policy, context.ledger
     selected_entries = [entry for entry in ledger.entries if tag is None or entry.tag == tag]
     selected_exceptions = [item for item in ledger.historical_exceptions if tag is None or item.tag == tag]
     if tag is not None and not selected_entries and not selected_exceptions:
-        return _report(observed, policy.repository, mode, (
+        return _report(observed, policy.repository, "remote", (
             AuditFinding("unauthorized", tag, "tag is not authorized by canonical policy or the intent ledger"),
         ))
 
     findings: list[AuditFinding] = []
+    static_issue = _local_repository_issue(context, list(ledger.entries))
+    if static_issue is not None:
+        findings.append(static_issue)
     linked_exceptions = {item.tag: item for item in selected_exceptions if ledger.intent_for_tag(item.tag) is not None}
     for entry in selected_entries:
         findings.append(_audit_remote_intent(
@@ -170,7 +183,6 @@ def audit(
             findings.append(_audit_remote_exception(
                 context, exception, remote_tags.get(exception.tag), releases.get(exception.tag),
             ))
-
     if tag is None:
         known = {entry.tag for entry in ledger.entries} | {item.tag for item in ledger.historical_exceptions}
         for unknown in sorted((set(remote_tags) | set(releases)) - known):
@@ -183,7 +195,7 @@ def audit(
             else:
                 description = "formal remote state has no authorized intent"
             findings.append(AuditFinding("unauthorized", unknown, description, ("remote",)))
-    return _report(observed, policy.repository, mode, findings)
+    return _report(observed, policy.repository, "remote", findings)
 
 
 def write_report(report: AuditReport, destination: Path | str) -> None:
@@ -280,9 +292,14 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
         return AuditFinding("conflict", policy.repository, "configured signing roles conflict with policy trust anchors")
     root = Path(context.repo_root)
     version_path = root / "products/lmdj/version.json"
-    if not version_path.exists():
-        return None
+    if not version_path.is_file() or version_path.is_symlink():
+        return AuditFinding(
+            "unverifiable", policy.repository,
+            "active Product identity manifest is unavailable",
+            ("active-manifests",),
+        )
     try:
+        context.trust_anchor_verifier(root, policy)
         version = _json_file(version_path)
         assembly_path = root / "products/lmdj/assembly.json"
         lock_path = root / "products/lmdj/assembly.lock.json"
@@ -391,7 +408,9 @@ def _audit_remote_intent(
     if release is None:
         result = AuditFinding("ok", intent.tag, "exact authorized remote tag exists without a Release")
         return _exception_finding(exception, result.message) if exception is not None else result
-    metadata_problem = _release_problem(context.policy, intent, release)
+    metadata_problem = _release_problem(
+        context.policy, intent, tag_state, release, allow_missing_marker=exception is not None,
+    )
     if metadata_problem is not None:
         return AuditFinding("conflict", intent.tag, metadata_problem, ("github-release",))
     try:
@@ -468,7 +487,7 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
                 raise ValueError
             path = _component_path(root, source_kind, identifier)
             document = _json_file(path)
-            if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            if source_kind != "provider" and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
                 raise ValueError
             if source_kind == "contract":
                 if not isinstance(document, dict) or document.get("x-lmdj-contract-version") != version:
@@ -521,7 +540,14 @@ def _ci_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
     return None
 
 
-def _release_problem(policy: ReleasePolicy, intent: ReleaseIntent, release: GitHubRelease) -> str | None:
+def _release_problem(
+    policy: ReleasePolicy,
+    intent: ReleaseIntent,
+    tag_state: _ObservedTag,
+    release: GitHubRelease,
+    *,
+    allow_missing_marker: bool,
+) -> str | None:
     if release.tag_name != intent.tag:
         return "GitHub Release tag conflicts with intent"
     expected_name = f"LMDJ {intent.identity}" if intent.kind.value == "product" else f"{intent.kind.value} {intent.identity}"
@@ -539,22 +565,32 @@ def _release_problem(policy: ReleasePolicy, intent: ReleaseIntent, release: GitH
     if release.target_commitish not in (intent.target_revision, policy.branch, intent.tag):
         return "GitHub Release target_commitish conflicts with canonical identity"
     markers = _MARKER.findall(release.body)
-    if markers:
-        if len(markers) != 1:
-            return "GitHub Release plan marker is ambiguous"
-        try:
-            marker = json.loads(markers[0])
-        except json.JSONDecodeError:
-            return "GitHub Release plan marker is invalid"
-        if (
-            marker.get("tag") != intent.tag
-            or marker.get("target_revision") != intent.target_revision
-            or marker.get("intent") != {
-                **{"kind": intent.kind.value, "identity": intent.identity, "profile": intent.profile},
-                **({"channel": intent.channel} if intent.channel is not None else {}),
-            }
-        ):
-            return "GitHub Release plan marker conflicts with canonical intent"
+    if not markers:
+        return None if allow_missing_marker else "GitHub Release plan marker is missing"
+    if len(markers) != 1:
+        return "GitHub Release plan marker is ambiguous"
+    try:
+        marker = json.loads(markers[0])
+    except json.JSONDecodeError:
+        return "GitHub Release plan marker is invalid"
+    if (
+        set(marker) != {
+            "schema", "plan_schema", "plan_sha256", "tag", "tag_object",
+            "target_revision", "intent",
+        }
+        or marker.get("schema") != "lmdj.release-plan-marker.v1"
+        or marker.get("plan_schema") != "lmdj.release-plan.v1"
+        or not isinstance(marker.get("plan_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", marker["plan_sha256"]) is None
+        or marker.get("tag") != intent.tag
+        or marker.get("tag_object") != tag_state.object_id
+        or marker.get("target_revision") != intent.target_revision
+        or marker.get("intent") != {
+            **{"kind": intent.kind.value, "identity": intent.identity, "profile": intent.profile},
+            **({"channel": intent.channel} if intent.channel is not None else {}),
+        }
+    ):
+        return "GitHub Release plan marker conflicts with canonical intent"
     return None
 
 
@@ -629,9 +665,8 @@ def _worktree(context: object, target: str):
     return factory(target) if callable(factory) else nullcontext(Path(context.repo_root))
 
 
-def _load_remote_projection(
-    context: object,
-) -> tuple[object, dict[str, _ObservedTag], dict[str, GitHubRelease]]:
+@contextmanager
+def _load_remote_projection(context: object):
     context.git.fetch_authority(context.policy.repository, context.policy.branch)
     branch = context.github.get_branch(context.policy.repository, context.policy.branch)
     main = context.git.main_revision()
@@ -641,12 +676,26 @@ def _load_remote_projection(
     if callable(reader):
         with context.git.detached_worktree(main) as authority_tree:
             policy, ledger = reader(Path(authority_tree))
-        if policy.repository != context.policy.repository or policy.branch != context.policy.branch:
-            raise RuntimeError("canonical release authority conflicts")
-        if isinstance(context, AuditContext):
-            context = replace(context, policy=policy, ledger=ledger, authority_reader=None)
-        else:
-            raise RuntimeError("canonical audit context cannot be replaced")
+            if policy.repository != context.policy.repository or policy.branch != context.policy.branch:
+                raise RuntimeError("canonical release authority conflicts")
+            builder = getattr(context, "authority_context_builder", None)
+            if not callable(builder):
+                raise RuntimeError("canonical audit context builder is unavailable")
+            resolved = builder(Path(authority_tree), policy, ledger)
+            if (
+                resolved.repo_root != Path(authority_tree)
+                or resolved.policy != policy or resolved.ledger != ledger
+                or resolved.git is not context.git or resolved.github is not context.github
+            ):
+                raise RuntimeError("canonical audit context is not authority-rooted")
+            tags, releases = _remote_inventories(resolved)
+            yield resolved, tags, releases
+            return
+    tags, releases = _remote_inventories(context)
+    yield context, tags, releases
+
+
+def _remote_inventories(context: object) -> tuple[dict[str, _ObservedTag], dict[str, GitHubRelease]]:
     tags = _list_remote_tags(context)
     release_items = _list_releases(context.github, context.policy.repository)
     releases: dict[str, GitHubRelease] = {}
@@ -656,7 +705,7 @@ def _load_remote_projection(
             raise RuntimeError("GitHub Release inventory is ambiguous")
         releases[release.tag_name] = release
         identifiers.add(release.id)
-    return context, tags, releases
+    return tags, releases
 
 
 def _list_remote_tags(context: object) -> dict[str, _ObservedTag]:

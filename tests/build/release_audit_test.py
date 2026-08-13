@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
 import json
@@ -43,6 +44,7 @@ class ReadOnlyGit:
         self.remote_reads = 0
         self.local_reads = 0
         self.mutations: list[str] = []
+        self.authority_root: Path | None = None
 
     def fetch_authority(self, repository: str, branch: str) -> None:
         self.fetches += 1
@@ -66,6 +68,12 @@ class ReadOnlyGit:
 
     def list_remote_tags(self) -> dict[str, LocalTag]:
         return dict(self.tags)
+
+    @contextmanager
+    def detached_worktree(self, target: str):
+        if self.authority_root is None:
+            raise RuntimeError("fixture canonical authority is unavailable")
+        yield self.authority_root
 
     def create_local_tag(self, *args, **kwargs):
         self.mutations.append("create-local-tag")
@@ -144,9 +152,11 @@ class ReleaseAuditTest(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-release-audit-")
         self.root = Path(self.temporary.name)
         (self.root / "evidence.md").write_text("fixture\n", encoding="utf-8")
+        self.install_static_authority(self.root)
         self.policy = load_policy(ROOT / "tools/release/policy.json")
         self.git = ReadOnlyGit()
         self.github = ReadOnlyGitHub()
+        self.git.authority_root = self.root
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -177,14 +187,44 @@ class ReleaseAuditTest(unittest.TestCase):
                 item["snapshot"] = identity
         return item
 
+    def active_entry(self) -> dict[str, object]:
+        return {
+            "tag": "lmdj-v1.0.20.0", "kind": "product", "identity": "1.0.20.0",
+            "target_revision": TARGET, "channel": "canary", "disposition": "allocated",
+            "profile": "web-runtime-host", "snapshot": "1.0.20.0",
+            "evidence_paths": ["evidence.md"],
+        }
+
+    def install_static_authority(self, root: Path) -> None:
+        paths = [
+            ROOT / "products/lmdj/version.json",
+            ROOT / "products/lmdj/assembly.json",
+            ROOT / "products/lmdj/assembly.lock.json",
+            ROOT / "apps/architecture-portal/versions.json",
+            ROOT / "apps/architecture-portal/versioned_metadata/version-1.0.20.0.json",
+            ROOT / ".github/release-signing-keys/lmdj-product.asc",
+            ROOT / ".github/release-signing-keys/lmdj-release-checksum.asc",
+            *ROOT.glob("packages/*/module.json"),
+            *ROOT.glob("apps/*/module.json"),
+            *ROOT.glob("providers/*/module.json"),
+            *ROOT.glob("contracts/*/*.schema.json"),
+        ]
+        for source in paths:
+            destination = root / source.relative_to(ROOT)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(source, destination)
+
     def context(
         self,
         entries: list[dict[str, object]] | None = None,
         exceptions: list[dict[str, object]] | None = None,
     ) -> AuditContext:
+        selected = list(entries if entries is not None else [self.entry()])
+        if not any(item.get("identity") == "1.0.20.0" for item in selected):
+            selected.append(self.active_entry())
         ledger = load_ledger_document({
             "schema": "lmdj.release-intents.v1",
-            "entries": entries if entries is not None else [self.entry()],
+            "entries": selected,
             "historical_exceptions": exceptions or [],
         }, self.policy)
         return AuditContext(
@@ -214,9 +254,26 @@ class ReleaseAuditTest(unittest.TestCase):
         name: str = "module application-facade@1.0.1",
         assets: tuple[GitHubAsset, ...] = (),
         target: str = TARGET,
+        body: str | None = None,
+        kind: str = "module",
+        identity: str = "application-facade@1.0.1",
+        profile: str = "source-only",
+        channel: str | None = None,
     ) -> GitHubRelease:
+        marker = {
+            "schema": "lmdj.release-plan-marker.v1", "plan_schema": "lmdj.release-plan.v1",
+            "plan_sha256": "0" * 64, "tag": tag, "tag_object": TAG_OBJECT,
+            "target_revision": target,
+            "intent": {"kind": kind, "identity": identity, "profile": profile},
+        }
+        if channel is not None:
+            marker["intent"]["channel"] = channel
+        if body is None:
+            body = "<!-- lmdj.release-plan-marker.v1 " + json.dumps(
+                marker, sort_keys=True, separators=(",", ":"),
+            ) + " -->"
         return GitHubRelease(
-            identifier, tag, name, "fixture", draft, prerelease, False,
+            identifier, tag, name, body, draft, prerelease, False,
             f"https://github.com/endaye/lmdj/releases/tag/{tag}",
             f"https://uploads.github.com/repos/endaye/lmdj/releases/{identifier}/assets{{?name,label}}",
             assets, target,
@@ -227,7 +284,7 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual({item.code for item in report.findings}, {"ok"})
         self.assertEqual(self.git.fetches, 0)
         self.assertEqual(self.git.remote_reads, 0)
-        self.assertEqual(self.git.local_reads, 1)
+        self.assertEqual(self.git.local_reads, 2)
         self.assertEqual(self.github.reads, 0)
         self.assertEqual(self.git.mutations + self.github.mutations, [])
 
@@ -249,6 +306,26 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual({item.code for item in report.findings}, {"ok"})
         self.assertEqual(self.git.mutations + self.github.mutations, [])
 
+    def test_current_policy_release_requires_one_canonical_body_marker(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        canonical = self.release(tag).body
+        incomplete = "<!-- lmdj.release-plan-marker.v1 " + json.dumps({
+            "tag": tag, "target_revision": TARGET,
+            "intent": {
+                "kind": "module", "identity": "application-facade@1.0.1",
+                "profile": "source-only",
+            },
+        }, sort_keys=True, separators=(",", ":")) + " -->"
+        for body in (
+            "", "arbitrary legacy body", "<!-- lmdj.release-plan-marker.v1 {} -->",
+            incomplete, canonical + canonical,
+        ):
+            with self.subTest(body=body):
+                self.github.releases[tag] = self.release(tag, body=body)
+                report = audit(self.context(), remote=True, tag=tag)
+                self.assertEqual(report.findings[0].code, "conflict")
+
     def test_pre_cutoff_exact_exception_remains_visible_success(self) -> None:
         tag = "v0.2.0"
         self.git.tags[tag] = self.tag_state()
@@ -262,13 +339,13 @@ class ReleaseAuditTest(unittest.TestCase):
             "reason": "fixture predates the closed tag policy",
             "evidence_paths": ["evidence.md"],
         }
-        report = audit(self.context([], [exception]), remote=True)
+        report = audit(self.context([], [exception]), remote=True, tag=tag)
         self.assertEqual([item.code for item in report.findings], ["ok-with-historical-exception"])
         self.assertIn("fixture predates", report.findings[0].message)
         self.assertEqual(report.exit_code, 0)
 
     def test_missing_published_tag_and_release_is_missing(self) -> None:
-        report = audit(self.context(), remote=True)
+        report = audit(self.context(), remote=True, tag=str(self.entry()["tag"]))
         self.assertEqual({item.code for item in report.findings}, {"missing"})
 
     def test_wrong_tag_target_is_conflict(self) -> None:
@@ -338,27 +415,119 @@ class ReleaseAuditTest(unittest.TestCase):
         report = audit(context, remote=False)
         self.assertEqual(report.findings[0].code, "unverifiable")
 
+    def test_missing_active_product_identity_fails_closed_locally(self) -> None:
+        (self.root / "products/lmdj/version.json").unlink()
+        report = audit(self.context(), remote=False)
+        self.assertIn("unverifiable", {item.code for item in report.findings})
+
+    def test_remote_static_audit_uses_fetched_main_and_fails_on_its_drift(self) -> None:
+        canonical = self.root / "canonical"
+        canonical.mkdir()
+        (canonical / "evidence.md").write_text("fixture\n", encoding="utf-8")
+        self.install_static_authority(canonical)
+        (canonical / "products/lmdj/version.json").unlink()
+        context = self.context()
+        self.git.authority_root = canonical
+        def build_authority(root, policy, ledger):
+            return replace(
+                context, repo_root=root, policy=policy, ledger=ledger,
+                tag_signer_fingerprint=policy.product_fingerprint,
+                checksum_signer_fingerprint=policy.checksum_fingerprint,
+                authority_reader=None, authority_context_builder=None,
+            )
+        context = replace(
+            context,
+            authority_reader=lambda root: (context.policy, context.ledger),
+            authority_context_builder=build_authority,
+        )
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        report = audit(context, remote=True, tag=tag)
+        self.assertIn("unverifiable", {item.code for item in report.findings})
+
+    def test_remote_authority_rebuild_ignores_stale_caller_policy_and_key_root(self) -> None:
+        canonical = self.root / "canonical"
+        canonical.mkdir()
+        (canonical / "evidence.md").write_text("fixture\n", encoding="utf-8")
+        self.install_static_authority(canonical)
+        (self.root / ".github/release-signing-keys/lmdj-product.asc").write_text(
+            "stale caller key\n", encoding="utf-8",
+        )
+        context = self.context()
+        stale_policy = replace(
+            context.policy,
+            product_fingerprint=CHECKSUM,
+            checksum_fingerprint=PRODUCT,
+        )
+        rebuilt_roots: list[Path] = []
+        self.git.authority_root = canonical
+        def build_authority(root, policy, ledger):
+            rebuilt_roots.append(root)
+            self.assertEqual(
+                (root / ".github/release-signing-keys/lmdj-product.asc").read_bytes(),
+                (ROOT / ".github/release-signing-keys/lmdj-product.asc").read_bytes(),
+            )
+            return replace(
+                context, repo_root=root, policy=policy, ledger=ledger,
+                tag_signer_fingerprint=policy.product_fingerprint,
+                checksum_signer_fingerprint=policy.checksum_fingerprint,
+                authority_reader=None, authority_context_builder=None,
+            )
+        context = replace(
+            context, policy=stale_policy,
+            authority_reader=lambda root: (self.policy, context.ledger),
+            authority_context_builder=build_authority,
+        )
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        report = audit(context, remote=True, tag=tag)
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
+        self.assertEqual(rebuilt_roots, [canonical])
+
+    def test_static_product_assembly_and_lock_fail_closed_in_both_modes(self) -> None:
+        cases = (
+            ("products/lmdj/version.json", None),
+            ("products/lmdj/assembly.json", "{}\n"),
+            ("products/lmdj/assembly.lock.json", "{}\n"),
+        )
+        for remote in (False, True):
+            for relative, replacement in cases:
+                with self.subTest(remote=remote, relative=relative):
+                    authority = self.root / f"case-{int(remote)}-{Path(relative).name}"
+                    authority.mkdir()
+                    (authority / "evidence.md").write_text("fixture\n", encoding="utf-8")
+                    self.install_static_authority(authority)
+                    target = authority / relative
+                    if replacement is None:
+                        target.unlink()
+                    else:
+                        target.write_text(replacement, encoding="utf-8")
+                    context = self.context()
+                    if remote:
+                        self.git.authority_root = authority
+                        def build_authority(root, policy, ledger):
+                            return replace(
+                                context, repo_root=root, policy=policy, ledger=ledger,
+                                tag_signer_fingerprint=policy.product_fingerprint,
+                                checksum_signer_fingerprint=policy.checksum_fingerprint,
+                                authority_reader=None, authority_context_builder=None,
+                            )
+                        context = replace(
+                            context,
+                            authority_reader=lambda root: (self.policy, context.ledger),
+                            authority_context_builder=build_authority,
+                        )
+                        tag = str(self.entry()["tag"])
+                        self.git.tags[tag] = self.tag_state()
+                        self.github.releases[tag] = self.release(tag)
+                        report = audit(context, remote=True, tag=tag)
+                    else:
+                        report = audit(replace(context, repo_root=authority), remote=False)
+                    self.assertIn("unverifiable", {item.code for item in report.findings})
+
     def test_local_active_manifest_drift_is_unverifiable(self) -> None:
-        for relative in (
-            "products/lmdj",
-            "packages",
-            "apps/core-cli",
-            "apps/core-mcp",
-            "apps/creator-web",
-            "apps/native-test-host",
-            "apps/web-runtime-host",
-            "apps/architecture-portal/versioned_metadata",
-            "apps/architecture-portal/versions.json",
-            "providers",
-            "contracts",
-        ):
-            source = ROOT / relative
-            destination = self.root / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if source.is_dir():
-                shutil.copytree(source, destination)
-            else:
-                shutil.copyfile(source, destination)
         manifest = self.root / "packages/application-facade/module.json"
         document = json.loads(manifest.read_text(encoding="utf-8"))
         document["version"] = "9.9.9"
@@ -395,6 +564,8 @@ class ReleaseAuditTest(unittest.TestCase):
         self.github.payloads = {asset.id: payload for asset, payload in zip(assets, payloads)}
         self.github.releases[tag] = self.release(
             tag, name="LMDJ 1.0.21.0", prerelease=True, assets=assets,
+            kind="product", identity="1.0.21.0", profile="web-runtime-host",
+            channel="canary",
         )
         context = self.context([item])
         context = replace(
