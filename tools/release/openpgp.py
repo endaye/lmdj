@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import re
+import tempfile
 from typing import Mapping
 
 from .commands import CommandError, CommandRunner
@@ -106,6 +107,27 @@ class OpenPgpVerifier:
             raise OpenPgpError("release detached signing failed") from None
         if not signature_path.is_file() or signature_path.is_symlink():
             raise OpenPgpError("release detached signing failed")
+
+    def verify_inline_tag(self, home: Path, tag_path: Path, fingerprint: str) -> None:
+        """Verify a Git annotated tag's inline OpenPGP signature agentlessly."""
+        _require_keyring(home)
+        try:
+            signed = tag_path.read_bytes()
+        except OSError:
+            raise OpenPgpError("release tag signature input is unavailable") from None
+        marker = b"\n-----BEGIN PGP SIGNATURE-----\n"
+        start = signed.find(marker)
+        if start < 0:
+            raise OpenPgpError("release tag does not contain an inline signature")
+        payload, signature = signed[:start + 1], signed[start + 1:]
+        if not payload or not signature:
+            raise OpenPgpError("release tag does not contain an inline signature")
+        with tempfile.TemporaryDirectory(prefix="lmdj-release-tag-") as directory:
+            root = Path(directory)
+            payload_path, signature_path = root / "tag.payload", root / "tag.asc"
+            payload_path.write_bytes(payload)
+            signature_path.write_bytes(signature)
+            self.verify_detached(home, signature_path, payload_path, fingerprint)
 
 
 def _require_keyring(home: Path) -> None:

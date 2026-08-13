@@ -249,7 +249,7 @@ verify_signed_tag() {
   local key_path="$repo_root/.github/release-signing-keys/lmdj-product.asc"
   local tag_type=''
   local key_fingerprint=''
-  local verify_status=''
+  local tag_file="$owned_temp/product-tag"
 
   tag_type="$(
     without_deploy_secrets git cat-file -t "$remote_tag_ref" 2>/dev/null
@@ -283,23 +283,15 @@ verify_signed_tag() {
     fail "trusted Product signing key import failed"
     return
   }
-  if ! verify_status="$(
-    without_deploy_secrets git verify-tag --raw "$remote_tag_ref" 2>&1
-  )"; then
-    fail "Product tag signature verification failed"
+  without_deploy_secrets git cat-file "$remote_tag_ref" >"$tag_file" 2>/dev/null || {
+    fail "Product tag signature input is unavailable"
     return
-  fi
-  if ! printf '%s\n' "$verify_status" |
-    awk -v fingerprint="$trusted_tag_fingerprint" '
-      /^\[GNUPG:\] VALIDSIG / {
-        for (field = 3; field <= NF; field += 1) {
-          if ($field == fingerprint) found = 1
-        }
-      }
-      END {exit(found ? 0 : 1)}
-    '
-  then
-    fail "Product tag signature is not from the trusted key"
+  }
+  if ! without_deploy_secrets python3 "$repo_root/tools/release/tag_verifier.py" \
+    --homedir "$GNUPGHOME" \
+    --tag-file "$tag_file" \
+    --fingerprint "$trusted_tag_fingerprint"; then
+    fail "Product tag signature verification failed"
     return
   fi
 

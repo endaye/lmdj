@@ -107,6 +107,7 @@ class ReleasePlan:
 class ReleasePolicy:
     repository: str
     branch: str
+    blocking_workflow: str
     product_fingerprint: str
     checksum_fingerprint: str
     tag_patterns: Mapping[ReleaseKind, str]
@@ -151,6 +152,11 @@ _PRODUCT_FINGERPRINT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 _CHECKSUM_FINGERPRINT = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
 _HISTORICAL_CUTOFF = "2026-08-13T00:00:00Z"
 
+# Bootstrap anchors for a local command before it can load canonical policy.
+CANONICAL_REPOSITORY = _CANONICAL_REPOSITORY
+CANONICAL_BRANCH = _CANONICAL_BRANCH
+CANONICAL_BLOCKING_WORKFLOW = "Core CI"
+
 
 def canonical_json(value: object) -> bytes:
     return (json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
@@ -163,15 +169,18 @@ def canonical_sha256(value: object) -> str:
 def load_policy(path: Path | str) -> ReleasePolicy:
     document = _load_json(path, "policy")
     _require_exact_keys(document, {
-        "schema", "repository", "branch", "fingerprints", "tag_patterns", "profiles",
+        "schema", "repository", "branch", "blocking_workflow", "fingerprints", "tag_patterns", "profiles",
         "channels", "environments", "historical_cutoff",
     }, "policy")
     if document["schema"] != _POLICY_SCHEMA:
         raise ReleaseModelError("unsupported policy schema")
     repository = _require_string(document["repository"], "policy repository")
     branch = _require_string(document["branch"], "policy branch")
+    blocking_workflow = _require_string(document["blocking_workflow"], "policy blocking workflow")
     if repository != _CANONICAL_REPOSITORY or branch != _CANONICAL_BRANCH:
         raise ReleaseModelError("policy repository and branch must be canonical")
+    if blocking_workflow != CANONICAL_BLOCKING_WORKFLOW:
+        raise ReleaseModelError("policy blocking workflow must be canonical")
     fingerprints = _require_mapping(document["fingerprints"], "fingerprints")
     _require_exact_keys(fingerprints, {"product", "checksum"}, "fingerprints")
     product_fingerprint = _require_fingerprint(fingerprints["product"], "product fingerprint")
@@ -215,7 +224,8 @@ def load_policy(path: Path | str) -> ReleasePolicy:
     if (release_environment, runtime_canary_environment, cutoff) != ("release", "runtime-canary", _HISTORICAL_CUTOFF):
         raise ReleaseModelError("policy environments or historical cutoff are not canonical")
     return ReleasePolicy(
-        repository=repository, branch=branch, product_fingerprint=product_fingerprint,
+        repository=repository, branch=branch, blocking_workflow=blocking_workflow,
+        product_fingerprint=product_fingerprint,
         checksum_fingerprint=checksum_fingerprint, tag_patterns=MappingProxyType(tag_patterns),
         product_profiles=frozenset(product_profiles), source_profiles=frozenset(source_profiles),
         channels=MappingProxyType({name: MappingProxyType(dict(item)) for name, item in channels.items()}),

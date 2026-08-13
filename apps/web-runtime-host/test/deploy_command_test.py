@@ -31,6 +31,7 @@ SOURCE_RELEASE_BUNDLE = SOURCE_ROOT / "apps/web-runtime-host/tools/release_bundl
 SOURCE_RELEASE_INIT = SOURCE_ROOT / "tools/release/__init__.py"
 SOURCE_RELEASE_COMMANDS = SOURCE_ROOT / "tools/release/commands.py"
 SOURCE_RELEASE_OPENPGP = SOURCE_ROOT / "tools/release/openpgp.py"
+SOURCE_TAG_VERIFIER = SOURCE_ROOT / "tools/release/tag_verifier.py"
 REAL_EVIDENCE_ROOT = SOURCE_ROOT / "build/deploy/web-runtime-host"
 TAG = "lmdj-v1.0.15.3"
 PRODUCT_BUILD = "1.0.15.3"
@@ -368,6 +369,7 @@ class DeployCommandTest(unittest.TestCase):
         self.copy_source(SOURCE_RELEASE_INIT, "tools/release/__init__.py")
         self.copy_source(SOURCE_RELEASE_COMMANDS, "tools/release/commands.py")
         self.copy_source(SOURCE_RELEASE_OPENPGP, "tools/release/openpgp.py")
+        self.copy_source(SOURCE_TAG_VERIFIER, "tools/release/tag_verifier.py")
         api_base = f"http://127.0.0.1:{self.server.server_port}/api/v1"
         netlify_source = SOURCE_NETLIFY.read_text(encoding="utf-8")
         original = '"https://api.netlify.com/api/v1"'
@@ -611,6 +613,9 @@ def verify_distribution(dist_root, repo_root):
             for required in --batch --no-tty --no-autostart --homedir; do
               case " $* " in *" $required "*) ;; *) exit 70 ;; esac
             done
+            if [ "${{GPG_OPERATION_LOG:-}}" ]; then
+              printf '%s\n' "$*" >> "$GPG_OPERATION_LOG"
+            fi
             case " $* " in
               *" --show-keys "*)
                 printf 'pub:-:4096:1:116ECE156F954D29:0:0::::::\nfpr:::::::::{TRUSTED_TAG_FINGERPRINT}:\n'
@@ -629,12 +634,13 @@ def verify_distribution(dist_root, repo_root):
                 fi
                 ;;
               *" --verify "*)
+                if [ "${{FAIL_TAG_VERIFY:-}}" = 1 ]; then exit 1; fi
                 for argument in "$@"; do
                   case "$argument" in
                     *.asc) grep -q 'wrong-signature' "$argument" && exit 1 ;;
                   esac
                 done
-                fingerprint="$(cat "$home/lmdj-imported-fingerprint")"
+                fingerprint="${{FAKE_SIGNATURE_FINGERPRINT:-$(cat "$home/lmdj-imported-fingerprint")}}"
                 printf '[GNUPG:] VALIDSIG %s 2026-08-10 0 4 0 22 8 00 %s\n' "$fingerprint" "$fingerprint"
                 ;;
               *) exit 2 ;;
@@ -754,17 +760,16 @@ def verify_distribution(dist_root, repo_root):
                     output.write(f"git remote fetch {{args[-1]}}\\n")
             elif args[:2] == ["cat-file", "-t"]:
                 print(os.environ.get("FAKE_TAG_TYPE", "tag"))
-            elif args[:2] == ["verify-tag", "--raw"]:
-                with log.open("a", encoding="utf-8") as output:
-                    output.write(f"git tag verify {{args[2]}}\\n")
-                if os.environ.get("FAIL_TAG_VERIFY") == "1":
-                    raise SystemExit(1)
-                fingerprint = os.environ.get(
-                    "FAKE_SIGNATURE_FINGERPRINT", {TRUSTED_TAG_FINGERPRINT!r}
-                )
+            elif args[:1] == ["cat-file"]:
                 print(
-                    f"[GNUPG:] VALIDSIG {{fingerprint}} 2026-08-07 0 4 0 1 10 00 {{fingerprint}}",
-                    file=sys.stderr,
+                    "object " + target + "\\n"
+                    "type commit\\n"
+                    "tag " + {TAG!r} + "\\n"
+                    "tagger fixture <fixture@example.invalid> 0 +0000\\n\\n"
+                    "fixture tag\\n"
+                    "-----BEGIN PGP SIGNATURE-----\\n"
+                    "fixture\\n"
+                    "-----END PGP SIGNATURE-----"
                 )
             elif args[:2] == ["rev-parse", "--verify"]:
                 print(target)
@@ -1049,7 +1054,6 @@ def verify_distribution(dist_root, repo_root):
             [
                 f"git remote fetch refs/tags/{TAG}:refs/lmdj-deploy/tags/{TAG}",
                 "git remote fetch refs/heads/main:refs/lmdj-deploy/origin-main",
-                f"git tag verify refs/lmdj-deploy/tags/{TAG}",
                 "git init detached",
                 "git fetch detached tag",
                 "git checkout detached",
@@ -1081,6 +1085,19 @@ def verify_distribution(dist_root, repo_root):
             self.server.authorization_headers,
             [f"Bearer {NETLIFY_TOKEN}"] * 5,
         )
+
+    def test_product_tag_verification_uses_the_agentless_gpg_boundary(self) -> None:
+        gpg_log = self.root / "gpg-operations.log"
+        completed = self.run_command("verify", TAG, environment={"GPG_OPERATION_LOG": str(gpg_log)})
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        operations = gpg_log.read_text(encoding="utf-8").splitlines()
+        verified = [
+            operation for operation in operations
+            if " --verify " in f" {operation} " and "tag.asc" in operation and "tag.payload" in operation
+        ]
+        self.assertEqual(len(verified), 1)
+        self.assertIn("--batch --no-tty --no-autostart --homedir", verified[0])
+        self.assertNotIn("git tag verify", self.command_log())
 
     def test_empty_initial_published_deploy_is_treated_as_first_publication(self) -> None:
         self.server.site_files_response = []
@@ -1248,10 +1265,7 @@ def verify_distribution(dist_root, repo_root):
             "verify", TAG, environment={"FAKE_LOCAL_TAG_TARGET": "f" * 40}
         )
         self.assertEqual(completed.returncode, 0, completed.stderr)
-        self.assertIn(
-            f"git tag verify refs/lmdj-deploy/tags/{TAG}", self.command_log()
-        )
-        self.assertNotIn(f"git tag verify {TAG}", self.command_log())
+        self.assertNotIn("git tag verify", self.command_log())
 
     def test_accepts_actions_checkout_canonical_origin_url(self) -> None:
         completed = self.run_command(

@@ -8,6 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -89,6 +90,7 @@ class ReleaseModelTest(unittest.TestCase):
     def test_policy_is_closed_and_uses_exact_trust_anchors(self) -> None:
         self.assertEqual(self.policy.repository, "endaye/lmdj")
         self.assertEqual(self.policy.branch, "main")
+        self.assertEqual(self.policy.blocking_workflow, "Core CI")
         self.assertEqual(self.policy.product_fingerprint, "2B5EE362F058800036AD4FB5116ECE156F954D29")
         self.assertEqual(self.policy.checksum_fingerprint, "CB928A6E89DE498851688EF1AAC3E7019FC1478B")
         self.assertEqual(self.policy.release_environment, "release")
@@ -96,6 +98,20 @@ class ReleaseModelTest(unittest.TestCase):
         self.assertEqual(self.policy.channel_release("canary"), (True, False))
         self.assertEqual(self.policy.channel_release("stable", make_latest=False), (False, False))
         self.assertEqual(self.policy.channel_release("stable", make_latest=True), (False, True))
+
+    def test_policy_requires_the_exact_canonical_blocking_workflow_key(self) -> None:
+        document = json.loads((ROOT / "tools/release/policy.json").read_text(encoding="utf-8"))
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "policy.json"
+            del document["blocking_workflow"]
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseModelError, "missing fields"):
+                load_policy(path)
+
+            document["blocking_workflow"] = "Unrelated workflow"
+            path.write_text(json.dumps(document), encoding="utf-8")
+            with self.assertRaisesRegex(ReleaseModelError, "blocking workflow"):
+                load_policy(path)
 
     def test_ledger_rejects_unknown_fields_duplicate_identities_and_bad_scalars(self) -> None:
         cases: list[tuple[str, dict[str, object], str]] = []

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,7 +12,7 @@ import tempfile
 from typing import Callable, Protocol
 
 from .github_api import BranchProjection, RunProjection
-from .model import AssetRecord, Disposition, ReleaseIntent, ReleaseLedger, ReleasePlan, ReleasePolicy, canonical_json, classify_tag
+from .model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, Disposition, ReleaseIntent, ReleaseLedger, ReleaseModelError, ReleasePlan, ReleasePolicy, canonical_json, classify_tag, load_ledger, load_policy
 from .profiles import AssetBuild, ProfileBuild, ProfileRuntime, build_profile
 
 
@@ -32,6 +33,7 @@ class ProductProof:
     target_revision: str
     product_build: str
     snapshot: str
+    snapshot_revision: str | None = None
 
 
 @dataclass(frozen=True)
@@ -43,8 +45,10 @@ class PreparedRelease:
 
 
 class ReleaseGit(Protocol):
-    def fetch_authority(self, branch: str) -> None: ...
+    def fetch_authority(self, repository: str, branch: str) -> None: ...
+    def main_revision(self) -> str: ...
     def is_main_ancestor(self, target: str) -> bool: ...
+    def is_revision_ancestor(self, ancestor: str, descendant: str) -> bool: ...
     def remote_tag_state(self, tag: str) -> LocalTag | None: ...
     def local_tag_state(self, tag: str) -> LocalTag | None: ...
     def detached_worktree(self, target: str): ...
@@ -58,6 +62,7 @@ class ReleaseGitHub(Protocol):
 
 ProfileBuilder = Callable[[str, Path, Path, ReleaseIntent], ProfileBuild]
 ProofReader = Callable[[Path, ReleaseIntent], ProductProof]
+AuthorityReader = Callable[[Path], tuple[ReleasePolicy, ReleaseLedger]]
 
 
 @dataclass
@@ -71,52 +76,47 @@ class PrepareContext:
     proof_reader: ProofReader
     tag_signer_fingerprint: str
     checksum_signer_fingerprint: str
+    authority_reader: AuthorityReader | None = None
 
 
 def prepare(tag: str, context: PrepareContext) -> PreparedRelease:
     """Prepare only local verified output and an annotated local tag for one intent."""
-    identity = classify_tag(tag, context.policy)
-    intent = context.ledger.intent_for_tag(tag)
+    policy, ledger, branch = _load_canonical_authority(context)
+    resolved = replace(context, policy=policy, ledger=ledger, authority_reader=None)
+    identity = classify_tag(tag, policy)
+    intent = ledger.intent_for_tag(tag)
     if intent is None or intent.kind is not identity.kind:
         raise PrepareError("release tag is not authorized by the intent ledger")
     if intent.disposition is not Disposition.RELEASABLE:
         raise PrepareError("only releasable release intents may be prepared")
-    if any(exception.tag == tag for exception in context.ledger.historical_exceptions):
+    if any(exception.tag == tag for exception in ledger.historical_exceptions):
         raise PrepareError("historical exception is audit-only and cannot authorize prepare")
-    _verify_key_roles(context, intent)
-
-    try:
-        context.git.fetch_authority(context.policy.branch)
-        branch = context.github.get_branch(context.policy.repository, context.policy.branch)
-    except Exception:
-        raise PrepareError("canonical main authority is unavailable") from None
-    if branch.name != context.policy.branch or not branch.protected:
-        raise PrepareError("canonical main branch must be protected")
-    if not context.git.is_main_ancestor(intent.target_revision):
+    _verify_key_roles(resolved, intent)
+    if not resolved.git.is_main_ancestor(intent.target_revision):
         raise PrepareError("release target does not have canonical main ancestry")
-    if context.git.remote_tag_state(tag) is not None:
+    if resolved.git.remote_tag_state(tag) is not None:
         raise PrepareError("remote tag already exists; prepare refuses remote tag conflicts")
-    _verify_ci(context, intent)
+    run = _verify_ci(resolved, intent)
 
-    existing = context.git.local_tag_state(tag)
-    if existing is not None and not _matching_tag(existing, intent.target_revision, context.tag_signer_fingerprint):
+    existing = resolved.git.local_tag_state(tag)
+    if existing is not None and not _matching_tag(existing, intent.target_revision, resolved.tag_signer_fingerprint):
         raise PrepareError("local tag conflict; formal tags are never moved")
 
-    with context.git.detached_worktree(intent.target_revision) as worktree:
+    with resolved.git.detached_worktree(intent.target_revision) as worktree:
         if intent.kind.value == "product":
-            _verify_product_proof(context, Path(worktree), intent)
+            _verify_product_proof(resolved, Path(worktree), intent)
         with tempfile.TemporaryDirectory(prefix="lmdj-release-profile-") as directory:
             profile_output = Path(directory)
-            built = context.profile_builder(intent.profile, Path(worktree), profile_output, intent)
+            built = resolved.profile_builder(intent.profile, Path(worktree), profile_output, intent)
             assets = _verify_profile_assets(intent, built)
             if existing is None:
-                tag_state = context.git.create_local_tag(
+                tag_state = resolved.git.create_local_tag(
                     tag,
                     intent.target_revision,
-                    context.tag_signer_fingerprint,
+                    resolved.tag_signer_fingerprint,
                     f"LMDJ release {tag}",
                 )
-                if not _matching_tag(tag_state, intent.target_revision, context.tag_signer_fingerprint):
+                if not _matching_tag(tag_state, intent.target_revision, resolved.tag_signer_fingerprint):
                     raise PrepareError("local signed tag verification failed")
             else:
                 tag_state = existing
@@ -132,10 +132,32 @@ def prepare(tag: str, context: PrepareContext) -> PreparedRelease:
                 profile=intent.profile,
                 assets=tuple(asset.record() for asset in assets),
             )
-            document = _plan_document(plan, intent, _matching_run(context, intent), context.policy)
+            document = _plan_document(plan, intent, run, policy)
             digest = hashlib.sha256(canonical_json(document)).hexdigest()
-            output_root = _write_output(context.repo_root, plan.output_name, document, digest, assets)
+            output_root = _write_output(resolved.repo_root, plan.output_name, document, digest, assets)
     return PreparedRelease(plan, digest, output_root, existing is not None)
+
+
+def _load_canonical_authority(context: PrepareContext) -> tuple[ReleasePolicy, ReleaseLedger, BranchProjection]:
+    try:
+        context.git.fetch_authority(CANONICAL_REPOSITORY, CANONICAL_BRANCH)
+        branch = context.github.get_branch(CANONICAL_REPOSITORY, CANONICAL_BRANCH)
+        main_revision = context.git.main_revision()
+    except Exception:
+        raise PrepareError("canonical main authority is unavailable") from None
+    if branch.name != CANONICAL_BRANCH or not branch.protected:
+        raise PrepareError("canonical main branch must be protected")
+    if main_revision != branch.commit_sha:
+        raise PrepareError("canonical main revision does not match GitHub branch projection")
+    reader = context.authority_reader or load_authority_documents
+    try:
+        with context.git.detached_worktree(main_revision) as authority_tree:
+            policy, ledger = reader(Path(authority_tree))
+    except (OSError, ReleaseModelError, PrepareError):
+        raise PrepareError("canonical release policy and intent ledger are unavailable") from None
+    if policy.repository != CANONICAL_REPOSITORY or policy.branch != CANONICAL_BRANCH:
+        raise PrepareError("canonical release policy does not bind the fetched authority")
+    return policy, ledger, branch
 
 
 def _verify_key_roles(context: PrepareContext, intent: ReleaseIntent) -> None:
@@ -149,13 +171,16 @@ def _verify_key_roles(context: PrepareContext, intent: ReleaseIntent) -> None:
         raise PrepareError("release tag and checksum signers must be distinct")
 
 
-def _verify_ci(context: PrepareContext, intent: ReleaseIntent) -> None:
+def _verify_ci(context: PrepareContext, intent: ReleaseIntent) -> RunProjection:
     run = _matching_run(context, intent)
     if (
         run.event != "push" or run.head_sha != intent.target_revision
+        or run.head_branch != context.policy.branch
+        or run.workflow_name != context.policy.blocking_workflow
         or run.status != "completed" or run.conclusion != "success"
     ):
         raise PrepareError("release intent does not have an exact successful merged-main CI run")
+    return run
 
 
 def _matching_run(context: PrepareContext, intent: ReleaseIntent) -> RunProjection:
@@ -184,6 +209,10 @@ def _verify_product_proof(context: PrepareContext, worktree: Path, intent: Relea
         raise PrepareError("merged-main Proof Product Build does not match the release tag")
     if proof.snapshot != intent.snapshot:
         raise PrepareError("Product immutable snapshot does not match the release intent")
+    if proof.snapshot_revision is None or not context.git.is_revision_ancestor(
+        proof.snapshot_revision, intent.target_revision,
+    ):
+        raise PrepareError("Product immutable snapshot does not have canonical target ancestry")
 
 
 def _verify_profile_assets(intent: ReleaseIntent, built: ProfileBuild) -> tuple[AssetBuild, ...]:
@@ -269,6 +298,8 @@ def _write_output(
         raise PrepareError("release output root is unsafe")
     output = root / encoded_tag
     if output.exists() or output.is_symlink():
+        if _matches_existing_output(output, document, digest, assets):
+            return output
         raise PrepareError("release output already exists; inspect and reconcile before retry")
     staged = Path(tempfile.mkdtemp(prefix=".lmdj-release-plan-", dir=root))
     try:
@@ -304,6 +335,57 @@ def default_profile_builder(runtime: ProfileRuntime) -> ProfileBuilder:
     return lambda profile, worktree, output, intent: build_profile(profile, worktree, output, intent, runtime=runtime)
 
 
-def unavailable_proof_reader(worktree: Path, intent: ReleaseIntent) -> ProductProof:
-    """Fail closed until a structured immutable Proof projection is supplied."""
-    raise PrepareError("structured merged-main Proof projection is unavailable")
+def load_authority_documents(worktree: Path) -> tuple[ReleasePolicy, ReleaseLedger]:
+    policy = load_policy(worktree / "tools/release/policy.json")
+    return policy, load_ledger(worktree / "docs/release-evidence/release-intents.json", policy)
+
+
+def read_product_snapshot_proof(worktree: Path, intent: ReleaseIntent) -> ProductProof:
+    """Read the immutable Portal snapshot recorded in the exact target tree."""
+    if intent.snapshot is None:
+        raise PrepareError("Product release intent is missing an immutable snapshot")
+    path = worktree / "apps/architecture-portal/versioned_metadata" / f"version-{intent.snapshot}.json"
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+        product = document["product"]
+        product_build = document["product_build"]
+        snapshot = product["version"]
+        revision = document["revision"]
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        raise PrepareError("structured merged-main Proof projection is unavailable") from None
+    if (
+        not isinstance(product_build, str) or not isinstance(snapshot, str)
+        or not isinstance(revision, str) or not _sha(revision)
+        or product_build != snapshot
+    ):
+        raise PrepareError("structured merged-main Proof projection is unavailable")
+    return ProductProof("main", intent.target_revision, product_build, snapshot, revision)
+
+
+def _matches_existing_output(
+    output: Path, document: dict[str, object], digest: str, assets: tuple[AssetBuild, ...],
+) -> bool:
+    if not output.is_dir() or output.is_symlink():
+        return False
+    try:
+        if (output / "release-plan.json").read_bytes() != canonical_json(document):
+            return False
+        if (output / "release-plan.sha256").read_text(encoding="ascii") != digest + "\n":
+            return False
+        expected_notes = f"# { _release_name_from_document(document) }\n\nPrepared locally for `{document['tag']}`.\n"
+        if (output / "release-notes.md").read_text(encoding="utf-8") != expected_notes:
+            return False
+        assets_root = output / "assets"
+        if not assets_root.is_dir() or assets_root.is_symlink():
+            return False
+        expected_names = {asset.name for asset in assets}
+        actual_names = {path.name for path in assets_root.iterdir() if path.is_file() and not path.is_symlink()}
+        if actual_names != expected_names or len(list(assets_root.iterdir())) != len(actual_names):
+            return False
+        for asset in assets:
+            saved = assets_root / asset.name
+            if saved.read_bytes() != asset.path.read_bytes():
+                return False
+    except (OSError, UnicodeDecodeError):
+        return False
+    return True

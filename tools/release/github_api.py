@@ -25,6 +25,8 @@ class RunProjection:
     id: int
     event: str
     head_sha: str
+    head_branch: str
+    workflow_name: str
     status: str
     conclusion: str | None
 
@@ -60,16 +62,20 @@ class GitHubClient:
         for run in runs:
             if not isinstance(run, dict):
                 raise GitHubApiError("GitHub run projection is invalid")
-            identifier, event, head_sha, status, conclusion = (
-                run.get("id"), run.get("event"), run.get("head_sha"), run.get("status"), run.get("conclusion"),
+            identifier, event, head_sha, head_branch, workflow_name, status, conclusion = (
+                run.get("id"), run.get("event"), run.get("head_sha"), run.get("head_branch"),
+                run.get("name"), run.get("status"), run.get("conclusion"),
             )
             if (
                 type(identifier) is not int or identifier <= 0 or not isinstance(event, str)
-                or not _sha(head_sha) or not isinstance(status, str)
+                or not _sha(head_sha) or not isinstance(head_branch, str)
+                or not isinstance(workflow_name, str) or not isinstance(status, str)
                 or (conclusion is not None and not isinstance(conclusion, str))
             ):
                 raise GitHubApiError("GitHub run projection is invalid")
-            parsed.append(RunProjection(identifier, event, head_sha, status, conclusion))
+            parsed.append(RunProjection(
+                identifier, event, head_sha, head_branch, workflow_name, status, conclusion,
+            ))
         return parsed
 
     def _get(self, path: str) -> object:

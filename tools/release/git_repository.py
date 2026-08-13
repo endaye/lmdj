@@ -32,16 +32,26 @@ class GitRepository:
         self._main_ref = "refs/lmdj-release/origin-main"
         self._tag_prefix = "refs/lmdj-release/tags/"
 
-    def fetch_authority(self, branch: str) -> None:
+    def fetch_authority(self, repository: str, branch: str) -> None:
+        remote = f"https://github.com/{repository}.git"
         self._run([
-            "git", "fetch", "--no-tags", "origin",
+            "git", "fetch", "--no-tags", remote,
             f"+refs/heads/{branch}:{self._main_ref}",
             f"+refs/tags/*:{self._tag_prefix}*",
         ])
 
+    def main_revision(self) -> str:
+        revision = self._run(["git", "rev-parse", "--verify", self._main_ref]).stdout.strip()
+        if not _sha(revision):
+            raise GitRepositoryError("canonical main revision is invalid")
+        return revision
+
     def is_main_ancestor(self, target: str) -> bool:
+        return self.is_revision_ancestor(target, self._main_ref)
+
+    def is_revision_ancestor(self, ancestor: str, descendant: str) -> bool:
         try:
-            self._run(["git", "merge-base", "--is-ancestor", target, self._main_ref])
+            self._run(["git", "merge-base", "--is-ancestor", ancestor, descendant])
             return True
         except GitRepositoryError:
             return False

@@ -9,6 +9,7 @@ import json
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import tempfile
 import zipfile
 from typing import Callable
 
@@ -76,7 +77,10 @@ def build_core_package(
     archive = _require_regular(archives[0], "Core archive")
     checksum = _require_regular(archive.with_name(archive.name + ".sha256"), "Core checksum")
     _verify_checksum(checksum, archive)
-    build = _stage_and_sign((archive, checksum), output, selected)
+    build = _stage_and_sign(
+        (archive, checksum), output, selected,
+        worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
+    )
     selected.runner.run([
         "python3", "tests/distribution/package_acceptance_test.py", "--build-root", "build/core/release",
     ], cwd=worktree)
@@ -98,7 +102,10 @@ def build_web_runtime_host(
     _create_dist_zip(dist, archive)
     checksum = archive.with_name(archive.name + ".sha256")
     checksum.write_text(f"{_sha256_file(archive)}  {archive.name}\n", encoding="ascii", newline="\n")
-    build = _stage_and_sign((archive, checksum), output, selected)
+    build = _stage_and_sign(
+        (archive, checksum), output, selected,
+        worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
+    )
     _stage_web_bundle(worktree, build, output, intent, host_version, selected)
     return build
 
@@ -116,7 +123,9 @@ def _require_runtime(runtime: ProfileRuntime | None) -> ProfileRuntime:
     return runtime
 
 
-def _stage_and_sign(inputs: tuple[Path, Path], output: Path, runtime: ProfileRuntime) -> ProfileBuild:
+def _stage_and_sign(
+    inputs: tuple[Path, Path], output: Path, runtime: ProfileRuntime, checksum_public_key_path: Path,
+) -> ProfileBuild:
     archive, checksum = inputs
     output.mkdir(parents=True, exist_ok=True)
     staged_archive = output / archive.name
@@ -129,6 +138,15 @@ def _stage_and_sign(inputs: tuple[Path, Path], output: Path, runtime: ProfileRun
     runtime.checksum_verifier.sign_detached(
         runtime.checksum_home, staged_checksum, signature, runtime.checksum_fingerprint,
     )
+    with tempfile.TemporaryDirectory(prefix="lmdj-release-checksum-verify-") as directory:
+        verification_home = Path(directory)
+        verification_home.chmod(0o700)
+        runtime.checksum_verifier.import_public_key(
+            verification_home, checksum_public_key_path, runtime.checksum_fingerprint,
+        )
+        runtime.checksum_verifier.verify_detached(
+            verification_home, signature, staged_checksum, runtime.checksum_fingerprint,
+        )
     return ProfileBuild(tuple(_asset(path) for path in (staged_archive, staged_checksum, signature)))
 
 
@@ -139,15 +157,11 @@ def _asset(path: Path) -> AssetBuild:
 
 def _verify_checksum(checksum: Path, archive: Path) -> None:
     try:
-        fields = checksum.read_text(encoding="ascii").splitlines()
+        record = checksum.read_text(encoding="ascii")
     except (OSError, UnicodeDecodeError) as error:
         raise ProfileError("release checksum is invalid") from error
-    if len(fields) != 1:
-        raise ProfileError("release checksum is invalid")
-    parts = fields[0].split()
-    if len(parts) != 2 or parts[1].removeprefix("*") != archive.name:
-        raise ProfileError("release checksum is invalid")
-    if parts[0] != _sha256_file(archive):
+    expected = f"{_sha256_file(archive)}  {archive.name}\n"
+    if record != expected:
         raise ProfileError("release checksum does not match archive")
 
 
@@ -165,7 +179,7 @@ def _create_dist_zip(dist: Path, archive: Path) -> None:
                 raise ProfileError("Web Runtime Host distribution contains an unsafe member")
             info = zipfile.ZipInfo(relative.as_posix(), date_time=(1980, 1, 1, 0, 0, 0))
             info.create_system = 3
-            info.external_attr = (stat.S_IFREG | stat.S_IMODE(source.stat().st_mode)) << 16
+            info.external_attr = (stat.S_IFREG | 0o644) << 16
             info.compress_type = zipfile.ZIP_DEFLATED
             output.writestr(info, source.read_bytes(), compresslevel=9)
     _verify_dist_zip(archive)

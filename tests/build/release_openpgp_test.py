@@ -143,6 +143,31 @@ class ReleaseOpenPgpTest(unittest.TestCase):
         self.assertNotIn("--passphrase", arguments)
         self.assertTrue(signature.is_file())
 
+    def test_inline_annotated_tag_verification_uses_the_agentless_prefix(self) -> None:
+        home = self.root / "home"
+        home.mkdir(mode=0o700)
+        tag = self.root / "tag-object"
+        tag.write_bytes(
+            b"object " + b"a" * 40 + b"\n"
+            b"type commit\n"
+            b"tag lmdj-v1.0.21.0\n\n"
+            b"fixture\n"
+            b"-----BEGIN PGP SIGNATURE-----\nfixture\n-----END PGP SIGNATURE-----\n"
+        )
+        verifier = OpenPgpVerifier(
+            gpg_program=str(self.fake_gpg),
+            environment={
+                "LMDJ_GPG_LOG": str(self.log),
+                "LMDJ_GPG_FINGERPRINT": PRODUCT_FINGERPRINT,
+            },
+        )
+        verifier.verify_inline_tag(home, tag, PRODUCT_FINGERPRINT)
+        arguments = __import__("json").loads(self.log.read_text(encoding="utf-8").splitlines()[-1])
+        self.assertEqual(arguments[:5], [
+            "--batch", "--no-tty", "--no-autostart", "--homedir", str(home),
+        ])
+        self.assertIn("--verify", arguments)
+
 
 if __name__ == "__main__":
     unittest.main()
