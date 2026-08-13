@@ -42,6 +42,9 @@ class GitHubAsset:
     api_url: str
     browser_download_url: str
     release_id: int
+    label: str | None
+    content_type: str
+    state: str
 
 
 @dataclass(frozen=True)
@@ -56,6 +59,7 @@ class GitHubRelease:
     html_url: str
     upload_url: str
     assets: tuple[GitHubAsset, ...]
+    target_commitish: str
 
 
 @dataclass(frozen=True)
@@ -376,10 +380,20 @@ def _parse_release(
         or not isinstance(assets, list)
     ):
         raise GitHubApiError("GitHub Release projection is invalid")
+    target_commitish = document.get("target_commitish")
+    if not isinstance(target_commitish, str) or not target_commitish:
+        raise GitHubApiError("GitHub Release projection is invalid")
     latest_value = document.get("make_latest")
-    if latest_value in (True, "true"):
+    # GitHub's Release response does not consistently include the update-only
+    # make_latest field. None explicitly means "not projected"; when present,
+    # preserve only its documented bool/string representations.
+    if type(latest_value) is bool and latest_value:
         make_latest: bool | None = True
-    elif latest_value in (False, "false"):
+    elif type(latest_value) is bool and not latest_value:
+        make_latest = False
+    elif latest_value == "true":
+        make_latest = True
+    elif latest_value == "false":
         make_latest = False
     elif latest_value is None:
         make_latest = None
@@ -387,7 +401,7 @@ def _parse_release(
         raise GitHubApiError("GitHub Release projection is invalid")
     return GitHubRelease(
         identifier, tag, name, body, draft, prerelease, make_latest, html_url, upload_url,
-        tuple(_parse_asset(item, repository, identifier) for item in assets),
+        tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish,
     )
 
 
@@ -396,15 +410,25 @@ def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAs
     if not isinstance(document, dict):
         raise GitHubApiError("GitHub asset projection is invalid")
     identifier, name, size = document.get("id"), document.get("name"), document.get("size")
+    label, content_type, state = (
+        document.get("label"), document.get("content_type"), document.get("state"),
+    )
     api_url, download_url = document.get("url"), document.get("browser_download_url")
     if (
         not _positive_id(identifier) or not isinstance(name, str) or not name
         or "/" in name or "\\" in name or type(size) is not int or size < 0
+        or (label is not None and not isinstance(label, str))
+        or not isinstance(content_type, str)
+        or re.fullmatch(r"[^\s/]+/[^\s/]+", content_type) is None
+        or not isinstance(state, str) or not state
         or _asset_api_identity(api_url) != (repository, identifier)
         or not _repository_url(download_url, "github.com", repository)
     ):
         raise GitHubApiError("GitHub asset projection is invalid")
-    return GitHubAsset(identifier, name, size, api_url, download_url, release_id)
+    return GitHubAsset(
+        identifier, name, size, api_url, download_url, release_id,
+        label, content_type, state,
+    )
 
 
 def _next_link(

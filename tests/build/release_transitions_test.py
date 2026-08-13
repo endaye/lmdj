@@ -95,6 +95,7 @@ class FakeGit:
 
 class FakeGitHub:
     def __init__(self, target: str) -> None:
+        self.target = target
         self.branch = BranchProjection("main", True, target)
         self.runs = [RunProjection(123, "push", target, "main", "Core CI", "completed", "success")]
         self.release: GitHubRelease | None = None
@@ -105,6 +106,8 @@ class FakeGitHub:
         self.fail_upload_after_write: set[str] = set()
         self.fail_publish_after_write = False
         self.publish_mutation: str | None = None
+        self.release_reads = 0
+        self.mutate_on_release_read: int | None = None
         self.patch_calls: list[tuple[int, dict[str, bool]]] = []
         self.next_asset_id = 40
 
@@ -118,6 +121,12 @@ class FakeGitHub:
         return self.release if self.release is not None and self.release.tag_name == tag else None
 
     def get_release(self, repository: str, release_id: int) -> GitHubRelease | None:
+        self.release_reads += 1
+        if self.release_reads == self.mutate_on_release_read and self.release is not None:
+            field, value = getattr(
+                self, "intervening_release_mutation", ("name", "intervening change"),
+            )
+            self.release = GitHubRelease(**{**self.release.__dict__, field: value})
         return self.release if self.release is not None and self.release.id == release_id else None
 
     def create_draft_release(self, repository: str, *, tag: str, name: str, body: str,
@@ -127,6 +136,7 @@ class FakeGitHub:
             17, tag, name, body, True, prerelease, make_latest,
             "https://github.com/endaye/lmdj/releases/tag/test",
             "https://uploads.github.com/repos/endaye/lmdj/releases/17/assets{?name,label}", (),
+            self.target,
         )
         if self.fail_create_after_write:
             raise GitHubApiError("GitHub release request is unavailable")
@@ -145,7 +155,7 @@ class FakeGitHub:
             self.next_asset_id, name, len(payload),
             f"https://api.github.com/repos/endaye/lmdj/releases/assets/{self.next_asset_id}",
             f"https://github.com/endaye/lmdj/releases/download/test/{name}",
-            release_id,
+            release_id, None, "application/octet-stream", "uploaded",
         )
         self.payloads[asset.id] = payload
         assert self.release is not None
@@ -168,10 +178,28 @@ class FakeGitHub:
         self.release = GitHubRelease(**{**self.release.__dict__, "draft": False})
         if self.publish_mutation == "name":
             self.release = GitHubRelease(**{**self.release.__dict__, "name": "changed"})
+        elif self.publish_mutation == "target-commitish":
+            self.release = GitHubRelease(**{
+                **self.release.__dict__, "target_commitish": "changed-target",
+            })
         elif self.publish_mutation == "asset-id":
             original = self.release.assets[0]
             changed = GitHubAsset(**{**original.__dict__, "id": original.id + 1000})
             self.payloads[changed.id] = self.payloads[original.id]
+            self.release = GitHubRelease(**{
+                **self.release.__dict__,
+                "assets": (changed,) + self.release.assets[1:],
+            })
+        elif self.publish_mutation in (
+            "asset-label", "asset-content-type", "asset-state",
+        ):
+            original = self.release.assets[0]
+            field, value = {
+                "asset-label": ("label", "changed label"),
+                "asset-content-type": ("content_type", "application/zip"),
+                "asset-state": ("state", "open"),
+            }[self.publish_mutation]
+            changed = GitHubAsset(**{**original.__dict__, field: value})
             self.release = GitHubRelease(**{
                 **self.release.__dict__,
                 "assets": (changed,) + self.release.assets[1:],
@@ -361,7 +389,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
         assert self.github.release is not None
         extra = GitHubAsset(
             99, "extra.txt", 1, "https://api.github.com/assets/99",
-            "https://github.com/extra", 17,
+            "https://github.com/extra", 17, None,
+            "application/octet-stream", "uploaded",
         )
         self.github.payloads[99] = b"x"
         self.github.release = GitHubRelease(**{**self.github.release.__dict__, "assets": self.github.release.assets + (extra,)})
@@ -437,8 +466,38 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(self.github.create_calls, 1)
         self.assertEqual(len(self.github.patch_calls), 1)
 
+    def test_publish_rejects_intervening_draft_mutation_before_patch(self) -> None:
+        for field, value in (
+            ("name", "intervening change"),
+            ("target_commitish", "intervening-target"),
+        ):
+            with self.subTest(field=field):
+                self.github = FakeGitHub(self.target)
+                created = self._push_and_create()
+                assert created.release_id is not None
+                self.github.release_reads = 0
+                self.github.mutate_on_release_read = 2
+                self.github.intervening_release_mutation = (field, value)
+                with self.assertRaisesRegex(TransitionError, "metadata"):
+                    publish_draft(
+                        self.tag, created.release_id, created.plan_sha256,
+                        self.context(), actions_environment={
+                            "GITHUB_ACTIONS": "true",
+                            "GITHUB_EVENT_NAME": "workflow_dispatch",
+                        },
+                    )
+                self.assertEqual(self.github.patch_calls, [])
+
     def test_publish_rejects_metadata_or_asset_identity_drift(self) -> None:
-        for mutation, message in (("name", "metadata"), ("asset-id", "assets")):
+        cases = (
+            ("name", "metadata"),
+            ("target-commitish", "metadata"),
+            ("asset-id", "assets"),
+            ("asset-label", "assets"),
+            ("asset-content-type", "assets"),
+            ("asset-state", "assets"),
+        )
+        for mutation, message in cases:
             with self.subTest(mutation=mutation):
                 self.github = FakeGitHub(self.target)
                 created = self._push_and_create()
@@ -554,6 +613,51 @@ class ReleaseTransitionsTest(unittest.TestCase):
         with self.assertRaisesRegex(GitHubApiError, "projection"):
             client.list_release_assets("endaye/lmdj", 17)
 
+    def test_github_projections_preserve_mutable_release_and_asset_metadata(self) -> None:
+        release = self._release_json(17)
+        release["assets"] = [self._asset_json(7, "asset.zip")]
+        client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+            200, {}, json.dumps(release).encode(),
+        ))
+        projected = client.get_release("endaye/lmdj", 17)
+        assert projected is not None
+        self.assertEqual(
+            getattr(projected, "target_commitish", None), self.target,
+        )
+        self.assertEqual(len(projected.assets), 1)
+        asset = projected.assets[0]
+        self.assertEqual(getattr(asset, "label", "missing"), None)
+        self.assertEqual(
+            getattr(asset, "content_type", None), "application/octet-stream",
+        )
+        self.assertEqual(getattr(asset, "state", None), "uploaded")
+
+    def test_github_mutable_metadata_shapes_fail_closed(self) -> None:
+        cases = (
+            ("target_commitish", "", "release"),
+            ("make_latest", 1, "release"),
+            ("label", 7, "asset"),
+            ("content_type", "", "asset"),
+            ("state", 7, "asset"),
+        )
+        for field, value, subject in cases:
+            with self.subTest(field=field):
+                if subject == "release":
+                    document = self._release_json(17)
+                    document[field] = value
+                    response = document
+                    operation = lambda client: client.get_release("endaye/lmdj", 17)
+                else:
+                    document = self._asset_json(7, "asset.zip")
+                    document[field] = value
+                    response = [document]
+                    operation = lambda client: client.list_release_assets("endaye/lmdj", 17)
+                client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+                    200, {}, json.dumps(response).encode(),
+                ))
+                with self.assertRaisesRegex(GitHubApiError, "projection"):
+                    operation(client)
+
     def test_asset_pagination_cannot_switch_release_identity(self) -> None:
         first = "/repos/endaye/lmdj/releases/17/assets?per_page=100"
         response = HttpResponse(
@@ -635,7 +739,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
                     7, "asset.zip", 7,
                     "https://api.github.com/repos/other/repository/releases/assets/7",
                     "https://github.com/other/repository/releases/download/test/asset.zip",
-                    release_id=17,
+                    release_id=17, label=None,
+                    content_type="application/octet-stream", state="uploaded",
                 ),
             )
         self.assertEqual(requests, [])
@@ -646,7 +751,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
                     7, "asset.zip", 7,
                     "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
                     "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
-                    release_id=18,
+                    release_id=18, label=None,
+                    content_type="application/octet-stream", state="uploaded",
                 ),
             )
         self.assertEqual(requests, [])
@@ -656,7 +762,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
                 7, "asset.zip", 7,
                 "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
                 "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
-                release_id=17,
+                release_id=17, label=None,
+                content_type="application/octet-stream", state="uploaded",
             ),
         )
         self.assertEqual(payload, b"payload")
@@ -678,7 +785,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
     @staticmethod
     def _asset_json(identifier: int, name: str) -> dict[str, object]:
         return {
-            "id": identifier, "name": name, "size": 7,
+            "id": identifier, "name": name, "label": None,
+            "content_type": "application/octet-stream", "state": "uploaded",
+            "size": 7,
             "url": f"https://api.github.com/repos/endaye/lmdj/releases/assets/{identifier}",
             "browser_download_url": f"https://github.com/endaye/lmdj/releases/download/test/{name}",
         }
@@ -693,7 +802,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
     def _release_json(self, identifier: int) -> dict[str, object]:
         return {
             "id": identifier, "tag_name": self.tag, "name": "LMDJ 1.0.21.0",
-            "body": "body", "draft": True, "prerelease": True,
+            "target_commitish": self.target, "body": "body",
+            "draft": True, "prerelease": True,
             "url": f"https://api.github.com/repos/endaye/lmdj/releases/{identifier}",
             "html_url": "https://github.com/endaye/lmdj/releases/tag/lmdj-v1.0.21.0",
             "upload_url": f"https://uploads.github.com/repos/endaye/lmdj/releases/{identifier}/assets{{?name,label}}",

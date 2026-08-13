@@ -46,12 +46,14 @@ class FakeRehearsalGitHub:
         self.payload = REHEARSAL_ASSET
         self.asset = GitHubAsset(
             8, state.asset_name, len(self.payload), "https://api.github.com/assets/8",
-            "https://github.com/asset", 9,
+            "https://github.com/asset", 9, None,
+            "application/octet-stream", "uploaded",
         )
         self.release = GitHubRelease(
             state.release_id, state.tag, f"LMDJ release rehearsal {state.tag}",
             rehearsal_marker(state), True, True, False, "https://github.com/rehearsal",
             "https://uploads.github.com/repos/endaye/lmdj/releases/9/assets{?name,label}", (self.asset,),
+            state.tag_object,
         )
         self.deleted: list[int] = []
         self.uploads = 0
@@ -76,6 +78,7 @@ class FakeRehearsalGitHub:
             9, tag, name, body, True, prerelease, make_latest,
             "https://github.com/rehearsal",
             "https://uploads.github.com/repos/endaye/lmdj/releases/9/assets{?name,label}", (),
+            self.release.target_commitish if self.release is not None else "main",
         )
         return self.release
 
@@ -87,7 +90,8 @@ class FakeRehearsalGitHub:
         self.payload = payload
         self.asset = GitHubAsset(
             8, name, len(payload), "https://api.github.com/assets/8",
-            "https://github.com/asset", release_id,
+            "https://github.com/asset", release_id, None,
+            "application/octet-stream", "uploaded",
         )
         self.release = GitHubRelease(**{**self.release.__dict__, "assets": (self.asset,)})
         return self.asset

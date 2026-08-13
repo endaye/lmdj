@@ -52,6 +52,15 @@ class _Authority:
     tag_state: object
 
 
+@dataclass(frozen=True)
+class _VerifiedRelease:
+    result: TransitionResult
+    authority: _Authority
+    release: GitHubRelease
+    release_snapshot: tuple[object, ...]
+    asset_snapshot: tuple[tuple[object, ...], ...]
+
+
 _MARKER_SCHEMA = "lmdj.release-plan-marker.v1"
 _MARKER_PATTERN = re.compile(r"<!-- (lmdj\.release-plan-marker\.v1) (\{[^\r\n]*\}) -->")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
@@ -125,24 +134,20 @@ def verify_draft(
     tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
 ) -> TransitionResult:
     """Reconstruct and verify the plan from canonical state and downloaded assets."""
+    return _verify_release_state(tag, release_id, plan_sha256, context).result
+
+
+def _verify_release_state(
+    tag: str, release_id: int, plan_sha256: str, context: PrepareContext,
+) -> _VerifiedRelease:
+    """Return the exact Release projection and assets that passed canonical verification."""
     if type(release_id) is not int or release_id <= 0:
         raise TransitionError("Release ID must be a positive numeric ID")
     if not isinstance(plan_sha256, str) or _DIGEST.fullmatch(plan_sha256) is None:
         raise TransitionError("release plan SHA-256 is invalid")
     authority = _formal_authority(tag, context, require_local=False, require_remote=True)
-    try:
-        release = authority.context.github.get_release(
-            authority.context.policy.repository, release_id,
-        )
-        by_tag = authority.context.github.get_release_by_tag(
-            authority.context.policy.repository, tag,
-        )
-    except Exception:
-        raise TransitionError("GitHub Release projection is unavailable") from None
-    if release is None or by_tag is None or release.id != by_tag.id:
-        raise TransitionError("GitHub Release numeric ID and tag do not identify one Release")
-
-    assets = _download_and_verify_assets(authority, release)
+    release = _release_pair(authority, tag, release_id)
+    assets, remote_assets, asset_snapshot = _download_and_verify_assets(authority, release)
     remote = authority.context.git.remote_tag_state(tag)
     plan = _release_plan(
         authority.context.policy, tag, remote, authority.intent, assets,
@@ -154,7 +159,12 @@ def verify_draft(
         raise TransitionError("reconstructed release plan digest does not match caller input")
     _verify_release_metadata(release, document, digest, allow_published=True)
     status = "draft-verified" if release.draft else "already-published"
-    return TransitionResult(status, digest, release.id, release.html_url)
+    result = TransitionResult(
+        status, digest, release.id, release.html_url, remote_assets,
+    )
+    return _VerifiedRelease(
+        result, authority, release, _release_without_draft(release), asset_snapshot,
+    )
 
 
 def publish_draft(
@@ -173,33 +183,32 @@ def publish_draft(
     ):
         raise TransitionError("Draft publication requires Actions workflow_dispatch")
 
-    verified = verify_draft(tag, release_id, plan_sha256, context)
-    authority = _formal_authority(tag, context, require_local=False, require_remote=True)
-    before = _release_pair(authority, tag, release_id)
-    before_assets = _asset_snapshot(authority, before)
-    if not before.draft:
-        return replace(verified, status="already-published", assets=before.assets)
+    initial = _verify_release_state(tag, release_id, plan_sha256, context)
+    before = _verify_release_state(tag, release_id, plan_sha256, context)
+    if initial.release_snapshot != before.release_snapshot:
+        raise TransitionError("GitHub Release metadata changed before publication")
+    if initial.asset_snapshot != before.asset_snapshot:
+        raise TransitionError("GitHub Release assets changed before publication")
+    if not before.release.draft:
+        return replace(before.result, status="already-published")
 
     try:
-        authority.context.github.publish_release(
-            authority.context.policy.repository, release_id,
+        before.authority.context.github.publish_release(
+            before.authority.context.policy.repository, release_id,
         )
     except Exception:
         # A response can be lost after GitHub accepted the exact PATCH. Numeric-ID
         # reconciliation below is the only recovery path; publication never creates.
         pass
 
-    postcondition = verify_draft(tag, release_id, plan_sha256, context)
-    refreshed = _formal_authority(tag, context, require_local=False, require_remote=True)
-    after = _release_pair(refreshed, tag, release_id)
-    after_assets = _asset_snapshot(refreshed, after)
-    if after.draft:
+    after = _verify_release_state(tag, release_id, plan_sha256, context)
+    if after.release.draft:
         raise TransitionError("GitHub Release publication could not be reconciled")
-    if _release_without_draft(before) != _release_without_draft(after):
+    if before.release_snapshot != after.release_snapshot:
         raise TransitionError("GitHub Release metadata changed during publication")
-    if before_assets != after_assets:
+    if before.asset_snapshot != after.asset_snapshot:
         raise TransitionError("GitHub Release assets changed during publication")
-    return replace(postcondition, status="published", assets=after.assets)
+    return replace(after.result, status="published")
 
 
 def marker_for_plan(document: dict[str, object], digest: str) -> str:
@@ -400,39 +409,25 @@ def _release_pair(
         )
     except Exception:
         raise TransitionError("GitHub Release projection is unavailable") from None
-    if by_id is None or by_tag is None or by_id.id != by_tag.id:
+    if (
+        by_id is None or by_tag is None or by_id.id != by_tag.id
+        or _release_projection(by_id) != _release_projection(by_tag)
+    ):
         raise TransitionError("GitHub Release numeric ID and tag do not identify one Release")
     return by_id
 
 
+def _release_projection(release: GitHubRelease) -> tuple[object, ...]:
+    return (_release_without_draft(release), release.draft)
+
+
 def _release_without_draft(release: GitHubRelease) -> tuple[object, ...]:
     return (
-        release.id, release.tag_name, release.name, release.body,
+        release.id, release.tag_name, release.target_commitish,
+        release.name, release.body,
         release.prerelease, release.make_latest, release.html_url,
         release.upload_url,
     )
-
-
-def _asset_snapshot(
-    authority: _Authority, release: GitHubRelease,
-) -> tuple[tuple[object, ...], ...]:
-    assets = _asset_map(authority, release)
-    snapshots: list[tuple[object, ...]] = []
-    for name in sorted(assets):
-        asset = assets[name]
-        try:
-            payload = authority.context.github.download_asset(
-                authority.context.policy.repository, release.id, asset,
-            )
-        except Exception:
-            raise TransitionError("GitHub Release asset download is unavailable") from None
-        if asset.size != len(payload):
-            raise TransitionError("GitHub Release asset size does not match downloaded bytes")
-        snapshots.append((
-            asset.id, asset.name, asset.size, hashlib.sha256(payload).hexdigest(),
-            asset.api_url, asset.browser_download_url, asset.release_id,
-        ))
-    return tuple(snapshots)
 
 
 def _verify_release_metadata(
@@ -515,11 +510,17 @@ def _compare_download(
 
 def _download_and_verify_assets(
     authority: _Authority, release: GitHubRelease,
-) -> tuple[AssetBuild, ...]:
+) -> tuple[
+    tuple[AssetBuild, ...],
+    tuple[GitHubAsset, ...],
+    tuple[tuple[object, ...], ...],
+]:
     assets = _asset_map(authority, release)
     with tempfile.TemporaryDirectory(prefix="lmdj-release-download-") as directory:
         root = Path(directory)
         builds: list[AssetBuild] = []
+        remote_assets: list[GitHubAsset] = []
+        snapshots: list[tuple[object, ...]] = []
         for name in sorted(assets):
             asset = assets[name]
             try:
@@ -530,7 +531,15 @@ def _download_and_verify_assets(
                 raise TransitionError("GitHub Release asset download is unavailable") from None
             if asset.size != len(payload):
                 raise TransitionError("GitHub Release asset size does not match downloaded bytes")
+            sha256 = hashlib.sha256(payload).hexdigest()
             path = root / name
             path.write_bytes(payload)
-            builds.append(AssetBuild(path, name, len(payload), hashlib.sha256(payload).hexdigest()))
-        return _verify_profile(authority, tuple(builds), root)
+            builds.append(AssetBuild(path, name, len(payload), sha256))
+            remote_assets.append(asset)
+            snapshots.append((
+                asset.id, asset.name, asset.label, asset.content_type,
+                asset.state, asset.size, sha256,
+                asset.api_url, asset.browser_download_url, asset.release_id,
+            ))
+        verified = _verify_profile(authority, tuple(builds), root)
+        return verified, tuple(remote_assets), tuple(snapshots)
