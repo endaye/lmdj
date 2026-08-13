@@ -105,8 +105,16 @@ CASES = {
     "tools/web-runtime/verify_emscripten.py": {
         "web_toolchain", "web_runtime_host", "creator"
     },
+    "tools/release/model.py": {"deploy_contract", "ci_contract"},
     "packaging/core/CMakeLists.txt": {"core_ubuntu", "package"},
     "netlify.toml": {"portal", "ci_contract"},
+    "scripts/release.sh": {"deploy_contract", "ci_contract"},
+    "docs/release-evidence/release-intents.json": {
+        "docs_static", "deploy_contract", "ci_contract"
+    },
+    "tests/build/release_model_test.py": {"deploy_contract", "ci_contract"},
+    ".github/workflows/publish-release.yml": {"deploy_contract", "ci_contract"},
+    ".github/workflows/release-audit.yml": {"deploy_contract", "ci_contract"},
     ".gitattributes": set(LANES),
 }
 
@@ -322,6 +330,21 @@ class ChangeScopeTest(unittest.TestCase):
         ])
         self.assertEqual(unknown["mode"], "full")
         self.assertEqual(self.true_lanes(unknown), LANES)
+
+    def test_release_workflow_rules_are_exact_and_signing_control_remains_full(self):
+        for path in (
+            ".github/workflows/publish-release.yml",
+            ".github/workflows/release-audit.yml",
+        ):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.true_lanes(self.classify([path])),
+                    {"deploy_contract", "ci_contract"},
+                )
+        self.assertEqual(
+            self.classify([".github/release-signing-keys/release.asc"])["mode"],
+            "full",
+        )
 
     def test_three_expensive_families_upgrade_to_full_but_docs_portal_do_not_count(self):
         full = self.classify([
