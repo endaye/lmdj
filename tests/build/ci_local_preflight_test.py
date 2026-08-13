@@ -13,6 +13,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -25,6 +26,9 @@ CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 PREFLIGHT_PATH = ROOT / "scripts/ci/local_preflight.py"
 LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
 ENTRY_POINT_PATH = ROOT / "scripts/local-ci.sh"
+WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
+
+PYTHON_TEST_FILE = re.compile(r"[\w./-]*[\w-]+_test\.py")
 
 LANES = {
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
@@ -51,6 +55,24 @@ def load_module(name: str, path: Path):
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def workflow_job(name: str) -> str:
+    """Return the body of one job in the real CI workflow."""
+    source = WORKFLOW_PATH.read_text(encoding="utf-8")
+    match = re.search(
+        rf"^  {re.escape(name)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+        source,
+        flags=re.MULTILINE | re.DOTALL,
+    )
+    if match is None:
+        raise AssertionError(f"workflow job is missing: {name}")
+    return match.group("body")
+
+
+def python_test_files(text: str) -> set[str]:
+    """Return every Python test file path an invocation text names."""
+    return set(PYTHON_TEST_FILE.findall(text))
 
 
 def git(root: Path, *args: str) -> str:
@@ -147,6 +169,60 @@ class LaneTableContractTest(unittest.TestCase):
         self.assertTrue(
             self.classifier._matches({"kind": "prefix", "value": "docs/"}, "docs/a.md")
         )
+
+
+class LaneCommandDriftTest(unittest.TestCase):
+    """Lane-key equality is not enough: the commands must not drift either.
+
+    A suite that moves between lanes changes what a job runs. Without this
+    contract the local table keeps the old composition and reports a pass for
+    a lane it no longer reproduces.
+    """
+
+    def setUp(self) -> None:
+        self.classifier = load_module("change_scope_drift", CLASSIFIER_PATH)
+        self.preflight = load_module("local_preflight_drift", PREFLIGHT_PATH)
+        self.policy = self.classifier.load_policy(POLICY_PATH)
+
+    def local_test_files(self, lane: str, table=None) -> set[str]:
+        if table is None:
+            table = self.preflight.load_lane_commands(policy=self.policy)
+        return python_test_files(" ".join(table[lane]["commands"]))
+
+    def test_deploy_contract_job_runs_the_deploy_command_suite(self) -> None:
+        workflow_tests = python_test_files(workflow_job("deploy-contract"))
+        self.assertIn(
+            "apps/web-runtime-host/test/deploy_command_test.py", workflow_tests
+        )
+
+    def test_deploy_contract_local_commands_cover_the_workflow_job(self) -> None:
+        workflow_tests = python_test_files(workflow_job("deploy-contract"))
+        self.assertTrue(workflow_tests, "deploy-contract runs no Python test file")
+        self.assertEqual(self.local_test_files("deploy_contract"), workflow_tests)
+
+    def test_a_dropped_local_command_stops_covering_the_workflow_job(self) -> None:
+        table = json.loads(LANE_COMMANDS_PATH.read_text(encoding="utf-8"))["lanes"]
+        entry = table["deploy_contract"]
+        entry["commands"] = [
+            command for command in entry["commands"]
+            if "deploy_command_test.py" not in command
+        ]
+        self.assertNotEqual(
+            self.local_test_files("deploy_contract", table),
+            python_test_files(workflow_job("deploy-contract")),
+        )
+
+    def test_the_deploy_suite_belongs_to_the_lane_that_owns_its_subject(self) -> None:
+        for path in (
+            "apps/web-runtime-host/test/deploy_command_test.py",
+            "apps/web-runtime-host/tools/deploy_orchestrator.py",
+            "apps/web-runtime-host/tools/netlify_api.py",
+            "apps/web-runtime-host/tools/release_bundle.py",
+            "scripts/web-runtime-deploy.sh",
+        ):
+            with self.subTest(path=path):
+                lanes, _ = self.classifier._evaluate_ready_paths(self.policy, [path])
+                self.assertIn("deploy_contract", lanes)
 
 
 class ScopePolicyEntryPointTest(unittest.TestCase):

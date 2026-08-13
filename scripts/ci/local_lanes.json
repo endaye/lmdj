@@ -151,9 +151,12 @@
       "requires": {},
       "commands": [
         "python3 tests/build/web_runtime_deploy_workflow_test.py",
-        "python3 tests/build/web_runtime_public_deployment_docs_test.py"
+        "python3 tests/build/web_runtime_public_deployment_docs_test.py",
+        "python3 apps/web-runtime-host/test/deploy_command_test.py"
       ],
-      "ci_only": []
+      "ci_only": [
+        "the deploy command suite pins --shards 4 to the hosted runner's four vCPUs; the local run takes the default min(4, os.cpu_count())"
+      ]
     },
     "chameleon_lab": {
       "requires": {
