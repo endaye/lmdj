@@ -194,14 +194,14 @@
 - Consumes: clean committed `1.0.21.0` implementation and Assembly.
 - Produces: immutable canary snapshot, full branch-local Proof, and an honest physical retest sheet.
 
-- [ ] **Step 1: Freeze the clean candidate snapshot**
+- [x] **Step 1: Freeze the clean candidate snapshot**
 
   ```bash
   scripts/architecture-portal.sh version 1.0.21.0 canary
   scripts/architecture-portal.sh check
   ```
 
-- [ ] **Step 2: Commit the immutable snapshot separately**
+- [x] **Step 2: Commit the immutable snapshot separately**
 
   Stage only generated `1.0.21.0` snapshot paths and `versions.json`, inspect staged paths/checks, and commit:
 
@@ -209,7 +209,7 @@
   git commit -m "docs(portal): freeze 1.0.21.0 canary snapshot"
   ```
 
-- [ ] **Step 3: Run full candidate verification**
+- [x] **Step 3: Run full candidate verification**
 
   ```bash
   scripts/creator-web.sh proof
@@ -227,11 +227,11 @@
 
   Expected: all automated gates pass. Synthetic Channel-10 coverage is not reported as physical-device evidence.
 
-- [ ] **Step 4: Record Proof and physical retest instructions**
+- [x] **Step 4: Record Proof and physical retest instructions**
 
   Record exact committed revisions, Assembly Lock digest, toolchain identities, Proof counts, fixture/report hashes, and a physical matrix. Record the observed `1.0.20.0` MPD218 failure, the Safari manual result exactly as supplied, and keep `1.0.21.0` MPD218/iPadOS results unverified until actually performed.
 
-- [ ] **Step 5: Commit evidence atomically**
+- [x] **Step 5: Commit evidence atomically**
 
   ```bash
   git commit -m "docs(stage7): record MIDI compatibility canary proof"

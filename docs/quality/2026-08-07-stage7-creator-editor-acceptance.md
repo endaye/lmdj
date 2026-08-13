@@ -54,7 +54,13 @@ yet no Trigger reached Creator. macOS CoreMIDI capture showed PAD BANK A PAD1
 and PAD16 sending Channel 10 Note 36/51 while Creator was hard-coded to Channel
 1. The current correction therefore allocates Product Build `1.0.21.0` and
 Creator Web `1.1.3`; Platform `0.2.1` and Formal Host `1.2.8` remain unchanged.
-Creator now accepts the bounded Note `36..51` mapping on channels 1–16.
+Creator now accepts the bounded Note `36..51` mapping on channels 1–16. Its
+immutable `1.0.21.0 · canary` snapshot and complete branch-local automated Proof
+passed at clean revision `1a7e84e94fd00030c44b48cd9f597cc42d5ca37a`;
+the candidate physical-MIDI UI retest remains independently in progress. Exact
+revisions, identities, hashes, counts, and the physical checklist are recorded
+in
+[`2026-08-13-stage7-midi-channel-canary-1.0.21.0.md`](../release-evidence/2026-08-13-stage7-midi-channel-canary-1.0.21.0.md).
 
 This remains branch-local candidate evidence, not merged-main Proof. No push,
 PR, merge, tag, Release, deployment, publication, or Channel promotion is
@@ -153,7 +159,7 @@ screen recovery, or long-session stability on those platforms.
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
 | Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
 | Product Build `1.0.20.0` | corrected keyboard spatial mapping; clean local Proof and immutable snapshot passed at `7d409b5`; candidate source/evidence through `ccd0aec` is now on `origin/main`; ten-step human Canary passed; `main` run `31665186166` remains in progress |
-| Product Build `1.0.21.0` | branch-local Creator `1.1.3` candidate accepts bounded MIDI mapping on channels 1–16; automated Proof and immutable snapshot pending |
+| Product Build `1.0.21.0` | branch-local Creator `1.1.3` candidate accepts bounded MIDI mapping on channels 1–16; clean automated Proof and immutable snapshot passed at `1a7e84e`; physical UI retest in progress |
 | Manual canary | `T1 passed — endaye confirmed all ten 1.0.20.0 steps with no issue; report SHA-256 7e2a2b…333a` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
@@ -165,7 +171,8 @@ The current remediation rows must be refreshed when run `31665186166` reaches a
 terminal result or when the local manual-acceptance addendum is published. T1 is closed for the `1.0.20.0`
 branch-local candidate; physical MIDI failed on that Build, Safari import was
 checked separately without reproducing the importing stall, and Safari Pointer
-plus iPadOS remain unverified. Physical MIDI on `1.0.21.0` remains pending.
+plus iPadOS remain unverified. Product `1.0.21.0` automated Proof and snapshot
+are complete; its physical MIDI UI retest remains in progress.
 Product Build `1.0.20.0` still requires a successful terminal result for the
 full Proof at exact `main` revision `ccd0aec` before any new Product tag. The physical rows
 remain authoritative for their individual platforms and continue to block

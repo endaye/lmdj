@@ -417,6 +417,10 @@ PAD1/PAD16 分别发送 Channel 10 Note 36/51，而 Creator 额外硬编码 Chan
 修复分配 Product Build `1.0.21.0` 与 Creator Web `1.1.3`，移除 Creator 的单
 channel filter；Platform `0.2.1`、Formal Host `1.2.8`、Project Truth、Contract、
 Provider 与 Model identity 不变。自动化 Channel 10 回归不替代候选上的实体复验。
+不可变 `1.0.21.0 · canary` snapshot 与完整 branch-local 自动化 Proof 已在 clean
+revision `1a7e84e94fd00030c44b48cd9f597cc42d5ca37a` 通过；精确 hashes、计数和实体
+复验表见
+[`2026-08-13-stage7-midi-channel-canary-1.0.21.0.md`](../release-evidence/2026-08-13-stage7-midi-channel-canary-1.0.21.0.md)。
 
 ### Final finding closure audit
 
@@ -478,14 +482,15 @@ Provider 与 Model identity 不变。自动化 Channel 10 回归不替代候选�
 | Product Build `1.0.19.0` historical branch-local Proof | `passed, superseded for current mapping acceptance` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
 | Product Build `1.0.20.0` branch-local Proof | `passed` | clean revision `7d409b5`：Creator、Formal Host、Core、dependency/identity 与 Portal 全量 Proof 通过；snapshot source `6a1cd97`，Assembly Lock `85c607…913`；详见 `docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`。 |
 | Product Build `1.0.20.0` merged-main Proof | `in progress` | 另一个进程已直接 push candidate history 到 `origin/main` `ccd0aec`，无关联 PR；full `main` push run `31665186166` 正在运行，尚无 terminal success。人工验收 addendum `95ae181` 仍只在本地。 |
-| Product Build `1.0.21.0` branch-local candidate | `in progress` | Creator `1.1.3` 已通过 synthetic Channel 10 regression；full Proof、immutable snapshot 与候选实体 MIDI 复验尚未完成。 |
+| Product Build `1.0.21.0` branch-local candidate | `automated Proof passed / physical retest in progress` | clean revision `1a7e84e` 的 full Proof 与 immutable snapshot 已通过；Creator `1.1.3` 的 synthetic Channel 10 regression 不替代候选实体 MIDI UI 复验。 |
 | macOS Chrome physical MIDI | `failed on 1.0.20.0 / pending on 1.0.21.0` | MPD218 PAD BANK A raw input confirmed Channel 10 Note 36/51; old Creator filtered it before Trigger admission. |
 | macOS Safari Bundle import | `manual observation passed` | endaye 未遇到导入 `stage7-canary.lmdj` 后超过 20 秒仍停在 `importing`；不推导 Safari Pointer 或 iPadOS 通过。 |
 
 因此当前源代码、branch-local 自动化、文档与历史 G1 更正都已纳入 closure ledger，
 T1 的十步键盘/听感 Canary 已在 `1.0.20.0` 关闭，但实体 MIDI 缺陷要求新的
-`1.0.21.0` 候选。该候选的 full Proof、snapshot 与实体复验仍未完成，本修复任务
-不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel promotion。
+`1.0.21.0` 候选。该候选的 full Proof 与 snapshot 已完成，实体 MIDI UI 复验仍在
+进行；Safari Pointer 和 iPadOS 仍未验证。本修复任务不能报告为最终完成，也没有
+授权 push、tag、Release、deployment 或 Channel promotion。
 
 ## 十一、第三轮更正 — G1 降级（2026-08-13）
 
