@@ -180,7 +180,8 @@ def create_rehearsal_draft(
         if not assets:
             try:
                 context.github.upload_release_asset(
-                    context.repository, release.upload_url, state.asset_name, REHEARSAL_ASSET,
+                    context.repository, release.id, release.upload_url,
+                    state.asset_name, REHEARSAL_ASSET,
                 )
             except Exception:
                 pass
@@ -292,7 +293,7 @@ def _assets(context: RehearsalContext, release_id: int) -> list[GitHubAsset]:
 
 
 def _verify_asset(state: RehearsalState, asset: GitHubAsset, context: RehearsalContext) -> None:
-    payload = context.github.download_asset(asset)
+    payload = context.github.download_asset(context.repository, asset)
     if (
         asset.name != state.asset_name or asset.size != len(payload)
         or hashlib.sha256(payload).hexdigest() != state.asset_sha256

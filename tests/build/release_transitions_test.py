@@ -131,8 +131,10 @@ class FakeGitHub:
     def list_release_assets(self, repository: str, release_id: int) -> list[GitHubAsset]:
         return list(self.release.assets if self.release is not None else ())
 
-    def upload_release_asset(self, repository: str, upload_url: str, name: str,
-                             payload: bytes) -> GitHubAsset:
+    def upload_release_asset(self, repository: str, release_id: int, upload_url: str,
+                             name: str, payload: bytes) -> GitHubAsset:
+        if self.release is None or self.release.id != release_id:
+            raise RuntimeError("wrong release ownership")
         self.upload_calls.append(name)
         self.next_asset_id += 1
         asset = GitHubAsset(
@@ -149,7 +151,9 @@ class FakeGitHub:
             raise GitHubApiError("GitHub release request is unavailable")
         return asset
 
-    def download_asset(self, asset: GitHubAsset) -> bytes:
+    def download_asset(self, repository: str, asset: GitHubAsset) -> bytes:
+        if repository != "endaye/lmdj":
+            raise RuntimeError("wrong repository ownership")
         return self.payloads[asset.id]
 
 
@@ -474,7 +478,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
 
         client = GitHubClient(token="ghp_DO_NOT_LEAK", http_transport=transport)
         asset = client.upload_release_asset(
-            "endaye/lmdj", "https://uploads.github.com/repos/endaye/lmdj/releases/17/assets{?name,label}",
+            "endaye/lmdj", 17,
+            "https://uploads.github.com/repos/endaye/lmdj/releases/17/assets{?name,label}",
             "a b.zip", b"payload",
         )
         self.assertEqual(asset.id, 7)
@@ -485,6 +490,40 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertNotIn("ghp_DO_NOT_LEAK", str(caught.exception))
         with self.assertRaisesRegex(GitHubApiError, "numeric"):
             client.get_release("endaye/lmdj", True)
+
+    def test_asset_io_requires_exact_repository_release_and_asset_ownership(self) -> None:
+        requests: list[str] = []
+        client = GitHubClient(http_transport=lambda method, url, headers, body: (
+            requests.append(url) or HttpResponse(200, {}, b"payload")
+        ))
+        with self.assertRaisesRegex(GitHubApiError, "upload URL"):
+            client.upload_release_asset(
+                "endaye/lmdj", 17,
+                "https://uploads.github.com/repos/endaye/lmdj/releases/18/assets{?name,label}",
+                "asset.zip", b"payload",
+            )
+        with self.assertRaisesRegex(GitHubApiError, "API URL"):
+            client.download_asset(
+                "endaye/lmdj",
+                GitHubAsset(
+                    7, "asset.zip", 7,
+                    "https://api.github.com/repos/other/repository/releases/assets/7",
+                    "https://github.com/other/repository/releases/download/test/asset.zip",
+                ),
+            )
+        self.assertEqual(requests, [])
+        payload = client.download_asset(
+            "endaye/lmdj",
+            GitHubAsset(
+                7, "asset.zip", 7,
+                "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
+                "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
+            ),
+        )
+        self.assertEqual(payload, b"payload")
+        self.assertEqual(requests, [
+            "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
+        ])
 
     def test_cli_exposes_separate_transition_and_rehearsal_boundaries(self) -> None:
         root = ["--repo-root", str(self.root)]

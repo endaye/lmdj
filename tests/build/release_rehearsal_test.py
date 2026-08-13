@@ -65,7 +65,9 @@ class FakeRehearsalGitHub:
     def list_release_assets(self, repository: str, release_id: int):
         return list(self.release.assets if self.release else ())
 
-    def download_asset(self, asset: GitHubAsset) -> bytes:
+    def download_asset(self, repository: str, asset: GitHubAsset) -> bytes:
+        if repository != "endaye/lmdj":
+            raise RuntimeError("wrong repository ownership")
         return self.payload
 
     def create_draft_release(self, repository: str, *, tag: str, name: str, body: str,
@@ -77,8 +79,10 @@ class FakeRehearsalGitHub:
         )
         return self.release
 
-    def upload_release_asset(self, repository: str, upload_url: str, name: str,
-                             payload: bytes) -> GitHubAsset:
+    def upload_release_asset(self, repository: str, release_id: int, upload_url: str,
+                             name: str, payload: bytes) -> GitHubAsset:
+        if self.release is None or self.release.id != release_id:
+            raise RuntimeError("wrong release ownership")
         self.uploads += 1
         self.payload = payload
         self.asset = GitHubAsset(

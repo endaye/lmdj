@@ -204,25 +204,30 @@ class GitHubClient:
         return assets
 
     def upload_release_asset(
-        self, repository: str, upload_url: str, name: str, payload: bytes,
+        self, repository: str, release_id: int, upload_url: str, name: str, payload: bytes,
     ) -> GitHubAsset:
         _require_repository(repository)
+        _require_id(release_id, "release")
         if not isinstance(name, str) or not name or "/" in name or "\\" in name:
             raise GitHubApiError("GitHub asset name is invalid")
         if not isinstance(payload, bytes):
             raise GitHubApiError("GitHub asset payload is invalid")
         upload_identity = _release_upload_identity(upload_url)
-        if upload_identity is None or upload_identity[0] != repository:
+        if upload_identity != (repository, release_id):
             raise GitHubApiError("GitHub asset upload URL is invalid")
         base = upload_url.split("{", 1)[0]
         url = f"{base}?name={quote(name, safe='')}"
         response = self._request("POST", url, payload, content_type="application/octet-stream")
         return _parse_asset(_json_response(response, {201}), repository)
 
-    def download_asset(self, asset: GitHubAsset) -> bytes:
+    def download_asset(self, repository: str, asset: GitHubAsset) -> bytes:
+        _require_repository(repository)
         _require_id(asset.id, "asset")
         identity = _asset_api_identity(asset.api_url)
-        if identity is None or identity[1] != asset.id:
+        if (
+            identity != (repository, asset.id)
+            or not _repository_url(asset.browser_download_url, "github.com", repository)
+        ):
             raise GitHubApiError("GitHub asset API URL is invalid")
         response = self._request(
             "GET", asset.api_url, accept="application/octet-stream",

@@ -378,7 +378,7 @@ def _resume_assets(
         payload = local.path.read_bytes()
         try:
             authority.context.github.upload_release_asset(
-                authority.context.policy.repository, release.upload_url, name, payload,
+                authority.context.policy.repository, release.id, release.upload_url, name, payload,
             )
         except Exception:
             reconciled = _asset_map(authority, release)
@@ -407,7 +407,9 @@ def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHu
 
 def _compare_download(authority: _Authority, remote: GitHubAsset, expected: AssetBuild) -> None:
     try:
-        payload = authority.context.github.download_asset(remote)
+        payload = authority.context.github.download_asset(
+            authority.context.policy.repository, remote,
+        )
     except Exception:
         raise TransitionError("GitHub Release asset download is unavailable") from None
     if remote.size != len(payload) or expected.bytes != len(payload) or hashlib.sha256(payload).hexdigest() != expected.sha256:
@@ -424,7 +426,9 @@ def _download_and_verify_assets(
         for name in sorted(assets):
             asset = assets[name]
             try:
-                payload = authority.context.github.download_asset(asset)
+                payload = authority.context.github.download_asset(
+                    authority.context.policy.repository, asset,
+                )
             except Exception:
                 raise TransitionError("GitHub Release asset download is unavailable") from None
             if asset.size != len(payload):
