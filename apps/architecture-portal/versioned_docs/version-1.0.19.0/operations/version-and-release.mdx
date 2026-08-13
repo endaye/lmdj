@@ -1,0 +1,72 @@
+---
+title: Version 与 Release
+area: operations
+status: implemented
+owners: [release, core]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 四条版本轴
+Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
+## Assembly Lock
+锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
+当前本地候选 Product Build 是 `1.0.19.0 · canary · g<short-sha>`。`1.0.17.0` 已由未发布 Stage 8 分支保留；`1.0.18.0` 已执行自动化与第一次人工 Canary，但该 Canary 暴露了 Runtime Session replacement 后残留永久 `importing` UI 的 Creator 缺陷，因此成为 abandoned、unshipped candidate。修复根据 live ref/worktree/tag 盘点分配下一个未用 BUILD。候选集成 Stage 7 review remediation 及该 Canary 修复：managed storage ownership、共享 Runtime integrity、单一 input/cleanup owner、可观察且可重试的 recovery、editor transition contracts、生成式 Runtime identity、packaged recovery/continuity Proof，以及 retiring generation 的 import UI cleanup。版本值由 active manifests 与 lock 派生，Contract、Provider 和 Model identity 保持不变。
+
+| Identity | 当前版本 | 变化边界 |
+| --- | --- | --- |
+| Audio Runtime | `0.4.1` | 本候选无变化 |
+| Project I/O | `0.5.4` | compatible managed storage ownership、publication recovery 与 Native link-count hardening |
+| Application Facade | `1.3.5` | 精确依赖更新到 Project I/O `0.5.4` |
+| Web Runtime Platform | `0.2.0` | additive diagnostics/input/error/cleanup surface 与 replacement generation isolation |
+| Core CLI | `1.0.11` | 精确 Facade 依赖更新 |
+| Core MCP | `1.1.8` | 精确 Facade 依赖及 Python identity 更新 |
+| Native Test Host | `1.0.9` | 精确 Facade 依赖更新 |
+| Web Runtime Host | `1.2.7` | compatible Platform 依赖与 lifecycle 修正 |
+| Creator Web | `1.1.1` | compatible retiring-generation import UI cleanup；保留 `1.1.0` 的 visible retry/details/continuity behavior |
+
+历史 `1.0.16.6`、`.7` 与 `1.0.18.0` 仍是 abandoned、unshipped candidate；签名 `.8` 及 `.9` 的冻结快照和验收记录继续只读保留。新的 Module/Host/dependency identities 不能使用 PATCH，因此 Creator `1.1.1` 进入新 BUILD `1.0.19.0`。已分配身份、branch-local Proof 或未来 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion。
+## Git 与发布
+Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
+
+## PATCH、Assembly 与证据链
+
+PATCH may not change Product Assembly identity or `assembly.lock`. Any module/provider/Host/dependency identity change allocates a new BUILD. Historical `1.0.16.x` events remain historical facts and are not rewritten；它们用于解释为什么规则被收紧，不构成再次偏离的先例。New Product tags require merged-main Proof first，且该 Proof 必须绑定未来 tag target 的精确 `main` revision、Product Build 与 lock hash。
+
+权威链必须逐环核验并分别记录：Product Build -> signed tag -> tag revision -> merged PR -> source revision -> snapshot provenance/witness -> merged-main Proof revision -> evidence-only documentation revision。branch-local Proof、快照、CI、tag 或后写的证据文档都不能替代链中其他一环。
+## 不可变性
+已发布 tag 不移动；交付测试或正式发布的文档快照按 Product Build 冻结，current 文档持续跟随 main。普通 PR Preview 不创建永久快照。
+schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资产、源提交与 source projection；后续 current 或 diagram 变化不能改写已冻结版本。生成前允许的脏路径仅限该 Product Build 的精确生成边界，提交后还必须验证 introducing commit、时间顺序以及 direct-parent 或获准的 squash-equivalent projection。
+## 发布门禁
+实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
+
+当前候选 Product tag 文本为 `lmdj-v1.0.19.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称 push、PR、远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+
+## Runtime Host 公共发布
+
+Runtime Host 的两阶段发布工具和 workflow 定义已经存在：不持有 Netlify credential 的
+preflight job 先从 canonical origin 验证 remote annotated signed Product tag、protected
+`main` ancestry，以及 Release 精确三资产 ZIP、checksum 和受信 Release checksum key 的
+detached armored signature，并完成资产下载与 staging；Product tag key 与 checksum key 的
+固定指纹和用途相互独立，不能替代，signature 验证先于 checksum 解析。只有它通过后才安装
+Node/Chromium，部署 job 在接触 Netlify 前对同一 Release 再验证一次。
+发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
+HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
+API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
+以官方 reversible site disable 安全撤下。成功 evidence v2 与恢复 evidence v1 分别保存完整
+HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
+状态必须由与精确身份绑定的 evidence 独立报告。
+
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.19.0` 已获得 remote verified
+tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
+promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
+精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、
+Proof、PR Preview 或 workflow 定义都不能替代它。运营前置条件、恢复和凭据轮换见仓库运行手册
+`docs/deploy/web-runtime-host.md`；其验收真相记录见
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+proof-only Python server 不属于生产面；Netlify 将静态服务经验证的 release `dist`。
+`lmdj-canary` 属于 Creator 交付边界，不能作为 Diagnostic Runtime Host 的项目、别名或 URL。
