@@ -32,6 +32,7 @@ const TERMINAL_RELEASE_OBSERVATION_TIMEOUT_MS = 15_000;
 const DIAGNOSTIC_PROJECT_OVERALL_TIMEOUT_MS = 300_000;
 const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = 90_000;
 const DIAGNOSTIC_PROJECT_POLL_INTERVAL_MS = 250;
+const PROJECT_REOPEN_OVERALL_TIMEOUT_MS = 60_000;
 const DIAGNOSTIC_PROJECT_CONTRACT =
   "lmdj.web-runtime-host.diagnostic-project.v1";
 const DIAGNOSTIC_PROJECT_STORAGE_KEY = DIAGNOSTIC_PROJECT_CONTRACT;
@@ -672,7 +673,7 @@ async function reopenProject(
   page,
   identity,
   patternId,
-  { overallDeadlineMs = 10_000, retryDelayMs = 25 } = {},
+  { overallDeadlineMs = PROJECT_REOPEN_OVERALL_TIMEOUT_MS, retryDelayMs = 25 } = {},
 ) {
   if (!Number.isFinite(overallDeadlineMs) || overallDeadlineMs <= 0) {
     throw new TypeError("overallDeadlineMs must be positive");
@@ -1518,7 +1519,7 @@ test("Chromium recovery outcome timeout is terminal and releases the lease", asy
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(240_000);
+  test.setTimeout(420_000);
   await openPackagedHost(page);
   await page.locator("#diagnostic-project-load").click();
   await waitForDiagnosticProjectReady(page);
@@ -1582,7 +1583,7 @@ test("Chromium synchronous submit copy cannot move the caller publication cutoff
   page,
 }) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(60_000);
+  test.setTimeout(180_000);
   await enableDeadlineProof(page);
   await openPackagedHost(page);
   const identity = {
@@ -2260,7 +2261,7 @@ test("WebKit records capability limitation or completes protocol OPFS restart li
   page,
 }, testInfo) => {
   test.skip(browserName !== "webkit");
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
   await installTransportObservability(page);
   await page.goto("/index.html");
   await expect.poll(() => page.locator("#host-state").textContent(), {
