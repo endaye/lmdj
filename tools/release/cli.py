@@ -25,6 +25,21 @@ from tools.release.prepare import (  # noqa: E402
     read_product_snapshot_proof,
 )
 from tools.release.profiles import ProfileError, ProfileRuntime  # noqa: E402
+from tools.release.rehearsal import (  # noqa: E402
+    RehearsalContext,
+    RehearsalError,
+    cleanup_rehearsal,
+    create_rehearsal_draft,
+    load_rehearsal_state,
+    prepare_rehearsal,
+    push_rehearsal_tag,
+)
+from tools.release.transitions import (  # noqa: E402
+    TransitionError,
+    create_draft,
+    push_tag,
+    verify_draft,
+)
 
 
 def parse_arguments(argv: list[str]) -> argparse.Namespace:
@@ -33,6 +48,19 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     commands = parser.add_subparsers(dest="command", required=True)
     prepared = commands.add_parser("prepare")
     prepared.add_argument("tag")
+    pushed = commands.add_parser("push-tag")
+    pushed.add_argument("tag")
+    drafted = commands.add_parser("create-draft")
+    drafted.add_argument("tag")
+    verified = commands.add_parser("verify-draft")
+    verified.add_argument("tag")
+    verified.add_argument("release_id", type=int)
+    verified.add_argument("plan_sha256")
+    rehearsal = commands.add_parser("rehearsal")
+    rehearsal_commands = rehearsal.add_subparsers(dest="rehearsal_command", required=True)
+    for name in ("prepare", "push-tag", "create-draft", "cleanup"):
+        selected = rehearsal_commands.add_parser(name)
+        selected.add_argument("tag")
     return parser.parse_args(argv)
 
 
@@ -77,18 +105,70 @@ def main(argv: list[str] | None = None) -> int:
         options = parse_arguments(argv if argv is not None else sys.argv[1:])
         root = options.repo_root.expanduser().resolve(strict=True)
         context = build_context(root)
-        prepared = prepare(options.tag, context)
+        if options.command == "prepare":
+            prepared = prepare(options.tag, context)
+            print(f"release plan sha256: {prepared.digest}")
+            print(f"next command: scripts/release.sh push-tag {options.tag}")
+        elif options.command == "push-tag":
+            result = push_tag(options.tag, context)
+            print(f"remote tag status: {result.status}")
+            print(f"release plan sha256: {result.plan_sha256}")
+        elif options.command == "create-draft":
+            result = create_draft(options.tag, context)
+            _print_release_result(result)
+        elif options.command == "verify-draft":
+            result = verify_draft(
+                options.tag, options.release_id, options.plan_sha256, context,
+            )
+            _print_release_result(result)
+        else:
+            _run_rehearsal(options, root, context)
     except SystemExit as error:
         return 0 if error.code == 0 else 64
     except (
         CommandError, GitHubApiError, GitRepositoryError, OpenPgpError, PrepareError,
-        ProfileError, ReleaseModelError, OSError,
+        ProfileError, RehearsalError, ReleaseModelError, TransitionError, OSError,
     ) as error:
-        print(f"release prepare verification error: {error}", file=sys.stderr)
+        print(f"release verification error: {error}", file=sys.stderr)
         return 2
-    print(f"release plan sha256: {prepared.digest}")
-    print(f"next command: scripts/release.sh push-tag {options.tag}")
     return 0
+
+
+def _print_release_result(result) -> None:
+    print(f"release status: {result.status}")
+    print(f"release ID: {result.release_id}")
+    print(f"release URL: {result.release_url}")
+    print(f"release plan sha256: {result.plan_sha256}")
+
+
+def _run_rehearsal(options: argparse.Namespace, root: Path, context: PrepareContext) -> None:
+    production_keys = {
+        context.policy.product_fingerprint, context.policy.checksum_fingerprint,
+    }
+    selected = RehearsalContext(
+        root, context.policy.repository, context.git, context.github,
+        frozenset(production_keys),
+    )
+    if options.rehearsal_command == "prepare":
+        state = prepare_rehearsal(
+            options.tag, selected, product_fingerprints=production_keys,
+        )
+    elif options.rehearsal_command == "push-tag":
+        state = push_rehearsal_tag(
+            options.tag, selected, product_fingerprints=production_keys,
+        )
+    elif options.rehearsal_command == "create-draft":
+        state = create_rehearsal_draft(
+            load_rehearsal_state(options.tag, root), selected,
+            product_fingerprints=production_keys,
+        )
+    else:
+        state = load_rehearsal_state(options.tag, root)
+        cleanup_rehearsal(state, selected)
+    print(f"rehearsal status: {options.rehearsal_command}")
+    print(f"rehearsal tag: {state.tag}")
+    if state.release_id is not None:
+        print(f"rehearsal Release ID: {state.release_id}")
 
 
 if __name__ == "__main__":
