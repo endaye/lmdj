@@ -13,12 +13,14 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.release.audit import AuditContext, audit, write_report  # noqa: E402
+import tools.release.audit as audit_module  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
     GitHubAsset,
@@ -26,6 +28,7 @@ from tools.release.github_api import (  # noqa: E402
     RunProjection,
 )
 from tools.release.model import load_ledger_document, load_policy  # noqa: E402
+from tools.release.openpgp import OpenPgpError  # noqa: E402
 from tools.release.prepare import LocalTag, ProductProof  # noqa: E402
 from tools.release import cli  # noqa: E402
 
@@ -207,6 +210,8 @@ class ReleaseAuditTest(unittest.TestCase):
             *ROOT.glob("packages/*/module.json"),
             *ROOT.glob("apps/*/module.json"),
             *ROOT.glob("providers/*/module.json"),
+            *ROOT.glob("providers/*/include/**/factory.hpp"),
+            *ROOT.glob("providers/*/src/provider.cpp"),
             *ROOT.glob("contracts/*/*.schema.json"),
         ]
         for source in paths:
@@ -343,6 +348,24 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual([item.code for item in report.findings], ["ok-with-historical-exception"])
         self.assertIn("fixture predates", report.findings[0].message)
         self.assertEqual(report.exit_code, 0)
+
+    def test_linked_exception_marker_waiver_requires_exact_release_id(self) -> None:
+        tag = str(self.entry()["tag"])
+        exception = {
+            "tag": tag,
+            "target_revision": TARGET,
+            "release_id": 17,
+            "observed_before": "2026-08-12T23:59:59Z",
+            "code": "pre-pipeline-ci-evidence",
+            "reason": "fixture current-policy publication predates canonical markers",
+            "evidence_paths": ["evidence.md"],
+        }
+        self.git.tags[tag] = self.tag_state()
+        for identifier, expected in ((17, "ok-with-historical-exception"), (18, "conflict")):
+            with self.subTest(identifier=identifier):
+                self.github.releases[tag] = self.release(tag, identifier=identifier, body="")
+                report = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
+                self.assertEqual(report.findings[0].code, expected)
 
     def test_missing_published_tag_and_release_is_missing(self) -> None:
         report = audit(self.context(), remote=True, tag=str(self.entry()["tag"]))
@@ -526,6 +549,80 @@ class ReleaseAuditTest(unittest.TestCase):
                     else:
                         report = audit(replace(context, repo_root=authority), remote=False)
                     self.assertIn("unverifiable", {item.code for item in report.findings})
+
+    def test_provider_source_package_drift_fails_static_audit_in_both_modes(self) -> None:
+        for remote in (False, True):
+            for relative in (
+                "providers/local-proof-success/include/lmdj/providers/local_proof_success/factory.hpp",
+                "providers/local-proof-success/src/provider.cpp",
+            ):
+                with self.subTest(remote=remote, relative=relative):
+                    authority = self.root / f"provider-{int(remote)}-{Path(relative).name}"
+                    authority.mkdir()
+                    (authority / "evidence.md").write_text("fixture\n", encoding="utf-8")
+                    self.install_static_authority(authority)
+                    with (authority / relative).open("a", encoding="utf-8") as source:
+                        source.write("\n// drift\n")
+                    context = self.context()
+                    if remote:
+                        self.git.authority_root = authority
+                        def build_authority(root, policy, ledger):
+                            return replace(
+                                context, repo_root=root, policy=policy, ledger=ledger,
+                                tag_signer_fingerprint=policy.product_fingerprint,
+                                checksum_signer_fingerprint=policy.checksum_fingerprint,
+                                authority_reader=None, authority_context_builder=None,
+                            )
+                        context = replace(
+                            context,
+                            authority_reader=lambda root: (self.policy, context.ledger),
+                            authority_context_builder=build_authority,
+                        )
+                        tag = str(self.entry()["tag"])
+                        self.git.tags[tag] = self.tag_state()
+                        self.github.releases[tag] = self.release(tag)
+                        report = audit(context, remote=True, tag=tag)
+                    else:
+                        report = audit(replace(context, repo_root=authority), remote=False)
+                    self.assertIn("unverifiable", {item.code for item in report.findings})
+
+    def test_trust_anchor_failure_is_a_static_finding_and_cli_writes_json(self) -> None:
+        def broken_trust_anchor(*args):
+            raise OpenPgpError("fixture key mismatch")
+
+        context = replace(self.context(), trust_anchor_verifier=broken_trust_anchor)
+        destination = self.root / "audit.json"
+        with patch.object(cli, "build_audit_context", return_value=context):
+            exit_code = cli.main([
+                "--repo-root", str(self.root), "audit", "--local",
+                "--json", str(destination),
+            ])
+        self.assertEqual(exit_code, 1)
+        document = json.loads(destination.read_text(encoding="utf-8"))
+        self.assertIn("unverifiable", {item["code"] for item in document["findings"]})
+
+        context = replace(
+            context,
+            authority_reader=lambda root: (self.policy, context.ledger),
+            authority_context_builder=lambda root, policy, ledger: replace(
+                context, repo_root=root, policy=policy, ledger=ledger,
+                authority_reader=None, authority_context_builder=None,
+            ),
+        )
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        report = audit(context, remote=True, tag=tag)
+        self.assertIn("unverifiable", {item.code for item in report.findings})
+        self.assertNotIn("external-error", {item.code for item in report.findings})
+
+        with patch.object(
+            audit_module, "_remote_inventories",
+            side_effect=OpenPgpError("fixture canonical key failure"),
+        ):
+            report = audit(context, remote=True, tag=tag)
+        self.assertEqual({item.code for item in report.findings}, {"unverifiable"})
+        self.assertFalse(report.incomplete_sources)
 
     def test_local_active_manifest_drift_is_unverifiable(self) -> None:
         manifest = self.root / "packages/application-facade/module.json"

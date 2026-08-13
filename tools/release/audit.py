@@ -29,6 +29,7 @@ from .model import (
 from .openpgp import OpenPgpError, OpenPgpVerifier
 from .prepare import LocalTag, ProductProof
 from .profiles import AssetBuild, ProfileBuild
+from scripts.version import _provider_source_package_sha256
 
 
 _REPORT_SCHEMA = "lmdj.release-audit.v1"
@@ -141,6 +142,15 @@ def audit(
     try:
         with _load_remote_projection(context) as (resolved, remote_tags, releases):
             return _remote_report(observed, resolved, remote_tags, releases, tag)
+    except OpenPgpError:
+        return _report(
+            observed, policy.repository, mode,
+            (AuditFinding(
+                "unverifiable", policy.repository,
+                "canonical signing trust or signature projection is inconsistent",
+                ("canonical-trust",),
+            ),),
+        )
     except Exception:
         return _report(
             observed, policy.repository, mode,
@@ -343,7 +353,7 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
                 ).returncode != 0:
                     raise ValueError
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, OpenPgpError):
         return AuditFinding(
             "unverifiable", policy.repository,
             "active Product, Assembly lock or immutable snapshot projection is inconsistent",
@@ -409,7 +419,11 @@ def _audit_remote_intent(
         result = AuditFinding("ok", intent.tag, "exact authorized remote tag exists without a Release")
         return _exception_finding(exception, result.message) if exception is not None else result
     metadata_problem = _release_problem(
-        context.policy, intent, tag_state, release, allow_missing_marker=exception is not None,
+        context.policy, intent, tag_state, release,
+        allow_missing_marker=(
+            exception is not None
+            and (exception.release_id is None or exception.release_id == release.id)
+        ),
     )
     if metadata_problem is not None:
         return AuditFinding("conflict", intent.tag, metadata_problem, ("github-release",))
@@ -487,7 +501,13 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
                 raise ValueError
             path = _component_path(root, source_kind, identifier)
             document = _json_file(path)
-            if source_kind != "provider" and hashlib.sha256(path.read_bytes()).hexdigest() != digest:
+            if source_kind == "provider":
+                observed_digest = _provider_source_package_sha256(
+                    identifier, version, path, repo_root=root,
+                )
+            else:
+                observed_digest = hashlib.sha256(path.read_bytes()).hexdigest()
+            if observed_digest != digest:
                 raise ValueError
             if source_kind == "contract":
                 if not isinstance(document, dict) or document.get("x-lmdj-contract-version") != version:
