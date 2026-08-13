@@ -73,7 +73,15 @@ Evidence (2026-08-13 investigation; run history and local measurements):
 
 ## Tasks
 
-### Task 1: Give the deploy suite to the lane that owns its subject
+### Task 1: Give the deploy suite to the lane that owns its subject — IMPLEMENTED (`6bfe06b`)
+
+Implementation note: `deploy_command_test.py` itself was edited in this Task,
+beyond the declared file list. The suite carried
+`test_host_nonbrowser_gate_registers_isolated_command_test`, which asserted
+the Host script runs it exactly once — true before the move, red after it.
+The test was retargeted to assert the `deploy-contract` job runs the suite
+exactly once **and** the Host script no longer does, so the guard that keeps
+this move from silently reverting survives instead of being deleted.
 
 - `scripts/ci/scope_policy.json`: add exact rules mapping
   `apps/web-runtime-host/test/deploy_command_test.py`,
@@ -105,7 +113,22 @@ Files: `scripts/ci/scope_policy.json`, `.github/workflows/ci.yml`,
 `docs/quality/core-test-policy.md`,
 `apps/architecture-portal/docs/operations/testing-and-proof.mdx`.
 
-### Task 2: Shard the suite
+### Task 2: Shard the suite — IMPLEMENTED with one premise corrected (`a71f9dc`)
+
+Premise correction: this plan claimed the suite shares no timing-sensitive
+state. That is true of *state* but was wrong about *wall clock*: two tests
+(`test_int_and_term_cleanup_owned_state_without_restore_or_evidence`,
+`test_post_publish_int_and_term_reconcile_and_restore_prior_good`) carry
+real readiness and post-signal budgets (10 s / 15 s) and both failed an
+honest first 4-shard run under competing load. Widening their budgets would
+have weakened real assertions, so the runner executes them in a serial phase
+after the shards (~18 s) and refuses to start if either named test
+disappears, so a rename cannot silently return them to the parallel phase.
+Measured: `--shards 1` 383 s, `--shards 4` 196 s (~2x, not the hoped 3x —
+the serial phase and spawn-bound load are the difference). Task 2 also
+touched the two documentation files beyond its declared list: the sharding
+contract sits directly against the recorded `workers: 1` browser decision,
+which makes documenting the distinction `required`, not optional.
 
 - Extend the suite's `__main__` (single file preferred; a sibling runner is
   acceptable if the file stays importable unchanged) with a
@@ -130,7 +153,12 @@ Files: `apps/web-runtime-host/test/deploy_command_test.py`,
 (plus `tests/build/ci_workflow_topology_test.py` only if the timeout
 changes).
 
-### Task 3: Close the pre-flight drift gap this move exposed
+### Task 3: Close the pre-flight drift gap this move exposed — IMPLEMENTED (`599bc77`)
+
+Implementation note: CI pins `--shards 4` (the hosted runner's four vCPUs)
+while `local_lanes.json` uses the adaptive default; the divergence is
+recorded in the lane's `ci_only` notes, which is the declared-divergence
+mechanism for exactly this.
 
 Task 6's contract test asserts only lane-key equality between
 `scripts/ci/local_lanes.json` and the scope policy, so a lane's commands can
