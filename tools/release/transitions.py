@@ -191,10 +191,13 @@ def publish_draft(
         raise TransitionError("GitHub Release assets changed before publication")
     if not before.release.draft:
         return replace(before.result, status="already-published")
+    if before.release.validator is None:
+        raise TransitionError("GitHub Release strong validator is unavailable")
 
     try:
         before.authority.context.github.publish_release(
             before.authority.context.policy.repository, release_id,
+            before.release.validator,
         )
     except Exception:
         # A response can be lost after GitHub accepted the exact PATCH. Numeric-ID

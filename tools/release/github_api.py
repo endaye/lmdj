@@ -48,6 +48,14 @@ class GitHubAsset:
 
 
 @dataclass(frozen=True)
+class GitHubReleaseValidator:
+    """Strong HTTP validator owned by one numeric Release representation."""
+
+    release_id: int
+    etag: str
+
+
+@dataclass(frozen=True)
 class GitHubRelease:
     id: int
     tag_name: str
@@ -60,6 +68,7 @@ class GitHubRelease:
     upload_url: str
     assets: tuple[GitHubAsset, ...]
     target_commitish: str
+    validator: GitHubReleaseValidator | None = None
 
 
 @dataclass(frozen=True)
@@ -144,7 +153,10 @@ class GitHubClient:
         response = self._request("GET", f"/repos/{repository}/releases/tags/{quote(tag, safe='')}")
         if response.status == 404:
             return None
-        return _parse_release(_json_response(response, {200}), repository)
+        return _parse_release(
+            _json_response(response, {200}), repository,
+            etag=_strong_etag(response.headers),
+        )
 
     def get_release(self, repository: str, release_id: int) -> GitHubRelease | None:
         _require_repository(repository)
@@ -152,7 +164,10 @@ class GitHubClient:
         response = self._request("GET", f"/repos/{repository}/releases/{release_id}")
         if response.status == 404:
             return None
-        return _parse_release(_json_response(response, {200}), repository, release_id)
+        return _parse_release(
+            _json_response(response, {200}), repository, release_id,
+            etag=_strong_etag(response.headers),
+        )
 
     def create_draft_release(
         self,
@@ -181,19 +196,35 @@ class GitHubClient:
             "POST", f"/repos/{repository}/releases", payload,
             content_type="application/json",
         )
-        return _parse_release(_json_response(response, {201}), repository)
+        return _parse_release(
+            _json_response(response, {201}), repository,
+            etag=_strong_etag(response.headers),
+        )
 
-    def publish_release(self, repository: str, release_id: int) -> GitHubRelease:
-        """Publish one existing Release by changing only its Draft state."""
+    def publish_release(
+        self, repository: str, release_id: int, validator: GitHubReleaseValidator,
+    ) -> GitHubRelease:
+        """Conditionally publish one exact existing Release representation."""
         _require_repository(repository)
         _require_id(release_id, "release")
+        if (
+            not isinstance(validator, GitHubReleaseValidator)
+            or type(validator.release_id) is not int
+            or validator.release_id != release_id
+        ):
+            raise GitHubApiError("GitHub Release validator ownership is invalid")
+        if not _is_strong_etag(validator.etag):
+            raise GitHubApiError("GitHub Release strong validator is invalid")
         payload = b'{"draft":false}'
         response = self._request(
             "PATCH", f"/repos/{repository}/releases/{release_id}", payload,
-            content_type="application/json",
+            content_type="application/json", if_match=validator.etag,
         )
+        if response.status == 412:
+            raise GitHubApiError("GitHub Release publication precondition failed")
         release = _parse_release(
             _json_response(response, {200}), repository, release_id,
+            etag=_strong_etag(response.headers),
         )
         if release.draft:
             raise GitHubApiError("GitHub Release publication did not change Draft state")
@@ -285,12 +316,15 @@ class GitHubClient:
         *,
         accept: str = "application/vnd.github+json",
         content_type: str | None = None,
+        if_match: str | None = None,
     ) -> HttpResponse:
         headers = {"Accept": accept, "User-Agent": "lmdj-release-pipeline"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         if content_type is not None:
             headers["Content-Type"] = content_type
+        if if_match is not None:
+            headers["If-Match"] = if_match
         try:
             response = self._http_transport(method, url, headers, body)
         except GitHubApiError:
@@ -357,6 +391,7 @@ def _parse_run(run: object) -> RunProjection:
 
 def _parse_release(
     document: object, repository: str, expected_id: int | None = None,
+    *, etag: str | None = None,
 ) -> GitHubRelease:
     if not isinstance(document, dict):
         raise GitHubApiError("GitHub Release projection is invalid")
@@ -402,7 +437,17 @@ def _parse_release(
     return GitHubRelease(
         identifier, tag, name, body, draft, prerelease, make_latest, html_url, upload_url,
         tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish,
+        GitHubReleaseValidator(identifier, etag) if etag is not None else None,
     )
+
+
+def _strong_etag(headers: Mapping[str, str]) -> str | None:
+    value = next((item for key, item in headers.items() if key.lower() == "etag"), None)
+    return value if _is_strong_etag(value) else None
+
+
+def _is_strong_etag(value: object) -> bool:
+    return isinstance(value, str) and re.fullmatch(r'"[!#-~]*"', value) is not None
 
 
 def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAsset:

@@ -23,6 +23,7 @@ from tools.release.github_api import (  # noqa: E402
     GitHubAsset,
     GitHubClient,
     GitHubRelease,
+    GitHubReleaseValidator,
     HttpResponse,
     RunProjection,
 )
@@ -109,7 +110,28 @@ class FakeGitHub:
         self.release_reads = 0
         self.mutate_on_release_read: int | None = None
         self.patch_calls: list[tuple[int, dict[str, bool]]] = []
+        self.conditional_patch_calls: list[GitHubReleaseValidator] = []
+        self.release_version = 1
+        self.validator_mode = "strong"
+        self.mutate_before_conditional_patch = False
         self.next_asset_id = 40
+
+    def _release_projection(self) -> GitHubRelease | None:
+        if self.release is None:
+            return None
+        validator = None
+        if self.validator_mode == "strong":
+            validator = GitHubReleaseValidator(
+                self.release.id, f'"release-{self.release.id}-v{self.release_version}"',
+            )
+        elif self.validator_mode == "weak":
+            validator = GitHubReleaseValidator(
+                self.release.id, f'W/"release-{self.release.id}-v{self.release_version}"',
+            )
+        return GitHubRelease(**{**self.release.__dict__, "validator": validator})
+
+    def _touch_release(self) -> None:
+        self.release_version += 1
 
     def get_branch(self, repository: str, branch: str) -> BranchProjection:
         return self.branch
@@ -118,7 +140,8 @@ class FakeGitHub:
         return self.runs
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
-        return self.release if self.release is not None and self.release.tag_name == tag else None
+        projected = self._release_projection()
+        return projected if projected is not None and projected.tag_name == tag else None
 
     def get_release(self, repository: str, release_id: int) -> GitHubRelease | None:
         self.release_reads += 1
@@ -127,7 +150,9 @@ class FakeGitHub:
                 self, "intervening_release_mutation", ("name", "intervening change"),
             )
             self.release = GitHubRelease(**{**self.release.__dict__, field: value})
-        return self.release if self.release is not None and self.release.id == release_id else None
+            self._touch_release()
+        projected = self._release_projection()
+        return projected if projected is not None and projected.id == release_id else None
 
     def create_draft_release(self, repository: str, *, tag: str, name: str, body: str,
                              prerelease: bool, make_latest: bool) -> GitHubRelease:
@@ -162,6 +187,7 @@ class FakeGitHub:
         self.release = GitHubRelease(**{
             **self.release.__dict__, "assets": self.release.assets + (asset,),
         })
+        self._touch_release()
         if name in self.fail_upload_after_write:
             raise GitHubApiError("GitHub release request is unavailable")
         return asset
@@ -171,11 +197,29 @@ class FakeGitHub:
             raise RuntimeError("wrong repository ownership")
         return self.payloads[asset.id]
 
-    def publish_release(self, repository: str, release_id: int) -> GitHubRelease:
+    def publish_release(
+        self, repository: str, release_id: int, validator: GitHubReleaseValidator,
+    ) -> GitHubRelease:
         if repository != "endaye/lmdj" or self.release is None or self.release.id != release_id:
             raise RuntimeError("wrong release ownership")
+        if (
+            not isinstance(validator, GitHubReleaseValidator)
+            or validator.release_id != release_id
+            or not validator.etag.startswith('"') or not validator.etag.endswith('"')
+        ):
+            raise GitHubApiError("GitHub Release strong validator is unavailable")
+        if self.mutate_before_conditional_patch:
+            self.release = GitHubRelease(**{
+                **self.release.__dict__, "name": "concurrent change",
+            })
+            self._touch_release()
+        self.conditional_patch_calls.append(validator)
+        expected = f'"release-{release_id}-v{self.release_version}"'
+        if validator.etag != expected:
+            raise GitHubApiError("GitHub Release publication precondition failed")
         self.patch_calls.append((release_id, {"draft": False}))
         self.release = GitHubRelease(**{**self.release.__dict__, "draft": False})
+        self._touch_release()
         if self.publish_mutation == "name":
             self.release = GitHubRelease(**{**self.release.__dict__, "name": "changed"})
         elif self.publish_mutation == "target-commitish":
@@ -206,7 +250,9 @@ class FakeGitHub:
             })
         if self.fail_publish_after_write:
             raise GitHubApiError("GitHub release request is unavailable")
-        return self.release
+        projected = self._release_projection()
+        assert projected is not None
+        return projected
 
 
 class ReleaseTransitionsTest(unittest.TestCase):
@@ -488,6 +534,43 @@ class ReleaseTransitionsTest(unittest.TestCase):
                     )
                 self.assertEqual(self.github.patch_calls, [])
 
+    def test_publish_condition_rejects_mutation_after_final_verification(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        self.github.mutate_before_conditional_patch = True
+        with self.assertRaisesRegex(TransitionError, "metadata conflicts"):
+            publish_draft(
+                self.tag, created.release_id, created.plan_sha256,
+                self.context(), actions_environment={
+                    "GITHUB_ACTIONS": "true",
+                    "GITHUB_EVENT_NAME": "workflow_dispatch",
+                },
+            )
+        self.assertEqual(len(self.github.conditional_patch_calls), 1)
+        self.assertEqual(self.github.patch_calls, [])
+        assert self.github.release is not None
+        self.assertTrue(self.github.release.draft)
+
+    def test_publish_refuses_missing_or_weak_release_validator(self) -> None:
+        for mode in ("missing", "weak"):
+            with self.subTest(mode=mode):
+                self.github = FakeGitHub(self.target)
+                created = self._push_and_create()
+                assert created.release_id is not None
+                self.github.validator_mode = mode
+                with self.assertRaisesRegex(
+                    TransitionError, "strong validator|could not be reconciled",
+                ):
+                    publish_draft(
+                        self.tag, created.release_id, created.plan_sha256,
+                        self.context(), actions_environment={
+                            "GITHUB_ACTIONS": "true",
+                            "GITHUB_EVENT_NAME": "workflow_dispatch",
+                        },
+                    )
+                self.assertEqual(self.github.conditional_patch_calls, [])
+                self.assertEqual(self.github.patch_calls, [])
+
     def test_publish_rejects_metadata_or_asset_identity_drift(self) -> None:
         cases = (
             ("name", "metadata"),
@@ -694,21 +777,39 @@ class ReleaseTransitionsTest(unittest.TestCase):
             client.get_release("endaye/lmdj", True)
 
     def test_github_publish_patches_only_draft_by_numeric_id(self) -> None:
-        requests: list[tuple[str, str, bytes | None]] = []
+        requests: list[tuple[str, str, dict[str, str], bytes | None]] = []
 
         def transport(method, url, headers, body):
-            requests.append((method, url, body))
+            requests.append((method, url, dict(headers), body))
             document = self._release_json(17)
             document["draft"] = False
-            return HttpResponse(200, {}, json.dumps(document).encode())
+            return HttpResponse(200, {"ETag": '"release-17-v2"'}, json.dumps(document).encode())
 
-        result = GitHubClient(http_transport=transport).publish_release("endaye/lmdj", 17)
+        validator = GitHubReleaseValidator(17, '"release-17-v1"')
+        result = GitHubClient(http_transport=transport).publish_release(
+            "endaye/lmdj", 17, validator,
+        )
         self.assertFalse(result.draft)
-        self.assertEqual(requests, [(
-            "PATCH", "/repos/endaye/lmdj/releases/17", b'{"draft":false}',
-        )])
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(requests[0][0:2], (
+            "PATCH", "/repos/endaye/lmdj/releases/17",
+        ))
+        self.assertEqual(requests[0][2].get("If-Match"), '"release-17-v1"')
+        self.assertEqual(requests[0][3], b'{"draft":false}')
         with self.assertRaisesRegex(GitHubApiError, "numeric"):
-            GitHubClient(http_transport=transport).publish_release("endaye/lmdj", True)
+            GitHubClient(http_transport=transport).publish_release(
+                "endaye/lmdj", True, validator,
+            )
+        self.assertEqual(len(requests), 1)
+
+        with self.assertRaisesRegex(GitHubApiError, "ownership"):
+            GitHubClient(http_transport=transport).publish_release(
+                "endaye/lmdj", 17, GitHubReleaseValidator(18, '"release-18-v1"'),
+            )
+        with self.assertRaisesRegex(GitHubApiError, "strong"):
+            GitHubClient(http_transport=transport).publish_release(
+                "endaye/lmdj", 17, GitHubReleaseValidator(17, 'W/"weak"'),
+            )
         self.assertEqual(len(requests), 1)
 
         def wrong_projection(method, url, headers, body):
@@ -718,8 +819,42 @@ class ReleaseTransitionsTest(unittest.TestCase):
 
         with self.assertRaisesRegex(GitHubApiError, "projection"):
             GitHubClient(http_transport=wrong_projection).publish_release(
-                "endaye/lmdj", 17,
+                "endaye/lmdj", 17, validator,
             )
+
+    def test_release_get_retains_only_a_strong_exact_id_validator(self) -> None:
+        document = self._release_json(17)
+        for header, expected in (
+            ({"ETag": '"release-17-v1"'}, GitHubReleaseValidator(17, '"release-17-v1"')),
+            ({"etag": 'W/"weak"'}, None),
+            ({}, None),
+        ):
+            with self.subTest(header=header):
+                client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+                    200, header, json.dumps(document).encode(),
+                ))
+                release = client.get_release("endaye/lmdj", 17)
+                assert release is not None
+                self.assertEqual(release.validator, expected)
+
+    def test_conditional_publish_reports_precondition_and_redacts_uncertainty(self) -> None:
+        validator = GitHubReleaseValidator(17, '"release-17-v1"')
+        rejected = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+            412, {}, b'{"message":"changed"}',
+        ))
+        with self.assertRaisesRegex(GitHubApiError, "precondition"):
+            rejected.publish_release("endaye/lmdj", 17, validator)
+
+        secret = "ghp_PUBLISH_DO_NOT_LEAK"
+        uncertain = GitHubClient(
+            token=secret,
+            http_transport=lambda method, url, headers, body: (_ for _ in ()).throw(
+                RuntimeError(secret)
+            ),
+        )
+        with self.assertRaises(GitHubApiError) as caught:
+            uncertain.publish_release("endaye/lmdj", 17, validator)
+        self.assertNotIn(secret, str(caught.exception))
 
     def test_asset_io_requires_exact_repository_release_and_asset_ownership(self) -> None:
         requests: list[str] = []
