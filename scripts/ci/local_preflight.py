@@ -1,0 +1,573 @@
+#!/usr/bin/env python3
+"""Advisory local pre-flight that reuses the CI Change Scope decision.
+
+The pre-flight answers one question: of the lanes CI would select for the
+current working tree, which ones pass on this machine right now? It is not
+evidence. `PR Gate` remains the single aggregate decision, and a green local
+run authorizes no push, Pull Request, merge, or later state transition.
+
+Two properties keep it honest. The lane selection comes from
+`scripts/ci/change_scope.py` and `scripts/ci/scope_policy.json`, the same
+classifier and policy the workflow runs, so the pre-flight cannot select a
+different set of lanes than CI would. A lane this machine cannot execute
+reports `not-runnable-here`, never `pass`.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Iterable, Mapping, Sequence
+from dataclasses import dataclass
+import argparse
+import hashlib
+import importlib.util
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import time
+
+
+ROOT = Path(__file__).resolve().parents[2]
+POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
+CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
+LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
+
+LANE_COMMANDS_SCHEMA = "lmdj.ci-local-lanes.v1"
+_LANE_KEYS = {"requires", "commands", "ci_only"}
+_REQUIRE_KEYS = {"os", "commands", "any_of", "clean_worktree"}
+_ANY_OF_KEYS = {"path", "env"}
+
+PASS = "pass"
+CACHED_PASS = "cached-pass"
+FAIL = "fail"
+NOT_RUNNABLE = "not-runnable-here"
+
+_DELETED = "0" * 40
+
+
+def load_classifier():
+    """Load the production classifier so lane selection cannot diverge."""
+    spec = importlib.util.spec_from_file_location(
+        "lmdj_change_scope", CLASSIFIER_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load the Change Scope classifier: {CLASSIFIER_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def load_lane_commands(
+    path: str | Path = LANE_COMMANDS_PATH, *, policy: Mapping[str, object] | None = None
+) -> dict[str, dict[str, object]]:
+    """Load and validate the lane-to-local-command table."""
+    classifier = load_classifier()
+    with Path(path).open(encoding="utf-8") as table_file:
+        table = json.load(table_file, object_pairs_hook=classifier.reject_duplicates)
+    if not isinstance(table, dict) or set(table) != {"schema", "lanes"}:
+        raise ValueError("lane command table schema is not closed")
+    if table["schema"] != LANE_COMMANDS_SCHEMA:
+        raise ValueError(f"unknown lane command schema: {table['schema']!r}")
+    lanes = table["lanes"]
+    if not isinstance(lanes, dict):
+        raise ValueError("lane command table must map lanes to entries")
+    if policy is not None and set(lanes) != set(policy["lanes"]):
+        missing = sorted(set(policy["lanes"]) - set(lanes))
+        extra = sorted(set(lanes) - set(policy["lanes"]))
+        raise ValueError(
+            "lane command table does not cover the policy lanes: "
+            f"missing {missing}, extra {extra}"
+        )
+    for lane, entry in lanes.items():
+        if not isinstance(entry, dict) or set(entry) != _LANE_KEYS:
+            raise ValueError(f"lane entry schema is not closed: {lane}")
+        commands = entry["commands"]
+        if not isinstance(commands, list) or not commands or not all(
+            isinstance(command, str) and command for command in commands
+        ):
+            raise ValueError(f"lane must declare nonempty commands: {lane}")
+        if not isinstance(entry["ci_only"], list) or not all(
+            isinstance(note, str) and note for note in entry["ci_only"]
+        ):
+            raise ValueError(f"invalid ci_only notes: {lane}")
+        _validate_requires(lane, entry["requires"])
+    return lanes
+
+
+def _validate_requires(lane: str, requires: object) -> None:
+    if not isinstance(requires, dict) or not set(requires).issubset(_REQUIRE_KEYS):
+        raise ValueError(f"requirement schema is not closed: {lane}")
+    for key in ("os", "commands"):
+        value = requires.get(key, [])
+        if not isinstance(value, list) or not all(
+            isinstance(item, str) and item for item in value
+        ):
+            raise ValueError(f"invalid {key} requirement: {lane}")
+    any_of = requires.get("any_of", [])
+    if not isinstance(any_of, list):
+        raise ValueError(f"invalid any_of requirement: {lane}")
+    for alternative in any_of:
+        if (
+            not isinstance(alternative, dict)
+            or len(alternative) != 1
+            or not set(alternative).issubset(_ANY_OF_KEYS)
+        ):
+            raise ValueError(f"invalid any_of alternative: {lane}")
+    if not isinstance(requires.get("clean_worktree", False), bool):
+        raise ValueError(f"invalid clean_worktree requirement: {lane}")
+
+
+def _git(root: Path, *args: str) -> bytes:
+    result = subprocess.run(
+        ["git", *args], cwd=root, capture_output=True, check=False
+    )
+    if result.returncode != 0:
+        detail = result.stderr.decode("utf-8", "replace").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {detail}")
+    return result.stdout
+
+
+def _split_z(payload: bytes) -> list[str]:
+    fields = payload.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    return [field.decode("utf-8", "strict") for field in fields]
+
+
+def resolve_base_sha(root: Path, base_ref: str) -> str:
+    """Return the merge base with the integration branch."""
+    try:
+        merge_base = _git(root, "merge-base", base_ref, "HEAD").decode().strip()
+    except RuntimeError:
+        merge_base = ""
+    if not merge_base:
+        raise RuntimeError(
+            f"cannot resolve a merge base with {base_ref!r}; "
+            "fetch the integration branch or pass --base-ref"
+        )
+    return merge_base
+
+
+def read_working_inventory(root: Path, base_sha: str, classifier) -> tuple:
+    """Return every change between the base commit and the working tree.
+
+    `git diff` against a single commit compares that commit to the working
+    tree, so uncommitted edits are classified exactly like committed ones.
+    Untracked files are added explicitly because `git diff` never reports
+    them, and an unclassified new file is precisely what upgrades CI to full
+    mode.
+    """
+    tracked = classifier.parse_name_status_z(
+        _git(root, "diff", "--name-status", "-z", base_sha)
+    )
+    seen = {path for record in tracked for path in record.paths}
+    untracked = [
+        classifier.ChangedFile("A", (path,))
+        for path in _split_z(
+            _git(root, "ls-files", "--others", "--exclude-standard", "-z")
+        )
+        if path not in seen
+    ]
+    return tuple(tracked) + tuple(untracked)
+
+
+def repository_blobs(root: Path) -> dict[str, str]:
+    """Map every tracked and untracked path to a content identity.
+
+    Index blob identities are read in one call. Only the paths that differ
+    from the index, plus untracked files, are hashed individually, so the
+    common case costs one `git ls-files` and a short `git hash-object`.
+    """
+    blobs: dict[str, str] = {}
+    for entry in _split_z(_git(root, "ls-files", "-s", "-z")):
+        metadata, _, path = entry.partition("\t")
+        fields = metadata.split()
+        if len(fields) != 3 or not path:
+            raise ValueError(f"unexpected index entry: {entry!r}")
+        blobs[path] = fields[1]
+
+    dirty = set(_split_z(_git(root, "diff-files", "--name-only", "-z")))
+    dirty.update(
+        _split_z(_git(root, "ls-files", "--others", "--exclude-standard", "-z"))
+    )
+    present = sorted(path for path in dirty if (root / path).is_file())
+    for path in sorted(dirty):
+        if path not in present:
+            blobs[path] = _DELETED
+    for chunk_start in range(0, len(present), 256):
+        chunk = present[chunk_start:chunk_start + 256]
+        hashes = _git(root, "hash-object", "--", *chunk).decode().split()
+        if len(hashes) != len(chunk):
+            raise RuntimeError("git hash-object returned an unexpected count")
+        blobs.update(zip(chunk, hashes))
+    return blobs
+
+
+def lane_input_paths(
+    policy: Mapping[str, object], paths: Iterable[str], classifier
+) -> dict[str, list[str]]:
+    """Group repository paths by the lanes whose result they can change.
+
+    A path that matches a full rule, or that matches no rule at all, upgrades
+    the whole run to full mode, so it is an input to *every* lane. Leaving
+    those out would let a shared CMake or contract edit hit a stale cached
+    pass.
+    """
+    lanes = list(policy["lanes"])
+    grouped: dict[str, set[str]] = {lane: set() for lane in lanes}
+    for path in paths:
+        matched: set[str] = set()
+        for rule in policy["rules"]:
+            if classifier._matches(rule["match"], path):
+                matched.update(rule["lanes"])
+        forces_full = not matched or any(
+            classifier._matches(rule["match"], path)
+            for rule in policy["full_rules"]
+        )
+        for lane in lanes if forces_full else matched:
+            grouped[lane].add(path)
+    return {lane: sorted(members) for lane, members in grouped.items()}
+
+
+def lane_cache_key(
+    lane: str, commands: Sequence[str], inputs: Sequence[str],
+    blobs: Mapping[str, str],
+) -> str:
+    """Digest the lane identity, its commands, and every input's content."""
+    digest = hashlib.sha256()
+    digest.update(lane.encode("utf-8"))
+    digest.update(b"\0")
+    for command in commands:
+        digest.update(command.encode("utf-8"))
+        digest.update(b"\0")
+    digest.update(b"\0")
+    for path in sorted(inputs):
+        digest.update(path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(blobs.get(path, _DELETED).encode("utf-8"))
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def default_cache_dir() -> Path:
+    base = os.environ.get("XDG_CACHE_HOME")
+    root = Path(base) if base else Path.home() / ".cache"
+    return root / "lmdj" / "preflight"
+
+
+def read_cached_keys(cache_dir: Path, lane: str) -> list[dict[str, str]]:
+    """Return the lane's recorded passing states, most recent first.
+
+    Several states are kept because editing a file and reverting it is an
+    ordinary development move; a single-slot cache would re-run the lane on
+    the way back to a state it already proved.
+    """
+    entry = cache_dir / f"{lane}.json"
+    try:
+        with entry.open(encoding="utf-8") as cache_file:
+            record = json.load(cache_file)
+    except (OSError, ValueError):
+        return []
+    if not isinstance(record, dict) or record.get("verdict") != PASS:
+        return []
+    passes = record.get("passes")
+    if not isinstance(passes, list):
+        return []
+    return [
+        item for item in passes
+        if isinstance(item, dict) and isinstance(item.get("key"), str)
+    ]
+
+
+def has_cached_pass(cache_dir: Path, lane: str, key: str) -> bool:
+    return any(item["key"] == key for item in read_cached_keys(cache_dir, lane))
+
+
+def write_cached_pass(
+    cache_dir: Path, lane: str, key: str, *, retain: int = 16
+) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    recorded = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    passes = [
+        item for item in read_cached_keys(cache_dir, lane) if item["key"] != key
+    ]
+    passes.insert(0, {"key": key, "recorded_at": recorded})
+    payload = {
+        "lane": lane,
+        "verdict": PASS,
+        "passes": passes[:retain],
+    }
+    entry = cache_dir / f"{lane}.json"
+    entry.write_text(json.dumps(payload, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def worktree_is_clean(root: Path) -> bool:
+    return not _git(root, "status", "--porcelain", "-z").strip()
+
+
+def check_requirements(
+    root: Path, requires: Mapping[str, object]
+) -> tuple[bool, str]:
+    """Return whether this machine can execute the lane, and why not."""
+    platforms = requires.get("os", [])
+    if platforms and not any(sys.platform.startswith(name) for name in platforms):
+        return False, f"requires {' or '.join(platforms)}, running on {sys.platform}"
+    for command in requires.get("commands", []):
+        if shutil.which(command) is None:
+            return False, f"{command} is not on PATH"
+    any_of = requires.get("any_of", [])
+    if any_of and not any(
+        (root / alternative["path"]).exists() if "path" in alternative
+        else bool(os.environ.get(alternative["env"]))
+        for alternative in any_of
+    ):
+        rendered = " or ".join(
+            alternative.get("path") or f"${alternative['env']}"
+            for alternative in any_of
+        )
+        return False, f"needs one of: {rendered}"
+    if requires.get("clean_worktree", False) and not worktree_is_clean(root):
+        return False, "requires a clean working tree"
+    return True, ""
+
+
+@dataclass
+class LaneResult:
+    lane: str
+    verdict: str
+    detail: str = ""
+    duration_seconds: float = 0.0
+
+
+def run_lane(
+    root: Path, lane: str, commands: Sequence[str], substitutions: Mapping[str, str],
+    *, echo: bool = True,
+) -> LaneResult:
+    """Run a lane's checked-in commands in order, stopping at the first failure."""
+    started = time.monotonic()
+    for command in commands:
+        resolved = command.format(**substitutions)
+        if echo:
+            print(f"    $ {resolved}", flush=True)
+        # The command table is checked-in repository content, not user input.
+        completed = subprocess.run(resolved, cwd=root, shell=True, check=False)
+        if completed.returncode != 0:
+            return LaneResult(
+                lane, FAIL, f"`{resolved}` exited {completed.returncode}",
+                time.monotonic() - started,
+            )
+    return LaneResult(lane, PASS, "", time.monotonic() - started)
+
+
+def build_plan(
+    root: Path, base_ref: str, *, only: Sequence[str] | None = None
+) -> dict[str, object]:
+    """Resolve the manifest CI would produce and the local inputs per lane."""
+    classifier = load_classifier()
+    policy = classifier.load_policy(POLICY_PATH)
+    lane_commands = load_lane_commands(policy=policy)
+
+    base_sha = resolve_base_sha(root, base_ref)
+    head_sha = _git(root, "rev-parse", "HEAD").decode().strip()
+    inventory = read_working_inventory(root, base_sha, classifier)
+    manifest = classifier.classify(
+        policy, inventory, base_sha=base_sha, head_sha=head_sha,
+        event_name="pull_request", draft=False, labels=(),
+    )
+
+    selected = [lane for lane, on in sorted(manifest["lanes"].items()) if on]
+    if only:
+        unknown = sorted(set(only) - set(policy["lanes"]))
+        if unknown:
+            raise ValueError(f"unknown lane(s): {', '.join(unknown)}")
+        selected = [lane for lane in selected if lane in set(only)]
+
+    blobs = repository_blobs(root)
+    grouped = lane_input_paths(policy, blobs, classifier)
+    keys = {
+        lane: lane_cache_key(
+            lane, lane_commands[lane]["commands"], grouped[lane], blobs
+        )
+        for lane in selected
+    }
+    return {
+        "base_sha": base_sha,
+        "head_sha": head_sha,
+        "mode": manifest["mode"],
+        "reasons": manifest["reasons"],
+        "selected": selected,
+        "lane_commands": lane_commands,
+        "cache_keys": keys,
+        "input_counts": {lane: len(grouped[lane]) for lane in selected},
+    }
+
+
+def execute(
+    root: Path, plan: Mapping[str, object], *, cache_dir: Path, use_cache: bool,
+    echo: bool = True,
+) -> list[LaneResult]:
+    results: list[LaneResult] = []
+    substitutions = {"base": plan["base_sha"], "head": plan["head_sha"]}
+    for lane in plan["selected"]:
+        entry = plan["lane_commands"][lane]
+        runnable, why_not = check_requirements(root, entry["requires"])
+        if not runnable:
+            results.append(LaneResult(lane, NOT_RUNNABLE, why_not))
+            if echo:
+                print(f"  {lane}: {NOT_RUNNABLE} ({why_not})", flush=True)
+            continue
+        key = plan["cache_keys"][lane]
+        if use_cache and has_cached_pass(cache_dir, lane, key):
+            results.append(LaneResult(lane, CACHED_PASS, "inputs unchanged"))
+            if echo:
+                print(f"  {lane}: {CACHED_PASS} (inputs unchanged)", flush=True)
+            continue
+        if echo:
+            print(f"  {lane}: running", flush=True)
+        result = run_lane(root, lane, entry["commands"], substitutions, echo=echo)
+        if result.verdict == PASS:
+            write_cached_pass(cache_dir, lane, key)
+        results.append(result)
+        if echo:
+            suffix = f" ({result.detail})" if result.detail else ""
+            print(
+                f"  {lane}: {result.verdict}{suffix} "
+                f"[{result.duration_seconds:.1f}s]",
+                flush=True,
+            )
+    return results
+
+
+HOOK_TEMPLATE = """#!/usr/bin/env bash
+# Installed by scripts/ci/local_preflight.py --install-hook.
+# The pre-flight is advisory: PR Gate remains the only aggregate decision.
+# Bypass with `git push --no-verify` when you intend to push anyway.
+set -euo pipefail
+exec "$(git rev-parse --show-toplevel)/scripts/local-ci.sh"
+"""
+
+
+def install_hook(root: Path, *, force: bool = False) -> Path:
+    hooks_dir = Path(
+        _git(root, "rev-parse", "--git-path", "hooks").decode().strip()
+    )
+    if not hooks_dir.is_absolute():
+        hooks_dir = root / hooks_dir
+    hooks_dir.mkdir(parents=True, exist_ok=True)
+    hook = hooks_dir / "pre-push"
+    if hook.exists() and not force:
+        existing = hook.read_text(encoding="utf-8", errors="replace")
+        if existing != HOOK_TEMPLATE:
+            raise RuntimeError(
+                f"refusing to overwrite an existing hook: {hook} (pass --force)"
+            )
+    hook.write_text(HOOK_TEMPLATE, encoding="utf-8")
+    hook.chmod(0o755)
+    return hook
+
+
+def _render(plan: Mapping[str, object], results: Sequence[LaneResult]) -> str:
+    counts: dict[str, int] = {}
+    for result in results:
+        counts[result.verdict] = counts.get(result.verdict, 0) + 1
+    summary = ", ".join(f"{count} {verdict}" for verdict, count in sorted(counts.items()))
+    lines = [
+        "",
+        f"pre-flight: mode={plan['mode']} lanes={len(plan['selected'])} "
+        f"({summary or 'nothing selected'})",
+    ]
+    blocked = [result for result in results if result.verdict == FAIL]
+    unrunnable = [result for result in results if result.verdict == NOT_RUNNABLE]
+    for result in blocked:
+        lines.append(f"  FAIL {result.lane}: {result.detail}")
+    for result in unrunnable:
+        lines.append(f"  not verified here: {result.lane} ({result.detail})")
+    lines.append(
+        "  advisory only: PR Gate is the aggregate decision and this run "
+        "authorizes no push or merge."
+    )
+    return "\n".join(lines)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Run the CI lanes this change selects, locally.",
+    )
+    parser.add_argument("--base-ref", default="origin/main")
+    parser.add_argument("--lanes", default="")
+    parser.add_argument("--cache-dir", default=str(default_cache_dir()))
+    parser.add_argument("--no-cache", action="store_true")
+    parser.add_argument("--list", action="store_true", help="resolve without running")
+    parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--strict", action="store_true",
+        help="treat not-runnable-here as a failure",
+    )
+    parser.add_argument("--install-hook", action="store_true")
+    parser.add_argument("--force", action="store_true")
+    args = parser.parse_args(argv)
+
+    root = ROOT
+    try:
+        if args.install_hook:
+            print(f"installed {install_hook(root, force=args.force)}")
+            return 0
+        only = [lane for lane in args.lanes.split(",") if lane]
+        plan = build_plan(root, args.base_ref, only=only)
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"pre-flight failed closed: {error}", file=sys.stderr)
+        return 2
+
+    if args.list:
+        payload = {
+            "mode": plan["mode"],
+            "reasons": plan["reasons"],
+            "selected": plan["selected"],
+            "input_counts": plan["input_counts"],
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    print(
+        f"pre-flight: {plan['mode']} mode, "
+        f"{len(plan['selected'])} lane(s): {', '.join(plan['selected']) or 'none'}"
+    )
+    try:
+        results = execute(
+            root, plan, cache_dir=Path(args.cache_dir),
+            use_cache=not args.no_cache, echo=not args.json,
+        )
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+        print(f"pre-flight failed closed: {error}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        print(json.dumps(
+            {
+                "mode": plan["mode"],
+                "results": [
+                    {
+                        "lane": result.lane, "verdict": result.verdict,
+                        "detail": result.detail,
+                        "duration_seconds": round(result.duration_seconds, 3),
+                    }
+                    for result in results
+                ],
+            },
+            indent=2, sort_keys=True,
+        ))
+    else:
+        print(_render(plan, results))
+
+    if any(result.verdict == FAIL for result in results):
+        return 1
+    if args.strict and any(result.verdict == NOT_RUNNABLE for result in results):
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
