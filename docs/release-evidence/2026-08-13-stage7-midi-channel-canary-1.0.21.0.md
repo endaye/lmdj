@@ -79,9 +79,9 @@ fixed heap `536870912`, and protocol `1`.
 
 The Creator Proof's deterministic fixture lived in its owned temporary
 directory, was packed twice byte-for-byte, and was removed by successful
-cleanup. The durable human fixture named above is independently hashed. No
-physical acceptance-report digest is claimed until the candidate UI run exports
-that report.
+cleanup. The durable human fixture named above is independently hashed. The
+physical run below binds its exported privacy-safe reports separately from that
+temporary automated fixture.
 
 ## Physical acceptance matrix
 
@@ -89,7 +89,7 @@ that report.
 | --- | --- | --- | --- |
 | macOS | Chrome `151.0.7922.110` | Physical MIDI on Product `1.0.20.0` | `FAIL — permission granted, but old Creator filtered MPD218 Channel 10` |
 | macOS | CoreMIDI raw capture | MPD218 PAD BANK A | `PASS diagnostic — Channel 10 Note 36/51 Note On/Off observed` |
-| macOS | Chrome `151.0.7922.110` | Physical MIDI on Product `1.0.21.0` | `IN PROGRESS — exact candidate loaded; final UI observations/report not yet recorded` |
+| macOS | Chrome `151.0.7922.110` | Physical MIDI on Product `1.0.21.0` | `PASS — endaye; MPD218 Channel 10; all 16 Bank-A Pads, Creator B/C/D mapping, reconnect, suspend/re-authorize, and reload/reopen confirmed` |
 | macOS | Safari | Bundle import | `PASS manual observation — import did not remain in importing for more than 20 seconds` |
 | macOS | Safari | Pointer | `deferred / unverified` |
 | iPadOS | Safari | Touch | `deferred / unverified` |
@@ -98,25 +98,61 @@ that report.
 The Safari import observation does not imply Safari Pointer acceptance. Neither
 automation nor the macOS result implies iPadOS acceptance.
 
-## Candidate physical-MIDI checklist
+## Chrome physical-MIDI acceptance result
 
-Use the exact candidate and fixture recorded above, keep the controller in
-**PAD BANK A**, then record only actually observed results:
+| Field | Recorded value |
+| --- | --- |
+| Operator | `endaye` |
+| Execution window | `2026-08-13 13:22–14:16 +0800` |
+| Browser / OS | Google Chrome `151.0.7922.110`; macOS `26.6.1` (`25G76`), Darwin `25.6.0`, arm64 |
+| Device / input | AKAI MPD218; `MPD218 Port A`; device PAD BANK A |
+| Candidate / fixture | Product `1.0.21.0`, Creator `1.1.3`; `stage7-canary.lmdj` SHA-256 `d5e17c74777cbf05cef239f79e16cce04ae0e3a380c3c00a93b553a17739aa4c` |
+| Bank-A baseline report | `0 admitted / 0 outcomes / 0 rejected`; SHA-256 `a7a798587983a1740dcee38ede973a8743f67f1990e57f970d303b0d325cc6f3` |
+| Bank-A 16-Pad report | `16 admitted / 16 outcomes / 0 rejected`; SHA-256 `3935f1b9412b661cf361666dcb6c9290770b71c6c4e6770d36b427a1c8ff2ee8` |
+| Creator Bank-address report | final `58 admitted / 58 outcomes / 0 rejected`; SHA-256 `452483b8971ea8b6b6ec88a5db688e98c9889b6a32fcb01a66f96d0bb1005601` |
+| Controlled reconnect reports | `77 -> 78 admitted/outcomes`, `0 rejected`; before SHA-256 `edca388014f1e1b8065600d072b313bc63d8c0b1e16922905d9e9ecd6b9b5c88`, after SHA-256 `3ef1e5c5d1bb13b44817c55c71258591438014f676586cacf274a3685907f921` |
+| Reload/reopen final report | `running`, `1 admitted / 1 outcome / 0 rejected`, no error; SHA-256 `b0491e75b8f275aaef9325ca0b240385cbe7e24fa02243c0e6ac934830f4d603` |
+| Human result | `PASS — all performed rows confirmed by endaye` |
 
-1. Activate Audio and confirm `Audio running`.
-2. Enable MIDI and grant Chrome access to `MPD218 Port A`.
-3. Press physical Pads 1–16 once each; confirm 16 audible/visible admissions,
-   correct velocity response, and no duplicate, missing, or stuck Pad.
-4. Switch Creator Banks B, C, and D while leaving the device in PAD BANK A;
-   confirm the same physical notes address the selected Creator Bank.
-5. Disconnect/reconnect the device, explicitly enable MIDI again if required,
-   and confirm input resumes without a duplicate listener.
-6. Suspend and reactivate Audio; confirm physical input stops and resumes under
-   the existing lifecycle contract.
-7. Reload/reopen the Project, explicitly activate Audio and MIDI, and repeat a
-   representative Pad trigger.
-8. Export the privacy-safe acceptance report and record its SHA-256, operator,
-   exact time/timezone, observations, and final pass/fail.
+### Performed observations
+
+1. Chrome exposed Web MIDI, the operator activated Audio, enabled MIDI, and
+   granted the MPD218 input. A clean baseline was `running · 0/0/0`.
+2. Physical Pads 1–16 were struck once each in device PAD BANK A. Creator A1–A16
+   each flashed and sounded with no missing, duplicate, or stuck Pad; the report
+   advanced exactly to `16/16/0`.
+3. With the device still in PAD BANK A, Creator B16, C1, C16, D1, and D16 each
+   flashed and sounded. B1 was also repeatedly confirmed. The controlled five
+   address sample advanced the report exactly from `53/53/0` to `58/58/0`.
+4. Selecting the MPD218's own PAD BANK B produced no Creator Trigger because
+   that device program emits Notes `52..67`, outside the approved `36..51`
+   range. Returning the device to PAD BANK A restored the selected Creator Bank
+   mapping. This is the bounded Stage 7 contract, not a Creator Bank failure.
+5. The MPD218 was physically disconnected and reconnected. Without a second
+   listener, one controlled PAD1 strike flashed and sounded once. Simultaneous
+   CoreMIDI capture contained one Note On `99 24 55`, Channel Pressure `D9`
+   messages that Creator intentionally ignores, and one Note Off `89 24 00`;
+   the report advanced exactly `77 -> 78` with no rejection.
+6. The operator confirmed that a suspended Runtime produced no flash and no
+   sound. While the operator switched between Chrome and Codex, a later report
+   showed a Session replacement; the replacement correctly required explicit
+   Audio activation and MIDI enablement, after which one strike flashed,
+   sounded, and produced `1/1/0`.
+   An independent same-page candidate reproduction retained counters as
+   `running 1/1/0 -> audio-suspended 1/1/0 -> running 2/2/0`, separating normal
+   Suspend behavior from the observed cross-application replacement.
+7. After explicit reload, Audio did not autoplay. The operator reopened Project
+   `00000000`, revision `66`, BPM `120`, selected Creator Bank A, explicitly
+   activated Audio and MIDI, and confirmed physical PAD16 flashed A16 and
+   sounded. The final new-Session report was `running · 1/1/0`, with no error.
+8. Softer physical strikes sounded quieter than Pointer/Keyboard. This is the
+   expected velocity contract: MPD218 velocity is preserved while Pointer and
+   Keyboard use fixed velocity `100`; it is not a missing or rejected Trigger.
+
+The exported report contract intentionally keeps every `physical` field at
+`deferred / unverified`; it cannot self-attest a human action. The named human
+observations and exact report digests in this document supply that separate
+physical evidence without rewriting Safari or iPadOS rows.
 
 This task has not pushed, created a Pull Request, merged, tagged, released,
 deployed, published, or promoted a Channel.

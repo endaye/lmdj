@@ -138,7 +138,7 @@ not Safari product acceptance.
 | macOS | Safari | Pointer | `deferred / unverified`; separate Bundle import check did not reproduce >20 s `importing` |
 | macOS | Chrome | Pointer | `deferred / unverified` |
 | macOS | Chrome | Physical keyboard + hearing | `PASS — 1.0.20.0 ten-step Canary confirmed by endaye; report SHA-256 7e2a2b…333a` |
-| macOS | Chrome | Physical MIDI | `FAIL — 1.0.20.0 filtered MPD218 Channel 10; pending retest on 1.0.21.0` |
+| macOS | Chrome | Physical MIDI | `PASS — 1.0.21.0 accepted MPD218 Channel 10 across all 16 Bank-A Pads, Creator B/C/D samples, reconnect, suspend/re-authorize, and reload/reopen; final report SHA-256 b0491e…603` |
 | iPadOS | Safari | Touch | `deferred / unverified` |
 | iPadOS | Safari | Lifecycle | `deferred / unverified` |
 
@@ -159,7 +159,7 @@ screen recovery, or long-session stability on those platforms.
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
 | Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
 | Product Build `1.0.20.0` | corrected keyboard spatial mapping; clean local Proof and immutable snapshot passed at `7d409b5`; candidate source/evidence through `ccd0aec` is now on `origin/main`; ten-step human Canary passed; `main` run `31665186166` remains in progress |
-| Product Build `1.0.21.0` | branch-local Creator `1.1.3` candidate accepts bounded MIDI mapping on channels 1–16; clean automated Proof and immutable snapshot passed at `1a7e84e`; physical UI retest in progress |
+| Product Build `1.0.21.0` | branch-local Creator `1.1.3` candidate accepts bounded MIDI mapping on channels 1–16; clean automated Proof and immutable snapshot passed at `1a7e84e`; MPD218 physical UI retest passed and is bound in `2026-08-13-stage7-midi-channel-canary-1.0.21.0.md` |
 | Manual canary | `T1 passed — endaye confirmed all ten 1.0.20.0 steps with no issue; report SHA-256 7e2a2b…333a` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
@@ -171,8 +171,9 @@ The current remediation rows must be refreshed when run `31665186166` reaches a
 terminal result or when the local manual-acceptance addendum is published. T1 is closed for the `1.0.20.0`
 branch-local candidate; physical MIDI failed on that Build, Safari import was
 checked separately without reproducing the importing stall, and Safari Pointer
-plus iPadOS remain unverified. Product `1.0.21.0` automated Proof and snapshot
-are complete; its physical MIDI UI retest remains in progress.
+plus iPadOS remain unverified. Product `1.0.21.0` automated Proof, snapshot, and
+Chrome MPD218 physical MIDI retest are complete; Safari Pointer and iPadOS
+remain separate unverified rows.
 Product Build `1.0.20.0` still requires a successful terminal result for the
 full Proof at exact `main` revision `ccd0aec` before any new Product tag. The physical rows
 remain authoritative for their individual platforms and continue to block

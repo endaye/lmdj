@@ -243,28 +243,30 @@
 
 - Modify: `docs/release-evidence/2026-08-13-stage7-midi-channel-canary-1.0.21.0.md`
 - Modify: current Stage 7 acceptance/review documents
+- Modify: this plan
 
 **Interfaces:**
 
 - Consumes: the exact `1.0.21.0` package, `stage7-canary.lmdj`, AKAI MPD218, macOS Chrome, and the named human's observations.
 - Produces: pass/fail evidence for Chrome physical MIDI, while Safari/iPadOS stay independently scoped.
 
-- [ ] **Step 1: Verify raw device input and Creator behavior**
+- [x] **Step 1: Verify raw device input and Creator behavior**
 
   Capture at least one raw Note On/Off pair from `MPD218 Port A`, then in Chrome explicitly activate Audio, enable MIDI, and play all 16 physical Pads in Bank A. Verify Channel 10 notes `36..51`, velocity preservation, no duplicate/missing/stuck trigger, Banks B/C/D sample addresses, disconnect/reconnect, suspend/reactivate, and reload/reopen.
 
-- [ ] **Step 2: Record only the performed observations**
+- [x] **Step 2: Record only the performed observations**
 
   Store operator, date/time/timezone, exact Chrome/macOS/device identity, candidate revision, Project fixture digest, per-row result, and exported privacy-safe report SHA-256. Do not infer iPadOS or another browser from this result.
 
-- [ ] **Step 3: Commit the signed evidence update**
+- [x] **Step 3: Commit the signed evidence update**
 
-  After validating the supplied human fields, stage only the three evidence/current-truth documents, inspect staged paths/checks, and commit:
+  After validating the supplied human fields, stage only the four declared
+  evidence/current-truth/plan documents, inspect staged paths/checks, and commit:
 
   ```bash
   git commit -m "docs(stage7): record physical MIDI canary"
   ```
 
-- [ ] **Step 4: Inspect final local state**
+- [x] **Step 4: Inspect final local state**
 
   Require a clean worktree and confirm no push, PR, merge, tag, Release, deployment, publication, or Channel promotion occurred.
