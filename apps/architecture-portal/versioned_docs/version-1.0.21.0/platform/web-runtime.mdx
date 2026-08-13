@@ -1,0 +1,75 @@
+---
+title: Web Runtime Platform
+area: platform
+status: partial
+owners: [web, audio]
+source_paths:
+  - apps/web-runtime-lab
+  - apps/web-runtime-host
+  - apps/creator-web
+  - packages/web-runtime-platform
+  - scripts/creator-web.sh
+  - scripts/web-runtime-host.sh
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+  - docs/quality/web-runtime-lab-acceptance.md
+  - docs/architecture/2026-08-01-web-realtime-audio-threshold-decision.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 当前组成
+
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.2.1`、Diagnostic Web Runtime Host `1.2.8` 与 Creator Web Host `1.1.3` 组成，并锁入 Product Build `1.0.21.0`。
+
+## 共享 Platform
+
+两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_complete`、`create_immutable`）都要求目标 Project 的有效 writer lease，且 lease 必须属于发起调用的同一 `ProjectStoragePlatform`；无覆盖 lease 时以 `IO_ERROR` + `storage_condition=invalid_state` 失败，不同 same-page platform 试图复用 owner lease 时以 `IO_ERROR` + `storage_condition=project_busy` 在打开 target 或 intent 前失败。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
+
+## 分发与服务
+
+两个 Host 都生成 canonical manifest 与内容哈希资产；固定 Emscripten `6.0.5`、512 MiB heap、协议 `1` 和资源上限。proof-only server 在 bind 前验证完整 dist，并固定 COOP/COEP/CORP/CSP、MIME、cache、no-follow 与每请求 hash；它不是生产部署服务。
+
+## 线程与生命周期
+
+主线程负责 UI、用户手势和生命周期观察；Dedicated Worker/Control 拥有 OPFS 与 Facade；AudioWorklet 处理实时音频。消息、sidecar、queue 与 timeout 均有界。AudioWorklet 的 terminal quiescence 在首个 caller budget 超时并锁存 fatal 后，只再等待一个同长度的 terminal budget；callback 仍未退出时返回类型化 `INTERNAL_ERROR`，不再无限 futex 等待。Transport 收到无法关联到 pending request 的未知或重复 response 时会原子 fail closed：仅终止一次、以 `HOST_PROTOCOL_MISMATCH` 拒绝其余 pending request，并清空 pending/active identity。真实 Chromium Browser Main conformance 会在 unknown response 进入 scheduled production poll 前保持另一个 production request pending，并直接观察该 promise 被同一 terminal error 拒绝且 ID 清除。Manifest mismatch、publication outcome unknown、终止与重启恢复同样 fail closed；`HOST_RESTART_REQUIRED` 不得被页面重试掩盖。
+
+Runtime Session 是 input 与 terminal cleanup 的唯一 owner。每个终止或 replacement
+generation 都必须释放 Worker/transport、MIDI listeners、BroadcastChannel、AudioContext
+和 window lifecycle listeners；新 generation 不得在旧 generation 仍持有这些资源时
+成为 owner。persisted page lifecycle 保留共享 Runtime，non-persisted terminal
+pagehide 才进入 close。
+
+## 自动化范围
+
+共享 C++/Node tests 固定 manifest、transport、input、recovery 与 realtime session；Creator 和 Diagnostic 的 packaged Playwright proof 分别验证创作旅程与诊断压力/Take/lifecycle 路径。WebKit capability smoke 只有在 mandatory primitive 可用时才能升级为完整自动化 PASS。
+
+## 公共静态托管边界
+
+Runtime Host 发布 workflow 先运行读不到 Netlify credential 的 preflight job：它从 canonical
+origin 获取 remote signed tag 与受保护 `main`，要求 tag commit 是该 `main` 的 ancestor；
+Release inventory 精确为 ZIP、checksum、受信且专用的 Release checksum key 的 detached
+armored checksum signature，并在解析 checksum 前验证角色专属 signature；Product tag key 与
+checksum key 不能替代。preflight 还完成资产下载与 staging，只有它通过后才安装
+Node/Chromium；部署 job 在 Netlify mutation 前对同一 Release 重新验证。随后它会发现并
+验证真实 prior Product/Host 身份，在 prior immutable 与 production 上先跑完整
+HTTP/Chromium，再创建 immutable draft；只有 draft smoke 通过才发布同一 ready Deploy ID。
+发布后失败或信号中断会 reconcile alias，必要时恢复 exact prior；首次无 prior 时采用官方
+reversible site disable。生成站点只给 manifest 中九个精确 hash asset 加 immutable header，
+未知 asset/source map 继续 `no-store`；成功/恢复分别保存 deployment evidence v2/recovery
+evidence v1。
+
+proof-only server 仅对本地 Proof 服务 `dist` 与安全 headers；它不是生产服务。生产由
+Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python server。`lmdj-canary`
+属于 Creator 交付边界，排除在 Diagnostic Runtime Host project/URL/alias 之外；完整操作与 pre-deploy
+记录分别见仓库文件 `docs/deploy/web-runtime-host.md` 和
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+发布工具、workflow、历史 Build 的 tag/Release 或任何部署证据，都不自动证明当前 Product
+Build `1.0.21.0` 已进入 current source，尚未发布。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
+record；本地 Proof 或 PR Preview 不能替代公共部署证据。
+
+## 非能力与下一门禁
+
+当前不承诺 Creator 离线安装或公共部署、跨物理设备一致体验或 `beta`/`stable` 质量。macOS Chrome Physical MIDI 在 `1.0.20.0` 上已复现 Channel 10 被过滤，`1.0.21.0` 待实体复验；macOS Safari/Chrome Pointer 与 iPadOS Safari Touch/lifecycle 仍为 `deferred / unverified`。声学延迟、underrun 与主观听感由独立 evaluator 判定。Snapshot、tag、PR/CI、merge、发布和 Channel promotion 各自需要独立证据。
