@@ -1035,14 +1035,14 @@ immutable `1.0.18.0` snapshot, freeze a new `1.0.19.0 · canary` snapshot from a
 clean identity commit, then rerun the complete Task 13 gates and prepare a new
 unexecuted human Canary sheet.
 
-- [ ] RED: reproduce an import aborted by Runtime Session replacement and
+- [x] RED: reproduce an import aborted by Runtime Session replacement and
   assert that the replacement UI is `ready`, not `importing`.
-- [ ] GREEN: when the retiring Session owns an import controller, abort it and
+- [x] GREEN: when the retiring Session owns an import controller, abort it and
   independently clear the transfer UI state even though its action token is
   stale.
-- [ ] Allocate Creator `1.1.1` and Product Build `1.0.19.0`; regenerate and
+- [x] Allocate Creator `1.1.1` and Product Build `1.0.19.0`; regenerate and
   verify Assembly/runtime identities and current Portal facts.
-- [ ] Commit the implementation/identity update, freeze the immutable
+- [x] Commit the implementation/identity update, freeze the immutable
   `1.0.19.0` snapshot in a separate clean commit, rerun Task 13, and record
   honest automated and human-Canary evidence.
 - [ ] Restart the local clean Creator package and require the named operator to

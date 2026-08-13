@@ -398,15 +398,17 @@ generation 的 `finally` 却因 action token 已失效而跳过 `transfer-ended`
 因此 `1.0.18.0` 是 abandoned / unshipped failed-canary candidate；操作者报告的步骤
 1–6 只作为缺陷诊断观察，不构成 T1 部分通过，也不得从步骤 7 继续。修复分配 Creator
 Web `1.1.1` 与 Product Build `1.0.19.0`，Contract、Project I/O、Web Runtime Platform、
-Web Runtime Host 与 Provider identities 不变。`1.0.19.0` 必须重新完成 clean full
-candidate Proof、不可变 snapshot、独立 evidence，并从步骤 1 重跑全部十步人工 Canary。
+Web Runtime Host 与 Provider identities 不变。`1.0.19.0` 已在 clean revision
+`213023d096522de0bbe5e02e6699d775a45e67a6` 完成 full candidate Proof、不可变
+snapshot 与独立 evidence；仍必须从步骤 1 重跑全部十步人工 Canary。
 
 ### Final finding closure audit
 
 下列是当前修复分支的唯一现行 closure ledger；第二至七节仍保留各历史基线下的
 原始发现与复核，不应被当作当前状态。`1.0.18.0` 的旧门禁仍绑定
-`c44517bc7bde30cea4a40a7cab495a081028eb7e`；修复后的 `1.0.19.0` 完整候选门禁待重跑，详见
-[`2026-08-13-stage7-remediation-canary.md`](../release-evidence/2026-08-13-stage7-remediation-canary.md)。
+`c44517bc7bde30cea4a40a7cab495a081028eb7e`；修复后的 `1.0.19.0` 完整候选门禁
+绑定 `213023d096522de0bbe5e02e6699d775a45e67a6`，详见
+[`2026-08-13-stage7-remediation-canary-1.0.19.0.md`](../release-evidence/2026-08-13-stage7-remediation-canary-1.0.19.0.md)。
 
 | ID | Status | Current evidence |
 | --- | --- | --- |
@@ -457,11 +459,11 @@ candidate Proof、不可变 snapshot、独立 evidence，并从步骤 1 重跑�
 | Gate | Status | Current evidence |
 | --- | --- | --- |
 | T1 human canary | `open — corrected candidate must restart at step 1` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从 `1.0.18.0` 的步骤 1–6 或自动化结果推导 pass。 |
-| Product Build `1.0.19.0` branch-local Proof | `pending` | 修复提交及 immutable snapshot 完成后，必须在 clean revision 重跑完整 Task 13 候选门禁。 |
+| Product Build `1.0.19.0` branch-local Proof | `passed` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
 | Product Build `1.0.19.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 获授权合并后必须在 exact merged `main` revision 重跑 Task 13 全部命令并落 evidence-only addendum。 |
 
 因此当前源代码、自动化、文档与历史 G1 更正都已纳入 closure ledger，但 T1 尚未
-从正确候选的步骤 1 重新执行，且 `1.0.19.0` 尚未经过 clean branch Proof、获授权的
-PR/merge 与 post-merge Proof。本修复任务
+从正确候选的步骤 1 重新执行，且 `1.0.19.0` 尚未经过获授权的 PR/merge 与
+post-merge Proof。本修复任务
 仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
 promotion。

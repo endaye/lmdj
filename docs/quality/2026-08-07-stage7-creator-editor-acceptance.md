@@ -33,9 +33,12 @@ Creator Web `1.1.1`; Web Runtime Platform remains `0.2.0`, Web Runtime Host
 `1.2.7`, Project I/O `0.5.4`, and Application Facade `1.3.5`. A focused rendered
 UI regression first failed with `expected ready, received importing`, then
 passed after the retiring Session cleanup became responsible for clearing its
-transient transfer state. A new clean full candidate Proof, immutable
-`1.0.19.0 · canary` snapshot, corrected evidence record, and a fresh ten-step
-human Canary from step 1 are still required.
+transient transfer state. The immutable `1.0.19.0 · canary` snapshot binds
+implementation revision `35c09053fd2bc64859b1a01c9cbbc2b5fb3a986d`; the full
+candidate sequence passed from clean snapshot revision
+`213023d096522de0bbe5e02e6699d775a45e67a6`. Exact results and the fresh blank
+ten-step sheet are recorded in
+`docs/release-evidence/2026-08-13-stage7-remediation-canary-1.0.19.0.md`.
 
 This remains branch-local candidate evidence, not merged-main Proof. No push,
 PR, merge, tag, Release, deployment, publication, or Channel promotion is
@@ -70,6 +73,16 @@ Safari, iPadOS, physical input, or hearing acceptance.
 These automated results remain valid historical evidence for the exact
 `1.0.18.0` revision only. They do not waive the newly discovered human-path
 defect and must not be reused as Proof for `1.0.19.0`.
+
+## Corrected 1.0.19.0 automated candidate evidence
+
+The complete Core, Web Toolchain, Web Runtime Host, Creator Web, Architecture
+Portal, dependency, active-tree, and version/Assembly Lock gates passed from
+clean revision `213023d096522de0bbe5e02e6699d775a45e67a6`. Creator Proof
+included 62/62 Vitest assertions and packaged Chromium 13 passed/1 designed
+physical-MIDI skip; the new real rendered-UI generation-replacement regression
+is part of that suite. See the corrected evidence record for exact hashes,
+commands, and honest automated/manual boundaries.
 
 ## Historical automated local evidence (1.0.16.3)
 
@@ -121,7 +134,7 @@ screen recovery, or long-session stability on those platforms.
 | Current remediation push / PR / CI / merge | not performed; current branch-local Proof is not merged-main Proof |
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
-| Product Build `1.0.19.0` | allocated locally; clean full Proof, immutable snapshot, and fresh evidence are pending |
+| Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
 | Manual canary | `open — corrected candidate must restart at step 1` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
