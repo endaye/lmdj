@@ -13,7 +13,7 @@ from typing import Callable, Protocol
 
 from .github_api import BranchProjection, RunProjection
 from .model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, Disposition, ReleaseIntent, ReleaseLedger, ReleaseModelError, ReleasePlan, ReleasePolicy, canonical_json, classify_tag, load_ledger, load_policy
-from .profiles import AssetBuild, ProfileBuild, ProfileRuntime, build_profile
+from .profiles import AssetBuild, ProfileBuild, ProfileRuntime, build_profile, verify_existing_profile
 
 
 class PrepareError(RuntimeError):
@@ -61,6 +61,7 @@ class ReleaseGitHub(Protocol):
 
 
 ProfileBuilder = Callable[[str, Path, Path, ReleaseIntent], ProfileBuild]
+ProfileVerifier = Callable[[str, Path, Path, ReleaseIntent, tuple[AssetBuild, ...]], None]
 ProofReader = Callable[[Path, ReleaseIntent], ProductProof]
 AuthorityReader = Callable[[Path], tuple[ReleasePolicy, ReleaseLedger]]
 
@@ -73,6 +74,7 @@ class PrepareContext:
     git: ReleaseGit
     github: ReleaseGitHub
     profile_builder: ProfileBuilder
+    profile_verifier: ProfileVerifier
     proof_reader: ProofReader
     tag_signer_fingerprint: str
     checksum_signer_fingerprint: str
@@ -105,6 +107,13 @@ def prepare(tag: str, context: PrepareContext) -> PreparedRelease:
     with resolved.git.detached_worktree(intent.target_revision) as worktree:
         if intent.kind.value == "product":
             _verify_product_proof(resolved, Path(worktree), intent)
+        existing_output = _existing_output_root(resolved.repo_root, identity.output_name)
+        if existing_output is not None:
+            if existing is None:
+                raise PrepareError("existing release output has no matching local signed tag")
+            return _reconcile_existing_output(
+                resolved, intent, existing, run, Path(worktree), existing_output,
+            )
         with tempfile.TemporaryDirectory(prefix="lmdj-release-profile-") as directory:
             profile_output = Path(directory)
             built = resolved.profile_builder(intent.profile, Path(worktree), profile_output, intent)
@@ -120,18 +129,7 @@ def prepare(tag: str, context: PrepareContext) -> PreparedRelease:
                     raise PrepareError("local signed tag verification failed")
             else:
                 tag_state = existing
-            plan = ReleasePlan(
-                schema="lmdj.release-plan.v1",
-                repository=context.policy.repository,
-                tag=tag,
-                tag_object=tag_state.object_id,
-                target_revision=intent.target_revision,
-                kind=intent.kind,
-                identity=intent.identity,
-                channel=intent.channel,
-                profile=intent.profile,
-                assets=tuple(asset.record() for asset in assets),
-            )
+            plan = _release_plan(policy, tag, tag_state, intent, assets)
             document = _plan_document(plan, intent, run, policy)
             digest = hashlib.sha256(canonical_json(document)).hexdigest()
             output_root = _write_output(resolved.repo_root, plan.output_name, document, digest, assets)
@@ -298,8 +296,6 @@ def _write_output(
         raise PrepareError("release output root is unsafe")
     output = root / encoded_tag
     if output.exists() or output.is_symlink():
-        if _matches_existing_output(output, document, digest, assets):
-            return output
         raise PrepareError("release output already exists; inspect and reconcile before retry")
     staged = Path(tempfile.mkdtemp(prefix=".lmdj-release-plan-", dir=root))
     try:
@@ -327,12 +323,87 @@ def _release_name_from_document(document: dict[str, object]) -> str:
     return release["name"] if isinstance(release, dict) and isinstance(release.get("name"), str) else "LMDJ release"
 
 
+def _release_plan(
+    policy: ReleasePolicy,
+    tag: str,
+    tag_state: LocalTag,
+    intent: ReleaseIntent,
+    assets: tuple[AssetBuild, ...],
+) -> ReleasePlan:
+    return ReleasePlan(
+        schema="lmdj.release-plan.v1",
+        repository=policy.repository,
+        tag=tag,
+        tag_object=tag_state.object_id,
+        target_revision=intent.target_revision,
+        kind=intent.kind,
+        identity=intent.identity,
+        channel=intent.channel,
+        profile=intent.profile,
+        assets=tuple(asset.record() for asset in assets),
+    )
+
+
+def _existing_output_root(repo_root: Path, encoded_tag: str) -> Path | None:
+    root = repo_root / "build/release"
+    if root.exists() or root.is_symlink():
+        if root.is_symlink() or not root.is_dir():
+            raise PrepareError("release output root is unsafe")
+    output = root / encoded_tag
+    if output.exists() or output.is_symlink():
+        return output
+    return None
+
+
+def _reconcile_existing_output(
+    context: PrepareContext,
+    intent: ReleaseIntent,
+    tag_state: LocalTag,
+    run: RunProjection,
+    worktree: Path,
+    output: Path,
+) -> PreparedRelease:
+    if not output.is_dir() or output.is_symlink():
+        raise PrepareError("existing release output is unsafe")
+    assets_root = output / "assets"
+    try:
+        assets = _existing_profile_assets(assets_root)
+        assets = _verify_profile_assets(intent, ProfileBuild(assets))
+        context.profile_verifier(intent.profile, worktree, assets_root, intent, assets)
+    except (OSError, ValueError, RuntimeError):
+        raise PrepareError("existing release profile assets are invalid") from None
+    plan = _release_plan(context.policy, intent.tag, tag_state, intent, assets)
+    document = _plan_document(plan, intent, run, context.policy)
+    digest = hashlib.sha256(canonical_json(document)).hexdigest()
+    if not _matches_existing_output(output, document, digest, assets):
+        raise PrepareError("existing release output does not reconcile")
+    return PreparedRelease(plan, digest, output, True)
+
+
+def _existing_profile_assets(assets_root: Path) -> tuple[AssetBuild, ...]:
+    if not assets_root.is_dir() or assets_root.is_symlink():
+        raise PrepareError("existing release assets are unavailable")
+    assets: list[AssetBuild] = []
+    for path in sorted(assets_root.iterdir()):
+        if not path.is_file() or path.is_symlink():
+            raise PrepareError("existing release assets are unavailable")
+        payload = path.read_bytes()
+        assets.append(AssetBuild(path, path.name, len(payload), hashlib.sha256(payload).hexdigest()))
+    return tuple(assets)
+
+
 def _sha(value: str) -> bool:
     return len(value) == 40 and all(character in "0123456789abcdef" for character in value)
 
 
 def default_profile_builder(runtime: ProfileRuntime) -> ProfileBuilder:
     return lambda profile, worktree, output, intent: build_profile(profile, worktree, output, intent, runtime=runtime)
+
+
+def default_profile_verifier(runtime: ProfileRuntime) -> ProfileVerifier:
+    return lambda profile, worktree, assets_root, intent, assets: verify_existing_profile(
+        profile, worktree, assets_root, intent, assets, runtime,
+    )
 
 
 def load_authority_documents(worktree: Path) -> tuple[ReleasePolicy, ReleaseLedger]:

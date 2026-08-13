@@ -20,7 +20,8 @@ from tools.release.github_api import GitHubApiError, GitHubClient  # noqa: E402
 from tools.release.model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, ReleaseModelError  # noqa: E402
 from tools.release.openpgp import OpenPgpError, OpenPgpVerifier  # noqa: E402
 from tools.release.prepare import (  # noqa: E402
-    PrepareContext, PrepareError, default_profile_builder, load_authority_documents, prepare,
+    PrepareContext, PrepareError, default_profile_builder, default_profile_verifier,
+    load_authority_documents, prepare,
     read_product_snapshot_proof,
 )
 from tools.release.profiles import ProfileError, ProfileRuntime  # noqa: E402
@@ -63,6 +64,7 @@ def build_context(
         git=selected_git,
         github=selected_github,
         profile_builder=default_profile_builder(runtime),
+        profile_verifier=default_profile_verifier(runtime),
         proof_reader=read_product_snapshot_proof,
         tag_signer_fingerprint=policy.product_fingerprint,
         checksum_signer_fingerprint=policy.checksum_fingerprint,

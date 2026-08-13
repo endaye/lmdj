@@ -43,6 +43,7 @@ from tools.release.profiles import (  # noqa: E402
     _stage_and_sign,
     _verify_checksum,
     build_profile,
+    verify_existing_profile,
 )
 from tools.release.commands import CommandRunner  # noqa: E402
 from tools.release import cli  # noqa: E402
@@ -169,12 +170,15 @@ class ReleasePrepareTest(unittest.TestCase):
 
     def profile_builder(self, profile: str, worktree: Path, output: Path, intent) -> ProfileBuild:
         self.assertEqual(profile, "web-runtime-host")
+        return self.profile_build_with_signature(output, b"signature")
+
+    def profile_build_with_signature(self, output: Path, signature: bytes) -> ProfileBuild:
         output.mkdir(parents=True, exist_ok=True)
         assets = []
         for name, payload in (
             ("lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip", b"zip"),
             ("lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip.sha256", b"checksum"),
-            ("lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip.sha256.asc", b"signature"),
+            ("lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip.sha256.asc", signature),
         ):
             path = output / name
             path.write_bytes(payload)
@@ -198,6 +202,7 @@ class ReleasePrepareTest(unittest.TestCase):
             git=self.git,
             github=self.github,
             profile_builder=self.profile_builder,
+            profile_verifier=lambda profile, worktree, assets_root, intent, assets: None,
             proof_reader=self.proof_reader,
             tag_signer_fingerprint=self.policy.product_fingerprint,
             checksum_signer_fingerprint=self.policy.checksum_fingerprint,
@@ -228,6 +233,88 @@ class ReleasePrepareTest(unittest.TestCase):
         second = prepare(self.tag, self.context())
         self.assertEqual(second.output_root, first.output_root)
         self.assertTrue(second.reused_local_tag)
+
+    def test_prepare_reconciles_existing_output_without_rebuilding_or_resigning(self) -> None:
+        signer_calls = 0
+
+        def nondeterministic_builder(profile: str, worktree: Path, output: Path, intent) -> ProfileBuild:
+            nonlocal signer_calls
+            self.assertEqual(profile, "web-runtime-host")
+            signer_calls += 1
+            if signer_calls > 1:
+                raise AssertionError("retry must not rebuild or re-sign existing release output")
+            return self.profile_build_with_signature(output, b"signature-created-at-first-prepare")
+
+        context = self.context()
+        context.profile_builder = nondeterministic_builder
+        context.profile_verifier = lambda profile, worktree, output, intent, assets: None
+        first = prepare(self.tag, context)
+        second = prepare(self.tag, context)
+        self.assertEqual(second.output_root, first.output_root)
+        self.assertEqual(signer_calls, 1)
+
+    def test_prepare_rejects_changed_existing_signature_without_rebuilding(self) -> None:
+        builds = 0
+
+        def builder(profile: str, worktree: Path, output: Path, intent) -> ProfileBuild:
+            nonlocal builds
+            builds += 1
+            if builds > 1:
+                raise AssertionError("retry must not rebuild after existing signature changes")
+            return self.profile_build_with_signature(output, b"signature-before-change")
+
+        context = self.context()
+        context.profile_builder = builder
+        context.profile_verifier = lambda profile, worktree, output, intent, assets: None
+        first = prepare(self.tag, context)
+        (first.output_root / "assets" / "lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip.sha256.asc").write_bytes(
+            b"changed-signature"
+        )
+        with self.assertRaisesRegex(PrepareError, "existing release output"):
+            prepare(self.tag, context)
+        self.assertEqual(builds, 1)
+
+    def test_prepare_rejects_changed_existing_archive_without_rebuilding(self) -> None:
+        builds = 0
+
+        def builder(profile: str, worktree: Path, output: Path, intent) -> ProfileBuild:
+            nonlocal builds
+            builds += 1
+            if builds > 1:
+                raise AssertionError("retry must not rebuild after existing asset changes")
+            return self.profile_build_with_signature(output, b"signature-before-archive-change")
+
+        context = self.context()
+        context.profile_builder = builder
+        context.profile_verifier = lambda profile, worktree, output, intent, assets: None
+        first = prepare(self.tag, context)
+        (first.output_root / "assets" / "lmdj-web-runtime-host-1.1.2-product-1.0.21.0.zip").write_bytes(
+            b"changed-archive"
+        )
+        with self.assertRaisesRegex(PrepareError, "existing release output"):
+            prepare(self.tag, context)
+        self.assertEqual(builds, 1)
+
+    def test_prepare_rejects_malformed_existing_signature_before_rebuild(self) -> None:
+        builds = 0
+
+        def builder(profile: str, worktree: Path, output: Path, intent) -> ProfileBuild:
+            nonlocal builds
+            builds += 1
+            if builds > 1:
+                raise AssertionError("retry must not rebuild malformed existing output")
+            return self.profile_build_with_signature(output, b"malformed-signature")
+
+        def reject_malformed(profile, worktree, output, intent, assets) -> None:
+            raise RuntimeError("malformed detached signature")
+
+        context = self.context()
+        context.profile_builder = builder
+        context.profile_verifier = reject_malformed
+        prepare(self.tag, context)
+        with self.assertRaisesRegex(PrepareError, "existing release profile assets"):
+            prepare(self.tag, context)
+        self.assertEqual(builds, 1)
 
     def test_prepare_rejects_a_branch_projection_that_does_not_bind_scratch_main(self) -> None:
         self.github.branch = BranchProjection("main", True, "b" * 40)
@@ -353,6 +440,7 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertIs(context.proof_reader, read_product_snapshot_proof)
         self.assertEqual(context.policy.repository, "endaye/lmdj")
         self.assertIn("fetch:endaye/lmdj:main", self.git.calls)
+        self.assertTrue(callable(context.profile_verifier))
 
     def test_cli_normalizes_usage_and_verification_failures(self) -> None:
         self.assertEqual(cli.main(["prepare"]), 64)
@@ -376,6 +464,35 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertEqual([name for name, _ in verifier.calls], ["sign", "import", "verify"])
         self.assertEqual(verifier.calls[1][1], verifier.calls[2][1])
         self.assertEqual(verifier.calls[1][1], 0o700)
+
+    def test_existing_core_profile_assets_are_reverified_in_a_fresh_keyring(self) -> None:
+        assets_root = self.root / "existing-assets"
+        assets_root.mkdir()
+        archive = assets_root / "core.zip"
+        checksum = assets_root / "core.zip.sha256"
+        signature = assets_root / "core.zip.sha256.asc"
+        key = self.root / ".github/release-signing-keys/lmdj-release-checksum.asc"
+        key.parent.mkdir(parents=True)
+        archive.write_bytes(b"persisted archive")
+        checksum.write_text(
+            hashlib.sha256(archive.read_bytes()).hexdigest() + "  core.zip\n", encoding="ascii"
+        )
+        signature.write_text("persisted detached signature", encoding="ascii")
+        key.write_text("public", encoding="ascii")
+        assets = tuple(
+            AssetBuild(path, path.name, len(path.read_bytes()), hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in (archive, checksum, signature)
+        )
+        verifier = RecordingVerifier()
+        runtime = ProfileRuntime(
+            runner=CommandRunner(), checksum_verifier=verifier, checksum_home=self.root,
+            checksum_fingerprint=self.policy.checksum_fingerprint,
+        )
+        intent = self.ledger.entries[0]
+        verify_existing_profile("core-package", self.root, assets_root, intent, assets, runtime)
+        self.assertEqual([name for name, _ in verifier.calls], ["import", "verify"])
+        self.assertEqual(verifier.calls[0][1], verifier.calls[1][1])
+        self.assertEqual(verifier.calls[0][1], 0o700)
 
     def test_checksum_record_requires_exact_canonical_bytes(self) -> None:
         archive = self.root / "archive.zip"

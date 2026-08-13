@@ -117,6 +117,37 @@ PROFILE_BUILDERS: dict[str, Callable[[Path, Path, ReleaseIntent | None, ProfileR
 }
 
 
+def verify_existing_profile(
+    profile: str,
+    worktree: Path,
+    assets_root: Path,
+    intent: ReleaseIntent,
+    assets: tuple[AssetBuild, ...],
+    runtime: ProfileRuntime,
+) -> None:
+    """Verify persisted profile assets without rebuilding or signing them."""
+    if profile == "source-only":
+        if assets:
+            raise ProfileError("source-only releases must not create release assets")
+        return
+    if profile not in {"core-package", "web-runtime-host"}:
+        raise ValueError("unknown release profile")
+    selected = _require_runtime(runtime)
+    archive, checksum, signature = _profile_asset_paths(assets_root, assets)
+    _verify_checksum(checksum, archive)
+    _verify_detached_checksum_signature(
+        checksum, signature,
+        worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
+        selected,
+    )
+    if profile == "web-runtime-host":
+        host_version = _host_version(worktree)
+        with tempfile.TemporaryDirectory(prefix="lmdj-release-existing-web-") as directory:
+            _stage_web_bundle(
+                worktree, ProfileBuild(assets), Path(directory), intent, host_version, selected,
+            )
+
+
 def _require_runtime(runtime: ProfileRuntime | None) -> ProfileRuntime:
     if runtime is None:
         raise ProfileError("release checksum signer is unavailable")
@@ -138,6 +169,29 @@ def _stage_and_sign(
     runtime.checksum_verifier.sign_detached(
         runtime.checksum_home, staged_checksum, signature, runtime.checksum_fingerprint,
     )
+    _verify_detached_checksum_signature(staged_checksum, signature, checksum_public_key_path, runtime)
+    return ProfileBuild(tuple(_asset(path) for path in (staged_archive, staged_checksum, signature)))
+
+
+def _profile_asset_paths(assets_root: Path, assets: tuple[AssetBuild, ...]) -> tuple[Path, Path, Path]:
+    paths = {asset.name: asset.path for asset in assets}
+    archives = [path for name, path in paths.items() if name.endswith(".zip")]
+    if len(archives) != 1:
+        raise ProfileError("Product release profile must produce exactly three assets")
+    archive = archives[0]
+    checksum = paths.get(archive.name + ".sha256")
+    signature = paths.get(archive.name + ".sha256.asc")
+    if (
+        archive.parent != assets_root or checksum is None or signature is None
+        or checksum.parent != assets_root or signature.parent != assets_root
+    ):
+        raise ProfileError("release asset inventory is not canonical")
+    return archive, checksum, signature
+
+
+def _verify_detached_checksum_signature(
+    checksum: Path, signature: Path, checksum_public_key_path: Path, runtime: ProfileRuntime,
+) -> None:
     with tempfile.TemporaryDirectory(prefix="lmdj-release-checksum-verify-") as directory:
         verification_home = Path(directory)
         verification_home.chmod(0o700)
@@ -145,9 +199,8 @@ def _stage_and_sign(
             verification_home, checksum_public_key_path, runtime.checksum_fingerprint,
         )
         runtime.checksum_verifier.verify_detached(
-            verification_home, signature, staged_checksum, runtime.checksum_fingerprint,
+            verification_home, signature, checksum, runtime.checksum_fingerprint,
         )
-    return ProfileBuild(tuple(_asset(path) for path in (staged_archive, staged_checksum, signature)))
 
 
 def _asset(path: Path) -> AssetBuild:
