@@ -15,6 +15,10 @@ source_paths:
   - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
   - docs/deploy/web-runtime-host.md
   - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
+  - docs/release-evidence/release-intents.json
+  - scripts/release.sh
+  - .github/workflows/publish-release.yml
+  - .github/workflows/deploy-web-runtime-host.yml
   - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
   - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
   - tests/platform/web/host/web_runtime_host_browser.spec.mjs
@@ -40,6 +44,20 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 `scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.8`、Platform `0.2.1`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
+
+## Release 输入边界
+
+Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepare TAG` 生成并验证本地
+候选，`scripts/release.sh push-tag TAG` 只推一个 exact tag，
+`scripts/release.sh create-draft TAG` 只创建或 reconcile Draft，dispatch-only
+`publish-release.yml` 再发布同一个已验证 Draft。每次 mutation 后运行
+`scripts/release.sh audit --remote --tag TAG`；historical exception 只能解释旧控制面事实，不能
+代替当前 tag、资产、签名或 profile 验证。
+
+公开 publication 的写权限只在受保护的 `release` Environment 人工批准后生效。它不触发下方
+Runtime deployment：该部署仍是 manual-only exact-tag dispatch，使用独立 Environment、凭据、
+smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。因此 release/deploy tooling
+已经 implemented 也不表示当前 Product Build `1.0.20.0` 已经 released、deployed 或 promoted。
 
 ## 公共发布边界
 

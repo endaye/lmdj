@@ -15,8 +15,8 @@ DESIGN = REPO_ROOT / "docs/superpowers/specs/2026-08-08-web-runtime-public-deplo
 PLAN = REPO_ROOT / "docs/superpowers/plans/2026-08-08-web-runtime-public-deployment.md"
 PORTAL_CURRENT_PAGES = (
     REPO_ROOT / "apps/architecture-portal/docs/operations/version-and-release.mdx",
+    REPO_ROOT / "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
     REPO_ROOT / "apps/architecture-portal/docs/hosts/web-runtime.mdx",
-    REPO_ROOT / "apps/architecture-portal/docs/platform/web-runtime.mdx",
 )
 TAG = "lmdj-v1.0.15.2"
 TAG_TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
@@ -44,6 +44,27 @@ class WebRuntimePublicDeploymentDocsTest(unittest.TestCase):
                 self.assertNotIn("deployment-tooling branch", source)
                 self.assertNotIn("尚未 push", source)
                 self.assertNotIn("未做远端验证", source)
+
+    def test_current_routes_explain_the_standard_release_boundaries(self) -> None:
+        for path in PORTAL_CURRENT_PAGES:
+            with self.subTest(path=path):
+                source = self.read(path)
+                for expected in (
+                    "prepare",
+                    "push-tag",
+                    "create-draft",
+                    "publish-release.yml",
+                    "Draft",
+                    "`release` Environment",
+                    "audit --remote",
+                    "historical exception",
+                    "manual-only",
+                    CURRENT_PRODUCT,
+                    "released",
+                    "deployed",
+                    "promoted",
+                ):
+                    self.assertIn(expected, source)
 
     def test_predeploy_record_is_explicitly_historical(self) -> None:
         source = self.read(ACCEPTANCE)

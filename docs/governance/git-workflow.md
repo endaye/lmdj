@@ -187,12 +187,35 @@ remove `PR Gate`. No stage authorizes the next one.
 
 Releases are produced from an identified, verified `main` SHA under
 [`version-management.md`](version-management.md). A release does not need a
-persistent release branch.
+persistent release branch. The normal path uses `scripts/release.sh` and keeps
+each transition independently authorized and verified:
+
+1. run a fresh read-only `audit --remote --tag TAG` against canonical state;
+2. authorize `prepare` to build, verify, sign, and create only local state;
+3. separately authorize `push-tag` to push and reconcile one exact tag;
+4. separately authorize `create-draft` to create or reconcile one Draft
+   GitHub Release and print its immutable publication inputs;
+5. dispatch `publish-release.yml` with the exact tag, numeric Release ID, and
+   plan digest; public Release publication occurs only after approval in the
+   protected `release` Environment;
+6. rerun the exact-tag remote audit and report the observed published state;
+7. separately authorize manual Runtime deployment and then any Channel
+   promotion, each with its own evidence.
+
+`prepare` does not authorize a tag push. A tag push does not authorize a Draft.
+A verified Draft does not authorize publication. A published Release neither
+triggers nor authorizes deployment, and deployment does not authorize Channel
+promotion. Normal operations do not use handwritten tag/Release commands,
+one-step publication, destructive asset replacement, all-tags push, tag
+movement, or published-history deletion.
 
 An urgent fix follows the normal `fix/<task>` path from `main` through focused
 verification, Pull Request, CI, and squash merge. Urgency can change scheduling
 and test focus, but it does not authorize direct commits to `main` or bypassing
-required gates.
+required gates. Any emergency release-path exception additionally requires an
+incident owner, exact target and asset inventory, rollback and stop conditions,
+and after-action evidence. It cannot waive tag immutability, signing, or the
+separation between publication and deployment.
 
 ## 7. Authority and reported state
 
@@ -200,8 +223,10 @@ These are separate states and permissions:
 
 ```text
 designed → planned → implemented → committed → pushed → merged
-         → tagged → built → channel-promoted → released
-         → deployed → release-verified
+         → release-audited → prepared → exact-tag-pushed
+         → Draft-created → Draft-verified → published-Release
+         → deployment-authorized → deployed → deployment-verified
+         → channel-promoted → release-verified
 ```
 
 A completed state does not imply permission for the next one. In particular,
