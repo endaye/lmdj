@@ -52,6 +52,18 @@ CASES = {
     "apps/README.md": {"docs_static", "portal"},
     "apps/creator-web/README.md": {"docs_static", "portal", "creator"},
     "apps/web-runtime-host/src/main.mjs": {"portal", "web_runtime_host"},
+    "apps/web-runtime-host/test/deploy_command_test.py": {
+        "portal", "web_runtime_host", "deploy_contract"
+    },
+    "apps/web-runtime-host/tools/deploy_orchestrator.py": {
+        "portal", "web_runtime_host", "deploy_contract"
+    },
+    "apps/web-runtime-host/tools/netlify_api.py": {
+        "portal", "web_runtime_host", "deploy_contract"
+    },
+    "apps/web-runtime-host/tools/release_bundle.py": {
+        "portal", "web_runtime_host", "deploy_contract"
+    },
     "apps/chameleon-lab/src/main.js": {"portal", "chameleon_lab"},
     "tests/core/audio/render_test.cpp": {
         "core_ubuntu", "core_asan", "core_coverage", "core_macos"

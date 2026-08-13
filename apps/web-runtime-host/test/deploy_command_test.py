@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1812,16 +1813,22 @@ def verify_distribution(dist_root, repo_root):
                 self.assertEqual(recovery["action"], "restored-prior")
                 self.assert_no_owned_temp()
 
-    def test_host_nonbrowser_gate_registers_isolated_command_test(self) -> None:
-        source = (SOURCE_ROOT / "scripts/web-runtime-host.sh").read_text(encoding="utf-8")
-        http_test = (
-            'python3 "$repo_root/apps/web-runtime-host/test/deployment_smoke_test.py"'
+    def test_deploy_contract_lane_registers_isolated_command_test(self) -> None:
+        workflow = (SOURCE_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        match = re.search(
+            r"^  deploy-contract:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+            workflow,
+            flags=re.MULTILINE | re.DOTALL,
         )
-        command_test = (
-            'python3 "$repo_root/apps/web-runtime-host/test/deploy_command_test.py"'
+        self.assertIsNotNone(match, "ci.yml is missing the deploy-contract job")
+        assert match is not None
+        job = match.group("body")
+        relative = "apps/web-runtime-host/test/deploy_command_test.py"
+        self.assertEqual(job.count(relative), 1)
+        host_script = (SOURCE_ROOT / "scripts/web-runtime-host.sh").read_text(
+            encoding="utf-8"
         )
-        self.assertEqual(source.count(command_test), 1)
-        self.assertLess(source.index(http_test), source.index(command_test))
+        self.assertNotIn(relative, host_script)
         forbidden_real_cleanup = "shutil.rmtree(" + "REAL_EVIDENCE_ROOT"
         self.assertNotIn(forbidden_real_cleanup, Path(__file__).read_text())
 

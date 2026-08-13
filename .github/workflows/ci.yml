@@ -269,6 +269,7 @@ jobs:
           python-version: "3.11"
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py
+      - run: python3 apps/web-runtime-host/test/deploy_command_test.py
 
   chameleon-lab:
     name: Chameleon Lab
