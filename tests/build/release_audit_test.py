@@ -367,6 +367,25 @@ class ReleaseAuditTest(unittest.TestCase):
                 report = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
                 self.assertEqual(report.findings[0].code, expected)
 
+    def test_linked_null_id_exception_never_waives_current_release_marker(self) -> None:
+        tag = str(self.entry()["tag"])
+        exception = {
+            "tag": tag,
+            "target_revision": TARGET,
+            "observed_before": "2026-08-12T23:59:59Z",
+            "code": "pre-pipeline-ci-evidence",
+            "reason": "fixture mirrors a current-policy exception without numeric Release identity",
+            "evidence_paths": ["evidence.md"],
+        }
+        self.git.tags[tag] = self.tag_state()
+        for identifier, body in ((17, ""), (18, "arbitrary recreated Release")):
+            with self.subTest(identifier=identifier, body=body):
+                self.github.releases[tag] = self.release(
+                    tag, identifier=identifier, body=body,
+                )
+                report = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
+                self.assertEqual(report.findings[0].code, "conflict")
+
     def test_missing_published_tag_and_release_is_missing(self) -> None:
         report = audit(self.context(), remote=True, tag=str(self.entry()["tag"]))
         self.assertEqual({item.code for item in report.findings}, {"missing"})

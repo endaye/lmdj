@@ -422,7 +422,8 @@ def _audit_remote_intent(
         context.policy, intent, tag_state, release,
         allow_missing_marker=(
             exception is not None
-            and (exception.release_id is None or exception.release_id == release.id)
+            and exception.release_id is not None
+            and exception.release_id == release.id
         ),
     )
     if metadata_problem is not None:
