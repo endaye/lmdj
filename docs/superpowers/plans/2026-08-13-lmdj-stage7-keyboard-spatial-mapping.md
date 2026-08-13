@@ -157,7 +157,7 @@
 
   Expected: all pass.
 
-- [ ] **Step 6: Commit the implementation and current identity atomically**
+- [x] **Step 6: Commit the implementation and current identity atomically**
 
   Verify the branch is not `main`, stage only declared Task paths, inspect `git diff --cached --name-status` and `git diff --cached --check`, then commit:
 
@@ -181,7 +181,7 @@
 - Consumes: clean committed `1.0.20.0` implementation source.
 - Produces: immutable `canary` portal snapshot, branch-local automated Proof evidence, and an honest unexecuted ten-step human checklist.
 
-- [ ] **Step 1: Freeze the clean candidate snapshot**
+- [x] **Step 1: Freeze the clean candidate snapshot**
 
   Confirm `git status --short` is empty, then run:
 
@@ -190,7 +190,7 @@
   scripts/architecture-portal.sh check
   ```
 
-- [ ] **Step 2: Commit the immutable snapshot separately**
+- [x] **Step 2: Commit the immutable snapshot separately**
 
   Stage only generated `1.0.20.0` snapshot paths and `versions.json`, inspect staged paths/checks, and commit:
 
@@ -198,7 +198,7 @@
   git commit -m "docs(portal): freeze 1.0.20.0 canary snapshot"
   ```
 
-- [ ] **Step 3: Run full Product verification**
+- [x] **Step 3: Run full Product verification**
 
   Run:
 
@@ -218,7 +218,7 @@
 
   Expected: all automated gates pass. Synthetic keyboard coverage is not reported as physical hearing evidence.
 
-- [ ] **Step 4: Record honest evidence and commit it**
+- [x] **Step 4: Record honest evidence and commit it**
 
   Record exact committed revisions, Assembly lock digest, Proof command outcomes/counts, package/fixture paths and digests, and an unexecuted Chinese ten-step table. Mark physical Keyboard, physical MIDI, hearing, Safari, and iPadOS `deferred / unverified`; mark merged-main Proof `pending — requires separate push/PR/merge authorization`. Stage only the new evidence file plus the three declared current acceptance/review/checklist files, inspect staged paths/checks, and commit:
 
@@ -226,6 +226,6 @@
   git commit -m "docs(stage7): record keyboard mapping canary proof"
   ```
 
-- [ ] **Step 5: Inspect final branch state**
+- [x] **Step 5: Inspect final branch state**
 
   Require a clean worktree, list committed file sets, and confirm no push, PR, merge, tag, Release, deployment, publication, or Channel promotion occurred.

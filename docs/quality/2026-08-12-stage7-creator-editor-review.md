@@ -469,12 +469,12 @@ Product Build `1.0.20.0`、Web Runtime Platform `0.2.1`、Creator Web `1.1.2`
 | --- | --- | --- |
 | T1 human canary | `open — corrected candidate must restart at step 1` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从 `1.0.18.0` 的步骤 1–6 或自动化结果推导 pass。 |
 | Product Build `1.0.19.0` historical branch-local Proof | `passed, superseded for current mapping acceptance` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
-| Product Build `1.0.20.0` branch-local Proof | `pending` | 必须在 clean committed mapping candidate 与其 immutable snapshot 上完整重跑。 |
+| Product Build `1.0.20.0` branch-local Proof | `passed` | clean revision `7d409b5`：Creator、Formal Host、Core、dependency/identity 与 Portal 全量 Proof 通过；snapshot source `6a1cd97`，Assembly Lock `85c607…913`；详见 `docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`。 |
 | Product Build `1.0.20.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 获授权合并后必须在 exact merged `main` revision 重跑全部命令并落 evidence-only addendum。 |
 
-因此当前源代码、自动化、文档与历史 G1 更正都已纳入 closure ledger，但 T1 尚未
-从正确候选的步骤 1 重新执行，且 `1.0.20.0` 尚未经过获授权的 PR/merge 与
-post-merge Proof。本修复任务
+因此当前源代码、branch-local 自动化、文档与历史 G1 更正都已纳入 closure ledger，
+但 T1 尚未从正确候选的步骤 1 重新执行，且 `1.0.20.0` 尚未经过获授权的
+push/PR/branch-to-main merge 与 post-merge Proof。本修复任务
 仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
 promotion。
 

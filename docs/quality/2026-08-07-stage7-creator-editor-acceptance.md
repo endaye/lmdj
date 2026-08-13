@@ -146,6 +146,7 @@ screen recovery, or long-session stability on those platforms.
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
 | Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
+| Product Build `1.0.20.0` | corrected keyboard spatial mapping; branch-local clean full Proof and immutable snapshot passed at `7d409b5`; merged-main Proof and fresh human Canary remain pending |
 | Manual canary | `open — corrected candidate must restart at step 1` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
@@ -155,6 +156,6 @@ recovered documentation binding, not a historical Proof execution failure.
 
 The current remediation rows must be refreshed again after any separately
 authorized push or external transition. T1 remains open and must restart from
-step 1 on the corrected package. Product Build `1.0.19.0` still requires a
+step 1 on the corrected package. Product Build `1.0.20.0` still requires a
 future Proof at its exact merged `main` revision before any new Product tag. The five physical rows
 continue to block physical-pass, `beta`, and `stable`.
