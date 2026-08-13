@@ -167,6 +167,22 @@ docs/release-evidence/release-intents.json
 - `evidence_paths` 只能是 canonical repo-relative tracked paths，不能是 URL、临时路径或
   secret-bearing log。
 
+Top-level 另允许一个闭合的 `historical_exceptions` 数组，只用于让新审计器解释控制面生效前
+已经存在且不会被改写的外部状态。每项必须固定 exact tag、target SHA、可选 numeric Release
+ID、`observed_before` UTC 时间、单一 exception code、具体 reason 与 evidence paths。初始 code
+只允许：
+
+- `pre-governance-tag-scheme`：例如不符合现行四类 tag 语法的既有 `v0.2.0` Release；
+- `pre-pipeline-ci-evidence`：例如 exact-main push run 没有成功，但已发布身份有明确的旧 CI、
+  Nightly 或部署证据。
+
+历史例外只能关联 `published`、`abandoned` 或 `superseded-unreleased` 的只读身份，或解释一个
+现行 tag schema 之外的 legacy artifact。任何 `allocated`/`releasable` entry、pipeline
+introducing commit 之后的新 tag/Release、缺少 exact immutable identifiers 的记录都不得使用。
+`prepare`、`push-tag`、`create-draft` 与 publish workflow 一律拒绝消费历史例外；只有 `audit`
+可以将匹配项报告为 `ok-with-historical-exception`，并必须在 human/JSON output 中显式列出，
+不能把它伪装成满足当前 prospective gate。
+
 Ledger 的作用是拒绝“猜测发布”。只有 `releasable` 可以开始新流程；`published` 只能
 audit；`abandoned` 与 `superseded-unreleased` 永远拒绝发布。`tagged` 与 `draft` 是从
 canonical Git/GitHub 实时派生的 operational state，不写回 ledger，避免在四段流程之间为
@@ -659,10 +675,13 @@ Skill 不包含版本映射、fingerprint、asset name、GitHub repo、secret pa
 实现 commit 不授权 push；push 不授权 PR；PR 不授权 merge；merge 不授权正式 tag、Draft、
 publish、deployment 或 Channel promotion。
 
-迁移时先把 2026-08-13 已发布的 14 个 release identities 录入 ledger 的 `published` 基线，
-然后让 `audit` 从 GitHub 重新证明每个 remote tag/Release，而不是信任人工清单。明确 abandoned
-或 unshipped 的历史 Product Build 录入相应 disposition，确保 audit 不把快照存在误判为漏发。
-若 live audit 与本规格背景数量不同，以 live canonical state 为准并在 evidence 中解释差异。
+迁移时先盘点全部 current-policy formal remote tags 与 GitHub Releases，再把 2026-08-13
+补齐的 14 个 release identities 标记为该全量基线的 backfill 子集；不能把 14 当作仓库全部
+历史。所有 current-policy identities 进入 ledger，现行 schema 之外的既有 tag/Release 只能
+通过上述 exact historical exception 解释。随后让 `audit` 从 GitHub 重新证明每个 remote
+tag/Release，而不是信任人工清单。明确 abandoned 或 unshipped 的历史 Product Build 录入
+相应 disposition，确保 audit 不把快照存在误判为漏发。若 live audit 与本规格背景数量不同，
+以 live canonical state 为准并在 evidence 中解释差异。
 
 在新 publish workflow 合入、`release` Environment 保护已单独获准配置、safe rehearsal 与
 current audit 全部通过前，现有正式发布继续采用逐项人工核验；不得声称自动化已经生效。
