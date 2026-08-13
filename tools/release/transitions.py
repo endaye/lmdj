@@ -5,9 +5,11 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import tempfile
+from typing import Mapping
 
 from .github_api import GitHubAsset, GitHubRelease
 from .model import (
@@ -40,6 +42,7 @@ class TransitionResult:
     plan_sha256: str
     release_id: int | None = None
     release_url: str | None = None
+    assets: tuple[GitHubAsset, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -152,6 +155,51 @@ def verify_draft(
     _verify_release_metadata(release, document, digest, allow_published=True)
     status = "draft-verified" if release.draft else "already-published"
     return TransitionResult(status, digest, release.id, release.html_url)
+
+
+def publish_draft(
+    tag: str,
+    release_id: int,
+    plan_sha256: str,
+    context: PrepareContext,
+    *,
+    actions_environment: Mapping[str, str] | None = None,
+) -> TransitionResult:
+    """Publish one verified Draft and prove that no other Release state changed."""
+    environment = os.environ if actions_environment is None else actions_environment
+    if (
+        environment.get("GITHUB_ACTIONS") != "true"
+        or environment.get("GITHUB_EVENT_NAME") != "workflow_dispatch"
+    ):
+        raise TransitionError("Draft publication requires Actions workflow_dispatch")
+
+    verified = verify_draft(tag, release_id, plan_sha256, context)
+    authority = _formal_authority(tag, context, require_local=False, require_remote=True)
+    before = _release_pair(authority, tag, release_id)
+    before_assets = _asset_snapshot(authority, before)
+    if not before.draft:
+        return replace(verified, status="already-published", assets=before.assets)
+
+    try:
+        authority.context.github.publish_release(
+            authority.context.policy.repository, release_id,
+        )
+    except Exception:
+        # A response can be lost after GitHub accepted the exact PATCH. Numeric-ID
+        # reconciliation below is the only recovery path; publication never creates.
+        pass
+
+    postcondition = verify_draft(tag, release_id, plan_sha256, context)
+    refreshed = _formal_authority(tag, context, require_local=False, require_remote=True)
+    after = _release_pair(refreshed, tag, release_id)
+    after_assets = _asset_snapshot(refreshed, after)
+    if after.draft:
+        raise TransitionError("GitHub Release publication could not be reconciled")
+    if _release_without_draft(before) != _release_without_draft(after):
+        raise TransitionError("GitHub Release metadata changed during publication")
+    if before_assets != after_assets:
+        raise TransitionError("GitHub Release assets changed during publication")
+    return replace(postcondition, status="published", assets=after.assets)
 
 
 def marker_for_plan(document: dict[str, object], digest: str) -> str:
@@ -338,6 +386,53 @@ def _release_by_tag(authority: _Authority, tag: str) -> GitHubRelease | None:
         return authority.context.github.get_release_by_tag(authority.context.policy.repository, tag)
     except Exception:
         raise TransitionError("GitHub Release lookup is unavailable") from None
+
+
+def _release_pair(
+    authority: _Authority, tag: str, release_id: int,
+) -> GitHubRelease:
+    try:
+        by_id = authority.context.github.get_release(
+            authority.context.policy.repository, release_id,
+        )
+        by_tag = authority.context.github.get_release_by_tag(
+            authority.context.policy.repository, tag,
+        )
+    except Exception:
+        raise TransitionError("GitHub Release projection is unavailable") from None
+    if by_id is None or by_tag is None or by_id.id != by_tag.id:
+        raise TransitionError("GitHub Release numeric ID and tag do not identify one Release")
+    return by_id
+
+
+def _release_without_draft(release: GitHubRelease) -> tuple[object, ...]:
+    return (
+        release.id, release.tag_name, release.name, release.body,
+        release.prerelease, release.make_latest, release.html_url,
+        release.upload_url,
+    )
+
+
+def _asset_snapshot(
+    authority: _Authority, release: GitHubRelease,
+) -> tuple[tuple[object, ...], ...]:
+    assets = _asset_map(authority, release)
+    snapshots: list[tuple[object, ...]] = []
+    for name in sorted(assets):
+        asset = assets[name]
+        try:
+            payload = authority.context.github.download_asset(
+                authority.context.policy.repository, release.id, asset,
+            )
+        except Exception:
+            raise TransitionError("GitHub Release asset download is unavailable") from None
+        if asset.size != len(payload):
+            raise TransitionError("GitHub Release asset size does not match downloaded bytes")
+        snapshots.append((
+            asset.id, asset.name, asset.size, hashlib.sha256(payload).hexdigest(),
+            asset.api_url, asset.browser_download_url, asset.release_id,
+        ))
+    return tuple(snapshots)
 
 
 def _verify_release_metadata(

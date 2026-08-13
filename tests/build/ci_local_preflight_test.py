@@ -75,6 +75,13 @@ def python_test_files(text: str) -> set[str]:
     return set(PYTHON_TEST_FILE.findall(text))
 
 
+def release_test_files(text: str) -> set[str]:
+    return {
+        path for path in python_test_files(text)
+        if Path(path).name.startswith("release_")
+    }
+
+
 def git(root: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", *args], cwd=root, capture_output=True, check=True,
@@ -194,11 +201,23 @@ class LaneCommandDriftTest(unittest.TestCase):
         self.assertIn(
             "apps/web-runtime-host/test/deploy_command_test.py", workflow_tests
         )
+        self.assertIn(
+            "tests/build/release_publish_workflow_test.py", workflow_tests
+        )
 
     def test_deploy_contract_local_commands_cover_the_workflow_job(self) -> None:
         workflow_tests = python_test_files(workflow_job("deploy-contract"))
         self.assertTrue(workflow_tests, "deploy-contract runs no Python test file")
         self.assertEqual(self.local_test_files("deploy_contract"), workflow_tests)
+
+    def test_all_release_contract_files_match_between_ci_and_local(self) -> None:
+        workflow_release_tests = release_test_files(workflow_job("deploy-contract"))
+        local_release_tests = {
+            path for path in self.local_test_files("deploy_contract")
+            if Path(path).name.startswith("release_")
+        }
+        self.assertTrue(workflow_release_tests, "deploy-contract runs no release test")
+        self.assertEqual(local_release_tests, workflow_release_tests)
 
     def test_a_dropped_local_command_stops_covering_the_workflow_job(self) -> None:
         table = json.loads(LANE_COMMANDS_PATH.read_text(encoding="utf-8"))["lanes"]

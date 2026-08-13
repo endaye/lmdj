@@ -32,6 +32,7 @@ from tools.release.transitions import (  # noqa: E402
     TransitionError,
     create_draft,
     marker_for_plan,
+    publish_draft,
     push_tag,
     verify_draft,
 )
@@ -102,6 +103,9 @@ class FakeGitHub:
         self.upload_calls: list[str] = []
         self.fail_create_after_write = False
         self.fail_upload_after_write: set[str] = set()
+        self.fail_publish_after_write = False
+        self.publish_mutation: str | None = None
+        self.patch_calls: list[tuple[int, dict[str, bool]]] = []
         self.next_asset_id = 40
 
     def get_branch(self, repository: str, branch: str) -> BranchProjection:
@@ -156,6 +160,25 @@ class FakeGitHub:
         if repository != "endaye/lmdj" or asset.release_id != release_id:
             raise RuntimeError("wrong repository ownership")
         return self.payloads[asset.id]
+
+    def publish_release(self, repository: str, release_id: int) -> GitHubRelease:
+        if repository != "endaye/lmdj" or self.release is None or self.release.id != release_id:
+            raise RuntimeError("wrong release ownership")
+        self.patch_calls.append((release_id, {"draft": False}))
+        self.release = GitHubRelease(**{**self.release.__dict__, "draft": False})
+        if self.publish_mutation == "name":
+            self.release = GitHubRelease(**{**self.release.__dict__, "name": "changed"})
+        elif self.publish_mutation == "asset-id":
+            original = self.release.assets[0]
+            changed = GitHubAsset(**{**original.__dict__, "id": original.id + 1000})
+            self.payloads[changed.id] = self.payloads[original.id]
+            self.release = GitHubRelease(**{
+                **self.release.__dict__,
+                "assets": (changed,) + self.release.assets[1:],
+            })
+        if self.fail_publish_after_write:
+            raise GitHubApiError("GitHub release request is unavailable")
+        return self.release
 
 
 class ReleaseTransitionsTest(unittest.TestCase):
@@ -378,6 +401,75 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(verified.plan_sha256, expected)
         self.assertTrue(self.verified_assets)
 
+    def test_publish_changes_only_draft_and_preserves_exact_assets(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        assert self.github.release is not None
+        original = self.github.release
+        result = publish_draft(
+            self.tag, created.release_id, created.plan_sha256, self.context(),
+            actions_environment={
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+            },
+        )
+        self.assertEqual(self.github.patch_calls, [(created.release_id, {"draft": False})])
+        self.assertEqual(result.status, "published")
+        self.assertEqual(result.assets, original.assets)
+        assert self.github.release is not None
+        self.assertEqual(
+            {**self.github.release.__dict__, "draft": True},
+            original.__dict__,
+        )
+
+    def test_publish_reconciles_an_accepted_patch_by_numeric_id(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        self.github.fail_publish_after_write = True
+        result = publish_draft(
+            self.tag, created.release_id, created.plan_sha256, self.context(),
+            actions_environment={
+                "GITHUB_ACTIONS": "true",
+                "GITHUB_EVENT_NAME": "workflow_dispatch",
+            },
+        )
+        self.assertEqual(result.status, "published")
+        self.assertEqual(self.github.create_calls, 1)
+        self.assertEqual(len(self.github.patch_calls), 1)
+
+    def test_publish_rejects_metadata_or_asset_identity_drift(self) -> None:
+        for mutation, message in (("name", "metadata"), ("asset-id", "assets")):
+            with self.subTest(mutation=mutation):
+                self.github = FakeGitHub(self.target)
+                created = self._push_and_create()
+                assert created.release_id is not None
+                self.github.publish_mutation = mutation
+                with self.assertRaisesRegex(TransitionError, message):
+                    publish_draft(
+                        self.tag, created.release_id, created.plan_sha256,
+                        self.context(), actions_environment={
+                            "GITHUB_ACTIONS": "true",
+                            "GITHUB_EVENT_NAME": "workflow_dispatch",
+                        },
+                    )
+                self.assertEqual(self.github.create_calls, 1)
+
+    def test_publish_is_actions_dispatch_only(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        for environment in (
+            {},
+            {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "push"},
+            {"GITHUB_ACTIONS": "false", "GITHUB_EVENT_NAME": "workflow_dispatch"},
+        ):
+            with self.subTest(environment=environment):
+                with self.assertRaisesRegex(TransitionError, "Actions workflow_dispatch"):
+                    publish_draft(
+                        self.tag, created.release_id, created.plan_sha256,
+                        self.context(), actions_environment=environment,
+                    )
+        self.assertEqual(self.github.patch_calls, [])
+
     def test_marker_and_numeric_inputs_are_strict(self) -> None:
         result = self._push_and_create()
         assert self.github.release is not None
@@ -497,6 +589,34 @@ class ReleaseTransitionsTest(unittest.TestCase):
         with self.assertRaisesRegex(GitHubApiError, "numeric"):
             client.get_release("endaye/lmdj", True)
 
+    def test_github_publish_patches_only_draft_by_numeric_id(self) -> None:
+        requests: list[tuple[str, str, bytes | None]] = []
+
+        def transport(method, url, headers, body):
+            requests.append((method, url, body))
+            document = self._release_json(17)
+            document["draft"] = False
+            return HttpResponse(200, {}, json.dumps(document).encode())
+
+        result = GitHubClient(http_transport=transport).publish_release("endaye/lmdj", 17)
+        self.assertFalse(result.draft)
+        self.assertEqual(requests, [(
+            "PATCH", "/repos/endaye/lmdj/releases/17", b'{"draft":false}',
+        )])
+        with self.assertRaisesRegex(GitHubApiError, "numeric"):
+            GitHubClient(http_transport=transport).publish_release("endaye/lmdj", True)
+        self.assertEqual(len(requests), 1)
+
+        def wrong_projection(method, url, headers, body):
+            document = self._release_json(18)
+            document["draft"] = False
+            return HttpResponse(200, {}, json.dumps(document).encode())
+
+        with self.assertRaisesRegex(GitHubApiError, "projection"):
+            GitHubClient(http_transport=wrong_projection).publish_release(
+                "endaye/lmdj", 17,
+            )
+
     def test_asset_io_requires_exact_repository_release_and_asset_ownership(self) -> None:
         requests: list[str] = []
         client = GitHubClient(http_transport=lambda method, url, headers, body: (
@@ -550,6 +670,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(cli.parse_arguments(root + ["create-draft", self.tag]).command, "create-draft")
         verified = cli.parse_arguments(root + ["verify-draft", self.tag, "17", "a" * 64])
         self.assertEqual((verified.release_id, verified.plan_sha256), (17, "a" * 64))
+        published = cli.parse_arguments(root + ["publish-draft", self.tag, "17", "a" * 64])
+        self.assertEqual((published.release_id, published.plan_sha256), (17, "a" * 64))
         rehearsed = cli.parse_arguments(root + ["rehearsal", "cleanup", "release-rehearsal/20260813T091011Z-012345abcdef"])
         self.assertEqual((rehearsed.command, rehearsed.rehearsal_command), ("rehearsal", "cleanup"))
 

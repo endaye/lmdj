@@ -37,6 +37,7 @@ from tools.release.rehearsal import (  # noqa: E402
 from tools.release.transitions import (  # noqa: E402
     TransitionError,
     create_draft,
+    publish_draft,
     push_tag,
     verify_draft,
 )
@@ -56,6 +57,10 @@ def parse_arguments(argv: list[str]) -> argparse.Namespace:
     verified.add_argument("tag")
     verified.add_argument("release_id", type=int)
     verified.add_argument("plan_sha256")
+    published = commands.add_parser("publish-draft")
+    published.add_argument("tag")
+    published.add_argument("release_id", type=int)
+    published.add_argument("plan_sha256")
     rehearsal = commands.add_parser("rehearsal")
     rehearsal_commands = rehearsal.add_subparsers(dest="rehearsal_command", required=True)
     for name in ("prepare", "push-tag", "create-draft", "cleanup"):
@@ -118,6 +123,11 @@ def main(argv: list[str] | None = None) -> int:
             _print_release_result(result)
         elif options.command == "verify-draft":
             result = verify_draft(
+                options.tag, options.release_id, options.plan_sha256, context,
+            )
+            _print_release_result(result)
+        elif options.command == "publish-draft":
+            result = publish_draft(
                 options.tag, options.release_id, options.plan_sha256, context,
             )
             _print_release_result(result)

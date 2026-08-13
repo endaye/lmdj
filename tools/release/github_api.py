@@ -179,6 +179,22 @@ class GitHubClient:
         )
         return _parse_release(_json_response(response, {201}), repository)
 
+    def publish_release(self, repository: str, release_id: int) -> GitHubRelease:
+        """Publish one existing Release by changing only its Draft state."""
+        _require_repository(repository)
+        _require_id(release_id, "release")
+        payload = b'{"draft":false}'
+        response = self._request(
+            "PATCH", f"/repos/{repository}/releases/{release_id}", payload,
+            content_type="application/json",
+        )
+        release = _parse_release(
+            _json_response(response, {200}), repository, release_id,
+        )
+        if release.draft:
+            raise GitHubApiError("GitHub Release publication did not change Draft state")
+        return release
+
     def list_release_assets(self, repository: str, release_id: int) -> list[GitHubAsset]:
         _require_repository(repository)
         _require_id(release_id, "release")
