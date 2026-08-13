@@ -41,6 +41,7 @@ class GitHubAsset:
     size: int
     api_url: str
     browser_download_url: str
+    release_id: int
 
 
 @dataclass(frozen=True)
@@ -194,7 +195,7 @@ class GitHubClient:
             document = _json_response(response, {200})
             if not isinstance(document, list):
                 raise GitHubApiError("GitHub asset projection is invalid")
-            assets.extend(_parse_asset(item, repository) for item in document)
+            assets.extend(_parse_asset(item, repository, release_id) for item in document)
             next_path = _next_link(
                 response.headers, endpoint, required_query, subject="asset",
             )
@@ -218,11 +219,16 @@ class GitHubClient:
         base = upload_url.split("{", 1)[0]
         url = f"{base}?name={quote(name, safe='')}"
         response = self._request("POST", url, payload, content_type="application/octet-stream")
-        return _parse_asset(_json_response(response, {201}), repository)
+        return _parse_asset(_json_response(response, {201}), repository, release_id)
 
-    def download_asset(self, repository: str, asset: GitHubAsset) -> bytes:
+    def download_asset(
+        self, repository: str, release_id: int, asset: GitHubAsset,
+    ) -> bytes:
         _require_repository(repository)
+        _require_id(release_id, "release")
         _require_id(asset.id, "asset")
+        if type(asset.release_id) is not int or asset.release_id != release_id:
+            raise GitHubApiError("GitHub asset Release ownership is invalid")
         identity = _asset_api_identity(asset.api_url)
         if (
             identity != (repository, asset.id)
@@ -365,11 +371,12 @@ def _parse_release(
         raise GitHubApiError("GitHub Release projection is invalid")
     return GitHubRelease(
         identifier, tag, name, body, draft, prerelease, make_latest, html_url, upload_url,
-        tuple(_parse_asset(item, repository) for item in assets),
+        tuple(_parse_asset(item, repository, identifier) for item in assets),
     )
 
 
-def _parse_asset(document: object, repository: str) -> GitHubAsset:
+def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAsset:
+    _require_id(release_id, "release")
     if not isinstance(document, dict):
         raise GitHubApiError("GitHub asset projection is invalid")
     identifier, name, size = document.get("id"), document.get("name"), document.get("size")
@@ -381,7 +388,7 @@ def _parse_asset(document: object, repository: str) -> GitHubAsset:
         or not _repository_url(download_url, "github.com", repository)
     ):
         raise GitHubApiError("GitHub asset projection is invalid")
-    return GitHubAsset(identifier, name, size, api_url, download_url)
+    return GitHubAsset(identifier, name, size, api_url, download_url, release_id)
 
 
 def _next_link(

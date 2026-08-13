@@ -188,7 +188,7 @@ def create_rehearsal_draft(
             assets = _assets(context, release.id)
         if len(assets) != 1:
             raise RehearsalError("rehearsal Draft asset inventory is not exact")
-        _verify_asset(selected, assets[0], context)
+        _verify_asset(selected, release.id, assets[0], context)
         if _output_root(context.repo_root, state.tag).is_dir():
             _write_state(_state_path(context.repo_root, state.tag), selected)
         return selected
@@ -285,15 +285,17 @@ def _validate_release(
         assets = _assets(context, release.id)
         if len(assets) != 1:
             raise RehearsalError("rehearsal Draft asset inventory is not exact")
-        _verify_asset(state, assets[0], context)
+        _verify_asset(state, release.id, assets[0], context)
 
 
 def _assets(context: RehearsalContext, release_id: int) -> list[GitHubAsset]:
     return context.github.list_release_assets(context.repository, release_id)
 
 
-def _verify_asset(state: RehearsalState, asset: GitHubAsset, context: RehearsalContext) -> None:
-    payload = context.github.download_asset(context.repository, asset)
+def _verify_asset(
+    state: RehearsalState, release_id: int, asset: GitHubAsset, context: RehearsalContext,
+) -> None:
+    payload = context.github.download_asset(context.repository, release_id, asset)
     if (
         asset.name != state.asset_name or asset.size != len(payload)
         or hashlib.sha256(payload).hexdigest() != state.asset_sha256

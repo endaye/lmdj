@@ -46,7 +46,7 @@ class FakeRehearsalGitHub:
         self.payload = REHEARSAL_ASSET
         self.asset = GitHubAsset(
             8, state.asset_name, len(self.payload), "https://api.github.com/assets/8",
-            "https://github.com/asset",
+            "https://github.com/asset", 9,
         )
         self.release = GitHubRelease(
             state.release_id, state.tag, f"LMDJ release rehearsal {state.tag}",
@@ -65,8 +65,8 @@ class FakeRehearsalGitHub:
     def list_release_assets(self, repository: str, release_id: int):
         return list(self.release.assets if self.release else ())
 
-    def download_asset(self, repository: str, asset: GitHubAsset) -> bytes:
-        if repository != "endaye/lmdj":
+    def download_asset(self, repository: str, release_id: int, asset: GitHubAsset) -> bytes:
+        if repository != "endaye/lmdj" or asset.release_id != release_id:
             raise RuntimeError("wrong repository ownership")
         return self.payload
 
@@ -86,7 +86,8 @@ class FakeRehearsalGitHub:
         self.uploads += 1
         self.payload = payload
         self.asset = GitHubAsset(
-            8, name, len(payload), "https://api.github.com/assets/8", "https://github.com/asset",
+            8, name, len(payload), "https://api.github.com/assets/8",
+            "https://github.com/asset", release_id,
         )
         self.release = GitHubRelease(**{**self.release.__dict__, "assets": (self.asset,)})
         return self.asset

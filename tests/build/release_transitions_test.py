@@ -141,6 +141,7 @@ class FakeGitHub:
             self.next_asset_id, name, len(payload),
             f"https://api.github.com/repos/endaye/lmdj/releases/assets/{self.next_asset_id}",
             f"https://github.com/endaye/lmdj/releases/download/test/{name}",
+            release_id,
         )
         self.payloads[asset.id] = payload
         assert self.release is not None
@@ -151,8 +152,8 @@ class FakeGitHub:
             raise GitHubApiError("GitHub release request is unavailable")
         return asset
 
-    def download_asset(self, repository: str, asset: GitHubAsset) -> bytes:
-        if repository != "endaye/lmdj":
+    def download_asset(self, repository: str, release_id: int, asset: GitHubAsset) -> bytes:
+        if repository != "endaye/lmdj" or asset.release_id != release_id:
             raise RuntimeError("wrong repository ownership")
         return self.payloads[asset.id]
 
@@ -335,7 +336,10 @@ class ReleaseTransitionsTest(unittest.TestCase):
     def test_extra_or_same_name_different_digest_is_rejected_without_clobber(self) -> None:
         self._push_and_create()
         assert self.github.release is not None
-        extra = GitHubAsset(99, "extra.txt", 1, "https://api.github.com/assets/99", "https://github.com/extra")
+        extra = GitHubAsset(
+            99, "extra.txt", 1, "https://api.github.com/assets/99",
+            "https://github.com/extra", 17,
+        )
         self.github.payloads[99] = b"x"
         self.github.release = GitHubRelease(**{**self.github.release.__dict__, "assets": self.github.release.assets + (extra,)})
         with self.assertRaisesRegex(TransitionError, "asset inventory"):
@@ -394,7 +398,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
             ),
         }
         client = GitHubClient(http_transport=lambda method, url, headers, body: pages[url])
-        self.assertEqual([asset.id for asset in client.list_release_assets("endaye/lmdj", 17)], [1, 2])
+        assets = client.list_release_assets("endaye/lmdj", 17)
+        self.assertEqual([asset.id for asset in assets], [1, 2])
+        self.assertEqual([asset.release_id for asset in assets], [17, 17])
         pages["/repos/endaye/lmdj/releases/17/assets?per_page=100&page=2"] = HttpResponse(
             200, {"Link": '<https://api.github.com/repos/endaye/lmdj/releases/17/assets?per_page=100>; rel="next"'}, b"[]",
         )
@@ -504,20 +510,33 @@ class ReleaseTransitionsTest(unittest.TestCase):
             )
         with self.assertRaisesRegex(GitHubApiError, "API URL"):
             client.download_asset(
-                "endaye/lmdj",
+                "endaye/lmdj", 17,
                 GitHubAsset(
                     7, "asset.zip", 7,
                     "https://api.github.com/repos/other/repository/releases/assets/7",
                     "https://github.com/other/repository/releases/download/test/asset.zip",
+                    release_id=17,
+                ),
+            )
+        self.assertEqual(requests, [])
+        with self.assertRaisesRegex(GitHubApiError, "Release ownership"):
+            client.download_asset(
+                "endaye/lmdj", 17,
+                GitHubAsset(
+                    7, "asset.zip", 7,
+                    "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
+                    "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
+                    release_id=18,
                 ),
             )
         self.assertEqual(requests, [])
         payload = client.download_asset(
-            "endaye/lmdj",
+            "endaye/lmdj", 17,
             GitHubAsset(
                 7, "asset.zip", 7,
                 "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
                 "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
+                release_id=17,
             ),
         )
         self.assertEqual(payload, b"payload")

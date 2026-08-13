@@ -371,7 +371,7 @@ def _resume_assets(
     if not set(existing).issubset(expected):
         raise TransitionError("GitHub Release asset inventory contains undeclared assets")
     for name, remote in existing.items():
-        _compare_download(authority, remote, expected[name])
+        _compare_download(authority, release.id, remote, expected[name])
     for name, local in expected.items():
         if name in existing:
             continue
@@ -385,7 +385,7 @@ def _resume_assets(
             candidates = [asset for asset_name, asset in reconciled.items() if asset_name == name]
             if len(candidates) != 1:
                 raise TransitionError("GitHub asset upload is uncertain and did not reconcile") from None
-            _compare_download(authority, candidates[0], local)
+            _compare_download(authority, release.id, candidates[0], local)
 
 
 def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHubAsset]:
@@ -405,10 +405,12 @@ def _asset_map(authority: _Authority, release: GitHubRelease) -> dict[str, GitHu
     return by_name
 
 
-def _compare_download(authority: _Authority, remote: GitHubAsset, expected: AssetBuild) -> None:
+def _compare_download(
+    authority: _Authority, release_id: int, remote: GitHubAsset, expected: AssetBuild,
+) -> None:
     try:
         payload = authority.context.github.download_asset(
-            authority.context.policy.repository, remote,
+            authority.context.policy.repository, release_id, remote,
         )
     except Exception:
         raise TransitionError("GitHub Release asset download is unavailable") from None
@@ -427,7 +429,7 @@ def _download_and_verify_assets(
             asset = assets[name]
             try:
                 payload = authority.context.github.download_asset(
-                    authority.context.policy.repository, asset,
+                    authority.context.policy.repository, release.id, asset,
                 )
             except Exception:
                 raise TransitionError("GitHub Release asset download is unavailable") from None
