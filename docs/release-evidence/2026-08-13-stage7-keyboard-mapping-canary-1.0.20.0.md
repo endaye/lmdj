@@ -22,7 +22,8 @@ Channel-promotion acceptance.
 | Creator host manifest SHA-256 | `1bd0435628c93b3dbb7dba90330d69bd96ad6234a7f9585bce84d151a939315c` |
 | Host OS | macOS `26.6.1` (`25G76`), Darwin `25.6.0`, arm64 |
 | T1 | `passed — all ten steps confirmed by endaye on 2026-08-13` |
-| Branch-to-main integration | `pending — push / PR / merge not authorized or performed` |
+| Branch-to-main integration | `origin/main` advanced by an external direct push to `ccd0aec` on 2026-08-13 11:51 +0800; no associated PR; GitHub run `31665186166` is in progress |
+| Manual-acceptance publication | acceptance addendum commit `95ae181` remains branch-local and unpushed |
 
 The immutable Portal snapshot records the clean mapping implementation revision.
 The tested revision is its descendant through the snapshot commit, the local
@@ -126,5 +127,9 @@ T1 状态：`通过 — endaye 在当前 Codex 任务中确认十步全部完成
 T1 关闭只覆盖上述十步，不能被解释为实体 MIDI、macOS Safari、iPadOS touch 或
 iPadOS lifecycle 通过。
 
-No push, Pull Request, branch-to-`main` merge, tag, Release, deployment,
-publication, or Channel promotion was performed by this task.
+This task did not push or create a Pull Request, tag, Release, deployment,
+publication, or Channel promotion. During acceptance recording, live verification
+found that another process had directly pushed the preceding candidate history
+through `ccd0aec` to `origin/main`; no associated PR exists. Its full `main` push
+run `31665186166` is still in progress, so this record does not yet claim a
+successful merged-main Proof. The manual-acceptance addendum remains local.

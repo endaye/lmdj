@@ -9,6 +9,9 @@
 > binds endaye's completed ten-step run, including
 > `Q W E R T Y U I -> A1..A8` and `A S D F G H J K -> A9..A16`, to the exported
 > report SHA-256 `7e2a2bbeb2cd4eb332112086e849148adf1553345ecce45c6eab22e9e016333a`.
+> Candidate history through `ccd0aec` was subsequently pushed directly to
+> `origin/main` by another process without an associated PR. Full `main` run
+> `31665186166` is in progress; the manual-acceptance addendum remains local.
 
 ## Evidence boundary
 

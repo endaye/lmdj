@@ -143,11 +143,11 @@ screen recovery, or long-session stability on those platforms.
 | Historical hardening PR | PR #117 is `MERGED` as `7555cfd`; squash-witness PR #118 is `MERGED` as `336a27c` |
 | Historical Product tags | signed annotated `lmdj-v1.0.16.5` targets `38a8c13`; signed annotated `lmdj-v1.0.16.8` targets `336a27c` |
 | Historical merged-main Proof | recovered and bound: `main` push run `31327104838` succeeded at `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f` (`1.0.16.5`, 12 success/1 designed skip); run `31529410253` succeeded at `336a27c0799035b2f8d6455b32259ee227df20f6` (`1.0.16.8`, 20 success/1 designed skip) |
-| Current remediation push / PR / CI / merge | not performed; current branch-local Proof is not merged-main Proof |
+| Current remediation push / PR / CI / merge | another process directly pushed candidate history through `ccd0aec` to `origin/main` at 11:51 +0800; no associated PR; full `main` push run `31665186166` is in progress; manual-acceptance addendum `95ae181` remains local |
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
 | Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
-| Product Build `1.0.20.0` | corrected keyboard spatial mapping; branch-local clean full Proof and immutable snapshot passed at `7d409b5`; ten-step human Canary passed; merged-main Proof remains pending |
+| Product Build `1.0.20.0` | corrected keyboard spatial mapping; clean local Proof and immutable snapshot passed at `7d409b5`; candidate source/evidence through `ccd0aec` is now on `origin/main`; ten-step human Canary passed; `main` run `31665186166` remains in progress |
 | Manual canary | `T1 passed — endaye confirmed all ten 1.0.20.0 steps with no issue; report SHA-256 7e2a2b…333a` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
@@ -155,10 +155,10 @@ historical Proof runs were always present; the review's prior inference from a
 missing repository document to a missing execution was incorrect. G1 is now a
 recovered documentation binding, not a historical Proof execution failure.
 
-The current remediation rows must be refreshed again after any separately
-authorized push or external transition. T1 is closed for the `1.0.20.0`
+The current remediation rows must be refreshed when run `31665186166` reaches a
+terminal result or when the local manual-acceptance addendum is published. T1 is closed for the `1.0.20.0`
 branch-local candidate; physical MIDI, Safari, and iPadOS remain unverified.
-Product Build `1.0.20.0` still requires a
-future Proof at its exact merged `main` revision before any new Product tag. The physical rows
+Product Build `1.0.20.0` still requires a successful terminal result for the
+full Proof at exact `main` revision `ccd0aec` before any new Product tag. The physical rows
 remain authoritative for their individual platforms and continue to block
 broader physical-device, `beta`, and `stable` claims.
