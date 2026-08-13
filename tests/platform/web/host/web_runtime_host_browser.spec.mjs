@@ -1045,11 +1045,11 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     window.__lmdjTask11.responses.slice(start)
       .filter(({ operation }) => operation === "trigger")
       .map(({ payload }) => payload),
-  keyboardMarker.responses)).toEqual([{ slot: 1, velocity: 100 }]);
+  keyboardMarker.responses)).toEqual([{ slot: 9, velocity: 100 }]);
 
   const burstCodes = [
-    "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
     "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
+    "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
   ];
   const burstMarker = await observationMarker(page);
   await page.evaluate((codes) => {
