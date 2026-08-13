@@ -446,7 +446,7 @@ Product Build `1.0.20.0`、Web Runtime Platform `0.2.1`、Creator Web `1.1.2`
 | F13 | resolved | `subscribeDiagnostics` 事件通知取代 16 ms diagnostics polling；`ef2b06b`。 |
 | F14 | resolved | 自动 reopen 与用户 Open/Import 共用 generation/session-bound Project action lane；`0e921be`。 |
 | F15 | resolved | Opened Project Surface 显示 BPM；spec 明确自动持久化且无虚假 `Save Local` command；`0e921be`。 |
-| T1 | open — corrected candidate must restart at step 1 | `1.0.18.0` 首轮步骤 1–6 已撤回；`1.0.19.0` 未执行人工表便被空间映射修复取代；`1.0.20.0` 的操作者、浏览器版本、听感、十步观察与 report hash 均待重新填写。 |
+| T1 | resolved — `1.0.20.0` ten-step Canary passed | endaye 在当前任务中确认十步全部完成且无问题；实体键盘空间顺序、逐键听感、Bank B/C/D、Suspend/reactivate、reload/reopen 与报告导出均通过。报告 SHA-256 `7e2a2b…333a`，28 admissions / 28 outcomes / 0 rejection / no error；实体 MIDI、Safari、iPadOS 保持独立 `deferred / unverified`。 |
 | T2 | resolved | Busy retry 上限 8 次、transition-based waits、最终 alert count 0；`8553467`。 |
 | T3 | resolved | Packaged keyboard-only Import、reload 后 Open、Bank selection 完成型旅程；`8553467`。 |
 | T4 | resolved | Packaged outcome timeout -> restart-required -> old generation cleanup -> replacement -> explicit activation；`f4722de`。 |
@@ -467,13 +467,13 @@ Product Build `1.0.20.0`、Web Runtime Platform `0.2.1`、Creator Web `1.1.2`
 
 | Gate | Status | Current evidence |
 | --- | --- | --- |
-| T1 human canary | `open — corrected candidate must restart at step 1` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从 `1.0.18.0` 的步骤 1–6 或自动化结果推导 pass。 |
+| T1 human canary | `passed on 1.0.20.0` | endaye 独立重跑全部十步并确认无问题；实体键盘与听感通过，报告 SHA-256 `7e2a2b…333a`。实体 MIDI、Safari 与 iPadOS 不在该通过范围内。 |
 | Product Build `1.0.19.0` historical branch-local Proof | `passed, superseded for current mapping acceptance` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
 | Product Build `1.0.20.0` branch-local Proof | `passed` | clean revision `7d409b5`：Creator、Formal Host、Core、dependency/identity 与 Portal 全量 Proof 通过；snapshot source `6a1cd97`，Assembly Lock `85c607…913`；详见 `docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`。 |
 | Product Build `1.0.20.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 获授权合并后必须在 exact merged `main` revision 重跑全部命令并落 evidence-only addendum。 |
 
 因此当前源代码、branch-local 自动化、文档与历史 G1 更正都已纳入 closure ledger，
-但 T1 尚未从正确候选的步骤 1 重新执行，且 `1.0.20.0` 尚未经过获授权的
+T1 已在正确候选上关闭，但 `1.0.20.0` 尚未经过获授权的
 push/PR/branch-to-main merge 与 post-merge Proof。本修复任务
 仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
 promotion。

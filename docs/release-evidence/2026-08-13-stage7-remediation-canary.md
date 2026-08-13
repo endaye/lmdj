@@ -5,8 +5,10 @@
 > fully proved but its blank human sheet was not executed before the keyboard
 > spatial-order defect was identified. Product Build `1.0.20.0` now has a clean
 > branch-local Proof record at
-> `2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`; it still requires a fresh ten-step run whose step 5 verifies
-> `Q W E R T Y U I -> A1..A8` and `A S D F G H J K -> A9..A16`.
+> `2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`. That record now also
+> binds endaye's completed ten-step run, including
+> `Q W E R T Y U I -> A1..A8` and `A S D F G H J K -> A9..A16`, to the exported
+> report SHA-256 `7e2a2bbeb2cd4eb332112086e849148adf1553345ecce45c6eab22e9e016333a`.
 
 ## Evidence boundary
 

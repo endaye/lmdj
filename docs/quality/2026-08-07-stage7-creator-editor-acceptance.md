@@ -126,6 +126,7 @@ not Safari product acceptance.
 | --- | --- | --- | --- |
 | macOS | Safari | Pointer | `deferred / unverified` |
 | macOS | Chrome | Pointer | `deferred / unverified` |
+| macOS | Chrome | Physical keyboard + hearing | `PASS — 1.0.20.0 ten-step Canary confirmed by endaye; report SHA-256 7e2a2b…333a` |
 | macOS | Chrome | Physical MIDI | `deferred / unverified` |
 | iPadOS | Safari | Touch | `deferred / unverified` |
 | iPadOS | Safari | Lifecycle | `deferred / unverified` |
@@ -146,8 +147,8 @@ screen recovery, or long-session stability on those platforms.
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
 | Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
-| Product Build `1.0.20.0` | corrected keyboard spatial mapping; branch-local clean full Proof and immutable snapshot passed at `7d409b5`; merged-main Proof and fresh human Canary remain pending |
-| Manual canary | `open — corrected candidate must restart at step 1` |
+| Product Build `1.0.20.0` | corrected keyboard spatial mapping; branch-local clean full Proof and immutable snapshot passed at `7d409b5`; ten-step human Canary passed; merged-main Proof remains pending |
+| Manual canary | `T1 passed — endaye confirmed all ten 1.0.20.0 steps with no issue; report SHA-256 7e2a2b…333a` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
 historical Proof runs were always present; the review's prior inference from a
@@ -155,7 +156,9 @@ missing repository document to a missing execution was incorrect. G1 is now a
 recovered documentation binding, not a historical Proof execution failure.
 
 The current remediation rows must be refreshed again after any separately
-authorized push or external transition. T1 remains open and must restart from
-step 1 on the corrected package. Product Build `1.0.20.0` still requires a
-future Proof at its exact merged `main` revision before any new Product tag. The five physical rows
-continue to block physical-pass, `beta`, and `stable`.
+authorized push or external transition. T1 is closed for the `1.0.20.0`
+branch-local candidate; physical MIDI, Safari, and iPadOS remain unverified.
+Product Build `1.0.20.0` still requires a
+future Proof at its exact merged `main` revision before any new Product tag. The physical rows
+remain authoritative for their individual platforms and continue to block
+broader physical-device, `beta`, and `stable` claims.

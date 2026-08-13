@@ -42,13 +42,13 @@ test('Stage 7 acceptance and review distinguish historical, candidate, and exter
   assert.match(acceptance, /Current remediation candidate/);
   assert.match(acceptance, /PR #97[^\n]+MERGED/);
   assert.match(acceptance, /branch-local[^\n]+not merged-main Proof/);
-  assert.match(acceptance, /Manual canary[^\n]+open/);
+  assert.match(acceptance, /Manual canary[^\n]+T1 passed/);
 
   assert.match(review, /Remediation status/);
   for (let finding = 1; finding <= 10; finding += 1) {
     assert.match(review, new RegExp(`\\| D${finding} \\|[^\n]+resolved`));
   }
-  assert.match(review, /T1[^\n]+open/);
+  assert.match(review, /T1[^\n]+resolved/);
   assert.match(review, /G1[^\n]+corrected/);
   assert.match(review, /1\.0\.18\.0[^\n]+abandoned \/ unshipped/);
   assert.match(review, /1\.0\.19\.0[\s\S]+步骤 1/);
@@ -58,6 +58,7 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
   const acceptance = await readRepo('docs/quality/2026-08-07-stage7-creator-editor-acceptance.md');
   const review = await readRepo('docs/quality/2026-08-12-stage7-creator-editor-review.md');
   const evidence = await readRepo('docs/release-evidence/2026-08-13-stage7-remediation-canary.md');
+  const mappingEvidence = await readRepo('docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md');
   const remediationDesign = await readRepo('docs/superpowers/specs/2026-08-13-lmdj-stage7-review-remediation-design.md');
   const remediationPlan = await readRepo('docs/superpowers/plans/2026-08-13-lmdj-stage7-review-remediation.md');
   const audit = review.match(
@@ -81,7 +82,7 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
     assert.match(audit, new RegExp(`^\\| ${finding} \\| resolved`, 'm'));
   }
   assert.equal((audit.match(/^\| T1 \|/gm) ?? []).length, 1);
-  assert.match(audit, /^\| T1 \| open — corrected candidate must restart at step 1 \|/m);
+  assert.match(audit, /^\| T1 \| resolved — `1\.0\.20\.0` ten-step Canary passed \|/m);
   assert.equal((audit.match(/^\| G1 \|/gm) ?? []).length, 1);
   assert.match(audit, /^\| G1 \| corrected — historical Proof recovered \|/m);
 
@@ -94,6 +95,13 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
   assert.match(review, /documentation binding gap[\s\S]+not a Proof execution gap/);
   assert.match(review, /1\.0\.19\.0[\s\S]+merged-main Proof/);
   assert.match(evidence, /1\.0\.18\.0[^\n]+abandoned and unshipped/);
+  for (const body of [acceptance, review, evidence, mappingEvidence]) {
+    assert.match(body, /7e2a2bbeb2cd4eb332112086e849148adf1553345ecce45c6eab22e9e016333a|7e2a2b…333a/);
+  }
+  assert.match(mappingEvidence, /28 admitted \/ 28 outcomes \/\s*0 rejected/);
+  assert.match(mappingEvidence, /实体 MIDI[^\n]+延期 \/ 未验证/);
+  assert.match(mappingEvidence, /macOS Safari[^\n]+延期 \/ 未验证/);
+  assert.match(mappingEvidence, /iPadOS Safari touch \/ lifecycle[^\n]+延期 \/ 未验证/);
   for (const body of [remediationDesign, remediationPlan]) {
     assert.match(body, /G1[\s\S]+historical Proof recovered/);
     assert.match(body, /1\.0\.18\.0/);
