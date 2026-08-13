@@ -52,6 +52,7 @@ class ReleaseGit(Protocol):
     def remote_tag_state(self, tag: str) -> LocalTag | None: ...
     def local_tag_state(self, tag: str) -> LocalTag | None: ...
     def detached_worktree(self, target: str): ...
+    def validate_release_target(self, worktree: Path, intent: ReleaseIntent) -> None: ...
     def create_local_tag(self, tag: str, target: str, signer: str, message: str) -> LocalTag: ...
 
 
@@ -105,6 +106,10 @@ def prepare(tag: str, context: PrepareContext) -> PreparedRelease:
         raise PrepareError("local tag conflict; formal tags are never moved")
 
     with resolved.git.detached_worktree(intent.target_revision) as worktree:
+        try:
+            resolved.git.validate_release_target(Path(worktree), intent)
+        except Exception:
+            raise PrepareError("exact release target identity or support metadata is invalid") from None
         if intent.kind.value == "product":
             _verify_product_proof(resolved, Path(worktree), intent)
         existing_output = _existing_output_root(resolved.repo_root, identity.output_name)
@@ -207,10 +212,8 @@ def _verify_product_proof(context: PrepareContext, worktree: Path, intent: Relea
         raise PrepareError("merged-main Proof Product Build does not match the release tag")
     if proof.snapshot != intent.snapshot:
         raise PrepareError("Product immutable snapshot does not match the release intent")
-    if proof.snapshot_revision is None or not context.git.is_revision_ancestor(
-        proof.snapshot_revision, intent.target_revision,
-    ):
-        raise PrepareError("Product immutable snapshot does not have canonical target ancestry")
+    if proof.snapshot_revision is None:
+        raise PrepareError("Product immutable snapshot has no authenticated source revision")
 
 
 def _verify_profile_assets(intent: ReleaseIntent, built: ProfileBuild) -> tuple[AssetBuild, ...]:

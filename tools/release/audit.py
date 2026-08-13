@@ -12,10 +12,9 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from typing import Callable, Iterable, Mapping
-from urllib.parse import parse_qs, urlparse
+from typing import Callable, Iterable
 
-from .github_api import GitHubAsset, GitHubRelease, _json_response, _parse_release
+from .github_api import GitHubAsset, GitHubRelease
 from .model import (
     Disposition,
     HistoricalException,
@@ -140,8 +139,10 @@ def audit(
         return _report(observed, policy.repository, mode, findings)
 
     try:
-        with _load_remote_projection(context) as (resolved, remote_tags, releases):
-            return _remote_report(observed, resolved, remote_tags, releases, tag)
+        with _load_remote_projection(context) as (resolved, remote_tags, releases, latest_release_id):
+            return _remote_report(
+                observed, resolved, remote_tags, releases, latest_release_id, tag,
+            )
     except OpenPgpError:
         return _report(
             observed, policy.repository, mode,
@@ -168,6 +169,7 @@ def _remote_report(
     context: object,
     remote_tags: dict[str, _ObservedTag],
     releases: dict[str, GitHubRelease],
+    latest_release_id: int | None,
     tag: str | None,
 ) -> AuditReport:
     policy, ledger = context.policy, context.ledger
@@ -186,7 +188,7 @@ def _remote_report(
     for entry in selected_entries:
         findings.append(_audit_remote_intent(
             context, entry, remote_tags.get(entry.tag), releases.get(entry.tag),
-            linked_exceptions.get(entry.tag),
+            linked_exceptions.get(entry.tag), latest_release_id,
         ))
     for exception in selected_exceptions:
         if ledger.intent_for_tag(exception.tag) is None:
@@ -283,7 +285,7 @@ def _audit_local(
             )
             detail = "matches" if matches else "conflicts with"
             findings.append(AuditFinding(
-                "ok", f"local:{entry.tag}",
+                "ok" if matches else "conflict", f"local:{entry.tag}",
                 f"local same-name tag {detail} intent; diagnostic only and not authoritative",
                 ("local-tag",),
             ))
@@ -327,6 +329,7 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
         if len(active) != 1:
             raise ValueError
         active_intent = active[0]
+        context.git.validate_release_target(root, active_intent)
         snapshot_path = root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
         versions = _json_file(root / "apps/architecture-portal/versions.json")
         snapshot = _json_file(snapshot_path)
@@ -341,9 +344,6 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
             or proof.product_build != identity
             or proof.snapshot != active_intent.snapshot
             or proof.snapshot_revision is None
-            or not context.git.is_revision_ancestor(
-                proof.snapshot_revision, active_intent.target_revision,
-            )
         ):
             raise ValueError
         if (root / ".git").exists():
@@ -353,7 +353,7 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
                 ).returncode != 0:
                     raise ValueError
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError, OpenPgpError):
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError, OpenPgpError):
         return AuditFinding(
             "unverifiable", policy.repository,
             "active Product, Assembly lock or immutable snapshot projection is inconsistent",
@@ -368,12 +368,12 @@ def _audit_remote_intent(
     tag_state: _ObservedTag | None,
     release: GitHubRelease | None,
     exception: HistoricalException | None,
+    latest_release_id: int | None,
 ) -> AuditFinding:
     evidence_issue = _evidence_issue(context.repo_root, intent.evidence_paths)
     if evidence_issue is not None:
         return AuditFinding("unverifiable", intent.tag, evidence_issue, intent.evidence_paths)
-
-    if intent.disposition in (Disposition.ABANDONED, Disposition.ALLOCATED):
+    if intent.disposition is Disposition.ABANDONED:
         if tag_state is not None or release is not None:
             return AuditFinding(
                 "unauthorized", intent.tag,
@@ -391,6 +391,25 @@ def _audit_remote_intent(
         return AuditFinding("conflict", intent.tag, problem) if problem else AuditFinding(
             "ok", intent.tag, "superseded-unreleased exact tag is retained without a Release",
         )
+
+    try:
+        with context.git.detached_worktree(intent.target_revision) as worktree:
+            context.git.validate_release_target(Path(worktree), intent)
+    except Exception:
+        return AuditFinding(
+            "unverifiable", intent.tag,
+            "exact release target identity or support metadata is invalid",
+            ("exact-target",),
+        )
+
+    if intent.disposition is Disposition.ALLOCATED:
+        if tag_state is not None or release is not None:
+            return AuditFinding(
+                "unauthorized", intent.tag,
+                "allocated intent must not have a remote tag or Release",
+                ("remote-tag", "github-release"),
+            )
+        return AuditFinding("ok", intent.tag, "allocated intent has no remote publication state")
 
     if intent.disposition is Disposition.PUBLISHED and (tag_state is None or release is None):
         missing = "tag and Release" if tag_state is None and release is None else ("tag" if tag_state is None else "Release")
@@ -420,6 +439,7 @@ def _audit_remote_intent(
         return _exception_finding(exception, result.message) if exception is not None else result
     metadata_problem = _release_problem(
         context.policy, intent, tag_state, release,
+        latest_release_id=latest_release_id,
         allow_missing_marker=(
             exception is not None
             and exception.release_id is not None
@@ -567,6 +587,7 @@ def _release_problem(
     tag_state: _ObservedTag,
     release: GitHubRelease,
     *,
+    latest_release_id: int | None,
     allow_missing_marker: bool,
 ) -> str | None:
     if release.tag_name != intent.tag:
@@ -579,8 +600,13 @@ def _release_problem(
     )
     if release.prerelease is not prerelease:
         return "GitHub Release prerelease state conflicts with channel policy"
-    if release.make_latest is not None and release.make_latest is not make_latest:
-        return "GitHub Release latest state conflicts with channel policy"
+    if release.draft:
+        if latest_release_id == release.id:
+            return "GitHub latest Release projection identifies a Draft"
+    elif make_latest and latest_release_id != release.id:
+        return "GitHub latest Release projection conflicts with channel policy"
+    elif not make_latest and latest_release_id == release.id:
+        return "GitHub latest Release projection conflicts with channel policy"
     if intent.disposition is Disposition.PUBLISHED and release.draft:
         return "published intent still identifies a Draft Release"
     if release.target_commitish not in (intent.target_revision, policy.branch, intent.tag):
@@ -669,7 +695,6 @@ def _proof_problem(context: object, intent: ReleaseIntent) -> AuditFinding | Non
             or proof.product_build != intent.identity
             or proof.snapshot != intent.snapshot
             or proof.snapshot_revision is None
-            or not context.git.is_revision_ancestor(proof.snapshot_revision, intent.target_revision)
         ):
             raise ValueError
     except Exception:
@@ -709,14 +734,16 @@ def _load_remote_projection(context: object):
                 or resolved.git is not context.git or resolved.github is not context.github
             ):
                 raise RuntimeError("canonical audit context is not authority-rooted")
-            tags, releases = _remote_inventories(resolved)
-            yield resolved, tags, releases
+            tags, releases, latest_release_id = _remote_inventories(resolved)
+            yield resolved, tags, releases, latest_release_id
             return
-    tags, releases = _remote_inventories(context)
-    yield context, tags, releases
+    tags, releases, latest_release_id = _remote_inventories(context)
+    yield context, tags, releases, latest_release_id
 
 
-def _remote_inventories(context: object) -> tuple[dict[str, _ObservedTag], dict[str, GitHubRelease]]:
+def _remote_inventories(
+    context: object,
+) -> tuple[dict[str, _ObservedTag], dict[str, GitHubRelease], int | None]:
     tags = _list_remote_tags(context)
     release_items = _list_releases(context.github, context.policy.repository)
     releases: dict[str, GitHubRelease] = {}
@@ -726,7 +753,10 @@ def _remote_inventories(context: object) -> tuple[dict[str, _ObservedTag], dict[
             raise RuntimeError("GitHub Release inventory is ambiguous")
         releases[release.tag_name] = release
         identifiers.add(release.id)
-    return tags, releases
+    latest = context.github.get_latest_release(context.policy.repository)
+    if latest is not None and latest.id not in identifiers:
+        raise RuntimeError("GitHub latest Release is absent from complete inventory")
+    return tags, releases, latest.id if latest is not None else None
 
 
 def _list_remote_tags(context: object) -> dict[str, _ObservedTag]:
@@ -794,45 +824,12 @@ def _coerce_tag(value: object) -> _ObservedTag:
 
 def _list_releases(github: object, repository: str) -> list[GitHubRelease]:
     method = getattr(github, "list_releases", None)
-    if callable(method):
-        result = method(repository)
-        if not isinstance(result, list) or not all(isinstance(item, GitHubRelease) for item in result):
-            raise RuntimeError("GitHub Release inventory is invalid")
-        return result
-    request = getattr(github, "_request")
-    path: str | None = f"/repos/{repository}/releases?per_page=100"
-    visited: set[str] = set()
-    releases: list[GitHubRelease] = []
-    while path is not None:
-        if path in visited or len(visited) >= 100:
-            raise RuntimeError("GitHub Release pagination is invalid")
-        visited.add(path)
-        response = request("GET", path)
-        document = _json_response(response, {200})
-        if not isinstance(document, list):
-            raise RuntimeError("GitHub Release inventory is invalid")
-        releases.extend(_parse_release(item, repository) for item in document)
-        path = _next_release_link(response.headers, repository)
-    return releases
-
-
-def _next_release_link(headers: Mapping[str, str], repository: str) -> str | None:
-    raw = next((value for key, value in headers.items() if key.lower() == "link"), None)
-    if raw is None:
-        return None
-    next_urls: list[str] = []
-    for item in raw.split(","):
-        match = re.fullmatch(r'\s*<([^>]+)>;\s*rel="([^"]+)"\s*', item)
-        if match is not None and match.group(2) == "next":
-            next_urls.append(match.group(1))
-    if len(next_urls) != 1:
-        raise RuntimeError("GitHub Release pagination is invalid")
-    parsed = urlparse(next_urls[0])
-    expected_path = f"/repos/{repository}/releases"
-    query = parse_qs(parsed.query)
-    if parsed.netloc not in ("", "api.github.com") or parsed.path != expected_path or query.get("per_page") != ["100"]:
-        raise RuntimeError("GitHub Release pagination is invalid")
-    return parsed.path + "?" + parsed.query
+    if not callable(method):
+        raise RuntimeError("typed GitHub Release inventory API is unavailable")
+    result = method(repository)
+    if not isinstance(result, list) or not all(isinstance(item, GitHubRelease) for item in result):
+        raise RuntimeError("GitHub Release inventory is invalid")
+    return result
 
 
 def _evidence_issue(root: Path, paths: Iterable[str]) -> str | None:

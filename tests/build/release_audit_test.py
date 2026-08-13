@@ -48,6 +48,7 @@ class ReadOnlyGit:
         self.local_reads = 0
         self.mutations: list[str] = []
         self.authority_root: Path | None = None
+        self.target_validation_error: Exception | None = None
 
     def fetch_authority(self, repository: str, branch: str) -> None:
         self.fetches += 1
@@ -60,6 +61,10 @@ class ReadOnlyGit:
 
     def is_revision_ancestor(self, ancestor: str, descendant: str) -> bool:
         return descendant == TARGET
+
+    def validate_release_target(self, worktree: Path, intent) -> None:
+        if self.target_validation_error is not None:
+            raise self.target_validation_error
 
     def remote_tag_state(self, tag: str) -> LocalTag | None:
         self.remote_reads += 1
@@ -102,6 +107,7 @@ class ReadOnlyGitHub:
         self.error: Exception | None = None
         self.reads = 0
         self.mutations: list[str] = []
+        self.latest_release: GitHubRelease | None = None
 
     def _read(self) -> None:
         self.reads += 1
@@ -119,6 +125,10 @@ class ReadOnlyGitHub:
     def list_releases(self, repository: str) -> list[GitHubRelease]:
         self._read()
         return list(self.releases.values())
+
+    def get_latest_release(self, repository: str) -> GitHubRelease | None:
+        self._read()
+        return self.latest_release
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
         self._read()
@@ -192,9 +202,9 @@ class ReleaseAuditTest(unittest.TestCase):
 
     def active_entry(self) -> dict[str, object]:
         return {
-            "tag": "lmdj-v1.0.20.0", "kind": "product", "identity": "1.0.20.0",
+            "tag": "lmdj-v1.0.21.0", "kind": "product", "identity": "1.0.21.0",
             "target_revision": TARGET, "channel": "canary", "disposition": "allocated",
-            "profile": "web-runtime-host", "snapshot": "1.0.20.0",
+            "profile": "web-runtime-host", "snapshot": "1.0.21.0",
             "evidence_paths": ["evidence.md"],
         }
 
@@ -204,7 +214,7 @@ class ReleaseAuditTest(unittest.TestCase):
             ROOT / "products/lmdj/assembly.json",
             ROOT / "products/lmdj/assembly.lock.json",
             ROOT / "apps/architecture-portal/versions.json",
-            ROOT / "apps/architecture-portal/versioned_metadata/version-1.0.20.0.json",
+            ROOT / "apps/architecture-portal/versioned_metadata/version-1.0.21.0.json",
             ROOT / ".github/release-signing-keys/lmdj-product.asc",
             ROOT / ".github/release-signing-keys/lmdj-release-checksum.asc",
             *ROOT.glob("packages/*/module.json"),
@@ -225,7 +235,7 @@ class ReleaseAuditTest(unittest.TestCase):
         exceptions: list[dict[str, object]] | None = None,
     ) -> AuditContext:
         selected = list(entries if entries is not None else [self.entry()])
-        if not any(item.get("identity") == "1.0.20.0" for item in selected):
+        if not any(item.get("identity") == "1.0.21.0" for item in selected):
             selected.append(self.active_entry())
         ledger = load_ledger_document({
             "schema": "lmdj.release-intents.v1",
@@ -293,14 +303,29 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual(self.github.reads, 0)
         self.assertEqual(self.git.mutations + self.github.mutations, [])
 
+    def test_tracked_current_product_identity_is_locally_auditable(self) -> None:
+        context = cli.build_audit_context(ROOT)
+        report = audit(context, remote=False, tag="lmdj-v1.0.21.0")
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
+
     def test_local_same_name_tag_conflict_is_visible_but_diagnostic_only(self) -> None:
         tag = str(self.entry()["tag"])
         self.git.local_tags[tag] = self.tag_state(target="c" * 40, signer=CHECKSUM)
         report = audit(self.context(), remote=False, tag=tag)
         diagnostic = next(item for item in report.findings if item.subject == f"local:{tag}")
-        self.assertEqual(diagnostic.code, "ok")
+        self.assertEqual(diagnostic.code, "conflict")
         self.assertIn("not authoritative", diagnostic.message)
-        self.assertEqual(report.exit_code, 0)
+        self.assertEqual(report.exit_code, 1)
+
+    def test_remote_audit_requires_kind_specific_exact_target_validation(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        self.git.target_validation_error = RuntimeError("module manifest mismatch")
+        report = audit(self.context(), remote=True, tag=tag)
+        finding = next(item for item in report.findings if item.subject == tag)
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertIn("exact release target", finding.message)
 
     def test_published_remote_state_is_ok_and_read_only(self) -> None:
         tag = self.entry()["tag"]
@@ -310,6 +335,24 @@ class ReleaseAuditTest(unittest.TestCase):
         report = audit(self.context(), remote=True)
         self.assertEqual({item.code for item in report.findings}, {"ok"})
         self.assertEqual(self.git.mutations + self.github.mutations, [])
+
+    def test_published_stable_release_requires_authoritative_latest_projection(self) -> None:
+        item = self.entry(
+            tag="lmdj-v1.0.21.0", disposition="published", kind="product",
+            identity="1.0.21.0", profile="web-runtime-host",
+        )
+        item.update({"channel": "stable", "snapshot": "1.0.21.0", "make_latest": True})
+        tag = str(item["tag"])
+        self.git.tags[tag] = self.tag_state()
+        release = self.release(
+            tag, name="LMDJ 1.0.21.0", kind="product", identity="1.0.21.0",
+            profile="web-runtime-host", channel="stable",
+        )
+        self.github.releases[tag] = GitHubRelease(**{**release.__dict__, "make_latest": None})
+        report = audit(self.context([item]), remote=True, tag=tag)
+        finding = next(result for result in report.findings if result.subject == tag)
+        self.assertEqual(finding.code, "conflict")
+        self.assertIn("latest Release projection", finding.message)
 
     def test_current_policy_release_requires_one_canonical_body_marker(self) -> None:
         tag = str(self.entry()["tag"])

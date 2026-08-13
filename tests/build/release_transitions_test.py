@@ -6,17 +6,20 @@ from __future__ import annotations
 from contextlib import contextmanager
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandResult  # noqa: E402
-from tools.release.git_repository import GitRepository  # noqa: E402
+from tools.release.git_repository import GitRepository, GitRepositoryError  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
     GitHubApiError,
@@ -28,7 +31,14 @@ from tools.release.github_api import (  # noqa: E402
     RunProjection,
 )
 from tools.release.model import canonical_json, load_ledger_document, load_policy  # noqa: E402
-from tools.release.prepare import LocalTag, PrepareContext, ProductProof  # noqa: E402
+from tools.release.prepare import (  # noqa: E402
+    LocalTag,
+    PrepareContext,
+    ProductProof,
+    _plan_document,
+    _release_plan,
+    load_authority_documents,
+)
 from tools.release.transitions import (  # noqa: E402
     TransitionError,
     create_draft,
@@ -61,6 +71,7 @@ class FakeGit:
         self.push_raises_after_write = False
         self.push_raises_without_write = False
         self.main_contains_target = True
+        self.target_validation_error: Exception | None = None
 
     def fetch_authority(self, repository: str, branch: str) -> None:
         self.fetches += 1
@@ -73,6 +84,10 @@ class FakeGit:
 
     def is_revision_ancestor(self, ancestor: str, descendant: str) -> bool:
         return descendant == self.target
+
+    def validate_release_target(self, worktree: Path, intent) -> None:
+        if self.target_validation_error is not None:
+            raise self.target_validation_error
 
     def remote_tag_state(self, tag: str) -> LocalTag | None:
         return self.remote
@@ -115,6 +130,8 @@ class FakeGitHub:
         self.validator_mode = "strong"
         self.mutate_before_conditional_patch = False
         self.next_asset_id = 40
+        self.latest_release: GitHubRelease | None = None
+        self.latest_error: Exception | None = None
 
     def _release_projection(self) -> GitHubRelease | None:
         if self.release is None:
@@ -153,6 +170,11 @@ class FakeGitHub:
             self._touch_release()
         projected = self._release_projection()
         return projected if projected is not None and projected.id == release_id else None
+
+    def get_latest_release(self, repository: str) -> GitHubRelease | None:
+        if self.latest_error is not None:
+            raise self.latest_error
+        return self.latest_release
 
     def create_draft_release(self, repository: str, *, tag: str, name: str, body: str,
                              prerelease: bool, make_latest: bool) -> GitHubRelease:
@@ -332,16 +354,47 @@ class ReleaseTransitionsTest(unittest.TestCase):
         push_tag(self.tag, self.context())
         return create_draft(self.tag, self.context())
 
+    def test_noncanonical_origin_is_rejected_before_exact_tag_mutation(self) -> None:
+        repository = self.root / "origin-guard"
+        remote = self.root / "noncanonical.git"
+        subprocess.run(["git", "init", "--bare", str(remote)], check=True, capture_output=True)
+        subprocess.run(["git", "init", str(repository)], check=True, capture_output=True)
+        for key, value in (("user.email", "release-test@example.invalid"), ("user.name", "Release Test")):
+            subprocess.run(["git", "-C", str(repository), "config", key, value], check=True)
+        (repository / "tracked.txt").write_text("fixture\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repository), "add", "tracked.txt"], check=True)
+        subprocess.run(["git", "-C", str(repository), "commit", "-m", "fixture"], check=True, capture_output=True)
+        tag = "module/core-cli/v1.0.2"
+        subprocess.run(["git", "-C", str(repository), "tag", "-a", tag, "-m", "fixture"], check=True)
+        subprocess.run(["git", "-C", str(repository), "remote", "add", "origin", str(remote)], check=True)
+
+        with self.assertRaisesRegex(GitRepositoryError, "canonical origin"):
+            GitRepository(repository).push_tag(tag)
+        observed = subprocess.run(
+            ["git", "--git-dir", str(remote), "show-ref", "--verify", f"refs/tags/{tag}"],
+            check=False, capture_output=True, text=True,
+        )
+        self.assertNotEqual(observed.returncode, 0)
+
     def test_git_repository_push_uses_one_exact_refspec_without_force_or_tags(self) -> None:
-        runner = RecordingRunner()
+        class CanonicalRunner(RecordingRunner):
+            def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
+                result = super().run(arguments, cwd=cwd, environment=environment)
+                if list(arguments) == ["git", "remote", "get-url", "origin"]:
+                    return CommandResult(tuple(arguments), 0, "https://github.com/endaye/lmdj.git\n", "")
+                if list(arguments) == ["git", "remote", "get-url", "--push", "origin"]:
+                    return CommandResult(tuple(arguments), 0, "git@github.com:endaye/lmdj.git\n", "")
+                return result
+
+        runner = CanonicalRunner()
         repository = GitRepository(self.root, runner=runner)
         repository.push_tag("module/core-cli/v1.0.2")
-        self.assertEqual(runner.commands, [[
+        self.assertEqual(runner.commands[-1], [
             "git", "push", "origin",
             "refs/tags/module/core-cli/v1.0.2:refs/tags/module/core-cli/v1.0.2",
-        ]])
-        self.assertNotIn("--tags", runner.commands[0])
-        self.assertNotIn("--force", runner.commands[0])
+        ])
+        self.assertNotIn("--tags", runner.commands[-1])
+        self.assertNotIn("--force", runner.commands[-1])
 
     def test_fetch_authority_prunes_deleted_tags_from_the_scratch_namespace(self) -> None:
         runner = RecordingRunner()
@@ -460,6 +513,93 @@ class ReleaseTransitionsTest(unittest.TestCase):
         with self.assertRaises(TransitionError):
             create_draft(self.tag, self.context())
         self.assertEqual(created.release_id, result.release_id)
+
+    def test_published_intent_never_resumes_a_historical_draft_or_patches_it(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        self.ledger = load_ledger_document({
+            "schema": "lmdj.release-intents.v1",
+            "entries": [{
+                "tag": self.tag, "kind": "product", "identity": "1.0.21.0",
+                "target_revision": self.target, "channel": "canary",
+                "disposition": "published", "profile": "web-runtime-host",
+                "snapshot": "1.0.21.0", "merged_main_run_id": 123,
+                "evidence_paths": ["docs/quality/example-proof.md"],
+            }],
+            "historical_exceptions": [],
+        }, self.policy)
+        uploads = tuple(self.github.upload_calls)
+        with self.assertRaisesRegex(TransitionError, "published.*read-only"):
+            create_draft(self.tag, self.context())
+        self.assertEqual(tuple(self.github.upload_calls), uploads)
+        with self.assertRaisesRegex(TransitionError, "published.*read-only"):
+            publish_draft(
+                self.tag, created.release_id, created.plan_sha256, self.context(),
+                actions_environment={"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "workflow_dispatch"},
+            )
+        self.assertEqual(self.github.patch_calls, [])
+
+    def test_verify_draft_requires_authoritative_latest_projection(self) -> None:
+        created = self._push_and_create()
+        assert self.github.release is not None and created.release_id is not None
+        self.github.latest_release = self.github.release
+        with self.assertRaisesRegex(TransitionError, "latest Release projection"):
+            verify_draft(self.tag, created.release_id, created.plan_sha256, self.context())
+
+    def test_transition_rejects_kind_specific_exact_target_validation_failure(self) -> None:
+        self.git.target_validation_error = RuntimeError("provider manifest mismatch")
+        with self.assertRaisesRegex(TransitionError, "exact release target"):
+            push_tag(self.tag, self.context())
+
+    def test_real_verify_draft_is_agentless_with_empty_caller_keyring(self) -> None:
+        tag = "module/application-facade/v1.0.1"
+        policy, ledger = load_authority_documents(ROOT)
+        intent = ledger.intent_for_tag(tag)
+        assert intent is not None and intent.merged_main_run_id is not None
+        target = intent.target_revision
+        tag_object = subprocess.run(
+            ["git", "rev-parse", f"refs/lmdj-release/tags/{tag}"], cwd=ROOT,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        run = RunProjection(
+            intent.merged_main_run_id, "push", target, "main", "Core CI", "completed", "success",
+        )
+        plan = _release_plan(
+            policy, tag, LocalTag(tag_object, target, policy.product_fingerprint), intent, (),
+        )
+        document = _plan_document(plan, intent, run, policy)
+        digest = hashlib.sha256(canonical_json(document)).hexdigest()
+        release_fields = document["release"]
+        github = FakeGitHub(target)
+        github.runs = [run]
+        github.release = GitHubRelease(
+            17, tag, release_fields["name"], marker_for_plan(document, digest),
+            False, release_fields["prerelease"], release_fields["make_latest"],
+            f"https://github.com/endaye/lmdj/releases/tag/{tag}",
+            "https://uploads.github.com/repos/endaye/lmdj/releases/17/assets{?name,label}",
+            (), target,
+        )
+
+        class OfflineGit(GitRepository):
+            def fetch_authority(self, repository: str, branch: str) -> None:
+                return None
+
+        git = OfflineGit(ROOT)
+        github.branch = BranchProjection("main", True, git.main_revision())
+
+        context = PrepareContext(
+            repo_root=ROOT, policy=policy, ledger=ledger, git=git, github=github,
+            profile_builder=lambda *args: None, profile_verifier=lambda *args: None,
+            proof_reader=lambda *args: None,
+            tag_signer_fingerprint=policy.product_fingerprint,
+            checksum_signer_fingerprint=policy.checksum_fingerprint,
+            authority_reader=lambda tree: (policy, ledger),
+        )
+        with tempfile.TemporaryDirectory(prefix="empty-release-keyring-") as directory:
+            os.chmod(directory, 0o700)
+            with patch.dict(os.environ, {"GNUPGHOME": directory}):
+                verified = verify_draft(tag, 17, digest, context)
+        self.assertEqual(verified.status, "already-published")
 
     def test_verify_draft_reconstructs_plan_without_local_release_output(self) -> None:
         result = self._push_and_create()
@@ -670,6 +810,59 @@ class ReleaseTransitionsTest(unittest.TestCase):
         ))
         with self.assertRaisesRegex(GitHubApiError, "pagination"):
             client.list_runs_for_sha("endaye/lmdj", self.target)
+
+    def test_github_release_pagination_is_typed_complete_and_strict(self) -> None:
+        first = "/repos/endaye/lmdj/releases?per_page=100"
+        second = first + "&page=2"
+        release_one = self._release_json(17)
+        release_two = self._release_json(18)
+        release_two["tag_name"] = "module/core-cli/v1.0.2"
+        release_two["html_url"] = "https://github.com/endaye/lmdj/releases/tag/module/core-cli/v1.0.2"
+        pages = {
+            first: HttpResponse(
+                200,
+                {"Link": f'<https://api.github.com{second}>; rel="next", '
+                         f'<https://api.github.com{second}>; rel="last"'},
+                json.dumps([release_one]).encode(),
+            ),
+            second: HttpResponse(
+                200,
+                {"Link": f'<https://api.github.com{first}>; rel="prev", '
+                         f'<https://api.github.com{second}>; rel="last"'},
+                json.dumps([release_two]).encode(),
+            ),
+        }
+        client = GitHubClient(http_transport=lambda method, url, headers, body: pages[url])
+        self.assertEqual([item.id for item in client.list_releases("endaye/lmdj")], [17, 18])
+
+        invalid_links = (
+            '<https://api.github.com/repos/other/repo/releases?per_page=100&page=2>; rel="next"',
+            f'<https://api.github.com{first}>; rel="next"',
+            "not-a-valid-link",
+        )
+        for link in invalid_links:
+            with self.subTest(link=link):
+                response = HttpResponse(200, {"Link": link}, json.dumps([release_one]).encode())
+                strict = GitHubClient(http_transport=lambda *args: response, page_cap=1)
+                with self.assertRaisesRegex(GitHubApiError, "pagination"):
+                    strict.list_releases("endaye/lmdj")
+
+        duplicate = HttpResponse(
+            200, {}, json.dumps([release_one, release_one]).encode(),
+        )
+        with self.assertRaisesRegex(GitHubApiError, "duplicate"):
+            GitHubClient(http_transport=lambda *args: duplicate).list_releases("endaye/lmdj")
+
+    def test_github_latest_release_projection_is_typed_and_404_is_absent(self) -> None:
+        release = self._release_json(17)
+        client = GitHubClient(http_transport=lambda *args: HttpResponse(
+            200, {}, json.dumps(release).encode(),
+        ))
+        latest = client.get_latest_release("endaye/lmdj")
+        assert latest is not None
+        self.assertEqual(latest.id, 17)
+        absent = GitHubClient(http_transport=lambda *args: HttpResponse(404, {}, b"{}"))
+        self.assertIsNone(absent.get_latest_release("endaye/lmdj"))
 
     def test_github_release_and_asset_urls_are_bound_to_numeric_identities(self) -> None:
         release = self._release_json(17)

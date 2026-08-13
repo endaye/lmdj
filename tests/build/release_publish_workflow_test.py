@@ -114,9 +114,26 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
             {"contents": "write", "actions": "read"},
         )
         self.assertIn("scripts/release.sh verify-draft", preflight)
+        self.assertIn("scripts/release.sh audit --remote --tag", preflight)
         verify_index = publish.index("scripts/release.sh verify-draft")
+        audit_index = publish.index("scripts/release.sh audit --remote --tag")
         publish_index = publish.index("scripts/release.sh publish-draft")
         self.assertLess(verify_index, publish_index)
+        self.assertLess(audit_index, publish_index)
+
+    def test_exact_tag_audit_runs_before_approval_immediately_before_publish_and_afterward(self) -> None:
+        preflight = self.job("preflight")
+        publish = self.job("publish")
+        audit_command = "scripts/release.sh audit --remote --tag"
+        self.assertEqual(preflight.count(audit_command), 1)
+        self.assertEqual(publish.count(audit_command), 2)
+        verify_index = publish.index("scripts/release.sh verify-draft")
+        prepublication_audit = publish.index(audit_command)
+        publication = publish.index("scripts/release.sh publish-draft")
+        postpublication_audit = publish.rindex(audit_command)
+        self.assertLess(verify_index, prepublication_audit)
+        self.assertLess(prepublication_audit, publication)
+        self.assertLess(publication, postpublication_audit)
 
     def test_both_jobs_use_pinned_protected_main_checkouts_without_credentials(self) -> None:
         source = self.source()
@@ -155,7 +172,7 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
     def test_publication_finishes_with_exact_tag_read_only_audit(self) -> None:
         publish = self.job("publish")
         publish_index = publish.index("scripts/release.sh publish-draft")
-        audit_index = publish.index("scripts/release.sh audit --remote --tag")
+        audit_index = publish.rindex("scripts/release.sh audit --remote --tag")
         self.assertLess(publish_index, audit_index)
         self.assertIn('"$RELEASE_TAG"', publish[audit_index:])
 

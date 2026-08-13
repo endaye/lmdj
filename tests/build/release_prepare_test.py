@@ -19,9 +19,12 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.release.github_api import BranchProjection, RunProjection  # noqa: E402
+from tools.release.git_repository import GitRepository  # noqa: E402
 from tools.release.model import (  # noqa: E402
     Disposition,
     HistoricalException,
+    ReleaseIntent,
+    ReleaseKind,
     ReleaseLedger,
     canonical_json,
     load_ledger_document,
@@ -58,6 +61,7 @@ class FakeGit:
         self.local_tag: LocalTag | None = None
         self.calls: list[str] = []
         self.remote_mutations: list[str] = []
+        self.target_validation_error: Exception | None = None
 
     def fetch_authority(self, *arguments: str) -> None:
         self.calls.append(f"fetch:{':'.join(arguments)}")
@@ -72,6 +76,11 @@ class FakeGit:
     def is_revision_ancestor(self, ancestor: str, descendant: str) -> bool:
         self.calls.append(f"revision-ancestor:{ancestor}:{descendant}")
         return self.main_contains_target and descendant == self.target
+
+    def validate_release_target(self, worktree: Path, intent: ReleaseIntent) -> None:
+        self.calls.append(f"validate-target:{intent.kind.value}:{intent.identity}")
+        if self.target_validation_error is not None:
+            raise self.target_validation_error
 
     def remote_tag_state(self, tag: str) -> LocalTag | None:
         self.calls.append(f"remote-tag:{tag}")
@@ -363,6 +372,30 @@ class ReleasePrepareTest(unittest.TestCase):
         self.proof_reader = lambda worktree, intent: ProductProof("main", self.target_sha, "1.0.21.0", "1.0.20.0")
         with self.assertRaisesRegex(PrepareError, "snapshot"):
             prepare(self.tag, self.context())
+
+    def test_prepare_requires_kind_specific_exact_target_validation(self) -> None:
+        self.git.target_validation_error = RuntimeError("assembly provenance mismatch")
+        with self.assertRaisesRegex(PrepareError, "exact release target"):
+            prepare(self.tag, self.context())
+
+    def test_real_exact_target_validator_accepts_all_supported_identity_kinds(self) -> None:
+        repository = GitRepository(ROOT)
+        target = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        cases = (
+            (ReleaseKind.PRODUCT, "1.0.21.0", "web-runtime-host", "canary", "1.0.21.0"),
+            (ReleaseKind.MODULE, "core-cli@1.0.11", "source-only", None, None),
+            (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
+            (ReleaseKind.PROVIDER, "local.proof.success@1.0.2", "source-only", None, None),
+        )
+        for kind, identity, profile, channel, snapshot in cases:
+            with self.subTest(kind=kind.value):
+                intent = ReleaseIntent(
+                    "fixture", kind, identity, target, Disposition.RELEASABLE, profile,
+                    ("evidence.md",), channel, snapshot, 1,
+                )
+                repository.validate_release_target(ROOT, intent)
 
     def test_prepare_rejects_forbidden_disposition_and_historical_exception(self) -> None:
         self.ledger = self.ledger_fixture("allocated")

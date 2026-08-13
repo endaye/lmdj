@@ -151,6 +151,13 @@ class ReleaseRehearsalTest(unittest.TestCase):
         self.assertIsNone(self.github.get_release("endaye/lmdj", 9))
         self.assertIsNone(self.git.remote_tag_object(self.tag))
 
+    def test_cleanup_retry_finishes_when_draft_is_already_absent_but_tag_remains(self) -> None:
+        self.github.release = None
+        cleanup_rehearsal(self.state, self.context)
+        self.assertEqual(self.github.deleted, [])
+        self.assertEqual(self.git.deleted, [self.tag])
+        self.assertIsNone(self.git.remote_tag_object(self.tag))
+
     def test_cleanup_rejects_published_wrong_id_object_marker_or_asset(self) -> None:
         for change in ("published", "id", "object", "marker", "asset"):
             with self.subTest(change=change):

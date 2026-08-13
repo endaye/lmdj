@@ -185,10 +185,23 @@ class ReleaseModelTest(unittest.TestCase):
             "lmdj-v1.0.16.9",
         } or entry.kind is ReleaseKind.MODULE]
         self.assertEqual(len(formal), 28)
-        allocated = ledger.intent_for_tag("lmdj-v1.0.20.0")
+        superseded = ledger.intent_for_tag("lmdj-v1.0.20.0")
+        self.assertIsNotNone(superseded)
+        self.assertEqual(  # type: ignore[union-attr]
+            superseded.disposition.value, "superseded-unreleased",
+        )
+        self.assertEqual(  # type: ignore[union-attr]
+            superseded.target_revision,
+            "f4674ada631d6af7ad8b9dd9f440671c2736d293",
+        )
+        allocated = ledger.intent_for_tag("lmdj-v1.0.21.0")
         self.assertIsNotNone(allocated)
         self.assertEqual(allocated.disposition.value, "allocated")  # type: ignore[union-attr]
-        self.assertEqual(allocated.target_revision, "f4674ada631d6af7ad8b9dd9f440671c2736d293")  # type: ignore[union-attr]
+        self.assertEqual(  # type: ignore[union-attr]
+            allocated.target_revision,
+            "5613158240f7e31385ccb5d175bded3c245ae33b",
+        )
+        self.assertEqual(allocated.snapshot, "1.0.21.0")  # type: ignore[union-attr]
         self.assertEqual(len(ledger.historical_exceptions), 3)
 
     def test_canonical_json_digest_and_slash_safe_output_name_are_deterministic(self) -> None:

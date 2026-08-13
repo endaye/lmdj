@@ -207,21 +207,27 @@ def cleanup_rehearsal(state: RehearsalState, context: RehearsalContext) -> None:
     try:
         release = context.github.get_release(context.repository, state.release_id)
         by_tag = context.github.get_release_by_tag(context.repository, state.tag)
-        if release is None or by_tag is None or release.id != by_tag.id:
+        if (release is None) != (by_tag is None):
             raise RehearsalError("rehearsal Draft ID and tag do not identify one object")
-        _validate_release(state, release, context, require_asset=True)
-        if context.git.remote_tag_object(state.tag) != state.tag_object:
+        if release is not None and by_tag is not None:
+            if release.id != by_tag.id:
+                raise RehearsalError("rehearsal Draft ID and tag do not identify one object")
+            _validate_release(state, release, context, require_asset=True)
+        remote_tag = context.git.remote_tag_object(state.tag)
+        if remote_tag not in (None, state.tag_object):
             raise RehearsalError("rehearsal remote tag object changed")
 
-        context.github.delete_release(context.repository, state.release_id)
-        if (
-            context.github.get_release(context.repository, state.release_id) is not None
-            or context.github.get_release_by_tag(context.repository, state.tag) is not None
-        ):
-            raise RehearsalError("rehearsal Draft deletion was not observed")
-        if context.git.remote_tag_object(state.tag) != state.tag_object:
-            raise RehearsalError("rehearsal tag changed after Draft deletion")
-        context.git.delete_remote_tag(state.tag, state.tag_object)
+        if release is not None:
+            context.github.delete_release(context.repository, state.release_id)
+            if (
+                context.github.get_release(context.repository, state.release_id) is not None
+                or context.github.get_release_by_tag(context.repository, state.tag) is not None
+            ):
+                raise RehearsalError("rehearsal Draft deletion was not observed")
+            if context.git.remote_tag_object(state.tag) != state.tag_object:
+                raise RehearsalError("rehearsal tag changed after Draft deletion")
+        if remote_tag is not None:
+            context.git.delete_remote_tag(state.tag, state.tag_object)
         if context.git.remote_tag_object(state.tag) is not None:
             raise RehearsalError("rehearsal tag deletion was not observed")
         gpg_home = _output_root(context.repo_root, state.tag) / "gnupg"

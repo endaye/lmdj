@@ -78,6 +78,7 @@ def push_tag(tag: str, context: PrepareContext) -> TransitionResult:
         raise TransitionError("published release intent cannot authorize a missing remote tag")
     status = "already-pushed"
     if remote is None:
+        _require_releasable(authority, "formal tag push")
         try:
             authority.context.git.push_tag(tag)
         except Exception:
@@ -102,8 +103,14 @@ def create_draft(tag: str, context: PrepareContext) -> TransitionResult:
     release = _release_by_tag(authority, tag)
     if authority.intent.disposition is Disposition.PUBLISHED and release is None:
         raise TransitionError("published release intent cannot authorize a new Draft")
+    if authority.intent.disposition is Disposition.PUBLISHED and release is not None:
+        if release.draft:
+            raise TransitionError("published release intent is read-only and cannot resume a Draft")
+        result = verify_draft(tag, release.id, digest, context)
+        return replace(result, status="already-published")
     created = release is None
     if release is None:
+        _require_releasable(authority, "Draft creation")
         body = _release_body(authority.context.repo_root, document, digest)
         release_fields = _release_fields(document)
         try:
@@ -121,6 +128,7 @@ def create_draft(tag: str, context: PrepareContext) -> TransitionResult:
                 raise TransitionError("GitHub Draft creation is uncertain and did not reconcile") from None
 
     _verify_release_metadata(release, document, digest, allow_published=True)
+    _verify_latest_projection(authority, release, document)
     if not release.draft:
         result = verify_draft(tag, release.id, digest, context)
         return replace(result, status="already-published")
@@ -158,6 +166,7 @@ def _verify_release_state(
     if digest != plan_sha256:
         raise TransitionError("reconstructed release plan digest does not match caller input")
     _verify_release_metadata(release, document, digest, allow_published=True)
+    _verify_latest_projection(authority, release, document)
     status = "draft-verified" if release.draft else "already-published"
     result = TransitionResult(
         status, digest, release.id, release.html_url, remote_assets,
@@ -184,13 +193,16 @@ def publish_draft(
         raise TransitionError("Draft publication requires Actions workflow_dispatch")
 
     initial = _verify_release_state(tag, release_id, plan_sha256, context)
+    if not initial.release.draft:
+        return replace(initial.result, status="already-published")
+    _require_releasable(initial.authority, "Draft publication")
     before = _verify_release_state(tag, release_id, plan_sha256, context)
     if initial.release_snapshot != before.release_snapshot:
         raise TransitionError("GitHub Release metadata changed before publication")
     if initial.asset_snapshot != before.asset_snapshot:
         raise TransitionError("GitHub Release assets changed before publication")
     if not before.release.draft:
-        return replace(before.result, status="already-published")
+        raise TransitionError("GitHub Release changed from Draft before publication")
     if before.release.validator is None:
         raise TransitionError("GitHub Release strong validator is unavailable")
 
@@ -261,6 +273,10 @@ def _formal_authority(
             raise TransitionError("release target does not have canonical main ancestry")
         _safe_ci(resolved, intent)
         with resolved.git.detached_worktree(intent.target_revision) as worktree:
+            try:
+                resolved.git.validate_release_target(Path(worktree), intent)
+            except Exception:
+                raise TransitionError("exact release target identity or support metadata is invalid") from None
             if intent.kind.value == "product":
                 _verify_product_proof(resolved, Path(worktree), intent)
         local = resolved.git.local_tag_state(tag) if require_local else None
@@ -400,6 +416,34 @@ def _release_by_tag(authority: _Authority, tag: str) -> GitHubRelease | None:
         raise TransitionError("GitHub Release lookup is unavailable") from None
 
 
+def _require_releasable(authority: _Authority, operation: str) -> None:
+    if authority.intent.disposition is not Disposition.RELEASABLE:
+        raise TransitionError(
+            f"published release intent is read-only and cannot authorize {operation}"
+        )
+
+
+def _verify_latest_projection(
+    authority: _Authority, release: GitHubRelease, document: dict[str, object],
+) -> None:
+    fields = _release_fields(document)
+    try:
+        latest = authority.context.github.get_latest_release(
+            authority.context.policy.repository,
+        )
+    except Exception:
+        raise TransitionError("authoritative latest Release projection is unavailable") from None
+    expected = fields["make_latest"]
+    if release.draft:
+        if latest is not None and latest.id == release.id:
+            raise TransitionError("authoritative latest Release projection identifies a Draft")
+        return
+    if (expected is True and (latest is None or latest.id != release.id)) or (
+        expected is False and latest is not None and latest.id == release.id
+    ):
+        raise TransitionError("authoritative latest Release projection conflicts with release plan")
+
+
 def _release_pair(
     authority: _Authority, tag: str, release_id: int,
 ) -> GitHubRelease:
@@ -459,6 +503,7 @@ def _resume_assets(
     document: dict[str, object],
     local_assets: tuple[AssetBuild, ...],
 ) -> None:
+    _require_releasable(authority, "asset upload")
     expected = {asset.name: asset for asset in local_assets}
     existing = _asset_map(authority, release)
     if not set(existing).issubset(expected):

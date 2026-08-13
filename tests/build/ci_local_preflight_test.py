@@ -29,6 +29,7 @@ ENTRY_POINT_PATH = ROOT / "scripts/local-ci.sh"
 WORKFLOW_PATH = ROOT / ".github/workflows/ci.yml"
 
 PYTHON_TEST_FILE = re.compile(r"[\w./-]*[\w-]+_test\.py")
+RELEASE_DISCOVERY = "python3 -m unittest discover -s tests/build -p 'release_*_test.py'"
 
 LANES = {
     "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
@@ -72,7 +73,13 @@ def workflow_job(name: str) -> str:
 
 def python_test_files(text: str) -> set[str]:
     """Return every Python test file path an invocation text names."""
-    return set(PYTHON_TEST_FILE.findall(text))
+    result = set(PYTHON_TEST_FILE.findall(text))
+    if RELEASE_DISCOVERY in text:
+        result.update(
+            str(path.relative_to(ROOT))
+            for path in (ROOT / "tests/build").glob("release_*_test.py")
+        )
+    return result
 
 
 def release_test_files(text: str) -> set[str]:
@@ -211,12 +218,22 @@ class LaneCommandDriftTest(unittest.TestCase):
         self.assertEqual(self.local_test_files("deploy_contract"), workflow_tests)
 
     def test_all_release_contract_files_match_between_ci_and_local(self) -> None:
-        workflow_release_tests = release_test_files(workflow_job("deploy-contract"))
+        workflow = workflow_job("deploy-contract")
+        local_commands = " ".join(
+            self.preflight.load_lane_commands(policy=self.policy)["deploy_contract"]["commands"]
+        )
+        self.assertIn(RELEASE_DISCOVERY, workflow)
+        self.assertIn(RELEASE_DISCOVERY, local_commands)
+        workflow_release_tests = release_test_files(workflow)
         local_release_tests = {
             path for path in self.local_test_files("deploy_contract")
             if Path(path).name.startswith("release_")
         }
-        self.assertTrue(workflow_release_tests, "deploy-contract runs no release test")
+        on_disk = {
+            str(path.relative_to(ROOT))
+            for path in (ROOT / "tests/build").glob("release_*_test.py")
+        }
+        self.assertEqual(workflow_release_tests, on_disk)
         self.assertEqual(local_release_tests, workflow_release_tests)
 
     def test_a_dropped_local_command_stops_covering_the_workflow_job(self) -> None:

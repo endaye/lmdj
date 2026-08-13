@@ -9,8 +9,17 @@ import re
 import shutil
 import tempfile
 from typing import Iterator, Mapping
+from urllib.parse import urlparse
 
 from .commands import CommandError, CommandRunner
+from .model import (
+    CANONICAL_BRANCH,
+    CANONICAL_PRODUCT_FINGERPRINT,
+    CANONICAL_REPOSITORY,
+    ReleaseIntent,
+)
+from .openpgp import OpenPgpError, OpenPgpVerifier
+from .target_validation import TargetValidationError, validate_release_target
 
 
 class GitRepositoryError(RuntimeError):
@@ -34,6 +43,8 @@ class GitRepository:
         self._tag_prefix = "refs/lmdj-release/tags/"
 
     def fetch_authority(self, repository: str, branch: str) -> None:
+        if repository != CANONICAL_REPOSITORY or branch != CANONICAL_BRANCH:
+            raise GitRepositoryError("canonical fetch authority is invalid")
         remote = f"https://github.com/{repository}.git"
         self._run([
             "git", "fetch", "--no-tags", "--prune", remote,
@@ -56,6 +67,12 @@ class GitRepository:
             return True
         except GitRepositoryError:
             return False
+
+    def validate_release_target(self, worktree: Path, intent: ReleaseIntent) -> None:
+        try:
+            validate_release_target(worktree, intent, runner=self.runner)
+        except TargetValidationError as error:
+            raise GitRepositoryError(str(error)) from None
 
     def remote_tag_state(self, tag: str) -> LocalTag | None:
         return self._tag_state(f"{self._tag_prefix}{tag}")
@@ -113,12 +130,14 @@ class GitRepository:
     def push_tag(self, tag: str) -> None:
         """Push exactly one local tag without branches, wildcard tags, or force."""
         _require_tag(tag)
+        self._require_canonical_origin()
         reference = f"refs/tags/{tag}"
         self._run(["git", "push", "origin", f"{reference}:{reference}"])
 
     def remote_tag_object(self, tag: str) -> str | None:
         """Read the exact canonical remote ref without trusting a local tracking ref."""
         _require_tag(tag)
+        self._require_canonical_origin()
         reference = f"refs/tags/{tag}"
         output = self._run(["git", "ls-remote", "--refs", "origin", reference]).stdout.strip()
         if not output:
@@ -137,6 +156,7 @@ class GitRepository:
         if not _sha(expected_object) or self.remote_tag_object(tag) != expected_object:
             raise GitRepositoryError("remote rehearsal tag object changed")
         reference = f"refs/tags/{tag}"
+        self._require_canonical_origin()
         self._run(["git", "push", "origin", f":{reference}"])
         if self.remote_tag_object(tag) is not None:
             raise GitRepositoryError("remote rehearsal tag deletion was not observed")
@@ -159,15 +179,49 @@ class GitRepository:
                 ["git", "rev-parse", "--verify", f"{reference}^{{commit}}"],
                 environment=environment,
             ).stdout.strip()
-            status = self._run(
-                ["git", "verify-tag", "--raw", reference], environment=environment,
-            ).stderr
+            if reference.startswith(self._tag_prefix):
+                signer = self._verify_canonical_tag(reference)
+            else:
+                status = self._run(
+                    ["git", "verify-tag", "--raw", reference], environment=environment,
+                ).stderr
+                signer = _signer_from_status(status)
         except GitRepositoryError:
             raise
-        signer = _signer_from_status(status)
         if not _sha(object_id) or not _sha(target) or signer is None:
             raise GitRepositoryError("release tag signature is invalid")
         return LocalTag(object_id, target, signer)
+
+    def _verify_canonical_tag(self, reference: str) -> str:
+        """Verify fetched tag bytes using only the Product key tracked on canonical main."""
+        try:
+            tag_bytes = self._run(["git", "cat-file", "tag", reference]).stdout.encode("utf-8")
+            key_bytes = self._run([
+                "git", "show",
+                f"{self._main_ref}:.github/release-signing-keys/lmdj-product.asc",
+            ]).stdout.encode("utf-8")
+            with tempfile.TemporaryDirectory(prefix="lmdj-release-keyring-") as directory:
+                home = Path(directory) / "gnupg"
+                home.mkdir(mode=0o700)
+                key_path = Path(directory) / "lmdj-product.asc"
+                tag_path = Path(directory) / "tag.object"
+                key_path.write_bytes(key_bytes)
+                tag_path.write_bytes(tag_bytes)
+                verifier = OpenPgpVerifier(runner=self.runner)
+                verifier.import_public_key(home, key_path, CANONICAL_PRODUCT_FINGERPRINT)
+                verifier.verify_inline_tag(home, tag_path, CANONICAL_PRODUCT_FINGERPRINT)
+            return CANONICAL_PRODUCT_FINGERPRINT
+        except (OSError, OpenPgpError):
+            raise GitRepositoryError("release tag signature is invalid") from None
+
+    def _require_canonical_origin(self) -> None:
+        try:
+            fetch_url = self._run(["git", "remote", "get-url", "origin"]).stdout.strip()
+            push_url = self._run(["git", "remote", "get-url", "--push", "origin"]).stdout.strip()
+        except GitRepositoryError:
+            raise GitRepositoryError("canonical origin is unavailable") from None
+        if any(_repository_from_remote_url(url) != CANONICAL_REPOSITORY for url in (fetch_url, push_url)):
+            raise GitRepositoryError("canonical origin does not bind endaye/lmdj")
 
     def _run(
         self, arguments: list[str], *, environment: Mapping[str, str] | None = None,
@@ -200,3 +254,29 @@ def _require_tag(tag: object) -> None:
         or re.search(r"[\x00-\x20\x7f~^:?*\\[]", tag) is not None
     ):
         raise GitRepositoryError("release tag reference is invalid")
+
+
+def _repository_from_remote_url(value: str) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    path: str | None = None
+    if value.startswith("git@github.com:"):
+        path = value.removeprefix("git@github.com:")
+    else:
+        try:
+            parsed = urlparse(value)
+            port = parsed.port
+        except ValueError:
+            return None
+        if (
+            parsed.scheme in ("https", "ssh") and parsed.hostname == "github.com"
+            and port is None and not parsed.params and not parsed.query and not parsed.fragment
+            and (
+                (parsed.scheme == "https" and parsed.username is None and parsed.password is None)
+                or (parsed.scheme == "ssh" and parsed.username == "git" and parsed.password is None)
+            )
+        ):
+            path = parsed.path.lstrip("/")
+    if path is None:
+        return None
+    return path.removesuffix(".git")

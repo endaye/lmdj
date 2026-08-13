@@ -169,6 +169,43 @@ class GitHubClient:
             etag=_strong_etag(response.headers),
         )
 
+    def get_latest_release(self, repository: str) -> GitHubRelease | None:
+        """Return GitHub's authoritative public latest-Release projection."""
+        _require_repository(repository)
+        response = self._request("GET", f"/repos/{repository}/releases/latest")
+        if response.status == 404:
+            return None
+        return _parse_release(
+            _json_response(response, {200}), repository,
+            etag=_strong_etag(response.headers),
+        )
+
+    def list_releases(self, repository: str) -> list[GitHubRelease]:
+        """Return the complete typed Release inventory through strict pagination."""
+        _require_repository(repository)
+        endpoint = f"/repos/{repository}/releases"
+        required_query = {"per_page": "100"}
+        next_path: str | None = f"{endpoint}?{urlencode(required_query)}"
+        visited: set[str] = set()
+        releases: list[GitHubRelease] = []
+        while next_path is not None:
+            if next_path in visited or len(visited) >= self._page_cap:
+                raise GitHubApiError("GitHub Release pagination is invalid")
+            visited.add(next_path)
+            response = self._request("GET", next_path)
+            document = _json_response(response, {200})
+            if not isinstance(document, list):
+                raise GitHubApiError("GitHub Release projection is invalid")
+            releases.extend(_parse_release(item, repository) for item in document)
+            next_path = _next_link(
+                response.headers, endpoint, required_query, subject="Release",
+            )
+        identifiers = [release.id for release in releases]
+        tags = [release.tag_name for release in releases]
+        if len(identifiers) != len(set(identifiers)) or len(tags) != len(set(tags)):
+            raise GitHubApiError("GitHub Release pagination returned duplicate identities")
+        return releases
+
     def create_draft_release(
         self,
         repository: str,
