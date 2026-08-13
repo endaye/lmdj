@@ -116,6 +116,45 @@ The closed lanes are `docs_static`, `portal`, `ci_contract`, `core_ubuntu`,
 inheritance, not component ownership: a shared fixture or tool selects every
 consumer whose behavior could change.
 
+Ownership follows the subject under test, not only the directory the test file
+sits in. `apps/web-runtime-host/test/deploy_command_test.py` executes
+`scripts/web-runtime-deploy.sh` end to end against a fake Netlify server, so
+the policy maps that suite and the three tools it drives —
+`apps/web-runtime-host/tools/deploy_orchestrator.py`, `netlify_api.py`, and
+`release_bundle.py` — to `deploy_contract` on top of their
+`apps/web-runtime-host/` prefix owners. Without those rules, editing the deploy
+command selected `deploy_contract` alone and never ran the suite that proves
+the command: a fail-open gap inside a policy documented as conservative test
+inheritance. The `deploy-contract` job now runs that suite, and
+`scripts/web-runtime-host.sh run_nonbrowser_tests` no longer does, so the
+Formal Web Runtime Host proof's non-browser phase excludes it while the other
+six non-browser suites stay — their subjects remain owned by
+`web_runtime_host`. Union semantics cannot subtract a lane, so the suite and
+the three tools still select `web_runtime_host` through the directory prefix;
+that over-selection is the fail-closed direction and is accepted.
+
+`deploy-contract` runs that suite sharded across worker processes rather than
+serially. `--shards N` defaults to `min(4, os.cpu_count())`, is overridable
+through `LMDJ_DEPLOY_COMMAND_TEST_SHARDS`, and `--shards 1` is the serial run.
+Sharding is safe here and deliberately not applied to the Playwright browser
+suites, which stay at `workers: 1`: every test in this suite builds its own
+temporary repository, its own fake-command directory, and its own fake Netlify
+server on port 0, and its `tearDown` only reads the real evidence root, so
+there is no shared timing-sensitive state. The runner partitions the discovered
+test ids deterministically, prints each failed worker's own output, and fails
+closed when the executed set differs from the discovered set — a silently
+dropped test is a failure, not a faster pass.
+
+Two tests are the exception and run alone in a serial phase after the parallel
+one: the SIGINT/SIGTERM cases drive the deploy command to a blocking point,
+signal its process group, and then assert against bounded readiness and
+post-signal cleanup windows. They are the only tests in the file with
+wall-clock budgets, and competing shard load can exceed those windows and fail
+a correct command. The runner names them explicitly and refuses to start if a
+named test no longer exists, so a rename cannot silently return them to the
+parallel phase. Widening a timing budget to buy parallelism would weaken the
+assertion; giving those two tests an idle machine does not.
+
 The Ubuntu selector runs only when a selected lane needs the trusted Linux
 pool, including `package`; the macOS selector runs only for `core_macos`.
 Package retains LFS hydration and explicitly disables ccache while reusing the
