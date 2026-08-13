@@ -133,6 +133,28 @@ six non-browser suites stay — their subjects remain owned by
 the three tools still select `web_runtime_host` through the directory prefix;
 that over-selection is the fail-closed direction and is accepted.
 
+`deploy-contract` runs that suite sharded across worker processes rather than
+serially. `--shards N` defaults to `min(4, os.cpu_count())`, is overridable
+through `LMDJ_DEPLOY_COMMAND_TEST_SHARDS`, and `--shards 1` is the serial run.
+Sharding is safe here and deliberately not applied to the Playwright browser
+suites, which stay at `workers: 1`: every test in this suite builds its own
+temporary repository, its own fake-command directory, and its own fake Netlify
+server on port 0, and its `tearDown` only reads the real evidence root, so
+there is no shared timing-sensitive state. The runner partitions the discovered
+test ids deterministically, prints each failed worker's own output, and fails
+closed when the executed set differs from the discovered set — a silently
+dropped test is a failure, not a faster pass.
+
+Two tests are the exception and run alone in a serial phase after the parallel
+one: the SIGINT/SIGTERM cases drive the deploy command to a blocking point,
+signal its process group, and then assert against bounded readiness and
+post-signal cleanup windows. They are the only tests in the file with
+wall-clock budgets, and competing shard load can exceed those windows and fail
+a correct command. The runner names them explicitly and refuses to start if a
+named test no longer exists, so a rename cannot silently return them to the
+parallel phase. Widening a timing budget to buy parallelism would weaken the
+assertion; giving those two tests an idle machine does not.
+
 The Ubuntu selector runs only when a selected lane needs the trusted Linux
 pool, including `package`; the macOS selector runs only for `core_macos`.
 Package retains LFS hydration and explicitly disables ccache while reusing the
