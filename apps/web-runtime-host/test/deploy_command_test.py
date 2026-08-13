@@ -28,6 +28,9 @@ SOURCE_COMMAND = SOURCE_ROOT / "scripts/web-runtime-deploy.sh"
 SOURCE_HELPER = SOURCE_ROOT / "apps/web-runtime-host/tools/deploy_orchestrator.py"
 SOURCE_NETLIFY = SOURCE_ROOT / "apps/web-runtime-host/tools/netlify_api.py"
 SOURCE_RELEASE_BUNDLE = SOURCE_ROOT / "apps/web-runtime-host/tools/release_bundle.py"
+SOURCE_RELEASE_INIT = SOURCE_ROOT / "tools/release/__init__.py"
+SOURCE_RELEASE_COMMANDS = SOURCE_ROOT / "tools/release/commands.py"
+SOURCE_RELEASE_OPENPGP = SOURCE_ROOT / "tools/release/openpgp.py"
 REAL_EVIDENCE_ROOT = SOURCE_ROOT / "build/deploy/web-runtime-host"
 TAG = "lmdj-v1.0.15.3"
 PRODUCT_BUILD = "1.0.15.3"
@@ -362,6 +365,9 @@ class DeployCommandTest(unittest.TestCase):
         self.copy_source(
             SOURCE_RELEASE_BUNDLE, "apps/web-runtime-host/tools/release_bundle.py"
         )
+        self.copy_source(SOURCE_RELEASE_INIT, "tools/release/__init__.py")
+        self.copy_source(SOURCE_RELEASE_COMMANDS, "tools/release/commands.py")
+        self.copy_source(SOURCE_RELEASE_OPENPGP, "tools/release/openpgp.py")
         api_base = f"http://127.0.0.1:{self.server.server_port}/api/v1"
         netlify_source = SOURCE_NETLIFY.read_text(encoding="utf-8")
         original = '"https://api.netlify.com/api/v1"'
@@ -601,6 +607,9 @@ def verify_distribution(dist_root, repo_root):
                 home="$argument"
               fi
               previous="$argument"
+            done
+            for required in --batch --no-tty --no-autostart --homedir; do
+              case " $* " in *" $required "*) ;; *) exit 70 ;; esac
             done
             case " $* " in
               *" --show-keys "*)

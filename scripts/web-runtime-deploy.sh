@@ -266,7 +266,8 @@ verify_signed_tag() {
   export GNUPGHOME="$owned_temp/gnupg"
   key_fingerprint="$(
     without_deploy_secrets \
-      gpg --batch --show-keys --with-colons "$key_path" 2>/dev/null |
+      gpg --batch --no-tty --no-autostart --homedir "$GNUPGHOME" \
+        --show-keys --with-colons "$key_path" 2>/dev/null |
       awk -F: '$1 == "fpr" {print $10; exit}'
   )" || {
     fail "trusted Product signing key is unavailable"
@@ -277,7 +278,8 @@ verify_signed_tag() {
     return
   }
   without_deploy_secrets \
-    gpg --batch --import "$key_path" >/dev/null 2>&1 || {
+    gpg --batch --no-tty --no-autostart --homedir "$GNUPGHOME" \
+      --import "$key_path" >/dev/null 2>&1 || {
     fail "trusted Product signing key import failed"
     return
   }

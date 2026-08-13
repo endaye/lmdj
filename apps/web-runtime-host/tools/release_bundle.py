@@ -10,13 +10,19 @@ import os
 import re
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Callable
+
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.release.openpgp import OpenPgpError, OpenPgpVerifier
 
 
 @dataclass(frozen=True)
@@ -81,57 +87,15 @@ def verify_detached_checksum_signature(
         raise BundleError("release checksum signature is invalid") from error
     if not signature_text.startswith("-----BEGIN PGP SIGNATURE-----\n"):
         raise BundleError("release checksum signature is not armored")
-
-    def run_gpg(home: Path, arguments: list[str]) -> subprocess.CompletedProcess[str]:
-        try:
-            completed = subprocess.run(
-                [gpg_program, "--batch", "--no-tty", "--homedir", str(home), *arguments],
-                check=False,
-                capture_output=True,
-                text=True,
-                env={"LANG": "C", "LC_ALL": "C", "PATH": os.environ.get("PATH", "")},
-            )
-        except OSError:
-            raise BundleError("release checksum signature verification is unavailable") from None
-        if completed.returncode != 0:
-            raise BundleError("release checksum signature verification failed")
-        return completed
-
     with tempfile.TemporaryDirectory(prefix=".lmdj-checksum-signature-") as directory:
         home = Path(directory)
         home.chmod(0o700)
-        run_gpg(home, ["--import", str(checksum_public_key_path)])
-        listed = run_gpg(home, ["--with-colons", "--fingerprint", "--list-keys"])
-        primary_fingerprints: list[str] = []
-        expecting_primary = False
-        for line in listed.stdout.splitlines():
-            fields = line.split(":")
-            record = fields[0] if fields else ""
-            if record == "pub":
-                expecting_primary = True
-            elif record == "fpr" and expecting_primary and len(fields) > 9:
-                primary_fingerprints.append(fields[9].upper())
-                expecting_primary = False
-            elif record in {"sub", "sec", "ssb"}:
-                expecting_primary = False
-        if primary_fingerprints != [fingerprint]:
-            raise BundleError("repository checksum signing public key fingerprint mismatch")
-        verified = run_gpg(
-            home,
-            [
-                "--status-fd",
-                "1",
-                "--verify",
-                str(signature_path),
-                str(checksum_path),
-            ],
-        )
-        valid = []
-        for line in verified.stdout.splitlines():
-            if line.startswith("[GNUPG:] VALIDSIG "):
-                valid.append(line.split())
-        if len(valid) != 1 or fingerprint not in {field.upper() for field in valid[0][2:]}:
-            raise BundleError("release checksum signature signer mismatch")
+        try:
+            verifier = OpenPgpVerifier(gpg_program=gpg_program)
+            verifier.import_public_key(home, checksum_public_key_path, fingerprint)
+            verifier.verify_detached(home, signature_path, checksum_path, fingerprint)
+        except OpenPgpError as error:
+            raise BundleError("release checksum signature verification failed") from error
 
 
 def canonical_json(bundle: StagedBundle) -> str:
