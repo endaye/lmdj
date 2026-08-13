@@ -137,7 +137,10 @@ test('current Portal maps the corrected Creator lifecycle and automated evidence
   assert.match(storage, /managed Bundle paths[^\n]+ASCII segment subset/);
   assert.match(storage, /Project payload text remains UTF-8/);
   assert.match(proof, /reload[^\n]+16 admissions[^\n]+16 outcomes[^\n]+0 rejection[^\n]+resize/);
-  assert.match(proof, /synthetic lifecycle[^\n]+automated contract only/);
-  assert.match(proof, /physical\/hearing\/Safari\/iPadOS\/MIDI[^\n]+unverified and deferred/);
-  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 5);
+  assert.match(proof, /synthetic lifecycle\/key repeat\/MIDI[^\n]+automated contract only/);
+  assert.match(
+    proof,
+    /macOS Chrome Physical MIDI `failed on 1\.0\.20\.0 \/ pending retest on 1\.0\.21\.0`/,
+  );
+  assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 4);
 });

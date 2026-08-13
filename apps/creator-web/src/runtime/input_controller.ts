@@ -180,7 +180,6 @@ export function createCreatorInputController({
     noteStart: 36,
     slotStart: 0,
     slotCount: 16,
-    channel: 0,
     resolveSlot,
     isAvailable: isAssigned,
     onRelease: release,
