@@ -224,9 +224,15 @@ Documentation impact: required.
 
 ## Pull Request and Completion Boundary
 
-This branch bases on `fix/ci-cost-hardening` and must not open a Pull
-Request before that branch's Tasks 1–6 Pull Request is squash-merged; rebase
-onto `main` afterward. Every Task here touches the central CI control plane,
+Owner decision (2026-08-13, superseding the original boundary below): this
+branch is folded into the Tasks 1–6 Pull Request (#133) instead of opening a
+second Pull Request, to spend one full-mode CI cycle rather than two. The
+combined PR squash-merges as one commit, matching the #130 precedent. The
+completion conditions below still apply, evaluated on the combined PR.
+
+Original boundary, retained for the record: this branch bases on
+`fix/ci-cost-hardening` and was not to open a Pull Request before that
+branch's Tasks 1–6 Pull Request merged; rebase onto `main` afterward. Every Task here touches the central CI control plane,
 so the integration candidate runs full-mode CI by policy. A green local run
 does not authorize push; a green pushed PR does not authorize merge. The
 plan is complete when the approved PR is squash-merged and the merged `main`
