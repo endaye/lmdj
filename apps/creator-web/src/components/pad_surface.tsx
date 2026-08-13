@@ -13,11 +13,11 @@ interface PadSurfaceProps {
   controller?: ReturnType<typeof createCreatorInputController>;
 }
 
-const KEYBOARD_KEY_BY_LOCAL_PAD = new Map(
+const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
   Object.entries(DEFAULT_KEYBOARD_MAPPING).map(([code, localPad]) => [
     localPad,
     code.replace(/^Key/, ""),
-  ]),
+  ] as const),
 );
 
 export function PadSurface({state, controller}: PadSurfaceProps) {
