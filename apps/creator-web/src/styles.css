@@ -85,6 +85,8 @@ button:disabled { color: #737b87; }
 .pad-grid { display: grid; grid-template-columns: repeat(4, minmax(44px, 1fr)); gap: .65rem; }
 .pad { min-height: 5.25rem; display: grid; align-content: space-between; text-align: left; }
 .pad span { color: #9da6b4; font-size: .8rem; }
+.pad kbd { justify-self: end; min-width: 1.5rem; padding: .1rem .35rem; border: 1px solid #596273; border-radius: .3rem; color: #d8dee9; background: #11151a; font: inherit; font-size: .75rem; text-align: center; }
+.pad:disabled kbd { color: #8f98a7; border-color: #444b57; }
 .pad[data-outcome="admitted"] { border-color: #80a9ff; }
 .pad[data-outcome="started"] { border-color: #b7ffc5; box-shadow: inset 0 0 0 1px #b7ffc5; }
 .pad[data-outcome="capacity"] { border-color: #ffb36b; }

@@ -59,7 +59,7 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   await expect(bankB).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(bankB).toHaveAttribute("aria-pressed", "true");
-  await expect(page.getByRole("button", {name: /^Pad B\d+ — assigned$/}))
+  await expect(page.getByRole("button", {name: /^Pad B\d+ — assigned — Key [QWERTYUIASDFGHJK]$/}))
     .toHaveCount(16);
 });
 
@@ -71,7 +71,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
   expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "1.2.7"},
+    {host_id: "web-runtime-host", host_version: "1.2.8"},
   ]);
   expect(manifest.assets.map(({role}) => role)).toEqual([
     "host_main", "runtime_script", "runtime_wasm", "host_style",
@@ -106,7 +106,7 @@ for (const viewport of [
     await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
       timeout: 30_000,
     });
-    await expect(page.getByRole("button", {name: /^Pad A\d+ — empty$/}))
+    await expect(page.getByRole("button", {name: /^Pad A\d+ — empty — Key [QWERTYUIASDFGHJK]$/}))
       .toHaveCount(16);
     expect(await page.evaluate(() =>
       document.documentElement.scrollWidth <= document.documentElement.clientWidth,
@@ -121,7 +121,7 @@ for (const viewport of [
     await (await chooserPromise).setFiles(bundle);
     await expect(page.getByRole("heading", {name: "Project 00000000"}))
       .toBeVisible({timeout: 120_000});
-    const pads = page.getByRole("button", {name: /^Pad A\d+ — assigned$/});
+    const pads = page.getByRole("button", {name: /^Pad A\d+ — assigned — Key [QWERTYUIASDFGHJK]$/});
     await expect(pads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {
       const box = await pads.nth(index).boundingBox();

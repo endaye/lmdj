@@ -26,10 +26,10 @@ function defaultDiagnostics(): RuntimeDiagnostics {
     state: "audio-suspended",
     error_code: null,
     error_details: {},
-    product_build: "1.0.19.0",
+    product_build: "1.0.20.0",
     host_id: "creator-web",
-    host_version: "1.1.1",
-    platform_version: "0.2.0",
+    host_version: "1.1.2",
+    platform_version: "0.2.1",
     protocol_version: 1,
     capabilities: {
       secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

@@ -1,5 +1,12 @@
 # Stage 7 Remediation Canary Evidence — 2026-08-13
 
+> Current candidate note: this file preserves the withdrawn `1.0.18.0` run and
+> its historical diagnostic observations. The `1.0.19.0` corrected package was
+> fully proved but its blank human sheet was not executed before the keyboard
+> spatial-order defect was identified. Product Build `1.0.20.0` requires a new
+> evidence record and a fresh ten-step run whose step 5 verifies
+> `Q W E R T Y U I -> A1..A8` and `A S D F G H J K -> A9..A16`.
+
 ## Evidence boundary
 
 This record binds the Stage 7 remediation candidate's automated Proof to one

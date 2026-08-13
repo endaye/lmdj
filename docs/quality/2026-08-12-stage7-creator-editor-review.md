@@ -402,6 +402,13 @@ Web Runtime Host 与 Provider identities 不变。`1.0.19.0` 已在 clean revisi
 `213023d096522de0bbe5e02e6699d775a45e67a6` 完成 full candidate Proof、不可变
 snapshot 与独立 evidence；仍必须从步骤 1 重跑全部十步人工 Canary。
 
+人工表执行前又发现默认实体键盘上下行与视觉 Pad 顺序反向。新的空间映射修复分配
+Product Build `1.0.20.0`、Web Runtime Platform `0.2.1`、Creator Web `1.1.2`
+与 Formal Web Runtime Host `1.2.8`：`Q W E R T Y U I` 对应 Pad 1–8，
+`A S D F G H J K` 对应 Pad 9–16，Pad 键帽从同一 mapping truth 派生。
+`1.0.19.0` 的 branch-local Proof 仍是其精确 revision 的历史事实，但不能替代
+`1.0.20.0` 自动化、人工或 merged-main 证据；T1 继续从步骤 1 开始。
+
 ### Final finding closure audit
 
 下列是当前修复分支的唯一现行 closure ledger；第二至七节仍保留各历史基线下的
@@ -437,7 +444,7 @@ snapshot 与独立 evidence；仍必须从步骤 1 重跑全部十步人工 Cana
 | F13 | resolved | `subscribeDiagnostics` 事件通知取代 16 ms diagnostics polling；`ef2b06b`。 |
 | F14 | resolved | 自动 reopen 与用户 Open/Import 共用 generation/session-bound Project action lane；`0e921be`。 |
 | F15 | resolved | Opened Project Surface 显示 BPM；spec 明确自动持久化且无虚假 `Save Local` command；`0e921be`。 |
-| T1 | open — corrected candidate must restart at step 1 | `1.0.18.0` 首轮步骤 1–6 仅为诊断观察且整轮撤回；`1.0.19.0` 的操作者、浏览器版本、听感、十步观察与 report hash 均待重新填写。 |
+| T1 | open — corrected candidate must restart at step 1 | `1.0.18.0` 首轮步骤 1–6 已撤回；`1.0.19.0` 未执行人工表便被空间映射修复取代；`1.0.20.0` 的操作者、浏览器版本、听感、十步观察与 report hash 均待重新填写。 |
 | T2 | resolved | Busy retry 上限 8 次、transition-based waits、最终 alert count 0；`8553467`。 |
 | T3 | resolved | Packaged keyboard-only Import、reload 后 Open、Bank selection 完成型旅程；`8553467`。 |
 | T4 | resolved | Packaged outcome timeout -> restart-required -> old generation cleanup -> replacement -> explicit activation；`f4722de`。 |
@@ -459,11 +466,12 @@ snapshot 与独立 evidence；仍必须从步骤 1 重跑全部十步人工 Cana
 | Gate | Status | Current evidence |
 | --- | --- | --- |
 | T1 human canary | `open — corrected candidate must restart at step 1` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从 `1.0.18.0` 的步骤 1–6 或自动化结果推导 pass。 |
-| Product Build `1.0.19.0` branch-local Proof | `passed` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
-| Product Build `1.0.19.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 获授权合并后必须在 exact merged `main` revision 重跑 Task 13 全部命令并落 evidence-only addendum。 |
+| Product Build `1.0.19.0` historical branch-local Proof | `passed, superseded for current mapping acceptance` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
+| Product Build `1.0.20.0` branch-local Proof | `pending` | 必须在 clean committed mapping candidate 与其 immutable snapshot 上完整重跑。 |
+| Product Build `1.0.20.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 获授权合并后必须在 exact merged `main` revision 重跑全部命令并落 evidence-only addendum。 |
 
 因此当前源代码、自动化、文档与历史 G1 更正都已纳入 closure ledger，但 T1 尚未
-从正确候选的步骤 1 重新执行，且 `1.0.19.0` 尚未经过获授权的 PR/merge 与
+从正确候选的步骤 1 重新执行，且 `1.0.20.0` 尚未经过获授权的 PR/merge 与
 post-merge Proof。本修复任务
 仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
 promotion。

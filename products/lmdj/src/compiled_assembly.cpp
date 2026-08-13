@@ -12,7 +12,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.19.0",
+      "1.0.20.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.2.0"},
@@ -22,14 +22,14 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"audio-runtime", "0.4.1"},
           CompiledComponent{"provider-sdk", "1.1.1"},
           CompiledComponent{"application-facade", "1.3.5"},
-          CompiledComponent{"web-runtime-platform", "0.2.0"},
+          CompiledComponent{"web-runtime-platform", "0.2.1"},
       },
       {
           CompiledComponent{"core-cli", "1.0.11"},
           CompiledComponent{"core-mcp", "1.1.8"},
           CompiledComponent{"native-test-host", "1.0.9"},
-          CompiledComponent{"web-runtime-host", "1.2.7"},
-          CompiledComponent{"creator-web", "1.1.1"},
+          CompiledComponent{"web-runtime-host", "1.2.8"},
+          CompiledComponent{"creator-web", "1.1.2"},
       },
       {
           CompiledComponent{"lmdj.project.v1", "1.0.0"},

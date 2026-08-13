@@ -5,22 +5,22 @@ const ignoreRelease = (_slot, _source) => {};
 const allMidiChannels = null;
 
 export const DEFAULT_KEYBOARD_MAPPING = Object.freeze({
-  KeyA: 0,
-  KeyS: 1,
-  KeyD: 2,
-  KeyF: 3,
-  KeyG: 4,
-  KeyH: 5,
-  KeyJ: 6,
-  KeyK: 7,
-  KeyQ: 8,
-  KeyW: 9,
-  KeyE: 10,
-  KeyR: 11,
-  KeyT: 12,
-  KeyY: 13,
-  KeyU: 14,
-  KeyI: 15,
+  KeyQ: 0,
+  KeyW: 1,
+  KeyE: 2,
+  KeyR: 3,
+  KeyT: 4,
+  KeyY: 5,
+  KeyU: 6,
+  KeyI: 7,
+  KeyA: 8,
+  KeyS: 9,
+  KeyD: 10,
+  KeyF: 11,
+  KeyG: 12,
+  KeyH: 13,
+  KeyJ: 14,
+  KeyK: 15,
 });
 
 

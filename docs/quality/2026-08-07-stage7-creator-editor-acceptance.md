@@ -40,6 +40,17 @@ candidate sequence passed from clean snapshot revision
 ten-step sheet are recorded in
 `docs/release-evidence/2026-08-13-stage7-remediation-canary-1.0.19.0.md`.
 
+Before that blank human sheet was executed, review of the physical keyboard
+journey found that its lower `A..K` row addressed Pads 1–8 while the upper
+`Q..I` row addressed Pads 9–16, opposite the Creator's ascending visual order.
+The current correction allocates Product Build `1.0.20.0`, Web Runtime Platform
+`0.2.1`, Creator Web `1.1.2`, and Formal Web Runtime Host `1.2.8`. The single
+shared map now assigns `Q..I -> Pad 1..8` and `A..K -> Pad 9..16`; every Pad
+shows an accessible key hint derived from that same map. Pointer, MIDI, stable
+Slot, Project, Bundle, Runtime Snapshot, and audio lifecycle semantics remain
+unchanged. A new `1.0.20.0` Proof and ten-step sheet are required; no automated
+or manual result transfers from `1.0.19.0`.
+
 This remains branch-local candidate evidence, not merged-main Proof. No push,
 PR, merge, tag, Release, deployment, publication, or Channel promotion is
 claimed by this record.

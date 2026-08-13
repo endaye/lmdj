@@ -30,7 +30,7 @@ async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export report"}).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("lmdj-creator-web-1.0.19.0.json");
+  expect(download.suggestedFilename()).toBe("lmdj-creator-web-1.0.20.0.json");
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
 
@@ -47,7 +47,9 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
   const visited = new Set();
   for (const bank of ["A", "B", "C", "D"]) {
     await page.getByRole("button", {name: `Bank ${bank}`}).click();
-    const pads = page.getByRole("button", {name: /^Pad [A-D]\d+ — assigned$/});
+    const pads = page.getByRole("button", {
+      name: /^Pad [A-D]\d+ — assigned — Key [QWERTYUIASDFGHJK]$/,
+    });
     await expect(pads).toHaveCount(16);
     for (let index = 0; index < 16; index += 1) {
       const pad = pads.nth(index);
@@ -68,18 +70,27 @@ test("visible Creator journey imports, activates, and admits all 64 unique Pad a
     ];
   }, {timeout: 30_000}).toEqual(["running", 64, 64, 0]);
 });
-test("one synthetic held-key Bank-A burst preserves the full Runtime tuple", async ({page, browserName}) => {
+test("physical key order addresses the matching Bank-A Pads and preserves the full Runtime tuple", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(120_000);
   await page.goto("/index.html");
   await importProject(page);
   await activate(page);
   const keys = [
-    "KeyA", "KeyS", "KeyD", "KeyF", "KeyG", "KeyH", "KeyJ", "KeyK",
-    "KeyQ", "KeyW", "KeyE", "KeyR", "KeyT", "KeyY", "KeyU", "KeyI",
+    ["KeyQ", "Q"], ["KeyW", "W"], ["KeyE", "E"], ["KeyR", "R"],
+    ["KeyT", "T"], ["KeyY", "Y"], ["KeyU", "U"], ["KeyI", "I"],
+    ["KeyA", "A"], ["KeyS", "S"], ["KeyD", "D"], ["KeyF", "F"],
+    ["KeyG", "G"], ["KeyH", "H"], ["KeyJ", "J"], ["KeyK", "K"],
   ];
-  for (const key of keys) await page.keyboard.down(key);
-  for (const key of keys) await page.keyboard.up(key);
+  for (const [index, [code, key]] of keys.entries()) {
+    const pad = page.getByRole("button", {
+      name: `Pad A${index + 1} — assigned — Key ${key}`,
+    });
+    await page.keyboard.down(code);
+    await expect(pad).not.toHaveAttribute("data-outcome", "idle");
+    await page.keyboard.up(code);
+    await expect(pad).toHaveAttribute("data-outcome", "idle");
+  }
   await expect.poll(async () => {
     const report = await downloadReport(page);
     return [
@@ -97,7 +108,7 @@ test("ready active Runtime survives portrait and landscape resize", async ({page
   await page.goto("/index.html");
   await importProject(page);
   await activate(page);
-  await page.keyboard.press("KeyA");
+  await page.keyboard.press("KeyQ");
   await expect.poll(async () => {
     const value = await downloadReport(page);
     return [value.trigger_admitted_count, value.trigger_outcome_count];

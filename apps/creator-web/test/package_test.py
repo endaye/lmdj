@@ -124,13 +124,13 @@ class CreatorPackageTest(unittest.TestCase):
         manifest = json.loads(manifest_bytes)
         self.assertEqual(self.module.canonical_json(manifest), manifest_bytes)
         self.assertEqual(manifest["distribution_contract"], "lmdj.creator-web.distribution.v1")
-        self.assertEqual(manifest["product_build"], "1.0.19.0")
+        self.assertEqual(manifest["product_build"], "1.0.20.0")
         self.assertEqual(manifest["host_id"], "creator-web")
-        self.assertEqual(manifest["host_version"], "1.1.1")
-        self.assertEqual(manifest["platform_version"], "0.2.0")
+        self.assertEqual(manifest["host_version"], "1.1.2")
+        self.assertEqual(manifest["platform_version"], "0.2.1")
         self.assertEqual(
             manifest["compatible_hosts"],
-            [{"host_id": "web-runtime-host", "host_version": "1.2.7"}],
+            [{"host_id": "web-runtime-host", "host_version": "1.2.8"}],
         )
         self.assertEqual(
             [entry["role"] for entry in manifest["assets"]],

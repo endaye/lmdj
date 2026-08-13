@@ -50,9 +50,17 @@ test("renders the approved workspace without inventing future modes or Project t
   expect(screen.getByText("Key").nextElementSibling?.textContent).toBe("—");
   expect(screen.queryByText(/untitled/i)).toBeNull();
   expect(screen.queryByText(/beat\.lmdj/i)).toBeNull();
-  expect(screen.getAllByRole("button", {
-    name: /^Pad [A-D](?:[1-9]|1[0-6]) — empty$/,
-  })).toHaveLength(16);
+  const keys = [
+    "Q", "W", "E", "R", "T", "Y", "U", "I",
+    "A", "S", "D", "F", "G", "H", "J", "K",
+  ];
+  for (const [index, key] of keys.entries()) {
+    expect(screen.getByRole("button", {
+      name: `Pad A${index + 1} — empty — Key ${key}`,
+    })).toBeTruthy();
+  }
+  expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
+    .toEqual(keys);
 
   await user.tab();
   expect(document.activeElement).toBe(
@@ -129,10 +137,10 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       state: "audio-suspended",
       error_code: null,
       error_details: {},
-      product_build: "1.0.19.0",
+      product_build: "1.0.20.0",
       host_id: "creator-web",
-      host_version: "1.1.1",
-      platform_version: "0.2.0",
+      host_version: "1.1.2",
+      platform_version: "0.2.1",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

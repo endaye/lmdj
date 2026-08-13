@@ -90,10 +90,10 @@ function sessionFixture(name: string) {
       state: hostState,
       error_code: errorCode,
       error_details: errorDetails,
-      product_build: "1.0.19.0",
+      product_build: "1.0.20.0",
       host_id: "creator-web",
-      host_version: "1.1.1",
-      platform_version: "0.2.0",
+      host_version: "1.1.2",
+      platform_version: "0.2.1",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,
@@ -261,7 +261,7 @@ test("recovery keeps the Project playable for the required probe Trigger", async
 
   value.emit({state: "interrupted", errorCode: null});
   await screen.findByText("Audio suspended");
-  const pad = screen.getByRole("button", {name: "Pad A1 — assigned"});
+  const pad = screen.getByRole("button", {name: "Pad A1 — assigned — Key Q"});
   expect(pad.hasAttribute("disabled")).toBe(true);
 
   value.emit({state: "recovering", errorCode: null});
@@ -269,7 +269,7 @@ test("recovery keeps the Project playable for the required probe Trigger", async
   value.setRecoveryProbeReady(true);
   await screen.findByText("Audio recovering");
   expect(pad.hasAttribute("disabled")).toBe(false);
-  window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyA"}));
+  window.dispatchEvent(new KeyboardEvent("keydown", {code: "KeyQ"}));
   await waitFor(() => expect(value.calls).toContain(
     "recovery:trigger:0:100:keyboard",
   ));

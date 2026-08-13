@@ -47,7 +47,7 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "0.2.0",
+        "0.2.1",
         1,
         {"application-facade": "1.3.5", "audio-runtime": "0.4.1"},
     ),
@@ -71,15 +71,15 @@ expected_modules = {
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.2.7",
+        "1.2.8",
         1,
-        {"web-runtime-platform": "0.2.0"},
+        {"web-runtime-platform": "0.2.1"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.1.1",
+        "1.1.2",
         1,
-        {"web-runtime-platform": "0.2.0"},
+        {"web-runtime-platform": "0.2.1"},
     ),
 }
 for relative, (
@@ -98,11 +98,11 @@ for relative, (
     assert manifest["dependencies"] == dependencies
 
 version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 19, 0)
-assert str(version) == "1.0.19.0"
-assert version.product_tag() == "lmdj-v1.0.19.0"
+assert version == ProductVersion(1, 0, 20, 0)
+assert str(version) == "1.0.20.0"
+assert version.product_tag() == "lmdj-v1.0.20.0"
 assert version.display("canary", "a" * 40) == (
-    "1.0.19.0 · canary · gaaaaaaaa"
+    "1.0.20.0 · canary · gaaaaaaaa"
 )
 
 for invalid in (
@@ -132,7 +132,7 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.19.0\n"
+assert tag_name.stdout == "lmdj-v1.0.20.0\n"
 assert tag_name.stderr == ""
 
 current = subprocess.run(
@@ -152,7 +152,7 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.19.0 · canary · gaaaaaaaa\n"
+assert current.stdout == "1.0.20.0 · canary · gaaaaaaaa\n"
 assert current.stderr == ""
 
 verified = subprocess.run(
@@ -168,7 +168,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.19.0)\n"
+assert verified.stdout == "version verification: PASS (1.0.20.0)\n"
 assert verified.stderr == ""
 
 
@@ -182,7 +182,7 @@ def write_json(path: Path, value: dict) -> None:
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
 tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
-assert assembly["product"] == {"id": "lmdj", "version": "1.0.19.0"}
+assert assembly["product"] == {"id": "lmdj", "version": "1.0.20.0"}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
@@ -263,7 +263,7 @@ compiled_product = re.search(
     compiled_source,
 )
 assert compiled_product is not None
-assert compiled_product.group(1) == "1.0.19.0"
+assert compiled_product.group(1) == "1.0.20.0"
 compiled_components = re.findall(
     r'CompiledComponent\{"([^"]+)",\s*"([^"]+)"\}',
     compiled_source,
@@ -437,6 +437,6 @@ cmake_source = (
     repo_root / "packages/web-runtime-platform/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
-assert '"product_build":"1.0.19.0"' not in cmake_source
+assert '"product_build":"1.0.20.0"' not in cmake_source
 
 print("product version tests: PASS")

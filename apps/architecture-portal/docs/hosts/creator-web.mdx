@@ -21,7 +21,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.1.1` 已进入 Product Build `1.0.19.0` Assembly。它只依赖共享 Web Runtime Platform `0.2.0`，不直接依赖或绕过 Application Facade。
+<StatusBadge status="implemented" /> Creator Web Host `1.1.2` 已进入 Product Build `1.0.20.0` Assembly。它只依赖共享 Web Runtime Platform `0.2.1`，不直接依赖或绕过 Application Facade。
 
 ## 创作边界
 
@@ -31,7 +31,7 @@ Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于
 
 ## 演奏边界
 
-Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。恢复期间保持 Project 可演奏边界，但只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。恢复期间保持 Project 可演奏边界，但只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
 
 ## 分发与身份
 
@@ -39,7 +39,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 的 reload/reopen、完整 16-trigger tuple、active resize continuity、restart-required replacement 与旧 generation cleanup，以及 WebKit capability boundary。Product Build `1.0.19.0` 的 Creator Web Host `1.1.1` 绑定 Web Runtime Platform `0.2.0`；Formal Web Runtime Host 相应更新为 `1.2.7`。本 Build 同时保留 `1.0.16.9` 的 Browser Main fail-closed 与 OPFS recovery gates；Contract、Provider 与 Model 身份保持不变。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 的 reload/reopen、完整 16-trigger tuple、active resize continuity、restart-required replacement 与旧 generation cleanup，以及 WebKit capability boundary。Product Build `1.0.20.0` 的 Creator Web Host `1.1.2` 绑定 Web Runtime Platform `0.2.1`；Formal Web Runtime Host 相应更新为 `1.2.8`。本 Build 同时保留 `1.0.16.9` 的 Browser Main fail-closed 与 OPFS recovery gates；Contract、Provider 与 Model 身份保持不变。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

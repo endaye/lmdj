@@ -1,3 +1,5 @@
+import {DEFAULT_KEYBOARD_MAPPING} from "@lmdj/web-runtime-platform/input_adapters.mjs";
+
 import {
   selectCanTrigger,
   selectVisiblePads,
@@ -11,6 +13,13 @@ interface PadSurfaceProps {
   controller?: ReturnType<typeof createCreatorInputController>;
 }
 
+const KEYBOARD_KEY_BY_LOCAL_PAD = new Map(
+  Object.entries(DEFAULT_KEYBOARD_MAPPING).map(([code, localPad]) => [
+    localPad,
+    code.replace(/^Key/, ""),
+  ]),
+);
+
 export function PadSurface({state, controller}: PadSurfaceProps) {
   const canTrigger = selectCanTrigger(state);
   return (
@@ -19,13 +28,14 @@ export function PadSurface({state, controller}: PadSurfaceProps) {
         const address = padAddress(pad);
         const assigned = pad.assetId !== null;
         const outcome = state.pressed.get(pad.slot);
+        const keyboardKey = KEYBOARD_KEY_BY_LOCAL_PAD.get(pad.slot % 16) ?? "—";
         return (
           <button
             type="button"
             className="pad"
             data-outcome={outcome ?? "idle"}
             disabled={!assigned || !canTrigger}
-            aria-label={`Pad ${address} — ${assigned ? "assigned" : "empty"}`}
+            aria-label={`Pad ${address} — ${assigned ? "assigned" : "empty"} — Key ${keyboardKey}`}
             key={pad.slot}
             onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}
             onMouseDown={(event) => controller?.pointerDown(event, pad.slot)}
@@ -35,6 +45,7 @@ export function PadSurface({state, controller}: PadSurfaceProps) {
           >
             <strong>{address}</strong>
             <span>{assigned ? "Assigned" : "Empty"}</span>
+            <kbd aria-hidden="true">{keyboardKey}</kbd>
           </button>
         );
       })}
