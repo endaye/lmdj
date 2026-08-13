@@ -126,3 +126,24 @@ each merge, record the `push` run id and its conclusion against the Product
 Build on `main`. A red merged-main run is a signal that `main` is not
 deployable and should be treated as such rather than left unrecorded — that,
 not a missing run, was the real content of G1.
+
+## Stage 7 remediation current binding — Product Build `1.0.21.0`
+
+PR #134 was protected by successful full PR workflow
+[31684663825](https://github.com/endaye/lmdj/actions/runs/31684663825) and
+squash-merged as `5613158240f7e31385ccb5d175bded3c245ae33b`. Its PR head
+`0f403e805694bce957644e004090dda8d60cbaf6` and the merge revision resolve to
+the same tree, `5251522137323f926a8bfa4c04088f5abd31a9eb`.
+
+The exact merge triggered full `main` push run
+[31688172806](https://github.com/endaye/lmdj/actions/runs/31688172806). Its
+retained scope manifest selects all 14 lanes; the run completed with 20
+successful jobs, one designed macOS fallback skip, zero failures, and a
+successful aggregate `PR Gate`. A fresh isolated-worktree rerun from exact
+`5613158` also passed Core full/stress/coverage/Proof, Web Toolchain, Formal
+Host, Creator, Portal, dependency, active-tree, Product version, Assembly, and
+lock gates.
+
+The complete exact revisions, hashes, runner ownership, fresh command results,
+and unchanged physical-evidence boundary are recorded in
+[`2026-08-13-stage7-remediation-merged-main-1.0.21.0.md`](../release-evidence/2026-08-13-stage7-remediation-merged-main-1.0.21.0.md).
