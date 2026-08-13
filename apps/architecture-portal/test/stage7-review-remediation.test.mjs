@@ -50,6 +50,8 @@ test('Stage 7 acceptance and review distinguish historical, candidate, and exter
   }
   assert.match(review, /T1[^\n]+open/);
   assert.match(review, /G1[^\n]+corrected/);
+  assert.match(review, /1\.0\.18\.0[^\n]+abandoned \/ unshipped/);
+  assert.match(review, /1\.0\.19\.0[\s\S]+步骤 1/);
 });
 
 test('Stage 7 current closure audit accounts for every review finding exactly once', async () => {
@@ -79,7 +81,7 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
     assert.match(audit, new RegExp(`^\\| ${finding} \\| resolved`, 'm'));
   }
   assert.equal((audit.match(/^\| T1 \|/gm) ?? []).length, 1);
-  assert.match(audit, /^\| T1 \| open — awaiting human execution \|/m);
+  assert.match(audit, /^\| T1 \| open — corrected candidate must restart at step 1 \|/m);
   assert.equal((audit.match(/^\| G1 \|/gm) ?? []).length, 1);
   assert.match(audit, /^\| G1 \| corrected — historical Proof recovered \|/m);
 
@@ -90,12 +92,16 @@ test('Stage 7 current closure audit accounts for every review finding exactly on
     assert.match(body, /336a27c0799035b2f8d6455b32259ee227df20f6/);
   }
   assert.match(review, /documentation binding gap[\s\S]+not a Proof execution gap/);
-  assert.match(review, /1\.0\.18\.0[\s\S]+future merged-main Proof/);
+  assert.match(review, /1\.0\.19\.0[\s\S]+merged-main Proof/);
+  assert.match(evidence, /1\.0\.18\.0[^\n]+abandoned and unshipped/);
   for (const body of [remediationDesign, remediationPlan]) {
     assert.match(body, /G1[\s\S]+historical Proof recovered/);
-    assert.match(body, /1\.0\.18\.0[\s\S]+future merged-main Proof/);
+    assert.match(body, /1\.0\.18\.0/);
+    assert.match(body, /1\.0\.19\.0/);
     assert.doesNotMatch(body, /T1 or G1 (?:is|remains?) open/);
   }
+  assert.match(remediationDesign, /abandoned \/ unshipped/);
+  assert.match(remediationPlan, /immutable failed-candidate evidence/);
 });
 
 test('release governance forbids PATCH assembly drift and binds release evidence', async () => {

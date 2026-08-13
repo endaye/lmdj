@@ -42,7 +42,7 @@ class CreatorPackageTest(unittest.TestCase):
             "product": "lmdj",
             "milestone": 1,
             "minor": 0,
-            "build": 18,
+            "build": 19,
             "patch": 0,
         }
         lock = json.loads(
@@ -124,9 +124,9 @@ class CreatorPackageTest(unittest.TestCase):
         manifest = json.loads(manifest_bytes)
         self.assertEqual(self.module.canonical_json(manifest), manifest_bytes)
         self.assertEqual(manifest["distribution_contract"], "lmdj.creator-web.distribution.v1")
-        self.assertEqual(manifest["product_build"], "1.0.18.0")
+        self.assertEqual(manifest["product_build"], "1.0.19.0")
         self.assertEqual(manifest["host_id"], "creator-web")
-        self.assertEqual(manifest["host_version"], "1.1.0")
+        self.assertEqual(manifest["host_version"], "1.1.1")
         self.assertEqual(manifest["platform_version"], "0.2.0")
         self.assertEqual(
             manifest["compatible_hosts"],

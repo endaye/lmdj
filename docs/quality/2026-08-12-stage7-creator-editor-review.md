@@ -368,10 +368,10 @@ Proof；精确命令、工具链身份、结果与未执行的人工表单见
 两个 annotated tag 均通过 GPG 验签。`.github/workflows/ci.yml` 在 push 到 `main`
 时运行，`scripts/ci/change_scope.py` 把 `push` 强制为 `full` 且要求 full manifest
 选择全部 lane。G1 是 documentation binding gap, not a Proof execution gap；这个
-历史事实更正不能替代 Product Build `1.0.18.0` 在未来合并 revision 上的
+历史事实更正不能替代当前 Product Build `1.0.19.0` 在未来合并 revision 上的
 future merged-main Proof。
 
-### Candidate automated Proof
+### Candidate automated Proof and Canary correction
 
 Product Build `1.0.18.0` 的 full/stress/coverage/Core Proof、Web Toolchain
 Conformance Proof、Web Runtime Host Proof、Creator Web Proof、完整 Portal check、
@@ -387,11 +387,25 @@ boundary，不能替代人工听感、实体输入、Safari/iPadOS 或 merged-ma
 schema-2 provenance 在测试 revision 上验证通过。证据文档晚于受测 revision，
 不会伪称其 documentation commit 本身已经运行产品 Proof。
 
+第一次人工 Canary 在 `1.0.18.0` 上执行到步骤 7 前暴露了新的 release blocker：
+Import 期间发生 Runtime Session replacement 时，旧导入虽被 AbortSignal 中止，旧
+generation 的 `finally` 却因 action token 已失效而跳过 `transfer-ended`。新 Session
+能够启动并列出本地 Project，但 Creator reducer 永久保留 `transfer.phase = importing`，
+于是 Project 与 Audio actions 持续禁用。真实渲染回归测试先得到
+`expected ready, received importing`，最小修复使 retiring Session cleanup 在中止旧导入
+时同步清理其临时 transfer UI state，随后同一测试通过。
+
+因此 `1.0.18.0` 是 abandoned / unshipped failed-canary candidate；操作者报告的步骤
+1–6 只作为缺陷诊断观察，不构成 T1 部分通过，也不得从步骤 7 继续。修复分配 Creator
+Web `1.1.1` 与 Product Build `1.0.19.0`，Contract、Project I/O、Web Runtime Platform、
+Web Runtime Host 与 Provider identities 不变。`1.0.19.0` 必须重新完成 clean full
+candidate Proof、不可变 snapshot、独立 evidence，并从步骤 1 重跑全部十步人工 Canary。
+
 ### Final finding closure audit
 
 下列是当前修复分支的唯一现行 closure ledger；第二至七节仍保留各历史基线下的
-原始发现与复核，不应被当作当前状态。所有 source-changing commit 后均在
-`c44517bc7bde30cea4a40a7cab495a081028eb7e` 重跑完整候选门禁，详见
+原始发现与复核，不应被当作当前状态。`1.0.18.0` 的旧门禁仍绑定
+`c44517bc7bde30cea4a40a7cab495a081028eb7e`；修复后的 `1.0.19.0` 完整候选门禁待重跑，详见
 [`2026-08-13-stage7-remediation-canary.md`](../release-evidence/2026-08-13-stage7-remediation-canary.md)。
 
 | ID | Status | Current evidence |
@@ -421,7 +435,7 @@ schema-2 provenance 在测试 revision 上验证通过。证据文档晚于受�
 | F13 | resolved | `subscribeDiagnostics` 事件通知取代 16 ms diagnostics polling；`ef2b06b`。 |
 | F14 | resolved | 自动 reopen 与用户 Open/Import 共用 generation/session-bound Project action lane；`0e921be`。 |
 | F15 | resolved | Opened Project Surface 显示 BPM；spec 明确自动持久化且无虚假 `Save Local` command；`0e921be`。 |
-| T1 | open — awaiting human execution | 十步 human canary sheet 已落档但全部 `NOT RUN`；操作者、浏览器版本、听感、逐步观察与 report hash 均待填写。 |
+| T1 | open — corrected candidate must restart at step 1 | `1.0.18.0` 首轮步骤 1–6 仅为诊断观察且整轮撤回；`1.0.19.0` 的操作者、浏览器版本、听感、十步观察与 report hash 均待重新填写。 |
 | T2 | resolved | Busy retry 上限 8 次、transition-based waits、最终 alert count 0；`8553467`。 |
 | T3 | resolved | Packaged keyboard-only Import、reload 后 Open、Bank selection 完成型旅程；`8553467`。 |
 | T4 | resolved | Packaged outcome timeout -> restart-required -> old generation cleanup -> replacement -> explicit activation；`f4722de`。 |
@@ -442,10 +456,12 @@ schema-2 provenance 在测试 revision 上验证通过。证据文档晚于受�
 
 | Gate | Status | Current evidence |
 | --- | --- | --- |
-| T1 human canary | `open — awaiting human execution` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从自动化结果推导 pass。 |
-| Product Build `1.0.18.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 当前仅有 branch-local candidate Proof；合并后必须在 exact merged `main` revision 重跑 Task 13 全部命令并落 evidence-only addendum。 |
+| T1 human canary | `open — corrected candidate must restart at step 1` | physical keyboard/MIDI/hearing/Safari/iPadOS 保持 `deferred / unverified`；不得从 `1.0.18.0` 的步骤 1–6 或自动化结果推导 pass。 |
+| Product Build `1.0.19.0` branch-local Proof | `pending` | 修复提交及 immutable snapshot 完成后，必须在 clean revision 重跑完整 Task 13 候选门禁。 |
+| Product Build `1.0.19.0` merged-main Proof | `pending — requires separate push/PR/merge authorization` | 获授权合并后必须在 exact merged `main` revision 重跑 Task 13 全部命令并落 evidence-only addendum。 |
 
 因此当前源代码、自动化、文档与历史 G1 更正都已纳入 closure ledger，但 T1 尚未
-执行，且 `1.0.18.0` 尚未经过获授权的 PR/merge 与 post-merge Proof。本修复任务
+从正确候选的步骤 1 重新执行，且 `1.0.19.0` 尚未经过 clean branch Proof、获授权的
+PR/merge 与 post-merge Proof。本修复任务
 仍不能报告为最终完成，也没有授权 push、tag、Release、deployment 或 Channel
 promotion。

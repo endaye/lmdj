@@ -996,10 +996,62 @@ merged-main Proof result
 
 - [ ] Only after the evidence-only change is itself merged and separately authorized may release work create a signed annotated `lmdj-v1.0.18.0` tag, GitHub Release, deployment, or Channel promotion. Each is a distinct action and verification boundary.
 
+## Task 15: Repair Canary-discovered Import Generation Cleanup
+
+The first human Canary attempt exposed a real Creator defect after Tasks 1–13:
+an import that was aborted by automatic Runtime Session replacement invalidated
+its Project action token, but the retiring generation left
+`transfer.phase = importing`. The replacement Session could list Projects while
+the visible Creator remained permanently blocked in `importing`. Steps 1–6 from
+that attempt are diagnostic evidence only and must be rerun on the corrected
+package; T1 remains open.
+
+**Files:**
+
+- Modify: `apps/creator-web/src/app.tsx`
+- Modify: `apps/creator-web/test/audio_lifecycle.test.tsx`
+- Modify: Creator/Product manifests, generated identity, exact identity tests,
+  current Portal pages, and Canary evidence required by the version change
+
+### Version Management
+
+| Identity | Failed Canary candidate | Corrected candidate | Reason |
+| --- | ---: | ---: | --- |
+| Product Build | `1.0.18.0` | `1.0.19.0` | `1.0.18.0` was allocated and exercised by a human Canary, so it is not reused after the Host identity changes |
+| Creator Web Host | `1.1.0` | `1.1.1` | compatible bug fix: retiring Runtime generations clear their owned import UI state |
+
+Contract, Project, Provider, Model, Web Runtime Platform, and Formal Web Runtime
+Host identities do not change. Compatibility and migration impact: none; the
+fix changes transient Creator UI lifecycle state only. Product Build
+`1.0.18.0` remains immutable failed-candidate evidence and must not be tagged or
+promoted. Any future tag text is `lmdj-v1.0.19.0`, but tag, push, PR, merge,
+Release, deployment, publication, and Channel promotion remain unauthorized.
+
+### Documentation Impact
+
+Documentation impact: required. Update current Product Assembly, Creator Host,
+Host overview, testing/Proof, and version/release Portal routes. Preserve the
+immutable `1.0.18.0` snapshot, freeze a new `1.0.19.0 · canary` snapshot from a
+clean identity commit, then rerun the complete Task 13 gates and prepare a new
+unexecuted human Canary sheet.
+
+- [ ] RED: reproduce an import aborted by Runtime Session replacement and
+  assert that the replacement UI is `ready`, not `importing`.
+- [ ] GREEN: when the retiring Session owns an import controller, abort it and
+  independently clear the transfer UI state even though its action token is
+  stale.
+- [ ] Allocate Creator `1.1.1` and Product Build `1.0.19.0`; regenerate and
+  verify Assembly/runtime identities and current Portal facts.
+- [ ] Commit the implementation/identity update, freeze the immutable
+  `1.0.19.0` snapshot in a separate clean commit, rerun Task 13, and record
+  honest automated and human-Canary evidence.
+- [ ] Restart the local clean Creator package and require the named operator to
+  rerun all ten T1 steps from step 1.
+
 ## Final Closure Audit
 
 - [ ] Use `rg` to enumerate D1-D10, F1-F15, T1-T7, G1-G5, and N1-N4 in the review and prove that every ID has one current status plus evidence link.
 - [ ] Confirm there are no unexplained tracked/untracked changes in any modified worktree.
 - [ ] Confirm historical G1 is recorded as corrected from the exact signed-tag/run bindings, while T1 remains open until human execution.
-- [ ] Confirm the task is not reported complete while T1 or the Product Build `1.0.18.0` future merged-main Proof gate remains open.
+- [ ] Confirm the task is not reported complete while T1 or the Product Build `1.0.19.0` future merged-main Proof gate remains open.
 - [ ] Confirm no push/tag/Release/deployment/Channel action occurred without explicit authorization.

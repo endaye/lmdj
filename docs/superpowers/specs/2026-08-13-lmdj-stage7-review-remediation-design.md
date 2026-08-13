@@ -299,7 +299,7 @@ documentation binding gap, not a Proof execution gap；本整改 evidence/ledger
 完成 historical Proof recovered binding，不再把历史运行写成未执行。
 
 这个更正不放宽当前 Product Build 的集成门禁。分支 Proof 只能证明候选；
-`1.0.18.0` 代码合并后仍必须从 exact merged `main` revision 重跑 required Proof，
+当前纠正后的 `1.0.19.0` 代码合并后仍必须从 exact merged `main` revision 重跑 required Proof，
 并提交独立 evidence addendum。由于创建该 evidence commit 会再次推进 `main`，
 记录必须区分：
 
@@ -353,7 +353,21 @@ gate。Task 之间按依赖顺序推进，不能把尚未验证的后续整改�
 6. spec/plan/governance/Portal 回写；
 7. version allocation、snapshot、full candidate Proof；
 8. 人工 canary；
-9. 经授权 PR/merge 后的 `1.0.18.0` future merged-main Proof 与 evidence addendum。
+9. 经授权 PR/merge 后的当前 Product Build future merged-main Proof 与 evidence addendum。
+
+### 9.1 Human Canary correction addendum
+
+第一次 `1.0.18.0` 人工 Canary 证明了一个此前自动化未覆盖的 generation ownership
+缺口：Import 被 Runtime Session replacement 中止后，旧 generation 仍必须清理自己拥有的
+transient transfer UI state。action token 只负责拒绝旧异步结果，不得同时阻止该 cleanup；
+否则新 Session 虽已完成 startup/list，Creator 仍会永久显示 `importing` 并禁用操作。
+
+该实现修复将 Creator Web Host 从 `1.1.0` 提升为兼容 bugfix `1.1.1`。按 Assembly
+identity 治理，已冻结且经过人工缺陷复现的 Product Build `1.0.18.0` 不得重写或复用，
+因此分配 `1.0.19.0`。Contract、Project I/O、Web Runtime Platform、Web Runtime Host、
+Provider 与 model identities 不变。`1.0.18.0` 保留为 abandoned / unshipped
+failed-canary 历史记录；其首轮步骤 1–6 只能作为诊断观察。纠正后的 `1.0.19.0`
+必须重新完成 snapshot、完整 automated candidate Proof，并从步骤 1 执行全部十步 T1。
 
 ## 10. Version Management
 

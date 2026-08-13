@@ -18,14 +18,36 @@ acceptance, Release, deployment, publication, or Channel promotion.
 | Immutable Portal snapshot source revision | `561fa2d6324d2fe2025eaf692026e5eedcb350bb` |
 | Snapshot relationship | The tested revision is a descendant; the snapshot bytes and Assembly Lock identity are unchanged and passed schema-2 provenance validation. |
 | Host OS for automated Proof | macOS `26.6.1` (`25G76`), Darwin `25.6.0`, arm64 |
-| T1 | `open — awaiting human execution` |
+| T1 | `withdrawn after failed human Canary; corrected Build must restart at step 1` |
 | Historical G1 | `corrected — historical Proof recovered` |
-| Current 1.0.18.0 integration gate | `pending — requires future merged-main Proof after authorized merge` |
+| Product Build 1.0.18.0 disposition | `abandoned and unshipped; no tag or promotion permitted` |
 
 The evidence document is committed after the tested revision, so its own
 documentation commit is not the tested product revision. The immutable Portal
 snapshot correctly binds its earlier clean source revision rather than claiming
 that a later evidence-only commit was the source used to freeze it.
+
+## Disposition after first human Canary
+
+This `1.0.18.0` candidate is **abandoned and unshipped**. During the first human
+Canary, the operator reported steps 1–6 behaving normally, then could not perform
+step 7 because **Suspend** was disabled. A subsequent Import reproduced a
+permanent `importing` state. The screenshot showed local Project inventory had
+already recovered while Audio remained inactive and Project/Audio actions were
+disabled, which ruled out a merely slow initial list operation.
+
+The confirmed cause was generation ownership during Runtime replacement: the
+old Import was aborted, but its invalidated action token caused `finally` to skip
+`transfer-ended`, leaking `transfer.phase = importing` into the replacement
+Session. A rendered UI regression failed before the fix with
+`expected ready, received importing` and passed after retiring Session cleanup
+explicitly cleared its transient transfer state.
+
+The operator-reported steps 1–6 have no named operator, exact browser version,
+report hash, or sign-off and are retained only as diagnostic observations. They
+are not partial T1 acceptance. The blank sheets below are withdrawn and must not
+be continued. Product Build `1.0.19.0` / Creator Web `1.1.1` requires a separate
+clean evidence record and a fresh ten-step Canary beginning at step 1.
 
 ## Recovered historical merged-main Proof
 
@@ -43,8 +65,8 @@ Both annotated tags passed local GPG verification. `.github/workflows/ci.yml`
 runs on pushes to `main`, and `scripts/ci/change_scope.py` forces `push` events
 to `full` mode and requires a full manifest to select every lane. This corrects
 historical G1 as a documentation binding gap, not a Proof execution gap. It
-does not satisfy the separate future merged-main Proof gate for Product Build
-`1.0.18.0`.
+does not satisfy the separate future merged-main Proof gate for the corrected
+Product Build `1.0.19.0`.
 
 ## Automated toolchain identity
 
@@ -99,9 +121,9 @@ These results prove the automated candidate contract only. Designed WebKit
 capability skips are not Safari product acceptance, and synthetic keyboard/MIDI
 events are not physical-device or hearing evidence.
 
-## 人工 Canary 验收表（中文快速执行版）
+## 人工 Canary 验收表（已撤回，请勿继续执行）
 
-T1 状态：`尚未执行 — 等待具名人员验收`。
+T1 状态：`本轮已撤回 — 1.0.19.0 必须从步骤 1 重新执行`。
 
 本节是下方英文规范表的逐项中文操作版，方便现场执行；两者验收标准
 完全相同。如文字理解存在歧义，以下方英文规范表为准。自动化结果或空白项
@@ -158,9 +180,9 @@ T1 状态：`尚未执行 — 等待具名人员验收`。
 Product Build `1.0.18.0` 的 merged-main Proof，亦不授权 push、PR、merge、
 tag、Release、部署、发布或 Channel promotion。
 
-## Human canary sheet — not executed
+## Human canary sheet — withdrawn, do not execute
 
-T1 status: `open — awaiting human execution`.
+T1 status: `this run is withdrawn — restart from step 1 on 1.0.19.0`.
 
 The named human operator must fill this sheet from the clean Creator package.
 No blank field or automated result may be interpreted as a pass.

@@ -14,7 +14,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前本地候选 Product Build 是 `1.0.18.0 · canary · g<short-sha>`。`1.0.17.0` 已由未发布 Stage 8 分支保留，本修复根据 live ref/worktree/tag 盘点分配下一个未用 BUILD。候选集成 Stage 7 review remediation：managed storage ownership、共享 Runtime integrity、单一 input/cleanup owner、可观察且可重试的 recovery、editor transition contracts、生成式 Runtime identity，以及 packaged recovery/continuity Proof。版本值由 active manifests 与 lock 派生，Contract、Provider 和 Model identity 保持不变。
+当前本地候选 Product Build 是 `1.0.19.0 · canary · g<short-sha>`。`1.0.17.0` 已由未发布 Stage 8 分支保留；`1.0.18.0` 已执行自动化与第一次人工 Canary，但该 Canary 暴露了 Runtime Session replacement 后残留永久 `importing` UI 的 Creator 缺陷，因此成为 abandoned、unshipped candidate。修复根据 live ref/worktree/tag 盘点分配下一个未用 BUILD。候选集成 Stage 7 review remediation 及该 Canary 修复：managed storage ownership、共享 Runtime integrity、单一 input/cleanup owner、可观察且可重试的 recovery、editor transition contracts、生成式 Runtime identity、packaged recovery/continuity Proof，以及 retiring generation 的 import UI cleanup。版本值由 active manifests 与 lock 派生，Contract、Provider 和 Model identity 保持不变。
 
 | Identity | 当前版本 | 变化边界 |
 | --- | --- | --- |
@@ -26,9 +26,9 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 | Core MCP | `1.1.8` | 精确 Facade 依赖及 Python identity 更新 |
 | Native Test Host | `1.0.9` | 精确 Facade 依赖更新 |
 | Web Runtime Host | `1.2.7` | compatible Platform 依赖与 lifecycle 修正 |
-| Creator Web | `1.1.0` | additive visible retry/details/continuity behavior |
+| Creator Web | `1.1.1` | compatible retiring-generation import UI cleanup；保留 `1.1.0` 的 visible retry/details/continuity behavior |
 
-历史 `1.0.16.6` 与 `.7` 仍是 abandoned、unshipped candidate；签名 `.8` 及 `.9` 的冻结快照和验收记录继续只读保留。新的 Module/Host/dependency identities 不能使用 PATCH，因此本候选进入新 BUILD `1.0.18.0`。已分配身份、branch-local Proof 或未来 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion。
+历史 `1.0.16.6`、`.7` 与 `1.0.18.0` 仍是 abandoned、unshipped candidate；签名 `.8` 及 `.9` 的冻结快照和验收记录继续只读保留。新的 Module/Host/dependency identities 不能使用 PATCH，因此 Creator `1.1.1` 进入新 BUILD `1.0.19.0`。已分配身份、branch-local Proof 或未来 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 
@@ -43,7 +43,7 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.18.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称 push、PR、远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+当前候选 Product tag 文本为 `lmdj-v1.0.19.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。当前源码身份不宣称 push、PR、远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 
@@ -60,7 +60,7 @@ API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact pri
 HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
 状态必须由与精确身份绑定的 evidence 独立报告。
 
-该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.18.0` 已获得 remote verified
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.19.0` 已获得 remote verified
 tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
 promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
 精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、

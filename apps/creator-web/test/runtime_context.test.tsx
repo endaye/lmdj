@@ -26,9 +26,9 @@ function defaultDiagnostics(): RuntimeDiagnostics {
     state: "audio-suspended",
     error_code: null,
     error_details: {},
-    product_build: "1.0.18.0",
+    product_build: "1.0.19.0",
     host_id: "creator-web",
-    host_version: "1.1.0",
+    host_version: "1.1.1",
     platform_version: "0.2.0",
     protocol_version: 1,
     capabilities: {

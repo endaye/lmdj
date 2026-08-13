@@ -94,8 +94,10 @@ function Workspace({
 
   useEffect(() => () => {
     projectActions.invalidate();
-    importController.current?.abort();
+    const retiringImport = importController.current;
     importController.current = null;
+    retiringImport?.abort();
+    if (retiringImport) dispatch({type: "transfer-ended"});
   }, [session]);
 
   useEffect(() => {

@@ -47,7 +47,7 @@ class CreatorServerTest(unittest.TestCase):
             "product": "lmdj",
             "milestone": 1,
             "minor": 0,
-            "build": 18,
+            "build": 19,
             "patch": 0,
         }
         lock = json.loads(

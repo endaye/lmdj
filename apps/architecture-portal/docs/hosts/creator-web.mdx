@@ -21,13 +21,13 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.1.0` 已进入 Product Build `1.0.18.0` Assembly。它只依赖共享 Web Runtime Platform `0.2.0`，不直接依赖或绕过 Application Facade。
+<StatusBadge status="implemented" /> Creator Web Host `1.1.1` 已进入 Product Build `1.0.19.0` Assembly。它只依赖共享 Web Runtime Platform `0.2.0`，不直接依赖或绕过 Application Facade。
 
 ## 创作边界
 
 当前 UI 提供 browser-local Project discovery/open、portable Project Bundle import、64 个稳定 Pad Slot、四个 Bank、Project inspect 与 Runtime diagnostics。Host 不解析 Bundle；导入字节流交给 Facade，Project Truth 与 publication 仍由 Core 决定。空白 Project 创建、Bundle 导出与 WAV 分配不属于当前 Stage 7 能力。
 
-Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次按下 Activate audio。
+Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次按下 Activate audio。
 
 ## 演奏边界
 
@@ -39,7 +39,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 的 reload/reopen、完整 16-trigger tuple、active resize continuity、restart-required replacement 与旧 generation cleanup，以及 WebKit capability boundary。Product Build `1.0.18.0` 的 Creator Web Host `1.1.0` 绑定 Web Runtime Platform `0.2.0`；Formal Web Runtime Host 相应更新为 `1.2.7`。本 Build 同时保留 `1.0.16.9` 的 Browser Main fail-closed 与 OPFS recovery gates；Contract、Provider 与 Model 身份保持不变。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+Node/Vitest 覆盖 UI 状态、导入、Runtime Session、Project action 串行化、persisted lifecycle、recovery probe readiness、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；Playwright 覆盖 packaged Chromium 的 reload/reopen、完整 16-trigger tuple、active resize continuity、restart-required replacement 与旧 generation cleanup，以及 WebKit capability boundary。Product Build `1.0.19.0` 的 Creator Web Host `1.1.1` 绑定 Web Runtime Platform `0.2.0`；Formal Web Runtime Host 相应更新为 `1.2.7`。本 Build 同时保留 `1.0.16.9` 的 Browser Main fail-closed 与 OPFS recovery gates；Contract、Provider 与 Model 身份保持不变。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

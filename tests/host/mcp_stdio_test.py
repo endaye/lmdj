@@ -539,7 +539,7 @@ def startup_and_platform(library: Path, temp_root: Path) -> None:
         "product": "lmdj",
         "milestone": 1,
         "minor": 0,
-        "build": 18,
+        "build": 19,
         "patch": 0,
     }
 

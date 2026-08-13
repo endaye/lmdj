@@ -16,30 +16,36 @@ local evidence proved.
 
 ## Current remediation candidate
 
-As of the live Git check on 2026-08-13, `origin/main` is
-`d1d8bb6a629b6e05b86b3c8843870ef27edcfe5c`. The remediation branch
-`fix/stage7-review-remediation` is unpublished and allocates Product Build
-`1.0.18.0`, Creator Web `1.1.0`, Web Runtime Platform `0.2.0`, Web Runtime Host
-`1.2.7`, Project I/O `0.5.4`, and Application Facade `1.3.5`. Creator Web
-and the complete multi-product candidate gate sequence passed from clean revision
-`c44517bc7bde30cea4a40a7cab495a081028eb7e`. The immutable `1.0.18.0`
-snapshot records its pre-snapshot source revision `561fa2d6324d2fe2025eaf692026e5eedcb350bb`
-and Assembly Lock SHA-256
-`3cd490099b7e7f15204d7af719f73bf7983077fe208e7644ce55cdc8c2809407`;
-the Portal provenance gate accepts that unchanged snapshot at the tested
-descendant. Exact commands, toolchain identity, results, and the unexecuted
-human sheet are recorded in
-`docs/release-evidence/2026-08-13-stage7-remediation-canary.md`.
+The first remediation candidate allocated Product Build `1.0.18.0` and Creator
+Web `1.1.0`. Its clean automated gate sequence passed at
+`c44517bc7bde30cea4a40a7cab495a081028eb7e`, with immutable snapshot source
+revision `561fa2d6324d2fe2025eaf692026e5eedcb350bb` and Assembly Lock SHA-256
+`3cd490099b7e7f15204d7af719f73bf7983077fe208e7644ce55cdc8c2809407`.
+The first human Canary then exposed a release-blocking defect: replacing the
+Runtime Session during Import aborted the old operation but could leave the
+Creator transfer projection permanently at `importing`, disabling Project and
+Audio actions. Operator-reported steps 1–6 are retained only as diagnostic
+observations; the incomplete run is withdrawn and `1.0.18.0` is abandoned and
+unshipped.
+
+The corrected remediation candidate allocates Product Build `1.0.19.0` and
+Creator Web `1.1.1`; Web Runtime Platform remains `0.2.0`, Web Runtime Host
+`1.2.7`, Project I/O `0.5.4`, and Application Facade `1.3.5`. A focused rendered
+UI regression first failed with `expected ready, received importing`, then
+passed after the retiring Session cleanup became responsible for clearing its
+transient transfer state. A new clean full candidate Proof, immutable
+`1.0.19.0 · canary` snapshot, corrected evidence record, and a fresh ten-step
+human Canary from step 1 are still required.
 
 This remains branch-local candidate evidence, not merged-main Proof. No push,
 PR, merge, tag, Release, deployment, publication, or Channel promotion is
 claimed by this record.
 
-Manual canary is `open — awaiting human execution`. Physical Keyboard/MIDI,
+Manual canary is `open — corrected candidate must restart at step 1`. Physical Keyboard/MIDI,
 hearing, Safari, and iPadOS observations remain `deferred / unverified`; no
 automated result is promoted into those claims.
 
-## Remediation candidate automated evidence
+## Abandoned 1.0.18.0 automated candidate evidence
 
 All rows below ran successfully from clean revision
 `c44517bc7bde30cea4a40a7cab495a081028eb7e`.
@@ -60,6 +66,10 @@ All rows below ran successfully from clean revision
 The automated Chromium binary was Google Chrome for Testing
 `151.0.7922.34`; it is not the human canary browser and does not establish
 Safari, iPadOS, physical input, or hearing acceptance.
+
+These automated results remain valid historical evidence for the exact
+`1.0.18.0` revision only. They do not waive the newly discovered human-path
+defect and must not be reused as Proof for `1.0.19.0`.
 
 ## Historical automated local evidence (1.0.16.3)
 
@@ -110,7 +120,9 @@ screen recovery, or long-session stability on those platforms.
 | Historical merged-main Proof | recovered and bound: `main` push run `31327104838` succeeded at `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f` (`1.0.16.5`, 12 success/1 designed skip); run `31529410253` succeeded at `336a27c0799035b2f8d6455b32259ee227df20f6` (`1.0.16.8`, 20 success/1 designed skip) |
 | Current remediation push / PR / CI / merge | not performed; current branch-local Proof is not merged-main Proof |
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
-| Manual canary | `open — awaiting human execution` |
+| Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
+| Product Build `1.0.19.0` | allocated locally; clean full Proof, immutable snapshot, and fresh evidence are pending |
+| Manual canary | `open — corrected candidate must restart at step 1` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
 historical Proof runs were always present; the review's prior inference from a
@@ -118,7 +130,7 @@ missing repository document to a missing execution was incorrect. G1 is now a
 recovered documentation binding, not a historical Proof execution failure.
 
 The current remediation rows must be refreshed again after any separately
-authorized push or external transition. T1 remains `open — awaiting human
-execution`, and Product Build `1.0.18.0` still requires a future Proof at its
-exact merged `main` revision before any new Product tag. The five physical rows
+authorized push or external transition. T1 remains open and must restart from
+step 1 on the corrected package. Product Build `1.0.19.0` still requires a
+future Proof at its exact merged `main` revision before any new Product tag. The five physical rows
 continue to block physical-pass, `beta`, and `stable`.

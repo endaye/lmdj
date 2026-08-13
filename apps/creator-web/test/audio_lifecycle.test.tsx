@@ -90,9 +90,9 @@ function sessionFixture(name: string) {
       state: hostState,
       error_code: errorCode,
       error_details: errorDetails,
-      product_build: "1.0.18.0",
+      product_build: "1.0.19.0",
       host_id: "creator-web",
-      host_version: "1.1.0",
+      host_version: "1.1.1",
       platform_version: "0.2.0",
       protocol_version: 1,
       capabilities: {
@@ -194,6 +194,43 @@ test("automatic reopen owns the same Project action lane until completion", asyn
   finishReopen?.();
   await waitFor(() => expect(second.calls).toContain("lane-second:reload"));
   expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(false);
+});
+
+test("Runtime replacement cannot leave an aborted import permanently visible", async () => {
+  const first = sessionFixture("import-first");
+  const second = sessionFixture("import-second");
+  first.session.importProject = async (_file, {signal}) =>
+    new Promise((_resolve, reject) => {
+      signal.addEventListener("abort", () => {
+        reject(new DOMException("cancelled", "AbortError"));
+      }, {once: true});
+    });
+  const sessions = [first, second];
+  let creations = 0;
+  const {container} = render(
+    <App runtimeFactory={() => sessions[creations++]!.session} />,
+  );
+
+  await screen.findByRole("button", {name: "Open Project 11111111"});
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  await userEvent.upload(input!, new File(["bundle"], "stage7.lmdj"));
+  await screen.findByText("importing");
+
+  first.emit({
+    state: "restart-required",
+    errorCode: "HOST_RESTART_REQUIRED",
+  });
+  await waitFor(() => expect(creations).toBe(2));
+  await waitFor(() => expect(second.calls).toEqual([
+    "import-second:start",
+    "import-second:list",
+  ]));
+
+  expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(false);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
     .toBe(false);
 });
 
