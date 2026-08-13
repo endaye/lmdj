@@ -83,13 +83,14 @@ class ReleaseSkillTest(unittest.TestCase):
         self.assertLess(contract, first_command)
         for expected in (
             "For any initial, multi-transition, or blanket request, the entire response/action is exactly:",
-            "Verified state: Run and describe only `scripts/release.sh audit --remote --tag TAG`; no mutation yet.",
-            "Next authorization: After audit, name exactly one next stable transition and request authorization for that boundary.",
-            "Unperformed states: Enumerate prepare, tag push, Draft, publication, deployment, and Channel as applicable; all are unperformed.",
-            "For a later boundary-specific authorized turn, the entire response/action is exactly:",
+            "Verified state: Run and describe only `scripts/release.sh audit --remote --tag TAG`; report the exact observed historical/current state; no mutation yet.",
+            "Next authorization: After audit, use exactly one of the actionable or no-permitted-transition templates below.",
+            "Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.",
+            "After audit, if the state is actionable releasable, the entire response/action is exactly:",
+            "Next authorization: Name exactly one permitted next stable transition and request authorization for that boundary.",
+            "For a later boundary-specific authorized turn with actionable releasable state, the entire response/action is exactly:",
             "Verified state: Audit first and report the current state.",
-            "Next authorization: Execute exactly the named one stable mutation if the gate passes, rerun audit, then name one next boundary without executing it.",
-            "Unperformed states: Enumerate all later transitions as unperformed.",
+            "Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.",
             "Do not output an ordered multi-stage command/action sequence; the template is the complete response.",
         ):
             self.assertIn(expected, source)
@@ -109,6 +110,27 @@ class ReleaseSkillTest(unittest.TestCase):
         ):
             self.assertIn(expected, source)
         self.assertIn("Do not approve", source)
+
+    def test_skill_reports_non_actionable_state_without_rewriting_history(self) -> None:
+        source = self.read(SKILL)
+        for expected in (
+            "After audit, if no transition is permitted, the entire response/action is exactly:",
+            "Verified state: Report the observed historical/current state accurately.",
+            "Next authorization: none; explain why no permitted mutation exists.",
+            "Unperformed states: List only mutation/state-transition actions not executed in this turn; never list an audit or verification already reported under Verified state, and never relabel historically completed tag or Release states as unperformed.",
+            "published (audit-only)",
+            "abandoned",
+            "superseded-unreleased",
+            "allocated (not releasable)",
+            "unknown",
+            "conflict",
+            "unverifiable",
+            "external-error",
+            "Only an actionable releasable state may name exactly one next authorization.",
+        ):
+            self.assertIn(expected, source)
+        self.assertNotIn("all are unperformed", source)
+        self.assertNotIn("release verification as unperformed", source.lower())
 
     def test_project_instructions_are_synchronized_and_require_the_skill(self) -> None:
         agents = self.read(AGENTS)
