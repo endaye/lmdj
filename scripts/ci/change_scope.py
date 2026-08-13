@@ -27,7 +27,7 @@ ALLOWED_MANIFEST_KEYS = {
     "schema", "base_sha", "head_sha", "mode", "reasons",
     "changed_files", "lanes", "required_jobs",
 }
-ALLOWED_MODES = {"draft", "focused", "full"}
+ALLOWED_MODES = {"draft", "focused", "full", "requested"}
 ALLOWED_RESULTS = {"added", "copied", "deleted", "modified", "renamed", "type_changed"}
 
 _SHA_RE = re.compile(r"^[0-9a-fA-F]{40}$")
@@ -258,7 +258,7 @@ def _evaluate_ready_paths(
 def classify(
     policy: Mapping[str, object], changed: Sequence[ChangedFile], *, base_sha: str,
     head_sha: str, event_name: str, draft: bool, labels: Collection[str],
-    force_full: bool = False,
+    force_full: bool = False, requested_lanes: Collection[str] | None = None,
 ) -> dict[str, object]:
     """Return a deterministic closed v1 scope manifest as a dictionary."""
     _validate_policy(policy)
@@ -286,9 +286,24 @@ def classify(
         full_reasons.add("forced full")
     if "ci:full" in label_set:
         full_reasons.add("ci:full label")
-    if event_name in {"push", "workflow_dispatch"}:
+    requested = set(requested_lanes or ())
+    if requested:
+        if event_name != "workflow_dispatch":
+            raise ValueError("lane selection is only valid for workflow_dispatch")
+        unknown = sorted(requested - lanes)
+        if unknown:
+            raise ValueError(f"unknown requested lane(s): {', '.join(unknown)}")
+    if event_name in {"push", "workflow_dispatch"} and not requested:
         full_reasons.add(f"full event: {event_name}")
-    if full_reasons:
+    if requested:
+        full_reasons.discard("forced full")
+        reasons.discard("forced full")
+        mode = "requested"
+        true_lanes = requested
+        reasons.add(
+            "requested lanes: " + ", ".join(sorted(requested))
+        )
+    elif full_reasons:
         mode = "full"
         true_lanes = lanes
     else:
@@ -310,7 +325,9 @@ def classify(
         "base_sha": base_sha,
         "head_sha": head_sha,
         "mode": mode,
-        "reasons": sorted(full_reasons if not draft else reasons),
+        "reasons": sorted(
+            reasons if (draft or requested) else full_reasons
+        ),
         "changed_files": [_changed_file_json(record) for record in changed],
         "lanes": lane_map,
         "required_jobs": required_jobs,
@@ -338,6 +355,12 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
         raise ValueError("full manifest must select every lane")
     if manifest["mode"] == "draft" and enabled_lanes != set(policy["draft_lanes"]):
         raise ValueError("draft manifest must select exactly the draft lanes")
+    if manifest["mode"] == "requested" and (
+        not enabled_lanes or not enabled_lanes.issubset(set(lanes))
+    ):
+        raise ValueError(
+            "requested manifest must select a non-empty subset of the lanes"
+        )
     if manifest["mode"] == "focused" and enabled_lanes == set(lanes):
         raise ValueError("focused manifest cannot select every lane")
     if not isinstance(manifest["reasons"], list) or not all(isinstance(reason, str) for reason in manifest["reasons"]):
@@ -540,6 +563,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--manifest-out", required=True)
     parser.add_argument("--github-output", required=True)
     parser.add_argument("--summary", required=True)
+    parser.add_argument(
+        "--lanes", default="",
+        help="comma-separated lanes for a focused workflow_dispatch",
+    )
     args = parser.parse_args(argv)
     try:
         policy = load_policy(args.policy)
@@ -550,6 +577,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         manifest = classify(
             policy, inventory, base_sha=args.base_sha, head_sha=args.head_sha,
             event_name=args.event, draft=draft, labels=labels,
+            requested_lanes=[
+                lane.strip() for lane in args.lanes.split(",") if lane.strip()
+            ],
         )
         compact = encode_manifest(manifest)
         _write(args.manifest_out, compact)

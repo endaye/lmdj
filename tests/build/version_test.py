@@ -97,13 +97,24 @@ for relative, (
     assert manifest["api_version"] == api_version
     assert manifest["dependencies"] == dependencies
 
-version = load_version("products/lmdj/version.json")
-assert version == ProductVersion(1, 0, 20, 0)
-assert str(version) == "1.0.20.0"
-assert version.product_tag() == "lmdj-v1.0.20.0"
-assert version.display("canary", "a" * 40) == (
-    "1.0.20.0 · canary · gaaaaaaaa"
+# The current identity is read from source; what is asserted is that every
+# derived form agrees with it. Pinning the literal here bought nothing and cost
+# a CI cycle on each bump.
+raw_version = json.loads(
+    (repo_root / "products/lmdj/version.json").read_text(encoding="utf-8")
 )
+current = (
+    f"{raw_version['milestone']}.{raw_version['minor']}"
+    f".{raw_version['build']}.{raw_version['patch']}"
+)
+version = load_version("products/lmdj/version.json")
+assert version == ProductVersion(
+    raw_version["milestone"], raw_version["minor"],
+    raw_version["build"], raw_version["patch"],
+)
+assert str(version) == current
+assert version.product_tag() == f"lmdj-v{current}"
+assert version.display("canary", "a" * 40) == f"{current} · canary · gaaaaaaaa"
 
 for invalid in (
     {"milestone": 0, "minor": 0, "build": 1, "patch": 0},
@@ -132,10 +143,10 @@ tag_name = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert tag_name.stdout == "lmdj-v1.0.20.0\n"
+assert tag_name.stdout == f"lmdj-v{current}\n"
 assert tag_name.stderr == ""
 
-current = subprocess.run(
+current_run = subprocess.run(
     [
         sys.executable,
         str(version_script),
@@ -152,8 +163,8 @@ current = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert current.stdout == "1.0.20.0 · canary · gaaaaaaaa\n"
-assert current.stderr == ""
+assert current_run.stdout == f"{current} · canary · gaaaaaaaa\n"
+assert current_run.stderr == ""
 
 verified = subprocess.run(
     [
@@ -168,7 +179,7 @@ verified = subprocess.run(
     capture_output=True,
     text=True,
 )
-assert verified.stdout == "version verification: PASS (1.0.20.0)\n"
+assert verified.stdout == f"version verification: PASS ({current})\n"
 assert verified.stderr == ""
 
 
@@ -182,7 +193,7 @@ def write_json(path: Path, value: dict) -> None:
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
 tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
-assert assembly["product"] == {"id": "lmdj", "version": "1.0.20.0"}
+assert assembly["product"] == {"id": "lmdj", "version": current}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
@@ -263,7 +274,7 @@ compiled_product = re.search(
     compiled_source,
 )
 assert compiled_product is not None
-assert compiled_product.group(1) == "1.0.20.0"
+assert compiled_product.group(1) == current
 compiled_components = re.findall(
     r'CompiledComponent\{"([^"]+)",\s*"([^"]+)"\}',
     compiled_source,

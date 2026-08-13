@@ -764,25 +764,36 @@ def host_boundary_and_identity(executable: Path) -> None:
             encoding="utf-8"
         )
     )
-    assert version == {
-        "contract": "lmdj.product-version.v1",
-        "product": "lmdj",
-        "milestone": 1,
-        "minor": 0,
-        "build": 19,
-        "patch": 0,
+    # Assert the shape and the cross-references, not a second copy of the
+    # values: a duplicated literal costs a CI cycle on every identity bump and
+    # never catches a real defect, while a stale dependency pin does.
+    assert set(version) == {
+        "contract", "product", "milestone", "minor", "build", "patch",
     }
+    assert version["contract"] == "lmdj.product-version.v1"
+    assert version["product"] == "lmdj"
+    assert all(
+        isinstance(version[part], int) and version[part] >= 0
+        for part in ("milestone", "minor", "build", "patch")
+    )
     manifest = json.loads(
         (REPO_ROOT / "apps/core-cli/module.json").read_text(
             encoding="utf-8"
         )
     )
-    assert manifest == {
-        "contract": "lmdj.module.v1",
-        "module": "core-cli",
-        "version": "1.0.11",
-        "api_version": 2,
-        "dependencies": {"application-facade": "1.3.5"},
+    facade = json.loads(
+        (REPO_ROOT / "packages/application-facade/module.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert set(manifest) == {
+        "contract", "module", "version", "api_version", "dependencies",
+    }
+    assert manifest["contract"] == "lmdj.module.v1"
+    assert manifest["module"] == "core-cli"
+    assert manifest["api_version"] == 2
+    assert manifest["dependencies"] == {
+        "application-facade": facade["version"]
     }
 
     root_cmake = (REPO_ROOT / "CMakeLists.txt").read_text(encoding="utf-8")

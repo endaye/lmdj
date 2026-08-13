@@ -343,7 +343,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             "core-asan": 35,
             "core-coverage": 35,
             "web-toolchain-conformance": 35,
-            "web-runtime-host": 45,
+            # Calibrated to the trusted pool, which runs this lane about 2.2x
+            # slower than GitHub-hosted (40 min observed, one cancellation at
+            # exactly 45, against 16-19 min hosted).
+            "web-runtime-host": 75,
             "creator-web": 35,
             "macos-primary": 30,
         }

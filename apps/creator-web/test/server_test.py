@@ -42,14 +42,13 @@ class CreatorServerTest(unittest.TestCase):
         self.repo.joinpath("tools/web-runtime").mkdir(parents=True)
         self.ui.joinpath("assets").mkdir(parents=True)
         self.runtime.mkdir()
-        version = {
-            "contract": "lmdj.product-version.v1",
-            "product": "lmdj",
-            "milestone": 1,
-            "minor": 0,
-            "build": 19,
-            "patch": 0,
-        }
+        # Derive the fixture from the real identity so it cannot drift out of
+        # step with the Product Build the packaging tool reads.
+        version = json.loads(
+            (REPO_ROOT / "products/lmdj/version.json").read_text(
+                encoding="utf-8"
+            )
+        )
         lock = json.loads(
             (REPO_ROOT / "tools/web-runtime/emscripten.lock.json").read_text(
                 encoding="utf-8"

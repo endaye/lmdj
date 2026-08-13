@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -1812,19 +1814,246 @@ def verify_distribution(dist_root, repo_root):
                 self.assertEqual(recovery["action"], "restored-prior")
                 self.assert_no_owned_temp()
 
-    def test_host_nonbrowser_gate_registers_isolated_command_test(self) -> None:
-        source = (SOURCE_ROOT / "scripts/web-runtime-host.sh").read_text(encoding="utf-8")
-        http_test = (
-            'python3 "$repo_root/apps/web-runtime-host/test/deployment_smoke_test.py"'
+    def test_deploy_contract_lane_registers_isolated_command_test(self) -> None:
+        workflow = (SOURCE_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        match = re.search(
+            r"^  deploy-contract:\n(?P<body>.*?)(?=^  [a-z0-9-]+:|\Z)",
+            workflow,
+            flags=re.MULTILINE | re.DOTALL,
         )
-        command_test = (
-            'python3 "$repo_root/apps/web-runtime-host/test/deploy_command_test.py"'
+        self.assertIsNotNone(match, "ci.yml is missing the deploy-contract job")
+        assert match is not None
+        job = match.group("body")
+        relative = "apps/web-runtime-host/test/deploy_command_test.py"
+        self.assertEqual(job.count(relative), 1)
+        host_script = (SOURCE_ROOT / "scripts/web-runtime-host.sh").read_text(
+            encoding="utf-8"
         )
-        self.assertEqual(source.count(command_test), 1)
-        self.assertLess(source.index(http_test), source.index(command_test))
+        self.assertNotIn(relative, host_script)
         forbidden_real_cleanup = "shutil.rmtree(" + "REAL_EVIDENCE_ROOT"
         self.assertNotIn(forbidden_real_cleanup, Path(__file__).read_text())
 
 
+SHARD_ENV = "LMDJ_DEPLOY_COMMAND_TEST_SHARDS"
+DEFAULT_SHARD_CEILING = 4
+
+# Every other test in this file is hermetic and load-insensitive: it builds its
+# own repository, fake-command directory, and fake Netlify server on port 0.
+# These two are the only ones with wall-clock budgets. They drive the deploy
+# command to a blocking point, signal its process group, and then assert on
+# bounded readiness and post-signal cleanup windows, so competing shard load
+# can exceed the window and fail a correct command. They run alone after the
+# parallel phase instead of being weakened or dropped.
+SERIAL_TEST_IDS = (
+    "DeployCommandTest.test_int_and_term_cleanup_owned_state_without_restore_or_evidence",
+    "DeployCommandTest.test_post_publish_int_and_term_reconcile_and_restore_prior_good",
+)
+
+
+def relative_test_id(test_id: str) -> str:
+    """Return an id `unittest` can resolve against this file's `__main__`."""
+    prefix = "__main__."
+    return test_id[len(prefix):] if test_id.startswith(prefix) else test_id
+
+
+def discover_test_ids() -> list[str]:
+    """Return every test id this file defines, in a deterministic order."""
+    loader = unittest.TestLoader()
+    suite = loader.loadTestsFromModule(sys.modules["__main__"])
+    if getattr(loader, "errors", None):
+        raise SystemExit("test discovery failed:\n" + "\n".join(loader.errors))
+
+    collected: list[str] = []
+
+    def walk(item: object) -> None:
+        if isinstance(item, unittest.TestSuite):
+            for child in item:
+                walk(child)
+            return
+        collected.append(relative_test_id(cast(unittest.TestCase, item).id()))
+
+    walk(suite)
+    if not collected:
+        raise SystemExit("test discovery found no tests")
+    if len(set(collected)) != len(collected):
+        raise SystemExit("test discovery produced duplicate test ids")
+    return sorted(collected)
+
+
+def resolve_shard_count(requested: int | None) -> int:
+    """Resolve the shard count from the flag, the environment, or the default."""
+    if requested is not None:
+        count = requested
+    else:
+        raw = os.environ.get(SHARD_ENV, "").strip()
+        if raw:
+            try:
+                count = int(raw)
+            except ValueError:
+                raise SystemExit(f"{SHARD_ENV} is not an integer: {raw!r}") from None
+        else:
+            count = min(DEFAULT_SHARD_CEILING, os.cpu_count() or 1)
+    if count < 1:
+        raise SystemExit(f"shard count must be at least 1, got {count}")
+    return count
+
+
+class ShardRecordingResult(unittest.TextTestResult):
+    """A result that records exactly which tests the shard actually started."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)  # type: ignore[arg-type]
+        self.executed_ids: list[str] = []
+
+    def startTest(self, test: unittest.TestCase) -> None:
+        self.executed_ids.append(relative_test_id(test.id()))
+        super().startTest(test)
+
+
+def run_shard(report_path: str, test_ids: list[str]) -> int:
+    """Run one shard's tests in this process and report what it executed."""
+    if not test_ids:
+        raise SystemExit("a shard worker requires at least one test id")
+    suite = unittest.TestLoader().loadTestsFromNames(
+        test_ids, sys.modules["__main__"]
+    )
+    result = unittest.TextTestRunner(
+        verbosity=2, stream=sys.stderr, resultclass=ShardRecordingResult
+    ).run(suite)
+    Path(report_path).write_text(
+        json.dumps(
+            {
+                "executed": getattr(result, "executed_ids", []),
+                "successful": result.wasSuccessful(),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return 0 if result.wasSuccessful() else 1
+
+
+def run_worker_phase(
+    groups: list[tuple[str, list[str]]], directory: Path, self_path: str
+) -> tuple[list[str], list[str]]:
+    """Run one phase of worker processes concurrently and report the outcome."""
+    workers = []
+    for label, bucket in groups:
+        slug = label.replace(" ", "-")
+        report = directory / f"{slug}.json"
+        log = directory / f"{slug}.log"
+        handle = log.open("wb")
+        process = subprocess.Popen(
+            [sys.executable, self_path, "--shard-report", str(report), *bucket],
+            stdout=handle,
+            stderr=subprocess.STDOUT,
+        )
+        workers.append((label, bucket, process, handle, report, log))
+
+    executed: list[str] = []
+    failed: list[str] = []
+    for label, bucket, process, handle, report, log in workers:
+        returncode = process.wait()
+        handle.close()
+        successful = False
+        if report.exists():
+            try:
+                payload = json.loads(report.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                payload = {}
+            executed.extend(payload.get("executed", []))
+            successful = bool(payload.get("successful"))
+        if returncode != 0 or not successful:
+            failed.append(label)
+            sys.stderr.write(
+                f"\n===== {label} failed: exit {returncode}, "
+                f"{len(bucket)} assigned tests =====\n"
+            )
+            sys.stderr.write(log.read_text(encoding="utf-8", errors="replace"))
+        else:
+            sys.stderr.write(f"{label}: {len(bucket)} tests OK\n")
+        sys.stderr.flush()
+    return executed, failed
+
+
+def run_sharded(shards: int) -> int:
+    """Run the suite across worker processes, failing closed on any drift."""
+    test_ids = discover_test_ids()
+    unknown_serial = sorted(set(SERIAL_TEST_IDS) - set(test_ids))
+    if unknown_serial:
+        raise SystemExit(
+            "SERIAL_TEST_IDS names tests this file no longer defines: "
+            + ", ".join(unknown_serial)
+        )
+    serial_ids = [test_id for test_id in test_ids if test_id in SERIAL_TEST_IDS]
+    parallel_ids = [test_id for test_id in test_ids if test_id not in SERIAL_TEST_IDS]
+
+    parallel_groups = [
+        (f"shard {index} of {shards}", bucket)
+        for index, bucket in enumerate(
+            parallel_ids[offset::shards] for offset in range(shards)
+        )
+        if bucket
+    ]
+    phases = [parallel_groups]
+    if serial_ids:
+        phases.append([("serial phase", serial_ids)])
+
+    started = time.monotonic()
+    executed: list[str] = []
+    failed: list[str] = []
+    self_path = str(Path(__file__).resolve())
+    with tempfile.TemporaryDirectory(prefix="lmdj-deploy-command-shards-") as directory:
+        for phase in phases:
+            if not phase:
+                continue
+            phase_executed, phase_failed = run_worker_phase(
+                phase, Path(directory), self_path
+            )
+            executed.extend(phase_executed)
+            failed.extend(phase_failed)
+
+    duration = time.monotonic() - started
+    missing = sorted(set(test_ids) - set(executed))
+    unexpected = sorted(set(executed) - set(test_ids))
+    status = 1 if failed else 0
+    if len(executed) != len(test_ids) or missing or unexpected:
+        status = 1
+        sys.stderr.write(
+            f"\nshard accounting failed: discovered {len(test_ids)} tests, "
+            f"executed {len(executed)}\n"
+        )
+        if missing:
+            sys.stderr.write("never executed: " + ", ".join(missing) + "\n")
+        if unexpected:
+            sys.stderr.write("unexpected: " + ", ".join(unexpected) + "\n")
+
+    sys.stderr.write(
+        f"\nRan {len(executed)} of {len(test_ids)} discovered tests across "
+        f"{len(parallel_groups)} shards plus {len(serial_ids)} serial tests "
+        f"in {duration:.3f}s: {'FAILED' if status else 'OK'}\n"
+    )
+    if failed:
+        sys.stderr.write("failed workers: " + ", ".join(failed) + "\n")
+    sys.stderr.flush()
+    return status
+
+
+def main(argv: list[str]) -> int:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--shards", type=int, default=None)
+    parser.add_argument("--shard-report", default=None)
+    options, rest = parser.parse_known_args(argv[1:])
+
+    if options.shard_report is not None:
+        return run_shard(options.shard_report, rest)
+    if rest:
+        # Explicit test selection or unittest flags keep the serial behavior.
+        unittest.main(argv=[argv[0], *rest])
+    shards = resolve_shard_count(options.shards)
+    if shards == 1:
+        unittest.main(argv=[argv[0]])
+    return run_sharded(shards)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    sys.exit(main(sys.argv))

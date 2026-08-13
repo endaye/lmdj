@@ -7,6 +7,13 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      lanes:
+        description: >-
+          Comma-separated lanes to run, e.g. "web_toolchain,creator". Leave
+          empty to run every lane, which is what a dispatch does today.
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -43,6 +50,7 @@ jobs:
           PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MANIFEST_PATH: ${{ runner.temp }}/ci-scope.json
+          REQUESTED_LANES: ${{ inputs.lanes }}
         run: |
           set -euo pipefail
           python3 scripts/ci/change_scope.py \
@@ -54,7 +62,8 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --manifest-out "$MANIFEST_PATH" \
             --github-output "$GITHUB_OUTPUT" \
-            --summary "$GITHUB_STEP_SUMMARY"
+            --summary "$GITHUB_STEP_SUMMARY" \
+            --lanes "${REQUESTED_LANES:-}"
       - name: Retain the scope manifest
         uses: actions/upload-artifact@v4
         with:
@@ -158,7 +167,24 @@ jobs:
           )"
           echo "Runner selection candidates: $runner_candidates"
 
+          # Eligibility deliberately ignores `busy`. GitHub already queues a
+          # label-matched job against a loaded pool, so a busy runner is a
+          # latency condition; only an absent pool is an availability
+          # condition. Treating the two alike diverted an entire manifest to
+          # paid infrastructure whenever concurrent runs happened to saturate
+          # the pool for an instant.
           eligible_count="$(
+            jq \
+              '[
+                .runners[]?
+                | select(.status == "online")
+                | [.labels[].name]
+                | select(contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"]))
+              ] | length' \
+              <<<"$runner_response"
+          )"
+
+          idle_count="$(
             jq \
               '[
                 .runners[]?
@@ -173,16 +199,19 @@ jobs:
           )"
 
           if [[ "$eligible_count" == "0" ]]; then
-            select_hosted 'no online idle trusted self-hosted runner is available'
+            select_hosted 'no online trusted self-hosted runner is available'
             exit 0
           fi
 
           {
             echo 'runner=["self-hosted","Linux","X64","lmdj-linux","contabo"]'
             echo 'self-hosted=true'
-            echo 'reason=online idle trusted self-hosted runner pool'
+            echo 'reason=online trusted self-hosted runner pool'
           } >>"$GITHUB_OUTPUT"
-          echo "Using trusted self-hosted runner pool: $eligible_count eligible runner(s)"
+          echo "Using trusted self-hosted runner pool: $eligible_count online runner(s), $idle_count idle"
+          if [[ "$idle_count" == "0" ]]; then
+            echo 'Trusted pool is saturated; selected jobs queue instead of using paid runners.'
+          fi
 
   docs-static:
     name: Docs / static
@@ -240,6 +269,11 @@ jobs:
           python-version: "3.11"
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py
+      # The suite is hermetic per test, so it shards across the runner's cores
+      # instead of spending its serial wall clock on process spawns. The runner
+      # runs its two timing-sensitive signal tests alone after the shards and
+      # fails closed if the executed test set differs from the discovered one.
+      - run: python3 apps/web-runtime-host/test/deploy_command_test.py --shards 4
 
   chameleon-lab:
     name: Chameleon Lab
@@ -281,6 +315,8 @@ jobs:
   web-toolchain-conformance:
     # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
     # bounded test budgets on the heterogeneous self-hosted Linux pool.
+    # This lane stays GitHub-hosted for determinism, not for capacity, so
+    # neither extra runner slots nor toolchain caching justifies moving it.
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain }}
     runs-on: ubuntu-24.04
@@ -336,7 +372,13 @@ jobs:
     needs: [change-scope, select-ubuntu-runner]
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
-    timeout-minutes: 45
+    # 45 was calibrated to GitHub-hosted speed (16-19 min observed). The
+    # trusted pool runs this lane about 2.2x slower: one success at 40 min
+    # and one cancellation at exactly 45. The limit is a hang detector, not
+    # a performance budget -- the suite owns its own behavior timeouts -- so
+    # it must clear the slow machine with room for pool contention, which
+    # rises as runner services per host go up.
+    timeout-minutes: 75
     env:
       LANG: C.UTF-8
       LC_ALL: C.UTF-8
@@ -393,6 +435,10 @@ jobs:
           scripts/web-runtime-host.sh proof
 
   creator-web:
+    # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
+    # bounded test budgets on the heterogeneous self-hosted Linux pool.
+    # This lane stays GitHub-hosted for determinism, not for capacity, so
+    # neither extra runner slots nor toolchain caching justifies moving it.
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.creator }}
     runs-on: ubuntu-24.04
@@ -634,6 +680,9 @@ jobs:
           )"
           echo "Runner selection candidates: $runner_candidates"
 
+          # As with the Linux pool, a busy trusted Mac is a latency condition
+          # and queues; only an offline, missing, or mislabeled runner is an
+          # availability condition worth paying 10.3x the Linux rate for.
           eligible_count="$(
             jq \
               --arg runner_name "$TARGET_RUNNER_NAME" \
@@ -642,7 +691,6 @@ jobs:
                 | select(
                     .name == $runner_name
                     and .status == "online"
-                    and .busy == false
                   )
                 | [.labels[].name]
                 | select(contains(["self-hosted", "macOS", "ARM64", "lmdj"]))
@@ -651,14 +699,14 @@ jobs:
           )"
 
           if [[ "$eligible_count" != "1" ]]; then
-            select_hosted 'self-hosted runner is offline, busy, missing, or mislabeled'
+            select_hosted 'self-hosted runner is offline, missing, or mislabeled'
             exit 0
           fi
 
           {
             echo 'runner=["self-hosted","macOS","ARM64","lmdj"]'
             echo 'self-hosted=true'
-            echo 'reason=online idle trusted self-hosted runner'
+            echo 'reason=online trusted self-hosted runner'
           } >>"$GITHUB_OUTPUT"
           echo "Using self-hosted runner: $TARGET_RUNNER_NAME"
 

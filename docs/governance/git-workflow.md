@@ -69,6 +69,35 @@ Before committing:
 Do not create empty commits. If verification fails or the commit boundary
 cannot be isolated, stop and report the blocker instead of committing.
 
+### Local pre-flight
+
+`scripts/local-ci.sh` runs the lanes CI would select for the current working
+tree, on the current machine. It calls the same `scripts/ci/change_scope.py`
+classifier and `scripts/ci/scope_policy.json` policy the workflow uses, so it
+cannot select a different lane set than CI, and it caches each lane's passing
+verdict against a digest of that lane's inputs — an untouched lane is not
+re-run between iterations.
+
+```bash
+scripts/local-ci.sh                       # run every selected lane
+scripts/local-ci.sh --list                # resolve the plan without running
+scripts/local-ci.sh --lanes core_ubuntu   # restrict to named lanes
+scripts/local-ci.sh --no-cache            # ignore cached lane verdicts
+scripts/local-ci.sh --install-hook        # install the pre-push hook
+```
+
+The pre-flight is advisory and produces no evidence. A lane this machine
+cannot execute — a Linux lane on macOS, a lane whose toolchain is absent,
+`package` against a modified working tree — reports `not-runnable-here`,
+never `pass`. `PR Gate` remains the single aggregate decision, and a green
+local run authorizes no push, Pull Request, merge, or later state transition
+(see §7).
+
+`--install-hook` writes a `pre-push` hook that runs the pre-flight and
+refuses the push on a hard failure; it refuses to overwrite an unrelated
+existing hook unless `--force` is given. `git push --no-verify` is the
+documented bypass.
+
 Coding agents do not need per-commit confirmation: once a change is complete
 and its verification passes, commit autonomously, and commit later
 user-requested modifications the same way. This autonomy covers local

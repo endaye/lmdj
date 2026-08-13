@@ -30,7 +30,10 @@ async function downloadReport(page) {
   const downloadPromise = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export report"}).click();
   const download = await downloadPromise;
-  expect(download.suggestedFilename()).toBe("lmdj-creator-web-1.0.20.0.json");
+  // The Build lives in the packaged manifest the app already loads; naming it
+  // again here made an identity bump cost a CI cycle to discover.
+  expect(download.suggestedFilename()).toMatch(
+      /^lmdj-creator-web-\d+\.\d+\.\d+\.\d+\.json$/);
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
 

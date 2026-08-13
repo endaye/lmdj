@@ -116,6 +116,45 @@ The closed lanes are `docs_static`, `portal`, `ci_contract`, `core_ubuntu`,
 inheritance, not component ownership: a shared fixture or tool selects every
 consumer whose behavior could change.
 
+Ownership follows the subject under test, not only the directory the test file
+sits in. `apps/web-runtime-host/test/deploy_command_test.py` executes
+`scripts/web-runtime-deploy.sh` end to end against a fake Netlify server, so
+the policy maps that suite and the three tools it drives —
+`apps/web-runtime-host/tools/deploy_orchestrator.py`, `netlify_api.py`, and
+`release_bundle.py` — to `deploy_contract` on top of their
+`apps/web-runtime-host/` prefix owners. Without those rules, editing the deploy
+command selected `deploy_contract` alone and never ran the suite that proves
+the command: a fail-open gap inside a policy documented as conservative test
+inheritance. The `deploy-contract` job now runs that suite, and
+`scripts/web-runtime-host.sh run_nonbrowser_tests` no longer does, so the
+Formal Web Runtime Host proof's non-browser phase excludes it while the other
+six non-browser suites stay — their subjects remain owned by
+`web_runtime_host`. Union semantics cannot subtract a lane, so the suite and
+the three tools still select `web_runtime_host` through the directory prefix;
+that over-selection is the fail-closed direction and is accepted.
+
+`deploy-contract` runs that suite sharded across worker processes rather than
+serially. `--shards N` defaults to `min(4, os.cpu_count())`, is overridable
+through `LMDJ_DEPLOY_COMMAND_TEST_SHARDS`, and `--shards 1` is the serial run.
+Sharding is safe here and deliberately not applied to the Playwright browser
+suites, which stay at `workers: 1`: every test in this suite builds its own
+temporary repository, its own fake-command directory, and its own fake Netlify
+server on port 0, and its `tearDown` only reads the real evidence root, so
+there is no shared timing-sensitive state. The runner partitions the discovered
+test ids deterministically, prints each failed worker's own output, and fails
+closed when the executed set differs from the discovered set — a silently
+dropped test is a failure, not a faster pass.
+
+Two tests are the exception and run alone in a serial phase after the parallel
+one: the SIGINT/SIGTERM cases drive the deploy command to a blocking point,
+signal its process group, and then assert against bounded readiness and
+post-signal cleanup windows. They are the only tests in the file with
+wall-clock budgets, and competing shard load can exceed those windows and fail
+a correct command. The runner names them explicitly and refuses to start if a
+named test no longer exists, so a rename cannot silently return them to the
+parallel phase. Widening a timing budget to buy parallelism would weaken the
+assertion; giving those two tests an idle machine does not.
+
 The Ubuntu selector runs only when a selected lane needs the trusted Linux
 pool, including `package`; the macOS selector runs only for `core_macos`.
 Package retains LFS hydration and explicitly disables ccache while reusing the
@@ -155,6 +194,37 @@ and test-owned behavior timeouts remain hard failures. A slow successful job
 stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
 is not retried. `main` and manual dispatch always run the full manifest.
 
+### Local Pre-Flight
+
+`scripts/local-ci.sh` (implemented by `scripts/ci/local_preflight.py` and the
+lane command table `scripts/ci/local_lanes.json`) runs the selected lanes on a
+developer machine before a push. It reuses `scripts/ci/change_scope.py` and
+`scripts/ci/scope_policy.json` directly, so its lane selection is the workflow's
+selection rather than a second opinion, and a contract test asserts the command
+table covers exactly the canonical lane list.
+
+The pre-flight is advisory and is never evidence. It publishes no job result,
+participates in no `needs` graph, and cannot satisfy a manifest-required job.
+`PR Gate` remains the single aggregate decision. Four verdicts are reported:
+`pass`, `cached-pass`, `fail`, and `not-runnable-here`. A lane whose platform,
+toolchain, or working-tree precondition is unmet reports `not-runnable-here`
+and never `pass`; the Linux-only core lanes on macOS and `package` against a
+modified working tree are the ordinary cases.
+
+Cached verdicts are keyed by a digest of the lane name, its resolved commands,
+and the content identity of every repository path the policy maps to that lane.
+Paths that force full mode — shared CMake, Contracts, the CI control plane, and
+any path the policy does not classify — are inputs to every lane, so a shared
+edit cannot leave a stale cached pass behind. A bounded set of recent passing
+states is retained per lane so that reverting an edit returns to a cached pass
+instead of re-running. The cache lives outside the worktree under
+`~/.cache/lmdj/preflight/` and has no path into a CI result.
+
+The command table records, per lane, the CI steps the pre-flight deliberately
+does not reproduce — toolchain provisioning, `actionlint`, LFS fixture
+rehydration, and the Pull Request body the Portal impact check reads. Those
+notes are the declared divergence; anything else diverging is a defect.
+
 ## No-Retry Policy
 
 An automated test runs once per requested command. A failure is evidence to
@@ -162,18 +232,37 @@ diagnose, not a reason to retry until it passes. A deliberate rerun after a
 code or environment correction must be recorded as a new result.
 
 The PR and `main` Core CI Linux workloads prefer the repository's trusted
-runner pool whenever at least one online, idle runner carries the
-`self-hosted`, `Linux`, `X64`, `lmdj-linux`, and `contabo` labels. Selection is
-label-based rather than bound to a runner name, so GitHub assigns each selected
-job to any matching free runner. The selector uses GitHub-hosted Ubuntu for an
-untrusted fork, a missing status token, a Runner API failure, or a pool with no
-online idle matching runner. Selection happens before the workload jobs start;
-a semantic failure on the selected lane is final and is not retried on a
-GitHub-hosted runner.
+runner pool whenever at least one online runner carries the `self-hosted`,
+`Linux`, `X64`, `lmdj-linux`, and `contabo` labels. Selection is label-based
+rather than bound to a runner name, so GitHub assigns each selected job to any
+matching free runner. The selector uses GitHub-hosted Ubuntu for an untrusted
+fork, a missing status token, a Runner API failure, or a pool with no online
+matching runner. Selection happens before the workload jobs start; a semantic
+failure on the selected lane is final and is not retried on a GitHub-hosted
+runner.
 
-The trusted Linux pool currently contains two independent runner services and
-therefore executes at most two selected jobs concurrently; additional jobs
-queue. Each CI CMake build is capped at three parallel jobs. Native Linux jobs
+Eligibility deliberately ignores whether a matching runner is currently busy.
+GitHub already queues a label-matched job against a loaded pool, so a busy
+runner is a latency condition while an absent pool is an availability
+condition. Because the selector resolves once for the whole run, treating the
+two alike diverted an entire manifest to paid infrastructure whenever
+concurrent runs saturated the pool for an instant — the dominant cost driver
+in the 2026-08-12 run history. A saturated pool now queues, and the selector
+reports online and idle counts as diagnostics.
+
+The trusted Linux pool's concurrency equals the number of online runner
+services, currently two — one per host; additional selected jobs queue behind
+them. Raising that number is an operational change on the existing hosts, not
+a workflow change. The approved target is two services per host, giving a pool
+concurrency of four. It is bounded rather than maximal because each CI CMake
+build is already capped at three parallel jobs, so services per host multiply
+into concurrent compile jobs per host: two services means at most six, which
+the hosts absorb, while three would mean nine and would slow every job on the
+machine. `web-runtime-host` is the lane most exposed to that contention, at
+roughly 40 minutes on the pool against 16-19 GitHub-hosted, and it sets the
+pool's critical path regardless of how many slots the pool offers.
+
+Each CI CMake build is capped at three parallel jobs. Native Linux jobs
 use the pool's shared checkout-external persistent `ccache`, while Emscripten
 jobs deliberately bypass it. The trusted M1 runner uses its own persistent
 `ccache` with the same three-job build cap. GitHub-hosted Linux and macOS lanes
@@ -183,7 +272,13 @@ results.
 
 The macOS CI fallback is infrastructure recovery, not a test retry. Runner
 selection uses GitHub-hosted macOS immediately when the trusted self-hosted
-runner is unavailable. When the self-hosted lane is selected, GitHub-hosted
+runner is offline, missing, or mislabeled. A busy trusted Mac queues instead,
+on the same reasoning as the Linux pool and with more weight behind it:
+GitHub-hosted macOS bills at 10.3 times the Linux rate and was 57 percent of
+the 2026-08-01..13 Actions spend on 11 percent of the minutes. Offline is
+still an availability condition, because a single laptop runner that is
+asleep would otherwise hold a Pull Request in the queue rather than merely
+delay it. When the self-hosted lane is selected, GitHub-hosted
 macOS may run the same gates only if checkout, acceleration/`ccache` setup,
 runner communication, or the 30-minute job limit prevents that lane from
 publishing a terminal result. A published preparation, Core Proof, or
