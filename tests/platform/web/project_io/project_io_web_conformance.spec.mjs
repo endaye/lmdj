@@ -524,7 +524,6 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.directoryBarrier).toBe("absent");
   expect(result.replacementFaultPoints).toEqual(REPLACEMENT_FAULT_POINTS);
   expect(result.publicationFaultPoints).toEqual(PUBLICATION_FAULT_POINTS);
-  expect(result.publicationMaxChunkBytes).toBe(1_048_576);
 
   const unleasedAppend = await trackedPage(context);
   await unleasedAppend.goto(
@@ -751,6 +750,20 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect((await waitForResult(immutableRestarted)).state).toBe("immutable-retry");
   await immutableRestarted.close();
   await immutableController.close();
+
+  const cleanPublicationBundle = `publication-clean-${Date.now()}`;
+  const cleanPublicationController = await trackedPage(context);
+  await cleanPublicationController.goto("/preflight.html");
+  await preparePublicationFixture(cleanPublicationController, cleanPublicationBundle);
+  const cleanPublication = await trackedPage(context);
+  await cleanPublication.goto(
+      `/project_io/project_io_web_test.html?action=publish_publication&bundle=${cleanPublicationBundle}`);
+  expect(await waitForResult(cleanPublication)).toEqual({
+    state: "published",
+    maxChunkBytes: 1_048_576,
+  });
+  await cleanPublication.close();
+  await cleanPublicationController.close();
 
   for (const [index, point] of PUBLICATION_FAULT_POINTS.entries()) {
     const bundle = `publication-fault-${index}-${Date.now()}`;

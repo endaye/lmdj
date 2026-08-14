@@ -624,7 +624,12 @@ nlohmann::json run_suite() {
           platform->publish_directory_if_absent(
               publication_source, fault_bundle),
           "publication fault write");
-      return {{"complete", true}, {"result", {{"state", "published"}}}};
+      return {
+          {"complete", true},
+          {"result",
+           {{"state", "published"},
+            {"maxChunkBytes", lmdj_opfs_publication_max_chunk_bytes()}}},
+      };
     }
     if (action == "publish_publication_failure") {
       auto lease = value(
@@ -1040,8 +1045,6 @@ nlohmann::json run_suite() {
           {"immutableShortWrites", "pass"},
           {"directoryTransfer", directory_transfer},
           {"directoryBarrier", "absent"},
-          {"publicationMaxChunkBytes",
-           lmdj_opfs_publication_max_chunk_bytes()},
           {"replacementFaultPoints", {"before_write", "during_write", "before_close",
                                         "after_close", "before_cleanup"}},
           {"publicationFaultPoints",
