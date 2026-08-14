@@ -10,6 +10,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+WEB_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
 ACCELERATION_ACTION = (
     REPO_ROOT / ".github/actions/configure-build-acceleration/action.yml"
 )
@@ -85,13 +86,17 @@ class CiBuildAccelerationTest(unittest.TestCase):
         self.assertIn("scripts/core.sh package", job)
 
     def test_web_builds_use_bounded_parallelism_without_ccache(self) -> None:
+        action = WEB_PROOF_ACTION.read_text(encoding="utf-8")
         for job_name in ("web-toolchain-conformance", "web-runtime-host"):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn(
-                    "uses: ./.github/actions/configure-build-acceleration", job
+                    "uses: ./.github/actions/web-ci-proof", job
                 )
-                self.assertIn("use-ccache: false", job)
+        self.assertIn(
+            "uses: ./.github/actions/configure-build-acceleration", action
+        )
+        self.assertIn("use-ccache: false", action)
 
         for script_path in (WEB_TOOLCHAIN, WEB_HOST):
             with self.subTest(script=script_path.name):

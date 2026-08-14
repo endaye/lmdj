@@ -11,6 +11,7 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MAIN_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 PORTAL_WORKFLOW = REPO_ROOT / ".github/workflows/architecture-portal.yml"
+WEB_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
 
 FORMAL_LANE_JOBS = (
     "docs-static",
@@ -87,6 +88,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.main_source = MAIN_WORKFLOW.read_text(encoding="utf-8")
         cls.portal_source = PORTAL_WORKFLOW.read_text(encoding="utf-8")
+        cls.web_proof_source = WEB_PROOF_ACTION.read_text(encoding="utf-8")
 
     def workflow_job(self, job_name: str, *, portal: bool = False) -> str:
         source = self.portal_source if portal else self.main_source
@@ -399,9 +401,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("$GITHUB_STEP_SUMMARY", job)
 
     def test_no_job_uses_retry_for_semantic_workloads(self) -> None:
-        self.assertNotRegex(self.main_source, r"(?im)^\s+uses: .*retry")
+        semantic_source = self.main_source + self.web_proof_source
+        self.assertNotRegex(semantic_source, r"(?im)^\s+uses: .*retry")
         self.assertNotRegex(
-            self.main_source,
+            semantic_source,
             r"(?im)^\s*(?:for|while|until)\s+.*(?:attempt|retry)",
         )
         semantic_commands = (
@@ -420,7 +423,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         )
         for command in semantic_commands:
             with self.subTest(command=command):
-                self.assertEqual(self.main_source.count(command), 1)
+                self.assertEqual(semantic_source.count(command), 1)
 
     def test_architecture_portal_no_longer_has_duplicate_pr_or_main_triggers(self) -> None:
         events = self.event_block(self.portal_source)

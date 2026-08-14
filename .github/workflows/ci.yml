@@ -336,47 +336,10 @@ jobs:
       LC_ALL: C.UTF-8
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: ./.github/actions/web-ci-proof
         with:
-          python-version: "3.11"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-      - name: Configure bounded build parallelism
-        uses: ./.github/actions/configure-build-acceleration
-        with:
-          use-ccache: false
-      - name: Restore pinned emsdk
-        id: emsdk-cache
-        uses: actions/cache@v4
-        with:
-          path: build/toolchains/emsdk
-          key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Clone pinned emsdk
-        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
-        run: |
-          git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
-          git -C build/toolchains/emsdk checkout "$LMDJ_EMSDK_REVISION"
-      - name: Install pinned Emscripten
-        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
-        run: build/toolchains/emsdk/emsdk install "$LMDJ_EMSDK_VERSION"
-      - name: Activate pinned Emscripten
-        run: build/toolchains/emsdk/emsdk activate "$LMDJ_EMSDK_VERSION"
-      - name: Install locked browser runner
-        working-directory: tests/platform/web
-        run: npm ci
-      - name: Restore Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install Chromium and WebKit
-        working-directory: tests/platform/web
-        run: npx --no-install playwright install --with-deps chromium webkit
-      - name: Prove the pre-Product Web toolchain
-        run: |
-          source build/toolchains/emsdk/emsdk_env.sh
-          scripts/web-toolchain-conformance.sh proof
+          lane: web_toolchain
+          install-system-deps: "true"
 
   web-runtime-host:
     needs: [change-scope, select-ubuntu-runner]
@@ -398,51 +361,10 @@ jobs:
           lfs: true
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
-      - uses: actions/setup-python@v6
+      - uses: ./.github/actions/web-ci-proof
         with:
-          python-version: "3.11"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-      - name: Configure bounded build parallelism
-        uses: ./.github/actions/configure-build-acceleration
-        with:
-          use-ccache: false
-      - name: Restore pinned emsdk
-        id: emsdk-cache
-        uses: actions/cache@v4
-        with:
-          path: build/toolchains/emsdk
-          key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Clone pinned emsdk
-        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
-        run: |
-          git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
-          git -C build/toolchains/emsdk checkout "$LMDJ_EMSDK_REVISION"
-      - name: Install pinned Emscripten
-        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
-        run: build/toolchains/emsdk/emsdk install "$LMDJ_EMSDK_VERSION"
-      - name: Activate pinned Emscripten
-        run: build/toolchains/emsdk/emsdk activate "$LMDJ_EMSDK_VERSION"
-      - name: Install locked browser runner
-        working-directory: tests/platform/web
-        run: npm ci
-      - name: Restore Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install Chromium and WebKit
-        working-directory: tests/platform/web
-        run: npx --no-install playwright install --with-deps chromium webkit
-      - name: Verify exact Emscripten identity
-        run: |
-          source build/toolchains/emsdk/emsdk_env.sh
-          python3 tools/web-runtime/verify_emscripten.py
-      - name: Prove the Formal Web Runtime Host
-        run: |
-          source build/toolchains/emsdk/emsdk_env.sh
-          scripts/web-runtime-host.sh proof
+          lane: web_runtime_host
+          install-system-deps: ${{ runner.environment == 'github-hosted' && 'true' || 'false' }}
 
   creator-web:
     # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
@@ -462,50 +384,10 @@ jobs:
           lfs: true
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
-      - uses: actions/setup-python@v6
+      - uses: ./.github/actions/web-ci-proof
         with:
-          python-version: "3.11"
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "22"
-      - name: Configure bounded build parallelism
-        uses: ./.github/actions/configure-build-acceleration
-        with:
-          use-ccache: false
-      - name: Restore pinned emsdk
-        id: emsdk-cache
-        uses: actions/cache@v4
-        with:
-          path: build/toolchains/emsdk
-          key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Clone pinned emsdk
-        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
-        run: |
-          git clone https://github.com/emscripten-core/emsdk.git build/toolchains/emsdk
-          git -C build/toolchains/emsdk checkout "$LMDJ_EMSDK_REVISION"
-      - name: Install pinned Emscripten
-        if: ${{ steps.emsdk-cache.outputs.cache-hit != 'true' }}
-        run: build/toolchains/emsdk/emsdk install "$LMDJ_EMSDK_VERSION"
-      - name: Activate pinned Emscripten
-        run: build/toolchains/emsdk/emsdk activate "$LMDJ_EMSDK_VERSION"
-      - name: Install locked Creator dependencies
-        working-directory: apps/creator-web
-        run: npm ci
-      - name: Install locked browser runner
-        working-directory: tests/platform/web
-        run: npm ci
-      - name: Restore Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
-      - name: Install Chromium and WebKit
-        working-directory: tests/platform/web
-        run: npx --no-install playwright install --with-deps chromium webkit
-      - name: Prove the packaged Creator Web Host
-        run: |
-          source build/toolchains/emsdk/emsdk_env.sh
-          scripts/creator-web.sh proof
+          lane: creator
+          install-system-deps: "true"
 
   web-runtime-lab:
     needs: [change-scope, select-ubuntu-runner]
@@ -908,9 +790,16 @@ jobs:
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - run: |
+      - name: Install coverage toolchain on GitHub-hosted runner
+        if: ${{ needs.select-ubuntu-runner.outputs.self-hosted != 'true' }}
+        run: |
           sudo apt-get update
           sudo apt-get install -y clang-18 llvm-18
+      - name: Verify coverage toolchain
+        run: |
+          command -v clang-18
+          command -v clang++-18
+          command -v llvm-cov-18
       - run: |
           env \
             PATH="/usr/lib/llvm-18/bin:$PATH" \
