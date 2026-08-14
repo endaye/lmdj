@@ -13,8 +13,9 @@ LMDJ 采用“减少不必要工作 + 双节点 Linux self-hosted 池”的组�
 2. 保留现有 Contabo Singapore 项目主机上的两个 Runner service，但先把它们从拥有
    `NOPASSWD: ALL` 的部署用户迁移到无 sudo、无 Docker、无部署目录权限的专用 Runner
    用户，再用于 Core、ASan、Coverage、Package 与轻量控制任务；
-3. Linux workflow 按真实角色标签调度，不再要求所有 Linux Runner 冒充 `contabo`，也不在
-   Runner 忙碌、状态 API 失败或池暂时离线时自动购买 GitHub-hosted Ubuntu；
+3. Linux workflow 按真实角色标签调度，不再要求所有 Linux Runner 冒充 `contabo`；保持
+   现有 busy -> queue 行为，并取消 token 不可用、Runner 状态 API 失败或无 online Runner
+   时的自动 GitHub-hosted Ubuntu workload fallback；
 4. Ready PR 继续使用已落地的风险分类；`main` push 改为对精确 `before..after` diff 运行同一
    fail-closed 分类，不再无条件 full；
 5. Product Build 候选、release、中央 CI、Product Assembly、Contract、未知路径和显式
@@ -102,7 +103,8 @@ Owner 已选择购物车中的
 
 ## 3. 目标
 
-- routine trusted Linux CI 不再自动消耗 GitHub-hosted Ubuntu minutes；
+- routine trusted Linux workload 不再自动消耗 GitHub-hosted Ubuntu minutes；Change Scope、
+  PR Gate 与既有 macOS selector 保留最小 GitHub-hosted Ubuntu 控制面；
 - docs-only Ready PR 与 docs-only main merge 的端到端目标均为 3 至 5 分钟；
 - full CI 的稳定目标为 median 不超过 20 分钟、P95 不超过 25 分钟；
 - 空闲池的 job queue 目标不超过 30 秒；
@@ -151,7 +153,8 @@ fallback 和 benchmark rollout。它需要最多迁移工作，但同时解决�
 trusted PR / main / explicit dispatch
                 |
                 v
-        Change Scope + trust gate
+  GitHub-hosted control plane
+  Change Scope + trust classification
                 |
         +-------+----------------------+------------------+
         |                              |                  |
@@ -163,7 +166,7 @@ trusted PR / main / explicit dispatch
         |                              |
         +---------------+--------------+
                         v
-                 same-run CI Gate
+       GitHub-hosted same-run PR Gate
 ```
 
 初始总 Linux concurrency 为四个 service：Contabo 两个、netcup 两个。netcup 只有在双并发
@@ -186,7 +189,7 @@ self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool
 
 | 节点 | 来源标签 | 角色标签 | 初始工作 |
 | --- | --- | --- | --- |
-| Contabo service 01/02 | `contabo`, `deployment-host` | `ci-general`, `ci-core` | Control、Docs、Portal、Core、ASan、Coverage、Package |
+| Contabo service 01/02 | `contabo`, `shared-with-staging` | `ci-general`, `ci-core` | Docs、Portal、Core、ASan、Coverage、Package |
 | netcup service 01/02 | `netcup`, `ci-only-host` | `ci-general`, `ci-web-heavy` | Web Toolchain、Web Runtime Host、Creator、Web Runtime Lab |
 | M1 | 既有 `lmdj`, `macOS`, `ARM64` | 既有 native 角色 | macOS Core/native ASan |
 | WSL2 | `wsl`, `win11-host` | `ci-overflow` | 当前离线，不计入承诺容量 |
@@ -199,21 +202,73 @@ self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool
 - Web Toolchain、Formal Web Runtime Host、Creator 与 Web Runtime Lab 要求
   `ci-web-heavy`；
 - Core Ubuntu、Linux ASan、Coverage 与 Package 要求 `ci-core`；
-- Change Scope、Docs/static、Portal、CI Contract、Deploy Contract、Chameleon Lab 与 Gate
-  使用 `ci-general`；
+- Change Scope 与 PR Gate 保留 `ubuntu-24.04`；既有 `select-macos-runner` 也保持 Hosted，
+  因为本设计不改 macOS fallback；
+- trusted Docs/static、Portal、CI Contract、Deploy Contract 与 Chameleon Lab 使用
+  `ci-general`；
 - 只有显式 emergency dispatch 才能改变某次 run 的角色路由；普通 event 不因 busy、offline、
   token/API error 自动改成 `ubuntu-24.04`；
-- fork 或不可信 head 不进入上述 self-hosted 标签。正式 merge 证据必须在受信同仓库分支上
-  重建；Owner 若要临时使用 hosted fallback，必须显式触发并接受该次费用。
+- fork 或不可信 head 不进入上述 self-hosted 标签；具体执行机制由 §8.1 固定。正式 merge
+  证据必须在受信同仓库分支上重建；Owner 若要临时使用 hosted fallback，必须显式触发并
+  接受该次费用。
 
-现有 `select-ubuntu-runner` 的 provider-specific 输出将被角色路由替代或收窄为只读摘要；
-不能继续让一次 API/idle snapshot 决定整个 run 是否购买 Hosted。若支持 job 集合或 manifest
-验证合同发生变化，内部 scope manifest 从 `lmdj.ci-scope.v1` 升级为 v2，producer、Gate、
-contract tests 与 artifact consumer 必须同一 Task 原子迁移，拒绝混合版本。
+现有 `select-ubuntu-runner` 的 provider-specific 输出将被角色路由替代；不能继续让一次
+API snapshot 决定整个 run 是否购买 Hosted。本设计新增 trust 字段并改变 support job 集合，
+因此内部 scope manifest 明确从 `lmdj.ci-scope.v1` 升级为
+`lmdj.ci-scope.v2`；producer、Gate、contract tests 与 artifact consumer 必须同一 Task
+原子迁移，拒绝混合版本。
+
+### 7.4 最小 Hosted 控制面
+
+Change Scope 继续在 GitHub-hosted Ubuntu 上执行，原因是它必须在任何 self-hosted Linux
+Runner 离线时仍发布精确 diff、scope、trust 与升级原因。PR Gate 也继续 Hosted，使它不受
+被裁决 workload 主机权限影响。两者运行 PR head 中的分类/Gate 代码时也不接触 self-hosted
+主机。
+
+这两项是预算中的显式豁免，不属于“routine Linux workload minutes”。实施后 summary 与
+billing 统计必须把以下类别分开：
+
+- hosted control plane：Change Scope、PR Gate，以及本设计不改动的 macOS selector；
+- self-hosted workload：Docs/Core/Web/Creator/Package 等正式 lane；
+- explicit hosted fallback：Owner 单次授权的 workload。
+
+控制面目标是每次普通 run 合计不超过 5 个 GitHub-hosted Ubuntu job-minutes，不把它写成 0。
+若 control plane 自身持续超过该目标，应优化 checkout/script，而不是迁移到可能离线或承接
+不可信代码的 workload 主机。
 
 ## 8. 信任与主机隔离
 
-### 8.1 Contabo Phase 0 硬门禁
+### 8.1 Private fork 的执行门
+
+仓库当前是 private、允许创建 fork，但 GitHub 的 private-fork workflow 设置为：
+
+```text
+run_workflows_from_fork_pull_requests=false
+send_write_tokens_to_workflows=false
+send_secrets_and_variables=false
+```
+
+这是外部 fork 不进入 self-hosted Runner 的主安全边界，必须在迁移前通过 GitHub API
+重新验证，并在观察周检查没有漂移。private repository 不支持 public-repository 使用的
+outside-collaborator approval endpoint，因此本设计不依赖一个对本仓库返回 422 的设置。
+
+workflow 再做纵深防御：
+
+1. Hosted Change Scope manifest 输出闭合布尔字段 `trusted_head`，job 同时输出
+   `trusted-head`；只有非 PR event 或
+   `github.event.pull_request.head.repo.full_name == github.repository` 才为 true；
+2. 每个 self-hosted job 的 `if` 必须同时要求 selected lane 与
+   `needs.change-scope.outputs.trusted-head == 'true'`；
+3. Hosted PR Gate 将“selected self-hosted lane 因 untrusted head skipped”裁决为 failure，并
+   在 summary 明确写 `untrusted fork blocked from self-hosted CI`；
+4. external fork 如需正式 merge evidence，由 maintainer 把 exact patch 带入受信同仓库分支，
+   在新 SHA 上重新建立正式 CI，不能继承 fork run。
+
+workflow `if` 不是唯一安全边界，因为 fork 可以修改自己的 workflow 文件；private-fork
+workflow 禁止执行才是阻止该文件开始运行的仓库级门禁。若未来 Owner 要开启 private-fork
+workflow，必须先另立安全设计，当前双节点路由在该设置开启时视为不满足前置条件。
+
+### 8.2 Contabo Phase 0 硬门禁
 
 在 Contabo 承接任何新增工作前：
 
@@ -232,7 +287,7 @@ contract tests 与 artifact consumer 必须同一 Task 原子迁移，拒绝混�
 
 在此门禁完成前，当前两个 Runner 只能维持既有容量，不增加新 lane、service 或权限。
 
-### 8.2 netcup 基线
+### 8.3 netcup 基线
 
 - Ubuntu 24.04 LTS，最小安装；
 - SSH key only，关闭密码登录和 root 远程登录；
@@ -317,8 +372,9 @@ main、PR head、旧 SHA 或一次局部 dispatch 当作 full 证据。此规则
 
 ## 11. Hosted fallback 政策
 
-- routine trusted Linux CI 的默认 hosted fallback 为关闭；
-- busy 表示排队，不表示付费切换；
+- Change Scope、PR Gate 与既有 macOS selector 是 §7.4 的显式 Hosted 控制面；
+- routine trusted Linux workload 的默认 hosted fallback 为关闭；
+- 保持现有 busy -> queue 行为；这项能力已经实现，不列为迁移待办；
 - Runner API/token failure 表示 observability failure，不表示付费切换；
 - 全部匹配 Runner 离线时，job 保持 queued/blocked 并通知，不在无人确认时消耗预算；
 - emergency hosted fallback 必须通过显式 dispatch input 或单独授权的 repository variable
@@ -326,9 +382,12 @@ main、PR head、旧 SHA 或一次局部 dispatch 当作 full 证据。此规则
 - fallback 只影响该次 run，不修改永久默认；
 - hosted 运行的成功结果仍是有效 CI 结果，但费用和触发原因必须作为运营证据单独报告。
 
-零自动付费的代价是池完全离线时不能依靠一个 hosted selector 快速失败，job 可能排队。
-因此“空闲 queue 不超过 30 秒”的 SLO 只在至少一个匹配 Runner online 时成立；完全离线由
-Runner heartbeat/运维告警处理，不能用自动账单隐藏故障。
+零 workload 自动付费的代价是池完全离线时 job 会排队；Hosted Change Scope 仍能发布本次
+scope/trust 证据，但不能代替 workload。GitHub 对 self-hosted job 的 queue 上限是 24 小时，
+超过后自动取消，因此最终状态是 fail/cancelled，而不是无限等待
+（[GitHub Actions limits](https://docs.github.com/en/actions/reference/limits)）。故“空闲 queue 不超过
+30 秒”的 SLO 只在至少一个匹配 Runner online 时成立；完全离线由 Runner heartbeat/运维
+告警处理，不能用自动账单隐藏故障。
 
 ## 12. 迁移阶段
 
@@ -336,6 +395,7 @@ Runner heartbeat/运维告警处理，不能用自动账单隐藏故障。
 
 - 记录至少三次近期 full/main run 的 queue、execution、critical path 与 billed minutes；
 - 恢复只读 `cntb` 认证并记录 Contabo exact SKU；
+- 通过 GitHub API 证明 private-fork workflow、write token 与 secret forwarding 均为关闭；
 - 将 Contabo Runner 从 `lmdjadmin` 迁移到受限用户；
 - 加入 resource slice，验证 staging health 与真实 runner assignment；
 - 未通过安全门禁时停止，不继续扩容路由。
@@ -350,7 +410,12 @@ Runner heartbeat/运维告警处理，不能用自动账单隐藏故障。
 
 ### Phase 2：benchmark，不切正式路由
 
-- 分别运行 Web Toolchain、Web Runtime Host、Creator 的显式 dispatch；
+- 新增独立的 dispatch-only benchmark workflow；它要求 exact trusted revision 与闭合 lane
+  allowlist，直接选择 `ci-web-heavy`，不发布 PR Gate、不满足 branch protection，也不改变
+  正式 workflow 的 `runs-on`；
+- 该 workflow 调用与正式 lane 相同的 pinned toolchain setup、stable script 与 artifact/trace
+  收集入口，禁止复制一套可能漂移的测试命令；
+- 分别运行 Web Toolchain、Web Runtime Host、Creator 的 benchmark dispatch；
 - 至少覆盖一次 cold cache、三次 warm cache；
 - 覆盖单 Runner idle 与两个 Runner 并发；
 - 保留 Playwright trace、runner name、queue、execution、load、memory、cache 与失败分类；
@@ -363,7 +428,8 @@ Runner heartbeat/运维告警处理，不能用自动账单隐藏故障。
 3. Web Runtime Host；
 4. Web Runtime Lab 与其他适用 Web workload；
 5. Linux control/light job；
-6. 取消 routine GitHub-hosted Ubuntu 自动 fallback。
+6. 取消 token/API/no-online 条件下的 routine GitHub-hosted Ubuntu workload fallback；busy ->
+   queue 保持不变；
 
 每一步至少连续三次绿色并满足资源门槛后才进入下一步。某 lane 失败只回滚该 lane 路由，
 不同时回滚 scope、其他 lane 或测试 assertion。
@@ -409,8 +475,11 @@ Runner heartbeat/运维告警处理，不能用自动账单隐藏故障。
 
 ### 13.3 Cost
 
-- 观察周 routine trusted Linux CI 的 GitHub-hosted Ubuntu minutes 为 0；
-- 任何 hosted Linux minutes 都能映射到一次显式 emergency authorization；
+- 观察周 routine trusted Linux workload 的 GitHub-hosted Ubuntu minutes 为 0；
+- Change Scope、PR Gate 与既有 macOS selector 单独记为 Hosted control plane，每次普通 run
+  目标合计不超过 5 个 Ubuntu job-minutes；
+- 任何 control plane 之外的 hosted Linux workload minutes 都能映射到一次显式 emergency
+  authorization；
 - netcup 首年实际 invoice 与 checkout 记录一致；
 - Contabo 为既有成本，不把沉没成本重复计入 CI 增量费用。
 
