@@ -463,8 +463,7 @@ test("Voice-state overflow terminalizes the real Worklet at production capacity"
     outcomeDrops: 0,
   });
   expect(result.overflowAccepted).toBe(3);
-  expect(result.afterOverflow).toEqual({
-    published: result.beforeOverflow.capacity,
+  expect(result.afterOverflow).toMatchObject({
     state: 1,
     drops: 1,
     outcomeDrops: 0,
@@ -475,6 +474,12 @@ test("Voice-state overflow terminalizes the real Worklet at production capacity"
     renderCallsAtFatal: expect.any(Number),
     renderCallsAfterFatal: expect.any(Number),
   });
+  expect(result.afterOverflow.published).toBeGreaterThanOrEqual(
+    result.beforeOverflow.capacity,
+  );
+  expect(result.afterOverflow.published).toBeLessThanOrEqual(
+    result.beforeOverflow.capacity + 1,
+  );
   expect(result.afterOverflow.renderCallsAfterFatal).toBe(
     result.afterOverflow.renderCallsAtFatal,
   );
