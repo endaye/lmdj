@@ -1069,8 +1069,10 @@ int main() {
   const std::string encoded = report.dump();
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
-  // EXIT_RUNTIME=0 retains the page runtime after main returns. Explicitly
-  // exiting a PROXY_TO_PTHREAD main asks Emscripten 6.0.5 to tear down its
-  // mailbox and trips thread_mailbox_shutdown before Playwright reads report.
-  return 0;
+  // A PROXY_TO_PTHREAD main tears down its mailbox when it returns, even with
+  // EXIT_RUNTIME=0 in Emscripten 6.0.5. Keep the conformance page's worker
+  // resident until Playwright closes the page after reading the report.
+  for (;;) {
+    emscripten_sleep(60'000);
+  }
 }
