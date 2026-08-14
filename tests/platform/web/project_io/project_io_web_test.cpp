@@ -1069,10 +1069,9 @@ int main() {
   const std::string encoded = report.dump();
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
-  // A PROXY_TO_PTHREAD main tears down its mailbox when it returns, even with
-  // EXIT_RUNTIME=0 in Emscripten 6.0.5. Keep the conformance page's worker
-  // resident until Playwright closes the page after reading the report.
-  for (;;) {
-    emscripten_sleep(60'000);
-  }
+  // A PROXY_TO_PTHREAD main tears down its mailbox when it returns. Transfer
+  // ownership to Emscripten's page main loop until Playwright closes the page
+  // after reading the report; simulateInfiniteLoop prevents a pthread return.
+  emscripten_set_main_loop([] {}, 0, true);
+  return 0;
 }
