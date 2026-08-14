@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <array>
-#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -1071,11 +1070,8 @@ int main() {
   const std::string encoded = report.dump();
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
-  // A PROXY_TO_PTHREAD main tears down its mailbox when it returns. The report
-  // is terminal for this page, so park the worker without Asyncify until
-  // Playwright closes the page and lets the browser terminate it directly.
-  static std::atomic<std::uint32_t> resident{0};
-  for (;;) {
-    static_cast<void>(emscripten_futex_wait(&resident, 0, 60'000));
-  }
+  // The report is terminal for this page, but returning from a
+  // PROXY_TO_PTHREAD main closes its mailbox. Yield without returning so the
+  // worker remains available until Playwright closes the page.
+  emscripten_unwind_to_js_event_loop();
 }
