@@ -35,7 +35,7 @@
 3. Owner separately authorizes each Contabo/netcup sudo, systemd, firewall, Runner, and label mutation in Tasks 1-2.
 4. Task 3's benchmark workflow must merge before it can receive `workflow_dispatch` on `main`.
 5. Task 4 must pass before formal routing changes in Task 6A.
-6. The standard release pipeline currently exists on `feat/standard-release-pipeline`, not the design branch's `origin/main`. Task 8 must not start until that work is merged and the implementation branch is rebased onto a `main` containing `scripts/release.sh`, `tools/release/**`, and `tests/build/release_*_test.py`.
+6. Live `origin/main` at `c20b9e9c` contains the standard release pipeline. Before Task 8, verify the implementation branch is based on a fresh `origin/main` that still contains `scripts/release.sh`, `tools/release/**`, and `tests/build/release_*_test.py`; do not rely on this recorded SHA as current forever.
 7. Tasks 5-6F and 8 require separate push/PR/merge authorization. Do not infer those permissions from this plan.
 
 ## File Map
@@ -45,7 +45,7 @@
 - `.github/actions/web-ci-proof/action.yml` — one pinned Web toolchain/setup/proof entry used by formal CI and benchmark CI.
 - `.github/workflows/ci-self-hosted-benchmark.yml` — dispatch-only, non-authoritative netcup benchmark workflow.
 - `tests/build/ci_benchmark_workflow_test.py` — benchmark workflow and shared-action contract.
-- `tests/build/release_github_api_test.py` — strict Actions jobs/artifact/ZIP projection contracts after the standard release pipeline lands.
+- `tests/build/release_github_api_test.py` — strict Actions jobs/artifact/ZIP projection contracts extending the merged standard release pipeline.
 - `docs/quality/ci-runner-migration-acceptance.md` — fixed-path acceptance record populated from actual run/server evidence after cutover.
 
 ### Existing files changed by routing
@@ -71,7 +71,7 @@
 - `tools/release/audit.py` — full exact-main audit.
 - `tools/release/prepare.py` — same full evidence precondition before preparation.
 - `tests/build/release_audit_test.py` and `tests/build/release_prepare_test.py` — artifact/Gate/full-mode tests.
-- `.agents/skills/lmdj-release/SKILL.md` — exact operator-facing precondition after the standard release pipeline merges.
+- `.agents/skills/lmdj-release/SKILL.md` — exact operator-facing full-evidence precondition.
 
 ---
 
@@ -86,8 +86,7 @@
 - [ ] **Step 1: Record three recent successful full-main baselines**
 
 ```bash
-baseline_dir="$(mktemp -d)"
-trap 'rm -rf "$baseline_dir"' EXIT
+baseline_dir="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-ci-baseline.XXXXXX")"
 GH_TOKEN="$(gh auth token --user endaye)"
 export GH_TOKEN
 gh run list --repo endaye/lmdj --workflow ci.yml --branch main --event push \
@@ -123,16 +122,21 @@ while IFS= read -r run_id; do
         queue_seconds: (($run.run_started_at | fromdateiso8601) - ($run.created_at | fromdateiso8601)),
         wall_seconds: (($run.updated_at | fromdateiso8601) - ($run.created_at | fromdateiso8601)),
         jobs: [$jobs[0].jobs[] | {name,runner_name,started_at,completed_at,conclusion}],
-        billable: $timing[0].billable
+        billable: $timing[0].billable,
+        timing_api_usable: (
+          (($timing[0].billable.UBUNTU.jobs // 0) == 0)
+          or (($timing[0].billable.UBUNTU.total_ms // 0) > 0)
+        )
       }'
   full_count=$((full_count + 1))
   test "$full_count" -lt 3 || break
 done <"$baseline_dir/candidate-run-ids"
 test "$full_count" -eq 3
+printf 'baseline_evidence_dir=%s\n' "$baseline_dir"
 unset GH_TOKEN
 ```
 
-Expected: three exact full manifests plus queue, wall-clock, per-job execution/runner, and GitHub billable projections are retained in the audited execution log. If the timing endpoint is unavailable, record that field as externally unavailable; do not estimate billed minutes from wall-clock.
+Expected: three exact full manifests plus queue, wall-clock, per-job execution/runner, and GitHub billable projections are retained in the audited execution log. If the timing endpoint fails, or reports hosted job count with zero duration as observed on 2026-08-14, record billed minutes as externally unavailable; do not treat that zero as cost evidence or estimate billed minutes from wall-clock.
 
 - [ ] **Step 2: Verify the live private-fork and Runner baseline without mutation**
 
@@ -178,13 +182,18 @@ ssh sg '
   sudo -n -u lmdjadmin sudo -n -l
   systemctl show actions.runner.endaye-lmdj.contabo-lmdj-linux.service \
     -p User -p ExecStart -p WorkingDirectory -p CPUQuotaPerSecUSec -p MemoryMax
-  sudo docker inspect lmdj-app \
-    --format "restart={{.RestartCount}} oom={{.State.OOMKilled}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"
+  for container in lmdj-app-1 lmdj-caddy-1; do
+    sudo docker inspect "$container" \
+      --format "name={{.Name}} restart={{.RestartCount}} oom={{.State.OOMKilled}} running={{.State.Running}}"
+  done
+  sudo docker exec lmdj-app-1 python -c \
+    "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=5).read().decode())"
+  sudo bash -c '\''set -euo pipefail; set -a; source /opt/lmdj/shared/.env; set +a; curl -fsS --max-time 10 "https://${LMDJ_DOMAIN}/api/health"'\''
   sudo journalctl -k --since "24 hours ago" --no-pager | grep -Ei "oom|out of memory" || true
 '
 ```
 
-Expected baseline: `lmdjadmin` has `NOPASSWD: ALL`; the first Runner has no CPU/memory cap. This is a required red-state observation, not acceptance.
+Expected baseline: `lmdjadmin` has `NOPASSWD: ALL`; the first Runner has no CPU/memory cap; both containers are running with zero OOM/restart drift; internal and public health return `{"ok":true}`. This is a required red-state observation, not acceptance.
 
 - [ ] **Step 5: Create the shared cache group, unprivileged users, and bounded slice**
 
@@ -318,8 +327,13 @@ Expected: service 01 stays online throughout; service 02 returns active as `lmdj
 
 ```bash
 ssh sg '
-  sudo docker inspect lmdj-app \
-    --format "restart={{.RestartCount}} oom={{.State.OOMKilled}} health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}"
+  for container in lmdj-app-1 lmdj-caddy-1; do
+    sudo docker inspect "$container" \
+      --format "name={{.Name}} restart={{.RestartCount}} oom={{.State.OOMKilled}} running={{.State.Running}}"
+  done
+  sudo docker exec lmdj-app-1 python -c \
+    "import urllib.request; print(urllib.request.urlopen(\"http://127.0.0.1:8000/health\", timeout=5).read().decode())"
+  sudo bash -c '\''set -euo pipefail; set -a; source /opt/lmdj/shared/.env; set +a; curl -fsS --max-time 10 "https://${LMDJ_DOMAIN}/api/health"'\''
   sudo journalctl -k --since "24 hours ago" --no-pager | grep -Ei "oom|out of memory" || true
 '
 ```
@@ -1310,7 +1324,7 @@ Do not re-enable automatic Hosted workload fallback. If netcup is unstable, rout
 
 ### Task 8: Focus Main Pushes and Bind Release Authority to Full Exact-main Evidence
 
-**Prerequisite:** `origin/main` contains the standard release pipeline files listed in Dependency Gate 6. If not, stop; do not implement focused main without its release evidence consumer.
+**Prerequisite:** fresh `origin/main` contains the standard release pipeline files listed in Dependency Gate 6. If any are absent, stop; do not implement focused main without its release evidence consumer.
 
 **Files:**
 - Modify: `scripts/ci/change_scope.py`
