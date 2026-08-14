@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <filesystem>
@@ -11,6 +12,7 @@
 #include <vector>
 
 #include <emscripten.h>
+#include <emscripten/threading.h>
 #include <nlohmann/json.hpp>
 
 #include <lmdj/domain/command_handler.hpp>
@@ -1069,9 +1071,11 @@ int main() {
   const std::string encoded = report.dump();
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
-  // A PROXY_TO_PTHREAD main tears down its mailbox when it returns. Transfer
-  // ownership to Emscripten's page main loop until Playwright closes the page
-  // after reading the report; simulateInfiniteLoop prevents a pthread return.
-  emscripten_set_main_loop([] {}, 0, true);
-  return 0;
+  // A PROXY_TO_PTHREAD main tears down its mailbox when it returns. The report
+  // is terminal for this page, so park the worker without Asyncify until
+  // Playwright closes the page and lets the browser terminate it directly.
+  static std::atomic<std::uint32_t> resident{0};
+  for (;;) {
+    static_cast<void>(emscripten_futex_wait(&resident, 0, 60'000));
+  }
 }
