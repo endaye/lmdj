@@ -837,6 +837,13 @@ void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
   LMDJ_CHECK(!empty.value().waveform_cache_identity.has_value());
   LMDJ_CHECK(read_bytes(project / "manifest.json") == manifest_before);
 
+  const auto unavailable_waveform = application.query_sample_waveform(
+      SampleWaveformRequest{project, {0, 0}, {0, 1, 1}});
+  LMDJ_CHECK(!unavailable_waveform.has_value());
+  LMDJ_CHECK(
+      unavailable_waveform.error().code == ErrorCode::missing_asset);
+  LMDJ_CHECK(read_bytes(project / "manifest.json") == manifest_before);
+
   const auto malformed_token = uuid(582);
   const auto begun = application.begin_sample_import(
       SampleImportBeginRequest{
