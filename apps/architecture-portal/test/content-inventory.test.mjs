@@ -112,8 +112,10 @@ test('current truth is version-neutral about the formal Web Host, snapshot lifec
   assert.equal((proof.match(/deferred \/ unverified/g) ?? []).length, 4);
   assert.match(
     proof,
-    /macOS Chrome Physical MIDI `failed on 1\.0\.20\.0 \/ pending retest on 1\.0\.21\.0`/,
+    /macOS Chrome Physical MIDI `passed on 1\.0\.21\.0`/,
   );
+  assert.match(proof, /PR run `31684663825`[\s\S]+exact-main run `31688172806`/);
+  assert.doesNotMatch(proof, /pending retest on 1\.0\.21\.0/);
 
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
   assert.match(overview, /Build Identity[^。]+current[^。]+不可变正式快照/);

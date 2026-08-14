@@ -57,18 +57,22 @@ Creator Web `1.1.3`; Platform `0.2.1` and Formal Host `1.2.8` remain unchanged.
 Creator now accepts the bounded Note `36..51` mapping on channels 1–16. Its
 immutable `1.0.21.0 · canary` snapshot and complete branch-local automated Proof
 passed at clean revision `1a7e84e94fd00030c44b48cd9f597cc42d5ca37a`;
-the candidate physical-MIDI UI retest remains independently in progress. Exact
+the candidate physical-MIDI UI retest subsequently passed. Exact
 revisions, identities, hashes, counts, and the physical checklist are recorded
 in
 [`2026-08-13-stage7-midi-channel-canary-1.0.21.0.md`](../release-evidence/2026-08-13-stage7-midi-channel-canary-1.0.21.0.md).
 
-This remains branch-local candidate evidence, not merged-main Proof. No push,
-PR, merge, tag, Release, deployment, publication, or Channel promotion is
-claimed by this record.
+That candidate evidence remains branch-local candidate evidence, not merged-main Proof.
+The branch was later protected by PR #134 and squash-merged as `5613158`; exact merged-main
+full Proof and a fresh local rerun are bound separately in
+[`2026-08-13-stage7-remediation-merged-main-1.0.21.0.md`](../release-evidence/2026-08-13-stage7-remediation-merged-main-1.0.21.0.md).
+No tag, Release, deployment, publication, or Channel promotion is claimed by
+this record.
 
 The `1.0.20.0` ten-step keyboard/hearing canary remains passed historical
-evidence. Physical MIDI on `1.0.21.0`, Safari Pointer, and iPadOS observations
-remain independently scoped; no automated result is promoted into those claims.
+evidence. Physical MIDI passed independently on `1.0.21.0`; Safari Pointer and
+iPadOS remain separately scoped and unverified. No automated result is promoted
+into those claims.
 
 ## Abandoned 1.0.18.0 automated candidate evidence
 
@@ -154,12 +158,12 @@ screen recovery, or long-session stability on those platforms.
 | Historical hardening PR | PR #117 is `MERGED` as `7555cfd`; squash-witness PR #118 is `MERGED` as `336a27c` |
 | Historical Product tags | signed annotated `lmdj-v1.0.16.5` targets `38a8c13`; signed annotated `lmdj-v1.0.16.8` targets `336a27c` |
 | Historical merged-main Proof | recovered and bound: `main` push run `31327104838` succeeded at `38a8c130e5f1ced6f27d8fd7d2cba2fd1d70f97f` (`1.0.16.5`, 12 success/1 designed skip); run `31529410253` succeeded at `336a27c0799035b2f8d6455b32259ee227df20f6` (`1.0.16.8`, 20 success/1 designed skip) |
-| Current remediation push / PR / CI / merge | another process directly pushed candidate history through `ccd0aec` to `origin/main` at 11:51 +0800; no associated PR; full `main` push run `31665186166` is in progress; manual-acceptance addendum `95ae181` remains local |
+| Current remediation push / PR / CI / merge | PR #134 merged as `5613158`; protected PR run `31684663825` and exact `main` push run `31688172806` both completed `success`; the merge and PR head have identical tree `5251522…a9eb` |
 | Current Product tag / Release / deployment / publication / Channel promotion | not authorized and not performed |
 | Product Build `1.0.18.0` | abandoned and unshipped after the first human Canary exposed permanent `importing` state |
-| Product Build `1.0.19.0` | branch-local clean full Proof and immutable snapshot passed; merged-main Proof remains pending |
-| Product Build `1.0.20.0` | corrected keyboard spatial mapping; clean local Proof and immutable snapshot passed at `7d409b5`; candidate source/evidence through `ccd0aec` is now on `origin/main`; ten-step human Canary passed; `main` run `31665186166` remains in progress |
-| Product Build `1.0.21.0` | branch-local Creator `1.1.3` candidate accepts bounded MIDI mapping on channels 1–16; clean automated Proof and immutable snapshot passed at `1a7e84e`; MPD218 physical UI retest passed and is bound in `2026-08-13-stage7-midi-channel-canary-1.0.21.0.md` |
+| Product Build `1.0.19.0` | historical branch-local clean full Proof and immutable snapshot passed; superseded by later corrected candidates |
+| Product Build `1.0.20.0` | keyboard/hearing Canary passed; direct-main run `31665186166` ended `failure` in `web-runtime-host`, and the Build was superseded after the physical MIDI channel defect was found |
+| Product Build `1.0.21.0` | clean candidate Proof and MPD218 physical retest passed; PR #134 merged as `5613158`; full-mode exact-main run `31688172806` and fresh merged-tree local Proof both passed |
 | Manual canary | `T1 passed — endaye confirmed all ten 1.0.20.0 steps with no issue; report SHA-256 7e2a2b…333a` |
 
 The historical rows were refreshed from live Git/GitHub on 2026-08-13. The two
@@ -167,14 +171,11 @@ historical Proof runs were always present; the review's prior inference from a
 missing repository document to a missing execution was incorrect. G1 is now a
 recovered documentation binding, not a historical Proof execution failure.
 
-The current remediation rows must be refreshed when run `31665186166` reaches a
-terminal result or when the local manual-acceptance addendum is published. T1 is closed for the `1.0.20.0`
-branch-local candidate; physical MIDI failed on that Build, Safari import was
-checked separately without reproducing the importing stall, and Safari Pointer
-plus iPadOS remain unverified. Product `1.0.21.0` automated Proof, snapshot, and
-Chrome MPD218 physical MIDI retest are complete; Safari Pointer and iPadOS
-remain separate unverified rows.
-Product Build `1.0.20.0` still requires a successful terminal result for the
-full Proof at exact `main` revision `ccd0aec` before any new Product tag. The physical rows
-remain authoritative for their individual platforms and continue to block
-broader physical-device, `beta`, and `stable` claims.
+T1 is closed for the `1.0.20.0` branch-local candidate; physical MIDI failed on
+that Build, Safari import was checked separately without reproducing the
+importing stall, and Safari Pointer plus iPadOS remain unverified. Product
+`1.0.21.0` automated Proof, immutable snapshot, Chrome MPD218 physical retest,
+protected merge, and exact merged-main Proof are complete. The remaining
+physical rows stay authoritative for their individual platforms and continue
+to block broader physical-device, `beta`, and `stable` claims. No Product tag,
+Release, deployment, publication, or Channel promotion is implied.

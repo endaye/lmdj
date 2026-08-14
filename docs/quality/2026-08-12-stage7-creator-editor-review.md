@@ -481,16 +481,18 @@ revision `1a7e84e94fd00030c44b48cd9f597cc42d5ca37a` 通过；精确 hashes、计
 | T1 human canary | `passed on 1.0.20.0` | endaye 独立重跑全部十步并确认无问题；实体键盘与听感通过，报告 SHA-256 `7e2a2b…333a`。实体 MIDI、Safari 与 iPadOS 不在该通过范围内。 |
 | Product Build `1.0.19.0` historical branch-local Proof | `passed, superseded for current mapping acceptance` | clean revision `213023d` 完整 Task 13 门禁通过；snapshot source `35c0905`，Assembly Lock `24a341…0689`。 |
 | Product Build `1.0.20.0` branch-local Proof | `passed` | clean revision `7d409b5`：Creator、Formal Host、Core、dependency/identity 与 Portal 全量 Proof 通过；snapshot source `6a1cd97`，Assembly Lock `85c607…913`；详见 `docs/release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md`。 |
-| Product Build `1.0.20.0` merged-main Proof | `in progress` | 另一个进程已直接 push candidate history 到 `origin/main` `ccd0aec`，无关联 PR；full `main` push run `31665186166` 正在运行，尚无 terminal success。人工验收 addendum `95ae181` 仍只在本地。 |
+| Product Build `1.0.20.0` merged-main Proof | `terminal failure; superseded` | direct-main run `31665186166` 在 `ccd0aec` 结束为 `failure`，失败 job 为 `web-runtime-host`；后续 MIDI channel 缺陷又要求新 Build，因此不把该旧 Build 重新晋级。 |
 | Product Build `1.0.21.0` branch-local candidate | `automated Proof and physical MIDI passed` | clean revision `1a7e84e` 的 full Proof 与 immutable snapshot 已通过；endaye 完成 MPD218 Channel 10 实体复验，详见独立 canary evidence。 |
+| Product Build `1.0.21.0` protected PR and merged-main Proof | `passed` | PR #134 run `31684663825` 全绿后 squash merge 为 `5613158`；PR head 与 merge tree 同为 `5251522…a9eb`；full `main` push run `31688172806` 为 20 success / 1 designed skip / 0 failure，随后从 exact merge revision 的 fresh isolated worktree 重跑 Core、Web Toolchain、Formal Host、Creator、Portal 与 identity gates 均通过。 |
 | macOS Chrome physical MIDI | `passed on 1.0.21.0` | MPD218 PAD BANK A 的 16 Pad、Creator B/C/D 地址、拔插单 listener、Suspend/re-authorize 与 reload/reopen 均确认；最终报告 `1/1/0`、SHA-256 `b0491e…603`。 |
 | macOS Safari Bundle import | `manual observation passed` | endaye 未遇到导入 `stage7-canary.lmdj` 后超过 20 秒仍停在 `importing`；不推导 Safari Pointer 或 iPadOS 通过。 |
 
-因此当前源代码、branch-local 自动化、文档与历史 G1 更正都已纳入 closure ledger，
-T1 的十步键盘/听感 Canary 已在 `1.0.20.0` 关闭，但实体 MIDI 缺陷要求新的
-`1.0.21.0` 候选。该候选的 full Proof、snapshot 与 Chrome 实体 MIDI UI 复验均已
-完成；Safari Pointer 和 iPadOS 仍未验证。本修复任务尚不能报告为完整 physical
-matrix 关闭，也没有授权 push、tag、Release、deployment 或 Channel promotion。
+因此当前源代码、41 项 finding closure、T1 十步、`1.0.21.0` candidate Proof、
+immutable snapshot、Chrome 实体 MIDI UI 复验、protected merge 与 exact merged-main
+Proof 都已有分层证据。Safari Pointer、Chrome Pointer performance 和 iPadOS 仍按
+设计保留 `deferred / unverified`；这不否定 Stage 7 remediation closure，但意味着
+仍不能报告完整 physical matrix、`beta` 或 `stable` 通过。没有创建或授权 tag、
+Release、deployment、publication 或 Channel promotion。
 
 ## 十一、第三轮更正 — G1 降级（2026-08-13）
 
