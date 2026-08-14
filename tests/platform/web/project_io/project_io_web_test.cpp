@@ -8,7 +8,6 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <emscripten.h>
@@ -881,25 +880,24 @@ nlohmann::json run_suite() {
   require(active.events.size() == 1 && active.events.front().frame_offset == 12,
           "TakeJournal parity");
 
-  project_io::TakeJournal concurrent_a{platform};
-  project_io::TakeJournal concurrent_b{platform};
-  bool append_a = false;
-  bool append_b = false;
-  std::thread first_append([&] {
-    append_a = concurrent_a.append(
-        bundle, take_id, domain::RawTakeEvent{domain::PadSlotId{0, 1}, 20, 90})
-                   .has_value();
-  });
-  std::thread second_append([&] {
-    append_b = concurrent_b.append(
-        bundle, take_id, domain::RawTakeEvent{domain::PadSlotId{0, 2}, 20, 91})
-                   .has_value();
-  });
-  first_append.join();
-  second_append.join();
-  require(append_a && append_b, "concurrent TakeJournal append");
-  require(value(journal.read_active(bundle, take_id), "concurrent read").events.size() == 3,
-          "concurrent append lost acknowledgement");
+  // The Web storage adapter is invoked on the Host's single Control thread;
+  // native stress tests own true multi-threaded TakeJournal coverage. Exercise
+  // distinct Web Journal owners without nesting Asyncify-backed OPFS calls in
+  // child pthreads, which is not a production call shape.
+  project_io::TakeJournal second_owner{platform};
+  project_io::TakeJournal third_owner{platform};
+  success(second_owner.append(
+      bundle, take_id,
+      domain::RawTakeEvent{domain::PadSlotId{0, 1}, 20, 90}),
+      "second-owner TakeJournal append");
+  success(third_owner.append(
+      bundle, take_id,
+      domain::RawTakeEvent{domain::PadSlotId{0, 2}, 20, 91}),
+      "third-owner TakeJournal append");
+  require(
+      value(journal.read_active(bundle, take_id), "multi-owner read")
+              .events.size() == 3,
+      "multi-owner append lost acknowledgement");
 
   const auto contract = bundle / "contract";
   auto contract_lease = value(
