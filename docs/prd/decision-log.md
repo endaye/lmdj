@@ -380,3 +380,21 @@
 
 这些批准项解决了开放问题中的 Sampler Edit 最小参数集；Take 是否包含音频 Bounce、
 Time-stretch、Artifact GC 与 Stage 8B capture lifecycle 仍按各自开放边界处理。
+
+## 2026-08-13
+
+### 已确认：Creator 的通用 Web MIDI Pad mapping 接受 channels 1–16
+
+- 结论：用户明确授权 Web MIDI 后，Creator 监听每个可用 input，并在 MIDI
+  channels 1–16 上接受 Note On `36..51`，映射到当前选中 Bank 的 16 个稳定 Pad；
+  Note On velocity `0` 与对应 Note Off 释放 Pad。共享 Platform adapter 继续保留
+  可选的单 channel filter，但 Creator 不启用该限制。
+- 原因：2026-08-13 的 macOS CoreMIDI 实体抓包显示，受测 AKAI MPD218 当前程序
+  在 PAD BANK A 的 PAD1/PAD16 分别发送 `99 24` / `99 33`，即 Channel 10 的
+  Note 36/51，并以 `89` Note Off 释放。旧 Creator 额外硬编码 Channel 1，导致
+  浏览器已授权、设备也正常发送时仍没有 Trigger。
+- 影响：生产逻辑不检查设备名称、不加入 AKAI profile 或 MIDI Learn；它只移除
+  Creator 的额外 Channel 1 过滤，并继续保留 `36..51` note 边界、velocity、当前
+  Bank、permission、disconnect、admission/outcome 与 listener cleanup 语义。
+  自动化 Channel 10 回归测试不替代修复候选上的实体 MIDI 复验，也不推导 Safari
+  或 iPadOS 结果。

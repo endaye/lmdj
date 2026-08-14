@@ -683,7 +683,6 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     noteStart: 36,
     slotStart: 0,
     slotCount: 16,
-    channel: 0,
     resolveSlot,
     isAvailable: adapterAvailable,
     onRelease: release,

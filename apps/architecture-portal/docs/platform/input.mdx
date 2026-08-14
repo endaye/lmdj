@@ -26,13 +26,15 @@ Pointer、Keyboard、MIDI 汇入共享 Runtime Session 的 Sample inspect→`tri
 
 Creator 默认键盘 mapping 使用 `KeyboardEvent.code`，按实体键盘与视觉 Pad 的共同上下顺序分配：`Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，`A S D F G H J K` 对应 Pad 9–16。Pad 上的 `kbd` 提示与 accessible name 均从同一个导出 mapping 派生，不维护第二份 Creator 键表；切换 Bank 只改变稳定的 16-Slot offset。
 
+Creator 在用户明确授权 Web MIDI 后监听每个可用 input，在 channels 1–16 上接受 Note On `36..51` 并保留 velocity；Note On velocity `0` 与对应 Note Off 释放 Pad，范围外 note 仍忽略。共享 Platform adapter 保留可选的单 channel filter，Creator 不启用该限制，也不按设备名称分支。
+
 ## 生命周期
 
 普通输入只在 `running` admitted；拒绝输入不重放。Gate/Loop Gate release、Loop Toggle latch 与 Voice sequence 精确关联；blur/hidden/suspend/close 先禁 admission、清 preview、stop all，再暴露状态。恢复期只有 Context 与 generation 就绪后开启的一次真实用户 probe 例外；MIDI 断开清理状态，不合成 Trigger。
 
 ## 自动化证据
 
-Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coordinate suppression、Keyboard `code`/repeat/editable focus、MIDI 显式授权/velocity/disconnect/privacy，以及 admission/recovery。Creator 与 Diagnostic packaged Chromium journey 分别覆盖实际 DOM Pointer Pad、mapped Keyboard、sequence-addressed Trigger、lifecycle 与 recovery 路由；它们不替代物理设备测量。
+Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coordinate suppression、Keyboard `code`/repeat/editable focus、MIDI channels 1–16、显式授权/velocity/disconnect/privacy，以及 admission/recovery。Creator 与 Diagnostic packaged Chromium journey 分别覆盖实际 DOM Pointer Pad、mapped Keyboard、sequence-addressed Trigger、lifecycle 与 recovery 路由；它们不替代物理设备测量。
 
 ## 非能力
 
@@ -40,4 +42,4 @@ Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coord
 
 ## 状态升级证据
 
-五个物理行——macOS Safari Pointer、macOS Chrome Pointer、macOS Chrome physical MIDI、iPadOS Safari Touch、iPadOS Safari lifecycle——全部仍为 `deferred / unverified`。
+物理行分别记录：macOS Safari Pointer 与 macOS Chrome Pointer 仍为 `deferred / unverified`；macOS Chrome physical MIDI 在 `1.0.20.0` 上因 Creator 的 Channel 1 filter 失败，`1.0.21.0` 修复候选待复验；iPadOS Safari Touch 与 lifecycle 仍为 `deferred / unverified`。macOS Safari 的 Bundle import 人工检查未复现超过 20 秒的 `importing`，但不推导 Pointer 或 iPadOS 通过。

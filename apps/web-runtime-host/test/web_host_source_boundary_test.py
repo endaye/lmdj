@@ -515,6 +515,25 @@ def main() -> int:
     diagnostic_overall_timeout_ms = int(
         diagnostic_overall_timeout.group(1).replace("_", "")
     )
+    project_reopen_timeout = re.search(
+        r"const PROJECT_REOPEN_OVERALL_TIMEOUT_MS = ([0-9_]+);",
+        browser_spec_text,
+    )
+    require(
+        project_reopen_timeout is not None
+        and int(project_reopen_timeout.group(1).replace("_", "")) >= 60_000,
+        "browser writer-handoff proof must retain the Product diagnostic "
+        "project's 60 second reopen budget",
+    )
+    project_reopen_timeout_ms = int(
+        project_reopen_timeout.group(1).replace("_", "")
+    )
+    require(
+        "{ overallDeadlineMs = PROJECT_REOPEN_OVERALL_TIMEOUT_MS, "
+        "retryDelayMs = 25 }" in browser_spec_text,
+        "the shared browser reopen helper must default to the named "
+        "writer-handoff budget",
+    )
     diagnostic_stall_timeout = re.search(
         r"const DIAGNOSTIC_PROJECT_STALL_TIMEOUT_MS = ([0-9_]+);",
         browser_spec_text,
@@ -550,6 +569,16 @@ def main() -> int:
         "recovery outcome timeout browser proof is missing",
     )
     recovery_outcome_timeout_body = recovery_outcome_timeout.group(0)
+    recovery_outcome_test_timeout = re.search(
+        r"test\.setTimeout\(([0-9_]+)\);", recovery_outcome_timeout_body
+    )
+    require(
+        recovery_outcome_test_timeout is not None
+        and int(recovery_outcome_test_timeout.group(1).replace("_", ""))
+        >= diagnostic_overall_timeout_ms + project_reopen_timeout_ms,
+        "recovery outcome proof must outlive diagnostic preparation plus the "
+        "writer-handoff reopen budget",
+    )
     terminal_release_evidence = recovery_outcome_timeout_body.find(
         "terminalTransportEvidence(page)"
     )

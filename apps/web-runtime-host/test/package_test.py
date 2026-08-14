@@ -25,6 +25,7 @@ OPERATOR_SCRIPT = REPO_ROOT / "scripts/web-runtime-host.sh"
 LOCK_PATH = REPO_ROOT / "tools/web-runtime/emscripten.lock.json"
 PRODUCT_VERSION_PATH = REPO_ROOT / "products/lmdj/version.json"
 PLATFORM_CMAKE_PATH = REPO_ROOT / "packages/web-runtime-platform/CMakeLists.txt"
+OPERATOR_START_TIMEOUT_SECONDS = 30.0
 
 
 def load_package_module():
@@ -272,6 +273,7 @@ class PackageTest(unittest.TestCase):
         fake_npm = fake_bin / "npm"
         fake_npm.write_text(
             "#!/usr/bin/env bash\n"
+            "sleep 6\n"
             'touch "$LMDJ_OPERATOR_NPM_STARTED"\n'
             "sleep 2\n",
             encoding="utf-8",
@@ -304,7 +306,8 @@ class PackageTest(unittest.TestCase):
         )
         server_pid = None
         try:
-            for _ in range(200):
+            start_deadline = time.monotonic() + OPERATOR_START_TIMEOUT_SECONDS
+            while time.monotonic() < start_deadline:
                 ready_files = list(operator_tmp.glob("lmdj-web-host-server.*/ready.json"))
                 if started.is_file() and ready_files:
                     server_pid = json.loads(

@@ -1,0 +1,98 @@
+---
+title: Web Runtime Host
+area: hosts
+status: implemented
+host: web-runtime-host
+owners: [hosts, web, audio]
+source_paths:
+  - docs/superpowers/specs/2026-08-03-lmdj-formal-web-runtime-host-design.md
+  - docs/superpowers/plans/2026-08-03-lmdj-formal-web-runtime-host.md
+  - apps/web-runtime-host
+  - apps/web-runtime-host/module.json
+  - packages/web-runtime-platform
+  - products/lmdj/assembly.json
+  - scripts/web-runtime-host.sh
+  - docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md
+  - docs/deploy/web-runtime-host.md
+  - docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md
+  - tests/platform/web/host/web_runtime_host_manifest_gate.spec.mjs
+  - tests/platform/web/host/web_runtime_host_lifecycle.spec.mjs
+  - tests/platform/web/host/web_runtime_host_browser.spec.mjs
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+
+<StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.8` 已进入 Product Build `1.0.21.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.2.1`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
+
+本次 Host SemVer 变化传播共享 Platform 的精确依赖与已收紧的失败路径；诊断 UI、协议 `1`、500-trigger、Take、restart-required 和成功路径没有新增能力。
+
+## 目标边界
+
+Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用户手势、生命周期观察与终止清理；共享 Web Runtime Platform 负责 DOM/MIDI 输入、有界 transport、Dedicated Worker OPFS 能力、Control/Facade 与 AudioWorklet 路径。Pointer、Keyboard、MIDI 汇入唯一 `trigger(flatSlot, velocity)` 路由。
+
+## 分发与身份门禁
+
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.8`、Platform `0.2.1`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
+
+proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
+
+## 公共发布边界
+
+两阶段 Netlify release/deploy 工具已进入仓库源码：部署 workflow 先运行不加入
+`runtime-canary` environment、因而读不到 Netlify credential 的 preflight job，它只用 Python
+和 scoped `github.token` 执行 `scripts/web-runtime-deploy.sh verify TAG`——从 canonical
+origin 获取受保护 `main` 和 remote annotated signed Product tag，验证 tag commit 是该
+`main` 的 ancestor；GitHub Release 必须精确包含 ZIP、checksum 和由专用 Release checksum
+key 签名的 armored detached checksum signature；Product tag key 与 checksum key 角色分离，
+工具在解析 checksum 前先验证角色专属 signature，并完成资产下载与 staging。只有该 job 通过
+后，持有 Netlify credential 的 deploy job 才会安装 Node/Chromium 并在任何 Netlify mutation
+之前对同一 Release 重新执行同一次验证。组装层只为 manifest 中的
+九个精确 hash asset 添加 immutable header，未知 asset 和 source map 继续 `no-store`。
+部署前以 current site/file inventory/current site 双读确认站点身份稳定；只有同一 ready
+current Deploy 的 validated file count 精确为零时，才按“无可回滚 prior”的首次发布继续，
+非空 current Deploy 仍须验证真实 prior immutable/production 身份和 HTTP/Chromium。发布后失败或中断时
+reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior，首次无 prior 时
+使用官方 reversible site disable。成功写 deployment evidence v2，失败恢复原子写 recovery
+evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
+smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
+时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
+自动证明当前 Product Build `1.0.21.0` 已获得 remote verified tag、Release、Deploy ID、
+immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
+工具测试或 PR Preview 上升为当前候选的公开部署结论。
+
+Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-only server 完全分离。
+`lmdj-canary` 属于 Creator 交付边界，不绑定给 Diagnostic Runtime Host，亦不作为其 Runtime URL。
+操作前置条件、失败处置、精确 Deploy-ID 回滚和轮换在仓库运行手册
+`docs/deploy/web-runtime-host.md`；当前 acceptance 记录在
+`docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
+
+## 生命周期门禁
+
+普通 Trigger 与全部 `take.begin` 只在 `running` 接收。诊断 Project 的每个 awaited Host request 返回后都重新核对 page-lifetime admission；pagehide 后不得继续 import、assignment、final inspect 或 publication。修复结束后必须再次 `project.inspect`，且 final revision、诊断 Asset 与全部 64 个 Pad assignment 都匹配，才可请求 Snapshot publication。Transport 收到 unknown request ID，或已 settlement request 的重复 response 时，不再忽略：它原子进入 terminal、只调用一次 terminate、以 `HOST_PROTOCOL_MISMATCH` 拒绝全部其余 pending request，并清空 request identity。真实 Browser Main 测试在 scheduled production poll 前用 `transport.send(host.status)` 保持另一个 request pending，确认其 promise 收到同一 terminal error、pending ID 已清除且 notification 为零。`HOST_RESTART_REQUIRED` 即使晚于 invalidation 返回也保持 sticky，`HOST_PROTOCOL_MISMATCH` 同样 fail closed；两者都只触发一次终止清理，页面重建前 direct/queued Load 不得重试。
+
+中断同步关闭 runtime admission、清除 pressed state，并按 epoch 只发一次 Control suspend/seal。恢复必须同时具备 Context `running`、正整数 current/ack generation 相等，以及一个真实用户 recovery probe 的唯一 `voice_started`；visibility 或 pageshow 本身不能完成恢复。
+
+## 自动化证据
+
+`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 全旅程。可见顺序固定为 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`，并覆盖 create/import/64 assignments、reload reopen、500 个 admission/outcome、20+1 Take、失败与 lifecycle 路径。reload 后的 `project.open` 使用 60 秒有界 writer-handoff 预算；浏览器 Proof 仅在 Host 与诊断错误码都精确为 `HOST_TIMEOUT` 时允许一次整页恢复。terminal failure 会先封闭新请求，再给 responsive Control Worker 5 秒有界 grace 完成 OPFS writer release，超过 grace 才强制终止 Worker；Wasm AudioWorklet callback 本身的 quiescence 还受两个 caller budget 的上界约束，第二个 budget 后返回类型化 terminal failure。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。本候选的实际 Task 6 命令结果在独立 acceptance 记录中报告，不继承旧 Build 的 PR、CI 或 merge 结论。
+
+## 非能力
+
+当前不能宣称 Creator 已具备完整 Sequence 编辑、离线安装/PWA 或生产部署，也不能把 WebKit automation 当作物理 Safari，或宣称 MIDI/iPad/延迟体验、`beta`/`stable` 已获准。
+
+## 剩余验收边界
+
+Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体验结论。五个物理行继续保持：
+
+| 物理行 | 状态 |
+| --- | --- |
+| macOS Safari Pointer | `deferred / unverified` |
+| macOS Chrome Pointer | `deferred / unverified` |
+| macOS Chrome physical MIDI | `failed on 1.0.20.0 / pending retest on 1.0.21.0` |
+| iPadOS Safari Touch | `deferred / unverified` |
+| iPadOS Safari lifecycle | `deferred / unverified` |

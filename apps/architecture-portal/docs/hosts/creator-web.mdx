@@ -32,7 +32,7 @@ Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于
 
 ## 演奏边界
 
-Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
 
 ## 分发与身份
 
@@ -40,7 +40,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Project action 串行化、generation cleanup、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.22.0` 绑定 Creator `1.2.0`、Platform `0.3.0` 与 Formal Host `1.2.9`。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Project action 串行化、MIDI channels 1–16、generation cleanup、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.22.0` 绑定 Creator `1.2.0`、Platform `0.3.0` 与 Formal Host `1.2.9`。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 
