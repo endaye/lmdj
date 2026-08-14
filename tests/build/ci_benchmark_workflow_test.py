@@ -47,8 +47,12 @@ class CiBenchmarkWorkflowTest(unittest.TestCase):
     def test_persistent_emsdk_install_is_serialized_atomic_and_group_readable(self) -> None:
         source = ACTION.read_text(encoding="utf-8")
         self.assertIn('flock 9', source)
-        self.assertIn('mktemp -d "$cache_root/.install-', source)
-        self.assertIn('chmod 2770 "$temporary"', source)
+        self.assertIn("for slot in {1..32}; do", source)
+        self.assertIn("(umask 0007; mkdir \"$candidate\")", source)
+        self.assertIn('[[ -n "$temporary" ]]', source)
+        self.assertNotIn('mktemp -d "$cache_root/.install-', source)
+        self.assertNotIn('chmod 0770 "$temporary"', source)
+        self.assertNotIn('chmod 2770 "$temporary"', source)
         self.assertIn('mv "$temporary" "$target"', source)
 
 
