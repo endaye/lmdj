@@ -36,6 +36,11 @@ using lmdj::foundation::Result;
 
 std::unique_ptr<lmdj::project_io::ProjectWriterLease> held_lease;
 
+void report_progress(const char* stage) {
+  MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWebProgress = UTF8ToString($0); },
+                     stage);
+}
+
 void require(bool condition, std::string message) {
   if (!condition) throw std::runtime_error(std::move(message));
 }
@@ -884,6 +889,7 @@ nlohmann::json run_suite() {
   // native stress tests own true multi-threaded TakeJournal coverage. Exercise
   // distinct Web Journal owners without nesting Asyncify-backed OPFS calls in
   // child pthreads, which is not a production call shape.
+  report_progress("multi-owner-append-start");
   project_io::TakeJournal second_owner{platform};
   project_io::TakeJournal third_owner{platform};
   success(second_owner.append(
@@ -898,6 +904,7 @@ nlohmann::json run_suite() {
       value(journal.read_active(bundle, take_id), "multi-owner read")
               .events.size() == 3,
       "multi-owner append lost acknowledgement");
+  report_progress("multi-owner-append-complete");
 
   const auto contract = bundle / "contract";
   auto contract_lease = value(
@@ -1032,6 +1039,7 @@ nlohmann::json run_suite() {
 
   contract_lease.reset();
 
+  report_progress("common-suite-complete");
   return {
       {"complete", true},
       {"result", {
@@ -1061,12 +1069,15 @@ nlohmann::json run_suite() {
 int main() {
   nlohmann::json report;
   try {
+    report_progress("native-suite-start");
     auto sample_cache = run_sample_cache_action();
     report = sample_cache.has_value() ? std::move(*sample_cache) : run_suite();
+    report_progress("native-report-ready");
   } catch (const std::exception& error) {
     report = {{"complete", true}, {"result", {{"error", error.what()}}}};
   }
   const std::string encoded = report.dump();
+  report_progress("terminal-publication-start");
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
   emscripten_exit_with_live_runtime();

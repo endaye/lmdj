@@ -114,7 +114,14 @@ async function waitForResult(page) {
       // native suite has synchronously published its terminal report. Keep
       // pre-terminal runtime failures fail-closed, but let the report remain
       // authoritative once publication is complete.
-      if (!(await awaitTerminalReport())) throw error;
+      if (!(await awaitTerminalReport())) {
+        const progress = await page.evaluate(
+            () => window.lmdjProjectIoWebProgress ?? "unreported").catch(
+            () => "unavailable");
+        throw new Error(`${error.message}; last native stage: ${progress}`, {
+          cause: error,
+        });
+      }
     }
     if (observer.error && !(await awaitTerminalReport())) {
       throw runtimeFailure(observer.error);
