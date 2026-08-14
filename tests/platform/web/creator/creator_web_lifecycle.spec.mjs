@@ -350,8 +350,9 @@ async function latchLoopToggle(page) {
   const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
   await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
   await pad.focus();
-  await page.keyboard.press("Enter");
+  await page.keyboard.down("Enter");
   await expect(pad).toHaveAttribute("data-outcome", "started", {timeout: 30_000});
+  await page.keyboard.up("Enter");
 }
 
 async function reopenWithVisibleBusyRetry(page) {
@@ -479,7 +480,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   });
   const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
   await armPadOutcomeObservation(pad);
-  await page.keyboard.down("KeyA");
+  await page.keyboard.down("KeyQ");
   await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
     timeout: 30_000,
   });
@@ -492,7 +493,7 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
     value.trigger_admitted_count,
     value.trigger_outcome_count,
   ]).toEqual(["running", 1, 1]);
-  await page.keyboard.up("KeyA");
+  await page.keyboard.up("KeyQ");
 });
 
 test("packaged recovery timeout cleans one generation before automatic replacement", async ({page, browserName}) => {

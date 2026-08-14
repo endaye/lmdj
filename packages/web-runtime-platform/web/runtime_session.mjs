@@ -2629,8 +2629,6 @@ function createRuntimeSessionController(options = {}) {
     listen(window, "pointerup", (event) => pointerAdapter.releasePointer(event));
     listen(window, "pointercancel", (event) => pointerAdapter.pointerCancel(event));
     listen(window, "mouseup", (event) => pointerAdapter.releaseMouse(event));
-    listen(window, "blur", observeBlur);
-    listen(window, "focus", observeFocus);
     listen(window, "keydown", (event) => {
       if (event?.code === "Escape") {
         clearPreviewsForCancellation();
@@ -2642,6 +2640,8 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function wireLifecycle() {
+    listen(window, "blur", observeBlur);
+    listen(window, "focus", observeFocus);
     listen(document, "visibilitychange", () =>
       observeVisibility(document.visibilityState === "hidden"));
     listen(window, "pagehide", (event) => observePageHide(event));

@@ -452,7 +452,7 @@ test("defaults diagnostics to session-owned input listeners", async () => {
   assert.equal(browserWindow.count("keydown"), 0);
 });
 
-test("host-owned input creates no session input listeners or MIDI adapter", async () => {
+test("host-owned input keeps lifecycle listeners but creates no input adapter", async () => {
   const browserWindow = trackedEventTarget();
   let midiRequests = 0;
   const {session} = fixture({
@@ -470,12 +470,13 @@ test("host-owned input creates no session input listeners or MIDI adapter", asyn
     "pointerup",
     "pointercancel",
     "mouseup",
-    "blur",
     "keydown",
     "keyup",
   ]) {
     assert.equal(browserWindow.count(type), 0, type);
   }
+  assert.equal(browserWindow.count("blur"), 1);
+  assert.equal(browserWindow.count("focus"), 1);
   assert.equal(browserWindow.count("pagehide"), 1);
   assert.equal(await session.requestMidi(), false);
   assert.equal(midiRequests, 0);
@@ -1853,7 +1854,7 @@ test("pointercancel and Escape clear previews without an Authoring mutation", as
       .includes(operation)), []);
 });
 
-test("adverse cleanup drains an in-flight preview before stop and rejects later preview admission", async () => {
+test("host-owned input still drains an in-flight preview before adverse stop", async () => {
   const browserWindow = new EventTarget();
   const operations = [];
   let previewStarted;
@@ -1863,6 +1864,7 @@ test("adverse cleanup drains an in-flight preview before stop and rejects later 
   let finishPreview;
   const {session} = fixture({
     browserWindow,
+    inputOwnership: "host",
     send: async (envelope) => {
       operations.push(envelope.operation);
       if (envelope.operation === "sample.preview.set" && finishPreview === undefined) {
