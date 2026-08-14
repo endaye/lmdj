@@ -2177,7 +2177,7 @@ struct Application::Impl {
               *decoded_cache, request.window, cache_frames_per_bucket);
           if (window.has_value()) {
             return foundation::Result<cooker::WaveformEnvelope>::success(
-                std::move(*window));
+                *window);
           }
         } else {
           (void)waveform_cache.remove(key);
