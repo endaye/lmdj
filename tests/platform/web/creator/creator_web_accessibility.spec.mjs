@@ -7,10 +7,10 @@ import {expect, test} from "@playwright/test";
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 const MAX_BUSY_RETRIES = 8;
-// openProjectJourney owns three independently bounded Project operations:
-// open, inspect, and snapshot reload. Keep the UI hang detector just above
-// their combined protocol deadline instead of assuming only one request.
-const OPEN_TRANSITION_TIMEOUT_MS = 95_000;
+// openProjectJourney owns three independently bounded 30-second Project
+// operations: open, inspect, and snapshot reload. The UI hang detector covers
+// their 90-second protocol ceiling plus bounded runner/render settling time.
+const OPEN_TRANSITION_TIMEOUT_MS = 3 * 30_000 + 35_000;
 const RETRY_SETTLE_TIMEOUT_MS = 35_000;
 
 async function waitForKeyboardProjectInventory(page) {
