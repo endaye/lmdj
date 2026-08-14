@@ -384,8 +384,8 @@ class ReleasePrepareTest(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
         ).stdout.strip()
         cases = (
-            (ReleaseKind.PRODUCT, "1.0.21.0", "web-runtime-host", "canary", "1.0.21.0"),
-            (ReleaseKind.MODULE, "core-cli@1.0.11", "source-only", None, None),
+            (ReleaseKind.PRODUCT, "1.0.22.0", "web-runtime-host", "canary", "1.0.22.0"),
+            (ReleaseKind.MODULE, "core-cli@1.0.12", "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
             (ReleaseKind.PROVIDER, "local.proof.success@1.0.2", "source-only", None, None),
         )
