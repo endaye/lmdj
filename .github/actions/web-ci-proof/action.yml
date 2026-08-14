@@ -1,0 +1,188 @@
+name: Web CI proof
+description: Prepare the pinned Web toolchain and execute one closed proof lane.
+
+inputs:
+  lane:
+    description: Closed Web proof lane.
+    required: true
+  install-system-deps:
+    description: Whether Playwright may install host system dependencies.
+    required: true
+  parallel-level:
+    description: Maximum concurrent CMake build jobs.
+    required: false
+    default: "3"
+
+runs:
+  using: composite
+  steps:
+    - name: Validate the closed Web proof request
+      shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+        INSTALL_SYSTEM_DEPS: ${{ inputs.install-system-deps }}
+      run: |
+        set -euo pipefail
+        case "$LANE" in
+          web_toolchain|web_runtime_host|creator) ;;
+          *) echo "unsupported Web CI lane: $LANE" >&2; exit 64 ;;
+        esac
+        case "$INSTALL_SYSTEM_DEPS" in
+          true|false) ;;
+          *) echo "install-system-deps must be true or false" >&2; exit 64 ;;
+        esac
+
+    - uses: actions/setup-python@v6
+      with:
+        python-version: "3.11"
+
+    - uses: actions/setup-node@v6
+      with:
+        node-version: "22"
+
+    - name: Configure bounded build parallelism
+      uses: ./.github/actions/configure-build-acceleration
+      with:
+        parallel-level: ${{ inputs.parallel-level }}
+        use-ccache: false
+
+    - name: Select the toolchain cache strategy
+      id: cache-strategy
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ -n "${LMDJ_EMSDK_CACHE_ROOT:-}" && -n "${LMDJ_BROWSER_CACHE_ROOT:-}" ]]; then
+          echo 'persistent=true' >>"$GITHUB_OUTPUT"
+        else
+          echo 'persistent=false' >>"$GITHUB_OUTPUT"
+        fi
+
+    - name: Restore pinned hosted emsdk
+      id: emsdk-cache
+      if: ${{ steps.cache-strategy.outputs.persistent != 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: build/toolchains/emsdk
+        key: emsdk-${{ env.LMDJ_EMSDK_REVISION }}-${{ env.LMDJ_EMSDK_VERSION }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Prepare pinned Emscripten
+      shell: bash
+      env:
+        PERSISTENT_CACHE: ${{ steps.cache-strategy.outputs.persistent }}
+        EMSDK_CACHE_HIT: ${{ steps.emsdk-cache.outputs.cache-hit }}
+      run: |
+        set -euo pipefail
+        revision="${LMDJ_EMSDK_REVISION:?}"
+        version="${LMDJ_EMSDK_VERSION:?}"
+        workspace_emsdk="$GITHUB_WORKSPACE/build/toolchains/emsdk"
+        mkdir -p "$GITHUB_WORKSPACE/build/toolchains"
+
+        if [[ "$PERSISTENT_CACHE" == 'true' ]]; then
+          cache_root="${LMDJ_EMSDK_CACHE_ROOT:?}"
+          target="$cache_root/$revision-$version"
+          marker="$target/.lmdj-emsdk-ready"
+          lock_file="$cache_root/.install-$revision-$version.lock"
+          mkdir -p "$cache_root"
+          (umask 0007; touch "$lock_file")
+          exec 9>"$lock_file"
+          flock 9
+          if [[ ! -f "$marker" ]]; then
+            if [[ -e "$target" ]]; then
+              echo "incomplete persistent emsdk target: $target" >&2
+              exit 1
+            fi
+            temporary="$(mktemp -d "$cache_root/.install-$revision-$version.XXXXXX")"
+            chmod 2770 "$temporary"
+            trap 'rm -rf -- "$temporary"' EXIT
+            git clone https://github.com/emscripten-core/emsdk.git "$temporary"
+            git -C "$temporary" checkout "$revision"
+            "$temporary/emsdk" install "$version"
+            "$temporary/emsdk" activate "$version"
+            printf '%s:%s\n' "$revision" "$version" >"$temporary/.lmdj-emsdk-ready"
+            mv "$temporary" "$target"
+            trap - EXIT
+          fi
+          flock -u 9
+          if [[ -e "$workspace_emsdk" || -L "$workspace_emsdk" ]]; then
+            test -L "$workspace_emsdk" || {
+              echo "workspace emsdk path is not a managed symlink" >&2
+              exit 1
+            }
+            rm "$workspace_emsdk"
+          fi
+          ln -s "$target" "$workspace_emsdk"
+        else
+          if [[ ! -d "$workspace_emsdk/.git" ]]; then
+            git clone https://github.com/emscripten-core/emsdk.git "$workspace_emsdk"
+            git -C "$workspace_emsdk" checkout "$revision"
+          fi
+          actual_revision="$(git -C "$workspace_emsdk" rev-parse HEAD)"
+          [[ "$actual_revision" == "$revision" ]]
+          if [[ "$EMSDK_CACHE_HIT" != 'true' ]]; then
+            "$workspace_emsdk/emsdk" install "$version"
+          fi
+          "$workspace_emsdk/emsdk" activate "$version"
+        fi
+
+    - name: Install locked Web dependencies
+      shell: bash
+      env:
+        LANE: ${{ inputs.lane }}
+      run: |
+        set -euo pipefail
+        npm --prefix tests/platform/web ci
+        if [[ "$LANE" == 'creator' ]]; then
+          npm --prefix apps/creator-web ci
+        fi
+
+    - name: Select the Playwright browser cache
+      id: playwright-cache-strategy
+      shell: bash
+      env:
+        PERSISTENT_CACHE: ${{ steps.cache-strategy.outputs.persistent }}
+      run: |
+        set -euo pipefail
+        playwright_version="$(node -p "require('./tests/platform/web/node_modules/@playwright/test/package.json').version")"
+        echo "version=$playwright_version" >>"$GITHUB_OUTPUT"
+        if [[ "$PERSISTENT_CACHE" == 'true' ]]; then
+          browser_path="${LMDJ_BROWSER_CACHE_ROOT:?}/$playwright_version"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$browser_path" >>"$GITHUB_ENV"
+        fi
+
+    - name: Restore hosted Playwright browsers
+      if: ${{ steps.cache-strategy.outputs.persistent != 'true' }}
+      uses: actions/cache@v4
+      with:
+        path: ~/.cache/ms-playwright
+        key: playwright-${{ hashFiles('tests/platform/web/package-lock.json') }}-${{ runner.os }}-${{ runner.arch }}
+
+    - name: Install Chromium and WebKit
+      shell: bash
+      working-directory: tests/platform/web
+      env:
+        INSTALL_SYSTEM_DEPS: ${{ inputs.install-system-deps }}
+        PERSISTENT_CACHE: ${{ steps.cache-strategy.outputs.persistent }}
+        PLAYWRIGHT_VERSION: ${{ steps.playwright-cache-strategy.outputs.version }}
+      run: |
+        set -euo pipefail
+        if [[ "$INSTALL_SYSTEM_DEPS" == 'true' ]]; then
+          npx --no-install playwright install --with-deps chromium webkit
+        elif [[ "$PERSISTENT_CACHE" == 'true' ]]; then
+          lock_file="${LMDJ_BROWSER_CACHE_ROOT:?}/.install-$PLAYWRIGHT_VERSION.lock"
+          (umask 0007; touch "$lock_file")
+          flock "$lock_file" npx --no-install playwright install chromium webkit
+        else
+          npx --no-install playwright install chromium webkit
+        fi
+
+    - name: Execute the selected Web proof
+      shell: bash
+      run: |
+        set -euo pipefail
+        source build/toolchains/emsdk/emsdk_env.sh
+        case "${{ inputs.lane }}" in
+          web_toolchain) scripts/web-toolchain-conformance.sh proof ;;
+          web_runtime_host) python3 tools/web-runtime/verify_emscripten.py && scripts/web-runtime-host.sh proof ;;
+          creator) scripts/creator-web.sh proof ;;
+          *) echo "unsupported Web CI lane" >&2; exit 2 ;;
+        esac

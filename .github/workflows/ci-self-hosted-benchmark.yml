@@ -1,0 +1,90 @@
+name: Self-hosted Web Benchmark
+
+on:
+  workflow_dispatch:
+    inputs:
+      lane:
+        description: Web proof lane to benchmark.
+        required: true
+        type: choice
+        options:
+          - web_toolchain
+          - web_runtime_host
+          - creator
+      revision:
+        description: Exact trusted SHA selected by this dispatch.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  LANG: C.UTF-8
+  LC_ALL: C.UTF-8
+  LMDJ_EMSDK_REVISION: dfb9d1a46c3bb8f52e1e6324be23123b9d73c190
+  LMDJ_EMSDK_VERSION: "6.0.5"
+
+jobs:
+  benchmark:
+    name: Web benchmark (${{ inputs.lane }})
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
+    timeout-minutes: 75
+    steps:
+      - name: Validate the dispatched trusted revision
+        shell: bash
+        env:
+          REVISION: ${{ inputs.revision }}
+          TRUSTED_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$REVISION" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$REVISION" == "$TRUSTED_SHA" ]]
+
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.revision }}
+          fetch-depth: 0
+          lfs: true
+
+      - name: Rehydrate deterministic audio fixtures
+        run: git lfs checkout -- tests/fixtures/audio
+
+      - name: Record benchmark start
+        run: date +%s >"$RUNNER_TEMP/lmdj-benchmark-start"
+
+      - uses: ./.github/actions/web-ci-proof
+        with:
+          lane: ${{ inputs.lane }}
+          install-system-deps: "false"
+          parallel-level: "4"
+
+      - name: Report benchmark evidence
+        if: ${{ always() }}
+        shell: bash
+        env:
+          SELECTED_RUNNER: ${{ runner.name }}
+          SELECTED_ARCH: ${{ runner.arch }}
+        run: |
+          set -euo pipefail
+          started="$(cat "$RUNNER_TEMP/lmdj-benchmark-start" 2>/dev/null || date +%s)"
+          now="$(date +%s)"
+          printf 'runner_name=%s\nrunner_arch=%s\nelapsed_seconds=%s\n' \
+            "$SELECTED_RUNNER" "$SELECTED_ARCH" "$((now - started))"
+          printf 'cpu_count=%s\n' "$(nproc)"
+          uptime
+          free -h
+          df -h / /var/cache
+          ccache --show-stats || true
+
+      - name: Retain failed browser evidence
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: self-hosted-web-${{ inputs.lane }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tests/platform/web/test-results
+            tests/platform/web/playwright-report
+            apps/creator-web/test-results
+          if-no-files-found: ignore
+          retention-days: 7

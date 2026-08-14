@@ -115,6 +115,9 @@ CASES = {
     "tests/build/release_model_test.py": {"deploy_contract", "ci_contract"},
     ".github/workflows/publish-release.yml": {"deploy_contract", "ci_contract"},
     ".github/workflows/release-audit.yml": {"deploy_contract", "ci_contract"},
+    ".github/actionlint.yaml": {"ci_contract"},
+    ".github/actions/web-ci-proof/action.yml": set(LANES),
+    ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
     ".gitattributes": set(LANES),
 }
 
@@ -311,6 +314,7 @@ class ChangeScopeTest(unittest.TestCase):
         for path in (
             ".github/workflows/ci.yml", "scripts/ci/change_scope.py",
             "scripts/ci/pr_gate.py", "scripts/ci/scope_policy.json",
+            ".github/actions/web-ci-proof/action.yml",
         ):
             with self.subTest(path=path):
                 self.assertEqual(self.classify([path])["mode"], "full")
