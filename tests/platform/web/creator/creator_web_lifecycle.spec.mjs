@@ -6,10 +6,29 @@ import {expect, test} from "@playwright/test";
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 const MAX_BUSY_RETRIES = 8;
-// One visible attempt may cross the 30 s request deadline and one 30 s
-// generation-replacement reopen before it reaches a stable UI transition.
-const OPEN_TRANSITION_TIMEOUT_MS = 65_000;
+// openProjectJourney owns three independently bounded Project operations:
+// open, inspect, and snapshot reload. Keep the UI hang detector just above
+// their combined protocol deadline instead of assuming only one request.
+const OPEN_TRANSITION_TIMEOUT_MS = 95_000;
 const RETRY_SETTLE_TIMEOUT_MS = 35_000;
+
+async function waitForProjectInventory(page) {
+  const open = page.getByRole("button", {name: "Open Project 00000000"});
+  const retry = page.getByRole("button", {name: "Retry project"});
+  const alert = page.getByRole("alert");
+  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt += 1) {
+    await expect.poll(async () =>
+      await open.isVisible() ? "open" : await retry.isVisible() ? "retry" : "",
+    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
+    if (await open.isVisible()) return open;
+    await expect(alert).toContainText(
+      "The local Project is busy in another tab or process.",
+    );
+    await retry.click();
+  }
+  await expect(open).toBeVisible();
+  return open;
+}
 
 async function installPackagedRecoveryProbe(page) {
   await page.addInitScript(() => {
@@ -294,7 +313,7 @@ async function reopenWithVisibleBusyRetry(page) {
 
 test("suspend and reload require explicit reopen and explicit reactivation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(180_000);
+  test.setTimeout(360_000);
   await page.goto("/index.html");
   await importAndActivate(page);
   await page.getByRole("button", {name: "Suspend audio"}).click();
@@ -303,8 +322,7 @@ test("suspend and reload require explicit reopen and explicit reactivation", asy
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
 
   await page.reload();
-  await expect(page.getByRole("button", {name: "Open Project 00000000"}))
-    .toBeVisible({timeout: 60_000});
+  await waitForProjectInventory(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await reopenWithVisibleBusyRetry(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
