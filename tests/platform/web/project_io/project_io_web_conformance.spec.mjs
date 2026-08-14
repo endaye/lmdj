@@ -83,7 +83,11 @@ async function waitForResult(page) {
   if (!observer) {
     throw new Error("Project I/O page was not tracked before navigation");
   }
-  if (observer.error) throw runtimeFailure(observer.error);
+  const hasTerminalReport = () => page.evaluate(
+      () => window.lmdjProjectIoWeb?.complete === true).catch(() => false);
+  if (observer.error && !(await hasTerminalReport())) {
+    throw runtimeFailure(observer.error);
+  }
 
   let rejectRuntimeError;
   const runtimeError = new Promise((_, reject) => {
@@ -91,11 +95,21 @@ async function waitForResult(page) {
     observer.waiters.add(reject);
   });
   try {
-    await Promise.race([
-      page.waitForFunction(() => window.lmdjProjectIoWeb?.complete === true),
-      runtimeError,
-    ]);
-    if (observer.error) throw runtimeFailure(observer.error);
+    try {
+      await Promise.race([
+        page.waitForFunction(() => window.lmdjProjectIoWeb?.complete === true),
+        runtimeError,
+      ]);
+    } catch (error) {
+      // PROXY_TO_PTHREAD teardown in pinned Emscripten can surface after the
+      // native suite has synchronously published its terminal report. Keep
+      // pre-terminal runtime failures fail-closed, but let the report remain
+      // authoritative once publication is complete.
+      if (!(await hasTerminalReport())) throw error;
+    }
+    if (observer.error && !(await hasTerminalReport())) {
+      throw runtimeFailure(observer.error);
+    }
     const result = await page.evaluate(() => window.lmdjProjectIoWeb.result);
     if (result?.error) {
       throw new Error(`Web Project I/O native runtime failed: ${result.error}`);
@@ -315,6 +329,20 @@ test("Web Project I/O reports page runtime failures without waiting for the suit
   });
   await failure;
   expect(Date.now() - startedAt).toBeLessThan(5_000);
+});
+
+test("Web Project I/O preserves a terminal native report across worker teardown", async ({page}) => {
+  trackRuntimeErrors(page);
+  await page.goto("/preflight.html");
+  const result = await page.evaluate(() => {
+    window.lmdjProjectIoWeb = {complete: true, result: {terminal: "pass"}};
+    setTimeout(() => {
+      throw new Error("project-io-post-terminal-teardown-proof");
+    }, 0);
+    return window.lmdjProjectIoWeb.result;
+  });
+  await page.waitForTimeout(50);
+  expect(await waitForResult(page)).toEqual(result);
 });
 
 test("Web Project I/O binds every mutation to its same-page platform owner", async ({page, browserName}) => {

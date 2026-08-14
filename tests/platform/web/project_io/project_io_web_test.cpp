@@ -11,7 +11,6 @@
 #include <vector>
 
 #include <emscripten.h>
-#include <emscripten/threading.h>
 #include <nlohmann/json.hpp>
 
 #include <lmdj/domain/command_handler.hpp>
@@ -1070,8 +1069,6 @@ int main() {
   const std::string encoded = report.dump();
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
-  // The report is terminal for this page, but returning from a
-  // PROXY_TO_PTHREAD main closes its mailbox. Yield without returning so the
-  // worker remains available until Playwright closes the page.
-  emscripten_unwind_to_js_event_loop();
+  emscripten_exit_with_live_runtime();
+  return 0;
 }
