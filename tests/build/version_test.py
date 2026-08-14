@@ -10,7 +10,12 @@ from pathlib import Path
 repo_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(repo_root))
 
-from scripts.version import ProductVersion, load_version, verify
+from scripts.version import (
+    ProductVersion,
+    _provider_source_package_sha256,
+    load_version,
+    verify,
+)
 
 
 expected_modules = {
@@ -199,6 +204,7 @@ def write_json(path: Path, value: dict) -> None:
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
 tracked_lock_path = repo_root / "products" / "lmdj" / "assembly.lock.json"
 assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+tracked_lock = json.loads(tracked_lock_path.read_text(encoding="utf-8"))
 assert assembly["product"] == {"id": "lmdj", "version": current}
 assert assembly["providers"] == [
     {
@@ -218,6 +224,22 @@ assert assembly["providers"] == [
         "model_identity": None,
     },
 ]
+provider_module = repo_root / "providers/local-proof-success/module.json"
+provider_digest = _provider_source_package_sha256(
+    "local.proof.success", "1.0.2", provider_module,
+)
+assert provider_digest == next(
+    item["sha256"] for item in tracked_lock["providers"]
+    if item["id"] == "local.proof.success"
+)
+with tempfile.TemporaryDirectory() as temp_dir:
+    authority_root = Path(temp_dir)
+    copied_provider = authority_root / "providers/local-proof-success"
+    shutil.copytree(provider_module.parent, copied_provider)
+    assert _provider_source_package_sha256(
+        "local.proof.success", "1.0.2", copied_provider / "module.json",
+        repo_root=authority_root,
+    ) == provider_digest
 assert assembly["contracts"] == [
     {"id": "lmdj.project.v1", "version": "1.0.0"},
     {"id": "lmdj.project.v2", "version": "2.0.0"},

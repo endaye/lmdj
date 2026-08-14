@@ -1,8 +1,6 @@
 name: Deploy Web Runtime Host
 
 on:
-  release:
-    types: [published]
   workflow_dispatch:
     inputs:
       tag:
@@ -43,28 +41,10 @@ jobs:
         id: release-tag
         shell: bash
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}
           MANUAL_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
-          case "$EVENT_NAME" in
-            release)
-              [[ "$RELEASE_IS_PRERELEASE" == "true" ]] || {
-                echo "Published release must be a prerelease" >&2
-                exit 2
-              }
-              tag="$RELEASE_TAG"
-              ;;
-            workflow_dispatch)
-              tag="$MANUAL_TAG"
-              ;;
-            *)
-              echo "Unsupported deployment event: $EVENT_NAME" >&2
-              exit 64
-              ;;
-          esac
+          tag="$MANUAL_TAG"
           [[ "$tag" =~ ^lmdj-v[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || {
             echo "Deployment tag must be an exact Product tag" >&2
             exit 64

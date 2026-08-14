@@ -66,6 +66,9 @@ __pycache__/
 # Headless Core build outputs
 build/core/
 
+# Local release prepare plans and signed asset staging
+build/release/
+
 # Pinned toolchains installed by Web CI and local proofs
 build/toolchains/
 

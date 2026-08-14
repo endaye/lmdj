@@ -195,6 +195,96 @@ lmdj_add_test(
 )
 
 lmdj_add_test(
+  NAME build.release_model
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_model_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_openpgp
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_openpgp_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_prepare
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_prepare_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_transitions
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_transitions_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_rehearsal
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_rehearsal_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_audit
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_audit_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 30
+)
+
+lmdj_add_test(
+  NAME build.release_audit_workflow
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_audit_workflow_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
+
+lmdj_add_test(
+  NAME build.release_publish_workflow
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_publish_workflow_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
+
+lmdj_add_test(
+  NAME build.release_skill
+  TIER contract
+  COMMAND
+    "${Python3_EXECUTABLE}"
+    tests/build/release_skill_test.py
+  WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  TIMEOUT 10
+)
+
+lmdj_add_test(
   NAME build.web_runtime_deploy_workflow
   TIER contract
   COMMAND
