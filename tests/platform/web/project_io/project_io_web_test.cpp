@@ -961,6 +961,7 @@ nlohmann::json run_suite() {
   require(lmdj_opfs_append_flush_count() == flushes, "oversized prefix flushed");
   require(value(platform->read_complete(append_path), "post oversized") == before_oversized,
           "oversized prefix mutated file");
+  report_progress("storage-contract-append-complete");
 
   const auto replacement = contract / "replacement.bin";
   success(platform->replace_complete(replacement, bytes("old")), "old replacement");
@@ -988,6 +989,7 @@ nlohmann::json run_suite() {
       platform->create_immutable(
           staging / "nested/large.bin", bytes(large_payload)),
       "large staging payload");
+  report_progress("directory-publication-payload-ready");
   auto publication_lease = value(
       platform->acquire_writer(published),
       "published destination lease");
@@ -1033,6 +1035,7 @@ nlohmann::json run_suite() {
         "collision staging removal");
     directory_transfer = "pass";
   }
+  report_progress("directory-publication-complete");
   publication_lease.reset();
 
   contract_lease.reset();

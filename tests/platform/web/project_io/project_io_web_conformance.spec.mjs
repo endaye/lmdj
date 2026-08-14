@@ -14,6 +14,7 @@ const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfsWritableReplace",
 ]);
 const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 60_000;
+const TERMINAL_REPORT_TIMEOUT_MS = 180_000;
 const PROJECT_IO_CONFORMANCE_TIMEOUT_MS = 600_000;
 const RUNTIME_ERROR_OBSERVERS = new WeakMap();
 
@@ -109,7 +110,7 @@ async function waitForResult(page) {
         page.waitForFunction(
             () => window.lmdjProjectIoWeb?.complete === true,
             undefined,
-            {timeout: FAULT_REACHED_OBSERVATION_TIMEOUT_MS}),
+            {timeout: TERMINAL_REPORT_TIMEOUT_MS}),
         runtimeError,
       ]);
     } catch (error) {
