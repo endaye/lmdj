@@ -83,7 +83,7 @@ using RuntimeSnapshotMemberTypes = decltype([] {
 }());
 
 using ResolvedPlaybackMemberTypes = decltype([] {
-  auto [start_frame, end_frame, trigger_mode, linear_gain, muted] =
+  [[maybe_unused]] auto [start_frame, end_frame, trigger_mode, linear_gain, muted] =
       ResolvedPlayback{0, 1, TriggerMode::one_shot, 1.0F, false};
   return std::tuple{
       std::type_identity<decltype(start_frame)>{},
