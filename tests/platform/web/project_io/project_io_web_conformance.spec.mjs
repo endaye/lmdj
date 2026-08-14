@@ -106,7 +106,10 @@ async function waitForResult(page) {
   try {
     try {
       await Promise.race([
-        page.waitForFunction(() => window.lmdjProjectIoWeb?.complete === true),
+        page.waitForFunction(
+            () => window.lmdjProjectIoWeb?.complete === true,
+            undefined,
+            {timeout: FAULT_REACHED_OBSERVATION_TIMEOUT_MS}),
         runtimeError,
       ]);
     } catch (error) {
