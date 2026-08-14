@@ -269,6 +269,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - run: python3 -m unittest discover -s tests/build -p 'release_*_test.py'
       - run: python3 tests/build/web_runtime_deploy_workflow_test.py
       - run: python3 tests/build/web_runtime_public_deployment_docs_test.py
@@ -310,6 +313,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -531,6 +537,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -763,6 +772,9 @@ jobs:
         if: ${{ needs.select-macos-runner.outputs.self-hosted != 'true' }}
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Run macOS Core gates
         id: gates
         uses: ./.github/actions/macos-core-gates
@@ -793,6 +805,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Rerun macOS Core gates after infrastructure failure
         id: gates
         uses: ./.github/actions/macos-core-gates
@@ -848,6 +863,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
@@ -880,6 +898,9 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:

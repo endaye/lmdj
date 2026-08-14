@@ -43,6 +43,15 @@ RELEASE_HISTORY_CONSUMERS = (
     "macos-fallback",
     "package",
 )
+RELEASE_NODE_CONSUMERS = (
+    "deploy-contract",
+    "package",
+    "core-ubuntu",
+    "core-asan",
+    "core-coverage",
+    "macos-primary",
+    "macos-fallback",
+)
 FORMAL_RESULTS = FORMAL_LANE_JOBS + SUPPORT_JOBS
 FORMAL_RESULT_LANE_GUARDS = {
     "docs-static": {"docs_static"},
@@ -176,6 +185,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 job = self.workflow_job(job_name)
                 self.assertIn("uses: actions/checkout@v6", job)
                 self.assertIn("fetch-depth: 0", job)
+
+    def test_release_contract_consumers_install_the_pinned_node_runtime(self) -> None:
+        for job_name in RELEASE_NODE_CONSUMERS:
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn("uses: actions/setup-node@v6", job)
+                self.assertIn('node-version: "22"', job)
 
     def test_portal_does_not_use_checks_api_or_cross_run_polling(self) -> None:
         for forbidden in ("api.github.com", "/check-runs", "gh api"):
