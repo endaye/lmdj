@@ -32,6 +32,24 @@ state transition still require explicit authorization.
 A commit does not authorize push, Pull Request creation, merge, tag push,
 release, publication, deployment, or Channel promotion.
 
+## Release operations
+
+For any release audit or operation, coding agents must read and follow
+`.agents/skills/lmdj-release/SKILL.md`. The normal release path uses only the
+stable `scripts/release.sh` interface and begins with a fresh exact-tag remote
+audit. `prepare`, `push-tag`, `create-draft`, publication through the protected
+`publish-release.yml` workflow, Runtime deployment, and Channel promotion are
+separate authorization and verification boundaries. Complete at most one
+authorized mutation, rerun the audit, report the verified state and stop before
+the next boundary.
+
+Handwritten tag/Release commands, one-step public Release flows,
+`gh release upload --clobber`, and `git push --tags` are outside the normal
+path. An emergency exception requires an incident owner, exact target and asset
+inventory, rollback and stop conditions, and after-action evidence before the
+operation begins. Urgency never authorizes moving a tag, skipping signing, or
+silently coupling publication to deployment.
+
 ## Active source boundaries
 
 - `packages/` contains product-neutral Core Modules.

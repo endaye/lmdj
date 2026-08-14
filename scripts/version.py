@@ -264,13 +264,16 @@ def _source_package_sha256(
     format_name: str,
     identity: dict[str, str],
     paths: list[Path],
+    *,
+    repo_root: Path | None = None,
 ) -> str:
+    resolved_repo_root = REPO_ROOT if repo_root is None else repo_root
     files = []
     for path in sorted(paths):
         if not path.is_file() or path.is_symlink():
             raise ValueError(f"source-package file is unavailable: {path}")
         try:
-            relative = path.relative_to(REPO_ROOT).as_posix()
+            relative = path.relative_to(resolved_repo_root).as_posix()
         except ValueError as error:
             raise ValueError(
                 f"source-package file is outside the repository: {path}"
@@ -288,7 +291,10 @@ def _provider_source_package_sha256(
     provider_id: str,
     provider_version: str,
     module_path: Path,
+    *,
+    repo_root: Path | None = None,
 ) -> str:
+    resolved_repo_root = REPO_ROOT if repo_root is None else repo_root
     provider_root = module_path.parent
     factory_headers = sorted(
         provider_root.glob("include/**/factory.hpp")
@@ -308,6 +314,7 @@ def _provider_source_package_sha256(
             module_path,
             provider_root / "src/provider.cpp",
         ],
+        repo_root=resolved_repo_root,
     )
 
 

@@ -226,17 +226,11 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
                 return "\n".join(lines[start + 1 : index])
         self.fail(f"shell function is unterminated: {name}")
 
-    def test_workflow_only_deploys_published_release_or_exact_manual_tag(
-        self,
-    ) -> None:
+    def test_deployment_requires_manual_exact_tag(self) -> None:
         source = self.workflow_source()
         triggers = self.mapping_block(source, "on", 0)
-        self.assertEqual(
-            self.direct_mapping(triggers, 2),
-            {"release": "", "workflow_dispatch": ""},
-        )
-        release = self.mapping_block(triggers, "release", 2)
-        self.assertEqual(self.direct_mapping(release, 4), {"types": "[published]"})
+        self.assertEqual(self.direct_mapping(triggers, 2), {"workflow_dispatch": ""})
+        self.assertNotIn("release.published", source)
         workflow_dispatch = self.mapping_block(triggers, "workflow_dispatch", 2)
         self.assertEqual(
             set(self.direct_mapping(workflow_dispatch, 4)),
@@ -253,15 +247,9 @@ class WebRuntimeDeployWorkflowTest(unittest.TestCase):
 
     def test_release_tag_selection_fails_closed(self) -> None:
         source = self.workflow_source()
-        self.assertIn("github.event.release.tag_name", source)
-        self.assertIn("github.event.release.prerelease", source)
         self.assertIn("inputs.tag", source)
-        self.assertIn(
-            "RELEASE_IS_PRERELEASE: ${{ github.event.release.prerelease }}",
-            source,
-        )
-        self.assertIn('[[ "$RELEASE_IS_PRERELEASE" == "true" ]]', source)
-        self.assertNotIn('release_prerelease="$RELEASE_PRERELEASE"', source)
+        self.assertNotIn("github.event.release", source)
+        self.assertNotIn("EVENT_NAME", source)
         self.assertIn(
             "^lmdj-v[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$",
             source,

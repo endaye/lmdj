@@ -509,6 +509,45 @@ release-verified
 - Release 不授权部署；
 - 部署不等于生产验证。
 
+### 12.1 标准 Release 控制面
+
+正常发布只通过 `scripts/release.sh` 与受保护 workflow 完成。每次操作先运行 exact-tag
+remote audit；随后 `prepare`、单 tag push、Draft 创建、Draft 发布、Runtime deployment 与
+Channel promotion 分别授权、分别验证，并在一个 mutation 后停止。命令输出的下一步只是导航，
+不构成下一权限边界的批准。
+
+`docs/release-evidence/release-intents.json` 是经 review 的 release intent ledger：它记录允许
+考虑的 exact identity、target、disposition、channel、profile 与 evidence path，但不缓存或
+替代 Git/GitHub 当前状态。只有 `releasable` intent 能开始 prospective mutation；
+`published` 只读审计，`abandoned` 与 `superseded-unreleased` 拒绝发布。远端 tag 与 Draft 是
+live control plane 派生状态，不写回 ledger 充当缓存。
+
+历史例外（historical exception）只解释控制面生效前不可改写的 exact 只读事实。只有 remote
+audit 可以报告 `ok-with-historical-exception`，并必须在 human/JSON evidence 中显式列出；
+`prepare`、tag push、Draft 创建与 publish workflow 都不能消费它来满足 prospective gate。
+
+Release `profile` 从受保护 policy 选择确定性 builder、verifier 与闭合 asset inventory。不能由
+操作者临时增加、覆盖或猜测资产。`create-draft` 只创建或 reconcile Draft；遇到错误、额外或
+同名不同内容的资产时保留 Draft 并停止调查，不覆盖既有内容。
+Notes、asset inventory 与 plan 的结构和 digest 是确定性的；独立 OpenPGP 签名会包含签名时间，
+因此不承诺重新签名得到逐字节相同的 signature。重试复用并验证已经持久化的 exact signature，
+不会用新签名覆盖它。
+
+公开 publication 只由 dispatch-only `publish-release.yml` 完成。Workflow 以 exact tag、numeric
+Release ID 和 plan digest 重建并验证 Draft，通过受保护 `release` Environment 的 exact-main
+策略门后，以一次 PATCH 设置 `draft=false`、精确 prerelease 与 exact make-latest policy，随后重新验证 metadata
+与资产不变。GitHub Release API 没有本流程可依赖的强条件更新契约，所以 mutation 前后验证用于
+检测并 fail closed，而不宣称消除 TOCTOU。当前单人维护者模式明确要求零 required reviewer，
+`prevent_self_review` 不启用，并且只允许 exact `main` branch policy；显式 workflow dispatch 与
+每次独立授权是人工边界，remote audit 对 GitHub 侧配置 fail closed。Publication 不触发
+Runtime deployment；后者保持 manual-only exact-tag dispatch，并与 Channel promotion 分离。
+
+所有 non-stable Release 都是 prerelease 且 `latest=false`。Stable 是否成为 `latest` 只由 ledger
+中的显式 intent 与 stable policy 决定，不能依据版本排序或当前 GitHub latest 推断。每个
+published Release 与 tag 都是不可变历史：正常工具不得移动 tag、替换资产、重写 metadata 或删除
+Release。发现 drift 或不确定 publish 结果时，先按 exact object/Release ID 做只读 reconcile，
+再以独立 incident 和纠正身份处置；不得通过改写历史制造成功。
+
 ## 13. 当前状态
 
 截至 2026-07-30：
