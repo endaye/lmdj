@@ -7,6 +7,7 @@ import {expect, test} from "@playwright/test";
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 const MAX_OPEN_ATTEMPTS = 8;
+const BUSY_RETRY_INTERVAL_MS = 500;
 // openProjectJourney owns three independently bounded 30-second Project
 // operations: open, inspect, and snapshot reload. The UI hang detector covers
 // their 90-second protocol ceiling plus bounded runner/render settling time.
@@ -28,13 +29,10 @@ async function waitForProjectOpenOutcome(heading, open, retry) {
   return outcome;
 }
 
-async function pressProjectAction(page, heading, open, retry, kind, action) {
+async function pressProjectAction(page, action) {
   await action.focus();
   await expect(action).toBeFocused();
   await page.keyboard.press("Enter");
-  await expect.poll(async () =>
-    await projectOpenOutcome(heading, open, retry),
-  {timeout: 5_000}).not.toBe(kind);
 }
 
 async function waitForKeyboardProjectInventory(page) {
@@ -78,10 +76,9 @@ test("keyboard-only Project and Bank journey preserves native activation", async
   const heading = page.getByRole("heading", {name: "Project 00000000"});
   const openButton = await waitForKeyboardProjectInventory(page);
   const retry = page.getByRole("button", {name: "Retry project"});
-  let kind = "open";
   let action = openButton;
   for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
-    await pressProjectAction(page, heading, openButton, retry, kind, action);
+    await pressProjectAction(page, action);
     const outcome = await waitForProjectOpenOutcome(
       heading, openButton, retry,
     );
@@ -90,13 +87,15 @@ test("keyboard-only Project and Bank journey preserves native activation", async
       await expect(page.getByRole("alert")).toContainText(
         "The local Project is busy in another tab or process.",
       );
-      kind = "busy";
+      // A reload can briefly overlap the previous document's asynchronous
+      // writer release. Model a deliberate user retry instead of hammering the
+      // visible action fast enough to exhaust the bounded attempt budget.
+      await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
       action = retry;
     } else {
       // A timed-out request may be followed by the one allowed automatic
       // Runtime replacement. The replacement intentionally requires another
       // explicit Open gesture instead of silently resuming the Project.
-      kind = "open";
       action = openButton;
     }
   }

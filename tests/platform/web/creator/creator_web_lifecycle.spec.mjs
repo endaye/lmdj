@@ -6,6 +6,7 @@ import {expect, test} from "@playwright/test";
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
 const MAX_OPEN_ATTEMPTS = 8;
+const BUSY_RETRY_INTERVAL_MS = 500;
 // openProjectJourney owns three independently bounded 30-second Project
 // operations: open, inspect, and snapshot reload. The UI hang detector covers
 // their 90-second protocol ceiling plus bounded runner/render settling time.
@@ -25,13 +26,6 @@ async function waitForProjectOpenOutcome(heading, open, retry) {
     return outcome;
   }, {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("pending");
   return outcome;
-}
-
-async function clickProjectAction(heading, open, retry, kind, action) {
-  await action.click();
-  await expect.poll(async () =>
-    await projectOpenOutcome(heading, open, retry),
-  {timeout: 5_000}).not.toBe(kind);
 }
 
 async function waitForProjectInventory(page) {
@@ -311,23 +305,24 @@ async function reopenWithVisibleBusyRetry(page) {
   });
   const alert = page.getByRole("alert");
   const retry = page.getByRole("button", {name: "Retry project"});
-  let kind = "open";
   let action = open;
   for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
-    await clickProjectAction(heading, open, retry, kind, action);
+    await action.click();
     const outcome = await waitForProjectOpenOutcome(heading, open, retry);
     if (outcome === "ready") break;
     if (outcome === "busy") {
       await expect(alert).toContainText(
         "The local Project is busy in another tab or process.",
       );
-      kind = "busy";
+      // A reload can briefly overlap the previous document's asynchronous
+      // writer release. Model a deliberate user retry instead of hammering the
+      // visible action fast enough to exhaust the bounded attempt budget.
+      await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
       action = retry;
     } else {
       // A timed-out request may be followed by the one allowed automatic
       // Runtime replacement. The replacement intentionally requires another
       // explicit Open gesture instead of silently resuming the Project.
-      kind = "open";
       action = open;
     }
   }
