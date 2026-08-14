@@ -5,18 +5,40 @@ import {expect, test} from "@playwright/test";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
-const MAX_BUSY_RETRIES = 8;
+const MAX_OPEN_ATTEMPTS = 8;
 // openProjectJourney owns three independently bounded 30-second Project
 // operations: open, inspect, and snapshot reload. The UI hang detector covers
 // their 90-second protocol ceiling plus bounded runner/render settling time.
 const OPEN_TRANSITION_TIMEOUT_MS = 3 * 30_000 + 35_000;
-const RETRY_SETTLE_TIMEOUT_MS = 35_000;
+
+async function projectOpenOutcome(heading, open, retry) {
+  if (await heading.isVisible()) return "ready";
+  if (await retry.isVisible()) return "busy";
+  if (await open.isVisible() && await open.isEnabled()) return "open";
+  return "pending";
+}
+
+async function waitForProjectOpenOutcome(heading, open, retry) {
+  let outcome = "pending";
+  await expect.poll(async () => {
+    outcome = await projectOpenOutcome(heading, open, retry);
+    return outcome;
+  }, {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("pending");
+  return outcome;
+}
+
+async function clickProjectAction(heading, open, retry, kind, action) {
+  await action.click();
+  await expect.poll(async () =>
+    await projectOpenOutcome(heading, open, retry),
+  {timeout: 5_000}).not.toBe(kind);
+}
 
 async function waitForProjectInventory(page) {
   const open = page.getByRole("button", {name: "Open Project 00000000"});
   const retry = page.getByRole("button", {name: "Retry project"});
   const alert = page.getByRole("alert");
-  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt += 1) {
+  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
     await expect.poll(async () =>
       await open.isVisible() ? "open" : await retry.isVisible() ? "retry" : "",
     {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
@@ -284,27 +306,29 @@ async function report(page) {
 
 async function reopenWithVisibleBusyRetry(page) {
   const heading = page.getByRole("heading", {name: "Project 00000000"});
-  const open = () => page.getByRole("button", {
+  const open = page.getByRole("button", {
     name: "Open Project 00000000",
   });
   const alert = page.getByRole("alert");
-  await open().click();
-  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt += 1) {
-    await expect.poll(async () =>
-      await heading.isVisible() ? "ready" : await alert.textContent(),
-    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
-    if (await heading.isVisible()) break;
-    await expect(alert).toContainText(
-      "The local Project is busy in another tab or process.",
-    );
-    await page.getByRole("button", {name: "Retry project"}).click();
-    try {
-      await expect(heading).toBeVisible({timeout: RETRY_SETTLE_TIMEOUT_MS});
-      break;
-    } catch {
+  const retry = page.getByRole("button", {name: "Retry project"});
+  let kind = "open";
+  let action = open;
+  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
+    await clickProjectAction(heading, open, retry, kind, action);
+    const outcome = await waitForProjectOpenOutcome(heading, open, retry);
+    if (outcome === "ready") break;
+    if (outcome === "busy") {
       await expect(alert).toContainText(
         "The local Project is busy in another tab or process.",
       );
+      kind = "busy";
+      action = retry;
+    } else {
+      // A timed-out request may be followed by the one allowed automatic
+      // Runtime replacement. The replacement intentionally requires another
+      // explicit Open gesture instead of silently resuming the Project.
+      kind = "open";
+      action = open;
     }
   }
   await expect(heading).toBeVisible();
