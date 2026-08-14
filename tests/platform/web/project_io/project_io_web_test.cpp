@@ -8,7 +8,6 @@
 #include <span>
 #include <stdexcept>
 #include <string>
-#include <thread>
 #include <vector>
 
 #include <emscripten.h>
@@ -826,19 +825,6 @@ nlohmann::json run_suite() {
   const auto bundle = std::filesystem::path{"/lmdj-workspace"} /
       ("parity-" + std::to_string(sequence) + ".lmdj");
 
-  // Exercise the declared pthread topology without invoking Asyncify-backed
-  // OPFS from a child worker. This also gives Emscripten's mailbox lifecycle a
-  // real child-thread owner before the proxied main remains live.
-  bool first_worker_ready = false;
-  bool second_worker_ready = false;
-  std::thread first_worker_probe([&] { first_worker_ready = true; });
-  std::thread second_worker_probe([&] { second_worker_ready = true; });
-  first_worker_probe.join();
-  second_worker_probe.join();
-  require(
-      first_worker_ready && second_worker_ready,
-      "Web pthread topology probe");
-
   auto outer_lease = value(platform->acquire_writer(bundle), "outer lease");
   auto nested_lease = value(
       platform->acquire_writer(bundle / ".." / bundle.filename()),
@@ -1083,6 +1069,8 @@ int main() {
   const std::string encoded = report.dump();
   MAIN_THREAD_EM_ASM({ window.lmdjProjectIoWeb = JSON.parse(UTF8ToString($0)); },
                      encoded.c_str());
-  emscripten_exit_with_live_runtime();
+  // EXIT_RUNTIME=0 retains the page runtime after main returns. Explicitly
+  // exiting a PROXY_TO_PTHREAD main asks Emscripten 6.0.5 to tear down its
+  // mailbox and trips thread_mailbox_shutdown before Playwright reads report.
   return 0;
 }
