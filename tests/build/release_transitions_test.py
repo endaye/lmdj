@@ -618,7 +618,7 @@ class ReleaseTransitionsTest(unittest.TestCase):
         assert intent is not None and intent.merged_main_run_id is not None
         target = intent.target_revision
         tag_object = subprocess.run(
-            ["git", "rev-parse", f"refs/lmdj-release/tags/{tag}"], cwd=ROOT,
+            ["git", "rev-parse", f"refs/tags/{tag}"], cwd=ROOT,
             check=True, capture_output=True, text=True,
         ).stdout.strip()
         run = RunProjection(
@@ -641,6 +641,11 @@ class ReleaseTransitionsTest(unittest.TestCase):
         )
 
         class OfflineGit(GitRepository):
+            def __init__(self, root: Path) -> None:
+                super().__init__(root)
+                self._main_ref = "refs/remotes/origin/main"
+                self._tag_prefix = "refs/tags/"
+
             def fetch_authority(self, repository: str, branch: str) -> None:
                 return None
 

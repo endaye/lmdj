@@ -351,6 +351,8 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
             raise ValueError
         if (root / ".git").exists():
             for entry in entries:
+                if entry.disposition is Disposition.ABANDONED:
+                    continue
                 if subprocess.run(
                     ["git", "-C", str(root), "cat-file", "-e", f"{entry.target_revision}^{{commit}}"],
                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,

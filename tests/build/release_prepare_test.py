@@ -397,6 +397,32 @@ class ReleasePrepareTest(unittest.TestCase):
                 )
                 repository.validate_release_target(ROOT, intent)
 
+    def test_product_snapshot_validator_imports_without_portal_packages(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="release-node-loader-") as directory:
+            loader = Path(directory) / "builtins-only.mjs"
+            loader.write_text(
+                """export async function resolve(specifier, context, nextResolve) {
+  if (!(specifier.startsWith('node:') || specifier.startsWith('.') ||
+        specifier.startsWith('/') || specifier.startsWith('file:'))) {
+    throw new Error(`external package import denied: ${specifier}`);
+  }
+  return nextResolve(specifier, context);
+}
+""",
+                encoding="utf-8",
+            )
+            subprocess.run(
+                [
+                    "node", "--experimental-loader", loader.as_uri(),
+                    "--input-type=module", "--eval",
+                    f"import({json.dumps((ROOT / 'apps/architecture-portal/scripts/lib/repo-facts.mjs').as_uri())})",
+                ],
+                cwd=ROOT,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+
     def test_prepare_rejects_forbidden_disposition_and_historical_exception(self) -> None:
         self.ledger = self.ledger_fixture("allocated")
         with self.assertRaisesRegex(PrepareError, "releasable"):

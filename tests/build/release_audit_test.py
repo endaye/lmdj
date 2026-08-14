@@ -318,6 +318,24 @@ class ReleaseAuditTest(unittest.TestCase):
         report = audit(context, remote=False, tag="lmdj-v1.0.21.0")
         self.assertEqual({item.code for item in report.findings}, {"ok"})
 
+    def test_local_audit_does_not_require_abandoned_target_objects(self) -> None:
+        abandoned = self.entry(
+            tag="lmdj-v1.0.16.6", disposition="abandoned", kind="product",
+            identity="1.0.16.6", profile="web-runtime-host",
+        )
+        abandoned["target_revision"] = "d" * 40
+        context = self.context(entries=[abandoned])
+        (self.root / ".git").mkdir()
+
+        def cat_file(command, **kwargs):
+            return subprocess.CompletedProcess(
+                command, 1 if command[-1].startswith("d" * 40) else 0,
+            )
+
+        with patch("tools.release.audit.subprocess.run", side_effect=cat_file):
+            report = audit(context, remote=False, tag="lmdj-v1.0.21.0")
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
+
     def test_local_same_name_tag_conflict_is_visible_but_diagnostic_only(self) -> None:
         tag = str(self.entry()["tag"])
         self.git.local_tags[tag] = self.tag_state(target="c" * 40, signer=CHECKSUM)
