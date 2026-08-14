@@ -2,23 +2,26 @@
 
 ## Current status
 
-Stage 8 automated local acceptance passed on `feat/stage8-sample-editor` at
-verified implementation revision `5f4299d5044ae1181951d004f2e680801ee0602a`
-on 2026-08-12. After conflict-free rebases onto current `main`
-`5b69ab901e8b211132979c158216840bacfeec51`, the patch-equivalent current
-implementation revision is `3f17fbc7e23ec9dcf39c71499d2bc68c07262885`;
-the latest `git range-diff` marked all 36 existing Stage 8 commits equivalent
-and the branch was 0 behind / 36 ahead. The allocated Product identity is
-`1.0.17.0 canary`. Its
-immutable Architecture Portal snapshot records source revision
-`195001b494f1c74995dc83fd35b5add00154edfd`; later commits hardened Creator
-recovery lifecycle ownership and refreshed acceptance evidence without changing
-the governed Product manifests or Assembly projection. The Portal consistency
-check accepts that unchanged immutable projection.
+Stage 8 is allocated as Product Build `1.0.22.0 canary` by
+`ebaf2fea0e6a2b150fb3fb1229dbf5e30e26a322`. The immutable Architecture
+Portal snapshot committed by `9bc9f693470ebe95a20b8849c71e9590d4bedce6`
+authenticates that exact allocation revision and Assembly lock
+`206cfa444a495595ac180d1467676de834684661abc57981c943fe620f339518`.
+Later implementation fixes do not rewrite that immutable candidate projection.
 
-This document does not claim a push, Pull Request, merge, tag, Release,
-deployment, publication, Channel promotion, physical device result, or human
-hearing result. Stage 8B remains unimplemented and unversioned.
+The current reviewed implementation is `9188410` on
+`feat/stage8-sample-editor`. It includes the recovery-trigger ownership fix
+`4667474023a421b56f569dab5d186dd58d75d5ee` and the two merge-review fixes:
+same-token recovery of valid incomplete Sample staging, and preservation of a
+successful mutation receipt when preview cleanup or authoritative inspection
+fails after commit.
+
+Automated Core, stress, Creator unit/build, Sample Editor Chromium, WebKit
+capability, and Portal gates pass at this revision. The complete Creator Proof
+is not currently green: its general Chromium lifecycle group reproducibly has
+three input-observation timeouts, recorded below. Therefore this record does
+not claim final automated acceptance or readiness for merge. Stage 8B remains
+unimplemented and unversioned.
 
 ## Automated acceptance contract
 
@@ -38,9 +41,9 @@ the Project mutation.
 
 ## Automated results
 
-All commands below ran from a clean tracked tree at implementation revision
-`5f4299d5044ae1181951d004f2e680801ee0602a`. Browser and Creator gates used the
-locked Emscripten 6.0.5 toolchain, Node 22.16.0, and its bundled Python 3.13.3.
+All commands below ran on 2026-08-14 against implementation revision
+`9188410`. Clean-source Proof used Emscripten 6.0.5, Node 22.16.0, and its
+bundled Python 3.13.3.
 
 | Gate | Result |
 | --- | --- |
@@ -48,42 +51,30 @@ locked Emscripten 6.0.5 toolchain, Node 22.16.0, and its bundled Python 3.13.3.
 | `scripts/core.sh build dev` | pass |
 | `scripts/core.sh test dev full` | 54/54 pass |
 | `scripts/core.sh test dev stress` | 2/2 pass |
-| `scripts/core.sh coverage check` | 55/55 tests pass; all module thresholds pass |
 | `scripts/core.sh proof` | 38/38 proof tests plus schema, dependency, CLI/MCP parity, Golden audio, package acceptance, and headless proof pass |
-| `scripts/creator-web.sh test` | Creator 195/195, package 9/9, server 3/3, Runtime Node 117/117 pass |
-| `scripts/creator-web.sh proof` | reproducible Project/Sample fixtures and byte-identical Creator distributions pass; Chromium 11 pass/1 capability skip; real Sample Editor 1 pass; declared WebKit capability paths pass |
+| Creator Vitest and production build | 222/222 pass; TypeScript and Vite production build pass |
+| `scripts/creator-web.sh proof` | Project/Sample fixtures, byte-identical distributions, Creator 222/222, package 9/9, server 3/3, Runtime Node 127/127, Sample Editor Chromium 1 pass/1 declared skip, and both WebKit capability checks pass; general Chromium is **not green** at 11 pass/3 fail/1 skip |
 | `bash scripts/verify-core-dependencies.sh` | pass |
 | `bash tests/build/test_active_tree.sh` | pass |
 | `python3 tests/build/version_test.py` | pass |
-| `python3 scripts/version.py verify --version-file products/lmdj/version.json` | `1.0.17.0` pass |
-| `scripts/architecture-portal.sh check` | 42/42 tests, 37 pages, 10 diagram sources/20 outputs, release-doc snapshot, typecheck/build, and 42 routes/internal links pass |
+| `python3 scripts/version.py verify --version-file products/lmdj/version.json` | `1.0.22.0` pass |
+| `scripts/architecture-portal.sh check` | 47/47 tests, 37 pages, 10 diagram sources/20 outputs, release-doc snapshot, typecheck/build, and 42 routes/internal links pass |
 
-Coverage evidence at this revision records overall line coverage 83.23% and
-branch coverage 69.26%. Application Facade line coverage is 84.05%; Audio
-Runtime 90.22%; Authoring Domain 89.19%; Foundation 91.16%; Project Cooker
-90.00%; Project I/O 70.69%; and Provider API 80.84%. The report and summary
-SHA-256 values are respectively
-`906374cde56040793f90c0bf546cb1a2001d2999b39f4e534fca5cf3e9ac6c8f`
-and
-`20186486a0496dea3c1beff1888b35d10ebb9299eb5043fc5e6a9269f32328e5`.
+The three reproducible Chromium failures are the lifecycle journeys at
+`creator_web_lifecycle.spec.mjs:346`, `:383`, and `:421`: two loop-toggle
+journeys remain `data-outcome=idle` after Enter, and the persisted-page journey
+does not observe a post-pageshow keyboard outcome. Both full Proof attempts had
+the same 11/3/1 result. They are not converted into a pass by the separately
+green Sample Editor journey.
 
 ## Local artifact evidence
 
-These are local proof outputs, not released or published artifacts.
-
-| Artifact | SHA-256 |
-| --- | --- |
-| Core Release build manifest | `13583f1097c47d46c6f634030fc1e412fca0e129c531ea772c9834494e4126b0` |
-| Creator Host manifest | `0e56e927e2276436fc39276aa9eef7f1e9ac7e096171c070f5157d0dfd39332c` |
-| Creator main JavaScript | `d3a3ee269ea03151157fb02e688c6c5f406351dc7d0bda10eedccf3b9ef0ef14` |
-| Creator Runtime Wasm | `060c23a9f470d92c8e059ac4d88c9e769d7619bf1d7fc80baecdccf8e2ec9f0b` |
-| Creator Runtime JavaScript | `7c134fd11043ab934fb6eafc4d143687b5364d509316334400b39fc434568ec3` |
-| Creator styles | `9ef489e0968b874a12efb69d75847c7c466b99b5fdf292ae6b851c29889de80c` |
-| Web toolchain identity | `f9a959a74481c095b07d120f3fd8b39a18e1211ccb69e5fd68d2573176797149` |
-| Immutable Portal metadata | `e99229497fda374125e66e39171bb1089ef9307612d6f98470a34d0d01423dce` |
-
-No release archive, detached archive checksum, tag, or GitHub Release was
-created by this acceptance run.
+The Core and Creator Proof commands generated local build/package outputs and
+proved the Creator distribution byte-identical across two clean builds. They
+are not released or published artifacts. Because the overall Creator Proof is
+not green, this record deliberately does not promote those transient outputs
+to acceptance artifacts or preserve their hashes. No release archive, tag, or
+GitHub Release was created by this run.
 
 ## Prohibited-boundary audit
 
@@ -114,8 +105,8 @@ they block any physical-pass claim and promotion to Beta or Stable.
 
 | Transition | Status |
 | --- | --- |
-| Push | not authorized / not performed |
-| Pull Request | not authorized / not created |
+| Push | performed through remote revision `bba79c1b5cd6c08aca1e56f0d02a7f77f113f9a5`; review fix `9188410` remains local |
+| Pull Request | Draft PR #137 exists; it remains Draft |
 | Merge | not authorized / not performed |
 | Product tag or GitHub Release | not authorized / not created |
 | Deployment or publication | not authorized / not performed |
