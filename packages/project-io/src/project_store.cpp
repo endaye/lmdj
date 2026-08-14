@@ -1635,16 +1635,47 @@ foundation::Result<StagedSample> stage_sample(
   if (!reused.has_value()) {
     return foundation::Result<StagedSample>::failure(reused.error());
   }
-  if (reused.value()) {
-    return foundation::Result<StagedSample>::failure(
-        Error{
-            ErrorCode::invalid_argument,
-            "Sample staging token was already used",
-        });
-  }
   auto lease = platform.acquire_writer(directory);
   if (!lease.has_value()) {
     return foundation::Result<StagedSample>::failure(lease.error());
+  }
+  if (reused.value()) {
+    const auto valid_directory = platform.validate_managed_tree(directory);
+    if (!valid_directory.has_value()) {
+      return foundation::Result<StagedSample>::failure(
+          valid_directory.error());
+    }
+    const auto files = platform.list_names(directory);
+    if (!files.has_value()) {
+      return foundation::Result<StagedSample>::failure(files.error());
+    }
+    const auto directories = platform.list_directories(directory);
+    if (!directories.has_value()) {
+      return foundation::Result<StagedSample>::failure(directories.error());
+    }
+    const auto marker = read_json(platform, directory / "state.json");
+    const bool reusable_incomplete =
+        files.value() ==
+            std::vector<std::string>{"payload.wav", "state.json"} &&
+        directories.value().empty() && marker.has_value() &&
+        exact_object_keys(
+            marker.value(),
+            {"contract", "created_unix_seconds", "state", "token"}) &&
+        marker.value().at("contract") == "lmdj.sample-staging.v1" &&
+        marker.value().at("state") == "incomplete" &&
+        marker.value().at("token") == token &&
+        nonnegative_integer(marker.value().at("created_unix_seconds"));
+    if (!reusable_incomplete) {
+      return foundation::Result<StagedSample>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "Sample staging token was already used",
+          });
+    }
+    const auto removed = platform.remove_tree(directory);
+    if (!removed.has_value()) {
+      return foundation::Result<StagedSample>::failure(removed.error());
+    }
   }
   ensured = platform.ensure_directory(directory);
   if (!ensured.has_value()) {

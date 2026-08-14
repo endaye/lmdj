@@ -288,7 +288,8 @@ export function SampleSurface({
         }
         if (!active) return;
         if (project === null) continue;
-        if (project.revision !== currentInspect.projectRevision) {
+        if (currentInspect === null ||
+          project.revision !== currentInspect.projectRevision) {
           try {
             currentInspect = await inspectSampleJourney(session, refresh.pending.slot);
           } catch (error) {
@@ -299,7 +300,7 @@ export function SampleSurface({
           }
           if (project.revision !== currentInspect.projectRevision) continue;
         }
-        if (!active) return;
+        if (!active || currentInspect === null) return;
         dispatch({
           type: "sample-project-refreshed",
           project,

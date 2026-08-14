@@ -18,7 +18,7 @@ export type SampleProjectionRefresh =
   | Readonly<{
       type: "mutation-committed";
       pending: Readonly<SamplePendingAction>;
-      inspect: Readonly<SampleInspect>;
+      inspect: Readonly<SampleInspect> | null;
       commit: Readonly<SampleCommit>;
     }>
   | Readonly<{
@@ -376,7 +376,18 @@ export function creatorReducer(
       if (state.sampleProjectionRefresh !== null) {
         throw new TypeError("Sample Project refresh is already active");
       }
-      reduceSampleState(state.sample, action.action);
+      if (action.action.type === "mutation-committed" &&
+        action.action.inspect === null) {
+        const pending = state.sample.pendingAction;
+        if (pending === null || pending.kind !== action.action.pending.kind ||
+          pending.slot !== action.action.pending.slot ||
+          pending.expectedRevision !== action.action.pending.expectedRevision ||
+          action.action.commit.committedRevision !== pending.expectedRevision + 1) {
+          throw new TypeError("Sample Project refresh identity does not match");
+        }
+      } else {
+        reduceSampleState(state.sample, action.action);
+      }
       return {
         ...state,
         sampleProjectionRefresh: Object.freeze({...action.action}),
@@ -387,6 +398,8 @@ export function creatorReducer(
       const refresh = state.sampleProjectionRefresh;
       if (current === null ||
         refresh === null || !samePendingMutation(refresh, action.action) ||
+        (action.action.type === "mutation-committed" &&
+          action.action.inspect === null) ||
         current.projectId !== action.project.projectId ||
         current.patternId !== action.project.patternId) {
         throw new TypeError("Sample Project refresh identity does not match");

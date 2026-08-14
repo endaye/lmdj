@@ -323,6 +323,35 @@ describe("Creator Sample actions", () => {
     ]);
   });
 
+  test.each(["preview-clear", "inspect"] as const)(
+    "preserves the committed receipt when %s settlement fails",
+    async (failure) => {
+      const {calls, session} = fixture();
+      if (failure === "preview-clear") {
+        session.clearSamplePreview = async (slot) => {
+          calls.push({method: "clearSamplePreview", arguments: [slot]});
+          throw Object.assign(new Error("late cleanup"), {code: "HOST_TIMEOUT"});
+        };
+      } else {
+        session.inspectSample = async (slot) => {
+          calls.push({method: "inspectSample", arguments: [slot]});
+          throw Object.assign(new Error("late refresh"), {code: "HOST_TIMEOUT"});
+        };
+      }
+
+      await expect(updateSampleJourney(session, {
+        slot: 17,
+        expectedRevision: 42,
+        playback,
+      })).resolves.toEqual({
+        kind: "committed",
+        commit: published,
+        inspect: null,
+      });
+      expect(calls.at(0)?.method).toBe("updatePad");
+    },
+  );
+
   test("never retries a revision conflict and refreshes after clearing preview", async () => {
     const {calls, session} = fixture();
     session.updatePad = async (request) => {

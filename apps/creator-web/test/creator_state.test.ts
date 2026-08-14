@@ -309,4 +309,86 @@ describe("Creator state", () => {
     expect(after.audio).toBe(before.audio);
     expect(after.runtime).toBe(before.runtime);
   });
+
+  test("retains a committed mutation while its authoritative inspect is pending", () => {
+    const pending = {kind: "update" as const, slot: 1, expectedRevision: 4};
+    const selected = creatorReducer(creatorReducer(creatorReducer({
+      ...readyState(),
+      audio: {phase: "running"},
+    }, {
+      type: "sample-action",
+      action: {type: "slot-selected", slot: 1},
+    }), {
+      type: "sample-action",
+      action: {
+        type: "inspect-stored",
+        inspect: {
+          projectRevision: 4,
+          slot: 1,
+          assetId: null,
+          playback: {
+            trimStartFrame: 0,
+            trimEndFrame: null,
+            triggerMode: "one_shot",
+            gainMillidb: 0,
+            muted: false,
+          },
+          metadata: null,
+          waveformCacheIdentity: null,
+        },
+      },
+    }), {
+      type: "sample-action",
+      action: {type: "pending-began", pending},
+    });
+    const commit = {
+      committedRevision: 5,
+      runtimeRevision: 5,
+      runtimePublished: true,
+      snapshotError: null,
+    };
+    const unresolved = {
+      type: "mutation-committed" as const,
+      pending,
+      inspect: null,
+      commit,
+    };
+
+    const refreshing = creatorReducer(selected, {
+      type: "sample-projection-refresh-started",
+      action: unresolved,
+    });
+    expect(refreshing.sample.pendingAction).toEqual(pending);
+    expect(refreshing.sampleProjectionRefresh).toEqual(unresolved);
+
+    const inspect = {
+      projectRevision: 5,
+      slot: 1,
+      assetId: null,
+      playback: {
+        trimStartFrame: 0,
+        trimEndFrame: null,
+        triggerMode: "gate" as const,
+        gainMillidb: 0,
+        muted: false,
+      },
+      metadata: null,
+      waveformCacheIdentity: null,
+    };
+    const refreshedProject = {
+      ...project,
+      revision: 5,
+      bundleDigest: "d".repeat(64),
+    };
+    const resolved = {...unresolved, inspect};
+    const after = creatorReducer(refreshing, {
+      type: "sample-project-refreshed",
+      project: refreshedProject,
+      action: resolved,
+    });
+    expect(after.sample.savedRevision).toBe(5);
+    expect(after.sample.pendingAction).toBeNull();
+    expect(after.sampleProjectionRefresh).toBeNull();
+    expect(after.audio).toBe(selected.audio);
+  });
 });

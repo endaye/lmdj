@@ -555,6 +555,52 @@ void test_sample_staging_scavenger_is_generated_name_age_and_count_bounded() {
   LMDJ_CHECK(std::filesystem::is_directory(root / count_limited_token));
 }
 
+void test_sample_import_reclaims_its_fresh_incomplete_crash_residue() {
+  TempDirectory temp("sample-retry-residue");
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+
+  const auto token = test_uuid("sample-retry-residue");
+  const auto directory =
+      temp.path() / ".lmdj-host/sample-staging" / token;
+  std::filesystem::create_directories(directory);
+  write_bytes(directory / "payload.wav", "crashed-at-staging");
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  write_bytes(
+      directory / "state.json",
+      nlohmann::json{
+          {"contract", "lmdj.sample-staging.v1"},
+          {"created_unix_seconds", now},
+          {"state", "incomplete"},
+          {"token", token},
+      }
+          .dump());
+
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+  };
+  const auto retried = store.import_assign_sample_bytes(
+      bundle,
+      ProjectStore::ImportAssignSampleBytesRequest{
+          CommandMeta{CommandId{token}, 0},
+          PadSlotId{2, 9},
+          AssetId{test_uuid("sample-retry-residue-asset")},
+          "audio/wav",
+          sample,
+      });
+
+  LMDJ_CHECK(retried.has_value());
+  LMDJ_CHECK(!std::filesystem::exists(directory));
+  const auto loaded = store.load(bundle);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value().revision == 1);
+  LMDJ_CHECK(loaded.value().banks.at(2).at(9).asset_id.has_value());
+}
+
 void test_crash_after_sample_manifest_publication_recovers_new_truth() {
   TempDirectory temp("sample-post-publication");
   const auto bundle = temp.path() / "project.lmdj";
@@ -748,6 +794,7 @@ int main() {
     test_publish_faults_preserve_previous_project_truth();
     test_atomic_sample_import_faults_preserve_every_project_truth_projection();
     test_sample_staging_scavenger_is_generated_name_age_and_count_bounded();
+    test_sample_import_reclaims_its_fresh_incomplete_crash_residue();
     test_crash_after_sample_manifest_publication_recovers_new_truth();
     test_restart_classifies_committed_and_uncommitted_files();
     test_take_cleanup_faults_leave_replayable_obligation();

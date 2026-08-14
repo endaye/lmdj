@@ -98,7 +98,7 @@ export type SampleMutationResolution =
   | Readonly<{
       kind: "committed";
       commit: Readonly<SampleCommit>;
-      inspect: Readonly<SampleInspect>;
+      inspect: Readonly<SampleInspect> | null;
     }>
   | Readonly<{
       kind: "conflict";
@@ -405,18 +405,9 @@ async function resolveMutation(
   operation: () => Promise<SampleCommit>,
   clearOnFailure: boolean,
 ): Promise<SampleMutationResolution> {
+  let commit: Readonly<SampleCommit>;
   try {
-    const commit = normalizeCommit(await operation());
-    await clearPreview(session, slot);
-    const inspected = await inspectSampleJourney(session, slot);
-    const minimumRevision = Math.max(
-      commit.committedRevision,
-      commit.runtimeRevision ?? 0,
-    );
-    if (inspected.projectRevision < minimumRevision) {
-      throw protocolMismatch("Sample mutation refresh is stale");
-    }
-    return Object.freeze({kind: "committed", commit, inspect: inspected});
+    commit = normalizeCommit(await operation());
   } catch (error) {
     if (errorCode(error) !== "REVISION_CONFLICT") {
       if (clearOnFailure) {
@@ -436,6 +427,26 @@ async function resolveMutation(
       message: SAMPLE_CONFLICT_MESSAGE,
     });
   }
+
+  try {
+    await clearPreview(session, slot);
+  } catch {
+    return Object.freeze({kind: "committed", commit, inspect: null});
+  }
+  let inspected: Readonly<SampleInspect>;
+  try {
+    inspected = await inspectSampleJourney(session, slot);
+  } catch {
+    return Object.freeze({kind: "committed", commit, inspect: null});
+  }
+  const minimumRevision = Math.max(
+    commit.committedRevision,
+    commit.runtimeRevision ?? 0,
+  );
+  if (inspected.projectRevision < minimumRevision) {
+    throw protocolMismatch("Sample mutation refresh is stale");
+  }
+  return Object.freeze({kind: "committed", commit, inspect: inspected});
 }
 
 export async function inspectSampleJourney(

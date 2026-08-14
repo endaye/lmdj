@@ -232,6 +232,13 @@ class RealtimeEngine final {
   foundation::Result<void> clear_sample(std::uint8_t slot);
   // Control thread, concurrent with render while running.
   // Publication and enqueue share one serialized control-thread producer.
+  // While running, publication establishes a three-part hand-off invariant:
+  // (1) the control producer initializes the pending Bank before release-
+  //     incrementing `pending_publications_` and publishing its queue entry;
+  // (2) render applies that entry before release-decrementing the counter; and
+  // (3) enqueue acquire-loads the counter and dereferences the current Bank
+  //     only after observing zero. The relaxed current-slot/Bank reads rely on
+  //     this exact release/acquire chain and the serialized control producer.
   // Applies the bank directly, and so requires quiescence, when stopped.
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
