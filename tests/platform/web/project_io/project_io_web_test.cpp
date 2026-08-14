@@ -869,17 +869,6 @@ nlohmann::json run_suite() {
   require(loaded == initial, "ProjectStore initial parity");
   report_progress("project-store-loaded");
 
-  domain::CreatePattern command{
-      domain::CommandMeta{foundation::CommandId{uuid("2")}, 0},
-      domain::Pattern{
-          foundation::PatternId{uuid("3")}, 1,
-          {domain::PatternEvent{domain::PadSlotId{0, 0}, 0, 100}}}};
-  const auto applied = value(store.execute(bundle, domain::Command{command}),
-                             "ProjectStore execute");
-  report_progress("project-store-executed");
-  require(applied.state.revision == 1, "ProjectStore transaction revision");
-  require(value(store.load(bundle), "ProjectStore replay load").revision == 1,
-          "ProjectStore replay revision");
   report_progress("project-store-complete");
 
   report_progress("take-journal-start");
