@@ -111,7 +111,7 @@ class ReadOnlyGitHub:
         self.mutations: list[str] = []
         self.latest_release: GitHubRelease | None = None
         self.environment: GitHubEnvironment | None = GitHubEnvironment(
-            "release", 1, True, False, True,
+            "release", 0, None, False, True,
             (DeploymentBranchPolicy(1, "main", "branch"),),
         )
 
@@ -363,7 +363,11 @@ class ReleaseAuditTest(unittest.TestCase):
         cases = (
             (None, "external-error"),
             (GitHubEnvironment(
-                "release", 0, False, True, False,
+                "release", 1, True, False, True,
+                (DeploymentBranchPolicy(1, "main", "branch"),),
+            ), "conflict"),
+            (GitHubEnvironment(
+                "release", 0, None, True, False,
                 (DeploymentBranchPolicy(1, "feature/*", "branch"),),
             ), "conflict"),
         )
@@ -375,6 +379,23 @@ class ReleaseAuditTest(unittest.TestCase):
                     item for item in report.findings if item.subject == "environment:release"
                 )
                 self.assertEqual(finding.code, expected)
+
+    def test_remote_audit_accepts_solo_maintainer_release_environment(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        for prevent_self_review in (None, False):
+            with self.subTest(prevent_self_review=prevent_self_review):
+                self.github.environment = GitHubEnvironment(
+                    "release", 0, prevent_self_review, False, True,
+                    (DeploymentBranchPolicy(1, "main", "branch"),),
+                )
+
+                report = audit(self.context(), remote=True, tag=tag)
+
+                self.assertNotIn(
+                    "environment:release", {item.subject for item in report.findings},
+                )
 
     def test_published_stable_release_requires_authoritative_latest_projection(self) -> None:
         item = self.entry(

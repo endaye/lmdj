@@ -349,7 +349,7 @@ git commit -m "feat(release): reconcile tags and draft releases"
 
 - [ ] **Step 1: Write failing workflow/transition tests**
 
-Assert publish workflow is only `workflow_dispatch`; exact three inputs; top-level `contents: read`; read-only preflight; publish job `contents: write` plus `environment: release`; protected-main checkout with `persist-credentials: false`; Draft verification before and immediately after approval; no Netlify/deploy/repository-dispatch strings. Update deployment test to require only explicit dispatch and unchanged `runtime-canary`.
+Assert publish workflow is only `workflow_dispatch`; exact three inputs; top-level `contents: read`; read-only preflight; publish job `contents: write` plus `environment: release`; protected-main checkout with `persist-credentials: false`; Draft verification in preflight and again immediately before publication; no Netlify/deploy/repository-dispatch strings. Update deployment test to require only explicit dispatch and unchanged `runtime-canary`.
 
 ```python
 def test_deployment_requires_manual_exact_tag(self) -> None:
@@ -637,7 +637,7 @@ With separate Ready/merge authorization, require exact-head full PR Gate/all lan
 
 ### Boundary C: Configure protected `release` Environment
 
-With repository-settings authorization, configure required human reviewers and prevent self-review where supported. Add no private signing/Netlify credential. Re-read API and retain secret-safe protection evidence. Do not dispatch.
+With repository-settings authorization, configure solo-maintainer mode: zero required reviewers, no prevent-self-review setting, and one exact `main` custom branch policy. Add no private signing/Netlify credential. Re-read API and retain secret-safe protection evidence. Do not dispatch.
 
 ### Boundary D: Safe Draft rehearsal and cleanup
 
@@ -684,7 +684,7 @@ Affected portal pages:
 - `/operations/testing-and-proof/`
 - `/hosts/web-runtime/`
 
-Reason: Normal release procedure, Draft/publication approval, audit evidence, CI ownership and Release-to-deployment triggering change. Task 6 updates all three current pages. No Product/Assembly change means no new immutable snapshot.
+Reason: Normal release procedure, Draft/publication authorization, audit evidence, CI ownership and Release-to-deployment triggering change. Task 6 updates all three current pages. No Product/Assembly change means no new immutable snapshot.
 
 ## Completion Checklist
 

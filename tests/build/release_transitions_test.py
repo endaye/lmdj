@@ -1150,10 +1150,8 @@ class ReleaseTransitionsTest(unittest.TestCase):
             if url == "/repos/endaye/lmdj/environments/release":
                 return HttpResponse(200, {}, json.dumps({
                     "name": "release",
-                    "protection_rules": [{
-                        "type": "required_reviewers", "reviewers": [{"type": "User"}],
-                    }],
-                    "prevent_self_review": True,
+                    "protection_rules": [],
+                    "prevent_self_review": None,
                     "deployment_branch_policy": {
                         "protected_branches": False,
                         "custom_branch_policies": True,
@@ -1172,7 +1170,7 @@ class ReleaseTransitionsTest(unittest.TestCase):
             "endaye/lmdj",
         )
         self.assertEqual(environment, GitHubEnvironment(
-            "release", 1, True, False, True,
+            "release", 0, None, False, True,
             (DeploymentBranchPolicy(9, "main", "branch"),),
         ))
         self.assertEqual(requests[-2:], [(

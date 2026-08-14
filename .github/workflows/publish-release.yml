@@ -56,7 +56,7 @@ jobs:
           scripts/release.sh verify-draft \
             "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
 
-      - name: Audit exact tag before approval
+      - name: Audit exact tag before publication job
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -87,7 +87,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Reverify exact Draft Release after approval
+      - name: Reverify exact Draft Release before publication
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}

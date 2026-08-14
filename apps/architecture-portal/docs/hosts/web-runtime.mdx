@@ -54,7 +54,8 @@ Runtime Host Release 使用同一个四段控制面：`scripts/release.sh prepar
 `scripts/release.sh audit --remote --tag TAG`；historical exception 只能解释旧控制面事实，不能
 代替当前 tag、资产、签名或 profile 验证。
 
-公开 publication 的写权限只在受保护的 `release` Environment 人工批准后生效。它不触发下方
+公开 publication 的写权限只在显式 dispatch 进入受保护的 `release` Environment 后生效；当前
+单人维护者模式不设置 reviewer，但 Environment 仍只允许 exact `main`。它不触发下方
 Runtime deployment：该部署仍是 manual-only exact-tag dispatch，使用独立 Environment、凭据、
 smoke/recovery 与 evidence；Channel promotion 继续是后续独立边界。因此 release/deploy tooling
 已经 implemented 也不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。

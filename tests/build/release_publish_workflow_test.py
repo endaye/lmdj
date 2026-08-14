@@ -92,7 +92,7 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
                     "type": kind,
                 })
 
-    def test_approval_separates_read_only_preflight_from_publication(self) -> None:
+    def test_environment_separates_read_only_preflight_from_publication(self) -> None:
         source = self.source()
         self.assertEqual(
             self.direct_mapping(self.mapping_block(source, "permissions", 0), 2),
@@ -121,7 +121,7 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         self.assertLess(verify_index, publish_index)
         self.assertLess(audit_index, publish_index)
 
-    def test_exact_tag_audit_runs_before_approval_immediately_before_publish_and_afterward(self) -> None:
+    def test_exact_tag_audit_runs_in_preflight_immediately_before_publish_and_afterward(self) -> None:
         preflight = self.job("preflight")
         publish = self.job("publish")
         audit_command = "scripts/release.sh audit --remote --tag"

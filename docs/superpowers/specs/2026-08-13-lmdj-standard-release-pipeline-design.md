@@ -31,12 +31,12 @@ deployment / Channel promotion remain separate explicit workflows
 ```
 
 正常入口是 `scripts/release.sh`，远端发布只由
-`.github/workflows/publish-release.yml` 在 `workflow_dispatch` 和受保护的 `release`
-GitHub Environment 人工批准后完成。发布工作流不持有 Product tag 或 Release checksum
-私钥，不构建产品，不部署，不提升 Channel。
+`.github/workflows/publish-release.yml` 由显式 `workflow_dispatch` 启动，并通过受保护的 `release`
+GitHub Environment exact-main 策略门完成。当前单人维护者模式不配置 reviewer。发布工作流不持有
+Product tag 或 Release checksum 私钥，不构建产品，不部署，不提升 Channel。
 
 仓库规则与机器校验拥有发布语义；一个薄的 repo-local Codex skill 只负责引导操作者调用
-这些入口、展示下一授权边界，不复制规则、不持有密钥、不绕过审批。定期 `audit` 只读核对
+这些入口、展示下一授权边界，不复制规则、不持有密钥、不绕过每次显式授权。定期 `audit` 只读核对
 manifest、快照、protected `main`、CI、tag、Release、资产与签名，不自动补 tag 或 Release。
 
 ## 2. 设计输入与已知事实
@@ -86,7 +86,7 @@ canonical GitHub 状态，不能把本节当作当前外部真相缓存。
 - 发布已明确标记为 `abandoned`、`unshipped`、`superseded-unreleased` 或仅存在于普通
   工作分支的身份；
 - 重新生成、替换或删除既有 GitHub Release 资产；
-- 用 agent skill 代替项目治理、测试、GitHub Environment approval 或真实凭据授权。
+- 用 agent skill 代替项目治理、测试、GitHub Environment 配置或真实 mutation 授权。
 
 ## 5. 核心决策
 
@@ -410,7 +410,8 @@ on:
 environment: release
 ```
 
-受保护 Environment 的人工审批是公开 Release 的授权边界。审批前的 preflight job 只读并
+精确输入的显式 workflow dispatch 是公开 Release 的人工授权边界；受保护 Environment 负责
+exact-main 策略约束和 deployment 记录，不在单人维护者仓库伪造第二人审批。preflight job 只读并
 完成：
 
 - canonical remote tag fetch、annotated/signed role、target 与 main ancestry；
@@ -420,7 +421,7 @@ environment: release
 - deterministic plan 重建与 `plan_sha256` 对比；
 - 当前 GitHub actor、repository 与 event 类型 allowlist。
 
-批准后的 publish job 必须再次读取并验证 Draft 的 immutable inputs，随后只执行一次设置
+publish job 必须再次读取并验证 Draft 的 immutable inputs，随后只执行一次设置
 `draft: false`、精确 `prerelease` 与精确 `make_latest` policy 的 transition。GitHub Release
 API 不提供本流程可依赖的强条件更新契约，因此这里不声称阻止 TOCTOU；流程通过 mutation 前
 最后一次完整验证和 mutation 后再次完整读取来检测并 fail closed，必要时按 numeric ID
@@ -493,14 +494,14 @@ release 与 deploy verifier 的 import helper，例如使用 batch、no-autostar
 
 - local `gh` 使用当前操作者凭据；脚本不得读取或打印 token；
 - workflow preflight `contents: read`、`actions: read`、`deployments: read`；
-- publish job 仅在 `release` Environment approval 后获得 `contents: write`；
+- publish job 仅在进入 `release` Environment exact-main 策略门后获得 `contents: write`；
 - checkout 使用 `persist-credentials: false`；
 - 不向 fork PR 或 self-hosted untrusted workload暴露 write token；
 - deployment token 与 GitHub write token不进入同一个 job。
 
-`release` Environment 必须至少有一名 required reviewer、禁止 self review，并只允许 exact
-`main` custom branch policy（不用 protected-branches wildcard）。Remote audit 每次读取并验证
-这些 GitHub 侧配置；缺失、不可读或漂移均 fail closed。仓库内 workflow 只声明契约，不自动
+`release` Environment 在当前单人维护者模式必须有零 required reviewer，`prevent_self_review`
+为未启用状态，并只允许 exact `main` custom branch policy（不用 protected-branches wildcard）。
+Remote audit 每次读取并验证这些 GitHub 侧配置；缺失、不可读或漂移均 fail closed。仓库内 workflow 只声明契约，不自动
 创建或修改 Environment。
 
 ## 11. 失败语义与恢复
@@ -661,7 +662,7 @@ rehearsal：
 - 定位 intent 与 exact tag；
 - 按授权调用 `prepare`、`push-tag`、`create-draft`；
 - 在每一步输出真实已验证状态、下一权限边界和尚未发生的状态；
-- 为 publish workflow 展示 exact `tag/release_id/plan_sha256`，但不替用户批准 Environment；
+- 为 publish workflow 展示 exact `tag/release_id/plan_sha256`，但不替用户 dispatch 或跨越 publication 边界；
 - 发布后重新 audit，并把 deployment/Channel promotion明确列为未授权。
 
 Skill 不包含版本映射、fingerprint、asset name、GitHub repo、secret path 或状态缓存；这些全部
@@ -720,7 +721,7 @@ Affected portal pages:
 - `/operations/testing-and-proof/`
 - `/hosts/web-runtime/`
 
-Reason: 本设计改变 release preparation、Draft/publication、审计、CI approval 和 Release 与
+Reason: 本设计改变 release preparation、Draft/publication、审计、publication authorization 和 Release 与
 Runtime Host deployment 的操作边界。这些是 Architecture Portal policy 明确要求同步的
 发布、测试与部署事实。
 

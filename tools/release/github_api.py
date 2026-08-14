@@ -58,7 +58,7 @@ class DeploymentBranchPolicy:
 class GitHubEnvironment:
     name: str
     required_reviewer_count: int
-    prevent_self_review: bool
+    prevent_self_review: bool | None
     protected_branches: bool
     custom_branch_policies: bool
     branch_policies: tuple[DeploymentBranchPolicy, ...]
@@ -203,7 +203,10 @@ class GitHubClient:
         branch_policy = document.get("deployment_branch_policy")
         if (
             name != "release" or not isinstance(rules, list)
-            or not isinstance(prevent_self_review, bool)
+            or (
+                prevent_self_review is not None
+                and not isinstance(prevent_self_review, bool)
+            )
             or not isinstance(branch_policy, dict)
         ):
             raise GitHubApiError("GitHub release Environment projection is invalid")

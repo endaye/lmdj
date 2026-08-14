@@ -534,11 +534,12 @@ Notes、asset inventory 与 plan 的结构和 digest 是确定性的；独立 Op
 不会用新签名覆盖它。
 
 公开 publication 只由 dispatch-only `publish-release.yml` 完成。Workflow 以 exact tag、numeric
-Release ID 和 plan digest 重建并验证 Draft，在受保护 `release` Environment 获得批准后以一次
-PATCH 设置 `draft=false`、精确 prerelease 与 exact make-latest policy，随后重新验证 metadata
+Release ID 和 plan digest 重建并验证 Draft，通过受保护 `release` Environment 的 exact-main
+策略门后，以一次 PATCH 设置 `draft=false`、精确 prerelease 与 exact make-latest policy，随后重新验证 metadata
 与资产不变。GitHub Release API 没有本流程可依赖的强条件更新契约，所以 mutation 前后验证用于
-检测并 fail closed，而不宣称消除 TOCTOU。Environment 必须包含 required reviewer、禁止 self
-review，并且只允许 exact `main` branch policy；remote audit 对其 fail closed。Publication 不触发
+检测并 fail closed，而不宣称消除 TOCTOU。当前单人维护者模式明确要求零 required reviewer，
+`prevent_self_review` 不启用，并且只允许 exact `main` branch policy；显式 workflow dispatch 与
+每次独立授权是人工边界，remote audit 对 GitHub 侧配置 fail closed。Publication 不触发
 Runtime deployment；后者保持 manual-only exact-tag dispatch，并与 Channel promotion 分离。
 
 所有 non-stable Release 都是 prerelease 且 `latest=false`。Stable 是否成为 `latest` 只由 ledger

@@ -195,9 +195,10 @@ each transition independently authorized and verified:
 3. separately authorize `push-tag` to push and reconcile one exact tag;
 4. separately authorize `create-draft` to create or reconcile one Draft
    GitHub Release and print its immutable publication inputs;
-5. dispatch `publish-release.yml` with the exact tag, numeric Release ID, and
-   plan digest; public Release publication occurs only after approval in the
-   protected `release` Environment;
+5. explicitly dispatch `publish-release.yml` with the exact tag, numeric
+   Release ID, and plan digest; the protected `release` Environment enforces
+   the exact-`main` publication policy (the current solo-maintainer mode has no
+   required reviewer);
 6. rerun the exact-tag remote audit and report the observed published state;
 7. separately authorize manual Runtime deployment and then any Channel
    promotion, each with its own evidence.

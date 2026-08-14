@@ -643,8 +643,8 @@ def _release_environment_finding(context: object) -> AuditFinding | None:
         )
     if (
         environment.name != "release"
-        or environment.required_reviewer_count < 1
-        or not environment.prevent_self_review
+        or environment.required_reviewer_count != 0
+        or environment.prevent_self_review not in (None, False)
         or environment.protected_branches
         or not environment.custom_branch_policies
         or len(environment.branch_policies) != 1

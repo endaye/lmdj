@@ -24,7 +24,8 @@ deployment 不能由前一段推断。每个 mutation 前后都以
 `scripts/release.sh audit --remote --tag TAG` 读取 live state；audit 报告中的 historical exception
 只是显式旧事实，不是当前 gate PASS。
 
-Publication job 在受保护的 `release` Environment 获得人工批准后，仍须重新验证 exact Draft；
+Publication job 在显式 dispatch 进入 exact-main-only `release` Environment 后，仍须重新验证
+exact Draft；当前单人维护者模式没有 required reviewer，人工授权边界就是这次独立 dispatch。
 workflow 成功也不自动触发 Runtime deployment。Runtime deployment 保持 manual-only exact-tag
 dispatch，部署 evidence 与 Channel promotion 再分别验证。测试、workflow 或工具已进入仓库，
 都不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
