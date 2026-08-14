@@ -42,6 +42,9 @@ target_link_options(
     -pthread
     -sWASMFS
     -sPROXY_TO_PTHREAD
+    # The parity journey synchronously joins two concurrent append workers.
+    # Prewarm both so worker-script loading cannot block the proxied main.
+    -sPTHREAD_POOL_SIZE=2
     -sINITIAL_MEMORY=536870912
     -sALLOW_MEMORY_GROWTH=0
     -sASYNCIFY=1
