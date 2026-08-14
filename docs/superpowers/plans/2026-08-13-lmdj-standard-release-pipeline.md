@@ -140,7 +140,7 @@ For `1.0.15.2`, record exact `pre-pipeline-ci-evidence`: main run `31193044255` 
 
 The 11 Module Releases are `source-only`: four `0.2.0/1.0.1` rows target `4e508fc3b048bc871049ff302668bd27a46edbe4` run `30751690298`; seven `0.3.0/1.1.0/1.0.2/1.0.0` rows target `8aae11d772456c1f6eb2007f6b928cc8c46c6a0c` run `30761741614`.
 
-Add `abandoned` Product rows: `1.0.16.6` at `fa0e619d3abd99f124e9dcce34e958815c21a23c`, `1.0.16.7` at `8f43f666b3b78bb9571c342c0c64951a7929aed5`, `1.0.18.0` at `561fa2d6324d2fe2025eaf692026e5eedcb350bb`; `1.0.19.0` is `superseded-unreleased` at `35c09053fd2bc64859b1a01c9cbbc2b5fb3a986d`. Current `1.0.20.0` is `allocated`, uses the exact result of `git rev-parse --verify origin/main` after the implementation worktree is created, and is not releasable.
+Add `abandoned` Product rows: `1.0.16.6` at `fa0e619d3abd99f124e9dcce34e958815c21a23c`, `1.0.16.7` at `8f43f666b3b78bb9571c342c0c64951a7929aed5`, `1.0.18.0` at `561fa2d6324d2fe2025eaf692026e5eedcb350bb`; `1.0.19.0` is `superseded-unreleased` at `35c09053fd2bc64859b1a01c9cbbc2b5fb3a986d`. The implemented ledger later records `1.0.20.0` as `superseded-unreleased` and current `1.0.21.0` as `allocated` at `5613158240f7e31385ccb5d175bded3c245ae33b`; it remains non-releasable without an exact successful merged-main run.
 
 Historical exceptions: legacy Release `v0.2.0`, target `9a2811bc326d7b63e538c77eeec428f617484ebe`, numeric ID `359913165`; legacy WIP tag `wip/chameleon-2d-2026-07-26`, target `a0f30e91d8f566eb7004430a3eb4de88cd25e4c3`. The dated evidence labels the 14 new backfills as a subset of the full history and says live audit wins over this snapshot.
 

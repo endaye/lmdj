@@ -45,7 +45,8 @@ prospective release authorization.
 
 ## Deliberately non-releasable Product identities
 
-`1.0.16.6`, `1.0.16.7`, and `1.0.18.0` are abandoned; `1.0.19.0` is
-superseded-unreleased. Product `1.0.20.0` is allocated to
-`f4674ada631d6af7ad8b9dd9f440671c2736d293` and is explicitly not releasable.
+`1.0.16.6`, `1.0.16.7`, and `1.0.18.0` are abandoned; `1.0.19.0` and
+`1.0.20.0` are superseded-unreleased. Product `1.0.21.0` is allocated to
+`5613158240f7e31385ccb5d175bded3c245ae33b` and is explicitly not releasable
+without an exact successful merged-main run recorded in the canonical ledger.
 No row in this section claims a remote tag or GitHub Release.

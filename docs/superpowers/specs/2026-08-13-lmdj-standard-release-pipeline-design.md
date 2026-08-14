@@ -342,7 +342,8 @@ remote mutation。
 6. 运行 profile-specific verifier，生成 detached checksum；
 7. 用 Release checksum private key 生成 armored detached signature，并用 public trust anchor
    在全新临时 keyring 中回验；
-8. 生成 deterministic notes、asset inventory 与 provisional plan；
+8. 生成 deterministic notes structure、asset inventory 与 provisional plan；独立执行的
+   OpenPGP signature 包含签名时间，不承诺跨独立签名运行逐字节相同；
 9. 创建本地 annotated tag；Product tag 必须使用指定 Product private key 签名；
 10. 验证 tag object、signature、peeled target、main ancestry，再写最终 plan 与 digest；
 11. 输出已完成状态和下一条可复制命令，但停止。
@@ -419,8 +420,11 @@ environment: release
 - deterministic plan 重建与 `plan_sha256` 对比；
 - 当前 GitHub actor、repository 与 event 类型 allowlist。
 
-批准后的 publish job 必须再次读取并验证 Draft 的 immutable inputs，随后只执行一次
-`draft: false` transition。发布后重新读取 Release，确认：
+批准后的 publish job 必须再次读取并验证 Draft 的 immutable inputs，随后只执行一次设置
+`draft: false`、精确 `prerelease` 与精确 `make_latest` policy 的 transition。GitHub Release
+API 不提供本流程可依赖的强条件更新契约，因此这里不声称阻止 TOCTOU；流程通过 mutation 前
+最后一次完整验证和 mutation 后再次完整读取来检测并 fail closed，必要时按 numeric ID
+reconcile。发布后重新读取 Release，确认：
 
 - Release ID/tag 未变；
 - `isDraft=false`；
@@ -488,11 +492,16 @@ release 与 deploy verifier 的 import helper，例如使用 batch、no-autostar
 ### 10.3 GitHub token
 
 - local `gh` 使用当前操作者凭据；脚本不得读取或打印 token；
-- workflow preflight `contents: read`、`actions: read`；
+- workflow preflight `contents: read`、`actions: read`、`deployments: read`；
 - publish job 仅在 `release` Environment approval 后获得 `contents: write`；
 - checkout 使用 `persist-credentials: false`；
 - 不向 fork PR 或 self-hosted untrusted workload暴露 write token；
 - deployment token 与 GitHub write token不进入同一个 job。
+
+`release` Environment 必须至少有一名 required reviewer、禁止 self review，并只允许 exact
+`main` custom branch policy（不用 protected-branches wildcard）。Remote audit 每次读取并验证
+这些 GitHub 侧配置；缺失、不可读或漂移均 fail closed。仓库内 workflow 只声明契约，不自动
+创建或修改 Environment。
 
 ## 11. 失败语义与恢复
 

@@ -124,6 +124,31 @@ class ReleaseOpenPgpTest(unittest.TestCase):
         with self.assertRaisesRegex(OpenPgpError, "exactly one"):
             verifier.verify_detached(home, signature, payload, CHECKSUM_FINGERPRINT)
 
+    def test_public_verification_rejects_adverse_status_even_with_validsig(self) -> None:
+        home = self.root / "home"
+        home.mkdir(mode=0o700)
+        signature = self.root / "artifact.asc"
+        payload = self.root / "artifact.sha256"
+        signature.write_text("fixture", encoding="ascii")
+        payload.write_text("fixture", encoding="ascii")
+        for status in ("EXPKEYSIG", "EXPSIG", "REVKEYSIG", "KEYREVOKED", "BADSIG", "ERRSIG"):
+            with self.subTest(status=status):
+                fake = self.root / f"invalid-gpg-{status.lower()}"
+                fake.write_text(
+                    "#!/bin/sh\n"
+                    "case \" $* \" in\n"
+                    "  *' --list-keys '*) printf 'pub:-::::\\nfpr:::::::::CB928A6E89DE498851688EF1AAC3E7019FC1478B:\\n' ;;\n"
+                    f"  *' --verify '*) printf '[GNUPG:] {status} CB928A6E89DE498851688EF1AAC3E7019FC1478B fixture\\n"
+                    "[GNUPG:] VALIDSIG CB928A6E89DE498851688EF1AAC3E7019FC1478B x\\n' ;;\n"
+                    "esac\n",
+                    encoding="utf-8",
+                )
+                fake.chmod(0o755)
+                verifier = OpenPgpVerifier(gpg_program=str(fake))
+                verifier.import_public_key(home, CHECKSUM, CHECKSUM_FINGERPRINT)
+                with self.assertRaisesRegex(OpenPgpError, "status|signature"):
+                    verifier.verify_detached(home, signature, payload, CHECKSUM_FINGERPRINT)
+
     def test_detached_signing_uses_the_exact_local_signer_without_a_passphrase_argument(self) -> None:
         home = self.root / "home"
         home.mkdir(mode=0o700)

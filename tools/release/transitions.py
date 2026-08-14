@@ -184,7 +184,7 @@ def publish_draft(
     *,
     actions_environment: Mapping[str, str] | None = None,
 ) -> TransitionResult:
-    """Publish one verified Draft and prove that no other Release state changed."""
+    """Publish exact policy fields, then detect and reconcile any concurrent drift."""
     environment = os.environ if actions_environment is None else actions_environment
     if (
         environment.get("GITHUB_ACTIONS") != "true"
@@ -203,13 +203,16 @@ def publish_draft(
         raise TransitionError("GitHub Release assets changed before publication")
     if not before.release.draft:
         raise TransitionError("GitHub Release changed from Draft before publication")
-    if before.release.validator is None:
-        raise TransitionError("GitHub Release strong validator is unavailable")
+    mutation_authority = _formal_authority(
+        tag, context, require_local=False, require_remote=True,
+    )
+    _require_releasable(mutation_authority, "Draft publication")
+    prerelease, make_latest = _publication_fields(mutation_authority)
 
     try:
-        before.authority.context.github.publish_release(
-            before.authority.context.policy.repository, release_id,
-            before.release.validator,
+        mutation_authority.context.github.publish_release(
+            mutation_authority.context.policy.repository, release_id,
+            prerelease=prerelease, make_latest=make_latest,
         )
     except Exception:
         # A response can be lost after GitHub accepted the exact PATCH. Numeric-ID
@@ -411,9 +414,15 @@ def _release_fields(document: dict[str, object]) -> dict[str, object]:
 
 def _release_by_tag(authority: _Authority, tag: str) -> GitHubRelease | None:
     try:
-        return authority.context.github.get_release_by_tag(authority.context.policy.repository, tag)
+        releases = authority.context.github.list_releases(
+            authority.context.policy.repository,
+        )
     except Exception:
         raise TransitionError("GitHub Release lookup is unavailable") from None
+    matches = [release for release in releases if release.tag_name == tag]
+    if len(matches) > 1:
+        raise TransitionError("GitHub Release lookup is ambiguous")
+    return matches[0] if matches else None
 
 
 def _require_releasable(authority: _Authority, operation: str) -> None:
@@ -421,6 +430,14 @@ def _require_releasable(authority: _Authority, operation: str) -> None:
         raise TransitionError(
             f"published release intent is read-only and cannot authorize {operation}"
         )
+
+
+def _publication_fields(authority: _Authority) -> tuple[bool, bool]:
+    if authority.intent.channel is None:
+        return False, False
+    return authority.context.policy.channel_release(
+        authority.intent.channel, authority.intent.make_latest,
+    )
 
 
 def _verify_latest_projection(
@@ -451,9 +468,7 @@ def _release_pair(
         by_id = authority.context.github.get_release(
             authority.context.policy.repository, release_id,
         )
-        by_tag = authority.context.github.get_release_by_tag(
-            authority.context.policy.repository, tag,
-        )
+        by_tag = _release_by_tag(authority, tag)
     except Exception:
         raise TransitionError("GitHub Release projection is unavailable") from None
     if (

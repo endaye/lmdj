@@ -42,10 +42,12 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
 
 签名发生在可信本地边界；GitHub workflow 只持有 public trust anchors。公开 publication 必须在
-受保护的 `release` Environment 获得人工批准，并且 publish 前后重新验证 exact tag、numeric
-Release ID、plan digest 和闭合资产。Runtime deployment 是另一个 manual-only exact-tag dispatch，
-之后的 Channel promotion 仍需第三份授权与证据。仓库中已有 release/deploy tooling 不表示当前
-Product Build `1.0.20.0` 已经 released、deployed 或 promoted。
+受保护的 `release` Environment 获得人工批准；Environment 必须禁止 self review、至少有一名
+required reviewer，并且只允许 exact `main` branch policy。Publish 以一次 PATCH 设置 Draft、
+prerelease 与 make-latest policy，前后重新验证 exact tag、numeric Release ID、plan digest 和闭合
+资产；这是并发漂移检测，不宣称 API 提供强条件更新。Runtime deployment 是另一个 manual-only
+exact-tag dispatch，之后的 Channel promotion 仍需第三份授权与证据。仓库中已有 release/deploy
+tooling 不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
 
 ## PATCH、Assembly 与证据链
 

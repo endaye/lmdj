@@ -529,11 +529,17 @@ audit 可以报告 `ok-with-historical-exception`，并必须在 human/JSON evid
 Release `profile` 从受保护 policy 选择确定性 builder、verifier 与闭合 asset inventory。不能由
 操作者临时增加、覆盖或猜测资产。`create-draft` 只创建或 reconcile Draft；遇到错误、额外或
 同名不同内容的资产时保留 Draft 并停止调查，不覆盖既有内容。
+Notes、asset inventory 与 plan 的结构和 digest 是确定性的；独立 OpenPGP 签名会包含签名时间，
+因此不承诺重新签名得到逐字节相同的 signature。重试复用并验证已经持久化的 exact signature，
+不会用新签名覆盖它。
 
 公开 publication 只由 dispatch-only `publish-release.yml` 完成。Workflow 以 exact tag、numeric
-Release ID 和 plan digest 重建并验证 Draft，在受保护 `release` Environment 获得批准后只改变
-Draft 状态，随后重新验证 metadata 与资产不变。Publication 不触发 Runtime deployment；后者
-保持 manual-only exact-tag dispatch，并与 Channel promotion 分离。
+Release ID 和 plan digest 重建并验证 Draft，在受保护 `release` Environment 获得批准后以一次
+PATCH 设置 `draft=false`、精确 prerelease 与 exact make-latest policy，随后重新验证 metadata
+与资产不变。GitHub Release API 没有本流程可依赖的强条件更新契约，所以 mutation 前后验证用于
+检测并 fail closed，而不宣称消除 TOCTOU。Environment 必须包含 required reviewer、禁止 self
+review，并且只允许 exact `main` branch policy；remote audit 对其 fail closed。Publication 不触发
+Runtime deployment；后者保持 manual-only exact-tag dispatch，并与 Channel promotion 分离。
 
 所有 non-stable Release 都是 prerelease 且 `latest=false`。Stable 是否成为 `latest` 只由 ledger
 中的显式 intent 与 stable policy 决定，不能依据版本排序或当前 GitHub latest 推断。每个

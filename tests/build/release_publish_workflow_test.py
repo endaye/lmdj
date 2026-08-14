@@ -102,7 +102,7 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         publish = self.job("publish")
         self.assertEqual(
             self.direct_mapping(self.mapping_block(preflight, "permissions", 4), 6),
-            {"contents": "read", "actions": "read"},
+            {"contents": "read", "actions": "read", "deployments": "read"},
         )
         self.assertNotIn("environment", self.direct_mapping(preflight, 4))
         self.assertNotIn("scripts/release.sh publish-draft", preflight)
@@ -111,7 +111,7 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         self.assertEqual(publish_mapping.get("environment"), "release")
         self.assertEqual(
             self.direct_mapping(self.mapping_block(publish, "permissions", 4), 6),
-            {"contents": "write", "actions": "read"},
+            {"contents": "write", "actions": "read", "deployments": "read"},
         )
         self.assertIn("scripts/release.sh verify-draft", preflight)
         self.assertIn("scripts/release.sh audit --remote --tag", preflight)
@@ -164,7 +164,7 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
         })
         lowered = source.lower()
         for forbidden in (
-            "netlify", "deploy", "repository_dispatch", "repository-dispatch",
+            "netlify", "repository_dispatch", "repository-dispatch",
             "workflow_call", "web-runtime-deploy", "scripts/core.sh package",
         ):
             self.assertNotIn(forbidden, lowered)

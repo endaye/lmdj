@@ -23,7 +23,9 @@ from tools.release.audit import AuditContext, audit, write_report  # noqa: E402
 import tools.release.audit as audit_module  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
+    DeploymentBranchPolicy,
     GitHubAsset,
+    GitHubEnvironment,
     GitHubRelease,
     RunProjection,
 )
@@ -108,6 +110,10 @@ class ReadOnlyGitHub:
         self.reads = 0
         self.mutations: list[str] = []
         self.latest_release: GitHubRelease | None = None
+        self.environment: GitHubEnvironment | None = GitHubEnvironment(
+            "release", 1, True, False, True,
+            (DeploymentBranchPolicy(1, "main", "branch"),),
+        )
 
     def _read(self) -> None:
         self.reads += 1
@@ -129,6 +135,10 @@ class ReadOnlyGitHub:
     def get_latest_release(self, repository: str) -> GitHubRelease | None:
         self._read()
         return self.latest_release
+
+    def get_release_environment(self, repository: str) -> GitHubEnvironment | None:
+        self._read()
+        return self.environment
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
         self._read()
@@ -336,6 +346,36 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual({item.code for item in report.findings}, {"ok"})
         self.assertEqual(self.git.mutations + self.github.mutations, [])
 
+    def test_nonpublished_intent_rejects_an_already_published_release(self) -> None:
+        item = self.entry(disposition="releasable")
+        tag = str(item["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag, draft=False)
+        report = audit(self.context([item]), remote=True, tag=tag)
+        finding = next(result for result in report.findings if result.subject == tag)
+        self.assertEqual(finding.code, "unauthorized")
+        self.assertIn("published", finding.message)
+
+    def test_remote_audit_fails_closed_when_release_environment_is_absent_or_unsafe(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        cases = (
+            (None, "external-error"),
+            (GitHubEnvironment(
+                "release", 0, False, True, False,
+                (DeploymentBranchPolicy(1, "feature/*", "branch"),),
+            ), "conflict"),
+        )
+        for environment, expected in cases:
+            with self.subTest(environment=environment):
+                self.github.environment = environment
+                report = audit(self.context(), remote=True, tag=tag)
+                finding = next(
+                    item for item in report.findings if item.subject == "environment:release"
+                )
+                self.assertEqual(finding.code, expected)
+
     def test_published_stable_release_requires_authoritative_latest_projection(self) -> None:
         item = self.entry(
             tag="lmdj-v1.0.21.0", disposition="published", kind="product",
@@ -409,6 +449,40 @@ class ReleaseAuditTest(unittest.TestCase):
                 self.github.releases[tag] = self.release(tag, identifier=identifier, body="")
                 report = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
                 self.assertEqual(report.findings[0].code, expected)
+
+    def test_pre_pipeline_ci_exception_waives_only_the_recorded_cancelled_run(self) -> None:
+        tag = str(self.entry()["tag"])
+        exception = {
+            "tag": tag,
+            "target_revision": TARGET,
+            "release_id": 17,
+            "observed_before": "2026-08-12T23:59:59Z",
+            "code": "pre-pipeline-ci-evidence",
+            "reason": "fixture predates the canonical release pipeline",
+            "evidence_paths": ["evidence.md"],
+        }
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        self.github.runs = [
+            RunProjection(123, "push", TARGET, "main", "Core CI", "completed", "cancelled"),
+        ]
+        accepted = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
+        accepted_finding = next(item for item in accepted.findings if item.subject == tag)
+        self.assertEqual(accepted_finding.code, "ok-with-historical-exception")
+        for runs in (
+            [],
+            [RunProjection(123, "push", "c" * 40, "main", "Core CI", "completed", "cancelled")],
+            [RunProjection(123, "workflow_dispatch", TARGET, "main", "Core CI", "completed", "cancelled")],
+            [RunProjection(123, "push", TARGET, "feature", "Core CI", "completed", "cancelled")],
+            [RunProjection(123, "push", TARGET, "main", "Other CI", "completed", "cancelled")],
+            [RunProjection(123, "push", TARGET, "main", "Core CI", "in_progress", None)],
+            [RunProjection(123, "push", TARGET, "main", "Core CI", "completed", "failure")],
+        ):
+            with self.subTest(runs=runs):
+                self.github.runs = runs
+                report = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
+                finding = next(item for item in report.findings if item.subject == tag)
+                self.assertIn(finding.code, {"missing", "conflict"})
 
     def test_linked_null_id_exception_never_waives_current_release_marker(self) -> None:
         tag = str(self.entry()["tag"])
@@ -753,6 +827,11 @@ class ReleaseAuditTest(unittest.TestCase):
         with self.assertRaises(OSError):
             write_report(report, destination)
         self.assertEqual(target.read_text(encoding="utf-8"), "unchanged")
+        destination.unlink()
+        destination.symlink_to(self.root / "missing-target.json")
+        with self.assertRaises(OSError):
+            write_report(report, destination)
+        self.assertTrue(destination.is_symlink())
 
     def test_cli_requires_one_audit_mode_and_accepts_tag_and_json(self) -> None:
         options = cli.parse_arguments([

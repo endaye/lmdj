@@ -216,11 +216,19 @@ class GitRepository:
 
     def _require_canonical_origin(self) -> None:
         try:
-            fetch_url = self._run(["git", "remote", "get-url", "origin"]).stdout.strip()
-            push_url = self._run(["git", "remote", "get-url", "--push", "origin"]).stdout.strip()
+            fetch_urls = self._run([
+                "git", "remote", "get-url", "--all", "origin",
+            ]).stdout.splitlines()
+            push_urls = self._run([
+                "git", "remote", "get-url", "--push", "--all", "origin",
+            ]).stdout.splitlines()
         except GitRepositoryError:
             raise GitRepositoryError("canonical origin is unavailable") from None
-        if any(_repository_from_remote_url(url) != CANONICAL_REPOSITORY for url in (fetch_url, push_url)):
+        urls = [url.strip() for url in (*fetch_urls, *push_urls) if url.strip()]
+        if (
+            not fetch_urls or not push_urls or not urls
+            or any(_repository_from_remote_url(url) != CANONICAL_REPOSITORY for url in urls)
+        ):
             raise GitRepositoryError("canonical origin does not bind endaye/lmdj")
 
     def _run(
@@ -233,9 +241,12 @@ class GitRepository:
 
 
 def _signer_from_status(output: str) -> str | None:
+    adverse = {"EXPKEYSIG", "EXPSIG", "REVKEYSIG", "KEYREVOKED", "BADSIG", "ERRSIG"}
     matches: list[str] = []
     for line in output.splitlines():
         fields = line.split()
+        if len(fields) >= 2 and fields[0] == "[GNUPG:]" and fields[1] in adverse:
+            return None
         if len(fields) >= 3 and fields[:2] == ["[GNUPG:]", "VALIDSIG"]:
             candidates = [field.upper() for field in fields[2:] if len(field) == 40 and all(char in "0123456789ABCDEF" for char in field.upper())]
             if candidates:

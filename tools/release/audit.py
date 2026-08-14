@@ -14,7 +14,7 @@ import subprocess
 import tempfile
 from typing import Callable, Iterable
 
-from .github_api import GitHubAsset, GitHubRelease
+from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
 from .model import (
     Disposition,
     HistoricalException,
@@ -181,6 +181,9 @@ def _remote_report(
         ))
 
     findings: list[AuditFinding] = []
+    environment_issue = _release_environment_finding(context)
+    if environment_issue is not None:
+        findings.append(environment_issue)
     static_issue = _local_repository_issue(context, list(ledger.entries))
     if static_issue is not None:
         findings.append(static_issue)
@@ -213,7 +216,7 @@ def _remote_report(
 def write_report(report: AuditReport, destination: Path | str) -> None:
     """Atomically write canonical report JSON without following a destination symlink."""
     path = Path(destination).expanduser()
-    if path.exists() and path.is_symlink():
+    if path.is_symlink():
         raise OSError("release audit JSON destination must not be a symlink")
     parent = path.parent
     parent.mkdir(parents=True, exist_ok=True)
@@ -227,7 +230,7 @@ def write_report(report: AuditReport, destination: Path | str) -> None:
             stream.write(canonical_json(report.to_document()))
             stream.flush()
             os.fsync(stream.fileno())
-        if path.exists() and path.is_symlink():
+        if path.is_symlink():
             raise OSError("release audit JSON destination changed to a symlink")
         os.replace(temporary, path)
         temporary = None
@@ -411,6 +414,13 @@ def _audit_remote_intent(
             )
         return AuditFinding("ok", intent.tag, "allocated intent has no remote publication state")
 
+    if intent.disposition is not Disposition.PUBLISHED and release is not None and not release.draft:
+        return AuditFinding(
+            "unauthorized", intent.tag,
+            "non-published intent identifies an already published GitHub Release",
+            ("github-release",),
+        )
+
     if intent.disposition is Disposition.PUBLISHED and (tag_state is None or release is None):
         missing = "tag and Release" if tag_state is None and release is None else ("tag" if tag_state is None else "Release")
         return AuditFinding("missing", intent.tag, f"published intent is missing its remote {missing}")
@@ -432,7 +442,7 @@ def _audit_remote_intent(
     if ci_problem is not None:
         if ci_problem.code == "external-error":
             return ci_problem
-        if exception is None or exception.code != "pre-pipeline-ci-evidence":
+        if not _pre_pipeline_ci_exception_matches(context, intent, exception):
             return ci_problem
     if release is None:
         result = AuditFinding("ok", intent.tag, "exact authorized remote tag exists without a Release")
@@ -578,6 +588,74 @@ def _ci_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
         or run.status != "completed" or run.conclusion != "success"
     ):
         return AuditFinding("conflict", intent.tag, "recorded merged-main CI run does not satisfy policy")
+    return None
+
+
+def _pre_pipeline_ci_exception_matches(
+    context: object,
+    intent: ReleaseIntent,
+    exception: HistoricalException | None,
+) -> bool:
+    """Waive only one exact recorded pre-pipeline run whose conclusion was cancelled."""
+    if (
+        exception is None or exception.code != "pre-pipeline-ci-evidence"
+        or intent.merged_main_run_id is None
+    ):
+        return False
+    try:
+        runs = context.github.list_runs_for_sha(
+            context.policy.repository, intent.target_revision,
+        )
+    except Exception:
+        return False
+    matching = [run for run in runs if run.id == intent.merged_main_run_id]
+    return len(matching) == 1 and (
+        matching[0].event == "push"
+        and matching[0].head_sha == intent.target_revision
+        and matching[0].head_branch == context.policy.branch
+        and matching[0].workflow_name == context.policy.blocking_workflow
+        and matching[0].status == "completed"
+        and matching[0].conclusion == "cancelled"
+    )
+
+
+def _release_environment_finding(context: object) -> AuditFinding | None:
+    subject = "environment:release"
+    try:
+        environment = context.github.get_release_environment(context.policy.repository)
+    except Exception:
+        return AuditFinding(
+            "external-error", subject,
+            "release Environment projection is unavailable",
+            ("github-environment",),
+        )
+    if environment is None:
+        return AuditFinding(
+            "external-error", subject,
+            "release Environment is not configured",
+            ("github-environment",),
+        )
+    if not isinstance(environment, GitHubEnvironment):
+        return AuditFinding(
+            "external-error", subject,
+            "release Environment projection is invalid",
+            ("github-environment",),
+        )
+    if (
+        environment.name != "release"
+        or environment.required_reviewer_count < 1
+        or not environment.prevent_self_review
+        or environment.protected_branches
+        or not environment.custom_branch_policies
+        or len(environment.branch_policies) != 1
+        or environment.branch_policies[0].name != context.policy.branch
+        or environment.branch_policies[0].type != "branch"
+    ):
+        return AuditFinding(
+            "conflict", subject,
+            "release Environment approval or main-only branch policy is unsafe",
+            ("github-environment",),
+        )
     return None
 
 

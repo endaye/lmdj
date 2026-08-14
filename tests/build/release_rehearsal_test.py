@@ -21,6 +21,7 @@ from tools.release.rehearsal import (  # noqa: E402
     RehearsalState,
     cleanup_rehearsal,
     create_rehearsal_draft,
+    load_rehearsal_state,
     rehearsal_marker,
     validate_rehearsal_tag,
 )
@@ -57,12 +58,16 @@ class FakeRehearsalGitHub:
         )
         self.deleted: list[int] = []
         self.uploads = 0
+        self.fail_upload_without_write = False
 
     def get_release(self, repository: str, release_id: int):
         return self.release if self.release is not None and self.release.id == release_id else None
 
     def get_release_by_tag(self, repository: str, tag: str):
-        return self.release if self.release is not None and self.release.tag_name == tag else None
+        raise AssertionError("Draft discovery must not use the published-only by-tag endpoint")
+
+    def list_releases(self, repository: str):
+        return [] if self.release is None else [self.release]
 
     def list_release_assets(self, repository: str, release_id: int):
         return list(self.release.assets if self.release else ())
@@ -87,6 +92,8 @@ class FakeRehearsalGitHub:
         if self.release is None or self.release.id != release_id:
             raise RuntimeError("wrong release ownership")
         self.uploads += 1
+        if self.fail_upload_without_write:
+            raise RuntimeError("upload failed before write")
         self.payload = payload
         self.asset = GitHubAsset(
             8, name, len(payload), "https://api.github.com/assets/8",
@@ -143,6 +150,17 @@ class ReleaseRehearsalTest(unittest.TestCase):
         reconciled = create_rehearsal_draft(created, self.context)
         self.assertEqual(reconciled, created)
         self.assertEqual(self.github.uploads, 1)
+
+    def test_failed_asset_upload_persists_numeric_release_id_for_cleanup_retry(self) -> None:
+        self.github.release = None
+        self.github.fail_upload_without_write = True
+        state = RehearsalState(**{**self.state.__dict__, "release_id": None})
+        output = self.root / "build/release-rehearsal" / self.tag.replace("/", "%2F")
+        output.mkdir(parents=True)
+        with self.assertRaises(RehearsalError):
+            create_rehearsal_draft(state, self.context)
+        persisted = load_rehearsal_state(self.tag, self.root)
+        self.assertEqual(persisted.release_id, 9)
 
     def test_cleanup_deletes_exact_draft_then_exact_tag_and_proves_absence(self) -> None:
         cleanup_rehearsal(self.state, self.context)

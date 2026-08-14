@@ -9,7 +9,7 @@ import re
 from typing import Callable, Mapping
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 
 class GitHubApiError(RuntimeError):
@@ -48,11 +48,20 @@ class GitHubAsset:
 
 
 @dataclass(frozen=True)
-class GitHubReleaseValidator:
-    """Strong HTTP validator owned by one numeric Release representation."""
+class DeploymentBranchPolicy:
+    id: int
+    name: str
+    type: str
 
-    release_id: int
-    etag: str
+
+@dataclass(frozen=True)
+class GitHubEnvironment:
+    name: str
+    required_reviewer_count: int
+    prevent_self_review: bool
+    protected_branches: bool
+    custom_branch_policies: bool
+    branch_policies: tuple[DeploymentBranchPolicy, ...]
 
 
 @dataclass(frozen=True)
@@ -68,7 +77,6 @@ class GitHubRelease:
     upload_url: str
     assets: tuple[GitHubAsset, ...]
     target_commitish: str
-    validator: GitHubReleaseValidator | None = None
 
 
 @dataclass(frozen=True)
@@ -78,7 +86,6 @@ class HttpResponse:
     body: bytes
 
 
-Transport = Callable[[str], object]
 HttpTransport = Callable[[str, str, Mapping[str, str], bytes | None], HttpResponse]
 
 
@@ -88,12 +95,10 @@ class GitHubClient:
     def __init__(
         self,
         *,
-        transport: Transport | None = None,
         http_transport: HttpTransport | None = None,
         token: str | None = None,
         page_cap: int = 100,
     ) -> None:
-        self._transport = transport or _get_json
         self._http_transport = http_transport or _http_request
         self._token = token if token is not None else os.environ.get("GITHUB_TOKEN")
         if type(page_cap) is not int or page_cap <= 0:
@@ -101,7 +106,13 @@ class GitHubClient:
         self._page_cap = page_cap
 
     def get_branch(self, repository: str, branch: str) -> BranchProjection:
-        document = self._get(f"/repos/{repository}/branches/{branch}")
+        _require_repository(repository)
+        if not isinstance(branch, str) or not branch:
+            raise GitHubApiError("GitHub branch identity is invalid")
+        response = self._request(
+            "GET", f"/repos/{repository}/branches/{quote(branch, safe='')}",
+        )
+        document = _json_response(response, {200})
         if not isinstance(document, dict):
             raise GitHubApiError("GitHub branch projection is invalid")
         commit = document.get("commit")
@@ -147,16 +158,14 @@ class GitHubClient:
         return parsed
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
+        """Find a published Release or Draft through the complete authenticated inventory."""
         _require_repository(repository)
         if not isinstance(tag, str) or not tag:
             raise GitHubApiError("GitHub release tag is invalid")
-        response = self._request("GET", f"/repos/{repository}/releases/tags/{quote(tag, safe='')}")
-        if response.status == 404:
-            return None
-        return _parse_release(
-            _json_response(response, {200}), repository,
-            etag=_strong_etag(response.headers),
-        )
+        matches = [release for release in self.list_releases(repository) if release.tag_name == tag]
+        if len(matches) > 1:
+            raise GitHubApiError("GitHub Release inventory is ambiguous")
+        return matches[0] if matches else None
 
     def get_release(self, repository: str, release_id: int) -> GitHubRelease | None:
         _require_repository(repository)
@@ -166,7 +175,6 @@ class GitHubClient:
             return None
         return _parse_release(
             _json_response(response, {200}), repository, release_id,
-            etag=_strong_etag(response.headers),
         )
 
     def get_latest_release(self, repository: str) -> GitHubRelease | None:
@@ -177,7 +185,43 @@ class GitHubClient:
             return None
         return _parse_release(
             _json_response(response, {200}), repository,
-            etag=_strong_etag(response.headers),
+        )
+
+    def get_release_environment(self, repository: str) -> GitHubEnvironment | None:
+        """Project the protected `release` Environment and its complete branch policy."""
+        _require_repository(repository)
+        endpoint = f"/repos/{repository}/environments/release"
+        response = self._request("GET", endpoint)
+        if response.status == 404:
+            return None
+        document = _json_response(response, {200})
+        if not isinstance(document, dict):
+            raise GitHubApiError("GitHub release Environment projection is invalid")
+        name = document.get("name")
+        rules = document.get("protection_rules")
+        prevent_self_review = document.get("prevent_self_review")
+        branch_policy = document.get("deployment_branch_policy")
+        if (
+            name != "release" or not isinstance(rules, list)
+            or not isinstance(prevent_self_review, bool)
+            or not isinstance(branch_policy, dict)
+        ):
+            raise GitHubApiError("GitHub release Environment projection is invalid")
+        reviewer_rules = [rule for rule in rules if isinstance(rule, dict) and rule.get("type") == "required_reviewers"]
+        if len(reviewer_rules) > 1:
+            raise GitHubApiError("GitHub release Environment projection is invalid")
+        reviewers = reviewer_rules[0].get("reviewers", []) if reviewer_rules else []
+        protected = branch_policy.get("protected_branches")
+        custom = branch_policy.get("custom_branch_policies")
+        if (
+            not isinstance(reviewers, list) or not isinstance(protected, bool)
+            or not isinstance(custom, bool)
+        ):
+            raise GitHubApiError("GitHub release Environment projection is invalid")
+        branch_policies = self._list_deployment_branch_policies(repository) if custom else ()
+        return GitHubEnvironment(
+            name, len(reviewers), prevent_self_review, protected, custom,
+            tuple(branch_policies),
         )
 
     def list_releases(self, repository: str) -> list[GitHubRelease]:
@@ -235,33 +279,27 @@ class GitHubClient:
         )
         return _parse_release(
             _json_response(response, {201}), repository,
-            etag=_strong_etag(response.headers),
         )
 
     def publish_release(
-        self, repository: str, release_id: int, validator: GitHubReleaseValidator,
+        self, repository: str, release_id: int, *, prerelease: bool, make_latest: bool,
     ) -> GitHubRelease:
-        """Conditionally publish one exact existing Release representation."""
+        """Publish exact policy state; callers must re-read to detect concurrent drift."""
         _require_repository(repository)
         _require_id(release_id, "release")
-        if (
-            not isinstance(validator, GitHubReleaseValidator)
-            or type(validator.release_id) is not int
-            or validator.release_id != release_id
-        ):
-            raise GitHubApiError("GitHub Release validator ownership is invalid")
-        if not _is_strong_etag(validator.etag):
-            raise GitHubApiError("GitHub Release strong validator is invalid")
-        payload = b'{"draft":false}'
+        if not isinstance(prerelease, bool) or not isinstance(make_latest, bool):
+            raise GitHubApiError("GitHub Release publication metadata is invalid")
+        payload = json.dumps({
+            "draft": False,
+            "prerelease": prerelease,
+            "make_latest": "true" if make_latest else "false",
+        }, sort_keys=True, separators=(",", ":")).encode("utf-8")
         response = self._request(
             "PATCH", f"/repos/{repository}/releases/{release_id}", payload,
-            content_type="application/json", if_match=validator.etag,
+            content_type="application/json",
         )
-        if response.status == 412:
-            raise GitHubApiError("GitHub Release publication precondition failed")
         release = _parse_release(
             _json_response(response, {200}), repository, release_id,
-            etag=_strong_etag(response.headers),
         )
         if release.draft:
             raise GitHubApiError("GitHub Release publication did not change Draft state")
@@ -326,6 +364,23 @@ class GitHubClient:
         response = self._request(
             "GET", asset.api_url, accept="application/octet-stream",
         )
+        if response.status in (302, 307):
+            location = _header(response.headers, "location")
+            if not _trusted_asset_redirect(location):
+                raise GitHubApiError("GitHub asset redirect is invalid")
+            headers = {
+                "Accept": "application/octet-stream",
+                "User-Agent": "lmdj-release-pipeline",
+            }
+            try:
+                response = self._http_transport("GET", location, headers, None)
+            except Exception:
+                raise GitHubApiError("GitHub asset download is unavailable") from None
+            if not isinstance(response, HttpResponse):
+                raise GitHubApiError("GitHub release response is invalid")
+            content_type = _header(response.headers, "content-type")
+            if content_type is not None and content_type.split(";", 1)[0].strip() != "application/octet-stream":
+                raise GitHubApiError("GitHub asset download content type is invalid")
         if response.status != 200:
             raise GitHubApiError("GitHub asset download is unavailable")
         return response.body
@@ -337,13 +392,58 @@ class GitHubClient:
         if response.status != 204:
             raise GitHubApiError("GitHub Draft deletion is unavailable")
 
-    def _get(self, path: str) -> object:
-        try:
-            return self._transport(path)
-        except GitHubApiError:
-            raise
-        except Exception:
-            raise GitHubApiError("GitHub release preflight is unavailable") from None
+    def _list_deployment_branch_policies(
+        self, repository: str,
+    ) -> tuple[DeploymentBranchPolicy, ...]:
+        endpoint = f"/repos/{repository}/environments/release/deployment-branch-policies"
+        required_query = {"per_page": "100"}
+        next_path: str | None = f"{endpoint}?{urlencode(required_query)}"
+        visited: set[str] = set()
+        policies: list[DeploymentBranchPolicy] = []
+        total_count: int | None = None
+        while next_path is not None:
+            if next_path in visited or len(visited) >= self._page_cap:
+                raise GitHubApiError("GitHub Environment pagination is invalid")
+            visited.add(next_path)
+            response = self._request("GET", next_path)
+            document = _json_response(response, {200})
+            items = document.get("branch_policies") if isinstance(document, dict) else None
+            page_total = document.get("total_count") if isinstance(document, dict) else None
+            if not isinstance(items, list) or type(page_total) is not int or page_total < 0:
+                raise GitHubApiError("GitHub release Environment projection is invalid")
+            if total_count is None:
+                total_count = page_total
+            elif total_count != page_total:
+                raise GitHubApiError("GitHub Environment pagination is invalid")
+            for item in items:
+                if not isinstance(item, dict):
+                    raise GitHubApiError("GitHub release Environment projection is invalid")
+                identifier, name = item.get("id"), item.get("name")
+                if not _positive_id(identifier) or not isinstance(name, str) or not name:
+                    raise GitHubApiError("GitHub release Environment projection is invalid")
+                detail = _json_response(
+                    self._request("GET", f"{endpoint}/{identifier}"), {200},
+                )
+                if not isinstance(detail, dict):
+                    raise GitHubApiError("GitHub release Environment projection is invalid")
+                detail_id, detail_name, kind = (
+                    detail.get("id"), detail.get("name"), detail.get("type"),
+                )
+                if (
+                    detail_id != identifier or detail_name != name
+                    or kind not in ("branch", "tag")
+                ):
+                    raise GitHubApiError("GitHub release Environment projection is invalid")
+                policies.append(DeploymentBranchPolicy(identifier, name, kind))
+            next_path = _next_link(
+                response.headers, endpoint, required_query, subject="Environment",
+            )
+        identifiers = [policy.id for policy in policies]
+        if len(identifiers) != len(set(identifiers)):
+            raise GitHubApiError("GitHub release Environment projection is ambiguous")
+        if total_count != len(policies):
+            raise GitHubApiError("GitHub Environment pagination is incomplete")
+        return tuple(policies)
 
     def _request(
         self,
@@ -353,15 +453,12 @@ class GitHubClient:
         *,
         accept: str = "application/vnd.github+json",
         content_type: str | None = None,
-        if_match: str | None = None,
     ) -> HttpResponse:
         headers = {"Accept": accept, "User-Agent": "lmdj-release-pipeline"}
         if self._token:
             headers["Authorization"] = f"Bearer {self._token}"
         if content_type is not None:
             headers["Content-Type"] = content_type
-        if if_match is not None:
-            headers["If-Match"] = if_match
         try:
             response = self._http_transport(method, url, headers, body)
         except GitHubApiError:
@@ -373,20 +470,11 @@ class GitHubClient:
         return response
 
 
-def _get_json(path: str) -> object:
-    response = _http_request(
-        "GET", path,
-        {"Accept": "application/vnd.github+json", "User-Agent": "lmdj-release-pipeline"},
-        None,
-    )
-    return _json_response(response, {200})
-
-
 def _http_request(method: str, url: str, headers: Mapping[str, str], body: bytes | None) -> HttpResponse:
     selected_url = f"https://api.github.com{url}" if url.startswith("/") else url
     request = Request(selected_url, data=body, headers=dict(headers), method=method)
     try:
-        with urlopen(request, timeout=30) as response:
+        with build_opener(_NoRedirect()).open(request, timeout=30) as response:
             return HttpResponse(response.status, dict(response.headers.items()), response.read())
     except HTTPError as error:
         try:
@@ -428,7 +516,6 @@ def _parse_run(run: object) -> RunProjection:
 
 def _parse_release(
     document: object, repository: str, expected_id: int | None = None,
-    *, etag: str | None = None,
 ) -> GitHubRelease:
     if not isinstance(document, dict):
         raise GitHubApiError("GitHub Release projection is invalid")
@@ -474,17 +561,34 @@ def _parse_release(
     return GitHubRelease(
         identifier, tag, name, body, draft, prerelease, make_latest, html_url, upload_url,
         tuple(_parse_asset(item, repository, identifier) for item in assets), target_commitish,
-        GitHubReleaseValidator(identifier, etag) if etag is not None else None,
     )
 
 
-def _strong_etag(headers: Mapping[str, str]) -> str | None:
-    value = next((item for key, item in headers.items() if key.lower() == "etag"), None)
-    return value if _is_strong_etag(value) else None
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
 
 
-def _is_strong_etag(value: object) -> bool:
-    return isinstance(value, str) and re.fullmatch(r'"[!#-~]*"', value) is not None
+def _header(headers: Mapping[str, str], name: str) -> str | None:
+    return next((value for key, value in headers.items() if key.lower() == name), None)
+
+
+def _trusted_asset_redirect(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and parsed.hostname in {
+            "objects.githubusercontent.com", "release-assets.githubusercontent.com",
+        }
+        and port is None and parsed.username is None and parsed.password is None
+        and not parsed.params and not parsed.fragment and bool(parsed.path)
+    )
 
 
 def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAsset:

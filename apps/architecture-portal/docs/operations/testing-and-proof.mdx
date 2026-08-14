@@ -27,7 +27,7 @@ deployment 不能由前一段推断。每个 mutation 前后都以
 Publication job 在受保护的 `release` Environment 获得人工批准后，仍须重新验证 exact Draft；
 workflow 成功也不自动触发 Runtime deployment。Runtime deployment 保持 manual-only exact-tag
 dispatch，部署 evidence 与 Channel promotion 再分别验证。测试、workflow 或工具已进入仓库，
-都不表示当前 Product Build `1.0.20.0` 已经 released、deployed 或 promoted。
+都不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
 ## Web Runtime Host Proof
 `scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
 

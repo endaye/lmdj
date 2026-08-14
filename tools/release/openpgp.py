@@ -162,9 +162,12 @@ def _primary_fingerprints(output: str) -> list[str]:
 
 
 def _valid_signatures(output: str) -> list[set[str]]:
+    adverse = {"EXPKEYSIG", "EXPSIG", "REVKEYSIG", "KEYREVOKED", "BADSIG", "ERRSIG"}
     valid: list[set[str]] = []
     for line in output.splitlines():
         fields = line.split()
+        if len(fields) >= 2 and fields[0] == "[GNUPG:]" and fields[1] in adverse:
+            raise OpenPgpError("release signature status is adverse")
         if len(fields) >= 3 and fields[:2] == ["[GNUPG:]", "VALIDSIG"]:
             fingerprints = {field.upper() for field in fields[2:] if _FINGERPRINT.fullmatch(field.upper())}
             valid.append(fingerprints)

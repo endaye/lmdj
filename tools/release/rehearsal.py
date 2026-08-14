@@ -67,7 +67,7 @@ def prepare_rehearsal(
     try:
         if context.git.remote_tag_object(tag) is not None:
             raise RehearsalError("rehearsal remote tag already exists")
-        if context.github.get_release_by_tag(context.repository, tag) is not None:
+        if _release_by_tag(context, tag) is not None:
             raise RehearsalError("rehearsal Release already exists")
         context.git.fetch_authority(context.repository, "main")
         target = context.git.main_revision()
@@ -157,7 +157,7 @@ def create_rehearsal_draft(
     try:
         if context.git.remote_tag_object(state.tag) != state.tag_object:
             raise RehearsalError("remote rehearsal tag does not match recorded object")
-        release = context.github.get_release_by_tag(context.repository, state.tag)
+        release = _release_by_tag(context, state.tag)
         if release is None:
             try:
                 release = context.github.create_draft_release(
@@ -169,13 +169,17 @@ def create_rehearsal_draft(
                     make_latest=False,
                 )
             except Exception:
-                release = context.github.get_release_by_tag(context.repository, state.tag)
+                release = _release_by_tag(context, state.tag)
                 if release is None:
                     raise RehearsalError("rehearsal Draft creation did not reconcile")
         if state.release_id is not None and release.id != state.release_id:
             raise RehearsalError("rehearsal Draft ID conflicts with recorded state")
         selected = replace(state, release_id=release.id)
         _validate_release(selected, release, context, require_asset=False)
+        if _output_root(context.repo_root, state.tag).is_dir():
+            # Persist exact numeric ownership before upload. A failed response or
+            # later verification must still leave cleanup a safe retry handle.
+            _write_state(_state_path(context.repo_root, state.tag), selected)
         assets = _assets(context, release.id)
         if not assets:
             try:
@@ -206,7 +210,7 @@ def cleanup_rehearsal(state: RehearsalState, context: RehearsalContext) -> None:
         raise RehearsalError("rehearsal cleanup requires an exact numeric Draft ID")
     try:
         release = context.github.get_release(context.repository, state.release_id)
-        by_tag = context.github.get_release_by_tag(context.repository, state.tag)
+        by_tag = _release_by_tag(context, state.tag)
         if (release is None) != (by_tag is None):
             raise RehearsalError("rehearsal Draft ID and tag do not identify one object")
         if release is not None and by_tag is not None:
@@ -221,7 +225,7 @@ def cleanup_rehearsal(state: RehearsalState, context: RehearsalContext) -> None:
             context.github.delete_release(context.repository, state.release_id)
             if (
                 context.github.get_release(context.repository, state.release_id) is not None
-                or context.github.get_release_by_tag(context.repository, state.tag) is not None
+                or _release_by_tag(context, state.tag) is not None
             ):
                 raise RehearsalError("rehearsal Draft deletion was not observed")
             if context.git.remote_tag_object(state.tag) != state.tag_object:
@@ -296,6 +300,14 @@ def _validate_release(
 
 def _assets(context: RehearsalContext, release_id: int) -> list[GitHubAsset]:
     return context.github.list_release_assets(context.repository, release_id)
+
+
+def _release_by_tag(context: RehearsalContext, tag: str) -> GitHubRelease | None:
+    releases = context.github.list_releases(context.repository)
+    matches = [release for release in releases if release.tag_name == tag]
+    if len(matches) > 1:
+        raise RehearsalError("rehearsal Release inventory is ambiguous")
+    return matches[0] if matches else None
 
 
 def _verify_asset(

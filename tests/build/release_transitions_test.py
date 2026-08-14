@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import replace
 import hashlib
 import json
 import os
@@ -19,14 +20,19 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandResult  # noqa: E402
-from tools.release.git_repository import GitRepository, GitRepositoryError  # noqa: E402
+from tools.release.git_repository import (  # noqa: E402
+    GitRepository,
+    GitRepositoryError,
+    _signer_from_status,
+)
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
+    DeploymentBranchPolicy,
     GitHubApiError,
     GitHubAsset,
     GitHubClient,
+    GitHubEnvironment,
     GitHubRelease,
-    GitHubReleaseValidator,
     HttpResponse,
     RunProjection,
 )
@@ -125,27 +131,18 @@ class FakeGitHub:
         self.release_reads = 0
         self.mutate_on_release_read: int | None = None
         self.patch_calls: list[tuple[int, dict[str, bool]]] = []
-        self.conditional_patch_calls: list[GitHubReleaseValidator] = []
         self.release_version = 1
         self.validator_mode = "strong"
         self.mutate_before_conditional_patch = False
         self.next_asset_id = 40
         self.latest_release: GitHubRelease | None = None
         self.latest_error: Exception | None = None
+        self.by_tag_unavailable = False
 
     def _release_projection(self) -> GitHubRelease | None:
         if self.release is None:
             return None
-        validator = None
-        if self.validator_mode == "strong":
-            validator = GitHubReleaseValidator(
-                self.release.id, f'"release-{self.release.id}-v{self.release_version}"',
-            )
-        elif self.validator_mode == "weak":
-            validator = GitHubReleaseValidator(
-                self.release.id, f'W/"release-{self.release.id}-v{self.release_version}"',
-            )
-        return GitHubRelease(**{**self.release.__dict__, "validator": validator})
+        return GitHubRelease(**self.release.__dict__)
 
     def _touch_release(self) -> None:
         self.release_version += 1
@@ -157,8 +154,14 @@ class FakeGitHub:
         return self.runs
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
+        if self.by_tag_unavailable:
+            raise GitHubApiError("published-only by-tag endpoint is unavailable for Drafts")
         projected = self._release_projection()
         return projected if projected is not None and projected.tag_name == tag else None
+
+    def list_releases(self, repository: str) -> list[GitHubRelease]:
+        projected = self._release_projection()
+        return [] if projected is None else [projected]
 
     def get_release(self, repository: str, release_id: int) -> GitHubRelease | None:
         self.release_reads += 1
@@ -220,27 +223,23 @@ class FakeGitHub:
         return self.payloads[asset.id]
 
     def publish_release(
-        self, repository: str, release_id: int, validator: GitHubReleaseValidator,
+        self, repository: str, release_id: int, *, prerelease: bool, make_latest: bool,
     ) -> GitHubRelease:
         if repository != "endaye/lmdj" or self.release is None or self.release.id != release_id:
             raise RuntimeError("wrong release ownership")
-        if (
-            not isinstance(validator, GitHubReleaseValidator)
-            or validator.release_id != release_id
-            or not validator.etag.startswith('"') or not validator.etag.endswith('"')
-        ):
-            raise GitHubApiError("GitHub Release strong validator is unavailable")
         if self.mutate_before_conditional_patch:
             self.release = GitHubRelease(**{
                 **self.release.__dict__, "name": "concurrent change",
             })
             self._touch_release()
-        self.conditional_patch_calls.append(validator)
-        expected = f'"release-{release_id}-v{self.release_version}"'
-        if validator.etag != expected:
-            raise GitHubApiError("GitHub Release publication precondition failed")
-        self.patch_calls.append((release_id, {"draft": False}))
-        self.release = GitHubRelease(**{**self.release.__dict__, "draft": False})
+        payload = {
+            "draft": False, "prerelease": prerelease, "make_latest": make_latest,
+        }
+        self.patch_calls.append((release_id, payload))
+        self.release = GitHubRelease(**{
+            **self.release.__dict__, "draft": False, "prerelease": prerelease,
+            "make_latest": make_latest,
+        })
         self._touch_release()
         if self.publish_mutation == "name":
             self.release = GitHubRelease(**{**self.release.__dict__, "name": "changed"})
@@ -380,9 +379,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
         class CanonicalRunner(RecordingRunner):
             def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
                 result = super().run(arguments, cwd=cwd, environment=environment)
-                if list(arguments) == ["git", "remote", "get-url", "origin"]:
+                if list(arguments) == ["git", "remote", "get-url", "--all", "origin"]:
                     return CommandResult(tuple(arguments), 0, "https://github.com/endaye/lmdj.git\n", "")
-                if list(arguments) == ["git", "remote", "get-url", "--push", "origin"]:
+                if list(arguments) == ["git", "remote", "get-url", "--push", "--all", "origin"]:
                     return CommandResult(tuple(arguments), 0, "git@github.com:endaye/lmdj.git\n", "")
                 return result
 
@@ -396,6 +395,50 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertNotIn("--tags", runner.commands[-1])
         self.assertNotIn("--force", runner.commands[-1])
 
+    def test_origin_guard_rejects_any_extra_fetch_or_push_url(self) -> None:
+        class MultipleUrlRunner(RecordingRunner):
+            def __init__(self, *, extra_fetch: bool) -> None:
+                super().__init__()
+                self.extra_fetch = extra_fetch
+
+            def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
+                result = super().run(arguments, cwd=cwd, environment=environment)
+                if list(arguments) == ["git", "remote", "get-url", "--all", "origin"]:
+                    lines = ["https://github.com/endaye/lmdj.git"]
+                    if self.extra_fetch:
+                        lines.append("https://github.com/attacker/fork.git")
+                    return CommandResult(tuple(arguments), 0, "\n".join(lines) + "\n", "")
+                if list(arguments) == ["git", "remote", "get-url", "--push", "--all", "origin"]:
+                    lines = ["https://github.com/endaye/lmdj.git"]
+                    if not self.extra_fetch:
+                        lines.append("https://github.com/attacker/fork.git")
+                    return CommandResult(tuple(arguments), 0, "\n".join(lines) + "\n", "")
+                return result
+
+        for extra_fetch in (True, False):
+            with self.subTest(extra_fetch=extra_fetch):
+                runner = MultipleUrlRunner(extra_fetch=extra_fetch)
+                with self.assertRaisesRegex(GitRepositoryError, "canonical origin"):
+                    GitRepository(self.root, runner=runner).push_tag("module/core-cli/v1.0.2")
+                self.assertFalse(any(command[:2] == ["git", "push"] for command in runner.commands))
+
+    def test_origin_guard_accepts_implicit_push_url_equal_to_fetch_url(self) -> None:
+        class ImplicitPushRunner(RecordingRunner):
+            def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
+                result = super().run(arguments, cwd=cwd, environment=environment)
+                if list(arguments) in (
+                    ["git", "remote", "get-url", "--all", "origin"],
+                    ["git", "remote", "get-url", "--push", "--all", "origin"],
+                ):
+                    return CommandResult(
+                        tuple(arguments), 0, "https://github.com/endaye/lmdj.git\n", "",
+                    )
+                return result
+
+        runner = ImplicitPushRunner()
+        GitRepository(self.root, runner=runner).push_tag("module/core-cli/v1.0.2")
+        self.assertEqual(runner.commands[-1][:3], ["git", "push", "origin"])
+
     def test_fetch_authority_prunes_deleted_tags_from_the_scratch_namespace(self) -> None:
         runner = RecordingRunner()
         GitRepository(self.root, runner=runner).fetch_authority("endaye/lmdj", "main")
@@ -404,6 +447,14 @@ class ReleaseTransitionsTest(unittest.TestCase):
             "+refs/heads/main:refs/lmdj-release/origin-main",
             "+refs/tags/*:refs/lmdj-release/tags/*",
         ]])
+
+    def test_git_tag_status_rejects_adverse_signature_even_with_validsig(self) -> None:
+        valid = f"[GNUPG:] VALIDSIG {self.policy.product_fingerprint}\n"
+        for status in ("EXPKEYSIG", "EXPSIG", "REVKEYSIG", "KEYREVOKED", "BADSIG", "ERRSIG"):
+            with self.subTest(status=status):
+                self.assertIsNone(_signer_from_status(
+                    f"[GNUPG:] {status} {self.policy.product_fingerprint}\n" + valid,
+                ))
 
     def test_push_refetches_and_reconciles_remote_object(self) -> None:
         result = push_tag(self.tag, self.context())
@@ -440,6 +491,15 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(second.status, "draft-verified")
         self.assertEqual(self.github.create_calls, 1)
         self.assertEqual(len(self.github.upload_calls), 3)
+
+    def test_draft_discovery_uses_complete_release_inventory_not_published_by_tag(self) -> None:
+        self.github.by_tag_unavailable = True
+        created = self._push_and_create()
+        self.assertEqual(created.status, "draft-created")
+        verified = verify_draft(
+            self.tag, created.release_id, created.plan_sha256, self.context(),
+        )
+        self.assertEqual(verified.status, "draft-verified")
 
     def test_source_only_draft_has_zero_custom_assets(self) -> None:
         self.tag = "module/core-cli/v1.0.3"
@@ -628,7 +688,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
                 "GITHUB_EVENT_NAME": "workflow_dispatch",
             },
         )
-        self.assertEqual(self.github.patch_calls, [(created.release_id, {"draft": False})])
+        self.assertEqual(self.github.patch_calls, [(created.release_id, {
+            "draft": False, "prerelease": True, "make_latest": False,
+        })])
         self.assertEqual(result.status, "published")
         self.assertEqual(result.assets, original.assets)
         assert self.github.release is not None
@@ -674,7 +736,39 @@ class ReleaseTransitionsTest(unittest.TestCase):
                     )
                 self.assertEqual(self.github.patch_calls, [])
 
-    def test_publish_condition_rejects_mutation_after_final_verification(self) -> None:
+    def test_publish_refetches_authority_immediately_before_mutation(self) -> None:
+        created = self._push_and_create()
+        assert created.release_id is not None
+        published_ledger = load_ledger_document({
+            "schema": "lmdj.release-intents.v1",
+            "entries": [{
+                "tag": self.tag, "kind": "product", "identity": "1.0.21.0",
+                "target_revision": self.target, "channel": "canary",
+                "disposition": "published", "profile": "web-runtime-host",
+                "snapshot": "1.0.21.0", "merged_main_run_id": 123,
+                "evidence_paths": ["docs/quality/example-proof.md"],
+            }],
+            "historical_exceptions": [],
+        }, self.policy)
+        reads = 0
+
+        def authority_reader(tree):
+            nonlocal reads
+            reads += 1
+            return self.policy, published_ledger if reads >= 3 else self.ledger
+
+        context = replace(self.context(), authority_reader=authority_reader)
+        with self.assertRaisesRegex(TransitionError, "published.*read-only"):
+            publish_draft(
+                self.tag, created.release_id, created.plan_sha256, context,
+                actions_environment={
+                    "GITHUB_ACTIONS": "true",
+                    "GITHUB_EVENT_NAME": "workflow_dispatch",
+                },
+            )
+        self.assertEqual(self.github.patch_calls, [])
+
+    def test_publish_detects_mutation_after_final_verification(self) -> None:
         created = self._push_and_create()
         assert created.release_id is not None
         self.github.mutate_before_conditional_patch = True
@@ -686,30 +780,26 @@ class ReleaseTransitionsTest(unittest.TestCase):
                     "GITHUB_EVENT_NAME": "workflow_dispatch",
                 },
             )
-        self.assertEqual(len(self.github.conditional_patch_calls), 1)
-        self.assertEqual(self.github.patch_calls, [])
+        self.assertEqual(len(self.github.patch_calls), 1)
         assert self.github.release is not None
-        self.assertTrue(self.github.release.draft)
+        self.assertFalse(self.github.release.draft)
 
-    def test_publish_refuses_missing_or_weak_release_validator(self) -> None:
+    def test_publish_does_not_depend_on_missing_or_weak_release_etag(self) -> None:
         for mode in ("missing", "weak"):
             with self.subTest(mode=mode):
                 self.github = FakeGitHub(self.target)
                 created = self._push_and_create()
                 assert created.release_id is not None
                 self.github.validator_mode = mode
-                with self.assertRaisesRegex(
-                    TransitionError, "strong validator|could not be reconciled",
-                ):
-                    publish_draft(
-                        self.tag, created.release_id, created.plan_sha256,
-                        self.context(), actions_environment={
-                            "GITHUB_ACTIONS": "true",
-                            "GITHUB_EVENT_NAME": "workflow_dispatch",
-                        },
-                    )
-                self.assertEqual(self.github.conditional_patch_calls, [])
-                self.assertEqual(self.github.patch_calls, [])
+                published = publish_draft(
+                    self.tag, created.release_id, created.plan_sha256,
+                    self.context(), actions_environment={
+                        "GITHUB_ACTIONS": "true",
+                        "GITHUB_EVENT_NAME": "workflow_dispatch",
+                    },
+                )
+                self.assertEqual(published.status, "published")
+                self.assertEqual(len(self.github.patch_calls), 1)
 
     def test_publish_rejects_metadata_or_asset_identity_drift(self) -> None:
         cases = (
@@ -853,6 +943,66 @@ class ReleaseTransitionsTest(unittest.TestCase):
         with self.assertRaisesRegex(GitHubApiError, "duplicate"):
             GitHubClient(http_transport=lambda *args: duplicate).list_releases("endaye/lmdj")
 
+    def test_all_paginators_reject_legal_next_page_beyond_page_cap(self) -> None:
+        cases = (
+            (
+                "/repos/endaye/lmdj/releases?per_page=100",
+                "/repos/endaye/lmdj/releases?per_page=100&page=2",
+                json.dumps([self._release_json(17)]).encode(),
+                lambda client: client.list_releases("endaye/lmdj"),
+            ),
+            (
+                "/repos/endaye/lmdj/releases/17/assets?per_page=100",
+                "/repos/endaye/lmdj/releases/17/assets?per_page=100&page=2",
+                json.dumps([self._asset_json(7, "asset.zip")]).encode(),
+                lambda client: client.list_release_assets("endaye/lmdj", 17),
+            ),
+            (
+                "/repos/endaye/lmdj/actions/runs?head_sha=" + self.target + "&per_page=100",
+                "/repos/endaye/lmdj/actions/runs?head_sha=" + self.target + "&per_page=100&page=2",
+                json.dumps({"total_count": 2, "workflow_runs": [self._run_json(1)]}).encode(),
+                lambda client: client.list_runs_for_sha("endaye/lmdj", self.target),
+            ),
+        )
+        for first, second, body, operation in cases:
+            with self.subTest(first=first):
+                response = HttpResponse(
+                    200, {"Link": f'<https://api.github.com{second}>; rel="next"'}, body,
+                )
+                client = GitHubClient(http_transport=lambda *args: response, page_cap=1)
+                with self.assertRaisesRegex(GitHubApiError, "pagination"):
+                    operation(client)
+
+    def test_all_paginators_reject_legal_cycles_before_duplicates(self) -> None:
+        cases = (
+            (
+                "/repos/endaye/lmdj/releases?per_page=100",
+                "/repos/endaye/lmdj/releases?per_page=100&page=2",
+                lambda page: json.dumps([self._release_json(16 + page)]).encode(),
+                lambda client: client.list_releases("endaye/lmdj"),
+            ),
+            (
+                "/repos/endaye/lmdj/releases/17/assets?per_page=100",
+                "/repos/endaye/lmdj/releases/17/assets?per_page=100&page=2",
+                lambda page: json.dumps([self._asset_json(6 + page, f"asset-{page}.zip")]).encode(),
+                lambda client: client.list_release_assets("endaye/lmdj", 17),
+            ),
+            (
+                "/repos/endaye/lmdj/actions/runs?head_sha=" + self.target + "&per_page=100",
+                "/repos/endaye/lmdj/actions/runs?head_sha=" + self.target + "&per_page=100&page=2",
+                lambda page: json.dumps({"total_count": 2, "workflow_runs": [self._run_json(page)]}).encode(),
+                lambda client: client.list_runs_for_sha("endaye/lmdj", self.target),
+            ),
+        )
+        for first, second, body, operation in cases:
+            with self.subTest(first=first):
+                pages = {
+                    first: HttpResponse(200, {"Link": f'<https://api.github.com{second}>; rel="next"'}, body(1)),
+                    second: HttpResponse(200, {"Link": f'<https://api.github.com{first}>; rel="next"'}, body(2)),
+                }
+                with self.assertRaisesRegex(GitHubApiError, "pagination"):
+                    operation(GitHubClient(http_transport=lambda method, url, headers, data: pages[url]))
+
     def test_github_latest_release_projection_is_typed_and_404_is_absent(self) -> None:
         release = self._release_json(17)
         client = GitHubClient(http_transport=lambda *args: HttpResponse(
@@ -969,7 +1119,71 @@ class ReleaseTransitionsTest(unittest.TestCase):
         with self.assertRaisesRegex(GitHubApiError, "numeric"):
             client.get_release("endaye/lmdj", True)
 
-    def test_github_publish_patches_only_draft_by_numeric_id(self) -> None:
+    def test_branch_projection_uses_authenticated_rest_boundary(self) -> None:
+        requests: list[tuple[str, str, dict[str, str]]] = []
+        token = "ghp_BRANCH_TOKEN"
+
+        def transport(method, url, headers, body):
+            requests.append((method, url, dict(headers)))
+            return HttpResponse(200, {}, json.dumps({
+                "name": "main", "protected": True, "commit": {"sha": self.target},
+            }).encode())
+
+        branch = GitHubClient(token=token, http_transport=transport).get_branch(
+            "endaye/lmdj", "main",
+        )
+        self.assertEqual(branch.commit_sha, self.target)
+        self.assertEqual(requests, [(
+            "GET", "/repos/endaye/lmdj/branches/main",
+            {
+                "Accept": "application/vnd.github+json",
+                "User-Agent": "lmdj-release-pipeline",
+                "Authorization": f"Bearer {token}",
+            },
+        )])
+
+    def test_release_environment_projection_includes_exact_branch_policy(self) -> None:
+        requests: list[str] = []
+
+        def transport(method, url, headers, body):
+            requests.append(url)
+            if url == "/repos/endaye/lmdj/environments/release":
+                return HttpResponse(200, {}, json.dumps({
+                    "name": "release",
+                    "protection_rules": [{
+                        "type": "required_reviewers", "reviewers": [{"type": "User"}],
+                    }],
+                    "prevent_self_review": True,
+                    "deployment_branch_policy": {
+                        "protected_branches": False,
+                        "custom_branch_policies": True,
+                    },
+                }).encode())
+            if url.endswith("/deployment-branch-policies/9"):
+                return HttpResponse(200, {}, json.dumps({
+                    "id": 9, "name": "main", "type": "branch",
+                }).encode())
+            return HttpResponse(200, {}, json.dumps({
+                "total_count": 1,
+                "branch_policies": [{"id": 9, "name": "main"}],
+            }).encode())
+
+        environment = GitHubClient(http_transport=transport).get_release_environment(
+            "endaye/lmdj",
+        )
+        self.assertEqual(environment, GitHubEnvironment(
+            "release", 1, True, False, True,
+            (DeploymentBranchPolicy(9, "main", "branch"),),
+        ))
+        self.assertEqual(requests[-2:], [(
+            "/repos/endaye/lmdj/environments/release/"
+            "deployment-branch-policies?per_page=100"
+        ), (
+            "/repos/endaye/lmdj/environments/release/"
+            "deployment-branch-policies/9"
+        )])
+
+    def test_github_publish_sets_all_policy_fields_without_if_match(self) -> None:
         requests: list[tuple[str, str, dict[str, str], bytes | None]] = []
 
         def transport(method, url, headers, body):
@@ -978,30 +1192,22 @@ class ReleaseTransitionsTest(unittest.TestCase):
             document["draft"] = False
             return HttpResponse(200, {"ETag": '"release-17-v2"'}, json.dumps(document).encode())
 
-        validator = GitHubReleaseValidator(17, '"release-17-v1"')
         result = GitHubClient(http_transport=transport).publish_release(
-            "endaye/lmdj", 17, validator,
+            "endaye/lmdj", 17, prerelease=True, make_latest=False,
         )
         self.assertFalse(result.draft)
         self.assertEqual(len(requests), 1)
         self.assertEqual(requests[0][0:2], (
             "PATCH", "/repos/endaye/lmdj/releases/17",
         ))
-        self.assertEqual(requests[0][2].get("If-Match"), '"release-17-v1"')
-        self.assertEqual(requests[0][3], b'{"draft":false}')
+        self.assertNotIn("If-Match", requests[0][2])
+        self.assertEqual(
+            json.loads(requests[0][3]),
+            {"draft": False, "prerelease": True, "make_latest": "false"},
+        )
         with self.assertRaisesRegex(GitHubApiError, "numeric"):
             GitHubClient(http_transport=transport).publish_release(
-                "endaye/lmdj", True, validator,
-            )
-        self.assertEqual(len(requests), 1)
-
-        with self.assertRaisesRegex(GitHubApiError, "ownership"):
-            GitHubClient(http_transport=transport).publish_release(
-                "endaye/lmdj", 17, GitHubReleaseValidator(18, '"release-18-v1"'),
-            )
-        with self.assertRaisesRegex(GitHubApiError, "strong"):
-            GitHubClient(http_transport=transport).publish_release(
-                "endaye/lmdj", 17, GitHubReleaseValidator(17, 'W/"weak"'),
+                "endaye/lmdj", True, prerelease=True, make_latest=False,
             )
         self.assertEqual(len(requests), 1)
 
@@ -1012,32 +1218,21 @@ class ReleaseTransitionsTest(unittest.TestCase):
 
         with self.assertRaisesRegex(GitHubApiError, "projection"):
             GitHubClient(http_transport=wrong_projection).publish_release(
-                "endaye/lmdj", 17, validator,
+                "endaye/lmdj", 17, prerelease=True, make_latest=False,
             )
 
-    def test_release_get_retains_only_a_strong_exact_id_validator(self) -> None:
+    def test_release_get_accepts_weak_or_missing_etag_without_projecting_authority(self) -> None:
         document = self._release_json(17)
-        for header, expected in (
-            ({"ETag": '"release-17-v1"'}, GitHubReleaseValidator(17, '"release-17-v1"')),
-            ({"etag": 'W/"weak"'}, None),
-            ({}, None),
-        ):
+        for header in ({"ETag": '"release-17-v1"'}, {"etag": 'W/"weak"'}, {}):
             with self.subTest(header=header):
                 client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
                     200, header, json.dumps(document).encode(),
                 ))
                 release = client.get_release("endaye/lmdj", 17)
                 assert release is not None
-                self.assertEqual(release.validator, expected)
+                self.assertFalse(hasattr(release, "validator"))
 
-    def test_conditional_publish_reports_precondition_and_redacts_uncertainty(self) -> None:
-        validator = GitHubReleaseValidator(17, '"release-17-v1"')
-        rejected = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
-            412, {}, b'{"message":"changed"}',
-        ))
-        with self.assertRaisesRegex(GitHubApiError, "precondition"):
-            rejected.publish_release("endaye/lmdj", 17, validator)
-
+    def test_publish_transport_uncertainty_is_secret_safe(self) -> None:
         secret = "ghp_PUBLISH_DO_NOT_LEAK"
         uncertain = GitHubClient(
             token=secret,
@@ -1046,7 +1241,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
             ),
         )
         with self.assertRaises(GitHubApiError) as caught:
-            uncertain.publish_release("endaye/lmdj", 17, validator)
+            uncertain.publish_release(
+                "endaye/lmdj", 17, prerelease=True, make_latest=False,
+            )
         self.assertNotIn(secret, str(caught.exception))
 
     def test_asset_io_requires_exact_repository_release_and_asset_ownership(self) -> None:
@@ -1098,6 +1295,49 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.assertEqual(requests, [
             "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
         ])
+
+    def test_asset_download_strips_authorization_on_trusted_redirect(self) -> None:
+        requests: list[tuple[str, dict[str, str]]] = []
+
+        def transport(method, url, headers, body):
+            requests.append((url, dict(headers)))
+            if len(requests) == 1:
+                return HttpResponse(302, {
+                    "Location": "https://release-assets.githubusercontent.com/github-production-release-asset/fixture",
+                }, b"")
+            return HttpResponse(200, {"Content-Type": "application/octet-stream"}, b"payload")
+
+        asset = GitHubAsset(
+            7, "asset.zip", 7,
+            "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
+            "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
+            17, None, "application/octet-stream", "uploaded",
+        )
+        payload = GitHubClient(token="ghp_ASSET_TOKEN", http_transport=transport).download_asset(
+            "endaye/lmdj", 17, asset,
+        )
+        self.assertEqual(payload, b"payload")
+        self.assertIn("Authorization", requests[0][1])
+        self.assertNotIn("Authorization", requests[1][1])
+
+    def test_asset_download_rejects_untrusted_redirect_without_following(self) -> None:
+        requests: list[str] = []
+
+        def transport(method, url, headers, body):
+            requests.append(url)
+            return HttpResponse(302, {"Location": "https://attacker.invalid/stolen"}, b"")
+
+        asset = GitHubAsset(
+            7, "asset.zip", 7,
+            "https://api.github.com/repos/endaye/lmdj/releases/assets/7",
+            "https://github.com/endaye/lmdj/releases/download/test/asset.zip",
+            17, None, "application/octet-stream", "uploaded",
+        )
+        with self.assertRaisesRegex(GitHubApiError, "redirect"):
+            GitHubClient(token="ghp_ASSET_TOKEN", http_transport=transport).download_asset(
+                "endaye/lmdj", 17, asset,
+            )
+        self.assertEqual(len(requests), 1)
 
     def test_cli_exposes_separate_transition_and_rehearsal_boundaries(self) -> None:
         root = ["--repo-root", str(self.root)]
