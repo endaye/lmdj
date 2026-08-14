@@ -864,8 +864,10 @@ nlohmann::json run_suite() {
   auto initial = value(domain::create_project(
       foundation::ProjectId{uuid("1")}, 120), "create project state");
   success(store.create(bundle, initial), "ProjectStore create");
+  report_progress("project-store-created");
   const auto loaded = value(store.load(bundle), "ProjectStore initial load");
   require(loaded == initial, "ProjectStore initial parity");
+  report_progress("project-store-loaded");
 
   domain::CreatePattern command{
       domain::CommandMeta{foundation::CommandId{uuid("2")}, 0},
@@ -874,6 +876,7 @@ nlohmann::json run_suite() {
           {domain::PatternEvent{domain::PadSlotId{0, 0}, 0, 100}}}};
   const auto applied = value(store.execute(bundle, domain::Command{command}),
                              "ProjectStore execute");
+  report_progress("project-store-executed");
   require(applied.state.revision == 1, "ProjectStore transaction revision");
   require(value(store.load(bundle), "ProjectStore replay load").revision == 1,
           "ProjectStore replay revision");
