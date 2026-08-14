@@ -42,6 +42,10 @@ target_link_options(
     -pthread
     -sWASMFS
     -sPROXY_TO_PTHREAD
+    # Keep one spare prewarmed Worker beside the proxied main. Pinned
+    # Emscripten 6.0.5 otherwise tears down the Asyncify-backed OPFS worker
+    # before the common parity journey can publish its terminal report.
+    -sPTHREAD_POOL_SIZE=2
     -sINITIAL_MEMORY=536870912
     -sALLOW_MEMORY_GROWTH=0
     -sASYNCIFY=1
