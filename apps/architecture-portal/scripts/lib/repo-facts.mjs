@@ -1,7 +1,6 @@
 import {createHash} from 'node:crypto';
 import path from 'node:path';
-import {readFile, lstat} from 'node:fs/promises';
-import {glob} from 'glob';
+import {readFile, lstat, readdir} from 'node:fs/promises';
 
 function fail(message) {
   throw new Error(`portal facts error: ${message}`);
@@ -43,14 +42,38 @@ function identities(values) {
   return sortIdentities(values).map(({id, version}) => ({id, version}));
 }
 
+async function directChildPaths(root, name) {
+  const entries = await readdir(root, {withFileTypes: true});
+  const matches = [];
+  for (const entry of entries.sort((left, right) => left.name.localeCompare(right.name))) {
+    if (!entry.isDirectory()) continue;
+    const candidate = path.join(root, entry.name, name);
+    if (await lstat(candidate).catch(() => null)) matches.push(candidate);
+  }
+  return matches;
+}
+
+async function recursiveNamedPaths(root, name) {
+  const matches = [];
+  for (const entry of (await readdir(root, {withFileTypes: true}))
+    .sort((left, right) => left.name.localeCompare(right.name))) {
+    const candidate = path.join(root, entry.name);
+    if (entry.isDirectory()) matches.push(...await recursiveNamedPaths(candidate, name));
+    else if (entry.name === name) matches.push(candidate);
+  }
+  return matches;
+}
+
 async function componentSource(repoRoot, field, componentId) {
   let matches;
   if (field === 'contracts') {
-    matches = await glob(`contracts/*/${componentId}.schema.json`, {cwd: repoRoot, absolute: true});
+    matches = await directChildPaths(
+      path.join(repoRoot, 'contracts'), `${componentId}.schema.json`,
+    );
   } else {
     const root = {modules: 'packages', hosts: 'apps', providers: 'providers'}[field];
     if (!root) fail(`unknown component field ${field}`);
-    const candidates = await glob(`${root}/*/module.json`, {cwd: repoRoot, absolute: true});
+    const candidates = await directChildPaths(path.join(repoRoot, root), 'module.json');
     matches = [];
     for (const candidate of candidates.sort()) {
       const manifest = await readJson(candidate);
@@ -95,7 +118,7 @@ async function sourcePackageSha256(repoRoot, format, identity, files) {
 async function expectedComponentSha(repoRoot, field, entry, source) {
   if (field !== 'providers') return sha256(source);
   const providerRoot = path.dirname(source);
-  const headers = await glob('include/**/factory.hpp', {cwd: providerRoot, absolute: true});
+  const headers = await recursiveNamedPaths(path.join(providerRoot, 'include'), 'factory.hpp');
   if (headers.length !== 1) fail(`Provider ${entry.id} must have exactly one factory header`);
   return sourcePackageSha256(
     repoRoot,

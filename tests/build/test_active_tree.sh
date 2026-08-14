@@ -34,6 +34,22 @@ grep -Eq 'lmdj.patch.v1.*must not' "$repo_root/AGENTS.md"
 grep -Eq 'docs/governance/version-management.md' "$repo_root/AGENTS.md"
 cmp "$repo_root/AGENTS.md" "$repo_root/CLAUDE.md"
 
+if [[ ! -x "$repo_root/scripts/release.sh" ]]; then
+  echo "stable release command is missing or not executable" >&2
+  exit 1
+fi
+for command_name in prepare push-tag create-draft verify-draft publish-draft audit; do
+  if ! grep -Eq "add_parser\(\"${command_name}\"\)" \
+    "$repo_root/tools/release/cli.py"; then
+    echo "stable release command is missing: $command_name" >&2
+    exit 1
+  fi
+done
+if [[ ! -f "$repo_root/.agents/skills/lmdj-release/SKILL.md" ]]; then
+  echo "repo-local release skill is missing" >&2
+  exit 1
+fi
+
 if [[ ! -x "$repo_root/scripts/web-runtime-host.sh" ]]; then
   echo "stable Web Runtime Host command is missing or not executable" >&2
   exit 1

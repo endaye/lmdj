@@ -6,14 +6,58 @@ import {expect, test} from "@playwright/test";
 
 const bundle = process.env.LMDJ_CREATOR_WEB_BUNDLE;
 if (!bundle) throw new Error("LMDJ_CREATOR_WEB_BUNDLE is required");
-const MAX_BUSY_RETRIES = 8;
-// Bound one user attempt across a request deadline and one automatic reopen.
-const OPEN_TRANSITION_TIMEOUT_MS = 65_000;
-const RETRY_SETTLE_TIMEOUT_MS = 35_000;
+const MAX_OPEN_ATTEMPTS = 8;
+const BUSY_RETRY_INTERVAL_MS = 500;
+// openProjectJourney owns three independently bounded 30-second Project
+// operations: open, inspect, and snapshot reload. The UI hang detector covers
+// their 90-second protocol ceiling plus bounded runner/render settling time.
+const OPEN_TRANSITION_TIMEOUT_MS = 3 * 30_000 + 35_000;
+
+async function projectOpenOutcome(heading, open, retry) {
+  if (await heading.isVisible()) return "ready";
+  if (await retry.isVisible()) return "busy";
+  if (await open.isVisible() && await open.isEnabled()) return "open";
+  return "pending";
+}
+
+async function waitForProjectOpenOutcome(heading, open, retry) {
+  let outcome = "pending";
+  await expect.poll(async () => {
+    outcome = await projectOpenOutcome(heading, open, retry);
+    return outcome;
+  }, {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("pending");
+  return outcome;
+}
+
+async function pressProjectAction(page, action) {
+  await action.focus();
+  await expect(action).toBeFocused();
+  await page.keyboard.press("Enter");
+}
+
+async function waitForKeyboardProjectInventory(page) {
+  const open = page.getByRole("button", {name: "Open Project 00000000"});
+  const retry = page.getByRole("button", {name: "Retry project"});
+  const alert = page.getByRole("alert");
+  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
+    await expect.poll(async () =>
+      await open.isVisible() ? "open" : await retry.isVisible() ? "retry" : "",
+    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
+    if (await open.isVisible()) return open;
+    await expect(alert).toContainText(
+      "The local Project is busy in another tab or process.",
+    );
+    await retry.focus();
+    await expect(retry).toBeFocused();
+    await page.keyboard.press("Enter");
+  }
+  await expect(open).toBeVisible();
+  return open;
+}
 
 test("keyboard-only Project and Bank journey preserves native activation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
-  test.setTimeout(180_000);
+  test.setTimeout(360_000);
   await page.goto("/index.html");
   await expect(page.getByTestId("creator-phase")).toHaveText("empty", {
     timeout: 30_000,
@@ -30,26 +74,29 @@ test("keyboard-only Project and Bank journey preserves native activation", async
 
   await page.reload();
   const heading = page.getByRole("heading", {name: "Project 00000000"});
-  const openButton = page.getByRole("button", {name: "Open Project 00000000"});
-  await expect(openButton).toBeVisible({timeout: 60_000});
-  await openButton.focus();
-  await expect(openButton).toBeFocused();
-  await page.keyboard.press("Enter");
-  for (let attempt = 0; attempt < MAX_BUSY_RETRIES; attempt += 1) {
-    if (await heading.isVisible()) break;
-    const retry = page.getByRole("button", {name: "Retry project"});
-    await expect.poll(async () =>
-      await heading.isVisible() ? "ready" : await retry.isVisible() ? "retry" : "",
-    {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("");
-    if (await heading.isVisible()) break;
-    await retry.focus();
-    await expect(retry).toBeFocused();
-    await page.keyboard.press("Enter");
-    try {
-      await expect(heading).toBeVisible({timeout: RETRY_SETTLE_TIMEOUT_MS});
-      break;
-    } catch {
-      await expect(retry).toBeVisible();
+  const openButton = await waitForKeyboardProjectInventory(page);
+  const retry = page.getByRole("button", {name: "Retry project"});
+  let action = openButton;
+  for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
+    await pressProjectAction(page, action);
+    const outcome = await waitForProjectOpenOutcome(
+      heading, openButton, retry,
+    );
+    if (outcome === "ready") break;
+    if (outcome === "busy") {
+      await expect(page.getByRole("alert")).toContainText(
+        "The local Project is busy in another tab or process.",
+      );
+      // A reload can briefly overlap the previous document's asynchronous
+      // writer release. Model a deliberate user retry instead of hammering the
+      // visible action fast enough to exhaust the bounded attempt budget.
+      await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
+      action = retry;
+    } else {
+      // A timed-out request may be followed by the one allowed automatic
+      // Runtime replacement. The replacement intentionally requires another
+      // explicit Open gesture instead of silently resuming the Project.
+      action = openButton;
     }
   }
   await expect(heading).toBeVisible();

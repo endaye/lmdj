@@ -156,3 +156,19 @@ physical evidence without rewriting Safari or iPadOS rows.
 
 This task has not pushed, created a Pull Request, merged, tagged, released,
 deployed, published, or promoted a Channel.
+
+## Release-intent reconciliation
+
+The later protected-`main` integration commit
+`5613158240f7e31385ccb5d175bded3c245ae33b` carries Product `1.0.21.0`, its
+immutable Portal snapshot, and the physical-MIDI correction whose acceptance is
+recorded above. The preceding Product `1.0.20.0` evidence records the keyboard
+mapping candidate, while this record reproduces its Channel-10 physical-MIDI
+failure and records the corrected `1.0.21.0` pass. Therefore the intent ledger
+classifies `1.0.20.0` as `superseded-unreleased` and allocates `1.0.21.0` at that
+exact protected-`main` integration commit.
+
+This reconciliation does not infer a tag, GitHub Release, deployment, Channel
+promotion, or successful merged-main CI run. The `1.0.21.0` row intentionally
+has no `merged_main_run_id` and remains `allocated`; promotion to `releasable`
+requires separately recorded exact-run evidence.

@@ -1,0 +1,130 @@
+name: Publish verified Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact verified tag
+        required: true
+        type: string
+      release_id:
+        description: Numeric Draft Release ID
+        required: true
+        type: string
+      plan_sha256:
+        description: Exact plan SHA-256
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-publish-${{ inputs.release_id }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    steps:
+      - name: Checkout protected main tooling
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Verify exact Draft Release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh verify-draft \
+            "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
+
+      - name: Audit exact tag before publication job
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh audit --remote --tag "$RELEASE_TAG"
+
+  publish:
+    needs: preflight
+    environment: release
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      actions: read
+      deployments: read
+    steps:
+      - name: Checkout protected main tooling
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.11"
+
+      - name: Reverify exact Draft Release before publication
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh verify-draft \
+            "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
+
+      - name: Audit exact tag immediately before publication
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh audit --remote --tag "$RELEASE_TAG"
+
+      - name: Publish exact verified Draft Release
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_ID: ${{ inputs.release_id }}
+          PLAN_SHA256: ${{ inputs.plan_sha256 }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh publish-draft \
+            "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
+
+      - name: Audit the exact published tag
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          scripts/release.sh audit --remote --tag "$RELEASE_TAG"
