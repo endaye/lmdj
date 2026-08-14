@@ -8,6 +8,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <emscripten.h>
@@ -824,6 +825,14 @@ nlohmann::json run_suite() {
   const auto sequence = std::chrono::steady_clock::now().time_since_epoch().count();
   const auto bundle = std::filesystem::path{"/lmdj-workspace"} /
       ("parity-" + std::to_string(sequence) + ".lmdj");
+
+  // Exercise the declared pthread topology without invoking Asyncify-backed
+  // OPFS from a child worker. This also gives Emscripten's mailbox lifecycle a
+  // real child-thread owner before the proxied main remains live.
+  bool worker_ready = false;
+  std::thread worker_probe([&] { worker_ready = true; });
+  worker_probe.join();
+  require(worker_ready, "Web pthread topology probe");
 
   auto outer_lease = value(platform->acquire_writer(bundle), "outer lease");
   auto nested_lease = value(
