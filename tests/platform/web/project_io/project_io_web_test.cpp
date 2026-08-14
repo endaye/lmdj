@@ -830,6 +830,7 @@ nlohmann::json run_suite() {
   const auto bundle = std::filesystem::path{"/lmdj-workspace"} /
       ("parity-" + std::to_string(sequence) + ".lmdj");
 
+  report_progress("lease-parity-start");
   auto outer_lease = value(platform->acquire_writer(bundle), "outer lease");
   auto nested_lease = value(
       platform->acquire_writer(bundle / ".." / bundle.filename()),
@@ -856,7 +857,9 @@ nlohmann::json run_suite() {
       distinct_platform->acquire_writer(bundle),
       "distinct platform acquisition after final release");
   distinct_lease.reset();
+  report_progress("lease-parity-complete");
 
+  report_progress("project-store-start");
   project_io::ProjectStore store{platform};
   auto initial = value(domain::create_project(
       foundation::ProjectId{uuid("1")}, 120), "create project state");
@@ -874,7 +877,9 @@ nlohmann::json run_suite() {
   require(applied.state.revision == 1, "ProjectStore transaction revision");
   require(value(store.load(bundle), "ProjectStore replay load").revision == 1,
           "ProjectStore replay revision");
+  report_progress("project-store-complete");
 
+  report_progress("take-journal-start");
   project_io::TakeJournal journal{platform};
   const foundation::TakeId take_id{uuid("4")};
   success(journal.begin(bundle, take_id, 1, 48000), "TakeJournal begin");
@@ -884,6 +889,7 @@ nlohmann::json run_suite() {
   const auto active = value(journal.read_active(bundle, take_id), "TakeJournal read");
   require(active.events.size() == 1 && active.events.front().frame_offset == 12,
           "TakeJournal parity");
+  report_progress("take-journal-initial-complete");
 
   // The Web storage adapter is invoked on the Host's single Control thread;
   // native stress tests own true multi-threaded TakeJournal coverage. Exercise
