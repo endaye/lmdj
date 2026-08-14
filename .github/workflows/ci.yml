@@ -264,6 +264,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -301,6 +303,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           lfs: true
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
@@ -521,6 +524,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           lfs: true
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
@@ -728,6 +732,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           lfs: true
       - name: Verify self-hosted Python 3.11
         if: ${{ needs.select-macos-runner.outputs.self-hosted == 'true' }}
@@ -783,6 +788,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           lfs: true
       - uses: actions/setup-python@v6
         with:
@@ -835,6 +841,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           lfs: true
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
@@ -866,6 +873,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
+          fetch-depth: 0
           lfs: true
       - name: Rehydrate deterministic audio fixtures
         run: git lfs checkout -- tests/fixtures/audio
