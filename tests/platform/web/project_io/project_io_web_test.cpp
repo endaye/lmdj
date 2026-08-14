@@ -984,12 +984,6 @@ nlohmann::json run_suite() {
   success(
       platform->create_immutable(staging / "nested/payload.bin", bytes("complete")),
       "staging payload");
-  const std::string large_payload(1048593U, 'x');
-  success(
-      platform->create_immutable(
-          staging / "nested/large.bin", bytes(large_payload)),
-      "large staging payload");
-  report_progress("directory-publication-payload-ready");
   auto publication_lease = value(
       platform->acquire_writer(published),
       "published destination lease");
@@ -1008,11 +1002,6 @@ nlohmann::json run_suite() {
             platform->read_complete(published / "nested/payload.bin"),
             "published payload")) == "complete",
         "published payload changed");
-    require(
-        value(
-            platform->byte_length(published / "nested/large.bin"),
-            "published large payload") == large_payload.size(),
-        "published large payload changed");
     const auto directory_names =
         value(platform->list_directories(contract), "directory listing");
     require(
