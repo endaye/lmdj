@@ -306,8 +306,13 @@ async function enterLoopToggleSample(page) {
   if (await loop.getAttribute("aria-pressed") !== "true") {
     await loop.click();
     await expect(loop).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
-    await expect(page.getByRole("button", {name: "Hold"})).toBeEnabled();
   }
+  const hold = page.getByRole("button", {name: "Hold"});
+  await expect(hold).toBeEnabled();
+  if (await hold.getAttribute("aria-pressed") !== "true") {
+    await hold.click();
+  }
+  await expect(hold).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
 }
 
 async function armPadOutcomeObservation(pad) {
