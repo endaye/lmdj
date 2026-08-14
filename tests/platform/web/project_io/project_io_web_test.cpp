@@ -829,10 +829,15 @@ nlohmann::json run_suite() {
   // Exercise the declared pthread topology without invoking Asyncify-backed
   // OPFS from a child worker. This also gives Emscripten's mailbox lifecycle a
   // real child-thread owner before the proxied main remains live.
-  bool worker_ready = false;
-  std::thread worker_probe([&] { worker_ready = true; });
-  worker_probe.join();
-  require(worker_ready, "Web pthread topology probe");
+  bool first_worker_ready = false;
+  bool second_worker_ready = false;
+  std::thread first_worker_probe([&] { first_worker_ready = true; });
+  std::thread second_worker_probe([&] { second_worker_ready = true; });
+  first_worker_probe.join();
+  second_worker_probe.join();
+  require(
+      first_worker_ready && second_worker_ready,
+      "Web pthread topology probe");
 
   auto outer_lease = value(platform->acquire_writer(bundle), "outer lease");
   auto nested_lease = value(
