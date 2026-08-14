@@ -42,6 +42,9 @@ target_link_options(
     -pthread
     -sWASMFS
     -sPROXY_TO_PTHREAD
+    # Keep the proxied main on one prewarmed worker. Web parity stays on that
+    # single Control thread; child pthreads cannot nest Asyncify-backed OPFS.
+    -sPTHREAD_POOL_SIZE=1
     -sINITIAL_MEMORY=536870912
     -sALLOW_MEMORY_GROWTH=0
     -sASYNCIFY=1
