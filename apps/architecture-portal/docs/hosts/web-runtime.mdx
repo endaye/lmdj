@@ -79,7 +79,7 @@ Netlify 生产面将静态服务已验证的 release `dist`，与 Python proof-o
 
 ## 自动化证据
 
-`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 全旅程。可见顺序固定为 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`，并覆盖 create/import/64 assignments、reload reopen、500 个 admission/outcome、20+1 Take、失败与 lifecycle 路径。reload 后的 `project.open` 使用 60 秒有界 writer-handoff 预算；浏览器 Proof 仅在 Host 与诊断错误码都精确为 `HOST_TIMEOUT` 时允许一次整页恢复。terminal failure 会先封闭新请求，再给 responsive Control Worker 5 秒有界 grace 完成 OPFS writer release，超过 grace 才强制终止 Worker；Wasm AudioWorklet callback 本身的 quiescence 还受两个 caller budget 的上界约束，第二个 budget 后返回类型化 terminal failure。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。本候选的实际 Task 6 命令结果在独立 acceptance 记录中报告，不继承旧 Build 的 PR、CI 或 merge 结论。
+`scripts/web-runtime-host.sh proof` 覆盖两次 clean build 的逐字节可复现性、deterministic inventory、proof-server headers/cache/no-follow ownership、双重 manifest gate，以及 Chromium packaged Main→shared Platform→Facade/OPFS→Wasm AudioWorklet 全旅程。可见顺序固定为 `Load diagnostic project -> ready -> Activate audio -> running -> trigger`，并覆盖 create/import/64 assignments、reload reopen、500 个 admission/outcome、20+1 Take、失败与 lifecycle 路径。reload 后的 `project.open` 使用 60 秒有界 writer-handoff 预算；浏览器 Proof 仅在 Host 与诊断错误码都精确为 `HOST_TIMEOUT` 时允许一次整页恢复。terminal failure 会先封闭新请求，再给 responsive Control Worker 5 秒有界 grace 完成 OPFS writer release，超过 grace 才强制终止 Worker；Wasm AudioWorklet callback 本身的 quiescence 还受两个 caller budget 的上界约束，第二个 budget 后返回类型化 terminal failure。WebKit 只在 mandatory primitive 可用时执行完整 smoke；缺少能力时必须输出结构化 limitation。Product Build `1.0.21.0` 的 protected PR、exact merged-main CI 与 fresh local Proof 已分别绑定在 Stage 7 merged-main evidence；旧 Build 的结果不被继承。
 
 ## 非能力
 
@@ -93,6 +93,6 @@ Formal Web Runtime Host 已进入 Assembly；自动化结果不升级物理体�
 | --- | --- |
 | macOS Safari Pointer | `deferred / unverified` |
 | macOS Chrome Pointer | `deferred / unverified` |
-| macOS Chrome physical MIDI | `failed on 1.0.20.0 / pending retest on 1.0.21.0` |
+| macOS Chrome physical MIDI | `passed on 1.0.21.0`；AKAI MPD218 Channel 10 实体 UI 复验 |
 | iPadOS Safari Touch | `deferred / unverified` |
 | iPadOS Safari lifecycle | `deferred / unverified` |
