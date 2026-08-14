@@ -83,9 +83,18 @@ async function waitForResult(page) {
   if (!observer) {
     throw new Error("Project I/O page was not tracked before navigation");
   }
-  const hasTerminalReport = () => page.evaluate(
-      () => window.lmdjProjectIoWeb?.complete === true).catch(() => false);
-  if (observer.error && !(await hasTerminalReport())) {
+  const awaitTerminalReport = async () => {
+    try {
+      await page.waitForFunction(
+          () => window.lmdjProjectIoWeb?.complete === true,
+          undefined,
+          {timeout: 250});
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+  if (observer.error && !(await awaitTerminalReport())) {
     throw runtimeFailure(observer.error);
   }
 
@@ -105,9 +114,9 @@ async function waitForResult(page) {
       // native suite has synchronously published its terminal report. Keep
       // pre-terminal runtime failures fail-closed, but let the report remain
       // authoritative once publication is complete.
-      if (!(await hasTerminalReport())) throw error;
+      if (!(await awaitTerminalReport())) throw error;
     }
-    if (observer.error && !(await hasTerminalReport())) {
+    if (observer.error && !(await awaitTerminalReport())) {
       throw runtimeFailure(observer.error);
     }
     const result = await page.evaluate(() => window.lmdjProjectIoWeb.result);
@@ -334,15 +343,17 @@ test("Web Project I/O reports page runtime failures without waiting for the suit
 test("Web Project I/O preserves a terminal native report across worker teardown", async ({page}) => {
   trackRuntimeErrors(page);
   await page.goto("/preflight.html");
-  const result = await page.evaluate(() => {
-    window.lmdjProjectIoWeb = {complete: true, result: {terminal: "pass"}};
+  const result = {terminal: "pass"};
+  const pending = waitForResult(page);
+  await page.evaluate(() => {
     setTimeout(() => {
       throw new Error("project-io-post-terminal-teardown-proof");
     }, 0);
-    return window.lmdjProjectIoWeb.result;
+    setTimeout(() => {
+      window.lmdjProjectIoWeb = {complete: true, result: {terminal: "pass"}};
+    }, 25);
   });
-  await page.waitForTimeout(50);
-  expect(await waitForResult(page)).toEqual(result);
+  expect(await pending).toEqual(result);
 });
 
 test("Web Project I/O binds every mutation to its same-page platform owner", async ({page, browserName}) => {
