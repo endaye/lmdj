@@ -46,6 +46,8 @@
 - `.github/workflows/ci-self-hosted-benchmark.yml` — dispatch-only, non-authoritative netcup benchmark workflow.
 - `tests/build/ci_benchmark_workflow_test.py` — benchmark workflow and shared-action contract.
 - `tests/build/release_github_api_test.py` — strict Actions jobs/artifact/ZIP projection contracts extending the merged standard release pipeline.
+- `tools/release/ci_evidence.py` — one read-only full exact-main verifier shared by release audit and prepare.
+- `tests/build/release_ci_evidence_test.py` — closed verifier classification and prospective-audit contracts.
 - `docs/quality/ci-runner-migration-acceptance.md` — fixed-path acceptance record populated from actual run/server evidence after cutover.
 
 ### Existing files changed by routing
@@ -62,12 +64,13 @@
 - `docs/quality/core-test-policy.md` — implemented runner topology, queue semantics, trust, timeout, and evidence.
 - `apps/architecture-portal/docs/operations/testing-and-proof.mdx` — current implemented CI routing/scope truth.
 
-### Existing files changed by focused-main/release authority
+### Files changed or added by focused-main/release authority
 
 - `docs/governance/git-workflow.md` — focused main and explicit full exact-main procedure.
 - `docs/governance/version-management.md` — full manifest + same-run Gate requirement.
 - `apps/architecture-portal/docs/operations/version-and-release.mdx` — release authority boundary.
 - `tools/release/github_api.py` — typed Actions job/artifact projections.
+- `tools/release/ci_evidence.py` — full scope/Gate/run evidence adjudication without mutation.
 - `tools/release/audit.py` — full exact-main audit.
 - `tools/release/prepare.py` — same full evidence precondition before preparation.
 - `tests/build/release_audit_test.py` and `tests/build/release_prepare_test.py` — artifact/Gate/full-mode tests.
@@ -1332,11 +1335,13 @@ Do not re-enable automatic Hosted workload fallback. If netcup is unstable, rout
 - Modify: `tests/build/ci_change_scope_test.py`
 - Modify: `tests/build/ci_workflow_topology_test.py`
 - Modify: `tools/release/github_api.py`
+- Create: `tools/release/ci_evidence.py`
 - Modify: `tools/release/audit.py`
 - Modify: `tools/release/prepare.py`
 - Modify: `tests/build/release_audit_test.py`
 - Modify: `tests/build/release_prepare_test.py`
 - Create: `tests/build/release_github_api_test.py`
+- Create: `tests/build/release_ci_evidence_test.py`
 - Modify: `tests/build/release_skill_test.py`
 - Modify: `.agents/skills/lmdj-release/SKILL.md`
 - Modify: `docs/governance/git-workflow.md`
@@ -1372,16 +1377,20 @@ Keep Product Assembly, Contract, CI control, unknown path, incomplete inventory,
 
 - [ ] **Step 2: Write failing release evidence tests**
 
-Extend the fake GitHub client with exact scope and job projections. Require tests for:
+Extend the fake GitHub client with exact scope and job projections. Define independent test constants `LANES` for the exact 14 v2 lane names and `FULL_REQUIRED_JOBS` for the full formal/support job set; do not derive the expected values from production code. Require tests for:
 
 ```python
 def test_release_accepts_only_full_exact_main_ci(self):
     self.github.scope = CiScopeProjection(
-        schema="lmdj.ci-scope.v2", head_sha=TARGET,
+        schema="lmdj.ci-scope.v2", base_sha="a" * 40, head_sha=TARGET,
         mode="full", trusted_head=True,
+        selected_lanes=tuple(sorted(LANES)),
+        required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
     )
-    self.github.jobs = [RunJobProjection("Change Scope", "completed", "success"),
-                        RunJobProjection("PR Gate", "completed", "success")]
+    self.github.jobs = [
+        RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", TARGET),
+        RunJobProjection(2, 123, "PR Gate", "completed", "success", "Core CI", TARGET),
+    ]
     self.assertIsNone(audit_module._ci_problem(self.context(), self.intent()))
 
 def test_release_rejects_focused_or_wrong_sha_or_missing_gate(self):
@@ -1393,13 +1402,16 @@ def test_release_rejects_focused_or_wrong_sha_or_missing_gate(self):
         with self.subTest(mode=mode, sha=sha, gate=gate):
             self.github.scope = CiScopeProjection(
                 schema="lmdj.ci-scope.v2",
+                base_sha="a" * 40,
                 head_sha=sha,
                 mode=mode,
                 trusted_head=True,
+                selected_lanes=tuple(sorted(LANES)),
+                required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
             )
             self.github.jobs = [
-                RunJobProjection("Change Scope", "completed", "success"),
-                RunJobProjection("PR Gate", "completed", gate),
+                RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", sha),
+                RunJobProjection(2, 123, "PR Gate", "completed", gate, "Core CI", sha),
             ]
             problem = audit_module._ci_problem(self.context(), self.intent())
             self.assertIsNotNone(problem)
@@ -1409,6 +1421,8 @@ Test both successful `push` full and successful `workflow_dispatch` full. A run 
 
 Create `release_github_api_test.py` with transport-level tests that require complete pagination for run jobs/artifacts, reject duplicate job/artifact identities, reject zero/multiple/expired matching scope artifacts, verify authenticated binary download, and reject ZIP traversal, duplicate members, extra scope manifests, duplicate JSON keys, wrong schema, or non-boolean trust.
 
+Create `release_ci_evidence_test.py` with closed result tests for valid full `push`, valid full `workflow_dispatch`, focused mode, wrong SHA/branch/workflow, missing/expired artifact, malformed artifact identity, missing/duplicate/failed Gate, API outage, and a releasable intent with no remote tag. The last case must prove audit no longer returns prospective `ok` before evaluating CI.
+
 - [ ] **Step 3: Run the focused-main and release tests to observe failure**
 
 ```bash
@@ -1416,6 +1430,7 @@ python3 -m unittest \
   tests.build.ci_change_scope_test \
   tests.build.ci_workflow_topology_test \
   tests.build.release_github_api_test \
+  tests.build.release_ci_evidence_test \
   tests.build.release_audit_test \
   tests.build.release_prepare_test -v
 ```
@@ -1434,22 +1449,46 @@ Add frozen dataclasses:
 @dataclass(frozen=True)
 class CiScopeProjection:
     schema: str
+    base_sha: str
     head_sha: str
     mode: str
     trusted_head: bool
+    selected_lanes: tuple[str, ...]
+    required_jobs: tuple[str, ...]
 
 @dataclass(frozen=True)
 class RunJobProjection:
+    id: int
+    run_id: int
     name: str
     status: str
     conclusion: str | None
+    workflow_name: str
+    head_sha: str
+
+@dataclass(frozen=True)
+class ActionsArtifactProjection:
+    id: int
+    name: str
+    size_in_bytes: int
+    api_url: str
+    archive_download_url: str
+    expired: bool
+    run_id: int
+    repository_id: int
+    head_repository_id: int
+    head_branch: str
+    head_sha: str
+    expires_at: str
 ```
 
-Add strict, paginated methods to list one run's jobs and retrieve exactly one non-expired artifact whose name is `ci-scope-` followed by that run's exact 40-hex head SHA. Download the ZIP through the authenticated API, reject traversal/duplicate members, parse exactly one `ci-scope.json` with duplicate-key rejection, validate schema v2 and closed projection types, and never accept a missing/expired artifact.
+Add strict, complete-pagination methods for `/actions/runs/{run_id}/jobs?filter=latest&per_page=100` and `/actions/runs/{run_id}/artifacts?per_page=100`, binding every job's run/workflow/head identities and every artifact's embedded `workflow_run.id`, repository identity, branch, and head SHA to the selected run. Retrieve exactly one non-expired artifact whose name is `ci-scope-` followed by that run's exact 40-hex head SHA.
+
+Download through the authenticated artifact API URL without forwarding `Authorization` across the 302. Accept only HTTPS redirects matching the observed closed GitHub Actions artifact host family `productionresultssa[0-9]+.blob.core.windows.net`, with no userinfo/port/fragment and a signed query; fail closed if GitHub changes that family. Require status 200, `application/zip`, ZIP magic, and a compressed/uncompressed size cap of 1 MiB. Reject traversal, symlink, duplicate/extra members, parse exactly one root `ci-scope.json` with duplicate-key rejection, require the exact v2 top-level key set, exact 14-lane key set with every lane true in full mode, and closed required-job/type invariants, and never log the signed redirect URL.
 
 - [ ] **Step 6: Enforce full exact-main evidence in audit and prepare**
 
-Factor one read-only verifier used by `audit.py` and `prepare.py`. It must require:
+Implement `ci_evidence.py` as one read-only verifier used by `audit.py` and `prepare.py`. Extend `PrepareContext`'s GitHub protocol with the exact job/artifact methods. The verifier must require:
 
 - recorded run ID matches the target SHA;
 - event is `push` or `workflow_dispatch`;
@@ -1458,7 +1497,9 @@ Factor one read-only verifier used by `audit.py` and `prepare.py`. It must requi
 - retained scope artifact is `lmdj.ci-scope.v2`, `head_sha == target`, `mode == full`, `trusted_head is True`;
 - exactly one `Change Scope` and one `PR Gate` job completed successfully in that run.
 
-Any API/artifact incompleteness is `unverifiable`/external error; focused mode, wrong SHA, missing Gate, or conflicting identity is a conflict. Do not infer full from path type or workflow conclusion.
+Run the verifier in audit before the existing “no remote tag/Release” prospective success return for every actionable `releasable` state; a releasable intent without full evidence is not audit-clean. Terminal published-state audit does not require an expired ephemeral artifact to rewrite history; it continues to validate immutable tag/Release/asset/plan-marker evidence. Preserve the narrow historical pre-pipeline exception only for its exact recorded cancelled push, and never let it authorize prepare.
+
+Classify transport/pagination/download outages as `external-error`, absent/expired retained evidence as `unverifiable`, and malformed/conflicting identity, focused mode, wrong SHA, or missing/failed/duplicate Gate as `conflict`. Prepare maps every non-success result to `PrepareError`. Do not infer full from path type or workflow conclusion.
 
 - [ ] **Step 7: Update governance and release skill in the same commit**
 
@@ -1467,7 +1508,7 @@ Document:
 - ordinary main merges use focused/full path classification;
 - Product Build/release operators dispatch empty-lane full CI for the exact main SHA when its push was focused;
 - `scripts/release.sh audit --remote` and prepare reject focused evidence;
-- the current 14-day scope-artifact retention is a hard evidence lifetime; after expiry, the operator must dispatch a new full run on the same exact current main SHA rather than infer or reconstruct evidence;
+- the current 14-day scope-artifact retention is a hard prospective-evidence lifetime; after expiry, rerun all jobs for the exact recorded Actions run while that run is retained, preserving its run ID/SHA and producing a fresh latest attempt. If rerun is unavailable, only a newly authorized exact-SHA full run plus an updated release intent may replace it; never infer or reconstruct evidence;
 - no release mutation is authorized by a full dispatch alone.
 
 Documentation impact: required. Affected Portal routes: `/operations/testing-and-proof/` and `/operations/version-and-release/`.
@@ -1480,6 +1521,7 @@ python3 -m unittest \
   tests.build.ci_pr_gate_test \
   tests.build.ci_workflow_topology_test \
   tests.build.release_github_api_test \
+  tests.build.release_ci_evidence_test \
   tests.build.release_audit_test \
   tests.build.release_prepare_test \
   tests.build.release_skill_test \
@@ -1497,9 +1539,11 @@ Expected: focused docs push passes; all unsafe push cases full; release rejects 
 git add \
   .github/workflows/ci.yml scripts/ci/change_scope.py \
   tests/build/ci_change_scope_test.py tests/build/ci_workflow_topology_test.py \
-  tools/release/github_api.py tools/release/audit.py tools/release/prepare.py \
+  tools/release/github_api.py tools/release/ci_evidence.py \
+  tools/release/audit.py tools/release/prepare.py \
   tests/build/release_github_api_test.py tests/build/release_audit_test.py \
-  tests/build/release_prepare_test.py tests/build/release_skill_test.py \
+  tests/build/release_ci_evidence_test.py tests/build/release_prepare_test.py \
+  tests/build/release_skill_test.py \
   .agents/skills/lmdj-release/SKILL.md \
   docs/governance/git-workflow.md docs/governance/version-management.md \
   apps/architecture-portal/docs/operations/testing-and-proof.mdx \
@@ -1646,6 +1690,7 @@ python3 -m unittest \
   tests.build.ci_workflow_topology_test \
   tests.build.ci_build_acceleration_test \
   tests.build.release_github_api_test \
+  tests.build.release_ci_evidence_test \
   tests.build.release_audit_test \
   tests.build.release_prepare_test \
   tests.build.release_skill_test \
