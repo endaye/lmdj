@@ -2,7 +2,7 @@
 
 日期：2026-08-13
 
-状态：设计已确认；待书面规格复核
+状态：已实施；closure evidence 已记录，剩余 physical matrix rows 明确保留
 
 目标分支：`fix/stage7-review-remediation`
 

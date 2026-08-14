@@ -1055,3 +1055,35 @@ unexecuted human Canary sheet.
 - [ ] Confirm historical G1 is recorded as corrected from the exact signed-tag/run bindings, while T1 remains open until human execution.
 - [ ] Confirm the task is not reported complete while T1 or the Product Build `1.0.19.0` future merged-main Proof gate remains open.
 - [ ] Confirm no push/tag/Release/deployment/Channel action occurred without explicit authorization.
+
+## Execution Outcome Addendum — 2026-08-13
+
+The numbered Tasks above preserve the plan as written, including intermediate
+Product Builds that were subsequently abandoned or superseded. The final
+observed outcome is:
+
+- [x] The closure ledger contains exactly the 41 expected IDs, once each.
+- [x] T1 was rerun from step 1 and passed on Product `1.0.20.0`; its keyboard,
+  hearing, and privacy-safe report evidence remain scoped to that Build.
+- [x] The later physical-MIDI defect was corrected in Product `1.0.21.0`; AKAI
+  MPD218 UI acceptance passed on the corrected Build.
+- [x] PR #134 passed its protected workflow and squash-merged as `5613158`;
+  exact-main run `31688172806` and a fresh isolated-worktree rerun both passed.
+- [x] Historical G1, candidate Proof, immutable snapshot, exact merged-main
+  Proof, and physical evidence are recorded as separate boundaries.
+- [x] No Product tag, Release, deployment, publication, or Channel promotion
+  was authorized or performed by this remediation workflow.
+
+The exact merge binding is recorded in
+`docs/release-evidence/2026-08-13-stage7-remediation-merged-main-1.0.21.0.md`.
+Safari Pointer, Chrome Pointer performance, iPadOS Touch, and iPadOS lifecycle
+remain `deferred / unverified`; they block full physical-matrix, `beta`, and
+`stable` claims, but do not reopen the Stage 7 remediation findings.
+
+Documentation impact: required. Current Portal routes `/hosts/web-runtime`,
+`/operations/version-and-release`, `/operations/testing-and-proof`,
+`/platform/web-runtime`, and `/platform/input` are refreshed from the observed
+physical-MIDI and exact-main evidence. Diagram impact: none; this addendum
+changes evidence state, not architecture or call flow. Version impact: none;
+no Product, Module, Host, Provider, Contract, Assembly, or Channel identity
+changes.

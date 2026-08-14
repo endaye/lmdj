@@ -42,4 +42,4 @@ Node 回归覆盖 primary Pointer、Chromium 整数化 compatibility mouse coord
 
 ## 状态升级证据
 
-物理行分别记录：macOS Safari Pointer 与 macOS Chrome Pointer 仍为 `deferred / unverified`；macOS Chrome physical MIDI 在 `1.0.20.0` 上因 Creator 的 Channel 1 filter 失败，`1.0.21.0` 修复候选待复验；iPadOS Safari Touch 与 lifecycle 仍为 `deferred / unverified`。macOS Safari 的 Bundle import 人工检查未复现超过 20 秒的 `importing`，但不推导 Pointer 或 iPadOS 通过。
+物理行分别记录：macOS Safari Pointer 与 macOS Chrome Pointer 仍为 `deferred / unverified`；macOS Chrome physical MIDI 在 `1.0.20.0` 上因 Creator 的 Channel 1 filter 失败，随后在 `1.0.21.0` 用 AKAI MPD218 Channel 10 完成实体 UI 复验并通过；iPadOS Safari Touch 与 lifecycle 仍为 `deferred / unverified`。macOS Safari 的 Bundle import 人工检查未复现超过 20 秒的 `importing`，但不推导 Pointer 或 iPadOS 通过；MIDI 通过也不推导 Pointer performance 或其他设备通过。
