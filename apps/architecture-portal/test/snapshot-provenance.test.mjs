@@ -6,12 +6,16 @@ import {mkdtemp, mkdir, readFile, rm, symlink, writeFile, cp} from 'node:fs/prom
 import path from 'node:path';
 import os from 'node:os';
 import {createHash} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 import {
   createSquashWitness,
   createSnapshotMetadata,
   freezeDiagramAssets,
+  readRepoFactsAtRevision,
   verifySnapshotProvenance,
 } from '../scripts/lib/snapshot-provenance.mjs';
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 const execFileAsync = promisify(execFile);
 const VERSION = '1.0.14.0';
@@ -133,6 +137,38 @@ function verifierOptions(fixture, metadata, headRevision) {
     },
   };
 }
+
+test('source-tree archive reads committed bytes without running content filters', async () => {
+  // A checkout that skipped the Git LFS smudge holds pointers and no objects, and
+  // an audit checkout holds no credentials to download them with. Rebuilding facts
+  // must still succeed, so the archive has to bypass the required filter.
+  const home = await mkdtemp(path.join(os.tmpdir(), 'portal-filter-config-'));
+  const configPath = path.join(home, 'gitconfig');
+  await writeFile(configPath, [
+    '[filter "lfs"]',
+    '\tclean = cat',
+    '\tsmudge = false',
+    '\tprocess = ',
+    '\trequired = true',
+    '',
+  ].join('\n'), 'utf8');
+  const previousGlobal = process.env.GIT_CONFIG_GLOBAL;
+  const previousSystem = process.env.GIT_CONFIG_SYSTEM;
+  process.env.GIT_CONFIG_GLOBAL = configPath;
+  process.env.GIT_CONFIG_SYSTEM = '/dev/null';
+  try {
+    const revision = (await git(REPO_ROOT, ['rev-parse', 'HEAD'])).stdout.trim();
+    const rebuilt = await readRepoFactsAtRevision({repoRoot: REPO_ROOT, revision, channel: 'canary'});
+    assert.equal(rebuilt.product.id, 'lmdj');
+    assert.equal(rebuilt.revision, revision);
+  } finally {
+    if (previousGlobal === undefined) delete process.env.GIT_CONFIG_GLOBAL;
+    else process.env.GIT_CONFIG_GLOBAL = previousGlobal;
+    if (previousSystem === undefined) delete process.env.GIT_CONFIG_SYSTEM;
+    else process.env.GIT_CONFIG_SYSTEM = previousSystem;
+    await rm(home, {recursive: true, force: true});
+  }
+});
 
 test('diagram freeze copies the exact validated inventory and rejects unsafe inputs', async () => {
   const fixture = await initializeFixture();
