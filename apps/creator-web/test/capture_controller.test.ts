@@ -92,6 +92,25 @@ describe("CaptureController", () => {
     expect(onBatch).toHaveBeenCalledWith([expect.any(Float32Array)], 0.7);
   });
 
+  test("releases the microphone when stop lands during start", async () => {
+    const {deps, track} = makeDeps();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const slow = deps.getUserMedia;
+    deps.getUserMedia = vi.fn(async () => {
+      await gate;
+      return slow();
+    });
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    const starting = controller.start();
+    const stopping = controller.stop(); // lands while start() is still awaiting
+    release?.();
+    await starting;
+    await stopping;
+    // The stream went live after stop() was requested; it must still be released.
+    expect(track.stopped).toBe(1);
+  });
+
   test("stops once as the single owner and is idempotent", async () => {
     const {deps, track, node, source, context} = makeDeps();
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
