@@ -82,6 +82,9 @@ runs:
           target="$cache_root/$revision-$version"
           marker="$target/.lmdj-emsdk-ready"
           lock_file="$cache_root/.install-$revision-$version.lock"
+          echo 'GIT_CONFIG_COUNT=1' >>"$GITHUB_ENV"
+          echo 'GIT_CONFIG_KEY_0=safe.directory' >>"$GITHUB_ENV"
+          printf 'GIT_CONFIG_VALUE_0=%s\n' "$target" >>"$GITHUB_ENV"
           mkdir -p "$cache_root"
           (umask 0007; touch "$lock_file")
           exec 9>"$lock_file"
