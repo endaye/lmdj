@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 from typing import Callable, Iterable, Iterator
 
+from .commands import sanitize_diagnostic
 from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
 from .model import (
     Disposition,
@@ -41,9 +42,7 @@ _STATIC_PROJECTION_MESSAGE = (
 _STATIC_PROJECTION_FAILURES = (
     OSError, KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError, OpenPgpError,
 )
-_ASSIGNMENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=\S+")
-_ABSOLUTE_PATH = re.compile(r"(?<![\w<>])/[^\s'\"]*")
-_REASON_LIMIT = 200
+_REASON_LIMIT = 240
 
 
 @dataclass(frozen=True)
@@ -327,11 +326,7 @@ def _static_projection(root: Path, projection: str, *sources: str) -> Iterator[N
 
 def _sanitized_reason(root: Path, exception: BaseException) -> str:
     """Describe a failure without echoing environment values, secrets or absolute paths."""
-    text = " ".join(str(exception).split()).replace(str(root), "<repo>")
-    text = _ASSIGNMENT.sub(r"\1=[redacted]", text)
-    text = _ABSOLUTE_PATH.sub("<path>", text)
-    if len(text) > _REASON_LIMIT:
-        text = text[:_REASON_LIMIT].rstrip() + "..."
+    text = sanitize_diagnostic(exception, root=root, limit=_REASON_LIMIT)
     return f"{type(exception).__name__}: {text}" if text else type(exception).__name__
 
 

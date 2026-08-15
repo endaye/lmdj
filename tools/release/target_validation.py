@@ -6,12 +6,18 @@ import hashlib
 import json
 from pathlib import Path
 
-from .commands import CommandError, CommandRunner
+from .commands import CommandError, CommandRunner, sanitize_diagnostic
 from .model import ReleaseIntent, ReleaseKind
 
 
 class TargetValidationError(RuntimeError):
     """An exact release target does not carry its declared identity and support data."""
+
+
+def _with_detail(message: str, error: CommandError) -> str:
+    """Keep the failed command's own sanitized reason so one failure is not another."""
+    detail = getattr(error, "detail", "")
+    return f"{message}: {detail}" if detail else message
 
 
 def validate_release_target(
@@ -44,7 +50,11 @@ def validate_release_target(
             raise TargetValidationError("release kind is unsupported")
     except TargetValidationError:
         raise
-    except (CommandError, OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+    except CommandError as error:
+        raise TargetValidationError(
+            _with_detail("exact release target identity is inconsistent", error),
+        ) from None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
         raise TargetValidationError("exact release target identity is inconsistent") from None
 
 
@@ -78,8 +88,10 @@ def _validate_product(
         raise TargetValidationError("Product Portal snapshot does not match the exact Assembly lock")
     try:
         runner.run(["node", "apps/architecture-portal/scripts/check-release-docs.mjs"], cwd=root)
-    except CommandError:
-        raise TargetValidationError("Product Portal snapshot provenance is invalid") from None
+    except CommandError as error:
+        raise TargetValidationError(
+            _with_detail("Product Portal snapshot provenance is invalid", error),
+        ) from None
 
 
 def _validate_module(root: Path, intent: ReleaseIntent, assembly: object, lock: object) -> None:
