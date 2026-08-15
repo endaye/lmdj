@@ -122,11 +122,11 @@ CASES = {
 }
 
 TOP_LEVELS = {
-    ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md",
-    "CMakeLists.txt", "CMakePresets.json", "README.md", "apps", "cmake",
-    "contracts", "docs", "netlify.toml", "output", "packages", "packaging",
-    "products", "providers", "references", "scripts", "testdata", "tests",
-    "third_party", "tools", "workers",
+    ".claude", ".gitattributes", ".github", ".gitignore", "AGENTS.md",
+    "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "README.md", "apps",
+    "cmake", "contracts", "docs", "netlify.toml", "output", "packages",
+    "packaging", "products", "providers", "references", "scripts", "testdata",
+    "tests", "third_party", "tools", "workers",
 }
 
 CONCURRENCY_STRESS_SOURCES = (
