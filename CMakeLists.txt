@@ -52,6 +52,7 @@ endif()
 add_subdirectory(apps/core-cli)
 add_subdirectory(apps/native-test-host)
 add_subdirectory(products/lmdj)
+add_subdirectory(tools/analysis-bench)
 
 lmdj_add_test(
   NAME build.project_io_test_hook_symbols
