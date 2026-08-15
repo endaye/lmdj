@@ -11,13 +11,14 @@ export function encodePcm16Wav(
   channels: readonly Float32Array[],
   sampleRate: number = CAPTURE_SAMPLE_RATE,
 ): Uint8Array {
-  if (channels.length < 1 || channels.length > 2 ||
-      channels.some((c) => !(c instanceof Float32Array) || c.length !== channels[0].length) ||
-      channels[0].length === 0) {
+  const first = channels[0];
+  if (channels.length < 1 || channels.length > 2 || first === undefined ||
+      channels.some((c) => !(c instanceof Float32Array) || c.length !== first.length) ||
+      first.length === 0) {
     throw new TypeError("WAV encode input is invalid");
   }
   const channelCount = channels.length;
-  const frames = channels[0].length;
+  const frames = first.length;
   const dataBytes = frames * channelCount * 2;
   const bytes = new Uint8Array(44 + dataBytes);
   const view = new DataView(bytes.buffer);
@@ -32,8 +33,14 @@ export function encodePcm16Wav(
   ascii(36, "data"); view.setUint32(40, dataBytes, true);
   let offset = 44;
   for (let frame = 0; frame < frames; frame += 1) {
-    for (let channel = 0; channel < channelCount; channel += 1) {
-      view.setInt16(offset, quantizePcm16(channels[channel][frame]), true);
+    for (const c of channels) {
+      const sample = c[frame];
+      if (sample === undefined) {
+        // Invariant: every channel's length equals `frames` (validated above), so
+        // indexing any channel with a frame index in [0, frames) always succeeds.
+        throw new TypeError("WAV encode input is invalid");
+      }
+      view.setInt16(offset, quantizePcm16(sample), true);
       offset += 2;
     }
   }

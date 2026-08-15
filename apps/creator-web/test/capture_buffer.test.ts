@@ -32,6 +32,9 @@ describe("CaptureBuffer", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([left]);
     const [mono] = buffer.slice(2, 3);
+    if (mono === undefined) {
+      throw new Error("expected slice to return one channel");
+    }
     expect(Array.from(mono)).toEqual([0.375, 0.5, 0.625]);
     const envelope = buffer.envelope(2);
     expect(Array.from(envelope)).toEqual([0.5, 1]);
