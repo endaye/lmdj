@@ -105,6 +105,24 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL", source)
                 self.assertRegex(source, r'parallel_args=\(--parallel\)')
 
+    def test_web_toolchain_reuses_the_provisioned_netcup_browser_stack(self) -> None:
+        """A persistent CI-only role provisions browser deps once, not per run.
+
+        `install-system-deps: "true"` lets Playwright apt-install host
+        libraries on every run. That is cheap on a discarded hosted image and
+        wrong on the dedicated netcup node, where it repeats work the role
+        already provides and mutates state shared by both runner services.
+        """
+        job = self.workflow_job("web-toolchain-conformance")
+        self.assertIn(
+            "runs-on: "
+            "[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]",
+            job,
+        )
+        self.assertIn("lane: web_toolchain", job)
+        self.assertIn('install-system-deps: "false"', job)
+        self.assertNotIn('install-system-deps: "true"', job)
+
     def test_generated_web_toolchain_does_not_dirty_source_tree(self) -> None:
         ignored = {
             line.strip()

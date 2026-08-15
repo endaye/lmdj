@@ -500,7 +500,17 @@ export async function readRepoFactsAtRevision({repoRoot, revision, treeRevision 
     const archive = path.join(temporary, 'source.tar');
     const extracted = path.join(temporary, 'source');
     await mkdir(extracted);
-    await execGit(repoRoot, ['archive', '--format=tar', `--output=${archive}`, treeRevision]);
+    // `git archive` converts blobs to working-tree form, so a configured content
+    // filter runs here. Git LFS is `required` by default once installed, and it
+    // resolves pointers by downloading them, which makes reading committed facts
+    // depend on network access, credentials and a filter binary that provenance
+    // must not need. Read the committed bytes instead.
+    await execGit(repoRoot, [
+      '-c', 'filter.lfs.required=false',
+      '-c', 'filter.lfs.smudge=',
+      '-c', 'filter.lfs.process=',
+      'archive', '--format=tar', `--output=${archive}`, treeRevision,
+    ]);
     await execFileAsync('tar', ['-xf', archive, '-C', extracted], {maxBuffer: 64 * 1024 * 1024});
     return await readRepoFacts({repoRoot: extracted, revision, channel});
   } finally {

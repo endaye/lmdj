@@ -25,7 +25,7 @@ class ChangedFile:
 
 ALLOWED_MANIFEST_KEYS = {
     "schema", "base_sha", "head_sha", "mode", "reasons",
-    "changed_files", "lanes", "required_jobs",
+    "changed_files", "lanes", "required_jobs", "trusted_head",
 }
 ALLOWED_MODES = {"draft", "focused", "full", "requested"}
 ALLOWED_RESULTS = {"added", "copied", "deleted", "modified", "renamed", "type_changed"}
@@ -56,14 +56,25 @@ _CANONICAL_LANE_JOBS = {
     "chameleon_lab": ("chameleon-lab",),
     "package": ("select-ubuntu-runner", "package"),
 }
+# The closed set of formal jobs a self-hosted role may ever execute. Change
+# Scope, the PR Gate and both runner selectors stay on the GitHub-hosted
+# control plane, and the macOS lane keeps its own runner policy, so none of
+# them belong here.
+_CANONICAL_SELF_HOSTED_JOBS = (
+    "docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan",
+    "core-coverage", "web-toolchain-conformance", "web-runtime-host",
+    "creator-web", "web-runtime-lab", "deploy-contract", "chameleon-lab",
+    "package",
+)
 _MANDATORY_FULL_MATCHES = {
     ("exact", ".github/workflows/ci.yml"),
     ("prefix", "scripts/ci/"),
     ("prefix", ".github/actions/configure-build-acceleration/"),
 }
 _POLICY_KEYS = {
-    "schema", "manifest_schema", "lanes", "lane_jobs", "known_top_levels",
-    "full_rules", "rules", "expensive_families", "draft_lanes", "slo_seconds",
+    "schema", "manifest_schema", "lanes", "lane_jobs", "self_hosted_jobs",
+    "known_top_levels", "full_rules", "rules", "expensive_families",
+    "draft_lanes", "slo_seconds",
 }
 
 
@@ -156,7 +167,7 @@ def _validate_match(match: object) -> None:
 def _validate_policy(policy: Mapping[str, object]) -> None:
     if set(policy) != _POLICY_KEYS:
         raise ValueError("policy schema is not closed")
-    if policy["schema"] != "lmdj.ci-scope-policy.v1" or policy["manifest_schema"] != "lmdj.ci-scope.v1":
+    if policy["schema"] != "lmdj.ci-scope-policy.v1" or policy["manifest_schema"] != "lmdj.ci-scope.v2":
         raise ValueError("unknown policy schema")
     lanes = policy["lanes"]
     if not isinstance(lanes, list) or tuple(lanes) != _CANONICAL_LANES:
@@ -168,6 +179,32 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
         for lane, jobs in lane_jobs.items()
     } != _CANONICAL_LANE_JOBS:
         raise ValueError("lane jobs do not match the closed v1 mapping")
+    formal_jobs = {job for jobs in _CANONICAL_LANE_JOBS.values() for job in jobs}
+    self_hosted = policy["self_hosted_jobs"]
+    if not isinstance(self_hosted, list) or not all(
+        isinstance(job, str) for job in self_hosted
+    ):
+        raise ValueError("self-hosted jobs must be a list of job names")
+    if len(self_hosted) != len(set(self_hosted)):
+        raise ValueError("duplicate self-hosted job")
+    non_formal = sorted(set(self_hosted) - formal_jobs)
+    if non_formal:
+        raise ValueError(
+            "self-hosted jobs reference non-formal job(s): "
+            + ", ".join(non_formal)
+        )
+    if set(self_hosted) != set(_CANONICAL_SELF_HOSTED_JOBS):
+        missing = sorted(set(_CANONICAL_SELF_HOSTED_JOBS) - set(self_hosted))
+        extra = sorted(set(self_hosted) - set(_CANONICAL_SELF_HOSTED_JOBS))
+        details = []
+        if missing:
+            details.append("missing " + ", ".join(missing))
+        if extra:
+            details.append("extra " + ", ".join(extra))
+        raise ValueError(
+            "self-hosted jobs do not match the closed v2 set: "
+            + "; ".join(details)
+        )
     known = policy["known_top_levels"]
     if not isinstance(known, list) or len(known) != len(set(known)) or not all(isinstance(item, str) and item for item in known):
         raise ValueError("invalid known top levels")
@@ -255,13 +292,36 @@ def _evaluate_ready_paths(
     return selected, full_reasons
 
 
+def derive_trusted_head(
+    event_name: str, head_repository: str, repository: str
+) -> bool:
+    """Trust only a non-PR event or a same-repository Pull Request head.
+
+    Trust is never derived from a title, a label, changed paths or the code
+    under test, because a fork controls all of those.
+    """
+    return (
+        event_name != "pull_request"
+        or head_repository == repository
+    )
+
+
 def classify(
     policy: Mapping[str, object], changed: Sequence[ChangedFile], *, base_sha: str,
     head_sha: str, event_name: str, draft: bool, labels: Collection[str],
     force_full: bool = False, requested_lanes: Collection[str] | None = None,
+    trusted_head: bool = True,
 ) -> dict[str, object]:
-    """Return a deterministic closed v1 scope manifest as a dictionary."""
+    """Return a deterministic closed v2 scope manifest as a dictionary.
+
+    ``trusted_head`` defaults to the non-Pull-Request branch of
+    :func:`derive_trusted_head`, which is exactly what an in-repository caller
+    such as the local pre-flight is. Every CI path derives and passes it
+    explicitly from the event.
+    """
     _validate_policy(policy)
+    if not isinstance(trusted_head, bool):
+        raise ValueError("trusted head must be a boolean")
     base_sha, head_sha = _validate_sha(base_sha), _validate_sha(head_sha)
     lanes = set(policy["lanes"])
     all_paths: set[str] = set()
@@ -331,6 +391,7 @@ def classify(
         "changed_files": [_changed_file_json(record) for record in changed],
         "lanes": lane_map,
         "required_jobs": required_jobs,
+        "trusted_head": trusted_head,
     }
     validate_manifest(manifest, policy)
     return manifest
@@ -345,6 +406,8 @@ def validate_manifest(manifest: Mapping[str, object], policy: Mapping[str, objec
     _validate_sha(manifest["head_sha"])
     if manifest["mode"] not in ALLOWED_MODES:
         raise ValueError("unknown manifest mode")
+    if not isinstance(manifest["trusted_head"], bool):
+        raise ValueError("manifest trusted head must be a boolean")
     lanes = policy["lanes"]
     if not isinstance(manifest["lanes"], dict) or set(manifest["lanes"]) != set(lanes) or not all(isinstance(value, bool) for value in manifest["lanes"].values()):
         raise ValueError("manifest lanes are not closed")
@@ -486,6 +549,9 @@ def _summary(
         f"| Mode | <code>{_summary_text(manifest['mode'])}</code> |",
         f"| Base | <code>{_summary_text(manifest['base_sha'])}</code> |",
         f"| Head | <code>{_summary_text(manifest['head_sha'])}</code> |",
+        "| Trust | <code>"
+        + _summary_text("trusted" if manifest["trusted_head"] else "untrusted")
+        + "</code> |",
         "| Lanes | " + (
             ", ".join(f"<code>{_summary_text(lane)}</code>" for lane in enabled)
             or "none"
@@ -559,6 +625,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--repository", required=True)
+    parser.add_argument("--head-repository", required=True)
     parser.add_argument("--pr-number", required=True)
     parser.add_argument("--manifest-out", required=True)
     parser.add_argument("--github-output", required=True)
@@ -574,17 +641,24 @@ def main(argv: Sequence[str] | None = None) -> int:
         draft, labels = (False, set())
         if args.event == "pull_request":
             draft, labels = fetch_pr_metadata(args.repository, args.pr_number)
+        trusted_head = derive_trusted_head(
+            args.event, args.head_repository, args.repository
+        )
         manifest = classify(
             policy, inventory, base_sha=args.base_sha, head_sha=args.head_sha,
             event_name=args.event, draft=draft, labels=labels,
             requested_lanes=[
                 lane.strip() for lane in args.lanes.split(",") if lane.strip()
             ],
+            trusted_head=trusted_head,
         )
         compact = encode_manifest(manifest)
         _write(args.manifest_out, compact)
         with Path(args.github_output).open("a", encoding="utf-8") as output_file:
             output_file.write(f"manifest={compact}\n")
+            output_file.write(
+                f"trusted-head={'true' if trusted_head else 'false'}\n"
+            )
         _write(args.summary, _summary(manifest, policy))
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"change scope failed closed: {error}", file=sys.stderr)

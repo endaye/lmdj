@@ -57,6 +57,7 @@ FOCUSED_PATH_FIXTURES = {
     frozenset(("deploy_contract",)): ("scripts/web-runtime-deploy.sh",),
     frozenset(("chameleon_lab",)): ("scripts/chameleon-lab.sh",),
     frozenset(("package",)): ("tests/distribution/archive_test.py",),
+    frozenset(("core_ubuntu",)): ("tests/fixtures/projects/demo.json",),
     frozenset(("core_ubuntu", "core_macos")): ("tests/host/cli_test.py",),
 }
 
@@ -105,14 +106,24 @@ def load_gate():
     return module
 
 
+def evaluate(manifest, results, policy):
+    """Adjudicate one manifest/result pair against the closed v2 policy."""
+    return load_gate().validate_gate(
+        policy, manifest, results, HEAD_SHA, expected_base_sha=OTHER_HEAD_SHA,
+    )
+
+
 class PrGateTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.policy = json.loads(POLICY_PATH.read_text(encoding="utf-8"))
         cls.module = load_gate()
 
-    def manifest(self, enabled=("docs_static", "portal", "web_runtime_host")):
-        enabled = tuple(enabled)
+    def manifest(
+        self, enabled=("docs_static", "portal", "web_runtime_host"), *,
+        lanes=None, trusted_head=True,
+    ):
+        enabled = tuple(sorted(lanes)) if lanes is not None else tuple(enabled)
         lanes = {lane: lane in enabled for lane in self.policy["lanes"]}
         required_jobs = sorted({
             job for lane in enabled for job in self.policy["lane_jobs"][lane]
@@ -135,6 +146,7 @@ class PrGateTest(unittest.TestCase):
             ],
             "lanes": lanes,
             "required_jobs": required_jobs,
+            "trusted_head": trusted_head,
         }
 
     @staticmethod
@@ -142,6 +154,17 @@ class PrGateTest(unittest.TestCase):
         results = {job: "skipped" for job in VALID_RESULTS}
         for job in manifest["required_jobs"]:
             results[job] = "success"
+        return results
+
+    @staticmethod
+    def results(**overrides):
+        """Build a result set keyed by lane-style identifiers, all skipped."""
+        results = {job: "skipped" for job in VALID_RESULTS}
+        for name, result in overrides.items():
+            job = name.replace("_", "-")
+            if job not in results:
+                raise AssertionError(f"unknown formal job: {job}")
+            results[job] = result
         return results
 
     def validate(
@@ -157,6 +180,52 @@ class PrGateTest(unittest.TestCase):
         report = self.validate()
         self.assertTrue(report.ok)
         self.assertEqual(report.errors, ())
+
+    def test_untrusted_selected_self_hosted_lane_fails_gate(self):
+        manifest = self.manifest(lanes={"core_ubuntu"}, trusted_head=False)
+        report = evaluate(manifest, self.results(core_ubuntu="skipped"), self.policy)
+        self.assertFalse(report.ok)
+        self.assertIn("untrusted fork blocked from self-hosted CI", report.errors)
+
+    def test_untrusted_block_is_reported_before_the_selected_skip_errors(self):
+        manifest = self.manifest(lanes={"core_ubuntu"}, trusted_head=False)
+        report = evaluate(manifest, self.results(core_ubuntu="skipped"), self.policy)
+        self.assertEqual(
+            report.errors[0], "untrusted fork blocked from self-hosted CI"
+        )
+        self.assertIn(
+            "selected job core-ubuntu is skipped, expected success", report.errors
+        )
+
+    def test_untrusted_head_without_a_self_hosted_job_keeps_ordinary_errors(self):
+        manifest = self.manifest(lanes={"core_macos"}, trusted_head=False)
+        self.assertFalse(
+            set(manifest["required_jobs"])
+            & set(self.policy["self_hosted_jobs"])
+        )
+        report = evaluate(
+            manifest, self.matching_results(manifest), self.policy
+        )
+        self.assertTrue(report.ok)
+        self.assertEqual(report.errors, ())
+
+    def test_trusted_head_keeps_the_existing_truth_table(self):
+        manifest = self.manifest(lanes={"core_ubuntu"}, trusted_head=True)
+        report = evaluate(
+            manifest, self.matching_results(manifest), self.policy
+        )
+        self.assertTrue(report.ok)
+        self.assertEqual(report.errors, ())
+
+    def test_missing_or_non_boolean_trust_fails_the_gate_closed(self):
+        for value in ("true", 1, None):
+            with self.subTest(value=value):
+                manifest = self.manifest()
+                manifest["trusted_head"] = value
+                self.assertFalse(self.validate(manifest=manifest).ok)
+        manifest = self.manifest()
+        del manifest["trusted_head"]
+        self.assertFalse(self.validate(manifest=manifest).ok)
 
     def test_change_scope_failure_after_manifest_output_fails_gate(self):
         try:

@@ -35,6 +35,7 @@ jobs:
     timeout-minutes: 3
     outputs:
       manifest: ${{ steps.scope.outputs.manifest }}
+      trusted-head: ${{ steps.scope.outputs.trusted-head }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -47,6 +48,7 @@ jobs:
           BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
           HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           REPOSITORY: ${{ github.repository }}
+          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
           PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MANIFEST_PATH: ${{ runner.temp }}/ci-scope.json
@@ -59,6 +61,7 @@ jobs:
             --base-sha "$BASE_SHA" \
             --head-sha "$HEAD_SHA" \
             --repository "$REPOSITORY" \
+            --head-repository "$HEAD_REPOSITORY" \
             --pr-number "$PR_NUMBER" \
             --manifest-out "$MANIFEST_PATH" \
             --github-output "$GITHUB_OUTPUT" \
@@ -216,7 +219,7 @@ jobs:
   docs-static:
     name: Docs / static
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -232,7 +235,7 @@ jobs:
   portal:
     name: Architecture Portal
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal && needs.change-scope.outputs.trusted-head == 'true' }}
     uses: ./.github/workflows/architecture-portal.yml
     with:
       check_documentation_impact: ${{ github.event_name == 'pull_request' }}
@@ -243,7 +246,7 @@ jobs:
   ci-contract:
     name: CI contract
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -259,7 +262,7 @@ jobs:
   deploy-contract:
     name: Deploy contract
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.deploy_contract }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.deploy_contract && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -284,7 +287,7 @@ jobs:
   chameleon-lab:
     name: Chameleon Lab
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.chameleon_lab }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.chameleon_lab && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -300,7 +303,7 @@ jobs:
   package:
     name: Core package
     needs: [change-scope, select-ubuntu-runner]
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     timeout-minutes: 35
     steps:
@@ -323,13 +326,17 @@ jobs:
       - run: scripts/core.sh package
 
   web-toolchain-conformance:
-    # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
-    # bounded test budgets on the heterogeneous self-hosted Linux pool.
-    # This lane stays GitHub-hosted for determinism, not for capacity, so
-    # neither extra runner slots nor toolchain caching justifies moving it.
+    # First lane cut over to the dedicated CI-only netcup node. The earlier
+    # hosted pinning answered heterogeneity on the shared Linux pool, not
+    # capacity; the dedicated Web role removes that heterogeneity, so the
+    # determinism argument no longer applies to this lane. The label set is
+    # literal rather than selector-resolved, so a busy or absent role queues
+    # this job instead of diverting it to paid runners. System dependencies
+    # are provisioned with the role, so Playwright must not apt-install them
+    # into state shared by both runner services on every run.
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain }}
-    runs-on: ubuntu-24.04
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain && needs.change-scope.outputs.trusted-head == 'true' }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
     timeout-minutes: 35
     env:
       LANG: C.UTF-8
@@ -339,11 +346,11 @@ jobs:
       - uses: ./.github/actions/web-ci-proof
         with:
           lane: web_toolchain
-          install-system-deps: "true"
+          install-system-deps: "false"
 
   web-runtime-host:
     needs: [change-scope, select-ubuntu-runner]
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     # 45 was calibrated to GitHub-hosted speed (16-19 min observed). The
     # trusted pool runs this lane about 2.2x slower: one success at 40 min
@@ -372,7 +379,7 @@ jobs:
     # This lane stays GitHub-hosted for determinism, not for capacity, so
     # neither extra runner slots nor toolchain caching justifies moving it.
     needs: change-scope
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.creator }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.creator && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
@@ -391,7 +398,7 @@ jobs:
 
   web-runtime-lab:
     needs: [change-scope, select-ubuntu-runner]
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     steps:
       - uses: actions/checkout@v6
@@ -406,7 +413,7 @@ jobs:
   core-ubuntu:
     name: core (ubuntu-latest)
     needs: [change-scope, select-ubuntu-runner]
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     timeout-minutes: 30
     steps:
@@ -732,7 +739,7 @@ jobs:
 
   core-asan:
     needs: [change-scope, select-ubuntu-runner]
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     timeout-minutes: 35
     steps:
@@ -767,7 +774,7 @@ jobs:
 
   core-coverage:
     needs: [change-scope, select-ubuntu-runner]
-    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage }}
+    if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage && needs.change-scope.outputs.trusted-head == 'true' }}
     runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
     timeout-minutes: 35
     steps:
