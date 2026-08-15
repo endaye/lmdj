@@ -73,6 +73,20 @@ target_link_libraries(
 lmdj_target_warnings(lmdj_analysis_bench_onsets)
 lmdj_target_sanitizers(lmdj_analysis_bench_onsets)
 
+add_executable(
+  lmdj_analysis_bench
+  src/main.cpp
+)
+target_link_libraries(
+  lmdj_analysis_bench
+  PRIVATE
+    lmdj_analysis_bench_peaks
+    lmdj_analysis_bench_loudness
+    lmdj_analysis_bench_onsets
+)
+lmdj_target_warnings(lmdj_analysis_bench)
+lmdj_target_sanitizers(lmdj_analysis_bench)
+
 if(BUILD_TESTING)
   add_executable(
     lmdj_analysis_bench_wav_tests
@@ -167,6 +181,18 @@ if(BUILD_TESTING)
     NAME analysis_bench.onsets
     TIER unit
     COMMAND lmdj_analysis_bench_onsets_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS analysis-bench
+  )
+
+  lmdj_add_test(
+    NAME analysis_bench.smoke
+    TIER component
+    COMMAND
+      python3
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_smoke_test.py"
+      $<TARGET_FILE:lmdj_analysis_bench>
+      "${CMAKE_SOURCE_DIR}/tests/fixtures/audio/kick.wav"
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS analysis-bench
   )
