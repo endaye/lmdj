@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 MAIN_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 PORTAL_WORKFLOW = REPO_ROOT / ".github/workflows/architecture-portal.yml"
 WEB_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
@@ -35,6 +37,32 @@ SUPPORT_JOBS = (
     "select-macos-runner",
     "macos-primary",
 )
+# Every job a self-hosted role may ever execute. Each one must already carry
+# the closed trust condition, including while it is still Hosted, so that a
+# later repository or routing change cannot open a self-hosted lane to an
+# untrusted head before the Gate sees it.
+SELF_HOSTED_JOBS = (
+    "docs-static",
+    "portal",
+    "ci-contract",
+    "core-ubuntu",
+    "core-asan",
+    "core-coverage",
+    "web-toolchain-conformance",
+    "web-runtime-host",
+    "creator-web",
+    "web-runtime-lab",
+    "deploy-contract",
+    "chameleon-lab",
+    "package",
+)
+HOSTED_CONTROL_PLANE_JOBS = (
+    "change-scope",
+    "pr-gate",
+    "select-ubuntu-runner",
+    "select-macos-runner",
+)
+TRUST_CONDITION = "needs.change-scope.outputs.trusted-head == 'true'"
 RELEASE_HISTORY_CONSUMERS = (
     "deploy-contract",
     "core-ubuntu",
@@ -265,6 +293,43 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotRegex(job, rf"(?i){forbidden}")
+
+    def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
+        for job_name in HOSTED_CONTROL_PLANE_JOBS:
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn("runs-on: ubuntu-24.04", job)
+                self.assertNotRegex(job, r"(?m)^    runs-on: (?!ubuntu-24\.04$)")
+        self.assertIn("select-ubuntu-runner:", self.main_source)
+
+    def test_change_scope_publishes_trusted_head_from_the_event_only(self) -> None:
+        job = self.workflow_job("change-scope")
+        self.assertIn(
+            "trusted-head: ${{ steps.scope.outputs.trusted-head }}", job
+        )
+        self.assertIn(
+            "HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}",
+            job,
+        )
+        self.assertIn('--head-repository "$HEAD_REPOSITORY"', job)
+        for forbidden in ("pull_request.title", "pull_request.labels", "label"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, job)
+
+    def test_every_self_hosted_job_requires_a_trusted_head(self) -> None:
+        policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
+        self.assertEqual(tuple(policy["self_hosted_jobs"]), SELF_HOSTED_JOBS)
+        for job_name in SELF_HOSTED_JOBS:
+            with self.subTest(job=job_name):
+                self.assertIn(TRUST_CONDITION, self.workflow_job(job_name))
+
+    def test_control_plane_and_macos_jobs_are_outside_the_trust_condition(self) -> None:
+        for job_name in (
+            *HOSTED_CONTROL_PLANE_JOBS, "macos-primary", "macos-fallback",
+            "core-macos", "core-asan-macos",
+        ):
+            with self.subTest(job=job_name):
+                self.assertNotIn(TRUST_CONDITION, self.workflow_job(job_name))
 
     def test_every_formal_lane_depends_directly_on_change_scope(self) -> None:
         for job_name in FORMAL_LANE_JOBS:

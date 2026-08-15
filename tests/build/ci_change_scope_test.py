@@ -46,6 +46,25 @@ LANE_JOBS = {
     "package": ["select-ubuntu-runner", "package"],
 }
 
+# The closed set of formal jobs that a self-hosted role may ever execute.
+# Change Scope, PR Gate and the two selectors are the Hosted control plane, and
+# the macOS lane keeps its own runner policy, so none of them appear here.
+SELF_HOSTED_JOBS = [
+    "docs-static",
+    "portal",
+    "ci-contract",
+    "core-ubuntu",
+    "core-asan",
+    "core-coverage",
+    "web-toolchain-conformance",
+    "web-runtime-host",
+    "creator-web",
+    "web-runtime-lab",
+    "deploy-contract",
+    "chameleon-lab",
+    "package",
+]
+
 CASES = {
     "docs/guide.md": {"docs_static"},
     "docs/governance/git-workflow.md": {"docs_static", "portal"},
@@ -204,6 +223,7 @@ class ChangeScopeTest(unittest.TestCase):
             "event_name": "pull_request",
             "draft": False,
             "labels": (),
+            "trusted_head": True,
         }
         defaults.update(kwargs)
         return self.module.classify(self.policy, changed(self.module, *paths), **defaults)
@@ -216,6 +236,73 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(self.policy["lane_jobs"], LANE_JOBS)
         self.assertEqual(set(self.policy["known_top_levels"]), TOP_LEVELS)
         self.assertNotIn("expensive_family_exemptions", self.policy)
+
+    def test_manifest_v2_records_closed_trust(self):
+        manifest = self.classify(["docs/guide.md"], trusted_head=True)
+        self.assertEqual(manifest["schema"], "lmdj.ci-scope.v2")
+        self.assertIs(manifest["trusted_head"], True)
+        broken = dict(manifest)
+        broken["trusted_head"] = "true"
+        with self.assertRaisesRegex(ValueError, "trusted head"):
+            self.module.validate_manifest(broken, self.policy)
+
+    def test_untrusted_head_is_encoded_and_non_boolean_trust_is_rejected(self):
+        manifest = self.classify(["docs/guide.md"], trusted_head=False)
+        self.assertIs(manifest["trusted_head"], False)
+        self.assertIn(
+            '"trusted_head":false', self.module.encode_manifest(manifest)
+        )
+        for value in ("true", 1, 0, None):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    self.classify(["docs/guide.md"], trusted_head=value)
+
+    def test_trust_derives_only_from_the_event_and_head_repository(self):
+        derive = self.module.derive_trusted_head
+        for event in ("push", "workflow_dispatch"):
+            with self.subTest(event=event):
+                self.assertIs(derive(event, "", "owner/repo"), True)
+        self.assertIs(derive("pull_request", "owner/repo", "owner/repo"), True)
+        self.assertIs(derive("pull_request", "fork/repo", "owner/repo"), False)
+        self.assertIs(derive("pull_request", "", "owner/repo"), False)
+
+    def test_policy_declares_the_closed_self_hosted_job_set(self):
+        self.assertEqual(self.policy["manifest_schema"], "lmdj.ci-scope.v2")
+        self.assertEqual(self.policy["self_hosted_jobs"], SELF_HOSTED_JOBS)
+        formal_jobs = {
+            job for jobs in self.policy["lane_jobs"].values() for job in jobs
+        }
+        self.assertTrue(set(SELF_HOSTED_JOBS).issubset(formal_jobs))
+        for job in ("select-ubuntu-runner", "select-macos-runner",
+                    "macos-primary", "core-macos", "core-asan-macos"):
+            with self.subTest(job=job):
+                self.assertNotIn(job, SELF_HOSTED_JOBS)
+
+    def test_policy_rejects_a_weakened_self_hosted_job_set(self):
+        mutations = {
+            "missing": lambda policy: policy["self_hosted_jobs"].remove("package"),
+            "extra": lambda policy: policy["self_hosted_jobs"].append(
+                "select-ubuntu-runner"
+            ),
+            "duplicate": lambda policy: policy["self_hosted_jobs"].append(
+                "package"
+            ),
+            "non-formal": lambda policy: policy["self_hosted_jobs"].append(
+                "invented-job"
+            ),
+            "removed": lambda policy: policy.pop("self_hosted_jobs"),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(name=name):
+                policy = copy.deepcopy(self.policy)
+                mutate(policy)
+                with self.assertRaises(ValueError):
+                    self.module.classify(
+                        policy, changed(self.module, "docs/guide.md"),
+                        base_sha="a" * 40, head_sha="b" * 40,
+                        event_name="pull_request", draft=False, labels=(),
+                        trusted_head=True,
+                    )
 
     def test_every_tracked_path_has_explicit_ownership_or_full_rule(self):
         inventory = subprocess.run(
@@ -545,6 +632,29 @@ class ChangeScopeTest(unittest.TestCase):
                 result = invoke(manifest, base, environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(manifest.exists())
+
+    def test_cli_publishes_the_trusted_head_output_and_summary_line(self):
+        with TemporaryGitRepository() as repository:
+            base = repository.write_and_commit("docs/guide.md", "one\n", "base")
+            head = repository.write_and_commit("docs/guide.md", "two\n", "head")
+            manifest = repository.path / "manifest.json"
+            output = repository.path / "output"
+            summary = repository.path / "summary.md"
+            result = subprocess.run([
+                sys.executable, str(CLASSIFIER_PATH), "--policy", str(POLICY_PATH),
+                "--event", "push", "--base-sha", base, "--head-sha", head,
+                "--repository", "owner/repo", "--head-repository", "",
+                "--pr-number", "0", "--manifest-out", str(manifest),
+                "--github-output", str(output), "--summary", str(summary),
+            ], cwd=repository.path, capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn(
+                "trusted-head=true", output.read_text(encoding="utf-8")
+            )
+            self.assertIn(
+                '"trusted_head":true', manifest.read_text(encoding="utf-8")
+            )
+            self.assertIn("| Trust |", summary.read_text(encoding="utf-8"))
 
     def test_manifest_is_compact_deterministic_and_schema_closed(self):
         first = self.classify(["docs/guide.md"])

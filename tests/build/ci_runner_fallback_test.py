@@ -113,6 +113,35 @@ class CiRunnerFallbackTest(unittest.TestCase):
                     job,
                 )
 
+    def test_selector_consumers_also_require_a_trusted_head(self) -> None:
+        """The selector's fork branch is depth, not the only trust boundary.
+
+        `select-ubuntu-runner` decides where a job runs; it cannot decide
+        whether the job runs at all. Every workload that can land on the pool
+        therefore carries the closed manifest trust condition, so an untrusted
+        head is blocked before routing rather than diverted to paid runners.
+        """
+        for job_name in (
+            "web-runtime-host",
+            "web-runtime-lab",
+            "core-ubuntu",
+            "core-asan",
+            "core-coverage",
+            "package",
+        ):
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn(
+                    "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
+                    job,
+                )
+                self.assertIn(
+                    "needs.change-scope.outputs.trusted-head == 'true'", job
+                )
+        selector = self.workflow_job("select-ubuntu-runner")
+        self.assertIn("runs-on: ubuntu-24.04", selector)
+        self.assertNotIn("trusted-head", selector)
+
     def test_resource_intensive_web_gates_use_hosted_runners(self) -> None:
         for job_name in ("web-toolchain-conformance", "creator-web"):
             with self.subTest(job=job_name):

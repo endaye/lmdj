@@ -194,6 +194,45 @@ and test-owned behavior timeouts remain hard failures. A slow successful job
 stays successful; a failed compile, Proof, test, sanitizer, or Coverage command
 is not retried. `main` and manual dispatch always run the full manifest.
 
+### Hosted Control Plane and Head Trust
+
+`Change Scope` and `PR Gate` stay on GitHub-hosted `ubuntu-24.04`, and so do
+both runner selectors. Change Scope must publish the exact diff, scope, trust,
+and upgrade reasons even when every self-hosted Linux runner is offline, and
+the Gate must adjudicate a workload without depending on that workload's host.
+These jobs are the declared exception to routing Linux work to the trusted
+pool; their minutes are reported as hosted control plane rather than as
+routine self-hosted workload.
+
+The scope manifest is `lmdj.ci-scope.v2`. v2 adds exactly one closed boolean
+field, `trusted_head`, and `Change Scope` publishes the matching `trusted-head`
+job output. Trust is derived only from the event: a non-`pull_request` event,
+or a Pull Request whose head repository equals `github.repository`. It is never
+derived from a Pull Request title, a label, the changed paths, or the code
+under test, because a fork controls all of those. Producer, Gate, and contract
+tests migrate to v2 in one commit; a mixed-version run fails closed.
+
+`scripts/ci/scope_policy.json` declares the closed `self_hosted_jobs` set: the
+thirteen formal jobs a self-hosted role may ever execute — Docs/static, Portal,
+CI Contract, Ubuntu Core, Linux ASan, Coverage, all four Web lanes, Deploy
+Contract, Chameleon Lab, and Package. Every one of them requires
+`needs.change-scope.outputs.trusted-head == 'true'` in its `if`, including the
+jobs still GitHub-hosted during the rollout, so an accidental repository or
+routing change fails closed before the first static self-hosted route exists.
+The policy validator rejects a missing, extra, duplicate, or non-formal entry
+in that set.
+
+`PR Gate` validates `trusted_head` before any job result. When an untrusted
+head selects any job in `self_hosted_jobs`, the Gate fails the run and reports
+`untrusted fork blocked from self-hosted CI`; the selected-but-skipped jobs
+that condition produces remain ordinary truth-table errors as well. A trusted
+head keeps the existing selected-success/unselected-skipped table unchanged.
+The repository-level private-fork workflow setting remains the primary
+boundary, because a fork can edit its own workflow file, and the manifest field
+is defence in depth. An external fork that needs formal merge evidence has its
+exact patch carried onto a trusted in-repository branch and CI rebuilt on the
+new SHA; a fork run is never inherited.
+
 ### Local Pre-Flight
 
 `scripts/local-ci.sh` (implemented by `scripts/ci/local_preflight.py` and the
@@ -261,6 +300,28 @@ the hosts absorb, while three would mean nine and would slow every job on the
 machine. `web-runtime-host` is the lane most exposed to that contention, at
 roughly 40 minutes on the pool against 16-19 GitHub-hosted, and it sets the
 pool's critical path regardless of how many slots the pool offers.
+
+The approved target topology replaces the shared `contabo` origin label with
+role labels. The Contabo Singapore host, which also runs LMDJ staging, keeps
+`shared-with-staging` and takes the `ci-general` and `ci-core` roles under a
+resource slice that reserves at least about 2 vCPU and 8 GiB for the
+application and the OS. A CI-only netcup node takes `ci-only-host` and the
+`ci-web-heavy` role with two runner services bounded to roughly 14 vCore and
+48 GB, leaving the rest for the OS and cache maintenance. Neither the role
+labels nor the netcup node exists yet: this change migrated schema and trust
+only, every current `runs-on` value and the `select-ubuntu-runner` label set
+are unchanged, and lanes that have not been cut over keep the current selector
+behavior.
+
+A busy matching pool still queues instead of diverting to paid runners. When no
+matching runner ever comes online, the job stays queued and GitHub cancels it
+at its 24-hour queue limit, so the terminal state is a cancelled run plus a
+runner-availability alert — not an unbounded wait, and not a silent bill.
+
+Runner evidence stays separated. Registration and online status are not
+selection, and selection is not success. The real `runner_name`, queue seconds,
+execution seconds, billable worker time, and run wall-clock are each reported
+on their own, and none of them substitutes for another.
 
 Each CI CMake build is capped at three parallel jobs. Native Linux jobs
 use the pool's shared checkout-external persistent `ccache`, while Emscripten

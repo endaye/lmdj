@@ -1,6 +1,6 @@
 {
   "schema": "lmdj.ci-scope-policy.v1",
-  "manifest_schema": "lmdj.ci-scope.v1",
+  "manifest_schema": "lmdj.ci-scope.v2",
   "lanes": ["docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan", "core_coverage", "core_macos", "web_toolchain", "web_runtime_host", "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab", "package"],
   "lane_jobs": {
     "docs_static": ["docs-static"],
@@ -18,6 +18,7 @@
     "chameleon_lab": ["chameleon-lab"],
     "package": ["select-ubuntu-runner", "package"]
   },
+  "self_hosted_jobs": ["docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan", "core-coverage", "web-toolchain-conformance", "web-runtime-host", "creator-web", "web-runtime-lab", "deploy-contract", "chameleon-lab", "package"],
   "known_top_levels": [".claude", ".gitattributes", ".github", ".gitignore", "AGENTS.md", "CLAUDE.md", "CMakeLists.txt", "CMakePresets.json", "README.md", "apps", "cmake", "contracts", "docs", "netlify.toml", "output", "packages", "packaging", "products", "providers", "references", "scripts", "testdata", "tests", "third_party", "tools", "workers"],
   "full_rules": [
     {"match": {"kind": "exact", "value": ".gitignore"}, "reason": "shared repository metadata"},
