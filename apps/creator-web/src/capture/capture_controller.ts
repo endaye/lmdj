@@ -48,19 +48,32 @@ export class CaptureController {
     }
     const track = stream.getAudioTracks()[0];
     if (track === undefined) { throw new Error("Capture stream has no audio track"); }
-    this.channelCount = track.getSettings().channelCount === 2 ? 2 : 1;
-    const context = this.#deps.createContext();
-    const moduleUrl = this.#deps.createModuleUrl(CAPTURE_WORKLET_SOURCE);
-    await context.audioWorklet.addModule(moduleUrl);
-    const source = context.createMediaStreamSource(stream);
-    const node = this.#deps.createNode(context, CAPTURE_WORKLET_NAME);
-    node.port.onmessage = (event: MessageEvent) => {
-      this.#listener.onBatch(event.data.channels, event.data.peak);
-    };
-    source.connect(node);
-    const onended = () => this.#listener.onEnded("device-lost");
-    track.addEventListener("ended", onended);
-    this.#resources = {track, node, source, context, moduleUrl, onended};
+    // The stream is live from here on. Any setup failure below must release it,
+    // or the microphone stays on with no owner able to stop it: stop() would
+    // find #resources === null and silently no-op (design §7, single owner).
+    let context: AudioContext | undefined;
+    let moduleUrl: string | undefined;
+    try {
+      this.channelCount = track.getSettings().channelCount === 2 ? 2 : 1;
+      context = this.#deps.createContext();
+      moduleUrl = this.#deps.createModuleUrl(CAPTURE_WORKLET_SOURCE);
+      await context.audioWorklet.addModule(moduleUrl);
+      const source = context.createMediaStreamSource(stream);
+      const node = this.#deps.createNode(context, CAPTURE_WORKLET_NAME);
+      node.port.onmessage = (event: MessageEvent) => {
+        this.#listener.onBatch(event.data.channels, event.data.peak);
+      };
+      source.connect(node);
+      const onended = () => this.#listener.onEnded("device-lost");
+      track.addEventListener("ended", onended);
+      this.#resources = {track, node, source, context, moduleUrl, onended};
+    } catch (error) {
+      track.stop();
+      if (context !== undefined) { await context.close(); }
+      if (moduleUrl !== undefined) { this.#deps.revokeModuleUrl(moduleUrl); }
+      this.channelCount = 0;
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {

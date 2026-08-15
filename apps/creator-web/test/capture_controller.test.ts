@@ -11,7 +11,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     getSettings: () => ({channelCount: 1}),
   };
   const stream = {getAudioTracks: () => [track]};
-  const source = {connected: 0, connect() { this.connected += 1; }, disconnect: vi.fn()};
+  // connect is a spy, not a counter: the test must be able to prove the source
+  // is wired to the worklet node and NOT to any output (S8B-D4 anti-feedback).
+  const source = {connect: vi.fn(), disconnect: vi.fn()};
   const node = {
     port: {onmessage: null as ((event: {data: {channels: Float32Array[]; peak: number}}) => void) | null},
     disconnect: vi.fn(),
@@ -37,7 +39,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 
 describe("CaptureController", () => {
   test("requests raw audio constraints and wires the graph", async () => {
-    const {deps, context, source} = makeDeps();
+    const {deps, context, source, node} = makeDeps();
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
     await controller.start();
     expect(deps.getUserMedia).toHaveBeenCalledWith({audio: {
@@ -45,8 +47,24 @@ describe("CaptureController", () => {
     }});
     expect(deps.createModuleUrl).toHaveBeenCalledWith(CAPTURE_WORKLET_SOURCE);
     expect(context.audioWorklet.added).toEqual(["blob:capture"]);
-    expect(source.connected).toBe(1);
+    // S8B-D4: wired to the worklet node, never to an output.
+    expect(source.connect).toHaveBeenCalledTimes(1);
+    expect(source.connect).toHaveBeenCalledWith(node);
     expect(controller.channelCount).toBe(1);
+  });
+
+  test("releases the microphone when setup fails after getUserMedia", async () => {
+    const {deps, track, context} = makeDeps();
+    context.audioWorklet.addModule = async () => { throw new Error("CSP blocked"); };
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    await expect(controller.start()).rejects.toThrow("CSP blocked");
+    // The stream was live; it must not be left running with no owner.
+    expect(track.stopped).toBe(1);
+    expect(context.closed).toBe(1);
+    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
+    // stop() afterwards stays a safe no-op, releasing nothing a second time.
+    await controller.stop();
+    expect(track.stopped).toBe(1);
   });
 
   test("maps getUserMedia rejection to CapturePermissionError", async () => {
