@@ -64,9 +64,21 @@ pinned emsdk 与 Playwright 浏览器由 `actions/cache` 按 pinned 修订/版�
 
 Portal 不再独立触发 PR 或 `main` workflow；主 CI 在同一次 run 内调用 reusable Portal，并显式传入 documentation-impact 开关、base/head 与 PR body。`PR Gate` 静态 fan-in 15 个 lane job 加 `select-ubuntu-runner`、`select-macos-runner`、`macos-primary` 共 18 个结果：manifest 选中的结果必须是 `success`，未选中的必须是 `skipped`，缺失、额外、失败、取消、exact base/head SHA、mode/lane、changed-file schema 或 lane/job 映射不一致都 fail closed。`Change Scope` 是 manifest producer，不是结果键，但 producer job 本身仍必须为 `success`，因此 manifest output 已产生但后置 artifact 上传失败也不能通过；条件性 `macos-fallback` 由 `core (macos-latest)` 与 `core-asan-macos` 两个 adjudicator 传递裁决。
 
+`Change Scope` 与 `PR Gate` 明确保留在 GitHub-hosted `ubuntu-24.04`，两个 runner selector 同样如此：Change Scope 必须在所有自建 Linux runner 离线时仍发布精确 diff、scope、trust 与升级理由，PR Gate 也不应受它所裁决的 workload 主机权限影响。这是"把 Linux 工作交给受信池"这一原则的显式豁免，它们的 minutes 记为 hosted control plane，而不是 routine self-hosted workload。
+
+scope manifest schema 现为 `lmdj.ci-scope` 的 v2——这是仓库内部的 CI schema 迁移，不是 active Contract，因此不参与 Contract SemVer。v2 只新增一个闭合布尔字段 `trusted_head`，`Change Scope` 同时发布 job output `trusted-head`。trust 只由 event 推导——非 `pull_request` 事件，或 head repository 等于 `github.repository` 的 Pull Request；绝不从 PR 标题、label、改动路径或被测代码推导，因为 fork 控制这些内容。producer、Gate 与契约测试在同一个 commit 原子迁移到 v2，混合版本 fail closed。
+
+`scripts/ci/scope_policy.json` 声明闭合的 `self_hosted_jobs`：13 个允许由自建角色执行的正式 job（Docs/static、Portal、CI Contract、Ubuntu Core、Linux ASan、Coverage、四条 Web lane、Deploy Contract、Chameleon Lab、Package）。它们的 `if` 现在都要求 `needs.change-scope.outputs.trusted-head == 'true'`，包括当前仍托管在 GitHub-hosted 上的 job，因此仓库设置或路由的意外改动会在第一条静态自建路由出现之前就 fail closed。`PR Gate` 在读取任何 job 结果之前先校验 `trusted_head`：untrusted head 选中该集合中任一 job 时，直接以 `untrusted fork blocked from self-hosted CI` 判定失败，而被跳过的 selected job 仍按原有真值表另行报错。仓库级 private-fork workflow 禁止执行仍是主边界（fork 可以改自己的 workflow 文件），manifest 字段是纵深防御。外部 fork 若需要正式 merge 证据，由 maintainer 把 exact patch 带到受信的同仓库分支，在新 SHA 上重新建立 CI，不能继承 fork run。
+
 只有 selected Linux pool consumer 存在时才运行 Ubuntu selector；Package 也是该 selector 的消费者，保留 LFS hydration 并明确禁用 ccache。只有 `core_macos` 被选中时才运行 macOS selector。Formal Web Runtime Host、Web Runtime Lab、Ubuntu Core、Linux ASan、Coverage 和 Package 重负载任务继续优先至少一台在线且带 `self-hosted`、`Linux`、`X64`、`lmdj-linux`、`contabo` 标签的受信 runner；外部 fork、状态密钥缺失、Runner API 失败或池中没有在线匹配 runner 时，在 workload 开始前选择 GitHub-hosted Ubuntu。
 
 资格判定刻意不看 runner 是否 busy。GitHub 本来就会让 label 匹配的 job 在满载池上排队，因此 busy 是延迟条件，只有池不存在才是可用性条件。selector 对整个 run 只解析一次，把两者等同处理会让并发 run 偶然占满池的瞬间把整份 manifest 转到付费基础设施——这正是 2026-08-12 运行历史中的主要成本来源。现在满载只排队，selector 把 online 与 idle 数量作为诊断输出。受信 Linux 池的并发度等于在线 runner service 数量，当前为二（每台主机一个），其余排队；提高该数量是既有主机上的运维改动，不是 workflow 改动。已批准的目标是每台主机两个 service、池并发四。取有界值而非最大值，是因为每次 CI CMake build 已限制为 3 路并行，主机上的 service 数量会与之相乘：每台两个即最多 6 个并发编译进程，主机可以吸收；三个则是 9 个，会拖慢该机器上的每个 job。`web-runtime-host` 是最受该争用影响的 lane——池上约 40 分钟，GitHub-hosted 上 16–19 分钟——无论池提供多少槽位，它都决定池的关键路径，其 job 上限因此按池速度校准为 75 分钟，而非按 hosted 速度的 45 分钟。
+
+已批准的目标拓扑用角色标签代替共享的 `contabo` 来源标签：兼跑 LMDJ staging 的 Contabo Singapore 主机标记 `shared-with-staging`，承担 `ci-general` 与 `ci-core` 角色，其 CI slice 至少为应用与 OS 保留约 2 vCPU 与 8 GiB；仅用于 CI 的 netcup 节点标记 `ci-only-host`，承担 `ci-web-heavy` 角色，初期两个 runner service、合计约 14 vCore 与 48 GB，为 OS 与缓存维护保留其余资源。角色标签与 netcup 节点目前都尚未存在：本次变更只迁移 schema 与 trust，`select-ubuntu-runner` 的现有标签集合与全部现有 `runs-on` 均未改动，尚未逐条切换的 lane 继续沿用当前 selector 行为。
+
+匹配池满载时仍然只排队，不转向付费 runner。若始终没有匹配的 runner 上线，job 保持 queued，并在 GitHub 的 24 小时排队上限后被自动取消——终态是 cancelled 与 runner 可用性告警，而不是无限等待，也不是静默账单。
+
+runner 证据始终分开报告：注册与 online 不等于被选中，被选中不等于成功。真实 `runner_name`、排队秒数、执行秒数、计费 worker time 与 run wall-clock 各自单独记录，任何一项都不能替代另一项。
 
 Web Toolchain 与 Creator 两条 lane 明确留在 GitHub-hosted Ubuntu：完整 Wasm/OPFS fault matrix 时序敏感，曾在异构自建池上超出限定测试预算。这是确定性决策而非容量决策，因此增加 runner 槽位或 toolchain 缓存都不构成迁移理由；契约测试同时固定其托管路由与该理由。Package 因此通常避免 hosted 执行，但 fallback 仍可能消耗 hosted minutes。所有 CI CMake build 均限制为 3 路并行。Linux 原生任务共享 checkout 外持久 `ccache`，Emscripten 与 Package 明确绕过；M1 原生任务使用本机持久 `ccache`，GitHub-hosted lane 不依赖 runner 本地缓存。
 
