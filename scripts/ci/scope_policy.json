@@ -13,7 +13,7 @@
     "web_toolchain": ["web-toolchain-conformance"],
     "web_runtime_host": ["web-runtime-host"],
     "creator": ["creator-web"],
-    "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
+    "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
     "package": ["select-ubuntu-runner", "package"]

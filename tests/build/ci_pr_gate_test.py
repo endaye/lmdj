@@ -449,6 +449,36 @@ class PrGateTest(unittest.TestCase):
             "\n".join(stale_report.errors),
         )
 
+    def test_web_runtime_lab_requires_no_runner_selector(self):
+        """The last Web lane leaves the selector, and its projection with it.
+
+        With `web_runtime_lab` on the static `ci-web-heavy` role, no Web lane
+        reads `select-ubuntu-runner` any more. Projecting the selector as a
+        required job for this lane would fail the run on a support job the
+        workflow guard now leaves skipped, and demanding it succeed would
+        quietly restore the paid-runner fallback the cutover removed.
+        """
+        manifest = self.manifest(("web_runtime_lab",))
+        self.assertEqual(manifest["required_jobs"], ["web-runtime-lab"])
+        report = self.validate(
+            manifest=manifest, results=self.matching_results(manifest)
+        )
+        self.assertTrue(report.ok)
+        self.assertNotIn("select-ubuntu-runner", report.requested_jobs)
+        self.assertIn("select-ubuntu-runner", report.skipped_jobs)
+        stale = self.manifest(("web_runtime_lab",))
+        stale["required_jobs"] = sorted(
+            [*stale["required_jobs"], "select-ubuntu-runner"]
+        )
+        stale_report = self.validate(
+            manifest=stale, results=self.matching_results(stale)
+        )
+        self.assertFalse(stale_report.ok)
+        self.assertIn(
+            "required jobs do not derive from lanes",
+            "\n".join(stale_report.errors),
+        )
+
     def test_core_macos_requires_both_published_adjudicators(self):
         manifest = self.manifest(("core_macos",))
         results = {job: "skipped" for job in VALID_RESULTS}
@@ -539,8 +569,15 @@ class PrGateTest(unittest.TestCase):
                     rf"Timing {re.escape(job_id)} .*; (?:within SLO|SLO missed)",
                 )
 
-    def test_web_only_selector_timing_has_no_lane_execution_slo(self):
-        manifest = self.manifest(("web_runtime_lab",))
+    def test_pool_selector_timing_has_no_lane_execution_slo(self):
+        """The selector is a support job, so it is timed but never judged.
+
+        No Web lane consumes `select-ubuntu-runner` any more, so the fixture
+        uses `package`, one of the remaining consumers. What is under test is
+        unchanged: the selector's own duration must never be scored against a
+        lane SLO it does not own.
+        """
+        manifest = self.manifest(("package",))
         results = {job: "skipped" for job in VALID_RESULTS}
         for required in manifest["required_jobs"]:
             results[required] = "success"

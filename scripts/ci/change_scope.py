@@ -53,7 +53,9 @@ _CANONICAL_LANE_JOBS = {
     # is a support job of this lane.
     "web_runtime_host": ("web-runtime-host",),
     "creator": ("creator-web",),
-    "web_runtime_lab": ("select-ubuntu-runner", "web-runtime-lab"),
+    # Also routed by the static role, which leaves the Ubuntu selector with
+    # no Web consumer at all.
+    "web_runtime_lab": ("web-runtime-lab",),
     "deploy_contract": ("deploy-contract",),
     "chameleon_lab": ("chameleon-lab",),
     "package": ("select-ubuntu-runner", "package"),

@@ -79,7 +79,7 @@ jobs:
   select-ubuntu-runner:
     name: Select Ubuntu runner
     needs: change-scope
-    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab || fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || fromJSON(needs.change-scope.outputs.manifest).lanes.package) }}
+    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || fromJSON(needs.change-scope.outputs.manifest).lanes.package) }}
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -413,9 +413,16 @@ jobs:
           install-system-deps: "false"
 
   web-runtime-lab:
-    needs: [change-scope, select-ubuntu-runner]
+    # Fourth and last Web lane cut over to the dedicated CI-only netcup node,
+    # after Web Toolchain, Creator and Web Runtime Host proved the role. The
+    # label set is literal rather than selector-resolved, so a busy or absent
+    # role queues this job instead of diverting it to paid runners, and the
+    # selector now has no Web consumer left at all. This lane keeps its own
+    # proof path: it never shared the emsdk/Playwright setup contract, so the
+    # cutover changes where it runs and nothing about what it runs.
+    needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
