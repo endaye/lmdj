@@ -648,6 +648,8 @@ git show --name-status --oneline HEAD
   `type CaptureStopReason = "user" | "capacity" | "blur" | "hidden" | "device-lost" | "permission-revoked"`;
   `interface CaptureState { phase: CapturePhase; stopReason: CaptureStopReason | null; frameCount: number; peak: number; selectionStart: number; selectionFrames: number; errorMessage: string | null; conflict: boolean }`;
   `const initialCaptureState: CaptureState`;
+  `const CAPTURE_DEVICE_LOST_MESSAGE: string`;
+  `const CAPTURE_PERMISSION_REVOKED_MESSAGE: string`;
   `type CaptureEvent = {kind: "record"} | {kind: "granted"} | {kind: "denied"; message: string} | {kind: "frames"; frames: number; peak: number} | {kind: "stop"; reason: CaptureStopReason} | {kind: "select"; start: number; frames: number} | {kind: "discard"} | {kind: "commit"} | {kind: "committed"} | {kind: "commit-failed"; message: string; conflict: boolean}`;
   `function reduceCapture(state: CaptureState, event: CaptureEvent): CaptureState`.
 
@@ -696,21 +698,59 @@ describe("reduceCapture", () => {
     expect(rejected).toBe(trimming); // unchanged
   });
 
-  it("keeps the buffer through every interruption and commit failure", () => {
+  it("keeps the buffer through every interruption reason", () => {
+    for (const reason of ["user", "capacity", "blur", "hidden",
+                          "device-lost", "permission-revoked"] as const) {
+      const trimming = run([
+        {kind: "record"}, {kind: "granted"},
+        {kind: "frames", frames: 48_000, peak: 0.4},
+        {kind: "stop", reason},
+      ]);
+      expect(trimming.phase).toBe("trimming");
+      expect(trimming.frameCount).toBe(48_000);
+      expect(trimming.stopReason).toBe(reason);
+    }
+  });
+
+  it("retains buffer and selection through commit failure", () => {
     const trimming = run([
       {kind: "record"}, {kind: "granted"},
-      {kind: "frames", frames: 48_000, peak: 0.4},
+      {kind: "frames", frames: 480_000, peak: 0.4},
       {kind: "stop", reason: "device-lost"},
+      {kind: "select", start: 1_000, frames: 200_000},
     ]);
-    expect(trimming.frameCount).toBe(48_000);
     const failed = reduceCapture(
       reduceCapture(trimming, {kind: "commit"}),
       {kind: "commit-failed", message: "conflict", conflict: true});
     expect(failed.phase).toBe("commit-error");
-    expect(failed.frameCount).toBe(48_000);
+    expect(failed.frameCount).toBe(480_000);
+    expect(failed.selectionStart).toBe(1_000);
+    expect(failed.selectionFrames).toBe(200_000);
     expect(failed.conflict).toBe(true);
     expect(reduceCapture(failed, {kind: "commit"}).phase).toBe("committing");
     expect(reduceCapture(failed, {kind: "discard"})).toEqual(initialCaptureState);
+  });
+
+  it("surfaces a failure reason when nothing was captured", () => {
+    const lost = run([{kind: "record"}, {kind: "granted"},
+                      {kind: "stop", reason: "device-lost"}]);
+    expect(lost.phase).toBe("permission-error");
+    expect(lost.errorMessage).toBe(CAPTURE_DEVICE_LOST_MESSAGE);
+    expect(lost.frameCount).toBe(0);
+    // still retryable
+    expect(reduceCapture(lost, {kind: "record"}).phase).toBe("requesting-permission");
+
+    const revoked = run([{kind: "record"}, {kind: "granted"},
+                         {kind: "stop", reason: "permission-revoked"}]);
+    expect(revoked.phase).toBe("permission-error");
+    expect(revoked.errorMessage).toBe(CAPTURE_PERMISSION_REVOKED_MESSAGE);
+  });
+
+  it("returns to idle when a benign stop captured nothing", () => {
+    for (const reason of ["user", "blur", "hidden"] as const) {
+      expect(run([{kind: "record"}, {kind: "granted"}, {kind: "stop", reason}]))
+        .toEqual(initialCaptureState);
+    }
   });
 
   it("routes permission denial to a retryable error state", () => {
@@ -754,6 +794,11 @@ export interface CaptureState {
   conflict: boolean;
 }
 
+export const CAPTURE_DEVICE_LOST_MESSAGE =
+  "Recording stopped: the input device became unavailable";
+export const CAPTURE_PERMISSION_REVOKED_MESSAGE =
+  "Recording stopped: microphone permission was revoked";
+
 export const initialCaptureState: CaptureState = Object.freeze({
   phase: "idle", stopReason: null, frameCount: 0, peak: 0,
   selectionStart: 0, selectionFrames: 0, errorMessage: null, conflict: false,
@@ -780,11 +825,24 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent): Capture
     case "frames":
       return state.phase === "recording"
         ? {...state, frameCount: event.frames, peak: event.peak} : state;
-    case "stop":
-      return state.phase === "recording" && state.frameCount > 0
-        ? {...state, phase: "trimming", stopReason: event.reason, peak: 0,
-           selectionStart: 0, selectionFrames: Math.min(state.frameCount, COMMIT_MAX_FRAMES)}
-        : state.phase === "recording" ? initialCaptureState : state;
+    case "stop": {
+      if (state.phase !== "recording") { return state; }
+      if (state.frameCount > 0) {
+        return {...state, phase: "trimming", stopReason: event.reason, peak: 0,
+                selectionStart: 0,
+                selectionFrames: Math.min(state.frameCount, COMMIT_MAX_FRAMES)};
+      }
+      // Nothing captured yet (interrupted before the first batch landed), so
+      // there is nothing to trim. A failure reason must still reach the user;
+      // a benign reason just returns to idle (S8B-D5 as amended).
+      return event.reason === "device-lost" || event.reason === "permission-revoked"
+        ? {...initialCaptureState, phase: "permission-error",
+           stopReason: event.reason,
+           errorMessage: event.reason === "device-lost"
+             ? CAPTURE_DEVICE_LOST_MESSAGE
+             : CAPTURE_PERMISSION_REVOKED_MESSAGE}
+        : initialCaptureState;
+    }
     case "select":
       return (state.phase === "trimming" || state.phase === "commit-error") &&
              Number.isInteger(event.start) && Number.isInteger(event.frames) &&

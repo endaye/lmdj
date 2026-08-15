@@ -416,7 +416,8 @@ manifest 与全部 Contract 零变更。
   ≤240,000 帧（5 秒）后提交，manifest 限值不变。
 - **S8B-D4**：无输入监听，只有电平表与增长波形；输入永不接输出。
 - **S8B-D5**：blur 与 hidden 一律停止采集（与 Stage 8 停 Voice 不变量一致），
-  缓冲保留进入裁剪。
+  缓冲保留进入裁剪。缓冲为空时（中断早于首批音频）不进入裁剪：设备丢失与
+  权限撤销进入可重试的错误态并给出原因，用户主动停/blur/hidden 回到 idle。
 - **S8B-D6**：录音期间不开 Core 会话；`sample.import.begin` 在提交时发起，
   `expected_revision` 取提交时新鲜值；冲突显式、缓冲保留、无 auto-rebase。
 - **S8B-D7**：采集关闭 echoCancellation/noiseSuppression/autoGainControl。
