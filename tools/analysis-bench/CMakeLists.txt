@@ -54,6 +54,25 @@ target_link_libraries(
 lmdj_target_warnings(lmdj_analysis_bench_loudness)
 lmdj_target_sanitizers(lmdj_analysis_bench_loudness)
 
+add_library(
+  lmdj_analysis_bench_onsets
+  STATIC
+    providers/onsets/src/provider.cpp
+)
+target_include_directories(
+  lmdj_analysis_bench_onsets
+  PUBLIC
+    "${CMAKE_CURRENT_SOURCE_DIR}/providers/onsets/include"
+)
+target_link_libraries(
+  lmdj_analysis_bench_onsets
+  PUBLIC
+    lmdj_analysis_bench_shared
+    lmdj_provider_sdk
+)
+lmdj_target_warnings(lmdj_analysis_bench_onsets)
+lmdj_target_sanitizers(lmdj_analysis_bench_onsets)
+
 if(BUILD_TESTING)
   add_executable(
     lmdj_analysis_bench_wav_tests
@@ -124,6 +143,30 @@ if(BUILD_TESTING)
     NAME analysis_bench.loudness
     TIER unit
     COMMAND lmdj_analysis_bench_loudness_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS analysis-bench
+  )
+
+  add_executable(
+    lmdj_analysis_bench_onsets_tests
+    tests/onsets_test.cpp
+  )
+  target_include_directories(
+    lmdj_analysis_bench_onsets_tests
+    PRIVATE
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests"
+  )
+  target_link_libraries(
+    lmdj_analysis_bench_onsets_tests
+    PRIVATE
+      lmdj_analysis_bench_onsets
+  )
+  lmdj_target_warnings(lmdj_analysis_bench_onsets_tests)
+  lmdj_target_sanitizers(lmdj_analysis_bench_onsets_tests)
+  lmdj_add_test(
+    NAME analysis_bench.onsets
+    TIER unit
+    COMMAND lmdj_analysis_bench_onsets_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS analysis-bench
   )
