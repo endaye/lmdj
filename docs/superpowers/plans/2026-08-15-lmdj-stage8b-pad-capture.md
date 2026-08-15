@@ -1145,8 +1145,12 @@ export class CaptureController {
       track.addEventListener("ended", onended);
       this.#resources = {track, node, source, context, moduleUrl, onended};
     } catch (error) {
-      track.stop();
-      if (context !== undefined) { await context.close(); }
+      // Best-effort release: a throw while cleaning up must never replace the
+      // original error, or the real cause of the capture failure is lost.
+      try { track.stop(); } catch { /* track already dead */ }
+      if (context !== undefined) {
+        try { await context.close(); } catch { /* already closing */ }
+      }
       if (moduleUrl !== undefined) { this.#deps.revokeModuleUrl(moduleUrl); }
       this.channelCount = 0;
       throw error;
@@ -1162,8 +1166,12 @@ export class CaptureController {
     resources.node.port.onmessage = null;
     resources.node.disconnect();
     resources.source.disconnect();
-    await resources.context.close();
-    this.#deps.revokeModuleUrl(resources.moduleUrl);
+    // finally: a rejected close() must not strand the Blob URL.
+    try {
+      await resources.context.close();
+    } finally {
+      this.#deps.revokeModuleUrl(resources.moduleUrl);
+    }
   }
 }
 
