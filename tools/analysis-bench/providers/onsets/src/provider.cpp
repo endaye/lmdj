@@ -37,7 +37,7 @@ bool is_power_of_two(std::uint32_t value) {
   return value != 0 && (value & (value - 1)) == 0;
 }
 
-// Spectral flux onset times (seconds). Mirrors compare.py exactly:
+// Spectral flux onset times (seconds). Mirrors the compare.py algorithm:
 // frames at i*hop (no centering), Hann window, half-spectrum magnitude,
 // flux = sum(max(0, mag-prev)), threshold = mean + 1.5*stddev, strict local
 // maximum, minimum spacing 0.05 s.

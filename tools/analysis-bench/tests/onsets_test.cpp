@@ -13,40 +13,6 @@
 
 #include "support.hpp"
 
-namespace {
-
-std::vector<std::byte> make_wav_bytes(
-    const std::vector<std::int16_t>& samples,
-    std::uint32_t sample_rate = 48000) {
-  const std::uint32_t data_size =
-      static_cast<std::uint32_t>(samples.size() * 2);
-  std::vector<std::byte> bytes(44 + data_size);
-  auto* p = reinterpret_cast<char*>(bytes.data());
-  std::memcpy(p, "RIFF", 4);
-  const std::uint32_t riff_size = 36 + data_size;
-  std::memcpy(p + 4, &riff_size, 4);
-  std::memcpy(p + 8, "WAVEfmt ", 8);
-  const std::uint32_t fmt_size = 16;
-  std::memcpy(p + 16, &fmt_size, 4);
-  const std::uint16_t format = 1;
-  const std::uint16_t channels = 1;
-  const std::uint32_t byte_rate = sample_rate * 2;
-  const std::uint16_t block_align = 2;
-  const std::uint16_t bits = 16;
-  std::memcpy(p + 20, &format, 2);
-  std::memcpy(p + 22, &channels, 2);
-  std::memcpy(p + 24, &sample_rate, 4);
-  std::memcpy(p + 28, &byte_rate, 4);
-  std::memcpy(p + 32, &block_align, 2);
-  std::memcpy(p + 34, &bits, 2);
-  std::memcpy(p + 36, "data", 4);
-  std::memcpy(p + 40, &data_size, 4);
-  std::memcpy(p + 44, samples.data(), data_size);
-  return bytes;
-}
-
-}  // namespace
-
 int main() {
   // FFT sanity: impulse at index 0 -> flat magnitude 1 everywhere.
   std::vector<std::complex<float>> impulse(8, {0.0F, 0.0F});
@@ -66,7 +32,7 @@ int main() {
       samples[start + i] = (i % 2 == 0) ? 24000 : -24000;
     }
   }
-  const auto wav = make_wav_bytes(samples);
+  const auto wav = analysis_bench_test::make_wav_bytes(samples);
   auto registration = lmdj::analysis_bench::onsets_registration(
       analysis_bench_test::make_resolver({{"wav-sha", wav}}));
   lmdj::provider::CapabilityRequest request;

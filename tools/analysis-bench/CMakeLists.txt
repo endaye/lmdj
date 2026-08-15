@@ -189,7 +189,7 @@ if(BUILD_TESTING)
     NAME analysis_bench.smoke
     TIER component
     COMMAND
-      python3
+      "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/bench_smoke_test.py"
       $<TARGET_FILE:lmdj_analysis_bench>
       "${CMAKE_SOURCE_DIR}/tests/fixtures/audio/kick.wav"
