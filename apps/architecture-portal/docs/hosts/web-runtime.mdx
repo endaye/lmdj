@@ -33,7 +33,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 <StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.8` 已进入 Product Build `1.0.21.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.2.1`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
 
-本次 Host SemVer 变化传播共享 Platform 的精确依赖与已收紧的失败路径；诊断 UI、协议 `1`、500-trigger、Take、restart-required 和成功路径没有新增能力。
+当前内部实现还保证 ControlBridge 先于 audio readiness 发布；该修复不改变公开 API、Contract、Assembly 或现有 Package/Product 身份。诊断 UI、协议 `1`、500-trigger、Take、restart-required 和成功路径没有新增能力。
 
 ## 目标边界
 
@@ -41,7 +41,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 ## 分发与身份门禁
 
-`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.8`、Platform `0.2.1`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.8`、Platform `0.2.1`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。Browser Main readiness 只在 ControlBridge 与 audio adapter 均已发布后变为可见。任何身份漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
