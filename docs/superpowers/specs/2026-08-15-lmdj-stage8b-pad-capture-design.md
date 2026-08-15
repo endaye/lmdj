@@ -19,11 +19,12 @@ Application Facade 表面、传输协议、活动 manifest 与全部 Contract **
 | S8B-D2 | 首次按下录音手势时才调用 `getUserMedia`。拒绝产生显式、可解释、可重试的错误态；录音中权限被撤销则停止采集并保留已录缓冲。 |
 | S8B-D3 | 录长后预裁剪：Host JS 层缓冲上限 60 秒，到顶自动停止；用户裁剪到 ≤240,000 帧（48 kHz 下 5.0 秒）后才进入提交。提交沿用现有 `imported_wav_bytes = 1,048,576` 与 `decoded_frames_per_pad = 240,000` 上限，manifest 不变。 |
 | S8B-D4 | 无输入监听。录音期间以实时电平表与增长中的波形做视觉监控，输入永不接到音频输出，物理上消除啸叫风险。 |
-| S8B-D5 | 页面 blur 与 hidden 一律停止采集（与 Stage 8 停 Voice 不变量一致），已录缓冲保留并进入裁剪态。（2026-08-15 修订：若中断发生在首批音频到达之前、缓冲为空，则没有可裁剪的内容——此时 `device-lost` 与 `permission-revoked` 进入可重试的 `permission-error` 并给出原因文案，`user`/`blur`/`hidden` 直接回到 `idle`。失败原因绝不静默丢弃。） |
+| S8B-D5 | 页面 blur 与 hidden 一律停止采集（与 Stage 8 停 Voice 不变量一致），已录缓冲保留并进入裁剪态。（2026-08-15 修订：若中断发生在首批音频到达之前、缓冲为空，则没有可裁剪的内容——此时 `device-lost` 进入可重试的 `permission-error` 并给出原因文案，`user`/`blur`/`hidden` 直接回到 `idle`。失败原因绝不静默丢弃。） |
 | S8B-D6 | 录音期间不打开 Core 导入会话；`sample.import.begin` 在用户确认提交时才发起，`expected_revision` 取提交时刻的新鲜值。冲突显式报告、缓冲保留、用户手动重试；无 auto-rebase、无乐观成功。 |
 | S8B-D7 | 采集约束关闭 `echoCancellation`、`noiseSuppression`、`autoGainControl`：音乐采样需要原始信号，不是语音通话处理链。 |
 | S8B-D8 | 验收由 Chromium 假设备（固定 WAV 喂入）自动化测试把关；真麦克风听感、Safari 与 iPadOS 录音行为显式记入 deferred 台账，做了才计入。 |
 | S8B-D9 | 采集管线使用 AudioWorklet 采集节点，挂在 Creator 自有的独立 `AudioContext({sampleRate: 48000})` 上；float→PCM16 WAV 编码在 Host 层于提交时完成。不使用 MediaRecorder（有损压缩）或已废弃的 ScriptProcessorNode。（2026-08-15 修订：审计确认引擎 context 位于 Emscripten 运行时内部、不向 Host 暴露，新增暴露面会违反本设计的零平台变更原则；独立 context 保留全部已批准属性——48 kHz 固定、浏览器重采样、输入永不接输出——且隔离与清理更干净。） |
+| S8B-D11 | 权限撤销不设独立的中断原因，一律归入 `device-lost`（2026-08-16 批准）。理由：浏览器对"权限被撤销"与"设备消失"使用同一信号——MediaStreamTrack 的 `ended` 事件，代码在该时刻无从区分；唯一的区分手段 `navigator.permissions.query({name:"microphone"})` 在 Firefox 与 Safari 均不支持麦克风查询，而 Safari/iPadOS 正是本阶段的目标平台。因此 `CaptureStopReason` 与 `CaptureListener.onEnded` 都不保留 `permission-revoked`；面向用户的文案需同时涵盖两种成因。 |
 | S8B-D10 | "共享 prepared-PCM 配额（单 Pad 最长约 60 秒、全 Bank 合计约 174 秒立体声）"立为具名后续阶段，记入 `docs/prd/open-questions.md`，与"Loop 素材 BPM Time-stretch"开放问题同一次设计评审处理。Stage 8B 不改资源模型，也不抬 512 MiB 固定堆。 |
 
 ## 3. Stage Boundary
@@ -145,8 +146,8 @@ idle ──录音手势──▶ requesting-permission ──granted──▶ re
 
 - 所有到达 `trimming` 的路径缓冲一律保留；仅显式丢弃或提交成功释放缓冲。
 - 缓冲为空时（中断早于首批音频到达）没有可裁剪内容，不进入 `trimming`：
-  `device-lost`/`permission-revoked` 进入可重试的 `permission-error` 并带原因
-  文案，`user`/`blur`/`hidden` 回到 `idle`（S8B-D5 修订）。
+  `device-lost` 进入可重试的 `permission-error` 并带原因文案，
+  `user`/`blur`/`hidden` 回到 `idle`（S8B-D5 修订）。
 - `recording` → `trimming` 的每个触发原因（停止手势、到顶、blur、hidden、
   设备消失、权限撤销）都在 UI 上可区分地呈现。
 - 对正在发声的目标 Pad 开始录音属于打断性操作：停掉该 Pad 的活动与 latched
@@ -161,9 +162,10 @@ idle ──录音手势──▶ requesting-permission ──granted──▶ re
   autoGainControl: false}})`，无 `deviceId` 约束（S8B-D1/D7）。
 - 权限仅在录音手势的调用栈内请求（S8B-D2）。拒绝 → `permission-error`，
   附浏览器无法区分"本次拒绝"与"永久拒绝"时的通用指引文案；再次手势重试。
-- 录音中权限被浏览器/系统撤销：等价于设备消失——停止采集、保留缓冲、
-  进入 `trimming`；若此时缓冲为空，则进入可重试的 `permission-error` 并说明
-  原因（S8B-D5 修订）。
+- 录音中权限被浏览器/系统撤销：等价于设备消失，走同一条 `device-lost` 路径
+  （S8B-D11）——停止采集、保留缓冲、进入 `trimming`；若此时缓冲为空，则进入
+  可重试的 `permission-error` 并说明原因。面向用户的文案必须同时涵盖设备不可用
+  与权限变更两种成因，因为代码无法区分它们。
 - 隐私边界：Sample Artifact 字节与 SHA-256 身份是唯一持久化产物；不持久化
   设备名、设备 ID 或权限状态；未提交缓冲只存在于页面内存。
 
