@@ -15,6 +15,9 @@ WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 ACTIONLINT_CONFIG = REPO_ROOT / ".github/actionlint.yaml"
 ACTION = REPO_ROOT / ".github/actions/macos-core-gates/action.yml"
 ASSERT_GATE = REPO_ROOT / ".github/scripts/assert-macos-gate-result.sh"
+WEB_HEAVY_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
+)
 
 
 class CiRunnerFallbackTest(unittest.TestCase):
@@ -142,8 +145,29 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-24.04", selector)
         self.assertNotIn("trusted-head", selector)
 
+    def test_web_toolchain_is_pinned_to_the_netcup_web_heavy_role(self) -> None:
+        """Web Toolchain is the first lane cut over to the CI-only netcup node.
+
+        The role label set is static, not selector-resolved. `ci-web-heavy`
+        exists only on the dedicated node, so a busy or absent role queues the
+        lane instead of diverting it to paid runners, which is why this job
+        keeps its own `needs: change-scope` rather than joining the
+        `select-ubuntu-runner` consumers. Trust therefore cannot come from the
+        selector's fork branch and must stay on the job itself.
+        """
+        job = self.workflow_job("web-toolchain-conformance")
+        self.assertIn(WEB_HEAVY_ROLE, job)
+        self.assertIn("needs: change-scope", job)
+        self.assertNotIn("needs: select-ubuntu-runner", job)
+        self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
+        self.assertNotIn("runs-on: ubuntu-24.04", job)
+        self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", job)
+        self.assertIn("lane: web_toolchain", job)
+        self.assertIn('install-system-deps: "false"', job)
+        self.assertNotIn("for determinism, not for capacity", job)
+
     def test_resource_intensive_web_gates_use_hosted_runners(self) -> None:
-        for job_name in ("web-toolchain-conformance", "creator-web"):
+        for job_name in ("creator-web",):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertNotIn("needs: select-ubuntu-runner", job)
@@ -182,12 +206,14 @@ class CiRunnerFallbackTest(unittest.TestCase):
     def test_hosted_web_gates_record_why_they_are_not_a_capacity_decision(self) -> None:
         """The routing reason must survive, or a later cost pass will undo it.
 
-        These lanes are hosted because the Wasm/OPFS fault matrix is
+        Creator is hosted because the Wasm/OPFS fault matrix is
         timing-sensitive and exceeded bounded budgets on the heterogeneous
         self-hosted pool. Extra runner slots and toolchain caches do not
-        address timing sensitivity, so neither is grounds for moving them.
+        address timing sensitivity, so neither is grounds for moving it. The
+        dedicated CI-only role removes the heterogeneity itself, which is a
+        different argument and is proven lane by lane, not assumed.
         """
-        for job_name in ("web-toolchain-conformance", "creator-web"):
+        for job_name in ("creator-web",):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn("timing-sensitive", job)

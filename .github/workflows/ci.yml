@@ -326,13 +326,17 @@ jobs:
       - run: scripts/core.sh package
 
   web-toolchain-conformance:
-    # The full Wasm/OPFS fault matrix is timing-sensitive and has exceeded
-    # bounded test budgets on the heterogeneous self-hosted Linux pool.
-    # This lane stays GitHub-hosted for determinism, not for capacity, so
-    # neither extra runner slots nor toolchain caching justifies moving it.
+    # First lane cut over to the dedicated CI-only netcup node. The earlier
+    # hosted pinning answered heterogeneity on the shared Linux pool, not
+    # capacity; the dedicated Web role removes that heterogeneity, so the
+    # determinism argument no longer applies to this lane. The label set is
+    # literal rather than selector-resolved, so a busy or absent role queues
+    # this job instead of diverting it to paid runners. System dependencies
+    # are provisioned with the role, so Playwright must not apt-install them
+    # into state shared by both runner services on every run.
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_toolchain && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
     timeout-minutes: 35
     env:
       LANG: C.UTF-8
@@ -342,7 +346,7 @@ jobs:
       - uses: ./.github/actions/web-ci-proof
         with:
           lane: web_toolchain
-          install-system-deps: "true"
+          install-system-deps: "false"
 
   web-runtime-host:
     needs: [change-scope, select-ubuntu-runner]
