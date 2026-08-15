@@ -42,7 +42,7 @@ _STATIC_PROJECTION_MESSAGE = (
 _STATIC_PROJECTION_FAILURES = (
     OSError, KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError, OpenPgpError,
 )
-_REASON_LIMIT = 240
+_REASON_LIMIT = 480
 
 
 @dataclass(frozen=True)

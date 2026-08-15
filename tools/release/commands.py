@@ -13,12 +13,30 @@ from typing import Callable, Mapping, Sequence
 _URL_CREDENTIALS = re.compile(r"(?i)\b[a-z][a-z0-9+.-]*://[^\s/@]*@")
 _AUTHORIZATION = re.compile(r"(?i)\b(basic|bearer|token)\s+\S+")
 _TOKEN_LIKE = re.compile(r"\b(gh[pousra]|github_pat)_[A-Za-z0-9_]{16,}")
-_ASSIGNMENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=\S+")
+_ASSIGNMENT = re.compile(r"(?<![\w])(-{1,2})?([A-Za-z_][A-Za-z0-9_-]*)=(\S+)")
+_SENSITIVE_NAME = re.compile(r"(?i)token|secret|password|passwd|credential|auth|key")
 _ABSOLUTE_PATH = re.compile(r"(?<![\w<>])/[^\s'\"]*")
 
 
+def _redact_assignment(match: re.Match[str]) -> str:
+    """Redact environment-shaped values, but keep ordinary command-line flags readable."""
+    flag, name, value = match.group(1) or "", match.group(2), match.group(3)
+    if flag and not _SENSITIVE_NAME.search(name):
+        return f"{flag}{name}={value}"
+    return f"{flag}{name}=[redacted]"
+
+
+def _bounded(text: str, limit: int) -> str:
+    """Keep both ends of an over-long diagnostic: tools name the rule first and fail last."""
+    if len(text) <= limit:
+        return text
+    head = (limit * 2) // 3
+    tail = limit - head - 5
+    return f"{text[:head].rstrip()} ... {text[-tail:].lstrip()}"
+
+
 def sanitize_diagnostic(
-    text: object, *, root: Path | None = None, limit: int = 160,
+    text: object, *, root: Path | None = None, limit: int = 320,
 ) -> str:
     """Reduce free-form tool output to a bounded diagnostic that carries no secret.
 
@@ -34,11 +52,9 @@ def sanitize_diagnostic(
     collapsed = _URL_CREDENTIALS.sub("<redacted>@", collapsed)
     collapsed = _AUTHORIZATION.sub(r"\1 [redacted]", collapsed)
     collapsed = _TOKEN_LIKE.sub("[redacted]", collapsed)
-    collapsed = _ASSIGNMENT.sub(r"\1=[redacted]", collapsed)
+    collapsed = _ASSIGNMENT.sub(_redact_assignment, collapsed)
     collapsed = _ABSOLUTE_PATH.sub("<path>", collapsed)
-    if len(collapsed) > limit:
-        collapsed = collapsed[:limit].rstrip() + "..."
-    return collapsed
+    return _bounded(collapsed, limit)
 
 
 class CommandError(RuntimeError):
