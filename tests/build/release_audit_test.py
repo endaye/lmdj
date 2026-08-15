@@ -799,6 +799,47 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual({item.code for item in report.findings}, {"unverifiable"})
         self.assertFalse(report.incomplete_sources)
 
+    def test_static_finding_names_its_projection_and_sanitizes_the_reason(self) -> None:
+        def broken_trust_anchor(*args):
+            raise OpenPgpError(
+                "import failed GITHUB_TOKEN=ghs_fixturesecret home /home/runner/work/lmdj/lmdj",
+            )
+
+        report = audit(
+            replace(self.context(), trust_anchor_verifier=broken_trust_anchor), remote=False,
+        )
+        finding = report.findings[0]
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertEqual(report.exit_code, 1)
+        self.assertIn("projection is inconsistent", finding.message)
+        self.assertIn("signing trust anchors", finding.message)
+        self.assertIn("OpenPgpError", finding.message)
+        self.assertEqual(finding.sources, ("canonical-trust",))
+        self.assertIn("GITHUB_TOKEN=[redacted]", finding.message)
+        self.assertNotIn("ghs_fixturesecret", finding.message)
+        self.assertNotIn("/home/runner", finding.message)
+
+    def test_each_static_projection_reports_itself_independently(self) -> None:
+        manifest = self.root / "packages/application-facade/module.json"
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+        document["version"] = "9.9.9"
+        manifest.write_text(json.dumps(document), encoding="utf-8")
+        report = audit(self.context(), remote=False)
+        digest_finding = report.findings[0]
+        self.assertEqual(digest_finding.code, "unverifiable")
+        self.assertIn("Assembly lock component digests", digest_finding.message)
+        self.assertIn("application-facade", digest_finding.message)
+
+        shutil.copyfile(ROOT / "packages/application-facade/module.json", manifest)
+        self.git.target_validation_error = RuntimeError(
+            "Product Portal snapshot provenance is invalid",
+        )
+        target_finding = audit(self.context(), remote=False).findings[0]
+        self.assertEqual(target_finding.code, "unverifiable")
+        self.assertIn("exact release target validation", target_finding.message)
+        self.assertIn("Product Portal snapshot provenance is invalid", target_finding.message)
+        self.assertNotEqual(digest_finding.message, target_finding.message)
+
     def test_local_active_manifest_drift_is_unverifiable(self) -> None:
         manifest = self.root / "packages/application-facade/module.json"
         document = json.loads(manifest.read_text(encoding="utf-8"))
