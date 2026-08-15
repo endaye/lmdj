@@ -398,3 +398,35 @@ Time-stretch、Artifact GC 与 Stage 8B capture lifecycle 仍按各自开放边�
   Bank、permission、disconnect、admission/outcome 与 listener cleanup 语义。
   自动化 Channel 10 回归测试不替代修复候选上的实体 MIDI 复验，也不推导 Safari
   或 iPadOS 结果。
+
+## 2026-08-15
+
+### 已批准：Stage 8B Pad Capture 设计（S8B-D1–D10）
+
+来自 [2026-08-15 Stage 8B Pad Capture 设计](../superpowers/specs/2026-08-15-lmdj-stage8b-pad-capture-design.md)
+评审，解决 S8-D13 留下的 capture lifecycle 开放边界。Capture 完全在 Creator
+与 Web Runtime Host 层实现，Core Modules、Facade 表面、传输协议、活动
+manifest 与全部 Contract 零变更。
+
+- **S8B-D1**：v1 只用系统默认输入设备，不做选择器；未来选择器落 Workspace/
+  Host 设置，永不进 Project Truth。
+- **S8B-D2**：首次按下录音手势才调 `getUserMedia`；拒绝为显式可重试错误态；
+  录音中撤销权限停止采集并保留缓冲。
+- **S8B-D3**：录长后预裁剪——Host JS 缓冲上限 60 秒、到顶自动停；裁剪到
+  ≤240,000 帧（5 秒）后提交，manifest 限值不变。
+- **S8B-D4**：无输入监听，只有电平表与增长波形；输入永不接输出。
+- **S8B-D5**：blur 与 hidden 一律停止采集（与 Stage 8 停 Voice 不变量一致），
+  缓冲保留进入裁剪。
+- **S8B-D6**：录音期间不开 Core 会话；`sample.import.begin` 在提交时发起，
+  `expected_revision` 取提交时新鲜值；冲突显式、缓冲保留、无 auto-rebase。
+- **S8B-D7**：采集关闭 echoCancellation/noiseSuppression/autoGainControl。
+- **S8B-D8**：验收由 Chromium 假设备自动化把关；真麦克风听感、Safari 与
+  iPadOS 行为显式 deferred，做了才计入。
+- **S8B-D9**：采集管线用 AudioWorklet 挂在引擎 48 kHz context；float→PCM16
+  WAV 编码在 Host 层提交时完成；不用 MediaRecorder / ScriptProcessorNode。
+- **S8B-D10**：共享 prepared-PCM 配额（单 Pad ≈60 秒长素材）立为具名后续
+  阶段，与 Loop 素材 BPM Time-stretch 开放问题同一次设计评审；Stage 8B 不改
+  资源模型、不抬 512 MiB 固定堆。
+
+Stage 8B 仍未实现、未分配 Product/Module 版本；实现时预期仅 `creator-web`
+与 `web-runtime-host` minor bump。
