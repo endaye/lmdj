@@ -17,6 +17,11 @@ export interface CaptureState {
   conflict: boolean;
 }
 
+export const CAPTURE_DEVICE_LOST_MESSAGE =
+  "Recording stopped: the input device became unavailable";
+export const CAPTURE_PERMISSION_REVOKED_MESSAGE =
+  "Recording stopped: microphone permission was revoked";
+
 export const initialCaptureState: CaptureState = Object.freeze({
   phase: "idle", stopReason: null, frameCount: 0, peak: 0,
   selectionStart: 0, selectionFrames: 0, errorMessage: null, conflict: false,
@@ -43,11 +48,24 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent): Capture
     case "frames":
       return state.phase === "recording"
         ? {...state, frameCount: event.frames, peak: event.peak} : state;
-    case "stop":
-      return state.phase === "recording" && state.frameCount > 0
-        ? {...state, phase: "trimming", stopReason: event.reason, peak: 0,
-           selectionStart: 0, selectionFrames: Math.min(state.frameCount, COMMIT_MAX_FRAMES)}
-        : state.phase === "recording" ? initialCaptureState : state;
+    case "stop": {
+      if (state.phase !== "recording") { return state; }
+      if (state.frameCount > 0) {
+        return {...state, phase: "trimming", stopReason: event.reason, peak: 0,
+                selectionStart: 0,
+                selectionFrames: Math.min(state.frameCount, COMMIT_MAX_FRAMES)};
+      }
+      // Nothing captured yet (interrupted before the first batch landed), so
+      // there is nothing to trim. A failure reason must still reach the user;
+      // a benign reason just returns to idle (S8B-D5 as amended).
+      return event.reason === "device-lost" || event.reason === "permission-revoked"
+        ? {...initialCaptureState, phase: "permission-error",
+           stopReason: event.reason,
+           errorMessage: event.reason === "device-lost"
+             ? CAPTURE_DEVICE_LOST_MESSAGE
+             : CAPTURE_PERMISSION_REVOKED_MESSAGE}
+        : initialCaptureState;
+    }
     case "select":
       return (state.phase === "trimming" || state.phase === "commit-error") &&
              Number.isInteger(event.start) && Number.isInteger(event.frames) &&

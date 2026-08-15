@@ -1,5 +1,10 @@
 import {describe, expect, test} from "vitest";
-import {initialCaptureState, reduceCapture} from "../src/state/capture_state";
+import {
+  CAPTURE_DEVICE_LOST_MESSAGE,
+  CAPTURE_PERMISSION_REVOKED_MESSAGE,
+  initialCaptureState,
+  reduceCapture,
+} from "../src/state/capture_state";
 
 const run = (events: Parameters<typeof reduceCapture>[1][]) =>
   events.reduce(reduceCapture, initialCaptureState);
@@ -39,21 +44,59 @@ describe("reduceCapture", () => {
     expect(rejected).toBe(trimming); // unchanged
   });
 
-  test("keeps the buffer through every interruption and commit failure", () => {
+  test("keeps the buffer through every interruption reason", () => {
+    for (const reason of ["user", "capacity", "blur", "hidden",
+                          "device-lost", "permission-revoked"] as const) {
+      const trimming = run([
+        {kind: "record"}, {kind: "granted"},
+        {kind: "frames", frames: 48_000, peak: 0.4},
+        {kind: "stop", reason},
+      ]);
+      expect(trimming.phase).toBe("trimming");
+      expect(trimming.frameCount).toBe(48_000);
+      expect(trimming.stopReason).toBe(reason);
+    }
+  });
+
+  test("retains buffer and selection through commit failure", () => {
     const trimming = run([
       {kind: "record"}, {kind: "granted"},
-      {kind: "frames", frames: 48_000, peak: 0.4},
+      {kind: "frames", frames: 480_000, peak: 0.4},
       {kind: "stop", reason: "device-lost"},
+      {kind: "select", start: 1_000, frames: 200_000},
     ]);
-    expect(trimming.frameCount).toBe(48_000);
     const failed = reduceCapture(
       reduceCapture(trimming, {kind: "commit"}),
       {kind: "commit-failed", message: "conflict", conflict: true});
     expect(failed.phase).toBe("commit-error");
-    expect(failed.frameCount).toBe(48_000);
+    expect(failed.frameCount).toBe(480_000);
+    expect(failed.selectionStart).toBe(1_000);
+    expect(failed.selectionFrames).toBe(200_000);
     expect(failed.conflict).toBe(true);
     expect(reduceCapture(failed, {kind: "commit"}).phase).toBe("committing");
     expect(reduceCapture(failed, {kind: "discard"})).toEqual(initialCaptureState);
+  });
+
+  test("surfaces a failure reason when nothing was captured", () => {
+    const lost = run([{kind: "record"}, {kind: "granted"},
+                      {kind: "stop", reason: "device-lost"}]);
+    expect(lost.phase).toBe("permission-error");
+    expect(lost.errorMessage).toBe(CAPTURE_DEVICE_LOST_MESSAGE);
+    expect(lost.frameCount).toBe(0);
+    // still retryable
+    expect(reduceCapture(lost, {kind: "record"}).phase).toBe("requesting-permission");
+
+    const revoked = run([{kind: "record"}, {kind: "granted"},
+                         {kind: "stop", reason: "permission-revoked"}]);
+    expect(revoked.phase).toBe("permission-error");
+    expect(revoked.errorMessage).toBe(CAPTURE_PERMISSION_REVOKED_MESSAGE);
+  });
+
+  test("returns to idle when a benign stop captured nothing", () => {
+    for (const reason of ["user", "blur", "hidden"] as const) {
+      expect(run([{kind: "record"}, {kind: "granted"}, {kind: "stop", reason}]))
+        .toEqual(initialCaptureState);
+    }
   });
 
   test("routes permission denial to a retryable error state", () => {
