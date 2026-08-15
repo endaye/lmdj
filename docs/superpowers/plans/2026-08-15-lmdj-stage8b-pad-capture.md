@@ -1498,6 +1498,42 @@ Steps:
   promotion each require new explicit authorization; PR sequencing also
   depends on Stage 8 (#137) merging first (see Branch and Sync Discipline).
 
+## Post-review amendments (2026-08-16)
+
+Tasks 5–8 are implemented, individually reviewed, and then re-reviewed as a
+whole. **For those four tasks the committed code is authoritative, not the
+embedded snippets above** — the snippets are the starting point they were
+written from, and a consolidated review changed several contracts. Read the
+code before extending it. The deltas that matter to later tasks:
+
+- **Channel count comes from the delivered audio, not from the device.**
+  `track.getSettings().channelCount` is optional in the spec and absent in
+  Firefox, so `CaptureController.channelCount` was removed. The worklet locks
+  its channel count (1 or 2) on the first non-empty `process()` and posts a
+  constant batch width forever; the panel sizes `CaptureBuffer` lazily from the
+  first batch.
+- **`permission-revoked` no longer exists** (S8B-D11). Browsers signal
+  permission revocation and device loss identically, so both are
+  `device-lost`, and the user-facing message covers both causes.
+- **`stop()` awaits an in-flight `start()`.** `start()` publishes its promise
+  so a stop arriving before resources exist still releases them. It therefore
+  may not settle while a permission prompt is open — **callers must not await
+  `stop()` on a UI path.**
+- **Cleanup is best-effort everywhere:** a throw while releasing never replaces
+  the original error, and the Blob URL revoke is guaranteed by `finally`.
+- Close stops an in-progress capture before invoking `onClose`.
+
+Deferred, needing a decision before Task 10/CI:
+
+- `envelope()` is still O(total frames) per redraw. The constant factor was
+  reduced and results are memoized on `(frameCount, bins)`, but a summary/mip
+  structure — the real fix for 60 s takes — would make bin-boundary values
+  overestimates instead of exact, which changes currently-asserted behavior.
+- The full creator suite is reliably green serially (`--no-file-parallelism`)
+  but `workspace_shell.test.tsx` and `audio_lifecycle.test.tsx` flake in
+  parallel mode with multi-second timeouts. They reference no capture code;
+  the added test files raise parallel load and plausibly raise the flake rate.
+
 ## Requirement-to-Task Coverage
 
 | Design requirement | Tasks |
