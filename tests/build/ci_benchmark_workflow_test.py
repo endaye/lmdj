@@ -55,6 +55,19 @@ class CiBenchmarkWorkflowTest(unittest.TestCase):
         self.assertNotIn('chmod 2770 "$temporary"', source)
         self.assertIn('mv "$temporary" "$target"', source)
 
+    def test_persistent_emsdk_trusts_only_the_exact_shared_git_checkout(self) -> None:
+        source = ACTION.read_text(encoding="utf-8")
+        self.assertIn("echo 'GIT_CONFIG_COUNT=1' >>\"$GITHUB_ENV\"", source)
+        self.assertIn(
+            "echo 'GIT_CONFIG_KEY_0=safe.directory' >>\"$GITHUB_ENV\"",
+            source,
+        )
+        self.assertIn(
+            "printf 'GIT_CONFIG_VALUE_0=%s\\n' \"$target\" >>\"$GITHUB_ENV\"",
+            source,
+        )
+        self.assertNotIn("safe.directory=*", source)
+
 
 if __name__ == "__main__":
     unittest.main()
