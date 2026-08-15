@@ -36,6 +36,38 @@ Documentation impact: none
 
 Reason: the architecture portal derives Product/Module/Host/Provider/Contract identities from active manifests; this prototype adds no manifest anywhere the portal or release tooling scans (`tools/` is not scanned; `tools/release/target_validation.py` globs only `providers/*/module.json`). The prototype is disposable validation tooling, not an active source boundary.
 
+## Success criteria and evidence write-back
+
+This prototype exists to answer specific questions; completing the six Tasks
+alone is not success. After Task 6, judge each item explicitly:
+
+1. **Mechanism fit** — `provider::Registry` + Capability v2 port bindings +
+   `AttemptStore::execute` host all three analysis Providers through the
+   production execute path (selection, port validation, staging, attempt
+   evidence on disk) with no SDK modifications.
+2. **Attempt/Candidate semantics** — do Attempt/Candidate semantics fit
+   analysis tools, whose output is a report rather than adoptable material?
+   Record a verdict: fits as-is / needs a lighter-weight result channel /
+   unresolved.
+3. **Input-bytes resolver gap** — does the prototype confirm the SDK needs a
+   first-class input-Artifact byte resolver, and what shape should it take?
+   The Host-injected `analysis::ArtifactByteResolver` is the temporary
+   bridge; the conclusion must be recorded, not just the workaround.
+4. **Accuracy and determinism** — every Provider is byte-identical across
+   iterations, and the comparison table passes on all rows under the Task 6
+   comparison rules (including the empty-reference onset rule).
+
+Benchmark timings are informational only; this prototype sets no performance
+acceptance threshold. If the numbers are later used for tool selection,
+define thresholds in that effort, not here.
+
+Write-back: paste the comparison table and the four verdicts into the PR
+description (see "Prototype report"), and record the resolver conclusion
+(item 3) in `docs/prd/decision-log.md` or the open issue in
+`docs/architecture/2026-08-01-provider-multi-port-contract-decision.md`
+rather than only in the PR thread. Do not silently settle the
+Candidate-adoption Contract question inside this prototype.
+
 ---
 
 ### Task 1: Shared support library (WAV parser + resolver alias)
@@ -460,7 +492,7 @@ git commit -m "feat(tools): add analysis-bench shared WAV PCM16 support"
   - `lmdj::analysis_bench::peaks_registration(analysis::ArtifactByteResolver) -> provider::ProviderRegistration`; Provider id `local.analysis-bench.peaks`, version `0.1.0`
   - Capability `analysis.waveform-peaks.v1` (contract version `2.0.0`): input port `sample` (`audio/wav`, required, max 1), output port `peaks` (`application/json`, required, max 1)
   - Output JSON: `{"contract":"lmdj.analysis-bench.peaks.v1","sample_rate":u32,"channels":u16,"frame_count":u64,"samples_per_bucket":u32,"bucket_count":u64,"min":[i16...],"max":[i16...]}` — min/max over the mono mixdown per bucket, scaled by `lrint(value * 32767)` clamped to int16
-  - Parameter: `samples_per_bucket` (integer, default 256, valid range 16..65536)
+  - Parameter: `samples_per_bucket` (integer, default 256, valid range 2..65536)
   - CMake target `lmdj_analysis_bench_peaks`
 
 - [ ] **Step 1: Write the failing test**
@@ -657,13 +689,16 @@ class PeaksProvider final : public provider::Provider {
       provider::ArtifactSink output) override {
     std::uint32_t samples_per_bucket = 256;
     if (request.parameters.contains("samples_per_bucket")) {
+      // nlohmann stores C++ integer literals as signed number_integer and
+      // text-parsed non-negative integers as number_unsigned; accept any
+      // integer representation and validate the value range instead.
       const auto& encoded = request.parameters.at("samples_per_bucket");
-      if (!encoded.is_number_unsigned() ||
-          encoded.get<std::uint32_t>() < 16 ||
-          encoded.get<std::uint32_t>() > 65536) {
+      if (!encoded.is_number_integer() ||
+          encoded.get<std::int64_t>() < 2 ||
+          encoded.get<std::int64_t>() > 65536) {
         return {std::move(attempt_id),
                 std::nullopt,
-                failed("samples_per_bucket must be 16..65536")};
+                failed("samples_per_bucket must be 2..65536")};
       }
       samples_per_bucket = encoded.get<std::uint32_t>();
     }
@@ -1284,7 +1319,7 @@ git commit -m "feat(tools): add analysis-bench loudness provider"
   - Capability `analysis.onsets.v1` (contract version `2.0.0`): input port `sample`, output port `onsets` (`application/json`, required, max 1)
   - Output JSON: `{"contract":"lmdj.analysis-bench.onsets.v1","sample_rate":u32,"frame_count":u64,"fft_size":u32,"hop_size":u32,"onsets_seconds":[f64...]}` sorted ascending
   - Algorithm (must match `compare.py` exactly): mono mix; frames at `i*hop_size` (no centering), Hann window; magnitude spectrum over first `fft_size/2+1` bins; spectral flux `sum(max(0, mag[i]-prev[i]))`; onset where flux is a strict local maximum and `flux > mean + 1.5*stddev`; minimum onset spacing 0.05 s
-  - Parameters: `fft_size` (default 1024, power of two 256..8192), `hop_size` (default 512, >= 128)
+  - Parameters: `fft_size` (default 1024, power of two 256..8192), `hop_size` (default 512, 128..65536)
   - CMake target `lmdj_analysis_bench_onsets`
 
 - [ ] **Step 1: Write the failing test**
@@ -1591,11 +1626,16 @@ class OnsetsProvider final : public provider::Provider {
     std::uint32_t fft_size = 1024;
     std::uint32_t hop_size = 512;
     if (request.parameters.contains("fft_size")) {
+      // Accept both signed and unsigned JSON integer representations
+      // (nlohmann stores C++ literals as signed, parsed non-negative text as
+      // unsigned); bound-check as int64 before the narrowing get.
       const auto& encoded = request.parameters.at("fft_size");
-      if (!encoded.is_number_unsigned()) {
+      if (!encoded.is_number_integer() ||
+          encoded.get<std::int64_t>() < 0 ||
+          encoded.get<std::int64_t>() > 8192) {
         return {std::move(attempt_id),
                 std::nullopt,
-                failed("fft_size must be an unsigned integer")};
+                failed("fft_size must be an integer in 256..8192")};
       }
       fft_size = encoded.get<std::uint32_t>();
     }
@@ -1606,10 +1646,12 @@ class OnsetsProvider final : public provider::Provider {
     }
     if (request.parameters.contains("hop_size")) {
       const auto& encoded = request.parameters.at("hop_size");
-      if (!encoded.is_number_unsigned()) {
+      if (!encoded.is_number_integer() ||
+          encoded.get<std::int64_t>() < 0 ||
+          encoded.get<std::int64_t>() > 65536) {
         return {std::move(attempt_id),
                 std::nullopt,
-                failed("hop_size must be an unsigned integer")};
+                failed("hop_size must be an integer in 128..65536")};
       }
       hop_size = encoded.get<std::uint32_t>();
     }
@@ -2214,8 +2256,8 @@ git commit -m "feat(tools): add analysis-bench CLI host"
 **Interfaces:**
 - Consumes: `lmdj_analysis_bench` binary (Task 5) and its report JSON; fixtures `tests/fixtures/audio/{kick,snare,stereo}.wav`.
 - Produces:
-  - `compare.py --bench BINARY --fixtures-dir DIR --report PATH` — runs every capability on every fixture (plus a generated click train), computes numpy/scipy ground truth with the identical algorithms, prints and writes a Markdown comparison table, exit 1 on mismatch.
-  - Comparison rules: peaks min/max arrays exact (±1 LSB); loudness peak/rms within 0.01 dB and equal `clipping`; onsets on the click train: equal count and each within 30 ms; onsets on real fixtures: matched-within-30 ms fraction ≥ 0.5 (reported, borderline spectral-flux peaks may flip between float32/float64).
+  - `compare.py --bench BINARY --fixtures-dir DIR --report PATH` — runs every capability on the three declared fixtures (`kick.wav`, `snare.wav`, `stereo.wav`; an explicit list, never a directory glob, because the fixtures directory also holds WAVs owned by other suites) plus a generated click train, computes numpy/scipy ground truth with the identical algorithms, prints and writes a Markdown comparison table, exit 1 on mismatch.
+  - Comparison rules: peaks min/max arrays exact (±1 LSB); loudness peak/rms within 0.01 dB and equal `clipping`; onsets on the click train: equal count and each within 30 ms; onsets on real fixtures: matched-within-30 ms fraction ≥ 0.5 (reported, borderline spectral-flux peaks may flip between float32/float64); when the reference finds no onsets (fixture shorter than `fft_size`), the provider must also report none.
   - CTest `analysis_bench.compare` (component tier), registered only when `tools/analysis-bench/.venv/bin/python3` exists.
 
 - [ ] **Step 1: Create the venv and requirements**
@@ -2259,6 +2301,10 @@ from scipy.io import wavfile
 
 ONSET_TOLERANCE_SECONDS = 0.03
 CLICK_TRAIN_TIMES = (0.25, 0.5, 0.75, 1.0, 1.25, 1.5)
+# Explicit fixture list: the fixtures directory also holds WAV files owned by
+# other suites (e.g. web-runtime-host-short.wav), which this comparison must
+# not pick up.
+FIXTURE_NAMES = ("kick.wav", "snare.wav", "stereo.wav")
 
 
 def read_mono(path: Path) -> tuple[int, np.ndarray]:
@@ -2415,13 +2461,23 @@ def compare_fixture(bench, workspace_root, fixture, rows, failures):
         detail = f"{matched}/{len(CLICK_TRAIN_TIMES)} clicks matched"
     else:
         expected = reference_onsets(mono, sample_rate)
-        matched = match_onsets(expected, actual)
-        fraction = matched / max(1, len(expected))
-        onsets_ok = fraction >= 0.5
-        detail = (
-            f"{matched}/{len(expected)} reference onsets matched "
-            f"({fraction:.0%})"
-        )
+        if not expected:
+            # Short fixtures (fewer samples than fft_size) legitimately have
+            # no reference onsets; agreement means the provider found none.
+            onsets_ok = not actual
+            detail = (
+                "no reference onsets; provider agrees"
+                if onsets_ok
+                else f"no reference onsets but provider found {len(actual)}"
+            )
+        else:
+            matched = match_onsets(expected, actual)
+            fraction = matched / len(expected)
+            onsets_ok = fraction >= 0.5
+            detail = (
+                f"{matched}/{len(expected)} reference onsets matched "
+                f"({fraction:.0%})"
+            )
     rows.append(
         f"| {fixture.name} | onsets | {run['provider_id']} | "
         f"{run['ms_median']:.2f} ms | {detail} | "
@@ -2438,7 +2494,9 @@ def main() -> int:
     parser.add_argument("--report", required=True)
     args = parser.parse_args()
 
-    fixtures = sorted(Path(args.fixtures_dir).glob("*.wav"))
+    fixtures = [Path(args.fixtures_dir) / name for name in FIXTURE_NAMES]
+    missing = [fixture.name for fixture in fixtures if not fixture.is_file()]
+    assert not missing, f"missing fixtures: {missing}"
     rows = [
         "| fixture | capability | provider | median time | result | verdict |",
         "| --- | --- | --- | --- | --- | --- |",
@@ -2586,6 +2644,9 @@ git commit -m "feat(tools): add analysis-bench ground-truth comparison"
 ## Prototype report
 
 After Task 6, paste the generated `build/core/dev/analysis-bench-report.md` table
-plus a short verdict (does the Attempt/Candidate semantics fit analysis
-tools? what is missing for production?) into the PR description — that is the
-evidence this prototype exists to produce.
+plus explicit verdicts on the four items in "Success criteria and evidence
+write-back" into the PR description — that is the evidence this prototype
+exists to produce. Record the input-bytes resolver conclusion in
+`docs/prd/decision-log.md` or the open issue in
+`docs/architecture/2026-08-01-provider-multi-port-contract-decision.md`, not
+only in the PR thread.
