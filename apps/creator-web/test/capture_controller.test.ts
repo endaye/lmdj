@@ -67,6 +67,16 @@ describe("CaptureController", () => {
     expect(track.stopped).toBe(1);
   });
 
+  test("keeps the original setup error when cleanup itself fails", async () => {
+    const {deps, context} = makeDeps();
+    context.audioWorklet.addModule = async () => { throw new Error("CSP blocked"); };
+    context.close = async () => { throw new Error("close failed"); };
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    // The setup failure is the real cause; a failing close() must not mask it.
+    await expect(controller.start()).rejects.toThrow("CSP blocked");
+    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
+  });
+
   test("maps getUserMedia rejection to CapturePermissionError", async () => {
     const {deps} = makeDeps({getUserMedia: vi.fn(async () => { throw new DOMException("denied", "NotAllowedError"); })});
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
@@ -92,6 +102,18 @@ describe("CaptureController", () => {
     expect(node.disconnect).toHaveBeenCalledTimes(1);
     expect(source.disconnect).toHaveBeenCalledTimes(1);
     expect(context.closed).toBe(1);
+    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
+  });
+
+  test("still revokes the module URL when stop()'s context.close() rejects", async () => {
+    const {deps, context} = makeDeps();
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    await controller.start();
+    context.close = async () => { throw new Error("close failed"); };
+    // stop() may still reject (its own error is not swallowed); what must be
+    // guaranteed is that the Blob URL revoke runs regardless. Catch here so
+    // the rejection doesn't surface as an unhandled promise rejection.
+    await controller.stop().catch(() => undefined);
     expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
   });
 
