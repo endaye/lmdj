@@ -2295,11 +2295,11 @@ int main() {
           web_runtime.get(),
           &schedule_audio_install,
       });
-  web_audio.store(web_audio_owner.get(), std::memory_order_release);
   web_bridge_owner = std::make_unique<ControlBridge>(
       *web_runtime,
       BridgeHooks{nullptr, schedule_control, on_control});
   web_bridge.store(web_bridge_owner.get(), std::memory_order_release);
+  web_audio.store(web_audio_owner.get(), std::memory_order_release);
   emscripten_exit_with_live_runtime();
   return 0;
 }

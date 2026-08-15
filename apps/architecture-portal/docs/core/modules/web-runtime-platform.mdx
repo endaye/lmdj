@@ -19,7 +19,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 为浏览器 Host 提供共享 Runtime Session、输入 adapter、Control bridge、manifest gate 与 Web Audio 接线；不拥有 Creator UI、诊断 UI、Project Truth 或产品专属身份。
 ## 2. 当前实现状态
-Creator Web 与诊断 Web Runtime Host 共用同一 Platform `0.2.1` 和同一 Wasm Runtime；Host 通过各自受 Product Assembly 允许的分发身份启动。
+Creator Web 与诊断 Web Runtime Host 共用同一 Platform `0.2.1` 和同一 Wasm Runtime；Host 通过各自受 Product Assembly 允许的分发身份启动。Browser Main 只在 ControlBridge 与 audio adapter 均已发布后观察到 Runtime readiness，首个请求不能落入半初始化窗口。
 ## 3. 所有权与依赖
 只依赖 Application Facade `1.3.5` 与 Audio Runtime `0.4.1`。Product CMake 注入 Product Build、Platform 版本及精确 Host allowlist。
 ## 4. 架构与数据流
@@ -27,7 +27,7 @@ Creator/Diagnostic Host → Runtime Session → Application Facade；Pointer、K
 ## 5. API 与 Contract 边界
 Platform 校验 canonical distribution manifest，但该同构建协议不是公开跨版本 Contract。Project Bundle 只通过 Facade 的导入 API 进入 Core。
 ## 6. 状态、错误与并发
-Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Main、Control、Worker 与 AudioWorklet 的职责和消息上限固定。`recovery_probe_ready` 仅在 Runtime 为 `recovering`、当前 epoch 的 probe window 已 armed 且没有已保留 Probe 时为真；Probe 被保留或 window 关闭后立即回到 false，Host 不得从 timer、Context 状态或页面可见性推断 readiness。
+Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Main、Control、Worker 与 AudioWorklet 的职责和消息上限固定。启动时先以 release ordering 发布 ControlBridge，再发布 audio adapter；pre-JS 的 audio readiness 因而同时构成 ControlBridge publication barrier。`recovery_probe_ready` 仅在 Runtime 为 `recovering`、当前 epoch 的 probe window 已 armed 且没有已保留 Probe 时为真；Probe 被保留或 window 关闭后立即回到 false，Host 不得从 timer、Context 状态或页面可见性推断 readiness。
 ## 7. 产品使用方
 `creator-web 1.1.3` 与 `web-runtime-host 1.2.8`。
 ## 8. 测试与证据
