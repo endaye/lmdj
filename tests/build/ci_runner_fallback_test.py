@@ -12,6 +12,7 @@ import unittest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+ACTIONLINT_CONFIG = REPO_ROOT / ".github/actionlint.yaml"
 ACTION = REPO_ROOT / ".github/actions/macos-core-gates/action.yml"
 ASSERT_GATE = REPO_ROOT / ".github/scripts/assert-macos-gate-result.sh"
 
@@ -121,6 +122,34 @@ class CiRunnerFallbackTest(unittest.TestCase):
                 self.assertIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
 
+    def test_actionlint_config_is_plain_git_text_not_an_lfs_pointer(self) -> None:
+        attribute = subprocess.run(
+            ["git", "check-attr", "filter", "--", str(ACTIONLINT_CONFIG)],
+            cwd=REPO_ROOT,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout
+        self.assertNotIn("filter: lfs", attribute)
+        self.assertNotIn(
+            "version https://git-lfs.github.com/spec/v1",
+            ACTIONLINT_CONFIG.read_text(encoding="utf-8"),
+        )
+
+    def test_self_hosted_coverage_uses_preinstalled_toolchain(self) -> None:
+        coverage = self.workflow_job("core-coverage")
+        self.assertIn(
+            "name: Install coverage toolchain on GitHub-hosted runner",
+            coverage,
+        )
+        self.assertIn(
+            "if: ${{ needs.select-ubuntu-runner.outputs.self-hosted != 'true' }}",
+            coverage,
+        )
+        self.assertIn("name: Verify coverage toolchain", coverage)
+        self.assertIn("command -v clang-18", coverage)
+        self.assertIn("command -v llvm-cov-18", coverage)
+
     def test_hosted_web_gates_record_why_they_are_not_a_capacity_decision(self) -> None:
         """The routing reason must survive, or a later cost pass will undo it.
 
@@ -218,7 +247,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
 
     def test_linux_fixture_consumers_rehydrate_lfs_before_generation(self) -> None:
         consumers = {
-            "web-runtime-host": "scripts/web-runtime-host.sh proof",
+            "web-runtime-host": "uses: ./.github/actions/web-ci-proof",
             "core-ubuntu": "python3 tests/fixtures/audio/make_fixtures.py",
             "core-asan": "python3 tests/fixtures/audio/make_fixtures.py",
             "core-coverage": "python3 tests/fixtures/audio/make_fixtures.py",

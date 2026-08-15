@@ -400,6 +400,19 @@ def main() -> int:
         "&drain_outcomes_on_control" not in diagnostic_drain.group(1),
         "diagnostic outcome drain must not self-requeue while a mirror is writing",
     )
+    bridge_published = bridge_source.find(
+        "web_bridge.store(web_bridge_owner.get(), std::memory_order_release);"
+    )
+    audio_published = bridge_source.find(
+        "web_audio.store(web_audio_owner.get(), std::memory_order_release);"
+    )
+    require(
+        bridge_published >= 0
+        and audio_published >= 0
+        and bridge_published < audio_published,
+        "Browser Main must publish the ControlBridge before exposing audio "
+        "readiness",
+    )
     failure_spec_text = realtime_failure_spec.read_text(encoding="utf-8")
     pending_rejection_case = re.search(
         r'test\("unknown response rejects and clears another real pending '

@@ -328,3 +328,6 @@
 *.skill filter=lfs diff=lfs merge=lfs -text
 # LMDJ product config 是文本契约，不走 LFS（覆盖上面的 *.yaml 等规则）
 workers/audio/config/** -filter text=auto
+
+# GitHub Actions tooling must be available before checkout can hydrate LFS.
+.github/actionlint.yaml !filter !diff !merge text
