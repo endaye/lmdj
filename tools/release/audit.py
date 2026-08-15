@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Iterator
 
 from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
 from .model import (
@@ -35,6 +35,15 @@ _REPORT_SCHEMA = "lmdj.release-audit.v1"
 _SUCCESS_CODES = frozenset(("ok", "ok-with-historical-exception"))
 _CODES = frozenset((*_SUCCESS_CODES, "missing", "conflict", "unauthorized", "unverifiable", "external-error"))
 _MARKER = re.compile(r"<!-- lmdj\.release-plan-marker\.v1 (\{[^\r\n]*\}) -->")
+_STATIC_PROJECTION_MESSAGE = (
+    "active Product, Assembly lock or immutable snapshot projection is inconsistent"
+)
+_STATIC_PROJECTION_FAILURES = (
+    OSError, KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError, OpenPgpError,
+)
+_ASSIGNMENT = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=\S+")
+_ABSOLUTE_PATH = re.compile(r"(?<![\w<>])/[^\s'\"]*")
+_REASON_LIMIT = 200
 
 
 @dataclass(frozen=True)
@@ -297,6 +306,35 @@ def _audit_local(
     return findings
 
 
+class _StaticProjectionError(Exception):
+    """One named static repository projection failed with a sanitized reason."""
+
+    def __init__(self, projection: str, sources: tuple[str, ...], reason: str) -> None:
+        super().__init__(f"{projection}: {reason}")
+        self.projection = projection
+        self.sources = sources
+        self.reason = reason
+
+
+@contextmanager
+def _static_projection(root: Path, projection: str, *sources: str) -> Iterator[None]:
+    """Attribute one static repository failure to the exact projection that raised it."""
+    try:
+        yield
+    except _STATIC_PROJECTION_FAILURES as exception:
+        raise _StaticProjectionError(projection, sources, _sanitized_reason(root, exception)) from None
+
+
+def _sanitized_reason(root: Path, exception: BaseException) -> str:
+    """Describe a failure without echoing environment values, secrets or absolute paths."""
+    text = " ".join(str(exception).split()).replace(str(root), "<repo>")
+    text = _ASSIGNMENT.sub(r"\1=[redacted]", text)
+    text = _ABSOLUTE_PATH.sub("<path>", text)
+    if len(text) > _REASON_LIMIT:
+        text = text[:_REASON_LIMIT].rstrip() + "..."
+    return f"{type(exception).__name__}: {text}" if text else type(exception).__name__
+
+
 def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> AuditFinding | None:
     policy = context.policy
     if (
@@ -314,55 +352,63 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
             ("active-manifests",),
         )
     try:
-        context.trust_anchor_verifier(root, policy)
-        version = _json_file(version_path)
+        with _static_projection(root, "signing trust anchors", "canonical-trust"):
+            context.trust_anchor_verifier(root, policy)
         assembly_path = root / "products/lmdj/assembly.json"
         lock_path = root / "products/lmdj/assembly.lock.json"
-        assembly = _json_file(assembly_path)
-        lock = _json_file(lock_path)
-        identity = ".".join(str(version[name]) for name in ("milestone", "minor", "build", "patch"))
-        if version.get("product") != "lmdj" or assembly.get("product") != {"id": "lmdj", "version": identity}:
-            raise ValueError
-        if lock.get("product") != {"id": "lmdj", "version": identity}:
-            raise ValueError
-        if lock.get("assembly_sha256") != hashlib.sha256(assembly_path.read_bytes()).hexdigest():
-            raise ValueError
-        _verify_active_components(root, assembly, lock)
-        active = [entry for entry in entries if entry.kind.value == "product" and entry.identity == identity]
-        if len(active) != 1:
-            raise ValueError
-        active_intent = active[0]
-        context.git.validate_release_target(root, active_intent)
-        snapshot_path = root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
-        versions = _json_file(root / "apps/architecture-portal/versions.json")
-        snapshot = _json_file(snapshot_path)
-        if identity not in versions or snapshot.get("product_build") != identity:
-            raise ValueError
-        if snapshot.get("assembly_lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
-            raise ValueError
-        proof = context.proof_reader(root, active_intent)
-        if (
-            proof.source_branch != policy.branch
-            or proof.target_revision != active_intent.target_revision
-            or proof.product_build != identity
-            or proof.snapshot != active_intent.snapshot
-            or proof.snapshot_revision is None
-        ):
-            raise ValueError
-        if (root / ".git").exists():
-            for entry in entries:
-                if entry.disposition is Disposition.ABANDONED:
-                    continue
-                if subprocess.run(
-                    ["git", "-C", str(root), "cat-file", "-e", f"{entry.target_revision}^{{commit}}"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
-                ).returncode != 0:
-                    raise ValueError
-    except (OSError, KeyError, TypeError, ValueError, RuntimeError, json.JSONDecodeError, OpenPgpError):
+        with _static_projection(root, "active Product identity manifests", "active-manifests"):
+            version = _json_file(version_path)
+            assembly = _json_file(assembly_path)
+            lock = _json_file(lock_path)
+            identity = ".".join(str(version[name]) for name in ("milestone", "minor", "build", "patch"))
+            if version.get("product") != "lmdj" or assembly.get("product") != {"id": "lmdj", "version": identity}:
+                raise ValueError(f"Product manifest or Assembly does not declare {identity}")
+            if lock.get("product") != {"id": "lmdj", "version": identity}:
+                raise ValueError(f"Assembly lock does not declare {identity}")
+            if lock.get("assembly_sha256") != hashlib.sha256(assembly_path.read_bytes()).hexdigest():
+                raise ValueError("Assembly lock digest does not match the active Assembly")
+        with _static_projection(root, "Assembly lock component digests", "active-manifests"):
+            _verify_active_components(root, assembly, lock)
+        with _static_projection(root, "active release intent selection", "active-manifests"):
+            active = [entry for entry in entries if entry.kind.value == "product" and entry.identity == identity]
+            if len(active) != 1:
+                raise ValueError(f"ledger holds {len(active)} Product intents for {identity}, expected exactly one")
+            active_intent = active[0]
+        with _static_projection(root, "exact release target validation", "exact-target", "architecture-portal"):
+            context.git.validate_release_target(root, active_intent)
+        with _static_projection(root, "immutable Portal snapshot projection", "architecture-portal"):
+            snapshot_path = root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
+            versions = _json_file(root / "apps/architecture-portal/versions.json")
+            snapshot = _json_file(snapshot_path)
+            if identity not in versions or snapshot.get("product_build") != identity:
+                raise ValueError(f"Portal snapshot inventory does not carry {identity}")
+            if snapshot.get("assembly_lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
+                raise ValueError("Portal snapshot lock digest does not match the active Assembly lock")
+        with _static_projection(root, "merged-main Proof projection", "architecture-portal"):
+            proof = context.proof_reader(root, active_intent)
+            if (
+                proof.source_branch != policy.branch
+                or proof.target_revision != active_intent.target_revision
+                or proof.product_build != identity
+                or proof.snapshot != active_intent.snapshot
+                or proof.snapshot_revision is None
+            ):
+                raise ValueError(f"Proof projection does not bind {active_intent.tag} to {identity}")
+        with _static_projection(root, "release intent target objects", "active-manifests"):
+            if (root / ".git").exists():
+                for entry in entries:
+                    if entry.disposition is Disposition.ABANDONED:
+                        continue
+                    if subprocess.run(
+                        ["git", "-C", str(root), "cat-file", "-e", f"{entry.target_revision}^{{commit}}"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False,
+                    ).returncode != 0:
+                        raise ValueError(f"target commit of {entry.tag} is absent from the local object store")
+    except _StaticProjectionError as failure:
         return AuditFinding(
             "unverifiable", policy.repository,
-            "active Product, Assembly lock or immutable snapshot projection is inconsistent",
-            ("active-manifests", "architecture-portal"),
+            f"{_STATIC_PROJECTION_MESSAGE}: {failure.projection} ({failure.reason})",
+            failure.sources,
         )
     return None
 
@@ -505,7 +551,7 @@ def _tag_problem(context: object, intent: ReleaseIntent, tag: _ObservedTag) -> s
 
 def _verify_active_components(root: Path, assembly: object, lock: object) -> None:
     if not isinstance(assembly, dict) or not isinstance(lock, dict):
-        raise ValueError
+        raise ValueError("Assembly or Assembly lock is not a JSON object")
     for assembly_key, lock_key, source_kind in (
         ("modules", "modules", "module"),
         ("hosts", "hosts", "host"),
@@ -515,7 +561,7 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
         declared = assembly.get(assembly_key)
         locked = lock.get(lock_key)
         if not isinstance(declared, list) or not isinstance(locked, list):
-            raise ValueError
+            raise ValueError(f"{source_kind} inventory is missing from the Assembly or its lock")
         declared_identity = {
             (item.get("id"), item.get("version"))
             for item in declared if isinstance(item, dict)
@@ -525,13 +571,13 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
             for item in locked if isinstance(item, dict)
         }
         if len(declared_identity) != len(declared) or declared_identity != locked_identity:
-            raise ValueError
+            raise ValueError(f"{source_kind} inventory differs between the Assembly and its lock")
         for item in locked:
             if not isinstance(item, dict) or set(item) != {"id", "version", "sha256"}:
-                raise ValueError
+                raise ValueError(f"locked {source_kind} entry has unexpected fields")
             identifier, version, digest = item["id"], item["version"], item["sha256"]
             if not all(isinstance(value, str) and value for value in (identifier, version, digest)):
-                raise ValueError
+                raise ValueError(f"locked {source_kind} entry has a non-string identity or digest")
             path = _component_path(root, source_kind, identifier)
             document = _json_file(path)
             if source_kind == "provider":
@@ -541,12 +587,12 @@ def _verify_active_components(root: Path, assembly: object, lock: object) -> Non
             else:
                 observed_digest = hashlib.sha256(path.read_bytes()).hexdigest()
             if observed_digest != digest:
-                raise ValueError
+                raise ValueError(f"{source_kind} {identifier} source digest does not match the lock")
             if source_kind == "contract":
                 if not isinstance(document, dict) or document.get("x-lmdj-contract-version") != version:
-                    raise ValueError
+                    raise ValueError(f"contract {identifier} does not declare version {version}")
             elif not isinstance(document, dict) or document.get("module") != identifier or document.get("version") != version:
-                raise ValueError
+                raise ValueError(f"{source_kind} {identifier} does not declare version {version}")
 
 
 def _component_path(root: Path, kind: str, identifier: str) -> Path:
@@ -560,15 +606,15 @@ def _component_path(root: Path, kind: str, identifier: str) -> Path:
             if isinstance(_json_file(path), dict) and _json_file(path).get("module") == identifier
         ]
         if len(candidates) != 1:
-            raise ValueError
+            raise ValueError(f"provider {identifier} does not have exactly one manifest")
         path = candidates[0]
     else:
         candidates = list((root / "contracts").glob(f"*/{identifier}.schema.json"))
         if len(candidates) != 1:
-            raise ValueError
+            raise ValueError(f"contract {identifier} does not have exactly one schema")
         path = candidates[0]
     if not path.is_file() or path.is_symlink():
-        raise ValueError
+        raise ValueError(f"{kind} {identifier} manifest is unavailable")
     return path
 
 
