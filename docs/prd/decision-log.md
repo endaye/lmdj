@@ -427,6 +427,11 @@ manifest 与全部 Contract 零变更。
   AudioContext（引擎 context 在 Emscripten 运行时内部、不向 Host 暴露）；
   float→PCM16 WAV 编码在 Host 层提交时完成；不用 MediaRecorder /
   ScriptProcessorNode。
+- **S8B-D11**（2026-08-16 补充）：权限撤销不设独立中断原因，一律归入设备丢失。
+  浏览器对两者使用同一信号（track `ended`），代码无从区分；唯一的区分手段
+  `navigator.permissions.query({name:"microphone"})` 在 Firefox 与 Safari 都不
+  支持麦克风查询，而 Safari/iPadOS 是本阶段目标平台。用户文案需同时涵盖设备
+  不可用与权限变更两种成因。
 - **S8B-D10**：共享 prepared-PCM 配额（单 Pad ≈60 秒长素材）立为具名后续
   阶段，与 Loop 素材 BPM Time-stretch 开放问题同一次设计评审；Stage 8B 不改
   资源模型、不抬 512 MiB 固定堆。
