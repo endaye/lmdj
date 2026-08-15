@@ -363,3 +363,26 @@
   Bank、permission、disconnect、admission/outcome 与 listener cleanup 语义。
   自动化 Channel 10 回归测试不替代修复候选上的实体 MIDI 复验，也不推导 Safari
   或 iPadOS 结果。
+
+## 2026-08-16
+
+### 已确认：Provider SDK 需要一等公民的 Artifact 字节访问（输入 resolver + 输出访问口）
+
+- 结论：analysis-bench 原型（分支 `feat/audio-analysis-bench-prototype`，
+  `tools/analysis-bench/`）验证了 Capability v2 + `AttemptStore` 生产执行路径
+  可以无改动地承载多种可插拔音频分析工具；同时确认了
+  [Provider 多端口决策](../architecture/2026-08-01-provider-multi-port-contract-decision.md)
+  中预留的输入字节 resolver 缺口是**双向**的：输入侧 Provider 只收到
+  `ArtifactRef` 而没有 bytes（原型由 Host 在组合时注入
+  `analysis::ArtifactByteResolver` 桥接），输出侧 SDK 也没有读取已提交
+  Artifact bytes 的访问口（原型不得不按 `.lmdj-workspace/attempts/` 私有
+  磁盘布局重建路径）。Attempt/Candidate 语义对报告型分析输出基本适配，
+  不需要轻量结果通道。原型对比证据：12/12 行通过 numpy/scipy ground truth,
+  多次 Attempt 输出 sha256 逐字节一致。
+- 原因：Capability Contract 只传递 `ArtifactRef`（sha256/media_type/
+  byte_length)，字节解析被显式保留为独立架构问题；原型证明这个缺口一旦
+  进入真实分析工具就会双向阻塞，而不是只阻塞输入。
+- 影响：本条只记录结论，不修改 Contract、SDK 或任何版本身份。正式的
+  resolver/输出访问口设计（形状、校验边界、对 v2 Contract 的影响）需要独立
+  的 Contract Review；原型的 Host 注入桥接是临时方案，不得直接毕业为正式
+  接口。
