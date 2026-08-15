@@ -853,6 +853,16 @@ distribution asset; `stop()` is idempotent and releases track → node → sourc
 → context → module URL in one owner (S8B-D5/§7); a track `ended` event maps to
 `onEnded("device-lost")`.
 
+The worklet processor ships as a source string, so it must also be tested
+directly — evaluate `CAPTURE_WORKLET_SOURCE` in the test with stub globals
+(`class AudioWorkletProcessor {constructor() {this.port = {postMessage}}}` and
+a `registerProcessor` that captures the class), instantiate the processor, and
+drive `process([[frames]])` with 128-frame quanta. Assert: no message before
+4,800 frames accumulate; exactly one message at 4,800 with the right peak; and
+— the boundary case — feeding quanta until a single quantum straddles the
+batch edge still posts correctly and keeps accepting frames without throwing
+(the batch is nulled after each post and must be reallocated inside the loop).
+
 - [ ] **Step 1: Write the failing test** — fake deps record every call:
 
 ```ts
@@ -971,12 +981,14 @@ class LmdjCaptureRecorder extends AudioWorkletProcessor {
   process(inputs) {
     const input = inputs[0];
     if (!input || input.length === 0) { return true; }
-    if (this.batch === null) {
-      this.batch = input.map(() => new Float32Array(${CAPTURE_BATCH_FRAMES}));
-    }
     const frames = input[0].length;
     let offset = 0;
     while (offset < frames) {
+      // Allocate inside the loop: a quantum that crosses a batch boundary
+      // posts (and nulls) the batch mid-loop, then keeps writing.
+      if (this.batch === null) {
+        this.batch = input.map(() => new Float32Array(${CAPTURE_BATCH_FRAMES}));
+      }
       const take = Math.min(frames - offset, ${CAPTURE_BATCH_FRAMES} - this.filled);
       for (let channel = 0; channel < this.batch.length; channel += 1) {
         const data = input[channel] ?? input[0];
