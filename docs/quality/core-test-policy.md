@@ -289,29 +289,57 @@ concurrent runs saturated the pool for an instant — the dominant cost driver
 in the 2026-08-12 run history. A saturated pool now queues, and the selector
 reports online and idle counts as diagnostics.
 
-The trusted Linux pool's concurrency equals the number of online runner
-services, currently two — one per host; additional selected jobs queue behind
-them. Raising that number is an operational change on the existing hosts, not
-a workflow change. The approved target is two services per host, giving a pool
-concurrency of four. It is bounded rather than maximal because each CI CMake
-build is already capped at three parallel jobs, so services per host multiply
-into concurrent compile jobs per host: two services means at most six, which
-the hosts absorb, while three would mean nine and would slow every job on the
-machine. `web-runtime-host` is the lane most exposed to that contention, at
-roughly 40 minutes on the pool against 16-19 GitHub-hosted, and it sets the
-pool's critical path regardless of how many slots the pool offers.
+Concurrency is per role and equals the number of online runner services
+carrying that role; additional selected jobs queue behind them. Both hosts now
+run the approved two services each, so `ci-general` offers four concurrent
+slots across the two hosts, `ci-web-heavy` two on netcup, and the
+`select-ubuntu-runner` pool — which still matches the `contabo` origin label —
+two on Contabo. Raising the count is an operational change on the existing
+hosts, not a workflow change. Two per host is bounded rather than maximal
+because each CI CMake build is already capped at three parallel jobs, so
+services per host multiply into concurrent compile jobs per host: two services
+means at most six, which the hosts absorb, while three would mean nine and
+would slow every job on the machine. `web-runtime-host` is the lane most
+exposed to that contention, at roughly 40 minutes on the shared pool against
+16-19 GitHub-hosted; its netcup timings are not yet recorded, so its 75-minute
+limit stays a hang detector with headroom rather than a performance budget.
 
-The approved target topology replaces the shared `contabo` origin label with
-role labels. The Contabo Singapore host, which also runs LMDJ staging, keeps
-`shared-with-staging` and takes the `ci-general` and `ci-core` roles under a
+Linux CI now routes by role label rather than by the shared `contabo` origin
+label. The Contabo Singapore host, which also runs LMDJ staging, keeps
+`shared-with-staging` and carries the `ci-general` and `ci-core` roles under a
 resource slice that reserves at least about 2 vCPU and 8 GiB for the
-application and the OS. A CI-only netcup node takes `ci-only-host` and the
-`ci-web-heavy` role with two runner services bounded to roughly 14 vCore and
-48 GB, leaving the rest for the OS and cache maintenance. Neither the role
-labels nor the netcup node exists yet: this change migrated schema and trust
-only, every current `runs-on` value and the `select-ubuntu-runner` label set
-are unchanged, and lanes that have not been cut over keep the current selector
-behavior.
+application and the OS. The CI-only netcup node carries `ci-only-host` and the
+`ci-general` and `ci-web-heavy` roles, with two runner services bounded to
+roughly 14 vCore and 48 GB and the rest left for the OS and cache maintenance.
+Routing splits three ways:
+
+- **Hosted control plane.** Change Scope, PR Gate, `select-ubuntu-runner` and
+  `select-macos-runner` stay on `ubuntu-24.04`. Change Scope decides what runs
+  and whether the head is trusted, and PR Gate decides whether the run passed,
+  so a self-hosted outage must not be able to take the scope and trust
+  evidence down with the jobs it governs.
+- **Self-hosted workload, addressed by role.** The four Web lanes — Web
+  Toolchain, Web Runtime Host, Creator and Web Runtime Lab — name
+  `ci-web-heavy` literally. The five general Linux jobs — Docs / static,
+  Architecture Portal, CI contract, Deploy contract and Chameleon Lab — name
+  `ci-general` literally. Architecture Portal declares its role inside the
+  called `architecture-portal.yml`, because GitHub does not allow a `uses:`
+  job to carry `runs-on`.
+- **Still selector-resolved.** Ubuntu Core, Linux ASan, Coverage and Package
+  are the only remaining `select-ubuntu-runner` consumers, and they keep the
+  automatic GitHub-hosted fallback until they move to `ci-core`.
+
+A literal role label is not selector-resolved and therefore has no fallback
+branch: a saturated or absent role queues the job instead of buying paid
+capacity. Every job that can land on a role carries the closed trust condition
+itself, because the selector's fork branch is no longer in its path.
+
+No CI job requires Docker. The CI-only host runs no daemon and the shared
+host's runner users are outside the `docker` group, so CI can never reach the
+socket that runs production. The CI contract lane accordingly validates
+workflows with a checksum-pinned actionlint release archive instead of a
+container action, at the same pinned version; a digest names the exact bytes,
+where the Docker tag it replaced named only a version.
 
 A busy matching pool still queues instead of diverting to paid runners. When no
 matching runner ever comes online, the job stays queued and GitHub cancels it

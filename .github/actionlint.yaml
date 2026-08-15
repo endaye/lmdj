@@ -2,4 +2,5 @@ self-hosted-runner:
   labels:
     - lmdj-linux
     - lmdj-linux-pool
+    - ci-general
     - ci-web-heavy
