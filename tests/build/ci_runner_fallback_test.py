@@ -24,7 +24,17 @@ WEB_HEAVY_ROLE = (
 WEB_HEAVY_LANES = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
+    "web-runtime-host": "web_runtime_host",
 }
+# Jobs whose runner is still resolved by `select-ubuntu-runner`. Cutting a
+# lane over removes it from here and from the selector's guard together, so
+# the selector is never started for a route nobody reads.
+SELECTOR_CONSUMERS = (
+    "web-runtime-lab",
+    "core-ubuntu",
+    "core-asan",
+    "core-coverage",
+)
 
 
 class CiRunnerFallbackTest(unittest.TestCase):
@@ -106,13 +116,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("runner=[\"ubuntu-24.04\"]", selector)
         self.assertIn("github.event.pull_request.head.repo.full_name", selector)
 
-        for job_name in (
-            "web-runtime-host",
-            "web-runtime-lab",
-            "core-ubuntu",
-            "core-asan",
-            "core-coverage",
-        ):
+        for job_name in SELECTOR_CONSUMERS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn(
@@ -131,14 +135,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         therefore carries the closed manifest trust condition, so an untrusted
         head is blocked before routing rather than diverted to paid runners.
         """
-        for job_name in (
-            "web-runtime-host",
-            "web-runtime-lab",
-            "core-ubuntu",
-            "core-asan",
-            "core-coverage",
-            "package",
-        ):
+        for job_name in (*SELECTOR_CONSUMERS, "package"):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn(
@@ -153,7 +150,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertNotIn("trusted-head", selector)
 
     def test_cut_over_web_lanes_are_pinned_to_the_netcup_web_heavy_role(self) -> None:
-        """Web Toolchain and Creator run on the CI-only netcup node.
+        """Web Toolchain, Creator and Web Runtime Host use the netcup node.
 
         The role label set is static, not selector-resolved. `ci-web-heavy`
         exists only on the dedicated node, so a busy or absent role queues a
@@ -269,10 +266,11 @@ class CiRunnerFallbackTest(unittest.TestCase):
         """The job limit must clear the slowest trusted runner, not the fastest.
 
         web-runtime-host was observed at 40 minutes on the trusted pool and
-        cancelled at exactly 45 once, against 16-19 minutes GitHub-hosted.
-        Removing the busy-based diversion raises how often it lands on the
-        slow pool, so a limit calibrated to hosted speed would convert a cost
-        saving into an intermittent red Pull Request.
+        cancelled at exactly 45 once, against 16-19 minutes GitHub-hosted. The
+        lane now always runs self-hosted, on the dedicated role, so a limit
+        calibrated to hosted speed would convert a cost saving into an
+        intermittent red Pull Request. The netcup node has not yet produced
+        its own timing evidence, so the headroom stays until it does.
         """
         job = self.workflow_job("web-runtime-host")
         match = re.search(r"timeout-minutes: (\d+)", job)

@@ -79,7 +79,7 @@ jobs:
   select-ubuntu-runner:
     name: Select Ubuntu runner
     needs: change-scope
-    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host || fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab || fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || fromJSON(needs.change-scope.outputs.manifest).lanes.package) }}
+    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_lab || fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || fromJSON(needs.change-scope.outputs.manifest).lanes.package) }}
     runs-on: ubuntu-24.04
     outputs:
       runner: ${{ steps.select.outputs.runner }}
@@ -349,15 +349,25 @@ jobs:
           install-system-deps: "false"
 
   web-runtime-host:
-    needs: [change-scope, select-ubuntu-runner]
+    # Third lane cut over to the dedicated CI-only netcup node, after Web
+    # Toolchain and Creator proved the role. This lane was the shared pool's
+    # critical path, so it is the one the dedicated capacity exists for. The
+    # label set is literal rather than selector-resolved, so a busy or absent
+    # role queues this job instead of diverting it to paid runners; leaving
+    # the selector also removes the last path by which a fallback could send
+    # this lane back to hosted Ubuntu. System dependencies are provisioned
+    # with the role, so Playwright must not apt-install them into state
+    # shared by both runner services on every run.
+    needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.web_runtime_host && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]
     # 45 was calibrated to GitHub-hosted speed (16-19 min observed). The
-    # trusted pool runs this lane about 2.2x slower: one success at 40 min
-    # and one cancellation at exactly 45. The limit is a hang detector, not
-    # a performance budget -- the suite owns its own behavior timeouts -- so
-    # it must clear the slow machine with room for pool contention, which
-    # rises as runner services per host go up.
+    # shared trusted pool ran this lane about 2.2x slower: one success at 40
+    # min and one cancellation at exactly 45. The limit is a hang detector, not
+    # a performance budget -- the suite owns its own behavior timeouts -- so it
+    # must clear the slow machine with room for contention, which rises as
+    # runner services per host go up. The netcup role has not yet reported its
+    # own timings for this lane, so the headroom stays until it does.
     timeout-minutes: 75
     env:
       LANG: C.UTF-8
@@ -371,7 +381,7 @@ jobs:
       - uses: ./.github/actions/web-ci-proof
         with:
           lane: web_runtime_host
-          install-system-deps: ${{ runner.environment == 'github-hosted' && 'true' || 'false' }}
+          install-system-deps: "false"
 
   creator-web:
     # Second lane cut over to the dedicated CI-only netcup node, after Web

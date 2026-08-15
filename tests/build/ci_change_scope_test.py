@@ -38,7 +38,11 @@ LANE_JOBS = {
     "core_coverage": ["select-ubuntu-runner", "core-coverage"],
     "core_macos": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
     "web_toolchain": ["web-toolchain-conformance"],
-    "web_runtime_host": ["select-ubuntu-runner", "web-runtime-host"],
+    # Cut over to the static `ci-web-heavy` netcup role, so the lane no longer
+    # needs `select-ubuntu-runner` to resolve a runner and must not require its
+    # result: a support job the lane never reads would gate the Gate on a job
+    # the workflow guard leaves skipped.
+    "web_runtime_host": ["web-runtime-host"],
     "creator": ["creator-web"],
     "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
