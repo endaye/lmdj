@@ -18,8 +18,13 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from tools.release.commands import CommandRunner, sanitize_diagnostic  # noqa: E402
 from tools.release.github_api import BranchProjection, RunProjection  # noqa: E402
 from tools.release.git_repository import GitRepository  # noqa: E402
+from tools.release.target_validation import (  # noqa: E402
+    TargetValidationError,
+    validate_release_target,
+)
 from tools.release.model import (  # noqa: E402
     Disposition,
     HistoricalException,
@@ -396,6 +401,67 @@ class ReleasePrepareTest(unittest.TestCase):
                     ("evidence.md",), channel, snapshot, 1,
                 )
                 repository.validate_release_target(ROOT, intent)
+
+    def test_failed_target_command_reports_a_sanitized_reason(self) -> None:
+        def executor(vector, **kwargs):
+            if vector[0] != "node":
+                return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
+            return subprocess.CompletedProcess(
+                vector, 1, stdout="",
+                stderr=(
+                    "snapshot introducing commit cannot be resolved: "
+                    "GITHUB_TOKEN=ghs_fixturesecret000111222333 "
+                    "https://token:ghs_fixturesecret000111222333@github.com/endaye/lmdj "
+                    "at /home/runner/work/lmdj/lmdj\n"
+                ),
+            )
+
+        intent = ReleaseIntent(
+            "fixture", ReleaseKind.PRODUCT, "1.0.21.0", "a" * 40, Disposition.RELEASABLE,
+            "web-runtime-host", ("evidence.md",), "canary", "1.0.21.0", 1,
+        )
+        with self.assertRaises(TargetValidationError) as raised:
+            validate_release_target(ROOT, intent, runner=CommandRunner(executor=executor))
+        message = str(raised.exception)
+        self.assertIn("Product Portal snapshot provenance is invalid", message)
+        self.assertIn("snapshot introducing commit cannot be resolved", message)
+        self.assertIn("GITHUB_TOKEN=[redacted]", message)
+        self.assertNotIn("ghs_fixturesecret000111222333", message)
+        self.assertNotIn("/home/runner", message)
+
+    def test_sanitized_diagnostics_drop_credentials_and_bound_length(self) -> None:
+        self.assertEqual(
+            sanitize_diagnostic("fatal: https://x-access-token:secret@github.com/o/r denied"),
+            "fatal: <redacted>@github.com/o/r denied",
+        )
+        self.assertEqual(
+            sanitize_diagnostic("AUTHORIZATION: basic QUJDOjEyMw=="),
+            "AUTHORIZATION: basic [redacted]",
+        )
+        self.assertEqual(
+            sanitize_diagnostic("token github_pat_11ABCDEFG0123456789abc rejected"),
+            "token [redacted] rejected",
+        )
+        self.assertEqual(sanitize_diagnostic("  a\n\n  b  "), "a b")
+
+    def test_sanitized_diagnostics_keep_flags_and_both_ends(self) -> None:
+        self.assertEqual(
+            sanitize_diagnostic("Command failed: git archive --format=tar --output=/tmp/a.tar HEAD"),
+            "Command failed: git archive --format=tar --output=<path> HEAD",
+        )
+        self.assertEqual(
+            sanitize_diagnostic("gh --token=ghs_fixturesecret000111222 run"),
+            "gh --token=[redacted] run",
+        )
+        self.assertEqual(
+            sanitize_diagnostic("GITHUB_TOKEN=ghs_fixturesecret000111222 git"),
+            "GITHUB_TOKEN=[redacted] git",
+        )
+        bounded = sanitize_diagnostic("head " + "x" * 400 + " fatal: the real reason", limit=60)
+        self.assertLessEqual(len(bounded), 60)
+        self.assertTrue(bounded.startswith("head"))
+        self.assertTrue(bounded.endswith("the real reason"))
+        self.assertIn(" ... ", bounded)
 
     def test_product_snapshot_validator_imports_without_portal_packages(self) -> None:
         with tempfile.TemporaryDirectory(prefix="release-node-loader-") as directory:

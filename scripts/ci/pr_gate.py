@@ -117,6 +117,12 @@ def validate_gate(
         )
     skipped = tuple(job for job in _formal_jobs(policy) if job not in requested)
     errors: list[str] = []
+    # Trust is adjudicated before any result, because an untrusted head must
+    # fail the run rather than pass on the skips its own blocked jobs produce.
+    if not manifest["trusted_head"] and set(requested).intersection(
+        policy["self_hosted_jobs"]
+    ):
+        errors.append("untrusted fork blocked from self-hosted CI")
     if change_scope_result != "success":
         errors.append(
             f"change-scope producer is {change_scope_result}, expected success"
