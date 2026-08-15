@@ -1,7 +1,11 @@
 import {describe, expect, test} from "vitest";
 import {
+  CAPTURE_BLUR_STOP_MESSAGE,
+  CAPTURE_CAPACITY_STOP_MESSAGE,
   CAPTURE_DEVICE_LOST_MESSAGE,
-  CAPTURE_PERMISSION_REVOKED_MESSAGE,
+  CAPTURE_HIDDEN_STOP_MESSAGE,
+  CAPTURE_USER_STOP_MESSAGE,
+  captureStopReasonMessage,
   initialCaptureState,
   reduceCapture,
 } from "../src/state/capture_state";
@@ -45,8 +49,7 @@ describe("reduceCapture", () => {
   });
 
   test("keeps the buffer through every interruption reason", () => {
-    for (const reason of ["user", "capacity", "blur", "hidden",
-                          "device-lost", "permission-revoked"] as const) {
+    for (const reason of ["user", "capacity", "blur", "hidden", "device-lost"] as const) {
       const trimming = run([
         {kind: "record"}, {kind: "granted"},
         {kind: "frames", frames: 48_000, peak: 0.4},
@@ -85,11 +88,6 @@ describe("reduceCapture", () => {
     expect(lost.frameCount).toBe(0);
     // still retryable
     expect(reduceCapture(lost, {kind: "record"}).phase).toBe("requesting-permission");
-
-    const revoked = run([{kind: "record"}, {kind: "granted"},
-                         {kind: "stop", reason: "permission-revoked"}]);
-    expect(revoked.phase).toBe("permission-error");
-    expect(revoked.errorMessage).toBe(CAPTURE_PERMISSION_REVOKED_MESSAGE);
   });
 
   test("returns to idle when a benign stop captured nothing", () => {
@@ -108,5 +106,27 @@ describe("reduceCapture", () => {
   test("ignores events that are invalid for the phase", () => {
     expect(reduceCapture(initialCaptureState, {kind: "committed"})).toBe(initialCaptureState);
     expect(reduceCapture(initialCaptureState, {kind: "stop", reason: "user"})).toBe(initialCaptureState);
+  });
+});
+
+describe("captureStopReasonMessage", () => {
+  // This is the single source of truth the panel imports instead of keeping
+  // its own copy (Finding 4): asserting every branch here is what would
+  // catch the two copies drifting apart again.
+  test("maps every stop reason to its message, and null to null", () => {
+    expect(captureStopReasonMessage("user")).toBe(CAPTURE_USER_STOP_MESSAGE);
+    expect(captureStopReasonMessage("capacity")).toBe(CAPTURE_CAPACITY_STOP_MESSAGE);
+    expect(captureStopReasonMessage("blur")).toBe(CAPTURE_BLUR_STOP_MESSAGE);
+    expect(captureStopReasonMessage("hidden")).toBe(CAPTURE_HIDDEN_STOP_MESSAGE);
+    expect(captureStopReasonMessage("device-lost")).toBe(CAPTURE_DEVICE_LOST_MESSAGE);
+    expect(captureStopReasonMessage(null)).toBeNull();
+  });
+
+  test("the device-lost message covers both device loss and permission revocation (S8B-D11)", () => {
+    // The browser reports both causes identically (the track's "ended"
+    // event) and there is no cross-browser way to tell them apart, so the
+    // single remaining message must not claim it was specifically the device.
+    expect(CAPTURE_DEVICE_LOST_MESSAGE).toContain("unavailable");
+    expect(CAPTURE_DEVICE_LOST_MESSAGE).toContain("permission");
   });
 });

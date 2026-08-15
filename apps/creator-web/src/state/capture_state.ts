@@ -4,7 +4,7 @@ export type CapturePhase =
   "idle" | "requesting-permission" | "permission-error" |
   "recording" | "trimming" | "committing" | "commit-error";
 export type CaptureStopReason =
-  "user" | "capacity" | "blur" | "hidden" | "device-lost" | "permission-revoked";
+  "user" | "capacity" | "blur" | "hidden" | "device-lost";
 
 export interface CaptureState {
   phase: CapturePhase;
@@ -17,10 +17,32 @@ export interface CaptureState {
   conflict: boolean;
 }
 
+// S8B-D11: browsers report permission revocation and device loss identically
+// (the track's "ended" event), and navigator.permissions.query({name:
+// "microphone"}) — the only mechanism that could distinguish them — is
+// unsupported in Firefox and Safari, both target platforms. The code cannot
+// tell the two causes apart, so the message must cover both.
+export const CAPTURE_USER_STOP_MESSAGE = "Recording stopped.";
+export const CAPTURE_CAPACITY_STOP_MESSAGE =
+  "Recording stopped: reached the 60-second limit.";
+export const CAPTURE_BLUR_STOP_MESSAGE = "Recording stopped: the window lost focus.";
+export const CAPTURE_HIDDEN_STOP_MESSAGE = "Recording stopped: the tab was hidden.";
 export const CAPTURE_DEVICE_LOST_MESSAGE =
-  "Recording stopped: the input device became unavailable";
-export const CAPTURE_PERMISSION_REVOKED_MESSAGE =
-  "Recording stopped: microphone permission was revoked";
+  "Recording stopped: the microphone became unavailable or its permission changed.";
+
+// Single source of truth for every stop-reason message: both the reducer's
+// own zero-frame permission-error state and the panel's trimming view render
+// through this function so the two can never drift apart again.
+export function captureStopReasonMessage(reason: CaptureStopReason | null): string | null {
+  switch (reason) {
+    case "user": return CAPTURE_USER_STOP_MESSAGE;
+    case "capacity": return CAPTURE_CAPACITY_STOP_MESSAGE;
+    case "blur": return CAPTURE_BLUR_STOP_MESSAGE;
+    case "hidden": return CAPTURE_HIDDEN_STOP_MESSAGE;
+    case "device-lost": return CAPTURE_DEVICE_LOST_MESSAGE;
+    case null: return null;
+  }
+}
 
 export const initialCaptureState: CaptureState = Object.freeze({
   phase: "idle", stopReason: null, frameCount: 0, peak: 0,
@@ -58,12 +80,9 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent): Capture
       // Nothing captured yet (interrupted before the first batch landed), so
       // there is nothing to trim. A failure reason must still reach the user;
       // a benign reason just returns to idle (S8B-D5 as amended).
-      return event.reason === "device-lost" || event.reason === "permission-revoked"
+      return event.reason === "device-lost"
         ? {...initialCaptureState, phase: "permission-error",
-           stopReason: event.reason,
-           errorMessage: event.reason === "device-lost"
-             ? CAPTURE_DEVICE_LOST_MESSAGE
-             : CAPTURE_PERMISSION_REVOKED_MESSAGE}
+           stopReason: event.reason, errorMessage: CAPTURE_DEVICE_LOST_MESSAGE}
         : initialCaptureState;
     }
     case "select":

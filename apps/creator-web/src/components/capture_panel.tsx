@@ -8,6 +8,7 @@ import {
   type CaptureListener,
 } from "../capture/capture_controller";
 import {
+  captureStopReasonMessage,
   initialCaptureState,
   reduceCapture,
   type CaptureStopReason,
@@ -39,18 +40,6 @@ function permissionErrorMessage(error: unknown): string {
   return "Recording could not start.";
 }
 
-function stopReasonMessage(reason: CaptureStopReason | null): string | null {
-  switch (reason) {
-    case "user": return "Recording stopped.";
-    case "capacity": return "Recording stopped: reached the 60-second limit.";
-    case "blur": return "Recording stopped: the window lost focus.";
-    case "hidden": return "Recording stopped: the tab was hidden.";
-    case "device-lost": return "Recording stopped: the input device became unavailable.";
-    case "permission-revoked": return "Recording stopped: microphone permission was revoked.";
-    case null: return null;
-  }
-}
-
 function secondsLabel(frames: number): string {
   return `${(frames / CAPTURE_SAMPLE_RATE).toFixed(1)} s`;
 }
@@ -58,10 +47,16 @@ function secondsLabel(frames: number): string {
 export function CapturePanel({padLabel, onCommit, onClose, makeController}: CapturePanelProps) {
   const [state, dispatch] = useReducer(reduceCapture, initialCaptureState);
   const bufferRef = useRef<CaptureBuffer | null>(null);
+  // The buffer is now created lazily from the first delivered batch (Finding
+  // 1), so "buffer === null" no longer means "not recording" — it can also
+  // mean "recording, but no batch has landed yet". This ref is the actual
+  // recording guard onBatch uses to no-op once capture has been stopped.
+  const recordingRef = useRef(false);
   const controllerRef = useRef<CaptureController | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const requestStop = useCallback((reason: CaptureStopReason) => {
+    recordingRef.current = false;
     dispatch({kind: "stop", reason});
     const controller = controllerRef.current;
     controllerRef.current = null;
@@ -73,6 +68,7 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
   // Single-owner lifecycle: whatever controller is active when this component
   // unmounts must be stopped exactly once, even if that happens mid-recording.
   useEffect(() => () => {
+    recordingRef.current = false;
     const controller = controllerRef.current;
     controllerRef.current = null;
     if (controller !== null) {
@@ -120,11 +116,27 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     // two controllers at once.
     if (controllerRef.current !== null) return;
     dispatch({kind: "record"});
+    bufferRef.current = null;
     const listener: CaptureListener = {
       onBatch(channels, peak) {
+        // The delivered audio is the single authority on channel width
+        // (Finding 1): the buffer is sized from the first real batch, never
+        // from a value inferred ahead of time.
+        if (!recordingRef.current) return;
+        if (bufferRef.current === null) {
+          bufferRef.current = new CaptureBuffer(channels.length === 2 ? 2 : 1);
+        }
         const buffer = bufferRef.current;
-        if (buffer === null) return;
-        buffer.append(channels);
+        try {
+          buffer.append(channels);
+        } catch {
+          // A shape mismatch here means the delivered audio disagreed with
+          // the buffer it was sized from. Stopping the capture releases the
+          // microphone; letting this escape into the event handler would
+          // strand it live with the UI stuck in "recording".
+          requestStop("device-lost");
+          return;
+        }
         dispatch({kind: "frames", frames: buffer.frameCount, peak});
         if (buffer.atCapacity) requestStop("capacity");
       },
@@ -136,7 +148,7 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     controllerRef.current = controller;
     try {
       await controller.start();
-      bufferRef.current = new CaptureBuffer(controller.channelCount === 2 ? 2 : 1);
+      recordingRef.current = true;
       dispatch({kind: "granted"});
     } catch (error) {
       controllerRef.current = null;
@@ -145,6 +157,18 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
   };
 
   const handleStop = () => requestStop("user");
+
+  // Finding 3: Close is rendered in every phase including "recording"; it
+  // must stop any in-progress capture itself rather than relying on the
+  // unmount cleanup, which never runs if the parent hides the panel instead
+  // of unmounting it (single-owner lifecycle — the microphone must never be
+  // left live with no owner able to stop it).
+  const handleClose = () => {
+    if (controllerRef.current !== null) {
+      requestStop("user");
+    }
+    onClose();
+  };
 
   // The reducer is the single source of truth for what a selection may be
   // (COMMIT_MAX_FRAMES, in-range); the sliders below only need correct
@@ -231,8 +255,8 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
         return (
           <>
             <p>{secondsLabel(state.frameCount)} captured</p>
-            {stopReasonMessage(state.stopReason) !== null && (
-              <p>{stopReasonMessage(state.stopReason)}</p>
+            {captureStopReasonMessage(state.stopReason) !== null && (
+              <p>{captureStopReasonMessage(state.stopReason)}</p>
             )}
             {state.phase === "commit-error" && (
               <p role="alert">{state.errorMessage}</p>
@@ -285,7 +309,7 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     <section className="capture-panel" aria-label={`${padLabel} Pad Capture`}>
       <div className="capture-panel-header">
         <h2>{padLabel} Capture</h2>
-        <button type="button" onClick={onClose}>Close</button>
+        <button type="button" onClick={handleClose}>Close</button>
       </div>
       {renderBody()}
     </section>

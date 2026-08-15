@@ -8,7 +8,6 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     onended: null as (() => void) | null,
     addEventListener(name: string, handler: () => void) { if (name === "ended") this.onended = handler; },
     removeEventListener() {},
-    getSettings: () => ({channelCount: 1}),
   };
   const stream = {getAudioTracks: () => [track]};
   // connect is a spy, not a counter: the test must be able to prove the source
@@ -50,7 +49,6 @@ describe("CaptureController", () => {
     // S8B-D4: wired to the worklet node, never to an output.
     expect(source.connect).toHaveBeenCalledTimes(1);
     expect(source.connect).toHaveBeenCalledWith(node);
-    expect(controller.channelCount).toBe(1);
   });
 
   test("releases the microphone when setup fails after getUserMedia", async () => {
@@ -227,5 +225,55 @@ describe("CAPTURE_WORKLET_SOURCE", () => {
     expect(messages).toHaveLength(2);
     expect(messages[1]?.channels[0]).toHaveLength(4_800);
     expect(messages[1]?.peak).toBeCloseTo(0.4);
+  });
+
+  test("locks channel count from the first non-empty input and keeps posting that width even after the input drops a channel (Finding 1)", () => {
+    const messages: WorkletMessage[] = [];
+    const Processor = loadProcessorClass((message) => messages.push(message));
+    const processor = new Processor();
+    // First non-empty input is stereo: this locks channelCount at 2 for the
+    // processor's whole lifetime, independent of anything reported later.
+    const left = new Float32Array(4_800).fill(0.6);
+    const right = new Float32Array(4_800).fill(0.2);
+    processor.process([[left, right]]);
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.channels).toHaveLength(2);
+
+    // The next quantum arrives right after a post, when the batch is null and
+    // would previously have been reallocated from whatever the input reports
+    // now. It reports only one channel here (e.g. Firefox's unreliable
+    // getSettings().channelCount). The posted width must not follow it down
+    // to 1, or the two batches disagree in shape and CaptureBuffer.append
+    // throws downstream, hanging the recording with the mic still live.
+    const mono = new Float32Array(4_800).fill(0.4);
+    expect(() => processor.process([[mono]])).not.toThrow();
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.channels).toHaveLength(2);
+    expect(messages[1]?.channels[0]).toHaveLength(4_800);
+    expect(messages[1]?.channels[1]).toHaveLength(4_800);
+    // The missing second channel is filled by reusing channel 0's data.
+    expect(messages[1]?.channels[1]?.[0]).toBeCloseTo(0.4);
+  });
+
+  test("locks channel count at mono and ignores extra channels reported later (Finding 1)", () => {
+    const messages: WorkletMessage[] = [];
+    const Processor = loadProcessorClass((message) => messages.push(message));
+    const processor = new Processor();
+    const mono = new Float32Array(4_800).fill(0.5);
+    processor.process([[mono]]); // locks channelCount at 1
+    expect(messages).toHaveLength(1);
+    expect(messages[0]?.channels).toHaveLength(1);
+
+    // A later quantum reports three channels. The posted width must stay 1;
+    // the extra channels are ignored, not grown into.
+    const three = [
+      new Float32Array(4_800).fill(0.9),
+      new Float32Array(4_800).fill(0.8),
+      new Float32Array(4_800).fill(0.7),
+    ];
+    expect(() => processor.process([three])).not.toThrow();
+    expect(messages).toHaveLength(2);
+    expect(messages[1]?.channels).toHaveLength(1);
+    expect(messages[1]?.channels[0]?.[0]).toBeCloseTo(0.9);
   });
 });
