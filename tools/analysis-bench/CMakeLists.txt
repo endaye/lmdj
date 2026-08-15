@@ -196,4 +196,19 @@ if(BUILD_TESTING)
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
     LABELS analysis-bench
   )
+
+  if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python3")
+    lmdj_add_test(
+      NAME analysis_bench.compare
+      TIER component
+      COMMAND
+        "${CMAKE_CURRENT_SOURCE_DIR}/.venv/bin/python3"
+        "${CMAKE_CURRENT_SOURCE_DIR}/compare/compare.py"
+        --bench $<TARGET_FILE:lmdj_analysis_bench>
+        --fixtures-dir "${CMAKE_SOURCE_DIR}/tests/fixtures/audio"
+        --report "${CMAKE_BINARY_DIR}/analysis-bench-report.md"
+      WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+      LABELS analysis-bench
+    )
+  endif()
 endif()
