@@ -108,6 +108,8 @@ int main(int argc, char** argv) {
     return 64;
   }
   const auto& invocation = *parsed;
+  const std::string invocation_token = std::to_string(
+      std::chrono::steady_clock::now().time_since_epoch().count());
   std::error_code directory_error;
   std::filesystem::create_directories(
       invocation.workspace, directory_error);
@@ -194,7 +196,8 @@ int main(int argc, char** argv) {
          iteration < invocation.iterations;
          ++iteration) {
       const std::string attempt_id =
-          "bench-" + std::to_string(provider_index) + "-" +
+          "bench-" + invocation_token + "-" +
+          std::to_string(provider_index) + "-" +
           std::to_string(iteration);
       lmdj::provider::CapabilityRequest request;
       request.capability = invocation.capability;
