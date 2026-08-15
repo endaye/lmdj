@@ -938,7 +938,9 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     getSettings: () => ({channelCount: 1}),
   };
   const stream = {getAudioTracks: () => [track]};
-  const source = {connected: 0, connect() { this.connected += 1; }, disconnect: vi.fn()};
+  // connect is a spy, not a counter: the test must be able to prove the source
+  // is wired to the worklet node and NOT to any output (S8B-D4 anti-feedback).
+  const source = {connect: vi.fn(), disconnect: vi.fn()};
   const node = {port: {onmessage: null}, disconnect: vi.fn()};
   const context = {
     sampleRate: 48_000, closed: 0,
@@ -961,7 +963,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
 
 describe("CaptureController", () => {
   it("requests raw audio constraints and wires the graph", async () => {
-    const {deps, context, source} = makeDeps();
+    const {deps, context, source, node} = makeDeps();
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
     await controller.start();
     expect(deps.getUserMedia).toHaveBeenCalledWith({audio: {
@@ -969,8 +971,24 @@ describe("CaptureController", () => {
     }});
     expect(deps.createModuleUrl).toHaveBeenCalledWith(CAPTURE_WORKLET_SOURCE);
     expect(context.audioWorklet.added).toEqual(["blob:capture"]);
-    expect(source.connected).toBe(1);
+    // S8B-D4: wired to the worklet node, never to an output.
+    expect(source.connect).toHaveBeenCalledTimes(1);
+    expect(source.connect).toHaveBeenCalledWith(node);
     expect(controller.channelCount).toBe(1);
+  });
+
+  it("releases the microphone when setup fails after getUserMedia", async () => {
+    const {deps, track, context} = makeDeps();
+    context.audioWorklet.addModule = async () => { throw new Error("CSP blocked"); };
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    await expect(controller.start()).rejects.toThrow("CSP blocked");
+    // The stream was live; it must not be left running with no owner.
+    expect(track.stopped).toBe(1);
+    expect(context.closed).toBe(1);
+    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
+    // stop() afterwards stays a safe no-op, releasing nothing a second time.
+    await controller.stop();
+    expect(track.stopped).toBe(1);
   });
 
   it("maps getUserMedia rejection to CapturePermissionError", async () => {
@@ -1105,17 +1123,34 @@ export class CaptureController {
         error instanceof DOMException ? error.name : "getUserMedia failed");
     }
     const track = stream.getAudioTracks()[0];
-    this.channelCount = track.getSettings().channelCount === 2 ? 2 : 1;
-    const context = this.#deps.createContext();
-    const moduleUrl = this.#deps.createModuleUrl(CAPTURE_WORKLET_SOURCE);
-    await context.audioWorklet.addModule(moduleUrl);
-    const source = context.createMediaStreamSource(stream);
-    const node = this.#deps.createNode(context, CAPTURE_WORKLET_NAME);
-    node.port.onmessage = (event) => this.#listener.onBatch(event.data.channels, event.data.peak);
-    source.connect(node);
-    const onended = () => this.#listener.onEnded("device-lost");
-    track.addEventListener("ended", onended);
-    this.#resources = {track, node, source, context, moduleUrl, onended};
+    if (track === undefined) {
+      throw new CapturePermissionError("no audio track");
+    }
+    // The stream is live from here on. Any setup failure below must release it,
+    // or the microphone stays on with no owner able to stop it: stop() would
+    // find #resources === null and silently no-op (design §7, single owner).
+    let context: AudioContext | undefined;
+    let moduleUrl: string | undefined;
+    try {
+      this.channelCount = track.getSettings().channelCount === 2 ? 2 : 1;
+      context = this.#deps.createContext();
+      moduleUrl = this.#deps.createModuleUrl(CAPTURE_WORKLET_SOURCE);
+      await context.audioWorklet.addModule(moduleUrl);
+      const source = context.createMediaStreamSource(stream);
+      const node = this.#deps.createNode(context, CAPTURE_WORKLET_NAME);
+      node.port.onmessage = (event) =>
+        this.#listener.onBatch(event.data.channels, event.data.peak);
+      source.connect(node);
+      const onended = () => this.#listener.onEnded("device-lost");
+      track.addEventListener("ended", onended);
+      this.#resources = {track, node, source, context, moduleUrl, onended};
+    } catch (error) {
+      track.stop();
+      if (context !== undefined) { await context.close(); }
+      if (moduleUrl !== undefined) { this.#deps.revokeModuleUrl(moduleUrl); }
+      this.channelCount = 0;
+      throw error;
+    }
   }
 
   async stop(): Promise<void> {
