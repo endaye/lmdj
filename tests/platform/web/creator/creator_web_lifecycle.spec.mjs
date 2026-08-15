@@ -28,6 +28,12 @@ async function waitForProjectOpenOutcome(heading, open, retry) {
   return outcome;
 }
 
+async function waitForOpenActionTransition(heading, open, retry) {
+  await expect.poll(async () =>
+    await projectOpenOutcome(heading, open, retry),
+  {timeout: OPEN_TRANSITION_TIMEOUT_MS}).not.toBe("open");
+}
+
 async function waitForProjectInventory(page) {
   const open = page.getByRole("button", {name: "Open Project 00000000"});
   const retry = page.getByRole("button", {name: "Retry project"});
@@ -305,9 +311,13 @@ async function reopenWithVisibleBusyRetry(page) {
   });
   const alert = page.getByRole("alert");
   const retry = page.getByRole("button", {name: "Retry project"});
+  let actionKind = "open";
   let action = open;
   for (let attempt = 0; attempt < MAX_OPEN_ATTEMPTS; attempt += 1) {
     await action.click();
+    if (actionKind === "open") {
+      await waitForOpenActionTransition(heading, open, retry);
+    }
     const outcome = await waitForProjectOpenOutcome(heading, open, retry);
     if (outcome === "ready") break;
     if (outcome === "busy") {
@@ -318,11 +328,13 @@ async function reopenWithVisibleBusyRetry(page) {
       // writer release. Model a deliberate user retry instead of hammering the
       // visible action fast enough to exhaust the bounded attempt budget.
       await page.waitForTimeout(BUSY_RETRY_INTERVAL_MS);
+      actionKind = "busy";
       action = retry;
     } else {
       // A timed-out request may be followed by the one allowed automatic
       // Runtime replacement. The replacement intentionally requires another
       // explicit Open gesture instead of silently resuming the Project.
+      actionKind = "open";
       action = open;
     }
   }
