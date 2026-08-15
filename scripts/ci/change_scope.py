@@ -590,6 +590,27 @@ def _summary(
             lane_reasons[lane].extend(
                 f"draft deferral: {reason}" for reason in manifest["reasons"]
             )
+    elif manifest["mode"] == "requested":
+        # A lane enabled here came from the operator's workflow_dispatch
+        # `lanes` input, not from path ownership, so it may have no matching
+        # path rule at all. Record that explicit selection as its auditable
+        # reason; path-derived reasons are added on top when they also apply.
+        for lane in enabled:
+            lane_reasons[lane].append(
+                "operator workflow_dispatch lane selection"
+            )
+        for entry in manifest["changed_files"]:
+            for path in entry["paths"]:
+                for rule in policy["rules"]:
+                    if not _matches(rule["match"], path):
+                        continue
+                    match = rule["match"]
+                    reason = (
+                        f"path {path} matched {match['kind']}: {match['value']}"
+                    )
+                    for lane in rule["lanes"]:
+                        if lane in lane_reasons:
+                            lane_reasons[lane].append(reason)
     else:
         for entry in manifest["changed_files"]:
             for path in entry["paths"]:
