@@ -19,13 +19,20 @@ export class CaptureBuffer {
   get atCapacity(): boolean { return this.#frames >= CAPTURE_MAX_FRAMES; }
 
   append(channels: readonly Float32Array[]): number {
-    if (channels.length !== this.channelCount ||
-        channels.some((c) => !(c instanceof Float32Array) || c.length !== channels[0].length)) {
+    const first = channels[0];
+    if (channels.length !== this.channelCount || first === undefined ||
+        channels.some((c) => !(c instanceof Float32Array) || c.length !== first.length)) {
       throw new TypeError("Capture batch shape is invalid");
     }
-    const accepted = Math.min(channels[0].length, CAPTURE_MAX_FRAMES - this.#frames);
+    const accepted = Math.min(first.length, CAPTURE_MAX_FRAMES - this.#frames);
     if (accepted <= 0) { return 0; }
-    channels.forEach((c, i) => this.#chunks[i].push(c.slice(0, accepted)));
+    channels.forEach((c, i) => {
+      const chunkList = this.#chunks[i];
+      if (chunkList === undefined) {
+        throw new TypeError("Capture batch shape is invalid");
+      }
+      chunkList.push(c.slice(0, accepted));
+    });
     this.#frames += accepted;
     return accepted;
   }
@@ -65,7 +72,8 @@ export class CaptureBuffer {
         for (const value of chunk) {
           const bin = Math.min(Math.floor(index / perBin), bins - 1);
           const magnitude = Math.abs(value);
-          if (magnitude > out[bin]) { out[bin] = magnitude; }
+          const current = out[bin];
+          if (current === undefined || magnitude > current) { out[bin] = magnitude; }
           index += 1;
         }
       }
