@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 import unittest
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+SCOPE_POLICY = REPO_ROOT / "scripts/ci/scope_policy.json"
 MAIN_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
 PORTAL_WORKFLOW = REPO_ROOT / ".github/workflows/architecture-portal.yml"
 WEB_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
@@ -35,6 +37,39 @@ SUPPORT_JOBS = (
     "select-macos-runner",
     "macos-primary",
 )
+# Every job a self-hosted role may ever execute. Each one must already carry
+# the closed trust condition, including while it is still Hosted, so that a
+# later repository or routing change cannot open a self-hosted lane to an
+# untrusted head before the Gate sees it.
+SELF_HOSTED_JOBS = (
+    "docs-static",
+    "portal",
+    "ci-contract",
+    "core-ubuntu",
+    "core-asan",
+    "core-coverage",
+    "web-toolchain-conformance",
+    "web-runtime-host",
+    "creator-web",
+    "web-runtime-lab",
+    "deploy-contract",
+    "chameleon-lab",
+    "package",
+)
+HOSTED_CONTROL_PLANE_JOBS = (
+    "change-scope",
+    "pr-gate",
+    "select-ubuntu-runner",
+    "select-macos-runner",
+)
+TRUST_CONDITION = "needs.change-scope.outputs.trusted-head == 'true'"
+WEB_HEAVY_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
+)
+# Lanes cut over to the dedicated netcup `ci-web-heavy` role so far. The
+# migration is proven one lane at a time, so this stays an exact set: an
+# unreviewed extra `ci-web-heavy` route is a topology change, not a detail.
+WEB_HEAVY_JOBS = ("web-toolchain-conformance",)
 RELEASE_HISTORY_CONSUMERS = (
     "deploy-contract",
     "core-ubuntu",
@@ -266,6 +301,43 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             with self.subTest(forbidden=forbidden):
                 self.assertNotRegex(job, rf"(?i){forbidden}")
 
+    def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
+        for job_name in HOSTED_CONTROL_PLANE_JOBS:
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn("runs-on: ubuntu-24.04", job)
+                self.assertNotRegex(job, r"(?m)^    runs-on: (?!ubuntu-24\.04$)")
+        self.assertIn("select-ubuntu-runner:", self.main_source)
+
+    def test_change_scope_publishes_trusted_head_from_the_event_only(self) -> None:
+        job = self.workflow_job("change-scope")
+        self.assertIn(
+            "trusted-head: ${{ steps.scope.outputs.trusted-head }}", job
+        )
+        self.assertIn(
+            "HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}",
+            job,
+        )
+        self.assertIn('--head-repository "$HEAD_REPOSITORY"', job)
+        for forbidden in ("pull_request.title", "pull_request.labels", "label"):
+            with self.subTest(forbidden=forbidden):
+                self.assertNotIn(forbidden, job)
+
+    def test_every_self_hosted_job_requires_a_trusted_head(self) -> None:
+        policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
+        self.assertEqual(tuple(policy["self_hosted_jobs"]), SELF_HOSTED_JOBS)
+        for job_name in SELF_HOSTED_JOBS:
+            with self.subTest(job=job_name):
+                self.assertIn(TRUST_CONDITION, self.workflow_job(job_name))
+
+    def test_control_plane_and_macos_jobs_are_outside_the_trust_condition(self) -> None:
+        for job_name in (
+            *HOSTED_CONTROL_PLANE_JOBS, "macos-primary", "macos-fallback",
+            "core-macos", "core-asan-macos",
+        ):
+            with self.subTest(job=job_name):
+                self.assertNotIn(TRUST_CONDITION, self.workflow_job(job_name))
+
     def test_every_formal_lane_depends_directly_on_change_scope(self) -> None:
         for job_name in FORMAL_LANE_JOBS:
             with self.subTest(job=job_name):
@@ -284,6 +356,29 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                     )),
                     expected_lanes,
                 )
+
+    def test_web_toolchain_uses_the_static_netcup_role_not_the_selector(self) -> None:
+        """Only Web Toolchain is cut over, and it routes by role, not selector.
+
+        `select-ubuntu-runner` resolves once per run and can fall back to paid
+        Ubuntu. The dedicated role must queue instead, so this lane carries a
+        literal label set and keeps `needs: change-scope` alone. Pinning the
+        exact `ci-web-heavy` job set keeps a later lane from inheriting the
+        route without its own proof run.
+        """
+        job = self.workflow_job("web-toolchain-conformance")
+        self.assertEqual(
+            self.job_needs("web-toolchain-conformance"), {"change-scope"}
+        )
+        self.assertIn(WEB_HEAVY_ROLE, job)
+        self.assertNotIn("runs-on: ubuntu-24.04", job)
+        self.assertNotIn("select-ubuntu-runner", job)
+        self.assertIn(TRUST_CONDITION, job)
+        self.assertIn("lane: web_toolchain", job)
+        self.assertIn('install-system-deps: "false"', job)
+        self.assertEqual(
+            self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
+        )
 
     def test_creator_no_longer_needs_web_toolchain_or_core(self) -> None:
         job = self.workflow_job("creator-web")

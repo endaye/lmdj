@@ -13,6 +13,7 @@ WORKFLOW = ROOT / ".github/workflows/release-audit.yml"
 ACTION_PINS = {
     "actions/checkout": ("de0fac2e4500dabe0009e67214ff5f5447ce83dd", "v6.0.2"),
     "actions/setup-python": ("a309ff8b426b58ec0e2a45f0f869d46889d02405", "v6.2.0"),
+    "actions/setup-node": ("249970729cb0ef3589644e2896645e5dc5ba9c38", "v6.5.0"),
     "actions/upload-artifact": ("ea165f8d65b6e75b540449e92b4886f43607fa02", "v4.6.2"),
 }
 
@@ -50,10 +51,23 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
         self.assertIn("path: build/release/audit/report.json", upload)
         self.assertIn("if-no-files-found: error", upload)
 
+    def test_job_provisions_every_toolchain_the_static_audit_shells_out_to(self) -> None:
+        source = self.source()
+        target_validation = (ROOT / "tools/release/target_validation.py").read_text(encoding="utf-8")
+        self.assertIn('"python3", "scripts/version.py", "verify"', target_validation)
+        self.assertIn(
+            '"node", "apps/architecture-portal/scripts/check-release-docs.mjs"',
+            target_validation,
+        )
+        self.assertIn("uses: actions/setup-python@", source)
+        self.assertIn('python-version: "3.11"', source)
+        self.assertIn("uses: actions/setup-node@", source)
+        self.assertIn('node-version: "22"', source)
+
     def test_actions_are_exactly_pinned_and_checkout_has_no_credentials(self) -> None:
         source = self.source()
         uses_lines = [line.strip() for line in source.splitlines() if "uses:" in line]
-        self.assertEqual(len(uses_lines), 3)
+        self.assertEqual(len(uses_lines), 4)
         for line in uses_lines:
             match = re.fullmatch(
                 r"-?\s*uses: (actions/[a-z-]+)@([0-9a-f]{40}) # (v[0-9]+(?:\.[0-9]+){1,2})",
