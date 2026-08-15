@@ -684,6 +684,21 @@ class ChangeScopeTest(unittest.TestCase):
             with self.subTest(lane=lane):
                 self.assertRegex(summary, rf"(?m)^- <code>{lane}</code>: .*unknown top-level")
 
+    def test_summary_records_dispatch_lane_selection_reason(self):
+        # Reproduces run 31902121850: a lane enabled only via the dispatch
+        # --lanes input (no path in the diff matches its rules) must still
+        # receive an auditable reason so the summary does not fail closed.
+        manifest = self.classify(
+            ["docs/guide.md"],
+            event_name="workflow_dispatch",
+            requested_lanes=["web_toolchain"],
+        )
+        summary = self.module._summary(manifest, self.policy)
+        self.assertRegex(
+            summary,
+            r"(?m)^- <code>web_toolchain</code>: .*workflow_dispatch",
+        )
+
     def test_summary_lists_both_rename_paths_and_all_lane_reasons(self):
         records = self.module.parse_name_status_z(
             b"R100\0apps/creator-web/src/old.ts\0apps/web-runtime-host/src/new.mjs\0"
