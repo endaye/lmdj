@@ -73,6 +73,18 @@ WEB_HEAVY_ROLE = (
 WEB_HEAVY_JOBS = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
+    "web-runtime-host": "web_runtime_host",
+}
+# Lanes that still resolve their runner through `select-ubuntu-runner`. The
+# selector must not be woken for a lane that no longer consumes it: an extra
+# lane here spends a Hosted job and an API call on nothing, and a missing one
+# leaves a consumer with an unresolved `runs-on`.
+SELECTOR_LANES = {
+    "web_runtime_lab",
+    "core_ubuntu",
+    "core_asan",
+    "core_coverage",
+    "package",
 }
 RELEASE_HISTORY_CONSUMERS = (
     "deploy-contract",
@@ -109,14 +121,7 @@ FORMAL_RESULT_LANE_GUARDS = {
     "deploy-contract": {"deploy_contract"},
     "chameleon-lab": {"chameleon_lab"},
     "package": {"package"},
-    "select-ubuntu-runner": {
-        "web_runtime_host",
-        "web_runtime_lab",
-        "core_ubuntu",
-        "core_asan",
-        "core_coverage",
-        "package",
-    },
+    "select-ubuntu-runner": set(SELECTOR_LANES),
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
 }
@@ -362,7 +367,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 )
 
     def test_cut_over_lanes_use_the_static_netcup_role_not_the_selector(self) -> None:
-        """Web Toolchain and Creator are cut over, by role and not by selector.
+        """Three lanes are cut over, by role and not by selector.
 
         `select-ubuntu-runner` resolves once per run and can fall back to paid
         Ubuntu. The dedicated role must queue instead, so each cut-over lane
@@ -384,6 +389,30 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
         )
 
+    def test_web_runtime_host_keeps_its_exact_emscripten_identity_check(self) -> None:
+        """Changing where the lane runs must not change what it proves.
+
+        The dedicated role provisions a persistent toolchain, which is exactly
+        the condition under which a silently different Emscripten would go
+        unnoticed. The lane therefore keeps verifying the pinned compiler
+        identity before its proof, and keeps rehydrating the LFS audio
+        fixtures first, so a role-provisioned host cannot pass on stand-in
+        inputs.
+        """
+        self.assertIn(
+            "web_runtime_host) python3 tools/web-runtime/verify_emscripten.py"
+            " && scripts/web-runtime-host.sh proof ;;",
+            self.web_proof_source,
+        )
+        job = self.workflow_job("web-runtime-host")
+        hydration = "git lfs checkout -- tests/fixtures/audio"
+        self.assertIn("lfs: true", job)
+        self.assertIn(hydration, job)
+        self.assertLess(
+            job.index(hydration),
+            job.index("uses: ./.github/actions/web-ci-proof"),
+        )
+
     def test_creator_no_longer_needs_web_toolchain_or_core(self) -> None:
         job = self.workflow_job("creator-web")
         self.assertEqual(self.job_needs("creator-web"), {"change-scope"})
@@ -392,18 +421,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn(WEB_HEAVY_ROLE, job)
 
     def test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected(self) -> None:
+        """The selector's guard shrinks with every lane that leaves it.
+
+        A lane cut over to the static `ci-web-heavy` role no longer reads the
+        selector's output, so keeping it in the guard would start a Hosted job
+        and a Runner API call for a route nobody consumes.
+        """
         job = self.workflow_job("select-ubuntu-runner")
         self.assertEqual(self.job_needs("select-ubuntu-runner"), {"change-scope"})
         self.assertEqual(
-            set(re.findall(r"lanes\.([a-z_]+)", job)),
-            {
-                "web_runtime_host",
-                "web_runtime_lab",
-                "core_ubuntu",
-                "core_asan",
-                "core_coverage",
-                "package",
-            },
+            set(re.findall(r"lanes\.([a-z_]+)", job)), SELECTOR_LANES
         )
         self.assertIn("if: ${{ !cancelled()", job)
 

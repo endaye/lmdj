@@ -26,6 +26,7 @@ WEB_HEAVY_ROLE = (
 WEB_HEAVY_LANES = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
+    "web-runtime-host": "web_runtime_host",
 }
 
 

@@ -28,7 +28,10 @@ VALID_RESULTS = {
     "docs-static": "success",
     "portal": "success",
     "ci-contract": "skipped",
-    "select-ubuntu-runner": "success",
+    # The default fixture selects `web_runtime_host`, which now routes by the
+    # static netcup role, so the selector is not a support job of any selected
+    # lane and must report skipped like every other unselected job.
+    "select-ubuntu-runner": "skipped",
     "select-macos-runner": "skipped",
     "macos-primary": "skipped",
     "core-ubuntu": "skipped",
@@ -415,6 +418,37 @@ class PrGateTest(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(set(report.requested_jobs), set(VALID_RESULTS))
 
+    def test_web_runtime_host_requires_no_runner_selector(self):
+        """The Gate projection must follow the lane off the selector.
+
+        `web_runtime_host` routes by the static `ci-web-heavy` role, so the
+        selector's guard leaves it skipped when only this lane is selected.
+        Still projecting `select-ubuntu-runner` as a required job would then
+        fail the run on a support job the lane never reads, and demanding the
+        selector succeed would quietly restore the paid-runner fallback the
+        cutover removed.
+        """
+        manifest = self.manifest(("web_runtime_host",))
+        self.assertEqual(manifest["required_jobs"], ["web-runtime-host"])
+        report = self.validate(
+            manifest=manifest, results=self.matching_results(manifest)
+        )
+        self.assertTrue(report.ok)
+        self.assertNotIn("select-ubuntu-runner", report.requested_jobs)
+        self.assertIn("select-ubuntu-runner", report.skipped_jobs)
+        stale = self.manifest(("web_runtime_host",))
+        stale["required_jobs"] = sorted(
+            [*stale["required_jobs"], "select-ubuntu-runner"]
+        )
+        stale_report = self.validate(
+            manifest=stale, results=self.matching_results(stale)
+        )
+        self.assertFalse(stale_report.ok)
+        self.assertIn(
+            "required jobs do not derive from lanes",
+            "\n".join(stale_report.errors),
+        )
+
     def test_core_macos_requires_both_published_adjudicators(self):
         manifest = self.manifest(("core_macos",))
         results = {job: "skipped" for job in VALID_RESULTS}
@@ -506,7 +540,7 @@ class PrGateTest(unittest.TestCase):
                 )
 
     def test_web_only_selector_timing_has_no_lane_execution_slo(self):
-        manifest = self.manifest(("web_runtime_host",))
+        manifest = self.manifest(("web_runtime_lab",))
         results = {job: "skipped" for job in VALID_RESULTS}
         for required in manifest["required_jobs"]:
             results[required] = "success"

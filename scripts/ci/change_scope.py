@@ -49,7 +49,9 @@ _CANONICAL_LANE_JOBS = {
     "core_coverage": ("select-ubuntu-runner", "core-coverage"),
     "core_macos": ("select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"),
     "web_toolchain": ("web-toolchain-conformance",),
-    "web_runtime_host": ("select-ubuntu-runner", "web-runtime-host"),
+    # Routed by the static `ci-web-heavy` netcup role, so no runner selector
+    # is a support job of this lane.
+    "web_runtime_host": ("web-runtime-host",),
     "creator": ("creator-web",),
     "web_runtime_lab": ("select-ubuntu-runner", "web-runtime-lab"),
     "deploy_contract": ("deploy-contract",),
