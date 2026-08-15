@@ -443,9 +443,25 @@ class ReleasePrepareTest(unittest.TestCase):
             "token [redacted] rejected",
         )
         self.assertEqual(sanitize_diagnostic("  a\n\n  b  "), "a b")
-        bounded = sanitize_diagnostic("word " * 200, limit=40)
-        self.assertTrue(bounded.endswith("..."))
-        self.assertLessEqual(len(bounded), 43)
+
+    def test_sanitized_diagnostics_keep_flags_and_both_ends(self) -> None:
+        self.assertEqual(
+            sanitize_diagnostic("Command failed: git archive --format=tar --output=/tmp/a.tar HEAD"),
+            "Command failed: git archive --format=tar --output=<path> HEAD",
+        )
+        self.assertEqual(
+            sanitize_diagnostic("gh --token=ghs_fixturesecret000111222 run"),
+            "gh --token=[redacted] run",
+        )
+        self.assertEqual(
+            sanitize_diagnostic("GITHUB_TOKEN=ghs_fixturesecret000111222 git"),
+            "GITHUB_TOKEN=[redacted] git",
+        )
+        bounded = sanitize_diagnostic("head " + "x" * 400 + " fatal: the real reason", limit=60)
+        self.assertLessEqual(len(bounded), 60)
+        self.assertTrue(bounded.startswith("head"))
+        self.assertTrue(bounded.endswith("the real reason"))
+        self.assertIn(" ... ", bounded)
 
     def test_product_snapshot_validator_imports_without_portal_packages(self) -> None:
         with tempfile.TemporaryDirectory(prefix="release-node-loader-") as directory:
