@@ -44,7 +44,11 @@ LANE_JOBS = {
     # the workflow guard leaves skipped.
     "web_runtime_host": ["web-runtime-host"],
     "creator": ["creator-web"],
-    "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
+    # Cut over to the same static role, and off the selector for the same
+    # reason: the lane resolves no runner through `select-ubuntu-runner`, so
+    # requiring its result would gate the Gate on a job the workflow guard
+    # leaves skipped. This was the selector's last Web consumer.
+    "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
     "package": ["select-ubuntu-runner", "package"],

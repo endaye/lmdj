@@ -67,20 +67,28 @@ WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
 # Lanes cut over to the dedicated netcup `ci-web-heavy` role so far, mapped to
-# the `web-ci-proof` lane each one must still request. The migration is proven
-# one lane at a time, so this stays an exact set: an unreviewed extra
-# `ci-web-heavy` route is a topology change, not a detail.
+# the lane each one runs. The migration is proven one lane at a time, so this
+# stays an exact set: an unreviewed extra `ci-web-heavy` route is a topology
+# change, not a detail.
 WEB_HEAVY_JOBS = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
     "web-runtime-host": "web_runtime_host",
+    "web-runtime-lab": "web_runtime_lab",
+}
+# Cut-over jobs that do not go through the shared `web-ci-proof` action,
+# mapped to the proof step each keeps instead. Web Runtime Lab never shared
+# the emsdk/Playwright setup contract, so it has no `lane` or
+# `install-system-deps` input to carry: its cutover changes where it runs and
+# nothing about what it runs.
+WEB_HEAVY_DIRECT_PROOFS = {
+    "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
 }
 # Lanes that still resolve their runner through `select-ubuntu-runner`. The
 # selector must not be woken for a lane that no longer consumes it: an extra
 # lane here spends a Hosted job and an API call on nothing, and a missing one
 # leaves a consumer with an unresolved `runs-on`.
 SELECTOR_LANES = {
-    "web_runtime_lab",
     "core_ubuntu",
     "core_asan",
     "core_coverage",
@@ -367,7 +375,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 )
 
     def test_cut_over_lanes_use_the_static_netcup_role_not_the_selector(self) -> None:
-        """Three lanes are cut over, by role and not by selector.
+        """All four Web lanes are cut over, by role and not by selector.
 
         `select-ubuntu-runner` resolves once per run and can fall back to paid
         Ubuntu. The dedicated role must queue instead, so each cut-over lane
@@ -383,8 +391,13 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertNotIn("runs-on: ubuntu-24.04", job)
                 self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(TRUST_CONDITION, job)
-                self.assertIn(f"lane: {lane}", job)
-                self.assertIn('install-system-deps: "false"', job)
+                if job_name in WEB_HEAVY_DIRECT_PROOFS:
+                    self.assertIn(WEB_HEAVY_DIRECT_PROOFS[job_name], job)
+                    self.assertNotIn("web-ci-proof", job)
+                    self.assertNotIn("install-system-deps", job)
+                else:
+                    self.assertIn(f"lane: {lane}", job)
+                    self.assertIn('install-system-deps: "false"', job)
         self.assertEqual(
             self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
         )
@@ -412,6 +425,30 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             job.index(hydration),
             job.index("uses: ./.github/actions/web-ci-proof"),
         )
+
+    def test_web_runtime_lab_keeps_its_own_stable_proof_steps(self) -> None:
+        """The Lab cutover moves the lane, it does not fold it into the others.
+
+        Web Runtime Lab was deliberately left out of the shared `web-ci-proof`
+        action because it does not share the emsdk/Playwright setup contract:
+        it is a short, stable Node/Python suite that installs nothing on the
+        host. Rerouting it to the role is not an invitation to normalize it
+        onto the heavy path, nor to inherit web-runtime-host's 75-minute hang
+        detector, which exists for a lane that is two orders of magnitude
+        longer.
+        """
+        job = self.workflow_job("web-runtime-lab")
+        self.assertNotIn("uses: ./.github/actions/web-ci-proof", job)
+        self.assertNotIn("timeout-minutes", job)
+        self.assertNotIn("lfs: true", job)
+        for step in (
+            "uses: actions/checkout@v6",
+            'python-version: "3.11"',
+            'node-version: "22"',
+            "- run: scripts/web-runtime-lab.sh test",
+        ):
+            with self.subTest(step=step):
+                self.assertIn(step, job)
 
     def test_creator_no_longer_needs_web_toolchain_or_core(self) -> None:
         job = self.workflow_job("creator-web")

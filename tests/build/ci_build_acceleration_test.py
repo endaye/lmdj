@@ -21,12 +21,20 @@ GITIGNORE = REPO_ROOT / ".gitignore"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
-# Lanes cut over to the dedicated netcup role, mapped to the `web-ci-proof`
-# lane each one must still request.
+# Lanes cut over to the dedicated netcup role, mapped to the lane each one
+# runs.
 WEB_HEAVY_LANES = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
     "web-runtime-host": "web_runtime_host",
+    "web-runtime-lab": "web_runtime_lab",
+}
+# Cut-over jobs that do not go through the shared `web-ci-proof` action,
+# mapped to the proof step each keeps instead. Web Runtime Lab installs no
+# browser stack of its own, so it has no `install-system-deps` input to set
+# and must not acquire one by being rerouted.
+WEB_HEAVY_DIRECT_PROOFS = {
+    "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
 }
 
 
@@ -127,9 +135,13 @@ class CiBuildAccelerationTest(unittest.TestCase):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn(WEB_HEAVY_ROLE, job)
-                self.assertIn(f"lane: {lane}", job)
-                self.assertIn('install-system-deps: "false"', job)
                 self.assertNotIn('install-system-deps: "true"', job)
+                if job_name in WEB_HEAVY_DIRECT_PROOFS:
+                    self.assertIn(WEB_HEAVY_DIRECT_PROOFS[job_name], job)
+                    self.assertNotIn("install-system-deps", job)
+                else:
+                    self.assertIn(f"lane: {lane}", job)
+                    self.assertIn('install-system-deps: "false"', job)
 
     def test_generated_web_toolchain_does_not_dirty_source_tree(self) -> None:
         ignored = {

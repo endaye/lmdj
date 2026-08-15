@@ -18,19 +18,25 @@ ASSERT_GATE = REPO_ROOT / ".github/scripts/assert-macos-gate-result.sh"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
-# Lanes cut over to the dedicated netcup role, mapped to the `web-ci-proof`
-# lane each one must still request. Cutting over must not silently reroute a
-# lane's workload.
+# Lanes cut over to the dedicated netcup role, mapped to the lane each one
+# runs. Cutting over must not silently reroute a lane's workload.
 WEB_HEAVY_LANES = {
     "web-toolchain-conformance": "web_toolchain",
     "creator-web": "creator",
     "web-runtime-host": "web_runtime_host",
+    "web-runtime-lab": "web_runtime_lab",
+}
+# Cut-over jobs that do not go through the shared `web-ci-proof` action,
+# mapped to the proof step each keeps instead. Web Runtime Lab never shared
+# the emsdk/Playwright setup contract, so it names no `lane` input and has no
+# system dependencies to suppress.
+WEB_HEAVY_DIRECT_PROOFS = {
+    "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
 }
 # Jobs whose runner is still resolved by `select-ubuntu-runner`. Cutting a
 # lane over removes it from here and from the selector's guard together, so
 # the selector is never started for a route nobody reads.
 SELECTOR_CONSUMERS = (
-    "web-runtime-lab",
     "core-ubuntu",
     "core-asan",
     "core-coverage",
@@ -150,7 +156,7 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertNotIn("trusted-head", selector)
 
     def test_cut_over_web_lanes_are_pinned_to_the_netcup_web_heavy_role(self) -> None:
-        """Web Toolchain, Creator and Web Runtime Host use the netcup node.
+        """All four Web lanes now use the CI-only netcup node.
 
         The role label set is static, not selector-resolved. `ci-web-heavy`
         exists only on the dedicated node, so a busy or absent role queues a
@@ -170,8 +176,12 @@ class CiRunnerFallbackTest(unittest.TestCase):
                 self.assertIn(
                     "needs.change-scope.outputs.trusted-head == 'true'", job
                 )
-                self.assertIn(f"lane: {lane}", job)
-                self.assertIn('install-system-deps: "false"', job)
+                if job_name in WEB_HEAVY_DIRECT_PROOFS:
+                    self.assertIn(WEB_HEAVY_DIRECT_PROOFS[job_name], job)
+                    self.assertNotIn("web-ci-proof", job)
+                else:
+                    self.assertIn(f"lane: {lane}", job)
+                    self.assertIn('install-system-deps: "false"', job)
 
     def test_actionlint_config_is_plain_git_text_not_an_lfs_pointer(self) -> None:
         attribute = subprocess.run(
