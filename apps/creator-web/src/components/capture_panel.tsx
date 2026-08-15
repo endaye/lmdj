@@ -94,6 +94,15 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
 
   // Paint the growing waveform straight from the capture buffer ref; the
   // buffer itself never lives in React state (S8B design note #4).
+  //
+  // The canvas element is unmounted during "committing" (which renders only a
+  // status paragraph) and remounted in "commit-error" (and again on the
+  // recording -> trimming transition). Neither frameCount nor peak need to
+  // change across those transitions — peak is already 0 by the time trimming
+  // starts, and neither commit nor commit-failed touch frameCount — so
+  // `state.phase` must be in the dependency array too, or the effect never
+  // re-runs against the freshly (re)mounted canvas and the user is left
+  // looking at a blank waveform (S8B-D6).
   useEffect(() => {
     const canvas = canvasRef.current;
     const buffer = bufferRef.current;
@@ -108,7 +117,7 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
       const barHeight = Math.max(1, magnitude * canvas.height);
       ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
     }
-  }, [state.frameCount, state.peak]);
+  }, [state.phase, state.frameCount, state.peak]);
 
   const handleRecord = async () => {
     // Single-owner lifecycle: the ref (not the reducer phase, which can lag a

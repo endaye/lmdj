@@ -12,11 +12,15 @@ import {CapturePanel} from "../src/components/capture_panel";
 
 // jsdom has no real canvas 2d context (would require the native "canvas"
 // package); stub just enough of it so the growing-waveform draw path runs
-// without jsdom's "not implemented" console noise on every batch.
+// without jsdom's "not implemented" console noise on every batch. fillRect is
+// a vi.fn() (not a no-op) so tests can assert a paint actually happened,
+// which is how Finding 1 (the paint effect must re-run once the canvas is
+// remounted, even when neither frameCount nor peak changed) is verified.
+const fillRectSpy = vi.fn();
 beforeAll(() => {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
     clearRect: () => {},
-    fillRect: () => {},
+    fillRect: fillRectSpy,
   } as unknown as CanvasRenderingContext2D);
 });
 afterAll(() => vi.restoreAllMocks());
@@ -288,6 +292,37 @@ test("a conflict result renders a retry affordance with the buffer intact (behav
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
   await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(2));
   expect(onCommit.mock.calls[1]![0]).toBe(onCommit.mock.calls[0]![0]);
+});
+
+test("the waveform canvas repaints after remounting from committing into commit-error (Finding 1)", async () => {
+  const {makeController, instances} = createFactory();
+  const onCommit = vi.fn(
+    async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+      ({kind: "conflict", message: "Pad slot changed"}) as const,
+  );
+  renderPanel({makeController, onCommit});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(96_000).fill(0.4)], 0.4));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+
+  // Baseline: the trimming canvas has painted at least once already.
+  expect(fillRectSpy).toHaveBeenCalled();
+  fillRectSpy.mockClear();
+
+  // Committing renders only a status paragraph (no canvas), then the conflict
+  // result moves the panel into commit-error, which remounts the canvas.
+  // Neither state.frameCount nor state.peak changes anywhere across this
+  // trimming -> committing -> commit-error path (peak is already 0 once
+  // trimming starts, and neither the "commit" nor "commit-failed" reducer
+  // cases touch frameCount), so a paint effect depending only on those two
+  // values never re-runs against the freshly remounted canvas and the user is
+  // left trimming against a blank waveform (S8B-D6). Repainting requires
+  // state.phase in the dependency array too.
+  await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
+  await screen.findByRole("alert");
+
+  expect(fillRectSpy).toHaveBeenCalled();
 });
 
 test("Discard resets to idle and clears the buffer", async () => {
