@@ -23,7 +23,7 @@ Application Facade 表面、传输协议、活动 manifest 与全部 Contract **
 | S8B-D6 | 录音期间不打开 Core 导入会话；`sample.import.begin` 在用户确认提交时才发起，`expected_revision` 取提交时刻的新鲜值。冲突显式报告、缓冲保留、用户手动重试；无 auto-rebase、无乐观成功。 |
 | S8B-D7 | 采集约束关闭 `echoCancellation`、`noiseSuppression`、`autoGainControl`：音乐采样需要原始信号，不是语音通话处理链。 |
 | S8B-D8 | 验收由 Chromium 假设备（固定 WAV 喂入）自动化测试把关；真麦克风听感、Safari 与 iPadOS 录音行为显式记入 deferred 台账，做了才计入。 |
-| S8B-D9 | 采集管线使用 AudioWorklet 采集节点，挂在引擎既有的 48 kHz AudioContext 上；float→PCM16 WAV 编码在 Host 层于提交时完成。不使用 MediaRecorder（有损压缩）或已废弃的 ScriptProcessorNode。 |
+| S8B-D9 | 采集管线使用 AudioWorklet 采集节点，挂在 Creator 自有的独立 `AudioContext({sampleRate: 48000})` 上；float→PCM16 WAV 编码在 Host 层于提交时完成。不使用 MediaRecorder（有损压缩）或已废弃的 ScriptProcessorNode。（2026-08-15 修订：审计确认引擎 context 位于 Emscripten 运行时内部、不向 Host 暴露，新增暴露面会违反本设计的零平台变更原则；独立 context 保留全部已批准属性——48 kHz 固定、浏览器重采样、输入永不接输出——且隔离与清理更干净。） |
 | S8B-D10 | "共享 prepared-PCM 配额（单 Pad 最长约 60 秒、全 Bank 合计约 174 秒立体声）"立为具名后续阶段，记入 `docs/prd/open-questions.md`，与"Loop 素材 BPM Time-stretch"开放问题同一次设计评审处理。Stage 8B 不改资源模型，也不抬 512 MiB 固定堆。 |
 
 ## 3. Stage Boundary
@@ -113,9 +113,12 @@ Capture 提交完整复用以下既有表面，不新增任何 Core 表面：
 
 ### 6.3 采集节点与实时边界
 
-Capture AudioWorkletNode 是挂在引擎 AudioContext 上的独立节点，不接入引擎
-render graph，输入永不路由到输出（S8B-D4）。浏览器把输入流重采样到 context
-的 48 kHz，因此提交的 WAV 恒为 48 kHz，Cooker 准备时走免重采样路径。
+Capture AudioWorkletNode 挂在 Creator 自有的独立
+`AudioContext({sampleRate: 48000})` 上（S8B-D9 修订：引擎 context 由
+Emscripten 运行时内部持有，不向 Host 暴露），不接入引擎 render graph，输入
+永不路由到输出（S8B-D4）。浏览器把输入流重采样到 context 的 48 kHz，因此
+提交的 WAV 恒为 48 kHz，Cooker 准备时走免重采样路径。采集图整体（context、
+stream、worklet node）由 capture controller 单一所有者创建与关闭。
 
 "音频 render 路径零分配、无锁、无系统调用"的既有不变量约束的是引擎 render；
 采集节点不属于 render 路径，但不得干扰它：采集帧在 worklet 内聚合为约 100 ms
@@ -210,7 +213,9 @@ Deferred 实体证据台账（S8B-D8，照 Stage 8 惯例，做了才计入）�
 - Stage 8B 实现（实施计划扩展时落实）：
   - Product Build：`1.0.22.0` 之后的下一个 Build，经 portal/version 工具在
     版本集成 Task 分配，不手填；
-  - `creator-web` minor bump、`web-runtime-host` minor bump；
+  - `creator-web` minor bump；`web-runtime-host` 仅在其文件实际变更时 bump
+    （2026-08-15 审计：采集与提交路径全部落在 creator-web 内，预期不触碰
+    web-runtime-host）；
   - Core Modules、`web-runtime-platform` 的 Facade/传输表面、全部 Contract、
     manifest `resource_limits`：零变更（若实现中发现必须变更，即为设计冲突，
     退回设计评审，不得就地弱化）。
