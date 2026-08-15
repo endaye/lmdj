@@ -126,6 +126,12 @@ def run_bench(bench, workspace, fixture, capability, parameters=None):
 def compare_fixture(bench, workspace_root, fixture, rows, failures):
     sample_rate, mono = read_mono(fixture)
     is_click_train = fixture.name == "click_train.wav"
+    # Reference clipping uses the raw int16 samples (any channel), matching
+    # the provider's definition, which checks interleaved samples before the
+    # mono mixdown.
+    raw = wavfile.read(fixture)[1]
+    assert raw.dtype == np.int16, f"{fixture} must be PCM16"
+    ref_clipping = bool((raw == 32767).any() or (raw == -32768).any())
 
     run = run_bench(
         bench,
@@ -161,11 +167,12 @@ def compare_fixture(bench, workspace_root, fixture, rows, failures):
     loudness_ok = (
         abs(result["peak_dbfs"] - ref_peak) <= 0.01
         and abs(result["rms_dbfs"] - ref_rms) <= 0.01
+        and result["clipping"] == ref_clipping
     )
     rows.append(
         f"| {fixture.name} | loudness | {run['provider_id']} | "
         f"{run['ms_median']:.2f} ms | peak={result['peak_dbfs']:.2f} dBFS "
-        f"rms={result['rms_dbfs']:.2f} dBFS | "
+        f"rms={result['rms_dbfs']:.2f} dBFS clip={result['clipping']} | "
         f"{'PASS' if loudness_ok else 'FAIL'} |"
     )
     if not loudness_ok:
