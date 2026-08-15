@@ -6,6 +6,13 @@ export class CaptureBuffer {
   readonly channelCount: number;
   #chunks: Float32Array[][];
   #frames = 0;
+  // Finding 4: envelope() is called once per delivered batch (about 10x/sec)
+  // and, unmemoized, walks every stored sample of every channel each time —
+  // O(total frames) per call, growing toward ~5.76M sample visits per redraw
+  // over a full 60 s stereo take. Memoizing on the only two inputs that can
+  // change the result (frame count, bin count) makes repeated calls with an
+  // unchanged buffer free; append() invalidates it below.
+  #envelopeCache: {frames: number; bins: number; result: Float32Array} | null = null;
 
   constructor(channelCount: 1 | 2) {
     if (channelCount !== 1 && channelCount !== 2) {
@@ -34,6 +41,7 @@ export class CaptureBuffer {
       chunkList.push(c.slice(0, accepted));
     });
     this.#frames += accepted;
+    this.#envelopeCache = null;
     return accepted;
   }
 
@@ -63,21 +71,28 @@ export class CaptureBuffer {
     if (!Number.isInteger(bins) || bins <= 0) {
       throw new TypeError("Envelope bin count is invalid");
     }
+    const cache = this.#envelopeCache;
+    if (cache !== null && cache.frames === this.#frames && cache.bins === bins) {
+      return cache.result;
+    }
     const out = new Float32Array(bins);
-    if (this.#frames === 0) { return out; }
-    const perBin = this.#frames / bins;
-    for (const chunks of this.#chunks) {
-      let index = 0;
-      for (const chunk of chunks) {
-        for (const value of chunk) {
-          const bin = Math.min(Math.floor(index / perBin), bins - 1);
-          const magnitude = Math.abs(value);
-          const current = out[bin];
-          if (current === undefined || magnitude > current) { out[bin] = magnitude; }
-          index += 1;
+    if (this.#frames > 0) {
+      const perBin = this.#frames / bins;
+      for (const chunks of this.#chunks) {
+        let index = 0;
+        for (const chunk of chunks) {
+          const length = chunk.length;
+          for (let i = 0; i < length; i += 1) {
+            const bin = Math.min(Math.floor(index / perBin), bins - 1);
+            const magnitude = Math.abs(chunk[i] ?? 0);
+            const current = out[bin];
+            if (current === undefined || magnitude > current) { out[bin] = magnitude; }
+            index += 1;
+          }
         }
       }
     }
+    this.#envelopeCache = {frames: this.#frames, bins, result: out};
     return out;
   }
 }
