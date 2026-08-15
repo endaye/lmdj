@@ -18,6 +18,13 @@ ASSERT_GATE = REPO_ROOT / ".github/scripts/assert-macos-gate-result.sh"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
+# Lanes cut over to the dedicated netcup role, mapped to the `web-ci-proof`
+# lane each one must still request. Cutting over must not silently reroute a
+# lane's workload.
+WEB_HEAVY_LANES = {
+    "web-toolchain-conformance": "web_toolchain",
+    "creator-web": "creator",
+}
 
 
 class CiRunnerFallbackTest(unittest.TestCase):
@@ -145,35 +152,29 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("runs-on: ubuntu-24.04", selector)
         self.assertNotIn("trusted-head", selector)
 
-    def test_web_toolchain_is_pinned_to_the_netcup_web_heavy_role(self) -> None:
-        """Web Toolchain is the first lane cut over to the CI-only netcup node.
+    def test_cut_over_web_lanes_are_pinned_to_the_netcup_web_heavy_role(self) -> None:
+        """Web Toolchain and Creator run on the CI-only netcup node.
 
         The role label set is static, not selector-resolved. `ci-web-heavy`
-        exists only on the dedicated node, so a busy or absent role queues the
-        lane instead of diverting it to paid runners, which is why this job
-        keeps its own `needs: change-scope` rather than joining the
+        exists only on the dedicated node, so a busy or absent role queues a
+        cut-over lane instead of diverting it to paid runners, which is why
+        these jobs keep their own `needs: change-scope` rather than joining the
         `select-ubuntu-runner` consumers. Trust therefore cannot come from the
-        selector's fork branch and must stay on the job itself.
+        selector's fork branch and must stay on each job itself.
         """
-        job = self.workflow_job("web-toolchain-conformance")
-        self.assertIn(WEB_HEAVY_ROLE, job)
-        self.assertIn("needs: change-scope", job)
-        self.assertNotIn("needs: select-ubuntu-runner", job)
-        self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
-        self.assertNotIn("runs-on: ubuntu-24.04", job)
-        self.assertIn("needs.change-scope.outputs.trusted-head == 'true'", job)
-        self.assertIn("lane: web_toolchain", job)
-        self.assertIn('install-system-deps: "false"', job)
-        self.assertNotIn("for determinism, not for capacity", job)
-
-    def test_resource_intensive_web_gates_use_hosted_runners(self) -> None:
-        for job_name in ("creator-web",):
+        for job_name, lane in WEB_HEAVY_LANES.items():
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertNotIn("needs: select-ubuntu-runner", job)
+                self.assertIn(WEB_HEAVY_ROLE, job)
                 self.assertIn("needs: change-scope", job)
-                self.assertIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("needs: select-ubuntu-runner", job)
                 self.assertNotIn("needs.select-ubuntu-runner.outputs.runner", job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertIn(
+                    "needs.change-scope.outputs.trusted-head == 'true'", job
+                )
+                self.assertIn(f"lane: {lane}", job)
+                self.assertIn('install-system-deps: "false"', job)
 
     def test_actionlint_config_is_plain_git_text_not_an_lfs_pointer(self) -> None:
         attribute = subprocess.run(
@@ -203,22 +204,27 @@ class CiRunnerFallbackTest(unittest.TestCase):
         self.assertIn("command -v clang-18", coverage)
         self.assertIn("command -v llvm-cov-18", coverage)
 
-    def test_hosted_web_gates_record_why_they_are_not_a_capacity_decision(self) -> None:
-        """The routing reason must survive, or a later cost pass will undo it.
+    def test_cut_over_web_gates_record_why_the_hosted_pin_was_lifted(self) -> None:
+        """The routing reason must survive, or a later pass will churn it back.
 
-        Creator is hosted because the Wasm/OPFS fault matrix is
+        Creator was hosted because the Wasm/OPFS fault matrix is
         timing-sensitive and exceeded bounded budgets on the heterogeneous
-        self-hosted pool. Extra runner slots and toolchain caches do not
-        address timing sensitivity, so neither is grounds for moving it. The
-        dedicated CI-only role removes the heterogeneity itself, which is a
-        different argument and is proven lane by lane, not assumed.
+        shared pool. Extra runner slots and toolchain caches never addressed
+        that; the dedicated CI-only role removes the heterogeneity itself,
+        which is a different argument and was proven lane by lane. Keeping
+        both halves in the file stops a later cost pass from reading the move
+        as "more slots were enough", and stops a later determinism pass from
+        restoring a pin whose premise is gone.
         """
-        for job_name in ("creator-web",):
+        for job_name in WEB_HEAVY_LANES:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn("timing-sensitive", job)
-                self.assertIn("bounded test budgets", job)
-                self.assertIn("for determinism, not for capacity", job)
+                self.assertIn("dedicated CI-only netcup node", job)
+                self.assertIn("instead of diverting it to paid runners", job)
+                self.assertNotIn("for determinism, not for capacity", job)
+        creator = self.workflow_job("creator-web")
+        self.assertIn("timing-sensitive", creator)
+        self.assertIn("bounded test budgets", creator)
 
     def test_selectors_queue_on_a_busy_pool_instead_of_paying_for_hosted(self) -> None:
         """A loaded trusted pool must queue, never divert to paid runners.

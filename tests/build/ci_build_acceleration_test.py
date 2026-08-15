@@ -18,6 +18,15 @@ MACOS_ACTION = REPO_ROOT / ".github/actions/macos-core-gates/action.yml"
 WEB_TOOLCHAIN = REPO_ROOT / "scripts/web-toolchain-conformance.sh"
 WEB_HOST = REPO_ROOT / "scripts/web-runtime-host.sh"
 GITIGNORE = REPO_ROOT / ".gitignore"
+WEB_HEAVY_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
+)
+# Lanes cut over to the dedicated netcup role, mapped to the `web-ci-proof`
+# lane each one must still request.
+WEB_HEAVY_LANES = {
+    "web-toolchain-conformance": "web_toolchain",
+    "creator-web": "creator",
+}
 
 
 class CiBuildAccelerationTest(unittest.TestCase):
@@ -105,7 +114,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL", source)
                 self.assertRegex(source, r'parallel_args=\(--parallel\)')
 
-    def test_web_toolchain_reuses_the_provisioned_netcup_browser_stack(self) -> None:
+    def test_cut_over_web_lanes_reuse_the_provisioned_netcup_browser_stack(self) -> None:
         """A persistent CI-only role provisions browser deps once, not per run.
 
         `install-system-deps: "true"` lets Playwright apt-install host
@@ -113,15 +122,13 @@ class CiBuildAccelerationTest(unittest.TestCase):
         wrong on the dedicated netcup node, where it repeats work the role
         already provides and mutates state shared by both runner services.
         """
-        job = self.workflow_job("web-toolchain-conformance")
-        self.assertIn(
-            "runs-on: "
-            "[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]",
-            job,
-        )
-        self.assertIn("lane: web_toolchain", job)
-        self.assertIn('install-system-deps: "false"', job)
-        self.assertNotIn('install-system-deps: "true"', job)
+        for job_name, lane in WEB_HEAVY_LANES.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn(WEB_HEAVY_ROLE, job)
+                self.assertIn(f"lane: {lane}", job)
+                self.assertIn('install-system-deps: "false"', job)
+                self.assertNotIn('install-system-deps: "true"', job)
 
     def test_generated_web_toolchain_does_not_dirty_source_tree(self) -> None:
         ignored = {

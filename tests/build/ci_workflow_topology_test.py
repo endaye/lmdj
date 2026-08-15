@@ -66,10 +66,14 @@ TRUST_CONDITION = "needs.change-scope.outputs.trusted-head == 'true'"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
-# Lanes cut over to the dedicated netcup `ci-web-heavy` role so far. The
-# migration is proven one lane at a time, so this stays an exact set: an
-# unreviewed extra `ci-web-heavy` route is a topology change, not a detail.
-WEB_HEAVY_JOBS = ("web-toolchain-conformance",)
+# Lanes cut over to the dedicated netcup `ci-web-heavy` role so far, mapped to
+# the `web-ci-proof` lane each one must still request. The migration is proven
+# one lane at a time, so this stays an exact set: an unreviewed extra
+# `ci-web-heavy` route is a topology change, not a detail.
+WEB_HEAVY_JOBS = {
+    "web-toolchain-conformance": "web_toolchain",
+    "creator-web": "creator",
+}
 RELEASE_HISTORY_CONSUMERS = (
     "deploy-contract",
     "core-ubuntu",
@@ -357,25 +361,25 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                     expected_lanes,
                 )
 
-    def test_web_toolchain_uses_the_static_netcup_role_not_the_selector(self) -> None:
-        """Only Web Toolchain is cut over, and it routes by role, not selector.
+    def test_cut_over_lanes_use_the_static_netcup_role_not_the_selector(self) -> None:
+        """Web Toolchain and Creator are cut over, by role and not by selector.
 
         `select-ubuntu-runner` resolves once per run and can fall back to paid
-        Ubuntu. The dedicated role must queue instead, so this lane carries a
-        literal label set and keeps `needs: change-scope` alone. Pinning the
-        exact `ci-web-heavy` job set keeps a later lane from inheriting the
-        route without its own proof run.
+        Ubuntu. The dedicated role must queue instead, so each cut-over lane
+        carries a literal label set and keeps `needs: change-scope` alone.
+        Pinning the exact `ci-web-heavy` job set keeps a later lane from
+        inheriting the route without its own proof run.
         """
-        job = self.workflow_job("web-toolchain-conformance")
-        self.assertEqual(
-            self.job_needs("web-toolchain-conformance"), {"change-scope"}
-        )
-        self.assertIn(WEB_HEAVY_ROLE, job)
-        self.assertNotIn("runs-on: ubuntu-24.04", job)
-        self.assertNotIn("select-ubuntu-runner", job)
-        self.assertIn(TRUST_CONDITION, job)
-        self.assertIn("lane: web_toolchain", job)
-        self.assertIn('install-system-deps: "false"', job)
+        for job_name, lane in WEB_HEAVY_JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(WEB_HEAVY_ROLE, job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("select-ubuntu-runner", job)
+                self.assertIn(TRUST_CONDITION, job)
+                self.assertIn(f"lane: {lane}", job)
+                self.assertIn('install-system-deps: "false"', job)
         self.assertEqual(
             self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
         )
@@ -385,7 +389,7 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(self.job_needs("creator-web"), {"change-scope"})
         self.assertNotIn("web-toolchain-conformance", job)
         self.assertNotIn("core-ubuntu", job)
-        self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertIn(WEB_HEAVY_ROLE, job)
 
     def test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected(self) -> None:
         job = self.workflow_job("select-ubuntu-runner")
