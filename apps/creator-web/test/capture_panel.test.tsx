@@ -22,7 +22,6 @@ beforeAll(() => {
 afterAll(() => vi.restoreAllMocks());
 
 interface FakeController {
-  channelCount: number;
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
 }
@@ -33,13 +32,11 @@ interface ControllerInstance {
 }
 
 function createFactory(options: {
-  channelCount?: number;
   startImpl?: () => Promise<void>;
 } = {}) {
   const instances: ControllerInstance[] = [];
   const makeController = (listener: CaptureListener): CaptureController => {
     const controller: FakeController = {
-      channelCount: options.channelCount ?? 1,
       start: vi.fn(options.startImpl ?? (async () => {})),
       stop: vi.fn(async () => {}),
     };
@@ -117,6 +114,54 @@ test("recording shows elapsed time, a level meter, and a growing waveform canvas
   await waitFor(() => expect(canvas.getAttribute("data-frame-count")).toBe("9600"));
 });
 
+test("a stereo batch sizes the buffer from the batch itself and the frame count advances (behavior 2, Finding 1/5)", async () => {
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+
+  const canvas = screen.getByRole("img", {name: "Pad A1 capture waveform"});
+  expect(canvas.getAttribute("data-frame-count")).toBe("0");
+
+  // The worklet is the single authority on channel width now (Finding 1): the
+  // panel must size CaptureBuffer from the delivered batch, not from any
+  // value inferred ahead of time. If it were still sized from a stale
+  // mono assumption, CaptureBuffer.append would throw on this 2-channel
+  // batch and the frame count would never advance.
+  act(() => listener.onBatch(
+    [new Float32Array(4_800).fill(0.5), new Float32Array(4_800).fill(-0.5)], 0.5,
+  ));
+  await waitFor(() => expect(canvas.getAttribute("data-frame-count")).toBe("4800"));
+  expect(screen.getByText("0.1 s recorded")).toBeTruthy();
+
+  act(() => listener.onBatch(
+    [new Float32Array(4_800).fill(0.25), new Float32Array(4_800).fill(-0.25)], 0.25,
+  ));
+  await waitFor(() => expect(canvas.getAttribute("data-frame-count")).toBe("9600"));
+});
+
+test("a batch that disagrees with the buffer's channel shape stops the capture as device-lost instead of throwing into the event handler (Finding 1)", async () => {
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController});
+  const {controller, listener} = await startRecording(instances);
+
+  // The first batch is mono, sizing the buffer as 1-channel.
+  act(() => listener.onBatch([new Float32Array(4_800).fill(0.3)], 0.3));
+  await screen.findByText("0.1 s recorded");
+
+  // A later batch disagrees in shape (2 channels): CaptureBuffer.append
+  // throws TypeError. Without a try/catch around it, this would escape into
+  // the event handler, leaving the UI stuck "recording" with the microphone
+  // still live rather than being caught and stopped.
+  expect(() => act(() => listener.onBatch(
+    [new Float32Array(4_800).fill(0.1), new Float32Array(4_800).fill(0.1)], 0.1,
+  ))).not.toThrow();
+
+  await waitFor(() => expect(controller.stop).toHaveBeenCalledTimes(1));
+  expect(await screen.findByText(
+    "Recording stopped: the microphone became unavailable or its permission changed.",
+  )).toBeTruthy();
+});
+
 test("reaching capacity stops recording and the controller (S8B-D3, behavior 2)", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});
@@ -170,8 +215,9 @@ test("controller onEnded maps to a device-lost stop (behavior 3)", async () => {
   act(() => listener.onEnded("device-lost"));
 
   await waitFor(() => expect(controller.stop).toHaveBeenCalledTimes(1));
-  expect(await screen.findByText("Recording stopped: the input device became unavailable."))
-    .toBeTruthy();
+  expect(await screen.findByText(
+    "Recording stopped: the microphone became unavailable or its permission changed.",
+  )).toBeTruthy();
 });
 
 test("trimming clamps the selection sliders to COMMIT_MAX_FRAMES (behavior 4)", async () => {
@@ -195,8 +241,9 @@ test("shows the interruption reason once trimming (behavior 4)", async () => {
   const {listener} = await startRecording(instances);
   act(() => listener.onBatch([new Float32Array(48_000).fill(0.2)], 0.2));
   act(() => listener.onEnded("device-lost"));
-  expect(await screen.findByText("Recording stopped: the input device became unavailable."))
-    .toBeTruthy();
+  expect(await screen.findByText(
+    "Recording stopped: the microphone became unavailable or its permission changed.",
+  )).toBeTruthy();
 });
 
 test("Commit calls onCommit with the buffer and selection, then resets to idle (behavior 5)", async () => {
@@ -267,5 +314,19 @@ test("Close calls onClose", async () => {
   const user = userEvent.setup();
   const {onClose} = renderPanel();
   await user.click(screen.getByRole("button", {name: "Close"}));
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test("Close stops an in-progress recording exactly once before closing (Finding 3)", async () => {
+  const {makeController, instances} = createFactory();
+  const {onClose} = renderPanel({makeController});
+  const {controller} = await startRecording(instances);
+
+  // Close is rendered even in the "recording" phase. Relying solely on the
+  // unmount cleanup would strand the microphone live if the eventual parent
+  // hides the panel instead of unmounting it (single-owner lifecycle).
+  await userEvent.setup().click(screen.getByRole("button", {name: "Close"}));
+
+  expect(controller.stop).toHaveBeenCalledTimes(1);
   expect(onClose).toHaveBeenCalledTimes(1);
 });

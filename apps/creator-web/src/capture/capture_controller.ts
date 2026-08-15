@@ -4,7 +4,7 @@ export class CapturePermissionError extends Error {}
 
 export interface CaptureListener {
   onBatch(channels: Float32Array[], peak: number): void;
-  onEnded(reason: "device-lost" | "permission-revoked"): void;
+  onEnded(reason: "device-lost"): void;
 }
 
 export interface CaptureControllerDeps {
@@ -29,7 +29,6 @@ export class CaptureController {
   readonly #listener: CaptureListener;
   #resources: CaptureResources | null = null;
   #starting: Promise<void> | null = null;
-  channelCount = 0;
 
   constructor(deps: CaptureControllerDeps, listener: CaptureListener) {
     this.#deps = deps;
@@ -70,7 +69,6 @@ export class CaptureController {
     let context: AudioContext | undefined;
     let moduleUrl: string | undefined;
     try {
-      this.channelCount = track.getSettings().channelCount === 2 ? 2 : 1;
       context = this.#deps.createContext();
       moduleUrl = this.#deps.createModuleUrl(CAPTURE_WORKLET_SOURCE);
       await context.audioWorklet.addModule(moduleUrl);
@@ -91,7 +89,6 @@ export class CaptureController {
         try { await context.close(); } catch { /* already closing */ }
       }
       if (moduleUrl !== undefined) { this.#deps.revokeModuleUrl(moduleUrl); }
-      this.channelCount = 0;
       throw error;
     }
   }
