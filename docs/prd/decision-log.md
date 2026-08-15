@@ -422,11 +422,13 @@ manifest 与全部 Contract 零变更。
 - **S8B-D7**：采集关闭 echoCancellation/noiseSuppression/autoGainControl。
 - **S8B-D8**：验收由 Chromium 假设备自动化把关；真麦克风听感、Safari 与
   iPadOS 行为显式 deferred，做了才计入。
-- **S8B-D9**：采集管线用 AudioWorklet 挂在引擎 48 kHz context；float→PCM16
-  WAV 编码在 Host 层提交时完成；不用 MediaRecorder / ScriptProcessorNode。
+- **S8B-D9**：采集管线用 AudioWorklet 挂在 Creator 自有的独立 48 kHz
+  AudioContext（引擎 context 在 Emscripten 运行时内部、不向 Host 暴露）；
+  float→PCM16 WAV 编码在 Host 层提交时完成；不用 MediaRecorder /
+  ScriptProcessorNode。
 - **S8B-D10**：共享 prepared-PCM 配额（单 Pad ≈60 秒长素材）立为具名后续
   阶段，与 Loop 素材 BPM Time-stretch 开放问题同一次设计评审；Stage 8B 不改
   资源模型、不抬 512 MiB 固定堆。
 
 Stage 8B 仍未实现、未分配 Product/Module 版本；实现时预期仅 `creator-web`
-与 `web-runtime-host` minor bump。
+minor bump（`web-runtime-host` 仅在其文件实际变更时 bump）。
