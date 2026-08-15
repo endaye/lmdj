@@ -1006,6 +1006,22 @@ describe("CaptureController", () => {
     expect(onBatch).toHaveBeenCalledWith([expect.any(Float32Array)], 0.7);
   });
 
+  it("releases the microphone when stop lands during start", async () => {
+    const {deps, track} = makeDeps();
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const slow = deps.getUserMedia;
+    deps.getUserMedia = vi.fn(async (c) => { await gate; return slow(c); });
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    const starting = controller.start();
+    const stopping = controller.stop();   // lands while start() is still awaiting
+    release?.();
+    await starting;
+    await stopping;
+    // The stream went live after stop() was requested; it must still be released.
+    expect(track.stopped).toBe(1);
+  });
+
   it("stops once as the single owner and is idempotent", async () => {
     const {deps, track, node, source, context} = makeDeps();
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
@@ -1107,12 +1123,28 @@ export class CapturePermissionError extends Error {}
 export class CaptureController {
   #deps; #listener;
   #resources: null | {track; node; source; context; moduleUrl: string; onended: () => void} = null;
+  #starting: Promise<void> | null = null;
   channelCount = 0;
 
   constructor(deps, listener) { this.#deps = deps; this.#listener = listener; }
 
+  // start() publishes the in-flight promise so stop() can await it. Without
+  // this, a stop() arriving mid-start finds #resources still null, no-ops, and
+  // the microphone goes live afterwards with no owner able to release it.
   async start(): Promise<void> {
-    if (this.#resources !== null) { throw new Error("Capture is already active"); }
+    if (this.#resources !== null || this.#starting !== null) {
+      throw new Error("Capture is already active");
+    }
+    const startup = this.#startInternal();
+    this.#starting = startup;
+    try {
+      await startup;
+    } finally {
+      this.#starting = null;
+    }
+  }
+
+  async #startInternal(): Promise<void> {
     let stream: MediaStream;
     try {
       stream = await this.#deps.getUserMedia({audio: {
@@ -1158,6 +1190,10 @@ export class CaptureController {
   }
 
   async stop(): Promise<void> {
+    // Wait out an in-flight start() so its resources exist to be released;
+    // its own failure is not this call's concern.
+    const startup = this.#starting;
+    if (startup !== null) { await startup.catch(() => {}); }
     const resources = this.#resources;
     if (resources === null) { return; }
     this.#resources = null;
