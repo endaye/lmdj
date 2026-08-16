@@ -446,5 +446,31 @@ manifest 与全部 Contract 零变更。
   （Core Modules、Facade/传输表面、全部 Contract、resource_limits）均未
   触碰。
 
-Stage 8B 仍未实现、未分配 Product/Module 版本；实现时预期仅 `creator-web`
-minor bump（`web-runtime-host` 仅在其文件实际变更时 bump）。
+Stage 8B 已于 2026-08-16 实现，分配 Product Build `1.0.23.0 canary`，`creator-web` 由 `1.2.0` 升至 `1.3.0`；`web-runtime-host` 文件未变更，保持 `1.2.9`。
+
+## 2026-08-16
+
+### 已确认：Provider SDK 需要一等公民的 Artifact 字节访问（输入 resolver + 输出访问口）
+
+- 结论：analysis-bench 原型（分支 `feat/audio-analysis-bench-prototype`，
+  `tools/analysis-bench/`）验证了 Capability v2 + `AttemptStore` 生产执行路径
+  可以无改动地承载多种可插拔音频分析工具；同时确认了
+  [Provider 多端口决策](../architecture/2026-08-01-provider-multi-port-contract-decision.md)
+  中预留的输入字节 resolver 缺口是**双向**的：输入侧 Provider 只收到
+  `ArtifactRef` 而没有 bytes（原型由 Host 在组合时注入
+  `analysis::ArtifactByteResolver` 桥接），输出侧 SDK 也没有读取已提交
+  Artifact bytes 的访问口（原型不得不按 `.lmdj-workspace/attempts/` 私有
+  磁盘布局重建路径）。Attempt/Candidate 语义对报告型分析输出基本适配，
+  不需要轻量结果通道。原型对比证据：12/12 行通过 numpy/scipy ground truth,
+  多次 Attempt 输出 sha256 逐字节一致。
+- 原因：Capability Contract 只传递 `ArtifactRef`（sha256/media_type/
+  byte_length)，字节解析被显式保留为独立架构问题；原型证明这个缺口一旦
+  进入真实分析工具就会双向阻塞，而不是只阻塞输入。
+- 影响：本条只记录结论，不修改 Contract、SDK 或任何版本身份。正式的
+  resolver/输出访问口设计（形状、校验边界、对 v2 Contract 的影响）需要独立
+  的 Contract Review；原型的 Host 注入桥接是临时方案，不得直接毕业为正式
+  接口。
+- 代码位置：原型是一次性验证材料，未合入 `main`；`main` 上不存在
+  `tools/analysis-bench/`。代码只保留在未合并分支
+  `feat/audio-analysis-bench-prototype`（PR #153，已关闭不合并）上，本条与
+  实施计划文档是它在 `main` 上的唯一记录。
