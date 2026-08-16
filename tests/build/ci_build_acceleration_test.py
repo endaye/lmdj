@@ -21,6 +21,9 @@ GITIGNORE = REPO_ROOT / ".gitignore"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
+CORE_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
+)
 # Lanes cut over to the dedicated netcup role, mapped to the lane each one
 # runs.
 WEB_HEAVY_LANES = {
@@ -72,29 +75,38 @@ class CiBuildAccelerationTest(unittest.TestCase):
         self.assertNotIn("actions/cache", source)
         self.assertNotIn("ccache --zero-stats", source)
 
-    def test_linux_native_jobs_use_ccache_only_on_self_hosted_lane(self) -> None:
-        expected_cache_selector = (
-            "use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}"
-        )
+    def test_linux_native_jobs_always_use_the_role_persistent_ccache(self) -> None:
+        """The cache condition goes with the selector output it read.
+
+        `use-ccache` was gated on whether the run had been diverted to paid
+        Ubuntu, where no persistent cache exists. These three lanes now only
+        ever execute on the shared host that owns the cache, so the input is
+        unconditionally true and the statistics step is unconditional too:
+        native Core ccache behavior is preserved, not merely retained.
+        """
         for job_name in ("core-ubuntu", "core-asan", "core-coverage"):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn(
-                    "needs: [change-scope, select-ubuntu-runner]", job
-                )
+                self.assertIn("needs: change-scope", job)
+                self.assertIn(CORE_ROLE, job)
+                self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(
                     "uses: ./.github/actions/configure-build-acceleration", job
                 )
-                self.assertIn(expected_cache_selector, job)
+                self.assertIn("use-ccache: true", job)
                 self.assertIn("ccache --show-log-stats", job)
+                self.assertIn(
+                    "if: ${{ always() }}\n"
+                    "        run: >-\n"
+                    "          ccache --show-log-stats",
+                    job,
+                )
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")
-        self.assertIn("needs: [change-scope, select-ubuntu-runner]", job)
-        self.assertIn(
-            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
-            job,
-        )
+        self.assertIn("needs: change-scope", job)
+        self.assertIn(CORE_ROLE, job)
+        self.assertNotIn("select-ubuntu-runner", job)
         self.assertIn("lfs: true", job)
         self.assertIn("git lfs checkout -- tests/fixtures/audio", job)
         self.assertIn(

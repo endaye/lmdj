@@ -33,30 +33,30 @@ LANE_JOBS = {
     "docs_static": ["docs-static"],
     "portal": ["portal"],
     "ci_contract": ["ci-contract"],
-    "core_ubuntu": ["select-ubuntu-runner", "core-ubuntu"],
-    "core_asan": ["select-ubuntu-runner", "core-asan"],
-    "core_coverage": ["select-ubuntu-runner", "core-coverage"],
+    # The four native Core lanes route by the literal `ci-core` role, so none
+    # of them resolves a runner through a selector and none may require a
+    # selector result: the Linux selector no longer exists as a job at all,
+    # and a support job that cannot run would gate the Gate on a permanent
+    # skip.
+    "core_ubuntu": ["core-ubuntu"],
+    "core_asan": ["core-asan"],
+    "core_coverage": ["core-coverage"],
     "core_macos": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
     "web_toolchain": ["web-toolchain-conformance"],
-    # Cut over to the static `ci-web-heavy` netcup role, so the lane no longer
-    # needs `select-ubuntu-runner` to resolve a runner and must not require its
-    # result: a support job the lane never reads would gate the Gate on a job
-    # the workflow guard leaves skipped.
+    # Cut over to the static `ci-web-heavy` netcup role, so the lane resolves
+    # no runner through a selector and must not require a selector result.
     "web_runtime_host": ["web-runtime-host"],
     "creator": ["creator-web"],
-    # Cut over to the same static role, and off the selector for the same
-    # reason: the lane resolves no runner through `select-ubuntu-runner`, so
-    # requiring its result would gate the Gate on a job the workflow guard
-    # leaves skipped. This was the selector's last Web consumer.
     "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
-    "package": ["select-ubuntu-runner", "package"],
+    "package": ["package"],
 }
 
 # The closed set of formal jobs that a self-hosted role may ever execute.
-# Change Scope, PR Gate and the two selectors are the Hosted control plane, and
-# the macOS lane keeps its own runner policy, so none of them appear here.
+# Change Scope, PR Gate and the surviving macOS selector are the Hosted control
+# plane, and the macOS lane keeps its own runner policy, so none of them appear
+# here.
 SELF_HOSTED_JOBS = [
     "docs-static",
     "portal",
@@ -281,10 +281,15 @@ class ChangeScopeTest(unittest.TestCase):
             job for jobs in self.policy["lane_jobs"].values() for job in jobs
         }
         self.assertTrue(set(SELF_HOSTED_JOBS).issubset(formal_jobs))
-        for job in ("select-ubuntu-runner", "select-macos-runner",
-                    "macos-primary", "core-macos", "core-asan-macos"):
+        for job in ("select-macos-runner", "macos-primary", "core-macos",
+                    "core-asan-macos"):
             with self.subTest(job=job):
                 self.assertNotIn(job, SELF_HOSTED_JOBS)
+        # The Linux runner selector is not merely outside the self-hosted set:
+        # it is no longer a formal job, because no lane can resolve a runner
+        # from an API snapshot that was able to buy paid Ubuntu.
+        self.assertNotIn("select-ubuntu-runner", formal_jobs)
+        self.assertNotIn("select-ubuntu-runner", SELF_HOSTED_JOBS)
 
     def test_policy_rejects_a_weakened_self_hosted_job_set(self):
         mutations = {
@@ -334,8 +339,11 @@ class ChangeScopeTest(unittest.TestCase):
                 policy["lane_jobs"].pop("core_asan"),
             ),
             "support job replacement": lambda policy: policy["lane_jobs"].__setitem__(
-                "core_asan", ["select-ubuntu-runner", "different-asan-job"]
+                "core_asan", ["different-asan-job"]
             ),
+            "retired selector reintroduction": lambda policy: policy[
+                "lane_jobs"
+            ].__setitem__("core_asan", ["select-ubuntu-runner", "core-asan"]),
             "central control rule removal": lambda policy: policy.__setitem__(
                 "full_rules", [
                     rule for rule in policy["full_rules"]
