@@ -9,6 +9,12 @@ import time
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+# Derived, not pinned: the Host reports the live Product Build, so a
+# literal here turns every allocation into an unrelated Host test failure.
+_VERSION = json.loads(
+    (REPO_ROOT / "products/lmdj/version.json").read_text(encoding="utf-8"))
+PRODUCT_BUILD = ".".join(
+    str(_VERSION[key]) for key in ("milestone", "minor", "build", "patch"))
 USAGE = (
     "usage: lmdj-native-host --workspace ABSOLUTE_PATH "
     "--assembly ABSOLUTE_ASSEMBLY_JSON "
@@ -400,7 +406,7 @@ def happy_path(
     assert ready["result"]["resolved_pad_count"] == 2
     assert ready["result"]["project_revision"] == 5
     assert ready["result"]["host_version"] == "1.0.10"
-    assert ready["result"]["product_build"] == "1.0.22.0"
+    assert ready["result"]["product_build"] == PRODUCT_BUILD
 
     for pad in (0, 1):
         triggered = process.request(
