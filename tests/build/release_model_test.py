@@ -205,9 +205,12 @@ class ReleaseModelTest(unittest.TestCase):
         stage8 = ledger.intent_for_tag("lmdj-v1.0.22.0")
         self.assertIsNotNone(stage8)
         self.assertEqual(stage8.disposition.value, "allocated")  # type: ignore[union-attr]
+        # The squash merge of #137, matching how 1.0.21.0 above records the
+        # squash merge of #134: a release target must be reachable on main,
+        # because prepare requires main ancestry and checks the revision out.
         self.assertEqual(  # type: ignore[union-attr]
             stage8.target_revision,
-            "ebaf2fea0e6a2b150fb3fb1229dbf5e30e26a322",
+            "51d9e4748cc12a4423954a159949b7b165513789",
         )
         self.assertEqual(stage8.snapshot, "1.0.22.0")  # type: ignore[union-attr]
         self.assertEqual(len(ledger.historical_exceptions), 3)
