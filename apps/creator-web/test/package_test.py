@@ -37,6 +37,7 @@ def module_version(module_directory: str) -> str:
 PACKAGE_TOOL = REPO_ROOT / "apps/creator-web/tools/package.py"
 CREATOR_SCRIPT = REPO_ROOT / "scripts/creator-web.sh"
 CI_WORKFLOW = REPO_ROOT / ".github/workflows/ci.yml"
+WEB_CI_PROOF_ACTION = REPO_ROOT / ".github/actions/web-ci-proof/action.yml"
 SAMPLE_EDITOR_MARKERS = (
     "Sample editor",
     "Replace Sample",
@@ -287,11 +288,19 @@ class CreatorPackageTest(unittest.TestCase):
     def test_proof_and_ci_require_the_packaged_sample_editor_lane(self) -> None:
         script = CREATOR_SCRIPT.read_text(encoding="utf-8")
         workflow = CI_WORKFLOW.read_text(encoding="utf-8")
+        action = WEB_CI_PROOF_ACTION.read_text(encoding="utf-8")
         required = "tests/platform/web/creator/creator_web_sample_editor.spec.mjs"
 
         self.assertIn(f'required_sample_editor_spec="$repo_root/{required}"', script)
         self.assertIn('LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle"', script)
-        self.assertIn("Prove the packaged Creator Sample Editor", workflow)
+        # The Creator lane runs through the shared composite proof action, so the
+        # binding that actually gates the packaged Sample Editor is the workflow
+        # selecting lane "creator" and the action mapping that lane onto the
+        # Creator proof script. Asserting a literal step name in ci.yml would
+        # break on every runner-topology edit without proving the lane still runs.
+        self.assertIn("uses: ./.github/actions/web-ci-proof", workflow)
+        self.assertIn("lane: creator", workflow)
+        self.assertIn("creator) scripts/creator-web.sh proof ;;", action)
 
     def test_cli_has_a_bounded_usage_failure(self) -> None:
         completed = subprocess.run(
