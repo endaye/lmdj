@@ -15,6 +15,14 @@ struct PcmSample {
   std::vector<std::int16_t> interleaved;
 };
 
+struct ResolvedPlayback {
+  std::uint32_t start_frame;
+  std::uint32_t end_frame;
+  domain::TriggerMode trigger_mode;
+  float linear_gain;
+  bool muted;
+};
+
 struct ResolvedEvent {
   domain::PadSlotId slot;
   std::uint32_t step;
@@ -26,6 +34,7 @@ struct ResolvedPad {
   domain::PadSlotId slot;
   foundation::ArtifactRef artifact;
   std::shared_ptr<const PcmSample> sample;
+  ResolvedPlayback playback{};
 };
 
 struct RuntimeSnapshot {

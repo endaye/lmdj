@@ -43,6 +43,108 @@ export interface RuntimeOutcome {
   runtimeFrame: number;
 }
 
+export type SampleTriggerMode =
+  | "one_shot"
+  | "gate"
+  | "loop_gate"
+  | "loop_toggle";
+
+export interface PadPlayback {
+  trimStartFrame: number;
+  trimEndFrame: number | null;
+  triggerMode: SampleTriggerMode;
+  gainMillidb: number;
+  muted: boolean;
+}
+
+export interface SampleMetadata {
+  sampleRate: 44_100 | 48_000;
+  channels: 1 | 2;
+  sourceFrames: number;
+}
+
+export interface SampleInspect {
+  projectRevision: number;
+  slot: number;
+  assetId: string | null;
+  playback: Readonly<PadPlayback>;
+  metadata: Readonly<SampleMetadata> | null;
+  waveformCacheIdentity: string | null;
+}
+
+export interface WaveformWindow {
+  startFrame: number;
+  endFrame: number;
+  bucketCount: number;
+}
+
+export interface WaveformQuery {
+  slot: number;
+  window: Readonly<WaveformWindow>;
+}
+
+export interface WaveformBucket {
+  startFrame: number;
+  endFrame: number;
+  peakMagnitude: number;
+}
+
+export interface WaveformEnvelope {
+  metadata: Readonly<SampleMetadata>;
+  algorithmVersion: 1;
+  buckets: readonly Readonly<WaveformBucket>[];
+  projectRevision: number;
+}
+
+export interface SampleSnapshotError {
+  code: string;
+  message: string;
+  details: Readonly<Record<string, unknown>>;
+}
+
+export interface SampleCommit {
+  committedRevision: number;
+  runtimeRevision: number | null;
+  runtimePublished: boolean;
+  snapshotError: Readonly<SampleSnapshotError> | null;
+}
+
+export interface SampleImportOptions {
+  slot: number;
+  expectedRevision: number;
+  signal?: AbortSignal;
+  onProgress?: (progress: TransferProgress) => void;
+}
+
+export interface SampleUpdateRequest {
+  slot: number;
+  expectedRevision: number;
+  playback: Readonly<PadPlayback>;
+}
+
+export interface SampleResetRequest {
+  slot: number;
+  expectedRevision: number;
+}
+
+export interface SnapshotPublication {
+  projectId: string;
+  projectRevision: number;
+  patternId: string;
+  runtimeReady: boolean;
+  generation: number | null;
+  snapshotError: Readonly<SampleSnapshotError> | null;
+  runtimeRevision: number | null;
+}
+
+export interface RuntimeVoiceState {
+  sequence: number;
+  slot: number;
+  state: "started" | "stopped" | "completed";
+  runtimeFrame: number;
+  sourceFrame: number;
+}
+
 export interface RuntimeHostState {
   state: string;
   errorCode: string | null;
@@ -110,6 +212,24 @@ export interface CreatorRuntimeSession {
   subscribeHostState(listener: (state: RuntimeHostState) => void): () => void;
   subscribeRuntimeOutcome(listener: (outcome: RuntimeOutcome) => void): () => void;
   diagnostics(): RuntimeDiagnostics;
+}
+
+export interface CreatorSampleRuntimeSession extends CreatorRuntimeSession {
+  inspectSample(slot: number): Promise<SampleInspect>;
+  queryWaveform(request: WaveformQuery): Promise<WaveformEnvelope>;
+  importAssignSample(
+    file: File,
+    options: SampleImportOptions,
+  ): Promise<SampleCommit>;
+  updatePad(request: SampleUpdateRequest): Promise<SampleCommit>;
+  resetPad(request: SampleResetRequest): Promise<SampleCommit>;
+  setSamplePreview(slot: number, playback: PadPlayback): Promise<boolean>;
+  clearSamplePreview(slot: number): Promise<boolean>;
+  release(slot: number, source: RuntimeTriggerSource): Promise<boolean>;
+  stopPad(slot: number): Promise<boolean>;
+  stopAll(): Promise<boolean>;
+  retryPrepare(patternId: string): Promise<SnapshotPublication>;
+  subscribeVoiceState(listener: (event: RuntimeVoiceState) => void): () => void;
 }
 
 export type RuntimeSessionFactory = () => CreatorRuntimeSession;

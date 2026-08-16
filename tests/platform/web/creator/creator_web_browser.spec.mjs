@@ -37,6 +37,35 @@ async function downloadReport(page) {
   return JSON.parse(await readFile(await download.path(), "utf8"));
 }
 
+async function armPadOutcomeObservation(pad) {
+  await pad.evaluate((element) => {
+    element.removeAttribute("data-proof-outcome-observed");
+    const observeOutcome = () => {
+      const outcome = element.getAttribute("data-outcome");
+      if (outcome !== null && outcome !== "idle") {
+        element.setAttribute("data-proof-outcome-observed", outcome);
+        return true;
+      }
+      return false;
+    };
+    if (observeOutcome()) return;
+    const observer = new MutationObserver((records) => {
+      const observed = records.some((record) =>
+        record.oldValue !== null && record.oldValue !== "idle"
+      );
+      if (observed || observeOutcome()) {
+        element.setAttribute("data-proof-outcome-observed", "true");
+        observer.disconnect();
+      }
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ["data-outcome"],
+      attributeOldValue: true,
+    });
+  });
+}
+
 test("visible Creator journey imports, activates, and admits all 64 unique Pad addresses", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(180_000);
@@ -89,8 +118,9 @@ test("physical key order addresses the matching Bank-A Pads and preserves the fu
     const pad = page.getByRole("button", {
       name: `Pad A${index + 1} — assigned — Key ${key}`,
     });
+    await armPadOutcomeObservation(pad);
     await page.keyboard.down(code);
-    await expect(pad).not.toHaveAttribute("data-outcome", "idle");
+    await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/);
     await page.keyboard.up(code);
     await expect(pad).toHaveAttribute("data-outcome", "idle");
   }

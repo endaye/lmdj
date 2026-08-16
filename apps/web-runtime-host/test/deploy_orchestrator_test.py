@@ -18,7 +18,7 @@ import netlify_api
 class DeployOrchestratorReleaseTest(unittest.TestCase):
     TAG = "lmdj-v1.0.15.2"
     TARGET = "72ae40074620cc5681c462ba04a31a666449734f"
-    ARCHIVE = "lmdj-web-runtime-host-1.1.2-product-1.0.15.2.zip"
+    ARCHIVE = "lmdj-web-runtime-host-1.2.0-product-1.0.15.2.zip"
 
     def metadata(self, *, target: object = "main", assets: list[str] | None = None) -> str:
         names = assets or [
@@ -43,7 +43,7 @@ class DeployOrchestratorReleaseTest(unittest.TestCase):
             tag=self.TAG,
             tag_target=self.TARGET,
             product_build="1.0.15.2",
-            host_version="1.1.2",
+            host_version="1.2.0",
         )
 
     def test_common_main_target_metadata_is_auxiliary(self) -> None:
@@ -190,7 +190,7 @@ class DeployOrchestratorPublishedProjectionTest(unittest.TestCase):
 
 class DeployOrchestratorEvidenceTest(unittest.TestCase):
     PRODUCT = "1.0.15.3"
-    HOST = "1.1.2"
+    HOST = "1.2.0"
     SITE = "site-123"
     DEPLOY = "deploy-456"
     PRIOR = "prior-123"

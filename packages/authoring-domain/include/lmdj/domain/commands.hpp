@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <variant>
 
@@ -24,6 +25,23 @@ struct AssignPad {
   std::optional<foundation::AssetId> asset_id;
 };
 
+struct ImportAssignSample {
+  CommandMeta meta;
+  Asset asset;
+  PadSlotId slot;
+};
+
+struct UpdatePadPlayback {
+  CommandMeta meta;
+  PadSlotId slot;
+  PadPlayback playback;
+};
+
+struct ResetPadPlayback {
+  CommandMeta meta;
+  PadSlotId slot;
+};
+
 struct RecordTake {
   CommandMeta meta;
   RawTake take;
@@ -36,5 +54,23 @@ struct CreatePattern {
 };
 
 using Command = std::variant<ImportAsset, AssignPad, RecordTake, CreatePattern>;
+
+struct AppliedCommand;
+struct CommandReceipt;
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const ImportAssignSample& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const UpdatePadPlayback& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const ResetPadPlayback& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts);
 
 }  // namespace lmdj::domain

@@ -7,6 +7,7 @@ add_library(
   lmdj_project_io
   STATIC
     src/project_store.cpp
+    src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
     src/take_journal.cpp
     ${lmdj_project_io_platform_source}
@@ -42,6 +43,7 @@ if(EMSCRIPTEN)
       "--js-library=${CMAKE_CURRENT_SOURCE_DIR}/src/web/library_opfs_storage.js"
       -sASYNCIFY=1
       "-sASYNCIFY_IMPORTS=${lmdj_project_io_async_imports}"
+      -sSTACK_SIZE=131072
       -sWASMFS
   )
   set_property(
@@ -60,6 +62,7 @@ if(BUILD_TESTING)
     lmdj_project_io_testable
     STATIC
       src/project_store.cpp
+      src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
       src/take_journal.cpp
       src/native/storage_platform.cpp

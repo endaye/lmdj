@@ -35,6 +35,51 @@ void update_max(
   }
 }
 
+bool valid_control_kind(PadControlKind kind) noexcept {
+  switch (kind) {
+    case PadControlKind::press:
+    case PadControlKind::release:
+    case PadControlKind::stop_slot:
+    case PadControlKind::stop_all:
+    case PadControlKind::preview_set:
+    case PadControlKind::preview_clear:
+      return true;
+  }
+  return false;
+}
+
+bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+    case domain::TriggerMode::gate:
+    case domain::TriggerMode::loop_gate:
+    case domain::TriggerMode::loop_toggle:
+      return true;
+  }
+  return false;
+}
+
+bool valid_playback(
+    const cooker::ResolvedPlayback& playback,
+    std::size_t frame_count) noexcept {
+  return playback.start_frame < playback.end_frame &&
+         playback.end_frame <= frame_count &&
+         valid_trigger_mode(playback.trigger_mode) &&
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+}
+
+bool is_default_playback_sentinel(
+    const cooker::ResolvedPlayback& playback) noexcept {
+  return playback.start_frame == 0 && playback.end_frame == 0 &&
+         playback.trigger_mode == domain::TriggerMode::one_shot &&
+         playback.linear_gain == 0.0F && !playback.muted;
+}
+
+bool is_looping(domain::TriggerMode mode) noexcept {
+  return mode == domain::TriggerMode::loop_gate ||
+         mode == domain::TriggerMode::loop_toggle;
+}
+
 }  // namespace
 
 std::uint64_t RealtimeEngine::legacy_availability_mask() const noexcept {
@@ -65,6 +110,7 @@ void RealtimeEngine::select_legacy_samples_quiescent() noexcept {
   current_bank_generation_.store(0, std::memory_order_relaxed);
   availability_mask_.store(
       legacy_availability_mask(), std::memory_order_release);
+  preview_mask_ = 0;
 }
 
 void RealtimeEngine::apply_published_bank(std::uint8_t slot_index) noexcept {
@@ -76,6 +122,7 @@ void RealtimeEngine::apply_published_bank(std::uint8_t slot_index) noexcept {
       slot.bank->availability_mask(), std::memory_order_release);
   current_bank_generation_.store(
       slot.generation, std::memory_order_relaxed);
+  preview_mask_ = 0;
   applied_publications_.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -91,8 +138,78 @@ void RealtimeEngine::release_voice_bank(Voice& voice) noexcept {
   }
 }
 
+const std::vector<float>& RealtimeEngine::current_sample(
+    std::uint8_t slot) const noexcept {
+  const auto bank_slot = current_bank_slot_.load(std::memory_order_relaxed);
+  return bank_slot == kLegacyBankSlot
+             ? samples_[slot]
+             : bank_slots_[bank_slot].bank->sample(slot);
+}
+
+cooker::ResolvedPlayback RealtimeEngine::published_playback(
+    std::uint8_t slot) const noexcept {
+  const auto bank_slot = current_bank_slot_.load(std::memory_order_relaxed);
+  if (bank_slot != kLegacyBankSlot) {
+    return bank_slots_[bank_slot].bank->playback(slot);
+  }
+  return cooker::ResolvedPlayback{
+      0,
+      static_cast<std::uint32_t>(samples_[slot].size()),
+      domain::TriggerMode::one_shot,
+      1.0F,
+      false,
+  };
+}
+
+bool RealtimeEngine::publish_voice_state(
+    const Voice& voice,
+    RuntimeVoiceState state,
+    std::uint64_t runtime_frame,
+    std::uint32_t source_frame) noexcept {
+  if (voice_state_stream_state_.load(std::memory_order_relaxed) ==
+      RuntimeVoiceStateStreamState::corrupted) {
+    return false;
+  }
+  if (voice_state_ring_.try_push(RuntimeVoiceStateEvent{
+          voice.sequence,
+          voice.slot,
+          state,
+          runtime_frame,
+          source_frame,
+      })) {
+    published_voice_states_.fetch_add(1, std::memory_order_relaxed);
+    return true;
+  }
+
+  auto expected = RuntimeVoiceStateStreamState::healthy;
+  if (voice_state_stream_state_.compare_exchange_strong(
+          expected,
+          RuntimeVoiceStateStreamState::corrupted,
+          std::memory_order_release,
+          std::memory_order_relaxed)) {
+    voice_state_drops_.fetch_add(1, std::memory_order_relaxed);
+  }
+  return false;
+}
+
+void RealtimeEngine::stop_voice(
+    Voice& voice, std::uint64_t runtime_frame) noexcept {
+  if (!voice.active) {
+    return;
+  }
+  static_cast<void>(publish_voice_state(
+      voice,
+      RuntimeVoiceState::stopped,
+      runtime_frame,
+      static_cast<std::uint32_t>(voice.cursor)));
+  voice.active = false;
+  release_voice_bank(voice);
+  cancelled_voices_.fetch_add(1, std::memory_order_relaxed);
+  active_voices_.fetch_sub(1, std::memory_order_relaxed);
+}
+
 void RealtimeEngine::capture_voice_start(
-    const TriggerEvent& event,
+    const PadControlEvent& event,
     std::uint64_t absolute_start_frame) noexcept {
   const auto state = capture_state_.load(std::memory_order_acquire);
   if (state != CaptureState::active &&
@@ -130,6 +247,9 @@ foundation::Result<void> RealtimeEngine::load_sample(
   }
   if (mono_pcm.empty()) {
     return invalid_argument("realtime sample PCM must not be empty");
+  }
+  if (mono_pcm.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return invalid_argument("realtime sample PCM is too large");
   }
   if (!std::all_of(mono_pcm.begin(), mono_pcm.end(), [](float value) {
         return std::isfinite(value);
@@ -281,6 +401,18 @@ std::size_t RealtimeEngine::drain_trigger_outcomes(
   return drained;
 }
 
+std::size_t RealtimeEngine::drain_voice_states(
+    std::span<RuntimeVoiceStateEvent> output) noexcept {
+  const auto drained = detail::drain_voice_states_fail_closed(
+      voice_state_stream_state_,
+      output,
+      [this](RuntimeVoiceStateEvent& event) noexcept {
+        return voice_state_ring_.try_pop(event);
+      });
+  drained_voice_states_.fetch_add(drained, std::memory_order_relaxed);
+  return drained;
+}
+
 foundation::Result<void> RealtimeEngine::start() {
   if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
     return invalid_argument("realtime engine is already running");
@@ -290,8 +422,10 @@ foundation::Result<void> RealtimeEngine::start() {
   publish_queue_.clear_quiescent();
   capture_ring_.clear_quiescent();
   trigger_outcome_ring_.clear_quiescent();
+  voice_state_ring_.clear_quiescent();
   pending_publications_.store(0, std::memory_order_relaxed);
   std::fill(voices_.begin(), voices_.end(), Voice{});
+  preview_mask_ = 0;
   enqueued_events_.store(0, std::memory_order_relaxed);
   dequeued_events_.store(0, std::memory_order_relaxed);
   cancelled_events_.store(0, std::memory_order_relaxed);
@@ -314,6 +448,11 @@ foundation::Result<void> RealtimeEngine::start() {
   published_outcomes_.store(0, std::memory_order_relaxed);
   drained_outcomes_.store(0, std::memory_order_relaxed);
   runtime_outcome_drops_.store(0, std::memory_order_relaxed);
+  voice_state_stream_state_.store(
+      RuntimeVoiceStateStreamState::healthy, std::memory_order_relaxed);
+  published_voice_states_.store(0, std::memory_order_relaxed);
+  drained_voice_states_.store(0, std::memory_order_relaxed);
+  voice_state_drops_.store(0, std::memory_order_relaxed);
   state_.store(RealtimeState::running, std::memory_order_release);
   return foundation::Result<void>::success();
 }
@@ -333,6 +472,7 @@ void RealtimeEngine::stop() noexcept {
   }
   cancelled_voices_.fetch_add(active, std::memory_order_relaxed);
   active_voices_.store(0, std::memory_order_relaxed);
+  preview_mask_ = 0;
 
   std::uint8_t pending_slot = 0;
   while (publish_queue_.try_pop(pending_slot)) {
@@ -347,25 +487,57 @@ void RealtimeEngine::stop() noexcept {
 }
 
 EnqueueResult RealtimeEngine::enqueue(TriggerEvent event) noexcept {
+  PadControlEvent control{
+      event.sequence,
+      event.slot,
+      event.velocity,
+      PadControlKind::press,
+      {},
+  };
+  if (state_.load(std::memory_order_acquire) == RealtimeState::running &&
+      event.slot < kRealtimeSampleSlots &&
+      pending_publications_.load(std::memory_order_acquire) == 0 &&
+      (availability_mask_.load(std::memory_order_acquire) &
+       (std::uint64_t{1} << event.slot)) != 0) {
+    control.playback = published_playback(event.slot);
+  }
+  return enqueue_control(control);
+}
+
+EnqueueResult RealtimeEngine::enqueue_control(PadControlEvent event) noexcept {
   if (state_.load(std::memory_order_acquire) != RealtimeState::running) {
     stopped_rejections_.fetch_add(1, std::memory_order_relaxed);
     return EnqueueResult::not_running;
   }
-  if (event.slot >= kRealtimeSampleSlots) {
-    invalid_events_.fetch_add(1, std::memory_order_relaxed);
-    return EnqueueResult::invalid_slot;
-  }
-  if (event.velocity == 0 || event.velocity > 127) {
+  if (!valid_control_kind(event.kind)) {
     invalid_events_.fetch_add(1, std::memory_order_relaxed);
     return EnqueueResult::invalid_velocity;
   }
-  if (pending_publications_.load(std::memory_order_acquire) != 0) {
-    return EnqueueResult::bank_transition;
-  }
-  if ((availability_mask_.load(std::memory_order_acquire) &
-       (std::uint64_t{1} << event.slot)) == 0) {
+  if (event.kind != PadControlKind::stop_all &&
+      event.slot >= kRealtimeSampleSlots) {
     invalid_events_.fetch_add(1, std::memory_order_relaxed);
-    return EnqueueResult::sample_unavailable;
+    return EnqueueResult::invalid_slot;
+  }
+  if (event.kind == PadControlKind::press &&
+      (event.velocity == 0 || event.velocity > 127)) {
+    invalid_events_.fetch_add(1, std::memory_order_relaxed);
+    return EnqueueResult::invalid_velocity;
+  }
+  if (event.kind == PadControlKind::press ||
+      event.kind == PadControlKind::preview_set) {
+    if (pending_publications_.load(std::memory_order_acquire) != 0) {
+      return EnqueueResult::bank_transition;
+    }
+    if ((availability_mask_.load(std::memory_order_acquire) &
+         (std::uint64_t{1} << event.slot)) == 0) {
+      invalid_events_.fetch_add(1, std::memory_order_relaxed);
+      return EnqueueResult::sample_unavailable;
+    }
+  }
+  if (event.kind == PadControlKind::preview_set &&
+      !valid_playback(event.playback, current_sample(event.slot).size())) {
+    invalid_events_.fetch_add(1, std::memory_order_relaxed);
+    return EnqueueResult::invalid_velocity;
   }
   if (!queue_.try_push(event)) {
     queue_drops_.fetch_add(1, std::memory_order_relaxed);
@@ -403,9 +575,73 @@ void RealtimeEngine::render(
     pending_publications_.fetch_sub(1, std::memory_order_release);
   }
 
-  TriggerEvent event{};
-  while (queue_.try_pop(event)) {
+  PadControlEvent event{};
+  for (std::size_t processed = 0;
+       processed < kRealtimeQueueCapacity && queue_.try_pop(event);
+       ++processed) {
     dequeued_events_.fetch_add(1, std::memory_order_relaxed);
+    if (event.kind == PadControlKind::preview_set) {
+      previews_[event.slot] = event.playback;
+      preview_mask_ |= std::uint64_t{1} << event.slot;
+      continue;
+    }
+    if (event.kind == PadControlKind::preview_clear) {
+      preview_mask_ &= ~(std::uint64_t{1} << event.slot);
+      continue;
+    }
+    if (event.kind == PadControlKind::release) {
+      for (auto& voice : voices_) {
+        if (voice.active && voice.slot == event.slot &&
+            (voice.trigger_mode == domain::TriggerMode::gate ||
+             voice.trigger_mode == domain::TriggerMode::loop_gate)) {
+          stop_voice(voice, absolute_start_frame);
+        }
+      }
+      continue;
+    }
+    if (event.kind == PadControlKind::stop_slot ||
+        event.kind == PadControlKind::stop_all) {
+      for (auto& voice : voices_) {
+        if (voice.active &&
+            (event.kind == PadControlKind::stop_all ||
+             voice.slot == event.slot)) {
+          stop_voice(voice, absolute_start_frame);
+        }
+      }
+      continue;
+    }
+
+    bool stopped_toggle = false;
+    for (auto& candidate : voices_) {
+      if (candidate.active && candidate.slot == event.slot &&
+          candidate.trigger_mode == domain::TriggerMode::loop_toggle) {
+        stop_voice(candidate, absolute_start_frame);
+        stopped_toggle = true;
+      }
+    }
+    if (stopped_toggle) {
+      continue;
+    }
+
+    const auto& sample = current_sample(event.slot);
+    auto playback = event.playback;
+    if (is_default_playback_sentinel(playback)) {
+      playback = (preview_mask_ & (std::uint64_t{1} << event.slot)) != 0
+                     ? previews_[event.slot]
+                     : published_playback(event.slot);
+    }
+    if (!valid_playback(playback, sample.size())) {
+      invalid_events_.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+    if (playback.muted) {
+      continue;
+    }
+    if (voice_state_stream_state_.load(std::memory_order_relaxed) ==
+        RuntimeVoiceStateStreamState::corrupted) {
+      voice_drops_.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
     auto voice = std::find_if(
         voices_.begin(), voices_.end(), [](const Voice& candidate) {
           return !candidate.active;
@@ -425,17 +661,30 @@ void RealtimeEngine::render(
     }
     const auto bank_slot =
         current_bank_slot_.load(std::memory_order_relaxed);
-    const auto& sample = bank_slot == kLegacyBankSlot
-                             ? samples_[event.slot]
-                             : bank_slots_[bank_slot].bank->sample(event.slot);
     *voice = Voice{
+        event.sequence,
+        event.slot,
         sample.data(),
         sample.size(),
-        0,
-        static_cast<float>(event.velocity) / 127.0F,
-        true,
+        playback.start_frame,
+        playback.end_frame,
+        playback.start_frame,
+        (static_cast<float>(event.velocity) / 127.0F) *
+            playback.linear_gain,
+        playback.trigger_mode,
+        false,
         bank_slot,
     };
+    if (!publish_voice_state(
+            *voice,
+            RuntimeVoiceState::started,
+            absolute_start_frame,
+            playback.start_frame)) {
+      *voice = Voice{};
+      voice_drops_.fetch_add(1, std::memory_order_relaxed);
+      continue;
+    }
+    voice->active = true;
     if (bank_slot != kLegacyBankSlot) {
       ++bank_slots_[bank_slot].active_voices;
     }
@@ -457,18 +706,28 @@ void RealtimeEngine::render(
     if (!voice.active) {
       continue;
     }
-    for (std::uint32_t frame = 0;
-         frame < frames && voice.cursor < voice.frame_count;
-         ++frame, ++voice.cursor) {
+    for (std::uint32_t frame = 0; frame < frames; ++frame) {
       const auto value = voice.samples[voice.cursor] * voice.gain;
       left[frame] += value;
       right[frame] += value;
-    }
-    if (voice.cursor == voice.frame_count) {
+      ++voice.cursor;
+      if (voice.cursor != voice.end_frame) {
+        continue;
+      }
+      if (is_looping(voice.trigger_mode)) {
+        voice.cursor = voice.start_frame;
+        continue;
+      }
+      static_cast<void>(publish_voice_state(
+          voice,
+          RuntimeVoiceState::completed,
+          absolute_start_frame + frame + 1,
+          voice.end_frame));
       voice.active = false;
       release_voice_bank(voice);
       completed_voices_.fetch_add(1, std::memory_order_relaxed);
       active_voices_.fetch_sub(1, std::memory_order_relaxed);
+      break;
     }
   }
 
@@ -534,6 +793,16 @@ RealtimeEngine::trigger_outcome_telemetry() const noexcept {
       published_outcomes_.load(std::memory_order_relaxed),
       drained_outcomes_.load(std::memory_order_relaxed),
       runtime_outcome_drops_.load(std::memory_order_relaxed),
+  };
+}
+
+RuntimeVoiceStateTelemetry RealtimeEngine::voice_state_telemetry()
+    const noexcept {
+  return RuntimeVoiceStateTelemetry{
+      voice_state_stream_state_.load(std::memory_order_acquire),
+      published_voice_states_.load(std::memory_order_relaxed),
+      drained_voice_states_.load(std::memory_order_relaxed),
+      voice_state_drops_.load(std::memory_order_relaxed),
   };
 }
 

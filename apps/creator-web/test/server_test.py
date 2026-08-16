@@ -18,6 +18,13 @@ import unittest
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PACKAGE_TOOL = REPO_ROOT / "apps/creator-web/tools/package.py"
 SERVER_TOOL = REPO_ROOT / "tools/web-runtime/serve_distribution.py"
+SAMPLE_EDITOR_MARKERS = (
+    "Sample editor",
+    "Replace Sample",
+    "Reset Pad to Defaults",
+    "Retry Prepare",
+    "Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz",
+)
 
 
 def load_module(name: str, path: Path):
@@ -79,7 +86,11 @@ class CreatorServerTest(unittest.TestCase):
             newline="\n",
         )
         self.ui.joinpath("assets/source.js").write_text(
-            "console.log('creator');\n", encoding="utf-8", newline="\n"
+            "const sampleEditorProof = "
+            + json.dumps(SAMPLE_EDITOR_MARKERS)
+            + "; console.log(sampleEditorProof);\n",
+            encoding="utf-8",
+            newline="\n",
         )
         self.ui.joinpath("assets/source.css").write_text(
             "body{margin:0}\n", encoding="utf-8", newline="\n"
@@ -111,6 +122,10 @@ class CreatorServerTest(unittest.TestCase):
         self.js_path = self.dist / next(
             entry["path"] for entry in manifest["assets"]
             if entry["role"] == "runtime_script"
+        )
+        self.main_path = self.dist / next(
+            entry["path"] for entry in manifest["assets"]
+            if entry["role"] == "host_main"
         )
         self.wasm_path = self.dist / next(
             entry["path"] for entry in manifest["assets"]
@@ -161,6 +176,18 @@ class CreatorServerTest(unittest.TestCase):
             headers["cache-control"], "public, max-age=31536000, immutable"
         )
         self.assertEqual(payload, self.wasm_path.read_bytes())
+
+        status, headers, payload = self.request(
+            "GET", "/" + self.main_path.relative_to(self.dist).as_posix()
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(headers["content-type"], "text/javascript; charset=utf-8")
+        self.assertEqual(
+            headers["cache-control"], "public, max-age=31536000, immutable"
+        )
+        self.assertEqual(payload, self.main_path.read_bytes())
+        for marker in SAMPLE_EDITOR_MARKERS:
+            self.assertIn(marker.encode("utf-8"), payload)
 
     def test_unowned_traversal_symlink_range_and_methods_fail_closed(self) -> None:
         outside = self.root / "secret.js"

@@ -21,6 +21,18 @@ export const HOST_OPERATIONS = Object.freeze([
   "asset.import",
   "pad.assign",
   "snapshot.reload",
+  "snapshot.retry",
+  "sample.inspect",
+  "sample.waveform",
+  "sample.import.begin",
+  "sample.import.chunk",
+  "sample.import.commit",
+  "sample.import.abort",
+  "sample.update_pad",
+  "sample.reset_pad",
+  "sample.preview.set",
+  "sample.preview.clear",
+  "sample.stop",
   "audio.activate",
   "audio.suspend",
   "trigger",
@@ -41,6 +53,7 @@ export const HOST_NOTIFICATIONS = Object.freeze([
   "midi.disconnected",
   "runtime.warning",
   "runtime.trigger_outcomes",
+  "runtime.voice_state",
   "capture.sealed",
 ]);
 
@@ -51,6 +64,9 @@ const SHORT_OPERATIONS = new Set([
   "audio.activate",
   "audio.suspend",
   "trigger",
+  "sample.preview.set",
+  "sample.preview.clear",
+  "sample.stop",
 ]);
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SHA256_PATTERN = /^[0-9a-f]{64}$/;
@@ -110,6 +126,169 @@ function requireOperation(value) {
   }
 }
 
+function isUnsignedInteger(value, maximum = Number.MAX_SAFE_INTEGER) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+function validSlot(value) {
+  return (
+    hasExactKeys(value, ["bank", "pad"]) &&
+    isUnsignedInteger(value.bank, 3) &&
+    isUnsignedInteger(value.pad, 15)
+  );
+}
+
+function validPlayback(value) {
+  return (
+    hasExactKeys(value, [
+      "trim_start_frame",
+      "trim_end_frame",
+      "trigger_mode",
+      "gain_millidb",
+      "muted",
+    ]) &&
+    isUnsignedInteger(value.trim_start_frame) &&
+    (value.trim_end_frame === null ||
+      (isUnsignedInteger(value.trim_end_frame) &&
+        value.trim_end_frame > value.trim_start_frame)) &&
+    ["one_shot", "gate", "loop_gate", "loop_toggle"].includes(
+      value.trigger_mode,
+    ) &&
+    Number.isSafeInteger(value.gain_millidb) &&
+    value.gain_millidb >= -60_000 &&
+    value.gain_millidb <= 6_000 &&
+    typeof value.muted === "boolean"
+  );
+}
+
+function validSidecarDeclaration(value) {
+  return (
+    hasExactKeys(value, ["sidecar_bytes", "sidecar_sha256"]) &&
+    isUnsignedInteger(value.sidecar_bytes, MAX_ASSET_BYTES) &&
+    typeof value.sidecar_sha256 === "string" &&
+    SHA256_PATTERN.test(value.sidecar_sha256)
+  );
+}
+
+function requireSampleOperationPayload(operation, payload) {
+  let valid = true;
+  switch (operation) {
+    case "sample.inspect":
+      valid = hasExactKeys(payload, ["slot"]) && validSlot(payload.slot);
+      break;
+    case "sample.waveform":
+      valid =
+        hasExactKeys(payload, ["slot", "window"]) &&
+        validSlot(payload.slot) &&
+        hasExactKeys(payload.window, [
+          "start_frame",
+          "end_frame",
+          "bucket_count",
+        ]) &&
+        isUnsignedInteger(payload.window.start_frame) &&
+        isUnsignedInteger(payload.window.end_frame) &&
+        payload.window.start_frame < payload.window.end_frame &&
+        isUnsignedInteger(payload.window.bucket_count, 512) &&
+        payload.window.bucket_count > 0;
+      break;
+    case "sample.import.begin":
+      valid =
+        hasExactKeys(payload, [
+          "import_token",
+          "command_id",
+          "expected_revision",
+          "slot",
+          "asset_id",
+          "byte_length",
+        ]) &&
+        UUID_PATTERN.test(payload.import_token) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        validSlot(payload.slot) &&
+        UUID_PATTERN.test(payload.asset_id) &&
+        isUnsignedInteger(payload.byte_length, MAX_ASSET_BYTES) &&
+        payload.byte_length > 0;
+      break;
+    case "sample.import.chunk":
+      valid =
+        hasExactKeys(payload, [
+          "import_token",
+          "offset",
+          "final",
+          "sidecar",
+        ]) &&
+        UUID_PATTERN.test(payload.import_token) &&
+        isUnsignedInteger(payload.offset) &&
+        typeof payload.final === "boolean" &&
+        validSidecarDeclaration(payload.sidecar);
+      break;
+    case "sample.import.commit":
+    case "sample.import.abort":
+      valid =
+        hasExactKeys(payload, ["import_token"]) &&
+        UUID_PATTERN.test(payload.import_token);
+      break;
+    case "sample.update_pad":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "slot",
+          "playback",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        validSlot(payload.slot) &&
+        validPlayback(payload.playback);
+      break;
+    case "sample.reset_pad":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "slot",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        validSlot(payload.slot);
+      break;
+    case "sample.preview.set":
+      valid =
+        hasExactKeys(payload, ["slot", "playback"]) &&
+        validSlot(payload.slot) &&
+        validPlayback(payload.playback);
+      break;
+    case "sample.preview.clear":
+      valid = hasExactKeys(payload, ["slot"]) && validSlot(payload.slot);
+      break;
+    case "sample.stop":
+      valid =
+        hasExactKeys(payload, []) ||
+        (hasExactKeys(payload, ["slot"]) && validSlot(payload.slot));
+      break;
+    case "snapshot.retry":
+      valid =
+        hasExactKeys(payload, ["pattern_id"]) &&
+        UUID_PATTERN.test(payload.pattern_id);
+      break;
+    case "trigger":
+      valid =
+        (hasExactKeys(payload, ["slot", "velocity"]) &&
+          isUnsignedInteger(payload.slot, 63) &&
+          isUnsignedInteger(payload.velocity, 127) &&
+          payload.velocity > 0) ||
+        (hasExactKeys(payload, ["slot", "kind"]) &&
+          isUnsignedInteger(payload.slot, 63) &&
+          payload.kind === "release");
+      break;
+    default:
+      return;
+  }
+  if (!valid) {
+    throw protocolError("Host operation payload is invalid", {operation});
+  }
+}
+
 function asBytes(value) {
   if (value instanceof ArrayBuffer) {
     return new Uint8Array(value);
@@ -159,6 +338,7 @@ function validateRequestObject(
   if (!isPlainObject(envelope.payload)) {
     throw protocolError("Request payload must be an object");
   }
+  requireSampleOperationPayload(envelope.operation, envelope.payload);
   if (seenRequestIds?.has(envelope.request_id)) {
     throw protocolError("Duplicate request_id", {
       request_id: envelope.request_id,

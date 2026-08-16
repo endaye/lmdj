@@ -26,10 +26,10 @@ function defaultDiagnostics(): RuntimeDiagnostics {
     state: "audio-suspended",
     error_code: null,
     error_details: {},
-    product_build: "1.0.21.0",
+    product_build: "1.0.22.0",
     host_id: "creator-web",
-    host_version: "1.1.3",
-    platform_version: "0.2.1",
+    host_version: "1.2.0",
+    platform_version: "0.3.0",
     protocol_version: 1,
     capabilities: {
       secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,
@@ -108,6 +108,16 @@ function sessionFixture({
     },
     emitCapturedHost(value: RuntimeHostState) {
       capturedHostListeners[0]?.(value);
+    },
+    emit(state: string, errorCode: string | null) {
+      const value = {state, errorCode, errorDetails: {}};
+      diagnostics = {
+        ...diagnostics,
+        state,
+        error_code: errorCode,
+        error_details: {},
+      };
+      for (const listener of [...hostListeners]) listener(value);
     },
   };
 }
@@ -275,4 +285,73 @@ test("stable running resets the automatic replacement allowance", async () => {
   }));
   await waitFor(() => expect(third.starts()).toBe(1));
   expect(creations).toBe(3);
+});
+
+test("keeps an unsupported startup classification after the terminal Host notification", async () => {
+  const fixture = sessionFixture();
+  const diagnostics = fixture.session.diagnostics();
+  fixture.session.start = async () => false;
+  fixture.session.diagnostics = () => ({
+    ...diagnostics,
+    state: "failed",
+    error_code: "UNSUPPORTED_WEB_RUNTIME",
+  });
+  render(
+    <RuntimeProvider factory={() => fixture.session}><Probe /></RuntimeProvider>,
+  );
+  await screen.findByText("unsupported");
+
+  await act(async () => {
+    fixture.emit("failed", "UNSUPPORTED_WEB_RUNTIME");
+  });
+  expect(screen.getByText("unsupported")).toBeTruthy();
+});
+
+test("closes a restart-required Session once before creating its replacement", async () => {
+  const first = sessionFixture();
+  const second = sessionFixture();
+  let finishClose: (() => void) | undefined;
+  const closeGate = new Promise<void>((resolve) => { finishClose = resolve; });
+  let firstCloseCount = 0;
+  const order: string[] = [];
+  first.session.close = async () => {
+    firstCloseCount += 1;
+    order.push("first:close:start");
+    await closeGate;
+    order.push("first:close:end");
+    return true;
+  };
+  second.session.start = async () => {
+    order.push("second:start");
+    return true;
+  };
+  const sessions = [first.session, second.session];
+  let creations = 0;
+  const rendered = render(
+    <RuntimeProvider factory={() => {
+      order.push(`create:${creations + 1}`);
+      return sessions[creations++]!;
+    }}><Probe /></RuntimeProvider>,
+  );
+  await screen.findByText("ready");
+
+  first.emit("restart-required", "HOST_RESTART_REQUIRED");
+  first.emit("restart-required", "HOST_RESTART_REQUIRED");
+  await waitFor(() => expect(firstCloseCount).toBe(1));
+  expect(creations).toBe(1);
+  expect(order).toEqual(["create:1", "first:close:start"]);
+
+  finishClose?.();
+  await waitFor(() => expect(creations).toBe(2));
+  await screen.findByText("ready");
+  expect(order).toEqual([
+    "create:1",
+    "first:close:start",
+    "first:close:end",
+    "create:2",
+    "second:start",
+  ]);
+  rendered.unmount();
+  await waitFor(() => expect(second.closes()).toBe(1));
+  expect(firstCloseCount).toBe(1);
 });

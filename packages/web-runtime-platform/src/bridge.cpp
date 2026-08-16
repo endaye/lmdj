@@ -126,6 +126,7 @@ enum class PublicationState : std::uint8_t {
   publish_claimed,
   committed,
   aborted,
+  query_cancelled,
 };
 
 bool exact_keys(
@@ -187,19 +188,38 @@ Json bridge_timeout_error() {
   };
 }
 
+Json bridge_query_cancelled_error() {
+  return {
+      {"ok", false},
+      {"error",
+       {
+           {"code", "HOST_STATE_INVALID"},
+           {"message", "host query was cancelled"},
+           {"details", Json::object()},
+       }},
+  };
+}
+
+bool safety_interruptible_query(std::string_view operation) {
+  return operation == "project.inspect" || operation == "project.list" ||
+         operation == "sample.inspect" || operation == "sample.waveform";
+}
+
 std::chrono::milliseconds operation_deadline(std::string_view operation) {
   if (operation == "host.close") {
     return std::chrono::seconds(10);
   }
   if (operation == "host.status" || operation == "audio.activate" ||
-      operation == "audio.suspend" || operation == "trigger") {
+      operation == "audio.suspend" || operation == "trigger" ||
+      operation == "sample.preview.set" ||
+      operation == "sample.preview.clear" || operation == "sample.stop") {
     return std::chrono::seconds(1);
   }
   return std::chrono::seconds(30);
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 21> operations{
+  static constexpr std::array<std::string_view, 33> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -213,6 +233,18 @@ bool supported_operation(std::string_view operation) {
       "asset.import",
       "pad.assign",
       "snapshot.reload",
+      "snapshot.retry",
+      "sample.inspect",
+      "sample.waveform",
+      "sample.import.begin",
+      "sample.import.chunk",
+      "sample.import.commit",
+      "sample.import.abort",
+      "sample.update_pad",
+      "sample.reset_pad",
+      "sample.preview.set",
+      "sample.preview.clear",
+      "sample.stop",
       "audio.activate",
       "audio.suspend",
       "trigger",
@@ -221,6 +253,19 @@ bool supported_operation(std::string_view operation) {
       "take.commit",
       "take.recoverable.list",
       "host.close",
+  };
+  return std::find(operations.begin(), operations.end(), operation) !=
+         operations.end();
+}
+
+bool snapshot_notification_operation(std::string_view operation) {
+  static constexpr std::array<std::string_view, 6> operations{
+      "project.open",
+      "snapshot.reload",
+      "snapshot.retry",
+      "sample.import.commit",
+      "sample.update_pad",
+      "sample.reset_pad",
   };
   return std::find(operations.begin(), operations.end(), operation) !=
          operations.end();
@@ -310,6 +355,7 @@ struct ControlBridge::Impl {
       return true;
     }
     if (state == PublicationState::cancelled ||
+        state == PublicationState::query_cancelled ||
         std::chrono::steady_clock::now() >= request.deadline) {
       auto expected = PublicationState::open;
       request.publication.compare_exchange_strong(
@@ -464,7 +510,8 @@ struct ControlBridge::Impl {
       fail_control();
       return;
     }
-    MessageSlot* message = nullptr;
+    MessageSlot* outcome_message = nullptr;
+    MessageSlot* voice_message = nullptr;
     try {
       static_cast<void>(runtime.drain_capture());
 #if !defined(__EMSCRIPTEN__)
@@ -476,12 +523,14 @@ struct ControlBridge::Impl {
         fail_control();
         return;
       }
-      message = reserve_message();
-      if (message == nullptr) {
+      outcome_message = reserve_message();
+      if (outcome_message == nullptr) {
         return;
       }
       if (runtime.failed()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
         fail_control();
         return;
       }
@@ -492,17 +541,23 @@ struct ControlBridge::Impl {
       }
 #endif
       if (!runtime.validate_realtime_health()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
         fail_control();
         return;
       }
       if (runtime.failed()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
         fail_control();
         return;
       }
       if (outcomes.empty()) {
-        message->state.store(MessageState::free, std::memory_order_release);
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+        outcome_message = nullptr;
       } else {
 #if defined(__EMSCRIPTEN__) && defined(LMDJ_WEB_AUDIO_CONFORMANCE)
         mirror_conformance_outcomes(outcomes);
@@ -519,7 +574,7 @@ struct ControlBridge::Impl {
           });
         }
         if (!publish_message(
-                *message,
+                *outcome_message,
                 Json{
                     {"protocol_version", 1},
                     {"event", "runtime.trigger_outcomes"},
@@ -527,12 +582,87 @@ struct ControlBridge::Impl {
                 },
                 nullptr,
                 false)) {
-          message->state.store(MessageState::free, std::memory_order_release);
+          outcome_message->state.store(
+              MessageState::free, std::memory_order_release);
+          outcome_message = nullptr;
+          fail_control();
+          return;
         }
+        outcome_message = nullptr;
+      }
+
+      voice_message = reserve_message();
+      if (voice_message == nullptr) {
+        return;
+      }
+      if (runtime.failed()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+        fail_control();
+        return;
+      }
+      const auto voices = runtime.drain_voice_states();
+      if (!runtime.validate_realtime_health()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+        fail_control();
+        return;
+      }
+      if (runtime.failed()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+        fail_control();
+        return;
+      }
+      if (voices.empty()) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
+        voice_message = nullptr;
+      } else {
+        auto events = Json::array();
+        for (const auto& voice : voices) {
+          std::string_view state = "completed";
+          if (voice.state == audio::RuntimeVoiceState::started) {
+            state = "started";
+          } else if (voice.state == audio::RuntimeVoiceState::stopped) {
+            state = "stopped";
+          }
+          events.push_back({
+              {"sequence", voice.sequence},
+              {"slot", voice.slot},
+              {"state", state},
+              {"runtime_frame", voice.runtime_frame},
+              {"source_frame", voice.source_frame},
+          });
+        }
+        if (!publish_message(
+                *voice_message,
+                Json{
+                    {"protocol_version", 1},
+                    {"event", "runtime.voice_state"},
+                    {"payload", {{"events", std::move(events)}}},
+                },
+                nullptr,
+                false)) {
+          voice_message->state.store(
+              MessageState::free, std::memory_order_release);
+          voice_message = nullptr;
+          fail_control();
+          return;
+        }
+        voice_message = nullptr;
       }
     } catch (...) {
-      if (message != nullptr) {
-        message->state.store(MessageState::free, std::memory_order_release);
+      if (outcome_message != nullptr) {
+        outcome_message->state.store(
+            MessageState::free, std::memory_order_release);
+      }
+      if (voice_message != nullptr) {
+        voice_message->state.store(
+            MessageState::free, std::memory_order_release);
       }
       fail_control();
     }
@@ -807,17 +937,19 @@ struct ControlBridge::Impl {
         }
         request.deadline = deadline;
         has_deadline = true;
-        if (request.publication.load(std::memory_order_acquire) ==
-                PublicationState::cancelled ||
-            std::chrono::steady_clock::now() >= deadline) {
+        const auto initial_publication =
+            request.publication.load(std::memory_order_acquire);
+        if (initial_publication == PublicationState::query_cancelled) {
+          response = bridge_query_cancelled_error();
+        } else if (initial_publication == PublicationState::cancelled ||
+                   std::chrono::steady_clock::now() >= deadline) {
           request.publication.store(
               PublicationState::cancelled, std::memory_order_release);
           runtime.fail_and_seal("request_timeout");
           response = bridge_timeout_error();
           terminal_after_response = true;
         } else {
-          if (operation == "project.open" ||
-              operation == "snapshot.reload") {
+          if (snapshot_notification_operation(operation)) {
             notification_slot = reserve_message();
             reservations.notification = notification_slot;
             if (notification_slot == nullptr) {
@@ -838,8 +970,11 @@ struct ControlBridge::Impl {
           });
           mark_entered_facade(request);
           wait_for_responsive_cancellation_proof(request);
-          if (request.publication.load(std::memory_order_acquire) ==
-              PublicationState::cancelled) {
+          const auto dispatch_publication =
+              request.publication.load(std::memory_order_acquire);
+          if (dispatch_publication == PublicationState::query_cancelled) {
+            response = bridge_query_cancelled_error();
+          } else if (dispatch_publication == PublicationState::cancelled) {
             response = bridge_timeout_error();
           } else {
             response = runtime.dispatch(
@@ -862,33 +997,74 @@ struct ControlBridge::Impl {
               response.value("ok", false) &&
               response.contains("result") &&
               response.at("result").is_object();
+          const auto sample_mutation =
+              operation == "sample.import.commit" ||
+              operation == "sample.update_pad" ||
+              operation == "sample.reset_pad";
+          const auto& result = has_result ? response.at("result") : Json{};
+          const auto snapshot_truth =
+              sample_mutation && has_result
+                  ? ControlRuntimeSnapshotAccess::read(runtime)
+                  : ControlRuntimeSnapshotTruth{};
+          const auto project_revision =
+              snapshot_truth.project_revision.has_value()
+                  ? Json(*snapshot_truth.project_revision)
+              : has_result && result.contains("project_revision")
+                  ? result.at("project_revision")
+                  : Json(nullptr);
           const auto published =
-              has_result &&
-              response.at("result").value("runtime_ready", false) &&
-              response.at("result").contains("generation") &&
-              response.at("result").at("generation").is_number_unsigned();
+              has_result && project_revision.is_number_unsigned() &&
+              (sample_mutation
+                   ? result.value("runtime_published", false)
+                   : result.value("runtime_ready", false));
           const auto rejected =
-              has_result &&
-              response.at("result").contains("runtime_ready") &&
-              response.at("result").at("runtime_ready") == false &&
-              response.at("result").contains("snapshot_error") &&
-              response.at("result").at("snapshot_error").is_object();
+              has_result && project_revision.is_number_unsigned() &&
+              result.contains("snapshot_error") &&
+              result.at("snapshot_error").is_object() &&
+              (sample_mutation
+                   ? result.contains("runtime_published") &&
+                         result.at("runtime_published") == false
+                   : result.contains("runtime_ready") &&
+                         result.at("runtime_ready") == false);
           if (!published && !rejected) {
             notification_slot->state.store(
                 MessageState::free, std::memory_order_release);
             notification_slot = nullptr;
             reservations.notification = nullptr;
           } else {
+            auto generation =
+                result.contains("generation") &&
+                        result.at("generation").is_number_unsigned()
+                    ? result.at("generation")
+                    : Json(runtime.engine()
+                               .bank_telemetry()
+                               .accepted_publications);
+            auto runtime_revision =
+                snapshot_truth.runtime_revision.has_value()
+                    ? Json(*snapshot_truth.runtime_revision)
+                : result.contains("runtime_revision")
+                    ? result.at("runtime_revision")
+                    : published ? project_revision : Json(nullptr);
+            const auto legacy_snapshot =
+                operation == "project.open" ||
+                operation == "snapshot.reload";
+            auto notification_payload =
+                legacy_snapshot
+                    ? published
+                          ? Json{{"generation", generation}}
+                          : Json{{"error", result.at("snapshot_error")}}
+                    : published
+                          ? Json{{"generation", std::move(generation)},
+                                 {"project_revision", project_revision}}
+                          : Json{{"project_revision", project_revision},
+                                 {"runtime_revision",
+                                  std::move(runtime_revision)},
+                                 {"error", result.at("snapshot_error")}};
             notification = Json{
                 {"protocol_version", 1},
                 {"event",
                  published ? "snapshot.published" : "snapshot.rejected"},
-                {"payload",
-                 published
-                     ? Json{{"generation",
-                             response.at("result").at("generation")}}
-                     : Json{{"error",
-                             response.at("result").at("snapshot_error")}}},
+                {"payload", std::move(notification_payload)},
             };
           }
         }
@@ -911,7 +1087,15 @@ struct ControlBridge::Impl {
           std::memory_order_acquire);
       publication = request.publication.load(std::memory_order_acquire);
     }
-    if (has_deadline && publication == PublicationState::cancelled) {
+    if (has_deadline && publication == PublicationState::query_cancelled) {
+      response = bridge_query_cancelled_error();
+      if (notification_slot != nullptr) {
+        notification_slot->state.store(
+            MessageState::free, std::memory_order_release);
+        notification_slot = nullptr;
+        reservations.notification = nullptr;
+      }
+    } else if (has_deadline && publication == PublicationState::cancelled) {
       mark_publication(request, PublicationState::cancelled);
       request.publication.notify_all();
       runtime.fail_and_seal("request_timeout");
@@ -1089,6 +1273,53 @@ BridgeCancelStatus ControlBridge::cancel(
     return BridgeCancelStatus::publish_claimed;
   }
   impl_->record_deadline_cancel(request_id, BridgeCancelStatus::not_found);
+  return BridgeCancelStatus::not_found;
+}
+
+BridgeCancelStatus ControlBridge::cancel_query(
+    std::string_view request_id) noexcept {
+  try {
+    if (!valid_request_id(Json(request_id))) {
+      return BridgeCancelStatus::not_found;
+    }
+  } catch (...) {
+    return BridgeCancelStatus::not_found;
+  }
+  std::lock_guard lock(impl_->request_id_mutex);
+  for (auto& request : impl_->requests) {
+    if (request.state.load(std::memory_order_acquire) == RequestState::free) {
+      continue;
+    }
+    try {
+      const auto* first = reinterpret_cast<const char*>(request.envelope.data());
+      const std::string_view bytes(first, request.envelope_size);
+      const auto parsed = foundation::valid_utf8(bytes)
+                              ? foundation::parse_bounded_json(bytes)
+                              : std::nullopt;
+      if (!parsed.has_value() || !parsed->is_object() ||
+          !parsed->contains("request_id") ||
+          !parsed->at("request_id").is_string() ||
+          parsed->at("request_id").get_ref<const std::string&>() != request_id ||
+          !parsed->contains("operation") ||
+          !parsed->at("operation").is_string() ||
+          !safety_interruptible_query(
+              parsed->at("operation").get_ref<const std::string&>())) {
+        continue;
+      }
+    } catch (...) {
+      continue;
+    }
+    auto expected = PublicationState::open;
+    if (request.publication.compare_exchange_strong(
+            expected,
+            PublicationState::query_cancelled,
+            std::memory_order_acq_rel,
+            std::memory_order_acquire)) {
+      request.publication.notify_all();
+      return BridgeCancelStatus::cancelled;
+    }
+    return BridgeCancelStatus::publish_claimed;
+  }
   return BridgeCancelStatus::not_found;
 }
 
@@ -1687,6 +1918,22 @@ EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_request(
       std::string_view(request_id, request_id_size)));
 }
 
+EMSCRIPTEN_KEEPALIVE int lmdj_web_host_cancel_query(
+    const char* request_id,
+    std::size_t request_id_size) {
+  if (request_id == nullptr || request_id_size != 36) {
+    return static_cast<int>(
+        lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
+  }
+  auto* bridge = web_bridge.load(std::memory_order_acquire);
+  if (bridge == nullptr) {
+    return static_cast<int>(
+        lmdj::web_runtime::detail::BridgeCancelStatus::not_found);
+  }
+  return static_cast<int>(bridge->cancel_query(
+      std::string_view(request_id, request_id_size)));
+}
+
 EMSCRIPTEN_KEEPALIVE int lmdj_web_host_deadline_proof_configure(
     const char* request_id,
     std::size_t request_id_size,
@@ -2271,6 +2518,12 @@ int main() {
   }
   const auto workspace =
       std::filesystem::path("/lmdj-workspace").lexically_normal();
+  constexpr RuntimePreparationLimits limits{
+      1'048'576,
+      240'000,
+      67'108'864,
+      134'217'728,
+  };
   auto created = ControlRuntime::create(
       workspace,
       Application(ApplicationConfig{
@@ -2278,13 +2531,9 @@ int main() {
           std::make_shared<Registry>(),
           ProviderPolicy{},
           {},
+          limits,
       }),
-      RuntimePreparationLimits{
-          1'048'576,
-          240'000,
-          67'108'864,
-          134'217'728,
-      });
+      limits);
   if (!created.has_value()) {
     return 1;
   }

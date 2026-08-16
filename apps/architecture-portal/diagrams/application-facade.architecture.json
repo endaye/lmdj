@@ -6,9 +6,9 @@
     {"id": "native-hosts", "label": "Native Hosts", "detail": "CLI · MCP · Native", "kind": "host", "x": 40, "y": 140, "width": 220, "height": 96},
     {"id": "web-hosts", "label": "Web Hosts", "detail": "Creator · Diagnostic", "kind": "host", "x": 40, "y": 380, "width": 220, "height": 96},
     {"id": "platform", "label": "Web Runtime Platform", "detail": "shared browser adapter", "kind": "core", "x": 340, "y": 380, "width": 250, "height": 96},
-    {"id": "facade", "label": "Application Facade", "detail": "public C++ / C API", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
-    {"id": "modules", "label": "Core Modules", "detail": "domain · I/O · cook", "kind": "core", "x": 1010, "y": 250, "width": 220, "height": 96},
-    {"id": "result", "label": "Typed Response", "detail": "Artifact / stream / error", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96}
+    {"id": "facade", "label": "Application Facade", "detail": "Project · Sample API", "kind": "core", "x": 680, "y": 250, "width": 250, "height": 96},
+    {"id": "modules", "label": "Core Modules", "detail": "domain · I/O · cook · audio", "kind": "core", "x": 1010, "y": 250, "width": 220, "height": 96},
+    {"id": "result", "label": "Typed Response", "detail": "revision · waveform · error", "kind": "host", "x": 1310, "y": 250, "width": 210, "height": 96}
   ],
   "connections": [
     {"from": "native-hosts", "to": "facade", "label": "Facade API"},
@@ -19,7 +19,7 @@
   ],
   "cards": [
     {"title": "Dependencies", "body": "Six lower Core Modules at locked versions."},
-    {"title": "Bundle streaming", "body": "Portable bytes cross the API; Hosts never parse Project internals."},
+    {"title": "Atomic Sample edit", "body": "Inspect, streamed WAV import, update and reset preserve receipt and current Project revision truth."},
     {"title": "Forbidden boundary", "body": "No Host UI, Web protocol or product-specific wiring in the Facade."}
   ]
 }

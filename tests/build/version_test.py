@@ -19,72 +19,78 @@ from scripts.version import (
 
 
 expected_modules = {
+    "packages/authoring-domain/module.json": (
+        "authoring-domain",
+        "0.2.0",
+        1,
+        {"foundation": "0.2.0"},
+    ),
     "packages/project-cooker/module.json": (
         "project-cooker",
-        "0.2.1",
+        "0.3.0",
         1,
-        {"foundation": "0.2.0", "authoring-domain": "0.1.1"},
+        {"foundation": "0.2.0", "authoring-domain": "0.2.0"},
     ),
     "packages/project-io/module.json": (
         "project-io",
-        "0.5.4",
+        "0.6.0",
         1,
-        {"foundation": "0.2.0", "authoring-domain": "0.1.1"},
+        {"foundation": "0.2.0", "authoring-domain": "0.2.0"},
     ),
     "packages/audio-runtime/module.json": (
         "audio-runtime",
-        "0.4.1",
+        "0.5.0",
         1,
-        {"foundation": "0.2.0", "project-cooker": "0.2.1"},
+        {"foundation": "0.2.0", "project-cooker": "0.3.0"},
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.3.5",
+        "1.4.0",
         2,
         {
             "foundation": "0.2.0",
-            "authoring-domain": "0.1.1",
-            "project-io": "0.5.4",
-            "project-cooker": "0.2.1",
-            "audio-runtime": "0.4.1",
+            "authoring-domain": "0.2.0",
+            "project-io": "0.6.0",
+            "project-cooker": "0.3.0",
+            "audio-runtime": "0.5.0",
             "provider-sdk": "1.1.1",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "0.2.1",
+        "0.3.0",
         1,
-        {"application-facade": "1.3.5", "audio-runtime": "0.4.1"},
+        {"application-facade": "1.4.0", "audio-runtime": "0.5.0"},
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.11",
+        "1.0.12",
         2,
-        {"application-facade": "1.3.5"},
+        {"application-facade": "1.4.0"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.1.8",
+        "1.1.9",
         2,
-        {"application-facade": "1.3.5"},
+        {"application-facade": "1.4.0"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.9",
+        "1.0.10",
         1,
-        {"application-facade": "1.3.5", "audio-runtime": "0.4.1"},
+        {"application-facade": "1.4.0", "audio-runtime": "0.5.0"},
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.2.8",
+        "1.2.9",
         1,
-        {"web-runtime-platform": "0.2.1"},
+        {"web-runtime-platform": "0.3.0"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.1.3",
+        "1.2.0",
         1,
-        {"web-runtime-platform": "0.2.1"},
+        {"web-runtime-platform": "0.3.0"},
     ),
 }
 for relative, (
@@ -236,6 +242,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     ) == provider_digest
 assert assembly["contracts"] == [
     {"id": "lmdj.project.v1", "version": "1.0.0"},
+    {"id": "lmdj.project.v2", "version": "2.0.0"},
     {"id": "lmdj.project-bundle.v1", "version": "1.0.0"},
     {"id": "lmdj.capability.v2", "version": "2.0.0"},
     {"id": "lmdj.assembly.v2", "version": "2.0.0"},
@@ -252,6 +259,7 @@ expected_contract_sources = {
     "contracts/error/lmdj.error.v1.schema.json": "1.0.0",
     "contracts/module/lmdj.module.v1.schema.json": "1.0.0",
     "contracts/project/lmdj.project.v1.schema.json": "1.0.0",
+    "contracts/project/lmdj.project.v2.schema.json": "2.0.0",
     "contracts/project/lmdj.project-bundle.v1.schema.json": "1.0.0",
     "contracts/version/lmdj.product-version.v1.schema.json": "1.0.0",
 }
@@ -470,6 +478,6 @@ cmake_source = (
     repo_root / "packages/web-runtime-platform/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
-assert '"product_build":"1.0.21.0"' not in cmake_source
+assert '"product_build":"1.0.22.0"' not in cmake_source
 
 print("product version tests: PASS")

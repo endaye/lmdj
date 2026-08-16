@@ -8,7 +8,7 @@ const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../
 
 test('facts match the current locked product composition', async () => {
   const facts = await readRepoFacts({repoRoot, revision: 'abcdef123456', channel: 'canary'});
-  assert.equal(facts.product.version, '1.0.21.0');
+  assert.equal(facts.product.version, '1.0.22.0');
   assert.equal(facts.revision, 'abcdef123456');
   assert.equal(facts.channel, 'canary');
   assert.deepEqual(facts.modules.map(({id}) => id), [
@@ -22,14 +22,14 @@ test('facts match the current locked product composition', async () => {
     'web-runtime-platform',
   ]);
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
-    {id: 'core-cli', version: '1.0.11'},
-    {id: 'core-mcp', version: '1.1.8'},
-    {id: 'creator-web', version: '1.1.3'},
-    {id: 'native-test-host', version: '1.0.9'},
-    {id: 'web-runtime-host', version: '1.2.8'},
+    {id: 'core-cli', version: '1.0.12'},
+    {id: 'core-mcp', version: '1.1.9'},
+    {id: 'creator-web', version: '1.2.0'},
+    {id: 'native-test-host', version: '1.0.10'},
+    {id: 'web-runtime-host', version: '1.2.9'},
   ]);
   assert.equal(facts.providers.length, 2);
-  assert.equal(facts.contracts.length, 7);
+  assert.equal(facts.contracts.length, 8);
 });
 
 test('facts reject an assembly identity mismatch', async () => {

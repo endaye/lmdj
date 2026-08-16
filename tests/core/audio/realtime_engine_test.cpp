@@ -9,6 +9,7 @@
 #include <limits>
 #include <new>
 #include <span>
+#include <type_traits>
 #include <utility>
 
 #include "tests/core/support/test.hpp"
@@ -52,13 +53,19 @@ void* aligned_allocation(std::size_t size, std::size_t alignment) {
 using lmdj::audio::EnqueueResult;
 using lmdj::audio::CapturedTriggerEvent;
 using lmdj::audio::CaptureState;
+using lmdj::audio::PadControlEvent;
+using lmdj::audio::PadControlKind;
 using lmdj::audio::PreparedSampleBank;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::audio::RealtimeState;
+using lmdj::audio::RuntimeVoiceState;
+using lmdj::audio::RuntimeVoiceStateEvent;
 using lmdj::audio::RuntimeTriggerOutcome;
 using lmdj::audio::RuntimeTriggerOutcomeEvent;
 using lmdj::audio::TriggerEvent;
+using lmdj::cooker::ResolvedPlayback;
+using lmdj::domain::TriggerMode;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::ProjectId;
 
@@ -71,6 +78,520 @@ PreparedSampleBank bank_with_sample(
   auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, revision);
   LMDJ_CHECK(bank.set_sample(slot, sample).has_value());
   return bank;
+}
+
+PreparedSampleBank bank_with_playback(
+    std::uint64_t revision,
+    std::span<const float> sample,
+    ResolvedPlayback playback,
+    std::uint8_t slot = 0) {
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, revision);
+  LMDJ_CHECK(bank.set_sample(slot, sample, playback).has_value());
+  return bank;
+}
+
+PadControlEvent control(
+    std::uint64_t sequence,
+    std::uint8_t slot,
+    PadControlKind kind,
+    std::uint8_t velocity = 0,
+    ResolvedPlayback playback = {}) {
+  return PadControlEvent{sequence, slot, velocity, kind, playback};
+}
+
+std::array<RuntimeVoiceStateEvent, 16> drain_voice_states(
+    RealtimeEngine& engine,
+    std::size_t expected) {
+  std::array<RuntimeVoiceStateEvent, 16> states{};
+  LMDJ_CHECK(engine.drain_voice_states(states) == expected);
+  return states;
+}
+
+void fixed_control_and_voice_messages_are_realtime_safe_values() {
+  static_assert(std::is_trivially_copyable_v<PadControlEvent>);
+  static_assert(std::is_trivially_copyable_v<RuntimeVoiceStateEvent>);
+  static_assert(lmdj::audio::kRealtimeQueueCapacity == 1'024);
+  static_assert(
+      lmdj::audio::kRealtimeVoiceStateCapacity ==
+      (lmdj::audio::kRealtimeCaptureCapacity +
+       lmdj::audio::kRealtimeQueueCapacity) * 2);
+}
+
+void one_shot_snapshots_trim_gain_and_ignores_release() {
+  RealtimeEngine engine;
+  const std::array<float, 5> sample{0.05F, 0.2F, 0.3F, 0.4F, 0.95F};
+  auto bank = bank_with_playback(
+      1,
+      sample,
+      ResolvedPlayback{1, 4, TriggerMode::one_shot, 0.5F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(10, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.1F && right.at(0) == 0.1F);
+  LMDJ_CHECK(
+      engine.enqueue_control(control(11, 0, PadControlKind::release)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 2);
+  LMDJ_CHECK(left.at(0) == 0.15F && left.at(1) == 0.2F);
+  LMDJ_CHECK(right == left);
+
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(0).sequence == 10);
+  LMDJ_CHECK(states.at(0).slot == 0);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(0).runtime_frame == 0);
+  LMDJ_CHECK(states.at(0).source_frame == 1);
+  LMDJ_CHECK(states.at(1).sequence == 10);
+  LMDJ_CHECK(states.at(1).slot == 0);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::completed);
+  LMDJ_CHECK(states.at(1).runtime_frame == 3);
+  LMDJ_CHECK(states.at(1).source_frame == 4);
+}
+
+void gate_release_stops_at_the_exact_cursor() {
+  RealtimeEngine engine;
+  const std::array<float, 5> sample{0.1F, 0.2F, 0.3F, 0.4F, 0.5F};
+  auto bank = bank_with_playback(
+      2,
+      sample,
+      ResolvedPlayback{1, 5, TriggerMode::gate, 1.0F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(20, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  engine.render(left.data(), right.data(), 2);
+  const std::array<float, 2> expected_gate{0.2F, 0.3F};
+  LMDJ_CHECK(left == expected_gate);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(21, 0, PadControlKind::release)) ==
+      EnqueueResult::accepted);
+  left.fill(1.0F);
+  right.fill(1.0F);
+  engine.render(left.data(), right.data(), 2);
+  const std::array<float, 2> silence{};
+  LMDJ_CHECK(left == silence);
+  LMDJ_CHECK(right == left);
+
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(0).runtime_frame == 0);
+  LMDJ_CHECK(states.at(0).source_frame == 1);
+  LMDJ_CHECK(states.at(1).sequence == 20);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(1).runtime_frame == 2);
+  LMDJ_CHECK(states.at(1).source_frame == 3);
+}
+
+void loop_gate_wraps_only_inside_the_selection_then_releases() {
+  RealtimeEngine engine;
+  const std::array<float, 4> sample{0.9F, 0.1F, 0.2F, 0.8F};
+  auto bank = bank_with_playback(
+      3,
+      sample,
+      ResolvedPlayback{1, 3, TriggerMode::loop_gate, 1.0F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(30, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  std::array<float, 5> left{};
+  std::array<float, 5> right{};
+  engine.render(left.data(), right.data(), 5);
+  const std::array<float, 5> expected_loop{
+      0.1F, 0.2F, 0.1F, 0.2F, 0.1F};
+  LMDJ_CHECK(left == expected_loop);
+  LMDJ_CHECK(right == left);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(31, 0, PadControlKind::release)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(1).sequence == 30);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(1).runtime_frame == 5);
+  LMDJ_CHECK(states.at(1).source_frame == 2);
+}
+
+void loop_toggle_is_latched_per_pad_and_stops_on_its_next_press() {
+  RealtimeEngine engine;
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 4);
+  const std::array<float, 2> first{0.1F, 0.2F};
+  const std::array<float, 2> second{0.3F, 0.4F};
+  const auto toggle =
+      ResolvedPlayback{0, 2, TriggerMode::loop_toggle, 1.0F, false};
+  LMDJ_CHECK(bank.set_sample(0, first, toggle).has_value());
+  LMDJ_CHECK(bank.set_sample(1, second, toggle).has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(40, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.1F);
+  LMDJ_CHECK(
+      engine.enqueue_control(control(41, 1, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.5F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(42, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.4F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  const auto states = drain_voice_states(engine, 3);
+  LMDJ_CHECK(states.at(0).sequence == 40);
+  LMDJ_CHECK(states.at(0).slot == 0);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(1).sequence == 41);
+  LMDJ_CHECK(states.at(1).slot == 1);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(2).sequence == 40);
+  LMDJ_CHECK(states.at(2).slot == 0);
+  LMDJ_CHECK(states.at(2).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(2).runtime_frame == 2);
+  LMDJ_CHECK(states.at(2).source_frame == 0);
+}
+
+void mute_starts_no_voice_and_invalid_preview_bounds_are_rejected() {
+  RealtimeEngine engine;
+  const std::array<float, 3> sample{0.25F, 0.5F, 0.75F};
+  auto bank = bank_with_playback(
+      5,
+      sample,
+      ResolvedPlayback{0, 3, TriggerMode::one_shot, 1.0F, true});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{50, 0, 127}) ==
+             EnqueueResult::accepted);
+  std::array<float, 3> left{};
+  std::array<float, 3> right{};
+  engine.render(left.data(), right.data(), 3);
+  const std::array<float, 3> silence{};
+  LMDJ_CHECK(left == silence);
+  LMDJ_CHECK(right == left);
+  LMDJ_CHECK(engine.telemetry().started_voices == 0);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.drain_voice_states(
+                 std::span<RuntimeVoiceStateEvent>{}) == 0);
+
+  for (const auto invalid : {
+           ResolvedPlayback{1, 1, TriggerMode::gate, 1.0F, false},
+           ResolvedPlayback{0, 4, TriggerMode::gate, 1.0F, false},
+           ResolvedPlayback{
+               0,
+               3,
+               TriggerMode::gate,
+               std::numeric_limits<float>::infinity(),
+               false},
+       }) {
+    LMDJ_CHECK(
+        engine.enqueue_control(control(
+            51, 0, PadControlKind::preview_set, 0, invalid)) ==
+        EnqueueResult::invalid_velocity);
+  }
+}
+
+void preview_set_and_clear_affect_only_later_voice_snapshots() {
+  RealtimeEngine engine;
+  const std::array<float, 4> sample{0.2F, 0.4F, 0.6F, 0.8F};
+  auto bank = bank_with_playback(
+      6,
+      sample,
+      ResolvedPlayback{0, 4, TriggerMode::one_shot, 1.0F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(
+          60,
+          0,
+          PadControlKind::preview_set,
+          0,
+          ResolvedPlayback{
+              1, 3, TriggerMode::one_shot, 0.5F, false})) ==
+      EnqueueResult::accepted);
+  LMDJ_CHECK(
+      engine.enqueue_control(control(61, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  LMDJ_CHECK(
+      engine.enqueue_control(control(62, 0, PadControlKind::preview_clear)) ==
+      EnqueueResult::accepted);
+
+  std::array<float, 4> left{};
+  std::array<float, 4> right{};
+  engine.render(left.data(), right.data(), 3);
+  LMDJ_CHECK(left.at(0) == 0.2F);
+  LMDJ_CHECK(left.at(1) == 0.3F);
+  LMDJ_CHECK(left.at(2) == 0.0F);
+  LMDJ_CHECK(right == left);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(63, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 4);
+  LMDJ_CHECK(left == sample);
+  LMDJ_CHECK(right == left);
+  const auto states = drain_voice_states(engine, 4);
+  LMDJ_CHECK(states.at(0).sequence == 61);
+  LMDJ_CHECK(states.at(0).source_frame == 1);
+  LMDJ_CHECK(states.at(1).sequence == 61);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::completed);
+  LMDJ_CHECK(states.at(1).runtime_frame == 2);
+  LMDJ_CHECK(states.at(1).source_frame == 3);
+  LMDJ_CHECK(states.at(2).sequence == 63);
+  LMDJ_CHECK(states.at(2).runtime_frame == 3);
+  LMDJ_CHECK(states.at(2).source_frame == 0);
+  LMDJ_CHECK(states.at(3).sequence == 63);
+  LMDJ_CHECK(states.at(3).runtime_frame == 7);
+  LMDJ_CHECK(states.at(3).source_frame == 4);
+}
+
+void legacy_enqueue_uses_published_snapshot_while_preview_is_active() {
+  RealtimeEngine engine;
+  const std::array<float, 4> sample{0.2F, 0.4F, 0.6F, 0.8F};
+  auto bank = bank_with_playback(
+      7,
+      sample,
+      ResolvedPlayback{0, 2, TriggerMode::one_shot, 0.5F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(
+          64,
+          0,
+          PadControlKind::preview_set,
+          0,
+          ResolvedPlayback{
+              2, 4, TriggerMode::one_shot, 0.25F, false})) ==
+      EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{65, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  engine.render(left.data(), right.data(), 2);
+
+  const std::array<float, 2> published{0.1F, 0.2F};
+  LMDJ_CHECK(left == published);
+  LMDJ_CHECK(right == published);
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(0).sequence == 65);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(0).runtime_frame == 0);
+  LMDJ_CHECK(states.at(0).source_frame == 0);
+  LMDJ_CHECK(states.at(1).sequence == 65);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::completed);
+  LMDJ_CHECK(states.at(1).runtime_frame == 2);
+  LMDJ_CHECK(states.at(1).source_frame == 2);
+}
+
+void direct_press_never_falls_back_from_non_sentinel_invalid_playback() {
+  RealtimeEngine engine;
+  const std::array<float, 2> sample{0.25F, 0.5F};
+  auto bank = bank_with_playback(
+      8,
+      sample,
+      ResolvedPlayback{0, 2, TriggerMode::one_shot, 1.0F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(
+          66,
+          0,
+          PadControlKind::preview_set,
+          0,
+          ResolvedPlayback{
+              0, 1, TriggerMode::one_shot, 1.0F, false})) ==
+      EnqueueResult::accepted);
+  LMDJ_CHECK(
+      engine.enqueue_control(control(
+          67,
+          0,
+          PadControlKind::press,
+          127,
+          ResolvedPlayback{
+              0, 3, TriggerMode::one_shot, 1.0F, false})) ==
+      EnqueueResult::accepted);
+
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  LMDJ_CHECK(left.at(0) == 0.0F);
+  LMDJ_CHECK(right.at(0) == 0.0F);
+  LMDJ_CHECK(engine.telemetry().invalid_events == 1);
+  std::array<RuntimeVoiceStateEvent, 1> states{};
+  LMDJ_CHECK(engine.drain_voice_states(states) == 0);
+}
+
+void control_queue_overflow_rejects_preview_without_applying_it() {
+  RealtimeEngine engine;
+  const std::array<float, 2> sample{0.25F, 0.5F};
+  auto bank = bank_with_playback(
+      7,
+      sample,
+      ResolvedPlayback{0, 2, TriggerMode::one_shot, 1.0F, false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  for (std::uint64_t sequence = 0;
+       sequence < lmdj::audio::kRealtimeQueueCapacity;
+       ++sequence) {
+    LMDJ_CHECK(engine.enqueue_control(control(
+                   sequence, 0, PadControlKind::preview_clear)) ==
+               EnqueueResult::accepted);
+  }
+  LMDJ_CHECK(
+      engine.enqueue_control(control(
+          1'024,
+          0,
+          PadControlKind::preview_set,
+          0,
+          ResolvedPlayback{
+              1, 2, TriggerMode::one_shot, 0.25F, false})) ==
+      EnqueueResult::queue_full);
+  LMDJ_CHECK(engine.telemetry().queue_drops == 1);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(1'025, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.25F && right.at(0) == 0.25F);
+}
+
+void stop_slot_targets_one_pad_and_stop_all_clears_latched_voices() {
+  RealtimeEngine engine;
+  auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, 8);
+  const std::array<float, 4> ordinary{0.1F, 0.1F, 0.1F, 0.1F};
+  const std::array<float, 2> latched{0.3F, 0.4F};
+  LMDJ_CHECK(bank.set_sample(
+                     0,
+                     ordinary,
+                     ResolvedPlayback{
+                         0, 4, TriggerMode::one_shot, 1.0F, false})
+                 .has_value());
+  LMDJ_CHECK(bank.set_sample(
+                     1,
+                     latched,
+                     ResolvedPlayback{
+                         0, 2, TriggerMode::loop_toggle, 1.0F, false})
+                 .has_value());
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue_control(control(70, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  LMDJ_CHECK(engine.enqueue_control(control(71, 1, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.4F);
+
+  LMDJ_CHECK(engine.enqueue_control(control(72, 0, PadControlKind::stop_slot)) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.4F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(engine.enqueue_control(control(73, 0, PadControlKind::press, 127)) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+
+  LMDJ_CHECK(engine.enqueue_control(control(74, 0, PadControlKind::stop_all)) ==
+             EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  const auto states = drain_voice_states(engine, 6);
+  LMDJ_CHECK(states.at(2).sequence == 70);
+  LMDJ_CHECK(states.at(2).slot == 0);
+  LMDJ_CHECK(states.at(2).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(2).runtime_frame == 1);
+  LMDJ_CHECK(states.at(3).sequence == 73);
+  LMDJ_CHECK(states.at(3).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(4).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(5).state == RuntimeVoiceState::stopped);
+}
+
+void voice_state_overflow_raises_the_existing_fail_closed_signal() {
+  RealtimeEngine engine;
+  const std::array<float, 1> sample{0.1F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  for (std::uint64_t sequence = 1;
+       sequence <= lmdj::audio::kRealtimeVoiceStateCapacity / 2;
+       ++sequence) {
+    LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
+               EnqueueResult::accepted);
+    engine.render(left.data(), right.data(), 1);
+    std::array<RuntimeTriggerOutcomeEvent, 1> outcome{};
+    LMDJ_CHECK(engine.drain_trigger_outcomes(outcome) == 1);
+  }
+  LMDJ_CHECK(
+      engine.enqueue(TriggerEvent{3'000, 0, 127}) == EnqueueResult::accepted);
+  engine.render(left.data(), right.data(), 1);
+
+  const auto states = engine.voice_state_telemetry();
+  LMDJ_CHECK(
+      states.state == lmdj::audio::RuntimeVoiceStateStreamState::corrupted);
+  LMDJ_CHECK(
+      states.published_voice_states == lmdj::audio::kRealtimeVoiceStateCapacity);
+  LMDJ_CHECK(states.drained_voice_states == 0);
+  LMDJ_CHECK(states.voice_state_drops == 1);
+  const auto outcomes = engine.trigger_outcome_telemetry();
+  LMDJ_CHECK(
+      outcomes.published_outcomes ==
+      lmdj::audio::kRealtimeVoiceStateCapacity / 2);
+  LMDJ_CHECK(
+      outcomes.drained_outcomes ==
+      lmdj::audio::kRealtimeVoiceStateCapacity / 2);
+  LMDJ_CHECK(outcomes.runtime_outcome_drops == 0);
+  LMDJ_CHECK(engine.telemetry().started_voices ==
+             lmdj::audio::kRealtimeVoiceStateCapacity / 2);
+  LMDJ_CHECK(engine.telemetry().voice_drops == 1);
+
+  std::array<RuntimeVoiceStateEvent, 1> first{};
+  LMDJ_CHECK(engine.drain_voice_states(first) == 0);
+  engine.stop();
+  LMDJ_CHECK(engine.start().has_value());
+  const auto reset = engine.voice_state_telemetry();
+  LMDJ_CHECK(
+      reset.state == lmdj::audio::RuntimeVoiceStateStreamState::healthy);
+  LMDJ_CHECK(reset.published_voice_states == 0);
+  LMDJ_CHECK(reset.drained_voice_states == 0);
+  LMDJ_CHECK(reset.voice_state_drops == 0);
+  LMDJ_CHECK(engine.drain_voice_states(first) == 0);
 }
 
 void plays_a_sample_and_reports_render_telemetry() {
@@ -318,6 +839,8 @@ void outcome_ring_reports_capacity_drop_and_restart_resets_it() {
     LMDJ_CHECK(engine.enqueue(TriggerEvent{sequence, 0, 127}) ==
                EnqueueResult::accepted);
     engine.render(left.data(), right.data(), 1);
+    std::array<RuntimeVoiceStateEvent, 2> voice_states{};
+    LMDJ_CHECK(engine.drain_voice_states(voice_states) == 2);
   }
 
   const auto full = engine.trigger_outcome_telemetry();
@@ -570,7 +1093,7 @@ void captures_only_successfully_allocated_voices() {
   LMDJ_CHECK(engine.telemetry().voice_drops == 1);
 }
 
-void capture_overflow_corrupts_and_restart_clears_stale_events() {
+void capture_overflow_remains_observable_without_a_voice_state_consumer() {
   static_assert(lmdj::audio::kRealtimeCaptureCapacity == 4'096);
   RealtimeEngine engine;
   const std::array<float, 1> sample{0.1F};
@@ -799,6 +1322,18 @@ void operator delete[](
 }
 
 int main() {
+  fixed_control_and_voice_messages_are_realtime_safe_values();
+  one_shot_snapshots_trim_gain_and_ignores_release();
+  gate_release_stops_at_the_exact_cursor();
+  loop_gate_wraps_only_inside_the_selection_then_releases();
+  loop_toggle_is_latched_per_pad_and_stops_on_its_next_press();
+  mute_starts_no_voice_and_invalid_preview_bounds_are_rejected();
+  preview_set_and_clear_affect_only_later_voice_snapshots();
+  direct_press_never_falls_back_from_non_sentinel_invalid_playback();
+  legacy_enqueue_uses_published_snapshot_while_preview_is_active();
+  control_queue_overflow_rejects_preview_without_applying_it();
+  stop_slot_targets_one_pad_and_stop_all_clears_latched_voices();
+  voice_state_overflow_raises_the_existing_fail_closed_signal();
   plays_a_sample_and_reports_render_telemetry();
   rejects_invalid_samples_and_running_time_mutation();
   supports_exact_64_slot_boundary();
@@ -815,7 +1350,7 @@ int main() {
   reports_exact_bytes_for_non_fifo_heterogeneous_bank_reclaim();
   captures_voice_starts_at_exact_runtime_frames_and_disarms_at_end();
   captures_only_successfully_allocated_voices();
-  capture_overflow_corrupts_and_restart_clears_stale_events();
+  capture_overflow_remains_observable_without_a_voice_state_consumer();
   stop_cancels_queued_events_and_active_voices();
   restart_resets_counters_retains_samples_and_replays_no_event();
   render_does_not_allocate_or_deallocate();

@@ -194,6 +194,43 @@ test("cleans before terminal or interrupted state becomes observable", () => {
   }
 });
 
+test("one adverse transition performs one cleanup edge with its exact reason", () => {
+  const observations = [];
+  let machine;
+  machine = createHostStateMachine({
+    initialState: "running",
+    cleanup: (targetState, lifecycle) => {
+      observations.push({
+        step: "cleanup",
+        targetState,
+        reason: lifecycle.reason,
+        state: machine.state,
+      });
+    },
+    notify: (event, payload) => {
+      if (event === "host.state_changed") {
+        observations.push({
+          step: "state",
+          targetState: payload.state,
+          state: machine.state,
+        });
+      }
+    },
+  });
+
+  machine.transition("interrupted", {reason: "visibilitychange"});
+
+  assert.deepEqual(observations, [
+    {
+      step: "cleanup",
+      targetState: "interrupted",
+      reason: "visibilitychange",
+      state: "running",
+    },
+    {step: "state", targetState: "interrupted", state: "interrupted"},
+  ]);
+});
+
 test("reentrant notification cannot recover during an interrupted transition", () => {
   const reentrantErrors = [];
   let machine;

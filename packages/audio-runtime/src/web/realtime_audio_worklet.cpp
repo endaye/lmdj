@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include <emscripten/emscripten.h>
 #include <emscripten/threading.h>
 #include <emscripten/webaudio.h>
 
@@ -28,6 +29,12 @@ static_assert(std::atomic<bool>::is_always_lock_free);
 static_assert(std::atomic<RealtimeAudioWorkletGate>::is_always_lock_free);
 static_assert(std::atomic<RealtimeAudioWorkletState>::is_always_lock_free);
 static_assert(std::atomic<RealtimeAudioWorkletFatal>::is_always_lock_free);
+
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+std::atomic<RealtimeEngine*> conformance_engine{nullptr};
+std::atomic<std::int32_t> conformance_voice_overflow_process_return{-1};
+static_assert(std::atomic<RealtimeEngine*>::is_always_lock_free);
+#endif
 
 foundation::Error worklet_error(const char* message) noexcept {
   return foundation::Error{
@@ -114,6 +121,17 @@ struct RealtimeAudioWorklet::Impl {
     auto* left = outputs[0].data;
     auto* right = outputs[0].data + outputs[0].samplesPerChannel;
     self.engine.render(left, right, kRequiredFrames);
+    if (self.engine.voice_state_telemetry().state ==
+        RuntimeVoiceStateStreamState::corrupted) {
+      self.latch_fatal(RealtimeAudioWorkletFatal::processor_error);
+      self.in_flight.store(false, std::memory_order_release);
+      self.signal_quiescence_waiters();
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+      conformance_voice_overflow_process_return.store(
+          0, std::memory_order_release);
+#endif
+      return false;
+    }
 #if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
     self.observed_quantum.store(kRequiredFrames, std::memory_order_relaxed);
     self.render_count.fetch_add(1, std::memory_order_relaxed);
@@ -290,9 +308,24 @@ struct RealtimeAudioWorklet::Impl {
 
 RealtimeAudioWorklet::RealtimeAudioWorklet(
     RealtimeEngine& engine, RealtimeAudioWorkletHooks hooks)
-    : impl_(std::make_unique<Impl>(engine, hooks)) {}
+    : impl_(std::make_unique<Impl>(engine, hooks)) {
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+  conformance_engine.store(&engine, std::memory_order_release);
+  conformance_voice_overflow_process_return.store(
+      -1, std::memory_order_release);
+#endif
+}
 
-RealtimeAudioWorklet::~RealtimeAudioWorklet() = default;
+RealtimeAudioWorklet::~RealtimeAudioWorklet() {
+#if defined(LMDJ_WEB_AUDIO_CONFORMANCE)
+  auto* expected = &impl_->engine;
+  static_cast<void>(conformance_engine.compare_exchange_strong(
+      expected,
+      nullptr,
+      std::memory_order_acq_rel,
+      std::memory_order_acquire));
+#endif
+}
 
 RealtimeAudioWorkletStart RealtimeAudioWorklet::start_on_browser_main(
     std::int32_t audio_context_handle) noexcept {
@@ -570,6 +603,143 @@ bool RealtimeAudioWorklet::mark_callback_in_flight_for_conformance() noexcept {
       std::memory_order_acq_rel,
       std::memory_order_acquire);
 }
+
+extern "C" {
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_voice_state_capacity() {
+  return static_cast<std::uint32_t>(kRealtimeVoiceStateCapacity);
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_voice_state_active_voices() {
+  auto* engine = conformance_engine.load(std::memory_order_acquire);
+  return engine == nullptr
+             ? 0
+             : static_cast<std::uint32_t>(
+                   engine->telemetry().active_voices);
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_voice_state_published() {
+  auto* engine = conformance_engine.load(std::memory_order_acquire);
+  return engine == nullptr
+             ? 0
+             : static_cast<std::uint32_t>(
+                   engine->voice_state_telemetry().published_voice_states);
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_voice_state_state() {
+  auto* engine = conformance_engine.load(std::memory_order_acquire);
+  return engine == nullptr
+             ? UINT32_MAX
+             : static_cast<std::uint32_t>(
+                   engine->voice_state_telemetry().state);
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_voice_state_drops() {
+  auto* engine = conformance_engine.load(std::memory_order_acquire);
+  return engine == nullptr
+             ? UINT32_MAX
+             : static_cast<std::uint32_t>(
+                   engine->voice_state_telemetry().voice_state_drops);
+}
+
+EMSCRIPTEN_KEEPALIVE std::uint32_t
+lmdj_web_audio_test_voice_state_outcome_drops() {
+  auto* engine = conformance_engine.load(std::memory_order_acquire);
+  return engine == nullptr
+             ? UINT32_MAX
+             : static_cast<std::uint32_t>(
+                   engine->trigger_outcome_telemetry()
+                       .runtime_outcome_drops);
+}
+
+EMSCRIPTEN_KEEPALIVE std::int32_t
+lmdj_web_audio_test_voice_state_process_return() {
+  return conformance_voice_overflow_process_return.load(
+      std::memory_order_acquire);
+}
+
+EMSCRIPTEN_KEEPALIVE int
+lmdj_web_audio_test_enqueue_voice_state_batch(
+    std::uint32_t batch,
+    std::uint32_t voice_count) {
+  auto* engine = conformance_engine.load(std::memory_order_acquire);
+  if (engine == nullptr || voice_count == 0 ||
+      voice_count > kRealtimeVoiceCapacity ||
+      engine->telemetry().state != RealtimeState::running ||
+      engine->telemetry().queued_events != 0 ||
+      engine->voice_state_telemetry().state !=
+          RuntimeVoiceStateStreamState::healthy) {
+    return -1;
+  }
+
+  std::array<RuntimeTriggerOutcomeEvent, kRealtimeVoiceCapacity> outcomes{};
+  for (std::size_t attempt = 0;
+       attempt <=
+           kRealtimeTriggerOutcomeCapacity / kRealtimeVoiceCapacity;
+       ++attempt) {
+    if (engine->drain_trigger_outcomes(outcomes) < outcomes.size()) {
+      break;
+    }
+  }
+  if (engine->trigger_outcome_telemetry().runtime_outcome_drops != 0) {
+    return -2;
+  }
+
+  const auto sequence_base =
+      std::uint64_t{1'000'000} +
+      static_cast<std::uint64_t>(batch) * kRealtimeVoiceCapacity;
+  int accepted = 0;
+  const auto enqueue = [&](PadControlEvent event) noexcept {
+    if (engine->enqueue_control(event) != EnqueueResult::accepted) {
+      return false;
+    }
+    ++accepted;
+    return true;
+  };
+  if (!enqueue(PadControlEvent{
+          sequence_base,
+          0,
+          0,
+          PadControlKind::preview_set,
+          cooker::ResolvedPlayback{
+              0,
+              1,
+              domain::TriggerMode::gate,
+              1.0F,
+              false,
+          },
+      })) {
+    return -3;
+  }
+  for (std::uint32_t index = 0; index < voice_count; ++index) {
+    if (!enqueue(PadControlEvent{
+            sequence_base + index + 1,
+            0,
+            127,
+            PadControlKind::press,
+            {},
+        })) {
+      return -4;
+    }
+  }
+  if (!enqueue(PadControlEvent{
+          sequence_base + voice_count + 1,
+          0,
+          0,
+          PadControlKind::stop_all,
+          {},
+      })) {
+    return -5;
+  }
+  return accepted;
+}
+
+}  // extern "C"
 #endif
 
 }  // namespace lmdj::audio::web

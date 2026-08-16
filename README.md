@@ -12,12 +12,13 @@ from the active tree and remains recoverable from Git history.
 ## Current status
 
 - Designed: full product and Core architecture.
-- Implemented: M1 Headless Core Proof, the Formal Native Host, Creator Web
-  Host `1.0.6`, and Formal Web Runtime Host `1.2.6` in Product Build
-  `1.0.16.9`. Both Web Hosts use Web Runtime Platform `0.1.6`, OPFS Project
-  I/O, and C++ Audio Runtime through the same Wasm AudioWorklet.
-- Not implemented: complete Creator editing, installable/offline PWA behavior, Sample
-  intelligence, Sequence editing, production Providers, or cloud deployment.
+- Implemented: M1 Headless Core Proof, the Formal Native Host, the Stage 8
+  Sample Editor in Creator Web Host `1.2.0`, and Formal Web Runtime Host
+  `1.2.9` in Product Build `1.0.22.0`. Both Web Hosts use Web Runtime Platform
+  `0.3.0`, Project Truth v2 over OPFS Project I/O, and C++ Audio Runtime through
+  the same Wasm AudioWorklet.
+- Not implemented: installable/offline PWA behavior, Sample intelligence,
+  Sequence editing, production Providers, or cloud deployment.
   The five required Web physical-device rows remain `deferred / unverified`.
 
 ## Architecture

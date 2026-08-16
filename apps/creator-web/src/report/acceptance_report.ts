@@ -34,6 +34,25 @@ const ERROR_CODES = new Set([
   "HOST_RESTART_REQUIRED",
   "HOST_PROTOCOL_MISMATCH",
 ]);
+const SAMPLE_OPERATIONS = new Set([
+  "import",
+  "replace",
+  "update",
+  "reset",
+  "prepare",
+]);
+const SAMPLE_OPERATION_OUTCOMES = new Set([
+  "committed",
+  "conflicted",
+  "failed",
+  "cancelled",
+]);
+const SAMPLE_TRIGGER_MODES = [
+  "one_shot",
+  "gate",
+  "loop_gate",
+  "loop_toggle",
+] as const;
 
 export interface CreatorAcceptanceIdentity {
   productBuild: string;
@@ -74,6 +93,19 @@ interface AcceptanceReportInput {
   diagnostics: AcceptanceDiagnostics;
   bankCount: number;
   padCount: number;
+  sampleEvidence?: CreatorAcceptanceSampleEvidence;
+}
+
+interface CreatorAcceptanceSampleEvidence {
+  projectRevision: number | null;
+  runtimeRevision: number | null;
+  operationOutcomes: readonly Readonly<{
+    operation: string;
+    outcome: string;
+    errorCode: string | null;
+  }>[];
+  triggerModeCoverage: readonly string[];
+  [key: string]: unknown;
 }
 
 function requireIdentity(value: string, label: string): string {
@@ -90,6 +122,11 @@ function requireCount(value: number, label: string): number {
   return value;
 }
 
+function requireRevision(value: number | null, label: string): number | null {
+  if (value === null) return null;
+  return requireCount(value, label);
+}
+
 function requireBoolean(value: boolean, label: string): boolean {
   if (typeof value !== "boolean") throw new TypeError(`${label} is invalid`);
   return value;
@@ -101,6 +138,7 @@ export function createAcceptanceReport({
   diagnostics,
   bankCount,
   padCount,
+  sampleEvidence,
 }: AcceptanceReportInput) {
   if (!HOST_STATES.has(diagnostics.state)) {
     throw new TypeError("Host state is invalid");
@@ -111,6 +149,9 @@ export function createAcceptanceReport({
   if (identity.protocolVersion !== 1) {
     throw new TypeError("Protocol version is invalid");
   }
+  const sample = sampleEvidence === undefined
+    ? undefined
+    : normalizeSampleEvidence(sampleEvidence);
   return Object.freeze({
     contract: "lmdj.creator-web.acceptance.v1" as const,
     product_build: requireIdentity(identity.productBuild, "Product Build"),
@@ -157,6 +198,7 @@ export function createAcceptanceReport({
       "Trigger rejection count",
     ),
     error_code: diagnostics.error_code,
+    ...(sample === undefined ? {} : {sample}),
     physical: Object.freeze({
       macos_safari_pointer: "deferred / unverified" as const,
       macos_chrome_pointer: "deferred / unverified" as const,
@@ -164,5 +206,51 @@ export function createAcceptanceReport({
       ipados_safari_touch: "deferred / unverified" as const,
       ipados_safari_lifecycle: "deferred / unverified" as const,
     }),
+  });
+}
+
+function normalizeSampleEvidence(value: CreatorAcceptanceSampleEvidence) {
+  const projectRevision = requireRevision(value.projectRevision, "Project revision");
+  const runtimeRevision = requireRevision(value.runtimeRevision, "Runtime revision");
+  if (projectRevision !== null && runtimeRevision !== null &&
+    runtimeRevision > projectRevision) {
+    throw new TypeError("Runtime revision is invalid");
+  }
+  if (!Array.isArray(value.operationOutcomes) || value.operationOutcomes.length > 32) {
+    throw new TypeError("Sample operation outcomes are invalid");
+  }
+  const operationOutcomes = value.operationOutcomes.map((entry) => {
+    if (entry === null || typeof entry !== "object" ||
+      Object.keys(entry).length !== 3 ||
+      !Object.hasOwn(entry, "operation") || !SAMPLE_OPERATIONS.has(entry.operation) ||
+      !Object.hasOwn(entry, "outcome") || !SAMPLE_OPERATION_OUTCOMES.has(entry.outcome) ||
+      !Object.hasOwn(entry, "errorCode") ||
+      !(entry.errorCode === null || ERROR_CODES.has(entry.errorCode)) ||
+      (entry.outcome === "failed") !== (entry.errorCode !== null)) {
+      throw new TypeError("Sample operation outcome is invalid");
+    }
+    return Object.freeze({
+      operation: entry.operation,
+      outcome: entry.outcome,
+      error_code: entry.errorCode,
+    });
+  });
+  if (!Array.isArray(value.triggerModeCoverage) ||
+    value.triggerModeCoverage.length > SAMPLE_TRIGGER_MODES.length ||
+    value.triggerModeCoverage.some((mode) =>
+      !SAMPLE_TRIGGER_MODES.includes(mode as typeof SAMPLE_TRIGGER_MODES[number]))) {
+    throw new TypeError("Sample trigger-mode coverage is invalid");
+  }
+  const modes = new Set(value.triggerModeCoverage);
+  if (modes.size !== value.triggerModeCoverage.length) {
+    throw new TypeError("Sample trigger-mode coverage is invalid");
+  }
+  return Object.freeze({
+    project_revision: projectRevision,
+    runtime_revision: runtimeRevision,
+    operation_outcomes: Object.freeze(operationOutcomes),
+    trigger_mode_coverage: Object.freeze(
+      SAMPLE_TRIGGER_MODES.filter((mode) => modes.has(mode)),
+    ),
   });
 }

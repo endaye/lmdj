@@ -1,15 +1,35 @@
 const futureModes = [
-  {name: "Sample", stage: 8},
   {name: "Sequence", stage: 9},
   {name: "Perform", stage: 10},
 ] as const;
 
-export function ModeRail() {
+export type CreatorMode = "project" | "sample";
+
+interface ModeRailProps {
+  activeMode: CreatorMode;
+  onSelect: (mode: CreatorMode) => void;
+}
+
+export function ModeRail({activeMode, onSelect}: ModeRailProps) {
   return (
     <nav className="mode-rail" aria-label="Creator modes">
-      <button className="mode-button is-active" type="button" aria-current="page">
+      <button
+        className={`mode-button${activeMode === "project" ? " is-active" : ""}`}
+        type="button"
+        aria-current={activeMode === "project" ? "page" : undefined}
+        onClick={() => onSelect("project")}
+      >
         <span aria-hidden="true">P</span>
         <span className="mode-label">Project</span>
+      </button>
+      <button
+        className={`mode-button${activeMode === "sample" ? " is-active" : ""}`}
+        type="button"
+        aria-current={activeMode === "sample" ? "page" : undefined}
+        onClick={() => onSelect("sample")}
+      >
+        <span aria-hidden="true">S</span>
+        <span className="mode-label">Sample</span>
       </button>
       {futureModes.map(({name, stage}) => (
         <button

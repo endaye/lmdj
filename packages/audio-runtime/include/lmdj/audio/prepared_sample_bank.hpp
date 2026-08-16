@@ -32,6 +32,10 @@ class PreparedSampleBank final {
 
   foundation::Result<void> set_sample(std::uint8_t slot,
                                       std::span<const float> mono_pcm);
+  foundation::Result<void> set_sample(
+      std::uint8_t slot,
+      std::span<const float> mono_pcm,
+      cooker::ResolvedPlayback playback);
 
   const foundation::ProjectId& project_id() const noexcept;
   std::uint64_t project_revision() const noexcept;
@@ -45,12 +49,14 @@ class PreparedSampleBank final {
 
   friend class RealtimeEngine;
   const std::vector<float>& sample(std::uint8_t slot) const noexcept;
+  const cooker::ResolvedPlayback& playback(std::uint8_t slot) const noexcept;
 
   foundation::ProjectId project_id_;
   std::uint64_t project_revision_;
   std::uint64_t availability_mask_ = 0;
   std::uint64_t decoded_pcm_bytes_ = 0;
   std::array<std::vector<float>, 64> samples_;
+  std::array<cooker::ResolvedPlayback, 64> playbacks_{};
 };
 
 }  // namespace lmdj::audio

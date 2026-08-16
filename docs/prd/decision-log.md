@@ -346,6 +346,41 @@
   Contract、Product Build、Module/Host 版本、Assembly 或 Channel。自动化证明不
   升级五项 deferred physical rows，也不代表 PR CI、tag、Release 或部署完成。
 
+## 2026-08-12
+
+### 已确认：Stage 8 Sample Editor 参数、真相与交互边界
+
+- **S8-D1**：首版参数集固定为 WAV import/replace、真实 waveform、Start/End、
+  One-shot/Gate、Loop/Hold、Mute、Volume 与 Reset。
+- **S8-D2**：播放参数属于 Pad Slot，不属于 Asset；同一不可变 WAV 可以被多个
+  Pad 以不同参数引用。
+- **S8-D3**：拖动期间 Runtime 试听 draft；pointer/key release 以
+  `expected_revision` 自动提交一个 revision，不提供 Apply。
+- **S8-D4**：Stage 8 不引入通用 Undo/Redo；`Reset Pad to Defaults` 是需确认的
+  普通 Authoring Command。
+- **S8-D5**：Replace 原子完成 Asset import、Pad assignment 与参数重置；旧 Asset
+  不立即删除，Artifact GC 留待后续设计。
+- **S8-D6**：输入只接受 PCM16 WAV、mono/stereo、44.1/48 kHz；保存原始字节，
+  Core 确定性准备 48 kHz Runtime PCM。
+- **S8-D7**：Loop 关闭时触发模式为 One Shot/Gate；Loop 开启时相同控制语义为
+  Loop/Hold，不保存互相矛盾的布尔组合。
+- **S8-D8**：Sample Surface 固定为上方波形、中部参数、下方完整 4×4 Pad，继承
+  Stage 7 Creator Shell。
+- **S8-D9**：波形是以零线为中心、上下镜像的真实 peak envelope，不是背景图或
+  频谱图。
+- **S8-D10**：支持双指/触控板缩放、横向平移和 Fit；viewport 状态不进入
+  Project Truth。
+- **S8-D11**：已分配 Pad 的 pointerdown 同时选择并触发；空 Pad 打开文件选择器，
+  也接受直接拖入。
+- **S8-D12**：替换已分配 Pad 前明确确认；取消或失败不改变 Project、Asset、Pad
+  或 revision。
+- **S8-D13**：麦克风/声卡 Pad Capture 属于后续 Stage 8B；当前实现不请求录音
+  权限，只保留可复用边界。Stage 8B 仍未实现、未分配 Product/Module/Contract
+  版本，也没有物理录音验收结论。
+
+这些批准项解决了开放问题中的 Sampler Edit 最小参数集；Take 是否包含音频 Bounce、
+Time-stretch、Artifact GC 与 Stage 8B capture lifecycle 仍按各自开放边界处理。
+
 ## 2026-08-13
 
 ### 已确认：Creator 的通用 Web MIDI Pad mapping 接受 channels 1–16

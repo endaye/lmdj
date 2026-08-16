@@ -18,6 +18,7 @@ dist_root="$build_root/dist"
 identity_path="$repo_root/build/web/toolchain/toolchain-identity.json"
 creator_root="$repo_root/apps/creator-web"
 web_test_root="$repo_root/tests/platform/web"
+required_sample_editor_spec="$repo_root/tests/platform/web/creator/creator_web_sample_editor.spec.mjs"
 proof_root=""
 proof_server_pid=""
 proof_server_ready_root=""
@@ -274,16 +275,112 @@ PY
   echo "Creator Web Project fixture reproducibility: PASS"
 }
 
+generate_sample_editor_fixture() {
+  local output="$1"
+  python3 - \
+    "$repo_root/build/core/dev/bin/lmdj-core" \
+    "$repo_root/products/lmdj/assembly.json" \
+    "$proof_root" <<'PY'
+import json
+from pathlib import Path
+import struct
+import subprocess
+import sys
+import wave
+
+executable, assembly, root = map(Path, sys.argv[1:])
+workspace = root / "sample-workspace"
+project = root / "creator-sample-proof.lmdj"
+audio = root / "near-limit-44k1.wav"
+workspace.mkdir()
+with wave.open(str(audio), "wb") as output:
+    output.setnchannels(1)
+    output.setsampwidth(2)
+    output.setframerate(44_100)
+    frames = bytearray()
+    for frame in range(240_000):
+        value = round((((frame % 97) / 96) * 2 - 1) * 24_000)
+        frames.extend(struct.pack("<h", value))
+    output.writeframes(frames)
+
+project_id = "00000000-0000-4000-8000-000000000002"
+asset_id = "00000000-0000-4000-8000-000000000102"
+pattern_id = "00000000-0000-4000-8000-000000000020"
+
+def invoke(surface, request, revision):
+    completed = subprocess.run(
+        [str(executable), "--workspace", str(workspace), "--assembly",
+         str(assembly), surface, "--request",
+         json.dumps(request, sort_keys=True, separators=(",", ":"))],
+        check=False, capture_output=True, text=True,
+    )
+    if completed.returncode != 0 or completed.stderr:
+        raise SystemExit(completed.stderr or completed.stdout)
+    response = json.loads(completed.stdout)
+    if response.get("ok") is not True or response.get("project_revision") != revision:
+        raise SystemExit(f"Core Sample fixture request failed: {response!r}")
+
+invoke("command", {
+    "operation": "project.create", "project_path": str(project),
+    "project_id": project_id, "bpm": 120,
+}, 0)
+invoke("command", {
+    "operation": "asset.import", "project_path": str(project),
+    "command_id": "00000000-0000-4000-8000-000000000301",
+    "expected_revision": 0, "asset_id": asset_id,
+    "source_path": str(audio), "media_type": "audio/wav",
+}, 1)
+revision = 1
+for slot in range(1, 45):
+    invoke("command", {
+        "operation": "pad.assign", "project_path": str(project),
+        "command_id": f"00000000-0000-4000-8000-{slot + 301:012d}",
+        "expected_revision": revision,
+        "slot": {"bank": slot // 16, "pad": slot % 16},
+        "asset_id": asset_id,
+    }, revision + 1)
+    revision += 1
+take_id = "00000000-0000-4000-8000-000000000401"
+invoke("command", {
+    "operation": "take.begin", "project_path": str(project),
+    "take_id": take_id, "expected_revision": revision, "sample_rate": 48_000,
+}, revision)
+invoke("command", {
+    "operation": "take.commit", "project_path": str(project),
+    "command_id": "00000000-0000-4000-8000-000000000402",
+    "expected_revision": revision, "take_id": take_id,
+    "pattern": {"pattern_id": pattern_id, "bars": 1, "events": []},
+}, revision + 1)
+PY
+  python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
+    --source "$proof_root/creator-sample-proof.lmdj" \
+    --output "$proof_root/sample-first.lmdj" >/dev/null
+  python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
+    --source "$proof_root/creator-sample-proof.lmdj" \
+    --output "$proof_root/sample-second.lmdj" >/dev/null
+  cmp "$proof_root/sample-first.lmdj" "$proof_root/sample-second.lmdj"
+  cmake -E copy "$proof_root/sample-first.lmdj" "$output"
+  echo "Creator Web Sample Project fixture reproducibility: PASS"
+}
+
 run_browser_gate() {
   local bundle="$1"
+  local sample_bundle="$2"
   local requested_port="${LMDJ_CREATOR_WEB_PORT:-0}"
   local ready_file ready_nonce port="" status=0
   local specs=()
   local tracked
+  local required_relative="${required_sample_editor_spec#"$repo_root/tests/platform/web/"}"
+  [[ -f "$required_sample_editor_spec" ]] &&
+    git -C "$repo_root" ls-files --error-unmatch \
+      "${required_sample_editor_spec#"$repo_root/"}" >/dev/null || {
+    echo "Creator Web error: required Sample Editor proof is not tracked" >&2
+    return 2
+  }
   while IFS= read -r tracked; do
-    specs+=("${tracked#tests/platform/web/}")
-  done < <(git -C "$repo_root" ls-files \
-    'tests/platform/web/creator/creator_web_*.spec.mjs')
+    [[ "${tracked#tests/platform/web/}" == "$required_relative" ]] ||
+      specs+=("${tracked#tests/platform/web/}")
+  done < <(git -C "$repo_root" ls-files 'tests/platform/web/creator/*.spec.mjs')
   [[ ${#specs[@]} -gt 0 ]] || {
     echo "Creator Web error: no tracked Creator browser specs" >&2
     return 2
@@ -329,10 +426,24 @@ PY
     npm --prefix "$web_test_root" test -- \
       --project=chromium "${specs[@]}" || status=$?
   LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-sample-chromium "$required_relative" || status=$?
+  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=webkit "${specs[@]}" --grep "capability boundary" || status=$?
+  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-sample-webkit "$required_relative" \
+      --grep "capability boundary" || status=$?
   cleanup_server
   return "$status"
 }
@@ -351,6 +462,7 @@ proof_creator() {
   unset PYTHONPATH || true
   proof_root="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-creator-proof.XXXXXX")"
   generate_project_fixture "$proof_root/creator-proof-bundle.lmdj"
+  generate_sample_editor_fixture "$proof_root/creator-sample-proof-bundle.lmdj"
   clean_creator
   configure_creator
   build_creator
@@ -366,7 +478,9 @@ proof_creator() {
   }
   echo "Creator Web distribution reproducibility: PASS"
   test_creator
-  run_browser_gate "$proof_root/creator-proof-bundle.lmdj"
+  run_browser_gate \
+    "$proof_root/creator-proof-bundle.lmdj" \
+    "$proof_root/creator-sample-proof-bundle.lmdj"
   echo "Creator Web Proof: PASS"
 }
 
