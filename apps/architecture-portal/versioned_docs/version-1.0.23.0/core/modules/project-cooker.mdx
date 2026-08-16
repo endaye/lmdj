@@ -1,0 +1,36 @@
+---
+title: Project Cooker
+area: core
+status: implemented
+owners: [core]
+module: project-cooker
+source_paths: [packages/project-cooker, tests/core/cooker]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {DiagramFrame} from '@site/src/components/DiagramFrame';
+
+<BuildIdentity kind="modules" id="project-cooker" />
+
+<DiagramFrame title="Project Cooker Module" diagramId="project-cooker" />
+
+## 1. 目的与非职责
+把 Project Truth 和 Artifact 确定性派生为 Runtime Snapshot；不保存 Project 或执行实时输出。
+## 2. 当前实现状态
+Cook、PCM16 WAV inspect/decode、真实 peak waveform、44.1→48 kHz 确定性 resample、resolved playback 与确定性矩阵已实现。
+## 3. 所有权与依赖
+依赖 Foundation 与 Authoring Domain，不依赖 Host 或 Product Assembly。
+## 4. 架构与数据流
+验证 Slot/Asset/playback 引用和 source-frame admission，读取不可变 WAV Artifact，生成多层 peak envelope 与 48 kHz PCM，输出不可变 prepared snapshot。
+## 5. API 与 Artifact 边界
+Artifact 输入显式传入；inspect/waveform 不修改 Project，Cook 输出 resolved playback、Runtime Snapshot 或 privacy-safe typed error。
+## 6. 状态、错误与生命周期
+相同输入必须产生相同结果；快照与 Project 生命周期分离。
+## 7. 产品使用方
+Audio Runtime 与 Application Facade 消费 Cook 结果。
+## 8. 测试与证据
+`project_cooker_test.cpp`、`sample_analysis_test.cpp` 和 `determinism_matrix_test.cpp` 覆盖格式、边界、waveform cache identity、resample 与相同输入相同输出。
+## 9. 限制与下一门禁
+增量 Cook 和分布式 Cook 不属于当前能力。
+## 10. 版本身份
+版本和 source hash 来自 Assembly Lock。
