@@ -88,7 +88,15 @@ class CreatorServerTest(unittest.TestCase):
         self.ui.joinpath("assets/source.js").write_text(
             "const sampleEditorProof = "
             + json.dumps(SAMPLE_EDITOR_MARKERS)
-            + "; console.log(sampleEditorProof);\n",
+            + "; console.log(sampleEditorProof);\n"
+            + 'const captureWorklet = "/assets/capture_worklet-fixture.js";\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        # The capture worklet is a fifth same-origin asset (CSP: script-src
+        # 'self'); the packaging tool rebinds this reference to its hashed name.
+        self.ui.joinpath("assets/capture_worklet-fixture.js").write_text(
+            "registerProcessor('lmdj-capture-recorder', class {});\n",
             encoding="utf-8",
             newline="\n",
         )
