@@ -421,3 +421,7 @@ Time-stretch、Artifact GC 与 Stage 8B capture lifecycle 仍按各自开放边�
   resolver/输出访问口设计（形状、校验边界、对 v2 Contract 的影响）需要独立
   的 Contract Review；原型的 Host 注入桥接是临时方案，不得直接毕业为正式
   接口。
+- 代码位置：原型是一次性验证材料，未合入 `main`；`main` 上不存在
+  `tools/analysis-bench/`。代码只保留在未合并分支
+  `feat/audio-analysis-bench-prototype`（PR #153，已关闭不合并）上，本条与
+  实施计划文档是它在 `main` 上的唯一记录。
