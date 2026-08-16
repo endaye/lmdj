@@ -33,7 +33,6 @@ FORMAL_LANE_JOBS = (
     "package",
 )
 SUPPORT_JOBS = (
-    "select-ubuntu-runner",
     "select-macos-runner",
     "macos-primary",
 )
@@ -59,8 +58,13 @@ SELF_HOSTED_JOBS = (
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
     "pr-gate",
-    "select-ubuntu-runner",
     "select-macos-runner",
+)
+# Hosted Ubuntu jobs that are not control plane: each republishes an already
+# produced macOS result under its required check name and runs no workload.
+MACOS_ADJUDICATOR_JOBS = (
+    "core-macos",
+    "core-asan-macos",
 )
 TRUST_CONDITION = "needs.change-scope.outputs.trusted-head == 'true'"
 WEB_HEAVY_ROLE = (
@@ -102,15 +106,20 @@ GENERAL_JOBS = {
 # carry `runs-on`, so the caller holds only the lane guard and the trust
 # condition and the role is declared on the called workflow's job.
 GENERAL_REUSABLE_JOBS = ("portal",)
-# Lanes that still resolve their runner through `select-ubuntu-runner`. The
-# selector must not be woken for a lane that no longer consumes it: an extra
-# lane here spends a Hosted job and an API call on nothing, and a missing one
-# leaves a consumer with an unresolved `runs-on`.
-SELECTOR_LANES = {
-    "core_ubuntu",
-    "core_asan",
-    "core_coverage",
-    "package",
+CORE_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
+)
+# The native Core workload, mapped to the manifest lane each guards. This role
+# lives only on the shared Contabo host: the persistent native `ccache` and
+# the preinstalled coverage toolchain are host state, not pool state. These
+# four were the Linux runner selector's last consumers, so pinning the exact
+# set is also what keeps the retired selector from being reintroduced for a
+# fifth.
+CORE_JOBS = {
+    "core-ubuntu": "core_ubuntu",
+    "core-asan": "core_asan",
+    "core-coverage": "core_coverage",
+    "package": "package",
 }
 RELEASE_HISTORY_CONSUMERS = (
     "deploy-contract",
@@ -147,7 +156,6 @@ FORMAL_RESULT_LANE_GUARDS = {
     "deploy-contract": {"deploy_contract"},
     "chameleon-lab": {"chameleon_lab"},
     "package": {"package"},
-    "select-ubuntu-runner": set(SELECTOR_LANES),
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
 }
@@ -340,9 +348,10 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         """The control plane must outlive the pool it adjudicates.
 
         Change Scope publishes what runs and whether the head is trusted; PR
-        Gate decides whether the run passed. As the workload leaves paid
-        Ubuntu these four must not follow it, or a self-hosted outage would
-        take the scope and trust evidence down with the jobs it governs.
+        Gate decides whether the run passed. Now that no Linux workload is
+        left beside them these three must not follow it either, or a
+        self-hosted outage would take the scope and trust evidence down with
+        the jobs it governs.
         """
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
@@ -351,8 +360,18 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertNotRegex(job, r"(?m)^    runs-on: (?!ubuntu-24\.04$)")
                 self.assertNotIn("ci-general", job)
                 self.assertNotIn("ci-web-heavy", job)
+                self.assertNotIn("ci-core", job)
                 self.assertNotIn("lmdj-linux-pool", job)
-        self.assertIn("select-ubuntu-runner:", self.main_source)
+        # The only other Hosted Ubuntu jobs are the two macOS adjudicators,
+        # which publish the required check names from an already-produced
+        # result and run no workload at all. Counting them closes the set: any
+        # new `ubuntu-24.04` job is an automatic Hosted workload until proven
+        # otherwise.
+        hosted = re.findall(r"(?m)^    runs-on: ubuntu-24\.04$", self.main_source)
+        self.assertEqual(
+            len(hosted),
+            len(HOSTED_CONTROL_PLANE_JOBS) + len(MACOS_ADJUDICATOR_JOBS),
+        )
 
     def test_change_scope_publishes_trusted_head_from_the_event_only(self) -> None:
         job = self.workflow_job("change-scope")
@@ -544,19 +563,26 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertNotIn("core-ubuntu", job)
         self.assertIn(WEB_HEAVY_ROLE, job)
 
-    def test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected(self) -> None:
-        """The selector's guard shrinks with every lane that leaves it.
+    def test_the_linux_runner_selector_no_longer_exists(self) -> None:
+        """The guard shrank to nothing, so the job goes rather than idles.
 
-        A lane cut over to the static `ci-web-heavy` role no longer reads the
-        selector's output, so keeping it in the guard would start a Hosted job
-        and a Runner API call for a route nobody consumes.
+        A selector with no consumers would still be a live route: it resolves
+        once per run and its hosted branch could be reconnected by a single
+        `needs`. Removing the job, its outputs, its Runner API probe and its
+        use of the runner-read token is what makes automatic Hosted Linux
+        capacity unreachable instead of merely unused.
         """
-        job = self.workflow_job("select-ubuntu-runner")
-        self.assertEqual(self.job_needs("select-ubuntu-runner"), {"change-scope"})
-        self.assertEqual(
-            set(re.findall(r"lanes\.([a-z_]+)", job)), SELECTOR_LANES
-        )
-        self.assertIn("if: ${{ !cancelled()", job)
+        for absent in (
+            "select-ubuntu-runner",
+            "Select Ubuntu runner",
+            "no online trusted self-hosted runner is available",
+        ):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent, self.main_source)
+        policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
+        for lane, jobs in policy["lane_jobs"].items():
+            with self.subTest(lane=lane):
+                self.assertNotIn("select-ubuntu-runner", jobs)
 
     def test_macos_selector_runs_only_when_core_macos_is_selected(self) -> None:
         job = self.workflow_job("select-macos-runner")
@@ -603,16 +629,29 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             job,
         )
 
-    def test_package_uses_existing_trusted_ubuntu_selector(self) -> None:
-        job = self.workflow_job("package")
-        self.assertEqual(
-            self.job_needs("package"), {"change-scope", "select-ubuntu-runner"}
-        )
-        self.assertIn(
-            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
-            job,
-        )
-        self.assertNotIn("runs-on: ubuntu-24.04", job)
+    def test_native_core_lanes_use_the_static_core_role_not_the_selector(self) -> None:
+        """The last four Linux lanes move by role, retiring the selector.
+
+        Ubuntu Core, Linux ASan, Coverage and Core package were the only jobs
+        still resolving `runs-on` from a once-per-run API snapshot that could
+        buy paid Ubuntu. Naming the literal label set makes a saturated or
+        absent role queue instead, so each keeps `needs: change-scope` alone
+        and carries the closed trust condition itself. Pinning the exact job
+        set keeps a later lane from inheriting the route without its own proof
+        run.
+        """
+        for job_name, lane in CORE_JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(CORE_ROLE, job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("select-ubuntu-runner", job)
+                self.assertIn(TRUST_CONDITION, job)
+                self.assertEqual(
+                    set(re.findall(r"lanes\.([a-z_]+)", job)), {lane}
+                )
+        self.assertEqual(self.main_source.count("ci-core"), len(CORE_JOBS))
 
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {

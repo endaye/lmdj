@@ -4,3 +4,4 @@ self-hosted-runner:
     - lmdj-linux-pool
     - ci-general
     - ci-web-heavy
+    - ci-core

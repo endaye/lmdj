@@ -76,146 +76,6 @@ jobs:
           overwrite: true
           retention-days: 14
 
-  select-ubuntu-runner:
-    name: Select Ubuntu runner
-    needs: change-scope
-    if: ${{ !cancelled() && (fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu || fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan || fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage || fromJSON(needs.change-scope.outputs.manifest).lanes.package) }}
-    runs-on: ubuntu-24.04
-    outputs:
-      runner: ${{ steps.select.outputs.runner }}
-      self-hosted: ${{ steps.select.outputs.self-hosted }}
-      reason: ${{ steps.select.outputs.reason }}
-    steps:
-      - name: Select an online idle trusted runner
-        id: select
-        shell: bash
-        env:
-          EVENT_NAME: ${{ github.event_name }}
-          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          REPOSITORY: ${{ github.repository }}
-          RUNNER_READ_TOKEN: ${{ secrets.SELF_HOSTED_RUNNER_READ_TOKEN }}
-        run: |
-          set -euo pipefail
-
-          select_hosted() {
-            {
-              echo 'runner=["ubuntu-24.04"]'
-              echo 'self-hosted=false'
-              echo "reason=$1"
-            } >>"$GITHUB_OUTPUT"
-            echo "Using GitHub-hosted Ubuntu: $1"
-          }
-
-          if [[ "$EVENT_NAME" == "pull_request" && \
-                "$HEAD_REPOSITORY" != "$REPOSITORY" ]]; then
-            select_hosted 'untrusted fork pull request'
-            exit 0
-          fi
-
-          if [[ -z "$RUNNER_READ_TOKEN" ]]; then
-            select_hosted 'runner status token is unavailable'
-            exit 0
-          fi
-
-          if ! runner_response="$(
-            curl \
-              --silent \
-              --show-error \
-              --fail-with-body \
-              --header 'Accept: application/vnd.github+json' \
-              --header "Authorization: Bearer $RUNNER_READ_TOKEN" \
-              --header 'X-GitHub-Api-Version: 2022-11-28' \
-              "https://api.github.com/repos/$REPOSITORY/actions/runners"
-          )"; then
-            select_hosted 'runner status API is unavailable'
-            exit 0
-          fi
-
-          runner_inventory="$(
-            jq \
-              --compact-output \
-              '{
-                total_count,
-                runners: [
-                  .runners[]?
-                  | {
-                      name,
-                      status,
-                      busy,
-                      labels: [.labels[].name]
-                    }
-                ]
-              }' \
-              <<<"$runner_response"
-          )"
-          echo "Runner selection inventory: $runner_inventory"
-
-          runner_candidates="$(
-            jq \
-              --compact-output \
-              '[
-                .runners[]?
-                | select(
-                    [.labels[].name]
-                    | contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"])
-                  )
-                | {
-                    name,
-                    status,
-                    busy,
-                    labels: [.labels[].name]
-                  }
-              ]' \
-              <<<"$runner_response"
-          )"
-          echo "Runner selection candidates: $runner_candidates"
-
-          # Eligibility deliberately ignores `busy`. GitHub already queues a
-          # label-matched job against a loaded pool, so a busy runner is a
-          # latency condition; only an absent pool is an availability
-          # condition. Treating the two alike diverted an entire manifest to
-          # paid infrastructure whenever concurrent runs happened to saturate
-          # the pool for an instant.
-          eligible_count="$(
-            jq \
-              '[
-                .runners[]?
-                | select(.status == "online")
-                | [.labels[].name]
-                | select(contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"]))
-              ] | length' \
-              <<<"$runner_response"
-          )"
-
-          idle_count="$(
-            jq \
-              '[
-                .runners[]?
-                | select(
-                    .status == "online"
-                    and .busy == false
-                  )
-                | [.labels[].name]
-                | select(contains(["self-hosted", "Linux", "X64", "lmdj-linux", "contabo"]))
-              ] | length' \
-              <<<"$runner_response"
-          )"
-
-          if [[ "$eligible_count" == "0" ]]; then
-            select_hosted 'no online trusted self-hosted runner is available'
-            exit 0
-          fi
-
-          {
-            echo 'runner=["self-hosted","Linux","X64","lmdj-linux","contabo"]'
-            echo 'self-hosted=true'
-            echo 'reason=online trusted self-hosted runner pool'
-          } >>"$GITHUB_OUTPUT"
-          echo "Using trusted self-hosted runner pool: $eligible_count online runner(s), $idle_count idle"
-          if [[ "$idle_count" == "0" ]]; then
-            echo 'Trusted pool is saturated; selected jobs queue instead of using paid runners.'
-          fi
-
   docs-static:
     # First of the five general Linux jobs on the dual-node trusted role. That
     # role exists on both the shared and the CI-only host, so unlike the Web
@@ -344,10 +204,14 @@ jobs:
       - run: scripts/chameleon-lab.sh test
 
   package:
+    # Native Core role on the shared host. The role is named literally rather
+    # than resolved by a selector, so a saturated or absent role queues this
+    # job instead of buying paid Ubuntu capacity for it. Trust therefore
+    # cannot come from a selector's fork branch and stays on the job itself.
     name: Core package
-    needs: [change-scope, select-ubuntu-runner]
+    needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.package && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -477,10 +341,16 @@ jobs:
       - run: scripts/web-runtime-lab.sh test
 
   core-ubuntu:
+    # First of the three native Core lanes on the shared host's role. The
+    # persistent native ccache and the coverage toolchain are host state, so
+    # this role deliberately does not span both trusted hosts. Naming it
+    # literally is what removes the last automatic Hosted Linux fallback: a
+    # busy or absent role queues these lanes rather than diverting a whole
+    # manifest to paid runners, so trust stays on each job itself.
     name: core (ubuntu-latest)
-    needs: [change-scope, select-ubuntu-runner]
+    needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_ubuntu && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
@@ -498,7 +368,7 @@ jobs:
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
-          use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}
+          use-ccache: true
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
@@ -526,14 +396,14 @@ jobs:
             cat "$evidence_dir/$target.log"
           done
       - name: Report persistent ccache statistics
-        if: ${{ always() && needs.select-ubuntu-runner.outputs.self-hosted == 'true' }}
+        if: ${{ always() }}
         run: >-
           ccache --show-log-stats
           || echo 'warning: ccache statistics are unavailable' >&2
 
   pr-gate:
     name: PR Gate
-    needs: [change-scope, docs-static, portal, ci-contract, select-ubuntu-runner, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
+    needs: [change-scope, docs-static, portal, ci-contract, select-macos-runner, macos-primary, core-ubuntu, core-asan, core-coverage, core-macos, core-asan-macos, web-toolchain-conformance, web-runtime-host, creator-web, web-runtime-lab, deploy-contract, chameleon-lab, package]
     if: ${{ always() && !cancelled() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -542,7 +412,7 @@ jobs:
       - name: Adjudicate the same-run formal lane results
         env:
           FORMAL_RESULTS_JSON: >-
-            {"docs-static":{"result":"${{ needs.docs-static.result }}"},"portal":{"result":"${{ needs.portal.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"select-ubuntu-runner":{"result":"${{ needs.select-ubuntu-runner.result }}"},"select-macos-runner":{"result":"${{ needs.select-macos-runner.result }}"},"macos-primary":{"result":"${{ needs.macos-primary.result }}"},"core-ubuntu":{"result":"${{ needs.core-ubuntu.result }}"},"core-asan":{"result":"${{ needs.core-asan.result }}"},"core-coverage":{"result":"${{ needs.core-coverage.result }}"},"core-macos":{"result":"${{ needs.core-macos.result }}"},"core-asan-macos":{"result":"${{ needs.core-asan-macos.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"package":{"result":"${{ needs.package.result }}"}}
+            {"docs-static":{"result":"${{ needs.docs-static.result }}"},"portal":{"result":"${{ needs.portal.result }}"},"ci-contract":{"result":"${{ needs.ci-contract.result }}"},"select-macos-runner":{"result":"${{ needs.select-macos-runner.result }}"},"macos-primary":{"result":"${{ needs.macos-primary.result }}"},"core-ubuntu":{"result":"${{ needs.core-ubuntu.result }}"},"core-asan":{"result":"${{ needs.core-asan.result }}"},"core-coverage":{"result":"${{ needs.core-coverage.result }}"},"core-macos":{"result":"${{ needs.core-macos.result }}"},"core-asan-macos":{"result":"${{ needs.core-asan-macos.result }}"},"web-toolchain-conformance":{"result":"${{ needs.web-toolchain-conformance.result }}"},"web-runtime-host":{"result":"${{ needs.web-runtime-host.result }}"},"creator-web":{"result":"${{ needs.creator-web.result }}"},"web-runtime-lab":{"result":"${{ needs.web-runtime-lab.result }}"},"deploy-contract":{"result":"${{ needs.deploy-contract.result }}"},"chameleon-lab":{"result":"${{ needs.chameleon-lab.result }}"},"package":{"result":"${{ needs.package.result }}"}}
           SCOPE_MANIFEST: ${{ needs.change-scope.outputs.manifest }}
           CHANGE_SCOPE_RESULT: ${{ needs.change-scope.result }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -804,9 +674,10 @@ jobs:
         run: bash .github/scripts/assert-macos-gate-result.sh asan
 
   core-asan:
-    needs: [change-scope, select-ubuntu-runner]
+    # Same native Core role, same reasoning as core-ubuntu.
+    needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_asan && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -824,7 +695,7 @@ jobs:
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
-          use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}
+          use-ccache: true
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
@@ -833,15 +704,16 @@ jobs:
       - run: scripts/core.sh test asan full
       - run: scripts/core.sh test asan stress
       - name: Report persistent ccache statistics
-        if: ${{ always() && needs.select-ubuntu-runner.outputs.self-hosted == 'true' }}
+        if: ${{ always() }}
         run: >-
           ccache --show-log-stats
           || echo 'warning: ccache statistics are unavailable' >&2
 
   core-coverage:
-    needs: [change-scope, select-ubuntu-runner]
+    # Same native Core role, same reasoning as core-ubuntu.
+    needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.core_coverage && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
@@ -859,15 +731,10 @@ jobs:
       - name: Configure bounded build acceleration
         uses: ./.github/actions/configure-build-acceleration
         with:
-          use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}
+          use-ccache: true
       - run: python3 tests/fixtures/audio/make_fixtures.py
       - run: python3 tests/fixtures/golden/reference_render.py
       - run: bash scripts/verify-core-dependencies.sh
-      - name: Install coverage toolchain on GitHub-hosted runner
-        if: ${{ needs.select-ubuntu-runner.outputs.self-hosted != 'true' }}
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y clang-18 llvm-18
       - name: Verify coverage toolchain
         run: |
           command -v clang-18
@@ -888,7 +755,7 @@ jobs:
             build/core/coverage/coverage/report.txt
             build/core/coverage/coverage/summary.json
       - name: Report persistent ccache statistics
-        if: ${{ always() && needs.select-ubuntu-runner.outputs.self-hosted == 'true' }}
+        if: ${{ always() }}
         run: >-
           ccache --show-log-stats
           || echo 'warning: ccache statistics are unavailable' >&2

@@ -44,26 +44,27 @@ _CANONICAL_LANE_JOBS = {
     "docs_static": ("docs-static",),
     "portal": ("portal",),
     "ci_contract": ("ci-contract",),
-    "core_ubuntu": ("select-ubuntu-runner", "core-ubuntu"),
-    "core_asan": ("select-ubuntu-runner", "core-asan"),
-    "core_coverage": ("select-ubuntu-runner", "core-coverage"),
+    # Routed by the static `ci-core` role on the shared host, which retired
+    # the Linux runner selector: these four were its last consumers, so no
+    # Linux lane has a runner-selector support job any more.
+    "core_ubuntu": ("core-ubuntu",),
+    "core_asan": ("core-asan",),
+    "core_coverage": ("core-coverage",),
     "core_macos": ("select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"),
     "web_toolchain": ("web-toolchain-conformance",),
     # Routed by the static `ci-web-heavy` netcup role, so no runner selector
     # is a support job of this lane.
     "web_runtime_host": ("web-runtime-host",),
     "creator": ("creator-web",),
-    # Also routed by the static role, which leaves the Ubuntu selector with
-    # no Web consumer at all.
     "web_runtime_lab": ("web-runtime-lab",),
     "deploy_contract": ("deploy-contract",),
     "chameleon_lab": ("chameleon-lab",),
-    "package": ("select-ubuntu-runner", "package"),
+    "package": ("package",),
 }
 # The closed set of formal jobs a self-hosted role may ever execute. Change
-# Scope, the PR Gate and both runner selectors stay on the GitHub-hosted
-# control plane, and the macOS lane keeps its own runner policy, so none of
-# them belong here.
+# Scope, the PR Gate and the surviving macOS runner selector stay on the
+# GitHub-hosted control plane, and the macOS lane keeps its own runner policy,
+# so none of them belong here.
 _CANONICAL_SELF_HOSTED_JOBS = (
     "docs-static", "portal", "ci-contract", "core-ubuntu", "core-asan",
     "core-coverage", "web-toolchain-conformance", "web-runtime-host",

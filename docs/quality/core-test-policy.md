@@ -155,13 +155,13 @@ named test no longer exists, so a rename cannot silently return them to the
 parallel phase. Widening a timing budget to buy parallelism would weaken the
 assertion; giving those two tests an idle machine does not.
 
-The Ubuntu selector runs only when a selected lane needs the trusted Linux
-pool, including `package`; the macOS selector runs only for `core_macos`.
-Package retains LFS hydration and explicitly disables ccache while reusing the
-same fork trust and hosted-capacity fallback route. Other GitHub-hosted
-preflight fallback, labels, bounded build parallelism, and persistent
-self-hosted `ccache` behavior remain unchanged. Selectors do not make a
-semantic workload conditional on infrastructure success: a selected job must
+`select-macos-runner` is the only runner selector left, and it runs only for
+`core_macos`. Every Linux lane names its role literally instead, so no Linux
+lane has a runner-selector support job. Package retains LFS hydration and
+explicitly disables ccache; the three native Core lanes use the role's
+persistent `ccache` unconditionally, because they can no longer land anywhere
+that lacks it. Bounded build parallelism is unchanged. A selector does not make
+a semantic workload conditional on infrastructure success: a selected job must
 still publish its formal result.
 
 `PR Gate` is the single aggregate decision. It evaluates same-run static
@@ -175,19 +175,18 @@ dependencies and applies this truth table:
 | unselected | `success`, `failure`, `cancelled`, or missing | fail |
 
 The manifest schema, exact event base/head SHAs, lane-to-job mapping, and
-complete 18-result key set must also match. The results are the 15 published
-lane jobs plus
-`select-ubuntu-runner`, `select-macos-runner`, and `macos-primary`;
+complete 17-result key set must also match. The results are the 15 published
+lane jobs plus `select-macos-runner` and `macos-primary`;
 `change-scope` is the manifest producer, and conditional `macos-fallback` is
 enforced transitively by `core-macos` and `core-asan-macos`. The producer is
-not a nineteenth result key, but its own job result must independently be
+not an eighteenth result key, but its own job result must independently be
 `success`; a manifest output cannot make a later artifact-upload failure pass.
 
 `Change Scope` and every selected lane or support job contribute timing
 evidence and a pre-Gate critical-path span to the Gate summary. Queue time is
 reported separately; only execution time is compared when the policy defines
-an execution SLO, otherwise the summary says `SLO not defined`. The Ubuntu and
-macOS selectors do not inherit a consumer lane SLO; `macos-primary` uses the
+an execution SLO, otherwise the summary says `SLO not defined`. The macOS
+selector does not inherit a consumer lane SLO; `macos-primary` uses the
 defined `core_macos` SLO. Missing timing is non-blocking, and SLO observations
 are neither timeouts nor correctness assertions. Independent job safety limits
 and test-owned behavior timeouts remain hard failures. A slow successful job
@@ -196,13 +195,15 @@ is not retried. `main` and manual dispatch always run the full manifest.
 
 ### Hosted Control Plane and Head Trust
 
-`Change Scope` and `PR Gate` stay on GitHub-hosted `ubuntu-24.04`, and so do
-both runner selectors. Change Scope must publish the exact diff, scope, trust,
+`Change Scope`, `PR Gate` and `select-macos-runner` stay on GitHub-hosted
+`ubuntu-24.04`. Change Scope must publish the exact diff, scope, trust,
 and upgrade reasons even when every self-hosted Linux runner is offline, and
 the Gate must adjudicate a workload without depending on that workload's host.
-These jobs are the declared exception to routing Linux work to the trusted
-pool; their minutes are reported as hosted control plane rather than as
-routine self-hosted workload.
+These three are the only declared exception to routing Linux work to the
+trusted hosts; their minutes are reported as hosted control plane rather than
+as routine self-hosted workload. The two macOS adjudicators also run on
+`ubuntu-24.04`, but they republish an already produced result under the
+required check name and execute no workload.
 
 The scope manifest is `lmdj.ci-scope.v2`. v2 adds exactly one closed boolean
 field, `trusted_head`, and `Change Scope` publishes the matching `trusted-head`
@@ -270,69 +271,71 @@ An automated test runs once per requested command. A failure is evidence to
 diagnose, not a reason to retry until it passes. A deliberate rerun after a
 code or environment correction must be recorded as a new result.
 
-The PR and `main` Core CI Linux workloads prefer the repository's trusted
-runner pool whenever at least one online runner carries the `self-hosted`,
-`Linux`, `X64`, `lmdj-linux`, and `contabo` labels. Selection is label-based
-rather than bound to a runner name, so GitHub assigns each selected job to any
-matching free runner. The selector uses GitHub-hosted Ubuntu for an untrusted
-fork, a missing status token, a Runner API failure, or a pool with no online
-matching runner. Selection happens before the workload jobs start; a semantic
-failure on the selected lane is final and is not retried on a GitHub-hosted
-runner.
+No routine Linux workload can reach GitHub-hosted capacity automatically any
+more. Every Linux job names a trusted role literally, and a literal label set
+has no fallback branch: a saturated or absent role queues the job instead of
+buying paid capacity. `select-ubuntu-runner`, which resolved `runs-on` from a
+single Runner API snapshot taken before the workload started, no longer exists.
+While it did, one snapshot could divert an entire manifest to paid
+infrastructure whenever concurrent runs saturated the pool for an instant — the
+dominant cost driver in the 2026-08-12 run history — and its hosted branch
+could have been reconnected by a single `needs`. Removing the job removes the
+route, along with its result key, its Runner API probe and its use of
+`SELF_HOSTED_RUNNER_READ_TOKEN` for Linux.
 
-Eligibility deliberately ignores whether a matching runner is currently busy.
-GitHub already queues a label-matched job against a loaded pool, so a busy
-runner is a latency condition while an absent pool is an availability
-condition. Because the selector resolves once for the whole run, treating the
-two alike diverted an entire manifest to paid infrastructure whenever
-concurrent runs saturated the pool for an instant — the dominant cost driver
-in the 2026-08-12 run history. A saturated pool now queues, and the selector
-reports online and idle counts as diagnostics.
+Busy-versus-absent is now platform behavior rather than workflow logic. GitHub
+queues a label-matched job against a loaded role, so a busy role is a latency
+condition; an offline or missing role is an availability condition that stays
+queued until GitHub cancels the job at its 24-hour queue limit. The terminal
+state of a dead role is therefore a cancelled run plus a runner-availability
+alert — not an unbounded wait, and not a silent bill.
 
 Concurrency is per role and equals the number of online runner services
-carrying that role; additional selected jobs queue behind them. Both hosts now
-run the approved two services each, so `ci-general` offers four concurrent
-slots across the two hosts, `ci-web-heavy` two on netcup, and the
-`select-ubuntu-runner` pool — which still matches the `contabo` origin label —
-two on Contabo. Raising the count is an operational change on the existing
-hosts, not a workflow change. Two per host is bounded rather than maximal
-because each CI CMake build is already capped at three parallel jobs, so
-services per host multiply into concurrent compile jobs per host: two services
-means at most six, which the hosts absorb, while three would mean nine and
-would slow every job on the machine. `web-runtime-host` is the lane most
-exposed to that contention, at roughly 40 minutes on the shared pool against
-16-19 GitHub-hosted; its netcup timings are not yet recorded, so its 75-minute
-limit stays a hang detector with headroom rather than a performance budget.
+carrying that role; additional selected jobs queue behind them. Both hosts run
+the approved two services each, so `ci-general` offers four concurrent slots
+across the two hosts, `ci-web-heavy` two on netcup, and `ci-core` two on the
+Contabo host it shares with LMDJ staging. Raising the count is an operational
+change on the existing hosts, not a workflow change. Two per host is bounded
+rather than maximal because each CI CMake build is already capped at three
+parallel jobs, so services per host multiply into concurrent compile jobs per
+host: two services means at most six, which the hosts absorb, while three would
+mean nine and would slow every job on the machine. `web-runtime-host` is the
+lane most exposed to that contention, at roughly 40 minutes on the shared pool
+against 16-19 GitHub-hosted; its netcup timings are not yet recorded, so its
+75-minute limit stays a hang detector with headroom rather than a performance
+budget.
 
-Linux CI now routes by role label rather than by the shared `contabo` origin
-label. The Contabo Singapore host, which also runs LMDJ staging, keeps
-`shared-with-staging` and carries the `ci-general` and `ci-core` roles under a
-resource slice that reserves at least about 2 vCPU and 8 GiB for the
-application and the OS. The CI-only netcup node carries `ci-only-host` and the
-`ci-general` and `ci-web-heavy` roles, with two runner services bounded to
-roughly 14 vCore and 48 GB and the rest left for the OS and cache maintenance.
-Routing splits three ways:
+Linux CI routes by role label rather than by the shared `contabo` origin label,
+which is no longer a selection condition anywhere. The Contabo Singapore host,
+which also runs LMDJ staging, keeps `shared-with-staging` and carries the
+`ci-general` and `ci-core` roles under a resource slice that reserves at least
+about 2 vCPU and 8 GiB for the application and the OS. The CI-only netcup node
+carries `ci-only-host` and the `ci-general` and `ci-web-heavy` roles, with two
+runner services bounded to roughly 14 vCore and 48 GB and the rest left for the
+OS and cache maintenance. Routing splits two ways:
 
-- **Hosted control plane.** Change Scope, PR Gate, `select-ubuntu-runner` and
+- **Hosted control plane, the declared exception.** Change Scope, PR Gate and
   `select-macos-runner` stay on `ubuntu-24.04`. Change Scope decides what runs
   and whether the head is trusted, and PR Gate decides whether the run passed,
   so a self-hosted outage must not be able to take the scope and trust
-  evidence down with the jobs it governs.
+  evidence down with the jobs it governs. The macOS selector is Hosted for the
+  same reason and is deliberately unchanged by this migration.
 - **Self-hosted workload, addressed by role.** The four Web lanes — Web
   Toolchain, Web Runtime Host, Creator and Web Runtime Lab — name
   `ci-web-heavy` literally. The five general Linux jobs — Docs / static,
   Architecture Portal, CI contract, Deploy contract and Chameleon Lab — name
-  `ci-general` literally. Architecture Portal declares its role inside the
-  called `architecture-portal.yml`, because GitHub does not allow a `uses:`
-  job to carry `runs-on`.
-- **Still selector-resolved.** Ubuntu Core, Linux ASan, Coverage and Package
-  are the only remaining `select-ubuntu-runner` consumers, and they keep the
-  automatic GitHub-hosted fallback until they move to `ci-core`.
+  `ci-general` literally. The four native Core jobs — Ubuntu Core, Linux ASan,
+  Coverage and Core package — name `ci-core` literally. Architecture Portal
+  declares its role inside the called `architecture-portal.yml`, because GitHub
+  does not allow a `uses:` job to carry `runs-on`.
 
-A literal role label is not selector-resolved and therefore has no fallback
-branch: a saturated or absent role queues the job instead of buying paid
-capacity. Every job that can land on a role carries the closed trust condition
-itself, because the selector's fork branch is no longer in its path.
+`ci-core` deliberately does not span both hosts: the persistent native `ccache`
+and the preinstalled clang-18/llvm-18 coverage toolchain are shared-host state,
+not pool state. Coverage accordingly no longer installs that toolchain; the
+`apt-get` step existed only for the hosted fallback and would otherwise mutate
+state both runner services share. Every job that can land on a role carries the
+closed trust condition itself, because no selector's fork branch is in its path
+any more.
 
 No CI job requires Docker. The CI-only host runs no daemon and the shared
 host's runner users are outside the `docker` group, so CI can never reach the
@@ -341,23 +344,19 @@ workflows with a checksum-pinned actionlint release archive instead of a
 container action, at the same pinned version; a digest names the exact bytes,
 where the Docker tag it replaced named only a version.
 
-A busy matching pool still queues instead of diverting to paid runners. When no
-matching runner ever comes online, the job stays queued and GitHub cancels it
-at its 24-hour queue limit, so the terminal state is a cancelled run plus a
-runner-availability alert — not an unbounded wait, and not a silent bill.
-
 Runner evidence stays separated. Registration and online status are not
 selection, and selection is not success. The real `runner_name`, queue seconds,
 execution seconds, billable worker time, and run wall-clock are each reported
 on their own, and none of them substitutes for another.
 
-Each CI CMake build is capped at three parallel jobs. Native Linux jobs
-use the pool's shared checkout-external persistent `ccache`, while Emscripten
-jobs deliberately bypass it. The trusted M1 runner uses its own persistent
-`ccache` with the same three-job build cap. GitHub-hosted Linux and macOS lanes
-keep the cap but do not depend on runner-local persistent caches. Per-job cache
-statistics are diagnostic evidence only and never replace semantic gate
-results.
+Each CI CMake build is capped at three parallel jobs. Native Linux jobs use the
+`ci-core` host's shared checkout-external persistent `ccache` unconditionally,
+because they can no longer land on a machine without it, while Emscripten and
+Package deliberately bypass it. The trusted M1 runner uses its own persistent
+`ccache` with the same three-job build cap. The GitHub-hosted macOS fallback
+lane keeps the cap but does not depend on a runner-local persistent cache.
+Per-job cache statistics are diagnostic evidence only and never replace
+semantic gate results.
 
 The macOS CI fallback is infrastructure recovery, not a test retry. Runner
 selection uses GitHub-hosted macOS immediately when the trusted self-hosted
