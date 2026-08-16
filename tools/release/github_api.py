@@ -983,12 +983,13 @@ def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAs
         document.get("label"), document.get("content_type"), document.get("state"),
     )
     api_url, download_url = document.get("url"), document.get("browser_download_url")
+    media_type = _media_type(content_type)
     if (
         not _positive_id(identifier) or not isinstance(name, str) or not name
         or "/" in name or "\\" in name or type(size) is not int or size < 0
         or (label is not None and not isinstance(label, str))
-        or not isinstance(content_type, str)
-        or re.fullmatch(r"[^\s/]+/[^\s/]+", content_type) is None
+        or media_type is None
+        or re.fullmatch(r"[^\s/]+/[^\s/]+", media_type) is None
         or not isinstance(state, str) or not state
         or _asset_api_identity(api_url) != (repository, identifier)
         or not _repository_url(download_url, "github.com", repository)
@@ -996,8 +997,22 @@ def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAs
         raise GitHubApiError("GitHub asset projection is invalid")
     return GitHubAsset(
         identifier, name, size, api_url, download_url, release_id,
-        label, content_type, state,
+        label, media_type, state,
     )
+
+
+def _media_type(value: object) -> str | None:
+    """Reduce a Content-Type to the bare type/subtype it identifies.
+
+    A media type may carry RFC 9110 parameters, and GitHub returns them: the
+    legacy `v0.2.0` Release serves `text/markdown; charset=utf-8`. A parameter
+    describes an encoding, never the asset's identity, so it is dropped before
+    the closed type/subtype pattern decides. Everything the pattern rejected
+    before it still rejects, because only parameters are removed.
+    """
+    if not isinstance(value, str):
+        return None
+    return value.split(";", 1)[0].strip()
 
 
 def _next_link(
