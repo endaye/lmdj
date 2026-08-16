@@ -53,7 +53,7 @@ if(TARGET lmdj_web_runtime_host)
       LMDJ_WEB_PLATFORM_VERSION="0.3.0"
       LMDJ_WEB_CREATOR_DISTRIBUTION_CONTRACT="lmdj.creator-web.distribution.v1"
       LMDJ_WEB_CREATOR_HOST_ID="creator-web"
-      LMDJ_WEB_CREATOR_HOST_VERSION="1.2.0"
+      LMDJ_WEB_CREATOR_HOST_VERSION="1.3.0"
       LMDJ_WEB_DIAGNOSTIC_DISTRIBUTION_CONTRACT="lmdj.web-runtime-host.distribution.v1"
       LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"
       LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.9"
