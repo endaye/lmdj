@@ -194,11 +194,17 @@ assert web_host_link is not None, (
     "Product Assembly must link the compiled catalog only when the "
     "Emscripten Web Host target exists"
 )
+# Derive the expected compile-time identities from the Host manifests rather
+# than repeating them. These definitions are baked into the wasm Runtime as the
+# manifest gate's allowlist, so a Host version bump that misses them ships a
+# distribution the Runtime refuses at boot with HOST_PROTOCOL_MISMATCH — a
+# failure that names nothing about versions. Deriving here fails loudly and
+# points at the real cause instead.
 for identity in (
     'LMDJ_WEB_CREATOR_HOST_ID="creator-web"',
-    'LMDJ_WEB_CREATOR_HOST_VERSION="1.2.0"',
+    f'LMDJ_WEB_CREATOR_HOST_VERSION="{creator_manifest["version"]}"',
     'LMDJ_WEB_DIAGNOSTIC_HOST_ID="web-runtime-host"',
-    'LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="1.2.9"',
+    f'LMDJ_WEB_DIAGNOSTIC_HOST_VERSION="{web_host_manifest["version"]}"',
 ):
     assert identity in product_cmake, identity
 
