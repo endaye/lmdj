@@ -429,20 +429,23 @@ PY
     echo "Creator Web error: proof server did not become ready" >&2
     return 2
   }
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium "${specs[@]}" || status=$?
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=sample-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=creator-sample-chromium "$required_relative" || status=$?
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
@@ -452,14 +455,16 @@ PY
   # all: the granted project proves record/trim/commit and the interruption
   # contract, the denied project proves the permission path is explained and
   # retryable rather than a silent no-op.
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=capture-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=creator-capture-chromium "$capture_relative" || status=$?
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=capture-denied-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
@@ -467,7 +472,8 @@ PY
     npm --prefix "$web_test_root" test -- \
       --project=creator-capture-denied-chromium "$capture_relative" || status=$?
 
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=sample-webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \

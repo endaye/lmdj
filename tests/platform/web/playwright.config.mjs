@@ -57,7 +57,16 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   reporter: [["line"]],
-  outputDir: resolve(webRoot, "test-results"),
+  // The Creator proof drives Playwright six times in a row. Playwright clears
+  // outputDir at the start of every run, so a single shared directory means
+  // each invocation destroys the previous one's traces and only the last
+  // failure is ever diagnosable — including in the CI artifact upload. Give
+  // each invocation its own subdirectory, keyed by the projects it runs.
+  outputDir: resolve(
+    webRoot,
+    "test-results",
+    (process.env.LMDJ_WEB_RESULTS_SLOT ?? "default").replace(/[^A-Za-z0-9._-]/g, "_"),
+  ),
   use: {
     baseURL: browserProofBaseURL,
     trace: "retain-on-failure",
