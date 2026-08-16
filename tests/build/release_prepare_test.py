@@ -526,8 +526,8 @@ class ReleasePrepareTest(unittest.TestCase):
             )
 
         intent = ReleaseIntent(
-            "fixture", ReleaseKind.PRODUCT, "1.0.21.0", "a" * 40, Disposition.RELEASABLE,
-            "web-runtime-host", ("evidence.md",), "canary", "1.0.21.0", 1,
+            "fixture", ReleaseKind.PRODUCT, "1.0.22.0", "a" * 40, Disposition.RELEASABLE,
+            "web-runtime-host", ("evidence.md",), "canary", "1.0.22.0", 1,
         )
         with self.assertRaises(TargetValidationError) as raised:
             validate_release_target(ROOT, intent, runner=CommandRunner(executor=executor))
