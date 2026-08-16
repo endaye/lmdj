@@ -84,6 +84,24 @@ WEB_HEAVY_JOBS = {
 WEB_HEAVY_DIRECT_PROOFS = {
     "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
 }
+GENERAL_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]"
+)
+# General Linux workload cut over to the dual-node general role, mapped to the
+# manifest lane each guards. The role exists on both trusted hosts, so these
+# jobs are the ones that can absorb either node's spare capacity. This stays
+# an exact set for the same reason the Web set does: an unreviewed extra route
+# is a topology change, not a detail.
+GENERAL_JOBS = {
+    "docs-static": "docs_static",
+    "ci-contract": "ci_contract",
+    "deploy-contract": "deploy_contract",
+    "chameleon-lab": "chameleon_lab",
+}
+# The one general lane that runs as a reusable workflow. A `uses:` job cannot
+# carry `runs-on`, so the caller holds only the lane guard and the trust
+# condition and the role is declared on the called workflow's job.
+GENERAL_REUSABLE_JOBS = ("portal",)
 # Lanes that still resolve their runner through `select-ubuntu-runner`. The
 # selector must not be woken for a lane that no longer consumes it: an extra
 # lane here spends a Hosted job and an API call on nothing, and a missing one
@@ -319,11 +337,21 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertNotRegex(job, rf"(?i){forbidden}")
 
     def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
+        """The control plane must outlive the pool it adjudicates.
+
+        Change Scope publishes what runs and whether the head is trusted; PR
+        Gate decides whether the run passed. As the workload leaves paid
+        Ubuntu these four must not follow it, or a self-hosted outage would
+        take the scope and trust evidence down with the jobs it governs.
+        """
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn("runs-on: ubuntu-24.04", job)
                 self.assertNotRegex(job, r"(?m)^    runs-on: (?!ubuntu-24\.04$)")
+                self.assertNotIn("ci-general", job)
+                self.assertNotIn("ci-web-heavy", job)
+                self.assertNotIn("lmdj-linux-pool", job)
         self.assertIn("select-ubuntu-runner:", self.main_source)
 
     def test_change_scope_publishes_trusted_head_from_the_event_only(self) -> None:
@@ -401,6 +429,65 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertEqual(
             self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
         )
+
+    def test_general_workload_lanes_use_the_dual_node_role_not_the_selector(self) -> None:
+        """The short Linux jobs cut over as one group, by role not by selector.
+
+        `select-ubuntu-runner` resolves once per run and can fall back to paid
+        Ubuntu; the static role queues instead. These four are short, share no
+        toolchain contract and carry no per-lane risk, so the reviewable unit
+        is the group rather than the lane. Pinning the exact job set still
+        keeps a later lane from inheriting the route without review.
+        """
+        for job_name, lane in GENERAL_JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(GENERAL_ROLE, job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("select-ubuntu-runner", job)
+                self.assertIn(TRUST_CONDITION, job)
+                self.assertEqual(
+                    set(re.findall(r"lanes\.([a-z_]+)", job)), {lane}
+                )
+        self.assertEqual(
+            self.main_source.count("ci-general"), len(GENERAL_JOBS)
+        )
+
+    def test_portal_role_is_declared_on_the_called_workflow(self) -> None:
+        """Portal routes where a reusable workflow can actually be routed.
+
+        The caller is a `uses:` job, which GitHub does not allow to declare
+        `runs-on`, so the role has to live on the called workflow's own job.
+        That workflow is `workflow_call`-only and has exactly one caller, so
+        placing the role there reroutes Portal and nothing else.
+        """
+        for job_name in GENERAL_REUSABLE_JOBS:
+            with self.subTest(job=job_name):
+                caller = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(TRUST_CONDITION, caller)
+                self.assertNotIn("runs-on:", caller)
+        called = self.workflow_job("portal", portal=True)
+        self.assertIn(GENERAL_ROLE, called)
+        self.assertNotIn("ubuntu-24.04", self.portal_source)
+        self.assertEqual(self.portal_source.count("ci-general"), 1)
+        events = self.event_block(self.portal_source)
+        self.assertNotRegex(
+            events, r"(?m)^  (?:pull_request|push|schedule|workflow_dispatch):"
+        )
+
+    def test_ci_contract_keeps_no_container_action_on_the_trusted_role(self) -> None:
+        """Nothing in CI may require the Docker socket that runs production.
+
+        The CI-only host has no daemon and the shared host's runner users are
+        outside the `docker` group, both on purpose. actionlint stays at the
+        same version but arrives as a digest-pinned release archive, which is
+        a stricter pin than the mutable tag it replaces.
+        """
+        self.assertNotIn("docker://", self.main_source)
+        self.assertNotIn("docker://", self.portal_source)
+        self.assertNotIn("docker://", self.web_proof_source)
 
     def test_web_runtime_host_keeps_its_exact_emscripten_identity_check(self) -> None:
         """Changing where the lane runs must not change what it proves.

@@ -217,10 +217,18 @@ jobs:
           fi
 
   docs-static:
+    # First of the five general Linux jobs on the dual-node trusted role. That
+    # role exists on both the shared and the CI-only host, so unlike the Web
+    # role it absorbs whichever node has capacity. These jobs are short, cheap
+    # and share no toolchain contract, so the group is the reviewable unit
+    # rather than the lane. The label set is literal rather than
+    # selector-resolved, so a busy or absent role queues them instead of
+    # diverting them to paid runners; trust therefore cannot come from the
+    # selector's fork branch and stays on each job itself.
     name: Docs / static
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.docs_static && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
@@ -233,6 +241,12 @@ jobs:
         run: git diff --check "$BASE_SHA" "$HEAD_SHA"
 
   portal:
+    # The one general lane that runs as a reusable workflow. GitHub does not
+    # allow a `uses:` job to declare `runs-on`, so this caller keeps only the
+    # lane guard and the closed trust condition and the trusted role is
+    # declared on the called workflow's own job. That workflow is
+    # `workflow_call`-only with this as its single caller, so the role there
+    # reroutes Portal and nothing else.
     name: Architecture Portal
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal && needs.change-scope.outputs.trusted-head == 'true' }}
@@ -244,15 +258,36 @@ jobs:
       pull_request_body: ${{ github.event_name == 'pull_request' && github.event.pull_request.body || '' }}
 
   ci-contract:
+    # On the dual-node trusted role with the rest of the general group.
     name: CI contract
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.ci_contract && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
+      # Same actionlint version as the `rhysd/actionlint:1.7.7` container
+      # action this replaces, pinned harder. A Docker tag is mutable, so the
+      # old form named a version but not an artifact; the
+      # digest below names the exact bytes and the check fails closed on
+      # mismatch. It also removes CI's only Docker dependency, which the
+      # trusted role cannot satisfy by design: the CI-only host runs no
+      # daemon and the shared host's runner users are outside the `docker`
+      # group, so CI can never reach the socket that runs production.
+      # actionlint still reads `.github/actionlint.yaml` from the workspace.
       - name: Validate workflows with pinned actionlint
-        uses: docker://rhysd/actionlint:1.7.7
+        env:
+          ACTIONLINT_VERSION: 1.7.7
+          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/actionlint.tar.gz"
+          curl --fail --silent --show-error --location --output "$archive" \
+            "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" \
+            | sha256sum --check --strict -
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" actionlint
+          "$RUNNER_TEMP/actionlint"
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -260,10 +295,14 @@ jobs:
         run: python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
 
   deploy-contract:
+    # On the dual-node trusted role with the rest of the general group. This
+    # lane only reads release history and runs hermetic tests; it holds no
+    # deployment credentials and the runner users have no deployment tree or
+    # secret access, so routing it does not widen what CI can reach.
     name: Deploy contract
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.deploy_contract && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
@@ -285,10 +324,14 @@ jobs:
       - run: python3 apps/web-runtime-host/test/deploy_command_test.py --shards 4
 
   chameleon-lab:
+    # On the dual-node trusted role with the rest of the general group. Like
+    # Web Runtime Lab it keeps its own proof path: a short Node/Python suite
+    # that installs nothing on the host, so the cutover changes where it runs
+    # and nothing about what it runs.
     name: Chameleon Lab
     needs: change-scope
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.chameleon_lab && needs.change-scope.outputs.trusted-head == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
