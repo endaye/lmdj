@@ -6,6 +6,7 @@ import {WaveformEditor} from "./waveform_editor";
 import type {createCreatorInputController} from "../runtime/input_controller";
 import {
   cancelSamplePreviewJourney,
+  captureCommitJourney,
   importAssignSampleJourney,
   inspectSampleJourney,
   previewSampleDraftJourney,
@@ -14,6 +15,8 @@ import {
   updateSampleJourney,
   type SampleMutationResolution,
 } from "../runtime/sample_actions";
+import {CapturePanel} from "./capture_panel";
+import type {CaptureBuffer} from "../capture/capture_buffer";
 import {refreshProjectProjectionJourney} from "../runtime/project_actions";
 import type {
   CreatorSampleRuntimeSession,
@@ -46,6 +49,29 @@ interface PendingFile {
   readonly slot: number;
   readonly file: File;
 }
+
+// What the Sample surface reports back to a byte source about one import
+// journey. CapturePanel consumes exactly this shape.
+type ImportOutcome =
+  | {readonly kind: "committed"}
+  | {readonly kind: "conflict"; readonly message: string}
+  | {readonly kind: "failed"; readonly message: string};
+
+const COMMITTED_OUTCOME: ImportOutcome = Object.freeze({kind: "committed"});
+const BUSY_OUTCOME: ImportOutcome = Object.freeze({
+  kind: "failed",
+  message: "Another Sample operation is still running.",
+});
+// The journey was replaced by a newer operation; its own result is no longer
+// this caller's to report, and the surface already reflects the newer one.
+const SUPERSEDED_OUTCOME: ImportOutcome = Object.freeze({
+  kind: "failed",
+  message: "Superseded by a newer Sample operation.",
+});
+const CANCELLED_OUTCOME: ImportOutcome = Object.freeze({
+  kind: "failed",
+  message: "Sample import was cancelled.",
+});
 
 interface PreviewOwner {
   readonly session: CreatorSampleRuntimeSession;
@@ -117,6 +143,10 @@ export function SampleSurface({
   const previewEpoch = useRef(0);
   const previewOwner = useRef<PreviewOwner | null>(null);
   const [pendingFile, setPendingFile] = useState<PendingFile | null>(null);
+  // Slot whose Replace confirmation is pending before the capture panel opens
+  // (S8-D12), and the slot the open panel records into.
+  const [pendingCaptureSlot, setPendingCaptureSlot] = useState<number | null>(null);
+  const [captureSlot, setCaptureSlot] = useState<number | null>(null);
   const sample = state.sample;
   const audioSuspended = state.audio.phase !== "running" &&
     state.audio.phase !== "recovering";
@@ -463,11 +493,22 @@ export function SampleSurface({
     }
   };
 
-  const performImport = async ({slot, file}: PendingFile) => {
+  // One journey runner for every byte source that assigns a Sample to a Pad.
+  // A file pick and a committed capture differ only in how the bytes are
+  // produced, so they must share the Replace confirmation, the pre-mutation
+  // stop, the pending/abort bookkeeping, conflict classification and the
+  // post-import selection and waveform behaviour. `invoke` is the only seam.
+  const runImportJourney = async (
+    slot: number,
+    invoke: (
+      active: CreatorSampleRuntimeSession,
+      options: {slot: number; expectedRevision: number; signal: AbortSignal},
+    ) => Promise<SampleMutationResolution>,
+  ): Promise<ImportOutcome> => {
     if (session === undefined || sample.pendingAction !== null ||
-      operationPending.current !== null) return;
+      operationPending.current !== null) return BUSY_OUTCOME;
     const expectedRevision = sample.savedRevision ?? state.project.current?.revision;
-    if (expectedRevision === null || expectedRevision === undefined) return;
+    if (expectedRevision === null || expectedRevision === undefined) return BUSY_OUTCOME;
     const assigned = isAssigned(slot);
     const pending = Object.freeze({
       kind: assigned ? "replace" as const : "import" as const,
@@ -481,17 +522,20 @@ export function SampleSurface({
     importPending.current = pending;
     try {
       if (assigned) await stopBeforeMutation(slot);
-      const resolution = await importAssignSampleJourney(session, file, {
+      const resolution = await invoke(session, {
         slot,
         expectedRevision,
         signal: controller.signal,
       });
       previewOwner.current = null;
-      if (operationPending.current !== pending) return;
+      if (operationPending.current !== pending) return SUPERSEDED_OUTCOME;
       dispatchResolution(pending, resolution);
+      return resolution.kind === "conflict"
+        ? {kind: "conflict", message: resolution.message}
+        : COMMITTED_OUTCOME;
     } catch (error) {
       clearOwnedPreview();
-      if (operationPending.current !== pending) return;
+      if (operationPending.current !== pending) return SUPERSEDED_OUTCOME;
       operationPending.current = null;
       importPending.current = null;
       if (error instanceof DOMException && error.name === "AbortError") {
@@ -499,16 +543,32 @@ export function SampleSurface({
           type: "sample-action",
           action: {type: "operation-cancelled", pending},
         });
-      } else {
-        dispatch({
-          type: "sample-action",
-          action: {type: "operation-failed", pending, error: publicOperationError(error)},
-        });
+        return CANCELLED_OUTCOME;
       }
+      const failure = publicOperationError(error);
+      dispatch({
+        type: "sample-action",
+        action: {type: "operation-failed", pending, error: failure},
+      });
+      return {kind: "failed", message: failure.message};
     } finally {
       if (importController.current === controller) importController.current = null;
     }
   };
+
+  const performImport = ({slot, file}: PendingFile) => runImportJourney(
+    slot,
+    (active, options) => importAssignSampleJourney(active, file, options),
+  );
+
+  const performCaptureCommit = (
+    slot: number,
+    buffer: CaptureBuffer,
+    selection: {startFrame: number; frameCount: number},
+  ) => runImportJourney(
+    slot,
+    (active, options) => captureCommitJourney(active, buffer, selection, options),
+  );
 
   const chooseFile = (slot: number) => {
     replaceReturnFocus.current = document.activeElement instanceof HTMLElement
@@ -565,6 +625,25 @@ export function SampleSurface({
               onClick={() => chooseFile(selectedSlot)}
             >
               Replace Sample
+            </button>
+          ) : null}
+          {selectedSlot !== null ? (
+            <button
+              type="button"
+              disabled={session === undefined || projectUnavailable ||
+                sample.pendingAction !== null || captureSlot !== null}
+              onClick={() => {
+                replaceReturnFocus.current = document.activeElement instanceof HTMLElement
+                  ? document.activeElement
+                  : null;
+                // Recording onto an assigned Pad is a replacement, so it takes
+                // the existing confirmation before the microphone is ever
+                // requested (S8-D12, S8B-D2).
+                if (selectedAssigned) setPendingCaptureSlot(selectedSlot);
+                else setCaptureSlot(selectedSlot);
+              }}
+            >
+              Record Sample
             </button>
           ) : null}
         </div>
@@ -721,6 +800,45 @@ export function SampleSurface({
           else void performImport({slot, file});
         }}
       />
+      {captureSlot === null ? null : (
+        <CapturePanel
+          padLabel={`Pad ${padAddress({slot: captureSlot, assetId: null})}`}
+          onCommit={(buffer, selection) =>
+            performCaptureCommit(captureSlot, buffer, selection)}
+          onClose={() => {
+            setCaptureSlot(null);
+            replaceReturnFocus.current?.focus();
+          }}
+        />
+      )}
+      {pendingCaptureSlot === null ? null : (
+        <ConfirmationDialog
+          labelledBy="record-replace-heading"
+          returnFocus={replaceReturnFocus.current}
+          onCancel={() => setPendingCaptureSlot(null)}
+        >
+          <h2 id="record-replace-heading">
+            Replace Pad {padAddress({slot: pendingCaptureSlot, assetId: null})}?
+          </h2>
+          <p>Committing a recording replaces this Pad&apos;s Sample.</p>
+          <p>Replacing the Sample resets Start, End, trigger, Loop, Volume, and Mute.</p>
+          <div className="confirmation-actions">
+            <button type="button" onClick={() => setPendingCaptureSlot(null)}>
+              Cancel replace
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const slot = pendingCaptureSlot;
+                setPendingCaptureSlot(null);
+                setCaptureSlot(slot);
+              }}
+            >
+              Confirm replace
+            </button>
+          </div>
+        </ConfirmationDialog>
+      )}
       {pendingFile === null ? null : (
         <ConfirmationDialog
           labelledBy="replace-heading"

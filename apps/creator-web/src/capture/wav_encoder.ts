@@ -7,10 +7,13 @@ export function quantizePcm16(value: number): number {
   return Math.sign(scaled) * Math.round(Math.abs(scaled));
 }
 
+// The returned view is always backed by a fresh ArrayBuffer (never a
+// SharedArrayBuffer), which the type states so callers can hand the bytes
+// straight to a Blob or File without copying or casting.
 export function encodePcm16Wav(
   channels: readonly Float32Array[],
   sampleRate: number = CAPTURE_SAMPLE_RATE,
-): Uint8Array {
+): Uint8Array<ArrayBuffer> {
   const first = channels[0];
   if (channels.length < 1 || channels.length > 2 || first === undefined ||
       channels.some((c) => !(c instanceof Float32Array) || c.length !== first.length) ||
