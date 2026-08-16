@@ -11,6 +11,11 @@ const BUSY_RETRY_INTERVAL_MS = 500;
 // operations: open, inspect, and snapshot reload. The UI hang detector covers
 // their 90-second protocol ceiling plus bounded runner/render settling time.
 const OPEN_TRANSITION_TIMEOUT_MS = 3 * 30_000 + 35_000;
+// Every audio lifecycle gesture owns one independently bounded 30-second
+// Runtime request, so the state that follows an accepted gesture is promised
+// only within that bound plus bounded render settling. Playwright's 5-second
+// default is tighter than anything the product guarantees.
+const AUDIO_TRANSITION_TIMEOUT_MS = 30_000 + 5_000;
 
 async function projectOpenOutcome(heading, open, retry) {
   if (await heading.isVisible()) return "ready";
@@ -295,13 +300,31 @@ async function importAndActivate(page) {
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
   await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
 }
 
 async function report(page) {
   const pending = page.waitForEvent("download");
   await page.getByRole("button", {name: "Export report"}).click();
   return JSON.parse(await readFile(await (await pending).path(), "utf8"));
+}
+
+// A synthetic lifecycle edge never suspends the AudioContext, so the Runtime
+// keeps the recovery epoch it opened, re-enters `recovering` on its own and
+// asks only for the one probe Trigger; the Host never parks at
+// `audio-suspended` and therefore never needs an Activate gesture here. The
+// Runtime refuses an Activate gesture in any other Host state, the Creator
+// reports a refused activation as "Audio inactive", and no Host state left in
+// this recovery can carry the surface out of it again. "Audio suspended" is
+// published as soon as the Host reaches `interrupted`, which is where the
+// interruption starts, so a gesture issued against that label races the
+// in-flight interruption. Wait for the guaranteed recovery instead.
+async function recoverFromLifecycleEdge(page) {
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
 }
 
 async function enterLoopToggleSample(page) {
@@ -407,9 +430,16 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await enterLoopToggleSample(page);
   await latchLoopToggle(page);
   await page.getByRole("button", {name: "Suspend audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
+  // An explicit Suspend publishes "Audio suspended" only after the Runtime has
+  // committed the suspend, so the Host is already parked and the Activate
+  // gesture that follows is guaranteed to be accepted.
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
   await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
   await latchLoopToggle(page);
 
   await page.reload();
@@ -418,7 +448,9 @@ test("suspend, restart, and reopen clear an active loop toggle before reactivati
   await reopenWithVisibleBusyRetry(page);
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
   await enterLoopToggleSample(page);
   await latchLoopToggle(page);
   const value = await report(page);
@@ -447,10 +479,11 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
     timeout: 30_000,
   });
-  await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
+  await recoverFromLifecycleEdge(page);
   await latchLoopToggle(page);
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 
   await page.evaluate(() => {
@@ -467,10 +500,11 @@ test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({pag
     delete document.visibilityState;
     document.dispatchEvent(new Event("visibilitychange"));
   });
-  await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
+  await recoverFromLifecycleEdge(page);
   await latchLoopToggle(page);
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
 });
 
 test("persisted page lifecycle retains the Project and live input surface", async ({page, browserName}) => {
