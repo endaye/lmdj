@@ -140,6 +140,23 @@ exact range), and CI Contract (pinned actionlint plus `ci_*` contracts). They do
 not establish merge evidence. Marking the Pull Request Ready triggers a new
 classification and formal result for the current head.
 
+An ordinary `main` push is classified from the exact `before..after` range with
+the same path ownership rules as a Ready Pull Request, so a docs-only merge runs
+focused CI while Product Assembly, Contract, central CI-control, unknown-path
+and three-expensive-family merges still run full. The push base is an event
+field, not a resolved Pull Request base: a zero, absent, non-commit or
+non-ancestor `before`, or any incomplete inventory, is reported as an
+unverifiable base and runs full with that concrete reason and no path
+inventory. Main runs stay grouped per SHA and never cancel an earlier `main`
+run.
+
+Focused main is a CI cost decision, never a release decision. A Product Build or
+release operator who needs full evidence for an exact `main` SHA dispatches
+`ci.yml` on that SHA with an empty `lanes` input and records the resulting run
+ID in the release intent; `scripts/release.sh audit --remote` and `prepare`
+reject focused or `requested` evidence, and a full dispatch by itself authorizes
+no release mutation.
+
 To upgrade the current head to full CI, apply `ci:full`, then wait for the
 in-progress run to finish or explicitly cancel it. Because label changes do not
 start a separate workflow event, use GitHub's **Re-run all jobs** on the current
@@ -190,6 +207,13 @@ Releases are produced from an identified, verified `main` SHA under
 persistent release branch. The normal path uses `scripts/release.sh` and keeps
 each transition independently authorized and verified:
 
+0. establish full exact-main CI evidence for the target SHA: a completed,
+   successful `Core CI` run on `main` whose retained scope manifest is `full`
+   for that exact SHA with a trusted head and whose same-run `Change Scope` and
+   `PR Gate` both succeeded. That manifest is retained for 14 days; after it
+   expires, rerun every job of the exact recorded run while the run itself is
+   retained, or obtain a newly authorized exact-SHA full run and a reviewed
+   intent update. Evidence is never inferred or reconstructed;
 1. run a fresh read-only `audit --remote --tag TAG` against canonical state;
 2. authorize `prepare` to build, verify, sign, and create only local state;
 3. separately authorize `push-tag` to push and reconcile one exact tag;

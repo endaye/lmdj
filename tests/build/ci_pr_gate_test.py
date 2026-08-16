@@ -28,7 +28,9 @@ VALID_RESULTS = {
     "docs-static": "success",
     "portal": "success",
     "ci-contract": "skipped",
-    "select-ubuntu-runner": "success",
+    # `select-macos-runner` is the only runner selector left in the result set.
+    # Every Linux lane now names a role literally, so the Linux selector is not
+    # a support job of any lane and is not a formal job at all.
     "select-macos-runner": "skipped",
     "macos-primary": "skipped",
     "core-ubuntu": "skipped",
@@ -244,7 +246,7 @@ class PrGateTest(unittest.TestCase):
             report.errors,
             ("change-scope producer is failure, expected success",),
         )
-        self.assertEqual(len(VALID_RESULTS), 18)
+        self.assertEqual(len(VALID_RESULTS), 17)
         self.assertNotIn("change-scope", VALID_RESULTS)
 
     def test_required_skipped_failure_and_cancelled_fail(self):
@@ -415,6 +417,61 @@ class PrGateTest(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(set(report.requested_jobs), set(VALID_RESULTS))
 
+    def test_no_lane_projects_a_linux_runner_selector(self):
+        """The Gate projection follows every lane off the retired selector.
+
+        Each Linux lane now names its role literally, so `select-ubuntu-runner`
+        is neither required nor skipped: it is not a job. Projecting it for any
+        lane would fail the run on a job that can never report, and demanding
+        it succeed would quietly restore the paid-runner fallback this cutover
+        removed. The four native Core lanes are the ones that changed here, but
+        the assertion is closed over every lane so no future lane can
+        reintroduce it.
+        """
+        for lane, jobs in self.policy["lane_jobs"].items():
+            with self.subTest(lane=lane):
+                self.assertNotIn("select-ubuntu-runner", jobs)
+        for lane in ("core_ubuntu", "package"):
+            with self.subTest(lane=lane):
+                manifest = self.manifest((lane,))
+                report = self.validate(
+                    manifest=manifest, results=self.matching_results(manifest)
+                )
+                self.assertTrue(report.ok)
+                self.assertNotIn("select-ubuntu-runner", report.requested_jobs)
+                self.assertNotIn("select-ubuntu-runner", report.skipped_jobs)
+
+    def test_native_core_lanes_require_only_their_own_job(self):
+        """Each native Core lane projects exactly one job now.
+
+        While the selector existed, selecting `core_asan` alone required two
+        jobs and made the Gate depend on an infrastructure decision taken
+        before the workload started. The lane is now its own required job and
+        nothing else, and reprojecting the retired selector fails closed.
+        """
+        for lane, job in (
+            ("core_ubuntu", "core-ubuntu"),
+            ("core_asan", "core-asan"),
+            ("core_coverage", "core-coverage"),
+            ("package", "package"),
+        ):
+            with self.subTest(lane=lane):
+                self.assertEqual(self.policy["lane_jobs"][lane], [job])
+        for lane in ("core_ubuntu", "package"):
+            with self.subTest(lane=lane):
+                stale = self.manifest((lane,))
+                stale["required_jobs"] = sorted(
+                    [*stale["required_jobs"], "select-ubuntu-runner"]
+                )
+                stale_report = self.validate(
+                    manifest=stale, results=self.matching_results(stale)
+                )
+                self.assertFalse(stale_report.ok)
+                self.assertIn(
+                    "required jobs do not derive from lanes",
+                    "\n".join(stale_report.errors),
+                )
+
     def test_core_macos_requires_both_published_adjudicators(self):
         manifest = self.manifest(("core_macos",))
         results = {job: "skipped" for job in VALID_RESULTS}
@@ -505,8 +562,15 @@ class PrGateTest(unittest.TestCase):
                     rf"Timing {re.escape(job_id)} .*; (?:within SLO|SLO missed)",
                 )
 
-    def test_web_only_selector_timing_has_no_lane_execution_slo(self):
-        manifest = self.manifest(("web_runtime_host",))
+    def test_retired_linux_selector_is_timed_nowhere_and_judged_nowhere(self):
+        """A retired job must not reappear as a timing row.
+
+        `select-ubuntu-runner` was the pool support job whose duration was
+        reported but never scored. It no longer runs, so a stray Jobs API row
+        under its old display name belongs to no formal job and must be
+        ignored rather than attributed to the lane it used to serve.
+        """
+        manifest = self.manifest(("package",))
         results = {job: "skipped" for job in VALID_RESULTS}
         for required in manifest["required_jobs"]:
             results[required] = "success"
@@ -515,22 +579,15 @@ class PrGateTest(unittest.TestCase):
             report,
             self.policy,
             timing_reader=lambda: [{
-                "name": workflow_display_names()["select-ubuntu-runner"],
+                "name": "Select Ubuntu runner",
                 "created_at": "2026-08-11T00:00:00Z",
                 "started_at": "2026-08-11T00:00:01Z",
                 "completed_at": "2026-08-11T01:00:01Z",
             }],
         )
         self.assertTrue(report.ok)
-        self.assertIn(
-            "Timing select-ubuntu-runner | queue 1s; execution 3600s; "
-            "SLO not defined",
-            summary,
-        )
-        self.assertNotRegex(
-            summary,
-            r"Timing select-ubuntu-runner .*; (?:within SLO|SLO missed)",
-        )
+        self.assertNotIn("select-ubuntu-runner", summary)
+        self.assertNotIn("select-ubuntu-runner", workflow_display_names())
 
     def test_macos_selector_has_no_slo_but_primary_keeps_core_macos_slo(self):
         manifest = self.manifest(("core_macos",))
@@ -579,14 +636,13 @@ class PrGateTest(unittest.TestCase):
             results[job] = "success"
         report = self.validate(manifest=manifest, results=results)
         summary = self.module.render_summary(report, self.policy, timing_reader=lambda: [
-            {"name": "Select Ubuntu runner", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
             {"name": "core (ubuntu-latest)", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
             {"name": "macOS gates (primary)", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
             {"name": "core (macos-latest)", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
             {"name": "core-asan-macos", "created_at": "2026-08-11T00:00:00Z", "started_at": "2026-08-11T00:00:01Z", "completed_at": "2026-08-11T00:00:02Z"},
         ])
         self.assertTrue(report.ok)
-        for job in ("select-ubuntu-runner", "core-ubuntu", "macos-primary", "core-macos", "core-asan-macos"):
+        for job in ("core-ubuntu", "macos-primary", "core-macos", "core-asan-macos"):
             self.assertIn(f"Timing {job}", summary)
         self.assertIn("Timing select-macos-runner | timing unavailable", summary)
 
@@ -619,7 +675,7 @@ class PrGateTest(unittest.TestCase):
 
         self.assertTrue(report.ok)
         self.assertEqual(set(display_names), set(VALID_RESULTS))
-        self.assertEqual(len(VALID_RESULTS), 18)
+        self.assertEqual(len(VALID_RESULTS), 17)
         self.assertNotIn("change-scope", VALID_RESULTS)
         self.assertIn("Timing change-scope", summary)
         for job_id in display_names:

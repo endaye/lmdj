@@ -11,7 +11,13 @@ import shutil
 import tempfile
 from typing import Callable, Protocol
 
-from .github_api import BranchProjection, RunProjection
+from .ci_evidence import verify_exact_main_ci
+from .github_api import (
+    BranchProjection,
+    CiScopeProjection,
+    RunJobProjection,
+    RunProjection,
+)
 from .model import CANONICAL_BRANCH, CANONICAL_REPOSITORY, Disposition, ReleaseIntent, ReleaseLedger, ReleaseModelError, ReleasePlan, ReleasePolicy, canonical_json, classify_tag, load_ledger, load_policy
 from .profiles import AssetBuild, ProfileBuild, ProfileRuntime, build_profile, verify_existing_profile
 
@@ -59,6 +65,10 @@ class ReleaseGit(Protocol):
 class ReleaseGitHub(Protocol):
     def get_branch(self, repository: str, branch: str) -> BranchProjection: ...
     def list_runs_for_sha(self, repository: str, sha: str) -> list[RunProjection]: ...
+    def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]: ...
+    def get_ci_scope_manifest(
+        self, repository: str, run: RunProjection,
+    ) -> CiScopeProjection: ...
 
 
 ProfileBuilder = Callable[[str, Path, Path, ReleaseIntent], ProfileBuild]
@@ -175,28 +185,37 @@ def _verify_key_roles(context: PrepareContext, intent: ReleaseIntent) -> None:
 
 
 def _verify_ci(context: PrepareContext, intent: ReleaseIntent) -> RunProjection:
-    run = _matching_run(context, intent)
-    if (
-        run.event != "push" or run.head_sha != intent.target_revision
-        or run.head_branch != context.policy.branch
-        or run.workflow_name != context.policy.blocking_workflow
-        or run.status != "completed" or run.conclusion != "success"
-    ):
-        raise PrepareError("release intent does not have an exact successful merged-main CI run")
-    return run
+    """Require full exact-main evidence before any prospective release step.
 
-
-def _matching_run(context: PrepareContext, intent: ReleaseIntent) -> RunProjection:
-    if intent.merged_main_run_id is None:
-        raise PrepareError("release intent is missing its merged-main CI run")
-    try:
-        runs = context.github.list_runs_for_sha(context.policy.repository, intent.target_revision)
-    except Exception:
-        raise PrepareError("exact target CI projection is unavailable") from None
-    matching = [run for run in runs if run.id == intent.merged_main_run_id]
-    if len(matching) != 1:
-        raise PrepareError("release intent does not have an exact successful merged-main CI run")
-    return matching[0]
+    `prepare` only ever reaches this with a `releasable` intent, so it always
+    requires the retained full scope manifest and the same-run Gate. The shared
+    transition path also verifies an already `published` intent, which is read
+    from immutable tag, Release and asset evidence instead: its scope artifact
+    has a bounded retention and must not be able to invalidate history.
+    """
+    result = verify_exact_main_ci(
+        context.github,
+        repository=context.policy.repository,
+        branch=context.policy.branch,
+        workflow=context.policy.blocking_workflow,
+        target_revision=intent.target_revision,
+        run_id=intent.merged_main_run_id,
+        require_full_scope=intent.disposition is Disposition.RELEASABLE,
+    )
+    if result.code == "external-error":
+        raise PrepareError("exact target CI projection is unavailable")
+    if result.code == "unverifiable":
+        if intent.merged_main_run_id is None:
+            raise PrepareError("release intent is missing its merged-main CI run")
+        raise PrepareError(
+            "release intent has no retained full merged-main CI evidence: " + result.message
+        )
+    if result.code != "ok" or result.run is None:
+        raise PrepareError(
+            "release intent does not have an exact successful merged-main CI run: "
+            + result.message
+        )
+    return result.run
 
 
 def _verify_product_proof(context: PrepareContext, worktree: Path, intent: ReleaseIntent) -> None:

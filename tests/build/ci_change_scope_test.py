@@ -33,22 +33,30 @@ LANE_JOBS = {
     "docs_static": ["docs-static"],
     "portal": ["portal"],
     "ci_contract": ["ci-contract"],
-    "core_ubuntu": ["select-ubuntu-runner", "core-ubuntu"],
-    "core_asan": ["select-ubuntu-runner", "core-asan"],
-    "core_coverage": ["select-ubuntu-runner", "core-coverage"],
+    # The four native Core lanes route by the literal `ci-core` role, so none
+    # of them resolves a runner through a selector and none may require a
+    # selector result: the Linux selector no longer exists as a job at all,
+    # and a support job that cannot run would gate the Gate on a permanent
+    # skip.
+    "core_ubuntu": ["core-ubuntu"],
+    "core_asan": ["core-asan"],
+    "core_coverage": ["core-coverage"],
     "core_macos": ["select-macos-runner", "macos-primary", "core-macos", "core-asan-macos"],
     "web_toolchain": ["web-toolchain-conformance"],
-    "web_runtime_host": ["select-ubuntu-runner", "web-runtime-host"],
+    # Cut over to the static `ci-web-heavy` netcup role, so the lane resolves
+    # no runner through a selector and must not require a selector result.
+    "web_runtime_host": ["web-runtime-host"],
     "creator": ["creator-web"],
-    "web_runtime_lab": ["select-ubuntu-runner", "web-runtime-lab"],
+    "web_runtime_lab": ["web-runtime-lab"],
     "deploy_contract": ["deploy-contract"],
     "chameleon_lab": ["chameleon-lab"],
-    "package": ["select-ubuntu-runner", "package"],
+    "package": ["package"],
 }
 
 # The closed set of formal jobs that a self-hosted role may ever execute.
-# Change Scope, PR Gate and the two selectors are the Hosted control plane, and
-# the macOS lane keeps its own runner policy, so none of them appear here.
+# Change Scope, PR Gate and the surviving macOS selector are the Hosted control
+# plane, and the macOS lane keeps its own runner policy, so none of them appear
+# here.
 SELF_HOSTED_JOBS = [
     "docs-static",
     "portal",
@@ -228,6 +236,20 @@ class ChangeScopeTest(unittest.TestCase):
         defaults.update(kwargs)
         return self.module.classify(self.policy, changed(self.module, *paths), **defaults)
 
+    def classify_unverifiable_push(self, *, base_sha):
+        """Classify a push whose exact `before` range cannot be verified."""
+        with TemporaryGitRepository() as repository:
+            repository.write_and_commit("docs/guide.md", "one\n", "base")
+            head = repository.write_and_commit("docs/guide.md", "two\n", "head")
+            inventory, reason = self.module.resolve_push_inventory(
+                str(repository.path), base_sha, head,
+            )
+        self.assertIsNone(inventory)
+        return self.module.classify(
+            self.policy, (), base_sha=base_sha, head_sha=head,
+            event_name="push", draft=False, labels=(), unverifiable_base=reason,
+        )
+
     def true_lanes(self, manifest):
         return {name for name, selected in manifest["lanes"].items() if selected}
 
@@ -273,10 +295,15 @@ class ChangeScopeTest(unittest.TestCase):
             job for jobs in self.policy["lane_jobs"].values() for job in jobs
         }
         self.assertTrue(set(SELF_HOSTED_JOBS).issubset(formal_jobs))
-        for job in ("select-ubuntu-runner", "select-macos-runner",
-                    "macos-primary", "core-macos", "core-asan-macos"):
+        for job in ("select-macos-runner", "macos-primary", "core-macos",
+                    "core-asan-macos"):
             with self.subTest(job=job):
                 self.assertNotIn(job, SELF_HOSTED_JOBS)
+        # The Linux runner selector is not merely outside the self-hosted set:
+        # it is no longer a formal job, because no lane can resolve a runner
+        # from an API snapshot that was able to buy paid Ubuntu.
+        self.assertNotIn("select-ubuntu-runner", formal_jobs)
+        self.assertNotIn("select-ubuntu-runner", SELF_HOSTED_JOBS)
 
     def test_policy_rejects_a_weakened_self_hosted_job_set(self):
         mutations = {
@@ -326,8 +353,11 @@ class ChangeScopeTest(unittest.TestCase):
                 policy["lane_jobs"].pop("core_asan"),
             ),
             "support job replacement": lambda policy: policy["lane_jobs"].__setitem__(
-                "core_asan", ["select-ubuntu-runner", "different-asan-job"]
+                "core_asan", ["different-asan-job"]
             ),
+            "retired selector reintroduction": lambda policy: policy[
+                "lane_jobs"
+            ].__setitem__("core_asan", ["select-ubuntu-runner", "core-asan"]),
             "central control rule removal": lambda policy: policy.__setitem__(
                 "full_rules", [
                     rule for rule in policy["full_rules"]
@@ -455,10 +485,105 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(plain["mode"], "focused")
         self.assertEqual(labeled["mode"], "full")
 
-    def test_main_and_dispatch_are_full(self):
-        for event_name in ("push", "workflow_dispatch"):
-            with self.subTest(event_name=event_name):
-                manifest = self.classify(["docs/guide.md"], event_name=event_name)
+    def test_docs_main_push_is_focused(self):
+        manifest = self.classify(["docs/guide.md"], event_name="push")
+        self.assertEqual(manifest["mode"], "focused")
+        self.assertEqual(self.true_lanes(manifest), {"docs_static"})
+
+    def test_dispatch_without_lanes_is_still_full(self):
+        manifest = self.classify(["docs/guide.md"], event_name="workflow_dispatch")
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(self.true_lanes(manifest), LANES)
+
+    def test_unverifiable_push_base_is_full(self):
+        manifest = self.classify_unverifiable_push(base_sha="0" * 40)
+        self.assertEqual(manifest["mode"], "full")
+        self.assertIn("unverifiable push base", manifest["reasons"])
+
+    def test_every_unverifiable_push_base_condition_is_full_without_guessed_paths(self):
+        with TemporaryGitRepository() as repository:
+            base = repository.write_and_commit("docs/guide.md", "one\n", "base")
+            head = repository.write_and_commit("docs/guide.md", "two\n", "head")
+            repository.run("git", "checkout", "--quiet", "-b", "other", base)
+            unrelated = repository.write_and_commit(
+                "docs/other.md", "one\n", "unrelated",
+            )
+            blob = repository.run(
+                "git", "rev-parse", f"{head}:docs/guide.md",
+            ).stdout.strip()
+            cases = {
+                "zero before": "0" * 40,
+                "absent before": "1" * 40,
+                "non-commit before": blob,
+                "non-ancestor before": unrelated,
+            }
+            for name, base_sha in cases.items():
+                with self.subTest(name=name):
+                    inventory, reason = self.module.resolve_push_inventory(
+                        str(repository.path), base_sha, head,
+                    )
+                    self.assertIsNone(inventory)
+                    self.assertTrue(reason)
+                    manifest = self.module.classify(
+                        self.policy, (), base_sha=base_sha, head_sha=head,
+                        event_name="push", draft=False, labels=(),
+                        unverifiable_base=reason,
+                    )
+                    self.assertEqual(manifest["mode"], "full")
+                    self.assertEqual(self.true_lanes(manifest), LANES)
+                    self.assertEqual(manifest["changed_files"], [])
+                    self.assertIn("unverifiable push base", manifest["reasons"])
+                    self.assertTrue(any(
+                        item.startswith("unverifiable push base: ")
+                        for item in manifest["reasons"]
+                    ))
+
+    def test_verifiable_push_base_reports_the_exact_inventory(self):
+        with TemporaryGitRepository() as repository:
+            base = repository.write_and_commit("docs/guide.md", "one\n", "base")
+            head = repository.write_and_commit(
+                "apps/creator-web/src/editor.ts", "one\n", "creator",
+            )
+            inventory, reason = self.module.resolve_push_inventory(
+                str(repository.path), base, head,
+            )
+            self.assertIsNone(reason)
+            self.assertEqual(
+                {path for record in inventory for path in record.paths},
+                {"apps/creator-web/src/editor.ts"},
+            )
+
+    def test_unverifiable_push_base_never_carries_a_path_inventory(self):
+        with self.assertRaises(ValueError):
+            self.classify(
+                ["docs/guide.md"], event_name="push",
+                unverifiable_base="fixture reason",
+            )
+        for event in ("pull_request", "workflow_dispatch"):
+            with self.subTest(event=event):
+                with self.assertRaises(ValueError):
+                    self.module.classify(
+                        self.policy, (), base_sha="a" * 40, head_sha="b" * 40,
+                        event_name=event, draft=False, labels=(),
+                        unverifiable_base="fixture reason",
+                    )
+
+    def test_unsafe_main_pushes_stay_full(self):
+        cases = {
+            "product assembly": ["products/lmdj/assembly.json"],
+            "contract": ["contracts/project/lmdj.project.v1.schema.json"],
+            "ci control": [".github/workflows/ci.yml"],
+            "ci script": ["scripts/ci/change_scope.py"],
+            "unknown path": ["invented-top-level/file.txt"],
+            "three expensive families": [
+                "tests/core/render_test.cpp",
+                "apps/web-runtime-host/src/main.mjs",
+                "apps/creator-web/src/editor.ts",
+            ],
+        }
+        for name, paths in cases.items():
+            with self.subTest(name=name):
+                manifest = self.classify(paths, event_name="push")
                 self.assertEqual(manifest["mode"], "full")
                 self.assertEqual(self.true_lanes(manifest), LANES)
 
@@ -597,41 +722,102 @@ class ChangeScopeTest(unittest.TestCase):
             )),
         ))
 
-    def test_missing_git_object_or_failed_diff_is_a_hard_error(self):
+    def invoke_classifier(self, repository, *, event, base_sha, head_sha,
+                          manifest, environment=None):
+        return subprocess.run([
+            sys.executable, str(CLASSIFIER_PATH), "--policy", str(POLICY_PATH),
+            "--event", event, "--base-sha", base_sha, "--head-sha", head_sha,
+            "--repository", "owner/repo", "--head-repository", "owner/repo",
+            "--pr-number", "1", "--manifest-out", str(manifest),
+            "--github-output", str(repository.path / "output"),
+            "--summary", str(repository.path / "summary.md"),
+        ], cwd=repository.path, capture_output=True, text=True, env=environment)
+
+    def fake_git_bin(self, repository, *, diff_status):
+        fake_bin = repository.path / "fake-bin"
+        fake_bin.mkdir()
+        fake_git = fake_bin / "git"
+        fake_git.write_text(
+            "#!/bin/sh\n"
+            "if [ \"$1\" = \"cat-file\" ]; then exit 0; fi\n"
+            "if [ \"$1\" = \"merge-base\" ]; then exit 0; fi\n"
+            f"if [ \"$1\" = \"diff\" ]; then exit {diff_status}; fi\n"
+            "exit 7\n",
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o755)
+        return dict(os.environ, PATH=str(fake_bin))
+
+    def test_missing_git_object_or_failed_diff_is_a_hard_error_off_the_push_path(self):
         with TemporaryGitRepository() as repository:
             base = repository.write_and_commit("docs/guide.md", "one\n", "base")
             head = repository.write_and_commit("docs/guide.md", "two\n", "head")
-            def invoke(manifest, base_sha, environment=None):
-                return subprocess.run([
-                    sys.executable, str(CLASSIFIER_PATH), "--policy", str(POLICY_PATH),
-                    "--event", "push", "--base-sha", base_sha, "--head-sha", head,
-                    "--repository", "owner/repo", "--pr-number", "1", "--manifest-out",
-                    str(manifest), "--github-output", str(repository.path / "output"),
-                    "--summary", str(repository.path / "summary.md"),
-                ], cwd=repository.path, capture_output=True, text=True, env=environment)
-
             with self.subTest("missing object"):
                 manifest = repository.path / "missing-object.json"
-                result = invoke(manifest, "0" * 40)
+                result = self.invoke_classifier(
+                    repository, event="pull_request", base_sha="1" * 40,
+                    head_sha=head, manifest=manifest,
+                )
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(manifest.exists())
             with self.subTest("failed diff"):
                 manifest = repository.path / "failed-diff.json"
-                fake_bin = repository.path / "fake-bin"
-                fake_bin.mkdir()
-                fake_git = fake_bin / "git"
-                fake_git.write_text(
-                    "#!/bin/sh\n"
-                    "if [ \"$1\" = \"cat-file\" ]; then exit 0; fi\n"
-                    "if [ \"$1\" = \"diff\" ]; then exit 9; fi\n"
-                    "exit 7\n",
-                    encoding="utf-8",
+                result = self.invoke_classifier(
+                    repository, event="pull_request", base_sha=base,
+                    head_sha=head, manifest=manifest,
+                    environment=self.fake_git_bin(repository, diff_status=9),
                 )
-                fake_git.chmod(0o755)
-                environment = dict(os.environ, PATH=str(fake_bin))
-                result = invoke(manifest, base, environment)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse(manifest.exists())
+
+    def test_push_with_an_unverifiable_base_publishes_a_full_manifest(self):
+        with TemporaryGitRepository() as repository:
+            head = repository.write_and_commit("docs/guide.md", "one\n", "base")
+            manifest = repository.path / "zero-base.json"
+            result = self.invoke_classifier(
+                repository, event="push", base_sha="0" * 40, head_sha=head,
+                manifest=manifest,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(document["mode"], "full")
+            self.assertEqual(document["base_sha"], "0" * 40)
+            self.assertEqual(document["changed_files"], [])
+            self.assertIn("unverifiable push base", document["reasons"])
+
+    def test_push_with_an_incomplete_inventory_publishes_a_full_manifest(self):
+        with TemporaryGitRepository() as repository:
+            base = repository.write_and_commit("docs/guide.md", "one\n", "base")
+            head = repository.write_and_commit("docs/guide.md", "two\n", "head")
+            manifest = repository.path / "incomplete.json"
+            result = self.invoke_classifier(
+                repository, event="push", base_sha=base, head_sha=head,
+                manifest=manifest,
+                environment=self.fake_git_bin(repository, diff_status=9),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(document["mode"], "full")
+            self.assertEqual(document["changed_files"], [])
+            self.assertIn("unverifiable push base", document["reasons"])
+
+    def test_docs_only_push_publishes_a_focused_manifest(self):
+        with TemporaryGitRepository() as repository:
+            base = repository.write_and_commit("docs/guide.md", "one\n", "base")
+            head = repository.write_and_commit("docs/guide.md", "two\n", "head")
+            manifest = repository.path / "focused.json"
+            result = self.invoke_classifier(
+                repository, event="push", base_sha=base, head_sha=head,
+                manifest=manifest,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            document = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(document["mode"], "focused")
+            self.assertEqual(
+                {lane for lane, on in document["lanes"].items() if on},
+                {"docs_static"},
+            )
+            self.assertEqual(document["required_jobs"], ["docs-static"])
 
     def test_cli_publishes_the_trusted_head_output_and_summary_line(self):
         with TemporaryGitRepository() as repository:
@@ -683,6 +869,21 @@ class ChangeScopeTest(unittest.TestCase):
         for lane in LANES:
             with self.subTest(lane=lane):
                 self.assertRegex(summary, rf"(?m)^- <code>{lane}</code>: .*unknown top-level")
+
+    def test_summary_records_dispatch_lane_selection_reason(self):
+        # Reproduces run 31902121850: a lane enabled only via the dispatch
+        # --lanes input (no path in the diff matches its rules) must still
+        # receive an auditable reason so the summary does not fail closed.
+        manifest = self.classify(
+            ["docs/guide.md"],
+            event_name="workflow_dispatch",
+            requested_lanes=["web_toolchain"],
+        )
+        summary = self.module._summary(manifest, self.policy)
+        self.assertRegex(
+            summary,
+            r"(?m)^- <code>web_toolchain</code>: .*workflow_dispatch",
+        )
 
     def test_summary_lists_both_rename_paths_and_all_lane_reasons(self):
         records = self.module.parse_name_status_z(

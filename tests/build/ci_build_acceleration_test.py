@@ -18,6 +18,27 @@ MACOS_ACTION = REPO_ROOT / ".github/actions/macos-core-gates/action.yml"
 WEB_TOOLCHAIN = REPO_ROOT / "scripts/web-toolchain-conformance.sh"
 WEB_HOST = REPO_ROOT / "scripts/web-runtime-host.sh"
 GITIGNORE = REPO_ROOT / ".gitignore"
+WEB_HEAVY_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
+)
+CORE_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
+)
+# Lanes cut over to the dedicated netcup role, mapped to the lane each one
+# runs.
+WEB_HEAVY_LANES = {
+    "web-toolchain-conformance": "web_toolchain",
+    "creator-web": "creator",
+    "web-runtime-host": "web_runtime_host",
+    "web-runtime-lab": "web_runtime_lab",
+}
+# Cut-over jobs that do not go through the shared `web-ci-proof` action,
+# mapped to the proof step each keeps instead. Web Runtime Lab installs no
+# browser stack of its own, so it has no `install-system-deps` input to set
+# and must not acquire one by being rerouted.
+WEB_HEAVY_DIRECT_PROOFS = {
+    "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
+}
 
 
 class CiBuildAccelerationTest(unittest.TestCase):
@@ -54,29 +75,38 @@ class CiBuildAccelerationTest(unittest.TestCase):
         self.assertNotIn("actions/cache", source)
         self.assertNotIn("ccache --zero-stats", source)
 
-    def test_linux_native_jobs_use_ccache_only_on_self_hosted_lane(self) -> None:
-        expected_cache_selector = (
-            "use-ccache: ${{ needs.select-ubuntu-runner.outputs.self-hosted }}"
-        )
+    def test_linux_native_jobs_always_use_the_role_persistent_ccache(self) -> None:
+        """The cache condition goes with the selector output it read.
+
+        `use-ccache` was gated on whether the run had been diverted to paid
+        Ubuntu, where no persistent cache exists. These three lanes now only
+        ever execute on the shared host that owns the cache, so the input is
+        unconditionally true and the statistics step is unconditional too:
+        native Core ccache behavior is preserved, not merely retained.
+        """
         for job_name in ("core-ubuntu", "core-asan", "core-coverage"):
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
-                self.assertIn(
-                    "needs: [change-scope, select-ubuntu-runner]", job
-                )
+                self.assertIn("needs: change-scope", job)
+                self.assertIn(CORE_ROLE, job)
+                self.assertNotIn("select-ubuntu-runner", job)
                 self.assertIn(
                     "uses: ./.github/actions/configure-build-acceleration", job
                 )
-                self.assertIn(expected_cache_selector, job)
+                self.assertIn("use-ccache: true", job)
                 self.assertIn("ccache --show-log-stats", job)
+                self.assertIn(
+                    "if: ${{ always() }}\n"
+                    "        run: >-\n"
+                    "          ccache --show-log-stats",
+                    job,
+                )
 
     def test_package_uses_lfs_and_bounded_acceleration_without_ccache(self) -> None:
         job = self.workflow_job("package")
-        self.assertIn("needs: [change-scope, select-ubuntu-runner]", job)
-        self.assertIn(
-            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
-            job,
-        )
+        self.assertIn("needs: change-scope", job)
+        self.assertIn(CORE_ROLE, job)
+        self.assertNotIn("select-ubuntu-runner", job)
         self.assertIn("lfs: true", job)
         self.assertIn("git lfs checkout -- tests/fixtures/audio", job)
         self.assertIn(
@@ -105,7 +135,7 @@ class CiBuildAccelerationTest(unittest.TestCase):
                 self.assertIn("CMAKE_BUILD_PARALLEL_LEVEL", source)
                 self.assertRegex(source, r'parallel_args=\(--parallel\)')
 
-    def test_web_toolchain_reuses_the_provisioned_netcup_browser_stack(self) -> None:
+    def test_cut_over_web_lanes_reuse_the_provisioned_netcup_browser_stack(self) -> None:
         """A persistent CI-only role provisions browser deps once, not per run.
 
         `install-system-deps: "true"` lets Playwright apt-install host
@@ -113,15 +143,17 @@ class CiBuildAccelerationTest(unittest.TestCase):
         wrong on the dedicated netcup node, where it repeats work the role
         already provides and mutates state shared by both runner services.
         """
-        job = self.workflow_job("web-toolchain-conformance")
-        self.assertIn(
-            "runs-on: "
-            "[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]",
-            job,
-        )
-        self.assertIn("lane: web_toolchain", job)
-        self.assertIn('install-system-deps: "false"', job)
-        self.assertNotIn('install-system-deps: "true"', job)
+        for job_name, lane in WEB_HEAVY_LANES.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertIn(WEB_HEAVY_ROLE, job)
+                self.assertNotIn('install-system-deps: "true"', job)
+                if job_name in WEB_HEAVY_DIRECT_PROOFS:
+                    self.assertIn(WEB_HEAVY_DIRECT_PROOFS[job_name], job)
+                    self.assertNotIn("install-system-deps", job)
+                else:
+                    self.assertIn(f"lane: {lane}", job)
+                    self.assertIn('install-system-deps: "false"', job)
 
     def test_generated_web_toolchain_does_not_dirty_source_tree(self) -> None:
         ignored = {

@@ -25,7 +25,14 @@ permissions:
 
 jobs:
   portal:
-    runs-on: ubuntu-24.04
+    # Portal's share of the general Linux workload on the dual-node trusted
+    # role. The role is declared here because the caller in `ci.yml` is a
+    # `uses:` job, which GitHub does not allow to carry `runs-on`. The label
+    # set is literal rather than selector-resolved, so a busy or absent role
+    # queues this job instead of diverting it to paid runners. The caller
+    # holds the closed trust condition, and this workflow has no trigger but
+    # `workflow_call` and no other caller, so it cannot run untrusted.
+    runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6

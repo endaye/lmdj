@@ -68,6 +68,32 @@ Use `scripts/release.sh verify-draft TAG RELEASE_ID PLAN_SHA256` only for
 read-only Draft verification. The audit before and after a mutation is
 `scripts/release.sh audit --remote --tag TAG`.
 
+## Full exact-main CI evidence
+
+An ordinary `main` merge is classified from its own changed paths, so a merge
+can legitimately run focused CI. Release authority never accepts that: audit and
+`prepare` require the exact recorded Actions run for the release target to be a
+completed, successful `Core CI` run on `main` whose retained scope manifest is
+`full` for that exact SHA with a trusted head, and whose same-run `Change Scope`
+and `PR Gate` jobs both succeeded. A run conclusion, a merged path type, or a
+`main` SHA alone is never evidence of full CI.
+
+When the release target's own push was focused, the operator dispatches `ci.yml`
+with an empty `lanes` input on the exact target SHA, waits for that run to
+finish, and records its run ID in the release intent before requesting any
+mutation. A lane selection produces a `requested` manifest, which is rejected.
+
+The retained scope manifest is the prospective evidence and it expires after 14
+days. While the recorded run itself is retained, rerun all of its jobs to
+produce a fresh latest attempt on the same run ID and SHA. If that is
+unavailable, only a newly authorized exact-SHA full run plus a separately
+reviewed intent update may replace it; never reconstruct, infer or backfill the
+evidence. Report absent or expired evidence as `unverifiable` and focused,
+mismatched or ungated evidence as `conflict`.
+
+A full dispatch is evidence, not authorization: completing one authorizes no
+tag, Draft, publication, deployment or promotion.
+
 When a verified Draft is ready for publication, print the protected workflow
 inputs `tag`, `release_id`, and `plan_sha256`. Do not approve the protected
 `release` Environment or claim publication on the user's behalf. Keep
