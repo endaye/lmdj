@@ -132,8 +132,10 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   expect(manifest.compatible_hosts).toEqual([
     {host_id: "web-runtime-host", host_version: "1.2.9"},
   ]);
+  // capture_worklet ships as its own same-origin asset because the CSP below
+  // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.
   expect(manifest.assets.map(({role}) => role)).toEqual([
-    "host_main", "runtime_script", "runtime_wasm", "host_style",
+    "host_main", "runtime_script", "runtime_wasm", "host_style", "capture_worklet",
   ]);
   const index = await (await request.get(`${baseURL}/index.html`)).text();
   expect(index).toContain(createHash("sha256").update(manifestBytes).digest("hex"));
