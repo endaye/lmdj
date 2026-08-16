@@ -23,10 +23,14 @@ from tools.release.audit import AuditContext, audit, write_report  # noqa: E402
 import tools.release.audit as audit_module  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
+    CiScopeConflictError,
+    CiScopeProjection,
+    CiScopeUnavailableError,
     DeploymentBranchPolicy,
     GitHubAsset,
     GitHubEnvironment,
     GitHubRelease,
+    RunJobProjection,
     RunProjection,
 )
 from tools.release.model import load_ledger_document, load_policy  # noqa: E402
@@ -39,6 +43,21 @@ TARGET = "a" * 40
 TAG_OBJECT = "b" * 40
 PRODUCT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 CHECKSUM = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
+
+# The closed v2 lane and full job identities, written independently of the CI
+# policy file and of the release modules under test.
+LANES = (
+    "chameleon_lab", "ci_contract", "core_asan", "core_coverage", "core_macos",
+    "core_ubuntu", "creator", "deploy_contract", "docs_static", "package",
+    "portal", "web_runtime_host", "web_runtime_lab", "web_toolchain",
+)
+FULL_REQUIRED_JOBS = (
+    "chameleon-lab", "ci-contract", "core-asan", "core-asan-macos",
+    "core-coverage", "core-macos", "core-ubuntu", "creator-web",
+    "deploy-contract", "docs-static", "macos-primary", "package", "portal",
+    "select-macos-runner", "web-runtime-host", "web-runtime-lab",
+    "web-toolchain-conformance",
+)
 
 
 class ReadOnlyGit:
@@ -104,6 +123,17 @@ class ReadOnlyGitHub:
         self.runs = [
             RunProjection(123, "push", TARGET, "main", "Core CI", "completed", "success")
         ]
+        self.jobs = [
+            RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", TARGET),
+            RunJobProjection(2, 123, "PR Gate", "completed", "success", "Core CI", TARGET),
+        ]
+        self.scope = CiScopeProjection(
+            schema="lmdj.ci-scope.v2", base_sha="a" * 40, head_sha=TARGET,
+            mode="full", trusted_head=True,
+            selected_lanes=tuple(sorted(LANES)),
+            required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+        )
+        self.scope_error: Exception | None = None
         self.releases: dict[str, GitHubRelease] = {}
         self.payloads: dict[int, bytes] = {}
         self.error: Exception | None = None
@@ -127,6 +157,16 @@ class ReadOnlyGitHub:
     def list_runs_for_sha(self, repository: str, sha: str) -> list[RunProjection]:
         self._read()
         return list(self.runs)
+
+    def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]:
+        self._read()
+        return list(self.jobs)
+
+    def get_ci_scope_manifest(self, repository: str, run: RunProjection) -> CiScopeProjection:
+        self._read()
+        if self.scope_error is not None:
+            raise self.scope_error
+        return self.scope
 
     def list_releases(self, repository: str) -> list[GitHubRelease]:
         self._read()
@@ -522,6 +562,78 @@ class ReleaseAuditTest(unittest.TestCase):
                 report = audit(self.context([self.entry()], [exception]), remote=True, tag=tag)
                 finding = next(item for item in report.findings if item.subject == tag)
                 self.assertIn(finding.code, {"missing", "conflict"})
+
+    def releasable_intent(self) -> tuple[AuditContext, object]:
+        item = self.entry(disposition="releasable")
+        context = self.context([item])
+        return context, context.ledger.intent_for_tag(str(item["tag"]))
+
+    def test_release_accepts_only_full_exact_main_ci(self) -> None:
+        self.github.scope = CiScopeProjection(
+            schema="lmdj.ci-scope.v2", base_sha="a" * 40, head_sha=TARGET,
+            mode="full", trusted_head=True,
+            selected_lanes=tuple(sorted(LANES)),
+            required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+        )
+        self.github.jobs = [
+            RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", TARGET),
+            RunJobProjection(2, 123, "PR Gate", "completed", "success", "Core CI", TARGET),
+        ]
+        context, intent = self.releasable_intent()
+        self.assertIsNone(audit_module._ci_problem(context, intent))
+
+    def test_release_rejects_focused_or_wrong_sha_or_missing_gate(self) -> None:
+        context, intent = self.releasable_intent()
+        for mode, sha, gate in (
+            ("focused", TARGET, "success"),
+            ("full", "c" * 40, "success"),
+            ("full", TARGET, "skipped"),
+        ):
+            with self.subTest(mode=mode, sha=sha, gate=gate):
+                self.github.scope = CiScopeProjection(
+                    schema="lmdj.ci-scope.v2",
+                    base_sha="a" * 40,
+                    head_sha=sha,
+                    mode=mode,
+                    trusted_head=True,
+                    selected_lanes=tuple(sorted(LANES)),
+                    required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+                )
+                self.github.jobs = [
+                    RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", sha),
+                    RunJobProjection(2, 123, "PR Gate", "completed", gate, "Core CI", sha),
+                ]
+                problem = audit_module._ci_problem(context, intent)
+                self.assertIsNotNone(problem)
+
+    def test_full_dispatch_evidence_is_accepted_for_a_release_target(self) -> None:
+        self.github.runs = [
+            RunProjection(123, "workflow_dispatch", TARGET, "main", "Core CI", "completed", "success"),
+        ]
+        context, intent = self.releasable_intent()
+        self.assertIsNone(audit_module._ci_problem(context, intent))
+
+    def test_absent_scope_evidence_is_unverifiable_and_outage_is_external(self) -> None:
+        context, intent = self.releasable_intent()
+        for error, expected in (
+            (CiScopeUnavailableError("retained scope evidence is absent"), "unverifiable"),
+            (CiScopeConflictError("scope artifact identity conflicts"), "conflict"),
+            (TimeoutError("fixture outage"), "external-error"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.github.scope_error = error
+                problem = audit_module._ci_problem(context, intent)
+                self.assertIsNotNone(problem)
+                self.assertEqual(problem.code, expected)
+
+    def test_published_audit_does_not_depend_on_expired_ephemeral_evidence(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        self.github.scope_error = CiScopeUnavailableError("retained scope evidence expired")
+        self.github.jobs = []
+        report = audit(self.context(), remote=True, tag=tag)
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
 
     def test_linked_null_id_exception_never_waives_current_release_marker(self) -> None:
         tag = str(self.entry()["tag"])

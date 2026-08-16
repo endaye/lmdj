@@ -71,6 +71,9 @@ _CANONICAL_SELF_HOSTED_JOBS = (
     "creator-web", "web-runtime-lab", "deploy-contract", "chameleon-lab",
     "package",
 )
+# The exact reason recorded on a `push` whose event-supplied base range cannot
+# be verified; it is a full-mode upgrade reason, never a lane input.
+UNVERIFIABLE_PUSH_BASE = "unverifiable push base"
 _MANDATORY_FULL_MATCHES = {
     ("exact", ".github/workflows/ci.yml"),
     ("prefix", "scripts/ci/"),
@@ -315,7 +318,7 @@ def classify(
     policy: Mapping[str, object], changed: Sequence[ChangedFile], *, base_sha: str,
     head_sha: str, event_name: str, draft: bool, labels: Collection[str],
     force_full: bool = False, requested_lanes: Collection[str] | None = None,
-    trusted_head: bool = True,
+    trusted_head: bool = True, unverifiable_base: str | None = None,
 ) -> dict[str, object]:
     """Return a deterministic closed v2 scope manifest as a dictionary.
 
@@ -323,10 +326,23 @@ def classify(
     :func:`derive_trusted_head`, which is exactly what an in-repository caller
     such as the local pre-flight is. Every CI path derives and passes it
     explicitly from the event.
+
+    ``unverifiable_base`` carries the concrete reason a push range could not be
+    verified. It only exists for ``push``, because that is the one event whose
+    base is an untrusted event field rather than a resolved Pull Request base,
+    and it forces full with no path inventory at all: an unverifiable range is
+    never used to guess which lanes a change owns.
     """
     _validate_policy(policy)
     if not isinstance(trusted_head, bool):
         raise ValueError("trusted head must be a boolean")
+    if unverifiable_base is not None:
+        if not isinstance(unverifiable_base, str) or not unverifiable_base:
+            raise ValueError("unverifiable push base reason must be a nonempty string")
+        if event_name != "push":
+            raise ValueError("an unverifiable base is only defined for a push")
+        if changed:
+            raise ValueError("an unverifiable push base carries no path inventory")
     base_sha, head_sha = _validate_sha(base_sha), _validate_sha(head_sha)
     lanes = set(policy["lanes"])
     all_paths: set[str] = set()
@@ -358,8 +374,16 @@ def classify(
         unknown = sorted(requested - lanes)
         if unknown:
             raise ValueError(f"unknown requested lane(s): {', '.join(unknown)}")
-    if event_name in {"push", "workflow_dispatch"} and not requested:
+    # An empty `workflow_dispatch` is the explicit operator request for full
+    # CI, so it stays unconditional. A `push` is classified from its exact
+    # verified range exactly like a Ready Pull Request; the central-CI,
+    # Contract, Product Assembly, unknown-path and expensive-family rules above
+    # already upgrade every unsafe main change to full on their own.
+    if event_name == "workflow_dispatch" and not requested:
         full_reasons.add(f"full event: {event_name}")
+    if unverifiable_base is not None:
+        full_reasons.add(UNVERIFIABLE_PUSH_BASE)
+        full_reasons.add(f"{UNVERIFIABLE_PUSH_BASE}: {unverifiable_base}")
     if requested:
         full_reasons.discard("forced full")
         reasons.discard("forced full")
@@ -505,6 +529,45 @@ def read_git_inventory(repository: str | Path, base_sha: str, head_sha: str) -> 
     if result.returncode != 0:
         raise RuntimeError("git diff --name-status failed")
     return parse_name_status_z(result.stdout)
+
+
+def _is_commit(repository: str | Path, sha: str) -> bool:
+    return subprocess.run(
+        ["git", "cat-file", "-e", f"{sha}^{{commit}}"], cwd=repository,
+        capture_output=True,
+    ).returncode == 0
+
+
+def resolve_push_inventory(
+    repository: str | Path, base_sha: str, head_sha: str,
+) -> tuple[tuple[ChangedFile, ...] | None, str | None]:
+    """Return the exact push inventory, or ``None`` plus a concrete reason.
+
+    A push carries its base in `github.event.before`, which is absent for the
+    first push, zero after a branch is created, and an unrelated revision after
+    a force push. Every one of those is reported as an unverifiable base so the
+    caller runs full CI; none of them is silently narrowed to a guessed range.
+    """
+    head_sha = _validate_sha(head_sha)
+    if not isinstance(base_sha, str) or _SHA_RE.fullmatch(base_sha) is None:
+        return None, "before SHA is absent or is not a 40-character revision"
+    base_sha = base_sha.lower()
+    if base_sha == "0" * 40:
+        return None, "before SHA is the zero object"
+    if not _is_commit(repository, head_sha):
+        raise RuntimeError(f"Git commit object unavailable: {head_sha}")
+    if not _is_commit(repository, base_sha):
+        return None, "before SHA is not an available commit object"
+    ancestry = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", base_sha, head_sha], cwd=repository,
+        capture_output=True,
+    )
+    if ancestry.returncode != 0:
+        return None, "before SHA is not an ancestor of the pushed head"
+    try:
+        return read_git_inventory(repository, base_sha, head_sha), None
+    except (ValueError, RuntimeError, subprocess.SubprocessError):
+        return None, "changed-file inventory is incomplete"
 
 
 def fetch_pr_metadata(repository: str, pr_number: str) -> tuple[bool, set[str]]:
@@ -663,7 +726,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         policy = load_policy(args.policy)
-        inventory = read_git_inventory(Path.cwd(), args.base_sha, args.head_sha)
+        unverifiable_base: str | None = None
+        if args.event == "push":
+            inventory, unverifiable_base = resolve_push_inventory(
+                Path.cwd(), args.base_sha, args.head_sha,
+            )
+            inventory = inventory or ()
+        else:
+            inventory = read_git_inventory(Path.cwd(), args.base_sha, args.head_sha)
         draft, labels = (False, set())
         if args.event == "pull_request":
             draft, labels = fetch_pr_metadata(args.repository, args.pr_number)
@@ -677,6 +747,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 lane.strip() for lane in args.lanes.split(",") if lane.strip()
             ],
             trusted_head=trusted_head,
+            unverifiable_base=unverifiable_base,
         )
         compact = encode_manifest(manifest)
         _write(args.manifest_out, compact)
