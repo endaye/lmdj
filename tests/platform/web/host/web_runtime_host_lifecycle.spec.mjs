@@ -37,7 +37,7 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
     });
   }
 
-  await page.addInitScript(() => {
+  await page.addInitScript((identity) => {
     class FakeAudioContext extends EventTarget {
       constructor(options) {
         super();
@@ -101,9 +101,9 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         // Derived from the generated identity: the shell compares this against
         // the live Product Build, so a literal fails every allocation with a
         // host state of "failed" that names nothing about versions.
-        product_build: WEB_RUNTIME_IDENTITY.product_build,
-        host_version: WEB_RUNTIME_IDENTITY.hosts["web-runtime-host"].version,
-        protocol_version: WEB_RUNTIME_IDENTITY.protocol_version,
+        product_build: identity.product_build,
+        host_version: identity.host_version,
+        protocol_version: identity.protocol_version,
       }),
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
@@ -171,6 +171,10 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         cleanupCalls += 1;
       },
     };
+  }, {
+    product_build: WEB_RUNTIME_IDENTITY.product_build,
+    host_version: WEB_RUNTIME_IDENTITY.hosts["web-runtime-host"].version,
+    protocol_version: WEB_RUNTIME_IDENTITY.protocol_version,
   });
 
   await page.goto("/formal-host/index.html");
