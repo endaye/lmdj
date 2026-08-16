@@ -1097,6 +1097,38 @@ class ReleaseTransitionsTest(unittest.TestCase):
         )
         self.assertEqual(getattr(asset, "state", None), "uploaded")
 
+    def test_asset_media_type_parameters_are_accepted_and_reduced(self) -> None:
+        cases = (
+            ("text/markdown; charset=utf-8", "text/markdown"),
+            ("text/markdown;charset=utf-8", "text/markdown"),
+            ("  application/zip  ", "application/zip"),
+            ("application/octet-stream", "application/octet-stream"),
+        )
+        for declared, expected in cases:
+            with self.subTest(content_type=declared):
+                document = self._asset_json(7, "asset.zip")
+                document["content_type"] = declared
+                client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+                    200, {}, json.dumps([document]).encode(),
+                ))
+                assets = client.list_release_assets("endaye/lmdj", 17)
+                self.assertEqual(len(assets), 1)
+                self.assertEqual(getattr(assets[0], "content_type", None), expected)
+
+    def test_asset_media_types_without_one_type_and_subtype_fail_closed(self) -> None:
+        for declared in (
+            "text/", "/markdown", "no-slash", "text/markdown/extra",
+            "text /markdown", "; charset=utf-8", "",
+        ):
+            with self.subTest(content_type=declared):
+                document = self._asset_json(7, "asset.zip")
+                document["content_type"] = declared
+                client = GitHubClient(http_transport=lambda method, url, headers, body: HttpResponse(
+                    200, {}, json.dumps([document]).encode(),
+                ))
+                with self.assertRaisesRegex(GitHubApiError, "projection"):
+                    client.list_release_assets("endaye/lmdj", 17)
+
     def test_github_mutable_metadata_shapes_fail_closed(self) -> None:
         cases = (
             ("target_commitish", "", "release"),
