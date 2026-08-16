@@ -1,5 +1,10 @@
 import {describe, expect, test} from "vitest";
-import {CAPTURE_MAX_FRAMES, COMMIT_MAX_FRAMES, CaptureBuffer} from "../src/capture/capture_buffer";
+import {
+  CAPTURE_MAX_FRAMES,
+  COMMIT_MAX_FRAMES,
+  CaptureBuffer,
+  ENVELOPE_BLOCK_FRAMES,
+} from "../src/capture/capture_buffer";
 import {WEB_RUNTIME_IDENTITY} from
   "../../../products/lmdj/generated/web-runtime-identity.mjs";
 
@@ -63,6 +68,60 @@ describe("CaptureBuffer", () => {
     const after = buffer.envelope(2);
     expect(after).not.toBe(before);
     expect(Array.from(after)).toEqual([1, 1]);
+  });
+
+  // Long-take redraw cost: once a bin spans at least one summary block, the
+  // envelope must be served from incrementally maintained per-block peaks
+  // (O(blocks) per redraw) instead of re-walking every stored sample
+  // (O(total frames)). The block path snaps bin boundaries outward to block
+  // edges, so a boundary-straddling block contributes its peak to BOTH
+  // neighbouring bins: values may overestimate at bin edges but can never
+  // underestimate, and a peak is never dropped.
+  test("summary-path bins report block peaks, overestimating only at unaligned edges", () => {
+    // 5 blocks (1280 frames), 2 bins => perBin = 640 = 2.5 blocks. The lone
+    // 1.0 peak sits at frame 700 (block 2, truly inside bin 1). Block 2
+    // straddles the 640-frame bin boundary, so bin 0 also reports 1.0.
+    const frames = 5 * ENVELOPE_BLOCK_FRAMES;
+    const data = Float32Array.from({length: frames}, () => 0.125);
+    data[700] = 1;
+    const buffer = new CaptureBuffer(1);
+    buffer.append([data]);
+    const envelope = buffer.envelope(2);
+    expect(Array.from(envelope)).toEqual([1, 1]);
+  });
+
+  test("summary path never underestimates and matches exact peaks on aligned bins", () => {
+    // 4 blocks, 2 bins => each bin is exactly 2 blocks; no straddling block,
+    // so the summary path must equal the exact per-bin maxima.
+    const frames = 4 * ENVELOPE_BLOCK_FRAMES;
+    const data = Float32Array.from({length: frames}, () => 0.25);
+    data[100] = 0.5;                              // bin 0
+    data[3 * ENVELOPE_BLOCK_FRAMES + 7] = 0.75;   // bin 1
+    const buffer = new CaptureBuffer(1);
+    buffer.append([data]);
+    expect(Array.from(buffer.envelope(2))).toEqual([0.5, 0.75]);
+  });
+
+  test("block peaks accumulate identically across arbitrary append boundaries", () => {
+    // The same samples split into uneven batches (crossing block boundaries
+    // mid-batch) must produce the same envelope as one contiguous append.
+    const frames = 6 * ENVELOPE_BLOCK_FRAMES;
+    const data = Float32Array.from({length: frames}, (_, i) => ((i * 31) % 97) / 97);
+    const whole = new CaptureBuffer(1);
+    whole.append([data]);
+    const pieces = new CaptureBuffer(1);
+    for (let at = 0; at < frames;) {
+      const take = Math.min(190 + (at % 3), frames - at); // never block-aligned
+      pieces.append([data.slice(at, at + take)]);
+      at += take;
+    }
+    expect(Array.from(pieces.envelope(3))).toEqual(Array.from(whole.envelope(3)));
+  });
+
+  test("summary-path envelope is memoized like the exact path", () => {
+    const buffer = new CaptureBuffer(1);
+    buffer.append([new Float32Array(4 * ENVELOPE_BLOCK_FRAMES)]);
+    expect(buffer.envelope(2)).toBe(buffer.envelope(2));
   });
 
   // Finding 3: COMMIT_MAX_FRAMES must never hand-enter a value that can drift
