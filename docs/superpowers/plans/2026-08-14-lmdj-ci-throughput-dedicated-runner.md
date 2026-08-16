@@ -86,7 +86,7 @@
 - Consumes: SSH alias `sg`; existing units `actions.runner.endaye-lmdj.contabo-lmdj-linux.service` and `actions.runner.endaye-lmdj.contabo-lmdj-linux-02.service`; work directories `/opt/actions-runner` and `/opt/actions-runner-02`.
 - Produces: two online Runner services running as `lmdj-runner-01` and `lmdj-runner-02` inside `lmdj-ci.slice`, plus verified role labels for Tasks 6A-6F.
 
-- [ ] **Step 1: Record three recent successful full-main baselines**
+- [x] **Step 1: Record three recent successful full-main baselines**
 
 ```bash
 baseline_dir="$(mktemp -d "${TMPDIR:-/tmp}/lmdj-ci-baseline.XXXXXX")"
@@ -141,7 +141,7 @@ unset GH_TOKEN
 
 Expected: three exact full manifests plus queue, wall-clock, per-job execution/runner, and GitHub billable projections are retained in the audited execution log. If the timing endpoint fails, or reports hosted job count with zero duration as observed on 2026-08-14, record billed minutes as externally unavailable; do not treat that zero as cost evidence or estimate billed minutes from wall-clock.
 
-- [ ] **Step 2: Verify the live private-fork and Runner baseline without mutation**
+- [x] **Step 2: Verify the live private-fork and Runner baseline without mutation**
 
 Run locally with the repository Owner account:
 
@@ -161,7 +161,7 @@ GH_TOKEN="$(gh auth token --user endaye)" gh api \
 
 Expected: `jq -e` exits 0; both Contabo services are present with their current labels. If the fork expression fails, stop before any self-hosted expansion.
 
-- [ ] **Step 3: Restore the read-only Contabo asset projection through the installed CLI**
+- [x] **Step 3: Restore the read-only Contabo asset projection through the installed CLI**
 
 The installed `cntb 1.7` does not consume the four guessed `CNTB_OAUTH2_*` names, so do not put secrets into invented environment variables or command arguments. The Owner first configures `cntb` in a trusted terminal using the CLI's supported credential store, with the config file readable only by the Owner. Then run only these redacted/read-only checks:
 
@@ -177,7 +177,7 @@ cntb get instances -o json \
 
 Expected: the config projection shows non-empty credential fields only in redacted output; one exact instance maps to host `vmi3444835`; its lifecycle and SKU are recorded without any OAuth value. If the supported config path differs, resolve it from `cntb config view` and apply the same mode check before querying.
 
-- [ ] **Step 4: Reconfirm privilege and staging-health baselines before changing the first service**
+- [x] **Step 4: Reconfirm privilege and staging-health baselines before changing the first service**
 
 ```bash
 ssh sg '
@@ -198,7 +198,7 @@ ssh sg '
 
 Expected baseline: `lmdjadmin` has `NOPASSWD: ALL`; the first Runner has no CPU/memory cap; both containers are running with zero OOM/restart drift; internal and public health return `{"ok":true}`. This is a required red-state observation, not acceptance.
 
-- [ ] **Step 5: Create the shared cache group, unprivileged users, and bounded slice**
+- [x] **Step 5: Create the shared cache group, unprivileged users, and bounded slice**
 
 After separate sudo authorization, run an audited remote shell:
 
@@ -228,7 +228,7 @@ EOF
 
 Expected: both users exist without `sudo`/`docker`; `systemctl show lmdj-ci.slice -p CPUQuotaPerSecUSec -p MemoryMax` reports the bounded values.
 
-- [ ] **Step 6: Migrate only the first service and install a hardening drop-in**
+- [x] **Step 6: Migrate only the first service and install a hardening drop-in**
 
 ```bash
 ssh -t sg '
@@ -266,7 +266,7 @@ EOF
 
 Expected: the first service returns active as `lmdj-runner-01`. If it fails, leave it stopped and diagnose while service 02 remains available; do not restore root-capable execution as the fallback.
 
-- [ ] **Step 7: Prove the first service cannot cross the staging boundary**
+- [x] **Step 7: Prove the first service cannot cross the staging boundary**
 
 ```bash
 ssh sg '
@@ -282,7 +282,7 @@ ssh sg '
 
 Expected: all four negated access checks succeed; systemd reports the new user/slice/hardening.
 
-- [ ] **Step 8: Migrate and isolate service 02 after service 01 is healthy**
+- [x] **Step 8: Migrate and isolate service 02 after service 01 is healthy**
 
 ```bash
 ssh -t sg '
@@ -326,7 +326,7 @@ EOF
 
 Expected: service 01 stays online throughout; service 02 returns active as `lmdj-runner-02` and all four access denials pass.
 
-- [ ] **Step 9: Recheck staging health, then apply factual Contabo role labels**
+- [x] **Step 9: Recheck staging health, then apply factual Contabo role labels**
 
 ```bash
 ssh sg '
@@ -364,7 +364,7 @@ GH_TOKEN="$(gh auth token --user endaye)" gh api \
 
 Expected: both runners are online and expose the default labels plus all six factual custom labels. This mutation requires its own authorization.
 
-- [ ] **Step 10: No commit**
+- [x] **Step 10: No commit**
 
 This Task modifies only external infrastructure. Record command output and stop before netcup purchase/provisioning.
 
@@ -378,11 +378,11 @@ This Task modifies only external infrastructure. Record command output and stop 
 - Consumes: Owner-approved `VPS 8000 G12 1M Rabatt` checkout; initial privileged SSH endpoint as execution input `NETCUP_BOOTSTRAP_HOST`; GitHub registration tokens.
 - Produces: online `netcup-lmdj-linux` and `netcup-lmdj-linux-02` services with `ci-general` and `ci-web-heavy` labels.
 
-- [ ] **Step 1: Owner confirms the checkout boundary**
+- [x] **Step 1: Owner confirms the checkout boundary**
 
 Expected invoice facts before payment: first month EUR 0; months 2-12 EUR 40.28; first-year estimate EUR 443.08; 12-month minimum/billing period; 16 shared x86 vCore, 64 GB DDR5 ECC, 2 TB NVMe, IPv4+IPv6. If checkout differs, stop and update the design rather than silently accepting a new contract.
 
-- [ ] **Step 2: Verify the fresh host before installing Runner software**
+- [x] **Step 2: Verify the fresh host before installing Runner software**
 
 ```bash
 IFS= read -r NETCUP_BOOTSTRAP_HOST
@@ -401,7 +401,7 @@ ssh -o BatchMode=yes "$NETCUP_BOOTSTRAP_HOST" '
 
 Expected: every assertion exits 0. The CPU check proves exposed vCore count, not dedicated physical ownership.
 
-- [ ] **Step 3: Harden SSH/firewall and install pinned prerequisites**
+- [x] **Step 3: Harden SSH/firewall and install pinned prerequisites**
 
 After separate host-mutation authorization, enter the Owner's current public source address or CIDR and validate it locally. First create a named admin account from the provider-injected SSH key, and prove that login before disabling privileged SSH:
 
@@ -474,7 +474,7 @@ ssh "$NETCUP_CI_HOST" '
 '
 ```
 
-- [ ] **Step 4: Create two unprivileged users and a bounded CI slice**
+- [x] **Step 4: Create two unprivileged users and a bounded CI slice**
 
 ```bash
 ssh -t "$NETCUP_CI_HOST" sudo bash -s <<'REMOTE'
@@ -509,7 +509,7 @@ REMOTE
 
 Expected: both users exist outside `sudo`/`docker`; all four caches are setgid and writable only by the CI cache group; ccache has a finite 100 GiB cap; the slice reports 1400% CPU and 48 GiB memory. Initial per-job `CMAKE_BUILD_PARALLEL_LEVEL` is 4.
 
-- [ ] **Step 5: Download one official Runner archive and verify its published digest**
+- [x] **Step 5: Download one official Runner archive and verify its published digest**
 
 ```bash
 ssh -t "$NETCUP_CI_HOST" sudo bash -s <<'REMOTE'
@@ -535,7 +535,7 @@ REMOTE
 
 Expected: calculated digest equals the official release-asset digest before extraction.
 
-- [ ] **Step 6: Register both services with exact factual labels**
+- [x] **Step 6: Register both services with exact factual labels**
 
 Install one closed root-only registration helper that reads the token from standard input. It accepts only the two planned name/user/path tuples:
 
@@ -626,7 +626,7 @@ ssh "$NETCUP_CI_HOST" sudo rm -f /usr/local/sbin/register-lmdj-runner
 
 Registration token values must not appear in the execution transcript. If the first registration or unit fails, stop before registering the second.
 
-- [ ] **Step 7: Verify online inventory and isolation**
+- [x] **Step 7: Verify online inventory and isolation**
 
 ```bash
 GH_TOKEN="$(gh auth token --user endaye)" gh api repos/endaye/lmdj/actions/runners \
@@ -655,7 +655,7 @@ ssh "$NETCUP_CI_HOST" '
 
 Expected: exactly two online runners with `netcup`, `ci-only-host`, `ci-general`, and `ci-web-heavy`; neither user has sudo/Docker/release/deploy access.
 
-- [ ] **Step 8: No commit**
+- [x] **Step 8: No commit**
 
 Stop with both nodes online. Do not route formal jobs yet.
 
@@ -673,7 +673,7 @@ Stop with both nodes online. Do not route formal jobs yet.
 - Consumes: pinned `LMDJ_EMSDK_REVISION`, Emscripten `6.0.5`, Node 22, Python 3.11, stable scripts `scripts/web-toolchain-conformance.sh proof`, `scripts/web-runtime-host.sh proof`, and `scripts/creator-web.sh proof`.
 - Produces: composite action `./.github/actions/web-ci-proof` with inputs `lane` and `install-system-deps`; dispatch-only workflow inputs `lane` and `revision`.
 
-- [ ] **Step 1: Write the failing benchmark workflow contract**
+- [x] **Step 1: Write the failing benchmark workflow contract**
 
 Create `tests/build/ci_benchmark_workflow_test.py` using the repository's existing workflow-test loading pattern and add these exact assertions:
 
@@ -709,7 +709,7 @@ def test_formal_and_benchmark_workflows_share_one_proof_action(self):
         self.assertIn("uses: ./.github/actions/web-ci-proof", source)
 ```
 
-- [ ] **Step 2: Run the test and observe the intended failure**
+- [x] **Step 2: Run the test and observe the intended failure**
 
 Run:
 
@@ -719,7 +719,7 @@ python3 -m unittest tests.build.ci_benchmark_workflow_test -v
 
 Expected: FAIL because both new files and shared action are absent.
 
-- [ ] **Step 3: Implement the shared composite action**
+- [x] **Step 3: Implement the shared composite action**
 
 The action must:
 
@@ -745,7 +745,7 @@ case "${{ inputs.lane }}" in
 esac
 ```
 
-- [ ] **Step 4: Refactor the three formal jobs to call the shared action without changing routing**
+- [x] **Step 4: Refactor the three formal jobs to call the shared action without changing routing**
 
 Keep current `runs-on`, `needs`, `if`, checkout/LFS, timeout, and job names. Replace only duplicated setup/proof steps with:
 
@@ -760,11 +760,11 @@ Use `web_toolchain` in Web Toolchain, `web_runtime_host` in Web Runtime Host, an
 
 This Task must not move Web jobs off their current formal runners.
 
-- [ ] **Step 5: Implement the dispatch-only benchmark workflow**
+- [x] **Step 5: Implement the dispatch-only benchmark workflow**
 
 Before checkout, the workflow must require `inputs.revision` to be 40-hex and exactly equal to the dispatch's trusted `${{ github.sha }}`; this prevents an arbitrary fork/unreviewed object from being supplied to the self-hosted benchmark. Then checkout that exact revision with LFS, set the same emsdk env values as formal CI, target only `ci-web-heavy`, call the shared action with `install-system-deps: "false"`, upload Playwright traces on failure, and print runner name/CPU/memory/cache/timing evidence. It must not call `pr_gate.py` or create a required check contract.
 
-- [ ] **Step 6: Run focused and full local contracts**
+- [x] **Step 6: Run focused and full local contracts**
 
 ```bash
 python3 -m unittest tests.build.ci_benchmark_workflow_test -v
@@ -778,7 +778,7 @@ scripts/architecture-portal.sh check
 
 Expected: all pass; formal runner routing is unchanged.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add \
@@ -790,7 +790,7 @@ git diff --cached --check
 git commit -m "feat(ci): add self-hosted web benchmark"
 ```
 
-- [ ] **Step 8: Stop for push/PR/merge authorization**
+- [x] **Step 8: Stop for push/PR/merge authorization**
 
 The new workflow cannot receive `workflow_dispatch` until it exists on `main`. Push, PR, full CI, and merge are separate authorizations. This small PR intentionally leaves formal routing unchanged.
 
@@ -804,7 +804,7 @@ The new workflow cannot receive `workflow_dispatch` until it exists on `main`. P
 - Consumes: merged `.github/workflows/ci-self-hosted-benchmark.yml`; exact `main` SHA; two online `ci-web-heavy` services.
 - Produces: cold/warm and idle/contention run IDs that authorize or block Task 5.
 
-- [ ] **Step 1: Dispatch one cold run per heavy lane**
+- [x] **Step 1: Dispatch one cold run per heavy lane**
 
 ```bash
 target_sha="$(git ls-remote git@github.com:endaye/lmdj.git refs/heads/main | awk '{print $1}')"
@@ -817,15 +817,15 @@ done
 
 Expected: every job's API `runner_name` begins with `netcup-lmdj-linux`; cache status is cold/miss where applicable.
 
-- [ ] **Step 2: Dispatch three warm runs per lane serially**
+- [x] **Step 2: Dispatch three warm runs per lane serially**
 
 Wait for each run to complete before the next. Record run ID, runner name, queue seconds, execution seconds, CPU/load/memory, cache status, and semantic result. Do not rerun a semantic failure; diagnose and create a new run only after an environment/code correction.
 
-- [ ] **Step 3: Run dual-load contention pairs**
+- [x] **Step 3: Run dual-load contention pairs**
 
 Dispatch `web_runtime_host` and `creator` together, then `web_toolchain` and `web_runtime_host` together. Preserve traces for every failure.
 
-- [ ] **Step 4: Apply the benchmark gate**
+- [x] **Step 4: Apply the benchmark gate**
 
 Proceed only when:
 
@@ -837,7 +837,7 @@ Proceed only when:
 
 If the gate fails, reduce per-job parallelism from 4 to 3 and repeat as new benchmark evidence. Do not add a third service or relax test timeouts.
 
-- [ ] **Step 5: No commit**
+- [x] **Step 5: No commit**
 
 Stop with the accepted run IDs. Formal routing is still unchanged.
 
@@ -861,7 +861,7 @@ Stop with the accepted run IDs. Formal routing is still unchanged.
 - Consumes: accepted Task 4 run IDs and current `lmdj.ci-scope.v1` producer/Gate.
 - Produces: atomic `lmdj.ci-scope.v2`, manifest field `trusted_head: bool`, job output `trusted-head`, and fail-closed workload conditions. It deliberately preserves every current `runs-on` value and the Linux selector for the progressive cutover Tasks.
 
-- [ ] **Step 1: Write failing v2/trust tests**
+- [x] **Step 1: Write failing v2/trust tests**
 
 Add tests that require:
 
@@ -884,7 +884,7 @@ def test_untrusted_selected_self_hosted_lane_fails_gate(self):
 
 Update topology tests to require Change Scope/PR Gate on `ubuntu-24.04`, retain `select-ubuntu-runner`, and prove every future self-hosted workload job includes the trusted-head condition before any static route is introduced.
 
-- [ ] **Step 2: Run the tests and observe v1/selector failures**
+- [x] **Step 2: Run the tests and observe v1/selector failures**
 
 ```bash
 python3 -m unittest \
@@ -897,7 +897,7 @@ python3 -m unittest \
 
 Expected: FAIL on schema v1, absent trust field, absent job output, and absent closed trust conditions.
 
-- [ ] **Step 3: Change the policy atomically**
+- [x] **Step 3: Change the policy atomically**
 
 In `scope_policy.json`:
 
@@ -909,7 +909,7 @@ In `scope_policy.json`:
 
 Update policy validation to reject a missing, extra, duplicate, or non-formal self-hosted job.
 
-- [ ] **Step 4: Add trust to the v2 producer**
+- [x] **Step 4: Add trust to the v2 producer**
 
 Change `build_manifest` to accept keyword-only `trusted_head: bool`; add it to `ALLOWED_MANIFEST_KEYS` and the encoded manifest. Reject non-boolean values. Add CLI `--head-repository`; derive:
 
@@ -922,7 +922,7 @@ trusted_head = (
 
 Write `trusted-head=true|false` to `$GITHUB_OUTPUT`, include Trust in the job summary, and pass `HEAD_REPOSITORY` from the workflow event. Do not derive trust from PR title, labels, code, or changed paths.
 
-- [ ] **Step 5: Make PR Gate fail closed for an untrusted selected workload**
+- [x] **Step 5: Make PR Gate fail closed for an untrusted selected workload**
 
 Validate `trusted_head` before results. When false and any required job is in `policy["self_hosted_jobs"]`, prepend the exact error:
 
@@ -932,7 +932,7 @@ untrusted fork blocked from self-hosted CI
 
 The selected skipped jobs remain ordinary errors too. A trusted head keeps the existing selected-success/unselected-skipped truth table.
 
-- [ ] **Step 6: Add the trust condition without changing routing**
+- [x] **Step 6: Add the trust condition without changing routing**
 
 Keep:
 
@@ -952,11 +952,11 @@ needs.change-scope.outputs.trusted-head == 'true'
 
 Add that condition now to every job named by `self_hosted_jobs`, including jobs still Hosted during the rollout. Keep all current `runs-on`, `needs`, selector outputs, ccache settings, and Web system-dependency behavior unchanged. This makes an accidental future repository setting change fail closed before the first static self-hosted route exists.
 
-- [ ] **Step 7: Preserve existing main-full behavior in this Task**
+- [x] **Step 7: Preserve existing main-full behavior in this Task**
 
 Do not edit the line that forces ordinary push full yet. Task 5 changes schema/trust only, so the merge's exact main SHA receives a full run on the current routing.
 
-- [ ] **Step 8: Update implemented documentation in the same commit**
+- [x] **Step 8: Update implemented documentation in the same commit**
 
 Update `core-test-policy.md` and `/operations/testing-and-proof/` to state:
 
@@ -970,7 +970,7 @@ Update `core-test-policy.md` and `/operations/testing-and-proof/` to state:
 
 Documentation impact: required. Affected Portal route: `/operations/testing-and-proof/`.
 
-- [ ] **Step 9: Run all CI contract and Portal verification**
+- [x] **Step 9: Run all CI contract and Portal verification**
 
 ```bash
 python3 -m unittest \
@@ -986,7 +986,7 @@ scripts/architecture-portal.sh check
 
 Expected: all tests pass; Portal builds; v2 producer/Gate/tests move together; routing remains unchanged.
 
-- [ ] **Step 10: Commit**
+- [x] **Step 10: Commit**
 
 ```bash
 git add \
@@ -1000,7 +1000,7 @@ git diff --cached --check
 git commit -m "feat(ci): add closed trust evidence"
 ```
 
-- [ ] **Step 11: Stop for remote transition authorization**
+- [x] **Step 11: Stop for remote transition authorization**
 
 Before push, re-verify private-fork workflows remain disabled. Push/PR/`ci:full`/merge are separate boundaries. The merge remains full because central CI files changed.
 
@@ -1015,7 +1015,7 @@ Before push, re-verify private-fork workflows remain disabled. Push/PR/`ci:full`
 - Modify: `tests/build/ci_build_acceleration_test.py`
 - Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
 
-- [ ] **Step 1: Make the routing test fail**
+- [x] **Step 1: Make the routing test fail**
 
 Require `web-toolchain-conformance` to have exact `runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]`, retain `needs: change-scope`, include `trusted-head == 'true'`, and call `web-ci-proof` with `lane: web_toolchain` plus `install-system-deps: "false"`.
 
@@ -1025,11 +1025,11 @@ python3 -m unittest tests.build.ci_runner_fallback_test tests.build.ci_workflow_
 
 Expected: FAIL because Web Toolchain is still Hosted.
 
-- [ ] **Step 2: Change only Web Toolchain routing and current Portal truth**
+- [x] **Step 2: Change only Web Toolchain routing and current Portal truth**
 
 Make exactly the tested YAML change. Preserve checkout/LFS, timeout, proof assertions, artifacts, and all other jobs. Update `/operations/testing-and-proof/` to show only Web Toolchain as cut over.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 ```bash
 python3 -m unittest tests.build.ci_runner_fallback_test tests.build.ci_workflow_topology_test tests.build.ci_build_acceleration_test -v
@@ -1042,7 +1042,7 @@ git diff --cached --check
 git commit -m "feat(ci): route web toolchain to netcup"
 ```
 
-- [ ] **Step 4: Prove three consecutive formal successes before continuing**
+- [x] **Step 4: Prove three consecutive formal successes before continuing**
 
 After separately authorized push/PR/full merge, dispatch lane `web_toolchain` three times on the merged exact `main` SHA. For every run, use the Jobs API to prove `runner_name` starts with `netcup-lmdj-linux`, Gate succeeds, no semantic rerun occurred, and execution/resource thresholds pass. Roll back only this commit if any of the three fails.
 
@@ -1057,7 +1057,7 @@ After separately authorized push/PR/full merge, dispatch lane `web_toolchain` th
 - Modify: `tests/build/ci_build_acceleration_test.py`
 - Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
 
-- [ ] **Step 1: Add a failing Creator route contract**
+- [x] **Step 1: Add a failing Creator route contract**
 
 Require `creator-web` to use exact role `ci-web-heavy`, preserve `needs: change-scope` and the trust condition, and call `web-ci-proof` with `lane: creator` and `install-system-deps: "false"`.
 
@@ -1067,7 +1067,7 @@ python3 -m unittest tests.build.ci_runner_fallback_test tests.build.ci_workflow_
 
 Expected: FAIL because Creator is still Hosted.
 
-- [ ] **Step 2: Implement only that route and update current Portal truth**
+- [x] **Step 2: Implement only that route and update current Portal truth**
 
 Do not change Web Runtime Host/Lab or the selector. Run:
 
@@ -1077,7 +1077,7 @@ bash tests/build/test_active_tree.sh
 scripts/architecture-portal.sh check
 ```
 
-- [ ] **Step 3: Commit and prove the lane**
+- [x] **Step 3: Commit and prove the lane**
 
 ```bash
 git add .github/workflows/ci.yml tests/build/ci_runner_fallback_test.py \
@@ -1103,7 +1103,7 @@ After separately authorized push/PR/full merge, dispatch `creator` three times o
 - Modify: `tests/build/ci_build_acceleration_test.py`
 - Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
 
-- [ ] **Step 1: Write failing route/support-map tests**
+- [x] **Step 1: Write failing route/support-map tests**
 
 Require `web-runtime-host` to use `ci-web-heavy`, remove `select-ubuntu-runner` from its `needs` and `lane_jobs.web_runtime_host`, keep its exact Emscripten identity check, and use `web-ci-proof` with `install-system-deps: "false"`. Require the selector condition/result guard to retain only lanes that still depend on it.
 
@@ -1116,11 +1116,11 @@ python3 -m unittest \
 
 Expected: FAIL on the Hosted/selector route and support map.
 
-- [ ] **Step 2: Implement the single-lane cutover**
+- [x] **Step 2: Implement the single-lane cutover**
 
 Change only the tested job, support map, Gate projections derived from policy, tests, and current Portal route. Do not change Web Runtime Lab or Core/Package selector dependencies.
 
-- [ ] **Step 3: Verify and commit**
+- [x] **Step 3: Verify and commit**
 
 Run and stage the exact declared files:
 
@@ -1140,7 +1140,7 @@ git diff --cached --check
 git commit -m "feat(ci): route web runtime host to netcup"
 ```
 
-- [ ] **Step 4: Prove three consecutive merged-main dispatches**
+- [x] **Step 4: Prove three consecutive merged-main dispatches**
 
 Dispatch lane `web_runtime_host` three times. Require netcup `runner_name`, exact Emscripten identity, same-run Gate success, trace retention on failure, and thresholds before Task 6D.
 
@@ -1158,7 +1158,7 @@ Dispatch lane `web_runtime_host` three times. Require netcup `runner_name`, exac
 - Modify: `tests/build/ci_build_acceleration_test.py`
 - Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
 
-- [ ] **Step 1: Make route/support-map tests fail**
+- [x] **Step 1: Make route/support-map tests fail**
 
 Require `web-runtime-lab` to use `ci-web-heavy`, remove its selector dependency from YAML and `lane_jobs.web_runtime_lab`, preserve its separate stable proof steps/timeouts, and keep only Core/ASan/Coverage/Package in the Linux selector guard.
 
@@ -1171,7 +1171,7 @@ python3 -m unittest \
 
 Expected: FAIL on the selector route and support map.
 
-- [ ] **Step 2: Implement, verify, and commit only the Lab cutover**
+- [x] **Step 2: Implement, verify, and commit only the Lab cutover**
 
 Run and stage the exact declared files:
 
@@ -1191,7 +1191,7 @@ git diff --cached --check
 git commit -m "feat(ci): route web runtime lab to netcup"
 ```
 
-- [ ] **Step 3: Prove three consecutive merged-main dispatches**
+- [x] **Step 3: Prove three consecutive merged-main dispatches**
 
 Dispatch lane `web_runtime_lab` three times and require netcup `runner_name`, Gate success, unchanged behavior assertions, and accepted timing/resources before Task 6E.
 
@@ -1201,7 +1201,7 @@ Dispatch lane `web_runtime_lab` three times and require netcup `runner_name`, Ga
 
 **Files:** `.github/workflows/ci.yml`, `tests/build/ci_runner_fallback_test.py`, `tests/build/ci_workflow_topology_test.py`, `docs/quality/core-test-policy.md`, and `apps/architecture-portal/docs/operations/testing-and-proof.mdx`.
 
-- [ ] **Step 1: Write exact general-role assertions**
+- [x] **Step 1: Write exact general-role assertions**
 
 Require Docs/static, Portal, CI Contract, Deploy Contract, and Chameleon Lab to use `[self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]`, retain only `change-scope`/existing reusable-workflow dependencies, and include the trust condition. Change Scope and PR Gate must remain `ubuntu-24.04`.
 
@@ -1211,11 +1211,11 @@ python3 -m unittest tests.build.ci_runner_fallback_test tests.build.ci_workflow_
 
 Expected: FAIL because these workload jobs are still Hosted.
 
-- [ ] **Step 2: Route only those five jobs**
+- [x] **Step 2: Route only those five jobs**
 
 Do not change the native Core selector. Update the two current documentation sources to distinguish the Hosted control plane from general self-hosted workload.
 
-- [ ] **Step 3: Verify, commit, and prove**
+- [x] **Step 3: Verify, commit, and prove**
 
 Run, stage, inspect, and commit:
 
@@ -1247,7 +1247,7 @@ After separately authorized merge, run three dispatches selecting `docs_static,p
 - Modify: `docs/quality/core-test-policy.md`
 - Modify: `apps/architecture-portal/docs/operations/testing-and-proof.mdx`
 
-- [ ] **Step 1: Write the final fail-closed topology tests**
+- [x] **Step 1: Write the final fail-closed topology tests**
 
 Require Core Ubuntu, Core ASan, Core Coverage, and Package to use exact `ci-core`; require native Core ccache; remove `select-ubuntu-runner` from all four `lane_jobs`; require the selector job, result key, token, API probe, and every `ubuntu-24.04` workload fallback string to be absent. Keep macOS selector behavior unchanged.
 
@@ -1260,11 +1260,11 @@ python3 -m unittest \
 
 Expected: FAIL while native jobs still consume the selector and automatic Hosted fallback exists.
 
-- [ ] **Step 2: Implement the final selector removal atomically**
+- [x] **Step 2: Implement the final selector removal atomically**
 
 Remove the Linux selector, all remaining `needs`/output/result references, and the `SELF_HOSTED_RUNNER_READ_TOKEN` Linux use. Preserve busy-to-queue as the platform behavior: a matching saturated pool queues, an offline/missing role stays queued until GitHub's 24-hour limit, and no routine Linux workload buys Hosted capacity. Update current docs with the final topology.
 
-- [ ] **Step 3: Run verification and commit**
+- [x] **Step 3: Run verification and commit**
 
 ```bash
 python3 -m unittest \
@@ -1282,7 +1282,7 @@ git diff --cached --check
 git commit -m "feat(ci): route native core to contabo"
 ```
 
-- [ ] **Step 4: Prove native routing and the no-fallback failure mode**
+- [x] **Step 4: Prove native routing and the no-fallback failure mode**
 
 After authorized merge, dispatch `core_ubuntu,core_asan,core_coverage,package` three times and require Contabo `runner_name` plus Gate success. In a separately authorized maintenance window, stop one redundant `ci-core` service and prove jobs still use the other; do not stop both merely to test the 24-hour failure path. Prove no Hosted workload through Jobs API and billing categorization.
 
@@ -1296,15 +1296,15 @@ After authorized merge, dispatch `core_ubuntu,core_asan,core_coverage,package` t
 - Consumes: Tasks 5-6F commits and four online services.
 - Produces: one PR full run and one merged-main full run with exact runner assignments.
 
-- [ ] **Step 1: Push and open the routing PR only after authorization**
+- [x] **Step 1: Push and open the routing PR only after authorization**
 
 Declare `CI mode: full`, all 14 lanes selected, none skipped, and Documentation impact required for `/operations/testing-and-proof/`.
 
-- [ ] **Step 2: Apply `ci:full` and rerun all jobs for the current head**
+- [x] **Step 2: Apply `ci:full` and rerun all jobs for the current head**
 
 Expected manifest: `lmdj.ci-scope.v2`, `trusted_head=true`, `mode=full`, 14 selected lanes, no `select-ubuntu-runner` support job.
 
-- [ ] **Step 3: Verify exact runner assignment through the Jobs API**
+- [x] **Step 3: Verify exact runner assignment through the Jobs API**
 
 Expected:
 
@@ -1315,11 +1315,11 @@ Expected:
 
 Reject registration-only or label-only evidence.
 
-- [ ] **Step 4: Merge only after separate authorization**
+- [x] **Step 4: Merge only after separate authorization**
 
 Because `.github/workflows/ci.yml` and `scripts/ci/**` are full rules, the resulting main SHA must run full before Task 8 changes main scope. Verify all formal results and the same-run Gate.
 
-- [ ] **Step 5: Roll back only the routing commit if evidence fails**
+- [x] **Step 5: Roll back only the routing commit if evidence fails**
 
 Do not re-enable automatic Hosted workload fallback. If netcup is unstable, route only the affected Web lane back under a separately reviewed temporary selector or leave it blocked while diagnosing.
 
@@ -1353,7 +1353,7 @@ Do not re-enable automatic Hosted workload fallback. If netcup is unstable, rout
 - Consumes: v2 manifest/Gate from Task 5; release intent `merged_main_run_id`; standard release `GitHubClient`.
 - Produces: focused ordinary push; `CiScopeProjection`; release audit/prepare that requires exact SHA, `mode=full`, and same-run Gate success.
 
-- [ ] **Step 1: Write failing focused-push tests**
+- [x] **Step 1: Write failing focused-push tests**
 
 Replace `test_main_and_dispatch_are_full` with explicit cases:
 
@@ -1375,7 +1375,7 @@ def test_unverifiable_push_base_is_full(self):
 
 Keep Product Assembly, Contract, CI control, unknown path, incomplete inventory, and three-expensive-family push cases full.
 
-- [ ] **Step 2: Write failing release evidence tests**
+- [x] **Step 2: Write failing release evidence tests**
 
 Extend the fake GitHub client with exact scope and job projections. Define independent test constants `LANES` for the exact 14 v2 lane names and `FULL_REQUIRED_JOBS` for the full formal/support job set; do not derive the expected values from production code. Require tests for:
 
@@ -1423,7 +1423,7 @@ Create `release_github_api_test.py` with transport-level tests that require comp
 
 Create `release_ci_evidence_test.py` with closed result tests for valid full `push`, valid full `workflow_dispatch`, focused mode, wrong SHA/branch/workflow, missing/expired artifact, malformed artifact identity, missing/duplicate/failed Gate, API outage, and a releasable intent with no remote tag. The last case must prove audit no longer returns prospective `ok` before evaluating CI.
 
-- [ ] **Step 3: Run the focused-main and release tests to observe failure**
+- [x] **Step 3: Run the focused-main and release tests to observe failure**
 
 ```bash
 python3 -m unittest \
@@ -1437,11 +1437,11 @@ python3 -m unittest \
 
 Expected: push still full and release tooling has no scope/job projection.
 
-- [ ] **Step 4: Implement focused push with fail-closed ancestry handling**
+- [x] **Step 4: Implement focused push with fail-closed ancestry handling**
 
 Change only empty `workflow_dispatch` to unconditional full. For `push`, evaluate the exact changed-file inventory like Ready PR. If `before` is zero, missing, not a commit, not an ancestor of head, or the inventory is incomplete, emit full with a concrete reason and do not guess paths. Keep per-SHA `cancel-in-progress: false` unchanged.
 
-- [ ] **Step 5: Add typed scope/job projections to release GitHub API**
+- [x] **Step 5: Add typed scope/job projections to release GitHub API**
 
 Add frozen dataclasses:
 
@@ -1486,7 +1486,7 @@ Add strict, complete-pagination methods for `/actions/runs/{run_id}/jobs?filter=
 
 Download through the authenticated artifact API URL without forwarding `Authorization` across the 302. Accept only HTTPS redirects matching the observed closed GitHub Actions artifact host family `productionresultssa[0-9]+.blob.core.windows.net`, with no userinfo/port/fragment and a signed query; fail closed if GitHub changes that family. Require status 200, `application/zip`, ZIP magic, and a compressed/uncompressed size cap of 1 MiB. Reject traversal, symlink, duplicate/extra members, parse exactly one root `ci-scope.json` with duplicate-key rejection, require the exact v2 top-level key set, exact 14-lane key set with every lane true in full mode, and closed required-job/type invariants, and never log the signed redirect URL.
 
-- [ ] **Step 6: Enforce full exact-main evidence in audit and prepare**
+- [x] **Step 6: Enforce full exact-main evidence in audit and prepare**
 
 Implement `ci_evidence.py` as one read-only verifier used by `audit.py` and `prepare.py`. Extend `PrepareContext`'s GitHub protocol with the exact job/artifact methods. The verifier must require:
 
@@ -1501,7 +1501,7 @@ Run the verifier in audit before the existing “no remote tag/Release” prospe
 
 Classify transport/pagination/download outages as `external-error`, absent/expired retained evidence as `unverifiable`, and malformed/conflicting identity, focused mode, wrong SHA, or missing/failed/duplicate Gate as `conflict`. Prepare maps every non-success result to `PrepareError`. Do not infer full from path type or workflow conclusion.
 
-- [ ] **Step 7: Update governance and release skill in the same commit**
+- [x] **Step 7: Update governance and release skill in the same commit**
 
 Document:
 
@@ -1513,7 +1513,7 @@ Document:
 
 Documentation impact: required. Affected Portal routes: `/operations/testing-and-proof/` and `/operations/version-and-release/`.
 
-- [ ] **Step 8: Run all relevant verification**
+- [x] **Step 8: Run all relevant verification**
 
 ```bash
 python3 -m unittest \
@@ -1533,7 +1533,7 @@ scripts/architecture-portal.sh check
 
 Expected: focused docs push passes; all unsafe push cases full; release rejects focused and accepts only full exact-main + same-run Gate.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add \
@@ -1552,7 +1552,7 @@ git diff --cached --check
 git commit -m "feat(ci): focus main and bind full release evidence"
 ```
 
-- [ ] **Step 10: Stop for push/PR/merge authorization**
+- [x] **Step 10: Stop for push/PR/merge authorization**
 
 This Task changes release authority and main CI behavior. It must not share an unreviewed remote transition with any release operation.
 
@@ -1702,3 +1702,32 @@ git status --short
 ```
 
 Expected: all tests/checks pass and the worktree is clean. Remote acceptance additionally requires the Task 7/9/10 evidence; local green output cannot substitute for actual `runner_name`, exact SHA, manifest, Gate, billing, or host-health proof.
+
+## Execution Record
+
+Recorded 2026-08-16. Task 1 through Task 8 are complete; Task 9 is in
+progress; Task 10 has not started.
+
+- Task 4 accepted on exact main a71c62d4: creator cold 31874245751; warm
+  triples per lane; dual-load pairs 31877033907/31877035224 and
+  31877379993/31877381526; max dual-load slowdown +10.7%.
+- Task 5 merged as 3a3c9828 (#147).
+- Task 6A merged 0714ba48 (#152), proofs
+  31905679866/31907020625/31907346757.
+- Task 6B merged 4881633d (#157), proofs
+  31908789094/31910183068/31910481345.
+- Task 6C merged cf54d66f (#158), proofs
+  31912077771/31913054564/31913422166.
+- Task 6D merged 91568415 (#159), proofs
+  31914552984/31915206858/31915245909.
+- Task 6E merged 5d21b32f (#160), proofs
+  31916688311/31917395338/31917533491.
+- Task 6F merged 77f08a57 (#161), proofs
+  31919294555/31920149016/31920531523.
+- Task 7 evidence: PR full run 31918465836 (attempt 2), merged-main full
+  run 31919292579.
+- Task 8 merged f7531c9d (#162); its main push run 31923067376 classified
+  full with 19 non-skipped jobs.
+- Supporting fixes merged along the way: #144 creator open-transition,
+  #145 scope rule for .claude, #146/#148/#149/#150/#151 release identity
+  audit chain (audit green from b7e8608c), #156 dispatch lane reasons.
