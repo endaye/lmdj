@@ -15,8 +15,9 @@ the manifest `resource_limits` are untouched: a committed capture is encoded to
 48 kHz PCM16 WAV in the Host and handed to the same `sample.import.*` session
 the file picker uses.
 
-This record claims automated acceptance at
-`cd182361baf1` for the gates listed below. It does not claim physical or
+This record claims automated acceptance for the gates listed below. The local
+Proof results were produced at `cd182361baf1`; the full CI matrix passed on the
+merged head, which additionally carries #177 and the current `main`. It does not claim physical or
 manual acceptance: every row in the deferred ledger stays
 `deferred / unverified`.
 
@@ -50,7 +51,7 @@ Emscripten 6.0.5 toolchain (`emsdk` revision
 | `python3 scripts/version.py verify --version-file products/lmdj/version.json` | `1.0.23.0` pass |
 | `tests/conformance/*.py` | module graph, version lock, JSON schema, schema contract and project bundle contract all pass |
 | `scripts/architecture-portal.sh check` | 48/48 tests, 37 pages, release-doc snapshot and 42 routes/internal links pass |
-| `scripts/creator-web.sh proof` | Project/Sample fixture reproducibility, byte-identical distributions, Creator 287/287, package 9/9, server 3/3, Runtime Node 127/127, Sample Editor Chromium and both WebKit capability checks pass; **capture granted 4 pass / 1 declared skip and capture denied 1 pass / 4 declared skip**; the general Chromium group is **not green**, see below |
+| `scripts/creator-web.sh proof` | Project/Sample fixture reproducibility, byte-identical distributions, Creator 287/287, package 9/9, server 3/3, Runtime Node 127/127, Sample Editor Chromium and both WebKit capability checks pass; **capture granted 4 pass / 1 declared skip and capture denied 1 pass / 4 declared skip**; the general Chromium group was intermittently red during this stage and is green since #177, see below |
 
 ### Capture browser evidence
 
@@ -74,31 +75,37 @@ Both projects passed on two consecutive full Proof runs at
   replays a synthetic tone; correct wiring is proven, audible correctness is
   not.
 
-## Pre-existing intermittent failure, not introduced here
+## Pre-existing intermittent failure, resolved on main during this stage
 
-`creator_web_lifecycle.spec.mjs:402` and `:438` fail intermittently in the
-general Chromium group. They passed at `524864e4` and both failed at
-`cd182361baf1` with the same source and machine, so the behaviour is
-intermittent rather than a deterministic break. At failure the page snapshot
-retains only `Audio inactive` — the shell is gone — which points at a Runtime
-generation replacement race in the suspend/restart path.
+`creator_web_lifecycle.spec.mjs:402` and `:438` failed intermittently in the
+general Chromium group while this branch was being proved — passing at
+`524864e4` and both failing at `cd182361baf1` on the same source and machine.
+The family predated Stage 8B: the Stage 8 acceptance record documented the same
+three journeys (then at `:346`, `:383`, `:421`) as reproducible failures, and a
+`creator` lane dispatched on `40e7e7d1`, a branch state containing no wired
+capture code, failed `:438` in CI.
 
-This family predates Stage 8B: the Stage 8 acceptance record documented the
-same three journeys (then at `:346`, `:383`, `:421`) as reproducible failures,
-and a `creator` lane dispatched on `40e7e7d1` — a branch state containing no
-wired capture code — failed `:438` in CI. Stage 8B changes no lifecycle,
-Runtime generation or audio-activation code.
+#177 diagnosed and fixed it on `main`, and this branch carries that fix. The
+cause was not the Runtime generation race the failure surface suggested: the
+journeys clicked `Activate audio` during an interruption window in which
+`inputController` is nulled while the button still renders enabled, so the
+click had been an inert no-op for months. A synthetic `blur` never suspends the
+AudioContext, so the Host takes the auto-recovery branch and never parks at
+`audio-suspended`, the only state that accepts the gesture. On a loaded runner
+the window lasts long enough for the click to reach a live handler, the Host
+refuses it, the Creator publishes `Audio inactive`, and no route exists back to
+`recovering`. The fix removes a gesture the journey never needed; no product
+code changed.
 
-It is recorded here as a known defect against `main` and tracked separately. It
-is not waived: a Stage 8B Pull Request that fails this group has not passed CI,
-and this record does not authorise merging over it.
+Stage 8B changed no lifecycle, Runtime generation or audio-activation code, and
+never waived this group: the full matrix passes with it green.
 
-Traces for both failures are retained under
+Traces from the failures are retained under
 `tests/platform/web/test-results/chromium/`, which is possible because two
-evidence gaps were closed while investigating: CI now uploads Playwright
-output on failure, and each of the Proof's six sequential Playwright
-invocations writes to its own results slot instead of clearing the previous
-one's.
+evidence gaps were closed while investigating: CI now uploads Playwright output
+on failure, and each of the Proof's six sequential Playwright invocations
+writes to its own results slot instead of clearing the previous one's. Those
+retained traces are what made the diagnosis reachable at all.
 
 ## Defects this stage's own evidence caught
 
