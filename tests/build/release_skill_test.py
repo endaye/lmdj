@@ -132,6 +132,50 @@ class ReleaseSkillTest(unittest.TestCase):
         self.assertNotIn("all are unperformed", source)
         self.assertNotIn("release verification as unperformed", source.lower())
 
+    def test_skill_states_the_full_exact_main_evidence_precondition(self) -> None:
+        source = self.read(SKILL)
+        for expected in (
+            "## Full exact-main CI evidence",
+            "`full`",
+            "trusted head",
+            "`Change Scope`",
+            "`PR Gate`",
+            "empty `lanes` input on the exact target SHA",
+            "`requested`",
+            "14",
+            "rerun all of its jobs",
+            "A full dispatch is evidence, not authorization",
+            "`unverifiable`",
+            "`conflict`",
+        ):
+            with self.subTest(expected=expected):
+                self.assertIn(expected, source)
+
+    def test_governance_binds_release_authority_to_full_exact_main_evidence(self) -> None:
+        git_workflow = self.read(GIT_WORKFLOW)
+        version_policy = self.read(VERSION_POLICY)
+        for expected in (
+            "focused",
+            "unverifiable base",
+            "empty `lanes` input",
+            "retained scope manifest is `full`",
+            "`PR Gate` both succeeded",
+            "14 days",
+        ):
+            with self.subTest(document="git-workflow", expected=expected):
+                self.assertIn(expected, git_workflow)
+        for expected in (
+            "`mode=full`",
+            "`trusted_head=true`",
+            "`PR Gate`",
+            "14 天",
+            "`unverifiable`",
+            "`conflict`",
+            "`external-error`",
+        ):
+            with self.subTest(document="version-management", expected=expected):
+                self.assertIn(expected, version_policy)
+
     def test_project_instructions_are_synchronized_and_require_the_skill(self) -> None:
         agents = self.read(AGENTS)
         self.assertEqual(agents.encode(), self.read(CLAUDE).encode())
