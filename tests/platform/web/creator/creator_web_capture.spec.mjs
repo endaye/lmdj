@@ -1,3 +1,5 @@
+import {readFile} from "node:fs/promises";
+
 import {expect, test} from "@playwright/test";
 
 import {CAPTURE_FIXTURE_SECONDS} from "./fixtures/make_capture_fixture.mjs";
@@ -6,9 +8,14 @@ const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
 const GRANTED = "creator-capture-chromium";
 const DENIED = "creator-capture-denied-chromium";
 
+// Read the revision from the exported report, the same way the Sample Editor
+// spec does: .project-summary renders only in Project mode, so a DOM probe
+// cannot verify a commit made from the Sample surface.
 async function expectProjectRevision(page, expectedRevision) {
-  await expect(page.locator(".project-summary"))
-    .toContainText(`Revision${expectedRevision}`, {timeout: 120_000});
+  const downloadPromise = page.waitForEvent("download");
+  await page.getByRole("button", {name: "Export report"}).click();
+  const report = JSON.parse(await readFile(await (await downloadPromise).path(), "utf8"));
+  expect(report.sample.project_revision).toBe(expectedRevision);
 }
 
 async function importV1SampleProject(page) {
@@ -23,7 +30,8 @@ async function importV1SampleProject(page) {
   await (await chooserPromise).setFiles(sampleBundle);
   await expect(page.getByRole("heading", {name: "Project 00000000"}))
     .toBeVisible({timeout: 120_000});
-  await expectProjectRevision(page, 46);
+  await expect(page.locator(".project-summary"))
+    .toContainText("Revision46", {timeout: 120_000});
 }
 
 async function enterSampleEditor(page) {
