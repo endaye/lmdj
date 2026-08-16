@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.request import Request
 
 
@@ -56,6 +57,11 @@ CONTENT_TYPES = {
     ".mjs": "text/javascript; charset=utf-8",
     ".wasm": "application/wasm",
 }
+RUNTIME_LOADER_ENVIRONMENT = (
+    "LD_LIBRARY_PATH",
+    "DYLD_LIBRARY_PATH",
+    "DYLD_FALLBACK_LIBRARY_PATH",
+)
 
 
 def canonical_json(value: object) -> bytes:
@@ -66,7 +72,7 @@ def canonical_json(value: object) -> bytes:
 
 def scrubbed_python_environment() -> dict[str, str]:
     environment = {"LANG": "C.UTF-8", "PATH": os.defpath}
-    for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH"):
+    for name in RUNTIME_LOADER_ENVIRONMENT:
         value = os.environ.get(name)
         if value:
             environment[name] = value
@@ -717,6 +723,28 @@ class DeploymentSmokeTest(unittest.TestCase):
             + "\n",
         )
         self.assertEqual(completed.stderr, "")
+
+
+class ScrubbedEnvironmentTest(unittest.TestCase):
+    def test_only_runtime_loader_state_survives_scrubbing(self) -> None:
+        additions = {
+            "LD_LIBRARY_PATH": "/runtime/python/lib",
+            "DYLD_LIBRARY_PATH": "/runtime/python/dyld",
+            "DYLD_FALLBACK_LIBRARY_PATH": "/runtime/python/fallback",
+            "GITHUB_TOKEN": "github-secret",
+            "GH_TOKEN": "gh-secret",
+            "NETLIFY_AUTH_TOKEN": "netlify-secret",
+        }
+        with patch.dict(os.environ, additions, clear=False):
+            environment = scrubbed_python_environment()
+
+        self.assertEqual(environment["LANG"], "C.UTF-8")
+        self.assertEqual(environment["PATH"], os.defpath)
+        for name in RUNTIME_LOADER_ENVIRONMENT:
+            self.assertEqual(environment[name], additions[name])
+        self.assertNotIn("GITHUB_TOKEN", environment)
+        self.assertNotIn("GH_TOKEN", environment)
+        self.assertNotIn("NETLIFY_AUTH_TOKEN", environment)
 
 
 if __name__ == "__main__":
