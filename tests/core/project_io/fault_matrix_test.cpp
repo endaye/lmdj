@@ -125,6 +125,8 @@ std::array<int, kCases.size()> matrix_observations{};
 FaultPoint injected_point = FaultPoint::artifact_temp_sync;
 int injected_point_calls = 0;
 std::filesystem::path injected_residue_path;
+FaultPoint sample_fault_point = FaultPoint::sample_after_staging;
+int sample_fault_calls = 0;
 
 bool lowercase_hex(std::string_view value) {
   return std::all_of(
@@ -200,6 +202,37 @@ class FaultGuard {
 
   FaultGuard(const FaultGuard&) = delete;
   FaultGuard& operator=(const FaultGuard&) = delete;
+};
+
+lmdj::foundation::Result<void> inject_sample_fault(
+    FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point != sample_fault_point) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  ++sample_fault_calls;
+  return lmdj::foundation::Result<void>::failure(
+      lmdj::foundation::Error{
+          ErrorCode::io_error,
+          "injected atomic Sample mutation fault",
+          {{"path", path.generic_string()}},
+      });
+}
+
+class SampleFaultGuard {
+ public:
+  explicit SampleFaultGuard(FaultPoint point) {
+    sample_fault_point = point;
+    sample_fault_calls = 0;
+    lmdj::project_io::testing::set_fault_hook(inject_sample_fault);
+  }
+
+  ~SampleFaultGuard() {
+    lmdj::project_io::testing::set_fault_hook(nullptr);
+  }
+
+  SampleFaultGuard(const SampleFaultGuard&) = delete;
+  SampleFaultGuard& operator=(const SampleFaultGuard&) = delete;
 };
 
 class TempDirectory {
@@ -402,6 +435,210 @@ void test_publish_faults_preserve_previous_project_truth() {
   }
 }
 
+void test_atomic_sample_import_faults_preserve_every_project_truth_projection() {
+  constexpr std::array fault_points{
+      FaultPoint::sample_after_staging,
+      FaultPoint::sample_after_event_preparation,
+      FaultPoint::sample_after_artifact_creation,
+      FaultPoint::sample_after_manifest_preparation,
+  };
+  for (const auto point : fault_points) {
+    TempDirectory temp("sample-atomic");
+    const auto bundle = temp.path() / "project.lmdj";
+    ProjectStore store;
+    LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+    const auto original_manifest = read_bytes(bundle / "manifest.json");
+    const auto original = store.load(bundle);
+    LMDJ_CHECK(original.has_value());
+    const std::array sample{
+        std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+        std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+    };
+
+    lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
+        lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
+            lmdj::foundation::Error{
+                ErrorCode::internal_error,
+                "Sample fault operation did not run",
+            });
+    {
+      SampleFaultGuard guard(point);
+      result = store.import_assign_sample_bytes(
+          bundle,
+          ProjectStore::ImportAssignSampleBytesRequest{
+              meta("sample-command", 0),
+              PadSlotId{1, 4},
+              AssetId{test_uuid("sample-asset")},
+              "audio/wav",
+              sample,
+          });
+      LMDJ_CHECK(sample_fault_calls == 1);
+    }
+
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::io_error);
+    LMDJ_CHECK(read_bytes(bundle / "manifest.json") == original_manifest);
+    const auto reopened = store.load(bundle);
+    LMDJ_CHECK(reopened.has_value());
+    LMDJ_CHECK(reopened.value() == original.value());
+    LMDJ_CHECK(reopened.value().revision == 0);
+    LMDJ_CHECK(reopened.value().assets.empty());
+    LMDJ_CHECK(
+        !reopened.value().banks.at(1).at(4).asset_id.has_value());
+    LMDJ_CHECK(std::filesystem::is_empty(bundle / "assets"));
+    LMDJ_CHECK(
+        !std::filesystem::exists(bundle / "history/checkpoints/1.json"));
+    LMDJ_CHECK(std::filesystem::is_empty(bundle / "history/transactions"));
+  }
+}
+
+void test_sample_staging_scavenger_is_generated_name_age_and_count_bounded() {
+  TempDirectory temp("sample-scavenger");
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto root = temp.path() / ".lmdj-host/sample-staging";
+  const auto old_token = test_uuid("old-staging");
+  const auto fresh_token = test_uuid("fresh-staging");
+  const auto invalid_name = std::string{"not-generated"};
+  for (const auto& name : {old_token, fresh_token, invalid_name}) {
+    std::filesystem::create_directories(root / name);
+    write_bytes(root / name / "payload.wav", "orphan");
+  }
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  write_bytes(
+      root / old_token / "state.json",
+      nlohmann::json{
+          {"contract", "lmdj.sample-staging.v1"},
+          {"created_unix_seconds", 0},
+          {"state", "incomplete"},
+          {"token", old_token},
+      }
+              .dump());
+  write_bytes(
+      root / fresh_token / "state.json",
+      nlohmann::json{
+          {"contract", "lmdj.sample-staging.v1"},
+          {"created_unix_seconds", now},
+          {"state", "incomplete"},
+          {"token", fresh_token},
+      }
+              .dump());
+
+  const auto opened = store.load(bundle);
+  LMDJ_CHECK(opened.has_value());
+  LMDJ_CHECK(!std::filesystem::exists(root / old_token));
+  LMDJ_CHECK(std::filesystem::is_directory(root / fresh_token));
+  LMDJ_CHECK(std::filesystem::is_directory(root / invalid_name));
+
+  const auto count_limited_token = test_uuid("count-limited-staging");
+  std::filesystem::create_directories(root / count_limited_token);
+  write_bytes(root / count_limited_token / "payload.wav", "bounded");
+  write_bytes(
+      root / count_limited_token / "state.json",
+      nlohmann::json{
+          {"contract", "lmdj.sample-staging.v1"},
+          {"created_unix_seconds", 0},
+          {"state", "incomplete"},
+          {"token", count_limited_token},
+      }
+          .dump());
+  for (std::size_t index = 0; index < 64; ++index) {
+    auto name = std::string{"!"} + std::to_string(index);
+    name.insert(1, 3 - std::min<std::size_t>(3, name.size() - 1), '0');
+    std::filesystem::create_directories(root / name);
+  }
+
+  LMDJ_CHECK(store.load(bundle).has_value());
+  LMDJ_CHECK(std::filesystem::is_directory(root / count_limited_token));
+}
+
+void test_sample_import_reclaims_its_fresh_incomplete_crash_residue() {
+  TempDirectory temp("sample-retry-residue");
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+
+  const auto token = test_uuid("sample-retry-residue");
+  const auto directory =
+      temp.path() / ".lmdj-host/sample-staging" / token;
+  std::filesystem::create_directories(directory);
+  write_bytes(directory / "payload.wav", "crashed-at-staging");
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  write_bytes(
+      directory / "state.json",
+      nlohmann::json{
+          {"contract", "lmdj.sample-staging.v1"},
+          {"created_unix_seconds", now},
+          {"state", "incomplete"},
+          {"token", token},
+      }
+          .dump());
+
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x01}, std::byte{0x02}, std::byte{0x03}, std::byte{0x04},
+  };
+  const auto retried = store.import_assign_sample_bytes(
+      bundle,
+      ProjectStore::ImportAssignSampleBytesRequest{
+          CommandMeta{CommandId{token}, 0},
+          PadSlotId{2, 9},
+          AssetId{test_uuid("sample-retry-residue-asset")},
+          "audio/wav",
+          sample,
+      });
+
+  LMDJ_CHECK(retried.has_value());
+  LMDJ_CHECK(!std::filesystem::exists(directory));
+  const auto loaded = store.load(bundle);
+  LMDJ_CHECK(loaded.has_value());
+  LMDJ_CHECK(loaded.value().revision == 1);
+  LMDJ_CHECK(loaded.value().banks.at(2).at(9).asset_id.has_value());
+}
+
+void test_crash_after_sample_manifest_publication_recovers_new_truth() {
+  TempDirectory temp("sample-post-publication");
+  const auto bundle = temp.path() / "project.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const std::array sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+  };
+  lmdj::foundation::Result<lmdj::domain::AppliedCommand> result =
+      lmdj::foundation::Result<lmdj::domain::AppliedCommand>::failure(
+          lmdj::foundation::Error{
+              ErrorCode::internal_error,
+              "post-publication Sample fault operation did not run",
+          });
+  {
+    SampleFaultGuard guard(FaultPoint::sample_after_manifest_publication);
+    result = store.import_assign_sample_bytes(
+        bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            meta("sample-post-publication", 0),
+            PadSlotId{3, 15},
+            AssetId{test_uuid("sample-post-publication-asset")},
+            "audio/wav",
+            sample,
+        });
+    LMDJ_CHECK(sample_fault_calls == 1);
+  }
+  LMDJ_CHECK(!result.has_value());
+  LMDJ_CHECK(manifest_revision(bundle) == 1);
+
+  ProjectStore restarted;
+  const auto recovered = restarted.load(bundle);
+  LMDJ_CHECK(recovered.has_value());
+  LMDJ_CHECK(recovered.value().revision == 1);
+  LMDJ_CHECK(recovered.value().assets.size() == 1);
+  LMDJ_CHECK(recovered.value().banks.at(3).at(15).asset_id.has_value());
+}
+
 void test_restart_classifies_committed_and_uncommitted_files() {
   TempDirectory temp("symlink-boundary");
   const auto bundle = temp.path() / "project.lmdj";
@@ -555,6 +792,10 @@ void test_every_fault_point_is_observed_exactly_once() {
 int main() {
   try {
     test_publish_faults_preserve_previous_project_truth();
+    test_atomic_sample_import_faults_preserve_every_project_truth_projection();
+    test_sample_staging_scavenger_is_generated_name_age_and_count_bounded();
+    test_sample_import_reclaims_its_fresh_incomplete_crash_residue();
+    test_crash_after_sample_manifest_publication_recovers_new_truth();
     test_restart_classifies_committed_and_uncommitted_files();
     test_take_cleanup_faults_leave_replayable_obligation();
     test_every_fault_point_is_observed_exactly_once();

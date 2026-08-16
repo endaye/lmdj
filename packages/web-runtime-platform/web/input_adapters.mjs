@@ -1,6 +1,7 @@
 const userGestureTokens = new WeakSet();
 const acceptAnySlot = (_slot) => true;
 const ignoreRelease = (_slot, _source) => {};
+const ignoreCancel = (_slot, _source) => {};
 /** @type {number | null} */
 const allMidiChannels = null;
 
@@ -99,6 +100,7 @@ export function createPointerAdapter({
   compatibilityWindowMs = 500,
   onPressedChange = () => {},
   onRelease = ignoreRelease,
+  onCancel = ignoreCancel,
 }) {
   requireTrigger(trigger);
   requireVelocity(velocity);
@@ -112,7 +114,11 @@ export function createPointerAdapter({
   ) {
     throw new TypeError("Pointer correlation requires an injected monotonic clock");
   }
-  if (typeof onPressedChange !== "function" || typeof onRelease !== "function") {
+  if (
+    typeof onPressedChange !== "function" ||
+    typeof onRelease !== "function" ||
+    typeof onCancel !== "function"
+  ) {
     throw new TypeError("Pointer pressed-state notification must be a function");
   }
   let compatibilityMarker = null;
@@ -228,20 +234,28 @@ export function createPointerAdapter({
   }
 
   function pointerCancel(event) {
-    if (releasePointer(event)) {
-      return true;
+    let flatSlot = pointerSlots.get(event?.pointerId);
+    if (flatSlot !== undefined) {
+      pointerSlots.delete(event.pointerId);
+      if (compatibilityMarker?.pointerId === event.pointerId) {
+        compatibilityMarker = null;
+      }
+    } else {
+      if (
+        compatibilityMarker === null ||
+        (event?.pointerId !== undefined &&
+          event.pointerId !== compatibilityMarker.pointerId)
+      ) {
+        return false;
+      }
+      flatSlot = compatibilityMarker.flatSlot;
+      compatibilityMarker = null;
     }
-    if (
-      compatibilityMarker === null ||
-      (event?.pointerId !== undefined &&
-        event.pointerId !== compatibilityMarker.pointerId)
-    ) {
-      return false;
+    if (mouseSlot === flatSlot) {
+      mouseSlot = null;
     }
-    const flatSlot = compatibilityMarker.flatSlot;
-    compatibilityMarker = null;
     if (pressed.delete(flatSlot)) {
-      onRelease(flatSlot, "pointer");
+      onCancel(flatSlot, "pointer");
       publishPressed();
     }
     return true;

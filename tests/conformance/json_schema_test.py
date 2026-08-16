@@ -150,7 +150,29 @@ bundle_schema = json.loads(
         encoding="utf-8"
     )
 )
+project_v2_schema = json.loads(
+    (contract_root / "project" / "lmdj.project.v2.schema.json").read_text(
+        encoding="utf-8"
+    )
+)
 bundle_fixture_root = repo_root / "tests" / "fixtures" / "contracts"
+valid(
+    json.loads(
+        (bundle_fixture_root / "project-v2-valid.json").read_text(
+            encoding="utf-8"
+        )
+    ),
+    project_v2_schema,
+)
+invalid(
+    json.loads(
+        (bundle_fixture_root / "project-v2-invalid-playback.json").read_text(
+            encoding="utf-8"
+        )
+    ),
+    project_v2_schema,
+    "above maximum 6000",
+)
 valid(
     json.loads(
         (bundle_fixture_root / "project-bundle-valid.json").read_text(

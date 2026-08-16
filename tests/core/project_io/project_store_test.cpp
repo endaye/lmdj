@@ -31,11 +31,16 @@ using lmdj::domain::Command;
 using lmdj::domain::CommandMeta;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::Asset;
+using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
+using lmdj::domain::ProjectContract;
 using lmdj::domain::RawTake;
 using lmdj::domain::RawTakeEvent;
+using lmdj::domain::ResetPadPlayback;
+using lmdj::domain::TriggerMode;
+using lmdj::domain::UpdatePadPlayback;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
@@ -534,6 +539,162 @@ void test_canonical_checkpoint_round_trip_and_bundle_shape() {
       read_bytes(second_bundle / "history/checkpoints/0.json"));
 }
 
+void test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "migration.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  const auto original_manifest = read_bytes(bundle / "manifest.json");
+  const auto original_checkpoint =
+      read_bytes(bundle / "history/checkpoints/0.json");
+
+  const auto opened = store.load(bundle);
+  LMDJ_CHECK(opened.has_value());
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v1);
+  LMDJ_CHECK(read_bytes(bundle / "manifest.json") == original_manifest);
+  LMDJ_CHECK(
+      read_bytes(bundle / "history/checkpoints/0.json") ==
+      original_checkpoint);
+
+  const UpdatePadPlayback command{
+      meta("migrate-playback", opened.value().revision),
+      PadSlotId{0, 0},
+      PadPlayback{12, 144, TriggerMode::loop_toggle, -1200, true},
+  };
+  const auto committed = store.execute(bundle, command);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(committed.value().state.contract == ProjectContract::v2);
+  LMDJ_CHECK(committed.value().state.revision == opened.value().revision + 1);
+  LMDJ_CHECK(
+      committed.value().state.banks.at(0).at(0).playback == command.playback);
+
+  const auto manifest = read_json(bundle / "manifest.json");
+  const auto checkpoint = read_json(
+      bundle / manifest.at("head_checkpoint").get<std::filesystem::path>());
+  LMDJ_CHECK(checkpoint.at("contract") == "lmdj.project.v2");
+  const auto& playback =
+      checkpoint.at("banks").at(0).at("pads").at(0).at("playback");
+  LMDJ_CHECK(playback.size() == 5);
+  LMDJ_CHECK(playback.at("trim_start_frame") == 12);
+  LMDJ_CHECK(playback.at("trim_end_frame") == 144);
+  LMDJ_CHECK(playback.at("trigger_mode") == "loop_toggle");
+  LMDJ_CHECK(playback.at("gain_millidb") == -1200);
+  LMDJ_CHECK(playback.at("muted") == true);
+  LMDJ_CHECK(
+      read_bytes(bundle / "history/checkpoints/0.json") ==
+      original_checkpoint);
+
+  const auto replayed = store.execute(bundle, command);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state.revision == 1);
+
+  auto changed_identity = command;
+  changed_identity.meta.expected_revision = 1;
+  const auto rejected_identity = store.execute(bundle, changed_identity);
+  LMDJ_CHECK(!rejected_identity.has_value());
+  LMDJ_CHECK(rejected_identity.error().code == ErrorCode::invalid_argument);
+
+  auto stale = command;
+  stale.meta = meta("stale-playback", 0);
+  const auto conflict = store.execute(bundle, stale);
+  LMDJ_CHECK(!conflict.has_value());
+  LMDJ_CHECK(conflict.error().code == ErrorCode::revision_conflict);
+
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == committed.value().state);
+}
+
+void test_nonzero_revision_v1_history_opens_without_migration() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "historical-v1.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(
+      store.execute(
+               bundle,
+               Command{lmdj::domain::AssignPad{
+                   meta("historical-v1-command", 0),
+                   PadSlotId{0, 0},
+                   std::nullopt,
+               }})
+          .has_value());
+
+  const auto checkpoint_path = bundle / "history/checkpoints/1.json";
+  auto historical = read_json(checkpoint_path);
+  historical["contract"] = "lmdj.project.v1";
+  for (auto& bank : historical["banks"]) {
+    for (auto& pad : bank["pads"]) {
+      pad.erase("playback");
+    }
+  }
+  write_bytes(
+      checkpoint_path,
+      lmdj::foundation::canonical_json(historical) + "\n");
+  const auto before = managed_bundle_snapshot(bundle);
+
+  const auto opened = store.load(bundle);
+  LMDJ_CHECK(opened.has_value());
+  LMDJ_CHECK(opened.value().contract == ProjectContract::v1);
+  LMDJ_CHECK(opened.value().revision == 1);
+  LMDJ_CHECK(managed_bundle_snapshot(bundle) == before);
+}
+
+void test_v2_checkpoint_rejects_extra_playback_keys() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "v2-exact-keys.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(
+      store.execute(
+               bundle,
+               UpdatePadPlayback{
+                   meta("v2-extra-key", 0),
+                   PadSlotId{0, 0},
+                   PadPlayback{},
+               })
+          .has_value());
+  const auto checkpoint_path = bundle / "history/checkpoints/1.json";
+  auto checkpoint = read_json(checkpoint_path);
+  checkpoint["banks"][0]["pads"][0]["playback"]["unexpected"] = true;
+  write_bytes(
+      checkpoint_path,
+      lmdj::foundation::canonical_json(checkpoint) + "\n");
+
+  const auto rejected = store.load(bundle);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_project);
+}
+
+void test_reset_pad_playback_persists_v2_defaults() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "reset-playback.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  LMDJ_CHECK(
+      store.execute(
+               bundle,
+               UpdatePadPlayback{
+                   meta("set-before-reset", 0),
+                   PadSlotId{0, 3},
+                   PadPlayback{4, 12, TriggerMode::gate, 6000, true},
+               })
+          .has_value());
+
+  const auto reset = store.execute(
+      bundle,
+      ResetPadPlayback{meta("reset-playback", 1), PadSlotId{0, 3}});
+  LMDJ_CHECK(reset.has_value());
+  LMDJ_CHECK(reset.value().state.revision == 2);
+  LMDJ_CHECK(reset.value().state.contract == ProjectContract::v2);
+  LMDJ_CHECK(
+      reset.value().state.banks.at(0).at(3).playback == PadPlayback{});
+  const auto reopened = store.load(bundle);
+  LMDJ_CHECK(reopened.has_value());
+  LMDJ_CHECK(reopened.value() == reset.value().state);
+}
+
 void test_persisted_checkpoints_reject_non_contract_shapes() {
   TempDirectory temp;
   ProjectStore store;
@@ -565,7 +726,7 @@ void test_persisted_checkpoints_reject_non_contract_shapes() {
   auto missing_contract = valid;
   missing_contract.erase("contract");
   auto wrong_contract = valid;
-  wrong_contract["contract"] = "lmdj.project.v2";
+  wrong_contract["contract"] = "lmdj.project.v3";
   auto invalid_uuid = valid;
   invalid_uuid["project_id"] =
       "00000000-0000-4000-8000-00000000000A";
@@ -907,6 +1068,97 @@ void test_byte_backed_import_publishes_immutable_artifact_without_staging() {
             return operation ==
                    "create_immutable:" + artifact_path.generic_string();
           }));
+}
+
+void test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "sample-import.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+  std::vector<std::byte> sample{
+      std::byte{'R'}, std::byte{'I'}, std::byte{'F'}, std::byte{'F'},
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40},
+  };
+  const auto request = ProjectStore::ImportAssignSampleBytesRequest{
+      meta("sample-import", 0),
+      PadSlotId{2, 7},
+      AssetId{test_uuid("sample-asset")},
+      "audio/wav",
+      sample,
+  };
+
+  const auto imported = store.import_assign_sample_bytes(bundle, request);
+  LMDJ_CHECK(imported.has_value());
+  LMDJ_CHECK(!imported.value().replayed);
+  LMDJ_CHECK(imported.value().state.contract == ProjectContract::v2);
+  LMDJ_CHECK(imported.value().state.revision == 1);
+  LMDJ_CHECK(imported.value().state.assets.size() == 1);
+  const auto& pad = imported.value().state.banks.at(2).at(7);
+  LMDJ_CHECK(pad.asset_id == request.asset_id);
+  LMDJ_CHECK(pad.playback == PadPlayback{});
+  const auto artifact = imported.value().state.assets.at(request.asset_id).artifact;
+  const auto expected_bytes = sample;
+  sample.back() = std::byte{0xff};
+  const auto stored = store.read_artifact(bundle, artifact);
+  LMDJ_CHECK(stored.has_value());
+  LMDJ_CHECK(stored.value() == expected_bytes);
+  sample.back() = std::byte{0x40};
+
+  const auto replayed = store.import_assign_sample_bytes(bundle, request);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().replayed);
+  LMDJ_CHECK(replayed.value().state.revision == 1);
+
+  auto changed_slot = request;
+  changed_slot.slot = PadSlotId{2, 8};
+  const auto rejected_identity =
+      store.import_assign_sample_bytes(bundle, changed_slot);
+  LMDJ_CHECK(!rejected_identity.has_value());
+  LMDJ_CHECK(rejected_identity.error().code == ErrorCode::invalid_argument);
+
+  auto conflict = request;
+  conflict.meta = meta("sample-conflict", 0);
+  conflict.asset_id = AssetId{test_uuid("sample-conflict-asset")};
+  const auto rejected_conflict =
+      store.import_assign_sample_bytes(bundle, conflict);
+  LMDJ_CHECK(!rejected_conflict.has_value());
+  LMDJ_CHECK(rejected_conflict.error().code == ErrorCode::revision_conflict);
+  const auto unchanged = store.load(bundle);
+  LMDJ_CHECK(unchanged.has_value());
+  LMDJ_CHECK(unchanged.value() == imported.value().state);
+}
+
+void test_import_assign_sample_bytes_obeys_generic_artifact_safety_boundary() {
+  auto platform = std::make_shared<MemoryStoragePlatform>();
+  ProjectStore store{platform};
+  const auto missing_bundle =
+      std::filesystem::path{"/workspace/missing-project.lmdj"};
+  constexpr std::size_t artifact_safety_limit = 64U * 1024U * 1024U;
+  std::vector<std::byte> bytes(artifact_safety_limit + 1U, std::byte{0x2a});
+  const auto import = [&](std::string_view command_label, std::size_t length) {
+    return store.import_assign_sample_bytes(
+        missing_bundle,
+        ProjectStore::ImportAssignSampleBytesRequest{
+            meta(std::string{command_label}, 0),
+            PadSlotId{0, 0},
+            AssetId{test_uuid(std::string{command_label} + "-asset")},
+            "audio/wav",
+            std::span<const std::byte>{bytes}.first(length),
+        });
+  };
+
+  const auto below = import("sample-boundary-below", artifact_safety_limit - 1U);
+  LMDJ_CHECK(!below.has_value());
+  LMDJ_CHECK(below.error().code == ErrorCode::invalid_project);
+  const auto at = import("sample-boundary-at", artifact_safety_limit);
+  LMDJ_CHECK(!at.has_value());
+  LMDJ_CHECK(at.error().code == ErrorCode::invalid_project);
+  const auto acquisitions_before_over = platform->writer_acquisitions;
+
+  const auto over = import("sample-boundary-over", bytes.size());
+  LMDJ_CHECK(!over.has_value());
+  LMDJ_CHECK(over.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(platform->writer_acquisitions == acquisitions_before_over);
 }
 
 void test_duplicate_command_ids_require_complete_persisted_identity() {
@@ -1518,6 +1770,10 @@ int main() {
     test_common_transactions_use_semantic_storage_obligations();
     test_default_store_remains_copy_list_initializable();
     test_canonical_checkpoint_round_trip_and_bundle_shape();
+    test_v1_load_is_read_only_and_first_authoring_mutation_writes_v2();
+    test_nonzero_revision_v1_history_opens_without_migration();
+    test_v2_checkpoint_rejects_extra_playback_keys();
+    test_reset_pad_playback_persists_v2_defaults();
     test_persisted_checkpoints_reject_non_contract_shapes();
     test_create_removes_exact_stale_checkpoint_temp();
     test_create_resumes_manifest_after_valid_checkpoint_publish();
@@ -1525,6 +1781,8 @@ int main() {
     test_committed_transactions_replay_to_manifest_head();
     test_imported_assets_are_content_addressed_and_deduplicated();
     test_byte_backed_import_publishes_immutable_artifact_without_staging();
+    test_import_assign_sample_bytes_commits_one_revision_and_replays_exactly();
+    test_import_assign_sample_bytes_obeys_generic_artifact_safety_boundary();
     test_duplicate_command_ids_require_complete_persisted_identity();
     test_import_rejects_invalid_command_before_receipt_and_source_io();
     test_import_rejects_invalid_asset_before_source_io();

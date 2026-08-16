@@ -33,7 +33,6 @@ FORMAL_LANE_JOBS = (
     "package",
 )
 SUPPORT_JOBS = (
-    "select-ubuntu-runner",
     "select-macos-runner",
     "macos-primary",
 )
@@ -59,17 +58,69 @@ SELF_HOSTED_JOBS = (
 HOSTED_CONTROL_PLANE_JOBS = (
     "change-scope",
     "pr-gate",
-    "select-ubuntu-runner",
     "select-macos-runner",
+)
+# Hosted Ubuntu jobs that are not control plane: each republishes an already
+# produced macOS result under its required check name and runs no workload.
+MACOS_ADJUDICATOR_JOBS = (
+    "core-macos",
+    "core-asan-macos",
 )
 TRUST_CONDITION = "needs.change-scope.outputs.trusted-head == 'true'"
 WEB_HEAVY_ROLE = (
     "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-web-heavy]"
 )
-# Lanes cut over to the dedicated netcup `ci-web-heavy` role so far. The
-# migration is proven one lane at a time, so this stays an exact set: an
-# unreviewed extra `ci-web-heavy` route is a topology change, not a detail.
-WEB_HEAVY_JOBS = ("web-toolchain-conformance",)
+# Lanes cut over to the dedicated netcup `ci-web-heavy` role so far, mapped to
+# the lane each one runs. The migration is proven one lane at a time, so this
+# stays an exact set: an unreviewed extra `ci-web-heavy` route is a topology
+# change, not a detail.
+WEB_HEAVY_JOBS = {
+    "web-toolchain-conformance": "web_toolchain",
+    "creator-web": "creator",
+    "web-runtime-host": "web_runtime_host",
+    "web-runtime-lab": "web_runtime_lab",
+}
+# Cut-over jobs that do not go through the shared `web-ci-proof` action,
+# mapped to the proof step each keeps instead. Web Runtime Lab never shared
+# the emsdk/Playwright setup contract, so it has no `lane` or
+# `install-system-deps` input to carry: its cutover changes where it runs and
+# nothing about what it runs.
+WEB_HEAVY_DIRECT_PROOFS = {
+    "web-runtime-lab": "run: scripts/web-runtime-lab.sh test",
+}
+GENERAL_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-general]"
+)
+# General Linux workload cut over to the dual-node general role, mapped to the
+# manifest lane each guards. The role exists on both trusted hosts, so these
+# jobs are the ones that can absorb either node's spare capacity. This stays
+# an exact set for the same reason the Web set does: an unreviewed extra route
+# is a topology change, not a detail.
+GENERAL_JOBS = {
+    "docs-static": "docs_static",
+    "ci-contract": "ci_contract",
+    "deploy-contract": "deploy_contract",
+    "chameleon-lab": "chameleon_lab",
+}
+# The one general lane that runs as a reusable workflow. A `uses:` job cannot
+# carry `runs-on`, so the caller holds only the lane guard and the trust
+# condition and the role is declared on the called workflow's job.
+GENERAL_REUSABLE_JOBS = ("portal",)
+CORE_ROLE = (
+    "runs-on: [self-hosted, Linux, X64, lmdj-linux, lmdj-linux-pool, ci-core]"
+)
+# The native Core workload, mapped to the manifest lane each guards. This role
+# lives only on the shared Contabo host: the persistent native `ccache` and
+# the preinstalled coverage toolchain are host state, not pool state. These
+# four were the Linux runner selector's last consumers, so pinning the exact
+# set is also what keeps the retired selector from being reintroduced for a
+# fifth.
+CORE_JOBS = {
+    "core-ubuntu": "core_ubuntu",
+    "core-asan": "core_asan",
+    "core-coverage": "core_coverage",
+    "package": "package",
+}
 RELEASE_HISTORY_CONSUMERS = (
     "deploy-contract",
     "core-ubuntu",
@@ -105,14 +156,6 @@ FORMAL_RESULT_LANE_GUARDS = {
     "deploy-contract": {"deploy_contract"},
     "chameleon-lab": {"chameleon_lab"},
     "package": {"package"},
-    "select-ubuntu-runner": {
-        "web_runtime_host",
-        "web_runtime_lab",
-        "core_ubuntu",
-        "core_asan",
-        "core_coverage",
-        "package",
-    },
     "select-macos-runner": {"core_macos"},
     "macos-primary": {"core_macos"},
 }
@@ -302,12 +345,33 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                 self.assertNotRegex(job, rf"(?i){forbidden}")
 
     def test_change_scope_and_pr_gate_stay_on_the_hosted_control_plane(self) -> None:
+        """The control plane must outlive the pool it adjudicates.
+
+        Change Scope publishes what runs and whether the head is trusted; PR
+        Gate decides whether the run passed. Now that no Linux workload is
+        left beside them these three must not follow it either, or a
+        self-hosted outage would take the scope and trust evidence down with
+        the jobs it governs.
+        """
         for job_name in HOSTED_CONTROL_PLANE_JOBS:
             with self.subTest(job=job_name):
                 job = self.workflow_job(job_name)
                 self.assertIn("runs-on: ubuntu-24.04", job)
                 self.assertNotRegex(job, r"(?m)^    runs-on: (?!ubuntu-24\.04$)")
-        self.assertIn("select-ubuntu-runner:", self.main_source)
+                self.assertNotIn("ci-general", job)
+                self.assertNotIn("ci-web-heavy", job)
+                self.assertNotIn("ci-core", job)
+                self.assertNotIn("lmdj-linux-pool", job)
+        # The only other Hosted Ubuntu jobs are the two macOS adjudicators,
+        # which publish the required check names from an already-produced
+        # result and run no workload at all. Counting them closes the set: any
+        # new `ubuntu-24.04` job is an automatic Hosted workload until proven
+        # otherwise.
+        hosted = re.findall(r"(?m)^    runs-on: ubuntu-24\.04$", self.main_source)
+        self.assertEqual(
+            len(hosted),
+            len(HOSTED_CONTROL_PLANE_JOBS) + len(MACOS_ADJUDICATOR_JOBS),
+        )
 
     def test_change_scope_publishes_trusted_head_from_the_event_only(self) -> None:
         job = self.workflow_job("change-scope")
@@ -357,51 +421,168 @@ class CiWorkflowTopologyTest(unittest.TestCase):
                     expected_lanes,
                 )
 
-    def test_web_toolchain_uses_the_static_netcup_role_not_the_selector(self) -> None:
-        """Only Web Toolchain is cut over, and it routes by role, not selector.
+    def test_cut_over_lanes_use_the_static_netcup_role_not_the_selector(self) -> None:
+        """All four Web lanes are cut over, by role and not by selector.
 
         `select-ubuntu-runner` resolves once per run and can fall back to paid
-        Ubuntu. The dedicated role must queue instead, so this lane carries a
-        literal label set and keeps `needs: change-scope` alone. Pinning the
-        exact `ci-web-heavy` job set keeps a later lane from inheriting the
-        route without its own proof run.
+        Ubuntu. The dedicated role must queue instead, so each cut-over lane
+        carries a literal label set and keeps `needs: change-scope` alone.
+        Pinning the exact `ci-web-heavy` job set keeps a later lane from
+        inheriting the route without its own proof run.
         """
-        job = self.workflow_job("web-toolchain-conformance")
-        self.assertEqual(
-            self.job_needs("web-toolchain-conformance"), {"change-scope"}
-        )
-        self.assertIn(WEB_HEAVY_ROLE, job)
-        self.assertNotIn("runs-on: ubuntu-24.04", job)
-        self.assertNotIn("select-ubuntu-runner", job)
-        self.assertIn(TRUST_CONDITION, job)
-        self.assertIn("lane: web_toolchain", job)
-        self.assertIn('install-system-deps: "false"', job)
+        for job_name, lane in WEB_HEAVY_JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(WEB_HEAVY_ROLE, job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("select-ubuntu-runner", job)
+                self.assertIn(TRUST_CONDITION, job)
+                if job_name in WEB_HEAVY_DIRECT_PROOFS:
+                    self.assertIn(WEB_HEAVY_DIRECT_PROOFS[job_name], job)
+                    self.assertNotIn("web-ci-proof", job)
+                    self.assertNotIn("install-system-deps", job)
+                else:
+                    self.assertIn(f"lane: {lane}", job)
+                    self.assertIn('install-system-deps: "false"', job)
         self.assertEqual(
             self.main_source.count("ci-web-heavy"), len(WEB_HEAVY_JOBS)
         )
+
+    def test_general_workload_lanes_use_the_dual_node_role_not_the_selector(self) -> None:
+        """The short Linux jobs cut over as one group, by role not by selector.
+
+        `select-ubuntu-runner` resolves once per run and can fall back to paid
+        Ubuntu; the static role queues instead. These four are short, share no
+        toolchain contract and carry no per-lane risk, so the reviewable unit
+        is the group rather than the lane. Pinning the exact job set still
+        keeps a later lane from inheriting the route without review.
+        """
+        for job_name, lane in GENERAL_JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(GENERAL_ROLE, job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("select-ubuntu-runner", job)
+                self.assertIn(TRUST_CONDITION, job)
+                self.assertEqual(
+                    set(re.findall(r"lanes\.([a-z_]+)", job)), {lane}
+                )
+        self.assertEqual(
+            self.main_source.count("ci-general"), len(GENERAL_JOBS)
+        )
+
+    def test_portal_role_is_declared_on_the_called_workflow(self) -> None:
+        """Portal routes where a reusable workflow can actually be routed.
+
+        The caller is a `uses:` job, which GitHub does not allow to declare
+        `runs-on`, so the role has to live on the called workflow's own job.
+        That workflow is `workflow_call`-only and has exactly one caller, so
+        placing the role there reroutes Portal and nothing else.
+        """
+        for job_name in GENERAL_REUSABLE_JOBS:
+            with self.subTest(job=job_name):
+                caller = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(TRUST_CONDITION, caller)
+                self.assertNotIn("runs-on:", caller)
+        called = self.workflow_job("portal", portal=True)
+        self.assertIn(GENERAL_ROLE, called)
+        self.assertNotIn("ubuntu-24.04", self.portal_source)
+        self.assertEqual(self.portal_source.count("ci-general"), 1)
+        events = self.event_block(self.portal_source)
+        self.assertNotRegex(
+            events, r"(?m)^  (?:pull_request|push|schedule|workflow_dispatch):"
+        )
+
+    def test_ci_contract_keeps_no_container_action_on_the_trusted_role(self) -> None:
+        """Nothing in CI may require the Docker socket that runs production.
+
+        The CI-only host has no daemon and the shared host's runner users are
+        outside the `docker` group, both on purpose. actionlint stays at the
+        same version but arrives as a digest-pinned release archive, which is
+        a stricter pin than the mutable tag it replaces.
+        """
+        self.assertNotIn("docker://", self.main_source)
+        self.assertNotIn("docker://", self.portal_source)
+        self.assertNotIn("docker://", self.web_proof_source)
+
+    def test_web_runtime_host_keeps_its_exact_emscripten_identity_check(self) -> None:
+        """Changing where the lane runs must not change what it proves.
+
+        The dedicated role provisions a persistent toolchain, which is exactly
+        the condition under which a silently different Emscripten would go
+        unnoticed. The lane therefore keeps verifying the pinned compiler
+        identity before its proof, and keeps rehydrating the LFS audio
+        fixtures first, so a role-provisioned host cannot pass on stand-in
+        inputs.
+        """
+        self.assertIn(
+            "web_runtime_host) python3 tools/web-runtime/verify_emscripten.py"
+            " && scripts/web-runtime-host.sh proof ;;",
+            self.web_proof_source,
+        )
+        job = self.workflow_job("web-runtime-host")
+        hydration = "git lfs checkout -- tests/fixtures/audio"
+        self.assertIn("lfs: true", job)
+        self.assertIn(hydration, job)
+        self.assertLess(
+            job.index(hydration),
+            job.index("uses: ./.github/actions/web-ci-proof"),
+        )
+
+    def test_web_runtime_lab_keeps_its_own_stable_proof_steps(self) -> None:
+        """The Lab cutover moves the lane, it does not fold it into the others.
+
+        Web Runtime Lab was deliberately left out of the shared `web-ci-proof`
+        action because it does not share the emsdk/Playwright setup contract:
+        it is a short, stable Node/Python suite that installs nothing on the
+        host. Rerouting it to the role is not an invitation to normalize it
+        onto the heavy path, nor to inherit web-runtime-host's 75-minute hang
+        detector, which exists for a lane that is two orders of magnitude
+        longer.
+        """
+        job = self.workflow_job("web-runtime-lab")
+        self.assertNotIn("uses: ./.github/actions/web-ci-proof", job)
+        self.assertNotIn("timeout-minutes", job)
+        self.assertNotIn("lfs: true", job)
+        for step in (
+            "uses: actions/checkout@v6",
+            'python-version: "3.11"',
+            'node-version: "22"',
+            "- run: scripts/web-runtime-lab.sh test",
+        ):
+            with self.subTest(step=step):
+                self.assertIn(step, job)
 
     def test_creator_no_longer_needs_web_toolchain_or_core(self) -> None:
         job = self.workflow_job("creator-web")
         self.assertEqual(self.job_needs("creator-web"), {"change-scope"})
         self.assertNotIn("web-toolchain-conformance", job)
         self.assertNotIn("core-ubuntu", job)
-        self.assertIn("runs-on: ubuntu-24.04", job)
+        self.assertIn(WEB_HEAVY_ROLE, job)
 
-    def test_linux_selector_runs_only_when_a_linux_pool_consumer_is_selected(self) -> None:
-        job = self.workflow_job("select-ubuntu-runner")
-        self.assertEqual(self.job_needs("select-ubuntu-runner"), {"change-scope"})
-        self.assertEqual(
-            set(re.findall(r"lanes\.([a-z_]+)", job)),
-            {
-                "web_runtime_host",
-                "web_runtime_lab",
-                "core_ubuntu",
-                "core_asan",
-                "core_coverage",
-                "package",
-            },
-        )
-        self.assertIn("if: ${{ !cancelled()", job)
+    def test_the_linux_runner_selector_no_longer_exists(self) -> None:
+        """The guard shrank to nothing, so the job goes rather than idles.
+
+        A selector with no consumers would still be a live route: it resolves
+        once per run and its hosted branch could be reconnected by a single
+        `needs`. Removing the job, its outputs, its Runner API probe and its
+        use of the runner-read token is what makes automatic Hosted Linux
+        capacity unreachable instead of merely unused.
+        """
+        for absent in (
+            "select-ubuntu-runner",
+            "Select Ubuntu runner",
+            "no online trusted self-hosted runner is available",
+        ):
+            with self.subTest(absent=absent):
+                self.assertNotIn(absent, self.main_source)
+        policy = json.loads(SCOPE_POLICY.read_text(encoding="utf-8"))
+        for lane, jobs in policy["lane_jobs"].items():
+            with self.subTest(lane=lane):
+                self.assertNotIn("select-ubuntu-runner", jobs)
 
     def test_macos_selector_runs_only_when_core_macos_is_selected(self) -> None:
         job = self.workflow_job("select-macos-runner")
@@ -448,16 +629,29 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             job,
         )
 
-    def test_package_uses_existing_trusted_ubuntu_selector(self) -> None:
-        job = self.workflow_job("package")
-        self.assertEqual(
-            self.job_needs("package"), {"change-scope", "select-ubuntu-runner"}
-        )
-        self.assertIn(
-            "runs-on: ${{ fromJSON(needs.select-ubuntu-runner.outputs.runner) }}",
-            job,
-        )
-        self.assertNotIn("runs-on: ubuntu-24.04", job)
+    def test_native_core_lanes_use_the_static_core_role_not_the_selector(self) -> None:
+        """The last four Linux lanes move by role, retiring the selector.
+
+        Ubuntu Core, Linux ASan, Coverage and Core package were the only jobs
+        still resolving `runs-on` from a once-per-run API snapshot that could
+        buy paid Ubuntu. Naming the literal label set makes a saturated or
+        absent role queue instead, so each keeps `needs: change-scope` alone
+        and carries the closed trust condition itself. Pinning the exact job
+        set keeps a later lane from inheriting the route without its own proof
+        run.
+        """
+        for job_name, lane in CORE_JOBS.items():
+            with self.subTest(job=job_name):
+                job = self.workflow_job(job_name)
+                self.assertEqual(self.job_needs(job_name), {"change-scope"})
+                self.assertIn(CORE_ROLE, job)
+                self.assertNotIn("runs-on: ubuntu-24.04", job)
+                self.assertNotIn("select-ubuntu-runner", job)
+                self.assertIn(TRUST_CONDITION, job)
+                self.assertEqual(
+                    set(re.findall(r"lanes\.([a-z_]+)", job)), {lane}
+                )
+        self.assertEqual(self.main_source.count("ci-core"), len(CORE_JOBS))
 
     def test_scope_and_gate_timeouts_are_three_minutes_and_lane_limits_match_policy(self) -> None:
         expected = {
@@ -494,6 +688,35 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("github.event.pull_request.head.sha", job)
         self.assertIn("$GITHUB_OUTPUT", job)
         self.assertIn("$GITHUB_STEP_SUMMARY", job)
+
+    def test_scope_artifact_retention_is_the_release_evidence_lifetime(self) -> None:
+        """Release authority reads this artifact, so its lifetime is a contract.
+
+        `tools/release/ci_evidence.py` accepts a release target only when the
+        exact run still retains a `full` scope manifest, so shortening this
+        retention or letting the upload fail silently would delete prospective
+        release evidence rather than merely lose a diagnostic.
+        """
+        job = self.workflow_job("change-scope")
+        self.assertIn("retention-days: 14", job)
+        self.assertIn("if-no-files-found: error", job)
+        self.assertIn("path: ${{ runner.temp }}/ci-scope.json", job)
+
+    def test_push_classification_uses_the_exact_before_range(self) -> None:
+        job = self.workflow_job("change-scope")
+        self.assertIn(
+            "BASE_SHA: ${{ github.event_name == 'pull_request' && "
+            "github.event.pull_request.base.sha || github.event_name == 'push' "
+            "&& github.event.before || github.sha }}",
+            job,
+        )
+        self.assertIn("HEAD_SHA: ${{ github.event_name == 'pull_request' && "
+                      "github.event.pull_request.head.sha || github.sha }}", job)
+
+    def test_dispatch_input_documents_the_explicit_full_evidence_path(self) -> None:
+        events = self.event_block(self.main_source)
+        self.assertIn("workflow_dispatch:", events)
+        self.assertIn("release evidence", events)
 
     def test_no_job_uses_retry_for_semantic_workloads(self) -> None:
         semantic_source = self.main_source + self.web_proof_source

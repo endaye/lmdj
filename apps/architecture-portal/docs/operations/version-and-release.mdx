@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/release-evidence/release-intents.json, tools/release/policy.json, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -14,21 +14,24 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前 `main` 的 Product Build 是 `1.0.21.0 · canary · g<short-sha>`。`1.0.18.0` 因人工 Canary 暴露永久 `importing` UI 而 abandoned、unshipped；`1.0.19.0` 完成 branch-local full Proof 与快照但被键盘空间 mapping 缺陷取代；`1.0.20.0` 纠正键盘 mapping 并通过十步人工 Canary，但实体 MPD218 暴露 Creator 额外 Channel 1 filter。`1.0.21.0` 使 bounded MIDI Note `36..51` mapping 接受 channels 1–16，并已完成 MPD218 Channel 10 实体复验、protected PR #134、squash merge `5613158` 与 exact merged-main Proof。版本值由 active manifests 与 lock 派生，Contract、Provider、Platform、Diagnostic Host 和 Model identity 保持不变。
+当前 source candidate 是 Product Build `1.0.22.0 · canary · g<short-sha>`，用于在最新 `main` 上集成 Stage 8 Sample Editor。此前 `1.0.21.0` 使 bounded MIDI Note `36..51` mapping 接受 channels 1–16，并已完成 MPD218 Channel 10 实体复验、protected PR #134、squash merge `5613158` 与 exact merged-main Proof；这些历史证据不自动升级为 `1.0.22.0` 的候选结论。版本值由 active manifests 与 Assembly Lock 派生。
 
 | Identity | 当前版本 | 变化边界 |
 | --- | --- | --- |
-| Audio Runtime | `0.4.1` | 本候选无变化 |
-| Project I/O | `0.5.4` | compatible managed storage ownership、publication recovery 与 Native link-count hardening |
-| Application Facade | `1.3.5` | 精确依赖更新到 Project I/O `0.5.4` |
-| Web Runtime Platform | `0.2.1` | compatible default keyboard spatial-order correction |
-| Core CLI | `1.0.11` | 精确 Facade 依赖更新 |
-| Core MCP | `1.1.8` | 精确 Facade 依赖及 Python identity 更新 |
-| Native Test Host | `1.0.9` | 精确 Facade 依赖更新 |
-| Web Runtime Host | `1.2.8` | 精确 Platform `0.2.1` 依赖传播；诊断 UI 语义不变 |
-| Creator Web | `1.1.3` | compatible MIDI channels 1–16 correction；Note/Bank/velocity 边界不变 |
+| Authoring Domain | `0.2.0` | 固定 Sample playback、Project v2 与兼容 v1 投影 |
+| Project I/O | `0.6.0` | v1 只读迁移、v2 写入及 Sample staging/cache storage |
+| Project Cooker | `0.3.0` | WAV inspect/decode、waveform 与 trim/gain/mute preparation |
+| Audio Runtime | `0.5.0` | 四种 trigger mode、preview/stop 与 Voice-state ring |
+| Application Facade | `1.4.0` | 原子 Sample inspect/import/update/reset 与 revision truth |
+| Web Runtime Platform | `0.3.0` | Sample transport、sidecar、Snapshot/Voice notification 与 lifecycle safety |
+| Core CLI | `1.0.12` | 精确 Facade 依赖与 Sample command parity |
+| Core MCP | `1.1.9` | 精确 Facade 依赖与 Sample tool parity |
+| Native Test Host | `1.0.10` | 精确 Facade 依赖与 Sample host coverage |
+| Web Runtime Host | `1.2.9` | 精确 Platform 依赖更新 |
+| Creator Web | `1.2.0` | packaged Sample Editor、input 与 Project projection |
+| Project Contract | `lmdj.project.v2 · 2.0.0` | 新写入真相；`lmdj.project.v1 · 1.0.0` 继续只读兼容 |
 
-历史 `1.0.16.6`、`.7` 与 `1.0.18.0` 仍是 abandoned、unshipped candidate；签名 `.8` 以及 `1.0.16.9`、`1.0.19.0`、`1.0.20.0` 的冻结快照和验收记录继续只读保留。新的 Host identity 不能使用 Product PATCH，因此 Creator `1.1.3` 进入新 BUILD `1.0.21.0`；Platform `0.2.1` 与 Host `1.2.8` 不变。已分配身份、branch-local Proof 或 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion；`1.0.21.0` 的这些边界已分别记录，不相互替代。
+这些 Major/Minor/Patch 变化按各组件公开边界独立分配。Stage 8B 仍未实现且不分配版本；历史 `1.0.16.8`、`1.0.16.9`、`1.0.18.0`、`1.0.19.0`、`1.0.20.0` 与 `1.0.21.0` 身份及快照保持只读。已分配身份、branch-local Proof 或未来 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion；`1.0.21.0` 的这些边界已分别记录，不相互替代。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 
@@ -40,6 +43,16 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 `publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；每次 mutation 后停止并重新运行
 `scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
+
+`audit --remote` 与 `prepare` 之前还有一道 CI 证据边界：release target 必须有一次 exact-main 的
+full 证据——该 SHA 上 completed、successful 的 `Core CI` run，同一 run 内 `Change Scope` 与
+`PR Gate` 均成功，且该 run 为同一 exact SHA 保留的 scope manifest 为 `lmdj.ci-scope` 的 v2、
+`mode=full`、`trusted_head=true`。普通 `main` merge 现在按精确路径分类，可能只跑 focused CI，
+所以 focused target 必须由操作者对该 exact SHA 以空 `lanes` 显式 dispatch 一次 full run 并把 run
+ID 写入 release intent；`requested` 与 focused 都会被拒绝，而一次 full dispatch 本身也不授权任何
+mutation。该 manifest artifact 保留 14 天：过期后只能在 run 仍被保留时重跑其全部 job，或另行授权
+一次 exact-SHA full run 并更新 intent；证据不得推断或重建。已 published 的终态审计继续以不可变
+tag/Release/asset 证据判定。
 
 签名发生在可信本地边界；GitHub workflow 只持有 public trust anchors。公开 publication 必须由
 精确输入的 workflow dispatch 显式授权，并通过受保护的 `release` Environment。当前单人维护者
@@ -61,7 +74,7 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前 Product tag 文本为 `lmdj-v1.0.21.0`，仅是未来 tag 文本。PR #134、squash merge `5613158`、完整 exact-main CI 和本地 merged-tree Proof 已完成；这些事实不授权或证明 tag、Release、部署、发布、public smoke 或 Channel promotion。创建 signed annotated tag 仍需要单独授权，并须绑定已经验证的精确目标。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前 Build 证据。
+当前候选 Product tag 文本为 `lmdj-v1.0.22.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。`1.0.21.0` 的 PR #134、squash merge `5613158`、完整 exact-main CI 和本地 merged-tree Proof 已完成，但这些历史事实不授权或证明 `1.0.22.0` 的 tag、Release、部署、发布、public smoke 或 Channel promotion。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 
@@ -78,7 +91,7 @@ API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact pri
 HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
 状态必须由与精确身份绑定的 evidence 独立报告。
 
-该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.21.0` 已获得 remote verified
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.22.0` 已获得 remote verified
 tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
 promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
 精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、

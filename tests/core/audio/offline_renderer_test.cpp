@@ -26,6 +26,8 @@ using lmdj::audio::OfflineRenderRequest;
 using lmdj::audio::render_offline;
 using lmdj::cooker::PcmSample;
 using lmdj::cooker::ResolvedEvent;
+using lmdj::cooker::ResolvedPad;
+using lmdj::cooker::ResolvedPlayback;
 using lmdj::cooker::RuntimeSnapshot;
 using lmdj::domain::AssignPad;
 using lmdj::domain::Command;
@@ -35,6 +37,7 @@ using lmdj::domain::ImportAsset;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::ProjectState;
+using lmdj::domain::TriggerMode;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
@@ -147,15 +150,63 @@ std::shared_ptr<const RuntimeSnapshot> snapshot(
     std::vector<ResolvedEvent> events,
     std::uint16_t bpm = 120,
     std::uint8_t bars = 1) {
+  std::vector<ResolvedPad> pads;
+  for (const auto& event : events) {
+    bool already_present = false;
+    for (const auto& pad : pads) {
+      already_present = already_present || pad.slot == event.slot;
+    }
+    if (already_present || event.sample == nullptr) {
+      continue;
+    }
+    const auto frames = event.sample->interleaved.size() /
+                        event.sample->channels;
+    pads.push_back(ResolvedPad{
+        event.slot,
+        ArtifactRef{
+            std::string(64, 'a'),
+            "audio/wav",
+            event.sample->interleaved.size() * sizeof(std::int16_t),
+        },
+        event.sample,
+        ResolvedPlayback{
+            0,
+            static_cast<std::uint32_t>(frames),
+            TriggerMode::one_shot,
+            1.0F,
+            false,
+        },
+    });
+  }
   return std::make_shared<const RuntimeSnapshot>(
       RuntimeSnapshot{
           ProjectId{"00000000-0000-4000-8000-000000000001"},
           17,
           bpm,
           bars,
-          {},
+          std::move(pads),
           std::move(events),
       });
+}
+
+std::shared_ptr<const RuntimeSnapshot> snapshot_with_playback(
+    ResolvedEvent event,
+    ResolvedPlayback playback) {
+  return std::make_shared<const RuntimeSnapshot>(RuntimeSnapshot{
+      ProjectId{"00000000-0000-4000-8000-000000000001"},
+      17,
+      120,
+      1,
+      {
+          ResolvedPad{
+              event.slot,
+              ArtifactRef{std::string(64, 'b'), "audio/wav", 16},
+              event.sample,
+              playback,
+          },
+      },
+      {std::move(event)},
+  });
 }
 
 std::shared_ptr<const PcmSample> fixture_sample(std::string_view filename) {
@@ -257,6 +308,42 @@ void test_render_preserves_stereo_and_scales_velocity() {
   const auto wav = read_bytes(output_path);
   LMDJ_CHECK(read_pcm16(wav, 0, 0) == -1);
   LMDJ_CHECK(read_pcm16(wav, 0, 1) == 504);
+}
+
+void test_pattern_events_apply_trim_gain_and_mute_as_one_shot_starts() {
+  TempDirectory temp;
+  const auto stereo = sample(
+      2,
+      {100, -100, 2'000, -2'000, 3'000, -3'000, 4'000, -4'000});
+  const auto trimmed = snapshot_with_playback(
+      ResolvedEvent{PadSlotId{0, 0}, 0, 127, stereo},
+      ResolvedPlayback{
+          1, 3, TriggerMode::loop_toggle, 0.5F, false});
+  const auto trimmed_path = temp.path() / "trimmed.wav";
+
+  const auto rendered =
+      render_offline(OfflineRenderRequest{trimmed, trimmed_path});
+
+  LMDJ_CHECK(rendered.has_value());
+  const auto wav = read_bytes(trimmed_path);
+  LMDJ_CHECK(read_pcm16(wav, 0, 0) == 1'000);
+  LMDJ_CHECK(read_pcm16(wav, 0, 1) == -1'000);
+  LMDJ_CHECK(read_pcm16(wav, 1, 0) == 1'500);
+  LMDJ_CHECK(read_pcm16(wav, 1, 1) == -1'500);
+  LMDJ_CHECK(read_pcm16(wav, 2, 0) == 0);
+  LMDJ_CHECK(read_pcm16(wav, 2, 1) == 0);
+
+  const auto muted = snapshot_with_playback(
+      ResolvedEvent{PadSlotId{0, 0}, 0, 127, stereo},
+      ResolvedPlayback{0, 4, TriggerMode::gate, 1.0F, true});
+  const auto muted_path = temp.path() / "muted.wav";
+  LMDJ_CHECK(render_offline(OfflineRenderRequest{muted, muted_path})
+                 .has_value());
+  const auto muted_wav = read_bytes(muted_path);
+  for (std::uint64_t frame = 0; frame < 4; ++frame) {
+    LMDJ_CHECK(read_pcm16(muted_wav, frame, 0) == 0);
+    LMDJ_CHECK(read_pcm16(muted_wav, frame, 1) == 0);
+  }
 }
 
 void test_render_saturates_overlapping_events_without_wrap() {
@@ -584,6 +671,7 @@ int main() {
     test_mix_math_uses_mathematical_floor_and_saturation();
     test_render_writes_exact_header_frame_count_and_step_positions();
     test_render_preserves_stereo_and_scales_velocity();
+    test_pattern_events_apply_trim_gain_and_mute_as_one_shot_starts();
     test_render_saturates_overlapping_events_without_wrap();
     test_render_saturates_each_event_in_snapshot_order();
     test_render_does_not_mutate_the_input_snapshot();

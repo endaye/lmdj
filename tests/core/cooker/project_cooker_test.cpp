@@ -1,4 +1,5 @@
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <cstddef>
 #include <exception>
@@ -8,6 +9,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <limits>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -26,6 +28,7 @@ using lmdj::cooker::ArtifactResolver;
 using lmdj::cooker::PcmSample;
 using lmdj::cooker::ResolvedEvent;
 using lmdj::cooker::ResolvedPad;
+using lmdj::cooker::ResolvedPlayback;
 using lmdj::cooker::RuntimeSnapshot;
 using lmdj::domain::AssignPad;
 using lmdj::domain::Command;
@@ -33,6 +36,7 @@ using lmdj::domain::CommandMeta;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::PadSlotId;
+using lmdj::domain::TriggerMode;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::ProjectState;
@@ -78,7 +82,20 @@ using RuntimeSnapshotMemberTypes = decltype([] {
   };
 }());
 
+using ResolvedPlaybackMemberTypes = decltype([] {
+  [[maybe_unused]] auto [start_frame, end_frame, trigger_mode, linear_gain, muted] =
+      ResolvedPlayback{0, 1, TriggerMode::one_shot, 1.0F, false};
+  return std::tuple{
+      std::type_identity<decltype(start_frame)>{},
+      std::type_identity<decltype(end_frame)>{},
+      std::type_identity<decltype(trigger_mode)>{},
+      std::type_identity<decltype(linear_gain)>{},
+      std::type_identity<decltype(muted)>{},
+  };
+}());
+
 static_assert(std::is_aggregate_v<RuntimeSnapshot>);
+static_assert(std::is_aggregate_v<ResolvedPlayback>);
 static_assert(std::is_same_v<
               CookResult,
               Result<std::shared_ptr<const RuntimeSnapshot>>>);
@@ -97,6 +114,14 @@ static_assert(std::is_same_v<
                   std::type_identity<std::uint8_t>,
                   std::type_identity<std::vector<ResolvedPad>>,
                   std::type_identity<std::vector<ResolvedEvent>>>>);
+static_assert(std::is_same_v<
+              ResolvedPlaybackMemberTypes,
+              std::tuple<
+                  std::type_identity<std::uint32_t>,
+                  std::type_identity<std::uint32_t>,
+                  std::type_identity<TriggerMode>,
+                  std::type_identity<float>,
+                  std::type_identity<bool>>>);
 
 std::vector<std::byte> fixture_bytes(const std::string& name) {
   const auto path = std::filesystem::path{"tests/fixtures/audio"} / name;
@@ -582,6 +607,93 @@ void test_cooker_decodes_each_unique_artifact_once() {
   LMDJ_CHECK(result.value()->events.at(0).sample == result.value()->events.at(1).sample);
 }
 
+void test_cooker_prepares_44100_pcm_and_resolves_complete_playback() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  auto project = project_with_pattern(artifact);
+  project.banks.at(0).at(0).playback = {
+      1,
+      7,
+      TriggerMode::loop_gate,
+      -6'000,
+      true,
+  };
+
+  const auto result = lmdj::cooker::cook(
+      project,
+      PatternId{kPatternId},
+      resolver_for({
+          {artifact.sha256, fixture_bytes("mono-44100.wav")},
+      }));
+
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value()->pads.size() == 1);
+  const auto& pad = result.value()->pads.at(0);
+  LMDJ_CHECK(pad.sample->sample_rate == 48'000);
+  LMDJ_CHECK(pad.sample->channels == 1);
+  LMDJ_CHECK(pad.sample->interleaved.size() == 9);
+  LMDJ_CHECK(pad.playback.start_frame == 1);
+  LMDJ_CHECK(pad.playback.end_frame == 8);
+  LMDJ_CHECK(pad.playback.trigger_mode == TriggerMode::loop_gate);
+  constexpr auto expected_gain = 0x1.009b9cp-1F;
+  LMDJ_CHECK(std::abs(pad.playback.linear_gain - expected_gain) < 0.000'001F);
+  LMDJ_CHECK(pad.playback.muted);
+  LMDJ_CHECK(result.value()->events.at(0).sample == pad.sample);
+}
+
+void test_cooker_resolves_default_playback_over_the_full_prepared_source() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  const auto result = lmdj::cooker::cook(
+      project_with_pattern(artifact),
+      PatternId{kPatternId},
+      resolver_for({
+          {artifact.sha256, fixture_bytes("mono-44100.wav")},
+      }));
+
+  LMDJ_CHECK(result.has_value());
+  const auto& playback = result.value()->pads.at(0).playback;
+  LMDJ_CHECK(playback.start_frame == 0);
+  LMDJ_CHECK(playback.end_frame == 9);
+  LMDJ_CHECK(playback.trigger_mode == TriggerMode::one_shot);
+  LMDJ_CHECK(playback.linear_gain == 1.0F);
+  LMDJ_CHECK(!playback.muted);
+}
+
+void test_cooker_rejects_invalid_trim_gain_and_trigger_values() {
+  const auto artifact = fixture_artifact("mono-44100.wav");
+  const auto bytes = fixture_bytes("mono-44100.wav");
+  auto empty_trim = project_with_pattern(artifact);
+  empty_trim.banks.at(0).at(0).playback.trim_start_frame = 4;
+  empty_trim.banks.at(0).at(0).playback.trim_end_frame = 4;
+  auto oversized_trim = project_with_pattern(artifact);
+  oversized_trim.banks.at(0).at(0).playback.trim_end_frame = 9;
+  auto non_finite_gain = project_with_pattern(artifact);
+  non_finite_gain.banks.at(0).at(0).playback.gain_millidb =
+      std::numeric_limits<std::int32_t>::max();
+  auto gain_below_domain = project_with_pattern(artifact);
+  gain_below_domain.banks.at(0).at(0).playback.gain_millidb = -60'001;
+  auto gain_above_domain = project_with_pattern(artifact);
+  gain_above_domain.banks.at(0).at(0).playback.gain_millidb = 6'001;
+  auto invalid_mode = project_with_pattern(artifact);
+  invalid_mode.banks.at(0).at(0).playback.trigger_mode =
+      static_cast<TriggerMode>(255);
+
+  for (const auto* project : {
+           &empty_trim,
+           &oversized_trim,
+           &non_finite_gain,
+           &gain_below_domain,
+           &gain_above_domain,
+           &invalid_mode,
+       }) {
+    const auto result = lmdj::cooker::cook(
+        *project,
+        PatternId{kPatternId},
+        resolver_for({{artifact.sha256, bytes}}));
+    LMDJ_CHECK(!result.has_value());
+    LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
+  }
+}
+
 void test_cooker_returns_immutable_deterministic_snapshot_values() {
   const auto artifact = fixture_artifact("stereo.wav");
   const auto project = project_with_pattern(artifact);
@@ -633,6 +745,9 @@ int main() {
     test_cooker_rejects_artifact_byte_length_or_hash_mismatch();
     test_cooker_rejects_cached_artifact_with_later_wrong_length();
     test_cooker_decodes_each_unique_artifact_once();
+    test_cooker_prepares_44100_pcm_and_resolves_complete_playback();
+    test_cooker_resolves_default_playback_over_the_full_prepared_source();
+    test_cooker_rejects_invalid_trim_gain_and_trigger_values();
     test_cooker_returns_immutable_deterministic_snapshot_values();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -71,6 +71,32 @@ def main() -> int:
             if re.search(pattern, source, re.IGNORECASE):
                 fail(f"{label} entered Platform web module: {path}")
 
+    browser_owned_sources = [
+        *text_files(PLATFORM_ROOT / "web"),
+        PLATFORM_ROOT / "src" / "web-runtime-pre.js",
+    ]
+    for path in browser_owned_sources:
+        if re.search(r"\bproject_path\b", path.read_text(encoding="utf-8")):
+            fail(f"browser transport owns a Project bundle path: {path}")
+
+    transport_source = (
+        PLATFORM_ROOT / "src" / "web-runtime-pre.js"
+    ).read_text(encoding="utf-8")
+    for required in (
+        "options.signal.addEventListener(\"abort\"",
+        "options.cancelQuery === true",
+        "abortPendingRequest(request.request_id, pending)",
+        "lmdj_web_host_cancel_query",
+        "pending.abortError",
+        "pending.abortSignal.removeEventListener(\"abort\"",
+        "const sidecarPointer = sidecar.byteLength === 0",
+        "HEAPU8.set(sidecar, sidecarPointer)",
+        '["number", "number", "number", "number", "number"]',
+        "if (sidecarPointer !== 0) _free(sidecarPointer)",
+    ):
+        if required not in transport_source:
+            fail("formal Host transport lacks settled request cancellation: " + required)
+
     creator_root = REPO_ROOT / "apps" / "creator-web"
     if creator_root.exists():
         for path in text_files(creator_root):

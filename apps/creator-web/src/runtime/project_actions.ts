@@ -8,6 +8,7 @@ import type {
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const PROJECTION_READ_ATTEMPTS = 4;
 
 export interface ProjectActionToken {
   readonly generation: number;
@@ -141,6 +142,30 @@ export async function openProjectJourney(
   const inspected = await session.inspectProject();
   await session.reloadSnapshot(summary.patternId);
   return projectView(summary, inspected);
+}
+
+export async function refreshProjectProjectionJourney(
+  session: CreatorRuntimeSession,
+  identity: Readonly<Pick<LocalProjectSummary, "projectId" | "patternId">>,
+): Promise<ProjectView | null> {
+  for (let attempt = 0; attempt < PROJECTION_READ_ATTEMPTS; ++attempt) {
+    const inspected = await session.inspectProject();
+    const projects = await listLocalProjectsJourney(session);
+    const summary = projects.find(({projectId, patternId}) =>
+      projectId === identity.projectId && patternId === identity.patternId,
+    );
+    if (summary === undefined) {
+      throw Object.assign(new Error("Current Project is not listed"), {
+        code: "NOT_FOUND",
+      });
+    }
+    if (!record(inspected) || !integer(inspected.project_revision)) {
+      throw protocolMismatch("Project projection inspection revision is invalid");
+    }
+    if (summary.revision !== inspected.project_revision) continue;
+    return projectView(summary, inspected);
+  }
+  return null;
 }
 
 export async function importProjectJourney(

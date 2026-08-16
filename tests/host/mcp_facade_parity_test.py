@@ -35,6 +35,22 @@ def slot(bank: int, pad: int) -> dict:
     return {"bank": bank, "pad": pad}
 
 
+def playback(
+    start: int = 0,
+    end: int | None = None,
+    mode: str = "one_shot",
+    gain: int = 0,
+    muted: bool = False,
+) -> dict:
+    return {
+        "trim_start_frame": start,
+        "trim_end_frame": end,
+        "trigger_mode": mode,
+        "gain_millidb": gain,
+        "muted": muted,
+    }
+
+
 def pattern() -> dict:
     return {
         "pattern_id": PATTERN_ID,
@@ -461,6 +477,174 @@ def assert_golden(output: Path, rendered: dict) -> None:
     assert rendered["result"]["artifact"]["sha256"] == expected_sha
 
 
+def sample_facade_parity(
+    cli: Path,
+    library: Path,
+    workspace: Path,
+    temp_root: Path,
+) -> None:
+    project = temp_root / "sample-parity.lmdj"
+    for surface, request, revision in (
+        (
+            "command",
+            {
+                "operation": "project.create",
+                "project_path": str(project),
+                "project_id": uuid(701),
+                "bpm": 120,
+            },
+            0,
+        ),
+        (
+            "command",
+            {
+                "operation": "asset.import",
+                "project_path": str(project),
+                "command_id": uuid(702),
+                "expected_revision": 0,
+                "asset_id": uuid(703),
+                "source_path": str(
+                    REPO_ROOT / "tests/fixtures/audio/mono-44100.wav"
+                ),
+                "media_type": "audio/wav",
+            },
+            1,
+        ),
+        (
+            "command",
+            {
+                "operation": "pad.assign",
+                "project_path": str(project),
+                "command_id": uuid(704),
+                "expected_revision": 1,
+                "slot": slot(0, 0),
+                "asset_id": uuid(703),
+            },
+            2,
+        ),
+    ):
+        check_success(
+            cli_request(cli, workspace, surface, request), revision
+        )
+
+    inspect_request = {
+        "operation": "sample.inspect",
+        "project_path": str(project),
+        "slot": slot(0, 0),
+    }
+    cli_inspect = cli_request(cli, workspace, "query", inspect_request)
+    check_success(cli_inspect, 2)
+    mcp = MCP(library, workspace)
+    mcp_inspect = mcp.tool(
+        "lmdj.sample.inspect",
+        {"project_path": str(project), "slot": slot(0, 0)},
+    )
+    assert mcp_inspect == cli_inspect
+
+    waveform_arguments = {
+        "project_path": str(project),
+        "slot": slot(0, 0),
+        "window": {
+            "start_frame": 0,
+            "end_frame": 8,
+            "bucket_count": 4,
+        },
+    }
+    cli_waveform = cli_request(
+        cli,
+        workspace,
+        "query",
+        {"operation": "sample.waveform", **waveform_arguments},
+    )
+    mcp_waveform = mcp.tool("lmdj.sample.waveform", waveform_arguments)
+    assert mcp_waveform == cli_waveform
+    assert [
+        bucket["peak_magnitude"]
+        for bucket in cli_waveform["result"]["buckets"]
+    ] == [32768, 8192, 4096, 0]
+
+    update_arguments = {
+        "project_path": str(project),
+        "command_id": uuid(705),
+        "expected_revision": 2,
+        "slot": slot(0, 0),
+        "playback": playback(1, 7, "loop_gate", -1200, False),
+    }
+    cli_update = cli_request(
+        cli,
+        workspace,
+        "command",
+        {"operation": "sample.update_pad", **update_arguments},
+    )
+    check_success(cli_update, 3)
+    assert mcp.tool(
+        "lmdj.sample.inspect",
+        {"project_path": str(project), "slot": slot(0, 0)},
+    )["result"]["playback"] == update_arguments["playback"]
+
+    mcp_reset = mcp.tool(
+        "lmdj.sample.reset_pad",
+        {
+            "project_path": str(project),
+            "command_id": uuid(706),
+            "expected_revision": 3,
+            "slot": slot(0, 0),
+        },
+    )
+    check_success(mcp_reset, 4)
+    cli_reset_inspect = cli_request(
+        cli, workspace, "query", inspect_request
+    )
+    assert cli_reset_inspect["result"]["playback"] == playback()
+
+    cli_replayed_update = cli_request(
+        cli,
+        workspace,
+        "command",
+        {"operation": "sample.update_pad", **update_arguments},
+    )
+    check_success(cli_replayed_update, 4)
+    assert cli_replayed_update["result"]["committed_revision"] == 3
+    mcp_replayed_update = mcp.tool(
+        "lmdj.sample.update_pad", update_arguments
+    )
+    assert mcp_replayed_update == cli_replayed_update
+
+    advanced = cli_request(
+        cli,
+        workspace,
+        "command",
+        {
+            "operation": "sample.update_pad",
+            "project_path": str(project),
+            "command_id": uuid(707),
+            "expected_revision": 4,
+            "slot": slot(0, 0),
+            "playback": playback(1, 7, "loop_toggle", -600, False),
+        },
+    )
+    check_success(advanced, 5)
+    reset_arguments = {
+        "project_path": str(project),
+        "command_id": uuid(706),
+        "expected_revision": 3,
+        "slot": slot(0, 0),
+    }
+    mcp_replayed_reset = mcp.tool(
+        "lmdj.sample.reset_pad", reset_arguments
+    )
+    check_success(mcp_replayed_reset, 5)
+    assert mcp_replayed_reset["result"]["committed_revision"] == 4
+    cli_replayed_reset = cli_request(
+        cli,
+        workspace,
+        "command",
+        {"operation": "sample.reset_pad", **reset_arguments},
+    )
+    assert cli_replayed_reset == mcp_replayed_reset
+    mcp.close()
+
+
 def provider_binding_parity(
     cli: Path,
     library: Path,
@@ -554,6 +738,7 @@ def main() -> int:
         mcp_author_cli_consume(
             cli, library, workspace, temp_root
         )
+        sample_facade_parity(cli, library, workspace, temp_root)
         provider_binding_parity(cli, library, temp_root)
     print("cli/mcp facade parity: passed")
     return 0

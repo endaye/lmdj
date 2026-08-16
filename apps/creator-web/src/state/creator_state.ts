@@ -2,7 +2,30 @@ import type {
   LocalProjectSummary,
   ProjectPadView,
   ProjectView,
+  SampleCommit,
+  SampleInspect,
 } from "../runtime/runtime_types";
+import {
+  initialSampleState,
+  preparedSampleState,
+  reduceSampleState,
+  type SamplePendingAction,
+  type SampleStateAction,
+  type SampleState,
+} from "./sample_state";
+
+export type SampleProjectionRefresh =
+  | Readonly<{
+      type: "mutation-committed";
+      pending: Readonly<SamplePendingAction>;
+      inspect: Readonly<SampleInspect> | null;
+      commit: Readonly<SampleCommit>;
+    }>
+  | Readonly<{
+      type: "mutation-conflicted";
+      pending: Readonly<SamplePendingAction>;
+      inspect: Readonly<SampleInspect>;
+    }>;
 
 export type {
   LocalProjectSummary,
@@ -55,6 +78,8 @@ export interface CreatorState {
   };
   activeBank: Bank;
   pressed: ReadonlyMap<number, PressOutcome>;
+  sample: SampleState;
+  sampleProjectionRefresh: SampleProjectionRefresh | null;
 }
 
 export type CreatorAction =
@@ -80,6 +105,14 @@ export type CreatorAction =
   | {type: "bank-selected"; bank: Bank}
   | {type: "pad-pressed"; slot: number; outcome: PressOutcome}
   | {type: "pad-released"; slot: number}
+  | {type: "sample-action"; action: SampleStateAction}
+  | {type: "sample-projection-refresh-started"; action: SampleProjectionRefresh}
+  | {
+      type: "sample-project-refreshed";
+      project: ProjectView;
+      action: SampleProjectionRefresh;
+    }
+  | {type: "sample-projection-refresh-failed"; errorCode: string}
   | {type: "pressed-cleared"};
 
 export const initialCreatorState: CreatorState = {
@@ -103,6 +136,8 @@ export const initialCreatorState: CreatorState = {
   },
   activeBank: 0,
   pressed: new Map(),
+  sample: initialSampleState,
+  sampleProjectionRefresh: null,
 };
 
 function hasReadyProject(state: CreatorState): boolean {
@@ -186,9 +221,26 @@ export function isCreatorActionAllowed(
     }
     case "pad-released":
       return state.pressed.has(action.slot);
+    case "sample-action":
+      return true;
+    case "sample-projection-refresh-started":
+    case "sample-project-refreshed":
+    case "sample-projection-refresh-failed":
+      return true;
     case "pressed-cleared":
       return true;
   }
+}
+
+function samePendingMutation(
+  left: SampleProjectionRefresh,
+  right: SampleProjectionRefresh,
+): boolean {
+  return left.type === right.type && left.pending.kind === right.pending.kind &&
+    left.pending.slot === right.pending.slot &&
+    left.pending.expectedRevision === right.pending.expectedRevision &&
+    (left.type !== "mutation-committed" ||
+      (right.type === "mutation-committed" && left.commit === right.commit));
 }
 
 export function creatorReducer(
@@ -234,6 +286,8 @@ export function creatorReducer(
         project: {...state.project, phase: "ready", current: action.project},
         runtime: {...state.runtime, errorCode: null, errorDetails: {}},
         audio: {phase: "inactive"},
+        sample: preparedSampleState(action.project.revision),
+        sampleProjectionRefresh: null,
       };
     case "project-error":
       return {
@@ -277,6 +331,149 @@ export function creatorReducer(
       const pressed = new Map(state.pressed);
       pressed.delete(action.slot);
       return {...state, pressed};
+    }
+    case "sample-action": {
+      if (action.action.type === "inspect-stored") {
+        const currentProject = state.project.current;
+        const inspected = action.action.inspect;
+        const inspectedRevision = inspected !== null &&
+            typeof inspected === "object" &&
+            Object.hasOwn(inspected, "projectRevision") &&
+            Number.isSafeInteger((inspected as {projectRevision?: unknown}).projectRevision)
+          ? (inspected as {projectRevision: number}).projectRevision
+          : null;
+        if ((currentProject === null && state.project.phase === "error") ||
+          (inspectedRevision !== null &&
+            currentProject !== null &&
+            inspectedRevision !== currentProject.revision)) {
+          return state;
+        }
+      }
+      if (action.action.type === "waveform-stored") {
+        const current = state.sample.inspect;
+        const viewport = state.sample.viewport;
+        const request = action.action.request;
+        const envelope = action.action.envelope;
+        const envelopeRevision = envelope !== null &&
+            typeof envelope === "object" &&
+            Object.hasOwn(envelope, "projectRevision") &&
+            Number.isSafeInteger((envelope as {projectRevision?: unknown}).projectRevision)
+          ? (envelope as {projectRevision: number}).projectRevision
+          : null;
+        if (current === null || viewport === null ||
+          request.slot !== current.slot ||
+          request.waveformCacheIdentity !== current.waveformCacheIdentity ||
+          request.window.startFrame !== viewport.startFrame ||
+          request.window.endFrame !== viewport.endFrame ||
+          (envelopeRevision !== null &&
+            envelopeRevision !== current.projectRevision)) {
+          return state;
+        }
+      }
+      return {...state, sample: reduceSampleState(state.sample, action.action)};
+    }
+    case "sample-projection-refresh-started": {
+      if (state.sampleProjectionRefresh !== null) {
+        throw new TypeError("Sample Project refresh is already active");
+      }
+      if (action.action.type === "mutation-committed" &&
+        action.action.inspect === null) {
+        const pending = state.sample.pendingAction;
+        if (pending === null || pending.kind !== action.action.pending.kind ||
+          pending.slot !== action.action.pending.slot ||
+          pending.expectedRevision !== action.action.pending.expectedRevision ||
+          action.action.commit.committedRevision !== pending.expectedRevision + 1) {
+          throw new TypeError("Sample Project refresh identity does not match");
+        }
+      } else {
+        reduceSampleState(state.sample, action.action);
+      }
+      return {
+        ...state,
+        sampleProjectionRefresh: Object.freeze({...action.action}),
+      };
+    }
+    case "sample-project-refreshed": {
+      const current = state.project.current;
+      const refresh = state.sampleProjectionRefresh;
+      if (current === null ||
+        refresh === null || !samePendingMutation(refresh, action.action) ||
+        (action.action.type === "mutation-committed" &&
+          action.action.inspect === null) ||
+        current.projectId !== action.project.projectId ||
+        current.patternId !== action.project.patternId) {
+        throw new TypeError("Sample Project refresh identity does not match");
+      }
+      const sample = reduceSampleState(state.sample, action.action);
+      if (sample.savedRevision !== action.project.revision ||
+        (sample.inspect !== null &&
+          sample.inspect.projectRevision !== action.project.revision)) {
+        throw new TypeError("Sample Project refresh revision does not match");
+      }
+      const summary: LocalProjectSummary = {
+        projectId: action.project.projectId,
+        patternId: action.project.patternId,
+        revision: action.project.revision,
+        bpm: action.project.bpm,
+        assetCount: action.project.assetCount,
+        assignedPadCount: action.project.assignedPadCount,
+        bundleDigest: action.project.bundleDigest,
+      };
+      let replaced = false;
+      const projects = state.project.projects.map((project) => {
+        if (project.projectId !== summary.projectId ||
+          project.patternId !== summary.patternId) return project;
+        replaced = true;
+        return summary;
+      });
+      if (!replaced) projects.push(summary);
+      return {
+        ...state,
+        project: {
+          phase: "ready",
+          projects,
+          current: action.project,
+        },
+        sample,
+        sampleProjectionRefresh: null,
+      };
+    }
+    case "sample-projection-refresh-failed": {
+      const refresh = state.sampleProjectionRefresh;
+      if (refresh === null || action.errorCode.length === 0) {
+        throw new TypeError("Sample Project refresh failure is invalid");
+      }
+      const cancelled = reduceSampleState(state.sample, {
+        type: "operation-cancelled",
+        pending: refresh.pending,
+      });
+      const committed = refresh.type === "mutation-committed";
+      return {
+        ...state,
+        project: {phase: "error", projects: [], current: null},
+        runtime: {...state.runtime, errorCode: action.errorCode},
+        pressed: new Map(),
+        sample: Object.freeze({
+          ...cancelled,
+          inspect: null,
+          waveform: null,
+          viewport: null,
+          draft: null,
+          auditionPlayback: null,
+          voices: Object.freeze([]),
+          playhead: null,
+          savedRevision: null,
+          runtimeRevision: committed ? refresh.commit.runtimeRevision : null,
+          lastError: Object.freeze({
+            code: action.errorCode,
+            message: committed
+              ? "Sample was saved, but current Project truth could not be refreshed"
+              : "Project changed, but current Project truth could not be refreshed",
+            retryPrepare: false,
+          }),
+        }),
+        sampleProjectionRefresh: null,
+      };
     }
     case "pressed-cleared":
       return state.pressed.size === 0 ? state : {...state, pressed: new Map()};

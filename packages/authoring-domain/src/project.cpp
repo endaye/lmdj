@@ -32,6 +32,7 @@ foundation::Result<ProjectState> create_project(
   }
 
   ProjectState state{
+      ProjectContract::v1,
       std::move(id),
       0,
       bpm,
@@ -42,7 +43,8 @@ foundation::Result<ProjectState> create_project(
   };
   for (std::uint8_t bank = 0; bank < state.banks.size(); ++bank) {
     for (std::uint8_t pad = 0; pad < state.banks.at(bank).size(); ++pad) {
-      state.banks.at(bank).at(pad) = PadSlot{PadSlotId{bank, pad}, std::nullopt};
+      state.banks.at(bank).at(pad) =
+          PadSlot{PadSlotId{bank, pad}, std::nullopt, PadPlayback{}};
     }
   }
   return foundation::Result<ProjectState>::success(std::move(state));

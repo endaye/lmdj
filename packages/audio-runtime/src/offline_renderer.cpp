@@ -3,6 +3,8 @@
 #include <lmdj/audio/mix_math.hpp>
 #include <lmdj/audio/wav_writer.hpp>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -55,6 +57,20 @@ foundation::Result<OfflineRenderResult> invalid_request(
           foundation::ErrorCode::invalid_argument,
           std::move(message),
       });
+}
+
+std::int16_t apply_gain(std::int16_t value, float gain) noexcept {
+  if (gain == 1.0F) {
+    return value;
+  }
+  const auto scaled = static_cast<double>(value) * gain;
+  if (scaled >= std::numeric_limits<std::int16_t>::max()) {
+    return std::numeric_limits<std::int16_t>::max();
+  }
+  if (scaled <= std::numeric_limits<std::int16_t>::min()) {
+    return std::numeric_limits<std::int16_t>::min();
+  }
+  return static_cast<std::int16_t>(std::lround(scaled));
 }
 
 }  // namespace
@@ -143,6 +159,15 @@ foundation::Result<OfflineRenderResult> render_offline(
       return invalid_request(
           "offline render event has invalid velocity");
     }
+    const auto pad = std::find_if(
+        snapshot.pads.begin(),
+        snapshot.pads.end(),
+        [&event](const cooker::ResolvedPad& candidate) {
+          return candidate.slot == event.slot;
+        });
+    if (pad == snapshot.pads.end()) {
+      return invalid_request("offline render event has no resolved Pad");
+    }
 
     const auto step_frame =
         (static_cast<std::uint64_t>(event.step) * kSampleRate * 60U) /
@@ -150,32 +175,46 @@ foundation::Result<OfflineRenderResult> render_offline(
 
     const auto source_frames =
         source.interleaved.size() / source.channels;
-    for (std::size_t source_frame = 0;
-         source_frame < source_frames &&
-         step_frame + source_frame < frame_count;
+    const auto& playback = pad->playback;
+    if (playback.start_frame >= playback.end_frame ||
+        playback.end_frame > source_frames ||
+        !std::isfinite(playback.linear_gain) ||
+        playback.linear_gain < 0.0F) {
+      return invalid_request("offline render Pad playback is invalid");
+    }
+    if (playback.muted) {
+      continue;
+    }
+    for (std::size_t source_frame = playback.start_frame;
+         source_frame < playback.end_frame &&
+         step_frame + source_frame - playback.start_frame < frame_count;
          ++source_frame) {
       const auto output_offset =
-          static_cast<std::size_t>(step_frame + source_frame) *
+          static_cast<std::size_t>(
+              step_frame + source_frame - playback.start_frame) *
           kOutputChannels;
       const auto source_offset = source_frame * source.channels;
       if (source.channels == 1) {
         const auto scaled =
-            detail::scale_velocity(
-                source.interleaved[source_offset],
-                event.velocity);
+            apply_gain(
+                detail::scale_velocity(
+                    source.interleaved[source_offset], event.velocity),
+                playback.linear_gain);
         output[output_offset] =
             detail::saturating_add(output[output_offset], scaled);
         output[output_offset + 1] =
             detail::saturating_add(output[output_offset + 1], scaled);
       } else {
         const auto scaled_left =
-            detail::scale_velocity(
-                source.interleaved[source_offset],
-                event.velocity);
+            apply_gain(
+                detail::scale_velocity(
+                    source.interleaved[source_offset], event.velocity),
+                playback.linear_gain);
         const auto scaled_right =
-            detail::scale_velocity(
-                source.interleaved[source_offset + 1],
-                event.velocity);
+            apply_gain(
+                detail::scale_velocity(
+                    source.interleaved[source_offset + 1], event.velocity),
+                playback.linear_gain);
         output[output_offset] =
             detail::saturating_add(
                 output[output_offset],

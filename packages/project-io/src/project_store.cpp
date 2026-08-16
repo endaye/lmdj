@@ -4,6 +4,7 @@
 #include <array>
 #include <charconv>
 #include <cctype>
+#include <chrono>
 #include <initializer_list>
 #include <limits>
 #include <map>
@@ -26,6 +27,7 @@
 #include <lmdj/project_io/take_journal.hpp>
 
 #include "publish_token.hpp"
+#include "testing_hooks.hpp"
 
 namespace lmdj::project_io {
 namespace {
@@ -49,9 +51,18 @@ using foundation::ErrorCode;
 
 constexpr std::uint64_t kMaximumArtifactBytes = 64U * 1024U * 1024U;
 
+using PersistedCommand = std::variant<
+    domain::ImportAsset,
+    domain::AssignPad,
+    domain::RecordTake,
+    domain::CreatePattern,
+    domain::ImportAssignSample,
+    domain::UpdatePadPlayback,
+    domain::ResetPadPlayback>;
+
 struct LoadedProject {
   domain::ProjectState state;
-  std::map<foundation::CommandId, domain::Command> commands;
+  std::map<foundation::CommandId, PersistedCommand> commands;
   std::map<foundation::CommandId, domain::CommandReceipt> receipts;
   std::map<foundation::CommandId, foundation::TakeId> cleanup_obligations;
   std::vector<std::string> transactions;
@@ -228,6 +239,49 @@ nlohmann::json slot_json(domain::PadSlotId slot) {
   return {{"bank", slot.bank}, {"pad", slot.pad}};
 }
 
+std::string_view trigger_mode_name(domain::TriggerMode mode) {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+      return "one_shot";
+    case domain::TriggerMode::gate:
+      return "gate";
+    case domain::TriggerMode::loop_gate:
+      return "loop_gate";
+    case domain::TriggerMode::loop_toggle:
+      return "loop_toggle";
+  }
+  return {};
+}
+
+std::optional<domain::TriggerMode> parse_trigger_mode(std::string_view mode) {
+  if (mode == "one_shot") {
+    return domain::TriggerMode::one_shot;
+  }
+  if (mode == "gate") {
+    return domain::TriggerMode::gate;
+  }
+  if (mode == "loop_gate") {
+    return domain::TriggerMode::loop_gate;
+  }
+  if (mode == "loop_toggle") {
+    return domain::TriggerMode::loop_toggle;
+  }
+  return std::nullopt;
+}
+
+nlohmann::json playback_json(const domain::PadPlayback& playback) {
+  return {
+      {"gain_millidb", playback.gain_millidb},
+      {"muted", playback.muted},
+      {"trigger_mode", trigger_mode_name(playback.trigger_mode)},
+      {"trim_end_frame",
+       playback.trim_end_frame.has_value()
+           ? nlohmann::json(*playback.trim_end_frame)
+           : nlohmann::json(nullptr)},
+      {"trim_start_frame", playback.trim_start_frame},
+  };
+}
+
 nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
   return {
       {"slot", slot_json(event.slot)},
@@ -283,14 +337,17 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   for (std::size_t bank = 0; bank < state.banks.size(); ++bank) {
     auto pads = nlohmann::json::array();
     for (const auto& slot : state.banks.at(bank)) {
-      pads.push_back(
-          {
-              {"asset_id",
-               slot.asset_id.has_value()
-                   ? nlohmann::json(slot.asset_id->value())
-                   : nlohmann::json(nullptr)},
-              {"pad", slot.id.pad},
-          });
+      nlohmann::json encoded_pad = {
+          {"asset_id",
+           slot.asset_id.has_value()
+               ? nlohmann::json(slot.asset_id->value())
+               : nlohmann::json(nullptr)},
+          {"pad", slot.id.pad},
+      };
+      if (state.contract == domain::ProjectContract::v2) {
+        encoded_pad["playback"] = playback_json(slot.playback);
+      }
+      pads.push_back(std::move(encoded_pad));
     }
     banks.push_back(
         {
@@ -315,7 +372,9 @@ nlohmann::json project_json(const domain::ProjectState& state) {
       {"assets", std::move(assets)},
       {"banks", std::move(banks)},
       {"bpm", state.bpm},
-      {"contract", "lmdj.project.v1"},
+      {"contract",
+       state.contract == domain::ProjectContract::v1 ? "lmdj.project.v1"
+                                                     : "lmdj.project.v2"},
       {"patterns", std::move(patterns)},
       {"project_id", state.id.value()},
       {"revision", state.revision},
@@ -354,6 +413,59 @@ std::optional<std::uint64_t> unsigned_integer_value(
 
 bool nonnegative_integer(const nlohmann::json& input) {
   return unsigned_integer_value(input).has_value();
+}
+
+foundation::Result<domain::PadPlayback> parse_playback(
+    const nlohmann::json& input,
+    const std::filesystem::path& path) {
+  try {
+    if (!exact_object_keys(
+            input,
+            {"gain_millidb",
+             "muted",
+             "trigger_mode",
+             "trim_end_frame",
+             "trim_start_frame"}) ||
+        !input.at("gain_millidb").is_number_integer() ||
+        !input.at("muted").is_boolean() ||
+        !input.at("trigger_mode").is_string() ||
+        !nonnegative_integer(input.at("trim_start_frame")) ||
+        !(input.at("trim_end_frame").is_null() ||
+          nonnegative_integer(input.at("trim_end_frame")))) {
+      return foundation::Result<domain::PadPlayback>::failure(
+          invalid_project("project Pad playback shape is invalid", path));
+    }
+    const auto trigger_mode = parse_trigger_mode(
+        input.at("trigger_mode").get<std::string>());
+    const auto gain = input.at("gain_millidb").get<std::int64_t>();
+    const auto trim_start =
+        unsigned_integer_value(input.at("trim_start_frame"));
+    std::optional<std::uint64_t> trim_end;
+    if (!input.at("trim_end_frame").is_null()) {
+      trim_end = unsigned_integer_value(input.at("trim_end_frame"));
+    }
+    if (!trigger_mode.has_value() || !trim_start.has_value() ||
+        gain < -60'000 || gain > 6'000 ||
+        (trim_end.has_value() &&
+         (*trim_end == 0 || *trim_end <= *trim_start))) {
+      return foundation::Result<domain::PadPlayback>::failure(
+          invalid_project("project Pad playback is invalid", path));
+    }
+    return foundation::Result<domain::PadPlayback>::success(
+        domain::PadPlayback{
+            *trim_start,
+            trim_end,
+            *trigger_mode,
+            static_cast<std::int32_t>(gain),
+            input.at("muted").get<bool>(),
+        });
+  } catch (const std::exception& exception) {
+    return foundation::Result<domain::PadPlayback>::failure(
+        invalid_project(
+            "project Pad playback could not be parsed",
+            path,
+            exception.what()));
+  }
 }
 
 foundation::Result<domain::PadSlotId> parse_slot(
@@ -558,6 +670,12 @@ foundation::Result<domain::ProjectState> parse_project(
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
+    const auto contract = input.contains("contract") &&
+                                  input.at("contract").is_string()
+                              ? input.at("contract").get<std::string>()
+                              : std::string{};
+    const bool is_v1 = contract == "lmdj.project.v1";
+    const bool is_v2 = contract == "lmdj.project.v2";
     if (!exact_object_keys(
             input,
             {
@@ -570,7 +688,7 @@ foundation::Result<domain::ProjectState> parse_project(
                 "revision",
                 "takes",
             }) ||
-        input.at("contract") != "lmdj.project.v1" ||
+        (!is_v1 && !is_v2) ||
         !nonnegative_integer(input.at("revision")) ||
         !nonnegative_integer(input.at("bpm")) ||
         !input.at("banks").is_array() ||
@@ -597,6 +715,8 @@ foundation::Result<domain::ProjectState> parse_project(
           invalid_project("project metadata is invalid", path));
     }
     auto state = std::move(created.value());
+    state.contract = is_v1 ? domain::ProjectContract::v1
+                           : domain::ProjectContract::v2;
     state.revision = *revision;
 
     const auto& banks = input.at("banks");
@@ -624,8 +744,12 @@ foundation::Result<domain::ProjectState> parse_project(
       seen_banks.at(*bank) = true;
       std::array<bool, 16> seen_pads{};
       for (const auto& encoded_pad : encoded_bank.at("pads")) {
-        if (!exact_object_keys(
-                encoded_pad, {"asset_id", "pad"}) ||
+        const bool valid_pad_shape =
+            is_v1
+                ? exact_object_keys(encoded_pad, {"asset_id", "pad"})
+                : exact_object_keys(
+                      encoded_pad, {"asset_id", "pad", "playback"});
+        if (!valid_pad_shape ||
             !nonnegative_integer(encoded_pad.at("pad"))) {
           return foundation::Result<domain::ProjectState>::failure(
               invalid_project("project pad shape is invalid", path));
@@ -653,6 +777,14 @@ foundation::Result<domain::ProjectState> parse_project(
           }
           state.banks.at(*bank).at(*pad).asset_id =
               foundation::AssetId{asset_id};
+        }
+        if (is_v2) {
+          auto playback = parse_playback(encoded_pad.at("playback"), path);
+          if (!playback.has_value()) {
+            return foundation::Result<domain::ProjectState>::failure(
+                playback.error());
+          }
+          state.banks.at(*bank).at(*pad).playback = playback.value();
         }
       }
     }
@@ -746,7 +878,7 @@ nlohmann::json meta_json(const domain::CommandMeta& meta) {
   };
 }
 
-const domain::CommandMeta& command_meta(const domain::Command& command) {
+const domain::CommandMeta& command_meta(const PersistedCommand& command) {
   return std::visit(
       [](const auto& value) -> const domain::CommandMeta& {
         return value.meta;
@@ -754,7 +886,7 @@ const domain::CommandMeta& command_meta(const domain::Command& command) {
       command);
 }
 
-nlohmann::json command_json(const domain::Command& command) {
+nlohmann::json command_json(const PersistedCommand& command) {
   return std::visit(
       [](const auto& value) -> nlohmann::json {
         using Type = std::decay_t<decltype(value)>;
@@ -785,11 +917,37 @@ nlohmann::json command_json(const domain::Command& command) {
               {"take", take_json(value.take)},
               {"type", "RecordTake"},
           };
-        } else {
+        } else if constexpr (std::is_same_v<Type, domain::CreatePattern>) {
           return {
               {"meta", meta_json(value.meta)},
               {"pattern", pattern_json(value.pattern)},
               {"type", "CreatePattern"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::ImportAssignSample>) {
+          return {
+              {"asset",
+               {
+                   {"artifact", value.asset.artifact},
+                   {"id", value.asset.id.value()},
+               }},
+              {"meta", meta_json(value.meta)},
+              {"slot", slot_json(value.slot)},
+              {"type", "ImportAssignSample"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::UpdatePadPlayback>) {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"playback", playback_json(value.playback)},
+              {"slot", slot_json(value.slot)},
+              {"type", "UpdatePadPlayback"},
+          };
+        } else {
+          return {
+              {"meta", meta_json(value.meta)},
+              {"slot", slot_json(value.slot)},
+              {"type", "ResetPadPlayback"},
           };
         }
       },
@@ -800,6 +958,11 @@ foundation::Result<domain::CommandMeta> parse_meta(
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
+    if (!exact_object_keys(input, {"command_id", "expected_revision"}) ||
+        !nonnegative_integer(input.at("expected_revision"))) {
+      return foundation::Result<domain::CommandMeta>::failure(
+          invalid_project("transaction command metadata shape is invalid", path));
+    }
     domain::CommandMeta meta{
         foundation::CommandId{input.at("command_id").get<std::string>()},
         input.at("expected_revision").get<std::uint64_t>(),
@@ -818,19 +981,24 @@ foundation::Result<domain::CommandMeta> parse_meta(
   }
 }
 
-foundation::Result<domain::Command> parse_command(
+foundation::Result<PersistedCommand> parse_command(
     const nlohmann::json& input,
     const std::filesystem::path& path) {
   try {
     auto meta = parse_meta(input.at("meta"), path);
     if (!meta.has_value()) {
-      return foundation::Result<domain::Command>::failure(meta.error());
+      return foundation::Result<PersistedCommand>::failure(meta.error());
     }
     const auto type = input.at("type").get<std::string>();
     if (type == "ImportAsset") {
       const auto& encoded = input.at("asset");
-      return foundation::Result<domain::Command>::success(
-          domain::Command{domain::ImportAsset{
+      if (!exact_object_keys(input, {"asset", "meta", "type"}) ||
+          !exact_object_keys(input.at("asset"), {"artifact", "id"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("ImportAsset transaction shape is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::ImportAsset{
               std::move(meta.value()),
               domain::Asset{
                   foundation::AssetId{
@@ -843,15 +1011,19 @@ foundation::Result<domain::Command> parse_command(
     if (type == "AssignPad") {
       auto slot = parse_slot(input.at("slot"), path);
       if (!slot.has_value()) {
-        return foundation::Result<domain::Command>::failure(slot.error());
+        return foundation::Result<PersistedCommand>::failure(slot.error());
       }
       std::optional<foundation::AssetId> asset_id;
       if (!input.at("asset_id").is_null()) {
         asset_id = foundation::AssetId{
             input.at("asset_id").get<std::string>()};
       }
-      return foundation::Result<domain::Command>::success(
-          domain::Command{domain::AssignPad{
+      if (!exact_object_keys(input, {"asset_id", "meta", "slot", "type"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("AssignPad transaction shape is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::AssignPad{
               std::move(meta.value()),
               slot.value(),
               std::move(asset_id),
@@ -861,13 +1033,17 @@ foundation::Result<domain::Command> parse_command(
       auto take = parse_take(input.at("take"), path);
       auto pattern = parse_pattern(input.at("pattern"), path);
       if (!take.has_value()) {
-        return foundation::Result<domain::Command>::failure(take.error());
+        return foundation::Result<PersistedCommand>::failure(take.error());
       }
       if (!pattern.has_value()) {
-        return foundation::Result<domain::Command>::failure(pattern.error());
+        return foundation::Result<PersistedCommand>::failure(pattern.error());
       }
-      return foundation::Result<domain::Command>::success(
-          domain::Command{domain::RecordTake{
+      if (!exact_object_keys(input, {"meta", "pattern", "take", "type"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("RecordTake transaction shape is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::RecordTake{
               std::move(meta.value()),
               std::move(take.value()),
               std::move(pattern.value()),
@@ -876,23 +1052,133 @@ foundation::Result<domain::Command> parse_command(
     if (type == "CreatePattern") {
       auto pattern = parse_pattern(input.at("pattern"), path);
       if (!pattern.has_value()) {
-        return foundation::Result<domain::Command>::failure(pattern.error());
+        return foundation::Result<PersistedCommand>::failure(pattern.error());
       }
-      return foundation::Result<domain::Command>::success(
-          domain::Command{domain::CreatePattern{
+      if (!exact_object_keys(input, {"meta", "pattern", "type"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project("CreatePattern transaction shape is invalid", path));
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::CreatePattern{
               std::move(meta.value()),
               std::move(pattern.value()),
           }});
     }
-    return foundation::Result<domain::Command>::failure(
+    if (type == "ImportAssignSample") {
+      if (!exact_object_keys(input, {"asset", "meta", "slot", "type"}) ||
+          !exact_object_keys(input.at("asset"), {"artifact", "id"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "ImportAssignSample transaction shape is invalid", path));
+      }
+      auto slot = parse_slot(input.at("slot"), path);
+      if (!slot.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(slot.error());
+      }
+      const auto& encoded = input.at("asset");
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::ImportAssignSample{
+              std::move(meta.value()),
+              domain::Asset{
+                  foundation::AssetId{encoded.at("id").get<std::string>()},
+                  encoded.at("artifact").get<foundation::ArtifactRef>(),
+              },
+              slot.value(),
+          }});
+    }
+    if (type == "UpdatePadPlayback") {
+      if (!exact_object_keys(
+              input, {"meta", "playback", "slot", "type"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "UpdatePadPlayback transaction shape is invalid", path));
+      }
+      auto slot = parse_slot(input.at("slot"), path);
+      auto playback = parse_playback(input.at("playback"), path);
+      if (!slot.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(slot.error());
+      }
+      if (!playback.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(playback.error());
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::UpdatePadPlayback{
+              std::move(meta.value()),
+              slot.value(),
+              playback.value(),
+          }});
+    }
+    if (type == "ResetPadPlayback") {
+      if (!exact_object_keys(input, {"meta", "slot", "type"})) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "ResetPadPlayback transaction shape is invalid", path));
+      }
+      auto slot = parse_slot(input.at("slot"), path);
+      if (!slot.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(slot.error());
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::ResetPadPlayback{
+              std::move(meta.value()),
+              slot.value(),
+          }});
+    }
+    return foundation::Result<PersistedCommand>::failure(
         invalid_project("transaction command type is unknown", path));
   } catch (const std::exception& exception) {
-    return foundation::Result<domain::Command>::failure(
+    return foundation::Result<PersistedCommand>::failure(
         invalid_project(
             "transaction command could not be parsed",
             path,
             exception.what()));
   }
+}
+
+foundation::Result<domain::AppliedCommand> apply_command(
+    const domain::ProjectState& state,
+    const PersistedCommand& command,
+    const std::map<foundation::CommandId, domain::CommandReceipt>& receipts) {
+  return std::visit(
+      [&state, &receipts](const auto& value) {
+        using Type = std::decay_t<decltype(value)>;
+        if constexpr (
+            std::is_same_v<Type, domain::ImportAssignSample> ||
+            std::is_same_v<Type, domain::UpdatePadPlayback> ||
+            std::is_same_v<Type, domain::ResetPadPlayback>) {
+          return domain::apply(state, value, receipts);
+        } else {
+          return domain::apply(state, domain::Command{value}, receipts);
+        }
+      },
+      command);
+}
+
+PersistedCommand persisted_command(const domain::Command& command) {
+  return std::visit(
+      [](const auto& value) -> PersistedCommand { return value; }, command);
+}
+
+foundation::Result<domain::Command> legacy_command(
+    const PersistedCommand& command) {
+  return std::visit(
+      [](const auto& value) -> foundation::Result<domain::Command> {
+        using Type = std::decay_t<decltype(value)>;
+        if constexpr (
+            std::is_same_v<Type, domain::ImportAssignSample> ||
+            std::is_same_v<Type, domain::UpdatePadPlayback> ||
+            std::is_same_v<Type, domain::ResetPadPlayback>) {
+          return foundation::Result<domain::Command>::failure(
+              Error{
+                  ErrorCode::internal_error,
+                  "persisted Sample command is not a legacy command",
+              });
+        } else {
+          return foundation::Result<domain::Command>::success(
+              domain::Command{value});
+        }
+      },
+      command);
 }
 
 bool safe_relative_path(
@@ -960,6 +1246,19 @@ foundation::Result<LoadedProject> load_project(
               "initial checkpoint revision is not zero",
               bundle / "history/checkpoints/0.json"));
     }
+    auto checkpoint_json = read_json(platform, bundle / head_checkpoint);
+    if (!checkpoint_json.has_value()) {
+      return foundation::Result<LoadedProject>::failure(
+          checkpoint_json.error());
+    }
+    auto checkpoint =
+        parse_project(checkpoint_json.value(), bundle / head_checkpoint);
+    if (!checkpoint.has_value()) {
+      return foundation::Result<LoadedProject>::failure(checkpoint.error());
+    }
+    const bool replay_as_v1 =
+        initial.value().contract == domain::ProjectContract::v1 &&
+        checkpoint.value().contract == domain::ProjectContract::v1;
 
     LoadedProject loaded{
         std::move(initial.value()),
@@ -985,13 +1284,16 @@ foundation::Result<LoadedProject> load_project(
       if (!command.has_value()) {
         return foundation::Result<LoadedProject>::failure(command.error());
       }
-      const auto applied =
-          domain::apply(loaded.state, command.value(), loaded.receipts);
+      auto applied =
+          apply_command(loaded.state, command.value(), loaded.receipts);
       if (!applied.has_value() || applied.value().replayed) {
         return foundation::Result<LoadedProject>::failure(
             invalid_project(
                 "project transaction could not be replayed",
                 bundle / relative));
+      }
+      if (replay_as_v1) {
+        applied.value().state.contract = domain::ProjectContract::v1;
       }
       const auto revision =
           transaction.value().at("revision").get<std::uint64_t>();
@@ -1036,16 +1338,6 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    auto checkpoint_json = read_json(platform, bundle / head_checkpoint);
-    if (!checkpoint_json.has_value()) {
-      return foundation::Result<LoadedProject>::failure(
-          checkpoint_json.error());
-    }
-    auto checkpoint =
-        parse_project(checkpoint_json.value(), bundle / head_checkpoint);
-    if (!checkpoint.has_value()) {
-      return foundation::Result<LoadedProject>::failure(checkpoint.error());
-    }
     if (checkpoint.value() != loaded.state ||
         foundation::canonical_json(checkpoint_json.value()) !=
             foundation::canonical_json(project_json(loaded.state))) {
@@ -1162,6 +1454,258 @@ bool asset_temp_name(std::string_view name) {
 bool manifest_temp_name(std::string_view name) {
   const auto destination = opaque_temp_destination(name);
   return destination.has_value() && *destination == "manifest.json";
+}
+
+std::filesystem::path sample_staging_root(
+    const std::filesystem::path& bundle) {
+  auto workspace = bundle.parent_path();
+  if (workspace.filename() == "projects") {
+    workspace = workspace.parent_path();
+  }
+  return workspace / ".lmdj-host/sample-staging";
+}
+
+foundation::Result<void> sample_after_staging_fault(
+    const std::filesystem::path& path) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  return testing::detail::invoke_fault(
+      testing::FaultPoint::sample_after_staging, path);
+#else
+  (void)path;
+  return foundation::Result<void>::success();
+#endif
+}
+
+foundation::Result<void> sample_after_event_preparation_fault(
+    const std::filesystem::path& path) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  return testing::detail::invoke_fault(
+      testing::FaultPoint::sample_after_event_preparation, path);
+#else
+  (void)path;
+  return foundation::Result<void>::success();
+#endif
+}
+
+foundation::Result<void> sample_after_artifact_creation_fault(
+    const std::filesystem::path& path) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  return testing::detail::invoke_fault(
+      testing::FaultPoint::sample_after_artifact_creation, path);
+#else
+  (void)path;
+  return foundation::Result<void>::success();
+#endif
+}
+
+foundation::Result<void> sample_after_manifest_preparation_fault(
+    const std::filesystem::path& path) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  return testing::detail::invoke_fault(
+      testing::FaultPoint::sample_after_manifest_preparation, path);
+#else
+  (void)path;
+  return foundation::Result<void>::success();
+#endif
+}
+
+foundation::Result<void> sample_after_manifest_publication_fault(
+    const std::filesystem::path& path) {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  return testing::detail::invoke_fault(
+      testing::FaultPoint::sample_after_manifest_publication, path);
+#else
+  (void)path;
+  return foundation::Result<void>::success();
+#endif
+}
+
+foundation::Result<void> scavenge_sample_staging(
+    ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle) {
+  constexpr std::size_t kMaximumScavengedEntries = 64;
+  constexpr std::uint64_t kMaximumStagingMarkerBytes = 4U * 1024U;
+  constexpr std::int64_t kMinimumIncompleteAgeSeconds = 24 * 60 * 60;
+  const auto root = sample_staging_root(bundle);
+  const auto present = platform.exists(root);
+  if (!present.has_value()) {
+    return foundation::Result<void>::failure(present.error());
+  }
+  if (!present.value()) {
+    return foundation::Result<void>::success();
+  }
+  const auto valid_tree = platform.validate_managed_tree(root);
+  if (!valid_tree.has_value()) {
+    return valid_tree;
+  }
+  const auto is_directory = platform.directory_exists(root);
+  if (!is_directory.has_value() || !is_directory.value()) {
+    return foundation::Result<void>::failure(
+        invalid_project("Sample staging root is not a directory", root));
+  }
+  const auto names = platform.list_directories(root);
+  if (!names.has_value()) {
+    return foundation::Result<void>::failure(names.error());
+  }
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+                       std::chrono::system_clock::now().time_since_epoch())
+                       .count();
+  std::size_t inspected = 0;
+  for (const auto& name : names.value()) {
+    if (inspected == kMaximumScavengedEntries) {
+      break;
+    }
+    ++inspected;
+    if (!domain::is_valid_uuid(name)) {
+      continue;
+    }
+    const auto directory = root / name;
+    const auto marker_length = platform.byte_length(directory / "state.json");
+    if (!marker_length.has_value() ||
+        marker_length.value() > kMaximumStagingMarkerBytes) {
+      continue;
+    }
+    const auto marker = read_json(platform, directory / "state.json");
+    if (!marker.has_value() ||
+        !exact_object_keys(
+            marker.value(),
+            {"contract", "created_unix_seconds", "state", "token"}) ||
+        marker.value().at("contract") != "lmdj.sample-staging.v1" ||
+        marker.value().at("token") != name ||
+        !nonnegative_integer(marker.value().at("created_unix_seconds")) ||
+        !marker.value().at("state").is_string()) {
+      continue;
+    }
+    const auto created =
+        unsigned_integer_value(marker.value().at("created_unix_seconds"));
+    const auto state = marker.value().at("state").get<std::string>();
+    const bool old_incomplete =
+        state == "incomplete" && created.has_value() &&
+        *created <= static_cast<std::uint64_t>(now) &&
+        static_cast<std::uint64_t>(now) - *created >=
+            static_cast<std::uint64_t>(kMinimumIncompleteAgeSeconds);
+    if (!old_incomplete) {
+      continue;
+    }
+    auto lease = platform.acquire_writer(directory);
+    if (!lease.has_value()) {
+      const auto busy =
+          lease.error().details.is_object() &&
+          lease.error().details.value("storage_condition", std::string{}) ==
+              kStorageConditionProjectBusy;
+      if (busy) {
+        continue;
+      }
+      return foundation::Result<void>::failure(lease.error());
+    }
+    lease.value().reset();
+    const auto removed = platform.remove_tree(directory);
+    if (!removed.has_value()) {
+      return removed;
+    }
+  }
+  return foundation::Result<void>::success();
+}
+
+struct StagedSample {
+  std::filesystem::path directory;
+  std::filesystem::path payload;
+};
+
+foundation::Result<StagedSample> stage_sample(
+    ProjectStoragePlatform& platform,
+    const std::filesystem::path& bundle,
+    std::string_view token,
+    std::span<const std::byte> bytes) {
+  const auto root = sample_staging_root(bundle);
+  auto valid_tree = platform.validate_managed_tree(root);
+  if (!valid_tree.has_value()) {
+    return foundation::Result<StagedSample>::failure(valid_tree.error());
+  }
+  auto ensured = platform.ensure_directory(root);
+  if (!ensured.has_value()) {
+    return foundation::Result<StagedSample>::failure(ensured.error());
+  }
+  valid_tree = platform.validate_managed_tree(root);
+  if (!valid_tree.has_value()) {
+    return foundation::Result<StagedSample>::failure(valid_tree.error());
+  }
+  const auto directory = root / std::string{token};
+  const auto reused = platform.exists(directory);
+  if (!reused.has_value()) {
+    return foundation::Result<StagedSample>::failure(reused.error());
+  }
+  auto lease = platform.acquire_writer(directory);
+  if (!lease.has_value()) {
+    return foundation::Result<StagedSample>::failure(lease.error());
+  }
+  if (reused.value()) {
+    const auto valid_directory = platform.validate_managed_tree(directory);
+    if (!valid_directory.has_value()) {
+      return foundation::Result<StagedSample>::failure(
+          valid_directory.error());
+    }
+    const auto files = platform.list_names(directory);
+    if (!files.has_value()) {
+      return foundation::Result<StagedSample>::failure(files.error());
+    }
+    const auto directories = platform.list_directories(directory);
+    if (!directories.has_value()) {
+      return foundation::Result<StagedSample>::failure(directories.error());
+    }
+    const auto marker = read_json(platform, directory / "state.json");
+    const bool reusable_incomplete =
+        files.value() ==
+            std::vector<std::string>{"payload.wav", "state.json"} &&
+        directories.value().empty() && marker.has_value() &&
+        exact_object_keys(
+            marker.value(),
+            {"contract", "created_unix_seconds", "state", "token"}) &&
+        marker.value().at("contract") == "lmdj.sample-staging.v1" &&
+        marker.value().at("state") == "incomplete" &&
+        marker.value().at("token") == token &&
+        nonnegative_integer(marker.value().at("created_unix_seconds"));
+    if (!reusable_incomplete) {
+      return foundation::Result<StagedSample>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "Sample staging token was already used",
+          });
+    }
+    const auto removed = platform.remove_tree(directory);
+    if (!removed.has_value()) {
+      return foundation::Result<StagedSample>::failure(removed.error());
+    }
+  }
+  ensured = platform.ensure_directory(directory);
+  if (!ensured.has_value()) {
+    lease.value().reset();
+    (void)platform.remove_tree(directory);
+    return foundation::Result<StagedSample>::failure(ensured.error());
+  }
+  const auto created = std::chrono::duration_cast<std::chrono::seconds>(
+                           std::chrono::system_clock::now().time_since_epoch())
+                           .count();
+  const auto marker_bytes = foundation::canonical_json(
+                                nlohmann::json{
+                                    {"contract", "lmdj.sample-staging.v1"},
+                                    {"created_unix_seconds", created},
+                                    {"state", "incomplete"},
+                                    {"token", token},
+                                }) +
+                            "\n";
+  auto written = platform.create_immutable(
+      directory / "state.json", byte_span(marker_bytes));
+  if (written.has_value()) {
+    written = platform.create_immutable(directory / "payload.wav", bytes);
+  }
+  lease.value().reset();
+  if (!written.has_value()) {
+    (void)platform.remove_tree(directory);
+    return foundation::Result<StagedSample>::failure(written.error());
+  }
+  return foundation::Result<StagedSample>::success(
+      StagedSample{directory, directory / "payload.wav"});
 }
 
 foundation::Result<void> recover_initial_create_residue(
@@ -1421,9 +1965,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     const std::shared_ptr<ProjectStoragePlatform>& platform,
     const std::filesystem::path& bundle,
     LoadedProject loaded,
-    const domain::Command& command,
+    const PersistedCommand& command,
     const std::optional<ArtifactStage>& artifact_stage,
-    domain::Command* persisted_identity) {
+    PersistedCommand* persisted_identity) {
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -1474,7 +2018,7 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   }
 
   const auto applied =
-      domain::apply(loaded.state, command, loaded.receipts);
+      apply_command(loaded.state, command, loaded.receipts);
   if (!applied.has_value()) {
     if (applied.error().code == ErrorCode::revision_conflict &&
         journal_matches) {
@@ -1505,6 +2049,16 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     return applied;
   }
 
+  const bool sample_import =
+      std::holds_alternative<domain::ImportAssignSample>(command);
+  if (sample_import) {
+    const auto fault = sample_after_event_preparation_fault(bundle);
+    if (!fault.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+
   const auto encoded_state = project_json(applied.value().state);
   const auto validated_state =
       parse_project(encoded_state, bundle / "manifest.json");
@@ -1528,28 +2082,53 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
       newly_published_artifact =
           bundle / "assets" / (artifact_stage->artifact.sha256 + ".wav");
     }
-  } else if (const auto* import =
-                 std::get_if<domain::ImportAsset>(&command)) {
-    if (!valid_sha256(import->asset.artifact.sha256)) {
+  } else if (
+      std::holds_alternative<domain::ImportAsset>(command) ||
+      sample_import) {
+    const domain::Asset* asset = nullptr;
+    if (const auto* import = std::get_if<domain::ImportAsset>(&command)) {
+      asset = &import->asset;
+    } else {
+      asset = &std::get<domain::ImportAssignSample>(command).asset;
+    }
+    if (!valid_sha256(asset->artifact.sha256)) {
       return foundation::Result<domain::AppliedCommand>::failure(
           Error{
               ErrorCode::invalid_argument,
-              "ImportAsset SHA-256 is invalid",
+              "imported Asset SHA-256 is invalid",
           });
     }
     const auto blob =
         bundle / "assets" /
-        (import->asset.artifact.sha256 + ".wav");
+        (asset->artifact.sha256 + ".wav");
     const auto described = describe_artifact(
-        *platform, blob, import->asset.artifact.media_type);
+        *platform, blob, asset->artifact.media_type);
     if (!described.has_value() ||
-        described.value() != import->asset.artifact) {
+        described.value() != asset->artifact) {
       return foundation::Result<domain::AppliedCommand>::failure(
           Error{
               ErrorCode::missing_asset,
-              "ImportAsset must reference an existing bundle artifact",
+              "import command must reference an existing bundle artifact",
               {{"path", blob.generic_string()}},
           });
+    }
+  }
+  if (sample_import) {
+    const auto fault = sample_after_artifact_creation_fault(
+        artifact_stage.has_value()
+            ? bundle / "assets" /
+                  (artifact_stage->artifact.sha256 + ".wav")
+            : bundle / "assets");
+    if (!fault.has_value()) {
+      if (newly_published_artifact.has_value()) {
+        const auto removed = platform->remove(*newly_published_artifact);
+        if (!removed.has_value()) {
+          return foundation::Result<domain::AppliedCommand>::failure(
+              removed.error());
+        }
+      }
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
     }
   }
 
@@ -1577,6 +2156,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   auto written = platform->create_immutable(
       transaction_final, byte_span(transaction_bytes));
   if (!written.has_value()) {
+    if (newly_published_artifact.has_value()) {
+      (void)platform->remove(*newly_published_artifact);
+    }
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
@@ -1586,6 +2168,10 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   written = platform->create_immutable(
       checkpoint_final, byte_span(checkpoint_bytes));
   if (!written.has_value()) {
+    (void)platform->remove(transaction_final);
+    if (newly_published_artifact.has_value()) {
+      (void)platform->remove(*newly_published_artifact);
+    }
     return foundation::Result<domain::AppliedCommand>::failure(
         written.error());
   }
@@ -1609,6 +2195,19 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     }
     return foundation::Result<void>::success();
   };
+  if (sample_import) {
+    const auto fault = sample_after_manifest_preparation_fault(
+        bundle / "manifest.json");
+    if (!fault.has_value()) {
+      const auto cleanup = cleanup_unpublished();
+      if (!cleanup.has_value()) {
+        return foundation::Result<domain::AppliedCommand>::failure(
+            cleanup.error());
+      }
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
   if (!detail::claim_publish()) {
     const auto cleanup = cleanup_unpublished();
     if (!cleanup.has_value()) {
@@ -1644,6 +2243,15 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   }
   detail::commit_publish();
 
+  if (sample_import) {
+    const auto fault = sample_after_manifest_publication_fault(
+        bundle / "manifest.json");
+    if (!fault.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+
   const auto cleanup =
       complete_journal_cleanup(*platform, bundle, cleanup_take_id);
   if (!cleanup.has_value()) {
@@ -1671,6 +2279,44 @@ foundation::Result<void> create_bundle_directories(
     }
   }
   return foundation::Result<void>::success();
+}
+
+foundation::Result<domain::AppliedCommand> execute_persisted(
+    const std::shared_ptr<ProjectStoragePlatform>& platform,
+    const std::filesystem::path& bundle,
+    const PersistedCommand& command) {
+  auto tree = validate_managed_bundle_tree(*platform, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto lock_result = platform->acquire_writer(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(*platform, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto loaded = load_project(*platform, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        loaded.error());
+  }
+  const auto recovered = recover_uncommitted(*platform, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        recovered.error());
+  }
+  return commit_loaded(
+      platform,
+      bundle,
+      std::move(loaded.value()),
+      command,
+      std::nullopt,
+      nullptr);
 }
 
 }  // namespace
@@ -1842,6 +2488,11 @@ foundation::Result<domain::ProjectState> ProjectStore::load(
       return foundation::Result<domain::ProjectState>::failure(
           recovered.error());
     }
+    const auto scavenged = scavenge_sample_staging(*platform_, bundle);
+    if (!scavenged.has_value()) {
+      return foundation::Result<domain::ProjectState>::failure(
+          scavenged.error());
+    }
   }
   return foundation::Result<domain::ProjectState>::success(
       std::move(loaded.value().state));
@@ -1875,21 +2526,26 @@ foundation::Result<CommandExecution> ProjectStore::execute_with_identity(
     return foundation::Result<CommandExecution>::failure(
         recovered.error());
   }
-  auto persisted_identity = command;
+  auto persisted_identity = persisted_command(command);
   auto outcome = commit_loaded(
       platform_,
       bundle,
       std::move(loaded.value()),
-      command,
+      persisted_identity,
       std::nullopt,
       &persisted_identity);
   if (!outcome.has_value()) {
     return foundation::Result<CommandExecution>::failure(
         outcome.error());
   }
+  auto returned_identity = legacy_command(persisted_identity);
+  if (!returned_identity.has_value()) {
+    return foundation::Result<CommandExecution>::failure(
+        returned_identity.error());
+  }
   return foundation::Result<CommandExecution>::success(
       CommandExecution{
-          std::move(persisted_identity),
+          std::move(returned_identity.value()),
           std::move(outcome.value()),
       });
 }
@@ -1904,6 +2560,18 @@ foundation::Result<domain::AppliedCommand> ProjectStore::execute(
   }
   return foundation::Result<domain::AppliedCommand>::success(
       std::move(executed.value().outcome));
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::UpdatePadPlayback& command) {
+  return execute_persisted(platform_, bundle, PersistedCommand{command});
+}
+
+foundation::Result<domain::AppliedCommand> ProjectStore::execute(
+    const std::filesystem::path& bundle,
+    const domain::ResetPadPlayback& command) {
+  return execute_persisted(platform_, bundle, PersistedCommand{command});
 }
 
 foundation::Result<std::optional<RecordTakeReplay>>
@@ -2106,7 +2774,7 @@ ProjectStore::import_artifact_with_identity(
     return foundation::Result<ImportArtifactExecution>::failure(
         described.error());
   }
-  const domain::Command command = domain::ImportAsset{
+  const PersistedCommand command = domain::ImportAsset{
       request.meta,
       domain::Asset{request.asset_id, described.value()},
   };
@@ -2252,7 +2920,7 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
         });
   }
 
-  const domain::Command command = domain::ImportAsset{
+  const PersistedCommand command = domain::ImportAsset{
       request.meta,
       domain::Asset{request.asset_id, artifact},
   };
@@ -2271,6 +2939,139 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
   if (!outcome.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
         outcome.error());
+  }
+  return outcome;
+}
+
+foundation::Result<domain::AppliedCommand>
+ProjectStore::import_assign_sample_bytes(
+    const std::filesystem::path& bundle,
+    const ImportAssignSampleBytesRequest& request) {
+  if (!domain::is_valid_uuid(request.meta.command_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "command id must be a lowercase UUID",
+        });
+  }
+  if (!domain::is_valid_slot(request.slot)) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "pad slot is invalid",
+        });
+  }
+  if (!domain::is_valid_uuid(request.asset_id.value())) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "asset id must be a lowercase UUID",
+        });
+  }
+  if (request.media_type.empty()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact media type must not be empty",
+        });
+  }
+  if (request.bytes.size() > kMaximumArtifactBytes) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "artifact exceeds the Project import limit",
+            {{"maximum_byte_length", kMaximumArtifactBytes}},
+        });
+  }
+  const auto artifact = describe_bytes(request.bytes, request.media_type);
+  const PersistedCommand command = domain::ImportAssignSample{
+      request.meta,
+      domain::Asset{request.asset_id, artifact},
+      request.slot,
+  };
+
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto lock_result = platform_->acquire_writer(bundle);
+  if (!lock_result.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        lock_result.error());
+  }
+  auto lock = std::move(lock_result.value());
+  (void)lock;
+  tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        loaded.error());
+  }
+  const auto recovered = recover_uncommitted(
+      *platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        recovered.error());
+  }
+  const auto scavenged = scavenge_sample_staging(*platform_, bundle);
+  if (!scavenged.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        scavenged.error());
+  }
+
+  if (loaded.value().receipts.contains(request.meta.command_id)) {
+    return commit_loaded(
+        platform_,
+        bundle,
+        std::move(loaded.value()),
+        command,
+        std::nullopt,
+        nullptr);
+  }
+
+  auto staged = stage_sample(
+      *platform_,
+      bundle,
+      request.meta.command_id.value(),
+      request.bytes);
+  if (!staged.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        staged.error());
+  }
+  const auto cleanup_staging = [&]() {
+    return platform_->remove_tree(staged.value().directory);
+  };
+  const auto staged_fault =
+      sample_after_staging_fault(staged.value().directory);
+  if (!staged_fault.has_value()) {
+    const auto cleanup = cleanup_staging();
+    return foundation::Result<domain::AppliedCommand>::failure(
+        cleanup.has_value() ? staged_fault.error() : cleanup.error());
+  }
+
+  auto outcome = commit_loaded(
+      platform_,
+      bundle,
+      std::move(loaded.value()),
+      command,
+      ArtifactStage{
+          staged.value().payload,
+          artifact,
+          {},
+          false,
+      },
+      nullptr);
+  const auto cleanup = cleanup_staging();
+  if (!outcome.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        outcome.error());
+  }
+  if (!cleanup.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(
+        cleanup.error());
   }
   return outcome;
 }

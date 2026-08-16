@@ -5,6 +5,7 @@ import {
   PUBLICATION_FAULT_POINTS,
   REPLACEMENT_FAULT_POINTS,
   STORAGE_CONDITION_FAULTS,
+  replacementReachedCommit,
 } from "./project_io_web_faults.mjs";
 
 const STORAGE_CAPABILITY_ORDER = Object.freeze([
@@ -13,6 +14,7 @@ const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfsWritableReplace",
 ]);
 const FAULT_REACHED_OBSERVATION_TIMEOUT_MS = 60_000;
+const TERMINAL_REPORT_TIMEOUT_MS = 180_000;
 const PROJECT_IO_CONFORMANCE_TIMEOUT_MS = 600_000;
 const RUNTIME_ERROR_OBSERVERS = new WeakMap();
 
@@ -82,7 +84,20 @@ async function waitForResult(page) {
   if (!observer) {
     throw new Error("Project I/O page was not tracked before navigation");
   }
-  if (observer.error) throw runtimeFailure(observer.error);
+  const awaitTerminalReport = async () => {
+    try {
+      await page.waitForFunction(
+          () => window.lmdjProjectIoWeb?.complete === true,
+          undefined,
+          {timeout: 250});
+      return true;
+    } catch (_) {
+      return false;
+    }
+  };
+  if (observer.error && !(await awaitTerminalReport())) {
+    throw runtimeFailure(observer.error);
+  }
 
   let rejectRuntimeError;
   const runtimeError = new Promise((_, reject) => {
@@ -90,11 +105,31 @@ async function waitForResult(page) {
     observer.waiters.add(reject);
   });
   try {
-    await Promise.race([
-      page.waitForFunction(() => window.lmdjProjectIoWeb?.complete === true),
-      runtimeError,
-    ]);
-    if (observer.error) throw runtimeFailure(observer.error);
+    try {
+      await Promise.race([
+        page.waitForFunction(
+            () => window.lmdjProjectIoWeb?.complete === true,
+            undefined,
+            {timeout: TERMINAL_REPORT_TIMEOUT_MS}),
+        runtimeError,
+      ]);
+    } catch (error) {
+      // PROXY_TO_PTHREAD teardown in pinned Emscripten can surface after the
+      // native suite has synchronously published its terminal report. Keep
+      // pre-terminal runtime failures fail-closed, but let the report remain
+      // authoritative once publication is complete.
+      if (!(await awaitTerminalReport())) {
+        const progress = await page.evaluate(
+            () => window.lmdjProjectIoWebProgress ?? "unreported").catch(
+            () => "unavailable");
+        throw new Error(`${error.message}; last native stage: ${progress}`, {
+          cause: error,
+        });
+      }
+    }
+    if (observer.error && !(await awaitTerminalReport())) {
+      throw runtimeFailure(observer.error);
+    }
     const result = await page.evaluate(() => window.lmdjProjectIoWeb.result);
     if (result?.error) {
       throw new Error(`Web Project I/O native runtime failed: ${result.error}`);
@@ -134,6 +169,23 @@ async function clearFaultControl(page) {
     await host.removeEntry("test-fault.json").catch(() => {});
     await host.removeEntry("test-fault-reached").catch(() => {});
   });
+}
+
+async function readCheckpointShape(page, bundle, revision) {
+  return page.evaluate(async ({bundle, revision}) => {
+    const root = await navigator.storage.getDirectory();
+    const project = await root.getDirectoryHandle(`${bundle}.lmdj`);
+    const history = await project.getDirectoryHandle("history");
+    const checkpoints = await history.getDirectoryHandle("checkpoints");
+    const file = await (await checkpoints.getFileHandle(`${revision}.json`)).getFile();
+    const checkpoint = JSON.parse(await file.text());
+    const pad = checkpoint.banks[0].pads[0];
+    return {
+      contract: checkpoint.contract,
+      padKeys: Object.keys(pad).sort(),
+      playbackKeys: pad.playback ? Object.keys(pad.playback).sort() : [],
+    };
+  }, {bundle, revision});
 }
 
 async function preparePublicationFixture(page, bundle) {
@@ -299,6 +351,22 @@ test("Web Project I/O reports page runtime failures without waiting for the suit
   expect(Date.now() - startedAt).toBeLessThan(5_000);
 });
 
+test("Web Project I/O preserves a terminal native report across worker teardown", async ({page}) => {
+  trackRuntimeErrors(page);
+  await page.goto("/preflight.html");
+  const result = {terminal: "pass"};
+  const pending = waitForResult(page);
+  await page.evaluate(() => {
+    setTimeout(() => {
+      throw new Error("project-io-post-terminal-teardown-proof");
+    }, 0);
+    setTimeout(() => {
+      window.lmdjProjectIoWeb = {complete: true, result: {terminal: "pass"}};
+    }, 25);
+  });
+  expect(await pending).toEqual(result);
+});
+
 test("Web Project I/O binds every mutation to its same-page platform owner", async ({page, browserName}) => {
   test.skip(
       browserName !== "chromium",
@@ -333,6 +401,92 @@ test("Web Project I/O binds every mutation to its same-page platform owner", asy
   expect(result.intentInventoryUnchanged).toBe(true);
   expect(result.ownerContent).toBe("seed-owner");
   expect(result.postReleaseAcquisition).toBe("pass");
+});
+
+test("Web Project I/O creates and opens an untouched v1 Project", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const project = await trackedPage(context);
+  const bundle = `v1-round-trip-${Date.now()}`;
+  await project.goto(
+      `/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
+  expect((await waitForResult(project)).revision).toBe(0);
+  expect(await readCheckpointShape(project, bundle, 0)).toEqual({
+    contract: "lmdj.project.v1",
+    padKeys: ["asset_id", "pad"],
+    playbackKeys: [],
+  });
+  await project.close();
+});
+
+test("Web Project I/O persists Sample staging and Workspace cache behavior", async ({context, browserName}) => {
+  test.skip(browserName !== "chromium", "Chromium owns the positive OPFS contract");
+  const bundle = `sample-cache-${Date.now()}`;
+  const oldStagingToken = "00000000-0000-4000-8000-000000000020";
+  const assetId = "00000000-0000-4000-8000-000000000022";
+  const artifactSha256 =
+      "2cb46aea89409885d9e92b8c106daa39f364b1b5bda845c5e62b0276581fdb17";
+  const padPlayback = {
+    trimStartFrame: 0,
+    trimEndFrame: null,
+    triggerMode: "one_shot",
+    gainMillidb: 0,
+    muted: false,
+  };
+
+  const prepare = await trackedPage(context);
+  await prepare.goto(
+      `/project_io/project_io_web_test.html?action=prepare_sample_cache&bundle=${bundle}`);
+  expect(await waitForResult(prepare)).toEqual({
+    revision: 0,
+    contract: "lmdj.project.v1",
+    oldStagingPresent: true,
+    stagingDirectories: [oldStagingToken],
+  });
+  await prepare.close();
+
+  const mutate = await trackedPage(context);
+  await mutate.goto(
+      `/project_io/project_io_web_test.html?action=mutate_sample_cache&bundle=${bundle}`);
+  expect(await waitForResult(mutate)).toEqual({
+    revision: 1,
+    contract: "lmdj.project.v2",
+    replayed: true,
+    padAssetId: assetId,
+    padPlayback,
+    assetCount: 1,
+    artifactSha256,
+    artifactByteLength: 15,
+    artifactBytes: "RIFF-web-sample",
+    oldStagingPresent: false,
+    completedStagingPresent: false,
+    stagingDirectories: [],
+    cacheFirst: "cache-first",
+    cacheLatest: "cache-latest",
+    corruptCacheMiss: true,
+    corruptCachePresent: false,
+  });
+  await mutate.close();
+
+  const reopen = await trackedPage(context);
+  await reopen.goto(
+      `/project_io/project_io_web_test.html?action=reopen_sample_cache&bundle=${bundle}`);
+  expect(await waitForResult(reopen)).toEqual({
+    revision: 1,
+    contract: "lmdj.project.v2",
+    padAssetId: assetId,
+    padPlayback,
+    assetCount: 1,
+    artifactSha256,
+    artifactByteLength: 15,
+    artifactBytes: "RIFF-web-sample",
+    oldStagingPresent: false,
+    completedStagingPresent: false,
+    stagingDirectories: [],
+    cacheLatest: "cache-latest",
+    corruptCacheMiss: true,
+    corruptCachePresent: false,
+  });
+  await reopen.close();
 });
 
 test("Web Project I/O runs common parity and interruption recovery", async ({page, context, browserName}, testInfo) => {
@@ -370,7 +524,6 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect(result.directoryBarrier).toBe("absent");
   expect(result.replacementFaultPoints).toEqual(REPLACEMENT_FAULT_POINTS);
   expect(result.publicationFaultPoints).toEqual(PUBLICATION_FAULT_POINTS);
-  expect(result.publicationMaxChunkBytes).toBe(1_048_576);
 
   const unleasedAppend = await trackedPage(context);
   await unleasedAppend.goto(
@@ -456,6 +609,11 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     const prepare = await trackedPage(context);
     await prepare.goto(`/project_io/project_io_web_test.html?action=prepare&bundle=${bundle}`);
     expect((await waitForResult(prepare)).revision).toBe(0);
+    expect(await readCheckpointShape(prepare, bundle, 0)).toEqual({
+      contract: "lmdj.project.v1",
+      padKeys: ["asset_id", "pad"],
+      playbackKeys: [],
+    });
     await writeFaultControl(
         prepare, `/lmdj-workspace/${bundle}.lmdj/manifest.json`, point);
 
@@ -467,8 +625,27 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
 
     const restarted = await trackedPage(context);
     await restarted.goto(`/project_io/project_io_web_test.html?action=reopen&bundle=${bundle}`);
-    const expectedRevision = ["after_close", "before_cleanup"].includes(point) ? 1 : 0;
+    const expectedRevision = replacementReachedCommit(point) ? 1 : 0;
     expect((await waitForResult(restarted)).revision).toBe(expectedRevision);
+    expect(await readCheckpointShape(restarted, bundle, expectedRevision)).toEqual(
+      expectedRevision === 0
+        ? {
+            contract: "lmdj.project.v1",
+            padKeys: ["asset_id", "pad"],
+            playbackKeys: [],
+          }
+        : {
+            contract: "lmdj.project.v2",
+            padKeys: ["asset_id", "pad", "playback"],
+            playbackKeys: [
+              "gain_millidb",
+              "muted",
+              "trigger_mode",
+              "trim_end_frame",
+              "trim_start_frame",
+            ],
+          },
+    );
     await restarted.close();
     await prepare.close();
   }
@@ -492,7 +669,7 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
     const restarted = await trackedPage(context);
     await restarted.goto(
         `/project_io/project_io_web_test.html?action=reopen_replacement&scenario=absent&bundle=${bundle}`);
-    const expectedState = ["after_close", "before_cleanup"].includes(point)
+    const expectedState = replacementReachedCommit(point)
       ? "new"
       : "absent";
     expect((await waitForResult(restarted)).state).toBe(expectedState);
@@ -573,6 +750,20 @@ test("Web Project I/O runs common parity and interruption recovery", async ({pag
   expect((await waitForResult(immutableRestarted)).state).toBe("immutable-retry");
   await immutableRestarted.close();
   await immutableController.close();
+
+  const cleanPublicationBundle = `publication-clean-${Date.now()}`;
+  const cleanPublicationController = await trackedPage(context);
+  await cleanPublicationController.goto("/preflight.html");
+  await preparePublicationFixture(cleanPublicationController, cleanPublicationBundle);
+  const cleanPublication = await trackedPage(context);
+  await cleanPublication.goto(
+      `/project_io/project_io_web_test.html?action=publish_publication&bundle=${cleanPublicationBundle}`);
+  expect(await waitForResult(cleanPublication)).toEqual({
+    state: "published",
+    maxChunkBytes: 1_048_576,
+  });
+  await cleanPublication.close();
+  await cleanPublicationController.close();
 
   for (const [index, point] of PUBLICATION_FAULT_POINTS.entries()) {
     const bundle = `publication-fault-${index}-${Date.now()}`;

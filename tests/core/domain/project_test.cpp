@@ -3,6 +3,7 @@
 #include <iostream>
 #include <string>
 #include <string_view>
+#include <type_traits>
 
 #include <lmdj/domain/project.hpp>
 
@@ -11,6 +12,13 @@
 namespace {
 
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
+
+static_assert(std::is_same_v<
+    std::underlying_type_t<lmdj::domain::ProjectContract>,
+    std::uint8_t>);
+static_assert(std::is_same_v<
+    std::underlying_type_t<lmdj::domain::TriggerMode>,
+    std::uint8_t>);
 
 void test_uuid_validation_matches_project_contract_grammar() {
   for (const std::string_view valid : {
@@ -41,6 +49,7 @@ void test_new_project_creates_all_64_addressable_pad_slots() {
 
   LMDJ_CHECK(result.has_value());
   const auto& project = result.value();
+  LMDJ_CHECK(project.contract == lmdj::domain::ProjectContract::v1);
   LMDJ_CHECK(project.revision == 0);
   LMDJ_CHECK(project.banks.size() == 4);
 
@@ -51,10 +60,21 @@ void test_new_project_creates_all_64_addressable_pad_slots() {
       const auto& slot = project.banks.at(bank).at(pad);
       LMDJ_CHECK((slot.id == lmdj::domain::PadSlotId{bank, pad}));
       LMDJ_CHECK(!slot.asset_id.has_value());
+      LMDJ_CHECK(slot.playback == lmdj::domain::PadPlayback{});
       ++slot_count;
     }
   }
   LMDJ_CHECK(slot_count == 64);
+}
+
+void test_pad_playback_defaults_are_project_v2_contract_values() {
+  const lmdj::domain::PadPlayback playback{};
+
+  LMDJ_CHECK(playback.trim_start_frame == 0);
+  LMDJ_CHECK(!playback.trim_end_frame.has_value());
+  LMDJ_CHECK(playback.trigger_mode == lmdj::domain::TriggerMode::one_shot);
+  LMDJ_CHECK(playback.gain_millidb == 0);
+  LMDJ_CHECK(!playback.muted);
 }
 
 void test_project_factory_accepts_only_supported_bpm_range() {
@@ -102,6 +122,7 @@ int main() {
   try {
     test_uuid_validation_matches_project_contract_grammar();
     test_new_project_creates_all_64_addressable_pad_slots();
+    test_pad_playback_defaults_are_project_v2_contract_values();
     test_project_factory_accepts_only_supported_bpm_range();
     test_project_factory_rejects_non_contract_project_ids();
   } catch (const std::exception& error) {

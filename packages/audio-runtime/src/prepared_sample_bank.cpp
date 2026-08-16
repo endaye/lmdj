@@ -50,6 +50,26 @@ std::uint8_t global_slot(domain::PadSlotId slot) noexcept {
   return static_cast<std::uint8_t>(slot.bank * 16U + slot.pad);
 }
 
+bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+    case domain::TriggerMode::gate:
+    case domain::TriggerMode::loop_gate:
+    case domain::TriggerMode::loop_toggle:
+      return true;
+  }
+  return false;
+}
+
+bool valid_playback(
+    const cooker::ResolvedPlayback& playback,
+    std::size_t frame_count) noexcept {
+  return playback.start_frame < playback.end_frame &&
+         playback.end_frame <= frame_count &&
+         valid_trigger_mode(playback.trigger_mode) &&
+         std::isfinite(playback.linear_gain) && playback.linear_gain >= 0.0F;
+}
+
 }  // namespace
 
 PreparedSampleBank::PreparedSampleBank(foundation::ProjectId project_id,
@@ -101,6 +121,9 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
     }
     const auto frames = static_cast<std::uint64_t>(
         source.interleaved.size() / source.channels);
+    if (!valid_playback(pad.playback, static_cast<std::size_t>(frames))) {
+      return invalid_bank("runtime snapshot Pad playback is invalid");
+    }
     if (!limits.allows_decoded_frames_per_pad(frames)) {
       return preparation_limit(
           "decoded_frames_per_pad",
@@ -151,7 +174,7 @@ foundation::Result<PreparedSampleBank> PreparedSampleBank::from_snapshot(
                        0.5F);
       }
     }
-    const auto assigned = bank.set_sample(slot, mono);
+    const auto assigned = bank.set_sample(slot, mono, pad.playback);
     if (!assigned.has_value()) {
       return invalid_bank(assigned.error().message);
     }
@@ -166,11 +189,33 @@ PreparedSampleBank PreparedSampleBank::empty(foundation::ProjectId project_id,
 
 foundation::Result<void> PreparedSampleBank::set_sample(
     std::uint8_t slot, std::span<const float> mono_pcm) {
+  if (mono_pcm.size() > std::numeric_limits<std::uint32_t>::max()) {
+    return invalid_argument("prepared Sample Bank playback is invalid");
+  }
+  return set_sample(
+      slot,
+      mono_pcm,
+      cooker::ResolvedPlayback{
+          0,
+          static_cast<std::uint32_t>(mono_pcm.size()),
+          domain::TriggerMode::one_shot,
+          1.0F,
+          false,
+      });
+}
+
+foundation::Result<void> PreparedSampleBank::set_sample(
+    std::uint8_t slot,
+    std::span<const float> mono_pcm,
+    cooker::ResolvedPlayback playback) {
   if (slot >= samples_.size() || mono_pcm.empty() ||
       (availability_mask_ & (std::uint64_t{1} << slot)) != 0 ||
       !std::all_of(mono_pcm.begin(), mono_pcm.end(),
                    [](float value) { return std::isfinite(value); })) {
     return invalid_argument("prepared Sample Bank input is invalid");
+  }
+  if (!valid_playback(playback, mono_pcm.size())) {
+    return invalid_argument("prepared Sample Bank playback is invalid");
   }
   const auto sample_bytes = checked_mono_float_bytes(mono_pcm.size());
   if (!sample_bytes.has_value()) {
@@ -182,6 +227,7 @@ foundation::Result<void> PreparedSampleBank::set_sample(
     return invalid_argument("prepared Sample Bank byte length overflowed");
   }
   samples_.at(slot).assign(mono_pcm.begin(), mono_pcm.end());
+  playbacks_.at(slot) = playback;
   availability_mask_ |= std::uint64_t{1} << slot;
   decoded_pcm_bytes_ = prospective.value();
   return foundation::Result<void>::success();
@@ -210,6 +256,11 @@ std::uint64_t PreparedSampleBank::decoded_pcm_bytes() const noexcept {
 const std::vector<float>& PreparedSampleBank::sample(
     std::uint8_t slot) const noexcept {
   return samples_[slot];
+}
+
+const cooker::ResolvedPlayback& PreparedSampleBank::playback(
+    std::uint8_t slot) const noexcept {
+  return playbacks_[slot];
 }
 
 }  // namespace lmdj::audio

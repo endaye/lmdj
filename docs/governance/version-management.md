@@ -522,6 +522,23 @@ Channel promotion 分别授权、分别验证，并在一个 mutation 后停止�
 `published` 只读审计，`abandoned` 与 `superseded-unreleased` 拒绝发布。远端 tag 与 Draft 是
 live control plane 派生状态，不写回 ledger 充当缓存。
 
+release target 的 CI 证据必须是 exact-main 的完整证据：该 target SHA 上一次
+completed、successful 的 `Core CI` run，其 `push` 或 `workflow_dispatch` 事件、`main`
+head branch、同一 run 内成功的 `Change Scope` 与 `PR Gate`，以及该 run 为同一 exact SHA
+保留的 scope manifest 必须是 `lmdj.ci-scope.v2`、`mode=full`、`trusted_head=true`。普通
+`main` merge 按精确改动路径分类，可能合法地只跑 focused CI；因此当 target SHA 自身的 push
+是 focused 时，操作者必须对该 exact SHA 以空 `lanes` 输入显式 dispatch 一次 full run，并把新的
+run ID 写入 release intent 后才能请求任何 mutation。`requested`（指定 lane）与 focused 都不是
+full 证据；run conclusion、路径类型或“已在 main 上”都不能推断 full。
+
+scope manifest artifact 的当前保留期是 14 天，这是 prospective 证据的硬性生命周期。过期后只有两条
+路径：在该 Actions run 仍被保留时对其重跑全部 job，保持同一 run ID 与 SHA 并产生新的 latest
+attempt；或者另行授权一次 exact-SHA full run 并同步更新 release intent。缺失或过期报告为
+`unverifiable`，focused/SHA 不符/Gate 缺失或失败报告为 `conflict`，传输与分页故障报告为
+`external-error`；证据不得被推断、重建或回填。已 `published` 的终态审计继续以不可变的
+tag/Release/asset/plan marker 证据判定，不因短生命周期 artifact 过期而改写历史。一次 full
+dispatch 本身不授权任何 release mutation。
+
 历史例外（historical exception）只解释控制面生效前不可改写的 exact 只读事实。只有 remote
 audit 可以报告 `ok-with-historical-exception`，并必须在 human/JSON evidence 中显式列出；
 `prepare`、tag push、Draft 创建与 publish workflow 都不能消费它来满足 prospective gate。

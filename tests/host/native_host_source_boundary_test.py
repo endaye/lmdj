@@ -10,6 +10,11 @@ FORBIDDEN = (
     "std::ifstream",
     "std::ofstream",
     "filesystem::directory_iterator",
+    "lmdj/cooker/",
+    "sample_analysis.hpp",
+    "wav_reader.hpp",
+    "decode_wav",
+    "WorkspaceCacheStore",
 )
 
 
@@ -35,8 +40,8 @@ def main() -> int:
         (source_root / "module.json").read_text(encoding="utf-8")
     )
     assert manifest["dependencies"] == {
-        "application-facade": "1.3.5",
-        "audio-runtime": "0.4.1",
+        "application-facade": "1.4.0",
+        "audio-runtime": "0.5.0",
     }
 
     logical_dependencies = {

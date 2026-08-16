@@ -7,6 +7,7 @@
 #include <fstream>
 #include <future>
 #include <iostream>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -152,6 +153,20 @@ nlohmann::json command(
   return parsed;
 }
 
+nlohmann::json query(
+    lmdj_engine* engine,
+    const nlohmann::json& request) {
+  char* response = nullptr;
+  const auto encoded = request.dump();
+  LMDJ_CHECK(
+      lmdj_engine_query(engine, encoded.c_str(), &response) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(response != nullptr);
+  auto parsed = nlohmann::json::parse(response);
+  lmdj_string_free(response);
+  return parsed;
+}
+
 void check_facade_error(
     const nlohmann::json& response,
     std::string_view code) {
@@ -163,6 +178,21 @@ std::string uuid(std::uint32_t suffix) {
   auto tail = std::to_string(suffix);
   return "00000000-0000-4000-8000-" +
          std::string(12 - tail.size(), '0') + tail;
+}
+
+nlohmann::json sample_playback(
+    std::uint64_t start = 0,
+    nlohmann::json end = nullptr,
+    std::string_view mode = "one_shot",
+    std::int32_t gain = 0,
+    bool muted = false) {
+  return {
+      {"trim_start_frame", start},
+      {"trim_end_frame", std::move(end)},
+      {"trigger_mode", mode},
+      {"gain_millidb", gain},
+      {"muted", muted},
+  };
 }
 
 void write_bytes(
@@ -515,6 +545,314 @@ void test_asset_and_pad_replay_identity_through_c_abi() {
   lmdj_engine_free(engine);
 }
 
+void test_sample_operations_have_exact_shapes_and_private_errors() {
+  TempDirectory temp;
+  const auto config = config_json(temp.path());
+  lmdj_engine* engine = nullptr;
+  char* error = nullptr;
+  LMDJ_CHECK(
+      lmdj_engine_create(config.c_str(), &engine, &error) ==
+      LMDJ_STATUS_OK);
+  LMDJ_CHECK(error == nullptr);
+
+  const auto project = temp.path() / "sample-c-api.lmdj";
+  auto response = command(
+      engine,
+      {
+          {"operation", "project.create"},
+          {"project_path", project.generic_string()},
+          {"project_id", uuid(701)},
+          {"bpm", 120},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  response = command(
+      engine,
+      {
+          {"operation", "asset.import"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(702)},
+          {"expected_revision", 0},
+          {"asset_id", uuid(703)},
+          {"source_path",
+           std::filesystem::absolute(
+               "tests/fixtures/audio/mono-44100.wav")
+               .generic_string()},
+          {"media_type", "audio/wav"},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  response = command(
+      engine,
+      {
+          {"operation", "pad.assign"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(704)},
+          {"expected_revision", 1},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"asset_id", uuid(703)},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+
+  response = query(
+      engine,
+      {
+          {"operation", "sample.inspect"},
+          {"project_path", project.generic_string()},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("project_revision") == 2);
+  const auto& inspected = response.at("result");
+  LMDJ_CHECK(inspected.size() == 6);
+  for (const auto* key : {
+           "project_revision",
+           "slot",
+           "asset_id",
+           "playback",
+           "metadata",
+           "waveform_cache_identity",
+       }) {
+    LMDJ_CHECK(inspected.contains(key));
+  }
+  LMDJ_CHECK(inspected.at("metadata").at("sample_rate") == 44'100);
+  LMDJ_CHECK(inspected.at("metadata").at("source_frames") == 8);
+  LMDJ_CHECK(inspected.at("playback") == sample_playback());
+
+  response = query(
+      engine,
+      {
+          {"operation", "sample.waveform"},
+          {"project_path", project.generic_string()},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"window",
+           {{"start_frame", 0},
+            {"end_frame", 8},
+            {"bucket_count", 4}}},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("project_revision") == 2);
+  LMDJ_CHECK(response.at("result").size() == 3);
+  LMDJ_CHECK(response.at("result").at("algorithm_version") == 1);
+  LMDJ_CHECK(response.at("result").at("buckets").size() == 4);
+  LMDJ_CHECK((
+      response.at("result").at("buckets").at(0) ==
+      nlohmann::json{
+          {"start_frame", 0},
+          {"end_frame", 2},
+          {"peak_magnitude", 32'768},
+      }));
+
+  response = command(
+      engine,
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(705)},
+          {"expected_revision", 2},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"playback", sample_playback(1, 7, "loop_toggle", -1'200, true)},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("project_revision") == 3);
+  LMDJ_CHECK((
+      response.at("result") ==
+      nlohmann::json{
+          {"committed_revision", 3},
+          {"runtime_prepare_required", true},
+      }));
+  response = command(
+      engine,
+      {
+          {"operation", "sample.reset_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(706)},
+          {"expected_revision", 3},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+      });
+  LMDJ_CHECK(response.at("ok") == true);
+  LMDJ_CHECK(response.at("project_revision") == 4);
+
+  const auto conflicted = command(
+      engine,
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(711)},
+          {"expected_revision", 3},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"playback", sample_playback()},
+      });
+  check_facade_error(conflicted, "REVISION_CONFLICT");
+  LMDJ_CHECK((
+      conflicted.at("error").at("details") ==
+      nlohmann::json{
+          {"actual_revision", 4},
+          {"expected_revision", 3},
+      }));
+  LMDJ_CHECK(
+      conflicted.at("error").at("message") ==
+      "Project revision changed");
+
+  const auto valid_token = uuid(707);
+  check_facade_error(
+      command(
+          engine,
+          {
+              {"operation", "sample.import.begin"},
+              {"import_token", valid_token},
+              {"project_path", project.generic_string()},
+              {"command_id", uuid(708)},
+              {"expected_revision", 4},
+              {"slot", {{"bank", 0}, {"pad", 0}}},
+              {"asset_id", uuid(709)},
+              {"byte_length", 60},
+          }),
+      "INVALID_ARGUMENT");
+  check_facade_error(
+      command(
+          engine,
+          {
+              {"operation", "sample.import.chunk"},
+              {"import_token", valid_token},
+              {"offset", 0},
+              {"final", true},
+              {"sidecar",
+               {{"sidecar_bytes", 60},
+                {"sidecar_sha256", std::string(64, '0')}}},
+          }),
+      "INVALID_ARGUMENT");
+
+  std::vector<nlohmann::json> rejected_requests{
+      {{"operation", "sample.inspect"},
+       {"project_path", project.generic_string()},
+       {"slot", {{"bank", 0}, {"pad", 0}}},
+       {"filename", "private.wav"}},
+      {{"operation", "sample.waveform"},
+       {"project_path", project.generic_string()},
+       {"slot", {{"bank", 0}, {"pad", 0}}},
+       {"window",
+        {{"start_frame", 0}, {"end_frame", 8}, {"bucket_count", 513}}}},
+      {{"operation", "sample.waveform"},
+       {"project_path", project.generic_string()},
+       {"slot", {{"bank", 4}, {"pad", 0}}},
+       {"window",
+        {{"start_frame", 0}, {"end_frame", 8}, {"bucket_count", 4}}}},
+      {{"operation", "sample.update_pad"},
+       {"project_path", project.generic_string()},
+       {"command_id", "not-a-uuid"},
+       {"expected_revision", 4},
+       {"slot", {{"bank", 0}, {"pad", 0}}},
+       {"playback", sample_playback()}},
+      {{"operation", "sample.reset_pad"},
+       {"project_path", project.generic_string()},
+       {"command_id", uuid(710)},
+       {"expected_revision", -1},
+       {"slot", {{"bank", 0}, {"pad", 0}}}},
+      {{"operation", "sample.import.chunk"},
+       {"import_token", valid_token},
+       {"offset", 0},
+       {"final", true},
+       {"sidecar",
+        {{"sidecar_bytes", 3}, {"sidecar_sha256", std::string(64, '0')}}},
+       {"bytes", nlohmann::json::array({1, 2, 3})}},
+      {{"operation", "sample.import.chunk"},
+       {"import_token", valid_token},
+       {"offset", 0},
+       {"final", true},
+       {"sidecar",
+        {{"sidecar_bytes", 3}, {"sidecar_sha256", std::string(64, '0')}}},
+       {"path", "/private/audio.wav"}},
+      {{"operation", "sample.import.commit"},
+       {"import_token", "not-a-uuid"}},
+      {{"operation", "sample.import.abort"},
+       {"import_token", valid_token},
+       {"filename", "private.wav"}},
+  };
+  for (const auto& request : rejected_requests) {
+    const auto surface = request.at("operation").get<std::string>() ==
+                                 "sample.inspect" ||
+                             request.at("operation").get<std::string>() ==
+                                 "sample.waveform"
+                         ? query(engine, request)
+                         : command(engine, request);
+    check_facade_error(surface, "INVALID_ARGUMENT");
+    LMDJ_CHECK(surface.at("error").at("details").empty());
+    LMDJ_CHECK(
+        surface.at("error").at("message") == "Sample request is invalid");
+    const auto encoded = surface.dump();
+    LMDJ_CHECK(encoded.find("private.wav") == std::string::npos);
+    LMDJ_CHECK(encoded.find("/private/audio.wav") == std::string::npos);
+  }
+
+  const auto missing_project = temp.path() / "private-missing.lmdj";
+  const auto private_error = query(
+      engine,
+      {
+          {"operation", "sample.inspect"},
+          {"project_path", missing_project.generic_string()},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+      });
+  check_facade_error(private_error, "IO_ERROR");
+  LMDJ_CHECK(private_error.at("error").at("details").empty());
+  LMDJ_CHECK(
+      private_error.at("error").at("message") ==
+      "Sample storage operation failed");
+  const auto encoded_error = private_error.dump();
+  LMDJ_CHECK(
+      encoded_error.find(missing_project.generic_string()) ==
+      std::string::npos);
+  LMDJ_CHECK(encoded_error.size() < 512);
+
+  const auto replayed_update = command(
+      engine,
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(705)},
+          {"expected_revision", 2},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"playback", sample_playback(1, 7, "loop_toggle", -1'200, true)},
+      });
+  LMDJ_CHECK(replayed_update.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_update.at("result").at("committed_revision") == 3);
+  const auto advanced = command(
+      engine,
+      {
+          {"operation", "sample.update_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(712)},
+          {"expected_revision", 4},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+          {"playback", sample_playback(1, 7, "loop_gate", -600, false)},
+      });
+  LMDJ_CHECK(advanced.at("ok") == true);
+  LMDJ_CHECK(advanced.at("project_revision") == 5);
+  const auto replayed_reset = command(
+      engine,
+      {
+          {"operation", "sample.reset_pad"},
+          {"project_path", project.generic_string()},
+          {"command_id", uuid(706)},
+          {"expected_revision", 3},
+          {"slot", {{"bank", 0}, {"pad", 0}}},
+      });
+  LMDJ_CHECK(replayed_reset.at("ok") == true);
+  LMDJ_CHECK(
+      replayed_reset.at("result").at("committed_revision") == 4);
+  const auto update_revision =
+      replayed_update.at("project_revision").get<std::uint64_t>();
+  const auto reset_revision =
+      replayed_reset.at("project_revision").get<std::uint64_t>();
+  if (update_revision != 4 || reset_revision != 5) {
+    throw std::runtime_error(
+        "Sample C ABI replay revisions are stale: update=" +
+        std::to_string(update_revision) +
+        " reset=" + std::to_string(reset_revision));
+  }
+
+  lmdj_engine_free(engine);
+}
+
 void test_transport_failures_null_outputs_and_valid_facade_errors() {
   TempDirectory temp;
   const auto config = config_json(temp.path());
@@ -864,6 +1202,7 @@ int main() {
     test_assembly_composition_through_c_abi();
     test_take_replay_identity_is_enforced_through_c_abi();
     test_asset_and_pad_replay_identity_through_c_abi();
+    test_sample_operations_have_exact_shapes_and_private_errors();
     test_transport_failures_null_outputs_and_valid_facade_errors();
     test_stale_unknown_aba_and_racing_free_are_safe();
     test_busy_project_fails_fast_without_serializing_engines();

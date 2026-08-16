@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <type_traits>
 #include <vector>
 
 #include <lmdj/audio/detail/fixed_spsc_queue.hpp>
@@ -23,6 +24,11 @@ inline constexpr std::size_t kRealtimeBankCapacity = 4;
 inline constexpr std::size_t kRealtimePublishQueueCapacity = 4;
 inline constexpr std::size_t kRealtimeCaptureCapacity = 4'096;
 inline constexpr std::size_t kRealtimeTriggerOutcomeCapacity = 4'096;
+// A legacy one-shot can publish both started and completed edges. Keep room
+// for the capture backlog plus one maximum control batch so capture overflow
+// remains observable to callers that do not yet consume the Stage 8 stream.
+inline constexpr std::size_t kRealtimeVoiceStateCapacity =
+    (kRealtimeCaptureCapacity + kRealtimeQueueCapacity) * 2;
 
 enum class RealtimeState : std::uint8_t { stopped, running };
 enum class EnqueueResult : std::uint8_t {
@@ -60,6 +66,40 @@ struct TriggerEvent {
   std::uint8_t slot;
   std::uint8_t velocity;
 };
+
+enum class PadControlKind : std::uint8_t {
+  press,
+  release,
+  stop_slot,
+  stop_all,
+  preview_set,
+  preview_clear,
+};
+
+struct PadControlEvent {
+  std::uint64_t sequence;
+  std::uint8_t slot;
+  std::uint8_t velocity;
+  PadControlKind kind;
+  cooker::ResolvedPlayback playback;
+};
+
+enum class RuntimeVoiceState : std::uint8_t {
+  started,
+  stopped,
+  completed,
+};
+
+struct RuntimeVoiceStateEvent {
+  std::uint64_t sequence;
+  std::uint8_t slot;
+  RuntimeVoiceState state;
+  std::uint64_t runtime_frame;
+  std::uint32_t source_frame;
+};
+
+static_assert(std::is_trivially_copyable_v<PadControlEvent>);
+static_assert(std::is_trivially_copyable_v<RuntimeVoiceStateEvent>);
 
 struct CapturedTriggerEvent {
   std::uint64_t sequence;
@@ -122,6 +162,42 @@ struct RuntimeTriggerOutcomeTelemetry {
   std::uint64_t runtime_outcome_drops;
 };
 
+enum class RuntimeVoiceStateStreamState : std::uint8_t {
+  healthy,
+  corrupted,
+};
+
+struct RuntimeVoiceStateTelemetry {
+  RuntimeVoiceStateStreamState state;
+  std::uint64_t published_voice_states;
+  std::uint64_t drained_voice_states;
+  std::uint64_t voice_state_drops;
+};
+
+namespace detail {
+
+template <typename TryPop>
+std::size_t drain_voice_states_fail_closed(
+    std::atomic<RuntimeVoiceStateStreamState>& state,
+    std::span<RuntimeVoiceStateEvent> output,
+    TryPop try_pop) noexcept {
+  if (state.load(std::memory_order_acquire) ==
+      RuntimeVoiceStateStreamState::corrupted) {
+    return 0;
+  }
+  std::size_t drained = 0;
+  while (drained < output.size() && try_pop(output[drained])) {
+    ++drained;
+  }
+  if (state.load(std::memory_order_acquire) ==
+      RuntimeVoiceStateStreamState::corrupted) {
+    return 0;
+  }
+  return drained;
+}
+
+}  // namespace detail
+
 // Threading contract. Violating it is undefined behavior, not a runtime error.
 //
 // Exactly two threads may touch one RealtimeEngine:
@@ -156,6 +232,13 @@ class RealtimeEngine final {
   foundation::Result<void> clear_sample(std::uint8_t slot);
   // Control thread, concurrent with render while running.
   // Publication and enqueue share one serialized control-thread producer.
+  // While running, publication establishes a three-part hand-off invariant:
+  // (1) the control producer initializes the pending Bank before release-
+  //     incrementing `pending_publications_` and publishing its queue entry;
+  // (2) render applies that entry before release-decrementing the counter; and
+  // (3) enqueue acquire-loads the counter and dereferences the current Bank
+  //     only after observing zero. The relaxed current-slot/Bank reads rely on
+  //     this exact release/acquire chain and the serialized control producer.
   // Applies the bank directly, and so requires quiescence, when stopped.
   PublishResult publish_sample_bank(PreparedSampleBank&& bank) noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
@@ -172,6 +255,9 @@ class RealtimeEngine final {
   // Control thread, concurrent with render. Sole consumer of the outcome ring.
   std::size_t drain_trigger_outcomes(
       std::span<RuntimeTriggerOutcomeEvent> output) noexcept;
+  // Control thread, concurrent with render. Sole consumer of the Voice ring.
+  std::size_t drain_voice_states(
+      std::span<RuntimeVoiceStateEvent> output) noexcept;
   // Control thread, quiescent. Resets Voice and queue state.
   foundation::Result<void> start();
   // Control thread, quiescent. Releases Voice bank references and consumes the
@@ -179,6 +265,7 @@ class RealtimeEngine final {
   void stop() noexcept;
   // Control thread, concurrent with render. Sole producer of the trigger queue.
   EnqueueResult enqueue(TriggerEvent event) noexcept;
+  EnqueueResult enqueue_control(PadControlEvent event) noexcept;
   // Audio thread only.
   void render(float* left, float* right, std::uint32_t frames) noexcept;
   // Any thread.
@@ -187,6 +274,7 @@ class RealtimeEngine final {
   BankTelemetry bank_telemetry() const noexcept;
   CaptureTelemetry capture_telemetry() const noexcept;
   RuntimeTriggerOutcomeTelemetry trigger_outcome_telemetry() const noexcept;
+  RuntimeVoiceStateTelemetry voice_state_telemetry() const noexcept;
 
  private:
   enum class BankState : std::uint8_t {
@@ -198,6 +286,8 @@ class RealtimeEngine final {
   };
   static_assert(std::atomic<BankState>::is_always_lock_free);
   static_assert(std::atomic<CaptureState>::is_always_lock_free);
+  static_assert(
+      std::atomic<RuntimeVoiceStateStreamState>::is_always_lock_free);
 
   static constexpr std::uint8_t kLegacyBankSlot = 0xff;
 
@@ -209,10 +299,15 @@ class RealtimeEngine final {
   };
 
   struct Voice {
+    std::uint64_t sequence = 0;
+    std::uint8_t slot = 0;
     const float* samples = nullptr;
     std::size_t frame_count = 0;
+    std::uint32_t start_frame = 0;
+    std::uint32_t end_frame = 0;
     std::size_t cursor = 0;
     float gain = 0.0F;
+    domain::TriggerMode trigger_mode = domain::TriggerMode::one_shot;
     bool active = false;
     std::uint8_t bank_slot = kLegacyBankSlot;
   };
@@ -223,11 +318,20 @@ class RealtimeEngine final {
   void apply_published_bank(std::uint8_t slot) noexcept;
   void release_voice_bank(Voice& voice) noexcept;
   void capture_voice_start(
-      const TriggerEvent& event,
+      const PadControlEvent& event,
       std::uint64_t absolute_start_frame) noexcept;
+  const std::vector<float>& current_sample(std::uint8_t slot) const noexcept;
+  cooker::ResolvedPlayback published_playback(
+      std::uint8_t slot) const noexcept;
+  bool publish_voice_state(
+      const Voice& voice,
+      RuntimeVoiceState state,
+      std::uint64_t runtime_frame,
+      std::uint32_t source_frame) noexcept;
+  void stop_voice(Voice& voice, std::uint64_t runtime_frame) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
-  detail::FixedSpscQueue<TriggerEvent, kRealtimeQueueCapacity> queue_;
+  detail::FixedSpscQueue<PadControlEvent, kRealtimeQueueCapacity> queue_;
   std::array<BankSlot, kRealtimeBankCapacity> bank_slots_{};
   detail::FixedSpscQueue<
       std::uint8_t,
@@ -241,7 +345,13 @@ class RealtimeEngine final {
       RuntimeTriggerOutcomeEvent,
       kRealtimeTriggerOutcomeCapacity>
       trigger_outcome_ring_;
+  detail::FixedSpscQueue<
+      RuntimeVoiceStateEvent,
+      kRealtimeVoiceStateCapacity>
+      voice_state_ring_;
   std::array<Voice, kRealtimeVoiceCapacity> voices_{};
+  std::array<cooker::ResolvedPlayback, kRealtimeSampleSlots> previews_{};
+  std::uint64_t preview_mask_ = 0;
   std::atomic<std::uint64_t> availability_mask_{0};
   std::atomic<std::uint8_t> current_bank_slot_{kLegacyBankSlot};
   std::uint64_t next_bank_generation_ = 1;
@@ -275,6 +385,11 @@ class RealtimeEngine final {
   std::atomic<std::uint64_t> published_outcomes_{0};
   std::atomic<std::uint64_t> drained_outcomes_{0};
   std::atomic<std::uint64_t> runtime_outcome_drops_{0};
+  std::atomic<RuntimeVoiceStateStreamState> voice_state_stream_state_{
+      RuntimeVoiceStateStreamState::healthy};
+  std::atomic<std::uint64_t> published_voice_states_{0};
+  std::atomic<std::uint64_t> drained_voice_states_{0};
+  std::atomic<std::uint64_t> voice_state_drops_{0};
 };
 
 }  // namespace lmdj::audio

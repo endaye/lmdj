@@ -21,6 +21,8 @@ namespace lmdj::web_runtime {
 
 namespace detail {
 class ControlRuntimeAudioAccess;
+class ControlRuntimeClockAccess;
+class ControlRuntimeSnapshotAccess;
 }
 
 class ControlRuntime final {
@@ -40,6 +42,7 @@ class ControlRuntime final {
       std::span<const std::byte> sidecar,
       std::chrono::steady_clock::time_point submitted_at);
   std::vector<audio::RuntimeTriggerOutcomeEvent> drain_outcomes();
+  std::vector<audio::RuntimeVoiceStateEvent> drain_voice_states();
   foundation::Result<void> drain_capture();
   bool validate_realtime_health() noexcept;
   void fail_and_seal(std::string_view cause) noexcept;
@@ -52,6 +55,8 @@ class ControlRuntime final {
 
   std::shared_ptr<Impl> impl_;
   friend class detail::ControlRuntimeAudioAccess;
+  friend class detail::ControlRuntimeClockAccess;
+  friend class detail::ControlRuntimeSnapshotAccess;
 };
 
 namespace detail {
@@ -65,11 +70,34 @@ struct AudioQuiescenceCoordinator {
   std::uint64_t (*acknowledged_generation)(void* context) noexcept;
 };
 
+struct ControlRuntimeClock {
+  void* context;
+  std::chrono::steady_clock::time_point (*now)(void* context) noexcept;
+};
+
+struct ControlRuntimeSnapshotTruth {
+  std::optional<std::uint64_t> project_revision;
+  std::optional<std::uint64_t> runtime_revision;
+};
+
 class ControlRuntimeAudioAccess final {
  public:
   static foundation::Result<void> install(
       ControlRuntime& runtime,
       AudioQuiescenceCoordinator coordinator) noexcept;
+};
+
+class ControlRuntimeClockAccess final {
+ public:
+  static foundation::Result<void> install(
+      ControlRuntime& runtime,
+      ControlRuntimeClock clock) noexcept;
+};
+
+class ControlRuntimeSnapshotAccess final {
+ public:
+  static ControlRuntimeSnapshotTruth read(
+      const ControlRuntime& runtime) noexcept;
 };
 
 inline constexpr std::size_t kBridgeMaximumEnvelopeBytes = 65'536;
@@ -124,6 +152,7 @@ class ControlBridge final {
       std::span<std::byte> output,
       std::size_t& required) noexcept;
   BridgeCancelStatus cancel(std::string_view request_id) noexcept;
+  BridgeCancelStatus cancel_query(std::string_view request_id) noexcept;
   bool configure_deadline_proof(
       std::string_view request_id,
       std::uint8_t gate,

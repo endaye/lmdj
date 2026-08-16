@@ -22,6 +22,11 @@ enum class FaultPoint {
   active_journal_remove,
   active_directory_sync,
   sealed_directory_sync,
+  sample_after_staging,
+  sample_after_event_preparation,
+  sample_after_artifact_creation,
+  sample_after_manifest_preparation,
+  sample_after_manifest_publication,
 };
 
 using FaultHook = foundation::Result<void> (*)(

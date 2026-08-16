@@ -162,4 +162,233 @@ describe("Creator state", () => {
     const ended = creatorReducer(cleared, {type: "transfer-ended"});
     expect(ended.transfer.phase).toBe("idle");
   });
+
+  test.each([
+    {
+      name: "initial nonpublished commit",
+      currentRevision: 5,
+      runtimeRevision: 4,
+      runtimePublished: false,
+      snapshotError: {code: "COOK_FAILED", message: "Cook failed", details: {}},
+    },
+    {
+      name: "published delayed replay",
+      currentRevision: 7,
+      runtimeRevision: 7,
+      runtimePublished: true,
+      snapshotError: null,
+    },
+    {
+      name: "nonpublished delayed replay",
+      currentRevision: 7,
+      runtimeRevision: 4,
+      runtimePublished: false,
+      snapshotError: {code: "COOK_FAILED", message: "Cook failed", details: {}},
+    },
+  ] as const)("atomically refreshes Project truth after $name", ({
+    currentRevision,
+    runtimeRevision,
+    runtimePublished,
+    snapshotError,
+  }) => {
+    const assetId = "33333333-3333-4333-8333-333333333333";
+    const replayAssetId = "44444444-4444-4444-8444-444444444444";
+    const before = creatorReducer(creatorReducer(creatorReducer({
+      ...readyState(),
+      project: {
+        ...readyState().project,
+        projects: [{
+          projectId: project.projectId,
+          patternId: project.patternId,
+          revision: project.revision,
+          bpm: project.bpm,
+          assetCount: project.assetCount,
+          assignedPadCount: project.assignedPadCount,
+          bundleDigest: project.bundleDigest,
+        }],
+      },
+      audio: {phase: "running"},
+    }, {
+      type: "sample-action",
+      action: {type: "slot-selected", slot: 1},
+    }), {
+      type: "sample-action",
+      action: {
+        type: "inspect-stored",
+        inspect: {
+          projectRevision: 4,
+          slot: 1,
+          assetId: null,
+          playback: {
+            trimStartFrame: 0,
+            trimEndFrame: null,
+            triggerMode: "one_shot",
+            gainMillidb: 0,
+            muted: false,
+          },
+          metadata: null,
+          waveformCacheIdentity: null,
+        },
+      },
+    }), {
+      type: "sample-action",
+      action: {
+        type: "pending-began",
+        pending: {kind: "import", slot: 1, expectedRevision: 4},
+      },
+    });
+    const refreshedProject: ProjectView = {
+      ...project,
+      revision: currentRevision,
+      assetCount: currentRevision === 5 ? 3 : 4,
+      assignedPadCount: currentRevision === 5 ? 3 : 4,
+      bundleDigest: (currentRevision === 5 ? "b" : "c").repeat(64),
+      pads: project.pads.map((pad) => {
+        if (pad.slot === 1) return {...pad, assetId};
+        if (currentRevision > 5 && pad.slot === 2) {
+          return {...pad, assetId: replayAssetId};
+        }
+        return pad;
+      }),
+    };
+
+    const refreshAction = {
+      type: "mutation-committed" as const,
+      pending: {kind: "import" as const, slot: 1, expectedRevision: 4},
+      inspect: {
+        projectRevision: currentRevision,
+        slot: 1,
+        assetId,
+        playback: {
+          trimStartFrame: 0,
+          trimEndFrame: 8,
+          triggerMode: "gate" as const,
+          gainMillidb: 0,
+          muted: false,
+        },
+        metadata: {sampleRate: 48_000 as const, channels: 1 as const, sourceFrames: 8},
+        waveformCacheIdentity: `${"b".repeat(64)}/1/max-abs-mirror/1`,
+      },
+      commit: {
+        committedRevision: 5,
+        runtimeRevision,
+        runtimePublished,
+        snapshotError,
+      },
+    };
+    const refreshing = creatorReducer(before, {
+      type: "sample-projection-refresh-started",
+      action: refreshAction,
+    });
+    const after = creatorReducer(refreshing, {
+      type: "sample-project-refreshed",
+      project: refreshedProject,
+      action: refreshAction,
+    });
+
+    expect(after.project.current).toEqual(refreshedProject);
+    expect(after.project.projects).toEqual([{
+      projectId: refreshedProject.projectId,
+      patternId: refreshedProject.patternId,
+      revision: currentRevision,
+      bpm: refreshedProject.bpm,
+      assetCount: refreshedProject.assetCount,
+      assignedPadCount: refreshedProject.assignedPadCount,
+      bundleDigest: refreshedProject.bundleDigest,
+    }]);
+    expect(after.sample.selectedSlot).toBe(1);
+    expect(after.sample.inspect?.assetId).toBe(assetId);
+    expect(after.sample.savedRevision).toBe(currentRevision);
+    expect(after.sample.runtimeRevision).toBe(runtimeRevision);
+    expect(after.sample.pendingAction).toBeNull();
+    expect(after.sample.lastError).toEqual(snapshotError === null ? null : {
+      code: "COOK_FAILED",
+      message: "Sample runtime preparation failed",
+      retryPrepare: true,
+    });
+    expect(after.audio).toBe(before.audio);
+    expect(after.runtime).toBe(before.runtime);
+  });
+
+  test("retains a committed mutation while its authoritative inspect is pending", () => {
+    const pending = {kind: "update" as const, slot: 1, expectedRevision: 4};
+    const selected = creatorReducer(creatorReducer(creatorReducer({
+      ...readyState(),
+      audio: {phase: "running"},
+    }, {
+      type: "sample-action",
+      action: {type: "slot-selected", slot: 1},
+    }), {
+      type: "sample-action",
+      action: {
+        type: "inspect-stored",
+        inspect: {
+          projectRevision: 4,
+          slot: 1,
+          assetId: null,
+          playback: {
+            trimStartFrame: 0,
+            trimEndFrame: null,
+            triggerMode: "one_shot",
+            gainMillidb: 0,
+            muted: false,
+          },
+          metadata: null,
+          waveformCacheIdentity: null,
+        },
+      },
+    }), {
+      type: "sample-action",
+      action: {type: "pending-began", pending},
+    });
+    const commit = {
+      committedRevision: 5,
+      runtimeRevision: 5,
+      runtimePublished: true,
+      snapshotError: null,
+    };
+    const unresolved = {
+      type: "mutation-committed" as const,
+      pending,
+      inspect: null,
+      commit,
+    };
+
+    const refreshing = creatorReducer(selected, {
+      type: "sample-projection-refresh-started",
+      action: unresolved,
+    });
+    expect(refreshing.sample.pendingAction).toEqual(pending);
+    expect(refreshing.sampleProjectionRefresh).toEqual(unresolved);
+
+    const inspect = {
+      projectRevision: 5,
+      slot: 1,
+      assetId: null,
+      playback: {
+        trimStartFrame: 0,
+        trimEndFrame: null,
+        triggerMode: "gate" as const,
+        gainMillidb: 0,
+        muted: false,
+      },
+      metadata: null,
+      waveformCacheIdentity: null,
+    };
+    const refreshedProject = {
+      ...project,
+      revision: 5,
+      bundleDigest: "d".repeat(64),
+    };
+    const resolved = {...unresolved, inspect};
+    const after = creatorReducer(refreshing, {
+      type: "sample-project-refreshed",
+      project: refreshedProject,
+      action: resolved,
+    });
+    expect(after.sample.savedRevision).toBe(5);
+    expect(after.sample.pendingAction).toBeNull();
+    expect(after.sampleProjectionRefresh).toBeNull();
+    expect(after.audio).toBe(selected.audio);
+  });
 });

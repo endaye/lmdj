@@ -304,6 +304,63 @@ async function report(page) {
   return JSON.parse(await readFile(await (await pending).path(), "utf8"));
 }
 
+async function enterLoopToggleSample(page) {
+  await page.getByRole("button", {name: "Sample"}).click();
+  await expect(page.getByRole("heading", {name: "Sample editor"})).toBeVisible();
+  await expect(page.getByText(/^Asset /)).toBeVisible({timeout: 30_000});
+  const loop = page.getByRole("button", {name: "Loop"});
+  if (await loop.getAttribute("aria-pressed") !== "true") {
+    await loop.click();
+    await expect(loop).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+  }
+  const hold = page.getByRole("button", {name: "Hold"});
+  await expect(hold).toBeEnabled();
+  if (await hold.getAttribute("aria-pressed") !== "true") {
+    await hold.click();
+  }
+  await expect(hold).toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+}
+
+async function armPadOutcomeObservation(pad) {
+  await pad.evaluate((element) => {
+    element.removeAttribute("data-proof-outcome-observed");
+    const observeOutcome = () => {
+      const outcome = element.getAttribute("data-outcome");
+      if (outcome !== null && outcome !== "idle") {
+        element.setAttribute("data-proof-outcome-observed", outcome);
+        return true;
+      }
+      return false;
+    };
+    if (observeOutcome()) return;
+    const observer = new MutationObserver((records) => {
+      const observed = records.some((record) =>
+        record.oldValue !== null && record.oldValue !== "idle"
+      );
+      if (observed || observeOutcome()) {
+        element.setAttribute("data-proof-outcome-observed", "true");
+        observer.disconnect();
+      }
+    });
+    observer.observe(element, {
+      attributes: true,
+      attributeFilter: ["data-outcome"],
+      attributeOldValue: true,
+    });
+  });
+}
+
+async function latchLoopToggle(page) {
+  await expect(page.getByRole("button", {name: "Loop"}))
+    .toHaveAttribute("aria-pressed", "true", {timeout: 30_000});
+  const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  await expect(pad).toHaveAttribute("data-outcome", "idle", {timeout: 30_000});
+  await pad.focus();
+  await page.keyboard.down("Enter");
+  await expect(pad).toHaveAttribute("data-outcome", "started", {timeout: 30_000});
+  await page.keyboard.up("Enter");
+}
+
 async function reopenWithVisibleBusyRetry(page) {
   const heading = page.getByRole("heading", {name: "Project 00000000"});
   const open = page.getByRole("button", {
@@ -342,15 +399,18 @@ async function reopenWithVisibleBusyRetry(page) {
   await expect(alert).toHaveCount(0);
 }
 
-test("suspend and reload require explicit reopen and explicit reactivation", async ({page, browserName}) => {
+test("suspend, restart, and reopen clear an active loop toggle before reactivation", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(360_000);
   await page.goto("/index.html");
   await importAndActivate(page);
+  await enterLoopToggleSample(page);
+  await latchLoopToggle(page);
   await page.getByRole("button", {name: "Suspend audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await latchLoopToggle(page);
 
   await page.reload();
   await waitForProjectInventory(page);
@@ -359,7 +419,58 @@ test("suspend and reload require explicit reopen and explicit reactivation", asy
   await expect(page.getByTestId("audio-state")).toHaveText("Audio inactive");
   await page.getByRole("button", {name: "Activate audio"}).click();
   await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
-  expect((await report(page)).state).toBe("running");
+  await enterLoopToggleSample(page);
+  await latchLoopToggle(page);
+  const value = await report(page);
+  expect(value.state).toBe("running");
+  expect(value.sample).toEqual({
+    project_revision: expect.any(Number),
+    runtime_revision: expect.any(Number),
+    operation_outcomes: [],
+    trigger_mode_coverage: [],
+  });
+  expect(value.sample.runtime_revision).toBe(value.sample.project_revision);
+  expect(JSON.stringify(value.sample)).not.toMatch(
+    /file_name|opfs|project_json|waveform_buckets|audio_bytes/i,
+  );
+});
+
+test("blur and hidden lifecycle edges clear each fresh loop toggle", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(180_000);
+  await page.goto("/index.html");
+  await importAndActivate(page);
+  await enterLoopToggleSample(page);
+  await latchLoopToggle(page);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: 30_000,
+  });
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
+  await latchLoopToggle(page);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+
+  await page.evaluate(() => {
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "hidden",
+    });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: 30_000,
+  });
+  await page.evaluate(() => {
+    delete document.visibilityState;
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await page.getByRole("button", {name: "Activate audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering");
+  await latchLoopToggle(page);
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running");
 });
 
 test("persisted page lifecycle retains the Project and live input surface", async ({page, browserName}) => {
@@ -379,12 +490,22 @@ test("persisted page lifecycle retains the Project and live input surface", asyn
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: 30_000,
   });
-  await page.keyboard.down("KeyA");
-  await expect.poll(async () => {
-    const value = await report(page);
-    return [value.state, value.trigger_admitted_count, value.trigger_outcome_count];
-  }, {timeout: 30_000}).toEqual(["running", 1, 1]);
-  await page.keyboard.up("KeyA");
+  const pad = page.getByRole("button", {name: "Pad A1 — assigned"});
+  await armPadOutcomeObservation(pad);
+  await page.keyboard.down("KeyQ");
+  await expect(pad).toHaveAttribute("data-proof-outcome-observed", /.+/, {
+    timeout: 30_000,
+  });
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio running", {
+    timeout: 30_000,
+  });
+  const value = await report(page);
+  expect([
+    value.state,
+    value.trigger_admitted_count,
+    value.trigger_outcome_count,
+  ]).toEqual(["running", 1, 1]);
+  await page.keyboard.up("KeyQ");
 });
 
 test("packaged recovery timeout cleans one generation before automatic replacement", async ({page, browserName}) => {

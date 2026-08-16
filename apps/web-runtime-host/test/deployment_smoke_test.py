@@ -109,9 +109,9 @@ class SmokeFixture:
             "emscripten": {},
             "heap_bytes": 536_870_912,
             "host_id": "lmdj-web-runtime-host",
-            "host_version": "1.1.2",
+            "host_version": "1.2.0",
             "manifest_version": 1,
-            "platform_version": "0.2.1",
+            "platform_version": "0.3.0",
             "product_build": "1.0.15.2",
             "protocol_version": 1,
             "resource_limits": {},
@@ -153,7 +153,7 @@ class SmokeFixture:
             f'<meta name="lmdj-host-manifest-sha256" content="{digest}">'
             '<meta name="lmdj-host-manifest-path" content="./host-manifest.json">'
             '<meta name="lmdj-product-build" content="1.0.15.2">'
-            '<meta name="lmdj-host-version" content="1.1.2">'
+            '<meta name="lmdj-host-version" content="1.2.0">'
             f'<link rel="stylesheet" href="./{style["path"]}">'
             f'<script type="module" src="./{main["path"]}"></script>'
             "</head><body></body></html>"
@@ -282,7 +282,7 @@ class DeploymentSmokeTest(unittest.TestCase):
         return smoke_http(
             base_url=self.server.base_url,
             expected_product_build="1.0.15.2",
-            expected_host_version="1.1.2",
+            expected_host_version="1.2.0",
             require_https=False,
         )
 
@@ -292,7 +292,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             result,
             {
                 "asset_count": 13,
-                "host_version": "1.1.2",
+                "host_version": "1.2.0",
                 "index_sha256": hashlib.sha256(
                     self.fixture.payloads["/index.html"]
                 ).hexdigest(),
@@ -525,7 +525,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             smoke_http(
                 base_url=self.server.base_url,
                 expected_product_build="1.0.15.2",
-                expected_host_version="1.1.2",
+                expected_host_version="1.2.0",
             )
 
     def test_cleartext_override_accepts_only_validated_loopback_targets(self) -> None:
@@ -534,7 +534,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             smoke_http(
                 base_url=localhost_url,
                 expected_product_build="1.0.15.2",
-                expected_host_version="1.1.2",
+                expected_host_version="1.2.0",
                 require_https=False,
             )["asset_count"],
             13,
@@ -543,15 +543,15 @@ class DeploymentSmokeTest(unittest.TestCase):
             smoke_http(
                 base_url="http://[::1]:1",
                 expected_product_build="1.0.15.2",
-                expected_host_version="1.1.2",
+                expected_host_version="1.2.0",
                 require_https=False,
                 timeout_seconds=0.01,
             )
         with self.assertRaisesRegex(SmokeError, "cleartext.*loopback"):
             smoke_http(
-                base_url="http://192.0.2.1:9",
+                base_url="http://192.0.3.0:9",
                 expected_product_build="1.0.15.2",
-                expected_host_version="1.1.2",
+                expected_host_version="1.2.0",
                 require_https=False,
                 timeout_seconds=0.01,
             )
@@ -562,7 +562,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             smoke_http(
                 base_url=self.server.base_url,
                 expected_product_build="1.0.15.2",
-                expected_host_version="1.1.2",
+                expected_host_version="1.2.0",
                 require_https=False,
                 timeout_seconds=0.01,
             )
@@ -646,7 +646,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             completed.stdout,
             json.dumps(
                 {
-                    "host_version": "1.1.2",
+                    "host_version": "1.2.0",
                     "manifest_sha256": hashlib.sha256(
                         self.fixture.payloads["/host-manifest.json"]
                     ).hexdigest(),
@@ -686,7 +686,7 @@ class DeploymentSmokeTest(unittest.TestCase):
                 str(TOOLS_ROOT / "deployment_smoke.py"),
                 self.server.base_url,
                 "1.0.15.2",
-                "1.1.2",
+                "1.2.0",
                 "--allow-http",
             ],
             check=False,
@@ -699,7 +699,7 @@ class DeploymentSmokeTest(unittest.TestCase):
             json.dumps(
                 {
                     "asset_count": 13,
-                    "host_version": "1.1.2",
+                    "host_version": "1.2.0",
                     "index_sha256": hashlib.sha256(
                         self.fixture.payloads["/index.html"]
                     ).hexdigest(),

@@ -14,10 +14,15 @@
 
 #include <lmdj/audio/runtime_preparation_limits.hpp>
 #include <lmdj/cooker/runtime_snapshot.hpp>
+#include <lmdj/cooker/sample_analysis.hpp>
 #include <lmdj/domain/command_handler.hpp>
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/provider/attempt_store.hpp>
 #include <lmdj/provider/registry.hpp>
+
+namespace lmdj::project_io {
+class ProjectStoragePlatform;
+}
 
 namespace lmdj::facade {
 
@@ -26,6 +31,10 @@ struct ApplicationConfig {
   std::shared_ptr<provider::Registry> providers;
   provider::ProviderPolicy provider_policy;
   provider::TimestampSource timestamp_source;
+  std::optional<audio::RuntimePreparationLimits> runtime_preparation_limits =
+      std::nullopt;
+  std::shared_ptr<project_io::ProjectStoragePlatform> storage_platform =
+      nullptr;
 };
 
 struct RuntimeSnapshotRequest {
@@ -97,6 +106,58 @@ struct ProjectBundleImportIdentity {
   std::uint32_t entry_count;
 };
 
+struct SampleInspectRequest {
+  std::filesystem::path project_path;
+  domain::PadSlotId slot;
+};
+
+struct SampleInspectResult {
+  std::uint64_t project_revision;
+  domain::PadSlotId slot;
+  std::optional<foundation::AssetId> asset_id;
+  domain::PadPlayback playback;
+  std::optional<cooker::WavMetadata> metadata;
+  std::optional<std::string> waveform_cache_identity;
+};
+
+struct SampleWaveformRequest {
+  std::filesystem::path project_path;
+  domain::PadSlotId slot;
+  cooker::WaveformRequest window;
+};
+
+struct SampleMutationResult {
+  std::uint64_t committed_revision;
+  bool runtime_prepare_required;
+};
+
+struct SampleUpdateRequest {
+  std::filesystem::path project_path;
+  domain::CommandMeta meta;
+  domain::PadSlotId slot;
+  domain::PadPlayback playback;
+};
+
+struct SampleResetRequest {
+  std::filesystem::path project_path;
+  domain::CommandMeta meta;
+  domain::PadSlotId slot;
+};
+
+struct SampleImportBeginRequest {
+  std::string import_token;
+  std::filesystem::path project_path;
+  domain::CommandMeta meta;
+  domain::PadSlotId slot;
+  foundation::AssetId asset_id;
+  std::uint64_t byte_length;
+};
+
+struct SampleImportSession {
+  std::string token;
+  std::uint64_t expected_bytes;
+};
+
 class Application {
  public:
   explicit Application(ApplicationConfig config);
@@ -137,6 +198,24 @@ class Application {
       std::string_view token);
   foundation::Result<void> abort_project_bundle_import(
       std::string_view token);
+  foundation::Result<SampleInspectResult> inspect_sample(
+      const SampleInspectRequest& request) const;
+  foundation::Result<cooker::WaveformEnvelope> query_sample_waveform(
+      const SampleWaveformRequest& request);
+  foundation::Result<SampleImportSession> begin_sample_import(
+      const SampleImportBeginRequest& request);
+  foundation::Result<void> append_sample_import(
+      std::string_view token,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes,
+      bool final);
+  foundation::Result<SampleMutationResult> commit_sample_import(
+      std::string_view token);
+  foundation::Result<void> abort_sample_import(std::string_view token);
+  foundation::Result<SampleMutationResult> update_sample_pad(
+      const SampleUpdateRequest& request);
+  foundation::Result<SampleMutationResult> reset_sample_pad(
+      const SampleResetRequest& request);
   foundation::Result<void> append_realtime_take_events(
       const std::filesystem::path& project_path,
       foundation::TakeId take_id,

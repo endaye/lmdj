@@ -44,7 +44,7 @@ function createCreatorRuntimeSession(): CreatorRuntimeSession {
     },
     inputOwnership: "host",
     seams,
-  }) as CreatorRuntimeSession;
+  });
 }
 
 createRoot(root).render(

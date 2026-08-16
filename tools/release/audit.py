@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 from typing import Callable, Iterable, Iterator
 
+from .ci_evidence import verify_exact_main_ci
 from .commands import sanitize_diagnostic
 from .github_api import GitHubAsset, GitHubEnvironment, GitHubRelease
 from .model import (
@@ -470,7 +471,18 @@ def _audit_remote_intent(
     if tag_state is None:
         if release is not None:
             return AuditFinding("conflict", intent.tag, "GitHub Release exists without its exact remote tag")
-        return AuditFinding("ok", intent.tag, "releasable intent has no remote publication state")
+        # An actionable intent with no remote state is exactly the state that
+        # authorizes the next mutation, so its CI evidence is evaluated before
+        # any prospective success is reported. A historical exception cannot
+        # waive it here: an exception explains immutable history and never
+        # satisfies a prospective gate.
+        prospective_problem = _ci_problem(context, intent)
+        if prospective_problem is not None:
+            return prospective_problem
+        return AuditFinding(
+            "ok", intent.tag,
+            "releasable intent has full exact-main CI evidence and no remote publication state",
+        )
 
     problem = _tag_problem(context, intent, tag_state)
     if problem is not None:
@@ -614,24 +626,26 @@ def _component_path(root: Path, kind: str, identifier: str) -> Path:
 
 
 def _ci_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
-    if intent.merged_main_run_id is None:
-        return AuditFinding("unverifiable", intent.tag, "intent has no exact merged-main CI run")
-    try:
-        runs = context.github.list_runs_for_sha(context.policy.repository, intent.target_revision)
-    except Exception:
-        return AuditFinding("external-error", intent.tag, "GitHub Actions run projection is unavailable", ("github-actions",))
-    matching = [run for run in runs if run.id == intent.merged_main_run_id]
-    if len(matching) != 1:
-        return AuditFinding("missing", intent.tag, "recorded merged-main CI run is absent")
-    run = matching[0]
-    if (
-        run.event != "push" or run.head_sha != intent.target_revision
-        or run.head_branch != context.policy.branch
-        or run.workflow_name != context.policy.blocking_workflow
-        or run.status != "completed" or run.conclusion != "success"
-    ):
-        return AuditFinding("conflict", intent.tag, "recorded merged-main CI run does not satisfy policy")
-    return None
+    """Adjudicate the exact merged-main CI evidence one intent still depends on.
+
+    A `releasable` intent is prospective: it can still authorize a tag, a Draft
+    and a publication, so it must hold retained `full` scope evidence for its
+    exact target plus a successful same-run Gate. Every terminal disposition is
+    audited from immutable evidence instead, because a bounded artifact
+    retention must never be able to rewrite recorded history.
+    """
+    result = verify_exact_main_ci(
+        context.github,
+        repository=context.policy.repository,
+        branch=context.policy.branch,
+        workflow=context.policy.blocking_workflow,
+        target_revision=intent.target_revision,
+        run_id=intent.merged_main_run_id,
+        require_full_scope=intent.disposition is Disposition.RELEASABLE,
+    )
+    if result.code == "ok":
+        return None
+    return AuditFinding(result.code, intent.tag, result.message, result.sources)
 
 
 def _pre_pipeline_ci_exception_matches(

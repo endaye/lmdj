@@ -19,7 +19,14 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
 from tools.release.commands import CommandRunner, sanitize_diagnostic  # noqa: E402
-from tools.release.github_api import BranchProjection, RunProjection  # noqa: E402
+from tools.release.github_api import (  # noqa: E402
+    BranchProjection,
+    CiScopeConflictError,
+    CiScopeProjection,
+    CiScopeUnavailableError,
+    RunJobProjection,
+    RunProjection,
+)
 from tools.release.git_repository import GitRepository  # noqa: E402
 from tools.release.target_validation import (  # noqa: E402
     TargetValidationError,
@@ -107,12 +114,40 @@ class FakeGit:
         return self.local_tag
 
 
+# The closed v2 lane and full job identities, written independently of the CI
+# policy file and of the release modules under test.
+LANES = (
+    "chameleon_lab", "ci_contract", "core_asan", "core_coverage", "core_macos",
+    "core_ubuntu", "creator", "deploy_contract", "docs_static", "package",
+    "portal", "web_runtime_host", "web_runtime_lab", "web_toolchain",
+)
+FULL_REQUIRED_JOBS = (
+    "chameleon-lab", "ci-contract", "core-asan", "core-asan-macos",
+    "core-coverage", "core-macos", "core-ubuntu", "creator-web",
+    "deploy-contract", "docs-static", "macos-primary", "package", "portal",
+    "select-macos-runner", "web-runtime-host", "web-runtime-lab",
+    "web-toolchain-conformance",
+)
+
+
 class FakeGitHub:
     def __init__(self, target: str, run_id: int) -> None:
         self.branch = BranchProjection("main", True, target)
         self.runs = [RunProjection(run_id, "push", target, "main", "Core CI", "completed", "success")]
+        self.jobs = [
+            RunJobProjection(1, run_id, "Change Scope", "completed", "success", "Core CI", target),
+            RunJobProjection(2, run_id, "PR Gate", "completed", "success", "Core CI", target),
+        ]
+        self.scope = CiScopeProjection(
+            schema="lmdj.ci-scope.v2", base_sha="b" * 40, head_sha=target,
+            mode="full", trusted_head=True,
+            selected_lanes=tuple(sorted(LANES)),
+            required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+        )
+        self.scope_error: Exception | None = None
         self.remote_mutations: list[str] = []
         self.run_queries = 0
+        self.scope_queries = 0
 
     def get_branch(self, repository: str, branch: str) -> BranchProjection:
         return self.branch
@@ -120,6 +155,15 @@ class FakeGitHub:
     def list_runs_for_sha(self, repository: str, sha: str) -> list[RunProjection]:
         self.run_queries += 1
         return self.runs
+
+    def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]:
+        return list(self.jobs)
+
+    def get_ci_scope_manifest(self, repository: str, run: RunProjection) -> CiScopeProjection:
+        self.scope_queries += 1
+        if self.scope_error is not None:
+            raise self.scope_error
+        return self.scope
 
 
 @dataclass(frozen=True)
@@ -347,6 +391,71 @@ class ReleasePrepareTest(unittest.TestCase):
         with self.assertRaisesRegex(PrepareError, "merged-main"):
             prepare(self.tag, self.context())
 
+    def test_prepare_requires_a_full_exact_main_scope_manifest(self) -> None:
+        cases = {
+            "focused": CiScopeProjection(
+                schema="lmdj.ci-scope.v2", base_sha="b" * 40, head_sha=self.target_sha,
+                mode="focused", trusted_head=True,
+                selected_lanes=("docs_static",), required_jobs=("docs-static",),
+            ),
+            "requested": CiScopeProjection(
+                schema="lmdj.ci-scope.v2", base_sha="b" * 40, head_sha=self.target_sha,
+                mode="requested", trusted_head=True,
+                selected_lanes=tuple(sorted(LANES)),
+                required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+            ),
+            "other head": CiScopeProjection(
+                schema="lmdj.ci-scope.v2", base_sha="b" * 40, head_sha="c" * 40,
+                mode="full", trusted_head=True,
+                selected_lanes=tuple(sorted(LANES)),
+                required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+            ),
+            "untrusted head": CiScopeProjection(
+                schema="lmdj.ci-scope.v2", base_sha="b" * 40, head_sha=self.target_sha,
+                mode="full", trusted_head=False,
+                selected_lanes=tuple(sorted(LANES)),
+                required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+            ),
+        }
+        for name, scope in cases.items():
+            with self.subTest(name=name):
+                self.github = FakeGitHub(self.target_sha, 123)
+                self.github.scope = scope
+                with self.assertRaisesRegex(PrepareError, "merged-main"):
+                    prepare(self.tag, self.context())
+                self.assertIsNone(self.git.local_tag)
+
+    def test_prepare_requires_a_successful_same_run_gate(self) -> None:
+        cases = {
+            "missing gate": [self.github.jobs[0]],
+            "failed gate": [
+                self.github.jobs[0],
+                RunJobProjection(2, 123, "PR Gate", "completed", "failure", "Core CI", self.target_sha),
+            ],
+            "duplicate gate": [
+                *self.github.jobs,
+                RunJobProjection(3, 123, "PR Gate", "completed", "success", "Core CI", self.target_sha),
+            ],
+        }
+        for name, jobs in cases.items():
+            with self.subTest(name=name):
+                self.github = FakeGitHub(self.target_sha, 123)
+                self.github.jobs = jobs
+                with self.assertRaisesRegex(PrepareError, "merged-main"):
+                    prepare(self.tag, self.context())
+
+    def test_prepare_separates_absent_evidence_from_a_transport_outage(self) -> None:
+        for error, expected in (
+            (CiScopeUnavailableError("retained scope evidence is absent"), "retained"),
+            (CiScopeConflictError("scope artifact identity conflicts"), "merged-main"),
+            (TimeoutError("fixture outage"), "unavailable"),
+        ):
+            with self.subTest(error=type(error).__name__):
+                self.github = FakeGitHub(self.target_sha, 123)
+                self.github.scope_error = error
+                with self.assertRaisesRegex(PrepareError, expected):
+                    prepare(self.tag, self.context())
+
     def test_prepare_uses_canonical_authority_documents_instead_of_caller_ledger(self) -> None:
         authority_ledger = self.ledger_fixture("allocated")
         context = self.context()
@@ -389,8 +498,8 @@ class ReleasePrepareTest(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
         ).stdout.strip()
         cases = (
-            (ReleaseKind.PRODUCT, "1.0.21.0", "web-runtime-host", "canary", "1.0.21.0"),
-            (ReleaseKind.MODULE, "core-cli@1.0.11", "source-only", None, None),
+            (ReleaseKind.PRODUCT, "1.0.22.0", "web-runtime-host", "canary", "1.0.22.0"),
+            (ReleaseKind.MODULE, "core-cli@1.0.12", "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
             (ReleaseKind.PROVIDER, "local.proof.success@1.0.2", "source-only", None, None),
         )
@@ -417,8 +526,8 @@ class ReleasePrepareTest(unittest.TestCase):
             )
 
         intent = ReleaseIntent(
-            "fixture", ReleaseKind.PRODUCT, "1.0.21.0", "a" * 40, Disposition.RELEASABLE,
-            "web-runtime-host", ("evidence.md",), "canary", "1.0.21.0", 1,
+            "fixture", ReleaseKind.PRODUCT, "1.0.22.0", "a" * 40, Disposition.RELEASABLE,
+            "web-runtime-host", ("evidence.md",), "canary", "1.0.22.0", 1,
         )
         with self.assertRaises(TargetValidationError) as raised:
             validate_release_target(ROOT, intent, runner=CommandRunner(executor=executor))

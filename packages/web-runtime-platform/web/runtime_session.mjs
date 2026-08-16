@@ -18,6 +18,7 @@ import {
 import { PREFLIGHT_CAPABILITIES, runPreflight } from "./preflight.mjs";
 import {
   HostProtocolError,
+  MAX_ASSET_BYTES,
   createRequestEnvelope,
   deadlineForOperation,
   validateNotificationEnvelope,
@@ -29,6 +30,16 @@ import { createHostStateMachine } from "./state_machine.mjs";
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
+const SAMPLE_PREVIEW_SLOT_LIMIT = 64;
+const VOICE_LISTENER_LIMIT = 64;
+const VOICE_NOTIFICATION_EVENT_LIMIT = 4_096;
+const SAFETY_QUERY_RETRY_LIMIT = 4;
+const SAFETY_INTERRUPTIBLE_HOST_OPERATIONS = new Set([
+  "project.inspect",
+  "project.list",
+  "sample.inspect",
+  "sample.waveform",
+]);
 const TRIGGER_SOURCES = new Set(["pointer", "keyboard", "midi"]);
 const SAFE_ERROR_DETAIL_NAMES = new Set([
   "mutation_outcome",
@@ -36,6 +47,9 @@ const SAFE_ERROR_DETAIL_NAMES = new Set([
   "storage_condition",
   "terminal_state",
 ]);
+const VOICE_STATES = new Set(["started", "stopped", "completed"]);
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const ALLOWED_TYPED_ERROR_CODES = new Set([
   "INVALID_ARGUMENT",
   "NOT_FOUND",
@@ -59,8 +73,8 @@ const ALLOWED_TYPED_ERROR_CODES = new Set([
   "HOST_PROTOCOL_MISMATCH",
 ]);
 
-function typedError(code, message = code) {
-  return new HostProtocolError(code, message, {});
+function typedError(code, message = code, details = {}) {
+  return new HostProtocolError(code, message, details);
 }
 
 function validatedErrorCode(value, fallback = "HOST_STATE_INVALID") {
@@ -103,7 +117,7 @@ function requireFunction(value, name) {
 }
 
 function isPositiveInteger(value) {
-  return Number.isInteger(value) && value > 0;
+  return Number.isSafeInteger(value) && value > 0;
 }
 
 function generationsMatch(status) {
@@ -200,6 +214,402 @@ async function defaultCapabilities(scope) {
   };
 }
 
+function protocolMismatch(message) {
+  return typedError("HOST_PROTOCOL_MISMATCH", message);
+}
+
+function isUnsignedInteger(value, maximum = Number.MAX_SAFE_INTEGER) {
+  return Number.isSafeInteger(value) && value >= 0 && value <= maximum;
+}
+
+function flatSlotAddress(flatSlot) {
+  if (!Number.isInteger(flatSlot) || flatSlot < 0 || flatSlot >= 64) {
+    throw new RangeError("Sample slot must be an integer in 0..63");
+  }
+  return Object.freeze({
+    bank: Math.floor(flatSlot / 16),
+    pad: flatSlot % 16,
+  });
+}
+
+function flatSlotFromAddress(value) {
+  if (
+    !exactKeys(value, ["bank", "pad"]) ||
+    !isUnsignedInteger(value.bank, 3) ||
+    !isUnsignedInteger(value.pad, 15)
+  ) {
+    throw protocolMismatch("Sample slot result is invalid");
+  }
+  return value.bank * 16 + value.pad;
+}
+
+function wirePlayback(value) {
+  if (
+    !exactKeys(value, [
+      "trimStartFrame",
+      "trimEndFrame",
+      "triggerMode",
+      "gainMillidb",
+      "muted",
+    ]) ||
+    !isUnsignedInteger(value.trimStartFrame) ||
+    !(
+      value.trimEndFrame === null ||
+      (isUnsignedInteger(value.trimEndFrame) &&
+        value.trimEndFrame > value.trimStartFrame)
+    ) ||
+    !["one_shot", "gate", "loop_gate", "loop_toggle"].includes(
+      value.triggerMode,
+    ) ||
+    !Number.isSafeInteger(value.gainMillidb) ||
+    value.gainMillidb < -60_000 ||
+    value.gainMillidb > 6_000 ||
+    typeof value.muted !== "boolean"
+  ) {
+    throw new TypeError("Sample playback is invalid");
+  }
+  return Object.freeze({
+    trim_start_frame: value.trimStartFrame,
+    trim_end_frame: value.trimEndFrame,
+    trigger_mode: value.triggerMode,
+    gain_millidb: value.gainMillidb,
+    muted: value.muted,
+  });
+}
+
+function normalizePlayback(value) {
+  if (!exactKeys(value, [
+    "trim_start_frame",
+    "trim_end_frame",
+    "trigger_mode",
+    "gain_millidb",
+    "muted",
+  ])) {
+    throw protocolMismatch("Sample playback result is invalid");
+  }
+  let validated;
+  try {
+    validated = wirePlayback({
+      trimStartFrame: value.trim_start_frame,
+      trimEndFrame: value.trim_end_frame,
+      triggerMode: value.trigger_mode,
+      gainMillidb: value.gain_millidb,
+      muted: value.muted,
+    });
+  } catch {
+    throw protocolMismatch("Sample playback result is invalid");
+  }
+  return Object.freeze({
+    trimStartFrame: validated.trim_start_frame,
+    trimEndFrame: validated.trim_end_frame,
+    triggerMode: validated.trigger_mode,
+    gainMillidb: validated.gain_millidb,
+    muted: validated.muted,
+  });
+}
+
+function normalizeMetadata(value) {
+  if (
+    !exactKeys(value, ["sample_rate", "channels", "source_frames"]) ||
+    ![44_100, 48_000].includes(value.sample_rate) ||
+    ![1, 2].includes(value.channels) ||
+    !isUnsignedInteger(value.source_frames) ||
+    value.source_frames === 0
+  ) {
+    throw protocolMismatch("Sample metadata result is invalid");
+  }
+  return Object.freeze({
+    sampleRate: value.sample_rate,
+    channels: value.channels,
+    sourceFrames: value.source_frames,
+  });
+}
+
+function canonicalWaveformFramesPerBucket(sourceFrames) {
+  return Math.ceil(sourceFrames / Math.min(sourceFrames, 512));
+}
+
+function normalizeWaveformCacheIdentity(value, metadata) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 512) {
+    throw protocolMismatch("Sample waveform cache identity is invalid");
+  }
+  const match = /^([0-9a-f]{64})\/1\/max-abs-mirror\/([1-9][0-9]*)$/.exec(
+    value,
+  );
+  const framesPerBucket = match === null ? NaN : Number(match[2]);
+  if (
+    match === null ||
+    !isUnsignedInteger(framesPerBucket) ||
+    framesPerBucket !== canonicalWaveformFramesPerBucket(metadata.sourceFrames)
+  ) {
+    throw protocolMismatch("Sample waveform cache identity is invalid");
+  }
+  return value;
+}
+
+function normalizeSnapshotError(value) {
+  if (
+    !exactKeys(value, ["code", "message", "details"]) ||
+    !ALLOWED_TYPED_ERROR_CODES.has(value.code) ||
+    typeof value.message !== "string" ||
+    value.message.length === 0 ||
+    value.message.length > 512 ||
+    value.details === null ||
+    typeof value.details !== "object" ||
+    Array.isArray(value.details)
+  ) {
+    throw protocolMismatch("Snapshot error result is invalid");
+  }
+  return Object.freeze({
+    code: value.code,
+    message: value.message,
+    details: Object.freeze({...value.details}),
+  });
+}
+
+function normalizeSampleInspect(value, expectedSlot) {
+  if (
+    !exactKeys(value, [
+      "project_revision",
+      "slot",
+      "asset_id",
+      "playback",
+      "metadata",
+      "waveform_cache_identity",
+    ]) ||
+    !isUnsignedInteger(value.project_revision) ||
+    !(value.asset_id === null ||
+      (typeof value.asset_id === "string" && UUID_PATTERN.test(value.asset_id)))
+  ) {
+    throw protocolMismatch("Sample inspect result is invalid");
+  }
+  const slot = flatSlotFromAddress(value.slot);
+  if (slot !== expectedSlot) {
+    throw protocolMismatch("Sample inspect slot does not match the request");
+  }
+  const metadata = value.metadata === null
+    ? null
+    : normalizeMetadata(value.metadata);
+  if (
+    (value.asset_id === null &&
+      (metadata !== null || value.waveform_cache_identity !== null)) ||
+    (value.asset_id !== null &&
+      (metadata === null || value.waveform_cache_identity === null))
+  ) {
+    throw protocolMismatch("Sample inspect Asset truth is invalid");
+  }
+  return Object.freeze({
+    projectRevision: value.project_revision,
+    slot,
+    assetId: value.asset_id,
+    playback: normalizePlayback(value.playback),
+    metadata,
+    waveformCacheIdentity: metadata === null
+      ? null
+      : normalizeWaveformCacheIdentity(value.waveform_cache_identity, metadata),
+  });
+}
+
+function normalizeWaveform(value, request) {
+  if (
+    !exactKeys(value, [
+      "metadata",
+      "algorithm_version",
+      "buckets",
+      "project_revision",
+    ]) ||
+    !isUnsignedInteger(value.project_revision) ||
+    value.algorithm_version !== 1 ||
+    !Array.isArray(value.buckets) ||
+    value.buckets.length === 0 ||
+    value.buckets.length > request.window.bucketCount
+  ) {
+    throw protocolMismatch("Sample waveform result is invalid");
+  }
+  const metadata = normalizeMetadata(value.metadata);
+  const windowFrames = request.window.endFrame - request.window.startFrame;
+  const framesPerBucket = Math.ceil(
+    windowFrames / request.window.bucketCount,
+  );
+  const expectedBucketCount = Math.ceil(windowFrames / framesPerBucket);
+  if (
+    metadata.sourceFrames < request.window.endFrame ||
+    value.buckets.length !== expectedBucketCount
+  ) {
+    throw protocolMismatch("Sample waveform result is invalid");
+  }
+  const buckets = [];
+  for (const [index, bucket] of value.buckets.entries()) {
+    const expectedStart =
+      request.window.startFrame + index * framesPerBucket;
+    const expectedEnd = Math.min(
+      request.window.endFrame,
+      expectedStart + framesPerBucket,
+    );
+    if (
+      !exactKeys(bucket, ["start_frame", "end_frame", "peak_magnitude"]) ||
+      bucket.start_frame !== expectedStart ||
+      bucket.end_frame !== expectedEnd ||
+      !isUnsignedInteger(bucket.peak_magnitude, 32_768)
+    ) {
+      throw protocolMismatch("Sample waveform bucket is invalid");
+    }
+    buckets.push(Object.freeze({
+      startFrame: bucket.start_frame,
+      endFrame: bucket.end_frame,
+      peakMagnitude: bucket.peak_magnitude,
+    }));
+  }
+  return Object.freeze({
+    metadata,
+    algorithmVersion: value.algorithm_version,
+    buckets: Object.freeze(buckets),
+    projectRevision: value.project_revision,
+  });
+}
+
+function normalizeSampleCommit(value) {
+  const keys = [
+    "committed_revision",
+    "runtime_revision",
+    "runtime_published",
+  ];
+  const published = value?.runtime_published;
+  const hasSnapshotError = Object.hasOwn(value ?? {}, "snapshot_error");
+  if (
+    !exactKeys(value, hasSnapshotError ? [...keys, "snapshot_error"] : keys) ||
+    !isUnsignedInteger(value.committed_revision) ||
+    !(value.runtime_revision === null ||
+      isUnsignedInteger(value.runtime_revision)) ||
+    typeof published !== "boolean" ||
+    (published && hasSnapshotError) ||
+    (published &&
+      (value.runtime_revision === null ||
+        value.runtime_revision < value.committed_revision))
+  ) {
+    throw protocolMismatch("Sample mutation result is invalid");
+  }
+  const snapshotError = hasSnapshotError
+    ? normalizeSnapshotError(value.snapshot_error)
+    : null;
+  return Object.freeze({
+    committedRevision: value.committed_revision,
+    runtimeRevision: value.runtime_revision,
+    runtimePublished: published,
+    snapshotError,
+  });
+}
+
+function normalizeAccepted(value, keys = ["accepted"]) {
+  if (!exactKeys(value, keys) || typeof value.accepted !== "boolean") {
+    throw protocolMismatch("Runtime control result is invalid");
+  }
+  return value.accepted;
+}
+
+function normalizeSnapshotPublication(value, expectedPatternId) {
+  if (
+    !exactKeys(value, [
+      "project_id",
+      "project_revision",
+      "pattern_id",
+      "runtime_ready",
+      "generation",
+      "snapshot_error",
+      "runtime_revision",
+    ]) ||
+    typeof value.project_id !== "string" ||
+    !UUID_PATTERN.test(value.project_id) ||
+    !isUnsignedInteger(value.project_revision) ||
+    value.pattern_id !== expectedPatternId ||
+    typeof value.runtime_ready !== "boolean" ||
+    !(value.runtime_revision === null ||
+      isUnsignedInteger(value.runtime_revision)) ||
+    (value.runtime_ready &&
+      (!isPositiveInteger(value.generation) ||
+        value.runtime_revision === null ||
+        value.runtime_revision !== value.project_revision ||
+        value.snapshot_error !== null)) ||
+    (!value.runtime_ready &&
+      (value.generation !== null ||
+        value.snapshot_error === null ||
+        (value.runtime_revision !== null &&
+          value.runtime_revision > value.project_revision)))
+  ) {
+    throw protocolMismatch("Snapshot publication result is invalid");
+  }
+  return Object.freeze({
+    projectId: value.project_id,
+    projectRevision: value.project_revision,
+    patternId: value.pattern_id,
+    runtimeReady: value.runtime_ready,
+    generation: value.generation,
+    snapshotError: value.snapshot_error === null
+      ? null
+      : normalizeSnapshotError(value.snapshot_error),
+    runtimeRevision: value.runtime_revision,
+  });
+}
+
+function normalizeSnapshotNotification(event, payload) {
+  if (event === "snapshot.published") {
+    const legacy = exactKeys(payload, ["generation"]);
+    const task6 = exactKeys(payload, ["generation", "project_revision"]);
+    if (
+      (!legacy && !task6) ||
+      !isPositiveInteger(payload?.generation) ||
+      (task6 && !isUnsignedInteger(payload.project_revision))
+    ) {
+      throw protocolMismatch("Snapshot published notification is invalid");
+    }
+    return Object.freeze({
+      generation: payload.generation,
+      projectRevision: task6 ? payload.project_revision : null,
+      snapshotError: null,
+      runtimeRevision: null,
+    });
+  }
+
+  const legacy = exactKeys(payload, ["error"]);
+  const task6 = exactKeys(payload, [
+    "project_revision",
+    "runtime_revision",
+    "error",
+  ]);
+  if (
+    (!legacy && !task6) ||
+    (task6 &&
+      (!isUnsignedInteger(payload.project_revision) ||
+        !(payload.runtime_revision === null ||
+          isUnsignedInteger(payload.runtime_revision)) ||
+        (payload.runtime_revision !== null &&
+          payload.runtime_revision > payload.project_revision)))
+  ) {
+    throw protocolMismatch("Snapshot rejected notification is invalid");
+  }
+  return Object.freeze({
+    generation: null,
+    projectRevision: task6 ? payload.project_revision : null,
+    snapshotError: normalizeSnapshotError(payload.error),
+    runtimeRevision: task6 ? payload.runtime_revision : null,
+  });
+}
+
+function abortError(message) {
+  if (typeof DOMException === "function") {
+    return new DOMException(message, "AbortError");
+  }
+  const error = new Error(message);
+  error.name = "AbortError";
+  return error;
+}
+
+function throwIfAborted(signal) {
+  if (signal?.aborted !== true) {
+    return;
+  }
+  throw abortError("Sample import was cancelled");
+}
 function metaContent(document, name) {
   return document
     ?.querySelector?.(`meta[name='${name}']`)
@@ -632,6 +1042,7 @@ function createRuntimeSessionController(options = {}) {
     host_version: assemblyIdentity.hostVersion,
     protocol_version: assemblyIdentity.protocolVersion,
   });
+  let verifiedSampleImportLimit = null;
   let runtime = null;
   let audioContext = null;
   let contextHandle = null;
@@ -657,8 +1068,14 @@ function createRuntimeSessionController(options = {}) {
   let triggerAdmittedCount = 0;
   let triggerOutcomeCount = 0;
   let triggerRejectedCount = 0;
-  let triggerTail = Promise.resolve();
-  let importTail = Promise.resolve();
+  let hostRequestTail = null;
+  let hostQueryGeneration = 0;
+  let activeHostQueryAbort = null;
+  let runtimeActionTail = Promise.resolve();
+  let projectActionTail = Promise.resolve();
+  let interruptionReservation = null;
+  let safetyReservation = null;
+  let fatalReservation = null;
   let capabilitySnapshot = Object.freeze({
     secureContext: false,
     crossOriginIsolated: false,
@@ -675,6 +1092,8 @@ function createRuntimeSessionController(options = {}) {
   const hostStateListeners = new Set();
   const runtimeOutcomeListeners = new Set();
   const diagnosticsListeners = new Set();
+  const voiceStateListeners = new Set();
+  const activePreviewSlots = new Set();
 
   const padBindings = [...(options.padBindings ?? [])];
 
@@ -686,6 +1105,7 @@ function createRuntimeSessionController(options = {}) {
   let pointerAdapter;
   let keyboardAdapter;
   let midiAdapter;
+  let suppressInputRelease = false;
 
   function pressedCount() {
     return (
@@ -715,6 +1135,7 @@ function createRuntimeSessionController(options = {}) {
       recovery_probe_ready:
         machine.state === "recovering" &&
         recoveryEpoch?.probeWindow === true &&
+        safetyReservation === null &&
         probeReservation === null,
       trigger_admitted_count: triggerAdmittedCount,
       trigger_outcome_count: triggerOutcomeCount,
@@ -734,11 +1155,81 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function clearPressed() {
-    pointerAdapter?.clearPressed();
-    keyboardAdapter?.clearPressed();
-    midiAdapter?.clearPressed();
+    suppressInputRelease = true;
+    try {
+      pointerAdapter?.clearPressed();
+      keyboardAdapter?.clearPressed();
+      midiAdapter?.clearPressed();
+    } finally {
+      suppressInputRelease = false;
+    }
     options.onPressedChange?.([]);
     renderDiagnostics();
+  }
+
+  async function clearOwnedPreviews(onlySlot = null, bestEffort = false) {
+    const selected = onlySlot === null
+      ? [...activePreviewSlots]
+      : activePreviewSlots.has(onlySlot) ? [onlySlot] : [];
+    for (const flatSlot of selected) {
+      activePreviewSlots.delete(flatSlot);
+      const slot = flatSlotAddress(flatSlot);
+      try {
+        normalizeAccepted(await boundedRequest(
+          "sample.preview.clear",
+          {slot},
+        ));
+      } catch (error) {
+        if (!bestEffort) {
+          throw error;
+        }
+        // Safety and cancellation clear local preview ownership fail closed.
+      }
+    }
+  }
+
+  function clearPreviewsForCancellation(onlySlot = null) {
+    void serializeRuntimeAction(() =>
+      clearOwnedPreviews(onlySlot, true)).catch(() => {});
+  }
+
+  async function stopAllInRuntimeLane(bestEffort = false) {
+    try {
+      const result = await boundedRequest("sample.stop", {});
+      if (result?.scope !== "all") {
+        throw protocolMismatch("Sample stop scope is invalid");
+      }
+      return normalizeAccepted(result, ["accepted", "scope"]);
+    } catch (error) {
+      if (!bestEffort) {
+        throw error;
+      }
+      return false;
+    }
+  }
+
+  function beginSafetyCleanup(reason) {
+    if (safetyReservation !== null) {
+      return safetyReservation;
+    }
+    hostQueryGeneration += 1;
+    activeHostQueryAbort?.abort();
+    const reservation = {reason, promise: null};
+    safetyReservation = reservation;
+    reservation.promise = serializeRuntimeAction(async () => {
+      await clearOwnedPreviews(null, true);
+      return stopAllInRuntimeLane(true);
+    });
+    Object.freeze(reservation);
+    clearPressed();
+    return reservation;
+  }
+
+  function releaseSafetyReservation(reservation) {
+    if (safetyReservation === reservation && !closing) {
+      safetyReservation = null;
+      renderDiagnostics();
+    }
   }
 
   function cleanupForTransition(targetState) {
@@ -783,6 +1274,8 @@ function createRuntimeSessionController(options = {}) {
     unsubscribeTransport = null;
     unsubscribeTransportFailure?.();
     unsubscribeTransportFailure = null;
+    activePreviewSlots.clear();
+    voiceStateListeners.clear();
     for (const dispose of listenerDisposers.splice(0)) {
       dispose();
     }
@@ -797,24 +1290,41 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function fail(codeOrError) {
-    if (["restart-required", "failed", "closed"].includes(machine.state)) {
+    if (
+      fatalReservation !== null ||
+      ["restart-required", "failed", "closed"].includes(machine.state)
+    ) {
       return false;
     }
-    lastErrorCode =
+    const code =
       typeof codeOrError === "string"
         ? validatedErrorCode(codeOrError)
         : errorCode(codeOrError);
+    lastErrorCode = code;
     lastErrorDetails =
       typeof codeOrError === "string"
         ? Object.freeze({})
         : safeErrorDetails(codeOrError);
     closing = true;
-    machine.transition(
-      ["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(lastErrorCode)
-        ? "restart-required"
-        : "failed",
-      {reason: lastErrorCode},
-    );
+    const target = ["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(code)
+      ? "restart-required"
+      : "failed";
+    const safety = beginSafetyCleanup(`fatal:${code}`);
+    const reservation = Object.freeze({code, safety, target});
+    fatalReservation = reservation;
+    void safety.promise.then(() => {
+      if (
+        fatalReservation !== reservation ||
+        ["restart-required", "failed", "closed"].includes(machine.state)
+      ) {
+        return;
+      }
+      invalidateProbe();
+      machine.transition(target, {reason: code});
+      renderDiagnostics();
+    }).catch(() => {
+      // The best-effort safety lane absorbs Host cleanup failures.
+    });
     renderDiagnostics();
     return true;
   }
@@ -827,13 +1337,19 @@ function createRuntimeSessionController(options = {}) {
     listenerDisposers.push(() => target.removeEventListener(type, listener));
   }
 
-  async function boundedRequest(operation, payload, requestOptions = {}) {
+  async function dispatchBoundedRequest(operation, payload, requestOptions = {}) {
     const request = createRequestEnvelope({ operation, payload, crypto });
     const transportOptions = {
       deadlineMs: requestOptions.deadlineMs ?? deadlineForOperation(operation),
     };
     if (requestOptions.sidecar !== undefined) {
       transportOptions.sidecar = requestOptions.sidecar;
+    }
+    if (requestOptions.signal !== undefined) {
+      transportOptions.signal = requestOptions.signal;
+    }
+    if (requestOptions.cancelQuery === true) {
+      transportOptions.cancelQuery = true;
     }
     const response = validateResponseEnvelope(
       await transport.send(request, transportOptions),
@@ -844,9 +1360,112 @@ function createRuntimeSessionController(options = {}) {
       );
     }
     if (!response.ok) {
-      throw typedError(response.error.code, "Host request was rejected");
+      throw typedError(
+        validatedErrorCode(response.error.code, "HOST_PROTOCOL_MISMATCH"),
+        "Host request was rejected",
+        Object.freeze({...response.error.details}),
+      );
     }
     return response.result;
+  }
+
+  function boundedRequest(operation, payload, requestOptions = {}) {
+    const interruptible = SAFETY_INTERRUPTIBLE_HOST_OPERATIONS.has(operation);
+    const queryGeneration = hostQueryGeneration;
+    const action = async () => {
+      if (interruptible && queryGeneration !== hostQueryGeneration) {
+        throw abortError("Host query was cancelled for Runtime safety");
+      }
+      if (!interruptible) {
+        return dispatchBoundedRequest(operation, payload, requestOptions);
+      }
+      const controller = new AbortController();
+      activeHostQueryAbort = controller;
+      try {
+        return await dispatchBoundedRequest(operation, payload, {
+          ...requestOptions,
+          signal: controller.signal,
+          cancelQuery: true,
+        });
+      } finally {
+        if (activeHostQueryAbort === controller) activeHostQueryAbort = null;
+      }
+    };
+    const pending = hostRequestTail === null
+      ? action()
+      : hostRequestTail.then(action);
+    const completion = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    hostRequestTail = completion;
+    void completion.then(() => {
+      if (hostRequestTail === completion) hostRequestTail = null;
+    });
+    return pending;
+  }
+
+  async function recoverableQuery(operation, payload) {
+    for (let attempt = 0; attempt < SAFETY_QUERY_RETRY_LIMIT; ++attempt) {
+      const queryGeneration = hostQueryGeneration;
+      try {
+        return await boundedRequest(operation, payload);
+      } catch (error) {
+        const safety = safetyReservation;
+        if (
+          error?.name !== "AbortError" ||
+          queryGeneration === hostQueryGeneration ||
+          safety === null ||
+          closing ||
+          ["restart-required", "failed", "closed"].includes(machine.state)
+        ) {
+          throw error;
+        }
+        try {
+          await safety.promise;
+        } catch {
+          throw error;
+        }
+        if (
+          closing ||
+          ["restart-required", "failed", "closed"].includes(machine.state)
+        ) {
+          throw error;
+        }
+      }
+    }
+    throw typedError(
+      "HOST_TIMEOUT",
+      "Host query could not recover after Runtime safety",
+    );
+  }
+
+  /**
+   * @template T
+   * @param {() => T} action
+   * @returns {Promise<Awaited<T>>}
+   */
+  function serializeRuntimeAction(action) {
+    const pending = runtimeActionTail.then(action);
+    runtimeActionTail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
+  }
+
+  /**
+   * @template T
+   * @param {() => T} action
+   * @returns {Promise<Awaited<T>>}
+   */
+  function serializeProjectAction(action) {
+    const pending = projectActionTail.then(action);
+    projectActionTail = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
 
   function retainAdmission(sequence, epochId, isProbe) {
@@ -874,6 +1493,17 @@ function createRuntimeSessionController(options = {}) {
     return false;
   }
 
+  /**
+   * @param {number} flatSlot
+   * @param {number} velocity
+   * @param {"pointer" | "keyboard" | "midi"} source
+   * @returns {Promise<false | Readonly<{
+   *   sequence: number,
+   *   slot: number,
+   *   velocity: number,
+   *   source: "pointer" | "keyboard" | "midi",
+   * }>>}
+   */
   async function dispatchTrigger(flatSlot, velocity, source) {
     if (
       !Number.isInteger(flatSlot) ||
@@ -883,7 +1513,9 @@ function createRuntimeSessionController(options = {}) {
       velocity < 1 ||
       velocity > 127 ||
       !TRIGGER_SOURCES.has(source) ||
-      closing
+      closing ||
+      interruptionReservation !== null ||
+      safetyReservation !== null
     ) {
       return rejectTrigger();
     }
@@ -920,7 +1552,9 @@ function createRuntimeSessionController(options = {}) {
             recoveryEpoch?.id === admissionEpoch &&
             probeReservation?.epochId === admissionEpoch
           )
-        : !closing && machine.state === "running";
+        : !closing &&
+          interruptionReservation === null &&
+          machine.state === "running";
       if (!responseIsCurrent) {
         return false;
       }
@@ -950,13 +1584,8 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function trigger(flatSlot, velocity, source = "pointer") {
-    const pending = triggerTail.then(() =>
+    return serializeRuntimeAction(() =>
       dispatchTrigger(flatSlot, velocity, source));
-    triggerTail = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return pending;
   }
 
   function completeRecovery(status) {
@@ -1017,10 +1646,14 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function beginInterruption(reason) {
-    if (closing || machine.state === "failed" || machine.state === "closed") {
+    if (
+      closing ||
+      interruptionReservation !== null ||
+      machine.state === "failed" ||
+      machine.state === "closed"
+    ) {
       return false;
     }
-    clearPressed();
 
     const isNewRunningEdge = machine.state === "running";
     const isNewRecoveryEdge =
@@ -1028,38 +1661,45 @@ function createRuntimeSessionController(options = {}) {
     if (!isNewRunningEdge && !isNewRecoveryEdge) {
       return false;
     }
-
-    invalidateProbe();
-    machine.transition("interrupted", { reason });
-    const epoch = {
-      id: nextRecoveryEpoch,
-      contextUsable: audioContext?.state === "running",
-      suspendComplete: false,
-      activationStarted: false,
-      probeWindow: false,
-    };
-    nextRecoveryEpoch += 1;
-    recoveryEpoch = epoch;
-
-    boundedRequest("audio.suspend", {}).then(
-      () => {
-        if (recoveryEpoch !== epoch || closing) {
-          return;
-        }
-        epoch.suspendComplete = true;
-        if (machine.state === "interrupted") {
-          machine.transition("recovering", { reason: "recovery_started" });
-        }
-        if (audioContext?.state === "running") {
-          activateRuntimeForRecovery(epoch);
-        } else if (machine.state === "recovering") {
-          machine.transition("audio-suspended", {
-            reason: "recovery_gesture_required",
-          });
-        }
-      },
-      (error) => fail(error),
-    );
+    const reservation = Object.freeze({reason});
+    interruptionReservation = reservation;
+    const safety = beginSafetyCleanup(`interruption:${reason}`);
+    void safety.promise.then(async () => {
+      if (closing || interruptionReservation !== reservation) {
+        return;
+      }
+      invalidateProbe();
+      machine.transition("interrupted", { reason });
+      const epoch = {
+        id: nextRecoveryEpoch,
+        contextUsable: audioContext?.state === "running",
+        suspendComplete: false,
+        activationStarted: false,
+        probeWindow: false,
+      };
+      nextRecoveryEpoch += 1;
+      recoveryEpoch = epoch;
+      await boundedRequest("audio.suspend", {});
+      if (recoveryEpoch !== epoch || closing) {
+        return;
+      }
+      epoch.suspendComplete = true;
+      if (machine.state === "interrupted") {
+        machine.transition("recovering", { reason: "recovery_started" });
+      }
+      if (audioContext?.state === "running") {
+        await activateRuntimeForRecovery(epoch);
+      } else if (machine.state === "recovering") {
+        machine.transition("audio-suspended", {
+          reason: "recovery_gesture_required",
+        });
+      }
+    }).catch((error) => fail(error)).finally(() => {
+      if (interruptionReservation === reservation) {
+        interruptionReservation = null;
+      }
+      releaseSafetyReservation(safety);
+    });
     return true;
   }
 
@@ -1068,7 +1708,8 @@ function createRuntimeSessionController(options = {}) {
       condition === "audio_statechange"
         ? activeAdverseConditions.has(condition)
         : activeAdverseConditions.has("visibilitychange") ||
-          activeAdverseConditions.has("pagehide");
+          activeAdverseConditions.has("pagehide") ||
+          activeAdverseConditions.has("blur");
     activeAdverseConditions.add(condition);
     return !hadActiveCondition;
   }
@@ -1122,6 +1763,19 @@ function createRuntimeSessionController(options = {}) {
       activeAdverseConditions.delete("visibilitychange");
       renderDiagnostics();
     }
+  }
+
+  function observeBlur() {
+    if (markAdverseCondition("blur")) {
+      beginInterruption("blur");
+    } else {
+      clearPressed();
+    }
+  }
+
+  function observeFocus() {
+    activeAdverseConditions.delete("blur");
+    renderDiagnostics();
   }
 
   function observePageShow() {
@@ -1207,6 +1861,54 @@ function createRuntimeSessionController(options = {}) {
     renderDiagnostics();
   }
 
+  function observeVoiceStates(payload) {
+    if (
+      !exactKeys(payload, ["events"]) ||
+      !Array.isArray(payload.events) ||
+      payload.events.length === 0 ||
+      payload.events.length > VOICE_NOTIFICATION_EVENT_LIMIT
+    ) {
+      fail("HOST_PROTOCOL_MISMATCH");
+      return;
+    }
+    const events = [];
+    for (const event of payload.events) {
+      if (
+        !exactKeys(event, [
+          "sequence",
+          "slot",
+          "state",
+          "runtime_frame",
+          "source_frame",
+        ]) ||
+        !isPositiveInteger(event.sequence) ||
+        !isUnsignedInteger(event.slot, 63) ||
+        !VOICE_STATES.has(event.state) ||
+        !isUnsignedInteger(event.runtime_frame) ||
+        !isUnsignedInteger(event.source_frame)
+      ) {
+        fail("HOST_PROTOCOL_MISMATCH");
+        return;
+      }
+      events.push(Object.freeze({
+        sequence: event.sequence,
+        slot: event.slot,
+        state: event.state,
+        runtimeFrame: event.runtime_frame,
+        sourceFrame: event.source_frame,
+      }));
+    }
+    for (const event of events) {
+      for (const listener of voiceStateListeners) {
+        try {
+          listener(event);
+        } catch {
+          // A render listener cannot corrupt the authoritative Voice stream.
+        }
+      }
+    }
+  }
+
   function observeNotification(rawNotification) {
     let notification;
     try {
@@ -1217,6 +1919,10 @@ function createRuntimeSessionController(options = {}) {
     }
     if (notification.event === "runtime.trigger_outcomes") {
       observeOutcomes(notification.payload.events);
+      return;
+    }
+    if (notification.event === "runtime.voice_state") {
+      observeVoiceStates(notification.payload);
       return;
     }
     if (notification.event === "runtime.warning") {
@@ -1230,8 +1936,23 @@ function createRuntimeSessionController(options = {}) {
       }
       return;
     }
-    if (notification.event === "snapshot.published") {
-      controlGeneration = notification.payload?.generation ?? controlGeneration;
+    if (
+      notification.event === "snapshot.published" ||
+      notification.event === "snapshot.rejected"
+    ) {
+      let snapshot;
+      try {
+        snapshot = normalizeSnapshotNotification(
+          notification.event,
+          notification.payload,
+        );
+      } catch (error) {
+        fail(error);
+        return;
+      }
+      if (notification.event === "snapshot.published") {
+        controlGeneration = snapshot.generation;
+      }
     }
     renderDiagnostics();
   }
@@ -1339,13 +2060,21 @@ function createRuntimeSessionController(options = {}) {
   }
 
   async function suspendAudio() {
-    if (closing || machine.state !== "running") {
+    if (
+      closing ||
+      safetyReservation !== null ||
+      machine.state !== "running"
+    ) {
       return false;
     }
-    machine.handleOperation("audio.suspend");
-    clearPressed();
-    expectedContextSuspend = true;
+    const safety = beginSafetyCleanup("audio.suspend");
     try {
+      await safety.promise;
+      if (closing || machine.state !== "running") {
+        return false;
+      }
+      machine.handleOperation("audio.suspend");
+      expectedContextSuspend = true;
       await Promise.all([
         boundedRequest("audio.suspend", {}),
         audioContext?.suspend?.() ?? Promise.resolve(),
@@ -1354,6 +2083,8 @@ function createRuntimeSessionController(options = {}) {
     } catch (error) {
       fail(error);
       return false;
+    } finally {
+      releaseSafetyReservation(safety);
     }
   }
 
@@ -1389,26 +2120,356 @@ function createRuntimeSessionController(options = {}) {
     return () => runtimeOutcomeListeners.delete(listener);
   }
 
-  async function openProject(projectId, patternId, requestOptions = {}) {
-    return boundedRequest("project.open", {
+  function subscribeVoiceState(listener) {
+    requireFunction(listener, "Voice state listener");
+    if (voiceStateListeners.size >= VOICE_LISTENER_LIMIT) {
+      throw typedError(
+        "WEB_RUNTIME_RESOURCE_LIMIT",
+        "Voice state listener limit reached",
+        {limit: VOICE_LISTENER_LIMIT},
+      );
+    }
+    voiceStateListeners.add(listener);
+    let subscribed = true;
+    return () => {
+      if (!subscribed) {
+        return false;
+      }
+      subscribed = false;
+      return voiceStateListeners.delete(listener);
+    };
+  }
+
+  function openProject(projectId, patternId, requestOptions = {}) {
+    return serializeProjectAction(() => boundedRequest("project.open", {
       project_id: projectId,
       pattern_id: patternId,
-    }, requestOptions);
+    }, requestOptions));
   }
 
   async function inspectProject() {
-    return boundedRequest("project.inspect", {});
+    return recoverableQuery("project.inspect", {});
   }
 
   async function reloadSnapshot(patternId) {
     return boundedRequest("snapshot.reload", {pattern_id: patternId});
   }
 
+  async function inspectSample(flatSlot) {
+    const slot = flatSlotAddress(flatSlot);
+    const result = await recoverableQuery("sample.inspect", {slot});
+    return normalizeSampleInspect(result, flatSlot);
+  }
+
+  async function queryWaveform(request) {
+    if (
+      !exactKeys(request, ["slot", "window"]) ||
+      !exactKeys(request.window, [
+        "startFrame",
+        "endFrame",
+        "bucketCount",
+      ]) ||
+      !isUnsignedInteger(request.window.startFrame) ||
+      !isUnsignedInteger(request.window.endFrame) ||
+      request.window.startFrame >= request.window.endFrame ||
+      !isUnsignedInteger(request.window.bucketCount, 512) ||
+      request.window.bucketCount === 0
+    ) {
+      throw new TypeError("Sample waveform query is invalid");
+    }
+    const result = await recoverableQuery("sample.waveform", {
+      slot: flatSlotAddress(request.slot),
+      window: {
+        start_frame: request.window.startFrame,
+        end_frame: request.window.endFrame,
+        bucket_count: request.window.bucketCount,
+      },
+    });
+    return normalizeWaveform(result, request);
+  }
+
+  function updatePad(request) {
+    if (
+      !exactKeys(request, ["slot", "expectedRevision", "playback"]) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Sample update request is invalid"));
+    }
+    let slot;
+    let playback;
+    try {
+      slot = flatSlotAddress(request.slot);
+      playback = wirePlayback(request.playback);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeProjectAction(async () => normalizeSampleCommit(
+      await boundedRequest("sample.update_pad", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        slot,
+        playback,
+      }),
+    ));
+  }
+
+  function resetPad(request) {
+    if (
+      !exactKeys(request, ["slot", "expectedRevision"]) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Sample reset request is invalid"));
+    }
+    let slot;
+    try {
+      slot = flatSlotAddress(request.slot);
+    } catch (error) {
+      return Promise.reject(error);
+    }
+    return serializeProjectAction(async () => normalizeSampleCommit(
+      await boundedRequest("sample.reset_pad", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        slot,
+      }),
+    ));
+  }
+
+  function importAssignSample(file, importOptions = {}) {
+    return serializeProjectAction(async () => {
+      const allowedKeys = ["slot", "expectedRevision", "signal", "onProgress"];
+      if (
+        importOptions === null ||
+        typeof importOptions !== "object" ||
+        Array.isArray(importOptions) ||
+        Object.keys(importOptions).some((key) => !allowedKeys.includes(key)) ||
+        !Object.hasOwn(importOptions, "slot") ||
+        !Object.hasOwn(importOptions, "expectedRevision") ||
+        !isUnsignedInteger(importOptions.expectedRevision)
+      ) {
+        throw new TypeError("Sample import options are invalid");
+      }
+      const slot = flatSlotAddress(importOptions.slot);
+      const signal = importOptions.signal;
+      const onProgress = importOptions.onProgress ?? (() => {});
+      if (typeof onProgress !== "function") {
+        throw new TypeError("Sample import progress observer must be a function");
+      }
+      throwIfAborted(signal);
+      if (
+        typeof file?.slice !== "function" ||
+        !isUnsignedInteger(file.size) ||
+        file.size === 0
+      ) {
+        throw typedError("UNSUPPORTED_AUDIO", "Sample source is invalid");
+      }
+      if (verifiedSampleImportLimit === null) {
+        throw typedError(
+          "HOST_STATE_INVALID",
+          "Verified Sample import limits are unavailable",
+        );
+      }
+      if (file.size > verifiedSampleImportLimit) {
+        throw typedError(
+          "WEB_RUNTIME_RESOURCE_LIMIT",
+          "Sample source exceeds the Web Runtime limit",
+          {limit: verifiedSampleImportLimit, observed: file.size},
+        );
+      }
+      const totalBytes = file.size;
+      const importToken = crypto.randomUUID();
+      const commandId = crypto.randomUUID();
+      const assetId = crypto.randomUUID();
+      let beginAttempted = false;
+      let committed = false;
+      let abortAttempted = false;
+      const report = (completedBytes) => {
+        try {
+          onProgress(Object.freeze({completedBytes, totalBytes}));
+        } catch {
+          // Progress observers cannot change the authoritative import outcome.
+        }
+      };
+      const abortOnce = async () => {
+        if (!beginAttempted || committed || abortAttempted) {
+          return;
+        }
+        abortAttempted = true;
+        const aborted = await boundedRequest("sample.import.abort", {
+          import_token: importToken,
+        });
+        if (!exactKeys(aborted, ["aborted"]) || aborted.aborted !== true) {
+          throw protocolMismatch("Sample import abort result is invalid");
+        }
+      };
+
+      report(0);
+      try {
+        throwIfAborted(signal);
+        beginAttempted = true;
+        const begun = await boundedRequest("sample.import.begin", {
+          import_token: importToken,
+          command_id: commandId,
+          expected_revision: importOptions.expectedRevision,
+          slot,
+          asset_id: assetId,
+          byte_length: totalBytes,
+        }, {signal});
+        if (
+          !exactKeys(begun, ["token", "expected_bytes"]) ||
+          begun.token !== importToken ||
+          begun.expected_bytes !== totalBytes
+        ) {
+          throw protocolMismatch("Sample import session result is invalid");
+        }
+
+        let offset = 0;
+        while (offset < totalBytes) {
+          throwIfAborted(signal);
+          const end = Math.min(offset + MAX_ASSET_BYTES, totalBytes);
+          const part = file.slice(offset, end);
+          if (typeof part?.arrayBuffer !== "function") {
+            throw typedError("UNSUPPORTED_AUDIO", "Sample source cannot be read");
+          }
+          const bytes = new Uint8Array(await part.arrayBuffer());
+          if (bytes.byteLength !== end - offset) {
+            throw typedError("UNSUPPORTED_AUDIO", "Sample source ended unexpectedly");
+          }
+          throwIfAborted(signal);
+          const final = end === totalBytes;
+          const appended = await boundedRequest("sample.import.chunk", {
+            import_token: importToken,
+            offset,
+            final,
+            sidecar: {
+              sidecar_bytes: bytes.byteLength,
+              sidecar_sha256: await sha256Hex(bytes, crypto),
+            },
+          }, {sidecar: bytes, signal});
+          if (
+            !exactKeys(appended, ["received_bytes", "final"]) ||
+            appended.received_bytes !== end ||
+            appended.final !== final
+          ) {
+            throw protocolMismatch("Sample import chunk result is invalid");
+          }
+          offset = end;
+          report(offset);
+        }
+        throwIfAborted(signal);
+        const result = normalizeSampleCommit(await boundedRequest(
+          "sample.import.commit",
+          {import_token: importToken},
+          {signal},
+        ));
+        committed = true;
+        return result;
+      } catch (error) {
+        try {
+          await abortOnce();
+        } catch (abortError) {
+          if (errorCode(abortError) === "HOST_PROTOCOL_MISMATCH") {
+            fail(abortError);
+          }
+          // The primary failure or cancellation remains authoritative.
+        }
+        throw error;
+      }
+    });
+  }
+
+  async function setSamplePreview(flatSlot, playback) {
+    const slot = flatSlotAddress(flatSlot);
+    const encoded = wirePlayback(playback);
+    if (closing || safetyReservation !== null) {
+      return false;
+    }
+    return serializeRuntimeAction(async () => {
+      const accepted = normalizeAccepted(await boundedRequest(
+        "sample.preview.set",
+        {slot, playback: encoded},
+      ));
+      if (accepted) {
+        if (
+          !activePreviewSlots.has(flatSlot) &&
+          activePreviewSlots.size >= SAMPLE_PREVIEW_SLOT_LIMIT
+        ) {
+          throw typedError(
+            "WEB_RUNTIME_RESOURCE_LIMIT",
+            "Sample preview slot limit reached",
+            {limit: SAMPLE_PREVIEW_SLOT_LIMIT},
+          );
+        }
+        activePreviewSlots.add(flatSlot);
+      }
+      return accepted;
+    });
+  }
+
+  async function clearSamplePreview(flatSlot) {
+    const slot = flatSlotAddress(flatSlot);
+    return serializeRuntimeAction(async () => {
+      if (!activePreviewSlots.has(flatSlot)) {
+        return false;
+      }
+      const accepted = normalizeAccepted(await boundedRequest(
+        "sample.preview.clear",
+        {slot},
+      ));
+      if (accepted) {
+        activePreviewSlots.delete(flatSlot);
+      }
+      return accepted;
+    });
+  }
+
+  async function release(flatSlot, source) {
+    flatSlotAddress(flatSlot);
+    if (!TRIGGER_SOURCES.has(source)) {
+      throw new TypeError("Runtime release source is invalid");
+    }
+    return serializeRuntimeAction(async () => normalizeAccepted(
+      await boundedRequest("trigger", {slot: flatSlot, kind: "release"}),
+    ));
+  }
+
+  async function stopPad(flatSlot) {
+    const slot = flatSlotAddress(flatSlot);
+    return serializeRuntimeAction(async () => {
+      const result = await boundedRequest("sample.stop", {slot});
+      if (result?.scope !== "slot") {
+        throw protocolMismatch("Sample stop scope is invalid");
+      }
+      return normalizeAccepted(result, ["accepted", "scope"]);
+    });
+  }
+
+  async function stopAll() {
+    return serializeRuntimeAction(() => stopAllInRuntimeLane());
+  }
+
+  function retryPrepare(patternId) {
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest(
+        "snapshot.retry",
+        {pattern_id: patternId},
+      );
+      try {
+        return normalizeSnapshotPublication(value, patternId);
+      } catch (error) {
+        if (errorCode(error) === "HOST_PROTOCOL_MISMATCH") {
+          fail(error);
+        }
+        throw error;
+      }
+    });
+  }
+
   async function listLocalProjects() {
     if (closing || !started) {
       throw typedError("HOST_STATE_INVALID", "Project discovery is unavailable");
     }
-    const result = await boundedRequest("project.list", {});
+    const result = await recoverableQuery("project.list", {});
     if (!exactKeys(result, ["projects"]) || !Array.isArray(result.projects)) {
       throw typedError(
         "HOST_PROTOCOL_MISMATCH",
@@ -1420,7 +2481,7 @@ function createRuntimeSessionController(options = {}) {
   }
 
   function importProject(file, importOptions = {}) {
-    const pending = importTail.then(async () => {
+    return serializeProjectAction(async () => {
       if (closing || !started) {
         throw typedError("HOST_STATE_INVALID", "Project import is unavailable");
       }
@@ -1449,11 +2510,6 @@ function createRuntimeSessionController(options = {}) {
         },
       });
     });
-    importTail = pending.then(
-      () => undefined,
-      () => undefined,
-    );
-    return pending;
   }
 
   async function close() {
@@ -1465,9 +2521,10 @@ function createRuntimeSessionController(options = {}) {
       return false;
     }
     closing = true;
-    clearPressed();
     invalidateProbe();
+    const safety = beginSafetyCleanup("host.close");
     try {
+      await safety.promise;
       await boundedRequest("host.close", {});
       machine.transition("closed", { reason: "pagehide" });
       await terminalCleanup();
@@ -1483,17 +2540,45 @@ function createRuntimeSessionController(options = {}) {
     if (inputOwnership !== "session") {
       return;
     }
+    const hasPointerIdentity = (event) => Number.isInteger(event?.pointerId);
+    const inputAvailable = () =>
+      !closing &&
+      interruptionReservation === null &&
+      safetyReservation === null &&
+      (
+        machine.state === "running" ||
+        (
+          machine.state === "recovering" &&
+          recoveryEpoch?.probeWindow === true &&
+          probeReservation === null
+        )
+      );
+    const releaseInput = (flatSlot, source) => {
+      if (suppressInputRelease) {
+        return;
+      }
+      void release(flatSlot, source).catch(() => {});
+    };
+    const cancelInput = (flatSlot, source) => {
+      void release(flatSlot, source).catch(() => {});
+      clearPreviewsForCancellation(flatSlot);
+    };
     pointerAdapter = createPointerAdapter({
       trigger,
       velocity: options.pointerVelocity ?? 100,
       now: monotonicNow,
+      isAvailable: inputAvailable,
       onPressedChange: renderPressed,
+      onRelease: releaseInput,
+      onCancel: cancelInput,
     });
     keyboardAdapter = createKeyboardAdapter({
       trigger,
       mapping: options.keyboardMapping ?? DEFAULT_KEYBOARD_MAPPING,
       velocity: options.keyboardVelocity ?? 100,
+      isAvailable: inputAvailable,
       onPressedChange: renderDiagnostics,
+      onRelease: releaseInput,
     });
     midiAdapter = createMidiAdapter({
       trigger,
@@ -1507,7 +2592,9 @@ function createRuntimeSessionController(options = {}) {
       noteStart: options.midiNoteStart ?? 36,
       slotStart: options.midiSlotStart ?? 0,
       slotCount: options.midiSlotCount ?? 64,
+      isAvailable: inputAvailable,
       onPressedChange: renderDiagnostics,
+      onRelease: releaseInput,
     });
 
     for (const binding of padBindings) {
@@ -1518,7 +2605,10 @@ function createRuntimeSessionController(options = {}) {
       listen(pad, "mousedown", (event) =>
         pointerAdapter.mouseDown(event, flatSlot));
       listen(pad, "pointerup", (event) => {
-        if (!pointerAdapter.releasePointer(event)) {
+        if (
+          !pointerAdapter.releasePointer(event) &&
+          !hasPointerIdentity(event)
+        ) {
           pointerAdapter.pointerUp(event, flatSlot);
         }
       });
@@ -1528,19 +2618,30 @@ function createRuntimeSessionController(options = {}) {
         }
       });
       listen(pad, "pointercancel", (event) => {
-        pointerAdapter.pointerCancel(event);
-        pointerAdapter.pointerUp(event, flatSlot);
+        if (
+          !pointerAdapter.pointerCancel(event) &&
+          !hasPointerIdentity(event)
+        ) {
+          pointerAdapter.pointerUp(event, flatSlot);
+        }
       });
     }
     listen(window, "pointerup", (event) => pointerAdapter.releasePointer(event));
     listen(window, "pointercancel", (event) => pointerAdapter.pointerCancel(event));
     listen(window, "mouseup", (event) => pointerAdapter.releaseMouse(event));
-    listen(window, "blur", () => pointerAdapter.clearPressed());
-    listen(window, "keydown", (event) => keyboardAdapter.keyDown(event));
+    listen(window, "keydown", (event) => {
+      if (event?.code === "Escape") {
+        clearPreviewsForCancellation();
+        return;
+      }
+      keyboardAdapter.keyDown(event);
+    });
     listen(window, "keyup", (event) => keyboardAdapter.keyUp(event));
   }
 
   function wireLifecycle() {
+    listen(window, "blur", observeBlur);
+    listen(window, "focus", observeFocus);
     listen(document, "visibilitychange", () =>
       observeVisibility(document.visibilityState === "hidden"));
     listen(window, "pagehide", (event) => observePageHide(event));
@@ -1580,6 +2681,15 @@ function createRuntimeSessionController(options = {}) {
       ) {
         throw typedError("HOST_PROTOCOL_MISMATCH", "Manifest identity is invalid");
       }
+      const importedWavBytes =
+        manifestSource?.resourceLimits?.imported_wav_bytes;
+      if (!isPositiveInteger(importedWavBytes)) {
+        throw typedError(
+          "HOST_PROTOCOL_MISMATCH",
+          "Manifest Sample import limit is invalid",
+        );
+      }
+      verifiedSampleImportLimit = importedWavBytes;
       const capabilities =
         options.capabilities ??
         (preflight === runPreflight ? await defaultCapabilities(window) : {});
@@ -1617,16 +2727,28 @@ function createRuntimeSessionController(options = {}) {
     trigger,
     listLocalProjects,
     importProject,
+    importAssignSample,
     openProject,
     inspectProject,
+    inspectSample,
+    queryWaveform,
+    updatePad,
+    resetPad,
+    setSamplePreview,
+    clearSamplePreview,
     reloadSnapshot,
+    retryPrepare,
     activateAudio,
     suspendAudio,
+    release,
+    stopPad,
+    stopAll,
     requestMidi: enableMidi,
     close,
     subscribeDiagnostics,
     subscribeHostState,
     subscribeRuntimeOutcome,
+    subscribeVoiceState,
     diagnostics,
   });
   registerDiagnosticTransport(session, async (...arguments_) => {

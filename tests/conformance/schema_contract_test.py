@@ -10,6 +10,7 @@ contract_root = repo_root / "contracts"
 
 schema_paths = {
     "project": contract_root / "project" / "lmdj.project.v1.schema.json",
+    "project_v2": contract_root / "project" / "lmdj.project.v2.schema.json",
     "project_bundle": (
         contract_root / "project" / "lmdj.project-bundle.v1.schema.json"
     ),
@@ -53,7 +54,7 @@ schemas = {name: load_json(path) for name, path in schema_paths.items()}
 contract_versions = {
     name: (
         "2.0.0"
-        if name in {"assembly", "capability_v2"}
+        if name in {"assembly", "capability_v2", "project_v2"}
         else "1.0.0"
     )
     for name in schemas
@@ -111,6 +112,45 @@ assert slot["properties"]["bank"]["minimum"] == 0
 assert slot["properties"]["bank"]["maximum"] == 3
 assert slot["properties"]["pad"]["minimum"] == 0
 assert slot["properties"]["pad"]["maximum"] == 15
+
+project_v2 = schemas["project_v2"]
+assert set(project_v2["required"]) == set(project["required"])
+assert project_v2["properties"]["contract"]["const"] == "lmdj.project.v2"
+assert project_v2["properties"]["bpm"] == project["properties"]["bpm"]
+
+pad_v2 = project_v2["$defs"]["pad"]
+assert set(pad_v2["required"]) == {"pad", "asset_id", "playback"}
+assert set(pad_v2["properties"]) == {"pad", "asset_id", "playback"}
+assert pad_v2["additionalProperties"] is False
+assert pad_v2["properties"]["playback"]["$ref"] == "#/$defs/playback"
+
+playback = project_v2["$defs"]["playback"]
+assert set(playback["required"]) == {
+    "trim_start_frame",
+    "trim_end_frame",
+    "trigger_mode",
+    "gain_millidb",
+    "muted",
+}
+assert set(playback["properties"]) == set(playback["required"])
+assert playback["additionalProperties"] is False
+assert playback["properties"]["trim_start_frame"] == {
+    "type": "integer",
+    "minimum": 0,
+}
+assert playback["properties"]["trim_end_frame"] == {
+    "type": ["integer", "null"],
+    "minimum": 1,
+}
+assert playback["properties"]["trigger_mode"] == {
+    "enum": ["one_shot", "gate", "loop_gate", "loop_toggle"]
+}
+assert playback["properties"]["gain_millidb"] == {
+    "type": "integer",
+    "minimum": -60000,
+    "maximum": 6000,
+}
+assert playback["properties"]["muted"] == {"type": "boolean"}
 
 capability = schemas["capability"]
 assert set(capability["required"]) == {
@@ -186,6 +226,27 @@ assert candidate_v2["properties"]["outputs"]["items"]["$ref"] == (
 assert candidate_v2["properties"]["outputs"]["uniqueItems"] is True
 
 fixture_root = repo_root / "tests" / "fixtures" / "contracts"
+valid_project_v2 = load_json(fixture_root / "project-v2-valid.json")
+invalid_project_v2 = load_json(
+    fixture_root / "project-v2-invalid-playback.json"
+)
+assert valid_project_v2["banks"][0]["pads"][0]["asset_id"] == (
+    valid_project_v2["banks"][0]["pads"][1]["asset_id"]
+)
+assert {
+    pad["playback"]["trigger_mode"]
+    for pad in valid_project_v2["banks"][0]["pads"][:4]
+} == {"one_shot", "gate", "loop_gate", "loop_toggle"}
+assert valid_project_v2["banks"][0]["pads"][0]["playback"][
+    "gain_millidb"
+] == -60000
+assert valid_project_v2["banks"][0]["pads"][1]["playback"][
+    "gain_millidb"
+] == 6000
+assert valid_project_v2["banks"][0]["pads"][0]["playback"][
+    "trim_end_frame"
+] is None
+
 valid_capability_v2 = load_json(
     fixture_root / "capability-v2-valid.json"
 )
@@ -401,6 +462,26 @@ json_schema.check(
     project_bundle,
     "project-bundle-valid",
 )
+json_schema.check(valid_project_v2, project_v2, "project-v2-valid")
+invalid_project_v2_violations = json_schema.validate(
+    invalid_project_v2, project_v2
+)
+assert any(
+    "#/banks/0/pads/0/playback/gain_millidb: above maximum 6000" in violation
+    for violation in invalid_project_v2_violations
+), invalid_project_v2_violations
+for unknown_target in (
+    mutated(valid_project_v2, ["banks", 0, "pads", 0, "compat"], True),
+    mutated(
+        valid_project_v2,
+        ["banks", 0, "pads", 0, "playback", "compat"],
+        True,
+    ),
+):
+    violations = json_schema.validate(unknown_target, project_v2)
+    assert any(
+        "'compat' is not allowed" in violation for violation in violations
+    ), violations
 assert json_schema.validate(
     load_json(fixture_root / "project-bundle-invalid-traversal.json"),
     project_bundle,

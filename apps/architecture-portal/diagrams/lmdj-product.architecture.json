@@ -5,18 +5,18 @@
     {"id": "core", "label": "Product-neutral Headless Core", "x": 520, "y": 96, "width": 1000, "height": 470}
   ],
   "components": [
-    {"id": "creator", "label": "Creator Web", "detail": "Project · Pads · Play", "kind": "host", "x": 30, "y": 135, "width": 190, "height": 92},
+    {"id": "creator", "label": "Creator Web", "detail": "Project · Sample Editor", "kind": "host", "x": 30, "y": 135, "width": 190, "height": 92},
     {"id": "diagnostic", "label": "Diagnostic Web", "detail": "proof · stress", "kind": "host", "x": 30, "y": 350, "width": 190, "height": 92},
     {"id": "native", "label": "Native Hosts", "detail": "CLI · MCP · Test", "kind": "host", "x": 30, "y": 490, "width": 190, "height": 92},
     {"id": "web-platform", "label": "Web Runtime Platform", "detail": "shared browser runtime", "kind": "core", "x": 285, "y": 245, "width": 210, "height": 92},
     {"id": "bundle", "label": "Project Bundle", "detail": "transfer-only", "kind": "host", "x": 285, "y": 455, "width": 210, "height": 92},
     {"id": "facade", "label": "Application Facade", "detail": "only Core entry", "kind": "core", "x": 555, "y": 245, "width": 200, "height": 92},
-    {"id": "project", "label": "Project Truth", "detail": "authoritative", "kind": "core", "x": 815, "y": 145, "width": 180, "height": 92},
-    {"id": "cooker", "label": "Project Cooker", "detail": "derive", "kind": "core", "x": 1055, "y": 145, "width": 180, "height": 92},
+    {"id": "project", "label": "Project Truth", "detail": "v2 Sample playback", "kind": "core", "x": 815, "y": 145, "width": 180, "height": 92},
+    {"id": "cooker", "label": "Project Cooker", "detail": "WAV · waveform · derive", "kind": "core", "x": 1055, "y": 145, "width": 180, "height": 92},
     {"id": "snapshot", "label": "Runtime Snapshot", "detail": "immutable", "kind": "core", "x": 1295, "y": 145, "width": 190, "height": 92},
     {"id": "storage", "label": "Project I/O", "detail": "Store · Bundle", "kind": "core", "x": 815, "y": 385, "width": 180, "height": 92},
     {"id": "provider-sdk", "label": "Provider SDK", "detail": "Capability · Attempt", "kind": "core", "x": 1055, "y": 385, "width": 180, "height": 92},
-    {"id": "audio", "label": "Audio Runtime", "detail": "offline · realtime", "kind": "core", "x": 1295, "y": 385, "width": 190, "height": 92}
+    {"id": "audio", "label": "Audio Runtime", "detail": "preview · mode · Voice", "kind": "core", "x": 1295, "y": 385, "width": 190, "height": 92}
   ],
   "connections": [
     {"from": "creator", "to": "web-platform"},
@@ -34,6 +34,6 @@
   "cards": [
     {"title": "Project Truth", "body": "唯一权威创作状态；Bundle 只传输，Runtime Snapshot 只派生。"},
     {"title": "Product Assembly", "body": "Product Build、Host allowlist 与 Provider wiring 只在 products/lmdj。"},
-    {"title": "当前交付", "body": "Creator 基础 workspace 已装配；完整编辑、生产 Provider 与物理验收仍有独立门禁。"}
+    {"title": "当前交付", "body": "Creator Sample Editor 已装配；Stage 8B、生产 Provider 与物理验收仍有独立门禁。"}
   ]
 }

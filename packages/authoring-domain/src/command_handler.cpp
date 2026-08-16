@@ -8,11 +8,6 @@
 namespace lmdj::domain {
 namespace {
 
-const CommandMeta& command_meta(const Command& command) {
-  return std::visit(
-      [](const auto& value) -> const CommandMeta& { return value.meta; }, command);
-}
-
 foundation::Result<AppliedCommand> invalid(std::string_view message) {
   return foundation::Result<AppliedCommand>::failure(
       foundation::Error{
@@ -44,6 +39,25 @@ bool valid_sha256(std::string_view value) {
 
 bool valid_artifact(const foundation::ArtifactRef& artifact) {
   return valid_sha256(artifact.sha256) && !artifact.media_type.empty();
+}
+
+bool valid_trigger_mode(TriggerMode trigger_mode) {
+  switch (trigger_mode) {
+    case TriggerMode::one_shot:
+    case TriggerMode::gate:
+    case TriggerMode::loop_gate:
+    case TriggerMode::loop_toggle:
+      return true;
+  }
+  return false;
+}
+
+bool valid_playback(const PadPlayback& playback) {
+  return playback.gain_millidb >= -60000 &&
+         playback.gain_millidb <= 6000 &&
+         valid_trigger_mode(playback.trigger_mode) &&
+         (!playback.trim_end_frame.has_value() ||
+          *playback.trim_end_frame > playback.trim_start_frame);
 }
 
 foundation::Result<void> validate_pattern(const Pattern& pattern) {
@@ -117,6 +131,7 @@ AppliedCommand applied(
     ProjectState state,
     std::string_view type,
     const CommandMeta& meta) {
+  state.contract = ProjectContract::v2;
   ++state.revision;
   const auto committed_revision = state.revision;
   return AppliedCommand{
@@ -167,9 +182,71 @@ foundation::Result<AppliedCommand> apply_new_command(
         });
   }
   auto copy = state;
-  copy.banks.at(command.slot.bank).at(command.slot.pad).asset_id = command.asset_id;
+  auto& pad = copy.banks.at(command.slot.bank).at(command.slot.pad);
+  const bool resets_playback =
+      !command.asset_id.has_value() || pad.asset_id != command.asset_id;
+  pad.asset_id = command.asset_id;
+  if (resets_playback) {
+    pad.playback = PadPlayback{};
+  }
   return foundation::Result<AppliedCommand>::success(
       applied(std::move(copy), "pad.assigned", command.meta));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const ImportAssignSample& command) {
+  if (!is_valid_slot(command.slot)) {
+    return invalid("pad slot is invalid");
+  }
+  if (!is_valid_uuid(command.asset.id.value())) {
+    return invalid("asset id must be a lowercase UUID");
+  }
+  if (!valid_artifact(command.asset.artifact)) {
+    return invalid("artifact reference is invalid");
+  }
+  if (state.assets.contains(command.asset.id)) {
+    return foundation::Result<AppliedCommand>::failure(
+        foundation::Error{
+            foundation::ErrorCode::duplicate_id,
+            "asset id already exists",
+        });
+  }
+  auto copy = state;
+  copy.assets.emplace(command.asset.id, command.asset);
+  auto& pad = copy.banks.at(command.slot.bank).at(command.slot.pad);
+  pad.asset_id = command.asset.id;
+  pad.playback = PadPlayback{};
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "sample.imported_assigned", command.meta));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const UpdatePadPlayback& command) {
+  if (!is_valid_slot(command.slot)) {
+    return invalid("pad slot is invalid");
+  }
+  if (!valid_playback(command.playback)) {
+    return invalid("pad playback is invalid");
+  }
+  auto copy = state;
+  copy.banks.at(command.slot.bank).at(command.slot.pad).playback =
+      command.playback;
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "pad.playback_updated", command.meta));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const ResetPadPlayback& command) {
+  if (!is_valid_slot(command.slot)) {
+    return invalid("pad slot is invalid");
+  }
+  auto copy = state;
+  copy.banks.at(command.slot.bank).at(command.slot.pad).playback = PadPlayback{};
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "pad.playback_reset", command.meta));
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -219,13 +296,12 @@ foundation::Result<AppliedCommand> apply_new_command(
       applied(std::move(copy), "take.recorded", command.meta));
 }
 
-}  // namespace
-
-foundation::Result<AppliedCommand> apply(
+template <typename CommandType>
+foundation::Result<AppliedCommand> apply_checked(
     const ProjectState& state,
-    const Command& command,
+    const CommandType& command,
     const std::map<foundation::CommandId, CommandReceipt>& receipts) {
-  const auto& meta = command_meta(command);
+  const auto& meta = command.meta;
   if (!is_valid_uuid(meta.command_id.value())) {
     return invalid("command id must be a lowercase UUID");
   }
@@ -245,9 +321,41 @@ foundation::Result<AppliedCommand> apply(
             },
         });
   }
+  return apply_new_command(state, command);
+}
+
+}  // namespace
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const Command& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
   return std::visit(
-      [&state](const auto& value) { return apply_new_command(state, value); },
+      [&state, &receipts](const auto& value) {
+        return apply_checked(state, value, receipts);
+      },
       command);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const ImportAssignSample& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const UpdatePadPlayback& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
+}
+
+foundation::Result<AppliedCommand> apply(
+    const ProjectState& state,
+    const ResetPadPlayback& command,
+    const std::map<foundation::CommandId, CommandReceipt>& receipts) {
+  return apply_checked(state, command, receipts);
 }
 
 }  // namespace lmdj::domain

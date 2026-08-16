@@ -103,6 +103,62 @@ def input_schemas() -> dict[str, dict]:
         },
         ["bank", "pad"],
     )
+    playback = object_schema(
+        {
+            "trim_start_frame": uint,
+            "trim_end_frame": {
+                "oneOf": [uint, {"type": "null"}],
+            },
+            "trigger_mode": {
+                "type": "string",
+                "enum": [
+                    "one_shot",
+                    "gate",
+                    "loop_gate",
+                    "loop_toggle",
+                ],
+            },
+            "gain_millidb": {
+                "type": "integer",
+                "minimum": -60_000,
+                "maximum": 6_000,
+            },
+            "muted": {"type": "boolean"},
+        },
+        [
+            "trim_start_frame",
+            "trim_end_frame",
+            "trigger_mode",
+            "gain_millidb",
+            "muted",
+        ],
+    )
+    waveform_window = object_schema(
+        {
+            "start_frame": uint,
+            "end_frame": uint,
+            "bucket_count": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 512,
+            },
+        },
+        ["start_frame", "end_frame", "bucket_count"],
+    )
+    sidecar = object_schema(
+        {
+            "sidecar_bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 1_048_576,
+            },
+            "sidecar_sha256": {
+                "type": "string",
+                "pattern": "^[0-9a-f]{64}$",
+            },
+        },
+        ["sidecar_bytes", "sidecar_sha256"],
+    )
     velocity = {"type": "integer", "minimum": 1, "maximum": 127}
     raw_event = object_schema(
         {
@@ -167,6 +223,89 @@ def input_schemas() -> dict[str, dict]:
         "lmdj.project.inspect": object_schema(
             {"project_path": path},
             ["project_path"],
+        ),
+        "lmdj.sample.inspect": object_schema(
+            {"project_path": path, "slot": slot},
+            ["project_path", "slot"],
+        ),
+        "lmdj.sample.waveform": object_schema(
+            {
+                "project_path": path,
+                "slot": slot,
+                "window": waveform_window,
+            },
+            ["project_path", "slot", "window"],
+        ),
+        "lmdj.sample.import.begin": object_schema(
+            {
+                "import_token": uuid,
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "slot": slot,
+                "asset_id": uuid,
+                "byte_length": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 1_048_576,
+                },
+            },
+            [
+                "import_token",
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "slot",
+                "asset_id",
+                "byte_length",
+            ],
+        ),
+        "lmdj.sample.import.chunk": object_schema(
+            {
+                "import_token": uuid,
+                "offset": uint,
+                "final": {"type": "boolean"},
+                "sidecar": sidecar,
+            },
+            ["import_token", "offset", "final", "sidecar"],
+        ),
+        "lmdj.sample.import.commit": object_schema(
+            {"import_token": uuid},
+            ["import_token"],
+        ),
+        "lmdj.sample.import.abort": object_schema(
+            {"import_token": uuid},
+            ["import_token"],
+        ),
+        "lmdj.sample.update_pad": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "slot": slot,
+                "playback": playback,
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "slot",
+                "playback",
+            ],
+        ),
+        "lmdj.sample.reset_pad": object_schema(
+            {
+                "project_path": path,
+                "command_id": uuid,
+                "expected_revision": uint,
+                "slot": slot,
+            },
+            [
+                "project_path",
+                "command_id",
+                "expected_revision",
+                "slot",
+            ],
         ),
         "lmdj.asset.import": object_schema(
             {
@@ -305,6 +444,14 @@ def tool_table() -> tuple[Tool, ...]:
     routes = (
         ("lmdj.project.create", "project.create", "command"),
         ("lmdj.project.inspect", "project.inspect", "query"),
+        ("lmdj.sample.inspect", "sample.inspect", "query"),
+        ("lmdj.sample.waveform", "sample.waveform", "query"),
+        ("lmdj.sample.import.begin", "sample.import.begin", "command"),
+        ("lmdj.sample.import.chunk", "sample.import.chunk", "command"),
+        ("lmdj.sample.import.commit", "sample.import.commit", "command"),
+        ("lmdj.sample.import.abort", "sample.import.abort", "command"),
+        ("lmdj.sample.update_pad", "sample.update_pad", "command"),
+        ("lmdj.sample.reset_pad", "sample.reset_pad", "command"),
         ("lmdj.asset.import", "asset.import", "command"),
         ("lmdj.pad.assign", "pad.assign", "command"),
         ("lmdj.take.begin", "take.begin", "command"),
