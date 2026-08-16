@@ -19,6 +19,7 @@ identity_path="$repo_root/build/web/toolchain/toolchain-identity.json"
 creator_root="$repo_root/apps/creator-web"
 web_test_root="$repo_root/tests/platform/web"
 required_sample_editor_spec="$repo_root/tests/platform/web/creator/creator_web_sample_editor.spec.mjs"
+required_capture_spec="$repo_root/tests/platform/web/creator/creator_web_capture.spec.mjs"
 proof_root=""
 proof_server_pid=""
 proof_server_ready_root=""
@@ -371,15 +372,24 @@ run_browser_gate() {
   local specs=()
   local tracked
   local required_relative="${required_sample_editor_spec#"$repo_root/tests/platform/web/"}"
+  local capture_relative="${required_capture_spec#"$repo_root/tests/platform/web/"}"
   [[ -f "$required_sample_editor_spec" ]] &&
     git -C "$repo_root" ls-files --error-unmatch \
       "${required_sample_editor_spec#"$repo_root/"}" >/dev/null || {
     echo "Creator Web error: required Sample Editor proof is not tracked" >&2
     return 2
   }
+  [[ -f "$required_capture_spec" ]] &&
+    git -C "$repo_root" ls-files --error-unmatch \
+      "${required_capture_spec#"$repo_root/"}" >/dev/null || {
+    echo "Creator Web error: required Pad Capture proof is not tracked" >&2
+    return 2
+  }
   while IFS= read -r tracked; do
-    [[ "${tracked#tests/platform/web/}" == "$required_relative" ]] ||
-      specs+=("${tracked#tests/platform/web/}")
+    case "${tracked#tests/platform/web/}" in
+      "$required_relative"|"$capture_relative") ;;
+      *) specs+=("${tracked#tests/platform/web/}") ;;
+    esac
   done < <(git -C "$repo_root" ls-files 'tests/platform/web/creator/*.spec.mjs')
   [[ ${#specs[@]} -gt 0 ]] || {
     echo "Creator Web error: no tracked Creator browser specs" >&2
@@ -419,25 +429,51 @@ PY
     echo "Creator Web error: proof server did not become ready" >&2
     return 2
   }
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=chromium "${specs[@]}" || status=$?
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=sample-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=creator-sample-chromium "$required_relative" || status=$?
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  LMDJ_WEB_RESULTS_SLOT=webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     npm --prefix "$web_test_root" test -- \
       --project=webkit "${specs[@]}" --grep "capability boundary" || status=$?
-  LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+  # S8B-D8: the fake-device projects are the automated acceptance gate for Pad
+  # Capture. Both must run here, or capture ships with no browser evidence at
+  # all: the granted project proves record/trim/commit and the interruption
+  # contract, the denied project proves the permission path is explained and
+  # retryable rather than a silent no-op.
+  LMDJ_WEB_RESULTS_SLOT=capture-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-capture-chromium "$capture_relative" || status=$?
+  LMDJ_WEB_RESULTS_SLOT=capture-denied-chromium \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
+    LMDJ_CREATOR_WEB_FULL_CHROMIUM=1 \
+    LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
+    LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
+    LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \
+    npm --prefix "$web_test_root" test -- \
+      --project=creator-capture-denied-chromium "$capture_relative" || status=$?
+
+  LMDJ_WEB_RESULTS_SLOT=sample-webkit \
+    LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1 \
     LMDJ_CREATOR_WEB_BASE_URL="http://127.0.0.1:$port" \
     LMDJ_CREATOR_WEB_BUNDLE="$bundle" \
     LMDJ_CREATOR_WEB_SAMPLE_BUNDLE="$sample_bundle" \

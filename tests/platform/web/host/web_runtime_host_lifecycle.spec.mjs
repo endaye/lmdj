@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 
 import { expect, test } from "@playwright/test";
 
+import { WEB_RUNTIME_IDENTITY } from "../../../../products/lmdj/generated/web-runtime-identity.mjs";
+
 const repoRoot = resolve(import.meta.dirname, "../../../..");
 const hostRoot = resolve(repoRoot, "apps/web-runtime-host");
 const sourceRoutes = new Map([
@@ -35,7 +37,7 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
     });
   }
 
-  await page.addInitScript(() => {
+  await page.addInitScript((identity) => {
     class FakeAudioContext extends EventTarget {
       constructor(options) {
         super();
@@ -96,9 +98,12 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         "opfsWritableReplace",
       ].map((name) => [name, true])),
       verifyManifest: async () => ({
-        product_build: "1.0.22.0",
-        host_version: "1.2.9",
-        protocol_version: 1,
+        // Derived from the generated identity: the shell compares this against
+        // the live Product Build, so a literal fails every allocation with a
+        // host state of "failed" that names nothing about versions.
+        product_build: identity.product_build,
+        host_version: identity.host_version,
+        protocol_version: identity.protocol_version,
       }),
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
@@ -166,6 +171,10 @@ test("source shell enforces activation, interruption, one-sequence recovery, and
         cleanupCalls += 1;
       },
     };
+  }, {
+    product_build: WEB_RUNTIME_IDENTITY.product_build,
+    host_version: WEB_RUNTIME_IDENTITY.hosts["web-runtime-host"].version,
+    protocol_version: WEB_RUNTIME_IDENTITY.protocol_version,
   });
 
   await page.goto("/formal-host/index.html");

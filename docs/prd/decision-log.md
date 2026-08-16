@@ -399,6 +399,55 @@ Time-stretch、Artifact GC 与 Stage 8B capture lifecycle 仍按各自开放边�
   自动化 Channel 10 回归测试不替代修复候选上的实体 MIDI 复验，也不推导 Safari
   或 iPadOS 结果。
 
+## 2026-08-15
+
+### 已批准：Stage 8B Pad Capture 设计（S8B-D1–D10）
+
+来自 [2026-08-15 Stage 8B Pad Capture 设计](../superpowers/specs/2026-08-15-lmdj-stage8b-pad-capture-design.md)
+评审，解决 S8-D13 留下的 capture lifecycle 开放边界。Capture 完全在 Creator
+与 Web Runtime Host 层实现，Core Modules、Facade 表面、传输协议、活动
+manifest 与全部 Contract 零变更。
+
+- **S8B-D1**：v1 只用系统默认输入设备，不做选择器；未来选择器落 Workspace/
+  Host 设置，永不进 Project Truth。
+- **S8B-D2**：首次按下录音手势才调 `getUserMedia`；拒绝为显式可重试错误态；
+  录音中撤销权限停止采集并保留缓冲。
+- **S8B-D3**：录长后预裁剪——Host JS 缓冲上限 60 秒、到顶自动停；裁剪到
+  ≤240,000 帧（5 秒）后提交，manifest 限值不变。
+- **S8B-D4**：无输入监听，只有电平表与增长波形；输入永不接输出。
+- **S8B-D5**：blur 与 hidden 一律停止采集（与 Stage 8 停 Voice 不变量一致），
+  缓冲保留进入裁剪。缓冲为空时（中断早于首批音频）不进入裁剪：设备丢失与
+  权限撤销进入可重试的错误态并给出原因，用户主动停/blur/hidden 回到 idle。
+- **S8B-D6**：录音期间不开 Core 会话；`sample.import.begin` 在提交时发起，
+  `expected_revision` 取提交时新鲜值；冲突显式、缓冲保留、无 auto-rebase。
+- **S8B-D7**：采集关闭 echoCancellation/noiseSuppression/autoGainControl。
+- **S8B-D8**：验收由 Chromium 假设备自动化把关；真麦克风听感、Safari 与
+  iPadOS 行为显式 deferred，做了才计入。
+- **S8B-D9**：采集管线用 AudioWorklet 挂在 Creator 自有的独立 48 kHz
+  AudioContext（引擎 context 在 Emscripten 运行时内部、不向 Host 暴露）；
+  float→PCM16 WAV 编码在 Host 层提交时完成；不用 MediaRecorder /
+  ScriptProcessorNode。
+- **S8B-D11**（2026-08-16 补充）：权限撤销不设独立中断原因，一律归入设备丢失。
+  浏览器对两者使用同一信号（track `ended`），代码无从区分；唯一的区分手段
+  `navigator.permissions.query({name:"microphone"})` 在 Firefox 与 Safari 都不
+  支持麦克风查询，而 Safari/iPadOS 是本阶段目标平台。用户文案需同时涵盖设备
+  不可用与权限变更两种成因。
+- **S8B-D10**：共享 prepared-PCM 配额（单 Pad ≈60 秒长素材）立为具名后续
+  阶段，与 Loop 素材 BPM Time-stretch 开放问题同一次设计评审；Stage 8B 不改
+  资源模型、不抬 512 MiB 固定堆。
+- **S8B-D12**（2026-08-16 实现期修订）：capture worklet 以同源内容哈希分发
+  资产（role `capture_worklet`）随包发布，不再以 blob URL 内联加载。原因：
+  分发包的加固 CSP 为 `script-src 'self' 'wasm-unsafe-eval'`，AudioWorklet
+  模块加载按 script-src 判定，blob:/data: 一律被拒（实测三种写法全部
+  `AbortError`），打包版 Creator 中录音无法启动。S8B-D9 未规定加载机制，
+  blob 是实现选择而非设计属性；同源资产与其余资产同受内容哈希与 manifest
+  完整性校验，安全性不降反升。分发 manifest 的 expected_assets 属同构建
+  协议（Portal 明文：不是公开跨版本 Contract），设计 §12 的零变更清单
+  （Core Modules、Facade/传输表面、全部 Contract、resource_limits）均未
+  触碰。
+
+Stage 8B 已于 2026-08-16 实现，分配 Product Build `1.0.23.0 canary`，`creator-web` 由 `1.2.0` 升至 `1.3.0`；`web-runtime-host` 文件未变更，保持 `1.2.9`。
+
 ## 2026-08-16
 
 ### 已确认：Provider SDK 需要一等公民的 Artifact 字节访问（输入 resolver + 输出访问口）

@@ -21,6 +21,8 @@ import {
   storeSampleInspect,
   type SampleDraft,
 } from "../state/sample_state";
+import {COMMIT_MAX_FRAMES, type CaptureBuffer} from "../capture/capture_buffer";
+import {encodePcm16Wav} from "../capture/wav_encoder";
 
 const UUID_PATTERN =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -573,6 +575,40 @@ export function importAssignSampleJourney(
     () => session.importAssignSample(file, normalizedOptions),
     false,
   );
+}
+
+export const CAPTURE_FILE_NAME = "capture.wav";
+
+// A committed capture is just another byte source for the Stage 8 import
+// session: encode the trimmed selection here, then hand the File to the very
+// same journey the file picker uses. Nothing downstream — staging, writer
+// lease, command_id/expected_revision, conflict classification, Cooker
+// preparation — learns that these bytes came from a microphone (S8B design
+// §6.2). A conflict therefore surfaces exactly like an import conflict, and a
+// retry re-encodes the identical selection into identical bytes.
+export function captureCommitJourney(
+  session: CreatorSampleRuntimeSession,
+  buffer: CaptureBuffer,
+  selection: {startFrame: number; frameCount: number},
+  options: SampleImportOptions,
+): Promise<SampleMutationResolution> {
+  if (!exactKeys(selection, ["startFrame", "frameCount"]) ||
+      !unsignedInteger(selection.startFrame) ||
+      !unsignedInteger(selection.frameCount) ||
+      selection.frameCount < 1 ||
+      selection.frameCount > COMMIT_MAX_FRAMES) {
+    return Promise.reject(new TypeError("Capture commit selection is invalid"));
+  }
+  let file: File;
+  try {
+    const wav = encodePcm16Wav(
+      buffer.slice(selection.startFrame, selection.frameCount),
+    );
+    file = new File([wav], CAPTURE_FILE_NAME, {type: "audio/wav"});
+  } catch (error) {
+    return Promise.reject(error);
+  }
+  return importAssignSampleJourney(session, file, options);
 }
 
 export async function retryPrepareJourney(

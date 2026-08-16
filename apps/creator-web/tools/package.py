@@ -230,6 +230,14 @@ def build_distribution(
     source_style_relative = unique_vite_asset(source_index, "css")
     source_main = require_file(ui_root / source_main_relative, "Vite main")
     source_style = require_file(ui_root / source_style_relative, "Vite style")
+    # The capture worklet ships as its own same-origin asset because the
+    # distribution CSP (script-src 'self') rejects blob:/data: AudioWorklet
+    # module URLs. It is referenced from main, not index.html, so it is
+    # discovered directly in the Vite output.
+    worklet_candidates = sorted((ui_root / "assets").glob("capture_worklet-*.js"))
+    if len(worklet_candidates) != 1:
+        raise PackageError("Vite output must contain exactly one capture worklet")
+    source_worklet = require_file(worklet_candidates[0], "Vite capture worklet")
     runtime_js = require_file(runtime_root / "lmdj-web-runtime.js", "Runtime JavaScript")
     runtime_wasm = require_file(runtime_root / "lmdj-web-runtime.wasm", "Runtime Wasm")
 
@@ -237,8 +245,27 @@ def build_distribution(
         staged = Path(temporary)
         assets_root = staged / "assets"
         assets_root.mkdir()
+        worklet_entry = write_hashed_asset(
+            assets_root,
+            "capture-worklet",
+            ".js",
+            source_worklet.read_bytes(),
+            "capture_worklet",
+        )
+        try:
+            main_text = source_main.read_text(encoding="utf-8")
+        except UnicodeDecodeError as error:
+            raise PackageError("Vite main is not UTF-8") from error
+        # Rebind main's worklet reference to the content-hashed name, exactly
+        # like the Runtime script's Wasm binding below.
+        worklet_reference = f"/assets/{source_worklet.name}"
+        if main_text.count(worklet_reference) != 1:
+            raise PackageError("Capture worklet binding must occur exactly once")
+        main_text = main_text.replace(
+            worklet_reference, f"/{worklet_entry['path']}", 1
+        )
         main_entry = write_hashed_asset(
-            assets_root, "main", ".js", source_main.read_bytes(), "host_main"
+            assets_root, "main", ".js", main_text.encode("utf-8"), "host_main"
         )
         style_entry = write_hashed_asset(
             assets_root, "styles", ".css", source_style.read_bytes(), "host_style"
@@ -262,7 +289,7 @@ def build_distribution(
             runtime_text.encode("utf-8"),
             "runtime_script",
         )
-        entries = [main_entry, runtime_entry, wasm_entry, style_entry]
+        entries = [main_entry, runtime_entry, wasm_entry, style_entry, worklet_entry]
         manifest = {
             "assets": entries,
             "compatible_hosts": host_identity["compatible_hosts"],

@@ -167,6 +167,7 @@ test("orders assigned Pad metadata, waveform, controls, Bank, and all Pads", asy
   expect(controls.compareDocumentPosition(pads) & Node.DOCUMENT_POSITION_FOLLOWING)
     .not.toBe(0);
   expect(screen.getByRole("button", {name: "Replace Sample"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Record Sample"})).toBeTruthy();
   expect(screen.getByRole("button", {name: "Reset Pad to Defaults"})).toBeTruthy();
   expect(screen.getByText("Activate Audio to preview")).toBeTruthy();
   const visiblePads = screen.getAllByRole("button", {
@@ -225,6 +226,45 @@ test("bounds and escapes Replace display names, warns, cancels, and restores foc
   expect(document.activeElement).toBe(pad);
   await userEvent.click(screen.getByRole("button", {name: "Project"}));
   expect(screen.getByText("4", {selector: ".project-summary dd"})).toBeTruthy();
+});
+
+test("Record on an assigned Pad confirms the replacement before the panel opens", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await screen.findByText("Asset 33333333");
+
+  // S8-D12: recording onto an assigned Pad is a replacement, so the existing
+  // confirmation runs before the microphone is ever requested (S8B-D2).
+  await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
+  expect(screen.queryByRole("region", {name: "Pad A1 Pad Capture"})).toBeNull();
+  const dialog = screen.getByRole("dialog", {name: "Replace Pad A1?"});
+  expect(dialog.textContent).toContain(
+    "Replacing the Sample resets Start, End, trigger, Loop, Volume, and Mute.",
+  );
+
+  await userEvent.click(screen.getByRole("button", {name: "Cancel replace"}));
+  expect(screen.queryByRole("region", {name: "Pad A1 Pad Capture"})).toBeNull();
+
+  await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
+  await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
+  expect(screen.getByRole("region", {name: "Pad A1 Pad Capture"})).toBeTruthy();
+});
+
+test("Record on an empty Pad opens the capture panel with no replacement prompt", async () => {
+  const fixture = mutableSampleRuntimeFixture();
+  render(<App initialState={ready} runtimeFactory={() => fixture.session} />);
+  await waitFor(() => expect(fixture.calls).toContain("reloadSnapshot"));
+  await userEvent.click(screen.getByRole("button", {name: "Sample"}));
+  await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
+
+  await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.getByRole("region", {name: "Pad A2 Pad Capture"})).toBeTruthy();
+
+  await userEvent.click(screen.getByRole("button", {name: "Close"}));
+  expect(screen.queryByRole("region", {name: "Pad A2 Pad Capture"})).toBeNull();
 });
 
 const listedSummary: LocalProjectSummary = {

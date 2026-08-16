@@ -1,7 +1,9 @@
 import {describe, expect, test} from "vitest";
 
 import {
+  CAPTURE_FILE_NAME,
   cancelSamplePreviewJourney,
+  captureCommitJourney,
   commitSampleDraft,
   importAssignSampleJourney,
   inspectSampleJourney,
@@ -11,6 +13,8 @@ import {
   retryPrepareJourney,
   updateSampleJourney,
 } from "../src/runtime/sample_actions";
+import {COMMIT_MAX_FRAMES, CaptureBuffer} from "../src/capture/capture_buffer";
+import {encodePcm16Wav} from "../src/capture/wav_encoder";
 import type {
   CreatorSampleRuntimeSession,
   RuntimeHostState,
@@ -752,5 +756,96 @@ describe("Creator Sample actions", () => {
       malformed.session,
       retried.patternId,
     ));
+  });
+});
+
+describe("captureCommitJourney", () => {
+  function captureBuffer(frames: number): CaptureBuffer {
+    const buffer = new CaptureBuffer(1);
+    buffer.append([Float32Array.from({length: frames}, (_, i) => ((i % 8) + 1) / 8)]);
+    return buffer;
+  }
+
+  test("encodes the selection and delegates to the unchanged import journey", async () => {
+    const {calls, session} = fixture();
+    const buffer = captureBuffer(64);
+    const refreshed = {...inspect, projectRevision: 43};
+    session.inspectSample = async (slot) => {
+      calls.push({method: "inspectSample", arguments: [slot]});
+      return refreshed;
+    };
+    const resolution = await captureCommitJourney(
+      session,
+      buffer,
+      {startFrame: 8, frameCount: 16},
+      {slot: 17, expectedRevision: 42},
+    );
+
+    expect(resolution).toEqual({kind: "committed", commit: published, inspect: refreshed});
+    const call = calls.find(({method}) => method === "importAssignSample");
+    const [file, options] = (call?.arguments ?? []) as [File, {slot: number; expectedRevision: number}];
+    expect(file).toBeInstanceOf(File);
+    expect(file.name).toBe(CAPTURE_FILE_NAME);
+    expect(file.type).toBe("audio/wav");
+    expect(options).toMatchObject({slot: 17, expectedRevision: 42});
+    // The delegated bytes are exactly the deterministic encoding of the
+    // selected frames — not the whole take.
+    const expected = encodePcm16Wav(buffer.slice(8, 16));
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(expected);
+  });
+
+  test("reads expectedRevision from the caller at commit time (S8B-D6)", async () => {
+    const {calls, session} = fixture();
+    // Two commits of the same buffer with different fresh revisions must reach
+    // the import session with those exact revisions; nothing is captured at
+    // recording time.
+    await captureCommitJourney(session, captureBuffer(32), {startFrame: 0, frameCount: 8},
+      {slot: 3, expectedRevision: 7});
+    await captureCommitJourney(session, captureBuffer(32), {startFrame: 0, frameCount: 8},
+      {slot: 3, expectedRevision: 9});
+    const revisions = calls
+      .filter(({method}) => method === "importAssignSample")
+      .map(({arguments: args}) => (args[1] as {expectedRevision: number}).expectedRevision);
+    expect(revisions).toEqual([7, 9]);
+  });
+
+  test("a conflict retry re-encodes identical bytes under a fresh revision", async () => {
+    const {calls, session} = fixture();
+    const buffer = captureBuffer(64);
+    const selection = {startFrame: 4, frameCount: 24};
+    await captureCommitJourney(session, buffer, selection, {slot: 5, expectedRevision: 11});
+    await captureCommitJourney(session, buffer, selection, {slot: 5, expectedRevision: 12});
+    const files = calls
+      .filter(({method}) => method === "importAssignSample")
+      .map(({arguments: args}) => args[0] as File);
+    const [first, second] = files;
+    if (first === undefined || second === undefined) {
+      throw new Error("expected two delegated import calls");
+    }
+    expect(new Uint8Array(await first.arrayBuffer()))
+      .toEqual(new Uint8Array(await second.arrayBuffer()));
+  });
+
+  test("rejects a selection over COMMIT_MAX_FRAMES or otherwise malformed", async () => {
+    const {calls, session} = fixture();
+    const buffer = captureBuffer(64);
+    await expect(captureCommitJourney(session, buffer,
+      {startFrame: 0, frameCount: COMMIT_MAX_FRAMES + 1}, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(TypeError);
+    await expect(captureCommitJourney(session, buffer,
+      {startFrame: 0, frameCount: 0}, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(TypeError);
+    await expect(captureCommitJourney(session, buffer,
+      {startFrame: -1, frameCount: 8} as never, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(TypeError);
+    await expect(captureCommitJourney(session, buffer,
+      {startFrame: 0, frameCount: 8, extra: 1} as never, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(TypeError);
+    // A selection outside the recorded frames is the buffer's RangeError, and
+    // it must never reach the Runtime as a half-formed import.
+    await expect(captureCommitJourney(session, buffer,
+      {startFrame: 60, frameCount: 16}, {slot: 1, expectedRevision: 1},
+    )).rejects.toThrow(RangeError);
+    expect(calls.some(({method}) => method === "importAssignSample")).toBe(false);
   });
 });
