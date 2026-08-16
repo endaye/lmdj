@@ -27,6 +27,7 @@ from tools.release.git_repository import (  # noqa: E402
 )
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
+    CiScopeProjection,
     DeploymentBranchPolicy,
     GitHubApiError,
     GitHubAsset,
@@ -34,6 +35,7 @@ from tools.release.github_api import (  # noqa: E402
     GitHubEnvironment,
     GitHubRelease,
     HttpResponse,
+    RunJobProjection,
     RunProjection,
 )
 from tools.release.model import canonical_json, load_ledger_document, load_policy  # noqa: E402
@@ -115,11 +117,37 @@ class FakeGit:
             yield Path(directory)
 
 
+# The closed v2 lane and full job identities, written independently of the CI
+# policy file and of the release modules under test.
+LANES = (
+    "chameleon_lab", "ci_contract", "core_asan", "core_coverage", "core_macos",
+    "core_ubuntu", "creator", "deploy_contract", "docs_static", "package",
+    "portal", "web_runtime_host", "web_runtime_lab", "web_toolchain",
+)
+FULL_REQUIRED_JOBS = (
+    "chameleon-lab", "ci-contract", "core-asan", "core-asan-macos",
+    "core-coverage", "core-macos", "core-ubuntu", "creator-web",
+    "deploy-contract", "docs-static", "macos-primary", "package", "portal",
+    "select-macos-runner", "web-runtime-host", "web-runtime-lab",
+    "web-toolchain-conformance",
+)
+
+
 class FakeGitHub:
     def __init__(self, target: str) -> None:
         self.target = target
         self.branch = BranchProjection("main", True, target)
         self.runs = [RunProjection(123, "push", target, "main", "Core CI", "completed", "success")]
+        self.jobs = [
+            RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", target),
+            RunJobProjection(2, 123, "PR Gate", "completed", "success", "Core CI", target),
+        ]
+        self.scope = CiScopeProjection(
+            schema="lmdj.ci-scope.v2", base_sha="b" * 40, head_sha=target,
+            mode="full", trusted_head=True,
+            selected_lanes=tuple(sorted(LANES)),
+            required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+        )
         self.release: GitHubRelease | None = None
         self.payloads: dict[int, bytes] = {}
         self.create_calls = 0
@@ -152,6 +180,12 @@ class FakeGitHub:
 
     def list_runs_for_sha(self, repository: str, sha: str) -> list[RunProjection]:
         return self.runs
+
+    def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]:
+        return list(self.jobs)
+
+    def get_ci_scope_manifest(self, repository: str, run: RunProjection) -> CiScopeProjection:
+        return self.scope
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
         if self.by_tag_unavailable:

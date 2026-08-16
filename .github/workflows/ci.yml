@@ -11,7 +11,9 @@ on:
       lanes:
         description: >-
           Comma-separated lanes to run, e.g. "web_toolchain,creator". Leave
-          empty to run every lane, which is what a dispatch does today.
+          empty to run every lane; an empty dispatch on the exact main SHA is
+          the authorized way to produce full release evidence for a SHA whose
+          own push classified focused. A lane selection is never full evidence.
         required: false
         default: ""
 
@@ -67,6 +69,11 @@ jobs:
             --github-output "$GITHUB_OUTPUT" \
             --summary "$GITHUB_STEP_SUMMARY" \
             --lanes "${REQUESTED_LANES:-}"
+      # Release authority reads this artifact: `tools/release/ci_evidence.py`
+      # accepts a target only while its exact run still retains a `full`
+      # manifest for that SHA, so the retention below is a prospective evidence
+      # lifetime rather than a diagnostic, and a failed upload must fail the
+      # producer job instead of leaving the run without scope evidence.
       - name: Retain the scope manifest
         uses: actions/upload-artifact@v4
         with:

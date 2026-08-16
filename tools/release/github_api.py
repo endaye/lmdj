@@ -3,17 +3,31 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import io
 import json
 import os
 import re
-from typing import Callable, Mapping
+from typing import Any, Callable, Mapping
 from urllib.error import HTTPError
 from urllib.parse import parse_qsl, quote, urlencode, urlparse
 from urllib.request import HTTPRedirectHandler, Request, build_opener
+import zipfile
 
 
 class GitHubApiError(RuntimeError):
     """A GitHub release projection or request is unavailable or malformed."""
+
+
+class CiScopeUnavailableError(GitHubApiError):
+    """The exact run retains no readable scope manifest for its head SHA.
+
+    Actions artifacts expire, so absence is an evidence-lifetime fact rather
+    than a conflict: callers classify it as unverifiable, never as a pass.
+    """
+
+
+class CiScopeConflictError(GitHubApiError):
+    """A retained scope manifest exists but its identity or content conflicts."""
 
 
 @dataclass(frozen=True)
@@ -32,6 +46,44 @@ class RunProjection:
     workflow_name: str
     status: str
     conclusion: str | None
+
+
+@dataclass(frozen=True)
+class RunJobProjection:
+    id: int
+    run_id: int
+    name: str
+    status: str
+    conclusion: str | None
+    workflow_name: str
+    head_sha: str
+
+
+@dataclass(frozen=True)
+class ActionsArtifactProjection:
+    id: int
+    name: str
+    size_in_bytes: int
+    api_url: str
+    archive_download_url: str
+    expired: bool
+    run_id: int
+    repository_id: int
+    head_repository_id: int
+    head_branch: str
+    head_sha: str
+    expires_at: str
+
+
+@dataclass(frozen=True)
+class CiScopeProjection:
+    schema: str
+    base_sha: str
+    head_sha: str
+    mode: str
+    trusted_head: bool
+    selected_lanes: tuple[str, ...]
+    required_jobs: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -87,6 +139,31 @@ class HttpResponse:
 
 
 HttpTransport = Callable[[str, str, Mapping[str, str], bytes | None], HttpResponse]
+
+_CI_SCOPE_ARTIFACT_PREFIX = "ci-scope-"
+_CI_SCOPE_MEMBER = "ci-scope.json"
+_CI_SCOPE_SCHEMA = "lmdj.ci-scope.v2"
+_CI_SCOPE_SIZE_CAP = 1024 * 1024
+_CI_SCOPE_MODES = frozenset(("draft", "focused", "full", "requested"))
+_CI_SCOPE_KEYS = frozenset((
+    "schema", "base_sha", "head_sha", "mode", "reasons", "changed_files",
+    "lanes", "required_jobs", "trusted_head",
+))
+# The closed v2 lane set is restated here on purpose. Release authority must be
+# able to reject a manifest that claims `full` while carrying a different lane
+# inventory, and it must do so without reading CI's own policy file, which is
+# exactly the document an attacker or a mistake would change alongside it.
+CI_SCOPE_LANES = frozenset((
+    "docs_static", "portal", "ci_contract", "core_ubuntu", "core_asan",
+    "core_coverage", "core_macos", "web_toolchain", "web_runtime_host",
+    "creator", "web_runtime_lab", "deploy_contract", "chameleon_lab", "package",
+))
+# GitHub redirects an authenticated artifact download to this closed Azure
+# storage host family with a signed query. Anything else fails closed rather
+# than being followed with or without credentials.
+_ARTIFACT_REDIRECT_HOST = re.compile(
+    r"productionresultssa[0-9]+\.blob\.core\.windows\.net"
+)
 
 
 class GitHubClient:
@@ -156,6 +233,138 @@ class GitHubClient:
         if total_count != len(parsed):
             raise GitHubApiError("GitHub run pagination is incomplete")
         return parsed
+
+    def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]:
+        """Return every latest-attempt job of one run bound to that run's identity."""
+        _require_repository(repository)
+        _require_id(run_id, "run")
+        endpoint = f"/repos/{repository}/actions/runs/{run_id}/jobs"
+        required_query = {"filter": "latest", "per_page": "100"}
+        next_path: str | None = f"{endpoint}?{urlencode(required_query)}"
+        visited: set[str] = set()
+        jobs: list[RunJobProjection] = []
+        total_count: int | None = None
+        while next_path is not None:
+            if next_path in visited or len(visited) >= self._page_cap:
+                raise GitHubApiError("GitHub run job pagination is invalid")
+            visited.add(next_path)
+            response = self._request("GET", next_path)
+            document = _json_response(response, {200})
+            items = document.get("jobs") if isinstance(document, dict) else None
+            page_total = document.get("total_count") if isinstance(document, dict) else None
+            if not isinstance(items, list) or type(page_total) is not int or page_total < 0:
+                raise GitHubApiError("GitHub run job projection is invalid")
+            if total_count is None:
+                total_count = page_total
+            elif page_total != total_count:
+                raise GitHubApiError("GitHub run job pagination is invalid")
+            jobs.extend(_parse_run_job(item, run_id) for item in items)
+            next_path = _next_link(
+                response.headers, endpoint, required_query, subject="run job",
+            )
+        identifiers = [job.id for job in jobs]
+        if len(identifiers) != len(set(identifiers)):
+            raise GitHubApiError("GitHub run job pagination returned duplicate IDs")
+        if total_count != len(jobs):
+            raise GitHubApiError("GitHub run job pagination is incomplete")
+        return jobs
+
+    def list_run_artifacts(
+        self, repository: str, run_id: int,
+    ) -> list[ActionsArtifactProjection]:
+        """Return every artifact of one run with its embedded run identity bound."""
+        _require_repository(repository)
+        _require_id(run_id, "run")
+        endpoint = f"/repos/{repository}/actions/runs/{run_id}/artifacts"
+        required_query = {"per_page": "100"}
+        next_path: str | None = f"{endpoint}?{urlencode(required_query)}"
+        visited: set[str] = set()
+        artifacts: list[ActionsArtifactProjection] = []
+        total_count: int | None = None
+        while next_path is not None:
+            if next_path in visited or len(visited) >= self._page_cap:
+                raise GitHubApiError("GitHub artifact pagination is invalid")
+            visited.add(next_path)
+            response = self._request("GET", next_path)
+            document = _json_response(response, {200})
+            items = document.get("artifacts") if isinstance(document, dict) else None
+            page_total = document.get("total_count") if isinstance(document, dict) else None
+            if not isinstance(items, list) or type(page_total) is not int or page_total < 0:
+                raise GitHubApiError("GitHub artifact projection is invalid")
+            if total_count is None:
+                total_count = page_total
+            elif page_total != total_count:
+                raise GitHubApiError("GitHub artifact pagination is invalid")
+            artifacts.extend(
+                _parse_artifact(item, repository, run_id) for item in items
+            )
+            next_path = _next_link(
+                response.headers, endpoint, required_query, subject="artifact",
+            )
+        identifiers = [artifact.id for artifact in artifacts]
+        if len(identifiers) != len(set(identifiers)):
+            raise GitHubApiError("GitHub artifact pagination returned duplicate IDs")
+        if total_count != len(artifacts):
+            raise GitHubApiError("GitHub artifact pagination is incomplete")
+        return artifacts
+
+    def get_ci_scope_manifest(
+        self, repository: str, run: RunProjection,
+    ) -> CiScopeProjection:
+        """Project the one retained scope manifest of an exact run's head SHA."""
+        _require_repository(repository)
+        if not isinstance(run, RunProjection) or not _sha(run.head_sha):
+            raise GitHubApiError("GitHub run projection is invalid")
+        artifacts = self.list_run_artifacts(repository, run.id)
+        expected = f"{_CI_SCOPE_ARTIFACT_PREFIX}{run.head_sha}"
+        matching = [artifact for artifact in artifacts if artifact.name == expected]
+        if len(matching) > 1:
+            raise CiScopeConflictError("retained CI scope evidence is ambiguous")
+        if not matching:
+            raise CiScopeUnavailableError("retained CI scope evidence is absent")
+        artifact = matching[0]
+        if artifact.expired:
+            raise CiScopeUnavailableError("retained CI scope evidence has expired")
+        if (
+            artifact.run_id != run.id or artifact.head_sha != run.head_sha
+            or artifact.head_branch != run.head_branch
+            or artifact.repository_id != artifact.head_repository_id
+        ):
+            raise CiScopeConflictError("retained CI scope evidence identity conflicts")
+        if artifact.size_in_bytes > _CI_SCOPE_SIZE_CAP:
+            raise CiScopeConflictError("retained CI scope evidence exceeds its size cap")
+        return _parse_ci_scope(self._download_artifact(artifact))
+
+    def _download_artifact(self, artifact: ActionsArtifactProjection) -> bytes:
+        """Download one artifact archive without forwarding credentials onward."""
+        response = self._request(
+            "GET", artifact.archive_download_url, accept="application/vnd.github+json",
+        )
+        if response.status in (302, 307):
+            location = _header(response.headers, "location")
+            if not _trusted_artifact_redirect(location):
+                # The signed URL is never echoed: it is a bearer credential.
+                raise CiScopeConflictError("GitHub artifact redirect is not trusted")
+            try:
+                response = self._http_transport("GET", location, {
+                    "Accept": "application/zip",
+                    "User-Agent": "lmdj-release-pipeline",
+                }, None)
+            except Exception:
+                raise GitHubApiError("GitHub artifact download is unavailable") from None
+            if not isinstance(response, HttpResponse):
+                raise GitHubApiError("GitHub release response is invalid")
+        if response.status != 200:
+            raise GitHubApiError("GitHub artifact download is unavailable")
+        content_type = _header(response.headers, "content-type")
+        if content_type is None or content_type.split(";", 1)[0].strip() != "application/zip":
+            raise CiScopeConflictError("GitHub artifact content type is invalid")
+        payload = response.body
+        if not isinstance(payload, bytes) or len(payload) > _CI_SCOPE_SIZE_CAP:
+            raise CiScopeConflictError("GitHub artifact archive exceeds its size cap")
+        if not payload.startswith(b"PK\x03\x04"):
+            raise CiScopeConflictError("GitHub artifact archive is not a ZIP archive")
+        return payload
 
     def get_release_by_tag(self, repository: str, tag: str) -> GitHubRelease | None:
         """Find a published Release or Draft through the complete authenticated inventory."""
@@ -517,6 +726,144 @@ def _parse_run(run: object) -> RunProjection:
     )
 
 
+def _parse_run_job(job: object, run_id: int) -> RunJobProjection:
+    if not isinstance(job, dict):
+        raise GitHubApiError("GitHub run job projection is invalid")
+    identifier, observed_run, name = job.get("id"), job.get("run_id"), job.get("name")
+    status, conclusion = job.get("status"), job.get("conclusion")
+    workflow_name, head_sha = job.get("workflow_name"), job.get("head_sha")
+    if (
+        not _positive_id(identifier) or observed_run != run_id
+        or not isinstance(name, str) or not name
+        or not isinstance(status, str) or not status
+        or (conclusion is not None and not isinstance(conclusion, str))
+        or not isinstance(workflow_name, str) or not workflow_name
+        or not _sha(head_sha)
+    ):
+        raise GitHubApiError("GitHub run job projection is invalid")
+    return RunJobProjection(
+        identifier, observed_run, name, status, conclusion, workflow_name, head_sha,
+    )
+
+
+def _parse_artifact(
+    document: object, repository: str, run_id: int,
+) -> ActionsArtifactProjection:
+    if not isinstance(document, dict):
+        raise GitHubApiError("GitHub artifact projection is invalid")
+    identifier, name = document.get("id"), document.get("name")
+    size, expired = document.get("size_in_bytes"), document.get("expired")
+    api_url, archive_url = document.get("url"), document.get("archive_download_url")
+    expires_at, run = document.get("expires_at"), document.get("workflow_run")
+    if (
+        not _positive_id(identifier) or not isinstance(name, str) or not name
+        or "/" in name or "\\" in name
+        or type(size) is not int or size < 0
+        or not isinstance(expired, bool) or not isinstance(expires_at, str)
+        or not expires_at or not isinstance(run, dict)
+        or _artifact_api_identity(api_url) != (repository, identifier)
+        or archive_url != f"{api_url}/zip"
+    ):
+        raise GitHubApiError("GitHub artifact projection is invalid")
+    observed_run, repository_id = run.get("id"), run.get("repository_id")
+    head_repository_id, head_branch = run.get("head_repository_id"), run.get("head_branch")
+    head_sha = run.get("head_sha")
+    if (
+        observed_run != run_id or not _positive_id(repository_id)
+        or not _positive_id(head_repository_id)
+        or not isinstance(head_branch, str) or not head_branch
+        or not _sha(head_sha)
+    ):
+        raise GitHubApiError("GitHub artifact run identity is invalid")
+    return ActionsArtifactProjection(
+        identifier, name, size, api_url, archive_url, expired, observed_run,
+        repository_id, head_repository_id, head_branch, head_sha, expires_at,
+    )
+
+
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    document: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in document:
+            raise CiScopeConflictError("CI scope manifest has a duplicate key")
+        document[key] = value
+    return document
+
+
+def _parse_ci_scope(payload: bytes) -> CiScopeProjection:
+    """Parse the one closed v2 manifest inside a retained scope archive."""
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            members = archive.infolist()
+            if len(members) != 1:
+                raise CiScopeConflictError("CI scope archive member inventory is not closed")
+            member = members[0]
+            if (
+                member.filename != _CI_SCOPE_MEMBER or member.is_dir()
+                or member.file_size > _CI_SCOPE_SIZE_CAP
+                or member.compress_size > _CI_SCOPE_SIZE_CAP
+                or (member.external_attr >> 16) & 0o170000 == 0o120000
+            ):
+                raise CiScopeConflictError("CI scope archive member is not the exact manifest")
+            contents = archive.read(member)
+    except CiScopeConflictError:
+        raise
+    except (zipfile.BadZipFile, OSError, ValueError, RuntimeError):
+        raise CiScopeConflictError("CI scope archive is unreadable") from None
+    try:
+        document = json.loads(
+            contents.decode("utf-8"), object_pairs_hook=_reject_duplicate_keys,
+        )
+    except CiScopeConflictError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise CiScopeConflictError("CI scope manifest is not valid JSON") from None
+    return _project_ci_scope(document)
+
+
+def _project_ci_scope(document: object) -> CiScopeProjection:
+    if not isinstance(document, dict) or set(document) != _CI_SCOPE_KEYS:
+        raise CiScopeConflictError("CI scope manifest schema is not closed")
+    schema, mode = document["schema"], document["mode"]
+    base_sha, head_sha = document["base_sha"], document["head_sha"]
+    trusted_head, lanes = document["trusted_head"], document["lanes"]
+    required_jobs, reasons = document["required_jobs"], document["reasons"]
+    if (
+        schema != _CI_SCOPE_SCHEMA or mode not in _CI_SCOPE_MODES
+        or not _sha(base_sha) or not _sha(head_sha)
+        or type(trusted_head) is not bool
+        or not isinstance(reasons, list)
+        or not all(isinstance(reason, str) for reason in reasons)
+        or not isinstance(document["changed_files"], list)
+    ):
+        raise CiScopeConflictError("CI scope manifest identity is invalid")
+    if (
+        not isinstance(lanes, dict) or set(lanes) != CI_SCOPE_LANES
+        or not all(type(value) is bool for value in lanes.values())
+    ):
+        raise CiScopeConflictError("CI scope manifest lanes are not closed")
+    selected = tuple(sorted(lane for lane, enabled in lanes.items() if enabled))
+    if mode == "full" and set(selected) != CI_SCOPE_LANES:
+        raise CiScopeConflictError("full CI scope manifest does not select every lane")
+    # The required-job inventory is only checked for closed shape here: the
+    # same-run Gate is the authority that binds jobs to lanes, and duplicating
+    # the CI lane/job table in release tooling would make release authority
+    # depend on a second, silently drifting copy of it.
+    if (
+        not isinstance(required_jobs, list) or not required_jobs
+        or not all(
+            isinstance(job, str) and job and "/" not in job for job in required_jobs
+        )
+        or len(set(required_jobs)) != len(required_jobs)
+        or list(required_jobs) != sorted(required_jobs)
+    ):
+        raise CiScopeConflictError("CI scope manifest required jobs are not closed")
+    return CiScopeProjection(
+        schema, base_sha.lower(), head_sha.lower(), mode, trusted_head,
+        selected, tuple(required_jobs),
+    )
+
+
 def _parse_release(
     document: object, repository: str, expected_id: int | None = None,
 ) -> GitHubRelease:
@@ -592,6 +939,39 @@ def _trusted_asset_redirect(value: object) -> bool:
         and port is None and parsed.username is None and parsed.password is None
         and not parsed.params and not parsed.fragment and bool(parsed.path)
     )
+
+
+def _trusted_artifact_redirect(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and isinstance(parsed.hostname, str)
+        and _ARTIFACT_REDIRECT_HOST.fullmatch(parsed.hostname) is not None
+        and port is None and parsed.username is None and parsed.password is None
+        and not parsed.params and not parsed.fragment and bool(parsed.path)
+        and bool(parsed.query)
+    )
+
+
+def _artifact_api_identity(value: object) -> tuple[str, int] | None:
+    if not isinstance(value, str):
+        return None
+    parsed = urlparse(value)
+    match = re.fullmatch(
+        r"/repos/([^/]+/[^/]+)/actions/artifacts/([1-9][0-9]*)", parsed.path,
+    )
+    if (
+        parsed.scheme != "https" or parsed.netloc != "api.github.com"
+        or parsed.params or parsed.query or parsed.fragment or match is None
+    ):
+        return None
+    return match.group(1), int(match.group(2))
 
 
 def _parse_asset(document: object, repository: str, release_id: int) -> GitHubAsset:

@@ -689,6 +689,35 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("$GITHUB_OUTPUT", job)
         self.assertIn("$GITHUB_STEP_SUMMARY", job)
 
+    def test_scope_artifact_retention_is_the_release_evidence_lifetime(self) -> None:
+        """Release authority reads this artifact, so its lifetime is a contract.
+
+        `tools/release/ci_evidence.py` accepts a release target only when the
+        exact run still retains a `full` scope manifest, so shortening this
+        retention or letting the upload fail silently would delete prospective
+        release evidence rather than merely lose a diagnostic.
+        """
+        job = self.workflow_job("change-scope")
+        self.assertIn("retention-days: 14", job)
+        self.assertIn("if-no-files-found: error", job)
+        self.assertIn("path: ${{ runner.temp }}/ci-scope.json", job)
+
+    def test_push_classification_uses_the_exact_before_range(self) -> None:
+        job = self.workflow_job("change-scope")
+        self.assertIn(
+            "BASE_SHA: ${{ github.event_name == 'pull_request' && "
+            "github.event.pull_request.base.sha || github.event_name == 'push' "
+            "&& github.event.before || github.sha }}",
+            job,
+        )
+        self.assertIn("HEAD_SHA: ${{ github.event_name == 'pull_request' && "
+                      "github.event.pull_request.head.sha || github.sha }}", job)
+
+    def test_dispatch_input_documents_the_explicit_full_evidence_path(self) -> None:
+        events = self.event_block(self.main_source)
+        self.assertIn("workflow_dispatch:", events)
+        self.assertIn("release evidence", events)
+
     def test_no_job_uses_retry_for_semantic_workloads(self) -> None:
         semantic_source = self.main_source + self.web_proof_source
         self.assertNotRegex(semantic_source, r"(?im)^\s+uses: .*retry")

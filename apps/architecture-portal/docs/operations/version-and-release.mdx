@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/release-evidence/release-intents.json, tools/release/policy.json, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -40,6 +40,16 @@ Task commit、push、PR、squash merge、signed product tag、Release、部署�
 `publish-release.yml` 发布同一个已验证 Draft。每段是独立授权；每次 mutation 后停止并重新运行
 `scripts/release.sh audit --remote --tag TAG`。Audit 从 policy、release intent ledger 与 live
 Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，不能满足新的 prospective gate。
+
+`audit --remote` 与 `prepare` 之前还有一道 CI 证据边界：release target 必须有一次 exact-main 的
+full 证据——该 SHA 上 completed、successful 的 `Core CI` run，同一 run 内 `Change Scope` 与
+`PR Gate` 均成功，且该 run 为同一 exact SHA 保留的 scope manifest 为 `lmdj.ci-scope` 的 v2、
+`mode=full`、`trusted_head=true`。普通 `main` merge 现在按精确路径分类，可能只跑 focused CI，
+所以 focused target 必须由操作者对该 exact SHA 以空 `lanes` 显式 dispatch 一次 full run 并把 run
+ID 写入 release intent；`requested` 与 focused 都会被拒绝，而一次 full dispatch 本身也不授权任何
+mutation。该 manifest artifact 保留 14 天：过期后只能在 run 仍被保留时重跑其全部 job，或另行授权
+一次 exact-SHA full run 并更新 intent；证据不得推断或重建。已 published 的终态审计继续以不可变
+tag/Release/asset 证据判定。
 
 签名发生在可信本地边界；GitHub workflow 只持有 public trust anchors。公开 publication 必须由
 精确输入的 workflow dispatch 显式授权，并通过受保护的 `release` Environment。当前单人维护者
