@@ -9,19 +9,32 @@ authenticates that exact allocation revision and Assembly lock
 `206cfa444a495595ac180d1467676de834684661abc57981c943fe620f339518`.
 Later implementation fixes do not rewrite that immutable candidate projection.
 
-The current reviewed implementation is `9188410` on
-`feat/stage8-sample-editor`. It includes the recovery-trigger ownership fix
-`4667474023a421b56f569dab5d186dd58d75d5ee` and the two merge-review fixes:
-same-token recovery of valid incomplete Sample staging, and preservation of a
+The accepted implementation is `ca846f96b1a9c73894948bfa32c1aef1968b6e85`, the
+exact `feat/stage8-sample-editor` head that Pull Request #137 carried. It was
+squash merged into `main` as `51d9e4748cc12a4423954a159949b7b165513789` on
+2026-08-16. It includes the recovery-trigger ownership fix
+`4667474023a421b56f569dab5d186dd58d75d5ee`, the two merge-review fixes
+(same-token recovery of valid incomplete Sample staging, and preservation of a
 successful mutation receipt when preview cleanup or authoritative inspection
-fails after commit.
+fails after commit), the later Creator lifecycle, Web Runtime Voice-overflow,
+Facade waveform, Cooker GCC and Web Project I/O hardening, and two merged-`main`
+drift fixes described under "Pre-merge drift fixes".
 
-Automated Core, stress, Creator unit/build, Sample Editor Chromium, WebKit
-capability, and Portal gates pass at this revision. The complete Creator Proof
-is not currently green: its general Chromium lifecycle group reproducibly has
-three input-observation timeouts, recorded below. Therefore this record does
-not claim final automated acceptance or readiness for merge. Stage 8B remains
-unimplemented and unversioned.
+The complete exact-head CI matrix is green at `ca846f96`, including the full
+Creator Proof. The three reproducible general-Chromium lifecycle timeouts that
+an earlier revision of this record reported are no longer present: those
+journeys now live at `creator_web_lifecycle.spec.mjs:402`, `:438` and `:476`
+and all pass. This record therefore claims automated acceptance at `ca846f96`.
+
+Physical and manual acceptance remains `deferred / unverified` in every row
+below; automation does not convert those rows. Stage 8B remains unimplemented
+and unversioned by this Product Build.
+
+Squash merging collapsed the allocation revision, so the `1.0.22.0` snapshot
+provenance was re-authenticated on `main` by
+`01e3ae24bfa2512a010e06eca0ef954ff3022397` (Pull Request #169), which adds only
+`apps/architecture-portal/versioned_provenance/version-1.0.22.0-squash-witness.json`
+and rewrites no immutable snapshot content.
 
 ## Automated acceptance contract
 
@@ -41,38 +54,70 @@ the Project mutation.
 
 ## Automated results
 
-All commands below ran on 2026-08-14 against implementation revision
-`9188410`. Clean-source Proof used Emscripten 6.0.5, Node 22.16.0, and its
-bundled Python 3.13.3.
+Acceptance evidence is the exact-head `Core CI` run
+[31927768644](https://github.com/endaye/lmdj/actions/runs/31927768644) on
+`ca846f96`, completed successfully on 2026-08-16. Every lane below is a job of
+that one run; no result is carried over from another revision.
 
-| Gate | Result |
+| Gate (job) | Result |
 | --- | --- |
-| `scripts/core.sh configure dev` | pass |
-| `scripts/core.sh build dev` | pass |
-| `scripts/core.sh test dev full` | 54/54 pass |
-| `scripts/core.sh test dev stress` | 2/2 pass |
-| `scripts/core.sh proof` | 38/38 proof tests plus schema, dependency, CLI/MCP parity, Golden audio, package acceptance, and headless proof pass |
-| Creator Vitest and production build | 222/222 pass; TypeScript and Vite production build pass |
-| `scripts/creator-web.sh proof` | Project/Sample fixtures, byte-identical distributions, Creator 222/222, package 9/9, server 3/3, Runtime Node 127/127, Sample Editor Chromium 1 pass/1 declared skip, and both WebKit capability checks pass; general Chromium is **not green** at 11 pass/3 fail/1 skip |
-| `bash scripts/verify-core-dependencies.sh` | pass |
-| `bash tests/build/test_active_tree.sh` | pass |
-| `python3 tests/build/version_test.py` | pass |
-| `python3 scripts/version.py verify --version-file products/lmdj/version.json` | `1.0.22.0` pass |
-| `scripts/architecture-portal.sh check` | 47/47 tests, 37 pages, 10 diagram sources/20 outputs, release-doc snapshot, typecheck/build, and 42 routes/internal links pass |
+| `Change Scope` | success |
+| `Docs / static` | success |
+| `CI contract` | success |
+| `Architecture Portal / portal` | success |
+| `core (ubuntu-latest)` | success; `Headless Core Proof: PASS`, including proof path safety, CLI/MCP Facade parity and Core distribution package acceptance |
+| `core-asan` | success; 61/61 full-tier tests and 2/2 stress-tier tests pass under ASan |
+| `core-coverage` | success; `Core coverage gate: PASS` |
+| `macOS gates (primary)` / `core (macos-latest)` | success; `Headless Core Proof: PASS` and 30/30 native tests |
+| `core-asan-macos` | success |
+| `Core package` | success; 24/24 tests |
+| `web-toolchain-conformance` | success; `Web Toolchain Conformance Proof: PASS` |
+| `web-runtime-host` | success; `Web Runtime Host Proof: PASS` |
+| `creator-web` | success; `Creator Web Proof: PASS` (detailed below) |
+| `web-runtime-lab` | success |
+| `Deploy contract` | success |
+| `Chameleon Lab` | success |
+| `PR Gate` | success |
 
-The three reproducible Chromium failures are the lifecycle journeys at
-`creator_web_lifecycle.spec.mjs:346`, `:383`, and `:421`: two loop-toggle
-journeys remain `data-outcome=idle` after Enter, and the persisted-page journey
-does not observe a post-pageshow keyboard outcome. Both full Proof attempts had
-the same 11/3/1 result. They are not converted into a pass by the separately
-green Sample Editor journey.
+`Creator Web Proof: PASS` decomposes into: `Creator Web distribution
+reproducibility: PASS` (two clean builds byte-identical), Creator Vitest
+222/222 across 11 files, package 9/9, server 3/3, Runtime Node 127/127,
+general Chromium 14 pass with 1 declared skip out of 15, Sample Editor
+`creator-sample-chromium` 1 pass with 1 declared skip, and both WebKit
+capability checks pass.
 
-## Local artifact evidence
+The general-Chromium lifecycle group is green. The three journeys an earlier
+revision of this record reported as reproducible timeouts now run at
+`creator_web_lifecycle.spec.mjs:402`, `:438` and `:476` and all pass in this
+run. The earlier 11 pass/3 fail/1 skip result stood at implementation revision
+`9188410` and is superseded historical context, not current evidence.
 
-The Core and Creator Proof commands generated local build/package outputs and
+### Pre-merge drift fixes
+
+Two defects were surfaced only when the Pull Request left Draft and the full
+matrix first executed, in run
+[31927144643](https://github.com/endaye/lmdj/actions/runs/31927144643) on
+`fe55a9e9`. Both were drift between the branch and merged `main`, not product
+defects, and both are fixed in the accepted head:
+
+1. `2ca0d17f fix(release): bind sanitized-target test to the stage 8 build` —
+   `release_prepare_test.test_failed_target_command_reports_a_sanitized_reason`
+   still pinned identity `1.0.21.0`, so the exact-target validator rejected it
+   on the manifest comparison before reaching the Portal snapshot command whose
+   sanitized diagnostic the test asserts. This failed `core (ubuntu-latest)`,
+   `core (macos-latest)`, `core-asan`, `core-coverage` and `Deploy contract`.
+2. `ca846f96 fix(creator): assert the packaged sample editor lane by its
+   binding` — `apps/creator-web/test/package_test.py` asserted a literal
+   `ci.yml` step name that the merged runner-topology refactor replaced with the
+   shared `.github/actions/web-ci-proof` composite action. The lane still runs
+   `scripts/creator-web.sh proof`; only the assertion was stale. This failed
+   `creator-web`.
+
+### Local artifact evidence
+
+The CI Core and Creator Proof lanes generated build and package outputs and
 proved the Creator distribution byte-identical across two clean builds. They
-are not released or published artifacts. Because the overall Creator Proof is
-not green, this record deliberately does not promote those transient outputs
+are not released or published artifacts, and this record does not promote them
 to acceptance artifacts or preserve their hashes. No release archive, tag, or
 GitHub Release was created by this run.
 
@@ -84,6 +129,11 @@ GitHub Release was created by this run.
 | Creator Project or storage parser | none |
 | Source maps in the packaged Creator distribution | none |
 | Alternate browser audio engine | none; the packaged journey uses the governed Runtime Host and AudioWorklet path |
+
+These boundaries are enforced automatically by the `creator-web` and
+`Core package` gates, both `success` in run `31927768644` at `ca846f96`, and the
+source inventory was re-inspected on merged `main` at
+`01e3ae24bfa2512a010e06eca0ef954ff3022397`.
 
 ## Manual and physical acceptance rows
 
@@ -105,9 +155,14 @@ they block any physical-pass claim and promotion to Beta or Stable.
 
 | Transition | Status |
 | --- | --- |
-| Push | performed through remote revision `bba79c1b5cd6c08aca1e56f0d02a7f77f113f9a5`; review fix `9188410` remains local |
-| Pull Request | Draft PR #137 exists; it remains Draft |
-| Merge | not authorized / not performed |
-| Product tag or GitHub Release | not authorized / not created |
+| Push | performed; the accepted head `ca846f96b1a9c73894948bfa32c1aef1968b6e85` was the exact remote branch tip |
+| Pull Request | #137 was marked ready for review and is `MERGED` |
+| Merge | authorized and performed on 2026-08-16; squash merged as `51d9e4748cc12a4423954a159949b7b165513789` |
+| Snapshot provenance follow-up | performed; #169 merged as `01e3ae24bfa2512a010e06eca0ef954ff3022397` and the `Release identity audit` on `main` returned to `success` |
+| Product tag or GitHub Release | not authorized / not created; `lmdj-v1.0.22.0` remains `allocated` |
 | Deployment or publication | not authorized / not performed |
 | Channel promotion | not authorized / not performed |
+
+Merging authorized none of the remaining transitions. A tag, Draft Release,
+publication, Runtime deployment, and Channel promotion each remain separate
+authorization boundaries.
