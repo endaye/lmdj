@@ -200,3 +200,20 @@ runs:
           creator) scripts/creator-web.sh proof ;;
           *) echo "unsupported Web CI lane" >&2; exit 2 ;;
         esac
+
+    # Every Web lane drives Playwright through one config whose outputDir is
+    # tests/platform/web/test-results. On failure that directory holds the
+    # trace, error context and screenshots naming the exact failing action,
+    # and without this step they die with the runner. An intermittent browser
+    # failure is then only reproducible by luck, which is how the Creator
+    # lifecycle journeys stayed undiagnosed. Keep this best-effort: a lane can
+    # fail before Playwright ever runs, and a missing directory must report the
+    # real failure rather than masking it with an upload error.
+    - name: Upload failed Web proof evidence
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: web-ci-failure-${{ inputs.lane }}
+        path: tests/platform/web/test-results
+        if-no-files-found: ignore
+        retention-days: 14
