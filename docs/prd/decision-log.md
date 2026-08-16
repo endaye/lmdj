@@ -435,6 +435,16 @@ manifest 与全部 Contract 零变更。
 - **S8B-D10**：共享 prepared-PCM 配额（单 Pad ≈60 秒长素材）立为具名后续
   阶段，与 Loop 素材 BPM Time-stretch 开放问题同一次设计评审；Stage 8B 不改
   资源模型、不抬 512 MiB 固定堆。
+- **S8B-D12**（2026-08-16 实现期修订）：capture worklet 以同源内容哈希分发
+  资产（role `capture_worklet`）随包发布，不再以 blob URL 内联加载。原因：
+  分发包的加固 CSP 为 `script-src 'self' 'wasm-unsafe-eval'`，AudioWorklet
+  模块加载按 script-src 判定，blob:/data: 一律被拒（实测三种写法全部
+  `AbortError`），打包版 Creator 中录音无法启动。S8B-D9 未规定加载机制，
+  blob 是实现选择而非设计属性；同源资产与其余资产同受内容哈希与 manifest
+  完整性校验，安全性不降反升。分发 manifest 的 expected_assets 属同构建
+  协议（Portal 明文：不是公开跨版本 Contract），设计 §12 的零变更清单
+  （Core Modules、Facade/传输表面、全部 Contract、resource_limits）均未
+  触碰。
 
 Stage 8B 仍未实现、未分配 Product/Module 版本；实现时预期仅 `creator-web`
 minor bump（`web-runtime-host` 仅在其文件实际变更时 bump）。

@@ -105,7 +105,15 @@ class CreatorPackageTest(unittest.TestCase):
         (self.ui / "assets/index-source.js").write_text(
             "const sampleEditorProof = "
             + json.dumps(SAMPLE_EDITOR_MARKERS)
-            + "; console.log(sampleEditorProof);\n",
+            + "; console.log(sampleEditorProof);\n"
+            + 'const captureWorklet = "/assets/capture_worklet-fixture.js";\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        # The capture worklet ships as its own asset (CSP: script-src 'self');
+        # the packaging tool rebinds main's reference to its hashed name.
+        (self.ui / "assets/capture_worklet-fixture.js").write_text(
+            "registerProcessor('lmdj-capture-recorder', class {});\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -177,7 +185,13 @@ class CreatorPackageTest(unittest.TestCase):
         )
         self.assertEqual(
             [entry["role"] for entry in manifest["assets"]],
-            ["host_main", "runtime_script", "runtime_wasm", "host_style"],
+            [
+                "host_main",
+                "runtime_script",
+                "runtime_wasm",
+                "host_style",
+                "capture_worklet",
+            ],
         )
 
     def test_dirty_source_fails_before_distribution_mutation(self) -> None:

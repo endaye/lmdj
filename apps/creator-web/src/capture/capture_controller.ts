@@ -1,4 +1,11 @@
-import {CAPTURE_WORKLET_NAME, CAPTURE_WORKLET_SOURCE} from "./capture_worklet_source";
+import {CAPTURE_WORKLET_NAME} from "./capture_worklet_source";
+// Resolved by the bundler to the same-origin hashed asset URL of the shipped
+// worklet file. The distribution CSP (`script-src 'self'`) rejects blob: and
+// data: worklet modules, so a same-origin URL is the only loadable form in the
+// packaged Creator.
+// ?no-inline: Vite would otherwise inline a file this small as a data: URL,
+// which the CSP rejects exactly like blob:.
+import captureWorkletUrl from "./capture_worklet.js?url&no-inline";
 
 export class CapturePermissionError extends Error {}
 
@@ -11,8 +18,7 @@ export interface CaptureControllerDeps {
   getUserMedia(constraints: MediaStreamConstraints): Promise<MediaStream>;
   createContext(): AudioContext;
   createNode(context: AudioContext, name: string): AudioWorkletNode;
-  createModuleUrl(source: string): string;
-  revokeModuleUrl(url: string): void;
+  workletModuleUrl(): string;
 }
 
 interface CaptureResources {
@@ -20,7 +26,6 @@ interface CaptureResources {
   node: AudioWorkletNode;
   source: MediaStreamAudioSourceNode;
   context: AudioContext;
-  moduleUrl: string;
   onended: () => void;
 }
 
@@ -67,11 +72,9 @@ export class CaptureController {
     // or the microphone stays on with no owner able to stop it: stop() would
     // find #resources === null and silently no-op (design §7, single owner).
     let context: AudioContext | undefined;
-    let moduleUrl: string | undefined;
     try {
       context = this.#deps.createContext();
-      moduleUrl = this.#deps.createModuleUrl(CAPTURE_WORKLET_SOURCE);
-      await context.audioWorklet.addModule(moduleUrl);
+      await context.audioWorklet.addModule(this.#deps.workletModuleUrl());
       const source = context.createMediaStreamSource(stream);
       const node = this.#deps.createNode(context, CAPTURE_WORKLET_NAME);
       node.port.onmessage = (event: MessageEvent) => {
@@ -80,7 +83,7 @@ export class CaptureController {
       source.connect(node);
       const onended = () => this.#listener.onEnded("device-lost");
       track.addEventListener("ended", onended);
-      this.#resources = {track, node, source, context, moduleUrl, onended};
+      this.#resources = {track, node, source, context, onended};
     } catch (error) {
       // Best-effort release: a throw while cleaning up must never replace the
       // original error, or the real cause of the capture failure is lost.
@@ -88,7 +91,6 @@ export class CaptureController {
       if (context !== undefined) {
         try { await context.close(); } catch { /* already closing */ }
       }
-      if (moduleUrl !== undefined) { this.#deps.revokeModuleUrl(moduleUrl); }
       throw error;
     }
   }
@@ -106,12 +108,7 @@ export class CaptureController {
     resources.node.port.onmessage = null;
     resources.node.disconnect();
     resources.source.disconnect();
-    // finally: a rejected close() must not strand the Blob URL.
-    try {
-      await resources.context.close();
-    } finally {
-      this.#deps.revokeModuleUrl(resources.moduleUrl);
-    }
+    await resources.context.close();
   }
 }
 
@@ -120,8 +117,6 @@ export function browserCaptureDeps(): CaptureControllerDeps {
     getUserMedia: (constraints) => navigator.mediaDevices.getUserMedia(constraints),
     createContext: () => new AudioContext({sampleRate: 48_000}),
     createNode: (context, name) => new AudioWorkletNode(context, name),
-    createModuleUrl: (source) =>
-      URL.createObjectURL(new Blob([source], {type: "text/javascript"})),
-    revokeModuleUrl: (url) => URL.revokeObjectURL(url),
+    workletModuleUrl: () => captureWorkletUrl,
   };
 }

@@ -1,6 +1,10 @@
 import {describe, expect, test, vi} from "vitest";
 import {CaptureController, CapturePermissionError} from "../src/capture/capture_controller";
-import {CAPTURE_WORKLET_SOURCE} from "../src/capture/capture_worklet_source";
+import {
+  CAPTURE_BATCH_FRAMES,
+  CAPTURE_WORKLET_NAME,
+  CAPTURE_WORKLET_SOURCE,
+} from "../src/capture/capture_worklet_source";
 
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const track = {
@@ -29,8 +33,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       getUserMedia: vi.fn(async () => stream),
       createContext: () => context,
       createNode: () => node,
-      createModuleUrl: vi.fn(() => "blob:capture"),
-      revokeModuleUrl: vi.fn(),
+      workletModuleUrl: vi.fn(() => "/assets/capture-worklet.test.js"),
       ...overrides,
     },
   };
@@ -44,8 +47,9 @@ describe("CaptureController", () => {
     expect(deps.getUserMedia).toHaveBeenCalledWith({audio: {
       echoCancellation: false, noiseSuppression: false, autoGainControl: false,
     }});
-    expect(deps.createModuleUrl).toHaveBeenCalledWith(CAPTURE_WORKLET_SOURCE);
-    expect(context.audioWorklet.added).toEqual(["blob:capture"]);
+    // The worklet loads from the same-origin distribution asset URL: the
+    // hardened CSP (script-src 'self') rejects blob:/data: module URLs.
+    expect(context.audioWorklet.added).toEqual(["/assets/capture-worklet.test.js"]);
     // S8B-D4: wired to the worklet node, never to an output.
     expect(source.connect).toHaveBeenCalledTimes(1);
     expect(source.connect).toHaveBeenCalledWith(node);
@@ -59,7 +63,6 @@ describe("CaptureController", () => {
     // The stream was live; it must not be left running with no owner.
     expect(track.stopped).toBe(1);
     expect(context.closed).toBe(1);
-    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
     // stop() afterwards stays a safe no-op, releasing nothing a second time.
     await controller.stop();
     expect(track.stopped).toBe(1);
@@ -72,7 +75,6 @@ describe("CaptureController", () => {
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
     // The setup failure is the real cause; a failing close() must not mask it.
     await expect(controller.start()).rejects.toThrow("CSP blocked");
-    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
   });
 
   test("maps getUserMedia rejection to CapturePermissionError", async () => {
@@ -119,19 +121,20 @@ describe("CaptureController", () => {
     expect(node.disconnect).toHaveBeenCalledTimes(1);
     expect(source.disconnect).toHaveBeenCalledTimes(1);
     expect(context.closed).toBe(1);
-    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
   });
 
-  test("still revokes the module URL when stop()'s context.close() rejects", async () => {
-    const {deps, context} = makeDeps();
+  test("releases the track and graph even when stop()'s context.close() rejects", async () => {
+    const {deps, track, node, source, context} = makeDeps();
     const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
     await controller.start();
     context.close = async () => { throw new Error("close failed"); };
-    // stop() may still reject (its own error is not swallowed); what must be
-    // guaranteed is that the Blob URL revoke runs regardless. Catch here so
-    // the rejection doesn't surface as an unhandled promise rejection.
-    await controller.stop().catch(() => undefined);
-    expect(deps.revokeModuleUrl).toHaveBeenCalledTimes(1);
+    // stop() rejects with close()'s own error, but by then the microphone and
+    // the capture graph must already be released — the failing close() cannot
+    // leave the indicator lit.
+    await expect(controller.stop()).rejects.toThrow("close failed");
+    expect(track.stopped).toBe(1);
+    expect(node.disconnect).toHaveBeenCalledTimes(1);
+    expect(source.disconnect).toHaveBeenCalledTimes(1);
   });
 
   test("reports track end as device loss", async () => {
@@ -145,6 +148,17 @@ describe("CaptureController", () => {
 });
 
 describe("CAPTURE_WORKLET_SOURCE", () => {
+  test("the shipped worklet file and the TypeScript mirror cannot drift", () => {
+    // The processor ships as capture_worklet.js; the TS constants are the
+    // mirror the controller and panel use. A drift here would register the
+    // node under a name the file never registered, or size batches wrong.
+    expect(CAPTURE_WORKLET_SOURCE).toContain(
+      `registerProcessor("${CAPTURE_WORKLET_NAME}"`);
+    expect(CAPTURE_WORKLET_SOURCE).toContain(
+      `const CAPTURE_BATCH_FRAMES = ${CAPTURE_BATCH_FRAMES};`);
+  });
+
+
   interface WorkletMessage {
     channels: Float32Array[];
     peak: number;

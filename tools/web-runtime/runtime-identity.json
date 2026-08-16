@@ -26,6 +26,11 @@
           "prefix": "assets/styles.",
           "role": "host_style",
           "suffix": ".css"
+        },
+        {
+          "prefix": "assets/capture-worklet.",
+          "role": "capture_worklet",
+          "suffix": ".js"
         }
       ]
     },
