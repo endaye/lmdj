@@ -6,6 +6,10 @@ import {expect, test} from "@playwright/test";
 const sampleBundle = process.env.LMDJ_CREATOR_WEB_SAMPLE_BUNDLE;
 
 const SLOT_A1 = {bank: 0, pad: 0};
+// Every audio lifecycle gesture owns one independently bounded 30-second
+// Runtime request, so the state that follows an accepted gesture is promised
+// only within that bound plus bounded render settling.
+const AUDIO_TRANSITION_TIMEOUT_MS = 30_000 + 5_000;
 let pointerSequence = 10;
 
 function pcm16Wav({frames = 96_000, sampleRate = 48_000, phase = 0}) {
@@ -464,9 +468,18 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await expectProjectRevision(page, 58);
 
   await page.getByRole("button", {name: "Suspend audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended");
+  // An explicit Suspend publishes "Audio suspended" only after the Runtime has
+  // committed the suspend, so the Activate gesture that follows is guaranteed
+  // to be accepted. Both gestures own one independently bounded 30-second
+  // Runtime request, which Playwright's 5-second default does not cover.
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
   await page.getByRole("button", {name: "Activate audio"}).click();
-  await expect(page.getByTestId("audio-state")).toHaveText(/Audio (running|recovering)/);
+  await expect(page.getByTestId("audio-state")).toHaveText(
+    /Audio (running|recovering)/,
+    {timeout: AUDIO_TRANSITION_TIMEOUT_MS},
+  );
   await page.getByRole("button", {name: "Retry Prepare"}).click();
   await expect(page.getByRole("button", {name: "Retry Prepare"})).toHaveCount(0, {
     timeout: 120_000,
