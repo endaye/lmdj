@@ -102,3 +102,4 @@ testdata/audio/suno/**/*.mp3
 # Local environment overrides
 .env
 **/worktrees/
+.aider*
