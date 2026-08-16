@@ -75,6 +75,11 @@ build/toolchains/
 # Formal Web toolchain and browser proof outputs
 build/web/
 tests/platform/web/test-results/
+# Deterministically regenerated at Playwright config load by
+# creator/fixtures/make_capture_fixture.mjs; tracking it would only add a
+# binary that every run can rebuild, and leaving it untracked would make
+# each proof dirty the tree it requires to be clean.
+tests/platform/web/creator/fixtures/capture-*.wav
 tests/platform/web/playwright-report/
 # Privacy-safe local Creator acceptance exports
 lmdj-creator-web-*.json

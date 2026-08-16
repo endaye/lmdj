@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 
 import { defineConfig, devices } from "@playwright/test";
 
+import { ensureCaptureFixture } from "./creator/fixtures/make_capture_fixture.mjs";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(webRoot, "../../..");
@@ -11,6 +12,13 @@ const creatorExternal = process.env.LMDJ_CREATOR_WEB_EXTERNAL_SERVER === "1";
 const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1" ||
   process.env.LMDJ_CREATOR_WEB_FULL_CHROMIUM === "1";
 const sampleEditorSpec = /creator_web_sample_editor\.spec\.mjs/;
+const captureSpec = /creator_web_capture\.spec\.mjs/;
+// Written at config load so the file exists before Chromium launches with
+// --use-file-for-fake-audio-capture; the flag silently yields silence if the
+// path is missing, which would turn a real capture regression into a green run.
+const captureFixture = ensureCaptureFixture(
+  resolve(webRoot, "creator/fixtures/capture-440hz-2s-mono-48k.wav"),
+);
 const externalServer =
   cleanRoom || creatorExternal ||
   process.env.LMDJ_WEB_HOST_EXTERNAL_SERVER === "1";
@@ -79,6 +87,38 @@ export default defineConfig({
       name: "creator-sample-webkit",
       testMatch: sampleEditorSpec,
       use: { ...devices["Desktop Safari"] },
+    },
+    // S8B-D8: Chromium's fake device replaying a fixed WAV is the automated
+    // acceptance gate for capture. Real-microphone, Safari and iPadOS
+    // behaviour stay in the deferred ledger and are never inferred from these.
+    {
+      name: "creator-capture-chromium",
+      testMatch: captureSpec,
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(fullChromium ? { channel: "chromium" } : {}),
+        permissions: ["microphone"],
+        launchOptions: {
+          args: [
+            "--use-fake-device-for-media-stream",
+            `--use-file-for-fake-audio-capture=${captureFixture}`,
+            "--use-fake-ui-for-media-stream",
+          ],
+        },
+      },
+    },
+    // No --use-fake-ui-for-media-stream and no granted permission, so the
+    // headless prompt auto-dismisses into a deterministic NotAllowedError.
+    {
+      name: "creator-capture-denied-chromium",
+      testMatch: captureSpec,
+      use: {
+        ...devices["Desktop Chrome"],
+        ...(fullChromium ? { channel: "chromium" } : {}),
+        launchOptions: {
+          args: ["--use-fake-device-for-media-stream"],
+        },
+      },
     },
   ],
 });
