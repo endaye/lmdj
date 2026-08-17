@@ -92,8 +92,8 @@ run against the current Build.
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | open; see P1 |
-| M3 | Pointer input | inherited from Stage 6/7 | open |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
+| M3 | Pointer input | inherited from Stage 6/7 | not started |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
 ### Session M-B — macOS Chrome with external hardware
@@ -207,8 +207,11 @@ omitted and not called passed.
 
 ## Suggested order
 
-1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 + M3 (+ M4)**
-   remain and still need only one Mac and no extra hardware.
+1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 stopped at its
+   first check** and should not resume until F5 and F6 are resolved: F5 makes
+   the trim controls unaimable, so checks 1–2 cannot be performed reliably, and
+   F6 makes checks 1 and 5 fail by construction. **M3** is independent of both
+   and can run at any time.
 2. **P1** — a short decision that determines whether the remaining list is
    thirteen rows or six.
 3. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external

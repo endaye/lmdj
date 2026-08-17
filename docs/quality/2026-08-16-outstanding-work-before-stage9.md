@@ -266,12 +266,18 @@ buffer editing requires invalidation logic. Recorded in the code.
 
 ---
 
-## F. Creator defects found by the 2026-08-17 physical session
+## F. Defects found by the 2026-08-17 physical session
 
-Found while performing A1's real-microphone row. Each was reproduced and
-measured before being recorded; full detail and measurements are in the
+F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 came
+from the first check of row M2, which stopped there. Each was reproduced or
+traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
-None is fixed, and each needs its own plan.
+None is fixed.
+
+F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
+[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
+F4 and F6 each need a product decision and are explicitly excluded from that
+plan.
 
 ### F1. The capture panel has no styling and opens below the fold
 
@@ -314,6 +320,48 @@ off screen.
 Needs a product decision — device picker, visible input identity, an
 input-level gate before commit, or some combination — not a unilateral fix
 inside an implementation Task. Belongs with D1–D5 in a design review.
+
+### F5. The waveform trim handles cannot be aimed
+
+Both trim handles are native `input[type="range"]` elements
+(`waveform_editor.tsx:372`, `:393`) styled `position: absolute; inset-inline: 0;
+width: 100%; min-height: 44px; opacity: .01` (`styles.css:127`), stacked over
+the waveform canvas with Start anchored to the top and End to the bottom.
+
+Three consequences follow from that geometry: which handle a press grabs is
+decided by **vertical band**, not by the handle being pointed at, so aiming at
+the drawn handle line is meaningless; the middle band of the canvas belongs to
+neither input and does nothing; and because a native range jumps its thumb to
+the clicked track position, a mis-aimed press **moves the wrong trim point**
+rather than being ignored. `opacity: .01` makes none of it learnable.
+
+Found within a minute of a human first trying to trim a Sample. The keyboard
+path is sound and must survive the fix.
+
+Scoped in
+[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
+with F1–F3.
+
+### F6. The render path has no amplitude ramp anywhere
+
+Trimming a Sample and triggering it produces audible clicks at the trim
+boundaries — the first check of row M2, 2026-08-17.
+
+Not a Creator defect. `realtime_engine.cpp:710` renders
+`voice.samples[voice.cursor] * voice.gain` and at `end_frame` either assigns
+`voice.cursor = voice.start_frame` for a loop or hard-stops; `stop_voice`
+(`:195`) sets `voice.active = false` immediately. There is no attack ramp, no
+release ramp, no fade at the trim boundary, no crossfade at the loop seam and
+no zero-crossing snap. A trim edge on a non-zero sample is a step
+discontinuity, which is what the click is.
+
+The same absence predicts clicks at the loop seam and on releasing a held
+voice; neither has been tested yet.
+
+Needs a Core/DSP product decision — ramp length, zero-crossing snap, crossfade,
+or a combination — with a realtime-safety review, since the render path is
+allocation-free and lock-free and any ramp state must stay inside that
+contract. Explicitly out of scope for the Creator UI plan.
 
 ---
 
