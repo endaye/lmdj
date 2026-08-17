@@ -17,8 +17,9 @@ the file picker uses.
 
 This record claims automated acceptance for the gates listed below. The local
 Proof results were produced at `cd182361baf1`; the full CI matrix passed on the
-merged head, which additionally carries #177 and the current `main`. It does not claim physical or
-manual acceptance: every row in the deferred ledger stays
+merged head, which additionally carries #177 and the current `main`. It claimed
+no physical or manual acceptance when written; one row has since been converted
+by a physical session and is marked in the ledger below. Every other row stays
 `deferred / unverified`.
 
 ## Automated acceptance contract
@@ -147,16 +148,19 @@ layer below it:
 
 | Platform | Browser / device | Journey | Status |
 | --- | --- | --- | --- |
-| macOS | Chrome | Real microphone capture, commit and playback hearing | `deferred / unverified` |
+| macOS | Chrome | Real microphone capture, commit and playback hearing | `PASS — 1.0.23.0, confirmed by endaye on 2026-08-17; all five hearing criteria including a deliberately hot take; see` [`evidence`](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md) |
 | macOS | Chrome | External audio interface input | `deferred / unverified` |
 | macOS | Safari | `getUserMedia` and AudioWorklet capture behaviour | `deferred / unverified` |
 | iPadOS | Safari | Capture behaviour | `deferred / unverified` |
 
 S8B-D8 makes these deferred by design and counted only once actually
-performed. The Chromium fake device proves the pipeline, never the sound. Every
-physical row inherited from Stage 6 and Stage 8 also remains
-`deferred / unverified`; automation converts none of them, and they block any
-physical-pass claim and promotion to Beta or Stable.
+performed. The Chromium fake device proves the pipeline, never the sound. The
+macOS Chrome real-microphone row was performed on 2026-08-17 and is the only
+one converted; that session also produced four findings, recorded in its
+evidence file, and none is fixed by this record. Every other row here, and
+every physical row inherited from Stage 6 and Stage 8, remains
+`deferred / unverified`; automation converts none of them, and they continue to
+block any full physical-pass claim and promotion to Beta or Stable.
 
 ## External state
 

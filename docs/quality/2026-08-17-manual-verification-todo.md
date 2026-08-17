@@ -89,12 +89,12 @@ run against the current Build.
 
 ### Session M-A — macOS Chrome, no extra hardware
 
-| ID | Journey | Origin |
-| --- | --- | --- |
-| M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) |
-| M3 | Pointer input | inherited from Stage 6/7 |
-| M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today |
+| ID | Journey | Origin | Status |
+| --- | --- | --- | --- |
+| M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | open; see P1 |
+| M3 | Pointer input | inherited from Stage 6/7 | open |
+| M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
 ### Session M-B — macOS Chrome with external hardware
 
@@ -165,6 +165,7 @@ reported before the remaining sessions run.
 | Apple native Host seven-step physical gate — CoreAudio closed loop, two-Pad audible mapping, live reload overlap | `PASS` on `1.0.11.0` ([record](2026-08-03-formal-native-host-acceptance.md)) |
 | macOS Chrome physical keyboard plus hearing, ten-step Canary | `PASS` on `1.0.20.0`, report SHA-256 `7e2a2b…333a` ([evidence](../release-evidence/2026-08-13-stage7-keyboard-mapping-canary-1.0.20.0.md)) |
 | macOS Chrome physical MIDI, Creator surface — MPD218 Channel 10, all 16 Bank-A Pads, reconnect, suspend/re-authorize, reload/reopen | `PASS` on `1.0.21.0`, report SHA-256 `b0491e…603` ([evidence](../release-evidence/2026-08-13-stage7-midi-channel-canary-1.0.21.0.md)) |
+| macOS Chrome real microphone capture → commit → playback hearing, five criteria including a hot take (M1) | `PASS` on `1.0.23.0` ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
 
 The Family L Chrome MIDI row (L3) is **not** covered by the `1.0.21.0` pass:
 that pass is a Creator product journey, while L3 additionally requires 500
@@ -206,8 +207,8 @@ omitted and not called passed.
 
 ## Suggested order
 
-1. **M1 + M2 + M3 (+ M4)** — one session, one Mac, no extra hardware, and M1 is
-   the only real validation the capture chain has ever had.
+1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 + M3 (+ M4)**
+   remain and still need only one Mac and no extra hardware.
 2. **P1** — a short decision that determines whether the remaining list is
    thirteen rows or six.
 3. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
