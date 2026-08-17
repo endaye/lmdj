@@ -8,6 +8,13 @@ This is a **triage document, not an implementation plan**. Each item that gets
 worked needs its own plan under `docs/superpowers/plans/` with its own
 `## Version Management` section, per `CLAUDE.md`.
 
+Two working lists split this record by who can act on each item:
+[`2026-08-17-manual-verification-todo.md`](2026-08-17-manual-verification-todo.md)
+for what a human must do, and
+[`2026-08-17-machine-task-todo.md`](2026-08-17-machine-task-todo.md) for what a
+coding agent can complete alone. This document stays the canonical statement of
+each item; the two lists carry status and ordering.
+
 Verified against `main` at `9d079796` on 2026-08-16, and updated on 2026-08-17
 with the outcome of A1's real-microphone row and the findings it returned
 (section F). Items from

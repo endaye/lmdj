@@ -1,15 +1,29 @@
-# Manual and Physical Verification TODO — 2026-08-17
+# Human TODO — 2026-08-17
 
-Every verification in this repository that a human being has to perform,
-gathered in one place. Automation cannot convert any of them.
+Everything in this repository that **a human being has to do**: verifications
+automation cannot convert, and decisions a coding agent must not settle alone.
 
-Companion to [`2026-08-16-outstanding-work-before-stage9.md`](2026-08-16-outstanding-work-before-stage9.md),
-which lists everything outstanding before Stage 9; this document expands its
-item A1 into an executable checklist and adds the `web-runtime-lab` physical
-gate, which A1 does not cover.
+Its companion is [`2026-08-17-machine-task-todo.md`](2026-08-17-machine-task-todo.md),
+which holds the work a coding agent can complete without a human in the loop.
+Between them the two lists cover every open item in
+[`2026-08-16-outstanding-work-before-stage9.md`](2026-08-16-outstanding-work-before-stage9.md),
+which stays the canonical triage record; these two are the working lists.
+
+This document expands triage item A1 into an executable checklist, adds the
+`web-runtime-lab` physical gate that A1 does not cover, and carries the
+decisions blocking machine work.
 
 Verified against `main` at `801fa450` on 2026-08-17. Status values are copied
 from the acceptance records named in each row, not re-derived.
+
+## Contents
+
+| Section | What it holds |
+| --- | --- |
+| Family L | the five instrumented Web physical rows |
+| Family M | Creator product physical rows, grouped by session and hardware |
+| Decisions | choices only a person can make; each one blocks machine work |
+| Re-verification | rows that must be re-run after a fix lands |
 
 ---
 
@@ -173,18 +187,49 @@ events and an instrumented physical timing sample.
 
 ---
 
-## Open policy question
+## Decisions — only a person can make these
 
-**P1. Does a physical pass carry forward across Product Builds?**
+Each one blocks machine work that is otherwise ready. A coding agent must not
+settle any of them inside an implementation Task; that is the rule in
+`CLAUDE.md`, and every item below is a product or governance choice, not an
+implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
+`docs/prd/open-questions.md`, or in the governance document it belongs to.
 
-The three passes above are bound to `1.0.11.0`, `1.0.20.0` and `1.0.21.0`. The
-current Build is `1.0.23.0`. No governance document states when a physical pass
-expires or what kind of change invalidates it. Until this is settled, whether
-M2 and M6 are re-runs or already-satisfied rows has no answer, and the question
-will recur at every Build.
+| ID | Decision | What it unblocks | Cost |
+| --- | --- | --- | --- |
+| P1 | Does a physical pass carry forward across Product Builds? | whether M2 and M6 are re-runs or already satisfied; recurs at every Build | short |
+| P2 | The capture panel's presentation, focus behaviour, and the replacement trim pointer model | Tasks 2–4 of the Creator UI remediation plan (F1, F2, F3, F5) | short, one design gate |
+| F4 | Device picker, visible input identity, an input-level gate before commit, or some combination | closing the silent-capture gap; the picker's absence is a declared `1.0.23.0` boundary, so this widens scope | design review |
+| F6 | Amplitude ramp policy in the render path — ramp length, zero-crossing snap, crossfade, or a combination | M2 checks 1 and 5, which fail by construction today; needs a realtime-safety review because the render path is allocation-free and lock-free | design review |
+| A2 | Is `native-test-host` a product component to be renamed, or does it leave the Assembly and every distribution? | the Assembly cleanup; also needs a written rule for what may enter a distribution package | short |
+| A3 | Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim | first external distribution (`dev` Channel or above) | short |
+| D1 + D2 | Long-material resource model and Loop BPM time-stretch — one review | any long-material work; touches Cooker Bank allocation, the lock-free publication layout, manifest semantics and Facade validation | design review |
+| D3 | Provider SDK Artifact byte access, both directions | the first Capability implementation that parses structured Artifact bytes | design review |
+| D4 + D5 | Recording concurrency semantics, and Take scope — events only or audio bounce too | **Stage 9 itself** | design review |
 
-Settling it belongs in `docs/prd/decision-log.md` or the version policy, not
-inside an implementation Task.
+P1 in full: the four passes above are bound to `1.0.11.0`, `1.0.20.0`,
+`1.0.21.0` and `1.0.23.0`, and the current Build is `1.0.23.0`. No governance
+document states when a physical pass expires or what kind of change invalidates
+it.
+
+Full statements of A2, A3 and D1–D5 are in
+[the triage document](2026-08-16-outstanding-work-before-stage9.md); F4 and F6
+are in its section F.
+
+---
+
+## Re-verification triggered by a fix
+
+Rows here are not new work — they are existing rows that a landed fix requires
+to be run again, or run for the first time on a surface that was previously
+untestable by hand.
+
+| Trigger | Rows to run | Why |
+| --- | --- | --- |
+| Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. This does **not** re-open M1's hearing result, which stands on its own |
+| F6 ramp policy lands | M2 checks 1 and 5 | both fail by construction today |
+| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated |
+| Any new Product Build allocated for team testing or release | every row P1 says does not carry forward | unanswered until P1 is settled |
 
 ---
 
@@ -211,12 +256,18 @@ omitted and not called passed.
    first check** and should not resume until F5 and F6 are resolved: F5 makes
    the trim controls unaimable, so checks 1–2 cannot be performed reliably, and
    F6 makes checks 1 and 5 fail by construction. **M3** is independent of both
-   and can run at any time.
-2. **P1** — a short decision that determines whether the remaining list is
-   thirteen rows or six.
-3. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
+   and can run at any time — it is the only verification row available today
+   with no blocker.
+2. **P2**, then **P1** — P2 is the design gate that unblocks four machine
+   Tasks and is the shortest path to making the Creator usable by hand; P1
+   determines whether the remaining verification list is thirteen rows or six.
+3. **F6**, then **D4 + D5** — F6 unblocks the rest of M2; D4 and D5 are what
+   Stage 9 itself waits on.
+4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
    distribution.
-4. **M5 + M6** — when the external interface and controller are on hand.
-5. **L1 through L5** — most expensive, needs instrumentation and five runs of
+5. **M5 + M6** — when the external interface and controller are on hand.
+6. **F4**, **A2**, **A3**, **D1 + D2**, **D3** — schedule as the work they gate
+   comes up; A2 and A3 are due before the first external distribution.
+7. **L1 through L5** — most expensive, needs instrumentation and five runs of
    500 triggers plus ten minutes. Schedule when the Web/PWA launch-platform
    conclusion actually has to land.
