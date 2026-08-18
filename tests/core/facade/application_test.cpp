@@ -121,6 +121,8 @@ enum class StorageOp {
   acquire_writer,
   exists,
   list_names,
+  directory_exists,
+  list_directories,
 };
 
 class OperationFailurePlatform final
@@ -210,6 +212,10 @@ class OperationFailurePlatform final
   }
   lmdj::foundation::Result<std::vector<std::string>> list_directories(
       const std::filesystem::path& path) const override {
+    if (take(StorageOp::list_directories)) {
+      return lmdj::foundation::Result<std::vector<std::string>>::failure(
+          injected());
+    }
     return inner_->list_directories(path);
   }
   lmdj::foundation::Result<void> remove_tree(
@@ -223,6 +229,9 @@ class OperationFailurePlatform final
   }
   lmdj::foundation::Result<bool> directory_exists(
       const std::filesystem::path& path) const override {
+    if (take(StorageOp::directory_exists)) {
+      return lmdj::foundation::Result<bool>::failure(injected());
+    }
     return inner_->directory_exists(path);
   }
 
@@ -3097,6 +3106,76 @@ void test_sample_import_publishes_its_limit_and_storage_refusals() {
   LMDJ_CHECK(after_release.has_value());
 }
 
+// Startup refuses to continue when it cannot account for leftover Sample
+// staging. That refusal is a safety property - a Host must not run against a
+// workspace whose staging state is unknown - and it is expressed as a thrown
+// construction failure, so the only way to observe it is to fail the storage
+// calls it makes.
+void test_startup_refuses_a_workspace_whose_staging_cannot_be_read() {
+  TempDirectory temp;
+
+  const auto construct_with = [&](StorageOp op) {
+    auto failing = std::make_shared<OperationFailurePlatform>(
+        lmdj::project_io::make_default_project_storage_platform());
+    auto configured = sample_config(temp.path());
+    configured.storage_platform = failing;
+    failing->arm(op);
+    bool threw = false;
+    try {
+      Application application(std::move(configured));
+    } catch (const std::exception&) {
+      threw = true;
+    }
+    return std::pair{threw, failing->fired()};
+  };
+
+  // The staging root cannot be inspected.
+  const auto inspect_failed = construct_with(StorageOp::directory_exists);
+  LMDJ_CHECK(inspect_failed.second);
+  LMDJ_CHECK(inspect_failed.first);
+
+  // A staging root that exists but cannot be listed is equally unaccounted
+  // for, so it must refuse too rather than silently proceed.
+  {
+    auto seeding = std::make_shared<OperationFailurePlatform>(
+        lmdj::project_io::make_default_project_storage_platform());
+    auto configured = sample_config(temp.path());
+    configured.storage_platform = seeding;
+    Application application(std::move(configured));
+    const auto project = temp.path() / "staging-seed.lmdj";
+    LMDJ_CHECK(application
+                   .create_initial_project(InitialProjectRequest{
+                       project,
+                       ProjectId{uuid(820)},
+                       120,
+                       Pattern{PatternId{uuid(821)}, 1, {}},
+                   })
+                   .has_value());
+    LMDJ_CHECK(application
+                   .begin_sample_import(SampleImportBeginRequest{
+                       uuid(822),
+                       project,
+                       CommandMeta{CommandId{uuid(823)}, 0},
+                       PadSlotId{0, 0},
+                       AssetId{uuid(824)},
+                       16,
+                   })
+                   .has_value());
+  }
+  const auto list_failed = construct_with(StorageOp::list_directories);
+  LMDJ_CHECK(list_failed.second);
+  LMDJ_CHECK(list_failed.first);
+
+  // With storage healthy the same workspace constructs and cleans normally,
+  // so the refusals above cannot be an artefact of the seeded staging.
+  auto healthy = std::make_shared<OperationFailurePlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  auto configured = sample_config(temp.path());
+  configured.storage_platform = healthy;
+  Application application(std::move(configured));
+  LMDJ_CHECK(!healthy->fired());
+}
+
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
   const auto project = temp.path() / "initial-pattern.lmdj";
@@ -3993,6 +4072,7 @@ int main() {
     test_every_trigger_mode_round_trips_through_the_json_surface();
     test_every_public_entry_converts_an_unexpected_throw_to_its_envelope();
     test_sample_import_publishes_its_limit_and_storage_refusals();
+    test_startup_refuses_a_workspace_whose_staging_cannot_be_read();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
     test_typed_sample_surface_rejects_invalid_boundary_values();
