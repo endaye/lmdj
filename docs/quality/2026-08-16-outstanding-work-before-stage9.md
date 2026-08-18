@@ -8,7 +8,16 @@ This is a **triage document, not an implementation plan**. Each item that gets
 worked needs its own plan under `docs/superpowers/plans/` with its own
 `## Version Management` section, per `CLAUDE.md`.
 
-Verified against `main` at `9d079796` on 2026-08-16. Items from
+Two working lists split this record by who can act on each item:
+[`2026-08-17-manual-verification-todo.md`](2026-08-17-manual-verification-todo.md)
+for what a human must do, and
+[`2026-08-17-machine-task-todo.md`](2026-08-17-machine-task-todo.md) for what a
+coding agent can complete alone. This document stays the canonical statement of
+each item; the two lists carry status and ordering.
+
+Verified against `main` at `9d079796` on 2026-08-16, and updated on 2026-08-17
+with the outcome of A1's real-microphone row and the findings it returned
+(section F). Items from
 `docs/quality/2026-08-03-review-backlog.md` were re-checked against the current
 tree rather than copied forward; the ones already fixed are listed under
 "Closed since the backlog was written" so nobody re-does them.
@@ -29,7 +38,7 @@ latency. These block any physical-pass claim and promotion to Beta or Stable.
 
 | Build | Row | Status |
 | --- | --- | --- |
-| 1.0.23.0 | macOS Chrome — real microphone capture, commit, playback hearing | `deferred / unverified` |
+| 1.0.23.0 | macOS Chrome — real microphone capture, commit, playback hearing | `PASS` 2026-08-17 ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
 | 1.0.23.0 | macOS Chrome — external audio interface input | `deferred / unverified` |
 | 1.0.23.0 | macOS Safari — `getUserMedia` and AudioWorklet capture | `deferred / unverified` |
 | 1.0.23.0 | iPadOS Safari — capture behaviour | `deferred / unverified` |
@@ -40,12 +49,15 @@ latency. These block any physical-pass claim and promotion to Beta or Stable.
 | 1.0.22.0 | iPadOS Safari — background, lock-screen and recovery lifecycle | `deferred / unverified` |
 | Stage 6/7 inherited | macOS Safari pointer, macOS Chrome pointer, iPadOS Safari touch, iPadOS Safari lifecycle | `deferred / unverified` |
 
-Only macOS Chrome physical MIDI has ever passed, and only on `1.0.21.0`.
+Two rows have passed: macOS Chrome physical MIDI on `1.0.21.0`, and the
+macOS Chrome real-microphone round trip on `1.0.23.0`.
 
-**Cheapest high-value item:** the real-microphone capture round trip. One
-session validates the whole capture chain end to end — no silence, no clipping,
-no channel swap, no sample-rate error — none of which the Chromium fake device
-can show.
+**The cheapest high-value item was the real-microphone capture round trip, and
+it has now been done.** One session validated the whole capture chain end to
+end — no silence, no clipping, no channel swap, no sample-rate error — none of
+which the Chromium fake device can show. It also produced four findings, listed
+as F1–F4 below. The remaining rows in the table are unaffected and every one of
+them still blocks a full physical-pass claim.
 
 ### A2. `native-test-host` is in the Product Assembly and every distribution
 
@@ -261,6 +273,105 @@ buffer editing requires invalidation logic. Recorded in the code.
 
 ---
 
+## F. Defects found by the 2026-08-17 physical session
+
+F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 came
+from the first check of row M2, which stopped there. Each was reproduced or
+traced to source before being recorded; measurements for F1–F4 are in the
+[evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
+None is fixed.
+
+F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
+[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
+F4 and F6 each need a product decision and are explicitly excluded from that
+plan.
+
+### F1. The capture panel has no styling and opens below the fold
+
+`.capture-panel` has no rule in `apps/creator-web/src/styles.css`. It renders
+as an unstyled flow element at the end of the Sample surface, with no
+scroll-into-view and no focus move. Measured at 1440×900: box `y ≈ 790`,
+height `157`, document height `983`. In a real browser window the panel and its
+`Record into Pad N` button are entirely below the fold, so pressing
+`Record Sample` looks like nothing happened.
+
+### F2. Stop is pushed off screen when recording starts
+
+Same root cause. Entering `recording` adds the level meter and waveform canvas,
+growing the panel from 157 px to 277 px, all downward, and the page does not
+scroll to follow. The take cannot be stopped from the visible surface.
+
+F1 and F2 are one fix. Every automated journey locates the panel by role and
+label, which never requires the element to be above the fold — this class of
+defect is invisible to the whole browser gate.
+
+### F3. `DUPLICATE_ID` presents as fatal with no way out
+
+Re-importing a bundle whose local Project has since diverged renders under
+`Creator unavailable` with no recovery control (`error_panel.tsx:36`); only
+`PROJECT_BUSY` and `HOST_RESTART_REQUIRED` get one. No data is lost —
+`Open local` still opens the diverged Project, and a plain reload clears the
+error. The defect is the presentation and the missing affordance.
+
+### F4. A silent default input commits silence with no indication
+
+`capture_controller.ts:62` requests audio with no `deviceId`, so capture follows
+the OS default input; the absent device picker is a **declared** scope boundary
+for this Build, so that omission is not the finding. The finding is its physical
+consequence: when the default input changes silently, `getUserMedia` succeeds,
+the stream carries digital silence, and the Creator commits a full 5 s of
+silence onto a Pad with no input-level gate, no silence detection and no
+warning. The operator's only signal is the level meter, which F1 and F2 keep
+off screen.
+
+Needs a product decision — device picker, visible input identity, an
+input-level gate before commit, or some combination — not a unilateral fix
+inside an implementation Task. Belongs with D1–D5 in a design review.
+
+### F5. The waveform trim handles cannot be aimed
+
+Both trim handles are native `input[type="range"]` elements
+(`waveform_editor.tsx:372`, `:393`) styled `position: absolute; inset-inline: 0;
+width: 100%; min-height: 44px; opacity: .01` (`styles.css:127`), stacked over
+the waveform canvas with Start anchored to the top and End to the bottom.
+
+Three consequences follow from that geometry: which handle a press grabs is
+decided by **vertical band**, not by the handle being pointed at, so aiming at
+the drawn handle line is meaningless; the middle band of the canvas belongs to
+neither input and does nothing; and because a native range jumps its thumb to
+the clicked track position, a mis-aimed press **moves the wrong trim point**
+rather than being ignored. `opacity: .01` makes none of it learnable.
+
+Found within a minute of a human first trying to trim a Sample. The keyboard
+path is sound and must survive the fix.
+
+Scoped in
+[`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
+with F1–F3.
+
+### F6. The render path has no amplitude ramp anywhere
+
+Trimming a Sample and triggering it produces audible clicks at the trim
+boundaries — the first check of row M2, 2026-08-17.
+
+Not a Creator defect. `realtime_engine.cpp:710` renders
+`voice.samples[voice.cursor] * voice.gain` and at `end_frame` either assigns
+`voice.cursor = voice.start_frame` for a loop or hard-stops; `stop_voice`
+(`:195`) sets `voice.active = false` immediately. There is no attack ramp, no
+release ramp, no fade at the trim boundary, no crossfade at the loop seam and
+no zero-crossing snap. A trim edge on a non-zero sample is a step
+discontinuity, which is what the click is.
+
+The same absence predicts clicks at the loop seam and on releasing a held
+voice; neither has been tested yet.
+
+Needs a Core/DSP product decision — ramp length, zero-crossing snap, crossfade,
+or a combination — with a realtime-safety review, since the render path is
+allocation-free and lock-free and any ramp state must stay inside that
+contract. Explicitly out of scope for the Creator UI plan.
+
+---
+
 ## Closed since the 2026-08-03 review backlog
 
 Re-verified against `main` at `9d079796`; do not re-do these.
@@ -285,9 +396,10 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
 
 ## Suggested order
 
-1. **A1 real-microphone check** — one session, only a human can do it, and it
-   either validates the whole capture chain or finds a defect worth more than
-   everything below.
+1. ~~**A1 real-microphone check**~~ — done 2026-08-17. The capture chain
+   passed all five hearing criteria; the session returned F1–F4, of which
+   **F1 + F2 are one cheap fix** and should be taken next in this group, since
+   they make Pad Capture unusable on a normal window without knowing to scroll.
 2. **B1 + B2 together** — same root cause shape, both currently absorbed by
    hand on every release, and both make the release path lie about its own
    readiness.
