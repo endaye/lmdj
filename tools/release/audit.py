@@ -409,6 +409,24 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
     return None
 
 
+def _ancestry_problem(context: object, intent: ReleaseIntent) -> AuditFinding | None:
+    """Canonical main ancestry, probed the same way prepare enforces it.
+
+    `prepare` refuses any target that is not an ancestor of protected main, so
+    an audit that reports an intent as actionable must assert the identical
+    condition. Reporting only object existence lets an intent whose allocation
+    commit a squash merge has collapsed stay green until garbage collection
+    removes the object, which is exactly how two Product intents became
+    unpreparable without the audit ever naming them.
+    """
+    try:
+        if not context.git.is_main_ancestor(intent.target_revision):
+            return AuditFinding("unauthorized", intent.tag, "release target is outside protected main ancestry")
+    except Exception:
+        return AuditFinding("external-error", intent.tag, "protected-main ancestry is unavailable", ("git-remote",))
+    return None
+
+
 def _audit_remote_intent(
     context: object,
     intent: ReleaseIntent,
@@ -456,6 +474,9 @@ def _audit_remote_intent(
                 "allocated intent must not have a remote tag or Release",
                 ("remote-tag", "github-release"),
             )
+        ancestry_problem = _ancestry_problem(context, intent)
+        if ancestry_problem is not None:
+            return ancestry_problem
         return AuditFinding("ok", intent.tag, "allocated intent has no remote publication state")
 
     if intent.disposition is not Disposition.PUBLISHED and release is not None and not release.draft:
@@ -472,10 +493,16 @@ def _audit_remote_intent(
         if release is not None:
             return AuditFinding("conflict", intent.tag, "GitHub Release exists without its exact remote tag")
         # An actionable intent with no remote state is exactly the state that
-        # authorizes the next mutation, so its CI evidence is evaluated before
-        # any prospective success is reported. A historical exception cannot
-        # waive it here: an exception explains immutable history and never
-        # satisfies a prospective gate.
+        # authorizes the next mutation, so its ancestry and CI evidence are
+        # both evaluated before any prospective success is reported. Ancestry
+        # is probed first: CI evidence for a target prepare would refuse
+        # describes work that cannot be released, so reporting it first would
+        # name a symptom instead of the defect. A historical exception cannot
+        # waive either check here: an exception explains immutable history and
+        # never satisfies a prospective gate.
+        ancestry_problem = _ancestry_problem(context, intent)
+        if ancestry_problem is not None:
+            return ancestry_problem
         prospective_problem = _ci_problem(context, intent)
         if prospective_problem is not None:
             return prospective_problem
@@ -487,11 +514,9 @@ def _audit_remote_intent(
     problem = _tag_problem(context, intent, tag_state)
     if problem is not None:
         return AuditFinding("conflict", intent.tag, problem)
-    try:
-        if not context.git.is_main_ancestor(intent.target_revision):
-            return AuditFinding("unauthorized", intent.tag, "release target is outside protected main ancestry")
-    except Exception:
-        return AuditFinding("external-error", intent.tag, "protected-main ancestry is unavailable", ("git-remote",))
+    ancestry_problem = _ancestry_problem(context, intent)
+    if ancestry_problem is not None:
+        return ancestry_problem
 
     ci_problem = _ci_problem(context, intent)
     if ci_problem is not None:
