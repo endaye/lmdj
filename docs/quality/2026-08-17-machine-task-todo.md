@@ -34,6 +34,7 @@ Compiled against `main` at `801fa450` on 2026-08-17.
 | B4 | Fold `assembly.lock.json` regeneration into whatever writes the compiled assembly, or make `version.py lock` refuse to run before the source is final | triage B4 | bit twice in one allocation; the second time surfaced only at the portal freeze |
 | C2 | Restructure `decision-log.md` and `open-questions.md` so concurrent branches stop colliding — dated section files with an index, or an append convention that keeps additions apart | triage C2 | both files are append-at-the-end; every parallel session conflicts |
 | C4 | Give `project_store.cpp`'s JSON read paths the `O_NOFOLLOW` symmetry `read_artifact()` already has | 2026-08-03 backlog C2, still open | small, mechanical, security-shaped |
+| C5 | Make `scripts/architecture-portal.sh witness` refuse an existing witness file cleanly instead of throwing an unhandled `EEXIST` rejection | found while closing B2, 2026-08-18 | `create-squash-witness.mjs:41` is the only `wx` write in the script family, and it is the outlier: `version-docs.mjs:123` and `snapshot-provenance.mjs:394` both refuse with a named error. **Keep the refusal** — `wx` is what stops a witness being silently overwritten; only its presentation is wrong. Now easier to hit, since B2 made this the routine remedy command |
 | E2 | Add a range parameter to `CaptureBuffer.envelope(bins)` | triage E2 | only when waveform zoom is actually built; a narrow window at the same bin count currently falls back to the exact path and rescans the whole buffer |
 | E3 | Add invalidation to the incremental block peaks in `append()` | triage E3 | only when pre-commit buffer editing is actually built |
 
@@ -94,7 +95,9 @@ row is answered.
 3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
    one branch, and it is what makes Pad Capture usable by hand.
 4. **C2** — every parallel branch pays for this one today.
-5. **B3, B4, C4** — mechanical hardening, schedule as capacity allows.
+5. **B3, B4, C4, C5** — mechanical hardening, schedule as capacity allows. C5
+   is the smallest of them and sits in the path operators now walk on every
+   snapshot-carrying Build.
 6. **E2, E3** — only when the feature that needs them is actually built.
 
 Everything else waits on a decision, not on capacity.
