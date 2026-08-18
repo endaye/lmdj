@@ -12,7 +12,7 @@ usage:
   scripts/architecture-portal.sh build
   scripts/architecture-portal.sh check
   scripts/architecture-portal.sh version PRODUCT_BUILD [CHANNEL]
-  scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION
+  scripts/architecture-portal.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]
   scripts/architecture-portal.sh smoke BASE_URL
 EOF
 }
@@ -48,7 +48,7 @@ case "$command_name" in
     exec node scripts/version-docs.mjs "$@"
     ;;
   witness)
-    [[ $# -eq 2 ]] || { usage; exit 64; }
+    [[ $# -ge 1 && $# -le 2 ]] || { usage; exit 64; }
     exec node scripts/create-squash-witness.mjs "$@"
     ;;
   smoke)

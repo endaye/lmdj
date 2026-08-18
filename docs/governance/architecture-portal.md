@@ -104,8 +104,11 @@ Product Build 条目必须唯一。既有 schema-1 快照保持只读兼容，�
 
 若 squash introducing tree 合法包含冻结之后的 mutable current/non-projection
 更新，因而不能逐字等同 source projection，必须另行提交由
-`scripts/architecture-portal.sh witness PRODUCT_BUILD INTRODUCING_REVISION`
-生成的 source-tree witness。witness 只记录从 exact introducing tree 反向恢复 source
+`scripts/architecture-portal.sh witness PRODUCT_BUILD [INTRODUCING_REVISION]`
+生成的 source-tree witness。省略 INTRODUCING_REVISION 时，命令按验证器同一套解析
+逻辑从当前 HEAD 推导 introducing revision，推导不出即 fail closed 并拒绝写入；
+显式传入的 revision 仍按原有规则校验。验证器在报告 witness 缺失时也会直接给出这条
+可复制的补救命令及其两个参数。witness 只记录从 exact introducing tree 反向恢复 source
 tree 所需的有序差异；验证器必须把差异应用到临时 Git index，重建出 raw source
 commit 已认证的精确 tree hash，并重新物化相同 commit object 后，才能读取和核对
 projection、facts、source docs/sidebar/diagrams。缺失、重复、非 canonical base64、

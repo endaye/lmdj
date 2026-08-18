@@ -276,6 +276,15 @@ async function reconstructAuthenticatedSourceCommit({
   }
 }
 
+export async function resolveIntroducingRevision({repoRoot, version, headRevision}) {
+  validateVersion(version);
+  validateRevision(headRevision);
+  const metadataPath = `apps/architecture-portal/versioned_metadata/version-${version}.json`;
+  const {introducing} = await resolveCurrentIntroducingCommit(repoRoot, headRevision, metadataPath);
+  return introducing;
+}
+
+
 export async function createSquashWitness({repoRoot, metadata, introducingRevision}) {
   validateRevision(metadata.revision);
   validateRevision(introducingRevision);
@@ -664,7 +673,11 @@ export async function verifySnapshotProvenance({
         sourceObjectExists = true;
       } catch (error) {
         if (error.message === 'authenticated squash witness is unavailable') {
-          squashRelationError = 'source projection is neither direct-parent nor squash-equivalent and authenticated squash witness is unavailable';
+          // The remedy is always the same, and both of its arguments are in
+          // scope right here. Naming only the condition is what made five
+          // consecutive Builds go red on main with the fix known but unstated.
+          squashRelationError = 'source projection is neither direct-parent nor squash-equivalent and authenticated squash witness is unavailable; ' +
+            `run: scripts/architecture-portal.sh witness ${version} ${introducing}`;
         } else {
           squashRelationError = error.message;
         }
