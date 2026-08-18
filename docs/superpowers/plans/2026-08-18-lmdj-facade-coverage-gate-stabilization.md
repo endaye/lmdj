@@ -181,19 +181,26 @@ margin this project wants is a policy call, and
 green" — with the noise justification gone, no implementation argument remains
 to lower it.
 
-- [ ] Take the margin question to a decision row rather than settling it here.
-- [ ] Change a threshold only after that decision, recording it against this
+- [x] Take the margin question to a decision row rather than settling it here.
+- [x] Change a threshold only after that decision, recording it against this
       measurement.
 
-**Verification:** none pending; this Task does no work until the decision
-exists.
+**Resolved 2026-08-18 by the product owner:** the floor number is not the
+point; the real work is raising coverage to the policy's 90% target and
+ratcheting the floor upward afterwards. Superseded by
+[`2026-08-18-lmdj-facade-coverage-raise.md`](2026-08-18-lmdj-facade-coverage-raise.md);
+no threshold moved under this plan.
 
 ### Task 4 — Close the ledger
 
-- [ ] Mark C1 done in `docs/quality/2026-08-17-machine-task-todo.md` with the
-      measured numbers, and record that triage's description of the defect was
+Done 2026-08-18 alongside filing machine task C6: C1 is recorded in both
+ledgers as invalidated by measurement and superseded by the coverage-raise
+plan.
+
+- [x] Mark C1 closed in `docs/quality/2026-08-17-machine-task-todo.md` with the
+      measured numbers, recording that triage's description of the defect was
       corrected by measurement.
-- [ ] Update triage C1 in
+- [x] Update triage C1 in
       `docs/quality/2026-08-16-outstanding-work-before-stage9.md` the same way.
 
 **Verification:** `scripts/architecture-portal.sh check`;

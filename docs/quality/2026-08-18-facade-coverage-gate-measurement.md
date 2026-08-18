@@ -117,6 +117,26 @@ disagree. The 83.94% and 84.04% observations must therefore come from
 **different source states**, not from re-measuring one — which makes them a
 real coverage change between commits, not gate noise.
 
+## Finding 5 — anatomy of the 648 uncovered lines
+
+Line-level `llvm-cov show` over the merged profile, aggregated by enclosing
+function. 89% of uncovered lines sit on error/failure paths; the shape is 139
+contiguous blocks in `application.cpp` of which only two reach 10 lines —
+failure exits scattered through otherwise-covered functions, not untested
+features. Largest concentrations: `read_verified_scratch` (42),
+`validate_initial_pattern` (39), `write_verified_staging` (23), the error
+envelope mappers (~37), the assembly loader's 13 validators (52 across
+`assembly_loader.cpp`), the C ABI boundary (54 across `c_api.cpp`), and 52
+occurrences of the per-API catch-all message "unexpected Application Facade
+Host API failure" across 24 catch blocks.
+
+Full tiering and the resulting work plan live in
+[`2026-08-18-lmdj-facade-coverage-raise.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-raise.md):
+Tier A (~200 lines, ordinary bad inputs), Tier B (~180 lines, fault hooks per
+the project-io precedent), Tier C (~50–80 lines of deep defence, deliberately
+not chased). 90% needs +242 lines; Tier A plus a throw-injection hook crosses
+it.
+
 ## Conclusion
 
 1. **The gate is not noisy on the platform that enforces it.** Two Ubuntu runs
