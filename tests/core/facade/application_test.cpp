@@ -110,6 +110,142 @@ class TempDirectory {
   std::filesystem::path path_;
 };
 
+// A storage platform that fails one named operation on demand. The facade
+// takes its storage platform through ApplicationConfig, so every storage
+// failure path below is reachable without a hook in production source: the
+// injected platform *is* the seam. Each armed failure is one-shot, so a test
+// can prove a specific refusal without disturbing the calls around it.
+enum class StorageOp {
+  ensure_directory,
+  validate_managed_tree,
+  acquire_writer,
+  exists,
+  list_names,
+};
+
+class OperationFailurePlatform final
+    : public lmdj::project_io::ProjectStoragePlatform {
+ public:
+  explicit OperationFailurePlatform(
+      std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner)
+      : inner_(std::move(inner)) {}
+
+  void arm(StorageOp op) {
+    op_ = op;
+    armed_ = true;
+    fired_ = false;
+  }
+  bool fired() const noexcept { return fired_; }
+
+  lmdj::foundation::Result<std::unique_ptr<lmdj::project_io::ProjectWriterLease>>
+  acquire_writer(const std::filesystem::path& path) override {
+    if (take(StorageOp::acquire_writer)) {
+      return lmdj::foundation::Result<
+          std::unique_ptr<lmdj::project_io::ProjectWriterLease>>::
+          failure(injected());
+    }
+    return inner_->acquire_writer(path);
+  }
+
+  lmdj::foundation::Result<void> ensure_directory(
+      const std::filesystem::path& path) override {
+    if (take(StorageOp::ensure_directory)) {
+      return lmdj::foundation::Result<void>::failure(injected());
+    }
+    return inner_->ensure_directory(path);
+  }
+
+  lmdj::foundation::Result<void> validate_managed_tree(
+      const std::filesystem::path& path) const override {
+    if (take(StorageOp::validate_managed_tree)) {
+      return lmdj::foundation::Result<void>::failure(injected());
+    }
+    return inner_->validate_managed_tree(path);
+  }
+
+  lmdj::foundation::Result<bool> exists(
+      const std::filesystem::path& path) const override {
+    if (take(StorageOp::exists)) {
+      return lmdj::foundation::Result<bool>::failure(injected());
+    }
+    return inner_->exists(path);
+  }
+
+  lmdj::foundation::Result<std::vector<std::string>> list_names(
+      const std::filesystem::path& path) const override {
+    if (take(StorageOp::list_names)) {
+      return lmdj::foundation::Result<std::vector<std::string>>::failure(
+          injected());
+    }
+    return inner_->list_names(path);
+  }
+
+  lmdj::foundation::Result<std::uint64_t> byte_length(
+      const std::filesystem::path& path) const override {
+    return inner_->byte_length(path);
+  }
+  lmdj::foundation::Result<std::vector<std::byte>> read_complete(
+      const std::filesystem::path& path) const override {
+    return inner_->read_complete(path);
+  }
+  lmdj::foundation::Result<void> create_immutable(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->create_immutable(path, bytes);
+  }
+  lmdj::foundation::Result<void> replace_complete(
+      const std::filesystem::path& path,
+      std::span<const std::byte> bytes) override {
+    return inner_->replace_complete(path, bytes);
+  }
+  lmdj::foundation::Result<void> append_durable(
+      const std::filesystem::path& path,
+      std::uint64_t offset,
+      std::span<const std::byte> bytes) override {
+    return inner_->append_durable(path, offset, bytes);
+  }
+  lmdj::foundation::Result<void> remove(
+      const std::filesystem::path& path) override {
+    return inner_->remove(path);
+  }
+  lmdj::foundation::Result<std::vector<std::string>> list_directories(
+      const std::filesystem::path& path) const override {
+    return inner_->list_directories(path);
+  }
+  lmdj::foundation::Result<void> remove_tree(
+      const std::filesystem::path& path) override {
+    return inner_->remove_tree(path);
+  }
+  lmdj::foundation::Result<void> publish_directory_if_absent(
+      const std::filesystem::path& from,
+      const std::filesystem::path& to) override {
+    return inner_->publish_directory_if_absent(from, to);
+  }
+  lmdj::foundation::Result<bool> directory_exists(
+      const std::filesystem::path& path) const override {
+    return inner_->directory_exists(path);
+  }
+
+ private:
+  bool take(StorageOp op) const {
+    if (!armed_ || op_ != op) return false;
+    armed_ = false;
+    fired_ = true;
+    return true;
+  }
+  static lmdj::foundation::Error injected() {
+    return lmdj::foundation::Error{
+        ErrorCode::io_error,
+        "injected storage operation failure",
+    };
+  }
+
+  std::shared_ptr<lmdj::project_io::ProjectStoragePlatform> inner_;
+  mutable StorageOp op_ = StorageOp::ensure_directory;
+  mutable bool armed_ = false;
+  mutable bool fired_ = false;
+};
+
 enum class SampleCleanupFailureTarget {
   payload,
   marker,
@@ -2877,6 +3013,90 @@ void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
   lmdj::facade::testing::set_api_entry_hook(nullptr);
 }
 
+// Two failure classes the Sample import path publishes but never proved: a
+// resource limit reached by ordinary use, and storage refusals at each seam.
+// Both are contract surfaces - a Host branches on the code and shows the
+// message - so each case asserts the exact code, message and details rather
+// than that the call merely failed.
+void test_sample_import_publishes_its_limit_and_storage_refusals() {
+  TempDirectory temp;
+  const auto project = temp.path() / "import-failures.lmdj";
+
+  auto failing = std::make_shared<OperationFailurePlatform>(
+      lmdj::project_io::make_default_project_storage_platform());
+  auto configured = sample_config(temp.path());
+  configured.storage_platform = failing;
+  Application application(std::move(configured));
+
+  LMDJ_CHECK(application
+                 .create_initial_project(InitialProjectRequest{
+                     project,
+                     ProjectId{uuid(800)},
+                     120,
+                     Pattern{PatternId{uuid(801)}, 1, {}},
+                 })
+                 .has_value());
+
+  const auto begin = [&](std::uint32_t seed) {
+    return application.begin_sample_import(SampleImportBeginRequest{
+        uuid(seed),
+        project,
+        CommandMeta{CommandId{uuid(seed + 100)}, 0},
+        PadSlotId{0, 0},
+        AssetId{uuid(seed + 200)},
+        16,
+    });
+  };
+
+  // Storage refusals: each seam reports io_error with the message naming the
+  // stage that failed, so an operator can tell which step refused.
+  const std::vector<std::pair<StorageOp, std::string_view>> seams{
+      {StorageOp::ensure_directory, "Sample staging could not be created"},
+      {StorageOp::validate_managed_tree, "Sample staging tree is invalid"},
+      {StorageOp::acquire_writer,
+       "Sample staging writer could not be acquired"},
+      {StorageOp::exists, "Sample staging could not be inspected"},
+  };
+  std::uint32_t seed = 810;
+  for (const auto& [op, message] : seams) {
+    failing->arm(op);
+    const auto refused = begin(seed);
+    seed += 10;
+    LMDJ_CHECK(failing->fired());
+    LMDJ_CHECK(!refused.has_value());
+    LMDJ_CHECK(refused.error().code == ErrorCode::io_error);
+    if (refused.error().message != message) {
+      throw std::runtime_error(
+          "storage refusal reported the wrong stage: " +
+          refused.error().message);
+    }
+  }
+
+  // The session limit is a published resource bound: it must name the
+  // resource, what was observed, and the limit, so a Host can explain itself.
+  std::vector<std::string> tokens;
+  for (std::uint32_t index = 0; index < 16U; ++index) {
+    const auto opened = begin(900 + index);
+    LMDJ_CHECK(opened.has_value());
+    tokens.push_back(uuid(900 + index));
+  }
+  const auto over_limit = begin(950);
+  LMDJ_CHECK(!over_limit.has_value());
+  LMDJ_CHECK(over_limit.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(
+      over_limit.error().message == "Sample import session limit reached");
+  LMDJ_CHECK(
+      over_limit.error().details.at("resource") == "sample_import_sessions");
+  LMDJ_CHECK(over_limit.error().details.at("limit") == 16);
+  LMDJ_CHECK(over_limit.error().details.at("observed") == 17);
+
+  // Releasing one session must make room again: the limit is a live count,
+  // not a one-way latch.
+  LMDJ_CHECK(application.abort_sample_import(tokens.front()).has_value());
+  const auto after_release = begin(960);
+  LMDJ_CHECK(after_release.has_value());
+}
+
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
   const auto project = temp.path() / "initial-pattern.lmdj";
@@ -3772,6 +3992,7 @@ int main() {
     test_initial_pattern_rejections_are_exact_and_write_nothing();
     test_every_trigger_mode_round_trips_through_the_json_surface();
     test_every_public_entry_converts_an_unexpected_throw_to_its_envelope();
+    test_sample_import_publishes_its_limit_and_storage_refusals();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
     test_typed_sample_surface_rejects_invalid_boundary_values();
