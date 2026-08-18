@@ -2,6 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+> **Revised 2026-08-18 after Task 1.** The measurement invalidated this plan's
+> original premise (that covered *lines* move between runs) and its proposed fix
+> (a stress-tier label exclusion). Both are recorded in
+> [`2026-08-18-facade-coverage-gate-measurement.md`](../../quality/2026-08-18-facade-coverage-gate-measurement.md).
+> Tasks 2 and 3 below are rewritten; the original text is preserved in this
+> file's history, not silently replaced.
+
 **Goal:** Stop the `application-facade` coverage gate from failing Pull
 Requests at random, and make a genuine coverage regression distinguishable
 from noise — which today it is not, because the measurement itself is
@@ -47,36 +54,43 @@ the defect is in what it is asked to measure, not in how it compares.
   here: thread scheduling is not seedable, so `facade.c_api_stress` can never
   be made a deterministic coverage source no matter how it is seeded.
 
-## The decision, and what each option gives up
+## What Task 1 measured, and what it changed
 
-Triage offers two shapes. They are not equivalent.
+Full evidence in
+[`2026-08-18-facade-coverage-gate-measurement.md`](../../quality/2026-08-18-facade-coverage-gate-measurement.md).
 
-**Rejected: lower the floor below the observed noise floor.** This keeps the
-nondeterministic measurement and just widens the dead zone around it — a
-genuine regression of several lines stays invisible, permanently, and the
-noise band itself is only characterized by two observations (83.94, 84.04),
-so any specific number would be a guess. A floor lowered while the
-measurement stays noisy is exactly the "lowered merely to make CI green" the
-policy forbids.
+**The line count does not vary.** Five local runs on an unchanged tree gave an
+identical 3422/4070 every time, and a per-file comparison found no facade file
+whose covered lines moved. The variance is entirely in branches, in exactly the
+two files `facade.c_api_stress` reaches: `src/application.cpp` (759↔760) and
+`src/c_api.cpp` (67↔68).
 
-**Chosen: make the measurement deterministic, then recalibrate the floor to
-the deterministic value.** Exclude the stress tier from the coverage preset
-by **label** (`^stress$`), replacing the name-specific exclusion that already
-exists for the sibling test — the repository has exactly two stress-tier
-tests, one of which is already excluded, so this unifies an existing
-precedent rather than inventing a policy. The tier maps to a ctest label via
-`cmake/LmdjTesting.cmake:42`, and the preset schema already uses a label
-filter elsewhere (`CMakePresets.json:121`).
+**So the risk is the opposite shape from what triage recorded.** The metric that
+varies (branches) has 3.4592 points of headroom and cannot reach its floor; the
+metric with 0.0786 points of headroom (lines) does not vary. One facade line is
+worth 0.0246 points, so the line gate breaks on about four lines of newly
+uncovered code. **The line gate is too tight, not noisy.**
 
-**What this gives up, stated per the machine-list requirement:** facade lines
-exercised **only** by `facade.c_api_stress` stop earning coverage credit, and
-the recalibrated floor will be lower than 84 if those lines exist. They are
-not lost to verification — `core-asan` runs `full` then `stress` on every PR,
-so the stress test still executes and still blocks; it just no longer counts
-toward a percentage. The exchange is: the gate stops measuring
-stress-reachable lines, and in return a **one-line** regression in the
-deterministic remainder becomes real signal instead of noise. Task 1
-quantifies exactly how many lines change status before anything is committed.
+**The proposed fix also does not run.** Replacing the preset's name exclusion
+with `exclude.label: ^stress$` fails with
+`coverage module signature count does not match object count: 32 != 33`, because
+`lmdj_application_c_api_stress_tests` is itself a coverage object
+(`CMakeLists.txt:109`) and produces no `.profraw` once its test is excluded.
+The sibling `lmdj_realtime_engine_stress_tests` is **not** a coverage object,
+so the two stress tests were never symmetric and the original plan's
+"unifies an existing precedent" claim was wrong.
+
+**What stays open.** Triage's Stage 8 observation (83.94% then 84.04%, a
+four-line move) was on Ubuntu CI, and five local macOS runs did not reproduce
+it. macOS and Ubuntu do not even measure the same file set — `CMakeLists.txt`
+adds two Apple-only coverage objects. Whether Ubuntu line counts vary is
+therefore unanswered, and it is the input the floor decision needs, because CI
+is the platform that enforces the gate.
+
+**Revised approach: establish the CI-side behaviour first, then set the floor
+from it.** No floor moves until there is same-revision Ubuntu evidence. This
+keeps the test policy's rule intact — a floor moves only on a reviewed
+measurement, on the platform that enforces it.
 
 ## Global Constraints
 
@@ -108,57 +122,76 @@ quantifies exactly how many lines change status before anything is committed.
 No committed change yet; this task produces the evidence every later number
 stands on.
 
-- [ ] With the preset unchanged, run `scripts/core-coverage.sh check` five
+- [x] With the preset unchanged, run `scripts/core-coverage.sh check` five
       times on identical source. Record per-run facade covered/total lines
       and the per-file diffs between runs, confirming the fluctuation
       localizes to files reachable from `facade.c_api_stress`.
-- [ ] Apply the label exclusion locally (not committed) and run five more
+- [x] Apply the label exclusion locally (not committed) and run five more
       times. Requirement: the facade covered-line count is **identical across
       all five runs**. If any residual nondeterminism remains, stop and
       report — the plan's premise is wrong and the exclusion alone is not the
       fix.
-- [ ] Quantify the trade: per-file list and total count of facade lines that
+- [x] Quantify the trade: per-file list and total count of facade lines that
       lose coverage credit under the exclusion, and the resulting
       deterministic facade percentage on this machine.
-- [ ] Write the measurement record as
+- [x] Write the measurement record as
       `docs/quality/2026-08-18-facade-coverage-gate-measurement.md`: machine
       and toolchain identity, all ten runs' numbers, the per-file diff, the
       deterministic value, and the floor it implies.
 
-**Verification:** the record exists and contains ten runs; the five
-post-exclusion runs are identical. Commit is the measurement document only.
+**Done 2026-08-18.** Five baseline runs are recorded; the five post-exclusion
+runs could not be produced because the exclusion does not run at all (Finding 2).
+The record covers both outcomes and is the commit for this Task.
 
-### Task 2 — Exclude the stress tier by label and recalibrate the floor
+### Task 2 — Establish whether Ubuntu line counts vary
 
-- [ ] In `CMakePresets.json`, replace the coverage test preset's
-      name-exclusion `^audio\.realtime_spsc_stress$` with the label
-      exclusion `^stress$`.
-- [ ] Set `packages/application-facade/` lines in
-      `tests/quality/core-coverage-thresholds.json` to the measured
-      deterministic value, truncated to the integer style the ratchet table
-      already uses. Touch the branch floor only if the measurement moved it.
-- [ ] Update the enforced-ratchet table and its narrative in
-      `docs/quality/core-test-policy.md` in the same commit: the facade row's
-      new floor, and one sentence recording that coverage measurement
-      excludes the stress tier because thread scheduling is not a
-      deterministic coverage source, while `core-asan` continues to own
-      stress execution.
-- [ ] Confirm no other floor in the JSON changed value against Task 1's
-      with-exclusion measurements.
+- [ ] Collect every retained `core-coverage` job on `main` and extract each
+      run's facade line numbers with its revision. Where two runs share a
+      revision, their difference is the CI variance; where they do not, record
+      the numbers per revision without inferring variance from them.
+- [ ] If same-revision Ubuntu runs disagree on covered lines, the CI
+      measurement is nondeterministic and the defect is noise after all —
+      report before proposing any fix, because the fix then has to target
+      whatever makes Ubuntu differ from macOS.
+- [ ] If they agree, or if no same-revision pair exists, obtain one: this
+      branch's own Pull Request selects the `core_coverage` lane through the
+      `tests/quality/` rule in `scripts/ci/scope_policy.json`, so a change
+      under that directory produces a fresh Ubuntu measurement to compare
+      against the retained one.
+- [ ] Extend the measurement record with the Ubuntu series and its conclusion.
 
-**Verification:** `scripts/core-coverage.sh check` passes twice locally with
-byte-identical facade totals; `python3 tests/build/version_test.py`;
-`bash tests/build/test_active_tree.sh`; `scripts/architecture-portal.sh
-check`. The PR's own `core-coverage` lane is the CI-equivalent Ubuntu
-evidence, matching how the original ratchet was measured on both platforms.
+**Verification:** the record states, with run ids, whether Ubuntu covered-line
+counts vary at a fixed revision.
 
-### Task 3 — Close the ledger
+### Task 3 — Set the floor from the CI-side evidence
 
-- [ ] Mark C1 done in `docs/quality/2026-08-17-machine-task-todo.md`, naming
-      the commits and the measured numbers.
+Blocked on Task 2. Its shape depends on Task 2's answer and must not be
+pre-committed here:
+
+- if Ubuntu is deterministic, the floor moves to a measured margin below the
+  Ubuntu value, and the surviving question is only how much margin the policy
+  wants;
+- if Ubuntu varies, the floor cannot be set until the variance is either
+  removed or characterized well enough to sit outside it.
+
+- [ ] Apply the decided floor to
+      `tests/quality/core-coverage-thresholds.json`.
+- [ ] Update the enforced-ratchet table and narrative in
+      `docs/quality/core-test-policy.md` in the same commit, recording the
+      measurement this floor came from.
+- [ ] Confirm no other floor moved.
+
+**Verification:** `scripts/core-coverage.sh check` locally; the PR's own
+`core-coverage` lane as the Ubuntu evidence; `bash tests/build/test_active_tree.sh`;
+`scripts/architecture-portal.sh check`.
+
+### Task 4 — Close the ledger
+
+- [ ] Mark C1 done in `docs/quality/2026-08-17-machine-task-todo.md` with the
+      measured numbers, and record that triage's description of the defect was
+      corrected by measurement.
 - [ ] Update triage C1 in
-      `docs/quality/2026-08-16-outstanding-work-before-stage9.md` the same
-      way, including what the exclusion gave up.
+      `docs/quality/2026-08-16-outstanding-work-before-stage9.md` the same way.
 
 **Verification:** `scripts/architecture-portal.sh check`;
 `git diff --cached --check`.
@@ -188,4 +221,7 @@ before every commit regardless.
   untouched.
 - `coverage_gate.py` semantics, including its exact comparison — a tolerance
   parameter would re-legitimize noise instead of removing it.
+- The stress-tier label exclusion, and any change to the coverage object list
+  it would require — Task 1 showed it does not run as written and targets
+  branch variance, which is not the live risk.
 - C2, B3, B4, C4, C5 — separate ledger rows, separate plans.
