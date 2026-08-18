@@ -1617,10 +1617,11 @@ void test_json_reads_reject_excessive_nesting() {
   // nlohmann 3.12.0 parses and destroys iteratively and therefore does not
   // crash on depth. The guard itself is proven in tests/core/foundation.
   //
-  // Symlink handling is not asserted here: read_json() goes through the storage
-  // platform, so O_NOFOLLOW belongs to the platform implementation rather than
-  // to this module. A symlink already in the bundle is refused by the recursive
-  // symlink scan that runs before any read.
+  // Symlink handling is asserted separately by
+  // test_json_reads_reject_symlinked_files: read_json() goes through the
+  // storage platform, so O_NOFOLLOW belongs to the platform implementation
+  // rather than to this module, and the file-level refusal surfaces as
+  // invalid_project.
   TempDirectory temp;
   const auto bundle = temp.path() / "beat-proof.lmdj";
   ProjectStore store;
@@ -1636,6 +1637,47 @@ void test_json_reads_reject_excessive_nesting() {
   const auto nested = store.load(bundle);
   LMDJ_CHECK(!nested.has_value());
   LMDJ_CHECK(nested.error().code == ErrorCode::invalid_project);
+}
+
+void test_json_reads_reject_symlinked_files() {
+  // File-level complement of
+  // test_symlinked_managed_directory_is_rejected_before_recovery and of
+  // read_artifact's symlink coverage: manifest and checkpoint reads go
+  // through the same storage platform read_complete(), whose native
+  // implementation opens the final component with O_NOFOLLOW and maps the
+  // refusal to invalid_project — the symmetry machine task C4 asked for.
+  TempDirectory temp;
+  const auto bundle = temp.path() / "json-symlink.lmdj";
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, new_project()).has_value());
+
+  const auto external = temp.path() / "external.json";
+  write_bytes(external, "{}");
+
+  const auto manifest = bundle / "manifest.json";
+  const auto manifest_bytes = read_bytes(manifest);
+  std::filesystem::remove(manifest);
+  std::filesystem::create_symlink(external, manifest);
+  const auto manifest_result = store.load(bundle);
+  LMDJ_CHECK(!manifest_result.has_value());
+  LMDJ_CHECK(manifest_result.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(read_bytes(external) == "{}");
+  std::filesystem::remove(manifest);
+  write_bytes(manifest, manifest_bytes);
+
+  const auto checkpoint = bundle / "history/checkpoints/0.json";
+  const auto checkpoint_bytes = read_bytes(checkpoint);
+  std::filesystem::remove(checkpoint);
+  std::filesystem::create_symlink(external, checkpoint);
+  const auto checkpoint_result = store.load(bundle);
+  LMDJ_CHECK(!checkpoint_result.has_value());
+  LMDJ_CHECK(
+      checkpoint_result.error().code == ErrorCode::invalid_project);
+  LMDJ_CHECK(read_bytes(external) == "{}");
+  std::filesystem::remove(checkpoint);
+  write_bytes(checkpoint, checkpoint_bytes);
+
+  LMDJ_CHECK(store.load(bundle).has_value());
 }
 
 void test_independent_platform_reports_busy_until_release() {
@@ -1794,6 +1836,7 @@ int main() {
     test_public_commands_reject_unsafe_ids_before_publishing();
     test_symlinked_managed_directory_is_rejected_before_recovery();
     test_json_reads_reject_excessive_nesting();
+    test_json_reads_reject_symlinked_files();
     test_independent_platform_reports_busy_until_release();
     test_artifact_reads_are_bounded_symlink_safe_and_integrity_verified();
     test_artifact_read_rejects_symlinked_intermediate_directory();
