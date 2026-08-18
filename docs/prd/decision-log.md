@@ -1,6 +1,15 @@
 # 决策记录
 
-这里记录已经确认的产品和技术决策。没有确认的内容不要写进这里，先放到 [open-questions.md](open-questions.md)。
+这里记录已经确认的产品和技术决策。没有确认的内容不要写进这里，先按
+[open-questions.md](open-questions.md) 的约定进入问题目录。
+
+**自 2026-08-18 起，新决策不再追加到本文件。** 每条新决策是
+[decisions/](decisions/) 目录下的一个独立文件，命名 `YYYY-MM-DD-<slug>.md`，
+格式与规则见 [decisions/README.md](decisions/README.md)。并行分支各自新建
+文件，不共享追加点。
+
+以下是 2026-07-02 至 2026-08-16 的历史决策存档，保持原样、不再修改；勘误
+也以新的决策文件记录。
 
 ## 2026-07-02
 

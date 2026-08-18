@@ -32,7 +32,7 @@ Compiled against `main` at `801fa450` on 2026-08-17.
 | ~~B2~~ | ~~Emit the Portal snapshot witness on the merge path, or make the failure name the exact command that resolves it~~ | triage B2 | **done 2026-08-18** (`edb16910`). The first option is impossible by construction — the witness records a revision that exists only after the merge, and must itself be committed. The failure now carries the command, and the command derives its second argument |
 | B3 | Derive Product Build identity wherever a gate can read committed truth; where a literal is unavoidable, make its failure message name the version | triage B3 | seven hand-maintained locations; none of the failures named a version. Two were converted during Stage 8, the rest remain literal |
 | B4 | Fold `assembly.lock.json` regeneration into whatever writes the compiled assembly, or make `version.py lock` refuse to run before the source is final | triage B4 | bit twice in one allocation; the second time surfaced only at the portal freeze |
-| C2 | Restructure `decision-log.md` and `open-questions.md` so concurrent branches stop colliding — dated section files with an index, or an append convention that keeps additions apart | triage C2 | both files are append-at-the-end; every parallel session conflicts |
+| ~~C2~~ | ~~Restructure `decision-log.md` and `open-questions.md` so concurrent branches stop colliding~~ | triage C2 | **done 2026-08-18** (`5a9c11a7`, plan [`2026-08-18-lmdj-prd-append-structure.md`](../superpowers/plans/2026-08-18-lmdj-prd-append-structure.md)). One entry per file: new decisions in `docs/prd/decisions/`, each open question in `docs/prd/questions/`; no hand-maintained index — an index edited on every addition is itself a shared append point |
 | C4 | Give `project_store.cpp`'s JSON read paths the `O_NOFOLLOW` symmetry `read_artifact()` already has | 2026-08-03 backlog C2, still open | small, mechanical, security-shaped |
 | C5 | Make `scripts/architecture-portal.sh witness` refuse an existing witness file cleanly instead of throwing an unhandled `EEXIST` rejection | found while closing B2, 2026-08-18 | `create-squash-witness.mjs:41` is the only `wx` write in the script family, and it is the outlier: `version-docs.mjs:123` and `snapshot-provenance.mjs:394` both refuse with a named error. **Keep the refusal** — `wx` is what stops a witness being silently overwritten; only its presentation is wrong. Now easier to hit, since B2 made this the routine remedy command |
 | E2 | Add a range parameter to `CaptureBuffer.envelope(bins)` | triage E2 | only when waveform zoom is actually built; a narrow window at the same bin count currently falls back to the exact path and rescans the whole buffer |
@@ -96,7 +96,7 @@ row is answered.
    one Task and lands ≈88–89%.
 3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
    one branch, and it is what makes Pad Capture usable by hand.
-4. **C2** — every parallel branch pays for this one today.
+4. ~~**C2**~~ — done 2026-08-18 on `docs/prd-append-structure`.
 5. **B3, B4, C4, C5** — mechanical hardening, schedule as capacity allows. C5
    is the smallest of them and sits in the path operators now walk on every
    snapshot-carrying Build.

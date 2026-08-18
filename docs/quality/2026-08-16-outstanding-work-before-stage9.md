@@ -201,13 +201,23 @@ value. Superseded by the coverage-raise plan
 which raises real coverage to the policy's 90% target and only then moves the
 floor — upward.
 
-### C2. `decision-log.md` and `open-questions.md` conflict on every parallel branch
+### ~~C2. `decision-log.md` and `open-questions.md` conflict on every parallel branch~~ — fixed 2026-08-18
 
 Both files are append-at-the-end, and every concurrent session appends to the
 same place. Stage 8b hit conflicts in both on its final sync.
 
 **Fix shape:** structural — dated section files with an index, or an append
 convention that keeps concurrent additions apart.
+
+**Fixed** in `5a9c11a7` (plan
+[`2026-08-18-lmdj-prd-append-structure.md`](../superpowers/plans/2026-08-18-lmdj-prd-append-structure.md)):
+one entry per file, deliberately **without** an index — an index file edited
+on every addition is itself a shared append point and would recreate this
+defect. New decisions are dated files under `docs/prd/decisions/`; each open
+question is its own file under `docs/prd/questions/`, which also removes the
+shared `更新时间` line every session edited. Both canonical paths survive as
+convention pages: `decision-log.md` keeps the pre-2026-08-18 archive frozen,
+`open-questions.md` migrated all 18 open rows verbatim.
 
 ### C3. Playwright evidence retention was two bugs deep
 
