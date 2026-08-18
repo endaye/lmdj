@@ -44,7 +44,16 @@ numbers differ by two Apple-only coverage objects):
 89% of uncovered lines sit on error/failure paths. Grouped by what a test
 needs to reach them:
 
-**Tier A — reachable today with ordinary bad inputs (~190–210 lines):**
+> **Corrected 2026-08-18 during Task 1.** The per-function line counts below
+> were produced by a heuristic that scanned upward for the nearest signature,
+> which mis-attributed blocks to the preceding function. Measured against
+> `llvm-cov report -show-functions`, `validate_initial_pattern` was 4 lines,
+> not 39, and covering it fully moved the package 84.08% → 84.18%. The
+> corrected attribution is in the table under "Where the volume actually is";
+> Tier A is materially smaller than estimated and Tier B carries the volume.
+> The tier *shapes* below still hold — what each target needs is unchanged.
+
+**Tier A — reachable today with ordinary bad inputs (line counts unreliable, see correction):**
 
 | Target | Lines | How |
 | --- | ---: | --- |
@@ -68,10 +77,43 @@ specific rare errno combinations, byte-level TOCTOU re-verification ("scratch
 changed while it was being read"), and allocation failure. Fixture complexity
 exceeds the value; these lines are why 100% is not a sane target.
 
-Arithmetic: 90% needs 3655/4061 covered, i.e. +242 lines. Tier A alone lands
-≈88–89%; Tier A plus the catch-all hook crosses 90%; the render fault matrix
-takes it toward 93% and lifts branches substantially toward their 80% target
-(currently 66.86%).
+Arithmetic: 90% needs 3655/4061 covered on Ubuntu, i.e. +242 lines. The
+per-tier landing points estimated here were derived from the mis-attributed
+counts and are **not** to be relied on; the honest statement is that Tier B
+holds most of the reachable volume, and each task re-measures rather than
+predicting. Branches start at 66.86% against an 80% target.
+
+## Where the volume actually is (measured 2026-08-18)
+
+`llvm-cov report -show-functions` over `application.cpp`, functions with
+uncovered lines, largest first:
+
+| Uncovered | Of total | Function |
+| ---: | ---: | --- |
+| 43 | 112 | `Impl::begin_sample_import` |
+| 37 | 128 | `Impl::cleanup_sample_import_staging` |
+| 22 | 80 | `Impl::render_offline` |
+| 21 | 87 | `Impl::cook_project` |
+| 14 | 76 | `Impl::commit_sample_import` |
+| 12 | 104 | `Impl::query_sample_waveform` |
+| 12 | 103 | `Impl::take_commit` |
+| 9 | 72 | `Impl::update_sample_pad` |
+| 9 | 42 | `Impl::append_sample_import` |
+| 8 | 27 | `Impl::create_initial_project` |
+| 7 | 13 | `Application::append_project_bundle_index` |
+| 7 | 12 | `Application::prepare_runtime_snapshot` |
+
+356 uncovered lines across 47 functions with gaps; the remainder sit in
+file-scope helpers.
+
+**What this changes.** The concentration is in the sample import, staging
+cleanup, render and cook paths — the storage and provider seams — not in the
+input validators. Those are Tier B by nature: reaching them means making a
+filesystem or provider operation fail at a chosen point. Tier A remains worth
+doing (it is cheap, and its contracts are real), but it will not carry the
+package to 90% on its own, and the plan's task ordering should not assume it
+does. Task 2's throw-injection hook and Task 3's fault matrix are now the
+load-bearing work.
 
 ## Global Constraints
 
