@@ -105,6 +105,31 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_application_facade_failure_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/failure_contract_test.cpp"
+  )
+  target_include_directories(
+    lmdj_application_facade_failure_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_application_facade_failure_tests
+    PRIVATE
+      lmdj::application
+      lmdj_provider_local_proof_success
+      lmdj_provider_local_proof_failure
+  )
+  lmdj_target_warnings(lmdj_application_facade_failure_tests)
+  lmdj_target_sanitizers(lmdj_application_facade_failure_tests)
+  lmdj_add_test(
+    NAME facade.failure_contracts
+    TIER component
+    COMMAND lmdj_application_facade_failure_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
     lmdj_assembly_loader_tests
     "${CMAKE_SOURCE_DIR}/tests/core/facade/assembly_loader_test.cpp"
   )
