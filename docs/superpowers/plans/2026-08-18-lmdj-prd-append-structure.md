@@ -64,7 +64,7 @@ index.
 
 ### Task 1 — Restructure the two files and their directories
 
-- [ ] Create `docs/prd/decisions/README.md`: naming rule
+- [x] Create `docs/prd/decisions/README.md`: naming rule
       (`YYYY-MM-DD-<slug>.md`, confirmation date, lowercase kebab-case slug),
       one decision per file (one review producing a batch like S8-D1–D13 may
       share a file), entry template (`已确认` heading; 日期 / 结论 / 原因 /
@@ -73,21 +73,21 @@ index.
       open question deletes the matching `../questions/` file in the same
       Task. This README also keeps the directory tracked while it waits for
       its first entry.
-- [ ] Rewrite the header of `docs/prd/decision-log.md`: from 2026-08-18 new
+- [x] Rewrite the header of `docs/prd/decision-log.md`: from 2026-08-18 new
       decisions are files under `decisions/`; everything below is the
       2026-07-02 … 2026-08-16 archive, closed to appends and edits. The
       archived sections themselves stay byte-identical.
-- [ ] Migrate all 18 open questions to `docs/prd/questions/<slug>.md`, each
+- [x] Migrate all 18 open questions to `docs/prd/questions/<slug>.md`, each
       with 范围 / 状态 / (optional 来源) / 为什么重要 / 处理时点. The 新内核
       section preamble becomes those six files' 来源 line.
-- [ ] Rewrite `docs/prd/open-questions.md` as the convention page: file
+- [x] Rewrite `docs/prd/open-questions.md` as the convention page: file
       naming, entry format, the existing status vocabulary, lifecycle (new
       question = new file; resolved question = file deleted in the Task that
       writes the decision entry), no per-entry index, and a note that the
       pre-2026-08-18 table lives in git history.
-- [ ] Update `docs/prd/README.md` so 文档分工 and 推荐迭代节奏 describe the
+- [x] Update `docs/prd/README.md` so 文档分工 and 推荐迭代节奏 describe the
       two directories instead of in-file appends.
-- [ ] Extend the frontmatter `source_paths` of the two portal pages that
+- [x] Extend the frontmatter `source_paths` of the two portal pages that
       declare these files as sources —
       `apps/architecture-portal/docs/product/positioning.mdx` (both files)
       gains `docs/prd/decisions/` and `docs/prd/questions/`, and
