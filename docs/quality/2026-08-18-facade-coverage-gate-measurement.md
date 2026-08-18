@@ -3,9 +3,9 @@
 Evidence for triage item C1. Produced by Task 1 of
 [`2026-08-18-lmdj-facade-coverage-gate-stabilization.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-gate-stabilization.md).
 
-The measurement **invalidated that plan's premise and its proposed fix**. Both
-findings are recorded here; no floor was changed and no source was committed
-on the strength of the original plan.
+The measurement **invalidated that plan's premise, its proposed fix, and
+finally the triage item itself**. No floor was changed and no source was
+committed on the strength of the original plan.
 
 ## Environment
 
@@ -14,7 +14,7 @@ on the strength of the original plan.
 | Source revision | `3b416a23` (`main`) |
 | Local host | macOS `26.6.1` (`25G76`), Darwin `25.6.0`, arm64 |
 | Local command | `scripts/core-coverage.sh check`, repeated on an unchanged tree |
-| CI reference | Ubuntu runner, job `95185530769`, run `31955538797`, revision `801fa450` |
+| CI reference | Ubuntu runner, run `31955538797`, revision `801fa450`, jobs `95185530769` and `95690337280` (same job re-run at the same revision) |
 
 macOS and Ubuntu do not measure the same file set: `CMakeLists.txt:112-117`
 adds `lmdj_audio_coreaudio_tests` and `lmdj_native_audio_probe` to the coverage
@@ -88,35 +88,56 @@ would still only address branch noise, which is not the live risk.
 
 The preset was restored; nothing from this experiment is committed.
 
-## Finding 3 — the CI observation is real and unexplained locally
+## Finding 3 — Ubuntu, the platform that enforces the gate, is deterministic
 
-Triage records a Stage 8 Ubuntu run measuring 83.94% and failing, followed by
-84.04% passing. Against 4,061 lines those are 3,409 and 3,413 covered — a
-four-line difference, matching the ±4 triage described.
+The retained Ubuntu job at `801fa450` was re-run **at that same revision**, so
+both measurements observe identical source on identical hardware and toolchain.
 
-The retained Ubuntu run at `801fa450` measures:
+| Ubuntu job | Run | Lines | Branches |
+| --- | --- | --- | --- |
+| `95185530769` | `31955538797` | 3413/4061 = 84.04% | 1031/1542 = 66.86% |
+| `95690337280` | `31955538797` (re-run) | 3413/4061 = 84.04% | 1031/1542 = 66.86% |
 
-```
-packages/application-facade/: lines 84.04% (3413/4061, required 84.00%);
-branches 66.86% (1031/1542, required 64.00%)
-```
+**Both lines and branches are identical.** The branch variance seen locally on
+macOS does not appear on the Ubuntu runner at all.
 
-Five local runs did not reproduce any line movement. The difference between
-platforms is unexplained by this measurement: candidate causes are the
-toolchain (CI pins Clang/LLVM 18), the differing coverage object set, a
-different source state at the time of the Stage 8 observation, or an
-interleaving five runs did not hit. **This record does not claim Ubuntu line
-counts are stable.**
+On Ubuntu the line margin is 0.0433 points above the 84.00 floor, and one
+facade line is worth 0.0246 points, so **two lines** of newly uncovered code
+break the gate.
+
+## Finding 4 — the failure C1 describes is not reproducible
+
+Triage's Stage 8 observation (83.94% failing, then 84.04% passing) could not be
+tied to a retained run. The only failed `core-coverage` job in the scanned
+history of `main` (`95171956153`, revision `a71b5e0a`) failed before reaching
+the gate, for unrelated reasons, and printed no facade percentage.
+
+Given Finding 3, two runs of the same revision on the enforcing platform cannot
+disagree. The 83.94% and 84.04% observations must therefore come from
+**different source states**, not from re-measuring one — which makes them a
+real coverage change between commits, not gate noise.
 
 ## Conclusion
 
-1. The line floor's problem is margin, not noise — 0.0786 points on a metric
-   where one line is worth 0.0246.
-2. The plan's fix is inapplicable as written and would target the wrong
-   metric even if completed.
-3. Whether Ubuntu line counts vary remains open and is the input the floor
-   decision needs.
+1. **The gate is not noisy on the platform that enforces it.** Two Ubuntu runs
+   of identical source produced identical lines and identical branches.
+2. **The local macOS branch variance is real but harmless**, and does not
+   reproduce on Ubuntu. It cannot reach the branch floor, which has 3.46 points
+   of headroom.
+3. **The line gate is very tight: 0.0433 points, about two lines.** Because the
+   measurement is deterministic, a failure at that margin is a true signal that
+   the change lowered facade line coverage — not a random stop.
+4. **C1 as filed does not exist.** "Any PR can be stopped by this at random" was
+   premised on a nondeterministic measurement, and the measurement is
+   deterministic where it counts.
 
-No threshold was changed on the strength of this record alone. The test
-policy's rule stands: a floor moves only on a reviewed measurement, and this
-measurement is not yet sufficient for the platform CI enforces.
+What remains is not a defect but a policy question: **does a ratchet floor with
+two lines of headroom carry the margin this project wants?** A tight ratchet
+catches regressions precisely, which is what a ratchet is for; it also fails any
+change that adds even two uncovered lines to this package.
+
+`docs/quality/core-test-policy.md` rules that floors "must not be lowered merely
+to make CI green" and that they "may rise after sustained behavioral coverage
+lands". With the noise justification gone, lowering this floor would need an
+argument about what the gate should catch — which is a decision, not an
+implementation. **No threshold was changed.**

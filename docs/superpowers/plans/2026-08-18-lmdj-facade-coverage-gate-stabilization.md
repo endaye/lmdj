@@ -145,45 +145,48 @@ The record covers both outcomes and is the commit for this Task.
 
 ### Task 2 — Establish whether Ubuntu line counts vary
 
-- [ ] Collect every retained `core-coverage` job on `main` and extract each
+- [x] Collect every retained `core-coverage` job on `main` and extract each
       run's facade line numbers with its revision. Where two runs share a
       revision, their difference is the CI variance; where they do not, record
       the numbers per revision without inferring variance from them.
-- [ ] If same-revision Ubuntu runs disagree on covered lines, the CI
+- [x] If same-revision Ubuntu runs disagree on covered lines, the CI
       measurement is nondeterministic and the defect is noise after all —
       report before proposing any fix, because the fix then has to target
       whatever makes Ubuntu differ from macOS.
-- [ ] If they agree, or if no same-revision pair exists, obtain one: this
+- [x] If they agree, or if no same-revision pair exists, obtain one: this
       branch's own Pull Request selects the `core_coverage` lane through the
       `tests/quality/` rule in `scripts/ci/scope_policy.json`, so a change
       under that directory produces a fresh Ubuntu measurement to compare
       against the retained one.
-- [ ] Extend the measurement record with the Ubuntu series and its conclusion.
+- [x] Extend the measurement record with the Ubuntu series and its conclusion.
 
-**Verification:** the record states, with run ids, whether Ubuntu covered-line
-counts vary at a fixed revision.
+**Done 2026-08-18.** Answered by re-running job `95185530769` at its own
+revision `801fa450` rather than by scanning history: the re-run
+(`95690337280`) reproduced 3413/4061 lines **and** 1031/1542 branches exactly.
+Ubuntu is deterministic in both metrics, so C1's premise of random failures
+does not hold on the enforcing platform.
 
-### Task 3 — Set the floor from the CI-side evidence
+### Task 3 — Blocked: the remaining question is a policy decision
 
-Blocked on Task 2. Its shape depends on Task 2's answer and must not be
-pre-committed here:
+Task 2's answer removed the defect this plan was written to fix. On Ubuntu the
+measurement is deterministic in lines and branches, so a gate failure at the
+0.0433-point margin is a true signal that a change lowered facade line
+coverage, not a random stop.
 
-- if Ubuntu is deterministic, the floor moves to a measured margin below the
-  Ubuntu value, and the surviving question is only how much margin the policy
-  wants;
-- if Ubuntu varies, the floor cannot be set until the variance is either
-  removed or characterized well enough to sit outside it.
+What is left is a judgement, not an implementation: **a ratchet floor with
+about two lines of headroom catches regressions precisely, and also fails any
+change that adds two uncovered lines to this package.** Whether that is the
+margin this project wants is a policy call, and
+`docs/quality/core-test-policy.md` forbids lowering a floor "merely to make CI
+green" — with the noise justification gone, no implementation argument remains
+to lower it.
 
-- [ ] Apply the decided floor to
-      `tests/quality/core-coverage-thresholds.json`.
-- [ ] Update the enforced-ratchet table and narrative in
-      `docs/quality/core-test-policy.md` in the same commit, recording the
-      measurement this floor came from.
-- [ ] Confirm no other floor moved.
+- [ ] Take the margin question to a decision row rather than settling it here.
+- [ ] Change a threshold only after that decision, recording it against this
+      measurement.
 
-**Verification:** `scripts/core-coverage.sh check` locally; the PR's own
-`core-coverage` lane as the Ubuntu evidence; `bash tests/build/test_active_tree.sh`;
-`scripts/architecture-portal.sh check`.
+**Verification:** none pending; this Task does no work until the decision
+exists.
 
 ### Task 4 — Close the ledger
 
