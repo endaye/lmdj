@@ -104,9 +104,9 @@ clean.
 
 ### Task 2 — Close the C2 ledger entries
 
-- [ ] Mark C2 done in `docs/quality/2026-08-17-machine-task-todo.md` (table
+- [x] Mark C2 done in `docs/quality/2026-08-17-machine-task-todo.md` (table
       row and suggested-order item), naming Task 1's commit.
-- [ ] Mark section C2 fixed in
+- [x] Mark section C2 fixed in
       `docs/quality/2026-08-16-outstanding-work-before-stage9.md`, recording
       the chosen shape and why no index file exists.
 
