@@ -163,11 +163,11 @@ failure CI took 13 minutes to find.
 
 ### Task 2 — Correct the two documents that state the gap is permanent
 
-- [ ] `docs/governance/git-workflow.md` §4 "Local pre-flight": add
+- [x] `docs/governance/git-workflow.md` §4 "Local pre-flight": add
       `scripts/local-ci.sh --pr-body FILE` to the command block and state what
       it checks, that it mirrors CI's portal-selected applicability, and that
       it is never cached. Keep the existing advisory-only framing.
-- [ ] `apps/architecture-portal/docs/operations/testing-and-proof.mdx`: the
+- [x] `apps/architecture-portal/docs/operations/testing-and-proof.mdx`: the
       page currently lists "Portal impact check 读取的 PR body" among the CI
       steps the pre-flight **deliberately does not reproduce**, which this
       change makes false. Correct that sentence and name the new
