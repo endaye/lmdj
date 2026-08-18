@@ -50,7 +50,8 @@ change.
 
 | ID | Task | Why it needs an argument, not just a diff |
 | --- | --- | --- |
-| C1 | Stabilise the `application-facade` coverage gate | Choosing between lowering the threshold and excluding paths changes what the gate can still catch. A genuine 4-line regression is currently indistinguishable from noise, so whichever option is taken must say what it gives up |
+| ~~C1~~ | ~~Stabilise the `application-facade` coverage gate~~ | **Invalidated by measurement 2026-08-18** ([record](2026-08-18-facade-coverage-gate-measurement.md)): two Ubuntu runs of the same revision produced identical lines *and* branches, so the premise "any PR can be stopped at random" does not hold on the enforcing platform. Superseded by C6 |
+| C6 | Raise facade line coverage to the policy's own 90% target with behavioral tests for unreached failure semantics, then ratchet the floor up | Plan written: [`2026-08-18-lmdj-facade-coverage-raise.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-raise.md). 89% of the 648 uncovered lines are error paths; Tier A (~200 lines) needs only ordinary bad inputs, Tier B mirrors the project-io fault-hook precedent, Tier C is deliberately not chased. Direction fixed by the product owner: the floor number is not the point, real coverage is |
 
 ---
 
@@ -90,8 +91,9 @@ row is answered.
 
 1. ~~**B1 + B2**~~ — done 2026-08-18 on `fix/release-audit-ancestry`, plan
    [`2026-08-18-lmdj-release-audit-ancestry-and-witness-remedy.md`](../superpowers/plans/2026-08-18-lmdj-release-audit-ancestry-and-witness-remedy.md).
-2. **C1** — cheap, and it stops random PR failures polluting every future
-   signal. Now the top of the ready queue.
+2. ~~**C1**~~ — invalidated by measurement; the gate is deterministic where it
+   enforces. **C6 replaces it at the top of the ready queue**: Tier A alone is
+   one Task and lands ≈88–89%.
 3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
    one branch, and it is what makes Pad Capture usable by hand.
 4. **C2** — every parallel branch pays for this one today.

@@ -176,7 +176,7 @@ assembly, or have `version.py lock` refuse to run before the source is final.
 
 ## C. Test and CI reliability
 
-### C1. `application-facade` coverage threshold has no margin
+### ~~C1. `application-facade` coverage threshold has no margin~~ — invalidated 2026-08-18, superseded
 
 Threshold is 84.00%; the measured value is 84.04% (3413/4061). The package
 contains concurrency code exercised by stress and concurrency tiers, and the
@@ -186,9 +186,20 @@ run measured 83.94% and failed; the next measured 84.04% and passed.
 Any PR can be stopped by this at random, and a genuine 4-line regression is
 indistinguishable from noise.
 
-**Fix shape:** decide whether the threshold should sit below the observed
-floor, or whether the nondeterministic paths should be excluded from the
-measurement.
+**Invalidated by measurement** ([record](2026-08-18-facade-coverage-gate-measurement.md)):
+re-running the retained Ubuntu coverage job at its own revision reproduced
+3413/4061 lines and 1031/1542 branches exactly, so the measurement is
+deterministic on the platform that enforces it, and the 83.94/84.04 pair must
+have been two different source states — a real coverage change, not gate
+noise. The local macOS branch jitter is real but has 3.46 points of headroom
+and does not appear on Ubuntu.
+
+What survives is not this defect but the underlying condition: 648 uncovered
+lines, 89% of them failure paths, and a floor two lines above the measured
+value. Superseded by the coverage-raise plan
+([`2026-08-18-lmdj-facade-coverage-raise.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-raise.md)),
+which raises real coverage to the policy's 90% target and only then moves the
+floor — upward.
 
 ### C2. `decision-log.md` and `open-questions.md` conflict on every parallel branch
 
@@ -413,8 +424,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    **F1 + F2 are one cheap fix** and should be taken next in this group, since
    they make Pad Capture unusable on a normal window without knowing to scroll.
 2. ~~**B1 + B2 together**~~ — done 2026-08-18. B3 and B4 remain open.
-3. **C1** — cheap, and it stops random PR failures polluting every future
-   signal.
+3. ~~**C1**~~ — invalidated by measurement; superseded by the facade
+   coverage-raise plan (machine list C6).
 4. **D4 + D5** — Stage 9 depends on them.
 5. **D1 + D2** — one review, before any long-material work.
 6. **A2, A3** — before the first external distribution.
