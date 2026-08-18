@@ -2740,6 +2740,143 @@ void test_every_trigger_mode_round_trips_through_the_json_surface() {
   }
 }
 
+// Every public Application entry wraps its implementation in a catch-all whose
+// job is to convert an unexpected exception into the documented failure
+// envelope instead of letting it cross the Host boundary. That contract has
+// never been exercised: an escaping exception would be undefined behaviour for
+// the C ABI and a crash for a Host, so each entry is armed with one throw and
+// required to answer with internal_error rather than propagate.
+struct ApiEntryFault {
+  static void throw_once(void*) {
+    throw std::runtime_error("injected Host API fault");
+  }
+};
+
+void arm_api_entry_fault(lmdj::facade::testing::ApiEntryHook& hook) {
+  hook.context = nullptr;
+  hook.invoke = &ApiEntryFault::throw_once;
+  lmdj::facade::testing::set_api_entry_hook(&hook);
+}
+
+void test_every_public_entry_converts_an_unexpected_throw_to_its_envelope() {
+  TempDirectory temp;
+  const auto project = temp.path() / "entry-faults.lmdj";
+  Application application(sample_config(temp.path()));
+  LMDJ_CHECK(application
+                 .create_initial_project(InitialProjectRequest{
+                     project,
+                     ProjectId{uuid(780)},
+                     120,
+                     Pattern{PatternId{uuid(781)}, 1, {}},
+                 })
+                 .has_value());
+
+  lmdj::facade::testing::ApiEntryHook hook{};
+
+  // Typed entries: the contract is a failed Result carrying internal_error and
+  // the exact public message, never an escaping exception.
+  const auto check_typed = [&](std::string_view label, auto&& call) {
+    arm_api_entry_fault(hook);
+    const auto result = call();
+    LMDJ_CHECK(!result.has_value());
+    if (result.error().code != ErrorCode::internal_error) {
+      throw std::runtime_error(
+          std::string("entry did not report internal_error: ") +
+          std::string(label));
+    }
+    if (result.error().message !=
+        "unexpected Application Facade Host API failure") {
+      throw std::runtime_error(
+          std::string("entry reported the wrong public message: ") +
+          std::string(label));
+    }
+  };
+
+  check_typed("create_initial_project", [&] {
+    return application.create_initial_project(InitialProjectRequest{
+        temp.path() / "second.lmdj",
+        ProjectId{uuid(782)},
+        120,
+        Pattern{PatternId{uuid(783)}, 1, {}},
+    });
+  });
+  check_typed("list_local_projects", [&] {
+    return application.list_local_projects();
+  });
+  check_typed("inspect_sample", [&] {
+    return application.inspect_sample(SampleInspectRequest{project, {0, 0}});
+  });
+  check_typed("begin_sample_import", [&] {
+    return application.begin_sample_import(SampleImportBeginRequest{
+        uuid(784),
+        project,
+        CommandMeta{CommandId{uuid(785)}, 0},
+        PadSlotId{0, 0},
+        AssetId{uuid(786)},
+        16,
+    });
+  });
+  check_typed("commit_sample_import", [&] {
+    return application.commit_sample_import(uuid(784));
+  });
+  check_typed("update_sample_pad", [&] {
+    return application.update_sample_pad(SampleUpdateRequest{
+        project,
+        CommandMeta{CommandId{uuid(787)}, 0},
+        PadSlotId{0, 0},
+        PadPlayback{},
+    });
+  });
+  check_typed("reset_sample_pad", [&] {
+    return application.reset_sample_pad(SampleResetRequest{
+        project,
+        CommandMeta{CommandId{uuid(788)}, 0},
+        PadSlotId{0, 0},
+    });
+  });
+  check_typed("acquire_project_writer", [&] {
+    return application.acquire_project_writer(project);
+  });
+
+  // JSON entries answer with the envelope form of the same failure, so a Host
+  // reading JSON sees a well-formed refusal rather than a truncated response.
+  const auto check_json = [&](std::string_view label, auto&& call) {
+    arm_api_entry_fault(hook);
+    const auto envelope = call();
+    LMDJ_CHECK(envelope.at("ok") == false);
+    if (envelope.at("error").at("code") != "INTERNAL_ERROR") {
+      throw std::runtime_error(
+          std::string("JSON entry did not report INTERNAL_ERROR: ") +
+          std::string(label));
+    }
+    LMDJ_CHECK(
+        envelope.at("error").at("message") == "unexpected application failure");
+  };
+
+  check_json("command", [&] {
+    return application.command({
+        {"operation", "project.inspect"},
+        {"project_path", project.generic_string()},
+    });
+  });
+  check_json("query", [&] {
+    return application.query({
+        {"operation", "project.inspect"},
+        {"project_path", project.generic_string()},
+    });
+  });
+
+  // The hook is one-shot: after every armed call above fired, an unarmed call
+  // must behave normally. Without this the suite could pass while leaving the
+  // facade permanently faulted for later tests.
+  const auto healthy = application.query({
+      {"operation", "project.inspect"},
+      {"project_path", project.generic_string()},
+  });
+  LMDJ_CHECK(healthy.at("ok") == true);
+  lmdj::facade::testing::set_api_entry_hook(nullptr);
+}
+
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
   const auto project = temp.path() / "initial-pattern.lmdj";
@@ -3634,6 +3771,7 @@ int main() {
     test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
     test_initial_pattern_rejections_are_exact_and_write_nothing();
     test_every_trigger_mode_round_trips_through_the_json_surface();
+    test_every_public_entry_converts_an_unexpected_throw_to_its_envelope();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
     test_typed_sample_surface_rejects_invalid_boundary_values();

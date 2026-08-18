@@ -47,6 +47,7 @@ namespace testing {
 namespace {
 
 std::atomic<SampleProjectionHook*> sample_projection_hook{nullptr};
+std::atomic<ApiEntryHook*> api_entry_hook{nullptr};
 
 }  // namespace
 
@@ -57,6 +58,17 @@ void set_sample_projection_hook(SampleProjectionHook* hook) noexcept {
 void invoke_sample_projection_hook() noexcept {
   auto* hook =
       sample_projection_hook.exchange(nullptr, std::memory_order_acq_rel);
+  if (hook != nullptr && hook->invoke != nullptr) {
+    hook->invoke(hook->context);
+  }
+}
+
+void set_api_entry_hook(ApiEntryHook* hook) noexcept {
+  api_entry_hook.store(hook, std::memory_order_release);
+}
+
+void invoke_api_entry_hook() {
+  auto* hook = api_entry_hook.exchange(nullptr, std::memory_order_acq_rel);
   if (hook != nullptr && hook->invoke != nullptr) {
     hook->invoke(hook->context);
   }
@@ -3616,6 +3628,7 @@ Application& Application::operator=(Application&&) noexcept = default;
 
 nlohmann::json Application::command(const nlohmann::json& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->dispatch(request, OperationKind::command);
   } catch (const InvalidRequest& error) {
     const Error invalid_request{ErrorCode::invalid_argument, error.what()};
@@ -3630,6 +3643,7 @@ nlohmann::json Application::command(const nlohmann::json& request) {
 nlohmann::json Application::query(
     const nlohmann::json& request) const {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->dispatch(request, OperationKind::query);
   } catch (const InvalidRequest& error) {
     const Error invalid_request{ErrorCode::invalid_argument, error.what()};
@@ -3645,6 +3659,7 @@ foundation::Result<std::shared_ptr<const cooker::RuntimeSnapshot>>
 Application::prepare_runtime_snapshot(
     const RuntimeSnapshotRequest& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->prepare_runtime_snapshot(request);
   } catch (...) {
     return foundation::Result<
@@ -3660,6 +3675,7 @@ foundation::Result<RuntimeProjectWriterLease>
 Application::acquire_project_writer(
     const std::filesystem::path& project_path) {
   try {
+    testing::invoke_api_entry_hook();
     auto acquired = impl_->acquire_project_writer(project_path);
     if (!acquired.has_value()) {
       return foundation::Result<RuntimeProjectWriterLease>::failure(
@@ -3682,6 +3698,7 @@ foundation::Result<domain::ProjectState>
 Application::create_initial_project(
     const InitialProjectRequest& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->create_initial_project(request);
   } catch (...) {
     return foundation::Result<domain::ProjectState>::failure(
@@ -3696,6 +3713,7 @@ foundation::Result<domain::AppliedCommand>
 Application::import_artifact_bytes(
     const ArtifactBytesImportRequest& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->import_artifact_bytes(request);
   } catch (...) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -3709,6 +3727,7 @@ Application::import_artifact_bytes(
 foundation::Result<std::vector<LocalProjectSummary>>
 Application::list_local_projects() {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->list_local_projects();
   } catch (...) {
     return foundation::Result<std::vector<LocalProjectSummary>>::failure(
@@ -3759,6 +3778,7 @@ foundation::Result<void> Application::append_project_bundle_entry(
     std::span<const std::byte> bytes,
     bool final) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->append_project_bundle_entry(
         token, entry_index, offset, bytes, final);
   } catch (...) {
@@ -3786,6 +3806,7 @@ Application::commit_project_bundle_import(std::string_view token) {
 foundation::Result<void> Application::abort_project_bundle_import(
     std::string_view token) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->abort_project_bundle_import(token);
   } catch (...) {
     return foundation::Result<void>::failure(
@@ -3799,6 +3820,7 @@ foundation::Result<void> Application::abort_project_bundle_import(
 foundation::Result<SampleInspectResult> Application::inspect_sample(
     const SampleInspectRequest& request) const {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->inspect_sample(request);
   } catch (...) {
     return foundation::Result<SampleInspectResult>::failure(Error{
@@ -3823,6 +3845,7 @@ Application::query_sample_waveform(const SampleWaveformRequest& request) {
 foundation::Result<SampleImportSession> Application::begin_sample_import(
     const SampleImportBeginRequest& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->begin_sample_import(request);
   } catch (...) {
     return foundation::Result<SampleImportSession>::failure(Error{
@@ -3838,6 +3861,7 @@ foundation::Result<void> Application::append_sample_import(
     std::span<const std::byte> bytes,
     bool final) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->append_sample_import(token, offset, bytes, final);
   } catch (...) {
     return foundation::Result<void>::failure(Error{
@@ -3850,6 +3874,7 @@ foundation::Result<void> Application::append_sample_import(
 foundation::Result<SampleMutationResult> Application::commit_sample_import(
     std::string_view token) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->commit_sample_import(token);
   } catch (...) {
     return foundation::Result<SampleMutationResult>::failure(Error{
@@ -3862,6 +3887,7 @@ foundation::Result<SampleMutationResult> Application::commit_sample_import(
 foundation::Result<void> Application::abort_sample_import(
     std::string_view token) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->abort_sample_import(token);
   } catch (...) {
     return foundation::Result<void>::failure(Error{
@@ -3874,6 +3900,7 @@ foundation::Result<void> Application::abort_sample_import(
 foundation::Result<SampleMutationResult> Application::update_sample_pad(
     const SampleUpdateRequest& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->update_sample_pad(request);
   } catch (...) {
     return foundation::Result<SampleMutationResult>::failure(Error{
@@ -3886,6 +3913,7 @@ foundation::Result<SampleMutationResult> Application::update_sample_pad(
 foundation::Result<SampleMutationResult> Application::reset_sample_pad(
     const SampleResetRequest& request) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->reset_sample_pad(request);
   } catch (...) {
     return foundation::Result<SampleMutationResult>::failure(Error{
@@ -3900,6 +3928,7 @@ foundation::Result<void> Application::append_realtime_take_events(
     foundation::TakeId take_id,
     std::span<const domain::RawTakeEvent> events) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->append_realtime_take_events(
         project_path, std::move(take_id), events);
   } catch (...) {
@@ -3917,6 +3946,7 @@ Application::seal_realtime_take(
     foundation::TakeId take_id,
     std::string_view reason) {
   try {
+    testing::invoke_api_entry_hook();
     return impl_->seal_realtime_take(
         project_path, std::move(take_id), reason);
   } catch (...) {
