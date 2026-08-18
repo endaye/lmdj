@@ -1,6 +1,6 @@
 # LMDJ Release Audit Ancestry and Witness Remedy Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Close the two release-governance defects the pre-Stage-9 triage files
 as B1 and B2: the audit approves release intents that `prepare` will refuse,
@@ -105,24 +105,24 @@ misuse.
 
 An intent the audit reports as actionable must be one `prepare` would accept.
 
-- [ ] In `_audit_remote_intent`, assert
+- [x] In `_audit_remote_intent`, assert
       `context.git.is_main_ancestor(intent.target_revision)` on both
       pre-mutation paths:
       - the `Disposition.ALLOCATED` early return (`audit.py:452-459`);
       - the releasable-with-no-remote-state path (`audit.py:471-485`),
         **before** CI evidence is evaluated — CI evidence for an unpreparable
         target is noise, and the finding must name the real defect first.
-- [ ] On failure return the existing vocabulary: an `unauthorized` finding for
+- [x] On failure return the existing vocabulary: an `unauthorized` finding for
       the intent's tag with the established message
       `release target is outside protected main ancestry`, so the failure is
       immediate and named, matching prepare's refusal.
-- [ ] Wrap the ancestry probe exactly as the post-tag flow does
+- [x] Wrap the ancestry probe exactly as the post-tag flow does
       (`audit.py:493-494`): a probe error is an `external-error` finding
       naming `git-remote`, never a silent pass.
-- [ ] Leave `ABANDONED` and `SUPERSEDED_UNRELEASED` paths unchanged: neither
+- [x] Leave `ABANDONED` and `SUPERSEDED_UNRELEASED` paths unchanged: neither
       authorizes a future mutation, and abandoned targets may legitimately sit
       outside `main`. Record this boundary in the test names.
-- [ ] Extend `tests/build/release_audit_test.py` (fake git already exposes
+- [x] Extend `tests/build/release_audit_test.py` (fake git already exposes
       `is_main_ancestor`, line 80):
       - allocated intent off-main → `unauthorized`, message as above;
       - releasable intent with no remote state, off-main → `unauthorized`,
@@ -140,25 +140,25 @@ pass after.
 
 ### Task 2 — The provenance failure names the exact remedy, and the remedy needs one argument (B2)
 
-- [ ] In `snapshot-provenance.mjs`, extend the failure at line 667 so the
+- [x] In `snapshot-provenance.mjs`, extend the failure at line 667 so the
       message carries the concrete remediation:
       `run scripts/architecture-portal.sh witness <product_build> <introducing>`
       with both values filled from `metadata.product_build` and the already
       resolved `introducing` revision — copy-pasteable, not a template.
-- [ ] Keep the distinct-error passthrough (`squashRelationError =
+- [x] Keep the distinct-error passthrough (`squashRelationError =
       error.message` for every other witness failure) byte-for-byte: a
       malformed witness must keep reporting its own defect, not the missing
       remedy.
-- [ ] In `create-squash-witness.mjs`, make `INTRODUCING_REVISION` optional:
+- [x] In `create-squash-witness.mjs`, make `INTRODUCING_REVISION` optional:
       when omitted, derive it with the same resolution the verifier uses
       (`snapshot-provenance.mjs:546-548`), refusing with the existing usage
       message when derivation is ambiguous or fails. An explicitly passed
       revision keeps exact current behaviour, including the
       `does not exist` refusal (`snapshot-provenance.mjs:286-287`).
-- [ ] Update `scripts/architecture-portal.sh` usage text
+- [x] Update `scripts/architecture-portal.sh` usage text
       (`witness PRODUCT_BUILD [INTRODUCING_REVISION]`) and the command's
       documentation in `docs/governance/architecture-portal.md:107`.
-- [ ] Extend `apps/architecture-portal/test/snapshot-provenance.test.mjs`:
+- [x] Extend `apps/architecture-portal/test/snapshot-provenance.test.mjs`:
       - the unavailable-witness failure message contains the exact command
         with both concrete arguments;
       - witness creation with the second argument omitted produces a witness
@@ -172,12 +172,12 @@ untouched (existing file still refuses).
 
 ### Task 3 — Close the ledger entries
 
-- [ ] Mark B1 and B2 done in
+- [x] Mark B1 and B2 done in
       `docs/quality/2026-08-17-machine-task-todo.md`, naming the commits.
-- [ ] Update section B of
+- [x] Update section B of
       `docs/quality/2026-08-16-outstanding-work-before-stage9.md` the same
       way; B3 and B4 remain open.
-- [ ] If reviewers of the audit change surfaced anything worth keeping,
+- [x] If reviewers of the audit change surfaced anything worth keeping,
       record it; otherwise this task is the two ledger edits and nothing else.
 
 **Verification:** `scripts/architecture-portal.sh check`;
