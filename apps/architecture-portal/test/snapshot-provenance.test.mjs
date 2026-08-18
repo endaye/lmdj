@@ -12,6 +12,7 @@ import {
   createSnapshotMetadata,
   freezeDiagramAssets,
   readRepoFactsAtRevision,
+  resolveIntroducingRevision,
   verifySnapshotProvenance,
 } from '../scripts/lib/snapshot-provenance.mjs';
 
@@ -446,7 +447,14 @@ test('schema-2 provenance accepts a fresh-clone squash without the source object
     const badIntro = await commit(fixture.repoRoot, 'divergent squash introduction', INTRO_DATE);
     await git(fixture.repoRoot, ['update-ref', 'refs/heads/main', badIntro]);
     await git(fixture.repoRoot, ['reset', '--hard', badIntro]);
-    assert.match((await verifySnapshotProvenance(verifierOptions(fixture, metadata, badIntro))).join('\n'), /source projection is neither direct-parent nor squash-equivalent/);
+    const unavailable = (await verifySnapshotProvenance(verifierOptions(fixture, metadata, badIntro))).join('\n');
+    assert.match(unavailable, /source projection is neither direct-parent nor squash-equivalent/);
+    // The failure must name the exact remedy with both arguments filled in:
+    // an operator reading it should not have to work out either one.
+    assert.match(
+      unavailable,
+      new RegExp(`run: scripts/architecture-portal\\.sh witness ${VERSION} ${badIntro}`),
+    );
   } finally {
     if (cloneParent) await rm(cloneParent, {recursive: true, force: true});
     await rm(fixture.repoRoot, {recursive: true, force: true});
@@ -545,6 +553,47 @@ test('schema-2 provenance resolves the latest continuous lifecycle after delete 
     const metadataAbsent = await commit(fixture.repoRoot, 'remove current metadata', '2026-08-04T00:07:00Z');
     assert.match(
       (await verifySnapshotProvenance(verifierOptions(fixture, metadata, metadataAbsent))).join('\n'),
+      /snapshot metadata path is absent at HEAD/,
+    );
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('the squash witness remedy derives its introducing revision from HEAD', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    await put(fixture.repoRoot, 'apps/architecture-portal/docs/overview/index.mdx', 'post-freeze current overview\n');
+    const introduction = await commit(fixture.repoRoot, 'snapshot plus current edits', INTRO_DATE);
+    await git(fixture.repoRoot, ['update-ref', 'refs/heads/main', introduction]);
+
+    // The verifier resolves this revision for itself before reporting the
+    // witness missing, so the remedy must not demand it from the operator.
+    const derived = await resolveIntroducingRevision({
+      repoRoot: fixture.repoRoot,
+      version: VERSION,
+      headRevision: introduction,
+    });
+    assert.equal(derived, introduction);
+
+    // Deriving and passing the revision must produce the same witness bytes.
+    const [explicitWitness, derivedWitness] = await Promise.all([
+      createSquashWitness({repoRoot: fixture.repoRoot, metadata, introducingRevision: introduction}),
+      createSquashWitness({repoRoot: fixture.repoRoot, metadata, introducingRevision: derived}),
+    ]);
+    assert.deepEqual(derivedWitness, explicitWitness);
+
+    // Derivation is fail-closed: with the metadata gone from HEAD there is no
+    // introducing revision to infer, and the remedy must refuse rather than guess.
+    await git(fixture.repoRoot, ['rm', '--', `apps/architecture-portal/versioned_metadata/version-${VERSION}.json`]);
+    const metadataAbsent = await commit(fixture.repoRoot, 'remove current metadata', '2026-08-04T00:07:00Z');
+    await assert.rejects(
+      resolveIntroducingRevision({
+        repoRoot: fixture.repoRoot,
+        version: VERSION,
+        headRevision: metadataAbsent,
+      }),
       /snapshot metadata path is absent at HEAD/,
     );
   } finally {

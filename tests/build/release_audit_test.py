@@ -1041,6 +1041,94 @@ class ReleaseAuditTest(unittest.TestCase):
                 "--repo-root", str(self.root), "audit", "--local", "--remote",
             ])
 
+    def _pre_mutation_intent(self, disposition: str, *, target: str):
+        """An intent in the exact state that authorizes the next mutation."""
+        item = self.entry(
+            tag="lmdj-v1.0.24.0", disposition=disposition, kind="product",
+            identity="1.0.24.0", profile="web-runtime-host",
+        )
+        item["target_revision"] = target
+        context = self.context([item])
+        return context, context.ledger.intent_for_tag(str(item["tag"]))
+
+    def _remote_finding(self, context, intent):
+        return audit_module._audit_remote_intent(context, intent, None, None, None, None)
+
+    def test_pre_mutation_intent_outside_main_ancestry_is_unauthorized(self) -> None:
+        """prepare refuses these targets, so the audit must refuse them too.
+
+        Both states below are pre-mutation: they report no remote publication
+        state and are exactly what authorizes the next mutation. Reporting them
+        ok on object existence alone is how 1.0.22.0 and 1.0.23.0 stayed green
+        while unpreparable.
+        """
+        for disposition in ("allocated", "releasable"):
+            with self.subTest(disposition=disposition):
+                context, intent = self._pre_mutation_intent(disposition, target="e" * 40)
+                finding = self._remote_finding(context, intent)
+                self.assertEqual(finding.code, "unauthorized")
+                self.assertEqual(
+                    finding.message, "release target is outside protected main ancestry",
+                )
+
+    def test_unpreparable_releasable_intent_is_named_before_its_ci_evidence(self) -> None:
+        """CI evidence for a target prepare would refuse describes work that
+        cannot be released, so ancestry is the finding that must surface."""
+        context, intent = self._pre_mutation_intent("releasable", target="e" * 40)
+
+        def unreachable(*args, **kwargs):
+            raise AssertionError("CI evidence was consulted for an unpreparable target")
+
+        with patch.object(audit_module, "_ci_problem", side_effect=unreachable):
+            finding = self._remote_finding(context, intent)
+        self.assertEqual(finding.code, "unauthorized")
+
+    def test_pre_mutation_ancestry_probe_outage_is_external_error(self) -> None:
+        """An unavailable probe never reads as a pass."""
+        for disposition in ("allocated", "releasable"):
+            with self.subTest(disposition=disposition):
+                context, intent = self._pre_mutation_intent(disposition, target=TARGET)
+                with patch.object(
+                    type(self.git), "is_main_ancestor", side_effect=TimeoutError("fixture outage"),
+                ):
+                    finding = self._remote_finding(context, intent)
+                self.assertEqual(finding.code, "external-error")
+                self.assertEqual(finding.sources, ("git-remote",))
+
+    def test_pre_mutation_intent_on_main_keeps_its_existing_finding(self) -> None:
+        """The change is fail-closed only: on-main states are untouched."""
+        context, intent = self._pre_mutation_intent("allocated", target=TARGET)
+        finding = self._remote_finding(context, intent)
+        self.assertEqual(finding.code, "ok")
+        self.assertEqual(finding.message, "allocated intent has no remote publication state")
+
+        context, intent = self._pre_mutation_intent("releasable", target=TARGET)
+        self.github.scope = CiScopeProjection(
+            schema="lmdj.ci-scope.v2", base_sha="a" * 40, head_sha=TARGET,
+            mode="full", trusted_head=True,
+            selected_lanes=tuple(sorted(LANES)),
+            required_jobs=tuple(sorted(FULL_REQUIRED_JOBS)),
+        )
+        self.github.jobs = [
+            RunJobProjection(1, 123, "Change Scope", "completed", "success", "Core CI", TARGET),
+            RunJobProjection(2, 123, "PR Gate", "completed", "success", "Core CI", TARGET),
+        ]
+        finding = self._remote_finding(context, intent)
+        self.assertEqual(finding.code, "ok")
+        self.assertEqual(
+            finding.message,
+            "releasable intent has full exact-main CI evidence and no remote publication state",
+        )
+
+    def test_historical_dispositions_are_not_ancestry_gated(self) -> None:
+        """Abandoned and superseded-unreleased intents authorize no mutation,
+        and their targets may legitimately sit outside main."""
+        for disposition in ("abandoned", "superseded-unreleased"):
+            with self.subTest(disposition=disposition):
+                context, intent = self._pre_mutation_intent(disposition, target="e" * 40)
+                finding = self._remote_finding(context, intent)
+                self.assertEqual(finding.code, "ok")
+
     def test_stable_release_entry_is_directly_executable(self) -> None:
         entry = ROOT / "scripts/release.sh"
         self.assertTrue(os.access(entry, os.X_OK), "scripts/release.sh is not executable")

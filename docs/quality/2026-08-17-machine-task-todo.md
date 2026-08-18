@@ -28,8 +28,8 @@ Compiled against `main` at `801fa450` on 2026-08-17.
 
 | ID | Task | Source | Shape |
 | --- | --- | --- | --- |
-| B1 | Make `audit` assert `main` ancestry, matching what `prepare` already requires | triage B1 | `tools/release/audit.py`. Two intents were unpreparable from the moment they were written and the audit stayed green for months |
-| B2 | Emit the Portal snapshot witness on the merge path, or make the audit failure name the exact command that resolves it | triage B2 | happened on five consecutive Builds; currently absorbed by hand after `main` is already red |
+| ~~B1~~ | ~~Make `audit` assert `main` ancestry, matching what `prepare` already requires~~ | triage B1 | **done 2026-08-18** (`33dbff7c`). Narrower than triage stated: ancestry was already asserted after a remote tag existed; the gap was the two pre-mutation paths. Abandoned and superseded-unreleased intents stay ungated by design |
+| ~~B2~~ | ~~Emit the Portal snapshot witness on the merge path, or make the failure name the exact command that resolves it~~ | triage B2 | **done 2026-08-18** (`edb16910`). The first option is impossible by construction — the witness records a revision that exists only after the merge, and must itself be committed. The failure now carries the command, and the command derives its second argument |
 | B3 | Derive Product Build identity wherever a gate can read committed truth; where a literal is unavoidable, make its failure message name the version | triage B3 | seven hand-maintained locations; none of the failures named a version. Two were converted during Stage 8, the rest remain literal |
 | B4 | Fold `assembly.lock.json` regeneration into whatever writes the compiled assembly, or make `version.py lock` refuse to run before the source is final | triage B4 | bit twice in one allocation; the second time surfaced only at the portal freeze |
 | C2 | Restructure `decision-log.md` and `open-questions.md` so concurrent branches stop colliding — dated section files with an index, or an append convention that keeps additions apart | triage C2 | both files are append-at-the-end; every parallel session conflicts |
@@ -87,10 +87,10 @@ row is answered.
 
 ## Suggested order
 
-1. **B1 + B2** — same root-cause shape, both currently absorbed by hand on
-   every release, and both let the release path lie about its own readiness.
+1. ~~**B1 + B2**~~ — done 2026-08-18 on `fix/release-audit-ancestry`, plan
+   [`2026-08-18-lmdj-release-audit-ancestry-and-witness-remedy.md`](../superpowers/plans/2026-08-18-lmdj-release-audit-ancestry-and-witness-remedy.md).
 2. **C1** — cheap, and it stops random PR failures polluting every future
-   signal.
+   signal. Now the top of the ready queue.
 3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
    one branch, and it is what makes Pad Capture usable by hand.
 4. **C2** — every parallel branch pays for this one today.

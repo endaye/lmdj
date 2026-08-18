@@ -98,7 +98,7 @@ Due before the first external distribution (`dev` Channel or above).
 These are real defects in the release machinery, found by Stage 8 rather than
 introduced by it. Each is currently worked around by hand.
 
-### B1. `audit` and `prepare` check different things about a release target
+### ~~B1. `audit` and `prepare` check different things about a release target~~ — fixed 2026-08-18
 
 `tools/release/audit.py` checks that a target commit **exists in the object
 store**. `tools/release/prepare.py` checks that it is an **ancestor of main**
@@ -111,10 +111,15 @@ written — and the audit stayed green until garbage collection removed the
 objects months later. Fixed for those two by #180; the mismatch that let them
 through is untouched.
 
-**Fix shape:** have `audit` assert main ancestry, so an unpreparable intent
-fails immediately and by name instead of eventually and by accident.
+**Fixed** in `33dbff7c`. Investigation narrowed the defect: `audit` already
+asserted ancestry, but only once a remote tag existed. The gap was the two
+pre-mutation paths — an allocated intent, and a releasable intent with no
+remote state — which returned `ok` on object existence alone. Both now probe
+ancestry through one shared helper, the releasable path before CI evidence.
+Abandoned and superseded-unreleased intents remain ungated: neither authorizes
+a mutation and their targets may legitimately sit outside `main`.
 
-### B2. Squash merge silently breaks snapshot provenance
+### ~~B2. Squash merge silently breaks snapshot provenance~~ — fixed 2026-08-18
 
 Every Product Build carrying an immutable Portal snapshot goes red on `main`
 immediately after merge, because the squash collapses the freeze revision and
@@ -125,8 +130,15 @@ exists and is documented, but is applied manually after `main` is already red.
 This happened for `1.0.16.8`, `1.0.16.9`, `1.0.21.0`, `1.0.22.0` and
 `1.0.23.0`. Five builds is a process, not an incident.
 
-**Fix shape:** emit the witness on the merge path, or have the audit failure
-name the exact command that resolves it.
+**Fixed** in `edb16910` — by the second shape only. Emitting the witness on the
+merge path is impossible by construction: the witness records the introducing
+squash revision, which exists only after the merge, and the witness file must
+itself be committed, which on protected `main` is a follow-up PR either way.
+The verifier now emits `run: scripts/architecture-portal.sh witness <build>
+<introducing>` with both arguments filled from values it already held, and the
+command derives that second argument itself when it is omitted.
+
+The merge still goes red; what changed is that the red now states its own cure.
 
 ### B3. Product Build identity is hand-written in too many places
 
@@ -400,9 +412,7 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    passed all five hearing criteria; the session returned F1–F4, of which
    **F1 + F2 are one cheap fix** and should be taken next in this group, since
    they make Pad Capture unusable on a normal window without knowing to scroll.
-2. **B1 + B2 together** — same root cause shape, both currently absorbed by
-   hand on every release, and both make the release path lie about its own
-   readiness.
+2. ~~**B1 + B2 together**~~ — done 2026-08-18. B3 and B4 remain open.
 3. **C1** — cheap, and it stops random PR failures polluting every future
    signal.
 4. **D4 + D5** — Stage 9 depends on them.
