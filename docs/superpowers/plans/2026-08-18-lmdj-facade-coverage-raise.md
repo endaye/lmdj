@@ -208,18 +208,37 @@ failure paths are mostly straight-line error returns.
 
 ### Task 4 — Ratchet the floor up and close the ledger
 
-- [ ] After the coverage level has held across the PR's own `core-coverage`
-      lane and a `main` run, raise
-      `packages/application-facade/` floors in
-      `tests/quality/core-coverage-thresholds.json` to hold the new measured
-      level with a small explicit margin, and update the enforced-ratchet
-      table in `docs/quality/core-test-policy.md` in the same commit.
-- [ ] Close C1 in `docs/quality/2026-08-17-machine-task-todo.md` and triage
-      C1 in `docs/quality/2026-08-16-outstanding-work-before-stage9.md`:
-      invalidated as filed by the 2026-08-18 measurement, superseded by this
-      plan's coverage raise.
+**Ubuntu measurement in hand** (PR #188, job `95799138152`, 2026-08-18):
+`packages/application-facade/` lines **86.25%** (3526/4088), branches 67.98%
+(1051/1546), up from 84.04%/66.86%. That is the platform that enforces the
+gate, so it is the number the floor is set from — the local macOS figure
+(86.28%) measures a different file set and is not used here.
 
-**Verification:** `scripts/core-coverage.sh check` green at the new floors
+| Candidate floor | Margin | In lines |
+| ---: | ---: | ---: |
+| 84 (today) | 2.2524 | ~92 |
+| 85 | 1.2524 | ~51 |
+| **86** | 0.2524 | **~10** |
+
+86 is the recommendation: it locks in the full 2-point gain and still leaves
+five times the headroom the old floor had (10 lines against 2), which was the
+condition that made C1 look like noise in the first place.
+
+- [ ] Wait for this level to hold on a `main` run after PR #188 merges — a
+      floor may only ratchet a level that has already held, per
+      `docs/quality/core-test-policy.md`.
+- [ ] Raise `packages/application-facade/` lines to 86 in
+      `tests/quality/core-coverage-thresholds.json`. Leave branches at 64:
+      67.98% would give only a ~61-branch margin and branch coverage is still
+      the weaker metric, so it ratchets in a later pass.
+- [ ] Update the enforced-ratchet table and narrative in
+      `docs/quality/core-test-policy.md` in the same commit, citing this
+      measurement.
+- [ ] Confirm no other floor moved.
+- [ ] Close C1 and C6 in `docs/quality/2026-08-17-machine-task-todo.md` and
+      triage C1 in `docs/quality/2026-08-16-outstanding-work-before-stage9.md`.
+
+**Verification:** `scripts/core-coverage.sh check` green at the new floor
 twice locally and on the PR lane; `scripts/architecture-portal.sh check`.
 
 ## Version Management
