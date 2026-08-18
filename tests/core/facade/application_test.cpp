@@ -2540,6 +2540,206 @@ void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
               .size() == 1);
 }
 
+// Every rejection `validate_initial_pattern` can produce, asserted by the
+// contract it publishes rather than by the lines it executes: each case names
+// the exact ErrorCode and public message a Host will see, and each proves the
+// refusal happened before any Project file was written.
+void test_initial_pattern_rejections_are_exact_and_write_nothing() {
+  TempDirectory temp;
+  Application application(config(temp.path()));
+
+  struct Case {
+    std::string_view label;
+    Pattern pattern;
+    std::string_view message;
+  };
+
+  const PatternId good_id{uuid(700)};
+  const std::vector<Case> cases{
+      {
+          "uppercase uuid is not a lowercase uuid",
+          Pattern{PatternId{"00000000-0000-4000-8000-00000000070A"}, 1, {}},
+          "pattern id must be a lowercase UUID",
+      },
+      {
+          "empty pattern id",
+          Pattern{PatternId{""}, 1, {}},
+          "pattern id must be a lowercase UUID",
+      },
+      {
+          "bars 0 is outside the permitted set",
+          Pattern{good_id, 0, {}},
+          "pattern bars must be one of 1, 2, 4, or 8",
+      },
+      {
+          "bars 3 is outside the permitted set",
+          Pattern{good_id, 3, {}},
+          "pattern bars must be one of 1, 2, 4, or 8",
+      },
+      {
+          "bars 16 is outside the permitted set",
+          Pattern{good_id, 16, {}},
+          "pattern bars must be one of 1, 2, 4, or 8",
+      },
+      {
+          "velocity 0 is below the permitted range",
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 0}}},
+          "pattern event is invalid",
+      },
+      {
+          "velocity 128 is above the permitted range",
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 0, 128}}},
+          "pattern event is invalid",
+      },
+      {
+          "step equals the one-bar limit",
+          Pattern{good_id, 1, {{PadSlotId{0, 0}, 16, 100}}},
+          "pattern event is invalid",
+      },
+      {
+          "step equals the two-bar limit",
+          Pattern{good_id, 2, {{PadSlotId{0, 0}, 32, 100}}},
+          "pattern event is invalid",
+      },
+      {
+          "slot is outside the pad grid",
+          Pattern{good_id, 1, {{PadSlotId{99, 0}, 0, 100}}},
+          "pattern event is invalid",
+      },
+      {
+          "a later event is invalid while the first is valid",
+          Pattern{
+              good_id,
+              1,
+              {{PadSlotId{0, 0}, 0, 100}, {PadSlotId{0, 1}, 0, 200}},
+          },
+          "pattern event is invalid",
+      },
+  };
+
+  for (const auto& item : cases) {
+    const auto project =
+        temp.path() / (std::string(item.label.substr(0, 12)) + ".lmdj");
+    const auto rejected = application.create_initial_project(
+        InitialProjectRequest{
+            project,
+            ProjectId{uuid(701)},
+            120,
+            item.pattern,
+        });
+    LMDJ_CHECK(!rejected.has_value());
+    LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+    LMDJ_CHECK(rejected.error().message == item.message);
+    // A refused request is not a partial one: nothing may reach the disk.
+    LMDJ_CHECK(!std::filesystem::exists(project));
+  }
+
+  // The boundary values the rejections sit against must still be accepted, so
+  // the matrix above cannot pass by refusing everything.
+  const std::vector<std::uint8_t> accepted_bars{1, 2, 4, 8};
+  for (const auto bars : accepted_bars) {
+    const auto project =
+        temp.path() /
+        ("accepted-" + std::to_string(static_cast<unsigned>(bars)) + ".lmdj");
+    const auto created = application.create_initial_project(
+        InitialProjectRequest{
+            project,
+            ProjectId{uuid(710U + bars)},
+            120,
+            Pattern{
+                PatternId{uuid(720U + bars)},
+                bars,
+                {{PadSlotId{0, 0},
+                  static_cast<std::uint32_t>(bars) * 16U - 1U, 127},
+                 {PadSlotId{0, 0}, 0, 1}},
+            },
+        });
+    LMDJ_CHECK(created.has_value());
+    LMDJ_CHECK(created.value().revision == 0);
+  }
+}
+
+// Trigger mode must survive a full write-then-read round trip through the JSON
+// surface. The four modes are a public contract: a Host writes one name and
+// must read the identical name back, so a silent fallback in either the parser
+// or the serializer is a contract break, not a cosmetic defect.
+void test_every_trigger_mode_round_trips_through_the_json_surface() {
+  TempDirectory temp;
+  const auto project = temp.path() / "trigger-modes.lmdj";
+  Application application(sample_config(temp.path()));
+  const auto created = application.create_initial_project(
+      InitialProjectRequest{
+          project,
+          ProjectId{uuid(760)},
+          120,
+          Pattern{PatternId{uuid(761)}, 1, {}},
+      });
+  LMDJ_CHECK(created.has_value());
+
+  // Every mode the domain defines, including the two the serializer would
+  // otherwise never be asked to name.
+  const std::vector<std::pair<TriggerMode, std::string_view>> modes{
+      {TriggerMode::one_shot, "one_shot"},
+      {TriggerMode::gate, "gate"},
+      {TriggerMode::loop_gate, "loop_gate"},
+      {TriggerMode::loop_toggle, "loop_toggle"},
+  };
+
+  // update_sample_pad requires a Sample on the Pad, so land one first.
+  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
+  const auto token = uuid(764);
+  const auto begun = application.begin_sample_import(
+      SampleImportBeginRequest{
+          token,
+          project,
+          CommandMeta{CommandId{uuid(765)}, 0},
+          PadSlotId{0, 0},
+          AssetId{uuid(766)},
+          source.size(),
+      });
+  LMDJ_CHECK(begun.has_value());
+  LMDJ_CHECK(application
+                 .append_sample_import(
+                     token,
+                     0,
+                     std::span<const std::byte>{source.data(), source.size()},
+                     true)
+                 .has_value());
+  const auto committed = application.commit_sample_import(token);
+  LMDJ_CHECK(committed.has_value());
+
+  std::uint64_t revision = committed.value().committed_revision;
+  std::uint32_t command = 770;
+  for (const auto& [mode, name] : modes) {
+    const auto updated = application.update_sample_pad(
+        SampleUpdateRequest{
+            project,
+            CommandMeta{CommandId{uuid(command)}, revision},
+            PadSlotId{0, 0},
+            PadPlayback{0, std::nullopt, mode, 0, false},
+        });
+    LMDJ_CHECK(updated.has_value());
+    revision = updated.value().committed_revision;
+    command += 1;
+
+    // Typed surface and JSON surface must agree on the same stored mode.
+    const auto inspected =
+        application.inspect_sample(SampleInspectRequest{project, {0, 0}});
+    LMDJ_CHECK(inspected.has_value());
+    LMDJ_CHECK(inspected.value().playback.trigger_mode == mode);
+
+    const auto json = application.query(
+        {
+            {"operation", "sample.inspect"},
+            {"project_path", project.generic_string()},
+            {"slot", slot(0, 0)},
+        });
+    LMDJ_CHECK(json.at("ok") == true);
+    LMDJ_CHECK(
+        json.at("result").at("playback").at("trigger_mode") == name);
+  }
+}
+
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
   const auto project = temp.path() / "initial-pattern.lmdj";
@@ -3432,6 +3632,8 @@ int main() {
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();
     test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
+    test_initial_pattern_rejections_are_exact_and_write_nothing();
+    test_every_trigger_mode_round_trips_through_the_json_surface();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
     test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
     test_typed_sample_surface_rejects_invalid_boundary_values();
