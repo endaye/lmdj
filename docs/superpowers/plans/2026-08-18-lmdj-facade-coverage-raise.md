@@ -179,13 +179,32 @@ per public API call on non-realtime control paths.
 
 ### Task 3 — Tier B, part 2: render scratch/staging fault matrix
 
-- [ ] Fault points at the render temp/scratch/staging filesystem seams.
-- [ ] A fault-matrix test in the style of
+- [x] Fault points at the render temp/scratch/staging filesystem seams.
+- [x] A fault-matrix test in the style of
       `tests/core/project_io/fault_matrix_test.cpp`, asserting each failure's
       error code and message.
-- [ ] Re-measure lines and branches; record both.
+- [x] Re-measure lines and branches; record both.
 
-**Verification:** as Task 2; branches expected materially above 70%.
+**Partially done 2026-08-18** (`caaafe9c`, `3006cb63`). The task's shape
+changed once the seam was found: `ApplicationConfig` already accepts a storage
+platform, so storage failures are injectable through the public config with
+**no production source change and no compile gate**. A one-shot
+`OperationFailurePlatform` decorator now fails a chosen operation and forwards
+the rest.
+
+Covered so far: the four `begin_sample_import` storage seams, each asserted to
+name its own stage; the Sample import session limit with its published
+`resource`/`observed`/`limit` details and proof the bound is a live count;
+and startup's refusal of a workspace whose staging cannot be inspected or
+listed.
+
+Remaining in this task: `render_offline` (22) and `cook_project` (24), whose
+failures come from the cook and render pipeline rather than storage, plus the
+rest of `cleanup_sample_import_staging`.
+
+Measured: 84.08% → 86.28% lines, 67.46% → 68.56% branches, local reference
+host. Branches are moving more slowly than lines because the remaining
+failure paths are mostly straight-line error returns.
 
 ### Task 4 — Ratchet the floor up and close the ledger
 
