@@ -110,6 +110,12 @@ class TempDirectory {
   std::filesystem::path path_;
 };
 
+// A storage platform that fails one named operation on demand. The facade
+// takes its storage platform through ApplicationConfig, so every storage
+// failure path below is reachable without a hook in production source: the
+// injected platform *is* the seam. Each armed failure is one-shot, so a test
+// can prove a specific refusal without disturbing the calls around it.
+
 enum class SampleCleanupFailureTarget {
   payload,
   marker,
@@ -2539,6 +2545,35 @@ void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
               .at("events")
               .size() == 1);
 }
+
+// Every rejection `validate_initial_pattern` can produce, asserted by the
+// contract it publishes rather than by the lines it executes: each case names
+// the exact ErrorCode and public message a Host will see, and each proves the
+// refusal happened before any Project file was written.
+
+// Trigger mode must survive a full write-then-read round trip through the JSON
+// surface. The four modes are a public contract: a Host writes one name and
+// must read the identical name back, so a silent fallback in either the parser
+// or the serializer is a contract break, not a cosmetic defect.
+
+// Every public Application entry wraps its implementation in a catch-all whose
+// job is to convert an unexpected exception into the documented failure
+// envelope instead of letting it cross the Host boundary. That contract has
+// never been exercised: an escaping exception would be undefined behaviour for
+// the C ABI and a crash for a Host, so each entry is armed with one throw and
+// required to answer with internal_error rather than propagate.
+
+// Two failure classes the Sample import path publishes but never proved: a
+// resource limit reached by ordinary use, and storage refusals at each seam.
+// Both are contract surfaces - a Host branches on the code and shows the
+// message - so each case asserts the exact code, message and details rather
+// than that the call merely failed.
+
+// Startup refuses to continue when it cannot account for leftover Sample
+// staging. That refusal is a safety property - a Host must not run against a
+// workspace whose staging state is unknown - and it is expressed as a thrown
+// construction failure, so the only way to observe it is to fail the storage
+// calls it makes.
 
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
