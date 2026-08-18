@@ -116,32 +116,32 @@ uses, so the two cannot disagree about what changed.
 
 ### Task 1 — The pre-flight checks a supplied PR body against CI's own checker
 
-- [ ] Add `--pr-body PATH` to `local_preflight.py`'s parser and to
+- [x] Add `--pr-body PATH` to `local_preflight.py`'s parser and to
       `scripts/local-ci.sh`'s usage comment block.
-- [ ] Add a `DeclarationResult`-shaped report (lane-independent) with verdicts
+- [x] Add a `DeclarationResult`-shaped report (lane-independent) with verdicts
       `pass`, `fail`, `not-runnable-here` (no `node` on PATH, or the checker
       script is missing) and `not-applicable` (the `portal` lane is not
       selected, so CI will not check the declaration either). Reuse the
       existing verdict constants where they apply and add only what is
       genuinely new.
-- [ ] Resolve the changed-file list from the plan's existing inventory rather
+- [x] Resolve the changed-file list from the plan's existing inventory rather
       than re-diffing, flattening rename records to all their paths, so lane
       selection and the declaration check cannot disagree about what changed.
-- [ ] Run the checker with `PORTAL_PR_BODY` and `PORTAL_CHANGED_FILES` set,
+- [x] Run the checker with `PORTAL_PR_BODY` and `PORTAL_CHANGED_FILES` set,
       capturing its stderr as the failure detail so the operator sees the
       checker's own message (`affected portal pages must list one or more
       absolute routes`, etc.) rather than a generic exit code.
-- [ ] Fail closed on an unreadable or non-UTF-8 body file with a named reason.
-- [ ] Surface the result in the human summary (`_render`), in `--json`, and in
+- [x] Fail closed on an unreadable or non-UTF-8 body file with a named reason.
+- [x] Surface the result in the human summary (`_render`), in `--json`, and in
       `--list` (as a planned/not-planned line). Never write it to the lane
       cache.
-- [ ] A `fail` verdict makes `main` return 1, matching a lane failure. Keep
+- [x] A `fail` verdict makes `main` return 1, matching a lane failure. Keep
       `--strict` semantics for `not-runnable-here` consistent with lanes.
-- [ ] Replace `portal`'s `ci_only` note in `local_lanes.json`: the impact step
+- [x] Replace `portal`'s `ci_only` note in `local_lanes.json`: the impact step
       is no longer permanently CI-only, it is checked locally when
       `--pr-body` is given. Keep it listed as a step the lane commands
       themselves do not run.
-- [ ] Extend `tests/build/ci_local_preflight_test.py`:
+- [x] Extend `tests/build/ci_local_preflight_test.py`:
       - a well-formed `required` body plus a changed portal `.mdx` → `pass`;
       - the exact PR #186 malformation (`**Documentation impact: required.**`)
         → `fail`, with the checker's own message in the detail;

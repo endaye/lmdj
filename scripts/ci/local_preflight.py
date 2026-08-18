@@ -33,6 +33,7 @@ ROOT = Path(__file__).resolve().parents[2]
 POLICY_PATH = ROOT / "scripts/ci/scope_policy.json"
 CLASSIFIER_PATH = ROOT / "scripts/ci/change_scope.py"
 LANE_COMMANDS_PATH = ROOT / "scripts/ci/local_lanes.json"
+DOC_IMPACT_CHECKER = ROOT / "apps/architecture-portal/scripts/check-doc-impact.mjs"
 
 LANE_COMMANDS_SCHEMA = "lmdj.ci-local-lanes.v1"
 _LANE_KEYS = {"requires", "commands", "ci_only"}
@@ -43,6 +44,12 @@ PASS = "pass"
 CACHED_PASS = "cached-pass"
 FAIL = "fail"
 NOT_RUNNABLE = "not-runnable-here"
+NOT_APPLICABLE = "not-applicable"
+
+# The lane whose CI job owns the documentation-impact step. The declaration is
+# checked locally only when this lane is selected, because that is the only
+# condition under which CI checks it.
+DECLARATION_LANE = "portal"
 
 _DELETED = "0" * 40
 
@@ -342,6 +349,77 @@ class LaneResult:
     duration_seconds: float = 0.0
 
 
+@dataclass
+class DeclarationResult:
+    """The verdict on a supplied Pull Request body's impact declaration."""
+
+    verdict: str
+    detail: str = ""
+
+
+def changed_paths(inventory: Iterable) -> list[str]:
+    """Flatten the classifier inventory to every path it names.
+
+    Rename records carry both the old and the new path, and the
+    documentation-impact checker matches paths individually, so both are
+    reported rather than only the destination.
+    """
+    paths = {path for record in inventory for path in record.paths}
+    return sorted(paths)
+
+
+def read_pr_body(path: str | Path) -> str:
+    """Read a Pull Request body, failing closed on anything unreadable."""
+    try:
+        return Path(path).read_text(encoding="utf-8")
+    except UnicodeDecodeError as error:
+        raise ValueError(f"Pull Request body is not valid UTF-8: {path}") from error
+    except OSError as error:
+        raise ValueError(f"cannot read the Pull Request body: {error}") from error
+
+
+def check_declaration(
+    root: Path, body: str, paths: Sequence[str], *, portal_selected: bool,
+    checker: str | Path = DOC_IMPACT_CHECKER,
+) -> DeclarationResult:
+    """Run CI's own documentation-impact checker against a local body.
+
+    The checker is reused rather than reimplemented: a second implementation
+    would be a second opinion, and the point of the pre-check is to answer
+    exactly what CI will answer. It imports only Node builtins, so it needs
+    `node` but none of the portal lane's installed dependencies.
+    """
+    if not portal_selected:
+        return DeclarationResult(
+            NOT_APPLICABLE,
+            f"this change does not select the {DECLARATION_LANE} lane, "
+            "so CI does not check the declaration either",
+        )
+    if shutil.which("node") is None:
+        return DeclarationResult(NOT_RUNNABLE, "node is not on PATH")
+    if not Path(checker).is_file():
+        return DeclarationResult(
+            NOT_RUNNABLE, f"the documentation impact checker is missing: {checker}"
+        )
+    completed = subprocess.run(
+        ["node", str(checker)],
+        cwd=root, capture_output=True, check=False,
+        env={
+            **os.environ,
+            "PORTAL_PR_BODY": body,
+            "PORTAL_CHANGED_FILES": "\n".join(paths),
+        },
+    )
+    if completed.returncode == 0:
+        return DeclarationResult(PASS)
+    reported = (
+        completed.stderr.decode("utf-8", "replace").strip()
+        or completed.stdout.decode("utf-8", "replace").strip()
+        or f"the checker exited {completed.returncode} without a message"
+    )
+    return DeclarationResult(FAIL, "; ".join(reported.splitlines()))
+
+
 def run_lane(
     root: Path, lane: str, commands: Sequence[str], substitutions: Mapping[str, str],
     *, echo: bool = True,
@@ -363,7 +441,8 @@ def run_lane(
 
 
 def build_plan(
-    root: Path, base_ref: str, *, only: Sequence[str] | None = None
+    root: Path, base_ref: str, *, only: Sequence[str] | None = None,
+    pr_body_path: str | Path | None = None,
 ) -> dict[str, object]:
     """Resolve the manifest CI would produce and the local inputs per lane."""
     classifier = load_classifier()
@@ -379,6 +458,10 @@ def build_plan(
     )
 
     selected = [lane for lane, on in sorted(manifest["lanes"].items()) if on]
+    # Kept before `--lanes` narrows the run: a local restriction says which
+    # lanes to execute here, never which lanes CI would select, and the
+    # declaration's applicability mirrors CI rather than this invocation.
+    ci_lanes = list(selected)
     if only:
         unknown = sorted(set(only) - set(policy["lanes"]))
         if unknown:
@@ -399,9 +482,16 @@ def build_plan(
         "mode": manifest["mode"],
         "reasons": manifest["reasons"],
         "selected": selected,
+        "ci_lanes": ci_lanes,
         "lane_commands": lane_commands,
         "cache_keys": keys,
         "input_counts": {lane: len(grouped[lane]) for lane in selected},
+        # The declaration check reuses the inventory that selected the lanes,
+        # so the two cannot disagree about what changed. It is deliberately a
+        # superset of CI's committed-only diff: an uncommitted portal page edit
+        # must not let `none` look valid.
+        "changed_paths": changed_paths(inventory),
+        "pr_body": read_pr_body(pr_body_path) if pr_body_path is not None else None,
     }
 
 
@@ -469,7 +559,19 @@ def install_hook(root: Path, *, force: bool = False) -> Path:
     return hook
 
 
-def _render(plan: Mapping[str, object], results: Sequence[LaneResult]) -> str:
+def _declaration_plan(plan: Mapping[str, object]) -> str:
+    """Say whether `--list` expects the declaration to be checked."""
+    if plan["pr_body"] is None:
+        return "not-provided"
+    if DECLARATION_LANE not in plan["ci_lanes"]:
+        return NOT_APPLICABLE
+    return "planned"
+
+
+def _render(
+    plan: Mapping[str, object], results: Sequence[LaneResult],
+    declaration: DeclarationResult | None = None,
+) -> str:
     counts: dict[str, int] = {}
     for result in results:
         counts[result.verdict] = counts.get(result.verdict, 0) + 1
@@ -485,6 +587,18 @@ def _render(plan: Mapping[str, object], results: Sequence[LaneResult]) -> str:
         lines.append(f"  FAIL {result.lane}: {result.detail}")
     for result in unrunnable:
         lines.append(f"  not verified here: {result.lane} ({result.detail})")
+    if declaration is not None:
+        if declaration.verdict == FAIL:
+            lines.append(f"  FAIL declaration: {declaration.detail}")
+            lines.append(
+                "  the Pull Request body must carry `Documentation impact:`, "
+                "`Reason:` and, when required, `Affected portal pages:` as bare "
+                "lines; bold or a trailing period defeats the pattern."
+            )
+        elif declaration.verdict != PASS:
+            lines.append(
+                f"  declaration not verified here: {declaration.detail}"
+            )
     lines.append(
         "  advisory only: PR Gate is the aggregate decision and this run "
         "authorizes no push or merge."
@@ -506,6 +620,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--strict", action="store_true",
         help="treat not-runnable-here as a failure",
     )
+    parser.add_argument(
+        "--pr-body", default=None, metavar="FILE",
+        help=(
+            "check a Pull Request body file's documentation impact declaration "
+            "with the same checker CI runs"
+        ),
+    )
     parser.add_argument("--install-hook", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args(argv)
@@ -516,7 +637,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(f"installed {install_hook(root, force=args.force)}")
             return 0
         only = [lane for lane in args.lanes.split(",") if lane]
-        plan = build_plan(root, args.base_ref, only=only)
+        plan = build_plan(
+            root, args.base_ref, only=only, pr_body_path=args.pr_body
+        )
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
         print(f"pre-flight failed closed: {error}", file=sys.stderr)
         return 2
@@ -527,6 +650,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "reasons": plan["reasons"],
             "selected": plan["selected"],
             "input_counts": plan["input_counts"],
+            "declaration": _declaration_plan(plan),
         }
         print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -536,6 +660,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{len(plan['selected'])} lane(s): {', '.join(plan['selected']) or 'none'}"
     )
     try:
+        # The declaration check costs milliseconds and its failure is certain
+        # to fail CI, so it is answered before any lane is run.
+        declaration = None
+        if plan["pr_body"] is not None:
+            declaration = check_declaration(
+                root, plan["pr_body"], plan["changed_paths"],
+                portal_selected=DECLARATION_LANE in plan["ci_lanes"],
+            )
+            if not args.json:
+                suffix = f" ({declaration.detail})" if declaration.detail else ""
+                print(f"  declaration: {declaration.verdict}{suffix}", flush=True)
         results = execute(
             root, plan, cache_dir=Path(args.cache_dir),
             use_cache=not args.no_cache, echo=not args.json,
@@ -545,26 +680,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
 
     if args.json:
-        print(json.dumps(
-            {
-                "mode": plan["mode"],
-                "results": [
-                    {
-                        "lane": result.lane, "verdict": result.verdict,
-                        "detail": result.detail,
-                        "duration_seconds": round(result.duration_seconds, 3),
-                    }
-                    for result in results
-                ],
-            },
-            indent=2, sort_keys=True,
-        ))
+        payload = {
+            "mode": plan["mode"],
+            "results": [
+                {
+                    "lane": result.lane, "verdict": result.verdict,
+                    "detail": result.detail,
+                    "duration_seconds": round(result.duration_seconds, 3),
+                }
+                for result in results
+            ],
+        }
+        if declaration is not None:
+            payload["declaration"] = {
+                "verdict": declaration.verdict, "detail": declaration.detail,
+            }
+        print(json.dumps(payload, indent=2, sort_keys=True))
     else:
-        print(_render(plan, results))
+        print(_render(plan, results, declaration))
 
-    if any(result.verdict == FAIL for result in results):
+    verdicts = [result.verdict for result in results]
+    if declaration is not None:
+        verdicts.append(declaration.verdict)
+    if FAIL in verdicts:
         return 1
-    if args.strict and any(result.verdict == NOT_RUNNABLE for result in results):
+    if args.strict and NOT_RUNNABLE in verdicts:
         return 1
     return 0
 
