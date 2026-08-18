@@ -176,7 +176,7 @@ assembly, or have `version.py lock` refuse to run before the source is final.
 
 ## C. Test and CI reliability
 
-### ~~C1. `application-facade` coverage threshold has no margin~~ — invalidated 2026-08-18, superseded
+### ~~C1. `application-facade` coverage threshold has no margin~~ — resolved 2026-08-19
 
 Threshold is 84.00%; the measured value is 84.04% (3413/4061). The package
 contains concurrency code exercised by stress and concurrency tiers, and the
@@ -186,19 +186,20 @@ run measured 83.94% and failed; the next measured 84.04% and passed.
 Any PR can be stopped by this at random, and a genuine 4-line regression is
 indistinguishable from noise.
 
-**Invalidated by measurement** ([record](2026-08-18-facade-coverage-gate-measurement.md)):
-re-running the retained Ubuntu coverage job at its own revision reproduced
-3413/4061 lines and 1031/1542 branches exactly, so the measurement is
-deterministic on the platform that enforces it, and the 83.94/84.04 pair must
-have been two different source states — a real coverage change, not gate
-noise. The local macOS branch jitter is real but has 3.46 points of headroom
-and does not appear on Ubuntu.
+**Resolved 2026-08-19** by raising real coverage rather than by tuning the
+gate, and the intermediate diagnosis was itself corrected.
 
-What survives is not this defect but the underlying condition: 648 uncovered
-lines, 89% of them failure paths, and a floor two lines above the measured
-value. Superseded by the coverage-raise plan
-([`2026-08-18-lmdj-facade-coverage-raise.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-raise.md)),
-which raises real coverage to the policy's 90% target and only then moves the
+A 2026-08-18 measurement concluded Ubuntu was deterministic and that this item
+did not exist. That was undersampled and is withdrawn: PR #188's head and its
+squash share a byte-identical tree yet measured 3526 and 3522 covered lines on
+Ubuntu — the ±4 recorded here originally. The 84 floor sat inside that band
+with about two lines of margin, so it genuinely could stop a PR at random.
+
+The fix was coverage, not threshold tuning: behavioral tests for previously
+unexercised failure semantics took the package from 84.04% to 86.15% on
+Ubuntu, and the floor then ratcheted to 85, leaving about 47 lines of headroom
+— comfortably outside the noise. Full history in
+[`2026-08-18-facade-coverage-gate-measurement.md`](2026-08-18-facade-coverage-gate-measurement.md).
 floor — upward.
 
 ### ~~C2. `decision-log.md` and `open-questions.md` conflict on every parallel branch~~ — fixed 2026-08-18
