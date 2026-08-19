@@ -96,11 +96,83 @@ if(BUILD_TESTING)
       lmdj_provider_local_proof_failure
   )
   lmdj_target_warnings(lmdj_application_facade_tests)
+  # The three facade binaries share one body of scaffolding and each
+  # exercises a subset of it, so unused-helper diagnostics report the
+  # split rather than a defect. Everything else stays an error.
+  target_compile_options(
+    lmdj_application_facade_tests
+    PRIVATE
+      -Wno-unused-function
+      -Wno-unused-const-variable
+      -Wno-unneeded-internal-declaration
+  )
   lmdj_target_sanitizers(lmdj_application_facade_tests)
   lmdj_add_test(
     NAME facade.application
     TIER component
     COMMAND lmdj_application_facade_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
+    lmdj_facade_sample_surface_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/sample_surface_test.cpp"
+  )
+  target_include_directories(lmdj_facade_sample_surface_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(
+    lmdj_facade_sample_surface_tests
+    PRIVATE
+      lmdj::application
+      lmdj_provider_local_proof_success
+      lmdj_provider_local_proof_failure
+  )
+  lmdj_target_warnings(lmdj_facade_sample_surface_tests)
+  # The three facade binaries share one body of scaffolding and each
+  # exercises a subset of it, so unused-helper diagnostics report the
+  # split rather than a defect. Everything else stays an error.
+  target_compile_options(
+    lmdj_facade_sample_surface_tests
+    PRIVATE
+      -Wno-unused-function
+      -Wno-unused-const-variable
+      -Wno-unneeded-internal-declaration
+  )
+  lmdj_target_sanitizers(lmdj_facade_sample_surface_tests)
+  lmdj_add_test(
+    NAME facade.sample_surface
+    TIER component
+    COMMAND lmdj_facade_sample_surface_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+  )
+
+  add_executable(
+    lmdj_facade_web_runtime_limit_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/facade/web_runtime_limits_test.cpp"
+  )
+  target_include_directories(lmdj_facade_web_runtime_limit_tests PRIVATE "${CMAKE_SOURCE_DIR}")
+  target_link_libraries(
+    lmdj_facade_web_runtime_limit_tests
+    PRIVATE
+      lmdj::application
+      lmdj_provider_local_proof_success
+      lmdj_provider_local_proof_failure
+  )
+  lmdj_target_warnings(lmdj_facade_web_runtime_limit_tests)
+  # The three facade binaries share one body of scaffolding and each
+  # exercises a subset of it, so unused-helper diagnostics report the
+  # split rather than a defect. Everything else stays an error.
+  target_compile_options(
+    lmdj_facade_web_runtime_limit_tests
+    PRIVATE
+      -Wno-unused-function
+      -Wno-unused-const-variable
+      -Wno-unneeded-internal-declaration
+  )
+  lmdj_target_sanitizers(lmdj_facade_web_runtime_limit_tests)
+  lmdj_add_test(
+    NAME facade.web_runtime_limits
+    TIER component
+    COMMAND lmdj_facade_web_runtime_limit_tests
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
   )
 
