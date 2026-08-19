@@ -11,6 +11,7 @@
 #include <iterator>
 #include <memory>
 #include <optional>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -800,9 +801,22 @@ void test_replacement_readers_observe_only_complete_versions() {
         started.store(true, std::memory_order_release);
         while (!stopped.load(std::memory_order_acquire)) {
           const auto observed = platform->read_complete(path);
-          LMDJ_CHECK(observed.has_value());
-          LMDJ_CHECK(
-              observed.value() == first || observed.value() == second);
+          // A reader that races a replacement must still see one complete
+          // version. When that fails the message is the whole diagnosis, and
+          // a bare has_value() check throws it away: this failure is rare and
+          // platform-specific, so one occurrence has to be enough to identify
+          // the path that produced it.
+          if (!observed.has_value()) {
+            throw std::runtime_error(
+                "racing reader observed no complete version: code=" +
+                std::to_string(static_cast<int>(observed.error().code)) +
+                " message=" + observed.error().message);
+          }
+          if (observed.value() != first && observed.value() != second) {
+            throw std::runtime_error(
+                "racing reader observed a torn version: " +
+                std::to_string(observed.value().size()) + " bytes");
+          }
         }
       });
   while (!started.load(std::memory_order_acquire)) {
