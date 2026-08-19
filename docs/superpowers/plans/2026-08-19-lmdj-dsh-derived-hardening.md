@@ -168,15 +168,32 @@ listed in `assembly.json` is inventory-cross-checked at runtime and would bump
 the Product Build per invariant added, making the observer part of what it
 observes. It is a `tests/` harness.
 
-Its Tasks 1–3 are implemented — `provider.attempt_ledger_invariant` (12
-relations), `provider.host_settings_invariant` (4), and
-`audio.snapshot_publication_invariant` (6), each carrying corruption cases that
-prove the harness can fail. Two of this track's findings are pinned as
-executable facts rather than prose: **F1** (an orphan Attempt reservation burns
-its id permanently) and **F3** (an orphaned settings lock blocks every write
-forever while reads keep succeeding). Task 4 is satisfied incrementally through
-those registrations. Deferred with reasons recorded in the plan: the stress-tier
-variant of Task 3, the live-Bank identity check, and the fixes for F1–F4.
+**All four of its Tasks are implemented.** `provider.attempt_ledger_invariant`
+(12 relations), `provider.host_settings_invariant` (4),
+`audio.snapshot_publication_invariant` (6 counter relations) and
+`audio.snapshot_publication_stress` (a conservation law under a real
+control-versus-render race), each carrying corruption cases that prove the
+harness can fail rather than only that it can pass. Task 4's registration
+hygiene is satisfied through those four registrations.
+
+Three findings are pinned as executable facts rather than prose: **G1** (an
+orphan Attempt reservation burns its id permanently), **G3** (an orphaned
+settings lock blocks every write forever while reads keep succeeding) and
+**G5** (`publish_queue_full` is unreachable at the current equal capacities, so
+its rollback branch is dead code — found while writing the stress case, which
+also closed the plan's last two open items on that basis).
+
+Every finding now has an owner in
+[`2026-08-17-machine-task-todo.md`](../../quality/2026-08-17-machine-task-todo.md)
+as `G1`–`G5`, relabelled from `F*` because `F1`–`F6` were already taken there.
+`G1` and `G4` are mechanical; `G2`, `G3` and `G5` each pick a semantic
+(durability scope, crash-recovery meaning, intended queue headroom) and so need
+an argument, not just a diff. The list also records that `G1`, `G2` and `G4`
+should land as one commit, because all three edit `attempt_store.cpp` and a
+`provider-sdk` PATCH cascades to ten manifests, roughly twenty version literals,
+sixteen gate tables, hand-authored portal prose, a new Product Build and a portal
+snapshot. Only the live-Bank identity check remains deferred inside the plan,
+needing production surface this Task declined to grow.
 
 The adopted exclusion rule removed work rather than decorating the plan — it
 struck a host-settings id check that the Registry and `read_host_settings`
