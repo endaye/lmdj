@@ -124,7 +124,7 @@ std::vector<std::string> ledger_violations(
 
   // Relation 1: a reservation directory without a terminal record means the
   // attempt never reached a terminal state, and nothing ever reclaims it. See
-  // finding F1 in the plan.
+  // finding G1 in the plan.
   for (const auto& reserved : reserved_ids) {
     if (!terminal_ids.contains(reserved)) {
       note(reserved, "reservation directory has no terminal record");
@@ -503,7 +503,7 @@ void test_harness_detects_each_corruption() {
   }
 }
 
-// Finding F1, pinned as an observable fact rather than a claim in a document.
+// Finding G1, pinned as an observable fact rather than a claim in a document.
 //
 // An orphan reservation directory has no terminal record, is never reclaimed
 // by any code path, and permanently burns its attempt id. This test asserts

@@ -93,7 +93,7 @@ std::vector<std::string> host_settings_violations(
 
   // Relation 1: the lock never survives a completed operation. A lock left
   // behind blocks every later write with "host settings are busy", and no
-  // staleness, owner, or timeout recovery exists -- see finding F3.
+  // staleness, owner, or timeout recovery exists -- see finding G3.
   if (std::filesystem::exists(lock_path)) {
     violations.push_back("the host settings lock survived the sequence");
   }
@@ -307,12 +307,12 @@ void test_harness_detects_each_corruption() {
   }
 }
 
-// Finding F3, pinned as an observable fact.
+// Finding G3, pinned as an observable fact.
 //
 // The lock is a bare create_directory with no pid, owner, or timestamp. A
 // process killed while holding it leaves the directory behind, and every
 // later write fails forever with "host settings are busy". This test asserts
-// the *current* behaviour so the defect cannot be lost; fixing F3 has to come
+// the *current* behaviour so the defect cannot be lost; fixing G3 has to come
 // here and change the second assertion deliberately.
 void test_orphaned_lock_is_detected_and_blocks_every_write() {
   const TempDirectory temp;

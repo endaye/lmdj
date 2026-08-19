@@ -2,7 +2,7 @@
 //
 // Completes Task 3 of docs/superpowers/plans/2026-08-19-lmdj-runtime-invariant-harness.md:
 // the stress-tier case. It also settles what that plan left open about
-// PublishResult::publish_queue_full -- see finding F5 on the second test: the
+// PublishResult::publish_queue_full -- see finding G5 on the second test: the
 // path is unreachable while the Bank and publish-queue capacities are equal, so
 // the rollback branch behind it is dead code rather than something a test could
 // have been covering all along.
@@ -153,7 +153,7 @@ void test_publication_accounting_is_conserved_under_concurrency() {
   LMDJ_CHECK(outcomes.accepted > 0);
 
   // Report the shape of the run. Which capacity wall is hit, if any, is
-  // scheduling-dependent, so nothing here asserts on it -- see finding F5 below
+  // scheduling-dependent, so nothing here asserts on it -- see finding G5 below
   // for why publish_queue_full in particular can never appear.
   std::cout << "  accepted=" << outcomes.accepted
             << " slots_full=" << outcomes.bank_slots_full
@@ -161,7 +161,7 @@ void test_publication_accounting_is_conserved_under_concurrency() {
             << " reclaimed=" << outcomes.reclaimed << '\n';
 }
 
-// Finding F5, pinned rather than asserted away.
+// Finding G5, pinned rather than asserted away.
 //
 // `PublishResult::publish_queue_full` is **unreachable while the two capacities
 // are equal**, so the rollback branch behind it is dead code today. The
