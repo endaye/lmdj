@@ -125,8 +125,10 @@ currently unwatched at runtime:**
   agrees byte-for-byte with the content-addressed files under its `artifacts/`
   directory, and no orphan attempt directories exist without a terminal
   record.
-- Single-writer lease exclusivity: `acquire_project_writer` never yields two
-  live leases for one project.
+- Cross-instance writer exclusion: a second `ProjectStoragePlatform` or
+  process is refused with `project_busy` while a lease is held. Note that
+  leases are **reentrant within one platform instance** by design, so
+  "never two live leases" would be the wrong invariant to check.
 - `host-settings.json` canonical form: the file on disk is always byte-identical
   to `canonical_json(settings) + "\n"` after any mutation path.
 
