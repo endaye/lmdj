@@ -96,6 +96,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_provider_attempt_isolation_tests
     lmdj_provider_spec_regression_tests
     lmdj_application_facade_tests
+    lmdj_application_facade_failure_tests
     lmdj_web_control_runtime_tests
     lmdj_web_manifest_gate_tests
     lmdj_web_realtime_session_tests
