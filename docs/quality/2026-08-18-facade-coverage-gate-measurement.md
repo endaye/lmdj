@@ -137,6 +137,39 @@ the project-io precedent), Tier C (~50–80 lines of deep defence, deliberately
 not chased). 90% needs +242 lines; Tier A plus a throw-injection hook crosses
 it.
 
+## Finding 6 — Ubuntu is NOT deterministic: Finding 3 was undersampled
+
+**Correction, 2026-08-19.** Finding 3 concluded from a single re-run pair that
+Ubuntu reproduces exactly. A same-tree counter-example has since appeared.
+
+PR #188's head commit `f58d19f2` and the squash that merged it, `93b7d3f2`,
+have the **byte-identical tree** `ab136c3039c15d3bf48b6a28657264315c9807c9`.
+Their Ubuntu coverage runs disagree:
+
+| Run | Covered | Total | Percent |
+| --- | ---: | ---: | ---: |
+| PR head, job `95799138152` | 3526 | 4088 | 86.2524% |
+| merged `main`, job `95832925202` | 3522 | 4088 | 86.1546% |
+
+Identical totals, **four fewer covered lines** — exactly the ±4 the original
+triage described, on the platform that enforces the gate.
+
+So C1's core claim was right and this record's earlier rebuttal was wrong. The
+error was sampling: one re-run pair reproducing proves that a run *can*
+reproduce, never that it always does. The re-run may also have reused runner
+state the fresh run did not.
+
+What survives from the earlier findings: the local macOS branch jitter is real
+(Finding 1), the label-exclusion fix still does not run (Finding 2), and the
+83.94/84.04 pair still cannot be attributed to specific runs (Finding 4). What
+does not survive is the claim that a failure at a thin margin is necessarily a
+true signal.
+
+**Consequence for the floor.** Against the lower observation, 3522/4088 =
+86.15%: a floor of 86 leaves ~6 lines of headroom, inside a ±4 band; a floor
+of 85 leaves ~47. The ratchet went to **85** for that reason, not to the
+higher value the coverage alone would have supported.
+
 ## Conclusion
 
 1. **The gate is not noisy on the platform that enforces it.** Two Ubuntu runs
@@ -144,12 +177,15 @@ it.
 2. **The local macOS branch variance is real but harmless**, and does not
    reproduce on Ubuntu. It cannot reach the branch floor, which has 3.46 points
    of headroom.
-3. **The line gate is very tight: 0.0433 points, about two lines.** Because the
-   measurement is deterministic, a failure at that margin is a true signal that
-   the change lowered facade line coverage — not a random stop.
-4. **C1 as filed does not exist.** "Any PR can be stopped by this at random" was
-   premised on a nondeterministic measurement, and the measurement is
-   deterministic where it counts.
+3. **The line gate was very tight: 0.0433 points, about two lines** — and
+   Finding 6 shows the measurement varies by about ±4 lines, so that floor sat
+   *inside* its own noise band. This is why the ratchet moved to 85 rather than
+   to the highest value the measured coverage would support.
+4. ~~**C1 as filed does not exist.**~~ **Withdrawn 2026-08-19 by Finding 6.**
+   Ubuntu produced 3526 and 3522 covered lines from a byte-identical tree, so
+   the measurement is nondeterministic on the enforcing platform after all and
+   C1's premise holds. The rebuttal was undersampled: one reproducing re-run
+   pair does not establish determinism.
 
 What remains is not a defect but a policy question: **does a ratchet floor with
 two lines of headroom carry the margin this project wants?** A tight ratchet

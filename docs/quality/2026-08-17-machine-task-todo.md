@@ -52,8 +52,8 @@ change.
 
 | ID | Task | Why it needs an argument, not just a diff |
 | --- | --- | --- |
-| ~~C1~~ | ~~Stabilise the `application-facade` coverage gate~~ | **Invalidated by measurement 2026-08-18** ([record](2026-08-18-facade-coverage-gate-measurement.md)): two Ubuntu runs of the same revision produced identical lines *and* branches, so the premise "any PR can be stopped at random" does not hold on the enforcing platform. Superseded by C6 |
-| C6 | Raise facade line coverage to the policy's own 90% target with behavioral tests for unreached failure semantics, then ratchet the floor up | Plan written: [`2026-08-18-lmdj-facade-coverage-raise.md`](../superpowers/plans/2026-08-18-lmdj-facade-coverage-raise.md). 89% of the 648 uncovered lines are error paths; Tier A (~200 lines) needs only ordinary bad inputs, Tier B mirrors the project-io fault-hook precedent, Tier C is deliberately not chased. Direction fixed by the product owner: the floor number is not the point, real coverage is |
+| ~~C1~~ | ~~Stabilise the `application-facade` coverage gate~~ | **Done 2026-08-19**, though not as filed and not as first rebutted. A 2026-08-18 measurement claimed Ubuntu was deterministic and that C1 did not exist; that was undersampled and is **withdrawn** — a byte-identical tree measured 3526 and 3522 covered lines on two Ubuntu runs, the ±4 C1 described. The old 84 floor sat inside that band with ~2 lines of margin. Resolved by C6 raising real coverage and ratcheting the floor to 85, which leaves ~47 lines |
+| ~~C6~~ | ~~Raise facade line coverage to 90% and ratchet the floor~~ | **Substantially done 2026-08-19** (#188, `93b7d3f2`). 84.04% → **86.15%** Ubuntu, via behavioral tests for failure semantics that had none: 22 public catch-alls, Sample import storage seams, the session limit, and startup's staging refusal — all mutation-verified. Floor ratcheted 84 → 85. The 90% target remains open: `render_offline` and `cook_project` need a cook/render seam the storage decorator does not reach, and belong in the new `facade.failure_contracts` binary |
 
 ---
 

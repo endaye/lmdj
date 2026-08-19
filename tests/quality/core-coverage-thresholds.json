@@ -7,6 +7,6 @@
     "packages/project-cooker/": {"lines": 89, "branches": 71},
     "packages/audio-runtime/": {"lines": 80, "branches": 67},
     "packages/provider-sdk/": {"lines": 77, "branches": 61},
-    "packages/application-facade/": {"lines": 84, "branches": 64}
+    "packages/application-facade/": {"lines": 85, "branches": 64}
   }
 }

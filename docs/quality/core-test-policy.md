@@ -74,10 +74,20 @@ C ABI concurrency suites landed:
 | Project Cooker | 89% | 71% |
 | Audio Runtime | 80% | 67% |
 | Provider SDK | 77% | 61% |
-| Application Facade | 84% | 64% |
+| Application Facade | 85% | 64% |
 
 These floors may rise after sustained behavioral coverage lands. They must not
-be lowered merely to make CI green. A toolchain or source-topology change that
+be lowered merely to make CI green.
+
+The Application Facade line floor rose from 84% to 85% on 2026-08-19, after
+behavioral tests for previously unexercised failure semantics took the package
+from 84.04% to 86.15% on the CI-equivalent Ubuntu toolchain. The margin is
+deliberate rather than tight: the same tree measured 3526 and 3522 covered
+lines on two Ubuntu runs, so this package carries about ±4 lines of
+measurement variance, and a floor must sit outside that band to keep a failure
+meaningful. 85% leaves roughly 47 lines of headroom; 86% would have left about
+6, which is inside the noise. See
+[`2026-08-18-facade-coverage-gate-measurement.md`](2026-08-18-facade-coverage-gate-measurement.md). A toolchain or source-topology change that
 invalidates a floor requires a reviewed measurement and policy update, not an
 ad hoc threshold edit.
 
