@@ -69,7 +69,19 @@ ship, it is not.
   artifacts), so descriptor expressiveness is tested before a real Provider
   depends on it.
 
-**Exit.** Its own implementation plan.
+**Exit — met.**
+[`2026-08-19-lmdj-attempt-replay-provider.md`](2026-08-19-lmdj-attempt-replay-provider.md).
+
+That plan is **blocked at its Task 0**, and the block is the track's main
+finding: the feature is not expressible through the current Provider
+interface. `Provider::run` receives a write-only `ArtifactSink` and
+content-addressed descriptors with no path and no resolver, so the input half
+of `CLAUDE.md`'s "Provider code receives Artifact inputs and an Artifact
+output sink" is unimplemented. The gap already has an owner —
+[`docs/prd/questions/provider-artifact-byte-access.md`](../../prd/questions/provider-artifact-byte-access.md),
+status *待架构设计* — and the replay Provider is recorded there as a second
+independent consumer rather than as a new question. Tasks 1–4 wait on that
+decision.
 
 ## Track 2 — Event-layer contract discipline (rider on spec §12.4)
 
@@ -105,8 +117,11 @@ product-level Contract question. Per `CLAUDE.md`, it must be routed through
 `docs/prd/open-questions.md` and the decision log, not decided inside the
 implementation Task.
 
-**Exit.** These constraints are inherited verbatim by whichever future plan
-implements spec §12.4; that plan owns the taxonomy decision routing.
+**Exit — standing, no work due.** These constraints are inherited verbatim by
+whichever future plan implements spec §12.4; that plan owns the taxonomy
+decision routing. Nothing is actionable until §12.4 is scheduled, which is the
+point of recording the constraints now: they cost a paragraph today and a
+migration later.
 
 ## Track 3 — Runtime invariant registry
 
@@ -145,7 +160,28 @@ boundary decision for its own plan** — a new Core Module means root CMake,
 module graph, assembly, portal page, and a new `BUILD`, which the plan must
 weigh against a `tests/`-owned harness that needs none of that.
 
-**Exit.** Its own implementation plan.
+**Exit — met, and partly implemented.**
+[`2026-08-19-lmdj-runtime-invariant-harness.md`](2026-08-19-lmdj-runtime-invariant-harness.md).
+
+That plan settles the boundary question against a Core Module: a registry
+listed in `assembly.json` is inventory-cross-checked at runtime and would bump
+the Product Build per invariant added, making the observer part of what it
+observes. It is a `tests/` harness.
+
+Its Tasks 1–3 are implemented — `provider.attempt_ledger_invariant` (12
+relations), `provider.host_settings_invariant` (4), and
+`audio.snapshot_publication_invariant` (6), each carrying corruption cases that
+prove the harness can fail. Two of this track's findings are pinned as
+executable facts rather than prose: **F1** (an orphan Attempt reservation burns
+its id permanently) and **F3** (an orphaned settings lock blocks every write
+forever while reads keep succeeding). Task 4 is satisfied incrementally through
+those registrations. Deferred with reasons recorded in the plan: the stress-tier
+variant of Task 3, the live-Bank identity check, and the fixes for F1–F4.
+
+The adopted exclusion rule removed work rather than decorating the plan — it
+struck a host-settings id check that the Registry and `read_host_settings`
+already enforce, reduced Snapshot atomicity to counter relations, and dropped
+the writer-lease invariant whose phrasing was wrong (corrected above).
 
 ---
 
