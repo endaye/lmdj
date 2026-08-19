@@ -33,7 +33,7 @@ Compiled against `main` at `801fa450` on 2026-08-17.
 | B3 | Derive Product Build identity wherever a gate can read committed truth; where a literal is unavoidable, make its failure message name the version | triage B3 | seven hand-maintained locations; none of the failures named a version. Two were converted during Stage 8, the rest remain literal |
 | B4 | Fold `assembly.lock.json` regeneration into whatever writes the compiled assembly, or make `version.py lock` refuse to run before the source is final | triage B4 | bit twice in one allocation; the second time surfaced only at the portal freeze |
 | ~~C2~~ | ~~Restructure `decision-log.md` and `open-questions.md` so concurrent branches stop colliding~~ | triage C2 | **done 2026-08-18** (`5a9c11a7`, plan [`2026-08-18-lmdj-prd-append-structure.md`](../superpowers/plans/2026-08-18-lmdj-prd-append-structure.md)). One entry per file: new decisions in `docs/prd/decisions/`, each open question in `docs/prd/questions/`; no hand-maintained index — an index edited on every addition is itself a shared append point |
-| C4 | Give `project_store.cpp`'s JSON read paths the `O_NOFOLLOW` symmetry `read_artifact()` already has | 2026-08-03 backlog C2, still open | small, mechanical, security-shaped |
+| ~~C4~~ | ~~Give `project_store.cpp`'s JSON read paths the `O_NOFOLLOW` symmetry `read_artifact()` already has~~ | 2026-08-03 backlog C2, still open | **closed by verification 2026-08-19** ([record](2026-08-18-project-io-json-symlink-symmetry.md)). The asymmetry is gone: both read paths share `ProjectStoragePlatform::read_complete()`, whose native implementation already opens with `O_NOFOLLOW` — the placement the 2026-08-03 plan prescribed when it withdrew the in-`read_json` edit. What was missing was the file-level test; `test_json_reads_reject_symlinked_files` now locks it |
 | C5 | Make `scripts/architecture-portal.sh witness` refuse an existing witness file cleanly instead of throwing an unhandled `EEXIST` rejection | found while closing B2, 2026-08-18 | `create-squash-witness.mjs:41` is the only `wx` write in the script family, and it is the outlier: `version-docs.mjs:123` and `snapshot-provenance.mjs:394` both refuse with a named error. **Keep the refusal** — `wx` is what stops a witness being silently overwritten; only its presentation is wrong. Now easier to hit, since B2 made this the routine remedy command |
 | ~~C7~~ | ~~Split `tests/core/facade/application_test.cpp` before it grows further~~ | found during C6, 2026-08-19 | **Done 2026-08-19** (`be279042`), paid for by the change that made it necessary. The C6 tests took the file from 15.97s to over its 30s budget on plain Ubuntu; the failure-contract tests now live in `facade.failure_contracts` with its own budget. Measured after the split: 3.99s and 0.21s against 30s each |
 | C8 | Give `domain.model_sequence` a budget it fits in, or make it fit the one it has | found during C6, 2026-08-19 | Declares `TIER unit` with an explicit `TIMEOUT 10`, so ASan allows 30s — and on `main` it takes **21.37s, 71% of that**. It has now timed out on two consecutive PR runs that could not have affected it: it links only `lmdj::authoring_domain` and those PRs touched none of it. It will keep failing unrelated PRs under contention. A 21s unit test is also the wrong tier; either the budget or the test is wrong |
@@ -99,9 +99,10 @@ row is answered.
 3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
    one branch, and it is what makes Pad Capture usable by hand.
 4. ~~**C2**~~ — done 2026-08-18 on `docs/prd-append-structure`.
-5. **B3, B4, C4, C5** — mechanical hardening, schedule as capacity allows. C5
+5. **B3, B4, C5** — mechanical hardening, schedule as capacity allows. C5
    is the smallest of them and sits in the path operators now walk on every
-   snapshot-carrying Build.
+   snapshot-carrying Build. (C4 closed by verification — see the Ready
+   table.)
 6. **E2, E3** — only when the feature that needs them is actually built.
 
 Everything else waits on a decision, not on capacity.
