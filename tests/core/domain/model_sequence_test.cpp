@@ -2,6 +2,7 @@
 #include <array>
 #include <charconv>
 #include <cstdint>
+#include <cstdlib>
 #include <exception>
 #include <iomanip>
 #include <iostream>
@@ -493,9 +494,16 @@ void check_failed_without_state_change(
   check_pattern_slots(state);
 }
 
+// The generated matrix is one pass that accumulates every property at once,
+// so the only axis that genuinely divides its cost is the seed range. Each
+// seed is independent - its own RNG, Project, and receipts - so a shard proves
+// exactly the same properties over its own slice, and the shards together
+// cover the same 256 seeds as before.
+constexpr std::uint64_t kSeedCount = 256;
+
 template <typename Scenario>
-void for_each_seed(Scenario&& scenario) {
-  for (std::uint64_t seed = 0; seed <= 255; ++seed) {
+void for_each_seed(std::uint64_t first, std::uint64_t last, Scenario&& scenario) {
+  for (std::uint64_t seed = first; seed <= last; ++seed) {
     try {
       scenario(seed);
     } catch (const std::exception& error) {
@@ -529,9 +537,9 @@ struct MatrixEvidence {
   std::uint64_t slot_identity_checks{};
 };
 
-MatrixEvidence run_generated_matrix() {
+MatrixEvidence run_generated_matrix(std::uint64_t first, std::uint64_t last) {
   MatrixEvidence evidence;
-  for_each_seed([&evidence](std::uint64_t seed) {
+  for_each_seed(first, last, [&evidence](std::uint64_t seed) {
     constexpr std::size_t kCommandCount = 64;
     DeterministicRng rng(seed);
     auto state = new_project(seed);
@@ -695,8 +703,16 @@ MatrixEvidence run_generated_matrix() {
   return evidence;
 }
 
+// The shard under test, selected once per process. Defaults to the whole
+// range so a bare local run still covers all 256 seeds.
+std::uint64_t g_first_seed = 0;
+std::uint64_t g_last_seed = kSeedCount - 1;
+
+std::uint64_t shard_seeds() { return g_last_seed - g_first_seed + 1U; }
+
 const MatrixEvidence& generated_matrix_evidence() {
-  static const MatrixEvidence evidence = run_generated_matrix();
+  static const MatrixEvidence evidence =
+      run_generated_matrix(g_first_seed, g_last_seed);
   return evidence;
 }
 
@@ -717,34 +733,56 @@ void test_deterministic_rng_contract() {
 
 void test_generated_valid_sequences_increment_revision_once() {
   LMDJ_CHECK(
-      generated_matrix_evidence().valid_commands == 256U * 28U);
+      generated_matrix_evidence().valid_commands == shard_seeds() * 28U);
 }
 
 void test_generated_stale_commands_leave_state_byte_identical() {
   LMDJ_CHECK(
-      generated_matrix_evidence().stale_failures == 256U * 12U);
+      generated_matrix_evidence().stale_failures == shard_seeds() * 12U);
 }
 
 void test_generated_duplicate_commands_replay_original_outcome() {
   LMDJ_CHECK(
-      generated_matrix_evidence().duplicate_replays == 256U * 12U);
+      generated_matrix_evidence().duplicate_replays == shard_seeds() * 12U);
 }
 
 void test_generated_invalid_ids_fail_before_receipt_lookup() {
   LMDJ_CHECK(
-      generated_matrix_evidence().invalid_id_failures == 256U * 12U);
+      generated_matrix_evidence().invalid_id_failures == shard_seeds() * 12U);
 }
 
 void test_generated_pad_reassignment_keeps_pattern_slot_identity() {
   LMDJ_CHECK(
       generated_matrix_evidence().slot_identity_checks ==
-      256U * (64U - 3U));
+      shard_seeds() * (64U - 3U));
 }
 
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  // One shard per process, so each CTest registration carries its own timeout
+  // budget instead of thirty thousand command applications sharing one. The
+  // shards cover the same seeds the single registration did.
+  if (argc == 3) {
+    const auto parse = [](const char* text, std::uint64_t& out) {
+      char* end = nullptr;
+      const auto value = std::strtoull(text, &end, 10);
+      if (end == text || *end != '\0' || value >= kSeedCount) return false;
+      out = value;
+      return true;
+    };
+    if (!parse(argv[1], g_first_seed) || !parse(argv[2], g_last_seed) ||
+        g_first_seed > g_last_seed) {
+      std::cerr << "usage: lmdj_domain_model_sequence_tests [FIRST_SEED LAST_SEED]\n";
+      return 64;
+    }
+  } else if (argc != 1) {
+    std::cerr << "usage: lmdj_domain_model_sequence_tests [FIRST_SEED LAST_SEED]\n";
+    return 64;
+  }
   try {
+    // The RNG contract guards the generator every shard depends on, so it runs
+    // in each of them; it costs microseconds.
     test_deterministic_rng_contract();
     test_generated_valid_sequences_increment_revision_once();
     test_generated_stale_commands_leave_state_byte_identical();
@@ -755,6 +793,7 @@ int main() {
     std::cerr << error.what() << '\n';
     return 1;
   }
-  std::cout << "domain model sequence tests: PASS\n";
+  std::cout << "domain model sequence tests: PASS (seeds " << g_first_seed
+            << "-" << g_last_seed << ")\n";
   return 0;
 }

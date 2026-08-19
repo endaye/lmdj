@@ -80,11 +80,35 @@ if(BUILD_TESTING)
   )
   lmdj_target_warnings(lmdj_domain_model_sequence_tests)
   lmdj_target_sanitizers(lmdj_domain_model_sequence_tests)
+  # One generated matrix pass costs the same whichever property asserts on it,
+  # so the seed range is the only axis that divides it. Four shards each carry
+  # their own unit budget and together cover the same 256 seeds; a bare run of
+  # the binary still covers all of them for local work.
   lmdj_add_test(
-    NAME domain.model_sequence
+    NAME domain.model_sequence_seeds_0_63
     TIER unit
-    COMMAND lmdj_domain_model_sequence_tests
-    TIMEOUT 10
+    COMMAND lmdj_domain_model_sequence_tests 0 63
+    LABELS domain generated
+  )
+
+  lmdj_add_test(
+    NAME domain.model_sequence_seeds_64_127
+    TIER unit
+    COMMAND lmdj_domain_model_sequence_tests 64 127
+    LABELS domain generated
+  )
+
+  lmdj_add_test(
+    NAME domain.model_sequence_seeds_128_191
+    TIER unit
+    COMMAND lmdj_domain_model_sequence_tests 128 191
+    LABELS domain generated
+  )
+
+  lmdj_add_test(
+    NAME domain.model_sequence_seeds_192_255
+    TIER unit
+    COMMAND lmdj_domain_model_sequence_tests 192 255
     LABELS domain generated
   )
 endif()
