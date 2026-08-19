@@ -76,6 +76,31 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_provider_host_settings_invariant_tests
+    host_settings_invariant_test.cpp
+  )
+  target_include_directories(
+    lmdj_provider_host_settings_invariant_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_provider_host_settings_invariant_tests
+    PRIVATE
+      lmdj_provider_local_proof_success
+      lmdj_provider_local_proof_failure
+  )
+  lmdj_target_warnings(lmdj_provider_host_settings_invariant_tests)
+  lmdj_target_sanitizers(lmdj_provider_host_settings_invariant_tests)
+  lmdj_add_test(
+    NAME provider.host_settings_invariant
+    TIER component
+    COMMAND lmdj_provider_host_settings_invariant_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS provider persistence
+  )
+
+  add_executable(
     lmdj_provider_spec_regression_tests
     spec_regression_test.cpp
   )
