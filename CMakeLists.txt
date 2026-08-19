@@ -92,6 +92,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_prepared_sample_bank_tests
     lmdj_realtime_engine_tests
     lmdj_audio_realtime_queue_tests
+    lmdj_snapshot_publication_invariant_tests
     lmdj_provider_conformance_tests
     lmdj_provider_attempt_isolation_tests
     lmdj_provider_attempt_ledger_invariant_tests
