@@ -12,6 +12,15 @@
 // risk class. Keeping them apart means a flake here never casts doubt on the
 // deterministic relations, and the component tier stays usable as a fast gate.
 //
+// Excluded from the `coverage` test preset in CMakePresets.json, alongside
+// audio.realtime_spsc_stress and for the same reason. The render loop below
+// busy-spins with no yield, which is the point -- it maximises the interleavings
+// the hand-off invariant has to survive -- but under the parallel coverage run
+// it starves whichever test is nearest its tier budget. It did exactly that to
+// facade.application, at 30s with no sanitizer multiplier to absorb the
+// contention. Coverage does not need a concurrency run; the stress tier has its
+// own lanes.
+//
 // The invariant under test is a conservation law: every publication is
 // accounted for exactly once, in exactly one bucket, no matter how the two
 // threads interleave.
