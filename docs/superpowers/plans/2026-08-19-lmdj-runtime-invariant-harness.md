@@ -86,7 +86,7 @@ Two candidates from the goal document are struck under this rule:
   dev/inode are unchanged. Adding a runtime check here would restate an
   existing test.
 
-  - [ ] Correct that bullet in the goal document so the inaccurate phrasing
+  - [x] Correct that bullet in the goal document so the inaccurate phrasing
         does not propagate.
 
 ---
@@ -98,7 +98,7 @@ Two candidates from the goal document are struck under this rule:
 The strongest candidate: entirely filesystem-observable, zero new production
 API, and it catches a real defect today.
 
-- [ ] A harness that, given a workspace, enumerates
+- [x] A harness that, given a workspace, enumerates
   `<workspace_root>/.lmdj-workspace/attempts/` and checks, for every attempt:
   1. `<id>.json` exists ⟺ the attempt reached a terminal state — **this is
      the check that fails today**, see Finding F1.
@@ -120,7 +120,7 @@ API, and it catches a real defect today.
   10. `started_at <= ended_at`; `request.capability == capability.id`.
   11. No leftover `.<name>.tmp.<clock>.<seq>` temp siblings anywhere in the
       workspace.
-- [ ] **Enumeration is new surface and must stay in the harness.** There is no
+- [x] **Enumeration is new surface and must stay in the harness.** There is no
   list/enumerate API at any layer: `AttemptStore` exposes only
   `set_provider_selection`, `selected_provider`, `inspect(AttemptId)`, and
   `execute`, and the Facade exposes only `attempt.inspect`. The harness
@@ -132,20 +132,25 @@ API, and it catches a real defect today.
 (success, failure, and a forced-failure interleaving) then asserting the ledger
 holds after each.
 
+**Done —** `tests/core/provider/attempt_ledger_invariant_test.cpp`, registered
+as `provider.attempt_ledger_invariant` (`component`, labels `provider
+persistence`). Twelve relations, five corruption cases proving the harness can
+fail, and one case pinning F1.
+
 ### Task 2 — `host-settings.json` canonical form and lock hygiene
 
 Also filesystem-observable with no new production surface.
 
-- [ ] Check after every mutation path that the file is byte-identical to
+- [x] Check after every mutation path that the file is byte-identical to
   `canonical_json(settings) + "\n"`, has exactly the two keys
   `format`/`provider_selections`, and that every capability and provider id
   satisfies `valid_file_id`.
-- [ ] Check that `.host-settings.lock/` does not survive a completed
+- [x] Check that `.host-settings.lock/` does not survive a completed
   operation, and add a case covering the crash-orphaned lock (Finding F3):
   today an orphaned lock directory makes every later write return
   `io_error "host settings are busy"` with no staleness, pid, owner, or
   timeout recovery.
-- [ ] Note that the read path already enforces byte-identity on every read
+- [x] Note that the read path already enforces byte-identity on every read
   (`packages/provider-sdk/src/attempt_store.cpp:599`), so the harness's job
   here is the *sequence* — that no completed mutation leaves a state the next
   read would reject.
@@ -153,12 +158,17 @@ Also filesystem-observable with no new production surface.
 **Verification:** `component`-tier test exercising set/overwrite/concurrent
 selection, plus an explicit orphaned-lock case.
 
+**Done —** `tests/core/provider/host_settings_invariant_test.cpp`, registered as
+`provider.host_settings_invariant` (`component`, labels `provider persistence`).
+Four relations after the id-safety candidate was struck under the exclusion
+rule, four corruption cases, and one case pinning F3.
+
 ### Task 3 — Snapshot publication counter relations (counters only)
 
 Admissible without new production surface, using
 `RealtimeEngine::bank_telemetry()`.
 
-- [ ] Check across a publication sequence: `applied <= accepted`;
+- [x] Check across a publication sequence: `applied <= accepted`;
   `pending == accepted - applied` once quiescent; `current_generation` is
   monotonic non-decreasing; and `accepted` is **unchanged** across each of the
   three rejection paths (`events_pending`, `bank_slots_full`,
@@ -167,7 +177,16 @@ Admissible without new production surface, using
   the slot (`bank.reset()`, `generation = 0`, state back to `empty`,
   `pending_publications` decremented), observable as `accepted` unchanged and
   no generation movement.
-- [ ] **Explicitly out of scope:** "the live bank's project revision equals
+  **Deferred — not reachable from a single-threaded sequence.**
+  `kRealtimeBankCapacity` and `kRealtimePublishQueueCapacity` are both 4, and
+  one slot is always the current Bank, so serial publication exhausts the slots
+  and returns `bank_slots_full` before the publish queue can fill. Reaching
+  `publish_queue_full` needs a render thread racing the control thread, which
+  belongs with the stress-tier item below. The implemented harness covers
+  `events_pending` and `bank_slots_full`, and its rejection relation (a refused
+  publication changes no accounting) applies to `publish_queue_full` unchanged
+  once it is reachable.
+- [x] **Explicitly out of scope:** "the live bank's project revision equals
   the last accepted snapshot's". That needs either a new `RealtimeEngine`
   accessor or a `LMDJ_*_TESTING` hook, and a test-only hook would have to
   satisfy the symbol-leak gate (the
@@ -176,32 +195,54 @@ Admissible without new production surface, using
 - [ ] Because this exercises the lock-free handoff, register the sequence case
   in the **`stress`** tier as well, per `CLAUDE.md`'s rule that lock-free or
   concurrent changes run the stress tier explicitly.
+  **Deferred to its own commit.** The implemented harness is deterministic and
+  single-threaded; a variant racing a control thread against a render thread is
+  a materially different test — the kind where flakiness lives — and bolting it
+  onto a counter-relation check would couple a flaky risk to a stable one. The
+  stress tier *was* run for the implementing change, and
+  `audio.realtime_spsc_stress` already covers the queue under load. This item
+  and the `publish_queue_full` rollback above should land together, since both
+  need the same concurrent harness.
 
 **Verification:** `component` tier for the counter relations, `stress` tier for
 the concurrent publication sequence.
 
+**Partly done —** `tests/core/audio/snapshot_publication_invariant_test.cpp`,
+registered as `audio.snapshot_publication_invariant` (`component`, labels `audio
+concurrency`). Six counter relations covering the `events_pending` and
+`bank_slots_full` rejection paths. The `stress`-tier variant and the
+`publish_queue_full` rollback remain, for the reasons recorded above.
+
 ### Task 4 — Register the harness without disturbing the taxonomy
 
-- [ ] Register through `lmdj_add_test` only — there is no bare `add_test` in
+- [x] Register through `lmdj_add_test` only — there is no bare `add_test` in
   first-party CMake, and the tier label is the whole registration contract
   (`cmake/LmdjTesting.cmake:11-60`). Exactly one tier label, a `TIMEOUT` at or
   below the tier maximum, and `native` is auto-assigned, never hand-written.
-- [ ] `tests/build/test_test_taxonomy.py` additionally requires, under
+- [x] `tests/build/test_test_taxonomy.py` additionally requires, under
   ASan/TSan, that native non-stress tests carry *exactly* tier × sanitizer
   factor; the `stress` tier is exempt. Set timeouts accordingly.
-- [ ] Choose a CTest name prefix deliberately: `scripts/core.sh proof`
+- [x] Choose a CTest name prefix deliberately: `scripts/core.sh proof`
   excludes `^(build\.|conformance\.|host\.|e2e\.|contract\.schemas)` patterns,
   so a name under those prefixes silently drops out of the Proof.
-- [ ] Add a `scripts/ci/scope_policy.json` rule for the new path. Omitting one
+- [x] Add a `scripts/ci/scope_policy.json` rule for the new path. Omitting one
   does not fail open — an unclassified path forces `full` mode for every PR
   touching it.
-- [ ] If a new test executable is added, list it in `lmdj_coverage_targets`
+- [x] If a new test executable is added, list it in `lmdj_coverage_targets`
   (root `CMakeLists.txt:76-110`); a listed-but-missing target is a configure
   `FATAL_ERROR`, and an unlisted one is silently absent from coverage.
 
 **Verification:** `scripts/core.sh test dev full` then
 `scripts/core.sh test dev stress`; `python3 -m unittest
 tests.build.test_test_taxonomy -v`.
+
+**Done for Tasks 1-3 —** `full` 70/70, `stress` 2/2,
+`tests/build/test_test_taxonomy.py` PASS at 72 registered tests,
+`tests/quality/core_coverage_runner_test.py` OK, and `scripts/core.sh proof`
+reporting `Headless Core Proof: PASS` with `Assembly lock: MATCH` at an
+unchanged Product Build `1.0.23.0`. No new `scope_policy.json` rule was needed:
+`tests/core/` and `packages/audio-runtime/` are already classified, and the
+root `CMakeLists.txt` coverage-target edit forces `full` mode anyway.
 
 ---
 

@@ -114,13 +114,13 @@ which is new evidence for that question rather than a new question.
 
 ### What Task 0 must produce
 
-- [ ] Add the replay-Provider driver to
+- [x] Add the replay-Provider driver to
   `docs/prd/questions/provider-artifact-byte-access.md` — per
   `docs/prd/open-questions.md`'s convention, a status or content change edits
   only that question's own file. Record that this consumer needs the *input*
   read side specifically, and that its fixture alternative (option B) is what
   makes waiting tolerable.
-- [ ] Do **not** create a new question file, and do not restate the gap in
+- [x] Do **not** create a new question file, and do not restate the gap in
   `docs/prd/open-questions.md`, which carries conventions only and no index.
 - [ ] When the question is settled, the deciding Task writes the decision file
   and deletes the question file in the same commit, per
