@@ -94,6 +94,7 @@ if(LMDJ_ENABLE_COVERAGE)
     lmdj_audio_realtime_queue_tests
     lmdj_provider_conformance_tests
     lmdj_provider_attempt_isolation_tests
+    lmdj_provider_attempt_ledger_invariant_tests
     lmdj_provider_spec_regression_tests
     lmdj_application_facade_tests
     lmdj_application_facade_failure_tests
