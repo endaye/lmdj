@@ -112,6 +112,14 @@ parse structured Artifact bytes".
 A replay Provider is a second, independent consumer arriving at the same wall,
 which is new evidence for that question rather than a new question.
 
+**It is also already on the machine-task list, as `D3`** —
+[`2026-08-17-machine-task-todo.md`](../../quality/2026-08-17-machine-task-todo.md)
+carries "Schema provenance on `ArtifactRef` and an input resolver on
+`AttemptStore`; retire the prototype's Host-injected bridge rather than
+graduating it", blocked on the D3 decision. So this track's blocker has an owner
+in both places already: the question file states it, and `D3` schedules it. Do
+not open a third.
+
 ### What Task 0 must produce
 
 - [x] Add the replay-Provider driver to

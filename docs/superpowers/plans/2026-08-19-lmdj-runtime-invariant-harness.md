@@ -101,7 +101,7 @@ API, and it catches a real defect today.
 - [x] A harness that, given a workspace, enumerates
   `<workspace_root>/.lmdj-workspace/attempts/` and checks, for every attempt:
   1. `<id>.json` exists ⟺ the attempt reached a terminal state — **this is
-     the check that fails today**, see Finding F1.
+     the check that fails today**, see Finding G1.
   2. `<id>.json` bytes equal `canonical_json(parse(bytes)) + "\n"`.
   3. `status == "succeeded"` ⟺ exactly one `candidate_ids` entry and no
      `error`; `status == "failed"` ⟺ no `candidate_ids`, an `error` present,
@@ -135,7 +135,7 @@ holds after each.
 **Done —** `tests/core/provider/attempt_ledger_invariant_test.cpp`, registered
 as `provider.attempt_ledger_invariant` (`component`, labels `provider
 persistence`). Twelve relations, five corruption cases proving the harness can
-fail, and one case pinning F1.
+fail, and one case pinning G1.
 
 ### Task 2 — `host-settings.json` canonical form and lock hygiene
 
@@ -146,7 +146,7 @@ Also filesystem-observable with no new production surface.
   `format`/`provider_selections`, and that every capability and provider id
   satisfies `valid_file_id`.
 - [x] Check that `.host-settings.lock/` does not survive a completed
-  operation, and add a case covering the crash-orphaned lock (Finding F3):
+  operation, and add a case covering the crash-orphaned lock (Finding G3):
   today an orphaned lock directory makes every later write return
   `io_error "host settings are busy"` with no staleness, pid, owner, or
   timeout recovery.
@@ -161,7 +161,7 @@ selection, plus an explicit orphaned-lock case.
 **Done —** `tests/core/provider/host_settings_invariant_test.cpp`, registered as
 `provider.host_settings_invariant` (`component`, labels `provider persistence`).
 Four relations after the id-safety candidate was struck under the exclusion
-rule, four corruption cases, and one case pinning F3.
+rule, four corruption cases, and one case pinning G3.
 
 ### Task 3 — Snapshot publication counter relations (counters only)
 
@@ -173,36 +173,31 @@ Admissible without new production surface, using
   monotonic non-decreasing; and `accepted` is **unchanged** across each of the
   three rejection paths (`events_pending`, `bank_slots_full`,
   `publish_queue_full`).
-- [ ] Assert the documented rollback: `publish_queue_full` must fully restore
+- [x] Assert the documented rollback: `publish_queue_full` must fully restore
   the slot (`bank.reset()`, `generation = 0`, state back to `empty`,
   `pending_publications` decremented), observable as `accepted` unchanged and
   no generation movement.
-  **Deferred — not reachable from a single-threaded sequence.**
-  `kRealtimeBankCapacity` and `kRealtimePublishQueueCapacity` are both 4, and
-  one slot is always the current Bank, so serial publication exhausts the slots
-  and returns `bank_slots_full` before the publish queue can fill. Reaching
-  `publish_queue_full` needs a render thread racing the control thread, which
-  belongs with the stress-tier item below. The implemented harness covers
-  `events_pending` and `bank_slots_full`, and its rejection relation (a refused
-  publication changes no accounting) applies to `publish_queue_full` unchanged
-  once it is reachable.
+  **Resolved as unreachable, not as a test.** Investigation while writing the
+  stress case proved the branch cannot be entered at the current capacities —
+  recorded as finding G5 below and pinned by a `static_assert` plus a race
+  asserting `publish_queue_drops` stays 0. There is no rollback to assert until
+  a capacity changes, and the test says so rather than pretending to cover it.
 - [x] **Explicitly out of scope:** "the live bank's project revision equals
   the last accepted snapshot's". That needs either a new `RealtimeEngine`
   accessor or a `LMDJ_*_TESTING` hook, and a test-only hook would have to
   satisfy the symbol-leak gate (the
   `tests/build/project_io_test_hook_symbols_test.py` pattern). Record it as a
   follow-up rather than growing production surface inside this Task.
-- [ ] Because this exercises the lock-free handoff, register the sequence case
+- [x] Because this exercises the lock-free handoff, register the sequence case
   in the **`stress`** tier as well, per `CLAUDE.md`'s rule that lock-free or
   concurrent changes run the stress tier explicitly.
-  **Deferred to its own commit.** The implemented harness is deterministic and
-  single-threaded; a variant racing a control thread against a render thread is
-  a materially different test — the kind where flakiness lives — and bolting it
-  onto a counter-relation check would couple a flaky risk to a stable one. The
-  stress tier *was* run for the implementing change, and
-  `audio.realtime_spsc_stress` already covers the queue under load. This item
-  and the `publish_queue_full` rollback above should land together, since both
-  need the same concurrent harness.
+  **Done —** `tests/core/audio/snapshot_publication_stress_test.cpp`, registered
+  as `audio.snapshot_publication_stress` (`stress`, labels `audio concurrency`,
+  180s). One control thread publishing against one render thread, asserting a
+  conservation law: every publication is accounted for exactly once in exactly
+  one bucket. Kept in its own file so a concurrent flake never casts doubt on
+  the deterministic component-tier relations. Verified stable over 20 ctest
+  repetitions and five direct runs.
 
 **Verification:** `component` tier for the counter relations, `stress` tier for
 the concurrent publication sequence.
@@ -248,12 +243,17 @@ root `CMakeLists.txt` coverage-target edit forces `full` mode anyway.
 
 ## Findings the investigation surfaced (each needs its own fix, not a check)
 
+Labelled `G*` because `F1`–`F6` are already taken by the Creator UI
+remediation findings in
+[`2026-08-17-machine-task-todo.md`](../../quality/2026-08-17-machine-task-todo.md),
+where these are now tracked under the same `G` ids.
+
 These are real defects, found while establishing what the harness could
 observe. Per this repo's standing preference for real fixes over instrument
 tuning, each belongs in `docs/quality/2026-08-17-machine-task-todo.md` as its
 own item; the harness's role is to keep them fixed, not to normalize them.
 
-- [ ] **F1 — an orphan attempt reservation permanently burns its attempt id.**
+- [ ] **G1 — an orphan attempt reservation permanently burns its attempt id.**
   `reserve_attempt` creates `attempts/<id>/` as the reservation, and every
   failure return between reservation and persist removes only `staging/` and
   `artifacts/` (`cleanup_attempt_outputs`,
@@ -262,19 +262,29 @@ own item; the harness's role is to keep them fixed, not to normalize them.
   the succeeded-with-failure-terminal path (`:1758-1765`). No code path ever
   reclaims an orphan, so retrying that id fails forever with
   `duplicate_id "Attempt id is already reserved"`.
-- [ ] **F2 — `host-settings.json` is written without `fsync`.** `write_bytes`
+- [ ] **G2 — `host-settings.json` is written without `fsync`.** `write_bytes`
   flushes and closes but never `fsync`s the file, and `write_replace_atomic`
   never syncs the containing directory around the `rename`
   (`attempt_store.cpp:435-471`, `:522-555`). A crash can leave a truncated or
   zero-length file, after which every read fails the shape check. The lease
   path does sync (`packages/project-io/src/native/storage_platform.cpp:1057`),
   so the asymmetry is unintentional.
-- [ ] **F3 — the host-settings lock has no crash recovery.** The lock is a
+- [ ] **G3 — the host-settings lock has no crash recovery.** The lock is a
   `create_directory` mutex with no pid, owner, or timestamp
   (`attempt_store.cpp:364-398`). A process killed while holding it leaves
   `.host-settings.lock/` forever and every later write returns
   `io_error "host settings are busy"`.
-- [ ] **F4 — temp-sibling names are not unique across processes.**
+- [ ] **G5 — `PublishResult::publish_queue_full` is unreachable, so its
+  rollback branch is dead code.** `kRealtimeBankCapacity` and
+  `kRealtimePublishQueueCapacity` are both 4; a queue entry exists per pending
+  publication, each pending publication owns a distinct slot, and `try_push` is
+  reached only after an empty slot is found — so a full queue would need four
+  pending slots plus a fifth empty one. `bank_slots_full` always binds first.
+  Found while implementing Task 3's stress case, and pinned there by a
+  `static_assert` on the capacities plus a race asserting `publish_queue_drops`
+  stays 0. Decide whether the headroom should differ (making the branch live) or
+  the branch should be documented as defensive.
+- [ ] **G4 — temp-sibling names are not unique across processes.**
   `temporary_sibling` (`attempt_store.cpp:423-433`) mixes
   `steady_clock::now()` — which is boot- or process-relative, not globally
   unique — with a *process-local* atomic sequence. Two processes can generate
@@ -306,7 +316,7 @@ own item; the harness's role is to keep them fixed, not to normalize them.
 No Core Module, Contract, Provider, Host, Product Assembly, or lock content
 changes — this Task adds test sources, one or more `lmdj_add_test`
 registrations, and a CI scope rule. No `module.json` version moves, so no
-Product Build is allocated. Fixing findings F1–F4 *will* bump the owning
+Product Build is allocated. Fixing findings G1–G4 *will* bump the owning
 modules (`provider-sdk` at minimum) and is deliberately not part of this Task.
 
 ## Documentation impact
@@ -321,7 +331,7 @@ updated in the same Task if a new risk label is introduced.
 
 ## Out of scope
 
-- Fixing findings F1–F4. They are recorded here and belong in the machine-task
+- Fixing findings G1–G4. They are recorded here and belong in the machine-task
   list; each is its own commit with its own version impact.
 - Any in-product invariant surface (a Host self-check through the Facade).
   That is a Contract question, not an implementation detail.
