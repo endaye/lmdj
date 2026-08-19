@@ -17,7 +17,7 @@
         "scripts/architecture-portal.sh check"
       ],
       "ci_only": [
-        "npm --prefix apps/architecture-portal run check:impact reads the Pull Request body, which does not exist locally"
+        "npm --prefix apps/architecture-portal run check:impact reads the Pull Request body, which these lane commands do not supply; scripts/local-ci.sh --pr-body FILE runs that same check locally, outside the lane and its cache"
       ]
     },
     "ci_contract": {

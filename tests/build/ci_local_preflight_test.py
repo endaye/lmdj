@@ -8,6 +8,7 @@ actually run, or serves a cached pass after an input changed.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 import copy
 import importlib.util
 import json
@@ -616,6 +617,194 @@ class ExecutionTest(unittest.TestCase):
                 cache_dir=Path(directory), use_cache=True, echo=False,
             )
             self.assertEqual(results[0].verdict, self.preflight.PASS)
+
+
+class DeclarationCheckTest(unittest.TestCase):
+    """The PR body declaration check must answer what CI will answer.
+
+    The production change that makes these tests fail is a pre-check that
+    accepts a declaration CI rejects, rejects one CI accepts, claims a verdict
+    where CI forms none, or serves any of it from the lane cache.
+    """
+
+    REQUIRED_BODY = (
+        "Documentation impact: required\n"
+        "Affected portal pages: /operations/testing-and-proof\n"
+        "Reason: the page describes the pre-flight.\n"
+    )
+    # The exact malformation PR #186 shipped: bold, with a trailing period.
+    MALFORMED_BODY = (
+        "**Documentation impact: required.** Affected portal routes:\n"
+        "`operations/testing-and-proof` — frontmatter only.\n"
+    )
+    PORTAL_PAGE = "apps/architecture-portal/docs/operations/testing-and-proof.mdx"
+
+    def setUp(self) -> None:
+        self.preflight = load_module("local_preflight_declaration", PREFLIGHT_PATH)
+
+    def check(self, body: str, paths: Sequence[str], *, portal_selected: bool = True):
+        return self.preflight.check_declaration(
+            ROOT, body, paths, portal_selected=portal_selected,
+        )
+
+    def test_well_formed_required_declaration_passes(self) -> None:
+        result = self.check(self.REQUIRED_BODY, [self.PORTAL_PAGE])
+        self.assertEqual(result.verdict, self.preflight.PASS, result.detail)
+
+    def test_bold_declaration_with_trailing_period_fails(self) -> None:
+        result = self.check(self.MALFORMED_BODY, [self.PORTAL_PAGE])
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("must be required or none", result.detail)
+
+    def test_required_without_absolute_routes_fails(self) -> None:
+        body = (
+            "Documentation impact: required\n"
+            "Affected portal pages: operations/testing-and-proof\n"
+            "Reason: a route without a leading slash.\n"
+        )
+        result = self.check(body, [self.PORTAL_PAGE])
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("absolute routes", result.detail)
+
+    def test_none_while_a_portal_page_changed_fails(self) -> None:
+        body = "Documentation impact: none\nReason: claims nothing changed.\n"
+        result = self.check(body, [self.PORTAL_PAGE])
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("current portal pages changed", result.detail)
+
+    def test_none_without_a_portal_page_passes(self) -> None:
+        body = "Documentation impact: none\nReason: tooling only.\n"
+        result = self.check(body, ["scripts/ci/local_preflight.py"])
+        self.assertEqual(result.verdict, self.preflight.PASS, result.detail)
+
+    def test_missing_reason_fails_even_when_the_impact_parses(self) -> None:
+        body = "Documentation impact: none\n"
+        result = self.check(body, ["scripts/ci/local_preflight.py"])
+        self.assertEqual(result.verdict, self.preflight.FAIL)
+        self.assertIn("reason is empty", result.detail)
+
+    def test_unselected_portal_lane_is_not_applicable_not_a_pass(self) -> None:
+        """CI checks the declaration only in the portal job."""
+        result = self.check(
+            self.MALFORMED_BODY, ["docs/prd/questions/thing.md"],
+            portal_selected=False,
+        )
+        self.assertEqual(result.verdict, self.preflight.NOT_APPLICABLE)
+        self.assertIn(self.preflight.DECLARATION_LANE, result.detail)
+
+    def test_the_checker_is_the_one_ci_runs(self) -> None:
+        """A second implementation would be a second opinion, not a pre-check."""
+        self.assertTrue(self.preflight.DOC_IMPACT_CHECKER.is_file())
+        self.assertEqual(
+            self.preflight.DOC_IMPACT_CHECKER,
+            ROOT / "apps/architecture-portal/scripts/check-doc-impact.mjs",
+        )
+        workflow = (
+            ROOT / ".github/workflows/architecture-portal.yml"
+        ).read_text(encoding="utf-8")
+        self.assertIn("check:impact", workflow)
+
+    def test_a_missing_checker_is_not_runnable_rather_than_a_pass(self) -> None:
+        result = self.preflight.check_declaration(
+            ROOT, self.REQUIRED_BODY, [self.PORTAL_PAGE],
+            portal_selected=True, checker=ROOT / "does/not/exist.mjs",
+        )
+        self.assertEqual(result.verdict, self.preflight.NOT_RUNNABLE)
+
+    def test_unreadable_body_fails_closed_with_a_named_reason(self) -> None:
+        with self.assertRaises(ValueError) as raised:
+            self.preflight.read_pr_body(ROOT / "does/not/exist.md")
+        self.assertIn("cannot read the Pull Request body", str(raised.exception))
+
+    def test_non_utf8_body_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            body = Path(directory) / "body.md"
+            body.write_bytes(b"Documentation impact: none\n\xff\xfe")
+            with self.assertRaises(ValueError) as raised:
+                self.preflight.read_pr_body(body)
+        self.assertIn("not valid UTF-8", str(raised.exception))
+
+    def test_rename_records_contribute_both_paths(self) -> None:
+        classifier = load_module("change_scope_for_declaration", CLASSIFIER_PATH)
+        inventory = (
+            classifier.ChangedFile("R100", ("old/page.mdx", "new/page.mdx")),
+            classifier.ChangedFile("M", ("scripts/ci/local_preflight.py",)),
+        )
+        self.assertEqual(
+            self.preflight.changed_paths(inventory),
+            ["new/page.mdx", "old/page.mdx", "scripts/ci/local_preflight.py"],
+        )
+
+    def test_applicability_follows_ci_selection_not_a_lane_restriction(self) -> None:
+        """`--lanes` says what to run here, never what CI would select."""
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write("apps/architecture-portal/docs/product/thing.mdx", "x\n")
+        repository.commit("portal page")
+        with tempfile.TemporaryDirectory() as directory:
+            body = Path(directory) / "body.md"
+            body.write_text(self.REQUIRED_BODY, encoding="utf-8")
+            plan = self.preflight.build_plan(
+                repository.path, repository.base_sha, only=["docs_static"],
+                pr_body_path=body,
+            )
+        self.assertNotIn(self.preflight.DECLARATION_LANE, plan["selected"])
+        self.assertIn(self.preflight.DECLARATION_LANE, plan["ci_lanes"])
+        # The restriction must not downgrade the declaration to not-applicable:
+        # CI still checks it, so a malformed body still fails the Pull Request.
+        self.assertEqual(self.preflight._declaration_plan(plan), "planned")
+
+    def test_change_that_never_selects_portal_is_not_applicable(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write("docs/prd/questions/thing.md", "x\n")
+        repository.commit("prd question")
+        with tempfile.TemporaryDirectory() as directory:
+            body = Path(directory) / "body.md"
+            body.write_text(self.REQUIRED_BODY, encoding="utf-8")
+            plan = self.preflight.build_plan(
+                repository.path, repository.base_sha, pr_body_path=body,
+            )
+        self.assertNotIn(self.preflight.DECLARATION_LANE, plan["ci_lanes"])
+        self.assertEqual(
+            self.preflight._declaration_plan(plan), self.preflight.NOT_APPLICABLE
+        )
+
+    def test_declaration_is_never_written_to_the_lane_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            cache = Path(directory)
+            self.check(self.REQUIRED_BODY, [self.PORTAL_PAGE])
+            self.assertEqual(list(cache.iterdir()), [])
+            self.assertEqual(
+                self.preflight.read_cached_keys(
+                    cache, self.preflight.DECLARATION_LANE
+                ),
+                [],
+            )
+
+    def test_plan_reports_not_provided_when_no_body_is_given(self) -> None:
+        repository = TemporaryRepository()
+        self.addCleanup(repository.close)
+        repository.write("docs/guide.md", "text\n")
+        repository.commit("docs")
+        plan = self.preflight.build_plan(repository.path, repository.base_sha)
+        self.assertIsNone(plan["pr_body"])
+        self.assertEqual(self.preflight._declaration_plan(plan), "not-provided")
+
+    def test_entry_point_documents_the_flag(self) -> None:
+        text = ENTRY_POINT_PATH.read_text(encoding="utf-8")
+        self.assertIn("--pr-body", text)
+
+    def test_lane_table_points_at_the_flag_instead_of_calling_it_impossible(
+        self,
+    ) -> None:
+        notes = " ".join(
+            self.preflight.load_lane_commands()[
+                self.preflight.DECLARATION_LANE
+            ]["ci_only"]
+        )
+        self.assertIn("--pr-body", notes)
+        self.assertNotIn("does not exist locally", notes)
 
 
 class AdvisoryBoundaryTest(unittest.TestCase):

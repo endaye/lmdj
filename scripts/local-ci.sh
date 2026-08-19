@@ -12,7 +12,14 @@
 #   scripts/local-ci.sh --list              # resolve the plan without running
 #   scripts/local-ci.sh --lanes docs_static # restrict to named lanes
 #   scripts/local-ci.sh --no-cache          # ignore cached lane verdicts
+#   scripts/local-ci.sh --pr-body body.md   # also check the PR body declaration
 #   scripts/local-ci.sh --install-hook      # install the pre-push hook
+#
+# --pr-body runs CI's own check-doc-impact.mjs against a Pull Request body
+# file, so a malformed `Documentation impact:` declaration is caught in
+# milliseconds instead of after a full portal lane run. It is never cached,
+# and it reports not-applicable when the portal lane is not selected, because
+# that is the only condition under which CI checks the declaration.
 set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"

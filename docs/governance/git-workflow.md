@@ -83,6 +83,7 @@ scripts/local-ci.sh                       # run every selected lane
 scripts/local-ci.sh --list                # resolve the plan without running
 scripts/local-ci.sh --lanes core_ubuntu   # restrict to named lanes
 scripts/local-ci.sh --no-cache            # ignore cached lane verdicts
+scripts/local-ci.sh --pr-body body.md     # also check the PR body declaration
 scripts/local-ci.sh --install-hook        # install the pre-push hook
 ```
 
@@ -92,6 +93,19 @@ cannot execute — a Linux lane on macOS, a lane whose toolchain is absent,
 never `pass`. `PR Gate` remains the single aggregate decision, and a green
 local run authorizes no push, Pull Request, merge, or later state transition
 (see §7).
+
+`--pr-body FILE` checks a Pull Request body's documentation-impact
+declaration with the same `check-doc-impact.mjs` the `portal` lane runs, so
+`Documentation impact:`, `Reason:` and `Affected portal pages:` are validated
+in milliseconds instead of after a full portal lane. Write the declaration as
+bare lines — the patterns are anchored, so bold or a trailing period does not
+match, and CI reads the body from the event payload, which means a body edit
+alone does not re-trigger the run. The check is never cached, since a body
+file is not repository content, and it reports `not-applicable` rather than
+`pass` when the change does not select the `portal` lane, because that is the
+only condition under which CI checks the declaration at all. A local `--lanes`
+restriction does not change that: it narrows what runs here, not what CI would
+select.
 
 `--install-hook` writes a `pre-push` hook that runs the pre-flight and
 refuses the push on a hard failure; it refuses to overwrite an unrelated
