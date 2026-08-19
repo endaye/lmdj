@@ -97,13 +97,34 @@ Two further constraints bound any answer:
 | **B. Fixture embedded in `src/provider.cpp`** | Recorded bytes as a byte-array literal inside the one file already covered by the source-package hash | No core change; fixture becomes part of `artifact_sha256`, i.e. self-verifying | Works only for small fixtures; a real stem-separation output is megabytes; each new fixture is a new provider version and `BUILD` |
 | **C. Fixture root via `parameters`** | Host passes a directory path in `CapabilityRequest::parameters`; provider reads it | No core change | **Recommend against.** Parameters are hashed, never stored, so the record cannot say which fixture was replayed; and it grants ambient filesystem authority to Provider code, which is the opposite of the artifact-port model |
 
+### The question is already open — do not file a duplicate
+
+`docs/prd/questions/provider-artifact-byte-access.md` (status *待架构设计*)
+already owns exactly this gap, and already records that it is **bidirectional**:
+`ArtifactRef` carries no Schema provenance, `AttemptStore` has no input
+Artifact resolver, and the output side has no read access either, so a Host can
+only rebuild paths from the private `.lmdj-workspace/attempts/` layout. It also
+records that the 2026-08-16 analysis-bench prototype's Host injection bridge
+was a stopgap that **must not graduate into a formal interface**. Its stated
+timing is "before the first formal Capability implementation that needs to
+parse structured Artifact bytes".
+
+A replay Provider is a second, independent consumer arriving at the same wall,
+which is new evidence for that question rather than a new question.
+
 ### What Task 0 must produce
 
-- [ ] Raise the read-side gap in `docs/prd/open-questions.md`: does
-  "Provider receives Artifact inputs" mean readable bytes through a
-  capability-gated source, or descriptors only? Reference this plan and the
-  invariant text in `CLAUDE.md`.
-- [ ] Record the decision in `docs/prd/decision-log.md` once settled.
+- [ ] Add the replay-Provider driver to
+  `docs/prd/questions/provider-artifact-byte-access.md` — per
+  `docs/prd/open-questions.md`'s convention, a status or content change edits
+  only that question's own file. Record that this consumer needs the *input*
+  read side specifically, and that its fixture alternative (option B) is what
+  makes waiting tolerable.
+- [ ] Do **not** create a new question file, and do not restate the gap in
+  `docs/prd/open-questions.md`, which carries conventions only and no index.
+- [ ] When the question is settled, the deciding Task writes the decision file
+  and deletes the question file in the same commit, per
+  `docs/prd/decisions/README.md`.
 - [ ] Only then continue. If the answer is **A**, that SDK work is its own
   Task and its own plan, and this plan resumes afterwards with a Provider that
   needs no privilege. If the answer is **B**, continue with Tasks 1–4 below as
