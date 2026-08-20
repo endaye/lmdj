@@ -1,0 +1,33 @@
+name: Question or decision needed
+description: Track an unresolved product, architecture, Contract, concurrency, or acceptance decision.
+title: "question: "
+labels: ["type:question"]
+body:
+  - type: textarea
+    id: question
+    attributes: {label: Question, description: State one decision as a question.}
+    validations: {required: true}
+  - type: textarea
+    id: importance
+    attributes: {label: Why it matters now, description: Name the blocked or affected outcome.}
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes: {label: Known evidence and options, description: Link sources and distinguish facts from hypotheses.}
+    validations: {required: true}
+  - type: textarea
+    id: decision_criteria
+    attributes: {label: Decision criteria, description: State the evidence and authority required to close.}
+    validations: {required: true}
+  - type: dropdown
+    id: stage
+    attributes: {label: Stage, options: [Foundation, Stage 7, Stage 8A, Stage 8B, Stage 9, Stage 10, Stage 11, Stage 12, Later]}
+    validations: {required: true}
+  - type: dropdown
+    id: area
+    attributes: {label: Area, options: [Core, Creator, Web Host, Native Host, Provider, Contracts, CI/Release, Product, Docs/Governance]}
+    validations: {required: true}
+  - type: textarea
+    id: source
+    attributes: {label: Authority and source context, description: Link the retained question, PRD, Contract, Spec, or evidence.}
+    validations: {required: true}

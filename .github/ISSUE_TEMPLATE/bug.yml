@@ -1,0 +1,45 @@
+name: Bug
+description: Report reproducible incorrect or flaky behavior.
+title: "bug: "
+labels: ["type:bug"]
+body:
+  - type: textarea
+    id: summary
+    attributes: {label: Summary, description: Describe the defect in one observable statement.}
+    validations: {required: true}
+  - type: textarea
+    id: observed
+    attributes: {label: Observed behavior, description: Include exact state and failure text.}
+    validations: {required: true}
+  - type: textarea
+    id: expected
+    attributes: {label: Expected behavior, description: Describe the required behavior.}
+    validations: {required: true}
+  - type: textarea
+    id: reproduction
+    attributes: {label: Reproduction, description: Give deterministic steps or the best known trigger.}
+    validations: {required: true}
+  - type: textarea
+    id: evidence
+    attributes: {label: Evidence, description: Link logs, runs, revisions, screenshots, or devices.}
+    validations: {required: true}
+  - type: textarea
+    id: acceptance
+    attributes: {label: Fix acceptance, description: State the regression proof required to close.}
+    validations: {required: true}
+  - type: dropdown
+    id: stage
+    attributes: {label: Stage, options: [Foundation, Stage 7, Stage 8A, Stage 8B, Stage 9, Stage 10, Stage 11, Stage 12, Later]}
+    validations: {required: true}
+  - type: dropdown
+    id: area
+    attributes: {label: Area, options: [Core, Creator, Web Host, Native Host, Provider, Contracts, CI/Release, Product, Docs/Governance]}
+    validations: {required: true}
+  - type: input
+    id: version_impact
+    attributes: {label: Version impact, description: Name the affected version domain or write none with a reason.}
+    validations: {required: true}
+  - type: input
+    id: documentation_impact
+    attributes: {label: Documentation impact, description: Name affected Portal routes or write none with a reason.}
+    validations: {required: true}
