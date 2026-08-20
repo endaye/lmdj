@@ -65,7 +65,21 @@ cmake --build --preset coverage
 cmake -E make_directory "$profiles_root"
 find "$profiles_root" -maxdepth 1 -type f -name '*.profraw' -delete
 
-LLVM_PROFILE_FILE="$profiles_root/%p-%m.profraw" ctest --preset coverage
+# Retain the CTest transcript. Timeout budgets are absolute seconds while
+# machine speed is not, so the only way to tell a slower test from a slower
+# machine is to keep the run's own timings and compare shares later.
+ctest_log="$coverage_root/ctest.log"
+cmake -E make_directory "$coverage_root"
+set +e
+LLVM_PROFILE_FILE="$profiles_root/%p-%m.profraw" ctest --preset coverage \
+  2>&1 | tee "$ctest_log"
+ctest_status="${PIPESTATUS[0]}"
+set -e
+if [[ "$ctest_status" -ne 0 ]]; then
+  python3 "$repo_root/tests/quality/test_budget_report.py" \
+    --ctest-log "$ctest_log" --sanitizer coverage --repo-root "$repo_root" || true
+  exit "$ctest_status"
+fi
 
 raw_profiles=()
 while IFS= read -r profile_path; do

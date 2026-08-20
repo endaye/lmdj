@@ -1,3 +1,6 @@
+// The scaffolding below is shared by the three facade test binaries and
+// each exercises a subset of it; the unused-helper diagnostics are turned
+// off for these targets in CMakeLists.txt for exactly that reason.
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -613,31 +616,6 @@ nlohmann::json create_request(const std::filesystem::path& project) {
   };
 }
 
-void test_module_versions_and_dependencies_are_exact() {
-  const auto application = nlohmann::json::parse(
-      read_bytes("packages/application-facade/module.json"));
-  const auto project_io = nlohmann::json::parse(
-      read_bytes("packages/project-io/module.json"));
-  LMDJ_CHECK(
-      (application ==
-       nlohmann::json{
-           {"contract", "lmdj.module.v1"},
-           {"module", "application-facade"},
-           {"version", "1.4.0"},
-           {"api_version", 2},
-           {"dependencies",
-            {
-                {"foundation", "0.2.0"},
-                {"authoring-domain", "0.2.0"},
-                {"project-io", "0.6.0"},
-                {"project-cooker", "0.3.0"},
-                {"audio-runtime", "0.5.0"},
-                {"provider-sdk", "1.1.1"},
-            }},
-       }));
-  LMDJ_CHECK(project_io.at("module") == "project-io");
-  LMDJ_CHECK(project_io.at("version") == "0.6.0");
-}
 
 nlohmann::json import_request(
     const std::filesystem::path& project,
@@ -812,555 +790,8 @@ void check_sample_artifact_busy_error(
   context.lease.reset();
 }
 
-void test_typed_sample_surface_is_atomic_bounded_and_cache_backed() {
-  TempDirectory temp;
-  const auto project = temp.path() / "typed-sample.lmdj";
-  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
-  const PatternId pattern_id{uuid(580)};
-  Application application(sample_config(temp.path()));
-  const auto created = application.create_initial_project(
-      InitialProjectRequest{
-          project,
-          ProjectId{uuid(581)},
-          120,
-          Pattern{
-              pattern_id,
-              1,
-              {{PadSlotId{0, 0}, 0, 127}},
-          },
-      });
-  LMDJ_CHECK(created.has_value());
-  const auto manifest_before = read_bytes(project / "manifest.json");
 
-  const auto empty =
-      application.inspect_sample(SampleInspectRequest{project, {0, 0}});
-  LMDJ_CHECK(empty.has_value());
-  LMDJ_CHECK(empty.value().project_revision == 0);
-  LMDJ_CHECK((empty.value().slot == PadSlotId{0, 0}));
-  LMDJ_CHECK(!empty.value().asset_id.has_value());
-  LMDJ_CHECK(empty.value().playback == PadPlayback{});
-  LMDJ_CHECK(!empty.value().metadata.has_value());
-  LMDJ_CHECK(!empty.value().waveform_cache_identity.has_value());
-  LMDJ_CHECK(read_bytes(project / "manifest.json") == manifest_before);
 
-  const auto unavailable_waveform = application.query_sample_waveform(
-      SampleWaveformRequest{project, {0, 0}, {0, 1, 1}});
-  LMDJ_CHECK(!unavailable_waveform.has_value());
-  LMDJ_CHECK(
-      unavailable_waveform.error().code == ErrorCode::missing_asset);
-  LMDJ_CHECK(read_bytes(project / "manifest.json") == manifest_before);
-
-  const auto malformed_token = uuid(582);
-  const auto begun = application.begin_sample_import(
-      SampleImportBeginRequest{
-          malformed_token,
-          project,
-          CommandMeta{CommandId{uuid(583)}, 0},
-          PadSlotId{0, 0},
-          AssetId{uuid(584)},
-          source.size(),
-      });
-  LMDJ_CHECK(begun.has_value());
-  LMDJ_CHECK(begun.value().token == malformed_token);
-  LMDJ_CHECK(begun.value().expected_bytes == source.size());
-  const auto split = source.size() / 2U;
-  LMDJ_CHECK(
-      application.append_sample_import(
-          malformed_token,
-          0,
-          std::span<const std::byte>{source.data(), split},
-          false)
-          .has_value());
-  const auto wrong_offset = application.append_sample_import(
-      malformed_token,
-      split + 1U,
-      std::span<const std::byte>{source.data() + split,
-                                 source.size() - split},
-      true);
-  LMDJ_CHECK(!wrong_offset.has_value());
-  LMDJ_CHECK(wrong_offset.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(
-      !std::filesystem::exists(
-          temp.path() / ".lmdj-host/sample-import-staging" /
-          malformed_token));
-  LMDJ_CHECK(
-      !application
-           .append_sample_import(
-               malformed_token,
-               split,
-               std::span<const std::byte>{source.data() + split,
-                                          source.size() - split},
-               true)
-           .has_value());
-  LMDJ_CHECK(
-      !application
-           .begin_sample_import(
-               {malformed_token,
-                project,
-                {CommandId{uuid(583)}, 0},
-                {0, 0},
-                AssetId{uuid(584)},
-                source.size()})
-           .has_value());
-
-  const auto short_final_token = uuid(570);
-  LMDJ_CHECK(
-      application.begin_sample_import(
-          {short_final_token,
-           project,
-           {CommandId{uuid(571)}, 0},
-           {0, 0},
-           AssetId{uuid(572)},
-           source.size()})
-          .has_value());
-  const auto short_final = application.append_sample_import(
-      short_final_token,
-      0,
-      std::span<const std::byte>{source.data(), split},
-      true);
-  LMDJ_CHECK(!short_final.has_value());
-  LMDJ_CHECK(short_final.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(
-      !std::filesystem::exists(
-          temp.path() / ".lmdj-host/sample-import-staging" /
-          short_final_token));
-
-  const auto token = uuid(589);
-  LMDJ_CHECK(
-      application.begin_sample_import(
-          {token,
-           project,
-           {CommandId{uuid(583)}, 0},
-           {0, 0},
-           AssetId{uuid(584)},
-           source.size()})
-          .has_value());
-  LMDJ_CHECK(
-      application.append_sample_import(token, 0, source, true).has_value());
-  const auto committed = application.commit_sample_import(token);
-  LMDJ_CHECK(committed.has_value());
-  LMDJ_CHECK(committed.value().committed_revision == 1);
-  LMDJ_CHECK(committed.value().runtime_prepare_required);
-
-  const auto inspected =
-      application.inspect_sample(SampleInspectRequest{project, {0, 0}});
-  LMDJ_CHECK(inspected.has_value());
-  LMDJ_CHECK(inspected.value().project_revision == 1);
-  LMDJ_CHECK(inspected.value().asset_id == AssetId{uuid(584)});
-  LMDJ_CHECK(inspected.value().playback == PadPlayback{});
-  LMDJ_CHECK(inspected.value().metadata.has_value());
-  LMDJ_CHECK(inspected.value().metadata->sample_rate == 44'100);
-  LMDJ_CHECK(inspected.value().metadata->channels == 1);
-  LMDJ_CHECK(inspected.value().metadata->source_frames == 8);
-  const auto cache_identity =
-      std::string(kMono44100Sha) + "/1/max-abs-mirror/1";
-  LMDJ_CHECK(
-      inspected.value().waveform_cache_identity == cache_identity);
-
-  const auto waveform_cache_identity =
-      std::string(kMono44100Sha) + "/1/max-abs-mirror/2";
-  const auto cache_path = temp.path() / ".lmdj-host/workspace-cache" /
-                          waveform_cache_identity;
-  LMDJ_CHECK(!std::filesystem::exists(cache_path));
-  const auto first_waveform = application.query_sample_waveform(
-      SampleWaveformRequest{project, {0, 0}, {0, 8, 4}});
-  LMDJ_CHECK(first_waveform.has_value());
-  LMDJ_CHECK(first_waveform.value().algorithm_version == 1);
-  LMDJ_CHECK(first_waveform.value().buckets.size() == 4);
-  check_peak_bucket(first_waveform.value().buckets.at(0), 0, 2, 32'768);
-  check_peak_bucket(first_waveform.value().buckets.at(1), 2, 4, 8'192);
-  check_peak_bucket(first_waveform.value().buckets.at(2), 4, 6, 4'096);
-  check_peak_bucket(first_waveform.value().buckets.at(3), 6, 8, 0);
-  LMDJ_CHECK(std::filesystem::is_regular_file(cache_path));
-  const auto cached_bytes = read_bytes(cache_path);
-  LMDJ_CHECK(cached_bytes.find(project.generic_string()) == std::string::npos);
-  LMDJ_CHECK(cached_bytes.find(token) == std::string::npos);
-  LMDJ_CHECK(cached_bytes.find(uuid(584)) == std::string::npos);
-  const auto second_waveform = application.query_sample_waveform(
-      SampleWaveformRequest{project, {0, 0}, {0, 8, 4}});
-  LMDJ_CHECK(second_waveform.has_value());
-  check_same_peak_buckets(
-      second_waveform.value().buckets, first_waveform.value().buckets);
-  LMDJ_CHECK(read_bytes(cache_path) == cached_bytes);
-
-  write_bytes(cache_path, "corrupt-cache-record");
-  const auto rebuilt = application.query_sample_waveform(
-      SampleWaveformRequest{project, {0, 0}, {0, 8, 4}});
-  LMDJ_CHECK(rebuilt.has_value());
-  check_same_peak_buckets(
-      rebuilt.value().buckets, first_waveform.value().buckets);
-  LMDJ_CHECK(read_bytes(cache_path) != "corrupt-cache-record");
-
-  lmdj::project_io::WorkspaceCacheStore cache(
-      temp.path() / ".lmdj-host/workspace-cache");
-  const std::string mismatched_payload = "{}";
-  LMDJ_CHECK(
-      cache.write(
-               waveform_cache_identity,
-               std::as_bytes(std::span<const char>{
-                   mismatched_payload.data(), mismatched_payload.size()}))
-          .has_value());
-  const auto mismatched_record = read_bytes(cache_path);
-  const auto mismatch_rebuilt = application.query_sample_waveform(
-      SampleWaveformRequest{project, {0, 0}, {0, 8, 4}});
-  LMDJ_CHECK(mismatch_rebuilt.has_value());
-  check_same_peak_buckets(
-      mismatch_rebuilt.value().buckets, first_waveform.value().buckets);
-  LMDJ_CHECK(read_bytes(cache_path) != mismatched_record);
-
-  const auto manifest_before_cache_failure =
-      read_bytes(project / "manifest.json");
-  std::filesystem::remove_all(
-      temp.path() / ".lmdj-host/workspace-cache");
-  write_bytes(
-      temp.path() / ".lmdj-host/workspace-cache",
-      "cache-root-is-unavailable");
-  const auto degraded = application.query_sample_waveform(
-      SampleWaveformRequest{project, {0, 0}, {0, 8, 4}});
-  LMDJ_CHECK(degraded.has_value());
-  check_same_peak_buckets(
-      degraded.value().buckets, first_waveform.value().buckets);
-  LMDJ_CHECK(
-      read_bytes(project / "manifest.json") ==
-      manifest_before_cache_failure);
-
-  const PadPlayback playback{
-      1,
-      7,
-      TriggerMode::loop_gate,
-      -1'200,
-      false,
-  };
-  const SampleUpdateRequest update{
-      project,
-      CommandMeta{CommandId{uuid(585)}, 1},
-      PadSlotId{0, 0},
-      playback,
-  };
-  const auto updated = application.update_sample_pad(update);
-  LMDJ_CHECK(updated.has_value());
-  LMDJ_CHECK(updated.value().committed_revision == 2);
-  LMDJ_CHECK(updated.value().runtime_prepare_required);
-  const auto replayed = application.update_sample_pad(update);
-  LMDJ_CHECK(replayed.has_value());
-  LMDJ_CHECK(replayed.value().committed_revision == 2);
-
-  const auto conflict = application.update_sample_pad(
-      SampleUpdateRequest{
-          project,
-          CommandMeta{CommandId{uuid(586)}, 1},
-          PadSlotId{0, 0},
-          playback,
-      });
-  LMDJ_CHECK(!conflict.has_value());
-  LMDJ_CHECK(conflict.error().code == ErrorCode::revision_conflict);
-  const auto invalid_selection = application.update_sample_pad(
-      SampleUpdateRequest{
-          project,
-          CommandMeta{CommandId{uuid(587)}, 2},
-          PadSlotId{0, 0},
-          PadPlayback{0, 9, TriggerMode::one_shot, 0, false},
-      });
-  LMDJ_CHECK(!invalid_selection.has_value());
-  LMDJ_CHECK(invalid_selection.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}})
-          .value()
-          .project_revision == 2);
-
-  const auto reset = application.reset_sample_pad(
-      SampleResetRequest{
-          project,
-          CommandMeta{CommandId{uuid(588)}, 2},
-          PadSlotId{0, 0},
-      });
-  LMDJ_CHECK(reset.has_value());
-  LMDJ_CHECK(reset.value().committed_revision == 3);
-  LMDJ_CHECK(reset.value().runtime_prepare_required);
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}}).value().playback ==
-      PadPlayback{});
-
-  const auto failed_prepare = application.prepare_runtime_snapshot(
-      RuntimeSnapshotRequest{
-          project,
-          pattern_id,
-          RuntimePreparationLimits{1'048'576, 240'000, 1, 1},
-      });
-  LMDJ_CHECK(!failed_prepare.has_value());
-  LMDJ_CHECK(failed_prepare.error().code == ErrorCode::cook_failed);
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}})
-          .value()
-          .project_revision == 3);
-
-  std::filesystem::remove(
-      project / "assets" / (std::string(kMono44100Sha) + ".wav"));
-  const auto missing =
-      application.inspect_sample(SampleInspectRequest{project, {0, 0}});
-  LMDJ_CHECK(!missing.has_value());
-  LMDJ_CHECK(missing.error().code == ErrorCode::missing_asset);
-}
-
-void test_typed_sample_surface_rejects_invalid_boundary_values() {
-  TempDirectory temp;
-  Application application(sample_config(temp.path()));
-  const auto invalid = [](const auto& result) {
-    LMDJ_CHECK(!result.has_value());
-    LMDJ_CHECK(result.error().code == ErrorCode::invalid_argument);
-  };
-
-  invalid(application.inspect_sample(
-      SampleInspectRequest{"relative-project.lmdj", {0, 0}}));
-  invalid(application.query_sample_waveform(
-      SampleWaveformRequest{
-          temp.path() / "missing-project.lmdj",
-          {0, 0},
-          {0, 1, 0},
-      }));
-  invalid(application.append_sample_import(
-      "not-a-uuid", 0, std::span<const std::byte>{}, false));
-  invalid(application.commit_sample_import("not-a-uuid"));
-  invalid(application.abort_sample_import("not-a-uuid"));
-  invalid(application.update_sample_pad(
-      SampleUpdateRequest{
-          "relative-project.lmdj",
-          CommandMeta{CommandId{uuid(589)}, 0},
-          {0, 0},
-          {},
-      }));
-  invalid(application.reset_sample_pad(
-      SampleResetRequest{
-          "relative-project.lmdj",
-          CommandMeta{CommandId{uuid(590)}, 0},
-          {0, 0},
-      }));
-}
-
-void test_sample_import_abort_scavenge_replace_and_manifest_admission() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-lifecycle.lmdj";
-  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
-  const auto oversized = file_bytes(
-      "tests/fixtures/audio/mono-44100-over-web-frame-limit.wav");
-  const auto staging_root =
-      temp.path() / ".lmdj-host/sample-import-staging";
-  const auto staging_directory = [&](std::string_view token) {
-    return staging_root / std::string{token};
-  };
-  const auto marker_path = [&](std::string_view token) {
-    return staging_directory(token) / "state.json";
-  };
-  const auto payload_path = [&](std::string_view token) {
-    return staging_directory(token) / "payload.wav";
-  };
-  const auto write_marker = [&](std::string_view token,
-                                std::uint64_t created_unix_seconds) {
-    std::filesystem::create_directories(staging_directory(token));
-    write_bytes(
-        marker_path(token),
-        nlohmann::json{
-            {"contract", "lmdj.sample-import-staging.v1"},
-            {"created_unix_seconds", created_unix_seconds},
-            {"state", "incomplete"},
-            {"token", token},
-        }
-            .dump());
-  };
-  check_success(
-      Application(sample_config(temp.path())).command(create_request(project)),
-      0);
-
-  const auto aborted_token = uuid(590);
-  {
-    Application application(sample_config(temp.path()));
-    LMDJ_CHECK(
-        application.begin_sample_import(
-            {aborted_token,
-             project,
-             {CommandId{uuid(591)}, 0},
-             {0, 0},
-             AssetId{uuid(592)},
-             source.size()})
-            .has_value());
-    LMDJ_CHECK(
-        application.append_sample_import(
-            aborted_token,
-            0,
-            std::span<const std::byte>{source}.first(source.size() / 2U),
-            false)
-            .has_value());
-    LMDJ_CHECK(std::filesystem::is_regular_file(
-        payload_path(aborted_token)));
-    LMDJ_CHECK(application.abort_sample_import(aborted_token).has_value());
-    LMDJ_CHECK(!std::filesystem::exists(staging_directory(aborted_token)));
-    LMDJ_CHECK(
-        !application.begin_sample_import(
-             {aborted_token,
-              project,
-              {CommandId{uuid(591)}, 0},
-              {0, 0},
-              AssetId{uuid(592)},
-              source.size()})
-             .has_value());
-  }
-
-  const auto abandoned_token = uuid(593);
-  {
-    Application abandoned(sample_config(temp.path()));
-    LMDJ_CHECK(
-        abandoned.begin_sample_import(
-            {abandoned_token,
-             project,
-             {CommandId{uuid(594)}, 0},
-             {0, 0},
-             AssetId{uuid(595)},
-             source.size()})
-            .has_value());
-    LMDJ_CHECK(
-        abandoned.append_sample_import(
-            abandoned_token,
-            0,
-            std::span<const std::byte>{source}.first(8),
-            false)
-            .has_value());
-  }
-  LMDJ_CHECK(std::filesystem::is_regular_file(
-      payload_path(abandoned_token)));
-  Application fresh_scavenger(sample_config(temp.path()));
-  LMDJ_CHECK(std::filesystem::is_regular_file(
-      payload_path(abandoned_token)));
-  write_marker(abandoned_token, 0);
-  Application application(sample_config(temp.path()));
-  LMDJ_CHECK(!std::filesystem::exists(staging_directory(abandoned_token)));
-
-  const auto count_candidate = uuid(609);
-  write_marker(count_candidate, 0);
-  write_bytes(payload_path(count_candidate), "orphan");
-  for (std::size_t index = 0; index < 64; ++index) {
-    auto name = std::string{"!"} + std::to_string(index);
-    name.insert(1, 3 - std::min<std::size_t>(3, name.size() - 1), '0');
-    std::filesystem::create_directories(staging_root / name);
-  }
-  Application count_scavenger(sample_config(temp.path()));
-  LMDJ_CHECK(!std::filesystem::exists(staging_directory(count_candidate)));
-
-  const auto corrupt_marker_token = uuid(697);
-  std::filesystem::create_directories(
-      staging_directory(corrupt_marker_token));
-  write_bytes(marker_path(corrupt_marker_token), "{");
-  write_bytes(payload_path(corrupt_marker_token), "orphan");
-  const auto incomplete_marker_token = uuid(698);
-  std::filesystem::create_directories(
-      staging_directory(incomplete_marker_token));
-  write_bytes(
-      marker_path(incomplete_marker_token),
-      nlohmann::json{
-          {"contract", "lmdj.sample-import-staging.v1"},
-          {"token", incomplete_marker_token},
-      }
-          .dump());
-  write_bytes(payload_path(incomplete_marker_token), "orphan");
-  const auto malformed_payload_token = uuid(699);
-  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
-                       std::chrono::system_clock::now().time_since_epoch())
-                       .count();
-  LMDJ_CHECK(now >= 0);
-  write_marker(
-      malformed_payload_token, static_cast<std::uint64_t>(now));
-  std::filesystem::create_directories(
-      payload_path(malformed_payload_token));
-  Application malformed_scavenger(sample_config(temp.path()));
-  LMDJ_CHECK(
-      !std::filesystem::exists(staging_directory(corrupt_marker_token)));
-  LMDJ_CHECK(
-      !std::filesystem::exists(staging_directory(incomplete_marker_token)));
-  LMDJ_CHECK(
-      !std::filesystem::exists(staging_directory(malformed_payload_token)));
-
-  const auto incomplete_token = uuid(606);
-  LMDJ_CHECK(
-      application.begin_sample_import(
-          {incomplete_token,
-           project,
-           {CommandId{uuid(607)}, 0},
-           {0, 0},
-           AssetId{uuid(608)},
-           source.size()})
-          .has_value());
-  LMDJ_CHECK(
-      application.append_sample_import(
-          incomplete_token,
-          0,
-          std::span<const std::byte>{source}.first(8),
-          false)
-          .has_value());
-  const auto incomplete =
-      application.commit_sample_import(incomplete_token);
-  LMDJ_CHECK(!incomplete.has_value());
-  LMDJ_CHECK(incomplete.error().code == ErrorCode::invalid_argument);
-  LMDJ_CHECK(!std::filesystem::exists(staging_directory(incomplete_token)));
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}})
-          .value()
-          .project_revision == 0);
-
-  const auto import = [&](std::string token,
-                          std::string command,
-                          std::string asset,
-                          std::uint64_t revision,
-                          std::span<const std::byte> bytes) {
-    LMDJ_CHECK(
-        application.begin_sample_import(
-            {token,
-             project,
-             {CommandId{command}, revision},
-             {0, 0},
-             AssetId{asset},
-             bytes.size()})
-            .has_value());
-    LMDJ_CHECK(
-        application.append_sample_import(token, 0, bytes, true).has_value());
-    return application.commit_sample_import(token);
-  };
-
-  const auto first =
-      import(uuid(596), uuid(597), uuid(598), 0, source);
-  LMDJ_CHECK(first.has_value());
-  LMDJ_CHECK(first.value().committed_revision == 1);
-  const auto updated = application.update_sample_pad(
-      {project,
-       {CommandId{uuid(599)}, 1},
-       {0, 0},
-       PadPlayback{1, 7, TriggerMode::gate, -600, true}});
-  LMDJ_CHECK(updated.has_value());
-  const auto replaced =
-      import(uuid(600), uuid(601), uuid(602), 2, source);
-  LMDJ_CHECK(replaced.has_value());
-  LMDJ_CHECK(replaced.value().committed_revision == 3);
-  const auto replacement = application.inspect_sample({project, {0, 0}});
-  LMDJ_CHECK(replacement.has_value());
-  LMDJ_CHECK(replacement.value().asset_id == AssetId{uuid(602)});
-  LMDJ_CHECK(replacement.value().playback == PadPlayback{});
-
-  const auto revision_before_rejection = replacement.value().project_revision;
-  const auto over_limit =
-      import(uuid(603), uuid(604), uuid(605), 3, oversized);
-  LMDJ_CHECK(!over_limit.has_value());
-  LMDJ_CHECK(over_limit.error().code == ErrorCode::unsupported_audio);
-  LMDJ_CHECK((
-      over_limit.error().details ==
-      nlohmann::json{
-          {"resource", "decoded_frames_per_pad"},
-          {"observed", 240'001},
-          {"limit", 240'000},
-      }));
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}})
-          .value()
-          .project_revision == revision_before_rejection);
-  LMDJ_CHECK(!std::filesystem::exists(staging_directory(uuid(603))));
-}
 
 struct SampleCleanupFailureObservation {
   bool cleanup_failed;
@@ -1475,321 +906,10 @@ SampleCleanupFailureObservation observe_sample_cleanup_failure(
   };
 }
 
-void test_sample_cleanup_half_failures_leave_one_retryable_unit() {
-  const auto payload = observe_sample_cleanup_failure(
-      SampleCleanupFailureTarget::payload, 680);
-  const auto marker = observe_sample_cleanup_failure(
-      SampleCleanupFailureTarget::marker, 690);
-  const auto valid = [](const SampleCleanupFailureObservation& observed) {
-    return observed.cleanup_failed &&
-           observed.genuine_partial_residue &&
-           observed.repeated_failure_fail_closed &&
-           observed.repeated_residue_retryable &&
-           observed.fresh_scavenger_recovered &&
-           observed.token_reusable_after_recovery;
-  };
-  if (!valid(payload) || !valid(marker)) {
-    throw std::runtime_error(
-        "Sample cleanup retryability failed: payload=" +
-        std::to_string(valid(payload)) +
-        " marker=" + std::to_string(valid(marker)));
-  }
-}
 
-void test_sample_source_frame_limit_is_not_reapplied_after_resampling() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-source-frame-boundary.lmdj";
-  const PatternId pattern_id{uuid(610)};
-  Application application(sample_config(temp.path()));
-  const auto created = application.create_initial_project(
-      InitialProjectRequest{
-          project,
-          ProjectId{uuid(611)},
-          120,
-          Pattern{
-              pattern_id,
-              1,
-              {{PadSlotId{0, 0}, 0, 127}},
-          },
-      });
-  LMDJ_CHECK(created.has_value());
 
-  const auto source = mono_pcm16_wav(220'501, 44'100);
-  const auto token = uuid(612);
-  LMDJ_CHECK(
-      application.begin_sample_import(
-          {token,
-           project,
-           {CommandId{uuid(613)}, 0},
-           {0, 0},
-           AssetId{uuid(614)},
-           source.size()})
-          .has_value());
-  LMDJ_CHECK(
-      application.append_sample_import(token, 0, source, true).has_value());
-  const auto imported = application.commit_sample_import(token);
-  LMDJ_CHECK(imported.has_value());
-  LMDJ_CHECK(imported.value().committed_revision == 1);
 
-  const auto prepared = application.prepare_runtime_snapshot(
-      RuntimeSnapshotRequest{project, pattern_id, kStage8WebLimits});
-  LMDJ_CHECK(prepared.has_value());
-  LMDJ_CHECK(prepared.value()->pads.size() == 1);
-  const auto& sample = *prepared.value()->pads.at(0).sample;
-  LMDJ_CHECK(sample.sample_rate == 48'000);
-  LMDJ_CHECK(sample.interleaved.size() / sample.channels == 240'002);
-}
 
-void test_sample_delayed_replays_report_original_committed_revision() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-delayed-replay.lmdj";
-  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
-  Application application(sample_config(temp.path()));
-  LMDJ_CHECK(
-      application
-          .create_initial_project(
-              {project,
-               ProjectId{uuid(620)},
-               120,
-               Pattern{PatternId{uuid(621)}, 1, {}}})
-          .has_value());
-
-  const auto import_command = CommandId{uuid(622)};
-  const auto import_asset = AssetId{uuid(623)};
-  const auto import_once = [&](std::string token) {
-    LMDJ_CHECK(
-        application.begin_sample_import(
-            {token,
-             project,
-             {import_command, 0},
-             {0, 0},
-             import_asset,
-             source.size()})
-            .has_value());
-    LMDJ_CHECK(
-        application.append_sample_import(token, 0, source, true).has_value());
-    return application.commit_sample_import(token);
-  };
-  const auto imported = import_once(uuid(624));
-  LMDJ_CHECK(imported.has_value());
-  LMDJ_CHECK(imported.value().committed_revision == 1);
-
-  const auto advance_after_import = application.update_sample_pad(
-      {project,
-       {CommandId{uuid(625)}, 1},
-       {0, 0},
-       PadPlayback{1, 7, TriggerMode::gate, -300, false}});
-  LMDJ_CHECK(advance_after_import.has_value());
-  LMDJ_CHECK(advance_after_import.value().committed_revision == 2);
-  const auto replayed_import = import_once(uuid(626));
-  LMDJ_CHECK(replayed_import.has_value());
-  LMDJ_CHECK(replayed_import.value().committed_revision == 1);
-
-  const SampleUpdateRequest update{
-      project,
-      {CommandId{uuid(627)}, 2},
-      {0, 0},
-      PadPlayback{2, 6, TriggerMode::loop_gate, -600, true},
-  };
-  const auto updated = application.update_sample_pad(update);
-  LMDJ_CHECK(updated.has_value());
-  LMDJ_CHECK(updated.value().committed_revision == 3);
-  const auto advance_after_update = application.reset_sample_pad(
-      {project, {CommandId{uuid(628)}, 3}, {0, 0}});
-  LMDJ_CHECK(advance_after_update.has_value());
-  LMDJ_CHECK(advance_after_update.value().committed_revision == 4);
-  const auto replayed_update = application.update_sample_pad(update);
-  LMDJ_CHECK(replayed_update.has_value());
-  LMDJ_CHECK(replayed_update.value().committed_revision == 3);
-
-  const SampleResetRequest reset{
-      project,
-      {CommandId{uuid(629)}, 4},
-      {0, 0},
-  };
-  const auto reset_result = application.reset_sample_pad(reset);
-  LMDJ_CHECK(reset_result.has_value());
-  LMDJ_CHECK(reset_result.value().committed_revision == 5);
-  const auto advance_after_reset = application.update_sample_pad(
-      {project,
-       {CommandId{uuid(630)}, 5},
-       {0, 0},
-       PadPlayback{1, 7, TriggerMode::loop_toggle, 0, false}});
-  LMDJ_CHECK(advance_after_reset.has_value());
-  LMDJ_CHECK(advance_after_reset.value().committed_revision == 6);
-  const auto replayed_reset = application.reset_sample_pad(reset);
-  LMDJ_CHECK(replayed_reset.has_value());
-  LMDJ_CHECK(replayed_reset.value().committed_revision == 5);
-}
-
-void test_sample_json_delayed_replays_report_current_project_revision() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-json-delayed-replay.lmdj";
-  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
-  Application application(sample_config(temp.path()));
-  LMDJ_CHECK(
-      application
-          .create_initial_project(
-              {project,
-               ProjectId{uuid(720)},
-               120,
-               Pattern{PatternId{uuid(721)}, 1, {}}})
-          .has_value());
-
-  const auto import_once = [&](std::string token) {
-    check_success(
-        application.command(
-            {
-                {"operation", "sample.import.begin"},
-                {"import_token", token},
-                {"project_path", project.generic_string()},
-                {"command_id", uuid(722)},
-                {"expected_revision", 0},
-                {"slot", slot(0, 0)},
-                {"asset_id", uuid(723)},
-                {"byte_length", source.size()},
-            }),
-        nullptr);
-    LMDJ_CHECK(
-        application.append_sample_import(token, 0, source, true).has_value());
-    return application.command(
-        {
-            {"operation", "sample.import.commit"},
-            {"import_token", token},
-        });
-  };
-  const auto imported = import_once(uuid(724));
-  check_success(imported, 1);
-  LMDJ_CHECK(imported.at("result").at("committed_revision") == 1);
-
-  const auto advance_import = application.command(
-      {
-          {"operation", "sample.update_pad"},
-          {"project_path", project.generic_string()},
-          {"command_id", uuid(725)},
-          {"expected_revision", 1},
-          {"slot", slot(0, 0)},
-          {"playback",
-           {{"trim_start_frame", 1},
-            {"trim_end_frame", 7},
-            {"trigger_mode", "gate"},
-            {"gain_millidb", -300},
-            {"muted", false}}},
-      });
-  check_success(advance_import, 2);
-  const auto replayed_import = import_once(uuid(726));
-  LMDJ_CHECK(replayed_import.at("ok") == true);
-  LMDJ_CHECK(
-      replayed_import.at("result").at("committed_revision") == 1);
-
-  const nlohmann::json update{
-      {"operation", "sample.update_pad"},
-      {"project_path", project.generic_string()},
-      {"command_id", uuid(727)},
-      {"expected_revision", 2},
-      {"slot", slot(0, 0)},
-      {"playback",
-       {{"trim_start_frame", 2},
-        {"trim_end_frame", 6},
-        {"trigger_mode", "loop_gate"},
-        {"gain_millidb", -600},
-        {"muted", true}}},
-  };
-  check_success(application.command(update), 3);
-  check_success(
-      application.command(
-          {
-              {"operation", "sample.reset_pad"},
-              {"project_path", project.generic_string()},
-              {"command_id", uuid(728)},
-              {"expected_revision", 3},
-              {"slot", slot(0, 0)},
-          }),
-      4);
-  const auto replayed_update = application.command(update);
-  LMDJ_CHECK(replayed_update.at("ok") == true);
-  LMDJ_CHECK(
-      replayed_update.at("result").at("committed_revision") == 3);
-
-  const nlohmann::json reset{
-      {"operation", "sample.reset_pad"},
-      {"project_path", project.generic_string()},
-      {"command_id", uuid(729)},
-      {"expected_revision", 4},
-      {"slot", slot(0, 0)},
-  };
-  check_success(application.command(reset), 5);
-  check_success(
-      application.command(
-          {
-              {"operation", "sample.update_pad"},
-              {"project_path", project.generic_string()},
-              {"command_id", uuid(730)},
-              {"expected_revision", 5},
-              {"slot", slot(0, 0)},
-              {"playback",
-               {{"trim_start_frame", 1},
-                {"trim_end_frame", 7},
-                {"trigger_mode", "loop_toggle"},
-                {"gain_millidb", 0},
-                {"muted", false}}},
-          }),
-      6);
-  const auto replayed_reset = application.command(reset);
-  LMDJ_CHECK(replayed_reset.at("ok") == true);
-  LMDJ_CHECK(
-      replayed_reset.at("result").at("committed_revision") == 5);
-
-  const auto import_revision =
-      replayed_import.at("project_revision").get<std::uint64_t>();
-  const auto update_revision =
-      replayed_update.at("project_revision").get<std::uint64_t>();
-  const auto reset_revision =
-      replayed_reset.at("project_revision").get<std::uint64_t>();
-  if (import_revision != 2 || update_revision != 4 || reset_revision != 6) {
-    throw std::runtime_error(
-        "Sample JSON replay revisions are stale: import=" +
-        std::to_string(import_revision) +
-        " update=" + std::to_string(update_revision) +
-        " reset=" + std::to_string(reset_revision));
-  }
-}
-
-void test_sample_artifact_busy_errors_remain_storage_errors() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-artifact-busy.lmdj";
-  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
-  Application application(sample_config(temp.path()));
-  Application competitor(sample_config(temp.path()));
-  create_single_asset_project(
-      application, project, source, 640, uuid(644), uuid(645));
-
-  check_sample_artifact_busy_error(
-      competitor,
-      project,
-      [&] { return application.inspect_sample({project, {0, 0}}); });
-  check_sample_artifact_busy_error(
-      competitor,
-      project,
-      [&] {
-        return application.query_sample_waveform(
-            {project, {0, 0}, {0, 8, 4}});
-      });
-  check_sample_artifact_busy_error(
-      competitor,
-      project,
-      [&] {
-        return application.update_sample_pad(
-            {project,
-             {CommandId{uuid(646)}, 3},
-             {0, 0},
-             PadPlayback{1, 7, TriggerMode::gate, 0, false}});
-      });
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}})
-          .value()
-          .project_revision == 3);
-}
 
 struct SampleMutationHookContext {
   Application* application;
@@ -1816,116 +936,7 @@ void replace_sample_after_projection_load(void* opaque) noexcept {
       assigned.value("project_revision", 0U) == 5;
 }
 
-void test_sample_waveform_json_uses_one_authoritative_projection() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-waveform-projection.lmdj";
-  const auto source = file_bytes("tests/fixtures/audio/mono-44100.wav");
-  const auto replacement = mono_pcm16_wav(8);
-  Application application(sample_config(temp.path()));
-  create_single_asset_project(
-      application, project, source, 660, uuid(664), uuid(665));
 
-  SampleMutationHookContext context{
-      &application,
-      project,
-      &replacement,
-  };
-  lmdj::facade::testing::SampleProjectionHook hook{
-      &context,
-      replace_sample_after_projection_load,
-  };
-  SampleProjectionHookGuard guard(&hook);
-  const auto waveform = application.query(
-      {
-          {"operation", "sample.waveform"},
-          {"project_path", project.generic_string()},
-          {"slot", {{"bank", 0}, {"pad", 0}}},
-          {"window",
-           {{"start_frame", 0}, {"end_frame", 8}, {"bucket_count", 4}}},
-      });
-  LMDJ_CHECK(context.completed);
-  check_success(waveform, 3);
-  LMDJ_CHECK(
-      waveform.at("result")
-          .at("buckets")
-          .at(0)
-          .at("peak_magnitude") == 32'768);
-  LMDJ_CHECK(
-      application.inspect_sample({project, {0, 0}})
-          .value()
-          .project_revision == 5);
-}
-
-void test_sample_waveform_cache_uses_cooker_full_level_bucket_width() {
-  TempDirectory temp;
-  const auto project = temp.path() / "sample-waveform-cache-level.lmdj";
-  const auto source = mono_pcm16_wav(5);
-  Application application(sample_config(temp.path()));
-  create_single_asset_project(
-      application, project, source, 670, uuid(674), uuid(675));
-  const auto inspected = application.inspect_sample({project, {0, 0}});
-  LMDJ_CHECK(inspected.has_value());
-  LMDJ_CHECK(inspected.value().waveform_cache_identity.has_value());
-  const auto artifact_sha =
-      inspected.value().waveform_cache_identity->substr(0, 64);
-
-  const auto partial = application.query_sample_waveform(
-      {project, {0, 0}, {0, 4, 1}});
-  LMDJ_CHECK(partial.has_value());
-  LMDJ_CHECK(partial.value().buckets.size() == 1);
-  check_peak_bucket(partial.value().buckets.at(0), 0, 4, 0);
-
-  lmdj::project_io::WorkspaceCacheStore cache(
-      temp.path() / ".lmdj-host/workspace-cache");
-  const auto exact_key =
-      artifact_sha + "/1/max-abs-mirror/3";
-  const auto wrong_key =
-      artifact_sha + "/1/max-abs-mirror/4";
-  const auto cached = cache.read(exact_key);
-  LMDJ_CHECK(cached.has_value());
-  LMDJ_CHECK(cached.value().has_value());
-  LMDJ_CHECK(!cache.read(wrong_key).value().has_value());
-  const auto cached_text = std::string_view{
-      reinterpret_cast<const char*>(cached.value()->data()),
-      cached.value()->size()};
-  const auto cached_json = nlohmann::json::parse(cached_text);
-  LMDJ_CHECK(cached_json.at("frames_per_bucket") == 3);
-  LMDJ_CHECK(cached_json.at("bucket_count") == 2);
-  LMDJ_CHECK(cached_json.at("buckets").at(0).at("start_frame") == 0);
-  LMDJ_CHECK(cached_json.at("buckets").at(0).at("end_frame") == 3);
-  LMDJ_CHECK(cached_json.at("buckets").at(1).at("start_frame") == 3);
-  LMDJ_CHECK(cached_json.at("buckets").at(1).at("end_frame") == 5);
-
-  const auto misaligned_text = nlohmann::json{
-      {"contract", "lmdj.sample-waveform-cache.v1"},
-      {"metadata",
-       {{"sample_rate", 48'000}, {"channels", 1}, {"source_frames", 5}}},
-      {"algorithm_version", 1},
-      {"fold", "max-abs-mirror"},
-      {"frames_per_bucket", 3},
-      {"bucket_count", 2},
-      {"buckets",
-       nlohmann::json::array(
-           {{{"start_frame", 0}, {"end_frame", 2}, {"peak_magnitude", 0}},
-            {{"start_frame", 2}, {"end_frame", 5}, {"peak_magnitude", 0}}})},
-  }.dump();
-  const auto misaligned_bytes = std::as_bytes(std::span<const char>{
-      misaligned_text.data(), misaligned_text.size()});
-  LMDJ_CHECK(cache.write(exact_key, misaligned_bytes).has_value());
-  const auto repaired = application.query_sample_waveform(
-      {project, {0, 0}, {0, 4, 1}});
-  LMDJ_CHECK(repaired.has_value());
-  check_peak_bucket(repaired.value().buckets.at(0), 0, 4, 0);
-  const auto repaired_cache = cache.read(exact_key);
-  LMDJ_CHECK(repaired_cache.has_value());
-  LMDJ_CHECK(repaired_cache.value().has_value());
-  LMDJ_CHECK(repaired_cache.value()->size() != misaligned_bytes.size() ||
-             !std::equal(
-                 repaired_cache.value()->begin(),
-                 repaired_cache.value()->end(),
-                 misaligned_bytes.begin(),
-                 misaligned_bytes.end()));
-}
 
 nlohmann::json pattern_json() {
   return {
@@ -2012,6 +1023,67 @@ void create_golden_project(
           {"pattern", pattern_json()},
       });
   check_success(response, 5);
+}
+
+
+
+
+
+
+
+// Every rejection `validate_initial_pattern` can produce, asserted by the
+// contract it publishes rather than by the lines it executes: each case names
+// the exact ErrorCode and public message a Host will see, and each proves the
+// refusal happened before any Project file was written.
+
+// Trigger mode must survive a full write-then-read round trip through the JSON
+// surface. The four modes are a public contract: a Host writes one name and
+// must read the identical name back, so a silent fallback in either the parser
+// or the serializer is a contract break, not a cosmetic defect.
+
+// Every public Application entry wraps its implementation in a catch-all whose
+// job is to convert an unexpected exception into the documented failure
+// envelope instead of letting it cross the Host boundary. That contract has
+// never been exercised: an escaping exception would be undefined behaviour for
+// the C ABI and a crash for a Host, so each entry is armed with one throw and
+// required to answer with internal_error rather than propagate.
+
+// Two failure classes the Sample import path publishes but never proved: a
+// resource limit reached by ordinary use, and storage refusals at each seam.
+// Both are contract surfaces - a Host branches on the code and shows the
+// message - so each case asserts the exact code, message and details rather
+// than that the call merely failed.
+
+// Startup refuses to continue when it cannot account for leftover Sample
+// staging. That refusal is a safety property - a Host must not run against a
+// workspace whose staging state is unknown - and it is expressed as a thrown
+// construction failure, so the only way to observe it is to fail the storage
+// calls it makes.
+
+void test_module_versions_and_dependencies_are_exact() {
+  const auto application = nlohmann::json::parse(
+      read_bytes("packages/application-facade/module.json"));
+  const auto project_io = nlohmann::json::parse(
+      read_bytes("packages/project-io/module.json"));
+  LMDJ_CHECK(
+      (application ==
+       nlohmann::json{
+           {"contract", "lmdj.module.v1"},
+           {"module", "application-facade"},
+           {"version", "1.4.0"},
+           {"api_version", 2},
+           {"dependencies",
+            {
+                {"foundation", "0.2.0"},
+                {"authoring-domain", "0.2.0"},
+                {"project-io", "0.6.0"},
+                {"project-cooker", "0.3.0"},
+                {"audio-runtime", "0.5.0"},
+                {"provider-sdk", "1.1.1"},
+            }},
+       }));
+  LMDJ_CHECK(project_io.at("module") == "project-io");
+  LMDJ_CHECK(project_io.at("version") == "0.6.0");
 }
 
 void test_all_operations_share_one_facade_and_revision_contract() {
@@ -2546,35 +1618,6 @@ void test_typed_realtime_host_api_prepares_and_persists_take_batches() {
               .size() == 1);
 }
 
-// Every rejection `validate_initial_pattern` can produce, asserted by the
-// contract it publishes rather than by the lines it executes: each case names
-// the exact ErrorCode and public message a Host will see, and each proves the
-// refusal happened before any Project file was written.
-
-// Trigger mode must survive a full write-then-read round trip through the JSON
-// surface. The four modes are a public contract: a Host writes one name and
-// must read the identical name back, so a silent fallback in either the parser
-// or the serializer is a contract break, not a cosmetic defect.
-
-// Every public Application entry wraps its implementation in a catch-all whose
-// job is to convert an unexpected exception into the documented failure
-// envelope instead of letting it cross the Host boundary. That contract has
-// never been exercised: an escaping exception would be undefined behaviour for
-// the C ABI and a crash for a Host, so each entry is armed with one throw and
-// required to answer with internal_error rather than propagate.
-
-// Two failure classes the Sample import path publishes but never proved: a
-// resource limit reached by ordinary use, and storage refusals at each seam.
-// Both are contract surfaces - a Host branches on the code and shows the
-// message - so each case asserts the exact code, message and details rather
-// than that the call merely failed.
-
-// Startup refuses to continue when it cannot account for leftover Sample
-// staging. That refusal is a safety property - a Host must not run against a
-// workspace whose staging state is unknown - and it is expressed as a thrown
-// construction failure, so the only way to observe it is to fail the storage
-// calls it makes.
-
 void test_typed_initial_project_creation_persists_one_pattern_at_revision_zero() {
   TempDirectory temp;
   const auto project = temp.path() / "initial-pattern.lmdj";
@@ -2769,186 +1812,6 @@ void test_byte_import_and_opaque_writer_lease_share_one_storage_platform() {
   check_success(inspected, 1);
   LMDJ_CHECK(
       inspected.at("result").at("project").at("assets").contains(uuid(301)));
-}
-
-void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank() {
-  TempDirectory temp;
-  Application application(config(temp.path()));
-
-  auto prior = PreparedSampleBank::empty(ProjectId{std::string(kProjectId)}, 9);
-  const std::array<float, 1> prior_pcm{0.5F};
-  LMDJ_CHECK(prior.set_sample(0, prior_pcm).has_value());
-  RealtimeEngine engine;
-  LMDJ_CHECK(engine.publish_sample_bank(std::move(prior)) ==
-             PublishResult::accepted);
-  LMDJ_CHECK(engine.start().has_value());
-  const auto check_prior = [&engine]() {
-    LMDJ_CHECK(engine.enqueue(TriggerEvent{99, 0, 127}) ==
-               EnqueueResult::accepted);
-    std::array<float, 1> left{};
-    std::array<float, 1> right{};
-    engine.render(left.data(), right.data(), 1);
-    LMDJ_CHECK(left.at(0) == 0.5F);
-    LMDJ_CHECK(right.at(0) == 0.5F);
-  };
-  const auto check_limit = [&check_prior](
-                               const auto& rejected,
-                               std::string_view resource,
-                               std::uint64_t observed,
-                               std::uint64_t limit) {
-    LMDJ_CHECK(!rejected.has_value());
-    LMDJ_CHECK(rejected.error().code == ErrorCode::cook_failed);
-    LMDJ_CHECK(rejected.error().details.at("resource") == resource);
-    LMDJ_CHECK(rejected.error().details.at("observed") == observed);
-    LMDJ_CHECK(rejected.error().details.at("limit") == limit);
-    check_prior();
-  };
-
-  constexpr std::uint32_t kArtifactBoundaryFrames =
-      (1'048'576U - 44U) / 2U;
-  auto artifact_boundary = mono_pcm16_wav(kArtifactBoundaryFrames);
-  LMDJ_CHECK(artifact_boundary.size() == 1'048'576);
-  const auto artifact_project = temp.path() / "artifact-boundary.lmdj";
-  const auto artifact_pattern = uuid(403);
-  create_single_asset_project(
-      application,
-      artifact_project,
-      artifact_boundary,
-      400,
-      uuid(404),
-      artifact_pattern);
-  const RuntimePreparationLimits artifact_limits{
-      1'048'576,
-      kArtifactBoundaryFrames,
-      static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
-      static_cast<std::uint64_t>(kArtifactBoundaryFrames) * sizeof(float),
-  };
-  const auto exact_artifact = application.prepare_runtime_snapshot(
-      RuntimeSnapshotRequest{
-          artifact_project,
-          PatternId{artifact_pattern},
-          artifact_limits,
-      });
-  LMDJ_CHECK(exact_artifact.has_value());
-
-  artifact_boundary.push_back(std::byte{0});
-  LMDJ_CHECK(artifact_boundary.size() == 1'048'577);
-  const auto oversized_project = temp.path() / "artifact-oversized.lmdj";
-  const auto oversized_pattern = uuid(413);
-  create_single_asset_project(
-      application,
-      oversized_project,
-      artifact_boundary,
-      410,
-      uuid(414),
-      oversized_pattern);
-  const auto inspected = application.query(
-      {
-          {"operation", "project.inspect"},
-          {"project_path", oversized_project.generic_string()},
-      });
-  check_success(inspected, 3);
-  LMDJ_CHECK(
-      inspected.at("result")
-              .at("project")
-              .at("assets")
-              .at(uuid(414))
-              .at("artifact")
-              .at("byte_length") == 1'048'577);
-  check_limit(
-      application.prepare_runtime_snapshot(
-          RuntimeSnapshotRequest{
-              oversized_project,
-              PatternId{oversized_pattern},
-              artifact_limits,
-          }),
-      "artifact_bytes",
-      1'048'577,
-      1'048'576);
-
-  auto decoded_boundary = mono_pcm16_wav(240'000);
-  const auto decoded_project = temp.path() / "decoded-boundary.lmdj";
-  const auto decoded_pattern = uuid(423);
-  create_single_asset_project(
-      application,
-      decoded_project,
-      decoded_boundary,
-      420,
-      uuid(424),
-      decoded_pattern);
-  const RuntimePreparationLimits decoded_limits{
-      1'048'576,
-      240'000,
-      960'000,
-      960'000,
-  };
-  const auto exact_decoded = application.prepare_runtime_snapshot(
-      RuntimeSnapshotRequest{
-          decoded_project,
-          PatternId{decoded_pattern},
-          decoded_limits,
-      });
-  LMDJ_CHECK(exact_decoded.has_value());
-
-  const auto decoded_plus_one = mono_pcm16_wav(240'001);
-  const auto decoded_oversized_project =
-      temp.path() / "decoded-oversized.lmdj";
-  const auto decoded_oversized_pattern = uuid(433);
-  create_single_asset_project(
-      application,
-      decoded_oversized_project,
-      decoded_plus_one,
-      430,
-      uuid(434),
-      decoded_oversized_pattern);
-  check_success(
-      application.query(
-          {
-              {"operation", "project.inspect"},
-              {"project_path", decoded_oversized_project.generic_string()},
-          }),
-      3);
-  check_limit(
-      application.prepare_runtime_snapshot(
-          RuntimeSnapshotRequest{
-              decoded_oversized_project,
-              PatternId{decoded_oversized_pattern},
-              decoded_limits,
-          }),
-      "decoded_frames_per_pad",
-      240'001,
-      240'000);
-
-  check_limit(
-      application.prepare_runtime_snapshot(
-          RuntimeSnapshotRequest{
-              decoded_project,
-              PatternId{decoded_pattern},
-              RuntimePreparationLimits{
-                  1'048'576,
-                  240'000,
-                  959'999,
-                  960'000,
-              },
-          }),
-      "prepared_bank_bytes",
-      960'000,
-      959'999);
-  check_limit(
-      application.prepare_runtime_snapshot(
-          RuntimeSnapshotRequest{
-              decoded_project,
-              PatternId{decoded_pattern},
-              RuntimePreparationLimits{
-                  1'048'576,
-                  240'000,
-                  960'000,
-                  959'999,
-              },
-          }),
-      "live_bank_bytes",
-      960'000,
-      959'999);
 }
 
 void test_render_rejects_symlinked_parent_and_never_reuses_crash_residue() {
@@ -3463,22 +2326,11 @@ int main() {
     test_project_bundle_discovery_and_import_are_typed_facade_apis();
     test_application_startup_cleans_incomplete_bundle_staging();
     test_project_bundle_host_paths_fail_closed();
-    test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_render_recooks_after_restart_and_publishes_golden_atomically();
     test_typed_realtime_host_api_prepares_and_persists_take_batches();
     test_typed_initial_project_creation_persists_one_pattern_at_revision_zero();
     test_byte_import_and_opaque_writer_lease_share_one_storage_platform();
-    test_typed_sample_surface_is_atomic_bounded_and_cache_backed();
-    test_typed_sample_surface_rejects_invalid_boundary_values();
-    test_sample_import_abort_scavenge_replace_and_manifest_admission();
-    test_sample_cleanup_half_failures_leave_one_retryable_unit();
-    test_sample_source_frame_limit_is_not_reapplied_after_resampling();
-    test_sample_delayed_replays_report_original_committed_revision();
-    test_sample_json_delayed_replays_report_current_project_revision();
-    test_sample_artifact_busy_errors_remain_storage_errors();
-    test_sample_waveform_json_uses_one_authoritative_projection();
-    test_sample_waveform_cache_uses_cooker_full_level_bucket_width();
-    test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank();
+    test_render_rejects_symlinked_parent_and_never_reuses_crash_residue();
     test_take_commit_uses_captured_revision_and_replays_after_cleanup();
     test_asset_and_pad_replay_identity_is_enforced();
     test_exact_shapes_routing_and_invalid_scalars_fail_before_mutation();

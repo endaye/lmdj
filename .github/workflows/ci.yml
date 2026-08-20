@@ -753,6 +753,18 @@ jobs:
             CC=clang-18 \
             CXX=clang++-18 \
             scripts/core-coverage.sh check
+      - name: Report test budget headroom
+        # Reports, never fails. Coverage runs get no sanitizer timeout
+        # multiplier, so this is the tightest budget in the repository and the
+        # first place a test that has outgrown its tier shows up. A guardrail
+        # allowed to stop a Pull Request would be one more source of the
+        # randomness it exists to remove.
+        if: ${{ always() }}
+        run: >-
+          python3 tests/quality/test_budget_report.py
+          --ctest-log build/core/coverage/coverage/ctest.log
+          --sanitizer coverage
+          || true
       - name: Upload failed coverage evidence
         if: failure()
         uses: actions/upload-artifact@v4
@@ -761,6 +773,7 @@ jobs:
           path: |
             build/core/coverage/coverage/report.txt
             build/core/coverage/coverage/summary.json
+            build/core/coverage/coverage/ctest.log
       - name: Report persistent ccache statistics
         if: ${{ always() }}
         run: >-
