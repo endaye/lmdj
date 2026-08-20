@@ -1,8 +1,8 @@
 # LMDJ Serialized Integration Queue Design
 
-日期：2026-08-20
+日期：2026-08-20；review 修订：2026-08-21
 
-状态：规格已批准
+状态：规格已批准；implementation 与远端 PR/全绿后 squash merge 已授权
 
 ## 1. 结论
 
@@ -75,6 +75,22 @@ Cloud 组织拥有的私有仓库；`endaye/lmdj` 是个人账户私有仓库，
 - 自动提交本地代码不授权 push、创建 PR、远端 label、branch protection 修改或启用
   自动合并能力。
 
+### 2.1 外部事实证据
+
+以下外部能力是设计支点，证据于 2026-08-20 验证；远端启用前必须在 live repository
+重新执行第 13 节 preflight，不能只依赖本表：
+
+| 事实 | 官方证据 | 设计后果 |
+| --- | --- | --- |
+| `concurrency.queue: max` 保留最多 100 个 pending runs；默认 `single` 只有一个 pending 且新 run 会替换旧 run | [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) | workflow 必须使用 `queue: max`；live probe 失败即不创建 label、不启用队列 |
+| REST API version `2026-03-10` 的 workflow dispatch 成功响应为 `200`，body 含 numeric `workflow_run_id` | [Create a workflow dispatch event](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) | controller 只绑定 response 中的 run ID；schema 不匹配时 `validation-dispatch-contract-mismatch`，不轮询猜测 |
+| actionlint `1.7.12` 能解析 `concurrency.queue` | [actionlint v1.7.12](https://github.com/rhysd/actionlint/releases/tag/v1.7.12) 与 [官方 checksums](https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt)；本地最小 workflow probe exit 0 | CI pin 与 digest 一起升级；contract test 固定语法与 digest |
+| `GITHUB_TOKEN` 产生的事件除 `workflow_dispatch` 与 `repository_dispatch` 外不会创建新的 workflow run | [Triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow) | update-branch 后不等待 `pull_request` 自动触发；队列显式 dispatch 是同步 head 的 Required Checks 唯一来源 |
+
+GitHub 对 `queue: max` 的顺序保证是“按 run 开始等待的时间 FIFO”，不是事件产生或 API
+dispatch 的绝对时间。本文的 FIFO 均指这个平台定义；controller 不声称提供跨平台事件的
+更强全序。
+
 ## 3. 目标
 
 - 用 `merge:queue` 标签建立明确、可审计、可撤销的自动合并授权。
@@ -118,18 +134,25 @@ Cloud 组织拥有的私有仓库；`endaye/lmdj` 是个人账户私有仓库，
 | D9 | base/head 漂移最多重新同步和完整验证三次；三次后仍漂移是 terminal failure。 |
 | D10 | 合并调用必须指定 exact expected head SHA 与 `squash`；调用前后都核验 canonical repository state。 |
 | D11 | CI failure、conflict、timeout、撤权和不确定 mutation 一律不重试 merge；先 reconciliation，再输出稳定 failure code。 |
-| D12 | 控制面只使用 `actions: write`、`contents: write`、`pull-requests: write`；不引入 PAT 或 GitHub App secret。 |
+| D12 | 控制面只使用 `actions: write`、`checks: read`、`contents: write`、`pull-requests: write`；不引入 PAT 或 GitHub App secret。 |
 | D13 | `main` push 的 per-SHA、non-cancelling concurrency 与 release exact-main evidence 保持不变。 |
 | D14 | actionlint 升级到已验证支持 `concurrency.queue` 的 `1.7.12`，继续校验下载 digest 与完整 workflow contract。 |
+| D15 | queue controller 的 hard timeout 为 360 分钟，但内部 mutation deadline 为 330 分钟；至少保留 30 分钟做 reconciliation/report。每次 validation wait 从剩余预算动态推导，不固定占满 120 分钟。 |
+| D16 | PR head 中的 `ci.yml` 与 CI scripts 属于被审代码而非独立可信证据；修改 queue/CI authority 文件的 PR 不允许由本队列自动合并。 |
+| D17 | duplicate queue run 发现 PR 已 merged 时以 `already-merged` 成功 no-op 结束，不评论、不制造失败 check。 |
+| D18 | squash merge 显式发送 `commit_title="<PR title> (#<number>)"` 与空 `commit_message`，不依赖仓库默认 squash message 设置。 |
 
 ## 6. 组件与文件边界
 
 ### 6.1 Merge Queue workflow
 
-新增 `.github/workflows/merge-queue.yml`，职责仅包括：
+新增 `.github/workflows/merge-queue.yml`。`pull_request_target` 只声明 `types: [labeled]`；
+workflow-level 不声明 concurrency，职责拆成：
 
-- 监听 `pull_request_target` 的 `labeled` activity，并只接受 label `merge:queue`；
-- 在 GitHub-hosted Ubuntu 上进入固定 `lmdj-merge-main` concurrency group；
+- 一个无 concurrency 的 hosted `route` job 精确判断 label `merge:queue`；
+- 只有 `needs.route.outputs.accepted == 'true'` 的 hosted `queue-item` job 进入固定
+  `lmdj-merge-main` job-level concurrency group；其他 label 只产生 route + skipped job，
+  不占 100 个 pending slots；
 - 使用 `queue: max`，不取消 running 或 pending queue items；
 - checkout canonical default-branch control code，`persist-credentials: false`；
 - 将 event actor、PR number、event head SHA、repository 与 workflow run identity 传给
@@ -137,13 +160,23 @@ Cloud 组织拥有的私有仓库；`endaye/lmdj` 是个人账户私有仓库，
 - 授予 controller 所需的最小 workflow permissions；
 - 将 controller 的结构化 report 写入 `GITHUB_STEP_SUMMARY`。
 
+同一 workflow 另有不共享 queue concurrency 的 `schedule` watchdog job。它每 15 分钟检查
+带 `merge:queue` 的 open PR；若 label 已存在 20 分钟，但 label event 之后不存在关联该
+PR 的 queued/in-progress queue run，则命中 `queue-stalled`，移除 label 并创建一次稳定
+COMMENT review。`queue-item` 的 downstream `finalize` job 使用 `if: always()`：若 worker
+没有写出 report，就先 reconcile，再用 `queue-worker-aborted` 收尾。整次 workflow 被人工
+cancel 时 finalizer 可能无法运行，因此 watchdog 是 cancel、平台 hard timeout 与 pending
+capacity eviction 的最终 fail-closed 兜底。
+
 workflow 不解析产品文件、不运行 PR shell、不持有 deployment/release secrets，也不直接
 在 YAML shell 中复制状态机。
 
 ### 6.2 Queue controller
 
 新增 `scripts/ci/merge_queue.py`。它拥有全部 queue semantics，并通过一个窄的
-`GitHubClient` 接口访问远端。核心接口返回闭合 report，而不是依赖异常文本作为状态：
+`GitHubClient` 接口访问远端；`scripts/ci/github_queue_api.py` 封装 transport/schema，
+`scripts/ci/merge_queue_watchdog.py` 只负责 stall reconciliation。核心接口返回闭合 report，
+而不是依赖异常文本作为状态：
 
 ```text
 run_queue_item(request: QueueRequest, client: GitHubClient) -> QueueReport
@@ -160,6 +193,9 @@ tree，执行 exact-head squash merge，以及在 Pull Request 上移除 queue l
 COMMENT review。HTTP transport、API version、bounded retry 与 response schema validation
 全部封装在该边界内。
 
+canonical `main` SHA 的唯一 authoritative 来源是 Git refs API 的 `refs/heads/main`；Pull
+Request API 的 `base.sha` 只作诊断与 drift 证据，不替代 ref。
+
 ### 6.3 Core CI queue-validation mode
 
 修改 `.github/workflows/ci.yml` 与 `scripts/ci/change_scope.py`，在既有
@@ -175,7 +211,8 @@ COMMENT review。HTTP transport、API version、bounded retry 与 response schem
 
 - dispatch ref 实际解析到 `queue_head_sha`；
 - PR number 指向 canonical repository 的 open、非 Draft、同仓库 PR；
-- PR base 为 `main` 且 base SHA 精确为 `queue_base_sha`；
+- PR base 为 `main`；canonical `refs/heads/main`、PR base SHA 与 `queue_base_sha` 的关系被
+  分类，而不是把正常 base drift 混成普通 CI failure；
 - PR head 精确为 `queue_head_sha`；
 - `queue_base_sha` 是 `queue_head_sha` 的 ancestor；
 - queue label 仍存在；
@@ -185,8 +222,27 @@ Change Scope 从实时 PR 响应输出文档影响检查需要的 PR body；Port
 mode 中与普通 PR event 一样校验该 body 和 exact base/head diff。Manifest 记录 queue
 metadata，使 `PR Gate` 可以验证 same-run manifest 与 dispatch inputs 一致。
 
+Change Scope 无论成功或失败都以 `if: always()` 上传闭合的 `queue-validation.json`：
+
+```json
+{"classification":"valid|queue-base-drift|queue-head-drift|invalid","queue_ticket":"...","observed_base_sha":"...","observed_head_sha":"..."}
+```
+
+controller 只从已绑定 numeric run ID 下载该 artifact。`queue-base-drift` 或
+`queue-head-drift` 仅在 controller 再读 canonical main ref 与 PR head、独立确认相同漂移后
+映射到 D9 attempt retry；artifact 缺失、schema 不闭合、与 live state 不一致或其他 CI failure
+都是 `validation-failed`。因此 Change Scope 仍 fail closed，同时正常排队期间发生的 main/head
+前进不会被误判为 terminal validation failure。
+
 Core CI 增加包含 queue ticket 的 `run-name`，但 controller 只信 dispatch API 直接返回的
 numeric run ID。显示名称只用于人工诊断，不参与 identity 判定。
+
+update-branch 使用 `GITHUB_TOKEN`，不会触发新的 `pull_request` workflow run；同步 head 的
+Required Checks 必须全部由这次显式 dispatch 产生。controller 验证 exact run 内存在当前
+branch protection 要求的 check context 与 GitHub App identity，至少包括
+`core (ubuntu-latest)`、`core (macos-latest)` 与 `PR Gate`；不匹配时报告
+`required-check-contract-mismatch`，不把最终 merge API 的拒绝含混归类为普通
+`merge-rejected`。
 
 ### 6.4 Contract tests and governance
 
@@ -217,6 +273,9 @@ requested|eligible|synchronizing|validating|ready
 
 merging
   -> merged | blocked-after-reconciliation
+
+requested
+  -> already-merged
 ```
 
 ### 7.1 Requested and eligible
@@ -229,6 +288,23 @@ permission 和 PR，而不是相信 event payload 的可变字段。以下任一
 - event head SHA 与 controller 首次读取的 PR head 不一致；
 - queue label 已不存在；
 - PR mergeability 是 conflict，或 GitHub 在有界等待后仍不能计算 mergeability。
+
+如果 duplicate run 到达队头时 PR 已经 merged，controller 返回 `already-merged` 成功终态，
+不移除 label、不评论、不产生红 check。closed 但未 merged 仍是 `ineligible-pr`。
+
+若 PR diff 修改以下 merge authority/control-plane 路径，controller 以
+`queue-control-plane-change` fail closed，要求人工受保护分支合并，避免 PR 用自己修改过的
+workflow/controller 为自身制造证据：
+
+- `.github/workflows/merge-queue.yml`
+- `.github/workflows/ci.yml`
+- `.github/actionlint.yaml`
+- `scripts/ci/merge_queue.py`
+- `scripts/ci/github_queue_api.py`
+- `scripts/ci/merge_queue_watchdog.py`
+- `scripts/ci/change_scope.py`
+- `scripts/ci/pr_gate.py`
+- `scripts/ci/scope_policy.json`
 
 标签是 merge authorization，不是 review approval。Branch protection 的 review、conversation
 resolution 与 Required Checks 仍由 GitHub 在最终 merge API 上强制执行。
@@ -264,8 +340,20 @@ queue inputs，并使用 GitHub REST API version `2026-03-10` 返回的
 - manifest 为 full、trusted head、exact queue ticket/base/head；
 - full mode 所有正式 lanes 的 same-run result 通过既有 PR Gate adjudication。
 
-validation attempt 上限为 120 分钟，queue worker job 上限为 360 分钟。API 轮询使用有界
-间隔并尊重 rate-limit response；标签每轮都重新读取，标签移除立即转为 cancelled。
+queue worker job hard timeout 为 360 分钟，controller 从 job start 建立 330 分钟 internal
+mutation deadline，剩余至少 30 分钟只允许 reconciliation/report，不再发 update、dispatch 或
+merge mutation。每次 validation wait 的预算为：
+
+```text
+min(120 minutes,
+    floor((mutation_deadline - now - 10 minute sync/reconcile reserve)
+          / remaining_attempts))
+```
+
+预算不足 10 分钟时不开始新 attempt，报告 `queue-budget-exhausted`。validation timeout 从
+run created time 计算，因此包含 runner 排队时间；report 同时记录 queue seconds 与 execution
+seconds，运维人员可以区分 capacity wait 和 test execution。API 轮询使用有界间隔并尊重
+rate-limit response；标签每轮都重新读取，标签移除立即转为 cancelled。
 
 ### 7.4 Ready and drift handling
 
@@ -284,6 +372,8 @@ controller 使用 `contents: write` 调用 Pull Request merge API，明确指定
 ```text
 merge_method = squash
 sha = exact validated PR head SHA
+commit_title = <PR title> (#<PR number>)
+commit_message = ""
 ```
 
 调用前最后一次读取 main/head/label；调用由 branch protection 原子裁决。如果 main 在最后
@@ -303,24 +393,35 @@ postcondition 不一致发生在 mutation 之后，不能自动回滚或 force-u
 报告 `blocked-after-reconciliation`，保留 exact response、PR/main SHA 与 tree evidence，交由
 incident owner 处理。
 
+移除 label 只保证在 controller 最后一次 pre-merge 读取之前可撤销；在该读取与 GitHub 接受
+merge mutation 之间存在不可消除的短窗口。API 请求已被接受后，后到的 label removal 不能
+撤销 merge；controller 仍必须完成 postcondition reconciliation 并报告这一事实。
+
 ## 8. Failure、取消与恢复
 
 稳定 terminal code 至少包括：
 
 - `unauthorized-actor`
 - `ineligible-pr`
+- `already-merged`（成功 no-op）
+- `queue-control-plane-change`
 - `queue-label-removed`
 - `merge-conflict`
 - `update-branch-timeout`
 - `validation-dispatch-failed`
+- `validation-dispatch-contract-mismatch`
 - `validation-timeout`
 - `validation-failed`
+- `required-check-contract-mismatch`
+- `queue-budget-exhausted`
+- `queue-worker-aborted`
+- `queue-stalled`
 - `unstable-after-three-validations`
 - `merge-rejected`
 - `merge-state-uncertain`
 - `postcondition-mismatch`
 
-除用户主动移除标签导致的 `queue-label-removed` 外，terminal failure 会：
+`already-merged` 是成功终态；`queue-label-removed` 是用户取消。除此以外 terminal failure 会：
 
 1. reconcile PR、main 与可能的 merge result；
 2. 如果 PR 仍 open，移除 `merge:queue`，避免旧授权被无意复用；
@@ -341,10 +442,15 @@ incident owner 处理。
 - fork PR 在任何 self-hosted 或 mutation 操作前被拒绝。
 - event actor、repository、PR、base/head、label 与 run identity 全部实时验证。
 - 用户可控字符串不拼接 shell command；GitHub API 参数使用结构化 JSON。
-- workflow token 只授予 `actions: write`、`contents: write`、`pull-requests: write`；无
+- workflow token 只授予 `actions: write`、`checks: read`、`contents: write`、
+  `pull-requests: write`；无
   deployments、environments、packages、secrets、id-token 或 administration 权限。
 - queue workflow 运行在 GitHub-hosted Ubuntu；PR 代码只在既有 trusted-head Core CI lanes
   中执行。
+- validation dispatch 到 PR head ref 时，GitHub 执行该 head 上的 `ci.yml` 与
+  `change_scope.py`/`pr_gate.py`。这些 evidence 不是独立于 PR 的可信控制面；其完整性最终
+  依赖代码 review、conversation resolution、branch protection 与“审批完成后才添加
+  `merge:queue`”的操作纪律。control-plane diff 禁止自助 queue merge 是额外防线。
 - workflow dispatch ticket 不是 secret。伪造 ticket 最多产生 CI，不会被 controller 接受，
   因为 controller 绑定 dispatch API 返回的 numeric run ID。
 - merge mutation 依赖 exact expected head、strict branch protection 与 Required Checks；
@@ -370,6 +476,13 @@ incident owner 处理。
 - mutation uncertainty 不会盲目重复 merge；
 - workflow 使用 `pull_request_target:labeled`、fixed concurrency、`queue: max`、hosted runner、
   canonical checkout 与 exact minimal permissions；
+- workflow 不监听 `synchronize`/`closed`，exact label route 位于 job-level concurrency 之前，
+  非 queue label 不占 pending slot；
+- duplicate runs 的 `already-merged` 幂等成功 no-op；
+- dynamic attempt budget 保留 30 分钟收尾，worker abort finalizer 与 scheduled stall watchdog；
+- Change Scope drift artifact 与 controller live-state 双重确认；
+- control-plane change 禁止 queue self-merge；
+- explicit squash title/message 与 required-check context/App identity contract；
 - actionlint `1.7.12` archive digest、workflow syntax 与 literal self-hosted labels；
 - local preflight、scope policy、Portal impact 与 workflow CI contract 保持一致。
 
@@ -411,17 +524,31 @@ Reason: Integration Queue 改变 Pull Request CI、自动 merge authority、失�
 
 ## 13. 远端启用与验收边界
 
-仓库代码合入本身不会启用队列。远端 rollout 分成独立授权与证据边界：
+仓库代码合入本身不会启用队列。远端 rollout 分成独立授权与证据边界；本 Task 已获授权
+完成 implementation push、PR 与 required checks 全绿后的 squash merge，但 label 创建、
+branch protection 变更与首次自动 queue merge 仍是独立 mutation：
 
 1. implementation PR 在 full CI 与 review 通过后，由单独授权 squash merge；
 2. 验证 exact merged-main CI，不能从 PR CI 推断；
-3. 单独授权创建 label `merge:queue`，记录 exact name、description 与 color；
-4. 单独授权确认 `main` strict required checks、conversation resolution 与 admin enforcement，
-   不删除或弱化 Required Checks；
-5. 用一个无产品风险的同仓库 test PR 做首次 queue validation，只在显式添加 label 后启动；
-6. 记录 queue run ID、validation run ID、runner assignment、base/head、merge SHA、tree equality、
+3. 在创建 label 前，用 `workflow_dispatch` 的 no-mutation preflight mode 连续发出三个
+   `hold_seconds` probe，验证一个 running、两个 pending、无 replacement/cancellation，并核对
+   FIFO start order；同时验证 dispatch 200 response 含 numeric `workflow_run_id`。任何一项失败
+   都停止 rollout，保持 label 不存在；
+4. 单独授权创建 label `merge:queue`，记录 exact name、description 与 color；
+5. 单独授权确认 `main` strict required checks、conversation resolution 与 admin enforcement，
+   不删除或弱化 Required Checks；用一次 queue validation dispatch 核对 required context 的 exact
+   name 与 GitHub App identity，确认同步后的 head 由 dispatch run 产生所有 required checks；
+6. 用一个无产品风险、且不修改 control-plane 路径的同仓库 test PR 做首次 queue validation，
+   只在 review/required checks 已完成后显式添加 label；
+7. 记录 queue run ID、validation run ID、runner assignment、base/head、merge SHA、tree equality、
    resulting main CI 与 label state；
-7. 首次验收成功后才把 queue 作为日常 merge 路径。
+8. 验证 watchdog：构造带 label 且无活动 queue run 的安全 test PR，确认 20 分钟后以
+   `queue-stalled` 摘 label 并报告；
+9. 首次验收成功后才把 queue 作为日常 merge 路径。
+
+Runbook 把“open PR 有 `merge:queue` label，但 label event 后没有 queued/in-progress queue run”
+定义为 stall signature。排查顺序固定为 workflow run、pending capacity、manual cancel/platform
+timeout、controller report；在 reconciliation 前不得直接重新添加 label。
 
 任何边界失败都停止在当前状态。Implementation commit 不授权 push；push 不授权 PR；PR 不
 授权 merge；merge 不授权 label/branch protection 修改；remote configuration 不授权首次
