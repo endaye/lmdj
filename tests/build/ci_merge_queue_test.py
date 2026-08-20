@@ -7,6 +7,7 @@ from dataclasses import replace
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -68,6 +69,7 @@ class MergeQueueTest(unittest.TestCase):
             labels=("merge:queue",),
             mergeable=True,
             merge_commit_sha=None,
+            head_ref="feat/queue",
         )
         return replace(pull, **changes)
 
@@ -269,7 +271,7 @@ class MergeQueueTest(unittest.TestCase):
         report = self.run_item(client)
         self.assertTrue(report.ok)
         self.assertEqual(client.update_calls[0][1], SHA_B)
-        self.assertEqual(client.dispatch_calls[0][1], SHA_D)
+        self.assertEqual(client.dispatch_calls[0][1], "feat/queue")
         self.assertEqual(client.dispatch_calls[0][2]["queue_base_sha"], SHA_A)
 
     def test_update_drift_consumes_an_attempt_but_never_repeats_blindly(self):
@@ -446,6 +448,64 @@ class MergeQueueTest(unittest.TestCase):
             evidence=(),
         )
         self.assertIs(self.mq.finalize_aborted(self.request(), client, existing), existing)
+
+    def test_run_cli_always_writes_a_closed_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "report.json"
+            summary_path = Path(directory) / "summary.md"
+            client = self.client(permission="read")
+            exit_code = self.mq.run_cli(
+                [
+                    "run",
+                    "--repository", "endaye/lmdj",
+                    "--pr-number", "220",
+                    "--actor", "endaye",
+                    "--event-head-sha", SHA_B,
+                    "--queue-run-id", "123",
+                    "--report", str(report_path),
+                    "--summary", str(summary_path),
+                ],
+                environ={"GITHUB_TOKEN": "token"},
+                client_factory=lambda _repository, _token: client,
+                clock=lambda: 0.0,
+                sleeper=lambda _seconds: None,
+            )
+            self.assertEqual(exit_code, 1)
+            document = __import__("json").loads(report_path.read_text(encoding="utf-8"))
+            self.assertEqual(document["code"], "unauthorized-actor")
+            self.assertIn("unauthorized-actor", summary_path.read_text(encoding="utf-8"))
+
+    def test_finalize_cli_preserves_an_existing_closed_report(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report_path = Path(directory) / "report.json"
+            existing = self.mq.QueueReport(
+                ok=True,
+                status="merged",
+                code="merged",
+                attempts=1,
+                observed_base_sha=SHA_A,
+                observed_head_sha=SHA_B,
+                validation_run_ids=(9001,),
+                merge_sha=SHA_C,
+                message="merged",
+                evidence=(),
+            )
+            report_path.write_text(existing.to_json(), encoding="utf-8")
+            exit_code = self.mq.run_cli(
+                [
+                    "finalize",
+                    "--repository", "endaye/lmdj",
+                    "--pr-number", "220",
+                    "--actor", "endaye",
+                    "--event-head-sha", SHA_B,
+                    "--queue-run-id", "123",
+                    "--report", str(report_path),
+                ],
+                environ={"GITHUB_TOKEN": "token"},
+                client_factory=lambda _repository, _token: self.client(),
+            )
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(report_path.read_text(encoding="utf-8"), existing.to_json())
 
 
 if __name__ == "__main__":

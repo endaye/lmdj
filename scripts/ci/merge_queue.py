@@ -7,9 +7,11 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict, dataclass
 import argparse
 import json
+import os
 from pathlib import Path
 import re
 import sys
+import tempfile
 import time
 from typing import Protocol
 
@@ -70,6 +72,7 @@ class PullRequest:
     labels: tuple[str, ...]
     mergeable: bool | None
     merge_commit_sha: str | None
+    head_ref: str
 
 
 @dataclass(frozen=True)
@@ -402,7 +405,7 @@ def run_queue_item(
             "queue_head_sha": head,
         }
         try:
-            run_id = client.dispatch_validation(request.pr_number, head, inputs)
+            run_id = client.dispatch_validation(request.pr_number, pull.head_ref, inputs)
         except DispatchContractError as error:
             return _stop(
                 request, client, "validation-dispatch-contract-mismatch",
@@ -559,25 +562,90 @@ def _write(path: str | Path, contents: str) -> None:
     Path(path).write_text(contents, encoding="utf-8")
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def _write_atomic(path: str | Path, contents: str) -> None:
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", dir=target.parent, delete=False
+    ) as output:
+        output.write(contents)
+        temporary = Path(output.name)
+    os.replace(temporary, target)
+
+
+def _load_report(path: str | Path) -> QueueReport:
+    document = json.loads(Path(path).read_text(encoding="utf-8"))
+    if not isinstance(document, dict):
+        raise ValueError("queue report must be an object")
+    return QueueReport(
+        **{
+            **document,
+            "validation_run_ids": tuple(document["validation_run_ids"]),
+            "evidence": tuple(document["evidence"]),
+        }
+    )
+
+
+def _default_client_factory(repository: str, token: str):
+    from github_queue_api import GitHubQueueClient
+
+    return GitHubQueueClient(repository, token)
+
+
+def run_cli(
+    argv: Sequence[str] | None = None,
+    *,
+    environ: Mapping[str, str] = os.environ,
+    client_factory: Callable[[str, str], QueueClient] = _default_client_factory,
+    clock: Callable[[], float] = time.time,
+    sleeper: Callable[[float], None] = time.sleep,
+) -> int:
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command", required=True)
+    for command in ("run", "finalize"):
+        action = subparsers.add_parser(command)
+        action.add_argument("--repository", required=True)
+        action.add_argument("--pr-number", type=int, required=True)
+        action.add_argument("--actor", required=True)
+        action.add_argument("--event-head-sha", required=True)
+        action.add_argument("--queue-run-id", type=int, required=True)
+        action.add_argument("--report", required=True)
+        action.add_argument("--summary")
     render = subparsers.add_parser("render-report")
     render.add_argument("--report", required=True)
     render.add_argument("--summary", required=True)
     args = parser.parse_args(argv)
     if args.command == "render-report":
-        document = json.loads(Path(args.report).read_text(encoding="utf-8"))
-        report = QueueReport(
-            **{
-                **document,
-                "validation_run_ids": tuple(document["validation_run_ids"]),
-                "evidence": tuple(document["evidence"]),
-            }
-        )
+        report = _load_report(args.report)
         _write(args.summary, render_markdown(report))
         return 0 if report.ok else 1
-    return 2
+    token = environ.get("GITHUB_TOKEN", "")
+    if not token:
+        raise RuntimeError("GITHUB_TOKEN is required")
+    request = QueueRequest(
+        repository=args.repository,
+        pr_number=args.pr_number,
+        actor=args.actor,
+        event_head_sha=args.event_head_sha,
+        queue_run_id=args.queue_run_id,
+        started_at=clock(),
+    )
+    client = client_factory(args.repository, token)
+    if args.command == "run":
+        report = run_queue_item(
+            request, client, clock=clock, sleeper=sleeper
+        )
+    else:
+        existing = _load_report(args.report) if Path(args.report).is_file() else None
+        report = finalize_aborted(request, client, existing)
+    _write_atomic(args.report, report.to_json())
+    if args.summary:
+        _write(args.summary, render_markdown(report))
+    return 0 if report.ok else 1
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    return run_cli(argv)
 
 
 if __name__ == "__main__":
