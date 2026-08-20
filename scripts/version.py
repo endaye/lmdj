@@ -5,11 +5,13 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
 import subprocess
 import sys
+import tempfile
 from typing import Any
 
 
@@ -266,11 +268,15 @@ def _source_package_sha256(
     paths: list[Path],
     *,
     repo_root: Path | None = None,
+    content_overrides: dict[Path, bytes] | None = None,
 ) -> str:
     resolved_repo_root = REPO_ROOT if repo_root is None else repo_root
+    overrides = {} if content_overrides is None else content_overrides
     files = []
     for path in sorted(paths):
-        if not path.is_file() or path.is_symlink():
+        if path not in overrides and (not path.is_file() or path.is_symlink()):
+            raise ValueError(f"source-package file is unavailable: {path}")
+        if path in overrides and path.is_symlink():
             raise ValueError(f"source-package file is unavailable: {path}")
         try:
             relative = path.relative_to(resolved_repo_root).as_posix()
@@ -278,13 +284,182 @@ def _source_package_sha256(
             raise ValueError(
                 f"source-package file is outside the repository: {path}"
             ) from error
-        files.append({"path": relative, "sha256": _sha256(path)})
+        digest = (
+            hashlib.sha256(overrides[path]).hexdigest()
+            if path in overrides
+            else _sha256(path)
+        )
+        files.append({"path": relative, "sha256": digest})
     document = {
         "files": files,
         "format": format_name,
         **identity,
     }
     return hashlib.sha256(_canonical_json(document).encode("utf-8")).hexdigest()
+
+
+def _sanitize_cpp_scope_source(source: str) -> str:
+    sanitized: list[str] = []
+    index = 0
+    state = "code"
+    while index < len(source):
+        current = source[index]
+        following = source[index + 1] if index + 1 < len(source) else ""
+        if state == "code":
+            if current == "/" and following == "/":
+                sanitized.extend((" ", " "))
+                index += 2
+                state = "line-comment"
+                continue
+            if current == "/" and following == "*":
+                sanitized.extend((" ", " "))
+                index += 2
+                state = "block-comment"
+                continue
+            if current == "R" and following == '"':
+                raise ValueError("raw C++ string literals are unsupported")
+            if current in {'"', "'"}:
+                sanitized.append(" ")
+                index += 1
+                state = "string" if current == '"' else "character"
+                continue
+            sanitized.append(current)
+            index += 1
+            continue
+        if state == "line-comment":
+            if current == "\n":
+                sanitized.append("\n")
+                state = "code"
+            else:
+                sanitized.append(" ")
+            index += 1
+            continue
+        if state == "block-comment":
+            if current == "*" and following == "/":
+                sanitized.extend((" ", " "))
+                index += 2
+                state = "code"
+                continue
+            sanitized.append("\n" if current == "\n" else " ")
+            index += 1
+            continue
+        if current == "\\" and following:
+            sanitized.extend((" ", "\n" if following == "\n" else " "))
+            index += 2
+            continue
+        if (
+            (state == "string" and current == '"')
+            or (state == "character" and current == "'")
+        ):
+            sanitized.append(" ")
+            index += 1
+            state = "code"
+            continue
+        sanitized.append("\n" if current == "\n" else " ")
+        index += 1
+    if state not in {"code", "line-comment"}:
+        raise ValueError("unterminated C++ comment or literal")
+    return "".join(sanitized)
+
+
+def _cpp_brace_depths(source: str) -> list[int]:
+    depths: list[int] = []
+    depth = 0
+    for character in source:
+        depths.append(depth)
+        if character == "{":
+            depth += 1
+        elif character == "}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("unbalanced C++ braces")
+    if depth != 0:
+        raise ValueError("unbalanced C++ braces")
+    depths.append(depth)
+    return depths
+
+
+def _provider_registration_symbol(source: str, provider_id: str) -> str:
+    scope_error = ValueError(
+        f"Provider {provider_id} factory.hpp must declare exactly one "
+        "registration symbol directly inside its unique global namespace "
+        "lmdj::providers block before assembly lock generation; compiled "
+        "assembly and assembly.lock.json were not changed"
+    )
+    try:
+        sanitized = _sanitize_cpp_scope_source(source)
+        brace_depths = _cpp_brace_depths(sanitized)
+    except ValueError as error:
+        raise scope_error from error
+    namespace_matches = list(
+        re.finditer(
+            r"\bnamespace[ \t\r\n]+lmdj[ \t\r\n]*::"
+            r"[ \t\r\n]*providers[ \t\r\n]*\{",
+            sanitized,
+        )
+    )
+    if len(namespace_matches) != 1:
+        raise scope_error
+    opening_brace = namespace_matches[0].end() - 1
+    if brace_depths[opening_brace] != 0:
+        raise scope_error
+    closing_brace = next(
+        (
+            index
+            for index in range(opening_brace + 1, len(sanitized))
+            if sanitized[index] == "}" and brace_depths[index] == 1
+        ),
+        None,
+    )
+    if closing_brace is None:
+        raise scope_error
+
+    declaration_pattern = (
+        r"(?m)^[ \t]*provider::ProviderRegistration[ \t]+"
+        r"([A-Za-z_][A-Za-z0-9_]*)[ \t]*\([ \t]*\)[ \t]*;[ \t]*$"
+    )
+    declarations = list(re.finditer(declaration_pattern, sanitized))
+    if len(declarations) != 1:
+        raise scope_error
+    declaration = declarations[0]
+    if not (
+        opening_brace < declaration.start() < closing_brace
+        and brace_depths[declaration.start()] == 1
+    ):
+        raise scope_error
+    return declaration.group(1)
+
+
+def _provider_factory_declaration(
+    provider_id: str,
+    module_path: Path,
+) -> tuple[Path, str, str]:
+    provider_root = module_path.parent
+    factory_headers = sorted(provider_root.glob("include/**/factory.hpp"))
+    if (
+        len(factory_headers) != 1
+        or not factory_headers[0].is_file()
+        or factory_headers[0].is_symlink()
+    ):
+        raise ValueError(
+            f"Provider {provider_id} factory.hpp must resolve exactly once "
+            "before assembly lock generation; compiled assembly and "
+            "assembly.lock.json were not changed"
+        )
+    factory_header = factory_headers[0]
+    try:
+        include_path = factory_header.relative_to(
+            provider_root / "include"
+        ).as_posix()
+    except ValueError as error:
+        raise ValueError(
+            f"Provider {provider_id} factory.hpp must be inside its include "
+            "directory before assembly lock generation; compiled assembly "
+            "and assembly.lock.json were not changed"
+        ) from error
+    source = factory_header.read_text(encoding="utf-8")
+    symbol = _provider_registration_symbol(source, provider_id)
+    return factory_header, include_path, f"lmdj::providers::{symbol}"
 
 
 def _provider_source_package_sha256(
@@ -296,13 +471,10 @@ def _provider_source_package_sha256(
 ) -> str:
     resolved_repo_root = REPO_ROOT if repo_root is None else repo_root
     provider_root = module_path.parent
-    factory_headers = sorted(
-        provider_root.glob("include/**/factory.hpp")
+    factory_header, _, _ = _provider_factory_declaration(
+        provider_id,
+        module_path,
     )
-    if len(factory_headers) != 1:
-        raise ValueError(
-            f"Provider {provider_id} must have exactly one factory header"
-        )
     return _source_package_sha256(
         "provider-source-package",
         {
@@ -310,7 +482,7 @@ def _provider_source_package_sha256(
             "provider_version": provider_version,
         },
         [
-            factory_headers[0],
+            factory_header,
             module_path,
             provider_root / "src/provider.cpp",
         ],
@@ -320,7 +492,11 @@ def _provider_source_package_sha256(
 
 def _product_assembly_source_package_sha256(
     version: ProductVersion,
+    compiled_assembly_bytes: bytes | None = None,
 ) -> str:
+    compiled_assembly_path = (
+        REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
+    )
     return _source_package_sha256(
         "product-assembly-source-package",
         {
@@ -329,8 +505,13 @@ def _product_assembly_source_package_sha256(
         },
         [
             REPO_ROOT / "products/lmdj/CMakeLists.txt",
-            REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp",
+            compiled_assembly_path,
         ],
+        content_overrides=(
+            {}
+            if compiled_assembly_bytes is None
+            else {compiled_assembly_path: compiled_assembly_bytes}
+        ),
     )
 
 
@@ -394,17 +575,154 @@ def _validate_component_source(
         raise ValueError(f"module source identity mismatch for {component_id}")
 
 
+def _cpp_string(value: str) -> str:
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _render_compiled_assembly(
+    version: ProductVersion,
+    assembly: dict[str, Any],
+) -> bytes:
+    assembly_contract = next(
+        (
+            component
+            for component in assembly["contracts"]
+            if component["id"] == assembly["contract"]
+        ),
+        None,
+    )
+    if assembly_contract is None:
+        raise ValueError(
+            "compiled assembly cannot resolve the Assembly Contract before "
+            "assembly lock generation; compiled assembly and "
+            "assembly.lock.json were not changed"
+        )
+    assembly_schema = _component_source(
+        "contracts",
+        assembly_contract["id"],
+    )
+    _validate_component_source(
+        "contracts",
+        assembly_contract["id"],
+        assembly_contract["version"],
+        assembly_schema,
+    )
+
+    provider_wiring: list[tuple[dict[str, Any], str, str]] = []
+    for provider in assembly["providers"]:
+        module_path = _component_source("providers", provider["id"])
+        _validate_component_source(
+            "providers",
+            provider["id"],
+            provider["version"],
+            module_path,
+        )
+        _, include_path, symbol = _provider_factory_declaration(
+            provider["id"],
+            module_path,
+        )
+        provider_wiring.append((provider, include_path, symbol))
+
+    include_paths = [include for _, include, _ in provider_wiring]
+    if len(set(include_paths)) != len(include_paths):
+        raise ValueError(
+            "Provider factory.hpp include paths must be unique before "
+            "assembly lock generation; compiled assembly and "
+            "assembly.lock.json were not changed"
+        )
+
+    lines = [
+        "#include <lmdj/facade/assembly_loader.hpp>",
+        "",
+        "#include <utility>",
+        "",
+    ]
+    lines.extend(f"#include <{path}>" for path in sorted(include_paths))
+    lines.extend(
+        [
+            "",
+            "namespace {",
+            "",
+            "lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {",
+            "  using lmdj::facade::CompiledComponent;",
+            "  using lmdj::facade::CompiledProvider;",
+            "  return lmdj::facade::CompiledAssemblyCatalog{",
+            f"      {_cpp_string(assembly['product']['id'])},",
+            f"      {_cpp_string(str(version))},",
+            f"      {_cpp_string(_sha256(assembly_schema))},",
+        ]
+    )
+    for field in ("modules", "hosts", "contracts"):
+        lines.append("      {")
+        for component in assembly[field]:
+            lines.append(
+                "          CompiledComponent{"
+                f"{_cpp_string(component['id'])}, "
+                f"{_cpp_string(component['version'])}"
+                "},"
+            )
+        lines.append("      },")
+
+    lines.append("      {")
+    for provider, _, symbol in provider_wiring:
+        lines.extend(
+            [
+                "          CompiledProvider{",
+                f"              {_cpp_string(provider['id'])},",
+                f"              {_cpp_string(provider['version'])},",
+                f"              {symbol},",
+            ]
+        )
+        model = provider["model_identity"]
+        if model is None:
+            lines.append("              std::nullopt,")
+        else:
+            lines.extend(
+                [
+                    "              lmdj::provider::ModelIdentity{",
+                    f"                  {_cpp_string(model['id'])},",
+                    f"                  {_cpp_string(model['version'])},",
+                    "                  "
+                    f"{_cpp_string(model['artifact_sha256'])},",
+                    "              },",
+                ]
+            )
+        lines.append("          },")
+    lines.extend(
+        [
+            "      },",
+            "  };",
+            "}",
+            "",
+            "struct ProductAssemblyInstaller {",
+            "  ProductAssemblyInstaller() {",
+            "    lmdj::facade::install_compiled_assembly_catalog(lmdj_catalog());",
+            "  }",
+            "};",
+            "",
+            "ProductAssemblyInstaller installer;",
+            "",
+            "}  // namespace",
+        ]
+    )
+    return ("\n".join(lines) + "\n").encode("utf-8")
+
+
 def _lock_document(
     version: ProductVersion,
     assembly_path: str | Path,
     assembly: dict[str, Any],
+    compiled_assembly_bytes: bytes | None = None,
 ) -> dict[str, Any]:
     document: dict[str, Any] = {
         "product": {"id": "lmdj", "version": str(version)},
         "product_assembly": {
             "id": "lmdj",
             "version": str(version),
-            "sha256": _product_assembly_source_package_sha256(version),
+            "sha256": _product_assembly_source_package_sha256(
+                version,
+                compiled_assembly_bytes,
+            ),
         },
         "assembly_sha256": _sha256(Path(assembly_path)),
     }
@@ -448,6 +766,94 @@ def _write_canonical(path: str | Path, value: object) -> None:
     temporary.replace(output)
 
 
+def _prepare_temporary_file(target: Path, content: bytes, mode: int) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=target.parent,
+        prefix=f".{target.name}.",
+        suffix=".tmp",
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(content)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temporary, mode)
+    except Exception:
+        temporary.unlink(missing_ok=True)
+        raise
+    return temporary
+
+
+def _write_generated_pair(
+    compiled_path: Path,
+    compiled_bytes: bytes,
+    lock_path: Path,
+    lock_bytes: bytes,
+) -> None:
+    targets = [(compiled_path, compiled_bytes), (lock_path, lock_bytes)]
+    if compiled_path.resolve(strict=False) == lock_path.resolve(strict=False):
+        raise ValueError(
+            "compiled assembly and assembly lock output must be different files"
+        )
+
+    originals: dict[Path, tuple[bytes | None, int]] = {}
+    temporaries: dict[Path, Path] = {}
+    for target, content in targets:
+        if target.is_symlink() or (target.exists() and not target.is_file()):
+            raise ValueError(
+                f"generated assembly destination must be a real file: {target}"
+            )
+        original = target.read_bytes() if target.exists() else None
+        mode = target.stat().st_mode & 0o777 if target.exists() else 0o644
+        originals[target] = (original, mode)
+        try:
+            temporaries[target] = _prepare_temporary_file(
+                target,
+                content,
+                mode,
+            )
+        except Exception:
+            for temporary in temporaries.values():
+                temporary.unlink(missing_ok=True)
+            raise
+
+    replaced: list[Path] = []
+    try:
+        for target, _ in targets:
+            temporaries[target].replace(target)
+            replaced.append(target)
+    except OSError as error:
+        rollback_error: OSError | None = None
+        for target in reversed(replaced):
+            original, mode = originals[target]
+            restoration: Path | None = None
+            try:
+                if original is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    restoration = _prepare_temporary_file(
+                        target,
+                        original,
+                        mode,
+                    )
+                    restoration.replace(target)
+            except OSError as current_error:
+                rollback_error = current_error
+            finally:
+                if restoration is not None:
+                    restoration.unlink(missing_ok=True)
+        if rollback_error is not None:
+            raise OSError(
+                "failed to roll back compiled assembly and assembly lock"
+            ) from rollback_error
+        raise error
+    finally:
+        for temporary in temporaries.values():
+            temporary.unlink(missing_ok=True)
+
+
 def generate_lock(
     version_file: str | Path,
     assembly_path: str | Path,
@@ -455,8 +861,21 @@ def generate_lock(
 ) -> dict[str, Any]:
     version = load_version(version_file)
     assembly = _verify_assembly(version, assembly_path)
-    lock = _lock_document(version, assembly_path, assembly)
-    _write_canonical(output_path, lock)
+    compiled_path = REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
+    compiled_bytes = _render_compiled_assembly(version, assembly)
+    lock = _lock_document(
+        version,
+        assembly_path,
+        assembly,
+        compiled_bytes,
+    )
+    lock_bytes = _canonical_json(lock).encode("utf-8")
+    _write_generated_pair(
+        compiled_path,
+        compiled_bytes,
+        Path(output_path),
+        lock_bytes,
+    )
     return lock
 
 
