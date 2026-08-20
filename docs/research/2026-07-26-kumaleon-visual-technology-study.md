@@ -50,7 +50,7 @@ LMDJ 不应直接复制 KUMALEON 的 Web3 路径。当前更合理的优先级�
 - [Okazz 的 OpenProcessing 主页](https://openprocessing.org/user/128718)在研究时触发 Cloudflare 连接验证，因此没有绕过验证或批量抓取实时个人主页。
 - Okazz 的量化统计来自公开的 [OpenProcessing sketches 数据快照](https://huggingface.co/datasets/t14n/openprocessing-sketches)，是历史样本，不代表作者当前主页的完整状态。
 - 官网前端包能证明所用运行时代码和公开客户端逻辑，但不能证明私有后台、部署流水线或未公开合约的全部结构。
-- 本文提到的 LMDJ 方案均为建议。现有项目状态以 [工作 PRD](../prd/working-prd.md)、[状态与 Backlog](../superpowers/2026-07-10-status-and-backlog.md)和已确认的设计规格为准。
+- 本文提到的 LMDJ 方案均为建议。现有项目状态以 [工作 PRD](../prd/working-prd.md)和已确认的设计规格为准。
 
 ## 2. 产品与品牌定位
 
@@ -971,5 +971,4 @@ KUMALEON 最成熟的地方，是把技术藏在清晰的艺术概念后面。LM
 - [OpenProcessing sketches public dataset snapshot](https://huggingface.co/datasets/t14n/openprocessing-sketches)
 - [Three.js Fundamentals](https://threejs.org/manual/en/fundamentals.html)
 - [LMDJ Working PRD](../prd/working-prd.md)
-- [LMDJ Status and Backlog](../superpowers/2026-07-10-status-and-backlog.md)
 - [LMDJ Stage 1 Creator Workspace UI Design](../superpowers/specs/2026-07-24-stage1-creator-workspace-ui-design.md)
