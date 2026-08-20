@@ -576,10 +576,14 @@ def _render(
     for result in results:
         counts[result.verdict] = counts.get(result.verdict, 0) + 1
     summary = ", ".join(f"{count} {verdict}" for verdict, count in sorted(counts.items()))
+    if plan["base_sha"] == plan["head_sha"] and not plan.get("changed_paths"):
+        summary = "base equals HEAD; no changes to check"
+    else:
+        summary = summary or "nothing selected"
     lines = [
         "",
         f"pre-flight: mode={plan['mode']} lanes={len(plan['selected'])} "
-        f"({summary or 'nothing selected'})",
+        f"({summary})",
     ]
     blocked = [result for result in results if result.verdict == FAIL]
     unrunnable = [result for result in results if result.verdict == NOT_RUNNABLE]
