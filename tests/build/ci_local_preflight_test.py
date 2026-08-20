@@ -807,6 +807,59 @@ class DeclarationCheckTest(unittest.TestCase):
         self.assertNotIn("does not exist locally", notes)
 
 
+class EmptyRangeDiagnosticTest(unittest.TestCase):
+    """Empty output must identify its production-plan source state."""
+
+    def setUp(self) -> None:
+        self.preflight = load_module(
+            "local_preflight_empty_range", PREFLIGHT_PATH,
+        )
+        self.repository = TemporaryRepository()
+        self.addCleanup(self.repository.close)
+
+    def render_plan(self) -> tuple[dict[str, object], str]:
+        plan = self.preflight.build_plan(
+            self.repository.path, self.repository.base_sha,
+        )
+        return plan, self.preflight._render(plan, [])
+
+    def test_equal_base_and_head_says_no_changes_to_check(self) -> None:
+        plan, rendered = self.render_plan()
+        self.assertEqual(plan["base_sha"], plan["head_sha"])
+        self.assertEqual(plan["changed_paths"], [])
+        self.assertIn("base equals HEAD", rendered)
+        self.assertIn("no changes to check", rendered)
+        self.assertNotIn("nothing selected", rendered)
+
+    def test_changed_plan_without_selected_lanes_keeps_nothing_selected(self) -> None:
+        rendered = self.preflight._render(
+            {
+                "base_sha": "base",
+                "head_sha": "head",
+                "mode": "focused",
+                "selected": [],
+                "changed_paths": ["future-owned/thing.py"],
+            },
+            [],
+        )
+        self.assertIn("nothing selected", rendered)
+        self.assertNotIn("base equals HEAD", rendered)
+
+    def test_modified_tracked_readme_with_equal_shas_is_not_an_empty_range(self) -> None:
+        self.repository.write("README.md", "modified locally\n")
+        plan, rendered = self.render_plan()
+        self.assertEqual(plan["base_sha"], plan["head_sha"])
+        self.assertEqual(plan["changed_paths"], ["README.md"])
+        self.assertNotIn("no changes to check", rendered)
+
+    def test_untracked_file_with_equal_shas_is_not_an_empty_range(self) -> None:
+        self.repository.write("untracked.txt", "new locally\n")
+        plan, rendered = self.render_plan()
+        self.assertEqual(plan["base_sha"], plan["head_sha"])
+        self.assertEqual(plan["changed_paths"], ["untracked.txt"])
+        self.assertNotIn("no changes to check", rendered)
+
+
 class AdvisoryBoundaryTest(unittest.TestCase):
     """The pre-flight must present itself as advisory, never as evidence."""
 
