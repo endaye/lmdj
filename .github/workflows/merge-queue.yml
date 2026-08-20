@@ -1,0 +1,174 @@
+name: Merge Queue
+run-name: Merge queue / ${{ github.event_name }} / PR ${{ github.event.pull_request.number || 'preflight-or-watchdog' }}
+
+on:
+  pull_request_target:
+    branches: [main]
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      hold_seconds:
+        description: No-mutation queue preflight hold; must be 30 through 600 seconds.
+        required: true
+        type: string
+        default: "60"
+  schedule:
+    - cron: '*/15 * * * *'
+
+permissions: {}
+
+jobs:
+  route:
+    if: ${{ github.event_name != 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 1
+    permissions: {}
+    outputs:
+      accepted: ${{ steps.route.outputs.accepted }}
+      mode: ${{ steps.route.outputs.mode }}
+      pr-number: ${{ steps.route.outputs.pr-number }}
+      actor: ${{ steps.route.outputs.actor }}
+      event-head-sha: ${{ steps.route.outputs.event-head-sha }}
+    steps:
+      - name: Route the exact authorization event
+        id: route
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          LABEL_NAME: ${{ github.event.label.name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_ACTOR: ${{ github.actor }}
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          accepted=false
+          mode=ignored
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            accepted=true
+            mode=preflight
+          elif [[ "$EVENT_NAME" == "pull_request_target" && "$LABEL_NAME" == "merge:queue" ]]; then
+            accepted=true
+            mode=controller
+          fi
+          {
+            echo "accepted=$accepted"
+            echo "mode=$mode"
+            echo "pr-number=${PR_NUMBER:-0}"
+            echo "actor=$EVENT_ACTOR"
+            echo "event-head-sha=${EVENT_HEAD_SHA:-0000000000000000000000000000000000000000}"
+          } >>"$GITHUB_OUTPUT"
+
+  queue-item:
+    needs: route
+    if: ${{ needs.route.outputs.accepted == 'true' }}
+    concurrency:
+      group: lmdj-merge-main
+      queue: max
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    permissions:
+      actions: write
+      checks: read
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Hold the no-mutation queue preflight
+        if: ${{ needs.route.outputs.mode == 'preflight' }}
+        env:
+          HOLD_SECONDS: ${{ inputs.hold_seconds }}
+        run: |
+          python3 - <<'PY'
+          import os
+          import time
+
+          seconds = int(os.environ["HOLD_SECONDS"])
+          if not 30 <= seconds <= 600:
+              raise SystemExit("hold_seconds must be between 30 and 600")
+          print(f"Holding the fixed queue for {seconds} seconds without mutation.")
+          time.sleep(seconds)
+          PY
+      - name: Process the authorized Pull Request
+        if: ${{ needs.route.outputs.mode == 'controller' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QUEUE_REPORT: ${{ runner.temp }}/merge-queue-report.json
+        run: >-
+          python3 scripts/ci/merge_queue.py run
+          --repository "${{ github.repository }}"
+          --pr-number "${{ needs.route.outputs.pr-number }}"
+          --actor "${{ needs.route.outputs.actor }}"
+          --event-head-sha "${{ needs.route.outputs.event-head-sha }}"
+          --queue-run-id "${{ github.run_id }}"
+          --report "$QUEUE_REPORT"
+          --summary "$GITHUB_STEP_SUMMARY"
+      - name: Retain the closed queue report
+        if: ${{ always() && needs.route.outputs.mode == 'controller' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: merge-queue-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/merge-queue-report.json
+          if-no-files-found: warn
+          retention-days: 14
+
+  finalize:
+    needs: [route, queue-item]
+    if: ${{ always() && needs.route.result == 'success' && needs.route.outputs.mode == 'controller' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Recover the worker report when available
+        continue-on-error: true
+        uses: actions/download-artifact@v5
+        with:
+          name: merge-queue-report-${{ github.run_id }}
+          path: ${{ runner.temp }}/merge-queue-finalize
+      - name: Reconcile an aborted worker
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          QUEUE_REPORT: ${{ runner.temp }}/merge-queue-finalize/merge-queue-report.json
+        run: >-
+          python3 scripts/ci/merge_queue.py finalize
+          --repository "${{ github.repository }}"
+          --pr-number "${{ needs.route.outputs.pr-number }}"
+          --actor "${{ needs.route.outputs.actor }}"
+          --event-head-sha "${{ needs.route.outputs.event-head-sha }}"
+          --queue-run-id "${{ github.run_id }}"
+          --report "$QUEUE_REPORT"
+          --summary "$GITHUB_STEP_SUMMARY"
+
+  watchdog:
+    if: ${{ github.event_name == 'schedule' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Reconcile orphaned queue authorization
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          python3 scripts/ci/merge_queue_watchdog.py
+          --repository "${{ github.repository }}"
+          --report "${{ runner.temp }}/merge-queue-watchdog.json"
+          --summary "$GITHUB_STEP_SUMMARY"

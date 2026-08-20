@@ -133,19 +133,23 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      # Same actionlint version as the `rhysd/actionlint:1.7.7` container
-      # action this replaces, pinned harder. A Docker tag is mutable, so the
-      # old form named a version but not an artifact; the
+      # Queue-aware actionlint release, pinned harder than a mutable Docker tag.
+      # The original container action named a version but not an artifact; the
       # digest below names the exact bytes and the check fails closed on
       # mismatch. It also removes CI's only Docker dependency, which the
       # trusted role cannot satisfy by design: the CI-only host runs no
       # daemon and the shared host's runner users are outside the `docker`
       # group, so CI can never reach the socket that runs production.
       # actionlint still reads `.github/actionlint.yaml` from the workspace.
+      # v1.7.12 predates GitHub's concurrency.queue schema and reports that one
+      # key as unknown (https://github.com/rhysd/actionlint/issues/657). Keep
+      # the exception exact and removable: queue topology tests prove there is
+      # exactly one `queue: max`, while every other actionlint diagnostic still
+      # fails this job.
       - name: Validate workflows with pinned actionlint
         env:
-          ACTIONLINT_VERSION: 1.7.7
-          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/actionlint.tar.gz"
@@ -154,7 +158,8 @@ jobs:
           printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" \
             | sha256sum --check --strict -
           tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint"
+          "$RUNNER_TEMP/actionlint" \
+            -ignore 'unexpected key "queue" for "concurrency" section'
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
