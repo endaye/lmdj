@@ -2854,12 +2854,17 @@ foundation::Result<domain::AppliedCommand> ProjectStore::import_artifact_bytes(
             {{"maximum_byte_length", kMaximumArtifactBytes}},
         });
   }
-  const auto artifact = describe_bytes(request.bytes, request.media_type);
-
+  // Validate the bundle before hashing: describe_bytes runs SHA-256 over the
+  // whole artifact, and doing that before a cheap existence check means a
+  // missing or malformed bundle costs a full hash of bytes that are then
+  // thrown away. The refusal is identical either way - the bundle error wins
+  // in both orders - so this only removes wasted work.
   auto tree = validate_managed_bundle_tree(*platform_, bundle);
   if (!tree.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(tree.error());
   }
+  const auto artifact = describe_bytes(request.bytes, request.media_type);
+
   auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -2983,17 +2988,18 @@ ProjectStore::import_assign_sample_bytes(
             {{"maximum_byte_length", kMaximumArtifactBytes}},
         });
   }
+  // Same ordering point as the byte import above: the cheap bundle check
+  // precedes the full-artifact hash, so a missing bundle no longer costs one.
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+  }
   const auto artifact = describe_bytes(request.bytes, request.media_type);
   const PersistedCommand command = domain::ImportAssignSample{
       request.meta,
       domain::Asset{request.asset_id, artifact},
       request.slot,
   };
-
-  auto tree = validate_managed_bundle_tree(*platform_, bundle);
-  if (!tree.has_value()) {
-    return foundation::Result<domain::AppliedCommand>::failure(tree.error());
-  }
   auto lock_result = platform_->acquire_writer(bundle);
   if (!lock_result.has_value()) {
     return foundation::Result<domain::AppliedCommand>::failure(
