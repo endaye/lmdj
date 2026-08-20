@@ -1,7 +1,7 @@
 # LMDJ Product Assembly
 
 `assembly.json` and its generated `assembly.lock.json` are the Product Assembly
-source of truth for Product Build `1.0.22.0`. The lock binds every declared
+source of truth for Product Build `1.0.24.0`. The lock binds every declared
 Module, Host, Provider, and Contract to its exact version and
 source-package/schema hash. `assembly.json` declares the effective Region,
 data-classification, and permission policy; the lock binds both that declaration
@@ -19,8 +19,8 @@ rebase.
 
 - Designed: full new product/core architecture.
 - Implemented: Headless Core Proof, the Formal Native Host, Creator Web Host
-  `1.2.0`, Formal Web Runtime Host `1.2.9`, and their shared Web Runtime
-  Platform `0.3.0`, including the Stage 8 Sample Editor and Project Truth v2.
+  `1.3.1`, Formal Web Runtime Host `1.2.10`, and their shared Web Runtime
+  Platform `0.3.1`, including the Stage 8 Sample Editor and Project Truth v2.
   Browser Hosts depend only on that Platform; Product Assembly owns exact Host
   identities and Provider catalog wiring.
 - Not implemented: installable/offline PWA behavior, Sample intelligence,

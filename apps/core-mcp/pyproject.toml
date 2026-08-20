@@ -1,6 +1,6 @@
 [project]
 name = "lmdj-core-mcp"
-version = "1.1.9"
+version = "1.1.10"
 description = "LMDJ Headless Core MCP stdio Host"
 requires-python = ">=3.11"
 dependencies = []

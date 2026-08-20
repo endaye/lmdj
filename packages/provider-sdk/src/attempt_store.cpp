@@ -9,6 +9,7 @@
 #include <iterator>
 #include <limits>
 #include <mutex>
+#include <random>
 #include <set>
 #include <span>
 #include <stdexcept>
@@ -48,6 +49,15 @@ using foundation::ErrorCode;
 
 std::atomic<std::uint64_t> temporary_file_sequence{0};
 std::mutex host_settings_mutex;
+
+std::uint64_t per_process_temp_nonce() {
+  static const std::uint64_t nonce = [] {
+    std::random_device device;
+    return (static_cast<std::uint64_t>(device()) << 32U) ^
+           static_cast<std::uint64_t>(device());
+  }();
+  return nonce;
+}
 
 Error invalid_argument(std::string message) {
   return Error{
@@ -426,9 +436,10 @@ std::filesystem::path temporary_sibling(
       temporary_file_sequence.fetch_add(1, std::memory_order_relaxed);
   const auto timestamp =
       std::chrono::steady_clock::now().time_since_epoch().count();
+  const auto nonce = per_process_temp_nonce();
   return final_path.parent_path() /
          ("." + final_path.filename().generic_string() + ".tmp." +
-          std::to_string(timestamp) + "." +
+          std::to_string(timestamp) + "." + std::to_string(nonce) + "." +
           std::to_string(sequence));
 }
 
@@ -1716,7 +1727,8 @@ foundation::Result<AttemptResult> AttemptStore::execute(
     } else {
       const auto published = publish_attempt_outputs(attempt_root);
       if (!published.has_value()) {
-        const auto cleaned = cleanup_attempt_outputs(attempt_root);
+        const auto cleaned = remove_tree(
+            attempt_root, "Attempt reservation cleanup failed");
         if (!cleaned.has_value()) {
           return foundation::Result<AttemptResult>::failure(
               cleaned.error());
@@ -1748,7 +1760,8 @@ foundation::Result<AttemptResult> AttemptStore::execute(
       minted,
       provider_invoked);
   if (!persisted.has_value()) {
-    const auto cleaned = cleanup_attempt_outputs(attempt_root);
+    const auto cleaned = remove_tree(
+        attempt_root, "Attempt reservation cleanup failed");
     if (!cleaned.has_value()) {
       return foundation::Result<AttemptResult>::failure(
           cleaned.error());
