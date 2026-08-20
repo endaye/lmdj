@@ -171,11 +171,12 @@ class PrGateTest(unittest.TestCase):
 
     def validate(
         self, manifest=None, results=None, expected_head_sha=HEAD_SHA,
-        expected_base_sha=OTHER_HEAD_SHA,
+        expected_base_sha=OTHER_HEAD_SHA, expected_queue=None,
     ):
         return self.module.validate_gate(
             self.policy, manifest or self.manifest(), results or VALID_RESULTS,
             expected_head_sha, expected_base_sha=expected_base_sha,
+            expected_queue=expected_queue,
         )
 
     def test_exact_required_success_and_unrequired_skipped_passes(self):
@@ -685,6 +686,54 @@ class PrGateTest(unittest.TestCase):
                     f"Timing {job_id} | timing unavailable", summary
                 )
         self.assertIn("Pre-Gate critical path | 600s", summary)
+
+    def test_queue_manifest_is_bound_to_the_exact_dispatch_inputs(self):
+        manifest = self.manifest(tuple(self.policy["lanes"]))
+        manifest["queue"] = {
+            "ticket": "mq:123:1",
+            "pr_number": 220,
+            "base_sha": OTHER_HEAD_SHA,
+            "head_sha": HEAD_SHA,
+        }
+        queue = self.module.change_scope.QueueInputs(
+            "mq:123:1", 220, OTHER_HEAD_SHA, HEAD_SHA
+        )
+        report = self.validate(
+            manifest=manifest,
+            results=self.matching_results(manifest),
+            expected_queue=queue,
+        )
+        self.assertTrue(report.ok, report.errors)
+        for field, value in (
+            ("ticket", "mq:999:1"),
+            ("pr_number", 221),
+            ("base_sha", "d" * 40),
+            ("head_sha", "e" * 40),
+        ):
+            with self.subTest(field=field):
+                drifted = json.loads(json.dumps(manifest))
+                drifted["queue"][field] = value
+                failed = self.validate(
+                    manifest=drifted,
+                    results=self.matching_results(drifted),
+                    expected_queue=queue,
+                )
+                self.assertFalse(failed.ok)
+
+    def test_queue_metadata_cannot_appear_without_queue_dispatch_expectations(self):
+        manifest = self.manifest(tuple(self.policy["lanes"]))
+        manifest["queue"] = {
+            "ticket": "mq:123:1",
+            "pr_number": 220,
+            "base_sha": OTHER_HEAD_SHA,
+            "head_sha": HEAD_SHA,
+        }
+        report = self.validate(
+            manifest=manifest,
+            results=self.matching_results(manifest),
+        )
+        self.assertFalse(report.ok)
+        self.assertIn("unexpected queue metadata", "\n".join(report.errors))
 
 
 if __name__ == "__main__":

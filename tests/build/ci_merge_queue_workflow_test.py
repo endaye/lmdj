@@ -103,6 +103,23 @@ class MergeQueueWorkflowTest(unittest.TestCase):
         self.assertEqual(self.source.count("queue: max"), 1)
         self.assertIn("rhysd/actionlint/issues/657", self.core_source)
 
+    def test_core_dispatch_declares_and_threads_all_queue_inputs(self):
+        for name in (
+            "queue_ticket", "queue_pr_number", "queue_base_sha", "queue_head_sha"
+        ):
+            self.assertIn(f"      {name}:\n", self.core_source)
+            self.assertIn(f"--{name.replace('_', '-')} ", self.core_source)
+        self.assertIn("queue-validation-${{ github.run_id }}", self.core_source)
+        self.assertIn("if: ${{ always() && inputs.queue_ticket != '' }}", self.core_source)
+        self.assertIn("queue-mode: ${{ steps.scope.outputs.queue-mode }}", self.core_source)
+        self.assertIn("pull-request-body: ${{ steps.scope.outputs.pull-request-body }}", self.core_source)
+
+    def test_queue_exact_range_and_pr_body_feed_docs_portal_and_gate(self):
+        self.assertIn("BASE_SHA: ${{ needs.change-scope.outputs.resolved-base-sha }}", self.core_source)
+        self.assertIn("HEAD_SHA: ${{ needs.change-scope.outputs.resolved-head-sha }}", self.core_source)
+        self.assertIn("pull_request_body: ${{ needs.change-scope.outputs.pull-request-body }}", self.core_source)
+        self.assertIn("--queue-ticket \"${{ inputs.queue_ticket }}\"", self.core_source)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -919,6 +919,117 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertIn(r"\n", summary)
         self.assertRegex(summary, r"<code>path .*&#124;.* matched prefix:")
 
+    def test_queue_inputs_are_strictly_all_or_none(self):
+        self.assertIsNone(self.module.parse_queue_inputs("", "", "", ""))
+        with self.assertRaisesRegex(ValueError, "all be provided"):
+            self.module.parse_queue_inputs("mq:123:1", "", "", "")
+        with self.assertRaisesRegex(ValueError, "queue ticket"):
+            self.module.parse_queue_inputs("ticket", "220", "a" * 40, "b" * 40)
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        self.assertEqual(queue.pr_number, 220)
+
+    def test_queue_context_classifies_live_base_and_head_drift(self):
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        pull = {
+            "number": 220,
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "body": "Documentation impact: none\nReason: no portal changes",
+            "base": {"ref": "main", "sha": "c" * 40},
+            "head": {
+                "sha": "b" * 40,
+                "repo": {"full_name": "endaye/lmdj"},
+            },
+            "labels": [{"name": "merge:queue"}],
+        }
+        base_drift = self.module.evaluate_queue_context(
+            queue, "endaye/lmdj", "c" * 40, pull
+        )
+        self.assertEqual(base_drift.classification, "queue-base-drift")
+        head_pull = copy.deepcopy(pull)
+        head_pull["base"]["sha"] = "a" * 40
+        head_pull["head"]["sha"] = "d" * 40
+        head_drift = self.module.evaluate_queue_context(
+            queue, "endaye/lmdj", "a" * 40, head_pull
+        )
+        self.assertEqual(head_drift.classification, "queue-head-drift")
+
+    def test_valid_queue_context_forces_full_and_closes_manifest_metadata(self):
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        pull = {
+            "number": 220,
+            "state": "open",
+            "merged": False,
+            "draft": False,
+            "body": "Documentation impact: required\nAffected portal pages: /operations/testing-and-proof/",
+            "base": {"ref": "main", "sha": "a" * 40},
+            "head": {
+                "sha": "b" * 40,
+                "repo": {"full_name": "endaye/lmdj"},
+            },
+            "labels": [{"name": "merge:queue"}],
+        }
+        evaluation = self.module.evaluate_queue_context(
+            queue, "endaye/lmdj", "a" * 40, pull
+        )
+        self.assertEqual(evaluation.classification, "valid")
+        self.assertEqual(evaluation.pull_request_body, pull["body"])
+        manifest = self.module.classify(
+            self.policy,
+            changed(self.module, "docs/guide.md"),
+            base_sha="a" * 40,
+            head_sha="b" * 40,
+            event_name="workflow_dispatch",
+            draft=False,
+            labels=("merge:queue",),
+            trusted_head=True,
+            queue=queue,
+        )
+        self.assertEqual(manifest["mode"], "full")
+        self.assertEqual(
+            manifest["queue"],
+            {
+                "ticket": "mq:123:1",
+                "pr_number": 220,
+                "base_sha": "a" * 40,
+                "head_sha": "b" * 40,
+            },
+        )
+        self.module.validate_manifest(manifest, self.policy)
+        invalid = copy.deepcopy(manifest)
+        invalid["queue"]["extra"] = True
+        with self.assertRaises(ValueError):
+            self.module.validate_manifest(invalid, self.policy)
+
+    def test_queue_validation_document_is_closed_for_valid_and_drift(self):
+        queue = self.module.parse_queue_inputs(
+            "mq:123:1", "220", "a" * 40, "b" * 40
+        )
+        for classification in ("valid", "queue-base-drift", "queue-head-drift", "invalid"):
+            with self.subTest(classification=classification):
+                evaluation = self.module.QueueEvaluation(
+                    classification=classification,
+                    observed_base_sha="a" * 40,
+                    observed_head_sha="b" * 40,
+                    pull_request_body="body",
+                    reason="reason",
+                )
+                document = self.module.queue_validation_document(
+                    queue,
+                    evaluation,
+                    manifest_mode="full" if classification == "valid" else None,
+                    trusted_head=classification == "valid",
+                )
+                self.assertEqual(set(document), self.module.QUEUE_VALIDATION_KEYS)
+                self.assertEqual(document["classification"], classification)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

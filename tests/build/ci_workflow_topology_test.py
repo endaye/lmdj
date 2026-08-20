@@ -373,13 +373,14 @@ class CiWorkflowTopologyTest(unittest.TestCase):
             len(HOSTED_CONTROL_PLANE_JOBS) + len(MACOS_ADJUDICATOR_JOBS),
         )
 
-    def test_change_scope_publishes_trusted_head_from_the_event_only(self) -> None:
+    def test_change_scope_publishes_trusted_head_from_event_or_queue_ticket(self) -> None:
         job = self.workflow_job("change-scope")
         self.assertIn(
             "trusted-head: ${{ steps.scope.outputs.trusted-head }}", job
         )
         self.assertIn(
-            "HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}",
+            "HEAD_REPOSITORY: ${{ inputs.queue_ticket != '' && github.repository || "
+            "github.event.pull_request.head.repo.full_name }}",
             job,
         )
         self.assertIn('--head-repository "$HEAD_REPOSITORY"', job)
@@ -623,9 +624,11 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         )
         self.assertIn('--change-scope-result "$CHANGE_SCOPE_RESULT"', job)
         self.assertIn(
-            "--base-sha \"${{ github.event_name == 'pull_request' && "
-            "github.event.pull_request.base.sha || github.event_name == 'push' && "
-            "github.event.before || github.sha }}\"",
+            '--base-sha "${{ needs.change-scope.outputs.resolved-base-sha }}"',
+            job,
+        )
+        self.assertIn(
+            '--head-sha "${{ needs.change-scope.outputs.resolved-head-sha }}"',
             job,
         )
 
@@ -705,13 +708,16 @@ class CiWorkflowTopologyTest(unittest.TestCase):
     def test_push_classification_uses_the_exact_before_range(self) -> None:
         job = self.workflow_job("change-scope")
         self.assertIn(
-            "BASE_SHA: ${{ github.event_name == 'pull_request' && "
+            "BASE_SHA: ${{ inputs.queue_base_sha || github.event_name == 'pull_request' && "
             "github.event.pull_request.base.sha || github.event_name == 'push' "
             "&& github.event.before || github.sha }}",
             job,
         )
-        self.assertIn("HEAD_SHA: ${{ github.event_name == 'pull_request' && "
-                      "github.event.pull_request.head.sha || github.sha }}", job)
+        self.assertIn(
+            "HEAD_SHA: ${{ inputs.queue_head_sha || github.event_name == 'pull_request' && "
+            "github.event.pull_request.head.sha || github.sha }}",
+            job,
+        )
 
     def test_dispatch_input_documents_the_explicit_full_evidence_path(self) -> None:
         events = self.event_block(self.main_source)
