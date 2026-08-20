@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-20
 
-**Status:** direction approved, pending written-Spec review
+**Status:** approved for implementation
 
 **Scope:** repository work intake, prioritization, uncertainty tracking, and Pull Request linkage
 
