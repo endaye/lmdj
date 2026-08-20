@@ -498,10 +498,10 @@ class ReleasePrepareTest(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
         ).stdout.strip()
         cases = (
-            (ReleaseKind.PRODUCT, "1.0.23.0", "web-runtime-host", "canary", "1.0.23.0"),
-            (ReleaseKind.MODULE, "core-cli@1.0.12", "source-only", None, None),
+            (ReleaseKind.PRODUCT, "1.0.24.0", "web-runtime-host", "canary", "1.0.24.0"),
+            (ReleaseKind.MODULE, "core-cli@1.0.13", "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
-            (ReleaseKind.PROVIDER, "local.proof.success@1.0.2", "source-only", None, None),
+            (ReleaseKind.PROVIDER, "local.proof.success@1.0.3", "source-only", None, None),
         )
         for kind, identity, profile, channel, snapshot in cases:
             with self.subTest(kind=kind.value):
@@ -526,8 +526,8 @@ class ReleasePrepareTest(unittest.TestCase):
             )
 
         intent = ReleaseIntent(
-            "fixture", ReleaseKind.PRODUCT, "1.0.23.0", "a" * 40, Disposition.RELEASABLE,
-            "web-runtime-host", ("evidence.md",), "canary", "1.0.23.0", 1,
+            "fixture", ReleaseKind.PRODUCT, "1.0.24.0", "a" * 40, Disposition.RELEASABLE,
+            "web-runtime-host", ("evidence.md",), "canary", "1.0.24.0", 1,
         )
         with self.assertRaises(TargetValidationError) as raised:
             validate_release_target(ROOT, intent, runner=CommandRunner(executor=executor))

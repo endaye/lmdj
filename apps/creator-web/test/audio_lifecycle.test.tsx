@@ -91,10 +91,10 @@ function sessionFixture(name: string) {
       state: hostState,
       error_code: errorCode,
       error_details: errorDetails,
-      product_build: "1.0.22.0",
+      product_build: "1.0.24.0",
       host_id: "creator-web",
-      host_version: "1.2.0",
-      platform_version: "0.3.0",
+      host_version: "1.3.1",
+      platform_version: "0.3.1",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

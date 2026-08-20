@@ -503,14 +503,10 @@ void test_harness_detects_each_corruption() {
   }
 }
 
-// Finding G1, pinned as an observable fact rather than a claim in a document.
-//
-// An orphan reservation directory has no terminal record, is never reclaimed
-// by any code path, and permanently burns its attempt id. This test asserts
-// the *current* behaviour so the defect cannot be lost, and so that the
-// eventual fix has to come here and change it deliberately. When F1 is fixed,
-// the second and third assertions are the ones that must change.
-void test_orphan_reservation_is_detected_and_burns_its_id() {
+// The harness should continue to flag orphan reservations, but after G1 the
+// duplicate-id result now means "that reservation still exists", not "the
+// product leaked and burned the id on its own failure path".
+void test_orphan_reservation_is_detected_and_blocks_reuse() {
   const TempDirectory temp;
   const auto registry = proof_registry();
   auto store = store_at(temp.path());
@@ -528,7 +524,8 @@ void test_orphan_reservation_is_detected_and_burns_its_id() {
       violations.front() ==
       "orphaned: reservation directory has no terminal record");
 
-  // And the id is unusable forever: no reclaim path exists.
+  // Retrying the same id still fails because the directory remains a live
+  // reservation from the store's point of view.
   const auto retried =
       store.execute(AttemptId{"orphaned"}, valid_request(), registry);
   LMDJ_CHECK(!retried.has_value());
@@ -543,7 +540,7 @@ int main() {
     test_failed_attempt_leaves_a_coherent_ledger();
     test_mixed_attempt_sequence_stays_coherent();
     test_harness_detects_each_corruption();
-    test_orphan_reservation_is_detected_and_burns_its_id();
+    test_orphan_reservation_is_detected_and_blocks_reuse();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

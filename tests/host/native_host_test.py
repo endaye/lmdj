@@ -405,7 +405,7 @@ def happy_path(
     }
     assert ready["result"]["resolved_pad_count"] == 2
     assert ready["result"]["project_revision"] == 5
-    assert ready["result"]["host_version"] == "1.0.10"
+    assert ready["result"]["host_version"] == "1.0.11"
     assert ready["result"]["product_build"] == PRODUCT_BUILD
 
     for pad in (0, 1):

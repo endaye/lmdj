@@ -252,9 +252,9 @@ class ReleaseAuditTest(unittest.TestCase):
 
     def active_entry(self) -> dict[str, object]:
         return {
-            "tag": "lmdj-v1.0.23.0", "kind": "product", "identity": "1.0.23.0",
+            "tag": "lmdj-v1.0.24.0", "kind": "product", "identity": "1.0.24.0",
             "target_revision": TARGET, "channel": "canary", "disposition": "allocated",
-            "profile": "web-runtime-host", "snapshot": "1.0.23.0",
+            "profile": "web-runtime-host", "snapshot": "1.0.24.0",
             "evidence_paths": ["evidence.md"],
         }
 
@@ -264,7 +264,7 @@ class ReleaseAuditTest(unittest.TestCase):
             ROOT / "products/lmdj/assembly.json",
             ROOT / "products/lmdj/assembly.lock.json",
             ROOT / "apps/architecture-portal/versions.json",
-            ROOT / "apps/architecture-portal/versioned_metadata/version-1.0.23.0.json",
+            ROOT / "apps/architecture-portal/versioned_metadata/version-1.0.24.0.json",
             ROOT / ".github/release-signing-keys/lmdj-product.asc",
             ROOT / ".github/release-signing-keys/lmdj-release-checksum.asc",
             *ROOT.glob("packages/*/module.json"),
@@ -285,7 +285,7 @@ class ReleaseAuditTest(unittest.TestCase):
         exceptions: list[dict[str, object]] | None = None,
     ) -> AuditContext:
         selected = list(entries if entries is not None else [self.entry()])
-        if not any(item.get("identity") == "1.0.23.0" for item in selected):
+        if not any(item.get("identity") == "1.0.24.0" for item in selected):
             selected.append(self.active_entry())
         ledger = load_ledger_document({
             "schema": "lmdj.release-intents.v1",
@@ -355,7 +355,7 @@ class ReleaseAuditTest(unittest.TestCase):
 
     def test_tracked_current_product_identity_is_locally_auditable(self) -> None:
         context = cli.build_audit_context(ROOT)
-        report = audit(context, remote=False, tag="lmdj-v1.0.23.0")
+        report = audit(context, remote=False, tag="lmdj-v1.0.24.0")
         self.assertEqual({item.code for item in report.findings}, {"ok"})
 
     def test_local_audit_does_not_require_abandoned_target_objects(self) -> None:
@@ -373,7 +373,7 @@ class ReleaseAuditTest(unittest.TestCase):
             )
 
         with patch("tools.release.audit.subprocess.run", side_effect=cat_file):
-            report = audit(context, remote=False, tag="lmdj-v1.0.23.0")
+            report = audit(context, remote=False, tag="lmdj-v1.0.24.0")
         self.assertEqual({item.code for item in report.findings}, {"ok"})
 
     def test_local_same_name_tag_conflict_is_visible_but_diagnostic_only(self) -> None:

@@ -45,7 +45,7 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.4.0",
+        "1.4.1",
         2,
         {
             "foundation": "0.2.0",
@@ -53,44 +53,44 @@ expected_modules = {
             "project-io": "0.6.0",
             "project-cooker": "0.3.0",
             "audio-runtime": "0.5.0",
-            "provider-sdk": "1.1.1",
+            "provider-sdk": "1.1.2",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "0.3.0",
+        "0.3.1",
         1,
-        {"application-facade": "1.4.0", "audio-runtime": "0.5.0"},
+        {"application-facade": "1.4.1", "audio-runtime": "0.5.0"},
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.12",
+        "1.0.13",
         2,
-        {"application-facade": "1.4.0"},
+        {"application-facade": "1.4.1"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.1.9",
+        "1.1.10",
         2,
-        {"application-facade": "1.4.0"},
+        {"application-facade": "1.4.1"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.10",
+        "1.0.11",
         1,
-        {"application-facade": "1.4.0", "audio-runtime": "0.5.0"},
+        {"application-facade": "1.4.1", "audio-runtime": "0.5.0"},
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.2.9",
+        "1.2.10",
         1,
-        {"web-runtime-platform": "0.3.0"},
+        {"web-runtime-platform": "0.3.1"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.3.0",
+        "1.3.1",
         1,
-        {"web-runtime-platform": "0.3.0"},
+        {"web-runtime-platform": "0.3.1"},
     ),
 }
 for relative, (
@@ -209,7 +209,7 @@ assert assembly["product"] == {"id": "lmdj", "version": current}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -217,7 +217,7 @@ assert assembly["providers"] == [
     },
     {
         "id": "local.proof.failure",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -226,7 +226,7 @@ assert assembly["providers"] == [
 ]
 provider_module = repo_root / "providers/local-proof-success/module.json"
 provider_digest = _provider_source_package_sha256(
-    "local.proof.success", "1.0.2", provider_module,
+    "local.proof.success", "1.0.3", provider_module,
 )
 assert provider_digest == next(
     item["sha256"] for item in tracked_lock["providers"]
@@ -237,7 +237,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     copied_provider = authority_root / "providers/local-proof-success"
     shutil.copytree(provider_module.parent, copied_provider)
     assert _provider_source_package_sha256(
-        "local.proof.success", "1.0.2", copied_provider / "module.json",
+        "local.proof.success", "1.0.3", copied_provider / "module.json",
         repo_root=authority_root,
     ) == provider_digest
 assert assembly["contracts"] == [
@@ -276,16 +276,16 @@ expected_provider_manifests = {
     "providers/local-proof-failure/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.failure",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.1"},
+        "dependencies": {"provider-sdk": "1.1.2"},
     },
     "providers/local-proof-success/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.success",
-        "version": "1.0.2",
+        "version": "1.0.3",
         "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.1"},
+        "dependencies": {"provider-sdk": "1.1.2"},
     },
 }
 actual_provider_manifests = sorted(
@@ -478,6 +478,6 @@ cmake_source = (
     repo_root / "packages/web-runtime-platform/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
-assert '"product_build":"1.0.22.0"' not in cmake_source
+assert '"product_build":"1.0.24.0"' not in cmake_source
 
 print("product version tests: PASS")
