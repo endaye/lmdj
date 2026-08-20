@@ -92,6 +92,7 @@ testdata/audio/suno/**/*.mp3
 
 # Agent session scratch (SDD ledger, task briefs, review packages)
 .superpowers/
+.orchestration/
 
 # Local isolated git worktrees
 .worktrees/
