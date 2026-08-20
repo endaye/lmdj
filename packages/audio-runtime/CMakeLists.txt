@@ -79,6 +79,25 @@ if(BUILD_TESTING)
   )
 
   add_executable(
+    lmdj_snapshot_publication_invariant_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/snapshot_publication_invariant_test.cpp"
+  )
+  target_include_directories(
+    lmdj_snapshot_publication_invariant_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_snapshot_publication_invariant_tests PRIVATE lmdj::audio_runtime
+  )
+  lmdj_target_warnings(lmdj_snapshot_publication_invariant_tests)
+  lmdj_target_sanitizers(lmdj_snapshot_publication_invariant_tests)
+  lmdj_add_test(
+    NAME audio.snapshot_publication_invariant
+    TIER component
+    COMMAND lmdj_snapshot_publication_invariant_tests
+    LABELS audio concurrency
+  )
+
+  add_executable(
     lmdj_audio_realtime_queue_tests
     "${CMAKE_SOURCE_DIR}/tests/core/audio/fixed_spsc_queue_test.cpp"
   )
@@ -115,6 +134,27 @@ if(BUILD_TESTING)
     NAME audio.realtime_spsc_stress
     TIER stress
     COMMAND lmdj_realtime_engine_stress_tests
+    LABELS audio concurrency
+    TIMEOUT 180
+  )
+
+  add_executable(
+    lmdj_snapshot_publication_stress_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/audio/snapshot_publication_stress_test.cpp"
+  )
+  target_include_directories(
+    lmdj_snapshot_publication_stress_tests PRIVATE "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_snapshot_publication_stress_tests
+    PRIVATE lmdj::audio_runtime Threads::Threads
+  )
+  lmdj_target_warnings(lmdj_snapshot_publication_stress_tests)
+  lmdj_target_sanitizers(lmdj_snapshot_publication_stress_tests)
+  lmdj_add_test(
+    NAME audio.snapshot_publication_stress
+    TIER stress
+    COMMAND lmdj_snapshot_publication_stress_tests
     LABELS audio concurrency
     TIMEOUT 180
   )
