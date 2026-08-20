@@ -1,0 +1,43 @@
+name: Feature
+description: Propose a user or product outcome.
+title: "feature: "
+labels: ["type:feature"]
+body:
+  - type: textarea
+    id: summary
+    attributes: {label: Summary, description: Describe the requested capability.}
+    validations: {required: true}
+  - type: textarea
+    id: outcome
+    attributes: {label: User outcome, description: Describe the observable user value.}
+    validations: {required: true}
+  - type: textarea
+    id: scope
+    attributes: {label: Scope, description: State what is in and out.}
+    validations: {required: true}
+  - type: textarea
+    id: acceptance
+    attributes: {label: Acceptance, description: List observable completion criteria.}
+    validations: {required: true}
+  - type: textarea
+    id: dependencies
+    attributes: {label: Dependencies, description: Link blockers, Issues, Specs, Plans, or PRs.}
+  - type: dropdown
+    id: stage
+    attributes: {label: Stage, options: [Foundation, Stage 7, Stage 8A, Stage 8B, Stage 9, Stage 10, Stage 11, Stage 12, Later]}
+    validations: {required: true}
+  - type: dropdown
+    id: area
+    attributes: {label: Area, options: [Core, Creator, Web Host, Native Host, Provider, Contracts, CI/Release, Product, Docs/Governance]}
+    validations: {required: true}
+  - type: input
+    id: version_impact
+    attributes: {label: Version impact, description: Name the affected version domain or write none with a reason.}
+    validations: {required: true}
+  - type: input
+    id: documentation_impact
+    attributes: {label: Documentation impact, description: Name affected Portal routes or write none with a reason.}
+    validations: {required: true}
+  - type: textarea
+    id: source
+    attributes: {label: Authority and sources, description: Link retained product, design, decision, research, or evidence sources.}

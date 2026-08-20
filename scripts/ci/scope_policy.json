@@ -160,6 +160,7 @@
     {"match": {"kind": "exact", "value": ".github/workflows/publish-release.yml"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/release-audit.yml"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/core-nightly.yml"}, "lanes": ["ci_contract", "core_asan"]},
+    {"match": {"kind": "prefix", "value": ".github/ISSUE_TEMPLATE/"}, "lanes": ["docs_static", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/pull_request_template.md"}, "lanes": ["docs_static", "portal"]}
   ],
   "expensive_families": {

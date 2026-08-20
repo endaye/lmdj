@@ -74,6 +74,7 @@ SELF_HOSTED_JOBS = [
 ]
 
 CASES = {
+    ".github/ISSUE_TEMPLATE/feature.yml": {"docs_static", "ci_contract"},
     "docs/guide.md": {"docs_static"},
     "docs/governance/git-workflow.md": {"docs_static", "portal"},
     "apps/README.md": {"docs_static", "portal"},

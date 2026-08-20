@@ -1,0 +1,32 @@
+name: Documentation
+description: Change canonical documentation, navigation, evidence, or retained knowledge.
+title: "docs: "
+labels: ["type:docs"]
+body:
+  - type: input
+    id: authority
+    attributes: {label: Authority, description: Name the canonical document or Portal route.}
+    validations: {required: true}
+  - type: textarea
+    id: change
+    attributes: {label: Required change, description: Describe the inaccurate, missing, or hard-to-find information.}
+    validations: {required: true}
+  - type: textarea
+    id: audience
+    attributes: {label: Audience and use, description: State who needs the document and what they must do with it.}
+    validations: {required: true}
+  - type: textarea
+    id: acceptance
+    attributes: {label: Acceptance, description: Name link, rendering, Portal, or evidence checks.}
+    validations: {required: true}
+  - type: textarea
+    id: links
+    attributes: {label: Related sources, description: Link superseded text, Issues, Specs, Plans, or PRs.}
+  - type: input
+    id: version_impact
+    attributes: {label: Version impact, description: Name the affected version domain or write none with a reason.}
+    validations: {required: true}
+  - type: input
+    id: documentation_impact
+    attributes: {label: Documentation impact, description: Name affected Portal routes or explain why Portal impact is none.}
+    validations: {required: true}
