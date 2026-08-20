@@ -38,5 +38,11 @@ if (introducingRevision === undefined) {
 const witness = await createSquashWitness({repoRoot, metadata, introducingRevision});
 const output = path.join(portalRoot, 'versioned_provenance', `version-${version}-squash-witness.json`);
 await mkdir(path.dirname(output), {recursive: true});
-await writeFile(output, `${JSON.stringify(witness, null, 2)}\n`, {flag: 'wx'});
-console.log(`portal squash witness: ${path.relative(repoRoot, output)}`);
+try {
+  await writeFile(output, `${JSON.stringify(witness, null, 2)}\n`, {flag: 'wx'});
+} catch (error) {
+  if (error?.code !== 'EEXIST') throw error;
+  console.error(`portal squash witness already exists: ${path.relative(repoRoot, output)}`);
+  process.exitCode = 1;
+}
+if (process.exitCode !== 1) console.log(`portal squash witness: ${path.relative(repoRoot, output)}`);

@@ -123,6 +123,26 @@ async function writeSquashWitness(fixture, metadata, introducingRevision) {
   return witness;
 }
 
+async function copyWitnessEntrypoint(fixture) {
+  for (const relative of [
+    'scripts/create-squash-witness.mjs',
+    'scripts/lib/snapshot-provenance.mjs',
+    'scripts/lib/repo-facts.mjs',
+  ]) {
+    const destination = path.join(fixture.portalRoot, relative);
+    await mkdir(path.dirname(destination), {recursive: true});
+    await cp(path.join(REPO_ROOT, 'apps/architecture-portal', relative), destination);
+  }
+}
+
+function runWitnessEntrypoint(fixture, introducingRevision) {
+  return execFileAsync('node', [
+    path.join(fixture.portalRoot, 'scripts/create-squash-witness.mjs'),
+    VERSION,
+    introducingRevision,
+  ], {cwd: fixture.repoRoot, encoding: 'utf8'});
+}
+
 function verifierOptions(fixture, metadata, headRevision) {
   return {
     repoRoot: fixture.repoRoot,
@@ -555,6 +575,38 @@ test('schema-2 provenance resolves the latest continuous lifecycle after delete 
       (await verifySnapshotProvenance(verifierOptions(fixture, metadata, metadataAbsent))).join('\n'),
       /snapshot metadata path is absent at HEAD/,
     );
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('witness entrypoint preserves an existing witness and names its collision', async () => {
+  const fixture = await initializeFixture();
+  try {
+    await generateWorkingSnapshot(fixture);
+    const introduction = await commit(fixture.repoRoot, 'snapshot introduction', INTRO_DATE);
+    await copyWitnessEntrypoint(fixture);
+    const output = path.join(
+      fixture.portalRoot,
+      `versioned_provenance/version-${VERSION}-squash-witness.json`,
+    );
+
+    await runWitnessEntrypoint(fixture, introduction);
+    const firstBytes = await readFile(output);
+
+    await assert.rejects(
+      runWitnessEntrypoint(fixture, introduction),
+      (error) => {
+        assert.match(
+          error.stderr,
+          new RegExp(
+            `squash witness already exists: apps/architecture-portal/versioned_provenance/version-${VERSION}-squash-witness\\.json`,
+          ),
+        );
+        return true;
+      },
+    );
+    assert.deepEqual(await readFile(output), firstBytes);
   } finally {
     await rm(fixture.repoRoot, {recursive: true, force: true});
   }
