@@ -2,6 +2,10 @@
 
 <!-- What changed and why? -->
 
+## Related Issue
+
+Related issue: <!-- Write exactly one: Closes #123 | Relates to #123 | None — reason: ... -->
+
 ## Verification
 
 <!-- Exact commands and retained evidence. -->

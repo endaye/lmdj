@@ -11,7 +11,7 @@
 
 | 目录 | 用途 | 生命周期 | 命名 |
 | --- | --- | --- | --- |
-| `governance/` | canonical 治理规范（Git 工作流、版本管理、架构门户） | 持续维护 | 固定主题名 |
+| `governance/` | canonical 治理规范（Git 工作流、版本管理、架构门户、GitHub 工作管理） | 持续维护 | 固定主题名 |
 | `prd/` | 产品输入与迭代：素材池、工作版 PRD、开放问题、决策记录 | 活文档；每问题/每决策一个文件 | `questions/`、`decisions/` 见 `prd/README.md` |
 | `superpowers/specs/` | 设计 spec（实施前的边界与验收设计） | 日期产物，完成即冻结，不删不改 | `YYYY-MM-DD-<slug>.md` |
 | `superpowers/plans/` | 实施计划（Task 级步骤与验证） | 同上 | 同上 |
@@ -27,6 +27,8 @@
 - 仓库规范与边界：根目录 `AGENTS.md`（`CLAUDE.md` 与其内容一致）。
 - 当前架构：门户 current 页面 + `architecture/current-product-architecture.md`。
 - 当前实施计划：AGENTS.md 的 Design authority 一节指向的 plan。
+- 活跃工作状态：GitHub Issues/Project 负责 intake、讨论、状态与组合；见
+  [`governance/github-work-management.md`](governance/github-work-management.md)。
 - 产品决策：`prd/decision-log.md` 与 `prd/decisions/`；
   架构决策在 `architecture/`，两者只记录已确认结论。
 - 项目状态：根目录 `README.md` 的 Current status。
