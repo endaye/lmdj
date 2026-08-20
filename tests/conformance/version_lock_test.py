@@ -162,6 +162,31 @@ def generate(
     )
 
 
+def copy_lock_repository(destination_root: Path) -> dict:
+    copied_assembly = load_object(ASSEMBLY_PATH)
+    for relative in (
+        "scripts/version.py",
+        "products/lmdj/version.json",
+        "products/lmdj/assembly.json",
+        "products/lmdj/CMakeLists.txt",
+        "products/lmdj/src/compiled_assembly.cpp",
+    ):
+        source = REPO_ROOT / relative
+        destination = destination_root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    for field in ("modules", "hosts", "providers", "contracts"):
+        for component in copied_assembly[field]:
+            source = component_source(field, component["id"])
+            destination = destination_root / source.relative_to(REPO_ROOT)
+            if field == "providers":
+                shutil.copytree(source.parent, destination.parent)
+            else:
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(source, destination)
+    return copied_assembly
+
+
 assert LOCK_PATH.is_file(), "assembly.lock.json must be generated and tracked"
 assembly = load_object(ASSEMBLY_PATH)
 lock = load_object(LOCK_PATH)
@@ -246,6 +271,244 @@ with tempfile.TemporaryDirectory(prefix="lmdj-version-lock-") as temp:
         assert completed.stdout == "assembly lock generated\n"
         assert completed.stderr == ""
     assert first.read_bytes() == second.read_bytes() == LOCK_PATH.read_bytes()
+
+    ordering_root = temp_root / "ordering-repository"
+    ordering_assembly = copy_lock_repository(ordering_root)
+    ordering_script = ordering_root / "scripts/version.py"
+    ordering_assembly_path = ordering_root / "products/lmdj/assembly.json"
+    ordering_output = ordering_root / "products/lmdj/assembly.lock.json"
+    ordering_source = (
+        ordering_root / "products/lmdj/src/compiled_assembly.cpp"
+    )
+
+    def run_ordering_lock() -> subprocess.CompletedProcess:
+        return subprocess.run(
+            [
+                sys.executable,
+                str(ordering_script),
+                "lock",
+                "--version-file",
+                str(ordering_root / "products/lmdj/version.json"),
+                "--assembly",
+                str(ordering_assembly_path),
+                "--output",
+                str(ordering_output),
+            ],
+            cwd=ordering_root,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+
+    completed = run_ordering_lock()
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == "assembly lock generated\n"
+    assert completed.stderr == ""
+    authoritative_source = ordering_source.read_bytes()
+    authoritative_lock = ordering_output.read_bytes()
+    assert authoritative_source == (
+        REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
+    ).read_bytes()
+    assert authoritative_lock == LOCK_PATH.read_bytes()
+
+    source_text = authoritative_source.decode("utf-8")
+    swapped_factories = source_text.replace(
+        "local_proof_success_registration",
+        "factory_swap_placeholder",
+        1,
+    ).replace(
+        "local_proof_failure_registration",
+        "local_proof_success_registration",
+        1,
+    ).replace(
+        "factory_swap_placeholder",
+        "local_proof_failure_registration",
+        1,
+    )
+    assert swapped_factories != source_text
+    ordering_source.write_text(swapped_factories, encoding="utf-8")
+    completed = run_ordering_lock()
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert completed.stdout == "assembly lock generated\n"
+    assert completed.stderr == ""
+    assert ordering_source.read_bytes() == authoritative_source
+    assert ordering_output.read_bytes() == authoritative_lock
+
+    model = {
+        "id": "proof.model",
+        "version": "weights-v1",
+        "artifact_sha256": "b" * 64,
+    }
+    ordering_assembly["providers"][0]["model_identity"] = model
+    ordering_assembly_path.write_bytes(canonical_bytes(ordering_assembly))
+    completed = run_ordering_lock()
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    model_source = ordering_source.read_text(encoding="utf-8")
+    assert (
+        """              lmdj::provider::ModelIdentity{
+                  "proof.model",
+                  "weights-v1",
+                  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+              },"""
+        in model_source
+    )
+    model_source_bytes = ordering_source.read_bytes()
+    model_lock_bytes = ordering_output.read_bytes()
+    assert load_object(ordering_output)["product_assembly"]["sha256"] == (
+        product_assembly_source_identity(ordering_root)
+    )
+    completed = run_ordering_lock()
+    assert completed.returncode == 0, (completed.stdout, completed.stderr)
+    assert ordering_source.read_bytes() == model_source_bytes
+    assert ordering_output.read_bytes() == model_lock_bytes
+
+    factory_header = (
+        ordering_root
+        / "providers/local-proof-success/include/lmdj/providers"
+        / "local_proof_success/factory.hpp"
+    )
+    valid_factory_header = factory_header.read_text(encoding="utf-8")
+    ambiguous_header = valid_factory_header.replace(
+        "\n}  // namespace lmdj::providers",
+        "\nprovider::ProviderRegistration ambiguous_registration();"
+        "\n\n}  // namespace lmdj::providers",
+    )
+    assert ambiguous_header != factory_header.read_text(encoding="utf-8")
+    factory_header.write_text(ambiguous_header, encoding="utf-8")
+    completed = run_ordering_lock()
+    assert completed.returncode == 2, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert "Provider local.proof.success factory.hpp" in completed.stderr
+    assert "exactly one registration symbol" in completed.stderr
+    assert "before assembly lock generation" in completed.stderr
+    assert "compiled assembly" in completed.stderr
+    assert "assembly.lock.json were not changed" in completed.stderr
+    assert ordering_source.read_bytes() == model_source_bytes
+    assert ordering_output.read_bytes() == model_lock_bytes
+
+    registration_declaration = (
+        "provider::ProviderRegistration local_proof_success_registration();"
+    )
+    outside_namespace_header = valid_factory_header.replace(
+        f"\n{registration_declaration}\n",
+        "\n/* ignored closing brace: }\n"
+        "provider::ProviderRegistration commented_registration();\n"
+        "ignored opening brace: { */\n",
+    ).replace(
+        "}  // namespace lmdj::providers",
+        "}  // namespace lmdj::providers"
+        f"\n\n{registration_declaration}",
+    )
+    assert outside_namespace_header != valid_factory_header
+    factory_header.write_text(outside_namespace_header, encoding="utf-8")
+    completed = run_ordering_lock()
+    assert completed.returncode == 2, (completed.stdout, completed.stderr)
+    assert completed.stdout == ""
+    assert "Provider local.proof.success factory.hpp" in completed.stderr
+    assert (
+        "directly inside its unique global namespace lmdj::providers block"
+        in completed.stderr
+    )
+    assert "before assembly lock generation" in completed.stderr
+    assert ordering_source.read_bytes() == model_source_bytes
+    assert ordering_output.read_bytes() == model_lock_bytes
+
+    nested_declaration_header = valid_factory_header.replace(
+        f"\n{registration_declaration}\n",
+        "\nnamespace detail {\n"
+        f"{registration_declaration}\n"
+        "}  // namespace detail\n",
+    )
+    outer_wrapped_header = valid_factory_header.replace(
+        "namespace lmdj::providers {",
+        "namespace outer {\n\nnamespace lmdj::providers {",
+    ).replace(
+        "}  // namespace lmdj::providers",
+        "}  // namespace lmdj::providers\n\n}  // namespace outer",
+    )
+    scope_results = []
+    for name, invalid_header in (
+        ("nested-declaration", nested_declaration_header),
+        ("outer-wrapped-target", outer_wrapped_header),
+    ):
+        assert invalid_header != valid_factory_header
+        factory_header.write_text(invalid_header, encoding="utf-8")
+        completed = run_ordering_lock()
+        scope_results.append(
+            (
+                name,
+                completed,
+                ordering_source.read_bytes(),
+                ordering_output.read_bytes(),
+            )
+        )
+    assert [
+        (name, completed.returncode)
+        for name, completed, _, _ in scope_results
+    ] == [
+        ("nested-declaration", 2),
+        ("outer-wrapped-target", 2),
+    ], [
+        (name, completed.stdout, completed.stderr)
+        for name, completed, _, _ in scope_results
+    ]
+    for name, completed, source_bytes, lock_bytes in scope_results:
+        assert completed.stdout == "", name
+        assert "Provider local.proof.success factory.hpp" in completed.stderr
+        assert (
+            "directly inside its unique global namespace "
+            "lmdj::providers block" in completed.stderr
+        )
+        assert "before assembly lock generation" in completed.stderr
+        assert source_bytes == model_source_bytes, name
+        assert lock_bytes == model_lock_bytes, name
+
+    rollback_root = temp_root / "generated-pair-rollback"
+    rollback_root.mkdir()
+    rollback_source = rollback_root / "compiled_assembly.cpp"
+    rollback_lock = rollback_root / "assembly.lock.json"
+    old_source_bytes = b"old compiled assembly\n"
+    old_lock_bytes = b"old assembly lock\n"
+    rollback_source.write_bytes(old_source_bytes)
+    rollback_lock.write_bytes(old_lock_bytes)
+    original_replace = Path.replace
+    replace_calls = [0]
+
+    def fail_second_generated_replace(
+        source: Path,
+        target: Path,
+    ) -> Path:
+        replace_calls[0] += 1
+        if replace_calls[0] == 2:
+            raise OSError("injected second generated-pair replace failure")
+        return original_replace(source, target)
+
+    Path.replace = fail_second_generated_replace
+    try:
+        try:
+            version_module._write_generated_pair(
+                rollback_source,
+                b"new compiled assembly\n",
+                rollback_lock,
+                b"new assembly lock\n",
+            )
+        except OSError as error:
+            assert str(error) == (
+                "injected second generated-pair replace failure"
+            )
+        else:
+            raise AssertionError(
+                "second generated-pair replace failure was not propagated"
+            )
+    finally:
+        Path.replace = original_replace
+    assert rollback_source.read_bytes() == old_source_bytes
+    assert rollback_lock.read_bytes() == old_lock_bytes
+    assert sorted(
+        path.name
+        for path in rollback_root.iterdir()
+        if path.name.endswith(".tmp")
+    ) == []
 
     isolated_root = temp_root / "isolated-repository"
     for relative in (
