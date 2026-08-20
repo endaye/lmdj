@@ -2,15 +2,20 @@
 
 ## Authority model
 
-Issues own active lifecycle state: intake, priority, dependency, assignee,
-discussion, acceptance checklist, and closure.
+For a migrated item, Issues own active lifecycle state: intake, priority,
+dependency, assignee, discussion, acceptance checklist, and closure. An Issue
+becomes the lifecycle authority only after a replacement Issue exists and its
+source link is verified.
 
-GitHub Project owns portfolio state: Status, Priority, Stage, Area, and Target.
+For a migrated item, GitHub Project owns portfolio state: Status, Priority,
+Stage, Area, and Target. GitHub Project becomes the portfolio authority only
+after `LMDJ Work` exists and the item is added.
 
 Repository documents own durable truth: current PRD and architecture, Contracts,
 governance, approved Decisions, Specs, Plans, acceptance evidence, and release
 evidence. An Issue comment is not a product decision and cannot override those
-sources.
+sources. Before migration, repository question/TODO sources retain their current
+live state.
 
 ## Intake and labels
 
@@ -40,8 +45,16 @@ Those remain separate authorization and verification boundaries.
 
 ## Migration and history
 
-Migrate active work only. Every migrated Issue links its prior source. Retained
-Specs, Plans, research, acceptance records, and release evidence are not copied
-into Issues. Existing question files retain context and link their Issue until
-the same reviewed Task records a confirmed decision and removes or supersedes
-the question.
+Migrate active work only after the replacement Issue is created and the source
+link is verified. Add a migrated item to `LMDJ Work` before treating Project
+fields as its portfolio state. Until both transitions occur, the repository
+source retains its live state; do not infer a migration from a planned Issue or
+Project alone.
+
+Every migrated Issue links its prior source. Retained Specs, Plans, research,
+acceptance records, and release evidence are not copied into Issues.
+`docs/prd/questions/*.md` must not be migrated before this repository contract
+is merged. After merge, an approved migration may create and verify replacement
+Issue links and update source state in the same reviewed Task. Those question
+files retain their current live state and context until the replacement Issue
+exists and its source link is verified.

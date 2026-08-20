@@ -64,6 +64,17 @@ class GitHubWorkManagementContractTest(unittest.TestCase):
         ):
             self.assertIn(required, source)
 
+    def test_governance_makes_the_canonical_transition_explicit(self) -> None:
+        source = " ".join(GOVERNANCE.read_text(encoding="utf-8").split())
+        for required in (
+            "An Issue becomes the lifecycle authority only after a replacement Issue exists and its source link is verified.",
+            "GitHub Project becomes the portfolio authority only after `LMDJ Work` exists and the item is added.",
+            "Before migration, repository question/TODO sources retain their current live state.",
+            "Migrate active work only after the replacement Issue is created and the source link is verified.",
+            "`docs/prd/questions/*.md` must not be migrated before this repository contract is merged.",
+        ):
+            self.assertIn(required, source)
+
     def test_pull_request_template_requires_issue_relation(self) -> None:
         source = PR_TEMPLATE.read_text(encoding="utf-8")
         self.assertIn("## Related Issue", source)

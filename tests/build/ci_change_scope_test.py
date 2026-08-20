@@ -77,6 +77,9 @@ CASES = {
     ".github/ISSUE_TEMPLATE/feature.yml": {"docs_static", "ci_contract"},
     "docs/guide.md": {"docs_static"},
     "docs/governance/git-workflow.md": {"docs_static", "portal"},
+    "docs/governance/github-work-management.md": {
+        "docs_static", "portal", "ci_contract"
+    },
     "apps/README.md": {"docs_static", "portal"},
     "apps/creator-web/README.md": {"docs_static", "portal", "creator"},
     "apps/web-runtime-host/src/main.mjs": {"portal", "web_runtime_host"},
@@ -144,6 +147,9 @@ CASES = {
     ".github/workflows/publish-release.yml": {"deploy_contract", "ci_contract"},
     ".github/workflows/release-audit.yml": {"deploy_contract", "ci_contract"},
     ".github/actionlint.yaml": {"ci_contract"},
+    ".github/pull_request_template.md": {
+        "docs_static", "portal", "ci_contract"
+    },
     ".github/actions/web-ci-proof/action.yml": set(LANES),
     ".github/workflows/ci-self-hosted-benchmark.yml": {"ci_contract"},
     ".gitattributes": set(LANES),

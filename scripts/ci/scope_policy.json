@@ -44,6 +44,7 @@
     {"match": {"kind": "prefix", "value": "docs/"}, "lanes": ["docs_static"]},
     {"match": {"kind": "exact", "value": "docs/release-evidence/release-intents.json"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "prefix", "value": "docs/governance/"}, "lanes": ["portal"]},
+    {"match": {"kind": "exact", "value": "docs/governance/github-work-management.md"}, "lanes": ["ci_contract"]},
     {"match": {"kind": "prefix", "value": "docs/quality/"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "docs/deploy/architecture-portal.md"}, "lanes": ["portal"]},
     {"match": {"kind": "exact", "value": "docs/deploy/web-runtime-host.md"}, "lanes": ["portal", "deploy_contract"]},
@@ -161,7 +162,7 @@
     {"match": {"kind": "exact", "value": ".github/workflows/release-audit.yml"}, "lanes": ["deploy_contract", "ci_contract"]},
     {"match": {"kind": "exact", "value": ".github/workflows/core-nightly.yml"}, "lanes": ["ci_contract", "core_asan"]},
     {"match": {"kind": "prefix", "value": ".github/ISSUE_TEMPLATE/"}, "lanes": ["docs_static", "ci_contract"]},
-    {"match": {"kind": "exact", "value": ".github/pull_request_template.md"}, "lanes": ["docs_static", "portal"]}
+    {"match": {"kind": "exact", "value": ".github/pull_request_template.md"}, "lanes": ["docs_static", "portal", "ci_contract"]}
   ],
   "expensive_families": {
     "core": ["core_ubuntu", "core_asan", "core_coverage", "core_macos"],

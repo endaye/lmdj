@@ -27,7 +27,9 @@
 - 仓库规范与边界：根目录 `AGENTS.md`（`CLAUDE.md` 与其内容一致）。
 - 当前架构：门户 current 页面 + `architecture/current-product-architecture.md`。
 - 当前实施计划：AGENTS.md 的 Design authority 一节指向的 plan。
-- 活跃工作状态：GitHub Issues/Project 负责 intake、讨论、状态与组合；见
+- 活跃工作状态：已迁移的工作项由 GitHub Issues/Project 负责 intake、讨论、状态与
+  组合；在 replacement Issue 创建并验证 source link 前，未迁移的 question/TODO
+  来源继续保留当前 live state。见
   [`governance/github-work-management.md`](governance/github-work-management.md)。
 - 产品决策：`prd/decision-log.md` 与 `prd/decisions/`；
   架构决策在 `architecture/`，两者只记录已确认结论。
