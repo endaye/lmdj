@@ -346,6 +346,7 @@ Commit the declared files with `docs(ci): publish merge queue operations`.
 | 3. GitHub boundary/watchdog | `d085d2ac` | API: 10 tests passed; watchdog: 6 tests passed |
 | 4. Queue workflow | `cc01887a` | Workflow contract and runner contract passed; verified actionlint 1.7.12 binary exited 0 with one exact schema-lag ignore |
 | 5. Core CI binding | `8d2c53e6` | All `ci_*` tests: 286 passed; verified actionlint 1.7.12 binary exited 0 |
+| 6. Governance and Portal | `99c576ee` | Portal: 50 tests, 37 pages, 10 diagrams, 42 routes; production build passed |
 
 ---
 
