@@ -178,6 +178,62 @@ head after the label is visible. Confirm the new `Change Scope` summary says
 `full`, all 14 lanes are selected, and the same-run `PR Gate` passes. Do not use
 an individual job rerun to change scope.
 
+### Serialized Integration Queue
+
+The repository-owned Integration Queue is available only after its separate
+remote rollout has passed. Workflow code on `main` is not enablement: before the
+label exists, run three no-mutation `workflow_dispatch` probes and prove one
+running plus two pending runs start in platform FIFO order under the single
+`lmdj-merge-main` group. The group must use `queue: max`; the default single
+pending behavior is forbidden because a later PR could replace an earlier one.
+The dispatch response must also contain a numeric `workflow_run_id`. A failed
+probe keeps the exact `merge:queue` label absent.
+
+After enablement, adding `merge:queue` is an explicit, revocable authorization
+to update and automatically squash-merge that PR; it is not review approval.
+Only an actor whose live repository permission is `write`, `maintain`, or
+`admin` may authorize a same-repository, open, non-Draft PR targeting `main`.
+The controller re-reads eligibility and the label, merges exact current `main`
+into the PR branch, then dispatches full Core CI bound to one ticket, PR number,
+base SHA, head SHA, and numeric `workflow_run_id`. The synchronized push made by
+`GITHUB_TOKEN` does not supply the required PR checks; that exact dispatch run
+must publish `core (ubuntu-latest)`, `core (macos-latest)`, and same-run
+`PR Gate` from GitHub Actions App ID `15368`. Only live-confirmed base/head drift
+may consume another attempt, with three attempts total.
+
+A PR changing `.github/workflows/merge-queue.yml`, `.github/workflows/ci.yml`,
+`.github/actionlint.yaml`, `scripts/ci/merge_queue.py`,
+`scripts/ci/github_queue_api.py`, `scripts/ci/merge_queue_watchdog.py`,
+`scripts/ci/change_scope.py`, `scripts/ci/pr_gate.py`, or
+`scripts/ci/scope_policy.json` is a control-plane change and cannot use the
+queue to merge itself. It follows the ordinary protected merge path. The
+actionlint `1.7.12` pin has one temporary, exact exception for its upstream
+`concurrency.queue` schema lag; repository tests separately require exactly one
+`queue: max`, and every other actionlint diagnostic remains fatal.
+
+Removing `merge:queue` cancels authorization while the controller can still
+observe it. A final label read and the merge mutation cannot be atomic, so an
+operator who revokes during that narrow window must inspect the queue report
+and live PR state rather than infer cancellation from label absence. Duplicate
+workers that reach an already merged PR exit successfully as `already-merged`.
+Every other terminal failure removes the label and leaves one stable-code
+review report; recovery requires fixing the cause and explicitly adding the
+label again.
+
+An open PR whose latest `merge:queue` event is at least 20 minutes old, with no
+associated queued or in-progress queue run since that event, has the
+`queue-stalled` signature. Inspect the workflow run, pending capacity, manual
+cancellation/platform timeout, and controller report in that order. The
+scheduled watchdog re-reads the head, removes the stale label, and emits one
+idempotent `queue-stalled` review marker. Reconcile live state before re-adding
+the label; the watchdog and controller never restore authorization themselves.
+
+Queue validation proves only the exact synchronized PR head. The resulting
+focused `main` run and exact-main release evidence remain separate: release
+operations still require a successful full `Core CI` run and retained full
+scope manifest for the exact target `main` SHA. Queue success authorizes no tag,
+release, deployment, publication, or Channel promotion.
+
 Required-check migration uses a forward dual-gate sequence. Each numbered
 boundary needs its own authorization; completion never authorizes the next:
 

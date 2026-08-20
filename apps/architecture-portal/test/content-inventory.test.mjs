@@ -117,6 +117,12 @@ test('current truth tracks the formal Web Host, candidate lifecycle, and evidenc
   );
   assert.match(proof, /PR run `31684663825`[\s\S]+exact-main run `31688172806`/);
   assert.doesNotMatch(proof, /pending retest on 1\.0\.21\.0/);
+  assert.match(proof, /`merge:queue`/);
+  assert.match(proof, /`queue: max`/);
+  assert.match(proof, /`queue-stalled`/);
+  assert.match(proof, /numeric `workflow_run_id`/);
+  assert.match(proof, /control-plane[^。]+不能由队列自动合并/);
+  assert.match(proof, /exact-main release evidence[^。]+独立/);
 
   const overview = await readFile(path.join(docsRoot, 'overview/index.mdx'), 'utf8');
   assert.match(overview, /Build Identity[^。]+current[^。]+不可变正式快照/);

@@ -77,14 +77,14 @@ Cloud 组织拥有的私有仓库；`endaye/lmdj` 是个人账户私有仓库，
 
 ### 2.1 外部事实证据
 
-以下外部能力是设计支点，证据于 2026-08-20 验证；远端启用前必须在 live repository
+以下外部能力是设计支点，证据于 2026-08-21 验证；远端启用前必须在 live repository
 重新执行第 13 节 preflight，不能只依赖本表：
 
 | 事实 | 官方证据 | 设计后果 |
 | --- | --- | --- |
 | `concurrency.queue: max` 保留最多 100 个 pending runs；默认 `single` 只有一个 pending 且新 run 会替换旧 run | [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) | workflow 必须使用 `queue: max`；live probe 失败即不创建 label、不启用队列 |
 | REST API version `2026-03-10` 的 workflow dispatch 成功响应为 `200`，body 含 numeric `workflow_run_id` | [Create a workflow dispatch event](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) | controller 只绑定 response 中的 run ID；schema 不匹配时 `validation-dispatch-contract-mismatch`，不轮询猜测 |
-| actionlint `1.7.12` 能解析 `concurrency.queue` | [actionlint v1.7.12](https://github.com/rhysd/actionlint/releases/tag/v1.7.12) 与 [官方 checksums](https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt)；本地最小 workflow probe exit 0 | CI pin 与 digest 一起升级；contract test 固定语法与 digest |
+| actionlint `1.7.12` 尚不能解析 `concurrency.queue`，会报告精确错误 `unexpected key "queue" for "concurrency" section` | [actionlint v1.7.12](https://github.com/rhysd/actionlint/releases/tag/v1.7.12)、[官方 checksums](https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt) 与 upstream [issue #657](https://github.com/rhysd/actionlint/issues/657)；真实 binary probe 复现该唯一 schema lag | CI pin 与 digest 一起升级；只忽略这一条精确错误，repository contract 另断言全仓恰好一个 `queue: max`，其余 actionlint 错误仍失败；upstream 支持后删除例外 |
 | `GITHUB_TOKEN` 产生的事件除 `workflow_dispatch` 与 `repository_dispatch` 外不会创建新的 workflow run | [Triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow) | update-branch 后不等待 `pull_request` 自动触发；队列显式 dispatch 是同步 head 的 Required Checks 唯一来源 |
 
 GitHub 对 `queue: max` 的顺序保证是“按 run 开始等待的时间 FIFO”，不是事件产生或 API
@@ -136,7 +136,7 @@ dispatch 的绝对时间。本文的 FIFO 均指这个平台定义；controller 
 | D11 | CI failure、conflict、timeout、撤权和不确定 mutation 一律不重试 merge；先 reconciliation，再输出稳定 failure code。 |
 | D12 | 控制面只使用 `actions: write`、`checks: read`、`contents: write`、`pull-requests: write`；不引入 PAT 或 GitHub App secret。 |
 | D13 | `main` push 的 per-SHA、non-cancelling concurrency 与 release exact-main evidence 保持不变。 |
-| D14 | actionlint 升级到已验证支持 `concurrency.queue` 的 `1.7.12`，继续校验下载 digest 与完整 workflow contract。 |
+| D14 | actionlint 升级到 `1.7.12` 并继续校验官方 digest；由于 upstream issue #657 的 schema lag，只允许精确忽略 `unexpected key "queue" for "concurrency" section`，同时由 repository contract 固定恰好一个 `queue: max`，其他 lint 错误仍 fail closed。 |
 | D15 | queue controller 的 hard timeout 为 360 分钟，但内部 mutation deadline 为 330 分钟；至少保留 30 分钟做 reconciliation/report。每次 validation wait 从剩余预算动态推导，不固定占满 120 分钟。 |
 | D16 | PR head 中的 `ci.yml` 与 CI scripts 属于被审代码而非独立可信证据；修改 queue/CI authority 文件的 PR 不允许由本队列自动合并。 |
 | D17 | duplicate queue run 发现 PR 已 merged 时以 `already-merged` 成功 no-op 结束，不评论、不制造失败 check。 |
@@ -483,7 +483,7 @@ merge mutation 之间存在不可消除的短窗口。API 请求已被接受后�
 - Change Scope drift artifact 与 controller live-state 双重确认；
 - control-plane change 禁止 queue self-merge；
 - explicit squash title/message 与 required-check context/App identity contract；
-- actionlint `1.7.12` archive digest、workflow syntax 与 literal self-hosted labels；
+- actionlint `1.7.12` archive digest、唯一精确 schema-lag exception、workflow syntax 与 literal self-hosted labels；
 - local preflight、scope policy、Portal impact 与 workflow CI contract 保持一致。
 
 Task-specific verification 至少运行：

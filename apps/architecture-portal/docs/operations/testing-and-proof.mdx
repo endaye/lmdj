@@ -3,7 +3,7 @@ title: Testing 与 Proof
 area: operations
 status: implemented
 owners: [core, quality]
-source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/web-toolchain-conformance.sh, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml]
+source_paths: [docs/quality/core-test-policy.md, docs/quality/2026-08-03-formal-web-runtime-host-acceptance.md, docs/quality/2026-08-07-stage7-creator-editor-acceptance.md, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, docs/quality/2026-08-12-opfs-publication-recovery-acceptance.md, docs/quality/2026-08-12-stage7-creator-editor-review.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/quality/2026-08-09-stage8-sample-editor-acceptance.md, docs/release-evidence/release-intents.json, scripts/core.sh, scripts/release.sh, scripts/web-runtime-host.sh, scripts/creator-web.sh, scripts/web-toolchain-conformance.sh, scripts/ci/merge_queue.py, scripts/ci/merge_queue_watchdog.py, tests, apps/creator-web/test, .github/actions/configure-build-acceleration/action.yml, .github/actions/macos-core-gates/action.yml, .github/scripts/assert-macos-gate-result.sh, .github/workflows/ci.yml, .github/workflows/merge-queue.yml, .github/workflows/core-nightly.yml, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -31,6 +31,38 @@ exact Draft；当前单人维护者模式没有 required reviewer，人工授权
 workflow 成功也不自动触发 Runtime deployment。Runtime deployment 保持 manual-only exact-tag
 dispatch，部署 evidence 与 Channel promotion 再分别验证。测试、workflow 或工具已进入仓库，
 都不表示当前 Product Build `1.0.21.0` 已经 released、deployed 或 promoted。
+
+## Integration Queue
+
+Integration Queue 把“多个 PR 同时更新 main 后反复重跑”收敛为一个串行 integration
+capacity。代码合入不等于启用：创建 `merge:queue` label 前必须先用 no-mutation dispatch
+连续验证三个 probe，证明固定 concurrency group 的 `queue: max` 保留一个 running 和两个
+pending，且按 GitHub 定义的等待开始时间 FIFO 执行；dispatch 还必须直接返回 numeric `workflow_run_id`。
+任一事实不成立就保持 label 不存在。
+
+启用后，具备实时 `write|maintain|admin` 权限的人给同仓库、open、非 Draft、base=`main`
+的 PR 添加 `merge:queue`，就是一次可撤销的自动 squash merge 授权。Controller 只执行默认
+分支上的控制代码，把 exact current main 合入 PR branch，再显式 dispatch PR head 上的 full
+Core CI；ticket、PR number、base SHA、head SHA 和返回的 run ID 必须完全匹配，同一 run 内
+`Change Scope`、全部 full lane 与 `PR Gate` 成功后才可 merge。被测 head 自己产生 CI 证据，
+因此 review 与 branch protection 仍是最终信任边界；任何 merge-authority control-plane diff
+都不能由队列自动合并，必须走普通受保护合并路径。
+
+base/head drift 只有在 artifact 分类与 live state 同时确认时才重试，最多三次；普通 CI
+failure 不重试。移除 label 会在 controller 下一次读取时撤销授权，但最后一次读取与 merge
+mutation 之间有不可原子化窗口，撤销后仍须检查 live PR 和 queue report。`already-merged`
+是无噪音成功 no-op；其他 terminal failure 摘 label、留下稳定 code，修复后必须人工重新添加，
+系统不会恢复旧授权。
+
+`queue-stalled` 的签名是：open PR 的最新 `merge:queue` event 已超过 20 分钟，但此后没有
+关联的 queued/in-progress queue run。先查 workflow run、pending capacity、manual cancel 或
+platform timeout，再查 controller report；scheduled watchdog 会重新核验 head、摘掉 label，
+并只留一条幂等 review marker。reconciliation 完成前不得直接重新入队。
+
+Queue validation 只证明 exact synchronized PR head；merge 后的 focused main run 与
+exact-main release evidence 始终独立。Release 仍要求 exact target main SHA 上 successful full
+`Core CI`、同 run Gate 和 retained full manifest，不能从 queue、PR CI 或 squash merge 推断。
+
 ## Web Runtime Host Proof
 `scripts/web-runtime-host.sh configure|build|test|proof|serve|clean` 是正式 Host 的稳定入口。`proof` 先在明确的非 clean-room 阶段运行现有 Chromium AudioWorklet conformance，再以固定 emsdk 连续执行两次 clean build，并逐字节比较两份 dist 后才运行 Python/Node/C++ Host 测试；它验证带 ownership contract 的 canonical manifest、完整生产资产清单，以及无 source/map/fixture/server/dev dependency 的精确 dist inventory。fixture generator 使用真实 native C++ compiler 对 active `realtime_engine.hpp` 常量求值，确定性再生 48 kHz mono PCM fixture；clean-room 阶段只把第二份 dist 与批准的 WAV/metadata pair 复制到 `mktemp -d`，从临时 dist 启动 proof-only server，并禁用 Playwright 的 source-tree toolchain webServer。Chromium 阶段从 Git tracked inventory 选择全部 `web_runtime_host_*.spec.mjs`，因此 source-shell lifecycle、manifest gate 与完整 packaged 创作/restart/failure journey 都属于稳定 Proof；随后单独运行 WebKit capability smoke。全程清除 `NODE_PATH`/`PYTHONPATH` 并禁用 package fetch；`clean` 只删除解析后的 `build/web/host` 子树。
 

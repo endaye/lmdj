@@ -33,15 +33,15 @@
 - Consumes: the approved design and review findings dated 2026-08-21.
 - Produces: the exact terminal codes, authority boundaries, time budgets, file split, verification commands, and rollout gates used by Tasks 2–7.
 
-- [ ] **Step 1: Record the external facts and fail-closed fallbacks**
+- [x] **Step 1: Record the external facts and fail-closed fallbacks**
 
-Add official GitHub/actionlint links, verification date, `queue: max` live probe, numeric dispatch run ID contract, and `validation-dispatch-contract-mismatch` with no run-name polling fallback.
+Add official GitHub/actionlint links, verification date, `queue: max` live probe, numeric dispatch run ID contract, and `validation-dispatch-contract-mismatch` with no run-name polling fallback. Record actionlint issue #657 as a verified schema lag, not as parser support.
 
-- [ ] **Step 2: Close the review-discovered state-machine gaps**
+- [x] **Step 2: Close the review-discovered state-machine gaps**
 
 Record `already-merged`, `queue-base-drift`, `queue-head-drift`, dynamic attempt budgets, worker finalization, scheduled stall detection, PR-head evidence trust, control-plane self-merge exclusion, explicit squash messages, exact required check names/App ID, canonical main ref, and label revocation window.
 
-- [ ] **Step 3: Verify and commit the documentation contract**
+- [x] **Step 3: Verify and commit the documentation contract**
 
 Run:
 
@@ -73,7 +73,7 @@ git commit -m "docs(ci): close merge queue review gaps"
 - Consumes: `QueueClient` methods from Task 3 by structural typing; tests use an in-memory fake with the same methods.
 - Produces: `QueueRequest`, `QueueReport`, `QueueAttempt`, `QueueClient` protocol, `run_queue_item(request, client, *, clock, sleeper) -> QueueReport`, `finalize_aborted(request, client) -> QueueReport`, and JSON/Markdown report rendering.
 
-- [ ] **Step 1: Write failing model and eligibility tests**
+- [x] **Step 1: Write failing model and eligibility tests**
 
 Tests construct `QueueRequest(repository="endaye/lmdj", pr_number=220, actor="endaye", event_head_sha="a" * 40, queue_run_id=123)` and assert:
 
@@ -86,17 +86,17 @@ self.assertEqual(run_queue_item(request, fake_control_plane).code, "queue-contro
 
 Cover open/non-Draft/main/same-repository/label/permission/mergeability invariants and require the exact protected path set from the design.
 
-- [ ] **Step 2: Run the new test and observe RED**
+- [x] **Step 2: Run the new test and observe RED**
 
 Run: `python3 tests/build/ci_merge_queue_test.py`
 
 Expected: FAIL because `scripts/ci/merge_queue.py` or the requested types do not exist.
 
-- [ ] **Step 3: Implement closed request/report types and eligibility**
+- [x] **Step 3: Implement closed request/report types and eligibility**
 
 Use frozen dataclasses and stable enums/constants. `QueueReport.ok` is true only for `merged`, `already-merged`, and `queue-label-removed`; failure cleanup is represented in the report rather than inferred from exception text.
 
-- [ ] **Step 4: Add failing synchronization and deadline tests**
+- [x] **Step 4: Add failing synchronization and deadline tests**
 
 Cover already-up-to-date, update accepted, expected-head 422 drift, conflict, timeout, uncertain response reconciliation, authoritative refs API use, three-attempt cap, and:
 
@@ -109,15 +109,15 @@ self.assertEqual(budget, 0)
 self.assertEqual(report.code, "queue-budget-exhausted")
 ```
 
-- [ ] **Step 5: Implement synchronization and dynamic budgets**
+- [x] **Step 5: Implement synchronization and dynamic budgets**
 
 Use `min(7200, floor((deadline - now - 600) / remaining_attempts))`; refuse a new attempt below 600 seconds. Read `refs/heads/main` before each attempt, send `expected_head_sha`, and reconcile after every uncertain mutation before another write.
 
-- [ ] **Step 6: Add failing exact-validation, drift, merge, and cancellation tests**
+- [x] **Step 6: Add failing exact-validation, drift, merge, and cancellation tests**
 
 Assert numeric run binding, exact run event/path/head, same-run named jobs, GitHub Actions App ID `15368`, full manifest queue metadata, live-confirmed drift retry, ordinary CI failure terminal behavior, label checks during every poll, explicit squash title/message, expected head SHA, post-merge tree equality, merge uncertainty reconciliation, and the final label-removal race statement in reports.
 
-- [ ] **Step 7: Implement validation and merge transitions**
+- [x] **Step 7: Implement validation and merge transitions**
 
 Only `queue-base-drift`/`queue-head-drift` artifacts independently confirmed by current ref/PR reads return to synchronization. Dispatch schema mismatch never polls. Merge payload is:
 
@@ -130,11 +130,11 @@ Only `queue-base-drift`/`queue-head-drift` artifacts independently confirmed by 
 }
 ```
 
-- [ ] **Step 8: Add and implement CLI/report behavior**
+- [x] **Step 8: Add and implement CLI/report behavior**
 
 Provide `run`, `finalize`, and `render-report` subcommands. `run` always writes an atomic JSON report path before returning; `finalize` treats an existing closed report as idempotent and otherwise reconciles, removes a still-live label, and returns `queue-worker-aborted`.
 
-- [ ] **Step 9: Verify and commit the state machine**
+- [x] **Step 9: Verify and commit the state machine**
 
 Run:
 
@@ -162,29 +162,29 @@ Commit only the two declared files with `feat(ci): add merge queue state machine
 - Consumes: `QueueClient`, `QueueRequest`, `QueueReport`, and report JSON from Task 2.
 - Produces: `GitHubQueueClient(repository, token, *, api_version="2026-03-10", opener=urlopen)`, `find_stalled_items(client, *, now, minimum_age_seconds=1200)`, and `reconcile_stalled_item(client, item)`.
 
-- [ ] **Step 1: Write failing HTTP contract tests**
+- [x] **Step 1: Write failing HTTP contract tests**
 
 Use a recording opener and deterministic response fixtures. Assert structured JSON, auth redaction, bounded pagination/retry, canonical ref reads, PR/files/permission/update/compare/dispatch/run/jobs/check-runs/artifact/commit/merge/label/review endpoints, API version header, and response-schema rejection.
 
-- [ ] **Step 2: Run API tests and observe RED**
+- [x] **Step 2: Run API tests and observe RED**
 
 Run: `python3 tests/build/ci_merge_queue_api_test.py`
 
 Expected: FAIL because the client does not exist.
 
-- [ ] **Step 3: Implement the standard-library GitHub client**
+- [x] **Step 3: Implement the standard-library GitHub client**
 
 Centralize `_request(method, path, payload=None, expected_statuses=...)`; retry reads only for transport/5xx/secondary-rate-limit responses. Mutation callers receive a typed uncertain result on transport ambiguity and must reconcile through Task 2. Parse downloaded `queue-validation` zip in memory and reject duplicate/missing/non-closed JSON entries.
 
-- [ ] **Step 4: Write failing watchdog tests**
+- [x] **Step 4: Write failing watchdog tests**
 
 Cover: younger-than-20-minute labels, active queued/in-progress run, label-event timestamp after an old run, manual cancel, platform timeout, pending eviction, already-removed label, already-merged PR, and idempotent review markers.
 
-- [ ] **Step 5: Implement watchdog reconciliation**
+- [x] **Step 5: Implement watchdog reconciliation**
 
 The stall signature is an open labeled PR whose latest label event is at least 1200 seconds old and has no associated queued/in-progress `Merge Queue` run created after that event. Re-read PR/label before mutation; remove the label and leave one review containing `<!-- lmdj-merge-queue:queue-stalled:<label-event-id> -->`.
 
-- [ ] **Step 6: Verify and commit the API boundary**
+- [x] **Step 6: Verify and commit the API boundary**
 
 Run:
 
@@ -213,21 +213,21 @@ Commit the four declared files with `feat(ci): add merge queue GitHub boundary`.
 - Consumes: Task 2 CLI commands and Task 3 watchdog CLI.
 - Produces: `route`, `queue-item`, `finalize`, `watchdog`, and no-mutation `workflow_dispatch` preflight jobs; fixed job-level `lmdj-merge-main` concurrency with `queue: max`.
 
-- [ ] **Step 1: Write failing workflow topology tests**
+- [x] **Step 1: Write failing workflow topology tests**
 
 Assert `pull_request_target.types == [labeled]`, no workflow-level concurrency, `route` has no concurrency, exact label comparison precedes `queue-item`, `queue-item` owns `queue: max`, nonmatching labels skip it, schedule is `*/15 * * * *`, watchdog/finalize do not share queue concurrency, checkout pins canonical default branch and disables persisted credentials, and permissions are exactly actions/checks/contents/pull-requests.
 
-- [ ] **Step 2: Observe RED, then add the minimal workflow**
+- [x] **Step 2: Observe RED, then add the minimal workflow**
 
 Run: `python3 tests/build/ci_merge_queue_workflow_test.py`
 
 Expected RED: workflow is missing. Add the workflow so label events run the controller, `workflow_dispatch` accepts bounded `hold_seconds` for the three-run preflight, `finalize` runs with `if: always()`, and schedule invokes the watchdog.
 
-- [ ] **Step 3: Pin actionlint 1.7.12 and its official Linux amd64 digest**
+- [x] **Step 3: Pin actionlint 1.7.12, its official Linux amd64 digest, and one exact schema-lag exception**
 
-Update the existing actionlint version/digest in `ci.yml`; update the runner contract expected version/archive. Do not change runner routing or formal lanes.
+Update the existing actionlint version/digest in `ci.yml`; update the runner contract expected version/archive. Because upstream issue #657 remains open, ignore only `unexpected key "queue" for "concurrency" section` and make the repository contract prove that exactly one `queue: max` exists. Do not change runner routing or formal lanes.
 
-- [ ] **Step 4: Verify and commit the workflow**
+- [x] **Step 4: Verify and commit the workflow**
 
 Run:
 
@@ -238,7 +238,7 @@ python3 tests/build/ci_workflow_topology_test.py
 python3 -m unittest discover -s tests/build -p 'ci_*_test.py'
 ```
 
-Then run the verified actionlint `1.7.12` binary over `.github/workflows/*.yml` and require exit 0.
+Then run the verified actionlint `1.7.12` binary over `.github/workflows/*.yml` with that one exact ignore and require exit 0; every other diagnostic remains fatal.
 
 Commit the declared files with `feat(ci): add serialized merge queue workflow`.
 
@@ -260,25 +260,25 @@ Commit the declared files with `feat(ci): add serialized merge queue workflow`.
 - Consumes: queue inputs `queue_ticket`, `queue_pr_number`, `queue_base_sha`, and `queue_head_sha` from Task 2 dispatch.
 - Produces: manifest field `queue` (`null` or a closed metadata object), output `pull-request-body`, and `queue-validation.json` classification `valid|queue-base-drift|queue-head-drift|invalid` uploaded even when Change Scope fails.
 
-- [ ] **Step 1: Write failing all-or-none and drift-classification tests**
+- [x] **Step 1: Write failing all-or-none and drift-classification tests**
 
 Add unit cases for no queue inputs preserving current semantics, any partial set failing closed, SHA/ticket/PR validation, exact full-only selection, live PR/ref mismatch classifications, same-repository trust, label presence, ancestor proof, and closed validation JSON schema.
 
-- [ ] **Step 2: Observe RED and implement queue metadata validation**
+- [x] **Step 2: Observe RED and implement queue metadata validation**
 
 Run: `python3 tests/build/ci_change_scope_test.py`
 
 Expected RED on the new cases. Add `QueueValidation` helpers and ensure `main()` writes `queue-validation.json` in every queue-mode path before exit.
 
-- [ ] **Step 3: Write failing PR Gate queue binding tests**
+- [x] **Step 3: Write failing PR Gate queue binding tests**
 
 Assert queue mode requires full, trusted head, exact ticket/base/head/PR, successful Change Scope, and all same-run formal results. Assert non-queue manifests retain the existing decision table.
 
-- [ ] **Step 4: Implement PR Gate binding and workflow threading**
+- [x] **Step 4: Implement PR Gate binding and workflow threading**
 
 Declare all four dispatch inputs. In queue mode, set base/head from queue inputs, fetch PR body through Change Scope, pass exact range/body to docs/Portal, upload the queue validation artifact with `if: always()`, and keep regular pull_request/push/manual dispatch behavior byte-for-byte equivalent at the interface level.
 
-- [ ] **Step 5: Verify and commit Core CI mode**
+- [x] **Step 5: Verify and commit Core CI mode**
 
 Run:
 
@@ -309,21 +309,21 @@ Commit the declared files with `feat(ci): bind queued full validation evidence`.
 - Consumes: implemented workflow/state codes from Tasks 2–5.
 - Produces: operator procedure for approval-before-label, FIFO limits, exact evidence, cancellation window, stall diagnosis/recovery, control-plane exclusion, main/release separation, and remote preflight/enablement.
 
-- [ ] **Step 1: Write the failing Portal content assertion**
+- [x] **Step 1: Write the failing Portal content assertion**
 
 Require current `/operations/testing-and-proof/` content to name `merge:queue`, `queue: max`, `queue-stalled`, exact dispatch run ID, control-plane self-merge exclusion, and the fact that exact-main release evidence remains separate.
 
-- [ ] **Step 2: Observe RED and update current governance pages**
+- [x] **Step 2: Observe RED and update current governance pages**
 
 Run: `node --test apps/architecture-portal/test/content-inventory.test.mjs`
 
 Expected RED on missing queue text. Add concise operator-facing prose and the rollout checklist; do not edit versioned snapshots.
 
-- [ ] **Step 3: Mark plan checkboxes with actual evidence**
+- [x] **Step 3: Mark plan checkboxes with actual evidence**
 
 Check only steps actually completed and add an `## Execution Evidence` table mapping each Task to commit SHA and verification command output summary.
 
-- [ ] **Step 4: Verify and commit documentation**
+- [x] **Step 4: Verify and commit documentation**
 
 Run:
 
@@ -336,6 +336,16 @@ git diff --check
 Expected: Portal content test and full Portal check pass; no immutable snapshot changed.
 
 Commit the declared files with `docs(ci): publish merge queue operations`.
+
+## Execution Evidence
+
+| Task | Commit | Verified evidence |
+| --- | --- | --- |
+| 1. Reviewed contract | `234cd6c8` | Architecture Portal check: 50 tests, 37 pages, 10 diagrams, 42 routes |
+| 2. Pure state machine | `18774cfe` | `ci_merge_queue_test.py`: 24 tests passed |
+| 3. GitHub boundary/watchdog | `d085d2ac` | API: 10 tests passed; watchdog: 6 tests passed |
+| 4. Queue workflow | `cc01887a` | Workflow contract and runner contract passed; verified actionlint 1.7.12 binary exited 0 with one exact schema-lag ignore |
+| 5. Core CI binding | `8d2c53e6` | All `ci_*` tests: 286 passed; verified actionlint 1.7.12 binary exited 0 |
 
 ---
 
