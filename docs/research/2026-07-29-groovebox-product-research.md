@@ -650,8 +650,7 @@ Ampify Support 在 2024-02-20 明确表示：
 ### 10.3 对 LMDJ 的直接提醒
 
 LMDJ 当前 “My Songs” 依赖浏览器拥有的 Submission / Job 恢复，不代表 Account-level
-Asset Library 或跨设备历史已经成立；这一边界已经记录在
-[LMDJ 状态与 Backlog](../superpowers/2026-07-10-status-and-backlog.md)。
+Asset Library 或跨设备历史已经成立。
 
 Groovebox 的教训是：如果用户开始把 LMDJ 当作长期 Creator Workspace，Project
 Portability 必须在以下三个层面说清楚：

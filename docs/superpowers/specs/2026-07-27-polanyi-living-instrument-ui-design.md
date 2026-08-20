@@ -38,7 +38,6 @@
 
 - [KUMALEON 视觉、3D、生成艺术与 Web3 技术研究](../../research/2026-07-26-kumaleon-visual-technology-study.md)
 - [LMDJ Stage 1 Creator Workspace UI 设计](./2026-07-24-stage1-creator-workspace-ui-design.md)
-- [LMDJ 状态与 Backlog](../2026-07-10-status-and-backlog.md)
 - [Kumaleon 官网](https://kumaleon.com/)
 - 当前 `apps/web` 的 16-pad、Pattern、My Songs、上传状态、Inspector 与 Creator Export 实现
 

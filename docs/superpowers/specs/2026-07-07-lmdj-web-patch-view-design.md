@@ -8,7 +8,7 @@
 
 `patch.json`（`lmdj.patch.v1`）的第一个消费者：一个纯客户端的 **8-pad Focus View 工作台原型**，验证"patch.json 能驱动一个可玩、可看、可静音编辑的 sampler 界面"。
 
-明确不是：webdemo0702 素材（`docs/lmdj-web-prototype-spec.md`）描述的 "prompt → pipeline → Z X N M 下落音符引导演奏" 三步 demo。该素材保留为参考；其"前端直读 `lanes.json`/`chart.mid`"的做法与 2026-07-07 决策（truth 三段式）冲突，本原型不采用。
+明确不是：webdemo0702 素材（`docs/prd/lmdj-web-prototype-spec.md`）描述的 "prompt → pipeline → Z X N M 下落音符引导演奏" 三步 demo。该素材保留为参考；其"前端直读 `lanes.json`/`chart.mid`"的做法与 2026-07-07 决策（truth 三段式）冲突，本原型不采用。
 
 ## 已确认的设计决策
 
