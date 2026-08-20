@@ -1,4 +1,5 @@
 name: Core CI
+run-name: Core CI / ${{ inputs.queue_ticket || github.ref_name }}
 
 on:
   pull_request:
@@ -14,6 +15,22 @@ on:
           empty to run every lane; an empty dispatch on the exact main SHA is
           the authorized way to produce full release evidence for a SHA whose
           own push classified focused. A lane selection is never full evidence.
+        required: false
+        default: ""
+      queue_ticket:
+        description: Controller ticket mq:<queue-run-id>:<attempt>; all queue inputs are required together.
+        required: false
+        default: ""
+      queue_pr_number:
+        description: Pull Request number bound to the controller ticket.
+        required: false
+        default: ""
+      queue_base_sha:
+        description: Exact canonical main SHA captured by the controller.
+        required: false
+        default: ""
+      queue_head_sha:
+        description: Exact synchronized Pull Request head SHA to validate.
         required: false
         default: ""
 
@@ -38,6 +55,10 @@ jobs:
     outputs:
       manifest: ${{ steps.scope.outputs.manifest }}
       trusted-head: ${{ steps.scope.outputs.trusted-head }}
+      queue-mode: ${{ steps.scope.outputs.queue-mode }}
+      pull-request-body: ${{ steps.scope.outputs.pull-request-body }}
+      resolved-base-sha: ${{ steps.scope.outputs.resolved-base-sha }}
+      resolved-head-sha: ${{ steps.scope.outputs.resolved-head-sha }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -47,14 +68,19 @@ jobs:
         shell: bash
         env:
           EVENT_NAME: ${{ github.event_name }}
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ inputs.queue_base_sha || github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
+          HEAD_SHA: ${{ inputs.queue_head_sha || github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           REPOSITORY: ${{ github.repository }}
-          HEAD_REPOSITORY: ${{ github.event.pull_request.head.repo.full_name }}
-          PR_NUMBER: ${{ github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
+          HEAD_REPOSITORY: ${{ inputs.queue_ticket != '' && github.repository || github.event.pull_request.head.repo.full_name }}
+          PR_NUMBER: ${{ inputs.queue_pr_number || github.event_name == 'pull_request' && github.event.pull_request.number || 0 }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           MANIFEST_PATH: ${{ runner.temp }}/ci-scope.json
+          QUEUE_VALIDATION_PATH: ${{ runner.temp }}/queue-validation.json
           REQUESTED_LANES: ${{ inputs.lanes }}
+          QUEUE_TICKET: ${{ inputs.queue_ticket }}
+          QUEUE_PR_NUMBER: ${{ inputs.queue_pr_number }}
+          QUEUE_BASE_SHA: ${{ inputs.queue_base_sha }}
+          QUEUE_HEAD_SHA: ${{ inputs.queue_head_sha }}
         run: |
           set -euo pipefail
           python3 scripts/ci/change_scope.py \
@@ -68,7 +94,20 @@ jobs:
             --manifest-out "$MANIFEST_PATH" \
             --github-output "$GITHUB_OUTPUT" \
             --summary "$GITHUB_STEP_SUMMARY" \
-            --lanes "${REQUESTED_LANES:-}"
+            --lanes "${REQUESTED_LANES:-}" \
+            --queue-ticket "${QUEUE_TICKET:-}" \
+            --queue-pr-number "${QUEUE_PR_NUMBER:-}" \
+            --queue-base-sha "${QUEUE_BASE_SHA:-}" \
+            --queue-head-sha "${QUEUE_HEAD_SHA:-}" \
+            --queue-validation-out "$QUEUE_VALIDATION_PATH"
+      - name: Retain the queue validation classification
+        if: ${{ always() && inputs.queue_ticket != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: queue-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/queue-validation.json
+          if-no-files-found: error
+          retention-days: 14
       # Release authority reads this artifact: `tools/release/ci_evidence.py`
       # accepts a target only while its exact run still retains a `full`
       # manifest for that SHA, so the retention below is a prospective evidence
@@ -103,8 +142,8 @@ jobs:
           fetch-depth: 0
       - name: Validate the exact selected revision range
         env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}
-          HEAD_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          BASE_SHA: ${{ needs.change-scope.outputs.resolved-base-sha }}
+          HEAD_SHA: ${{ needs.change-scope.outputs.resolved-head-sha }}
         run: git diff --check "$BASE_SHA" "$HEAD_SHA"
 
   portal:
@@ -119,10 +158,10 @@ jobs:
     if: ${{ !cancelled() && fromJSON(needs.change-scope.outputs.manifest).lanes.portal && needs.change-scope.outputs.trusted-head == 'true' }}
     uses: ./.github/workflows/architecture-portal.yml
     with:
-      check_documentation_impact: ${{ github.event_name == 'pull_request' }}
-      base_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-      head_sha: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
-      pull_request_body: ${{ github.event_name == 'pull_request' && github.event.pull_request.body || '' }}
+      check_documentation_impact: ${{ github.event_name == 'pull_request' || needs.change-scope.outputs.queue-mode == 'true' }}
+      base_sha: ${{ needs.change-scope.outputs.resolved-base-sha }}
+      head_sha: ${{ needs.change-scope.outputs.resolved-head-sha }}
+      pull_request_body: ${{ needs.change-scope.outputs.pull-request-body }}
 
   ci-contract:
     # On the dual-node trusted role with the rest of the general group.
@@ -133,19 +172,23 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      # Same actionlint version as the `rhysd/actionlint:1.7.7` container
-      # action this replaces, pinned harder. A Docker tag is mutable, so the
-      # old form named a version but not an artifact; the
+      # Queue-aware actionlint release, pinned harder than a mutable Docker tag.
+      # The original container action named a version but not an artifact; the
       # digest below names the exact bytes and the check fails closed on
       # mismatch. It also removes CI's only Docker dependency, which the
       # trusted role cannot satisfy by design: the CI-only host runs no
       # daemon and the shared host's runner users are outside the `docker`
       # group, so CI can never reach the socket that runs production.
       # actionlint still reads `.github/actionlint.yaml` from the workspace.
+      # v1.7.12 predates GitHub's concurrency.queue schema and reports that one
+      # key as unknown (https://github.com/rhysd/actionlint/issues/657). Keep
+      # the exception exact and removable: queue topology tests prove there is
+      # exactly one `queue: max`, while every other actionlint diagnostic still
+      # fails this job.
       - name: Validate workflows with pinned actionlint
         env:
-          ACTIONLINT_VERSION: 1.7.7
-          ACTIONLINT_SHA256: 023070a287cd8cccd71515fedc843f1985bf96c436b7effaecce67290e7e0757
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/actionlint.tar.gz"
@@ -154,7 +197,8 @@ jobs:
           printf '%s  %s\n' "$ACTIONLINT_SHA256" "$archive" \
             | sha256sum --check --strict -
           tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP" actionlint
-          "$RUNNER_TEMP/actionlint"
+          "$RUNNER_TEMP/actionlint" \
+            -ignore 'unexpected key "queue" for "concurrency" section'
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -432,8 +476,12 @@ jobs:
           --manifest-json "$SCOPE_MANIFEST"
           --results-json "$FORMAL_RESULTS_JSON"
           --change-scope-result "$CHANGE_SCOPE_RESULT"
-          --base-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || github.sha }}"
-          --head-sha "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+          --base-sha "${{ needs.change-scope.outputs.resolved-base-sha }}"
+          --head-sha "${{ needs.change-scope.outputs.resolved-head-sha }}"
+          --queue-ticket "${{ inputs.queue_ticket }}"
+          --queue-pr-number "${{ inputs.queue_pr_number }}"
+          --queue-base-sha "${{ inputs.queue_base_sha }}"
+          --queue-head-sha "${{ inputs.queue_head_sha }}"
           --summary "$GITHUB_STEP_SUMMARY"
 
   select-macos-runner:

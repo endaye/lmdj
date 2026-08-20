@@ -96,6 +96,7 @@ def validate_gate(
     results: Mapping[str, str], expected_head_sha: str, *,
     expected_base_sha: str,
     change_scope_result: str = "success",
+    expected_queue: change_scope.QueueInputs | None = None,
 ) -> GateReport:
     """Return the exact selected-success/unselected-skipped gate decision."""
     try:
@@ -117,6 +118,18 @@ def validate_gate(
         )
     skipped = tuple(job for job in _formal_jobs(policy) if job not in requested)
     errors: list[str] = []
+    manifest_queue = manifest.get("queue")
+    if expected_queue is None and manifest_queue is not None:
+        errors.append("unexpected queue metadata without queue dispatch expectations")
+    elif expected_queue is not None:
+        expected_metadata = {
+            "ticket": expected_queue.ticket,
+            "pr_number": expected_queue.pr_number,
+            "base_sha": expected_queue.base_sha,
+            "head_sha": expected_queue.head_sha,
+        }
+        if manifest_queue != expected_metadata:
+            errors.append("manifest queue metadata does not match dispatch inputs")
     # Trust is adjudicated before any result, because an untrusted head must
     # fail the run rather than pass on the skips its own blocked jobs produce.
     if not manifest["trusted_head"] and set(requested).intersection(
@@ -305,6 +318,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--base-sha", required=True)
     parser.add_argument("--head-sha", required=True)
     parser.add_argument("--summary", required=True)
+    parser.add_argument("--queue-ticket", default="")
+    parser.add_argument("--queue-pr-number", default="")
+    parser.add_argument("--queue-base-sha", default="")
+    parser.add_argument("--queue-head-sha", default="")
     args = parser.parse_args(argv)
     try:
         policy = change_scope.load_policy(args.policy)
@@ -312,6 +329,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         needs = _load_json(args.results_json)
         if not isinstance(manifest, Mapping):
             raise ValueError("manifest JSON must be an object")
+        expected_queue = change_scope.parse_queue_inputs(
+            args.queue_ticket,
+            args.queue_pr_number,
+            args.queue_base_sha,
+            args.queue_head_sha,
+        )
         report = validate_gate(
             policy,
             manifest,
@@ -319,6 +342,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.head_sha,
             expected_base_sha=args.base_sha,
             change_scope_result=args.change_scope_result,
+            expected_queue=expected_queue,
         )
     except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
         report = GateReport(False, (f"PR gate failed closed: {error}",), (), ())
