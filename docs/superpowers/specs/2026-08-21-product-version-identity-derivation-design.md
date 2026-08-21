@@ -2,7 +2,7 @@
 
 日期：2026-08-21
 
-状态：规格已批准；本文只定义后续 implementation 的边界，不分配 Product Build
+状态：待用户 review 批准；本文只定义后续 implementation 的边界，不分配 Product Build
 
 关联任务：[Issue #207](https://github.com/endaye/lmdj/issues/207)、
 [Issue #165](https://github.com/endaye/lmdj/issues/165)
@@ -330,7 +330,11 @@ module.json.version
 
 - 验证三个 JSON document 的闭合必要字段；
 - 对每个 consumer 分别输出 expected Host version、found 值和 repo-relative path；
-- 同时检查 package name 为 `@lmdj/creator-web`，避免 lock root 指向另一个 package；
+- 同时检查 package name：`lmdj.module.v1` 没有 npm name 字段，expected name 从
+  `module.json` 的 `module` 字段派生为 `@lmdj/<module>`（当前即 `@lmdj/creator-web`）；
+  `package.json.name`、`package-lock.json.name` 与 `package-lock.json.packages[""].name`
+  必须与之精确相等，避免 lock root 指向另一个 package。门禁中不得出现没有权威来源的
+  手写 name 字面量；
 - 用负例 fixture 分别覆盖 top-level lock version、root package version、package.json version
   与 name drift；
 - 只读取，不自动运行 `npm install` 或改写 lockfile。
@@ -481,7 +485,8 @@ message 或 bare assertion 而 RED。随后才修改 checker/generator。
 - package name。
 
 现有 conformance 没有该门禁，因此 RED 必须证明每个 drift 目前未被目标 checker 精确拒绝。
-GREEN 后错误包含 canonical `module.json` expected version、found 和具体 consumer path。
+GREEN 后错误包含从 `module.json` 派生的 expected version 或 expected name、found 值和
+具体 consumer path。
 
 ### 11.3 RED：current literals 与 synthetic fixtures
 
