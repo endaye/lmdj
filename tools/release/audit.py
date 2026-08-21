@@ -457,13 +457,16 @@ def _audit_remote_intent(
             "ok", intent.tag, "superseded-unreleased exact tag is retained without a Release",
         )
 
+    diagnostic_root = Path(context.repo_root)
     try:
         with context.git.detached_worktree(intent.target_revision) as worktree:
-            context.git.validate_release_target(Path(worktree), intent)
-    except Exception:
+            diagnostic_root = Path(worktree)
+            context.git.validate_release_target(diagnostic_root, intent)
+    except Exception as error:
+        reason = _sanitized_reason(diagnostic_root, error)
         return AuditFinding(
             "unverifiable", intent.tag,
-            "exact release target identity or support metadata is invalid",
+            f"exact release target identity or support metadata is invalid ({reason})",
             ("exact-target",),
         )
 
