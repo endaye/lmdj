@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 import io
 import json
+from pathlib import Path
 import re
 import time
 from typing import Any, Callable, Mapping, Sequence
@@ -24,6 +25,7 @@ from merge_queue import (
     UpdateResult,
     ValidationResult,
 )
+from change_scope import load_policy, reject_duplicates, validate_manifest
 
 
 API_ROOT = "https://api.github.com"
@@ -186,9 +188,46 @@ def parse_queue_validation_zip(payload: bytes) -> dict[str, object]:
             names = [name for name in archive.namelist() if name.endswith("queue-validation.json")]
             if names != ["queue-validation.json"]:
                 raise ValueError("queue validation archive must contain one root document")
-            return parse_queue_validation_json(_json(archive.read(names[0])))
+            try:
+                document = json.loads(
+                    archive.read(names[0]).decode("utf-8"),
+                    object_pairs_hook=reject_duplicates,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("queue validation is not UTF-8 JSON") from error
+            return parse_queue_validation_json(document)
     except zipfile.BadZipFile as error:
         raise ValueError("queue validation artifact is not a zip archive") from error
+
+
+def parse_scope_manifest_zip(
+    payload: bytes, expected_head_sha: str
+) -> dict[str, object]:
+    expected_head_sha = _sha(expected_head_sha, "expected scope head SHA")
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = [name for name in archive.namelist() if name.endswith("ci-scope.json")]
+            if names != ["ci-scope.json"]:
+                raise ValueError("scope archive must contain one root document")
+            try:
+                parsed = json.loads(
+                    archive.read(names[0]).decode("utf-8"),
+                    object_pairs_hook=reject_duplicates,
+                )
+            except (UnicodeDecodeError, json.JSONDecodeError) as error:
+                raise ValueError("scope manifest is not UTF-8 JSON") from error
+            document = _object(parsed, "scope manifest")
+    except zipfile.BadZipFile as error:
+        raise ValueError("scope artifact is not a zip archive") from error
+    policy = load_policy(Path(__file__).with_name("scope_policy.json"))
+    validate_manifest(document, policy)
+    if "queue" in document:
+        raise ValueError("pull request scope must not contain dispatch queue metadata")
+    if document.get("head_sha") != expected_head_sha:
+        raise ValueError("scope manifest head does not match workflow run")
+    if document.get("mode") != "full" or document.get("trusted_head") is not True:
+        raise ValueError("synchronized validation requires trusted full scope")
+    return document
 
 
 class GitHubQueueClient:
@@ -372,6 +411,65 @@ class GitHubQueueClient:
             self._sleeper(5)
         return UpdateResult("timeout", None)
 
+    def authorize_sync_validation(
+        self, number: int, base_sha: str, head_sha: str, timeout_seconds: int
+    ) -> int:
+        _sha(base_sha, "synchronized base SHA")
+        _sha(head_sha, "synchronized head SHA")
+        deadline = self._clock() + timeout_seconds
+        while True:
+            values = self._get_pages(
+                "/actions/workflows/ci.yml/runs?event=pull_request&per_page=100",
+                "workflow_runs",
+            )
+            candidates: list[dict[str, Any]] = []
+            for value in values:
+                run = _object(value, "workflow run")
+                pull_numbers = {
+                    _object(pull, "workflow run pull").get("number")
+                    for pull in run.get("pull_requests", [])
+                }
+                if (
+                    run.get("event") == "pull_request"
+                    and run.get("path") == ".github/workflows/ci.yml"
+                    and run.get("head_sha") == head_sha
+                    and _object(run.get("actor"), "workflow run actor").get("login")
+                    == "github-actions[bot]"
+                    and number in pull_numbers
+                ):
+                    candidates.append(run)
+            if len(candidates) > 1:
+                raise ValueError("multiple synchronized validation runs matched")
+            if candidates:
+                run = candidates[0]
+                run_id = run.get("id")
+                if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
+                    raise ValueError("synchronized validation run ID is missing")
+                if run.get("conclusion") == "action_required":
+                    try:
+                        self._request(
+                            "POST", f"/actions/runs/{run_id}/approve", expected=(201,)
+                        )
+                    except Exception:
+                        pass
+                    while self._clock() <= deadline:
+                        reconciled = self._get_object(f"/actions/runs/{run_id}")
+                        if reconciled.get("conclusion") != "action_required":
+                            return run_id
+                        self._sleeper(1)
+                    raise GitHubApiError(
+                        403,
+                        "POST",
+                        self._url(f"/actions/runs/{run_id}/approve"),
+                        "synchronized validation still requires approval",
+                    )
+                if run.get("status") in {"queued", "in_progress", "completed"}:
+                    return run_id
+                raise ValueError("synchronized validation run has an unexpected state")
+            if self._clock() >= deadline:
+                raise TimeoutError("synchronized validation run was not created")
+            self._sleeper(5)
+
     def get_tree(self, sha: str) -> str:
         document = self._get_object(f"/git/commits/{sha}")
         return _sha(_object(document.get("tree"), "commit tree").get("sha"), "tree SHA")
@@ -478,18 +576,37 @@ class GitHubQueueClient:
         checks = self._get_pages(f"/check-suites/{suite_id}/check-runs?per_page=100", "check_runs")
         artifacts = self._get_pages(f"/actions/runs/{run_id}/artifacts?per_page=100", "artifacts")
         candidates = []
+        artifact_prefix = (
+            "queue-validation-"
+            if run.get("event") == "workflow_dispatch"
+            else f"ci-scope-{run.get('head_sha')}"
+        )
         for value in artifacts:
             artifact = _object(value, "artifact")
             if (
                 isinstance(artifact.get("name"), str)
-                and artifact["name"].startswith("queue-validation-")
+                and (
+                    artifact["name"].startswith(artifact_prefix)
+                    if run.get("event") == "workflow_dispatch"
+                    else artifact["name"] == artifact_prefix
+                )
                 and artifact.get("expired") is False
             ):
                 candidates.append(artifact)
         if len(candidates) != 1 or not isinstance(candidates[0].get("id"), int):
-            raise ValueError("exactly one live queue validation artifact is required")
+            raise ValueError("exactly one live validation artifact is required")
         artifact_body = self._download_validation_artifact(candidates[0]["id"])
-        validation = parse_queue_validation_zip(artifact_body)
+        if run.get("event") == "pull_request":
+            manifest = parse_scope_manifest_zip(artifact_body, str(run.get("head_sha")))
+            validation = {
+                "classification": "valid",
+                "queue_ticket": None,
+                "queue_base_sha": manifest["base_sha"],
+                "manifest_mode": manifest["mode"],
+                "trusted_head": manifest["trusted_head"],
+            }
+        else:
+            validation = parse_queue_validation_zip(artifact_body)
         created = _instant(run["created_at"])
         started = _instant(run["run_started_at"])
         updated = _instant(run["updated_at"])
@@ -506,7 +623,10 @@ class GitHubQueueClient:
                 if validation["manifest_mode"] is not None else None
             ),
             trusted_head=bool(validation["trusted_head"]),
-            ticket=str(validation["queue_ticket"]),
+            ticket=(
+                str(validation["queue_ticket"])
+                if validation["queue_ticket"] is not None else None
+            ),
             base_sha=str(validation["queue_base_sha"]),
             required_checks=self._required_checks(jobs, checks),
             queue_seconds=(started - created).total_seconds(),
@@ -539,8 +659,7 @@ class GitHubQueueClient:
 
     def create_review_comment(self, number: int, body: str) -> None:
         self._request(
-            "POST", f"/pulls/{number}/reviews", {"body": body, "event": "COMMENT"},
-            expected=(200,),
+            "POST", f"/issues/{number}/comments", {"body": body}, expected=(201,),
         )
 
     def list_labeled_pulls(self, label: str) -> tuple[PullRequest, ...]:
@@ -598,7 +717,7 @@ class GitHubQueueClient:
         return False
 
     def list_review_comments(self, number: int) -> tuple[str, ...]:
-        values = self._get_pages(f"/pulls/{number}/reviews?per_page=100")
+        values = self._get_pages(f"/issues/{number}/comments?per_page=100")
         bodies: list[str] = []
         for value in values:
             body = _object(value, "pull review").get("body")

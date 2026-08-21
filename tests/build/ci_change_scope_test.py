@@ -492,6 +492,12 @@ class ChangeScopeTest(unittest.TestCase):
         self.assertEqual(plain["mode"], "focused")
         self.assertEqual(labeled["mode"], "full")
 
+    def test_merge_queue_label_upgrades_synchronized_pr_run_to_full(self):
+        manifest = self.classify(["docs/guide.md"], labels={"merge:queue"})
+        self.assertEqual(manifest["mode"], "full")
+        self.assertTrue(all(manifest["lanes"].values()))
+        self.assertIn("merge:queue label", manifest["reasons"])
+
     def test_docs_main_push_is_focused(self):
         manifest = self.classify(["docs/guide.md"], event_name="push")
         self.assertEqual(manifest["mode"], "focused")

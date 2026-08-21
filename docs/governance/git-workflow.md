@@ -193,13 +193,17 @@ After enablement, adding `merge:queue` is an explicit, revocable authorization
 to update and automatically squash-merge that PR; it is not review approval.
 Only an actor whose live repository permission is `write`, `maintain`, or
 `admin` may authorize a same-repository, open, non-Draft PR targeting `main`.
-The controller re-reads eligibility and the label, merges exact current `main`
-into the PR branch, then dispatches full Core CI bound to one ticket, PR number,
-base SHA, head SHA, and numeric `workflow_run_id`. The synchronized push made by
-`GITHUB_TOKEN` does not supply the required PR checks; that exact dispatch run
-must publish `core (ubuntu-latest)`, `core (macos-latest)`, and same-run
-`PR Gate` from GitHub Actions App ID `15368`. Only live-confirmed base/head drift
-may consume another attempt, with three attempts total.
+The controller re-reads eligibility and the label, then merges exact current
+`main` into the PR branch when needed. GitHub creates that `GITHUB_TOKEN`
+`synchronize` run in approval-required state; the controller binds the unique
+exact PR/head/bot `Core CI` run, approves it with `actions:write`, and uses its
+same-run full scope as the validation instead of dispatching duplicate CI. If
+the PR already contains current `main`, the controller dispatches full Core CI
+bound to one ticket, PR number, base SHA, head SHA, and numeric
+`workflow_run_id`. In either path the exact run must publish
+`core (ubuntu-latest)`, `core (macos-latest)`, and same-run `PR Gate` from GitHub
+Actions App ID `15368`. Only live-confirmed base/head drift may consume another
+attempt, with three attempts total.
 
 A PR changing `.github/workflows/merge-queue.yml`, `.github/workflows/ci.yml`,
 `.github/actionlint.yaml`, `scripts/ci/merge_queue.py`,
@@ -216,8 +220,8 @@ observe it. A final label read and the merge mutation cannot be atomic, so an
 operator who revokes during that narrow window must inspect the queue report
 and live PR state rather than infer cancellation from label absence. Duplicate
 workers that reach an already merged PR exit successfully as `already-merged`.
-Every other terminal failure removes the label and leaves one stable-code
-review report; recovery requires fixing the cause and explicitly adding the
+Every other terminal failure removes the label and leaves one stable-code PR
+conversation comment; recovery requires fixing the cause and explicitly adding the
 label again.
 
 An open PR whose latest `merge:queue` event is at least 20 minutes old, with no

@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts/ci"))
 
 import github_queue_api as api  # noqa: E402
+import change_scope as scope  # noqa: E402
 import merge_queue as mq  # noqa: E402
 
 
@@ -32,6 +33,13 @@ def validation_zip(document):
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("queue-validation.json", json.dumps(document))
+    return buffer.getvalue()
+
+
+def scope_zip(document):
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("ci-scope.json", json.dumps(document))
     return buffer.getvalue()
 
 
@@ -200,6 +208,111 @@ class GitHubQueueApiTest(unittest.TestCase):
         self.assertEqual(result, mq.UpdateResult("accepted", "c" * 40))
         self.assertEqual(json.loads(transport.requests[0].body), {"expected_head_sha": SHA_B})
 
+    def test_sync_validation_is_exactly_bound_approved_and_reconciled(self):
+        run = {
+            "id": 9101,
+            "event": "pull_request",
+            "path": ".github/workflows/ci.yml",
+            "head_sha": SHA_B,
+            "status": "completed",
+            "conclusion": "action_required",
+            "actor": {"login": "github-actions[bot]"},
+            "pull_requests": [{"number": 220}],
+        }
+        client, transport = self.client([
+            json_response(200, {"workflow_runs": [run]}),
+            (201, {}, b""),
+            json_response(200, run),
+            json_response(200, {**run, "status": "queued", "conclusion": None}),
+        ], clock=iter((0.0, 1.0, 2.0, 3.0)).__next__)
+        self.assertEqual(
+            client.authorize_sync_validation(220, SHA_A, SHA_B, 60),
+            9101,
+        )
+        self.assertTrue(transport.requests[0].url.endswith(
+            "/actions/workflows/ci.yml/runs?event=pull_request&per_page=100"
+        ))
+        self.assertTrue(transport.requests[1].url.endswith("/actions/runs/9101/approve"))
+        self.assertEqual(transport.requests[1].method, "POST")
+
+    def test_pull_request_validation_reads_the_exact_scope_manifest(self):
+        manifest = scope.classify(
+            scope.load_policy(ROOT / "scripts/ci/scope_policy.json"),
+            (scope.ChangedFile("M", ("docs/guide.md",)),),
+            base_sha=SHA_A,
+            head_sha=SHA_B,
+            event_name="pull_request",
+            draft=False,
+            labels={"merge:queue"},
+            trusted_head=True,
+        )
+        redirect = (
+            "https://productionresultssa12.blob.core.windows.net/"
+            "actions-results/scope?sig=fixture"
+        )
+        client, _ = self.client([
+            json_response(200, {
+                "id": 9101,
+                "status": "completed",
+                "conclusion": "success",
+                "event": "pull_request",
+                "path": ".github/workflows/ci.yml",
+                "head_sha": SHA_B,
+                "check_suite_id": 778,
+                "created_at": "2026-08-21T00:00:00Z",
+                "run_started_at": "2026-08-21T00:00:10Z",
+                "updated_at": "2026-08-21T00:00:30Z",
+            }),
+            json_response(200, {"total_count": 3, "jobs": [
+                {"name": "core (ubuntu-latest)", "conclusion": "success"},
+                {"name": "core (macos-latest)", "conclusion": "success"},
+                {"name": "PR Gate", "conclusion": "success"},
+            ]}),
+            json_response(200, {"total_count": 3, "check_runs": [
+                {"name": "core (ubuntu-latest)", "conclusion": "success", "app": {"id": 15368}},
+                {"name": "core (macos-latest)", "conclusion": "success", "app": {"id": 15368}},
+                {"name": "PR Gate", "conclusion": "success", "app": {"id": 15368}},
+            ]}),
+            json_response(200, {"total_count": 1, "artifacts": [
+                {"id": 43, "name": f"ci-scope-{SHA_B}", "expired": False},
+            ]}),
+            (302, {"Location": redirect}, b""),
+            (200, {"Content-Type": "application/zip"}, scope_zip(manifest)),
+        ])
+        result = client.wait_validation(9101, 60)
+        self.assertEqual(result.run_event, "pull_request")
+        self.assertEqual(result.base_sha, SHA_A)
+        self.assertEqual(result.head_sha, SHA_B)
+        self.assertIsNone(result.ticket)
+        self.assertEqual(result.classification, "valid")
+
+    def test_scope_artifact_rejects_open_or_inconsistent_manifests(self):
+        policy = scope.load_policy(ROOT / "scripts/ci/scope_policy.json")
+        manifest = scope.classify(
+            policy,
+            (scope.ChangedFile("M", ("docs/guide.md",)),),
+            base_sha=SHA_A,
+            head_sha=SHA_B,
+            event_name="pull_request",
+            draft=False,
+            labels={"merge:queue"},
+            trusted_head=True,
+        )
+        opened = dict(manifest)
+        opened["extra"] = True
+        wrong_lanes = json.loads(json.dumps(manifest))
+        wrong_lanes["lanes"][next(iter(wrong_lanes["lanes"]))] = False
+        wrong_jobs = dict(manifest)
+        wrong_jobs["required_jobs"] = []
+        for document in (opened, wrong_lanes, wrong_jobs):
+            with self.subTest(keys=sorted(document)):
+                with self.assertRaises(ValueError):
+                    api.parse_scope_manifest_zip(scope_zip(document), SHA_B)
+        wrong_head = dict(manifest)
+        wrong_head["head_sha"] = SHA_A
+        with self.assertRaises(ValueError):
+            api.parse_scope_manifest_zip(scope_zip(wrong_head), SHA_B)
+
     def test_validation_binds_run_jobs_check_suite_and_secret_safe_artifact_redirect(self):
         validation = {
             "schema": "lmdj.queue-validation.v1",
@@ -303,11 +416,11 @@ class GitHubQueueApiTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             api.parse_queue_validation_zip(buffer.getvalue())
 
-    def test_merge_label_and_review_mutations_are_structured(self):
+    def test_merge_label_and_issue_comment_mutations_are_structured(self):
         client, transport = self.client([
             json_response(200, {"merged": True, "sha": SHA_B, "message": "merged"}),
             (204, {}, b""),
-            json_response(200, {"id": 8}),
+            json_response(201, {"id": 8}),
         ])
         payload = {
             "merge_method": "squash",
@@ -319,7 +432,8 @@ class GitHubQueueApiTest(unittest.TestCase):
         client.remove_label(220, "merge:queue")
         client.create_review_comment(220, "stable report")
         self.assertEqual(json.loads(transport.requests[0].body), payload)
-        self.assertEqual(json.loads(transport.requests[2].body), {"body": "stable report", "event": "COMMENT"})
+        self.assertTrue(transport.requests[2].url.endswith("/issues/220/comments"))
+        self.assertEqual(json.loads(transport.requests[2].body), {"body": "stable report"})
 
     def test_watchdog_reads_live_label_timeline_runs_and_review_markers(self):
         pull = {
