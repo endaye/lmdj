@@ -16,6 +16,18 @@ Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 Sem
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
 当前 source candidate 是 Product Build `1.0.24.0 · canary · g<short-sha>`。这次候选来自 provider-sdk G1/G4 缺陷修复级联：Attempt reservation 泄漏回收与 temp sibling 进程级唯一性修复已经进入 active manifests 与 Assembly Lock；历史 `1.0.21.0` 的 MPD218 复验和 `1.0.22.0` / `1.0.23.0` 的旧候选证据都不自动升级为 `1.0.24.0` 的候选结论。版本值由 active manifests 与 Assembly Lock 派生。
 
+## Product Build 权威与诊断
+
+`products/lmdj/version.json` 是当前 Product Build 的唯一源码权威。CMake、Runtime identity、
+Portal facts 与 current-repository tests 都从它派生；`assembly.json` 的 Product Build 仍是经过
+review 的 exact Assembly 声明，release intent、build-specific current prose 与 immutable
+snapshot 也继续保存各自的精确事实，不能由 mutable HEAD 自动重写。
+
+版本、Assembly、compiled assembly、lock 或 generated Runtime identity 漂移时，最早可判定的
+gate 会报告 authority、expected、found 与 consumer path；生成物 stale 还会给出稳定的
+`scripts/version.py lock` 或 `tools/web-runtime/generate_runtime_identity.py` remedy。修复命令只
+恢复派生物，不会自动修改 reviewed Assembly、release intent、snapshot 或分配新 Product Build。
+
 | Identity | 当前版本 | 变化边界 |
 | --- | --- | --- |
 | Authoring Domain | `0.2.0` | 固定 Sample playback、Project v2 与兼容 v1 投影 |

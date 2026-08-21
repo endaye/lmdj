@@ -101,11 +101,16 @@ def provider_source_package_identity(
 
 
 def product_assembly_source_identity(root: Path = REPO_ROOT) -> str:
+    version = load_object(root / "products/lmdj/version.json")
+    product_version = ".".join(
+        str(version[field])
+        for field in ("milestone", "minor", "build", "patch")
+    )
     return source_package_identity(
         format_name="product-assembly-source-package",
         identity={
             "product_id": "lmdj",
-            "product_version": "1.0.24.0",
+            "product_version": product_version,
         },
         paths=[
             root / "products/lmdj/CMakeLists.txt",
@@ -208,7 +213,7 @@ assert lock["product"] == assembly["product"]
 assert lock["assembly_sha256"] == sha256(ASSEMBLY_PATH)
 assert lock["product_assembly"] == {
     "id": "lmdj",
-    "version": "1.0.24.0",
+    "version": assembly["product"]["version"],
     "sha256": product_assembly_source_identity(),
 }
 
@@ -310,6 +315,41 @@ with tempfile.TemporaryDirectory(prefix="lmdj-version-lock-") as temp:
         REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
     ).read_bytes()
     assert authoritative_lock == LOCK_PATH.read_bytes()
+
+    stale_product = ordering_assembly["product"]["version"]
+    stale_source = authoritative_source.decode("utf-8").replace(
+        f'CompiledAssemblyCatalog{{\n      "lmdj",\n      "{stale_product}",',
+        'CompiledAssemblyCatalog{\n      "lmdj",\n      "9.8.7.5",',
+        1,
+    )
+    assert stale_source.encode("utf-8") != authoritative_source
+    ordering_source.write_text(stale_source, encoding="utf-8")
+    original_repo_root = version_module.REPO_ROOT
+    version_module.REPO_ROOT = ordering_root
+    try:
+        try:
+            version_module._verify_lock(
+                version_module.load_version(
+                    ordering_root / "products/lmdj/version.json"
+                ),
+                ordering_assembly_path,
+                ordering_assembly,
+                ordering_output,
+                ordering_root / "products/lmdj/version.json",
+            )
+        except ValueError as error:
+            stale_message = str(error)
+        else:
+            raise AssertionError("stale compiled Product Build was accepted")
+    finally:
+        version_module.REPO_ROOT = original_repo_root
+    assert "Product Build mismatch" in stale_message
+    assert f"expected {stale_product}" in stale_message
+    assert "found 9.8.7.5" in stale_message
+    assert "products/lmdj/version.json" in stale_message
+    assert "products/lmdj/src/compiled_assembly.cpp" in stale_message
+    assert "scripts/version.py lock" in stale_message
+    ordering_source.write_bytes(authoritative_source)
 
     source_text = authoritative_source.decode("utf-8")
     swapped_factories = source_text.replace(

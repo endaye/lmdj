@@ -2,10 +2,12 @@ import {expect, test} from "vitest";
 
 import {createAcceptanceReport} from "../src/report/acceptance_report";
 
+const TEST_PRODUCT_BUILD = "9.8.7.6";
+
 test("emits only deterministic privacy-safe acceptance facts", () => {
   const report = createAcceptanceReport({
     identity: {
-      productBuild: "1.0.24.0",
+      productBuild: TEST_PRODUCT_BUILD,
       hostId: "creator-web",
       hostVersion: "1.3.1",
       platformVersion: "0.3.1",
@@ -55,7 +57,7 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
 
   expect(report).toEqual({
     contract: "lmdj.creator-web.acceptance.v1",
-    product_build: "1.0.24.0",
+    product_build: TEST_PRODUCT_BUILD,
     host_id: "creator-web",
     host_version: "1.3.1",
     platform_version: "0.3.1",

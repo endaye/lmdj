@@ -19,6 +19,8 @@ import {
   type CreatorState,
 } from "../src/state/creator_state";
 
+const TEST_PRODUCT_BUILD = "9.8.7.6";
+
 function fakeMidiInput() {
   const listeners = new Map<string, (event: unknown) => void>();
   return {
@@ -112,7 +114,7 @@ function fixture() {
       state: "running",
       error_code: null,
       error_details: {},
-      product_build: "1.0.24.0",
+      product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
       host_version: "1.3.1",
       platform_version: "0.3.1",

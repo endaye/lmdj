@@ -24,6 +24,16 @@ SEMVER_PATTERN = re.compile(
     r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
 )
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
+PRODUCT_BUILD_PATTERN = re.compile(
+    r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\."
+    r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$"
+)
+LOCK_REMEDY = (
+    "regenerate the compiled assembly and lock with python3 "
+    "scripts/version.py lock --version-file products/lmdj/version.json "
+    "--assembly products/lmdj/assembly.json --output "
+    "products/lmdj/assembly.lock.json"
+)
 
 
 @dataclass(frozen=True, order=True)
@@ -112,9 +122,51 @@ def _git_revision() -> str:
     return revision
 
 
+def _repo_relative(path: str | Path) -> str:
+    candidate = Path(path)
+    if not candidate.is_absolute():
+        return candidate.as_posix()
+    try:
+        return candidate.relative_to(REPO_ROOT).as_posix()
+    except ValueError:
+        pass
+    roots = {"apps", "contracts", "packages", "products", "providers", "scripts", "tools"}
+    for index, part in enumerate(candidate.parts):
+        if part in roots:
+            return PurePosixPath(*candidate.parts[index:]).as_posix()
+    return candidate.name
+
+
+def _product_build_text(value: object) -> str:
+    if value is None:
+        return "<missing>"
+    if not isinstance(value, str) or PRODUCT_BUILD_PATTERN.fullmatch(value) is None:
+        return "<invalid>"
+    return value
+
+
+def _product_build_mismatch(
+    *,
+    expected: ProductVersion,
+    authority: str | Path,
+    found: object,
+    consumer: str | Path,
+    remedy: str | None = None,
+) -> str:
+    message = (
+        f"Product Build mismatch: expected {expected} from "
+        f"{_repo_relative(authority)}, found {_product_build_text(found)} in "
+        f"{_repo_relative(consumer)}"
+    )
+    if remedy is not None:
+        return f"{message}; remedy: {remedy}"
+    return message
+
+
 def _verify_assembly(
     version: ProductVersion,
     assembly_path: str | Path,
+    version_path: str | Path = "products/lmdj/version.json",
 ) -> dict[str, Any]:
     assembly = _load_object(assembly_path, "assembly")
     if assembly.get("contract") != "lmdj.assembly.v2":
@@ -126,7 +178,17 @@ def _verify_assembly(
         raise ValueError("assembly product id does not match lmdj")
     if product.get("version") != str(version):
         raise ValueError(
-            "assembly product version does not match product version"
+            _product_build_mismatch(
+                expected=version,
+                authority=version_path,
+                found=product.get("version"),
+                consumer=assembly_path,
+                remedy=(
+                    "update the reviewed products/lmdj/assembly.json "
+                    "declaration to the approved Product Build, then "
+                    f"{LOCK_REMEDY}"
+                ),
+            )
         )
     if set(assembly) != {
         "contract",
@@ -860,7 +922,7 @@ def generate_lock(
     output_path: str | Path,
 ) -> dict[str, Any]:
     version = load_version(version_file)
-    assembly = _verify_assembly(version, assembly_path)
+    assembly = _verify_assembly(version, assembly_path, version_file)
     compiled_path = REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
     compiled_bytes = _render_compiled_assembly(version, assembly)
     lock = _lock_document(
@@ -884,11 +946,62 @@ def _verify_lock(
     assembly_path: str | Path,
     assembly: dict[str, Any],
     lock_path: str | Path,
+    version_path: str | Path = "products/lmdj/version.json",
 ) -> None:
     lock = _load_object(lock_path, "assembly lock")
-    expected = _lock_document(version, assembly_path, assembly)
+    for field in ("product", "product_assembly"):
+        identity = lock.get(field)
+        found = identity.get("version") if isinstance(identity, dict) else None
+        if found != str(version):
+            raise ValueError(
+                _product_build_mismatch(
+                    expected=version,
+                    authority=version_path,
+                    found=found,
+                    consumer=lock_path,
+                    remedy=LOCK_REMEDY,
+                )
+            )
+
+    compiled_path = REPO_ROOT / "products/lmdj/src/compiled_assembly.cpp"
+    expected_compiled = _render_compiled_assembly(version, assembly)
+    actual_compiled = compiled_path.read_bytes()
+    if actual_compiled != expected_compiled:
+        try:
+            compiled_text = actual_compiled.decode("utf-8")
+        except UnicodeDecodeError:
+            compiled_text = ""
+        match = re.search(
+            r'CompiledAssemblyCatalog\{\s*"lmdj",\s*"([^"]+)"',
+            compiled_text,
+        )
+        found = match.group(1) if match is not None else None
+        if found != str(version):
+            raise ValueError(
+                _product_build_mismatch(
+                    expected=version,
+                    authority=version_path,
+                    found=found,
+                    consumer=compiled_path,
+                    remedy=LOCK_REMEDY,
+                )
+            )
+        raise ValueError(
+            "generated compiled assembly is stale in "
+            f"{_repo_relative(compiled_path)}; remedy: {LOCK_REMEDY}"
+        )
+
+    expected = _lock_document(
+        version,
+        assembly_path,
+        assembly,
+        expected_compiled,
+    )
     if lock != expected:
-        raise ValueError("assembly lock does not match resolved assembly")
+        raise ValueError(
+            "assembly lock does not match resolved assembly in "
+            f"{_repo_relative(lock_path)}; remedy: {LOCK_REMEDY}"
+        )
 
 
 def _artifact_overlays(
@@ -1005,8 +1118,14 @@ def verify(
     if (assembly_path is None) != (lock_path is None):
         raise ValueError("assembly and lock must be supplied together")
     if assembly_path is not None and lock_path is not None:
-        assembly = _verify_assembly(version, assembly_path)
-        _verify_lock(version, assembly_path, assembly, lock_path)
+        assembly = _verify_assembly(version, assembly_path, version_file)
+        _verify_lock(
+            version,
+            assembly_path,
+            assembly,
+            lock_path,
+            version_file,
+        )
     return version
 
 

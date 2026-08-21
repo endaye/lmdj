@@ -15,6 +15,20 @@ unit/component 验证局部边界，integration/e2e 验证组合，stress 验证
 ## 稳定命令
 `scripts/core.sh test dev full` 运行除 stress 外的完整层级；stress 必须显式运行；`scripts/core.sh proof` 也不包含 stress。
 
+## Version identity fixtures
+
+验证 active repository 的测试从 `products/lmdj/version.json`、Assembly 或 generated Runtime
+identity 派生当前 Product Build，并用独立 mismatch fixture 证明 consumer 不能漂移。只验证
+透传、报告、状态机或错误处理的 pure behavior tests 使用命名 synthetic Product Build；它不
+代表已分配或候选身份，下一次 allocation 不修改这类 fixture。历史测试与 reviewed exact
+release/snapshot 记录继续保留原版本语义。
+
+Creator Host/package conformance 以 `apps/creator-web/module.json` 为 Host SemVer 与 npm name
+权威，并要求 `package.json`、`package-lock.json` 顶层及 `packages[""]` 的 version/name 全部
+一致；expected npm name 由 module ID 派生。每个 drift 直接报告 expected、found、authority 与
+consumer，不依赖 `npm install` 副作用，也不会自动改写 lockfile。Product Build 与 Creator
+Host SemVer 是不同版本轴。
+
 ## Release 验证边界
 
 release 授权只接受 exact-main 的 full CI 证据：target SHA 上一次 completed、successful 的 `Core CI` run（`push` 或显式 `workflow_dispatch`、head branch 为 `main`），其同一 run 内的 `Change Scope` 与 `PR Gate` 均成功，且该 run 为同一 exact SHA 保留的 scope manifest 为 `lmdj.ci-scope` 的 v2、`mode=full`、`trusted_head=true`。因为普通 merge 可能是 focused，所以当 target SHA 自身的 push 是 focused 时，操作者必须对该 exact SHA 以空 `lanes` 显式 dispatch 一次 full run 并把 run ID 写入 release intent；指定 lane 的 `requested` run 不是 full 证据。该 artifact 的保留期是 14 天：过期后只能在 run 仍被保留时重跑其全部 job（保持同一 run ID 与 SHA），或另行授权一次 exact-SHA full run 并更新 intent，证据不得推断或重建。缺失/过期为 `unverifiable`，focused、SHA 不符或 Gate 缺失/失败为 `conflict`，传输与下载故障为 `external-error`。已 published 的终态审计仍以不可变 tag/Release/asset 证据判定，不依赖会过期的 artifact。artifact 下载走认证的 Actions API，不向 302 之后的签名存储地址转发凭据，并对宿主家族、大小、ZIP 成员与 manifest schema 全部 fail closed。

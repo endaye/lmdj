@@ -13,6 +13,7 @@ import type {
 
 const PROJECT_ID = "11111111-1111-4111-8111-111111111111";
 const PATTERN_ID = "22222222-2222-4222-8222-222222222222";
+const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const summary: LocalProjectSummary = {
   projectId: PROJECT_ID,
@@ -81,7 +82,7 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       state: "audio-suspended",
       error_code: null,
       error_details: {},
-      product_build: "1.0.24.0",
+      product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
       host_version: "1.3.1",
       platform_version: "0.3.1",

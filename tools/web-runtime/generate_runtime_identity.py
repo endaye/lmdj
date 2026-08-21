@@ -15,7 +15,15 @@ JSON_OUTPUT = Path("products/lmdj/generated/web-runtime-identity.json")
 MJS_OUTPUT = Path("products/lmdj/generated/web-runtime-identity.mjs")
 SAFE_IDENTITY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 SEMVER = re.compile(r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$")
+PRODUCT_BUILD = re.compile(
+    r"^(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\."
+    r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)$"
+)
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
+RUNTIME_IDENTITY_REMEDY = (
+    "regenerate Runtime identity with python3 "
+    "tools/web-runtime/generate_runtime_identity.py --repo-root ."
+)
 TOOLCHAIN_KEYS = {
     "allow_memory_growth",
     "emcc_version",
@@ -31,6 +39,41 @@ TOOLCHAIN_KEYS = {
 
 class IdentityError(RuntimeError):
     pass
+
+
+def relative_path(repo_root: Path, path: Path) -> str:
+    try:
+        return path.resolve(strict=False).relative_to(
+            repo_root.resolve(strict=False)
+        ).as_posix()
+    except ValueError:
+        return path.name
+
+
+def product_build_text(value: object) -> str:
+    if value is None:
+        return "<missing>"
+    if not isinstance(value, str) or PRODUCT_BUILD.fullmatch(value) is None:
+        return "<invalid>"
+    return value
+
+
+def product_build_mismatch(
+    repo_root: Path,
+    *,
+    expected: str,
+    found: object,
+    consumer: Path,
+    remedy: str | None = None,
+) -> IdentityError:
+    message = (
+        f"Product Build mismatch: expected {expected} from "
+        "products/lmdj/version.json, found "
+        f"{product_build_text(found)} in {relative_path(repo_root, consumer)}"
+    )
+    if remedy is not None:
+        message = f"{message}; remedy: {remedy}"
+    return IdentityError(message)
 
 
 def read_json(path: Path, label: str) -> dict:
@@ -133,13 +176,49 @@ def read_assembly_identity(
     if assembly["contract"] != "lmdj.assembly.v2":
         raise IdentityError("Product Assembly contract is invalid")
     expected_product = {"id": "lmdj", "version": product_build}
-    if assembly["product"] != expected_product or lock["product"] != expected_product:
-        raise IdentityError("Product Assembly version is stale")
+    if assembly["product"] != expected_product:
+        product = assembly["product"]
+        found = product.get("version") if isinstance(product, dict) else None
+        raise product_build_mismatch(
+            repo_root,
+            expected=product_build,
+            found=found,
+            consumer=assembly_path,
+        )
+    lock_path = repo_root / "products/lmdj/assembly.lock.json"
+    if lock["product"] != expected_product:
+        product = lock["product"]
+        found = product.get("version") if isinstance(product, dict) else None
+        raise product_build_mismatch(
+            repo_root,
+            expected=product_build,
+            found=found,
+            consumer=lock_path,
+            remedy=(
+                "regenerate the compiled assembly and lock with python3 "
+                "scripts/version.py lock --version-file "
+                "products/lmdj/version.json --assembly "
+                "products/lmdj/assembly.json --output "
+                "products/lmdj/assembly.lock.json"
+            ),
+        )
     product_assembly = lock["product_assembly"]
     if not isinstance(product_assembly, dict) or set(product_assembly) != {"id", "version", "sha256"}:
         raise IdentityError("locked Product Assembly identity is invalid")
     if product_assembly["id"] != "lmdj" or product_assembly["version"] != product_build:
-        raise IdentityError("locked Product Assembly version is stale")
+        raise product_build_mismatch(
+            repo_root,
+            expected=product_build,
+            found=product_assembly.get("version"),
+            consumer=lock_path,
+            remedy=(
+                "regenerate the compiled assembly and lock with python3 "
+                "scripts/version.py lock --version-file "
+                "products/lmdj/version.json --assembly "
+                "products/lmdj/assembly.json --output "
+                "products/lmdj/assembly.lock.json"
+            ),
+        )
     digest = lock["assembly_sha256"]
     if not isinstance(digest, str) or SHA256.fullmatch(digest) is None:
         raise IdentityError("Assembly SHA-256 is invalid")
@@ -307,6 +386,26 @@ def mjs_bytes(value: object) -> bytes:
     ).encode("utf-8")
 
 
+def output_product_build(path: Path, content: bytes) -> object:
+    try:
+        if path.suffix == ".json":
+            value = json.loads(content)
+        elif path.suffix == ".mjs":
+            prefix = mjs_bytes({}).split(b"{}", 1)[0]
+            suffix = b");\n"
+            if not content.startswith(prefix) or not content.endswith(suffix):
+                return "<invalid>"
+            value = json.loads(content[len(prefix):-len(suffix)])
+        else:
+            return "<invalid>"
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return "<invalid>"
+    if not isinstance(value, dict):
+        return "<invalid>"
+    found = value.get("product_build")
+    return found if product_build_text(found) == found else "<invalid>"
+
+
 def write_or_check(repo_root: Path, check: bool) -> None:
     identity = generate(repo_root)
     outputs = {
@@ -318,9 +417,28 @@ def write_or_check(repo_root: Path, check: bool) -> None:
             try:
                 actual = path.read_bytes()
             except OSError as error:
-                raise IdentityError(f"generated Runtime identity is missing: {path}") from error
+                raise product_build_mismatch(
+                    repo_root,
+                    expected=identity["product_build"],
+                    found=None,
+                    consumer=path,
+                    remedy=RUNTIME_IDENTITY_REMEDY,
+                ) from error
             if actual != expected:
-                raise IdentityError(f"generated Runtime identity is stale: {path}")
+                found = output_product_build(path, actual)
+                if found != identity["product_build"]:
+                    raise product_build_mismatch(
+                        repo_root,
+                        expected=identity["product_build"],
+                        found=found,
+                        consumer=path,
+                        remedy=RUNTIME_IDENTITY_REMEDY,
+                    )
+                raise IdentityError(
+                    "generated Runtime identity is stale in "
+                    f"{relative_path(repo_root, path)}; remedy: "
+                    f"{RUNTIME_IDENTITY_REMEDY}"
+                )
         else:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(expected)

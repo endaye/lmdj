@@ -18,6 +18,19 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+
+def current_product_build() -> str:
+    version = json.loads(
+        (ROOT / "products/lmdj/version.json").read_text(encoding="utf-8")
+    )
+    return ".".join(
+        str(version[field])
+        for field in ("milestone", "minor", "build", "patch")
+    )
+
+
+CURRENT_PRODUCT_BUILD = current_product_build()
+
 from tools.release.commands import CommandRunner, sanitize_diagnostic  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
@@ -498,7 +511,10 @@ class ReleasePrepareTest(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=ROOT, check=True, capture_output=True, text=True,
         ).stdout.strip()
         cases = (
-            (ReleaseKind.PRODUCT, "1.0.24.0", "web-runtime-host", "canary", "1.0.24.0"),
+            (
+                ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
+                "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
+            ),
             (ReleaseKind.MODULE, "core-cli@1.0.13", "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
             (ReleaseKind.PROVIDER, "local.proof.success@1.0.3", "source-only", None, None),
@@ -526,8 +542,9 @@ class ReleasePrepareTest(unittest.TestCase):
             )
 
         intent = ReleaseIntent(
-            "fixture", ReleaseKind.PRODUCT, "1.0.24.0", "a" * 40, Disposition.RELEASABLE,
-            "web-runtime-host", ("evidence.md",), "canary", "1.0.24.0", 1,
+            "fixture", ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD, "a" * 40,
+            Disposition.RELEASABLE, "web-runtime-host", ("evidence.md",),
+            "canary", CURRENT_PRODUCT_BUILD, 1,
         )
         with self.assertRaises(TargetValidationError) as raised:
             validate_release_target(ROOT, intent, runner=CommandRunner(executor=executor))

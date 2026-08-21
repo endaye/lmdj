@@ -2,6 +2,7 @@
 
 import json
 import re
+import tempfile
 from pathlib import Path
 
 
@@ -82,6 +83,47 @@ def inventory(assembly: dict, field: str) -> dict[str, str]:
     return result
 
 
+def identity_text(value: object) -> str:
+    if value is None:
+        return "<missing>"
+    return value if isinstance(value, str) and value else "<invalid>"
+
+
+def verify_creator_package_identity(root: Path) -> None:
+    relative_root = Path("apps/creator-web")
+    authority_relative = relative_root / "module.json"
+    package_relative = relative_root / "package.json"
+    lock_relative = relative_root / "package-lock.json"
+    module = load_object(root / authority_relative)
+    package = load_object(root / package_relative)
+    lock = load_object(root / lock_relative)
+    assert module.get("contract") == "lmdj.module.v1", authority_relative
+    module_id = module.get("module")
+    expected_version = module.get("version")
+    assert isinstance(module_id, str) and module_id, authority_relative
+    assert isinstance(expected_version, str) and expected_version, authority_relative
+    expected_name = f"@lmdj/{module_id}"
+    packages = lock.get("packages")
+    root_package = packages.get("") if isinstance(packages, dict) else None
+    consumers = (
+        (package_relative.as_posix(), package),
+        (lock_relative.as_posix(), lock),
+        (f"{lock_relative.as_posix()}#packages['']", root_package),
+    )
+    for consumer, document in consumers:
+        for identity_kind, expected in (
+            ("version", expected_version),
+            ("name", expected_name),
+        ):
+            found = document.get(identity_kind) if isinstance(document, dict) else None
+            if found != expected:
+                raise AssertionError(
+                    f"Creator Host {identity_kind} mismatch: expected {expected} "
+                    f"from {authority_relative.as_posix()}, found "
+                    f"{identity_text(found)} in {consumer}"
+                )
+
+
 package_manifests = load_manifests(
     manifest_paths(REPO_ROOT / "packages")
 )
@@ -142,6 +184,7 @@ assert creator_manifest == {
     "api_version": 1,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }
+verify_creator_package_identity(REPO_ROOT)
 
 for _, (path, manifest) in provider_manifests.items():
     assert "authoring-domain" not in manifest["dependencies"], path
@@ -216,5 +259,98 @@ except AssertionError:
     pass
 else:
     raise AssertionError("cycle checker accepted a cycle")
+
+with tempfile.TemporaryDirectory(prefix="lmdj-creator-identity-") as temp:
+    fixture_root = Path(temp)
+    creator_root = fixture_root / "apps/creator-web"
+    creator_root.mkdir(parents=True)
+    valid_module = {
+        "contract": "lmdj.module.v1",
+        "module": "creator-web",
+        "version": "9.8.7",
+        "api_version": 1,
+        "dependencies": {},
+    }
+    valid_package = {"name": "@lmdj/creator-web", "version": "9.8.7"}
+    valid_lock = {
+        "name": "@lmdj/creator-web",
+        "version": "9.8.7",
+        "packages": {
+            "": {"name": "@lmdj/creator-web", "version": "9.8.7"}
+        },
+    }
+
+    def write_fixture(package: dict, lock: dict) -> None:
+        for name, value in (
+            ("module.json", valid_module),
+            ("package.json", package),
+            ("package-lock.json", lock),
+        ):
+            (creator_root / name).write_text(
+                json.dumps(value),
+                encoding="utf-8",
+            )
+
+    mutations = (
+        (
+            "package-version",
+            lambda package, lock: package.__setitem__("version", "9.8.6"),
+            "version",
+            "apps/creator-web/package.json",
+        ),
+        (
+            "lock-version",
+            lambda package, lock: lock.__setitem__("version", "9.8.6"),
+            "version",
+            "apps/creator-web/package-lock.json",
+        ),
+        (
+            "lock-root-version",
+            lambda package, lock: lock["packages"][""].__setitem__(
+                "version", "9.8.6"
+            ),
+            "version",
+            "apps/creator-web/package-lock.json#packages['']",
+        ),
+        (
+            "package-name",
+            lambda package, lock: package.__setitem__("name", "@lmdj/wrong"),
+            "name",
+            "apps/creator-web/package.json",
+        ),
+        (
+            "lock-name",
+            lambda package, lock: lock.__setitem__("name", "@lmdj/wrong"),
+            "name",
+            "apps/creator-web/package-lock.json",
+        ),
+        (
+            "lock-root-name",
+            lambda package, lock: lock["packages"][""].__setitem__(
+                "name", "@lmdj/wrong"
+            ),
+            "name",
+            "apps/creator-web/package-lock.json#packages['']",
+        ),
+    )
+    for case, mutate, identity_kind, consumer in mutations:
+        package = json.loads(json.dumps(valid_package))
+        lock = json.loads(json.dumps(valid_lock))
+        mutate(package, lock)
+        write_fixture(package, lock)
+        try:
+            verify_creator_package_identity(fixture_root)
+        except AssertionError as error:
+            message = str(error)
+            expected = (
+                "9.8.7" if identity_kind == "version" else "@lmdj/creator-web"
+            )
+            found = "9.8.6" if identity_kind == "version" else "@lmdj/wrong"
+            assert f"expected {expected}" in message, (case, message)
+            assert f"found {found}" in message, (case, message)
+            assert "apps/creator-web/module.json" in message, (case, message)
+            assert consumer in message, (case, message)
+        else:
+            raise AssertionError(f"Creator identity drift was accepted: {case}")
 
 print("module graph conformance: PASS")
