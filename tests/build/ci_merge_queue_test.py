@@ -211,10 +211,13 @@ class MergeQueueTest(unittest.TestCase):
             setattr(client, name, value)
         return client
 
-    def run_item(self, client, *, request=None, clock=None):
+    def run_item(self, client, *, request=None, clock=None, sleeper=None):
         clock = clock or FakeClock()
         return self.mq.run_queue_item(
-            request or self.request(), client, clock=clock.now, sleeper=clock.sleep
+            request or self.request(),
+            client,
+            clock=clock.now,
+            sleeper=sleeper or clock.sleep,
         )
 
     def test_unauthorized_actor_fails_closed_and_revokes_label(self):
@@ -224,6 +227,229 @@ class MergeQueueTest(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertEqual(client.removed, [(220, "merge:queue")])
         self.assertIn("unauthorized-actor", client.comments[0][1])
+
+    def test_cleanup_retries_transient_errors_with_backoff(self):
+        client = self.client(permission="read")
+        original_comment = client.create_review_comment
+        comment_attempts = 0
+        delays = []
+
+        def create_review_comment(number, body):
+            nonlocal comment_attempts
+            comment_attempts += 1
+            if comment_attempts < 3:
+                raise RuntimeError("temporary GitHub error")
+            original_comment(number, body)
+
+        client.create_review_comment = create_review_comment
+        report = self.run_item(client, sleeper=delays.append)
+        self.assertEqual(comment_attempts, 3)
+        self.assertEqual(len(client.comments), 1)
+        self.assertEqual(report.evidence, ())
+        self.assertEqual(delays, [2, 4])
+
+    def test_comment_loss_never_blocks_label_removal_and_is_named(self):
+        client = self.client(permission="read")
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def create_review_comment(number, body):
+            del number, body
+            raise GitHubApiError("comment unavailable")
+
+        client.create_review_comment = create_review_comment
+        report = self.run_item(client, sleeper=lambda _seconds: None)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertIn("cleanup-error:comment:GitHubApiError", report.evidence)
+
+    def test_label_removal_failure_still_attempts_the_comment(self):
+        client = self.client(permission="read")
+        label_attempts = 0
+        delays = []
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def remove_label(number, label):
+            nonlocal label_attempts
+            del number, label
+            label_attempts += 1
+            raise GitHubApiError("label removal unavailable")
+
+        client.remove_label = remove_label
+        report = self.run_item(client, sleeper=delays.append)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(label_attempts, 3)
+        self.assertEqual(delays, [2, 4])
+        self.assertEqual(len(client.comments), 1)
+        self.assertEqual(
+            report.evidence,
+            ("cleanup-error:remove-label:GitHubApiError",),
+        )
+
+    def test_cleanup_pull_read_failure_still_attempts_terminal_comment(self):
+        client = self.client(permission="read")
+        original_get_pull = client.get_pull
+        pull_reads = 0
+        delays = []
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def get_pull(number, *, timeout_seconds=None):
+            nonlocal pull_reads
+            pull_reads += 1
+            if pull_reads > 1:
+                raise GitHubApiError("pull unavailable")
+            return original_get_pull(number, timeout_seconds=timeout_seconds)
+
+        client.get_pull = get_pull
+        report = self.run_item(client, sleeper=delays.append)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(client.removed, [])
+        self.assertEqual(len(client.comments), 1)
+        self.assertEqual(
+            report.evidence,
+            ("cleanup-error:remove-label:GitHubApiError",),
+        )
+        self.assertEqual(delays, [2, 4])
+
+    def test_cleanup_is_a_noop_when_live_state_proves_label_absent(self):
+        client = self.client(permission="read")
+        original_get_pull = client.get_pull
+        pull_reads = 0
+
+        def get_pull(number, *, timeout_seconds=None):
+            nonlocal pull_reads
+            pull_reads += 1
+            pull = original_get_pull(number, timeout_seconds=timeout_seconds)
+            if pull_reads > 1:
+                return replace(pull, labels=())
+            return pull
+
+        client.get_pull = get_pull
+        report = self.run_item(client)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(report.evidence, ())
+        self.assertEqual(client.removed, [])
+        self.assertEqual(client.comments, [])
+
+    def test_both_cleanup_failures_preserve_preexisting_evidence(self):
+        client = self.client(permission="read")
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def remove_label(number, label):
+            del number, label
+            raise GitHubApiError("label unavailable")
+
+        def create_review_comment(number, body):
+            del number, body
+            raise TimeoutError("comment unavailable")
+
+        client.remove_label = remove_label
+        client.create_review_comment = create_review_comment
+        report = self.mq._cleanup_failure(
+            self.request(),
+            client,
+            self.mq._report(
+                code="validation-failed",
+                evidence=("field:run_status",),
+            ),
+            sleeper=lambda _seconds: None,
+        )
+        self.assertEqual(
+            report.evidence,
+            (
+                "field:run_status",
+                "cleanup-error:remove-label:GitHubApiError",
+                "cleanup-error:comment:TimeoutError",
+            ),
+        )
+
+    def test_summary_carries_evidence_when_cleanup_degrades(self):
+        report = self.mq.QueueReport(
+            ok=False,
+            status="blocked",
+            code="unauthorized-actor",
+            attempts=0,
+            observed_base_sha=SHA_A,
+            observed_head_sha=SHA_B,
+            validation_run_ids=(),
+            merge_sha=None,
+            message="unauthorized-actor",
+            evidence=("cleanup-error:comment:GitHubApiError",),
+        )
+        self.assertIn(
+            "- Evidence: cleanup-error:comment:GitHubApiError",
+            self.mq.render_markdown(report),
+        )
+
+    def test_summary_redacts_hostile_evidence_but_keeps_safe_diagnostics(self):
+        report = self.mq.QueueReport(
+            ok=False,
+            status="blocked",
+            code="validation-failed",
+            attempts=1,
+            observed_base_sha=SHA_A,
+            observed_head_sha=SHA_B,
+            validation_run_ids=(9001,),
+            merge_sha=None,
+            message="validation-failed",
+            evidence=(
+                "missing:PR Gate",
+                "check:PR Gate=invalid",
+                "cleanup-error:comment:GitHubApiError",
+                "/Users/endaye/Projects/lmdj/private.txt",
+                "https://api.github.com/repos/endaye/lmdj",
+                "token=ghp_super_secret",
+                '{"message":"raw merge API response"}',
+            ),
+        )
+        rendered = self.mq.render_markdown(report)
+        self.assertIn("missing:PR Gate", rendered)
+        self.assertIn("check:PR Gate=invalid", rendered)
+        self.assertIn("cleanup-error:comment:GitHubApiError", rendered)
+        self.assertIn("evidence-redacted", rendered)
+        for hostile in (
+            "/Users/endaye",
+            "api.github.com",
+            "ghp_super_secret",
+            "raw merge API response",
+        ):
+            self.assertNotIn(hostile, rendered)
+
+    def test_summary_with_empty_evidence_is_exactly_backward_compatible(self):
+        report = self.mq.QueueReport(
+            ok=False,
+            status="blocked",
+            code="unauthorized-actor",
+            attempts=0,
+            observed_base_sha=SHA_A,
+            observed_head_sha=SHA_B,
+            validation_run_ids=(),
+            merge_sha=None,
+            message="unauthorized-actor",
+            evidence=(),
+        )
+        self.assertEqual(
+            self.mq.render_markdown(report),
+            "\n".join((
+                "## Integration Queue",
+                "",
+                "- Status: `blocked`",
+                "- Code: `unauthorized-actor`",
+                "- Attempts: `0`",
+                f"- Base/head: `{SHA_A}` / `{SHA_B}`",
+                "- Validation runs: ``",
+                "- Merge SHA: `None`",
+                "- Message: unauthorized-actor",
+                "",
+            )),
+        )
 
     def test_already_merged_duplicate_is_a_quiet_success(self):
         client = self.client(pull=self.pull(state="closed", merged=True, merge_commit_sha=SHA_C))
@@ -672,9 +898,25 @@ class MergeQueueTest(unittest.TestCase):
 
     def test_finalize_aborted_is_idempotent_and_revokes_live_authority(self):
         client = self.client()
-        report = self.mq.finalize_aborted(self.request(), client, existing_report=None)
+        original_comment = client.create_review_comment
+        comment_attempts = 0
+        delays = []
+
+        def create_review_comment(number, body):
+            nonlocal comment_attempts
+            comment_attempts += 1
+            if comment_attempts < 3:
+                raise RuntimeError("temporary GitHub error")
+            original_comment(number, body)
+
+        client.create_review_comment = create_review_comment
+        report = self.mq.finalize_aborted(
+            self.request(), client, existing_report=None, sleeper=delays.append
+        )
         self.assertEqual(report.code, "queue-worker-aborted")
         self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(comment_attempts, 3)
+        self.assertEqual(delays, [2, 4])
         existing = self.mq.QueueReport(
             ok=True,
             status="merged",

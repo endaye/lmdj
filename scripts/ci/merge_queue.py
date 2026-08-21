@@ -44,6 +44,41 @@ CONTROL_PLANE_PATHS = (
     "scripts/ci/scope_policy.json",
 )
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_SAFE_SUMMARY_EVIDENCE = (
+    re.compile(
+        r"^cleanup-error:(?:remove-label|comment):"
+        r"[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"
+    ),
+    re.compile(
+        r"^check:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
+        r"(?:failure|cancelled|skipped|timed_out|None|invalid)$"
+    ),
+    re.compile(
+        r"^(?:missing|duplicate):"
+        r"(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)$"
+    ),
+    re.compile(
+        r"^app:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
+        r"(?:\d+|invalid)$"
+    ),
+    re.compile(r"^unexpected:required-check$"),
+    re.compile(
+        r"^field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|"
+        r"base_sha|manifest_mode=(?:focused|None|invalid)|trusted_head|"
+        r"run_status|run_conclusion)$"
+    ),
+    re.compile(r"^[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"),
+    re.compile(r"^unconfirmed-drift-artifact$"),
+    re.compile(
+        r"^reconciliation-errors:"
+        r"[A-Z][A-Za-z0-9_]*(?:Error|Exception)"
+        r"(?:,[A-Z][A-Za-z0-9_]*(?:Error|Exception))*$"
+    ),
+    re.compile(r"^(?:merge-sha|pull-merge-sha|main-sha):(?:[0-9a-f]{40}|None)$"),
+    re.compile(r"^(?:pull-merged|base-ancestor):(?:True|False|None)$"),
+    re.compile(r"^(?:expected-head-tree|merge-tree|head-tree):(?:[0-9a-f]{40}|None)$"),
+    re.compile(r"^(?:queue-seconds|execution-seconds):\d+(?:\.\d+)?$"),
+)
 
 
 class DispatchContractError(RuntimeError):
@@ -208,29 +243,68 @@ def _report(
     )
 
 
+def _retry_cleanup(
+    operation: Callable[[], None], sleeper: Callable[[float], None]
+) -> Exception | None:
+    last_error: Exception | None = None
+    for attempt in range(MAX_ATTEMPTS):
+        try:
+            operation()
+            return None
+        except Exception as error:
+            last_error = error
+            if attempt + 1 < MAX_ATTEMPTS:
+                sleeper(2 ** (attempt + 1))
+    return last_error
+
+
 def _cleanup_failure(
-    request: QueueRequest, client: QueueClient, report: QueueReport
+    request: QueueRequest,
+    client: QueueClient,
+    report: QueueReport,
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> QueueReport:
-    try:
+    comment = "\n".join((
+        f"<!-- lmdj-merge-queue:{report.code}:{request.queue_run_id} -->",
+        "## Integration Queue stopped",
+        f"Stable code: `{report.code}`",
+        f"Queue run: `{request.queue_run_id}`",
+        f"Observed base/head: `{report.observed_base_sha}` / `{report.observed_head_sha}`",
+        "Fix the named condition, then explicitly add `merge:queue` again.",
+    ))
+    cleanup_was_live = False
+
+    def remove_live_label() -> None:
+        nonlocal cleanup_was_live
         pull = client.get_pull(request.pr_number)
         if pull.state == "open" and QUEUE_LABEL in pull.labels:
+            cleanup_was_live = True
             client.remove_label(request.pr_number, QUEUE_LABEL)
-            client.create_review_comment(
-                request.pr_number,
-                "\n".join((
-                    f"<!-- lmdj-merge-queue:{report.code}:{request.queue_run_id} -->",
-                    "## Integration Queue stopped",
-                    f"Stable code: `{report.code}`",
-                    f"Queue run: `{request.queue_run_id}`",
-                    f"Observed base/head: `{report.observed_base_sha}` / `{report.observed_head_sha}`",
-                    "Fix the named condition, then explicitly add `merge:queue` again.",
-                )),
+
+    failures: list[str] = []
+    label_error = _retry_cleanup(remove_live_label, sleeper)
+    if label_error is not None:
+        failures.append(
+            f"cleanup-error:remove-label:{type(label_error).__name__}"
+        )
+
+    # A successful read proving no live authority makes repeated finalization a no-op.
+    # An unreadable pull must not suppress the independent terminal comment channel.
+    if cleanup_was_live or label_error is not None:
+        comment_error = _retry_cleanup(
+            lambda: client.create_review_comment(request.pr_number, comment),
+            sleeper,
+        )
+        if comment_error is not None:
+            failures.append(
+                f"cleanup-error:comment:{type(comment_error).__name__}"
             )
-    except Exception as error:  # cleanup evidence must not hide the primary code
+    if failures:
         return QueueReport(
             **{
                 **asdict(report),
-                "evidence": tuple(report.evidence) + (f"cleanup-error:{type(error).__name__}",),
+                "evidence": tuple(report.evidence) + tuple(failures),
             }
         )
     return report
@@ -241,6 +315,7 @@ def _stop(
     base: str | None = None, head: str | None = None,
     run_ids: Sequence[int] = (), status: str = "blocked",
     evidence: Sequence[str] = (), cleanup: bool = True, ok: bool = False,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> QueueReport:
     report = _report(
         code=code,
@@ -252,7 +327,7 @@ def _stop(
         evidence=evidence,
         ok=ok,
     )
-    return _cleanup_failure(request, client, report) if cleanup else report
+    return _cleanup_failure(request, client, report, sleeper=sleeper) if cleanup else report
 
 
 def _labelled(pull: PullRequest) -> bool:
@@ -346,6 +421,9 @@ def run_queue_item(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> QueueReport:
     """Run one queue item to a closed terminal report."""
+    def terminal(code: str, **kwargs: object) -> QueueReport:
+        return _stop(request, client, code, sleeper=sleeper, **kwargs)
+
     pull = client.get_pull(request.pr_number)
     if pull.merged:
         return _report(
@@ -356,7 +434,7 @@ def run_queue_item(
             ok=True,
         )
     if client.get_permission(request.actor) not in {"write", "maintain", "admin"}:
-        return _stop(request, client, "unauthorized-actor", head=pull.head_sha)
+        return terminal("unauthorized-actor", head=pull.head_sha)
     if (
         pull.state != "open"
         or pull.draft
@@ -365,20 +443,18 @@ def run_queue_item(
         or pull.number != request.pr_number
         or pull.head_sha != request.event_head_sha
     ):
-        return _stop(request, client, "ineligible-pr", base=pull.base_sha, head=pull.head_sha)
+        return terminal("ineligible-pr", base=pull.base_sha, head=pull.head_sha)
     if not _labelled(pull):
-        return _stop(
-            request, client, "queue-label-removed", status="cancelled",
+        return terminal("queue-label-removed", status="cancelled",
             base=pull.base_sha, head=pull.head_sha, cleanup=False, ok=True,
         )
     if pull.mergeable is False:
-        return _stop(request, client, "merge-conflict", base=pull.base_sha, head=pull.head_sha)
+        return terminal("merge-conflict", base=pull.base_sha, head=pull.head_sha)
     if pull.mergeable is None:
-        return _stop(request, client, "ineligible-pr", base=pull.base_sha, head=pull.head_sha)
+        return terminal("ineligible-pr", base=pull.base_sha, head=pull.head_sha)
     changed = set(client.list_changed_paths(request.pr_number))
     if changed.intersection(CONTROL_PLANE_PATHS):
-        return _stop(
-            request, client, "queue-control-plane-change",
+        return terminal("queue-control-plane-change",
             base=pull.base_sha, head=pull.head_sha,
             evidence=tuple(sorted(changed.intersection(CONTROL_PLANE_PATHS))),
         )
@@ -396,8 +472,7 @@ def run_queue_item(
             remaining_attempts=remaining_attempts,
         )
         if budget == 0:
-            return _stop(
-                request, client, "queue-budget-exhausted",
+            return terminal("queue-budget-exhausted",
                 attempts=attempt_number - 1, base=last_base, head=last_head,
                 run_ids=run_ids,
             )
@@ -412,14 +487,12 @@ def run_queue_item(
                 run_ids=run_ids, merge_sha=pull.merge_commit_sha, ok=True,
             )
         if not _labelled(pull):
-            return _stop(
-                request, client, "queue-label-removed", status="cancelled",
+            return terminal("queue-label-removed", status="cancelled",
                 attempts=attempt_number - 1, base=base, head=pull.head_sha,
                 run_ids=run_ids, cleanup=False, ok=True,
             )
         if not (_valid_sha(base) and _valid_sha(pull.head_sha)):
-            return _stop(
-                request, client, "ineligible-pr", attempts=attempt_number,
+            return terminal("ineligible-pr", attempts=attempt_number,
                 base=base, head=pull.head_sha, run_ids=run_ids,
             )
 
@@ -436,14 +509,12 @@ def run_queue_item(
                 "uncertain": "merge-state-uncertain",
             }
             if update.status in update_codes:
-                return _stop(
-                    request, client, update_codes[update.status],
+                return terminal(update_codes[update.status],
                     attempts=attempt_number, base=base, head=pull.head_sha,
                     run_ids=run_ids,
                 )
             if update.status != "accepted" or not update.head_sha:
-                return _stop(
-                    request, client, "merge-state-uncertain",
+                return terminal("merge-state-uncertain",
                     attempts=attempt_number, base=base, head=pull.head_sha,
                     run_ids=run_ids,
                 )
@@ -458,8 +529,7 @@ def run_queue_item(
                     min(budget, 10 * 60),
                 )
             except Exception as error:
-                return _stop(
-                    request, client, "sync-validation-approval-failed",
+                return terminal("sync-validation-approval-failed",
                     attempts=attempt_number, base=base, head=pull.head_sha,
                     run_ids=run_ids, evidence=(type(error).__name__,),
                 )
@@ -472,8 +542,7 @@ def run_queue_item(
             remaining_attempts=remaining_attempts,
         )
         if budget == 0:
-            return _stop(
-                request, client, "queue-budget-exhausted",
+            return terminal("queue-budget-exhausted",
                 attempts=attempt_number, base=base, head=head, run_ids=run_ids,
             )
         attempt = QueueAttempt(
@@ -497,28 +566,24 @@ def run_queue_item(
             try:
                 run_id = client.dispatch_validation(request.pr_number, pull.head_ref, inputs)
             except DispatchContractError as error:
-                return _stop(
-                    request, client, "validation-dispatch-contract-mismatch",
+                return terminal("validation-dispatch-contract-mismatch",
                     attempts=attempt_number, base=base, head=head, run_ids=run_ids,
                     evidence=(str(error),),
                 )
             except Exception as error:
-                return _stop(
-                    request, client, "validation-dispatch-failed",
+                return terminal("validation-dispatch-failed",
                     attempts=attempt_number, base=base, head=head, run_ids=run_ids,
                     evidence=(type(error).__name__,),
                 )
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
-            return _stop(
-                request, client, "validation-dispatch-contract-mismatch",
+            return terminal("validation-dispatch-contract-mismatch",
                 attempts=attempt_number, base=base, head=head, run_ids=run_ids,
             )
         run_ids.append(run_id)
         result = client.wait_validation(run_id, budget)
 
         if result.classification == "timeout":
-            return _stop(
-                request, client, "validation-timeout", attempts=attempt_number,
+            return terminal("validation-timeout", attempts=attempt_number,
                 base=base, head=head, run_ids=run_ids,
             )
 
@@ -533,8 +598,7 @@ def run_queue_item(
             if confirmed:
                 last_base, last_head = live_base, live_pull.head_sha
                 continue
-            return _stop(
-                request, client, "validation-failed", attempts=attempt_number,
+            return terminal("validation-failed", attempts=attempt_number,
                 base=live_base, head=live_pull.head_sha, run_ids=run_ids,
                 evidence=("unconfirmed-drift-artifact",),
             )
@@ -544,16 +608,14 @@ def run_queue_item(
         )
         if contract_error:
             code, evidence = contract_error
-            return _stop(
-                request, client, code, attempts=attempt_number,
+            return terminal(code, attempts=attempt_number,
                 base=base, head=head, run_ids=run_ids, evidence=evidence,
             )
 
         live_base = client.get_main_sha()
         live_pull = client.get_pull(request.pr_number)
         if not _labelled(live_pull):
-            return _stop(
-                request, client, "queue-label-removed", status="cancelled",
+            return terminal("queue-label-removed", status="cancelled",
                 attempts=attempt_number, base=live_base, head=live_pull.head_sha,
                 run_ids=run_ids, cleanup=False, ok=True,
             )
@@ -571,9 +633,7 @@ def run_queue_item(
         if not merge.merged:
             reconciled = client.get_pull(request.pr_number)
             if not reconciled.merged:
-                return _stop(
-                    request, client,
-                    "merge-state-uncertain" if merge.uncertain else "merge-rejected",
+                return terminal("merge-state-uncertain" if merge.uncertain else "merge-rejected",
                     status="blocked-after-reconciliation" if merge.uncertain else "blocked",
                     attempts=attempt_number, base=base, head=head, run_ids=run_ids,
                     evidence=((merge.message,) if merge.message else ()),
@@ -643,8 +703,7 @@ def run_queue_item(
                 evidence.append(
                     f"reconciliation-errors:{','.join(reconciliation_errors)}"
                 )
-            return _stop(
-                request, client, "postcondition-mismatch",
+            return terminal("postcondition-mismatch",
                 status="blocked-after-reconciliation", attempts=attempt_number,
                 base=base, head=head, run_ids=run_ids,
                 evidence=evidence,
@@ -662,8 +721,7 @@ def run_queue_item(
             ok=True,
         )
 
-    return _stop(
-        request, client, "unstable-after-three-validations",
+    return terminal("unstable-after-three-validations",
         attempts=request.max_attempts, base=last_base, head=last_head,
         run_ids=run_ids,
     )
@@ -672,6 +730,8 @@ def run_queue_item(
 def finalize_aborted(
     request: QueueRequest, client: QueueClient,
     existing_report: QueueReport | None,
+    *,
+    sleeper: Callable[[float], None] = time.sleep,
 ) -> QueueReport:
     if existing_report is not None:
         return existing_report
@@ -684,11 +744,12 @@ def finalize_aborted(
     return _stop(
         request, client, "queue-worker-aborted",
         base=client.get_main_sha(), head=pull.head_sha,
+        sleeper=sleeper,
     )
 
 
 def render_markdown(report: QueueReport) -> str:
-    return "\n".join((
+    lines = [
         "## Integration Queue",
         "",
         f"- Status: `{report.status}`",
@@ -698,8 +759,20 @@ def render_markdown(report: QueueReport) -> str:
         f"- Validation runs: `{','.join(map(str, report.validation_run_ids))}`",
         f"- Merge SHA: `{report.merge_sha}`",
         f"- Message: {report.message}",
-        "",
-    ))
+    ]
+    if report.evidence:
+        safe_evidence: list[str] = []
+        for value in report.evidence:
+            rendered = (
+                value
+                if any(pattern.fullmatch(value) for pattern in _SAFE_SUMMARY_EVIDENCE)
+                else "evidence-redacted"
+            )
+            if rendered not in safe_evidence:
+                safe_evidence.append(rendered)
+        lines.append(f"- Evidence: {', '.join(safe_evidence)}")
+    lines.append("")
+    return "\n".join(lines)
 
 
 def _write(path: str | Path, contents: str) -> None:
@@ -781,7 +854,7 @@ def run_cli(
         )
     else:
         existing = _load_report(args.report) if Path(args.report).is_file() else None
-        report = finalize_aborted(request, client, existing)
+        report = finalize_aborted(request, client, existing, sleeper=sleeper)
     _write_atomic(args.report, report.to_json())
     if args.summary:
         _write(args.summary, render_markdown(report))
