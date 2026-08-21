@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 from typing import Callable, Iterable, Iterator
+import unicodedata
 
 from .ci_evidence import verify_exact_main_ci
 from .commands import sanitize_diagnostic
@@ -327,7 +328,18 @@ def _static_projection(root: Path, projection: str, *sources: str) -> Iterator[N
 
 def _sanitized_reason(root: Path, exception: BaseException) -> str:
     """Describe a failure without echoing environment values, secrets or absolute paths."""
-    text = sanitize_diagnostic(exception, root=root, limit=_REASON_LIMIT)
+    visible: list[str] = []
+    for character in str(exception):
+        if character.isspace():
+            visible.append(" ")
+        elif unicodedata.category(character) in {"Cc", "Cf"}:
+            codepoint = ord(character)
+            visible.append(
+                f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
+            )
+        else:
+            visible.append(character)
+    text = sanitize_diagnostic("".join(visible), root=root, limit=_REASON_LIMIT)
     return f"{type(exception).__name__}: {text}" if text else type(exception).__name__
 
 
@@ -457,13 +469,16 @@ def _audit_remote_intent(
             "ok", intent.tag, "superseded-unreleased exact tag is retained without a Release",
         )
 
+    diagnostic_root = Path(context.repo_root)
     try:
         with context.git.detached_worktree(intent.target_revision) as worktree:
-            context.git.validate_release_target(Path(worktree), intent)
-    except Exception:
+            diagnostic_root = Path(worktree)
+            context.git.validate_release_target(diagnostic_root, intent)
+    except Exception as error:
+        reason = _sanitized_reason(diagnostic_root, error)
         return AuditFinding(
             "unverifiable", intent.tag,
-            "exact release target identity or support metadata is invalid",
+            f"exact release target identity or support metadata is invalid ({reason})",
             ("exact-target",),
         )
 
