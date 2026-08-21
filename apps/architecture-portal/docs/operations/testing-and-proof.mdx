@@ -42,9 +42,12 @@ pending，且按 GitHub 定义的等待开始时间 FIFO 执行；dispatch 还�
 
 启用后，具备实时 `write|maintain|admin` 权限的人给同仓库、open、非 Draft、base=`main`
 的 PR 添加 `merge:queue`，就是一次可撤销的自动 squash merge 授权。Controller 只执行默认
-分支上的控制代码，把 exact current main 合入 PR branch，再显式 dispatch PR head 上的 full
-Core CI；ticket、PR number、base SHA、head SHA 和返回的 run ID 必须完全匹配，同一 run 内
-`Change Scope`、全部 full lane 与 `PR Gate` 成功后才可 merge。被测 head 自己产生 CI 证据，
+分支上的控制代码，把 exact current main 合入 PR branch。GitHub 会把该 `GITHUB_TOKEN`
+同步产生的 PR CI 置为 approval-required；Controller 只绑定 exact PR/head/bot 的唯一 run，
+显式批准后把它作为 full validation，不再重复 dispatch。若 PR 已包含 current main，才显式
+dispatch PR head；该路径的 ticket、PR number、base SHA、head SHA 和返回 run ID 必须完全
+匹配。两条路径都要求同一 run 内 `Change Scope`、全部 full lane 与 `PR Gate` 成功后才可
+merge。被测 head 自己产生 CI 证据，
 因此 review 与 branch protection 仍是最终信任边界；任何 merge-authority control-plane diff
 都不能由队列自动合并，必须走普通受保护合并路径。
 
@@ -57,7 +60,7 @@ mutation 之间有不可原子化窗口，撤销后仍须检查 live PR 和 queu
 `queue-stalled` 的签名是：open PR 的最新 `merge:queue` event 已超过 20 分钟，但此后没有
 关联的 queued/in-progress queue run。先查 workflow run、pending capacity、manual cancel 或
 platform timeout，再查 controller report；scheduled watchdog 会重新核验 head、摘掉 label，
-并只留一条幂等 review marker。reconciliation 完成前不得直接重新入队。
+并只留一条幂等 conversation-comment marker。reconciliation 完成前不得直接重新入队。
 
 Queue validation 只证明 exact synchronized PR head；merge 后的 focused main run 与
 exact-main release evidence 始终独立。Release 仍要求 exact target main SHA 上 successful full

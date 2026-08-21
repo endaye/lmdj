@@ -107,12 +107,14 @@ class MergeQueueTest(unittest.TestCase):
                 )
             ]
             dispatch_ids = [9001]
+            sync_run_ids = [9101]
             merge_result = mq.MergeResult(merged=True, sha=SHA_C)
             head_tree = "tree-head"
             merge_tree = "tree-head"
             removed = []
             comments = []
             update_calls = []
+            sync_authorization_calls = []
             dispatch_calls = []
             validation_calls = []
             merge_calls = []
@@ -144,6 +146,17 @@ class MergeQueueTest(unittest.TestCase):
 
             def get_tree(inner, sha):
                 return inner.merge_tree if sha == SHA_C else inner.head_tree
+
+            def authorize_sync_validation(
+                inner, number, base_sha, head_sha, timeout_seconds
+            ):
+                inner.sync_authorization_calls.append(
+                    (number, base_sha, head_sha, timeout_seconds)
+                )
+                value = inner.sync_run_ids.pop(0)
+                if isinstance(value, Exception):
+                    raise value
+                return value
 
             def dispatch_validation(inner, number, head_ref, inputs):
                 inner.dispatch_calls.append((number, head_ref, inputs))
@@ -261,7 +274,11 @@ class MergeQueueTest(unittest.TestCase):
     def test_update_branch_uses_expected_head_and_revalidates_new_head(self):
         update = self.mq.UpdateResult("accepted", SHA_D)
         validation = replace(
-            self.client().validation_results[0], head_sha=SHA_D, ticket="mq:123:1"
+            self.client().validation_results[0],
+            run_id=9101,
+            run_event="pull_request",
+            head_sha=SHA_D,
+            ticket=None,
         )
         client = self.client(
             ancestor=False,
@@ -271,8 +288,22 @@ class MergeQueueTest(unittest.TestCase):
         report = self.run_item(client)
         self.assertTrue(report.ok)
         self.assertEqual(client.update_calls[0][1], SHA_B)
-        self.assertEqual(client.dispatch_calls[0][1], "feat/queue")
-        self.assertEqual(client.dispatch_calls[0][2]["queue_base_sha"], SHA_A)
+        self.assertEqual(
+            client.sync_authorization_calls,
+            [(220, SHA_A, SHA_D, 600)],
+        )
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.validation_calls[0][0], 9101)
+
+    def test_sync_validation_approval_failure_has_a_stable_terminal_code(self):
+        client = self.client(
+            ancestor=False,
+            update_results=[self.mq.UpdateResult("accepted", SHA_D)],
+            sync_run_ids=[RuntimeError("approval unavailable")],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "sync-validation-approval-failed")
+        self.assertEqual(client.dispatch_calls, [])
 
     def test_update_drift_consumes_an_attempt_but_never_repeats_blindly(self):
         update = self.mq.UpdateResult("drift", None)

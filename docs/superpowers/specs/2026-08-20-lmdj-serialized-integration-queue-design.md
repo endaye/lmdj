@@ -36,7 +36,8 @@ write-capable actor applies merge:queue
  update PR branch from exact current main
                  |
                  v
- dispatch exact full Core CI and receive run ID
+ bind + approve the exact generated PR CI run
+ (or dispatch exact full CI when no sync was needed)
                  |
                  v
  wait for same-run PR Gate + recheck live state
@@ -85,7 +86,7 @@ Cloud 组织拥有的私有仓库；`endaye/lmdj` 是个人账户私有仓库，
 | `concurrency.queue: max` 保留最多 100 个 pending runs；默认 `single` 只有一个 pending 且新 run 会替换旧 run | [GitHub Actions concurrency](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency) | workflow 必须使用 `queue: max`；live probe 失败即不创建 label、不启用队列 |
 | REST API version `2026-03-10` 的 workflow dispatch 成功响应为 `200`，body 含 numeric `workflow_run_id` | [Create a workflow dispatch event](https://docs.github.com/en/rest/actions/workflows#create-a-workflow-dispatch-event) | controller 只绑定 response 中的 run ID；schema 不匹配时 `validation-dispatch-contract-mismatch`，不轮询猜测 |
 | actionlint `1.7.12` 尚不能解析 `concurrency.queue`，会报告精确错误 `unexpected key "queue" for "concurrency" section` | [actionlint v1.7.12](https://github.com/rhysd/actionlint/releases/tag/v1.7.12)、[官方 checksums](https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_checksums.txt) 与 upstream [issue #657](https://github.com/rhysd/actionlint/issues/657)；真实 binary probe 复现该唯一 schema lag | CI pin 与 digest 一起升级；只忽略这一条精确错误，repository contract 另断言全仓恰好一个 `queue: max`，其余 actionlint 错误仍失败；upstream 支持后删除例外 |
-| `GITHUB_TOKEN` 产生的事件除 `workflow_dispatch` 与 `repository_dispatch` 外不会创建新的 workflow run | [Triggering a workflow from a workflow](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow#triggering-a-workflow-from-a-workflow) | update-branch 后不等待 `pull_request` 自动触发；队列显式 dispatch 是同步 head 的 Required Checks 唯一来源 |
+| workflow 使用 `GITHUB_TOKEN` 更新 PR 时，`pull_request:synchronize` 会创建 approval-required run；`Actions: write` token 可调用批准端点 | [GITHUB_TOKEN event exceptions](https://docs.github.com/en/actions/concepts/security/github_token#when-github_token-triggers-workflow-runs)、[Approve a workflow run](https://docs.github.com/en/rest/actions/workflow-runs#approve-a-workflow-run-for-a-fork-pull-request)；2026-08-21 live rollout 以 PR #222/run `32436012836` 复现 | update-branch 后 controller 必须绑定 exact PR/head/bot run、显式批准并把它作为唯一 full validation；PR 已经 up to date 时才使用显式 dispatch |
 
 GitHub 对 `queue: max` 的顺序保证是“按 run 开始等待的时间 FIFO”，不是事件产生或 API
 dispatch 的绝对时间。本文的 FIFO 均指这个平台定义；controller 不声称提供跨平台事件的
@@ -96,7 +97,8 @@ dispatch 的绝对时间。本文的 FIFO 均指这个平台定义；controller 
 - 用 `merge:queue` 标签建立明确、可审计、可撤销的自动合并授权。
 - 让多个待合并 PR 在一个固定 queue 中有界等待，而不是同时占用 integration capacity。
 - 自动把待处理 PR 更新到最新 `main`，并对 exact integration head 运行 full Core CI。
-- 绑定队列票据、PR number、base SHA、head SHA、workflow run ID 与 same-run `PR Gate`。
+- 绑定 PR number、base SHA、head SHA、workflow run ID 与 same-run `PR Gate`；dispatch
+  路径额外绑定 queue ticket。
 - 在 base/head 漂移时重新同步并重新验证，绝不消费旧成功结果。
 - 在冲突、CI failure、timeout、权限不足、标签撤销或 API 不确定状态时 fail closed。
 - 只使用最小 `GITHUB_TOKEN` 权限，不引入长期 PAT、个人 cookie 或新的 secret。
@@ -128,13 +130,13 @@ dispatch 的绝对时间。本文的 FIFO 均指这个平台定义；controller 
 | D3 | 一个固定 `main` concurrency group 使用 `queue: max` 保留最多 100 个 pending runs；不使用 `cancel-in-progress`。 |
 | D4 | 入队 actor 必须经实时 API 解析为 `write`、`maintain` 或 `admin`，PR 必须为同仓库、open、非 Draft、base=`main`。 |
 | D5 | 队列用 update-branch API 的 `expected_head_sha` 把 current `main` 合入 PR branch，不创建临时 integration branch。 |
-| D6 | 队列使用 2026-03-10 REST API 显式 dispatch `ci.yml`，直接接收并记录 `workflow_run_id`，不通过轮询猜 run identity。 |
-| D7 | queue validation dispatch 必须是 full，并完整绑定 ticket、PR number、base SHA 与 head SHA；普通手动 dispatch 语义保持不变。 |
-| D8 | validation run 必须在 same run 内成功产生 Change Scope、所有 full lanes 与 `PR Gate`；不拼接其他 run 的 check results。 |
+| D6 | update-branch 产生的 approval-required `pull_request` run 必须按 exact PR/head/workflow/bot identity 唯一匹配、批准并记录 numeric run ID；未发生同步时才显式 dispatch，并直接使用 2026-03-10 response 的 `workflow_run_id`。两条路径都禁止按显示名称猜 run。 |
+| D7 | 两种 validation 都必须由 same-run `ci-scope` 证明 full、trusted、exact base/head；dispatch 路径还必须完整绑定 ticket 与 PR number。普通手动 dispatch 语义保持不变。 |
+| D8 | validation run 必须在 same run 内成功产生 Change Scope、所有 full lanes 与 `PR Gate`；同步路径不再追加第二次 dispatch，不拼接其他 run 的 check results。 |
 | D9 | base/head 漂移最多重新同步和完整验证三次；三次后仍漂移是 terminal failure。 |
 | D10 | 合并调用必须指定 exact expected head SHA 与 `squash`；调用前后都核验 canonical repository state。 |
 | D11 | CI failure、conflict、timeout、撤权和不确定 mutation 一律不重试 merge；先 reconciliation，再输出稳定 failure code。 |
-| D12 | 控制面只使用 `actions: write`、`checks: read`、`contents: write`、`pull-requests: write`；不引入 PAT 或 GitHub App secret。 |
+| D12 | 控制面只使用 `actions: write`、`checks: read`、`contents: write`、`pull-requests: write`；不引入 PAT 或 GitHub App secret。PR conversation comment 与 label mutation 均使用 `pull-requests:write`。 |
 | D13 | `main` push 的 per-SHA、non-cancelling concurrency 与 release exact-main evidence 保持不变。 |
 | D14 | actionlint 升级到 `1.7.12` 并继续校验官方 digest；由于 upstream issue #657 的 schema lag，只允许精确忽略 `unexpected key "queue" for "concurrency" section`，同时由 repository contract 固定恰好一个 `queue: max`，其他 lint 错误仍 fail closed。 |
 | D15 | queue controller 的 hard timeout 为 360 分钟，但内部 mutation deadline 为 330 分钟；至少保留 30 分钟做 reconciliation/report。每次 validation wait 从剩余预算动态推导，不固定占满 120 分钟。 |
@@ -163,7 +165,7 @@ workflow-level 不声明 concurrency，职责拆成：
 同一 workflow 另有不共享 queue concurrency 的 `schedule` watchdog job。它每 15 分钟检查
 带 `merge:queue` 的 open PR；若 label 已存在 20 分钟，但 label event 之后不存在关联该
 PR 的 queued/in-progress queue run，则命中 `queue-stalled`，移除 label 并创建一次稳定
-COMMENT review。`queue-item` 的 downstream `finalize` job 使用 `if: always()`：若 worker
+conversation comment。`queue-item` 的 downstream `finalize` job 使用 `if: always()`：若 worker
 没有写出 report，就先 reconcile，再用 `queue-worker-aborted` 收尾。整次 workflow 被人工
 cancel 时 finalizer 可能无法运行，因此 watchdog 是 cancel、平台 hard timeout 与 pending
 capacity eviction 的最终 fail-closed 兜底。
@@ -188,9 +190,10 @@ status、stable code、attempt count、observed base/head、validation run IDs�
 message 与 reconciliation evidence。
 
 `GitHubClient` 只暴露 controller 需要的操作：读取 repository/actor permission/PR/ref，
-更新 PR branch，dispatch workflow 并取得 run ID，读取 run/jobs/checks，读取 Git commit
+更新 PR branch，绑定并批准同步 run 或 dispatch workflow 并取得 run ID，读取
+run/jobs/checks，读取 Git commit
 tree，执行 exact-head squash merge，以及在 Pull Request 上移除 queue label、留下一个
-COMMENT review。HTTP transport、API version、bounded retry 与 response schema validation
+conversation comment。HTTP transport、API version、bounded retry 与 response schema validation
 全部封装在该边界内。
 
 canonical `main` SHA 的唯一 authoritative 来源是 Git refs API 的 `refs/heads/main`；Pull
@@ -237,9 +240,16 @@ controller 只从已绑定 numeric run ID 下载该 artifact。`queue-base-drift
 Core CI 增加包含 queue ticket 的 `run-name`，但 controller 只信 dispatch API 直接返回的
 numeric run ID。显示名称只用于人工诊断，不参与 identity 判定。
 
-update-branch 使用 `GITHUB_TOKEN`，不会触发新的 `pull_request` workflow run；同步 head 的
-Required Checks 必须全部由这次显式 dispatch 产生。controller 验证 exact run 内存在当前
-branch protection 要求的 check context 与 GitHub App identity，至少包括
+update-branch 使用 `GITHUB_TOKEN` 时，GitHub 会为 `pull_request:synchronize` 创建
+approval-required run。controller 轮询 `ci.yml` runs，只接受同时匹配 exact PR number、
+exact synchronized head SHA、`event=pull_request`、workflow path 与
+`actor=github-actions[bot]` 的唯一 run；用 `actions:write` 批准后先 reconcile run state，
+再等待它完成。该 run 的 `ci-scope-<head>` artifact 必须是 schema v2、full、trusted 且
+base/head 精确匹配 attempt，因此同步路径不再额外 dispatch 一次重复 full CI。PR 原本已经
+包含 current main 时，没有 synchronize run，才使用上述 queue-validation dispatch。
+
+controller 验证被选 exact run 内存在当前 branch protection 要求的 check context 与 GitHub
+App identity，至少包括
 `core (ubuntu-latest)`、`core (macos-latest)` 与 `PR Gate`；不匹配时报告
 `required-check-contract-mismatch`，不把最终 merge API 的拒绝含混归类为普通
 `merge-rejected`。
@@ -329,15 +339,19 @@ ticket = mq:<queue-workflow-run-id>:<attempt>
 
 ### 7.3 Validating
 
-controller 使用 `actions: write` 对 PR head branch 显式 dispatch `ci.yml`，空 `lanes` 加完整
-queue inputs，并使用 GitHub REST API version `2026-03-10` 返回的
-`workflow_run_id` 作为唯一 run identity。随后只等待该 run：
+发生 update-branch 时，controller 使用 `actions: write` 批准同步事件创建的 exact
+approval-required run，并以其 numeric ID 作为唯一 run identity；该 run 必须是
+`event=pull_request`、exact PR/head/bot identity，且其 same-run `ci-scope` 必须是 full、
+trusted、exact base/head。PR 无需同步时，controller 才对 PR head 显式 dispatch `ci.yml`，
+空 `lanes` 加完整 queue inputs，并使用 GitHub REST API version `2026-03-10` response 的
+`workflow_run_id`。随后只等待所选 run：
 
-- run `event=workflow_dispatch`、workflow path=`.github/workflows/ci.yml`；
+- run event 与路径符合其来源：同步为 `pull_request`，否则为 `workflow_dispatch`；workflow
+  path 均为 `.github/workflows/ci.yml`；
 - run `head_sha` 精确等于 attempt head；
 - run completed/success；
 - same run 的 `Change Scope` 与 `PR Gate` completed/success；
-- manifest 为 full、trusted head、exact queue ticket/base/head；
+- manifest 为 full、trusted head、exact base/head；dispatch 路径还要求 exact queue ticket；
 - full mode 所有正式 lanes 的 same-run result 通过既有 PR Gate adjudication。
 
 queue worker job hard timeout 为 360 分钟，controller 从 job start 建立 330 分钟 internal
@@ -408,6 +422,7 @@ merge mutation 之间存在不可消除的短窗口。API 请求已被接受后�
 - `queue-label-removed`
 - `merge-conflict`
 - `update-branch-timeout`
+- `sync-validation-approval-failed`
 - `validation-dispatch-failed`
 - `validation-dispatch-contract-mismatch`
 - `validation-timeout`
@@ -425,7 +440,7 @@ merge mutation 之间存在不可消除的短窗口。API 请求已被接受后�
 
 1. reconcile PR、main 与可能的 merge result；
 2. 如果 PR 仍 open，移除 `merge:queue`，避免旧授权被无意复用；
-3. 使用 `pull-requests: write` 创建一个 `COMMENT` review，记录 stable code、queue run URL、
+3. 使用 `pull-requests: write` 创建一个 PR conversation comment，记录 stable code、queue run URL、
    validation run URL、observed base/head 与安全重试方法；
 4. 以 non-zero 结束 queue workflow。
 
@@ -447,7 +462,7 @@ merge mutation 之间存在不可消除的短窗口。API 请求已被接受后�
   deployments、environments、packages、secrets、id-token 或 administration 权限。
 - queue workflow 运行在 GitHub-hosted Ubuntu；PR 代码只在既有 trusted-head Core CI lanes
   中执行。
-- validation dispatch 到 PR head ref 时，GitHub 执行该 head 上的 `ci.yml` 与
+- validation run（同步产生的 PR run 或 dispatch）执行该 head 上的 `ci.yml` 与
   `change_scope.py`/`pr_gate.py`。这些 evidence 不是独立于 PR 的可信控制面；其完整性最终
   依赖代码 review、conversation resolution、branch protection 与“审批完成后才添加
   `merge:queue`”的操作纪律。control-plane diff 禁止自助 queue merge 是额外防线。
@@ -455,7 +470,7 @@ merge mutation 之间存在不可消除的短窗口。API 请求已被接受后�
   因为 controller 绑定 dispatch API 返回的 numeric run ID。
 - merge mutation 依赖 exact expected head、strict branch protection 与 Required Checks；
   controller 不拥有绕过规则的管理员 token。
-- review comment、summary 与 test fixture 不记录 token、authorization header 或私有 API body。
+- conversation comment、summary 与 test fixture 不记录 token、authorization header 或私有 API body。
 
 ## 10. Verification strategy
 
@@ -467,6 +482,8 @@ merge mutation 之间存在不可消除的短窗口。API 请求已被接受后�
 - authorized label request enters one fixed FIFO queue；
 - unauthorized actor、fork、Draft、wrong base、missing label 全部 fail closed；
 - expected-head update success、422 drift、conflict、timeout 与 uncertain response reconciliation；
+- 同步产生的 approval-required run 按 exact PR/head/bot identity 唯一绑定，批准 mutation
+  不确定时先 reconcile，且同步路径不再二次 dispatch；
 - dispatch response 的 exact numeric run ID 被保存，其他同 SHA/同名 run 被忽略；
 - queue validation inputs 全有或全无、full-only、exact base/head 与 PR body impact check；
 - same-run Change Scope/PR Gate success 才能进入 ready；
@@ -536,8 +553,8 @@ branch protection 变更与首次自动 queue merge 仍是独立 mutation：
    都停止 rollout，保持 label 不存在；
 4. 单独授权创建 label `merge:queue`，记录 exact name、description 与 color；
 5. 单独授权确认 `main` strict required checks、conversation resolution 与 admin enforcement，
-   不删除或弱化 Required Checks；用一次 queue validation dispatch 核对 required context 的 exact
-   name 与 GitHub App identity，确认同步后的 head 由 dispatch run 产生所有 required checks；
+   不删除或弱化 Required Checks；分别核对同步路径的 approved `pull_request` run 与无需同步时
+   的 dispatch run，确认 required context 的 exact name、GitHub App identity 和 same-run scope；
 6. 用一个无产品风险、且不修改 control-plane 路径的同仓库 test PR 做首次 queue validation，
    只在 review/required checks 已完成后显式添加 label；
 7. 记录 queue run ID、validation run ID、runner assignment、base/head、merge SHA、tree equality、

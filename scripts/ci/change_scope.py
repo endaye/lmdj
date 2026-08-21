@@ -509,6 +509,8 @@ def classify(
         full_reasons.add("forced full")
     if "ci:full" in label_set:
         full_reasons.add("ci:full label")
+    if "merge:queue" in label_set:
+        full_reasons.add("merge:queue label")
     requested = set(requested_lanes or ())
     if requested:
         if event_name != "workflow_dispatch":

@@ -12,7 +12,7 @@
 
 - Work only on `feat/ci-merge-queue` in the existing isolated worktree; never commit directly on `main`.
 - Use `merge:queue` as the sole automatic merge authorization and squash as the sole merge method.
-- Use canonical `refs/heads/main`, exact PR head SHA, exact dispatch `workflow_run_id`, and same-run `PR Gate`; never guess a run by name or SHA.
+- Use canonical `refs/heads/main`, exact PR head SHA, exact numeric validation run ID, and same-run `PR Gate`; never guess a run by display name.
 - Keep `main` push concurrency, focused main CI, exact-main release evidence, deployment, publication, and Channel promotion unchanged.
 - Use only `GITHUB_TOKEN`; workflow permissions are `actions: write`, `checks: read`, `contents: write`, and `pull-requests: write`.
 - Queue worker hard timeout is 360 minutes, internal mutation deadline is 330 minutes, and every validation budget is dynamically derived from remaining time.
@@ -164,7 +164,7 @@ Commit only the two declared files with `feat(ci): add merge queue state machine
 
 - [x] **Step 1: Write failing HTTP contract tests**
 
-Use a recording opener and deterministic response fixtures. Assert structured JSON, auth redaction, bounded pagination/retry, canonical ref reads, PR/files/permission/update/compare/dispatch/run/jobs/check-runs/artifact/commit/merge/label/review endpoints, API version header, and response-schema rejection.
+Use a recording opener and deterministic response fixtures. Assert structured JSON, auth redaction, bounded pagination/retry, canonical ref reads, PR/files/permission/update/compare/approve/dispatch/run/jobs/check-runs/artifact/commit/merge/label/issue-comment endpoints, API version header, and response-schema rejection.
 
 - [x] **Step 2: Run API tests and observe RED**
 
@@ -178,11 +178,11 @@ Centralize `_request(method, path, payload=None, expected_statuses=...)`; retry 
 
 - [x] **Step 4: Write failing watchdog tests**
 
-Cover: younger-than-20-minute labels, active queued/in-progress run, label-event timestamp after an old run, manual cancel, platform timeout, pending eviction, already-removed label, already-merged PR, and idempotent review markers.
+Cover: younger-than-20-minute labels, active queued/in-progress run, label-event timestamp after an old run, manual cancel, platform timeout, pending eviction, already-removed label, already-merged PR, and idempotent conversation-comment markers.
 
 - [x] **Step 5: Implement watchdog reconciliation**
 
-The stall signature is an open labeled PR whose latest label event is at least 1200 seconds old and has no associated queued/in-progress `Merge Queue` run created after that event. Re-read PR/label before mutation; remove the label and leave one review containing `<!-- lmdj-merge-queue:queue-stalled:<label-event-id> -->`.
+The stall signature is an open labeled PR whose latest label event is at least 1200 seconds old and has no associated queued/in-progress `Merge Queue` run created after that event. Re-read PR/label before mutation; remove the label and leave one PR conversation comment containing `<!-- lmdj-merge-queue:queue-stalled:<label-event-id> -->`.
 
 - [x] **Step 6: Verify and commit the API boundary**
 
