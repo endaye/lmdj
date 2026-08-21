@@ -205,6 +205,16 @@ bound to one ticket, PR number, base SHA, head SHA, and numeric
 Actions App ID `15368`. Only live-confirmed base/head drift may consume another
 attempt, with three attempts total.
 
+Once the queue is enabled, it is the default path for every non-control-plane
+PR merging into `main`. While an `lmdj-merge-main` queue item is queued or
+in-progress, ordinary manual merging of a non-control-plane PR is prohibited:
+each such merge creates one confirmed base drift for every PR already in the
+queue, consumes one of its three attempts, and invalidates one in-progress full
+validation. The ordinary protected path remains for control-plane PRs (which
+are already required to use it) and for explicitly recorded exceptions under
+the §emergency semantics when the queue is proven unavailable. This rule is
+motivated by the mixed-path failure documented in PR #226 and Issue #230.
+
 A PR changing `.github/workflows/merge-queue.yml`, `.github/workflows/ci.yml`,
 `.github/actionlint.yaml`, `scripts/ci/merge_queue.py`,
 `scripts/ci/github_queue_api.py`, `scripts/ci/merge_queue_watchdog.py`,
