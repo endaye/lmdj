@@ -81,6 +81,23 @@ class GitHubQueueApiTest(unittest.TestCase):
         self.assertEqual(request.headers["X-GitHub-Api-Version"], "2026-03-10")
         self.assertEqual(request.headers["Authorization"], "Bearer secret-token")
 
+    def test_bounded_get_passes_remaining_deadline_to_transport(self):
+        now = [0.0]
+
+        def timeout(request):
+            self.assertEqual(request.timeout_seconds, 5.0)
+            now[0] += request.timeout_seconds
+            raise TimeoutError("transport deadline reached")
+
+        client, transport = self.client(
+            [timeout, json_response(200, {"ref": "refs/heads/main", "object": {"sha": SHA_A}})],
+            clock=lambda: now[0],
+            sleeper=lambda seconds: now.__setitem__(0, now[0] + seconds),
+        )
+        with self.assertRaises(TimeoutError):
+            client.get_main_sha(timeout_seconds=5)
+        self.assertEqual(len(transport.requests), 1)
+
     def test_urllib_transport_never_automatically_follows_redirects(self):
         class Handler(BaseHTTPRequestHandler):
             redirected_requests = 0

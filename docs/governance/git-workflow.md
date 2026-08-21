@@ -224,6 +224,12 @@ Every other terminal failure removes the label and leaves one stable-code PR
 conversation comment; recovery requires fixing the cause and explicitly adding the
 label again.
 
+After GitHub accepts the squash merge, PR merge metadata can briefly lag the
+main ref. Within a 30-second scheduling budget, the controller performs up to
+seven read-only postcondition observations no more than five seconds apart and
+passes the remaining budget to every REST transport timeout. It requires
+PR/main/merge SHA/tree equality to converge and never repeats the merge mutation.
+
 An open PR whose latest `merge:queue` event is at least 20 minutes old, with no
 associated queued or in-progress queue run since that event, has the
 `queue-stalled` signature. Inspect the workflow run, pending capacity, manual

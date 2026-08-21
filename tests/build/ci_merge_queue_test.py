@@ -122,16 +122,19 @@ class MergeQueueTest(unittest.TestCase):
             def get_permission(inner, actor):
                 return inner.permission
 
-            def get_pull(inner, number):
+            def get_pull(inner, number, *, timeout_seconds=None):
+                del timeout_seconds
                 return inner.pull
 
-            def get_main_sha(inner):
+            def get_main_sha(inner, *, timeout_seconds=None):
+                del timeout_seconds
                 return inner.main_sha
 
             def list_changed_paths(inner, number):
                 return inner.changed_paths
 
-            def is_ancestor(inner, base, head):
+            def is_ancestor(inner, base, head, *, timeout_seconds=None):
+                del timeout_seconds
                 return inner.ancestor_overrides.get((base, head), inner.ancestor)
 
             def update_branch(inner, number, expected_head_sha, timeout_seconds):
@@ -144,7 +147,8 @@ class MergeQueueTest(unittest.TestCase):
                     return result
                 raise AssertionError("unexpected update_branch call")
 
-            def get_tree(inner, sha):
+            def get_tree(inner, sha, *, timeout_seconds=None):
+                del timeout_seconds
                 return inner.merge_tree if sha == SHA_C else inner.head_tree
 
             def authorize_sync_validation(
@@ -311,7 +315,8 @@ class MergeQueueTest(unittest.TestCase):
         original_get_pull = client.get_pull
         calls = 0
 
-        def get_pull(number):
+        def get_pull(number, *, timeout_seconds=None):
+            del timeout_seconds
             nonlocal calls
             calls += 1
             if calls >= 3:
@@ -457,9 +462,131 @@ class MergeQueueTest(unittest.TestCase):
         )
 
     def test_tree_mismatch_is_blocked_after_reconciliation(self):
-        report = self.run_item(self.client(merge_tree="different-tree"))
+        client = self.client(merge_tree="different-tree")
+        clock = FakeClock()
+        original_get_tree = client.get_tree
+        tree_reads = 0
+
+        def get_tree(sha, *, timeout_seconds=None):
+            nonlocal tree_reads
+            if sha == SHA_C:
+                tree_reads += 1
+            return original_get_tree(sha, timeout_seconds=timeout_seconds)
+
+        client.get_tree = get_tree
+        report = self.run_item(client, clock=clock)
         self.assertEqual(report.code, "postcondition-mismatch")
         self.assertEqual(report.status, "blocked-after-reconciliation")
+        self.assertEqual(clock.value, 24)
+        self.assertEqual(len(client.merge_calls), 1)
+        self.assertEqual(tree_reads, 7)
+        self.assertIn("pull-merged:True", report.evidence)
+        self.assertIn(f"pull-merge-sha:{SHA_C}", report.evidence)
+        self.assertIn(f"main-sha:{SHA_C}", report.evidence)
+        self.assertIn("base-ancestor:True", report.evidence)
+        self.assertIn("expected-head-tree:tree-head", report.evidence)
+        self.assertIn("merge-tree:different-tree", report.evidence)
+
+    def test_postcondition_deadline_stops_before_the_next_read(self):
+        client = self.client(merge_tree="different-tree")
+        clock = FakeClock()
+        original_get_pull = client.get_pull
+        original_get_main_sha = client.get_main_sha
+        post_merge_pull_reads = 0
+        post_merge_main_reads = 0
+
+        def get_pull(number, *, timeout_seconds=None):
+            nonlocal post_merge_pull_reads
+            pull = original_get_pull(number, timeout_seconds=timeout_seconds)
+            if client.merge_calls:
+                post_merge_pull_reads += 1
+                clock.sleep(timeout_seconds)
+            return pull
+
+        def get_main_sha(*, timeout_seconds=None):
+            nonlocal post_merge_main_reads
+            if client.merge_calls:
+                post_merge_main_reads += 1
+            return original_get_main_sha(timeout_seconds=timeout_seconds)
+
+        client.get_pull = get_pull
+        client.get_main_sha = get_main_sha
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "postcondition-mismatch")
+        self.assertEqual(clock.value, 30)
+        self.assertEqual(post_merge_pull_reads, 1)
+        self.assertEqual(post_merge_main_reads, 0)
+        self.assertEqual(len(client.merge_calls), 1)
+
+    def test_postcondition_failure_preserves_transient_error_history(self):
+        client = self.client(merge_tree="different-tree")
+        original_get_main_sha = client.get_main_sha
+        failed_reads = 0
+
+        def get_main_sha(*, timeout_seconds=None):
+            nonlocal failed_reads
+            if client.merge_calls and failed_reads == 0:
+                failed_reads += 1
+                raise TimeoutError("transient read timeout")
+            return original_get_main_sha(timeout_seconds=timeout_seconds)
+
+        client.get_main_sha = get_main_sha
+        report = self.run_item(client)
+        self.assertEqual(report.code, "postcondition-mismatch")
+        self.assertIn("reconciliation-errors:TimeoutError", report.evidence)
+
+    def test_successful_merge_waits_for_eventually_consistent_pr_metadata(self):
+        client = self.client()
+        clock = FakeClock()
+        original_get_pull = client.get_pull
+        stale_reads = 0
+
+        def get_pull(number, *, timeout_seconds=None):
+            del timeout_seconds
+            nonlocal stale_reads
+            pull = original_get_pull(number)
+            if client.merge_calls and stale_reads == 0:
+                stale_reads += 1
+                return replace(
+                    pull,
+                    state="open",
+                    merged=False,
+                    merge_commit_sha=None,
+                )
+            return pull
+
+        client.get_pull = get_pull
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merged")
+        self.assertTrue(report.ok)
+        self.assertEqual(stale_reads, 1)
+        self.assertEqual(
+            clock.value, self.mq.POST_MERGE_RECONCILIATION_INTERVAL_SECONDS
+        )
+        self.assertEqual(len(client.merge_calls), 1)
+
+    def test_successful_merge_recovers_from_transient_postcondition_read_error(self):
+        client = self.client()
+        clock = FakeClock()
+        original_get_main_sha = client.get_main_sha
+        failed_reads = 0
+
+        def get_main_sha(*, timeout_seconds=None):
+            nonlocal failed_reads
+            if client.merge_calls and failed_reads == 0:
+                failed_reads += 1
+                raise TimeoutError("transient read timeout")
+            return original_get_main_sha(timeout_seconds=timeout_seconds)
+
+        client.get_main_sha = get_main_sha
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "merged")
+        self.assertTrue(report.ok)
+        self.assertEqual(failed_reads, 1)
+        self.assertEqual(
+            clock.value, self.mq.POST_MERGE_RECONCILIATION_INTERVAL_SECONDS
+        )
+        self.assertEqual(len(client.merge_calls), 1)
 
     def test_finalize_aborted_is_idempotent_and_revokes_live_authority(self):
         client = self.client()
