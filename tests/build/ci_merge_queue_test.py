@@ -26,7 +26,8 @@ SAFE_VALIDATION_EVIDENCE = re.compile(
     r"duplicate:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
     r"unexpected:required-check|"
     r"field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|base_sha|"
-    r"manifest_mode=(?:focused|None)|trusted_head|run_status|run_conclusion))$"
+    r"classification=(?:invalid|unexpected)|manifest_mode=(?:focused|None)|"
+    r"trusted_head|run_status|run_conclusion))$"
 )
 
 
@@ -735,6 +736,23 @@ class MergeQueueTest(unittest.TestCase):
         self.assertEqual(report.code, "validation-failed")
         self.assertEqual(report.attempts, 1)
 
+    def test_non_valid_validation_classification_never_merges(self):
+        for classification, expected_evidence in (
+            ("invalid", "field:classification=invalid"),
+            ("future-classification", "field:classification=unexpected"),
+        ):
+            with self.subTest(classification=classification):
+                result = replace(
+                    self.client().validation_results[0],
+                    classification=classification,
+                )
+                client = self.client(validation_results=[result])
+                report = self.run_item(client)
+                self.assertEqual(report.code, "validation-failed")
+                self.assertIn(expected_evidence, report.evidence)
+                self.assertEqual(client.merge_calls, [])
+                self.assert_evidence_is_safe(report)
+
     def test_label_removed_after_validation_never_merges(self):
         client = self.client()
         original_wait = client.wait_validation
@@ -804,6 +822,99 @@ class MergeQueueTest(unittest.TestCase):
         self.assertEqual(report.code, "validation-timeout")
         self.assertEqual(client.cancel_calls, [9001])
         self.assertIn("cancel-error:GitHubApiError", report.evidence)
+
+    def test_wait_validation_failure_cancels_the_dispatched_run_and_cleans_up(self):
+        client = self.client()
+        secret_message = "token=ghp_WAIT_FAILURE_MUST_NOT_LEAK"
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def wait_validation(run_id, timeout_seconds):
+            client.validation_calls.append((run_id, timeout_seconds))
+            raise GitHubApiError(secret_message)
+
+        client.wait_validation = wait_validation
+        try:
+            report = self.run_item(client)
+        except Exception as error:
+            self.fail(
+                f"wait_validation escaped the controller: {type(error).__name__}"
+            )
+        self.assertEqual(report.code, "validation-observation-failed")
+        self.assertEqual(report.evidence, ("GitHubApiError",))
+        self.assertEqual(report.validation_run_ids, (9001,))
+        self.assertEqual(client.cancel_calls, [9001])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(len(client.comments), 1)
+        for surface in (
+            report.to_json(),
+            self.mq.render_markdown(report),
+            client.comments[0][1],
+        ):
+            self.assertNotIn(secret_message, surface)
+
+    def test_wait_validation_failure_never_cancels_a_synchronize_run(self):
+        client = self.client(
+            ancestor=False,
+            update_results=[self.mq.UpdateResult("accepted", SHA_D)],
+        )
+
+        def wait_validation(run_id, timeout_seconds):
+            client.validation_calls.append((run_id, timeout_seconds))
+            raise TimeoutError("synchronized observation unavailable")
+
+        client.wait_validation = wait_validation
+        try:
+            report = self.run_item(client)
+        except Exception as error:
+            self.fail(
+                f"wait_validation escaped the controller: {type(error).__name__}"
+            )
+        self.assertEqual(report.code, "validation-observation-failed")
+        self.assertEqual(report.evidence, ("TimeoutError",))
+        self.assertEqual(report.validation_run_ids, (9101,))
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.cancel_calls, [])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(len(client.comments), 1)
+
+    def test_cancel_failure_preserves_wait_observation_failure_and_cleanup(self):
+        client = self.client()
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        class CancelError(RuntimeError):
+            pass
+
+        def wait_validation(run_id, timeout_seconds):
+            client.validation_calls.append((run_id, timeout_seconds))
+            raise GitHubApiError("raw observation response")
+
+        def cancel_validation(run_id):
+            client.cancel_calls.append(run_id)
+            raise CancelError("raw cancellation response")
+
+        client.wait_validation = wait_validation
+        client.cancel_validation = cancel_validation
+        try:
+            report = self.run_item(client)
+        except Exception as error:
+            self.fail(
+                f"wait_validation escaped the controller: {type(error).__name__}"
+            )
+        self.assertEqual(report.code, "validation-observation-failed")
+        self.assertEqual(
+            report.evidence,
+            ("GitHubApiError", "cancel-error:CancelError"),
+        )
+        self.assertEqual(client.cancel_calls, [9001])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(len(client.comments), 1)
+        rendered = report.to_json() + self.mq.render_markdown(report)
+        self.assertNotIn("raw observation response", rendered)
+        self.assertNotIn("raw cancellation response", rendered)
 
     def test_merge_commit_must_descend_from_the_validated_base(self):
         client = self.client(ancestor_overrides={(SHA_A, SHA_C): False})

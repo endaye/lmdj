@@ -325,14 +325,7 @@ class GitHubQueueClient:
                 delay = min(delay, remaining)
             self._sleeper(delay)
         if status not in expected:
-            message = "unexpected response"
-            try:
-                document = _object(_json(response_body), "error response")
-                if isinstance(document.get("message"), str):
-                    message = document["message"]
-            except ValueError:
-                pass
-            raise GitHubApiError(status, method, url, message)
+            raise GitHubApiError(status, method, url, "unexpected response")
         return status, response_headers, response_body
 
     def _get_object(
@@ -708,7 +701,7 @@ class GitHubQueueClient:
         self._request(
             "DELETE",
             f"/issues/{number}/labels/{quote(label, safe='')}",
-            expected=(204,),
+            expected=(200,),
         )
 
     def create_review_comment(self, number: int, body: str) -> None:

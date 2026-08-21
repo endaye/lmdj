@@ -65,8 +65,9 @@ _SAFE_SUMMARY_EVIDENCE = (
     re.compile(r"^unexpected:required-check$"),
     re.compile(
         r"^field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|"
-        r"base_sha|manifest_mode=(?:focused|None|invalid)|trusted_head|"
-        r"run_status|run_conclusion)$"
+        r"base_sha|classification=(?:invalid|unexpected)|"
+        r"manifest_mode=(?:focused|None|invalid)|trusted_head|run_status|"
+        r"run_conclusion)$"
     ),
     re.compile(r"^[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"),
     re.compile(r"^unconfirmed-drift-artifact$"),
@@ -582,15 +583,27 @@ def run_queue_item(
                 attempts=attempt_number, base=base, head=head, run_ids=run_ids,
             )
         run_ids.append(run_id)
-        result = client.wait_validation(run_id, budget)
+
+        def cancel_dispatched_validation() -> tuple[str, ...]:
+            if synchronized_run_id is not None:
+                return ()
+            try:
+                client.cancel_validation(run_id)
+            except Exception as error:
+                return (f"cancel-error:{type(error).__name__}",)
+            return ()
+
+        try:
+            result = client.wait_validation(run_id, budget)
+        except Exception as error:
+            evidence = (type(error).__name__,) + cancel_dispatched_validation()
+            return terminal("validation-observation-failed",
+                attempts=attempt_number, base=base, head=head, run_ids=run_ids,
+                evidence=evidence,
+            )
 
         if result.classification == "timeout":
-            evidence: tuple[str, ...] = ()
-            if synchronized_run_id is None:
-                try:
-                    client.cancel_validation(run_id)
-                except Exception as error:
-                    evidence = (f"cancel-error:{type(error).__name__}",)
+            evidence = cancel_dispatched_validation()
             return terminal("validation-timeout", attempts=attempt_number,
                 base=base, head=head, run_ids=run_ids, evidence=evidence,
             )
@@ -609,6 +622,15 @@ def run_queue_item(
             return terminal("validation-failed", attempts=attempt_number,
                 base=live_base, head=live_pull.head_sha, run_ids=run_ids,
                 evidence=("unconfirmed-drift-artifact",),
+            )
+
+        if result.classification != "valid":
+            classification = (
+                "invalid" if result.classification == "invalid" else "unexpected"
+            )
+            return terminal("validation-failed", attempts=attempt_number,
+                base=base, head=head, run_ids=run_ids,
+                evidence=(f"field:classification={classification}",),
             )
 
         contract_error = _validation_contract_error(
