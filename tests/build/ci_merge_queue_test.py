@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,17 @@ SHA_A = "a" * 40
 SHA_B = "b" * 40
 SHA_C = "c" * 40
 SHA_D = "d" * 40
+SAFE_VALIDATION_EVIDENCE = re.compile(
+    r"^(?:check:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
+    r"(?:failure|cancelled|skipped|timed_out|None)|"
+    r"missing:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
+    r"app:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)=\d+|"
+    r"duplicate:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
+    r"unexpected:required-check|"
+    r"field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|base_sha|"
+    r"classification=(?:invalid|unexpected)|manifest_mode=(?:focused|None)|"
+    r"trusted_head|run_status|run_conclusion))$"
+)
 
 
 def load_module():
@@ -116,6 +128,7 @@ class MergeQueueTest(unittest.TestCase):
             update_calls = []
             sync_authorization_calls = []
             dispatch_calls = []
+            cancel_calls = []
             validation_calls = []
             merge_calls = []
 
@@ -169,6 +182,9 @@ class MergeQueueTest(unittest.TestCase):
                     raise value
                 return value
 
+            def cancel_validation(inner, run_id):
+                inner.cancel_calls.append(run_id)
+
             def wait_validation(inner, run_id, timeout_seconds):
                 inner.validation_calls.append((run_id, timeout_seconds))
                 return inner.validation_results.pop(0)
@@ -200,10 +216,13 @@ class MergeQueueTest(unittest.TestCase):
             setattr(client, name, value)
         return client
 
-    def run_item(self, client, *, request=None, clock=None):
+    def run_item(self, client, *, request=None, clock=None, sleeper=None):
         clock = clock or FakeClock()
         return self.mq.run_queue_item(
-            request or self.request(), client, clock=clock.now, sleeper=clock.sleep
+            request or self.request(),
+            client,
+            clock=clock.now,
+            sleeper=sleeper or clock.sleep,
         )
 
     def test_unauthorized_actor_fails_closed_and_revokes_label(self):
@@ -213,6 +232,229 @@ class MergeQueueTest(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertEqual(client.removed, [(220, "merge:queue")])
         self.assertIn("unauthorized-actor", client.comments[0][1])
+
+    def test_cleanup_retries_transient_errors_with_backoff(self):
+        client = self.client(permission="read")
+        original_comment = client.create_review_comment
+        comment_attempts = 0
+        delays = []
+
+        def create_review_comment(number, body):
+            nonlocal comment_attempts
+            comment_attempts += 1
+            if comment_attempts < 3:
+                raise RuntimeError("temporary GitHub error")
+            original_comment(number, body)
+
+        client.create_review_comment = create_review_comment
+        report = self.run_item(client, sleeper=delays.append)
+        self.assertEqual(comment_attempts, 3)
+        self.assertEqual(len(client.comments), 1)
+        self.assertEqual(report.evidence, ())
+        self.assertEqual(delays, [2, 4])
+
+    def test_comment_loss_never_blocks_label_removal_and_is_named(self):
+        client = self.client(permission="read")
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def create_review_comment(number, body):
+            del number, body
+            raise GitHubApiError("comment unavailable")
+
+        client.create_review_comment = create_review_comment
+        report = self.run_item(client, sleeper=lambda _seconds: None)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertIn("cleanup-error:comment:GitHubApiError", report.evidence)
+
+    def test_label_removal_failure_still_attempts_the_comment(self):
+        client = self.client(permission="read")
+        label_attempts = 0
+        delays = []
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def remove_label(number, label):
+            nonlocal label_attempts
+            del number, label
+            label_attempts += 1
+            raise GitHubApiError("label removal unavailable")
+
+        client.remove_label = remove_label
+        report = self.run_item(client, sleeper=delays.append)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(label_attempts, 3)
+        self.assertEqual(delays, [2, 4])
+        self.assertEqual(len(client.comments), 1)
+        self.assertEqual(
+            report.evidence,
+            ("cleanup-error:remove-label:GitHubApiError",),
+        )
+
+    def test_cleanup_pull_read_failure_still_attempts_terminal_comment(self):
+        client = self.client(permission="read")
+        original_get_pull = client.get_pull
+        pull_reads = 0
+        delays = []
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def get_pull(number, *, timeout_seconds=None):
+            nonlocal pull_reads
+            pull_reads += 1
+            if pull_reads > 1:
+                raise GitHubApiError("pull unavailable")
+            return original_get_pull(number, timeout_seconds=timeout_seconds)
+
+        client.get_pull = get_pull
+        report = self.run_item(client, sleeper=delays.append)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(client.removed, [])
+        self.assertEqual(len(client.comments), 1)
+        self.assertEqual(
+            report.evidence,
+            ("cleanup-error:remove-label:GitHubApiError",),
+        )
+        self.assertEqual(delays, [2, 4])
+
+    def test_cleanup_is_a_noop_when_live_state_proves_label_absent(self):
+        client = self.client(permission="read")
+        original_get_pull = client.get_pull
+        pull_reads = 0
+
+        def get_pull(number, *, timeout_seconds=None):
+            nonlocal pull_reads
+            pull_reads += 1
+            pull = original_get_pull(number, timeout_seconds=timeout_seconds)
+            if pull_reads > 1:
+                return replace(pull, labels=())
+            return pull
+
+        client.get_pull = get_pull
+        report = self.run_item(client)
+        self.assertEqual(report.code, "unauthorized-actor")
+        self.assertEqual(report.evidence, ())
+        self.assertEqual(client.removed, [])
+        self.assertEqual(client.comments, [])
+
+    def test_both_cleanup_failures_preserve_preexisting_evidence(self):
+        client = self.client(permission="read")
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def remove_label(number, label):
+            del number, label
+            raise GitHubApiError("label unavailable")
+
+        def create_review_comment(number, body):
+            del number, body
+            raise TimeoutError("comment unavailable")
+
+        client.remove_label = remove_label
+        client.create_review_comment = create_review_comment
+        report = self.mq._cleanup_failure(
+            self.request(),
+            client,
+            self.mq._report(
+                code="validation-failed",
+                evidence=("field:run_status",),
+            ),
+            sleeper=lambda _seconds: None,
+        )
+        self.assertEqual(
+            report.evidence,
+            (
+                "field:run_status",
+                "cleanup-error:remove-label:GitHubApiError",
+                "cleanup-error:comment:TimeoutError",
+            ),
+        )
+
+    def test_summary_carries_evidence_when_cleanup_degrades(self):
+        report = self.mq.QueueReport(
+            ok=False,
+            status="blocked",
+            code="unauthorized-actor",
+            attempts=0,
+            observed_base_sha=SHA_A,
+            observed_head_sha=SHA_B,
+            validation_run_ids=(),
+            merge_sha=None,
+            message="unauthorized-actor",
+            evidence=("cleanup-error:comment:GitHubApiError",),
+        )
+        self.assertIn(
+            "- Evidence: cleanup-error:comment:GitHubApiError",
+            self.mq.render_markdown(report),
+        )
+
+    def test_summary_redacts_hostile_evidence_but_keeps_safe_diagnostics(self):
+        report = self.mq.QueueReport(
+            ok=False,
+            status="blocked",
+            code="validation-failed",
+            attempts=1,
+            observed_base_sha=SHA_A,
+            observed_head_sha=SHA_B,
+            validation_run_ids=(9001,),
+            merge_sha=None,
+            message="validation-failed",
+            evidence=(
+                "missing:PR Gate",
+                "check:PR Gate=invalid",
+                "cleanup-error:comment:GitHubApiError",
+                "/Users/endaye/Projects/lmdj/private.txt",
+                "https://api.github.com/repos/endaye/lmdj",
+                "token=ghp_super_secret",
+                '{"message":"raw merge API response"}',
+            ),
+        )
+        rendered = self.mq.render_markdown(report)
+        self.assertIn("missing:PR Gate", rendered)
+        self.assertIn("check:PR Gate=invalid", rendered)
+        self.assertIn("cleanup-error:comment:GitHubApiError", rendered)
+        self.assertIn("evidence-redacted", rendered)
+        for hostile in (
+            "/Users/endaye",
+            "api.github.com",
+            "ghp_super_secret",
+            "raw merge API response",
+        ):
+            self.assertNotIn(hostile, rendered)
+
+    def test_summary_with_empty_evidence_is_exactly_backward_compatible(self):
+        report = self.mq.QueueReport(
+            ok=False,
+            status="blocked",
+            code="unauthorized-actor",
+            attempts=0,
+            observed_base_sha=SHA_A,
+            observed_head_sha=SHA_B,
+            validation_run_ids=(),
+            merge_sha=None,
+            message="unauthorized-actor",
+            evidence=(),
+        )
+        self.assertEqual(
+            self.mq.render_markdown(report),
+            "\n".join((
+                "## Integration Queue",
+                "",
+                "- Status: `blocked`",
+                "- Code: `unauthorized-actor`",
+                "- Attempts: `0`",
+                f"- Base/head: `{SHA_A}` / `{SHA_B}`",
+                "- Validation runs: ``",
+                "- Merge SHA: `None`",
+                "- Message: unauthorized-actor",
+                "",
+            )),
+        )
 
     def test_already_merged_duplicate_is_a_quiet_success(self):
         client = self.client(pull=self.pull(state="closed", merged=True, merge_commit_sha=SHA_C))
@@ -256,7 +498,7 @@ class MergeQueueTest(unittest.TestCase):
     def test_dynamic_budget_reserves_reconciliation_time(self):
         self.assertEqual(
             self.mq.validation_budget_seconds(
-                now=0, mutation_deadline=9 * 60, remaining_attempts=1
+                now=0, mutation_deadline=39 * 60, remaining_attempts=1
             ),
             0,
         )
@@ -268,12 +510,19 @@ class MergeQueueTest(unittest.TestCase):
         )
 
     def test_budget_exhaustion_starts_no_mutation(self):
-        clock = FakeClock(321 * 60)
+        clock = FakeClock(300 * 60)
         client = self.client()
         report = self.run_item(client, clock=clock)
         self.assertEqual(report.code, "queue-budget-exhausted")
         self.assertEqual(client.dispatch_calls, [])
         self.assertEqual(client.merge_calls, [])
+
+    def test_attempt_below_measured_validation_floor_never_dispatches(self):
+        clock = FakeClock(233 * 60)
+        client = self.client()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "queue-budget-exhausted")
+        self.assertEqual(client.dispatch_calls, [])
 
     def test_update_branch_uses_expected_head_and_revalidates_new_head(self):
         update = self.mq.UpdateResult("accepted", SHA_D)
@@ -365,6 +614,77 @@ class MergeQueueTest(unittest.TestCase):
         report = self.run_item(self.client(validation_results=[invalid]))
         self.assertEqual(report.code, "required-check-contract-mismatch")
 
+    def test_failed_required_check_is_validation_failed_and_named(self):
+        failed = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "failure"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[failed]))
+        self.assertEqual(report.code, "validation-failed")
+        self.assertNotEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("check:PR Gate=failure", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_missing_required_check_is_a_contract_mismatch_with_diff(self):
+        missing = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "success"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[missing]))
+        self.assertEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("missing:core (macos-latest)", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_foreign_app_check_is_a_contract_mismatch_with_diff(self):
+        foreign = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 12345, "success"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[foreign]))
+        self.assertEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("app:PR Gate=12345", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_duplicate_required_check_is_a_contract_mismatch_with_diff(self):
+        duplicate = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "success"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[duplicate]))
+        self.assertEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("duplicate:PR Gate", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_run_field_mismatch_names_the_field(self):
+        focused = replace(
+            self.client().validation_results[0], manifest_mode="focused"
+        )
+        report = self.run_item(self.client(validation_results=[focused]))
+        self.assertEqual(report.code, "validation-failed")
+        self.assertIn("field:manifest_mode=focused", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def assert_evidence_is_safe(self, report):
+        for evidence in report.evidence:
+            with self.subTest(evidence=evidence):
+                self.assertRegex(evidence, SAFE_VALIDATION_EVIDENCE)
+
     def test_live_confirmed_base_drift_retries_full_validation(self):
         drift = replace(
             self.client().validation_results[0],
@@ -416,6 +736,23 @@ class MergeQueueTest(unittest.TestCase):
         self.assertEqual(report.code, "validation-failed")
         self.assertEqual(report.attempts, 1)
 
+    def test_non_valid_validation_classification_never_merges(self):
+        for classification, expected_evidence in (
+            ("invalid", "field:classification=invalid"),
+            ("future-classification", "field:classification=unexpected"),
+        ):
+            with self.subTest(classification=classification):
+                result = replace(
+                    self.client().validation_results[0],
+                    classification=classification,
+                )
+                client = self.client(validation_results=[result])
+                report = self.run_item(client)
+                self.assertEqual(report.code, "validation-failed")
+                self.assertIn(expected_evidence, report.evidence)
+                self.assertEqual(client.merge_calls, [])
+                self.assert_evidence_is_safe(report)
+
     def test_label_removed_after_validation_never_merges(self):
         client = self.client()
         original_wait = client.wait_validation
@@ -431,15 +768,153 @@ class MergeQueueTest(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(client.merge_calls, [])
 
-    def test_validation_timeout_has_its_own_terminal_code(self):
+    def test_validation_timeout_cancels_the_dispatched_orphan(self):
         timed_out = replace(
             self.client().validation_results[0],
             classification="timeout",
             run_status="in_progress",
             run_conclusion=None,
         )
-        report = self.run_item(self.client(validation_results=[timed_out]))
+        client = self.client(validation_results=[timed_out])
+        report = self.run_item(client)
         self.assertEqual(report.code, "validation-timeout")
+        self.assertEqual(client.cancel_calls, [9001])
+
+    def test_validation_timeout_never_cancels_a_synchronize_run(self):
+        timed_out = replace(
+            self.client().validation_results[0],
+            classification="timeout",
+            run_id=9101,
+            run_status="in_progress",
+            run_conclusion=None,
+            run_event="pull_request",
+            head_sha=SHA_D,
+            ticket=None,
+        )
+        client = self.client(
+            ancestor=False,
+            update_results=[self.mq.UpdateResult("accepted", SHA_D)],
+            validation_results=[timed_out],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "validation-timeout")
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.cancel_calls, [])
+
+    def test_cancel_failure_is_evidence_not_a_new_code(self):
+        timed_out = replace(
+            self.client().validation_results[0],
+            classification="timeout",
+            run_status="in_progress",
+            run_conclusion=None,
+        )
+        client = self.client(validation_results=[timed_out])
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def cancel_validation(run_id):
+            client.cancel_calls.append(run_id)
+            raise GitHubApiError("cancel unavailable")
+
+        client.cancel_validation = cancel_validation
+        report = self.run_item(client)
+        self.assertEqual(report.code, "validation-timeout")
+        self.assertEqual(client.cancel_calls, [9001])
+        self.assertIn("cancel-error:GitHubApiError", report.evidence)
+
+    def test_wait_validation_failure_cancels_the_dispatched_run_and_cleans_up(self):
+        client = self.client()
+        secret_message = "token=ghp_WAIT_FAILURE_MUST_NOT_LEAK"
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def wait_validation(run_id, timeout_seconds):
+            client.validation_calls.append((run_id, timeout_seconds))
+            raise GitHubApiError(secret_message)
+
+        client.wait_validation = wait_validation
+        try:
+            report = self.run_item(client)
+        except Exception as error:
+            self.fail(
+                f"wait_validation escaped the controller: {type(error).__name__}"
+            )
+        self.assertEqual(report.code, "validation-observation-failed")
+        self.assertEqual(report.evidence, ("GitHubApiError",))
+        self.assertEqual(report.validation_run_ids, (9001,))
+        self.assertEqual(client.cancel_calls, [9001])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(len(client.comments), 1)
+        for surface in (
+            report.to_json(),
+            self.mq.render_markdown(report),
+            client.comments[0][1],
+        ):
+            self.assertNotIn(secret_message, surface)
+
+    def test_wait_validation_failure_never_cancels_a_synchronize_run(self):
+        client = self.client(
+            ancestor=False,
+            update_results=[self.mq.UpdateResult("accepted", SHA_D)],
+        )
+
+        def wait_validation(run_id, timeout_seconds):
+            client.validation_calls.append((run_id, timeout_seconds))
+            raise TimeoutError("synchronized observation unavailable")
+
+        client.wait_validation = wait_validation
+        try:
+            report = self.run_item(client)
+        except Exception as error:
+            self.fail(
+                f"wait_validation escaped the controller: {type(error).__name__}"
+            )
+        self.assertEqual(report.code, "validation-observation-failed")
+        self.assertEqual(report.evidence, ("TimeoutError",))
+        self.assertEqual(report.validation_run_ids, (9101,))
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.cancel_calls, [])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(len(client.comments), 1)
+
+    def test_cancel_failure_preserves_wait_observation_failure_and_cleanup(self):
+        client = self.client()
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        class CancelError(RuntimeError):
+            pass
+
+        def wait_validation(run_id, timeout_seconds):
+            client.validation_calls.append((run_id, timeout_seconds))
+            raise GitHubApiError("raw observation response")
+
+        def cancel_validation(run_id):
+            client.cancel_calls.append(run_id)
+            raise CancelError("raw cancellation response")
+
+        client.wait_validation = wait_validation
+        client.cancel_validation = cancel_validation
+        try:
+            report = self.run_item(client)
+        except Exception as error:
+            self.fail(
+                f"wait_validation escaped the controller: {type(error).__name__}"
+            )
+        self.assertEqual(report.code, "validation-observation-failed")
+        self.assertEqual(
+            report.evidence,
+            ("GitHubApiError", "cancel-error:CancelError"),
+        )
+        self.assertEqual(client.cancel_calls, [9001])
+        self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(len(client.comments), 1)
+        rendered = report.to_json() + self.mq.render_markdown(report)
+        self.assertNotIn("raw observation response", rendered)
+        self.assertNotIn("raw cancellation response", rendered)
 
     def test_merge_commit_must_descend_from_the_validated_base(self):
         client = self.client(ancestor_overrides={(SHA_A, SHA_C): False})
@@ -590,9 +1065,25 @@ class MergeQueueTest(unittest.TestCase):
 
     def test_finalize_aborted_is_idempotent_and_revokes_live_authority(self):
         client = self.client()
-        report = self.mq.finalize_aborted(self.request(), client, existing_report=None)
+        original_comment = client.create_review_comment
+        comment_attempts = 0
+        delays = []
+
+        def create_review_comment(number, body):
+            nonlocal comment_attempts
+            comment_attempts += 1
+            if comment_attempts < 3:
+                raise RuntimeError("temporary GitHub error")
+            original_comment(number, body)
+
+        client.create_review_comment = create_review_comment
+        report = self.mq.finalize_aborted(
+            self.request(), client, existing_report=None, sleeper=delays.append
+        )
         self.assertEqual(report.code, "queue-worker-aborted")
         self.assertEqual(client.removed, [(220, "merge:queue")])
+        self.assertEqual(comment_attempts, 3)
+        self.assertEqual(delays, [2, 4])
         existing = self.mq.QueueReport(
             ok=True,
             status="merged",

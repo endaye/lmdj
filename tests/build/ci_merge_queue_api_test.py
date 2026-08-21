@@ -195,6 +195,22 @@ class GitHubQueueApiTest(unittest.TestCase):
                 with self.assertRaises(mq.DispatchContractError):
                     invalid.dispatch_validation(220, SHA_B, {"lanes": ""})
 
+    def test_cancel_validation_posts_the_exact_run_endpoint(self):
+        client, transport = self.client([(202, {}, b"")])
+        client.cancel_validation(991)
+        request = transport.requests[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(
+            request.url,
+            "https://api.github.com/repos/endaye/lmdj/actions/runs/991/cancel",
+        )
+        self.assertIsNone(request.body)
+
+    def test_cancel_validation_rejects_a_non_success_response(self):
+        client, _ = self.client([json_response(409, {"message": "cannot cancel"})])
+        with self.assertRaises(api.GitHubApiError):
+            client.cancel_validation(991)
+
     def test_update_branch_maps_expected_head_conflict_and_accepted_poll(self):
         drift, _ = self.client([json_response(422, {"message": "head changed"})])
         self.assertEqual(drift.update_branch(220, SHA_B, 60).status, "drift")
@@ -433,10 +449,35 @@ class GitHubQueueApiTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             api.parse_queue_validation_zip(buffer.getvalue())
 
+    def test_remove_label_accepts_200_with_remaining_labels(self):
+        client, transport = self.client([
+            json_response(200, [{"name": "still-present"}]),
+        ])
+        client.remove_label(220, "merge:queue")
+        request = transport.requests[0]
+        self.assertEqual(request.method, "DELETE")
+        self.assertEqual(
+            request.url,
+            "https://api.github.com/repos/endaye/lmdj/issues/220/labels/merge%3Aqueue",
+        )
+        self.assertIsNone(request.body)
+
+    def test_remove_label_non_200_is_typed_and_redacts_secrets_and_body(self):
+        response_secret = "ghp_RESPONSE_BODY_MUST_NOT_LEAK"
+        client, _ = self.client([
+            json_response(422, {"message": response_secret}),
+        ])
+        with self.assertRaises(api.GitHubApiError) as context:
+            client.remove_label(220, "merge:queue")
+        self.assertEqual(context.exception.status, 422)
+        rendered = str(context.exception)
+        self.assertNotIn("secret-token", rendered)
+        self.assertNotIn(response_secret, rendered)
+
     def test_merge_label_and_issue_comment_mutations_are_structured(self):
         client, transport = self.client([
             json_response(200, {"merged": True, "sha": SHA_B, "message": "merged"}),
-            (204, {}, b""),
+            json_response(200, []),
             json_response(201, {"id": 8}),
         ])
         payload = {

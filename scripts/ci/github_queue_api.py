@@ -325,14 +325,7 @@ class GitHubQueueClient:
                 delay = min(delay, remaining)
             self._sleeper(delay)
         if status not in expected:
-            message = "unexpected response"
-            try:
-                document = _object(_json(response_body), "error response")
-                if isinstance(document.get("message"), str):
-                    message = document["message"]
-            except ValueError:
-                pass
-            raise GitHubApiError(status, method, url, message)
+            raise GitHubApiError(status, method, url, "unexpected response")
         return status, response_headers, response_body
 
     def _get_object(
@@ -537,6 +530,13 @@ class GitHubQueueClient:
             raise DispatchContractError("workflow dispatch response has no numeric workflow_run_id")
         return run_id
 
+    def cancel_validation(self, run_id: int) -> None:
+        self._request(
+            "POST",
+            f"/actions/runs/{run_id}/cancel",
+            expected=tuple(range(200, 300)),
+        )
+
     def _required_checks(
         self, jobs: list[object], checks: list[object]
     ) -> tuple[RequiredCheck, ...]:
@@ -701,7 +701,7 @@ class GitHubQueueClient:
         self._request(
             "DELETE",
             f"/issues/{number}/labels/{quote(label, safe='')}",
-            expected=(204,),
+            expected=(200,),
         )
 
     def create_review_comment(self, number: int, body: str) -> None:
