@@ -28,6 +28,7 @@ import {canonicalJson, exactKeys, sha256Hex} from "./integrity.mjs";
 import { createHostStateMachine } from "./state_machine.mjs";
 
 const HOST_MANIFEST_MAXIMUM_BYTES = 65_536;
+const CONTROL_WORKER_CAPABILITY_PROBE_TIMEOUT_MS = 15_000;
 const TRIGGER_LEDGER_LIMIT = 4_096;
 const RECOVERY_OUTCOME_DEADLINE_MS = 1_000;
 const SAMPLE_PREVIEW_SLOT_LIMIT = 64;
@@ -128,7 +129,7 @@ function generationsMatch(status) {
   );
 }
 
-async function probeControlWorkerCapabilities(scope) {
+async function probeControlWorkerCapabilities(scope, timeoutMs) {
   if (typeof scope.Worker !== "function" || typeof scope.Blob !== "function") {
     return {
       opfs: false,
@@ -172,14 +173,13 @@ async function probeControlWorkerCapabilities(scope) {
   const worker = new scope.Worker(url);
   const probeName = `.lmdj-capability-probe-${scope.crypto.randomUUID()}`;
   try {
-    return await new Promise((resolvePromise) => {
+    return await new Promise((resolvePromise, rejectPromise) => {
       const timeout = scope.setTimeout(() => {
-        resolvePromise({
-          opfs: false,
-          opfsSyncAccessHandle: false,
-          opfsWritableReplace: false,
-        });
-      }, 2_000);
+        rejectPromise(typedError(
+          "HOST_TIMEOUT",
+          "Control Worker capability probe timed out",
+        ));
+      }, timeoutMs);
       worker.addEventListener("message", (event) => {
         scope.clearTimeout(timeout);
         resolvePromise(event.data);
@@ -200,8 +200,8 @@ async function probeControlWorkerCapabilities(scope) {
   }
 }
 
-async function defaultCapabilities(scope) {
-  const controlWorker = await probeControlWorkerCapabilities(scope);
+async function defaultCapabilities(scope, timeoutMs) {
+  const controlWorker = await probeControlWorkerCapabilities(scope, timeoutMs);
   return {
     secureContext: scope.isSecureContext === true,
     crossOriginIsolated: scope.crossOriginIsolated === true,
@@ -957,6 +957,15 @@ function createRuntimeSessionController(options = {}) {
   const assemblyIdentity = options.assemblyIdentity;
   const manifestSource = options.manifestSource;
   const inputOwnership = options.inputOwnership ?? "session";
+  const capabilityProbeTimeoutMs =
+    options.capabilityProbeTimeoutMs === undefined
+      ? CONTROL_WORKER_CAPABILITY_PROBE_TIMEOUT_MS
+      : options.capabilityProbeTimeoutMs;
+  if (!isPositiveInteger(capabilityProbeTimeoutMs)) {
+    throw new TypeError(
+      "Capability probe timeout must be a positive safe integer",
+    );
+  }
   if (inputOwnership !== "session" && inputOwnership !== "host") {
     throw new TypeError("Runtime Session input ownership is invalid");
   }
@@ -1289,7 +1298,7 @@ function createRuntimeSessionController(options = {}) {
     return terminalCleanupPromise;
   }
 
-  function fail(codeOrError) {
+  function fail(codeOrError, targetOverride) {
     if (
       fatalReservation !== null ||
       ["restart-required", "failed", "closed"].includes(machine.state)
@@ -1306,9 +1315,11 @@ function createRuntimeSessionController(options = {}) {
         ? Object.freeze({})
         : safeErrorDetails(codeOrError);
     closing = true;
-    const target = ["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(code)
-      ? "restart-required"
-      : "failed";
+    const target =
+      targetOverride ??
+      (["HOST_RESTART_REQUIRED", "HOST_TIMEOUT"].includes(code)
+        ? "restart-required"
+        : "failed");
     const safety = beginSafetyCleanup(`fatal:${code}`);
     const reservation = Object.freeze({code, safety, target});
     fatalReservation = reservation;
@@ -2692,7 +2703,9 @@ function createRuntimeSessionController(options = {}) {
       verifiedSampleImportLimit = importedWavBytes;
       const capabilities =
         options.capabilities ??
-        (preflight === runPreflight ? await defaultCapabilities(window) : {});
+        (preflight === runPreflight
+          ? await defaultCapabilities(window, capabilityProbeTimeoutMs)
+          : {});
       const resolvedCapabilities = {};
       for (const name of PREFLIGHT_CAPABILITIES) {
         try {
@@ -2717,7 +2730,7 @@ function createRuntimeSessionController(options = {}) {
       renderDiagnostics();
       return true;
     } catch (error) {
-      fail(error);
+      fail(error, "failed");
       return false;
     }
   }

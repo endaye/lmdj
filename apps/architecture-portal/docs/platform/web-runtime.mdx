@@ -28,6 +28,8 @@ Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Produc
 
 两个 Host 使用同一 Runtime Session、input adapters、Control bridge、OPFS capability gate、Application Facade 与 AudioWorklet 接线。Host manifest 的 contract/id/version 必须命中 Product Assembly 注入的精确 allowlist；Host UI 不能自选 Product identity 或绕过 Facade。Stage 8 在同一有界 Host lane 上加入 Sample inspect、waveform、streamed import、update、reset、preview、release、stop 与 Snapshot retry，并把权威 Voice started/stopped/completed 状态按序投影给 Creator。Project 路径只由 retained current Project 注入，Browser payload 不得携带 `project_path`；verified sidecar 的长度、SHA-256、offset 与 final 标记在进入 Facade 前精确校验。
 
+Host preflight 的单次 Control Worker capability probe 使用 15 秒有界预算。CPU 或文件 I/O contention 可以推迟结果，但不能被解释成 OPFS primitive 缺失；明确 primitive 缺失、actual negative 或 Worker error 仍 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`，deadline expiry 则为 `HOST_TIMEOUT`。无论 settle 原因如何，临时 Worker 与 Blob URL 都由 probe owner 清理。
+
 Project I/O 的三个文件 mutation primitive（`append_durable`、`replace_complete`、`create_immutable`）都要求目标 Project 的有效 writer lease，且 lease 必须属于发起调用的同一 `ProjectStoragePlatform`；无覆盖 lease 时以 `IO_ERROR` + `storage_condition=invalid_state` 失败，不同 same-page platform 试图复用 owner lease 时以 `IO_ERROR` + `storage_condition=project_busy` 在打开 target 或 intent 前失败。Web OPFS 还把 `QuotaExceededError` 与 `InvalidStateError` 保留为 `quota_exceeded` / `invalid_state` 类型化条件，而不是丢失为空 details。
 
 ## 分发与服务
