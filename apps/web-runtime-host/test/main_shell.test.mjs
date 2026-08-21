@@ -8,6 +8,7 @@ import {createWebRuntimeHostController} from "../src/main.mjs";
 
 
 const APP_ROOT = new URL("../", import.meta.url);
+const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 class Element extends EventTarget {
   constructor(id, {bank, pad} = {}) {
@@ -107,7 +108,7 @@ function fixture() {
       return Object.freeze({
         state,
         error_code: null,
-        product_build: "1.0.24.0",
+        product_build: TEST_PRODUCT_BUILD,
         host_version: "1.2.10",
         protocol_version: 1,
       });

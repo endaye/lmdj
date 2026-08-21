@@ -6,6 +6,7 @@ import {createDiagnosticClient} from "../web/diagnostic_client.mjs";
 import {createUserGestureToken} from "../web/input_adapters.mjs";
 import {createRuntimeSession} from "../web/runtime_session.mjs";
 
+const TEST_PRODUCT_BUILD = "9.8.7.6";
 
 const API = [
   "activateAudio",
@@ -151,7 +152,7 @@ function fixture({
       hostId: "web-runtime-host",
       hostVersion: "1.2.10",
       platformVersion: "0.3.1",
-      productBuild: "1.0.24.0",
+      productBuild: TEST_PRODUCT_BUILD,
       protocolVersion: 1,
     },
     inputConfiguration,
@@ -177,7 +178,7 @@ function fixture({
         host_id: "web-runtime-host",
         host_version: "1.2.10",
         platform_version: "0.3.1",
-        product_build: "1.0.24.0",
+        product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
       }),
     },
@@ -260,7 +261,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
     hostId: "creator-web",
     hostVersion: "1.2.0",
     platformVersion: "0.3.1",
-    productBuild: "1.0.24.0",
+    productBuild: TEST_PRODUCT_BUILD,
     protocolVersion: 1,
   };
   const manifestSource = {

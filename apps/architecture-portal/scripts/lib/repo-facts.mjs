@@ -6,6 +6,24 @@ function fail(message) {
   throw new Error(`portal facts error: ${message}`);
 }
 
+function relativePath(repoRoot, consumer) {
+  const relative = path.relative(repoRoot, consumer);
+  return relative && !relative.startsWith('..') ? relative.split(path.sep).join('/') : path.basename(consumer);
+}
+
+function productBuildText(value) {
+  if (value === undefined || value === null) return '<missing>';
+  return typeof value === 'string' && /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/.test(value)
+    ? value
+    : '<invalid>';
+}
+
+function productBuildMismatch({repoRoot, expected, found, consumer, remedy}) {
+  let message = `Product Build mismatch: expected ${expected} from products/lmdj/version.json, found ${productBuildText(found)} in ${relativePath(repoRoot, consumer)}`;
+  if (remedy) message += `; remedy: ${remedy}`;
+  fail(message);
+}
+
 async function readJson(file) {
   try {
     return JSON.parse(await readFile(file, 'utf8'));
@@ -158,9 +176,24 @@ export async function readRepoFacts({repoRoot, revision, channel}) {
     fail('product version must contain four non-negative integers');
   }
   const productVersion = parts.join('.');
-  if (assembly.product?.id !== 'lmdj' || lock.product?.id !== 'lmdj' ||
-      assembly.product?.version !== productVersion || lock.product?.version !== productVersion) {
-    fail(`product version mismatch for ${productVersion}`);
+  if (assembly.product?.id !== 'lmdj' || assembly.product?.version !== productVersion) {
+    productBuildMismatch({
+      repoRoot, expected: productVersion, found: assembly.product?.version, consumer: assemblyPath,
+      remedy: 'update the reviewed products/lmdj/assembly.json declaration to the approved Product Build, then regenerate the compiled assembly and lock with scripts/version.py lock',
+    });
+  }
+  if (lock.product?.id !== 'lmdj' || lock.product?.version !== productVersion) {
+    productBuildMismatch({
+      repoRoot, expected: productVersion, found: lock.product?.version, consumer: lockPath,
+      remedy: 'regenerate the compiled assembly and lock with scripts/version.py lock',
+    });
+  }
+  const productAssembly = lock.product_assembly;
+  if (productAssembly?.id !== 'lmdj' || productAssembly?.version !== productVersion) {
+    productBuildMismatch({
+      repoRoot, expected: productVersion, found: productAssembly?.version, consumer: lockPath,
+      remedy: 'regenerate the compiled assembly and lock with scripts/version.py lock',
+    });
   }
   if (!revision || !channel) fail('revision and channel are required');
 
@@ -169,10 +202,6 @@ export async function readRepoFacts({repoRoot, revision, channel}) {
     await validateInventory(repoRoot, assembly, lock, field);
   }
 
-  const productAssembly = lock.product_assembly;
-  if (productAssembly?.id !== 'lmdj' || productAssembly?.version !== productVersion) {
-    fail('product assembly identity mismatch');
-  }
   const expectedProductAssemblySha = await sourcePackageSha256(
     repoRoot,
     'product-assembly-source-package',

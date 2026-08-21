@@ -1,11 +1,12 @@
 # LMDJ Product Assembly
 
-`assembly.json` and its generated `assembly.lock.json` are the Product Assembly
-source of truth for Product Build `1.0.24.0`. The lock binds every declared
-Module, Host, Provider, and Contract to its exact version and
-source-package/schema hash. `assembly.json` declares the effective Region,
-data-classification, and permission policy; the lock binds both that declaration
-and the versioned Product Assembly wiring source. Hosts receive the Assembly
+`version.json` is the source of truth for the current Product Build.
+`assembly.json` is the reviewed, explicit Product Assembly declaration and its
+Product Build must match that authority. `assembly.lock.json` and
+`src/compiled_assembly.cpp` are generated together from those inputs; the lock
+binds every declared Module, Host, Provider, and Contract to its exact version
+and source-package/schema hash. `assembly.json` also declares the effective
+Region, data-classification, and permission policy. Hosts receive the Assembly
 path explicitly; Provider selection remains Workspace/Host state and is never
 written into Project Truth.
 

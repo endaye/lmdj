@@ -13,6 +13,8 @@ import type {
   RuntimeOutcome,
 } from "../src/runtime/runtime_types";
 
+const TEST_PRODUCT_BUILD = "9.8.7.6";
+
 const summary: LocalProjectSummary = {
   projectId: "11111111-1111-4111-8111-111111111111",
   patternId: "22222222-2222-4222-8222-222222222222",
@@ -91,7 +93,7 @@ function sessionFixture(name: string) {
       state: hostState,
       error_code: errorCode,
       error_details: errorDetails,
-      product_build: "1.0.24.0",
+      product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
       host_version: "1.3.1",
       platform_version: "0.3.1",

@@ -195,10 +195,25 @@ assert verified.stderr == ""
 
 
 def write_json(path: Path, value: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(value, sort_keys=True, separators=(",", ":")),
         encoding="utf-8",
     )
+
+
+def assert_product_build_mismatch(
+    message: str,
+    *,
+    expected: str,
+    found: str,
+    consumer: str,
+) -> None:
+    assert "Product Build mismatch" in message, message
+    assert f"expected {expected}" in message, message
+    assert f"found {found}" in message, message
+    assert "products/lmdj/version.json" in message, message
+    assert consumer in message, message
 
 
 assembly_path = repo_root / "products" / "lmdj" / "assembly.json"
@@ -353,7 +368,28 @@ assert verify(
 
 with tempfile.TemporaryDirectory() as temp_dir:
     temp_root = Path(temp_dir)
-    lock_path = temp_root / "assembly.lock.json"
+    fixture_product_root = temp_root / "products/lmdj"
+    stale_assembly_path = fixture_product_root / "assembly.json"
+    stale_assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+    stale_assembly["product"]["version"] = "9.8.7.5"
+    write_json(stale_assembly_path, stale_assembly)
+    try:
+        verify(
+            "products/lmdj/version.json",
+            assembly_path=stale_assembly_path,
+            lock_path=tracked_lock_path,
+        )
+    except ValueError as error:
+        assert_product_build_mismatch(
+            str(error),
+            expected=current,
+            found="9.8.7.5",
+            consumer="products/lmdj/assembly.json",
+        )
+    else:
+        raise AssertionError("accepted an Assembly Product Build mismatch")
+
+    lock_path = fixture_product_root / "assembly.lock.json"
     lock = json.loads(tracked_lock_path.read_text(encoding="utf-8"))
     write_json(lock_path, lock)
     assert verify(
@@ -391,6 +427,26 @@ with tempfile.TemporaryDirectory() as temp_dir:
     else:
         raise AssertionError("accepted an incomplete assembly lock")
 
+    for field in ("product", "product_assembly"):
+        stale_lock = json.loads(tracked_lock_path.read_text(encoding="utf-8"))
+        stale_lock[field]["version"] = "9.8.7.5"
+        write_json(lock_path, stale_lock)
+        try:
+            verify(
+                "products/lmdj/version.json",
+                assembly_path=assembly_path,
+                lock_path=lock_path,
+            )
+        except ValueError as error:
+            assert_product_build_mismatch(
+                str(error),
+                expected=current,
+                found="9.8.7.5",
+                consumer="products/lmdj/assembly.lock.json",
+            )
+        else:
+            raise AssertionError(f"accepted a stale lock {field} identity")
+
 runtime_identity_generator_path = (
     repo_root / "tools/web-runtime/generate_runtime_identity.py"
 )
@@ -419,6 +475,47 @@ with tempfile.TemporaryDirectory() as temp_dir:
         shutil.copyfile(repo_root / relative, destination)
 
     baseline = runtime_identity_generator.generate(fixture_root)
+    for relative, mutate in (
+        (
+            "products/lmdj/assembly.json",
+            lambda value: value["product"].__setitem__(
+                "version", "9.8.7.5"
+            ),
+        ),
+        (
+            "products/lmdj/assembly.lock.json",
+            lambda value: value["product"].__setitem__(
+                "version", "9.8.7.5"
+            ),
+        ),
+        (
+            "products/lmdj/assembly.lock.json",
+            lambda value: value["product_assembly"].__setitem__(
+                "version", "9.8.7.5"
+            ),
+        ),
+    ):
+        path = fixture_root / relative
+        original = path.read_bytes()
+        value = json.loads(original)
+        mutate(value)
+        write_json(path, value)
+        try:
+            runtime_identity_generator.generate(fixture_root)
+        except runtime_identity_generator.IdentityError as error:
+            assert_product_build_mismatch(
+                str(error),
+                expected=current,
+                found="9.8.7.5",
+                consumer=relative,
+            )
+        else:
+            raise AssertionError(
+                f"Runtime identity accepted a stale consumer: {relative}"
+            )
+        finally:
+            path.write_bytes(original)
+
     mutations = (
         ("products/lmdj/version.json", "patch", 10),
         ("apps/creator-web/module.json", "version", "9.9.9"),
@@ -454,6 +551,56 @@ with tempfile.TemporaryDirectory() as temp_dir:
         finally:
             path.write_bytes(original)
 
+    runtime_identity_generator.write_or_check(fixture_root, check=False)
+    runtime_outputs = (
+        fixture_root / "products/lmdj/generated/web-runtime-identity.json",
+        fixture_root / "products/lmdj/generated/web-runtime-identity.mjs",
+    )
+    for output_path in runtime_outputs:
+        original = output_path.read_bytes()
+        output_path.write_bytes(
+            original.replace(
+                f'"product_build":"{current}"'.encode("utf-8"),
+                b'"product_build":"9.8.7.5"',
+                1,
+            )
+        )
+        assert output_path.read_bytes() != original
+        try:
+            runtime_identity_generator.write_or_check(
+                fixture_root,
+                check=True,
+            )
+        except runtime_identity_generator.IdentityError as error:
+            assert_product_build_mismatch(
+                str(error),
+                expected=current,
+                found="9.8.7.5",
+                consumer=output_path.relative_to(fixture_root).as_posix(),
+            )
+            assert "generate_runtime_identity.py" in str(error)
+        else:
+            raise AssertionError(
+                f"stale Runtime Product Build was accepted: {output_path}"
+            )
+        finally:
+            output_path.write_bytes(original)
+
+    invalid_mjs = runtime_outputs[1]
+    original_mjs = invalid_mjs.read_bytes()
+    invalid_mjs.write_text("export const nope = true;\n", encoding="utf-8")
+    try:
+        runtime_identity_generator.write_or_check(fixture_root, check=True)
+    except runtime_identity_generator.IdentityError as error:
+        message = str(error)
+        assert "found <invalid>" in message, message
+        assert invalid_mjs.relative_to(fixture_root).as_posix() in message
+        assert "generate_runtime_identity.py" in message
+    else:
+        raise AssertionError("invalid Runtime identity MJS was accepted")
+    finally:
+        invalid_mjs.write_bytes(original_mjs)
+
 for host_main, package_tool in (
     ("apps/creator-web/src/main.tsx", "apps/creator-web/tools/package.py"),
     ("apps/web-runtime-host/src/main.mjs", "apps/web-runtime-host/tools/package.py"),
@@ -478,6 +625,9 @@ cmake_source = (
     repo_root / "packages/web-runtime-platform/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "products/lmdj/generated/web-runtime-identity.json" in cmake_source
-assert '"product_build":"1.0.24.0"' not in cmake_source
+assert re.search(
+    r'"product_build":"[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+"',
+    cmake_source,
+) is None
 
 print("product version tests: PASS")

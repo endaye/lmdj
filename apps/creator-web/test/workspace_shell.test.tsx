@@ -18,6 +18,8 @@ import type {
   WaveformQuery,
 } from "../src/runtime/runtime_types";
 
+const TEST_PRODUCT_BUILD = "9.8.7.6";
+
 const creatorStyles = readFileSync("src/styles.css", "utf8");
 let styleElement: HTMLStyleElement;
 beforeAll(() => {
@@ -328,7 +330,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       state: "audio-suspended",
       error_code: null,
       error_details: {},
-      product_build: "1.0.24.0",
+      product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
       host_version: "1.3.1",
       platform_version: "0.3.1",
