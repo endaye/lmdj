@@ -21,7 +21,7 @@ MAX_ATTEMPTS = 3
 WORKER_TIMEOUT_SECONDS = 360 * 60
 MUTATION_WINDOW_SECONDS = 330 * 60
 RECONCILIATION_RESERVE_SECONDS = 10 * 60
-MINIMUM_ATTEMPT_SECONDS = 10 * 60
+MINIMUM_ATTEMPT_SECONDS = 30 * 60
 MAXIMUM_VALIDATION_SECONDS = 120 * 60
 POST_MERGE_RECONCILIATION_ATTEMPTS = 7
 POST_MERGE_RECONCILIATION_INTERVAL_SECONDS = 4
@@ -49,6 +49,7 @@ _SAFE_SUMMARY_EVIDENCE = (
         r"^cleanup-error:(?:remove-label|comment):"
         r"[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"
     ),
+    re.compile(r"^cancel-error:[A-Z][A-Za-z0-9_]*(?:Error|Exception)$"),
     re.compile(
         r"^check:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
         r"(?:failure|cancelled|skipped|timed_out|None|invalid)$"
@@ -199,6 +200,7 @@ class QueueClient(Protocol):
     def dispatch_validation(
         self, number: int, head_ref: str, inputs: Mapping[str, str]
     ) -> int: ...
+    def cancel_validation(self, run_id: int) -> None: ...
     def wait_validation(self, run_id: int, timeout_seconds: int) -> ValidationResult: ...
     def merge_pull(self, number: int, payload: Mapping[str, str]) -> MergeResult: ...
     def remove_label(self, number: int, label: str) -> None: ...
@@ -583,8 +585,14 @@ def run_queue_item(
         result = client.wait_validation(run_id, budget)
 
         if result.classification == "timeout":
+            evidence: tuple[str, ...] = ()
+            if synchronized_run_id is None:
+                try:
+                    client.cancel_validation(run_id)
+                except Exception as error:
+                    evidence = (f"cancel-error:{type(error).__name__}",)
             return terminal("validation-timeout", attempts=attempt_number,
-                base=base, head=head, run_ids=run_ids,
+                base=base, head=head, run_ids=run_ids, evidence=evidence,
             )
 
         if result.classification in {"queue-base-drift", "queue-head-drift"}:

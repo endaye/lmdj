@@ -195,6 +195,22 @@ class GitHubQueueApiTest(unittest.TestCase):
                 with self.assertRaises(mq.DispatchContractError):
                     invalid.dispatch_validation(220, SHA_B, {"lanes": ""})
 
+    def test_cancel_validation_posts_the_exact_run_endpoint(self):
+        client, transport = self.client([(202, {}, b"")])
+        client.cancel_validation(991)
+        request = transport.requests[0]
+        self.assertEqual(request.method, "POST")
+        self.assertEqual(
+            request.url,
+            "https://api.github.com/repos/endaye/lmdj/actions/runs/991/cancel",
+        )
+        self.assertIsNone(request.body)
+
+    def test_cancel_validation_rejects_a_non_success_response(self):
+        client, _ = self.client([json_response(409, {"message": "cannot cancel"})])
+        with self.assertRaises(api.GitHubApiError):
+            client.cancel_validation(991)
+
     def test_update_branch_maps_expected_head_conflict_and_accepted_poll(self):
         drift, _ = self.client([json_response(422, {"message": "head changed"})])
         self.assertEqual(drift.update_branch(220, SHA_B, 60).status, "drift")

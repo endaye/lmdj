@@ -537,6 +537,13 @@ class GitHubQueueClient:
             raise DispatchContractError("workflow dispatch response has no numeric workflow_run_id")
         return run_id
 
+    def cancel_validation(self, run_id: int) -> None:
+        self._request(
+            "POST",
+            f"/actions/runs/{run_id}/cancel",
+            expected=tuple(range(200, 300)),
+        )
+
     def _required_checks(
         self, jobs: list[object], checks: list[object]
     ) -> tuple[RequiredCheck, ...]:

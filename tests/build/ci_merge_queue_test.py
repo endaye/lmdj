@@ -127,6 +127,7 @@ class MergeQueueTest(unittest.TestCase):
             update_calls = []
             sync_authorization_calls = []
             dispatch_calls = []
+            cancel_calls = []
             validation_calls = []
             merge_calls = []
 
@@ -179,6 +180,9 @@ class MergeQueueTest(unittest.TestCase):
                 if isinstance(value, Exception):
                     raise value
                 return value
+
+            def cancel_validation(inner, run_id):
+                inner.cancel_calls.append(run_id)
 
             def wait_validation(inner, run_id, timeout_seconds):
                 inner.validation_calls.append((run_id, timeout_seconds))
@@ -493,7 +497,7 @@ class MergeQueueTest(unittest.TestCase):
     def test_dynamic_budget_reserves_reconciliation_time(self):
         self.assertEqual(
             self.mq.validation_budget_seconds(
-                now=0, mutation_deadline=9 * 60, remaining_attempts=1
+                now=0, mutation_deadline=39 * 60, remaining_attempts=1
             ),
             0,
         )
@@ -505,12 +509,19 @@ class MergeQueueTest(unittest.TestCase):
         )
 
     def test_budget_exhaustion_starts_no_mutation(self):
-        clock = FakeClock(321 * 60)
+        clock = FakeClock(300 * 60)
         client = self.client()
         report = self.run_item(client, clock=clock)
         self.assertEqual(report.code, "queue-budget-exhausted")
         self.assertEqual(client.dispatch_calls, [])
         self.assertEqual(client.merge_calls, [])
+
+    def test_attempt_below_measured_validation_floor_never_dispatches(self):
+        clock = FakeClock(233 * 60)
+        client = self.client()
+        report = self.run_item(client, clock=clock)
+        self.assertEqual(report.code, "queue-budget-exhausted")
+        self.assertEqual(client.dispatch_calls, [])
 
     def test_update_branch_uses_expected_head_and_revalidates_new_head(self):
         update = self.mq.UpdateResult("accepted", SHA_D)
@@ -739,15 +750,60 @@ class MergeQueueTest(unittest.TestCase):
         self.assertTrue(report.ok)
         self.assertEqual(client.merge_calls, [])
 
-    def test_validation_timeout_has_its_own_terminal_code(self):
+    def test_validation_timeout_cancels_the_dispatched_orphan(self):
         timed_out = replace(
             self.client().validation_results[0],
             classification="timeout",
             run_status="in_progress",
             run_conclusion=None,
         )
-        report = self.run_item(self.client(validation_results=[timed_out]))
+        client = self.client(validation_results=[timed_out])
+        report = self.run_item(client)
         self.assertEqual(report.code, "validation-timeout")
+        self.assertEqual(client.cancel_calls, [9001])
+
+    def test_validation_timeout_never_cancels_a_synchronize_run(self):
+        timed_out = replace(
+            self.client().validation_results[0],
+            classification="timeout",
+            run_id=9101,
+            run_status="in_progress",
+            run_conclusion=None,
+            run_event="pull_request",
+            head_sha=SHA_D,
+            ticket=None,
+        )
+        client = self.client(
+            ancestor=False,
+            update_results=[self.mq.UpdateResult("accepted", SHA_D)],
+            validation_results=[timed_out],
+        )
+        report = self.run_item(client)
+        self.assertEqual(report.code, "validation-timeout")
+        self.assertEqual(client.dispatch_calls, [])
+        self.assertEqual(client.cancel_calls, [])
+
+    def test_cancel_failure_is_evidence_not_a_new_code(self):
+        timed_out = replace(
+            self.client().validation_results[0],
+            classification="timeout",
+            run_status="in_progress",
+            run_conclusion=None,
+        )
+        client = self.client(validation_results=[timed_out])
+
+        class GitHubApiError(RuntimeError):
+            pass
+
+        def cancel_validation(run_id):
+            client.cancel_calls.append(run_id)
+            raise GitHubApiError("cancel unavailable")
+
+        client.cancel_validation = cancel_validation
+        report = self.run_item(client)
+        self.assertEqual(report.code, "validation-timeout")
+        self.assertEqual(client.cancel_calls, [9001])
+        self.assertIn("cancel-error:GitHubApiError", report.evidence)
 
     def test_merge_commit_must_descend_from_the_validated_base(self):
         client = self.client(ancestor_overrides={(SHA_A, SHA_C): False})
