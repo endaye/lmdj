@@ -13,6 +13,7 @@ import re
 import subprocess
 import tempfile
 from typing import Callable, Iterable, Iterator
+import unicodedata
 
 from .ci_evidence import verify_exact_main_ci
 from .commands import sanitize_diagnostic
@@ -327,7 +328,18 @@ def _static_projection(root: Path, projection: str, *sources: str) -> Iterator[N
 
 def _sanitized_reason(root: Path, exception: BaseException) -> str:
     """Describe a failure without echoing environment values, secrets or absolute paths."""
-    text = sanitize_diagnostic(exception, root=root, limit=_REASON_LIMIT)
+    visible: list[str] = []
+    for character in str(exception):
+        if character.isspace():
+            visible.append(" ")
+        elif unicodedata.category(character) in {"Cc", "Cf"}:
+            codepoint = ord(character)
+            visible.append(
+                f"\\u{codepoint:04x}" if codepoint <= 0xFFFF else f"\\U{codepoint:08x}"
+            )
+        else:
+            visible.append(character)
+    text = sanitize_diagnostic("".join(visible), root=root, limit=_REASON_LIMIT)
     return f"{type(exception).__name__}: {text}" if text else type(exception).__name__
 
 

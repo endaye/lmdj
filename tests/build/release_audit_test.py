@@ -69,6 +69,8 @@ class ReadOnlyGit:
         self.local_reads = 0
         self.mutations: list[str] = []
         self.authority_root: Path | None = None
+        self.detached_worktree_root: Path | None = None
+        self.detached_worktree_error: Exception | None = None
         self.target_validation_error: Exception | None = None
 
     def fetch_authority(self, repository: str, branch: str) -> None:
@@ -100,9 +102,12 @@ class ReadOnlyGit:
 
     @contextmanager
     def detached_worktree(self, target: str):
-        if self.authority_root is None:
+        if self.detached_worktree_error is not None:
+            raise self.detached_worktree_error
+        selected_root = self.detached_worktree_root or self.authority_root
+        if selected_root is None:
             raise RuntimeError("fixture canonical authority is unavailable")
-        yield self.authority_root
+        yield selected_root
 
     def create_local_tag(self, *args, **kwargs):
         self.mutations.append("create-local-tag")
@@ -432,6 +437,76 @@ class ReleaseAuditTest(unittest.TestCase):
             len(finding.message),
             len(prefix) + 3 + len("RuntimeError: ") + audit_module._REASON_LIMIT,
         )
+
+    def test_remote_exact_target_detail_neutralizes_terminal_and_format_controls(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        secret = "ghs_controlfixture000111222333"
+        self.git.target_validation_error = RuntimeError(
+            "terminal "
+            "\x1b[31mred\x1b[0m "
+            "\x1b]8;;mailto:test@example.invalid\x1b\\link\x1b]8;;\x1b\\ "
+            "bell\x07 bidi\u202e "
+            f"GITHUB_TOKEN={secret} "
+            "at /home/runner/work/lmdj/lmdj "
+            + ("\x1b[2Kfill " * 80)
+            + "final exact-target control rule"
+        )
+
+        report = audit(self.context(), remote=True, tag=tag)
+
+        finding = next(item for item in report.findings if item.subject == tag)
+        prefix = "exact release target identity or support metadata is invalid"
+        for rendered in (finding.message, format_report(report)):
+            self.assertIn("\\u001b[31mred\\u001b[0m", rendered)
+            self.assertIn(
+                "\\u001b]8;;mailto:test@example.invalid\\u001b" + "\\",
+                rendered,
+            )
+            self.assertIn("\\u0007", rendered)
+            self.assertIn("\\u202e", rendered)
+            self.assertIn("GITHUB_TOKEN=[redacted]", rendered)
+            self.assertIn("<path>", rendered)
+            self.assertNotIn("\x1b", rendered)
+            self.assertNotIn("\x07", rendered)
+            self.assertNotIn("\u202e", rendered)
+            self.assertNotIn(secret, rendered)
+            self.assertNotIn("/home/runner", rendered)
+        self.assertLessEqual(
+            len(finding.message),
+            len(prefix) + 3 + len("RuntimeError: ") + audit_module._REASON_LIMIT,
+        )
+
+    def test_remote_exact_target_worktree_entry_failure_uses_authority_root(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        self.git.detached_worktree_error = RuntimeError(f"entry failed at {self.root}")
+
+        report = audit(self.context(), remote=True, tag=tag)
+
+        finding = next(item for item in report.findings if item.subject == tag)
+        self.assertIn("RuntimeError: entry failed at <repo>", finding.message)
+        self.assertNotIn("<path>", finding.message)
+        self.assertNotIn(str(self.root), finding.message)
+
+    def test_remote_exact_target_validation_failure_uses_exact_worktree_root(self) -> None:
+        tag = str(self.entry()["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag)
+        exact_root = self.root.parent / f"{self.root.name}-exact-target"
+        self.git.detached_worktree_root = exact_root
+        self.git.target_validation_error = RuntimeError(
+            f"target {exact_root} authority {self.root}",
+        )
+
+        report = audit(self.context(), remote=True, tag=tag)
+
+        finding = next(item for item in report.findings if item.subject == tag)
+        self.assertIn("RuntimeError: target <repo> authority <path>", finding.message)
+        self.assertNotIn(str(exact_root), finding.message)
+        self.assertNotIn(str(self.root), finding.message)
 
     def test_published_remote_state_is_ok_and_read_only(self) -> None:
         tag = self.entry()["tag"]
