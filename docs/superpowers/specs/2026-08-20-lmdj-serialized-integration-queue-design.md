@@ -395,7 +395,10 @@ commit_message = ""
 reconcile remote state，再决定进入下一 attempt 或 blocked，不能假设请求失败就表示没有
 mutation。
 
-成功 response 后必须验证：
+成功 response 后，controller 必须有界等待 GitHub 的 PR merge metadata、canonical main ref
+与 Git commit reads 收敛：30 秒调度预算内最多读取 7 次、间隔不超过 5 秒，并把剩余预算
+传给每次 REST read 的 transport timeout；这里只做 reconciliation，绝不重复 merge mutation。
+收敛后必须验证：
 
 - PR `merged=true` 且 merge commit SHA 等于 response SHA；
 - canonical `main` ref 指向该 merge SHA；

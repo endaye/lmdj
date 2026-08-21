@@ -63,6 +63,7 @@ class HttpRequest:
     url: str
     headers: Mapping[str, str]
     body: bytes | None
+    timeout_seconds: float = 30.0
 
 
 Transport = Callable[[HttpRequest], tuple[int, Mapping[str, str], bytes]]
@@ -76,7 +77,9 @@ def _urllib_transport(request: HttpRequest) -> tuple[int, Mapping[str, str], byt
         method=request.method,
     )
     try:
-        with build_opener(_NoRedirect()).open(urllib_request, timeout=30) as response:
+        with build_opener(_NoRedirect()).open(
+            urllib_request, timeout=request.timeout_seconds
+        ) as response:
             return response.status, dict(response.headers.items()), response.read()
     except HTTPError as error:
         try:
@@ -264,6 +267,7 @@ class GitHubQueueClient:
         payload: Mapping[str, object] | None = None,
         *,
         expected: Sequence[int] = (200,),
+        timeout_seconds: float | None = None,
     ) -> tuple[int, Mapping[str, str], bytes]:
         body = None if payload is None else json.dumps(
             payload, sort_keys=True, separators=(",", ":")
@@ -275,16 +279,34 @@ class GitHubQueueClient:
         }
         if body is not None:
             headers["Content-Type"] = "application/json"
-        request = HttpRequest(method, self._url(path), headers, body)
+        url = self._url(path)
+        deadline = (
+            None if timeout_seconds is None else self._clock() + timeout_seconds
+        )
         attempts = 3 if method == "GET" else 1
         status, response_headers, response_body = 0, {}, b""
         for attempt in range(attempts):
+            request_timeout = 30.0
+            if deadline is not None:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    raise TimeoutError(f"GitHub API {method} {url} exceeded its deadline")
+                request_timeout = min(request_timeout, remaining)
+            request = HttpRequest(method, url, headers, body, request_timeout)
             try:
                 status, response_headers, response_body = self._transport(request)
             except (OSError, TimeoutError):
                 if method != "GET" or attempt == attempts - 1:
                     raise
-                self._sleeper(float(2 ** attempt))
+                delay = float(2 ** attempt)
+                if deadline is not None:
+                    remaining = deadline - self._clock()
+                    if remaining <= 0:
+                        raise TimeoutError(
+                            f"GitHub API {method} {url} exceeded its deadline"
+                        )
+                    delay = min(delay, remaining)
+                self._sleeper(delay)
                 continue
             retryable = status >= 500 or status == 429 or (
                 status == 403 and any(
@@ -293,7 +315,15 @@ class GitHubQueueClient:
             )
             if not retryable or attempt == attempts - 1:
                 break
-            self._sleeper(float(2 ** attempt))
+            delay = float(2 ** attempt)
+            if deadline is not None:
+                remaining = deadline - self._clock()
+                if remaining <= 0:
+                    raise TimeoutError(
+                        f"GitHub API {method} {url} exceeded its deadline"
+                    )
+                delay = min(delay, remaining)
+            self._sleeper(delay)
         if status not in expected:
             message = "unexpected response"
             try:
@@ -302,11 +332,16 @@ class GitHubQueueClient:
                     message = document["message"]
             except ValueError:
                 pass
-            raise GitHubApiError(status, method, request.url, message)
+            raise GitHubApiError(status, method, url, message)
         return status, response_headers, response_body
 
-    def _get_object(self, path: str) -> dict[str, Any]:
-        return _object(_json(self._request("GET", path)[2]), path)
+    def _get_object(
+        self, path: str, *, timeout_seconds: float | None = None
+    ) -> dict[str, Any]:
+        return _object(
+            _json(self._request("GET", path, timeout_seconds=timeout_seconds)[2]),
+            path,
+        )
 
     def _get_pages(self, path: str, key: str | None = None) -> list[object]:
         values: list[object] = []
@@ -331,8 +366,12 @@ class GitHubQueueClient:
             raise ValueError("collaborator permission is missing")
         return permission
 
-    def get_pull(self, number: int) -> PullRequest:
-        document = self._get_object(f"/pulls/{number}")
+    def get_pull(
+        self, number: int, *, timeout_seconds: float | None = None
+    ) -> PullRequest:
+        document = self._get_object(
+            f"/pulls/{number}", timeout_seconds=timeout_seconds
+        )
         base = _object(document.get("base"), "pull base")
         head = _object(document.get("head"), "pull head")
         head_repo = _object(head.get("repo"), "pull head repository")
@@ -367,8 +406,10 @@ class GitHubQueueClient:
             head_ref=str(head["ref"]),
         )
 
-    def get_main_sha(self) -> str:
-        document = self._get_object("/git/ref/heads/main")
+    def get_main_sha(self, *, timeout_seconds: float | None = None) -> str:
+        document = self._get_object(
+            "/git/ref/heads/main", timeout_seconds=timeout_seconds
+        )
         if document.get("ref") != "refs/heads/main":
             raise ValueError("canonical main ref identity mismatch")
         return _sha(_object(document.get("object"), "git ref object").get("sha"), "main SHA")
@@ -383,8 +424,12 @@ class GitHubQueueClient:
             paths.append(filename)
         return tuple(paths)
 
-    def is_ancestor(self, base: str, head: str) -> bool:
-        document = self._get_object(f"/compare/{base}...{head}")
+    def is_ancestor(
+        self, base: str, head: str, *, timeout_seconds: float | None = None
+    ) -> bool:
+        document = self._get_object(
+            f"/compare/{base}...{head}", timeout_seconds=timeout_seconds
+        )
         return document.get("status") in {"ahead", "identical"}
 
     def update_branch(
@@ -470,8 +515,10 @@ class GitHubQueueClient:
                 raise TimeoutError("synchronized validation run was not created")
             self._sleeper(5)
 
-    def get_tree(self, sha: str) -> str:
-        document = self._get_object(f"/git/commits/{sha}")
+    def get_tree(self, sha: str, *, timeout_seconds: float | None = None) -> str:
+        document = self._get_object(
+            f"/git/commits/{sha}", timeout_seconds=timeout_seconds
+        )
         return _sha(_object(document.get("tree"), "commit tree").get("sha"), "tree SHA")
 
     def dispatch_validation(

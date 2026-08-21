@@ -57,6 +57,11 @@ mutation 之间有不可原子化窗口，撤销后仍须检查 live PR 和 queu
 是无噪音成功 no-op；其他 terminal failure 摘 label、留下稳定 code，修复后必须人工重新添加，
 系统不会恢复旧授权。
 
+GitHub 接受 squash merge 后，PR merge metadata 可能短暂落后于 main ref；Controller 在
+30 秒调度预算内最多以 5 秒间隔做 7 次只读 reconciliation，并把剩余预算传给每次 REST
+transport timeout。它要求 PR/main/merge SHA/tree equality 收敛，绝不重复 merge mutation；
+预算耗尽后仍不一致才报告 `postcondition-mismatch`。
+
 `queue-stalled` 的签名是：open PR 的最新 `merge:queue` event 已超过 20 分钟，但此后没有
 关联的 queued/in-progress queue run。先查 workflow run、pending capacity、manual cancel 或
 platform timeout，再查 controller report；scheduled watchdog 会重新核验 head、摘掉 label，

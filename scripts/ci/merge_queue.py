@@ -23,6 +23,9 @@ MUTATION_WINDOW_SECONDS = 330 * 60
 RECONCILIATION_RESERVE_SECONDS = 10 * 60
 MINIMUM_ATTEMPT_SECONDS = 10 * 60
 MAXIMUM_VALIDATION_SECONDS = 120 * 60
+POST_MERGE_RECONCILIATION_ATTEMPTS = 7
+POST_MERGE_RECONCILIATION_INTERVAL_SECONDS = 4
+POST_MERGE_RECONCILIATION_SECONDS = 30
 GITHUB_ACTIONS_APP_ID = 15368
 REQUIRED_CHECKS = (
     "core (ubuntu-latest)",
@@ -143,17 +146,21 @@ class QueueReport:
 
 class QueueClient(Protocol):
     def get_permission(self, actor: str) -> str: ...
-    def get_pull(self, number: int) -> PullRequest: ...
-    def get_main_sha(self) -> str: ...
+    def get_pull(
+        self, number: int, *, timeout_seconds: float | None = None
+    ) -> PullRequest: ...
+    def get_main_sha(self, *, timeout_seconds: float | None = None) -> str: ...
     def list_changed_paths(self, number: int) -> Sequence[str]: ...
-    def is_ancestor(self, base: str, head: str) -> bool: ...
+    def is_ancestor(
+        self, base: str, head: str, *, timeout_seconds: float | None = None
+    ) -> bool: ...
     def update_branch(
         self, number: int, expected_head_sha: str, timeout_seconds: int
     ) -> UpdateResult: ...
     def authorize_sync_validation(
         self, number: int, base_sha: str, head_sha: str, timeout_seconds: int
     ) -> int: ...
-    def get_tree(self, sha: str) -> str: ...
+    def get_tree(self, sha: str, *, timeout_seconds: float | None = None) -> str: ...
     def dispatch_validation(
         self, number: int, head_ref: str, inputs: Mapping[str, str]
     ) -> int: ...
@@ -287,7 +294,6 @@ def run_queue_item(
     sleeper: Callable[[float], None] = time.sleep,
 ) -> QueueReport:
     """Run one queue item to a closed terminal report."""
-    del sleeper  # polling belongs to the concrete client boundary
     pull = client.get_pull(request.pr_number)
     if pull.merged:
         return _report(
@@ -521,23 +527,74 @@ def run_queue_item(
                 )
             merge = MergeResult(True, reconciled.merge_commit_sha)
 
-        merged_pull = client.get_pull(request.pr_number)
-        merged_main = client.get_main_sha()
         merge_sha = merge.sha
-        postcondition_ok = (
-            bool(merge_sha)
-            and merged_pull.merged
-            and merged_pull.merge_commit_sha == merge_sha
-            and merged_main == merge_sha
-            and client.is_ancestor(base, merge_sha)
-            and client.get_tree(merge_sha) == attempt.head_tree
-        )
+        merged_main: str | None = None
+        merged_pull_state: bool | None = None
+        merged_pull_sha: str | None = None
+        base_is_ancestor: bool | None = None
+        merge_tree: str | None = None
+        postcondition_ok = False
+        reconciliation_errors: list[str] = []
+        reconciliation_deadline = clock() + POST_MERGE_RECONCILIATION_SECONDS
+
+        def reconciliation_timeout() -> float:
+            remaining = reconciliation_deadline - clock()
+            if remaining <= 0:
+                raise TimeoutError("post-merge reconciliation deadline exhausted")
+            return remaining
+
+        for reconciliation in range(POST_MERGE_RECONCILIATION_ATTEMPTS):
+            try:
+                merged_pull = client.get_pull(
+                    request.pr_number, timeout_seconds=reconciliation_timeout()
+                )
+                merged_pull_state = merged_pull.merged
+                merged_pull_sha = merged_pull.merge_commit_sha
+                merged_main = client.get_main_sha(
+                    timeout_seconds=reconciliation_timeout()
+                )
+                base_is_ancestor = client.is_ancestor(
+                    base, merge_sha, timeout_seconds=reconciliation_timeout()
+                ) if merge_sha else False
+                merge_tree = client.get_tree(
+                    merge_sha, timeout_seconds=reconciliation_timeout()
+                ) if merge_sha else None
+                postcondition_ok = (
+                    bool(merge_sha)
+                    and merged_pull_state is True
+                    and merged_pull_sha == merge_sha
+                    and merged_main == merge_sha
+                    and base_is_ancestor is True
+                    and merge_tree == attempt.head_tree
+                )
+            except Exception as error:
+                reconciliation_errors.append(type(error).__name__)
+            if postcondition_ok:
+                break
+            if reconciliation + 1 < POST_MERGE_RECONCILIATION_ATTEMPTS:
+                remaining = reconciliation_deadline - clock()
+                if remaining <= 0:
+                    break
+                sleeper(min(POST_MERGE_RECONCILIATION_INTERVAL_SECONDS, remaining))
         if not postcondition_ok:
+            evidence = [
+                f"merge-sha:{merge_sha}",
+                f"pull-merged:{merged_pull_state}",
+                f"pull-merge-sha:{merged_pull_sha}",
+                f"main-sha:{merged_main}",
+                f"base-ancestor:{base_is_ancestor}",
+                f"expected-head-tree:{attempt.head_tree}",
+                f"merge-tree:{merge_tree}",
+            ]
+            if reconciliation_errors:
+                evidence.append(
+                    f"reconciliation-errors:{','.join(reconciliation_errors)}"
+                )
             return _stop(
                 request, client, "postcondition-mismatch",
                 status="blocked-after-reconciliation", attempts=attempt_number,
                 base=base, head=head, run_ids=run_ids,
-                evidence=(f"merge-sha:{merge_sha}", f"main-sha:{merged_main}"),
+                evidence=evidence,
                 cleanup=False,
             )
         return _report(
