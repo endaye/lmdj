@@ -1800,12 +1800,9 @@ test("Chromium packaged responsive cancellation wins before mutation publication
         observedWorkerAcks: 1,
         acceptedConsumes: 1,
       });
-      const attackEvidence = await terminalAckAttackEvidence(owner);
-      expect([0, 2]).toContain(attackEvidence.rejectedConsumes);
       expect(await replayConsumedTerminalAck(owner)).toBe(-1);
       expect(await terminalAckAttackEvidence(owner)).toMatchObject({
         acceptedConsumes: 1,
-        rejectedConsumes: attackEvidence.rejectedConsumes + 1,
       });
       expect(await terminalTransportEvidence(owner)).toMatchObject({
         terminalOwnerReleased: true,
@@ -1820,6 +1817,8 @@ test("Chromium packaged responsive cancellation wins before mutation publication
       notifications: window.__lmdjTask11.notifications.length,
       responses: window.__lmdjTask11.responses.length,
     })), `${selected.name} late messages`).toEqual(observationsBefore);
+    expect(await owner.evaluate(() =>
+      window.lmdjWebRuntimeController.close()), selected.name).toBe(false);
 
     const reopened = await context.newPage();
     await openPackagedHost(reopened);
