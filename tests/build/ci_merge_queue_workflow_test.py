@@ -62,6 +62,7 @@ class MergeQueueWorkflowTest(unittest.TestCase):
             "actions: write", "checks: read", "contents: write", "pull-requests: write"
         ):
             self.assertIn(permission, queue)
+        self.assertNotIn("issues:", queue)
         for forbidden in ("deployments:", "id-token:", "packages:", "administration:"):
             self.assertNotIn(forbidden, queue)
 

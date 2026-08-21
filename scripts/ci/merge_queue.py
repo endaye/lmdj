@@ -150,6 +150,9 @@ class QueueClient(Protocol):
     def update_branch(
         self, number: int, expected_head_sha: str, timeout_seconds: int
     ) -> UpdateResult: ...
+    def authorize_sync_validation(
+        self, number: int, base_sha: str, head_sha: str, timeout_seconds: int
+    ) -> int: ...
     def get_tree(self, sha: str) -> str: ...
     def dispatch_validation(
         self, number: int, head_ref: str, inputs: Mapping[str, str]
@@ -250,15 +253,17 @@ def _labelled(pull: PullRequest) -> bool:
 
 
 def _validation_contract_error(
-    result: ValidationResult, attempt: QueueAttempt
+    result: ValidationResult, attempt: QueueAttempt, *, synchronized: bool = False
 ) -> str | None:
     if result.run_id <= 0:
         return "validation-failed"
+    expected_event = "pull_request" if synchronized else "workflow_dispatch"
+    expected_ticket = None if synchronized else attempt.ticket
     if (
-        result.run_event != "workflow_dispatch"
+        result.run_event != expected_event
         or result.workflow_path != ".github/workflows/ci.yml"
         or result.head_sha != attempt.head_sha
-        or result.ticket != attempt.ticket
+        or result.ticket != expected_ticket
         or result.base_sha != attempt.base_sha
         or result.manifest_mode != "full"
         or not result.trusted_head
@@ -360,6 +365,7 @@ def run_queue_item(
                 base=base, head=pull.head_sha, run_ids=run_ids,
             )
 
+        synchronized_run_id: int | None = None
         if not client.is_ancestor(base, pull.head_sha):
             update = client.update_branch(
                 request.pr_number, pull.head_sha, min(budget, 10 * 60)
@@ -386,9 +392,32 @@ def run_queue_item(
             pull = client.get_pull(request.pr_number)
             if pull.head_sha != update.head_sha or not client.is_ancestor(base, pull.head_sha):
                 continue
+            try:
+                synchronized_run_id = client.authorize_sync_validation(
+                    request.pr_number,
+                    base,
+                    pull.head_sha,
+                    min(budget, 10 * 60),
+                )
+            except Exception as error:
+                return _stop(
+                    request, client, "sync-validation-approval-failed",
+                    attempts=attempt_number, base=base, head=pull.head_sha,
+                    run_ids=run_ids, evidence=(type(error).__name__,),
+                )
 
         head = pull.head_sha
         last_head = head
+        budget = validation_budget_seconds(
+            now=clock(),
+            mutation_deadline=mutation_deadline,
+            remaining_attempts=remaining_attempts,
+        )
+        if budget == 0:
+            return _stop(
+                request, client, "queue-budget-exhausted",
+                attempts=attempt_number, base=base, head=head, run_ids=run_ids,
+            )
         attempt = QueueAttempt(
             number=attempt_number,
             base_sha=base,
@@ -404,20 +433,23 @@ def run_queue_item(
             "queue_base_sha": base,
             "queue_head_sha": head,
         }
-        try:
-            run_id = client.dispatch_validation(request.pr_number, pull.head_ref, inputs)
-        except DispatchContractError as error:
-            return _stop(
-                request, client, "validation-dispatch-contract-mismatch",
-                attempts=attempt_number, base=base, head=head, run_ids=run_ids,
-                evidence=(str(error),),
-            )
-        except Exception as error:
-            return _stop(
-                request, client, "validation-dispatch-failed",
-                attempts=attempt_number, base=base, head=head, run_ids=run_ids,
-                evidence=(type(error).__name__,),
-            )
+        if synchronized_run_id is not None:
+            run_id = synchronized_run_id
+        else:
+            try:
+                run_id = client.dispatch_validation(request.pr_number, pull.head_ref, inputs)
+            except DispatchContractError as error:
+                return _stop(
+                    request, client, "validation-dispatch-contract-mismatch",
+                    attempts=attempt_number, base=base, head=head, run_ids=run_ids,
+                    evidence=(str(error),),
+                )
+            except Exception as error:
+                return _stop(
+                    request, client, "validation-dispatch-failed",
+                    attempts=attempt_number, base=base, head=head, run_ids=run_ids,
+                    evidence=(type(error).__name__,),
+                )
         if not isinstance(run_id, int) or isinstance(run_id, bool) or run_id <= 0:
             return _stop(
                 request, client, "validation-dispatch-contract-mismatch",
@@ -449,7 +481,9 @@ def run_queue_item(
                 evidence=("unconfirmed-drift-artifact",),
             )
 
-        contract_error = _validation_contract_error(result, attempt)
+        contract_error = _validation_contract_error(
+            result, attempt, synchronized=synchronized_run_id is not None
+        )
         if contract_error:
             return _stop(
                 request, client, contract_error, attempts=attempt_number,
