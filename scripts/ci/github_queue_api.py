@@ -11,8 +11,8 @@ import re
 import time
 from typing import Any, Callable, Mapping, Sequence
 from urllib.error import HTTPError
-from urllib.parse import quote
-from urllib.request import Request, urlopen
+from urllib.parse import parse_qs, quote, urlparse
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 import zipfile
 
 from merge_queue import (
@@ -44,6 +44,9 @@ QUEUE_CLASSIFICATIONS = {
     "valid", "queue-base-drift", "queue-head-drift", "invalid",
 }
 _SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+_ARTIFACT_REDIRECT_HOST = re.compile(
+    r"productionresultssa[0-9]+\.blob\.core\.windows\.net"
+)
 
 
 class GitHubApiError(RuntimeError):
@@ -71,10 +74,49 @@ def _urllib_transport(request: HttpRequest) -> tuple[int, Mapping[str, str], byt
         method=request.method,
     )
     try:
-        with urlopen(urllib_request, timeout=30) as response:
+        with build_opener(_NoRedirect()).open(urllib_request, timeout=30) as response:
             return response.status, dict(response.headers.items()), response.read()
     except HTTPError as error:
-        return error.code, dict(error.headers.items()), error.read()
+        try:
+            return error.code, dict(error.headers.items()), error.read()
+        finally:
+            error.close()
+
+
+class _NoRedirect(HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+def _header(headers: Mapping[str, str], name: str) -> str | None:
+    return next(
+        (value for key, value in headers.items() if key.lower() == name.lower()),
+        None,
+    )
+
+
+def _trusted_artifact_redirect(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    try:
+        parsed = urlparse(value)
+        port = parsed.port
+        signatures = parse_qs(parsed.query, keep_blank_values=True).get("sig", [])
+    except ValueError:
+        return False
+    return (
+        parsed.scheme == "https"
+        and isinstance(parsed.hostname, str)
+        and _ARTIFACT_REDIRECT_HOST.fullmatch(parsed.hostname) is not None
+        and port is None
+        and parsed.username is None
+        and parsed.password is None
+        and not parsed.params
+        and not parsed.fragment
+        and bool(parsed.path)
+        and len(signatures) == 1
+        and bool(signatures[0])
+    )
 
 
 def _json(body: bytes) -> object:
@@ -372,6 +414,50 @@ class GitHubQueueClient:
             parsed.append(RequiredCheck(name, app_id, conclusion))
         return tuple(sorted(parsed, key=lambda item: item.name))
 
+    def _download_validation_artifact(self, artifact_id: int) -> bytes:
+        status, headers, _ = self._request(
+            "GET",
+            f"/actions/artifacts/{artifact_id}/zip",
+            expected=(302, 307),
+        )
+        location = _header(headers, "location")
+        if not _trusted_artifact_redirect(location):
+            raise GitHubApiError(
+                status,
+                "GET",
+                f"{API_ROOT}/repos/{self.repository}/actions/artifacts/{artifact_id}/zip",
+                "untrusted artifact redirect",
+            )
+        try:
+            redirected_status, redirected_headers, redirected_body = self._transport(
+                HttpRequest(
+                    "GET",
+                    location,
+                    {
+                        "Accept": "application/zip",
+                        "User-Agent": "lmdj-merge-queue",
+                    },
+                    None,
+                )
+            )
+        except (OSError, TimeoutError):
+            raise GitHubApiError(
+                0, "GET", "trusted artifact redirect", "download unavailable"
+            ) from None
+        content_type = _header(redirected_headers, "content-type")
+        if (
+            redirected_status != 200
+            or content_type is None
+            or content_type.split(";", 1)[0].strip().lower() != "application/zip"
+        ):
+            raise GitHubApiError(
+                redirected_status,
+                "GET",
+                "trusted artifact redirect",
+                "unexpected response",
+            )
+        return redirected_body
+
     def wait_validation(self, run_id: int, timeout_seconds: int) -> ValidationResult:
         deadline = self._clock() + timeout_seconds
         while True:
@@ -402,9 +488,7 @@ class GitHubQueueClient:
                 candidates.append(artifact)
         if len(candidates) != 1 or not isinstance(candidates[0].get("id"), int):
             raise ValueError("exactly one live queue validation artifact is required")
-        _, _, artifact_body = self._request(
-            "GET", f"/actions/artifacts/{candidates[0]['id']}/zip"
-        )
+        artifact_body = self._download_validation_artifact(candidates[0]["id"])
         validation = parse_queue_validation_zip(artifact_body)
         created = _instant(run["created_at"])
         started = _instant(run["run_started_at"])

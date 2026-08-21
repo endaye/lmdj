@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import io
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
+import threading
 import unittest
 import zipfile
 
@@ -70,6 +72,43 @@ class GitHubQueueApiTest(unittest.TestCase):
         self.assertTrue(request.url.endswith("/git/ref/heads/main"))
         self.assertEqual(request.headers["X-GitHub-Api-Version"], "2026-03-10")
         self.assertEqual(request.headers["Authorization"], "Bearer secret-token")
+
+    def test_urllib_transport_never_automatically_follows_redirects(self):
+        class Handler(BaseHTTPRequestHandler):
+            redirected_requests = 0
+
+            def do_GET(self):
+                if self.path == "/artifact":
+                    self.send_response(302)
+                    self.send_header(
+                        "Location",
+                        f"http://127.0.0.1:{self.server.server_port}/redirected",
+                    )
+                    self.end_headers()
+                    return
+                type(self).redirected_requests += 1
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, _format, *_args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, _, _ = api._urllib_transport(api.HttpRequest(
+                "GET",
+                f"http://127.0.0.1:{server.server_port}/artifact",
+                {"Authorization": "Bearer must-not-be-forwarded"},
+                None,
+            ))
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+        self.assertEqual(status, 302)
+        self.assertEqual(Handler.redirected_requests, 0)
 
     def test_pull_permission_and_changed_files_are_closed_and_paginated(self):
         pull = {
@@ -161,7 +200,7 @@ class GitHubQueueApiTest(unittest.TestCase):
         self.assertEqual(result, mq.UpdateResult("accepted", "c" * 40))
         self.assertEqual(json.loads(transport.requests[0].body), {"expected_head_sha": SHA_B})
 
-    def test_validation_binds_run_jobs_check_suite_and_closed_artifact(self):
+    def test_validation_binds_run_jobs_check_suite_and_secret_safe_artifact_redirect(self):
         validation = {
             "schema": "lmdj.queue-validation.v1",
             "classification": "valid",
@@ -174,7 +213,11 @@ class GitHubQueueApiTest(unittest.TestCase):
             "manifest_mode": "full",
             "trusted_head": True,
         }
-        client, _ = self.client([
+        artifact_redirect = (
+            "https://productionresultssa12.blob.core.windows.net/"
+            "actions-results/fixture?sig=fixture"
+        )
+        client, transport = self.client([
             json_response(200, {
                 "id": 991,
                 "status": "completed",
@@ -202,7 +245,8 @@ class GitHubQueueApiTest(unittest.TestCase):
             json_response(200, {"total_count": 1, "artifacts": [
                 {"id": 42, "name": "queue-validation-mq-123-1", "expired": False},
             ]}),
-            (200, {}, validation_zip(validation)),
+            (302, {"Location": artifact_redirect}, b""),
+            (200, {"Content-Type": "application/zip"}, validation_zip(validation)),
         ])
         result = client.wait_validation(991, 60)
         self.assertEqual(result.classification, "valid")
@@ -211,6 +255,31 @@ class GitHubQueueApiTest(unittest.TestCase):
         self.assertEqual({check.name for check in result.required_checks}, set(mq.REQUIRED_CHECKS))
         self.assertEqual(result.queue_seconds, 10)
         self.assertEqual(result.execution_seconds, 20)
+        self.assertEqual(transport.requests[-1].url, artifact_redirect)
+        self.assertNotIn("Authorization", transport.requests[-1].headers)
+
+    def test_artifact_redirect_requires_one_nonempty_signature(self):
+        valid = (
+            "https://productionresultssa12.blob.core.windows.net/"
+            "actions-results/fixture?se=2026-08-21&sig=fixture&sp=r"
+        )
+        self.assertTrue(api._trusted_artifact_redirect(valid))
+        for invalid in (
+            valid.replace("https://", "http://"),
+            valid.replace("productionresultssa12", "productionresultssa12.evil"),
+            valid.replace("?se=2026-08-21&sig=fixture&sp=r", "?foo=bar"),
+            valid.replace("sig=fixture", "sig="),
+            valid + "&sig=duplicate",
+        ):
+            with self.subTest(invalid=invalid):
+                self.assertFalse(api._trusted_artifact_redirect(invalid))
+
+    def test_artifact_download_rejects_a_direct_success_response(self):
+        client, _ = self.client([
+            (200, {"Content-Type": "application/zip"}, b"PK\x03\x04fixture"),
+        ])
+        with self.assertRaises(api.GitHubApiError):
+            client._download_validation_artifact(42)
 
     def test_validation_artifact_rejects_extra_keys_and_duplicate_entries(self):
         base = {
