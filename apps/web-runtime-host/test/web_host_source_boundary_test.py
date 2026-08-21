@@ -636,6 +636,105 @@ def main() -> int:
                 "the visible diagnostic journey must include one bounded "
                 "reload-timeout recovery budget",
             )
+    responsive_cancellation = re.search(
+        r'test\("Chromium packaged responsive cancellation wins before '
+        r'mutation publication".*?\n\}\);',
+        browser_spec_text,
+        re.DOTALL,
+    )
+    require(
+        responsive_cancellation is not None,
+        "responsive terminal-ack proof is missing",
+    )
+    responsive_body = responsive_cancellation.group(0)
+    replay = responsive_body.find(
+        "expect(await replayConsumedTerminalAck(owner)).toBe(-1)"
+    )
+    accepted_consumes = [
+        match.start()
+        for match in re.finditer(r"acceptedConsumes:\s*1", responsive_body)
+    ]
+    claim_attempt_evidence = re.search(
+        r"expect\(\s*await deadlineProofState\(owner,\s*requestId\)\s*,\s*"
+        r"selected\.name\s*\)\s*\.toMatchObject\(\{\s*claim_attempted:\s*"
+        r"selected\.claimAttempted\s*\}\)",
+        responsive_body,
+        re.DOTALL,
+    )
+    direct_inventory_evidence = re.search(
+        r"expect\(\s*await opfsInventory\(owner\)\s*,\s*"
+        r"`\$\{selected\.name\} direct cleanup`\s*\)\s*"
+        r"\.toEqual\(inventoryBefore\)",
+        responsive_body,
+        re.DOTALL,
+    )
+    reopened_inventory_evidence = re.search(
+        r"expect\(\s*await opfsInventory\(reopened\)\s*,\s*"
+        r"selected\.name\s*\)\.toEqual\(inventoryBefore\)",
+        responsive_body,
+        re.DOTALL,
+    )
+    late_message_evidence = re.search(
+        r"`\$\{selected\.name\} late messages`\s*\)"
+        r"\.toEqual\(observationsBefore\)",
+        responsive_body,
+        re.DOTALL,
+    )
+    owner_close_evidence = re.search(
+        r"expect\(\s*await owner\.evaluate\(\(\)\s*=>\s*"
+        r"window\.lmdjWebRuntimeController\.close\(\)\s*\),\s*"
+        r"selected\.name\s*\)\.toBe\(false\)",
+        responsive_body,
+        re.DOTALL,
+    )
+    reopened_close_evidence = re.search(
+        r"expect\(\s*await reopened\.evaluate\(\(\)\s*=>\s*"
+        r"window\.lmdjWebRuntimeController\.close\(\)\s*\),\s*"
+        r"selected\.name\s*\)\.toBe\(true\)",
+        responsive_body,
+        re.DOTALL,
+    )
+    require(
+        "forgedAcksSent: 2" in responsive_body
+        and "duplicateReleaseRequestsSent: 2" in responsive_body
+        and "observedWorkerAcks: 1" in responsive_body
+        and replay >= 0
+        and any(position < replay for position in accepted_consumes)
+        and any(position > replay for position in accepted_consumes),
+        "responsive terminal-ack proof must preserve the exact attack, real "
+        "Worker ACK, one accepted consume, and deterministic replay rejection",
+    )
+    require(
+        responsive_body.count("claimAttempted: false") == 2
+        and claim_attempt_evidence is not None
+        and 'publication: "cancelled"' in responsive_body
+        and 'error: { code: "HOST_TIMEOUT" }' in responsive_body
+        and '"restart-required"' in responsive_body
+        and 'newSubmitCode: "HOST_TIMEOUT"' in responsive_body
+        and "terminated: true" in responsive_body
+        and "terminalOwnerReleased: true" in responsive_body,
+        "responsive terminal-ack proof must preserve cancellation-before-claim "
+        "and terminal owner cleanup",
+    )
+    require(
+        direct_inventory_evidence is not None
+        and late_message_evidence is not None
+        and "project_revision, selected.name).toBe(0)" in responsive_body
+        and "expect(after, selected.name).toEqual(before)" in responsive_body
+        and reopened_inventory_evidence is not None,
+        "responsive terminal-ack proof must preserve OPFS, late-message, "
+        "and reopen Truth recovery evidence",
+    )
+    require(
+        owner_close_evidence is not None and reopened_close_evidence is not None,
+        "responsive terminal-ack proof must formally close both terminal owner "
+        "and reopened controller",
+    )
+    require(
+        "rejectedConsumes" not in responsive_body,
+        "responsive terminal-ack proof must not assert scheduler-dependent "
+        "rejection cardinality",
+    )
     unresponsive_cancellation = re.search(
         r'test\("Chromium packaged unresponsive cancellation '
         r'force-terminates and recovers".*?\n\}\);',
