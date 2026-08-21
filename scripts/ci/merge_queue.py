@@ -261,30 +261,82 @@ def _labelled(pull: PullRequest) -> bool:
 
 def _validation_contract_error(
     result: ValidationResult, attempt: QueueAttempt, *, synchronized: bool = False
-) -> str | None:
+) -> tuple[str, tuple[str, ...]] | None:
     if result.run_id <= 0:
-        return "validation-failed"
+        return "validation-failed", ("field:run_id=invalid",)
     expected_event = "pull_request" if synchronized else "workflow_dispatch"
     expected_ticket = None if synchronized else attempt.ticket
-    if (
-        result.run_event != expected_event
-        or result.workflow_path != ".github/workflows/ci.yml"
-        or result.head_sha != attempt.head_sha
-        or result.ticket != expected_ticket
-        or result.base_sha != attempt.base_sha
-        or result.manifest_mode != "full"
-        or not result.trusted_head
+    field_evidence: list[str] = []
+    for field, observed, expected in (
+        ("run_event", result.run_event, expected_event),
+        ("workflow_path", result.workflow_path, ".github/workflows/ci.yml"),
+        ("head_sha", result.head_sha, attempt.head_sha),
+        ("ticket", result.ticket, expected_ticket),
+        ("base_sha", result.base_sha, attempt.base_sha),
+        ("trusted_head", result.trusted_head, True),
     ):
-        return "validation-failed"
-    observed = {
-        (check.name, check.app_id, check.conclusion)
-        for check in result.required_checks
+        if observed != expected:
+            field_evidence.append(f"field:{field}")
+    if result.manifest_mode != "full":
+        mode = (
+            result.manifest_mode
+            if result.manifest_mode in {"focused", None}
+            else "invalid"
+        )
+        field_evidence.append(f"field:manifest_mode={mode}")
+    if field_evidence:
+        return "validation-failed", tuple(field_evidence)
+
+    checks_by_name: dict[str, list[RequiredCheck]] = {
+        name: [] for name in REQUIRED_CHECKS
     }
-    expected = {(name, GITHUB_ACTIONS_APP_ID, "success") for name in REQUIRED_CHECKS}
-    if observed != expected:
-        return "required-check-contract-mismatch"
+    has_unexpected_check = False
+    for check in result.required_checks:
+        if check.name in checks_by_name:
+            checks_by_name[check.name].append(check)
+        else:
+            has_unexpected_check = True
+
+    contract_evidence: list[str] = []
+    for name in REQUIRED_CHECKS:
+        checks = checks_by_name[name]
+        if not checks:
+            contract_evidence.append(f"missing:{name}")
+            continue
+        if len(checks) > 1:
+            contract_evidence.append(f"duplicate:{name}")
+        for check in checks:
+            if check.app_id != GITHUB_ACTIONS_APP_ID:
+                app_id = (
+                    str(check.app_id)
+                    if isinstance(check.app_id, int) and not isinstance(check.app_id, bool)
+                    else "invalid"
+                )
+                contract_evidence.append(f"app:{name}={app_id}")
+    if has_unexpected_check:
+        contract_evidence.append("unexpected:required-check")
+    if contract_evidence:
+        return "required-check-contract-mismatch", tuple(contract_evidence)
+
+    failed_checks: list[str] = []
+    for name in REQUIRED_CHECKS:
+        conclusion = checks_by_name[name][0].conclusion
+        if conclusion != "success":
+            safe_conclusion = (
+                conclusion
+                if conclusion in {"failure", "cancelled", "skipped", "timed_out", None}
+                else "invalid"
+            )
+            failed_checks.append(f"check:{name}={safe_conclusion}")
+    if failed_checks:
+        return "validation-failed", tuple(failed_checks)
     if result.run_status != "completed" or result.run_conclusion != "success":
-        return "validation-failed"
+        evidence = []
+        if result.run_status != "completed":
+            evidence.append("field:run_status")
+        if result.run_conclusion != "success":
+            evidence.append("field:run_conclusion")
+        return "validation-failed", tuple(evidence)
     return None
 
 
@@ -491,9 +543,10 @@ def run_queue_item(
             result, attempt, synchronized=synchronized_run_id is not None
         )
         if contract_error:
+            code, evidence = contract_error
             return _stop(
-                request, client, contract_error, attempts=attempt_number,
-                base=base, head=head, run_ids=run_ids,
+                request, client, code, attempts=attempt_number,
+                base=base, head=head, run_ids=run_ids, evidence=evidence,
             )
 
         live_base = client.get_main_sha()

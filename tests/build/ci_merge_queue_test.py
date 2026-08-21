@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import replace
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,16 @@ SHA_A = "a" * 40
 SHA_B = "b" * 40
 SHA_C = "c" * 40
 SHA_D = "d" * 40
+SAFE_VALIDATION_EVIDENCE = re.compile(
+    r"^(?:check:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)="
+    r"(?:failure|cancelled|skipped|timed_out|None)|"
+    r"missing:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
+    r"app:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)=\d+|"
+    r"duplicate:(?:core \(ubuntu-latest\)|core \(macos-latest\)|PR Gate)|"
+    r"unexpected:required-check|"
+    r"field:(?:run_id=invalid|run_event|workflow_path|head_sha|ticket|base_sha|"
+    r"manifest_mode=(?:focused|None)|trusted_head|run_status|run_conclusion))$"
+)
 
 
 def load_module():
@@ -364,6 +375,77 @@ class MergeQueueTest(unittest.TestCase):
         )
         report = self.run_item(self.client(validation_results=[invalid]))
         self.assertEqual(report.code, "required-check-contract-mismatch")
+
+    def test_failed_required_check_is_validation_failed_and_named(self):
+        failed = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "failure"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[failed]))
+        self.assertEqual(report.code, "validation-failed")
+        self.assertNotEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("check:PR Gate=failure", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_missing_required_check_is_a_contract_mismatch_with_diff(self):
+        missing = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "success"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[missing]))
+        self.assertEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("missing:core (macos-latest)", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_foreign_app_check_is_a_contract_mismatch_with_diff(self):
+        foreign = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 12345, "success"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[foreign]))
+        self.assertEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("app:PR Gate=12345", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_duplicate_required_check_is_a_contract_mismatch_with_diff(self):
+        duplicate = replace(
+            self.client().validation_results[0],
+            required_checks=(
+                self.mq.RequiredCheck("core (ubuntu-latest)", 15368, "success"),
+                self.mq.RequiredCheck("core (macos-latest)", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "success"),
+                self.mq.RequiredCheck("PR Gate", 15368, "success"),
+            ),
+        )
+        report = self.run_item(self.client(validation_results=[duplicate]))
+        self.assertEqual(report.code, "required-check-contract-mismatch")
+        self.assertIn("duplicate:PR Gate", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def test_run_field_mismatch_names_the_field(self):
+        focused = replace(
+            self.client().validation_results[0], manifest_mode="focused"
+        )
+        report = self.run_item(self.client(validation_results=[focused]))
+        self.assertEqual(report.code, "validation-failed")
+        self.assertIn("field:manifest_mode=focused", report.evidence)
+        self.assert_evidence_is_safe(report)
+
+    def assert_evidence_is_safe(self, report):
+        for evidence in report.evidence:
+            with self.subTest(evidence=evidence):
+                self.assertRegex(evidence, SAFE_VALIDATION_EVIDENCE)
 
     def test_live_confirmed_base_drift_retries_full_validation(self):
         drift = replace(
