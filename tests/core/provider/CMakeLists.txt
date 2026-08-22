@@ -2,6 +2,30 @@ if(BUILD_TESTING)
   find_package(Threads REQUIRED)
 
   add_executable(
+    lmdj_provider_durable_file_tests
+    durable_file_test.cpp
+  )
+  target_include_directories(
+    lmdj_provider_durable_file_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_provider_durable_file_tests
+    PRIVATE
+      lmdj::provider_sdk
+  )
+  lmdj_target_warnings(lmdj_provider_durable_file_tests)
+  lmdj_target_sanitizers(lmdj_provider_durable_file_tests)
+  lmdj_add_test(
+    NAME provider.durable_file
+    TIER unit
+    COMMAND lmdj_provider_durable_file_tests
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+    LABELS provider persistence
+  )
+
+  add_executable(
     lmdj_provider_conformance_tests
     conformance_test.cpp
   )

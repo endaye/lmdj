@@ -140,7 +140,7 @@ command derives that second argument itself when it is omitted.
 
 The merge still goes red; what changed is that the red now states its own cure.
 
-### B3. Product Build identity is hand-written in too many places
+### ~~B3. Product Build identity is hand-written in too many places~~ — fixed 2026-08-21
 
 Allocating `1.0.23.0` required edits in seven hand-maintained locations plus
 five derived artifacts and gate tables. None of the failures named a version:
@@ -159,8 +159,16 @@ Two were converted to derive-from-manifest during Stage 8 (the compiled
 allowlist via `module_graph_test`, and the two Host fixtures). The rest remain
 literal.
 
-**Fix shape:** derive wherever a gate can read the committed truth; where a
-literal is unavoidable, make its failure message name the version.
+**Fixed** in `4312a6de` (#226), against
+[`2026-08-21-product-version-identity-derivation-design.md`](../superpowers/specs/2026-08-21-product-version-identity-derivation-design.md)
+§12 rather than the historical seven-location count. Current consumers derive
+from committed `products/lmdj/version.json`; `assembly.json`, release intents,
+and immutable snapshots stay explicit exact records; pure behavior tests use
+named synthetic Product Builds; Creator Host `module.json` / `package.json` /
+`package-lock.json` identity is gated; mismatch failures name expected, found,
+authority, and consumer, with a stable remedy on generated stale outputs.
+Issue [#207](https://github.com/endaye/lmdj/issues/207) stayed OPEN because
+the squash subject omitted `Closes #207`.
 
 ### B4. `assembly.lock.json` must be regenerated twice
 
@@ -434,10 +442,12 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    passed all five hearing criteria; the session returned F1–F4, of which
    **F1 + F2 are one cheap fix** and should be taken next in this group, since
    they make Pad Capture unusable on a normal window without knowing to scroll.
-2. ~~**B1 + B2 together**~~ — done 2026-08-18. B3 and B4 remain open.
+2. ~~**B1 + B2 together**~~ — done 2026-08-18. ~~B3~~ done 2026-08-21 in #226
+   (`4312a6de`). B4 remains open.
 3. ~~**C1**~~ — invalidated by measurement; superseded by the facade
    coverage-raise plan (machine list C6).
 4. **D4 + D5** — Stage 9 depends on them.
 5. **D1 + D2** — one review, before any long-material work.
 6. **A2, A3** — before the first external distribution.
-7. **B3, B4, C2, backlog C2** — mechanical hardening, schedule as capacity allows.
+7. ~~**B3**~~ — done 2026-08-21 in #226. **B4, C2, backlog C2** — mechanical
+   hardening, schedule as capacity allows.
