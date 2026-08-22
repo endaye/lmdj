@@ -26,8 +26,10 @@ Web Hosts
   -> Audio Runtime
 ```
 
-Native Hosts 直接进入 Application Facade。Project I/O 与 Provider SDK/Proof Providers 是从
-其最近主路径节点向下延伸的支路，不是第二套 Project 或 Runtime。
+Core CLI 与 Core MCP 只通过 Application Facade 进入应用/控制面。Native Test Host 是验收专用
+Host：它通过 Facade 执行应用/控制面操作，同时直接连接 Audio Runtime 的 adapter/realtime 路径，
+用于实时音频、设备与采集验证；它不是产品 UI，也不解析 Project Bundle。Project I/O 与
+Provider SDK/Proof Providers 是从其最近主路径节点延伸的支路，不是第二套 Project 或 Runtime。
 
 Product Assembly 负责锁定 Module、Host、Provider、Contract 和 policy 的组合身份。它是声明式
 装配边界，不执行用户工作流，也不动态增加 Facade operation。
@@ -37,13 +39,14 @@ Product Assembly 负责锁定 Module、Host、Provider、Contract 和 policy 的
 | 边界 | 组件 | 当前职责 | 源码位置 |
 | --- | --- | --- | --- |
 | Host | Creator Web / Formal Web Runtime Host | UI、Host identity、浏览器生命周期和协议适配 | `apps/creator-web/`、`apps/web-runtime-host/` |
-| Host | Core CLI / Core MCP / Native Test Host | 通过同一 Facade 提供终端、stdio MCP 和原生验收入口 | `apps/core-cli/`、`apps/core-mcp/`、`apps/native-test-host/` |
+| Host | Core CLI / Core MCP | 只通过 Facade 提供终端与 stdio MCP 应用/控制面入口 | `apps/core-cli/`、`apps/core-mcp/` |
+| Acceptance Host | Native Test Host | 通过 Facade 执行应用/控制面操作，并直接使用 Audio Runtime adapter/realtime 路径验证实时音频、设备与采集；不是产品 UI | `apps/native-test-host/` |
 | Core Module | Web Runtime Platform | Manifest Gate、Runtime Session、输入适配、Control Runtime 与浏览器资源生命周期 | `packages/web-runtime-platform/` |
-| Core Module | Application Facade | Host 唯一 Core 入口、应用编排、稳定结果与错误语义 | `packages/application-facade/` |
+| Core Module | Application Facade | Host 唯一应用/控制面入口、应用编排、稳定结果与错误语义 | `packages/application-facade/` |
 | Core Module | Authoring Domain | Project Truth、命令规则、revision 与 Pad/Pattern/Sample 语义 | `packages/authoring-domain/` |
 | Core Module | Project I/O | 原子 Project store、Take recovery、portable Bundle transfer 与 Workspace cache | `packages/project-io/` |
 | Core Module | Project Cooker | 校验 Project 与 Artifact，派生 Runtime Snapshot | `packages/project-cooker/` |
-| Derived state | Runtime Snapshot | 不可变、可丢弃、可重建的 Audio Runtime 输入 | `packages/project-cooker/`、`contracts/` |
+| Derived state | Runtime Snapshot | 不可变、可丢弃、可重建的 Audio Runtime 输入 | `packages/project-cooker/`、`apps/architecture-portal/docs/contracts/runtime-snapshot.mdx` |
 | Core Module | Audio Runtime | prepared sample bank、离线渲染、实时 Engine、Voice 与 preview | `packages/audio-runtime/` |
 | Core Module | Provider SDK | Capability、Registry、Attempt Store 和 Artifact output sink | `packages/provider-sdk/` |
 | Provider | Local Proof Providers | 当前装配的成功/失败隔离证明，不代表生产模型或云服务 | `providers/local-proof-success/`、`providers/local-proof-failure/` |
@@ -64,7 +67,8 @@ Architecture Portal 派生。
 
 Facade 是控制面和应用用例边界，不是实时逐事件数据面的替代品。浏览器输入与 Audio Runtime 的
 低延迟路径由 Web Runtime Platform 和 Runtime/Voice 机制承担；Host 不能用自己的业务规则绕过
-Facade、Domain revision 或 Candidate commit 语义。
+Facade、Domain revision 或 Candidate commit 语义。Native Test Host 的直接 Audio Runtime 依赖
+只服务验收环境中的 adapter/realtime、设备与采集生命周期，不扩展为产品业务入口。
 
 ## Provider 边界
 
@@ -78,6 +82,7 @@ Project bundle path。Provider failure 只能更新 Attempt/Workspace State，�
 ## 禁止路径
 
 - Host 不解析 Project Bundle，也不直接依赖 Domain、Project I/O 或 Provider implementation。
+- Native Test Host 的直接依赖仅限 Audio Runtime 验收路径；它仍通过 Facade 进入应用/控制面。
 - Provider 不读取或修改 mutable Project，不把 failure 写入 Project Truth。
 - Runtime Snapshot 不持久化为 Project Truth，也不把 Runtime state 反写 Project。
 - Pattern event 指向 Pad Slot，不直接指向 Asset。
@@ -110,14 +115,19 @@ Web Runtime Lab 是独立实验工具，不属于 Product Assembly，也不替�
 重新渲染与校验：
 
 ```bash
-node /Users/endaye/.agents/skills/archify/bin/archify.mjs validate architecture \
+: "${ARCHIFY_ROOT:?set ARCHIFY_ROOT to the Archify skill directory}"
+
+node "$ARCHIFY_ROOT/bin/archify.mjs" validate architecture \
   docs/architecture/assets/lmdj-current-runtime-architecture.architecture.json \
   --quality showcase --repo-root . --json
 
-node /Users/endaye/.agents/skills/archify/bin/archify.mjs deliver architecture \
+node "$ARCHIFY_ROOT/bin/archify.mjs" deliver architecture \
   docs/architecture/assets/lmdj-current-runtime-architecture.architecture.json \
   docs/architecture/assets/lmdj-current-runtime-architecture.html \
   --quality showcase --repo-root . --json
+
+node "$ARCHIFY_ROOT/bin/archify.mjs" visual-check \
+  docs/architecture/assets/lmdj-current-runtime-architecture.html --json
 
 scripts/architecture-portal.sh check
 ```

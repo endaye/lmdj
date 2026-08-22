@@ -2,7 +2,7 @@
 
 日期：2026-08-22
 
-状态：待用户 review 批准；本文只定义文档替换与 Archify 产物边界，不改变运行时
+状态：已批准；本文只定义文档替换与 Archify 产物边界，不改变运行时
 
 ## 1. 结论
 
@@ -26,8 +26,10 @@ Application Facade -> Authoring Domain / Project Truth -> Project Cooker
                                                    Audio Runtime
 ```
 
-Native Hosts 直接进入 Application Facade；Project I/O 与 Provider SDK/Proof Providers
-作为短支路呈现。Product Assembly 是声明式装配与身份边界，不画成业务流程节点。
+Core CLI 与 Core MCP 只进入 Application Facade；验收专用的 Native Test Host 同时连接
+Application Facade 的应用/控制面和 Audio Runtime 的 adapter/realtime 路径。Project I/O 与
+Provider SDK/Proof Providers 作为短支路呈现。Product Assembly 是声明式装配与身份边界，
+不画成业务流程节点。
 
 正式产物包括可审查的 Archify JSON 源文件、自包含 HTML，以及重写后的 Markdown 技术说明。
 旧 Mermaid 源、旧 SVG 和仅供旧图使用的 Mermaid 配置删除，避免仓库继续同时发布两份互相
@@ -57,7 +59,8 @@ Portal current pages 和测试证据重建 `docs/architecture/` 下已经过时�
   Product Assembly 的所有权。
 - 把 `Project Truth -> Cook -> Immutable Runtime Snapshot -> Audio Runtime` 设为主数据路径。
 - 明确 Project Bundle、Project I/O、Provider Attempt 和 Runtime Snapshot 的权威性边界。
-- 明确 Facade 是 Host 唯一 Core 入口，而不是实时逐事件数据面的替代品。
+- 明确 Facade 是 Host 唯一应用/控制面入口，而不是实时逐事件数据面的替代品；Native Test Host
+  直接使用 Audio Runtime 只用于实时音频、设备与采集验收。
 - 只呈现当前实现；规划中的生产 Provider、云基础设施和物理设备验收不进入主图。
 - 用 Archify 提供深浅主题和 PNG、JPEG、WebP、SVG 导出能力。
 - 删除旧图源和旧生成图，恢复“当前架构”名称的单一含义。
@@ -141,9 +144,10 @@ Portal current pages 和测试证据重建 `docs/architecture/` 下已经过时�
 | 位置 | 节点 | 副标题/职责 |
 | --- | --- | --- |
 | 左上 | Web Hosts | Creator Web · Formal Runtime Host |
-| 左下 | Native Hosts | CLI · MCP · Native Test Host |
+| 左下 | CLI / MCP Hosts | terminal · stdio MCP |
+| 右下 | Native Test Host | acceptance · device · capture |
 | 中左 | Web Runtime Platform | manifest gate · browser runtime session |
-| 中部入口 | Application Facade | only Core entry · orchestration |
+| 中部入口 | Application Facade | application/control-plane entry · orchestration |
 | 中部 | Authoring Domain | Project Truth · commands · revision |
 | 中右 | Project Cooker | validate · derive |
 | 右上 | Runtime Snapshot | immutable derived state |
@@ -176,14 +180,17 @@ Web Hosts
 
 - Web Hosts 通过 shared Web Runtime Platform 完成 Host identity、preflight、Runtime Session、
   input/lifecycle 和 typed protocol adaptation。
-- Application Facade 是所有 Host 的唯一 Core 入口，负责跨模块应用编排和稳定错误语义。
+- Application Facade 是所有 Host 的唯一应用/控制面入口，负责跨模块应用编排和稳定错误语义。
 - Authoring Domain 是 Project Truth 唯一所有者。
 - Project Cooker 校验 Project 和 Artifact，生成可丢弃、可重建的 Runtime Snapshot。
 - Audio Runtime 只读消费 Snapshot 准备的运行时数据；它不把运行时状态写回 Project。
 
 ### 8.2 支路
 
-- Native Hosts -> Application Facade：不经过浏览器 adapter，也不解析 Project bundle。
+- Core CLI / Core MCP -> Application Facade：不经过浏览器 adapter，也不解析 Project bundle。
+- Native Test Host -> Application Facade：应用/控制面操作仍经 Facade，不解析 Project bundle。
+- Native Test Host -> Audio Runtime：仅通过 adapter/realtime 路径验证实时音频、设备与采集；
+  它不是产品 UI，也不得承载产品业务规则。
 - Authoring Domain/Application Facade -> Project I/O：事务式 store、revision、Take recovery、
   portable Bundle transfer 与 Workspace cache。
 - Application Facade -> Provider SDK -> Proof Providers：Provider 只接收 Artifact input 和
