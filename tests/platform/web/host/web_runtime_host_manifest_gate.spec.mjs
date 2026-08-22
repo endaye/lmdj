@@ -45,7 +45,7 @@ test("packaged index binds exact canonical manifest bytes without inline script"
   expect(index).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
   expect(manifest).toMatchObject({
     product_build: currentProductBuild,
-    host_version: "1.2.11",
+    host_version: "1.2.12",
     protocol_version: 1,
     heap_bytes: 536_870_912,
   });
@@ -58,7 +58,7 @@ test("packaged host starts through the real Window and Dedicated Worker realms",
   const diagnostics = JSON.parse(await page.locator("#diagnostics").textContent());
   expect(diagnostics).toMatchObject({
     product_build: currentProductBuild,
-    host_version: "1.2.11",
+    host_version: "1.2.12",
     protocol_version: 1,
   });
   expect(diagnostics.error_code ?? null).toBeNull();

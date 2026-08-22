@@ -1,9 +1,9 @@
 {
   "contract": "lmdj.module.v1",
   "module": "local.proof.success",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "api_version": 2,
   "dependencies": {
-    "provider-sdk": "1.1.3"
+    "provider-sdk": "1.1.4"
   }
 }
