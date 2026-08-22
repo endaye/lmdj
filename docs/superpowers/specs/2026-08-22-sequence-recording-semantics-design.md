@@ -2,7 +2,10 @@
 
 日期：2026-08-22
 
-状态：待用户 review 批准；本文定义 Stage 9 Sequence 录音的产品与 Contract
+修订：2026-08-23 补齐会话所有权、flush 幂等、恢复指纹、切槽音乐边界、
+SR-D15 与 Stage 8B trimming、BPM 锚点、事件量化/overdub 不变量
+
+状态：待用户再次 review；本文定义 Stage 9 Sequence 录音的产品与 Contract
 边界，不分配 Product Build，不改代码
 
 关联任务：[Issue #238](https://github.com/endaye/lmdj/issues/238)（D4 + D5）
@@ -31,9 +34,12 @@ Pattern 引用 Pad Slot，不引用 Asset：换采样后，已有 Sequence 用�
 
 Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal Take」
 不得作为产品规则。产品规则是分类并发：少数 Command 可 rebase 且录音继续；
-从 Sequence 切到 Sample 会停录并 commit；未知 Authoring Command fail closed。
+从 Sequence 切到 Sample 会停录并 flush；未知 Authoring Command fail closed。
+会话是 **Project 级** 的：落在 bundle Journal 上，受 writer lease 保护，CLI
+与 MCP 与第二窗口看见同一份 active/recoverable 状态。
 
-本设计由 2026-08-22 的 brainstorming 会话逐节批准。
+本设计由 2026-08-22 的 brainstorming 会话逐节批准；2026-08-23 按 review
+补入 SR-D20–D26，未改 SR-D1–D5 / D12 / D18 / D19 的方向。
 
 ## 2. Approved Decisions
 
@@ -47,17 +53,24 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 | SR-D6 | 新 Project 默认 BPM 120，Quantize 默认开。 |
 | SR-D7 | 音乐时间用固定 PPQ：**960 tick / 四分音符**（1/16 = 240 tick）。音符长度同为 tick。Koala 未公开内部 PPQ；960 提供与其 1/16 Quantize 对齐的公开格子。 |
 | SR-D8 | Play 时可改 Sample。Play + Record 可同时开。 |
-| SR-D9 | 从 Sequence Record 切到 Sample：自动 commit 当前未写入音符，停 Record，Play 继续。之后才能改 Sample 或新开麦。 |
-| SR-D10 | 再按 Record：停录并 commit，Play 继续。停 Play：同时停录并 commit。 |
-| SR-D11 | 切到另一 Pattern 槽：当前槽未提交音符先 commit，Record 转到新槽，不停 Record。 |
+| SR-D9 | 从 Sequence Record 切到 Sample：按 §8.6 flush 当前未写入音符，停 Record，Play 继续。之后才能改 Sample 或新开麦。 |
+| SR-D10 | 再按 Record：停录并 flush，Play 继续。停 Play：同时停录并 flush。 |
+| SR-D11 | 切到另一 Pattern 槽是 **selection request**。默认在下一 Bar 生效（新内核规格 §6.3）。在 **同一个** 音乐边界上：commit 旧槽、Journal 改目标、Runtime 改播放。生效前仍听旧 Pattern、仍录进旧槽。 |
 | SR-D12 | 往已有音符的 Pattern 叠录（overdub），不整槽覆盖。 |
 | SR-D13 | 新敲的音立刻能听、下一圈也有；写成 Project 只发生在 SR-D9–D11 与停 Play。 |
 | SR-D14 | 录音中允许改 BPM、Quantize、Swing。Core rebase，录音继续。Quantize/Swing 只影响之后的新音。BPM 改变 tick→墙钟，已写入的 tick 不动。 |
-| SR-D15 | 先武装空 Pad 收音，再进 Sequence Record：Pad Capture 后台继续。收音 Pad 不进 Sequence。在 Sequence 页点该 Pad = 停采并把音频 rebase 写入该 Pad，Record 不停。此后再敲，打击才进当前 Sequence。 |
+| SR-D15 | 先武装空 Pad 收音，再进 Sequence Record：Capture 后台继续。收音 Pad 不进 Sequence。在 Sequence 页点该 Pad = **停采并进入 Stage 8B trimming overlay**（不切到 Sample 表面，不触发 SR-D9）。用户确认 ≤5 s 提交后，Pad 写入 rebase 会话；此后再敲才进 Sequence。 |
 | SR-D16 | Record 仍 active 时，Trim / 换其他 Pad 采样 / 普通 `ImportAsset` 等 Sample 类 Command：Core 失败，Journal 继续，不 seal。Host 须先停录。 |
-| SR-D17 | 崩溃、音频中断、Capture Ring 溢出：不写 Project。下次打开提示恢复；确认则写入对应 Pattern，拒绝则丢未提交音符。 |
+| SR-D17 | 崩溃、音频中断、Capture Ring 溢出、owner 丢失：不写 Project。下次打开提示恢复。确认时按 SR-D22 匹配目标 Pattern，**禁止**仅凭新鲜 revision 写回。拒绝则丢未提交音符。 |
 | SR-D18 | 选择性 rebase 只适用于 BPM、Quantize/Swing、以及「正在进行的 Pad Capture 写入武装中的目标 Pad」。未知 Authoring Command fail closed。 |
 | SR-D19 | 实施时新增 Project Contract（新 Contract ID + Schema），删除 `takes`。禁止用空 `takes: {}` 假装兼容。Pattern 事件改为 Slot + tick + 力度 + 长度。 |
+| SR-D20 | 一个 Project 同时只允许一个 active Sequence session。会话落在 bundle `recovery/active`，受 writer lease 保护。Authoring admission 必须在 **同一把写锁** 内检查 active Journal 与 `expected_revision`。 |
+| SR-D21 | 每次 flush 有稳定 `session_id` + `flush_seq` + `command_id`。先把 flush 意图耐久写入 Journal，再写 Project。重复提交返回原 receipt。Journal 只在全部 flush 的 transaction 耐久之后删除。 |
+| SR-D22 | Journal 保存目标 Pattern 的 `pattern_id`、`bars`、以及上次耐久 flush（若无则 begin）时事件的 canonical fingerprint。恢复区分：指纹匹配可 append；不兼容变化给用户选新槽或放弃；删除/越界 fail closed 并保留恢复件。 |
+| SR-D23 | 切槽的 commit、Journal 改目标、Runtime 改播放三者只在 SR-D11 的 effective transport boundary 发生，禁止点击瞬间换 Journal 而播放仍等到下一 Bar。 |
+| SR-D24 | SR-D15 **不**推翻 Stage 8B 的 trimming / ≤5 s / 显式提交 / 冲突保留缓冲。只增加 Sequence 页内 overlay，避免走到 Sample 表面。 |
+| SR-D25 | Transport 的 musical tick 是权威时钟。BPM Command 在生效点冻结 `(audio_frame, musical_tick, bpm)` 锚点；之后只从该锚点积分。 |
+| SR-D26 | Pattern 事件边界与 overdub 合并是 Contract 不变量（见 §10.1），必须有跨语言测试向量。 |
 
 ## 3. 明确非目标
 
@@ -67,7 +80,9 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 - Stage 9 实现 Quantize 的非破坏「隐藏 Raw Take」。
 - 通用 auto-rebase、last-write-wins、Host 私自 merge。
 - Perform Stereo WAV、主菜单 Bounce Sequence 到 Pad 的完整产品（可在 Play 且未 Record 时后续做；与 Sequence 身份分离）。
-- 改变 Stage 8B Pad Capture 的采集管线本身；本设计只规定它与 Sequence 会话的叠加顺序。
+- 推翻 Stage 8B 的 trimming、5 s 选区、显式提交、冲突保留缓冲（SR-D24）。允许的只是 Sequence 页内 overlay。
+- 崩溃后自动 resume 同一 session（必须走恢复确认）。
+- 切槽时立即改 Journal 目标、播放仍等到下一 Bar。
 - 拍号（Beats per Bar）、Pattern 槽数量、最大小节数：仍以新内核规格 §6.2 为准（16 槽；1/2/4/8 小节），不在本次评审扩大到 Koala 的 32 槽 / 64 小节。
 - 分配 Product Build、改活动 manifest、改 Portal current 页（留给决策落地 / Stage 9 实施 Task）。
 
@@ -84,7 +99,8 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 | Record Song | Perform Stereo WAV（更后） |
 | 无独立 Take 文件 | SR-D1 |
 | 录 Sequence 时切去改 Sample，Record 停 | SR-D9 |
-| 先开 Pad 收音再打 Sequence | SR-D15 |
+| 先开 Pad 收音再打 Sequence | SR-D15 / SR-D24 |
+| SEQ SNAP / 下一 Bar 再切 Sequence | SR-D11 / SR-D23（LMDJ 默认下一 Bar） |
 | Overdub | SR-D12 |
 
 ## 5. 身份与数据
@@ -101,44 +117,61 @@ Proof 规则「录音中任何 revision 变化都 `REVISION_CONFLICT` 并 seal T
 - Take id、Raw Take、音频 bounce。
 
 录音中 Journal（bundle 内 recovery，对标现有 `recovery/active` 与
-`recovery/sealed` 职责，不再叫 Take）：
+`recovery/sealed` 职责，不再叫 Take）至少包含：
 
-- 目标 Pattern id（切槽后为新目标；已冲刷的槽已 commit）。
-- 会话开始时捕获的 `expected_revision`，以及每次成功 rebase 后的 head。
+- `session_id`（begin 时 Host 提供的 UUID）。
+- 当前目标 `pattern_id`；已 flush 的槽不再出现在未提交事件里。
+- 捕获并随 rebase 更新的 `expected_revision`。
 - 当时的 BPM / Quantize / Swing。
 - 尚未 commit 的事件。
+- 目标 Pattern 在上次耐久 flush（若无则 begin）时的 `bars` 与
+  `pattern_fingerprint`（见 §8.7）。
+- 每个 pending/completed flush：`flush_seq`、`command_id`、目标
+  `pattern_id`、该批事件、状态。
 
-停录、切 Sample、切槽冲刷、停 Play 之后删除 active Journal。中断则 seal 为
-恢复件，不进入 `patterns`，直到用户确认。
+停录、切 Sample、切槽 flush、停 Play 之后，**不得**在 Project 耐久 commit
+之前删除 Journal。中断或 owner 丢失则 seal 为恢复件，不进入 `patterns`，
+直到用户确认或拒绝。
 
 ## 6. 会话与数据流
 
 ```text
 Pad 打击
-  → Audio Clock → 当前 BPM 换成 tick（PPQ 960）
-  → Quantize 开则 onset 吸到 240 的倍数
+  → transport musical tick（权威；见 SR-D25）
+  → Quantize 开则 onset 按 §10.1 吸格
   → 写入会话 Journal + Runtime 叠录音符
   → 下一圈即可听到
-  → 到边界：一条 Authoring Command 把本槽未提交音符写入 Pattern
+  → 到 flush 边界：Journal 先记下 command_id，再一条 Command 写入 Pattern
   → revision +1 → Cook Snapshot
+  → 确认 transaction 耐久后才结束/清理 Journal
 ```
 
-Runtime 在 Record 期间播放 **已提交 Pattern ∪ 本会话未提交音符**。未提交音符
-不是 Project Truth。
+Runtime 在 Record 期间播放的是 §10.1 定义的 **committed Pattern 与 Journal
+按 (slot, onset_tick) 合并结果**。未提交音符不是 Project Truth。
+
+权威时钟（SR-D25）：不以「会话开始墙钟 × 当前 BPM」换算 tick。BPM Command
+在写锁内生效时冻结锚点 `(audio_frame F, musical_tick T, bpm B)`。之后：
+
+```text
+tick = T + (frame - F) * bpm_now * 960 / (48000 * 60)
+```
+
+已写入 Journal / Pattern 的 tick 不因后来的 BPM 重算。改 BPM 后下一个事件
+必须在时间上连续，不得跳格。
 
 边界：
 
 | 动作 | 会话 | Project |
 | --- | --- | --- |
-| 再按 Record | 停 Record，Play 继续 | commit 当前槽 |
-| 停 Play | 停 Record 与 Play | commit 当前槽 |
-| 切到另一 Pattern 槽 | Record 转到新槽 | 先 commit 旧槽 |
-| 从 Sequence 切到 Sample | 停 Record，Play 继续 | commit 当前槽 |
-| 崩溃 / 音频中断 / Ring 溢出 | 结束，不自动 commit | 不变；seal 恢复件 |
+| 再按 Record | 停 Record，Play 继续 | flush 当前槽后清理 Journal |
+| 停 Play | 停 Record 与 Play | 同上 |
+| 切到另一 Pattern 槽 | 下一 Bar（默认）同时改 Journal 目标与 Runtime | 边界上 flush 旧槽 |
+| 从 Sequence 切到 Sample | 停 Record，Play 继续 | flush 当前槽后清理 Journal |
+| 崩溃 / 音频中断 / Ring 溢出 / owner 丢失 | 结束，不自动 commit | 不变；seal 恢复件 |
 
 Host 不得在一条 Command 里「先 commit Sequence 再改 Sample」。必须先完成停录
-commit，再发 Sample 类 Command。Core 在会话仍 active 时拒绝 Sample 类
-Command（SR-D16），作为双保险。
+flush（§8.6），再发 Sample 类 Command。Core 在 **持有写锁且 Journal active**
+时拒绝 Sample 类 Command（SR-D16），对 CLI/MCP/第二窗口同样生效。
 
 ## 7. 与 Pad Capture 叠加
 
@@ -148,25 +181,65 @@ Command（SR-D16），作为双保险。
 2. Pad Capture：麦克风或「从 App 混音」进 **某个 Pad**（Stage 8B 及后续
    Resample）。
 
-允许的顺序（SR-D15）：
+允许的顺序（SR-D15 / SR-D24）：
 
 ```text
 Sample：空 Pad 开始收音（不发声）
   → Sequence：开 Record，敲 *其他* Pad
   → 收音后台继续；收音 Pad 的按下不进 Journal
-  → Sequence 页再点该 Pad：停采，音频 rebase 写入该 Pad
-  → 该 Pad 从空变为可演奏；之后的敲击进入当前 Sequence
+  → Sequence 页再点该 Pad：停采 → Stage 8B `trimming` overlay
+     （仍在 Sequence 表面，不触发 SR-D9）
+  → 用户选出 ≤240,000 帧并确认提交
+  → sample.import 用当刻 expected_revision 写入该 Pad
+  → 成功则 Sequence 会话 rebase；冲突则缓冲保留、用户重试、会话继续
+  → 提交成功后该 Pad 可演奏；之后的敲击进入当前 Sequence
 ```
 
-停采那一下不是音符。
+停采那一下不是音符，也 **不是** Pad 写入。未确认 trimming 之前 Pad 仍视为空，
+不进 Sequence。
 
-禁止的顺序：已经在 Sequence Record 中，再切回 Sample 去改采样或 **新开** 麦。
-这走 SR-D9，会话结束。
+禁止的顺序：已经在 Sequence Record 中，再切回 **Sample 表面** 去改采样或
+**新开** 麦。这走 SR-D9，会话结束。
+
+Stage 8B 状态机（`recording` → `trimming` → `committing` / `commit-error`）
+保持有效。本设计只规定 overlay 的宿主表面是 Sequence，以及提交成功后必须
+rebase 会话。
 
 ## 8. 并发分类
 
 录音会话钉在当前 `expected_revision` 上。Facade 仍要求每条成功 Authoring
 Command 带 `expected_revision` 且原子执行。
+
+### 8.0 所有权（SR-D20）
+
+一个 Project **同时只有一个** active Sequence session。
+
+| 主体 | 如何发现 | 写权限 |
+| --- | --- | --- |
+| 持有 writer lease 的 Host | Facade Query `sequence.record.status` 返回 session | begin / append / flush / 白名单 rebase |
+| 其他窗口、CLI、MCP | 同一 Query：`active` 或 `recoverable` | 没有 lease → 既有 Host `PROJECT_BUSY`；不得 begin |
+| 任意 Host | Query 列出 sealed 恢复件 | 确认/拒绝需要 lease |
+
+Begin / append / flush / 一切 Authoring Command 的 admission **必须**在
+Facade 已持有的 writer lease 内：先读 active Journal，再验
+`expected_revision`，再执行。禁止无锁检查会话、禁止只在发起录音的进程内存里
+记 session。
+
+第二次 `sequence.record.begin`：
+
+- 无 lease：`PROJECT_BUSY`（Host 既有语义）。
+- 同一 lease、已有 active session：`INVALID_ARGUMENT`，details 含
+  `reason=sequence_session_active` 与 `session_id`。不 seal、不覆盖 Journal。
+- 前一 owner 崩溃、lease 已释放、磁盘上仍有 active Journal：打开 Project 并
+  取得 lease 时，**先**把该 Journal seal 为 `owner_lost`，再允许其他 Command。
+  不自动 resume。之后走 SR-D17 恢复，不走第二次 begin。
+
+非 owner 发来的 Sample / 未知 Authoring Command：先被 lease 挡成
+`PROJECT_BUSY`。只有 **当前 owner** 在 session active 时误发这些 Command 才
+走 SR-D16（`INVALID_ARGUMENT` + `reason=sequence_session_active`，录音继续）。
+
+不新增只为文案服务的公开 error code。`PROJECT_BUSY` 仍是 Host 对 lease 失败
+的正规化；Core 公开码沿用 `lmdj.error.v1`。
 
 ### 8.1 不占 Project revision
 
@@ -181,10 +254,20 @@ Query；Workspace / Host 设置；Provider 选择；失败 Attempt；Snapshot Co
 
 Core 把会话的 `expected_revision` 收到新 head。不是通用 rebase。
 
-### 8.3 冲刷并继续
+### 8.3 冲刷并继续（SR-D11 / SR-D23）
 
-切到另一 Pattern 槽：对旧槽发出一次 Pattern 写入 Command，然后会话目标换成
-新槽。
+用户点另一 Pattern 槽只产生 **selection request**（UI 可标 pending）。默认
+effective boundary 是 **下一 Bar**（§6.3）。Beat / Pattern End 若在 Stage 9
+开放，规则相同：三者同一边界。
+
+在该边界上 **同一把写锁** 内顺序发生：
+
+1. 按 §8.6 把旧槽未提交事件 flush 成一条 Pattern Command；
+2. Journal 目标改为新槽，刷新 fingerprint 为新槽当前 Pattern；
+3. Runtime 改为播放新槽（已提交音符 ∪ 此后 Journal）。
+
+生效前：继续听旧 Pattern，新敲的音仍进旧槽 Journal。禁止点击瞬间改 Journal
+目标而播放仍等到下一 Bar。
 
 ### 8.4 停录并 commit
 
@@ -198,10 +281,51 @@ Core 把会话的 `expected_revision` 收到新 head。不是通用 rebase。
 
 失败不丢 Journal，不把会话变成恢复件。
 
-### 8.6 中断恢复
+### 8.6 Flush 幂等（SR-D21）
 
-Seal Journal。下次打开列出恢复件：确认则把事件写入记录的 Pattern 槽（该写入
-带当时的新鲜 `expected_revision`）；拒绝则删除恢复件。确认前 Project 不变。
+沿用 Proof：`successful commit deletes the active journal only after Project
+commit`，以及 duplicate `command_id` 回放原 receipt。
+
+每个 flush（停录、停 Play、切 Sample、切槽边界）：
+
+1. 在 Journal 耐久写入 pending flush：`session_id`、`flush_seq`、
+   `command_id`（Host UUID）、目标 `pattern_id`、本批事件、
+   `expected_revision`。
+2. 在同一 writer lease 内执行 Pattern 写入 Command。已存在该 `command_id`
+   的 receipt 时返回原 receipt，不二次 overdub。
+3. 仅当对应 `history/transactions/<revision>-<command-id>.json` 与
+   checkpoint 已耐久，才把该 flush 标为 completed。
+4. 会话结束且 **全部** flush completed 之后，才删除 active Journal。
+
+重启判定：
+
+| 磁盘 | 行为 |
+| --- | --- |
+| Journal pending flush，Project 无该 `command_id` | 未提交。seal/恢复，不得当已成功 |
+| Journal pending/active，Project 已有该 receipt | 已提交，仅待清理：回放 receipt，删除或完成 Journal，**禁止**再 apply 事件 |
+| Journal 已删，Project 有 receipt | 正常终态 |
+| active Journal，无 live owner | 打开时 seal `owner_lost`，走恢复 |
+
+禁止先删 Journal 再写 Project。禁止 Project 已提交后把同一批事件再当
+uncommitted 恢复。
+
+### 8.7 恢复匹配（SR-D22）
+
+`pattern_fingerprint` 是目标 Pattern 在 begin 或上次 completed flush 时，
+canonical 事件列表（§10.1 排序）加 `bars` 的 SHA-256。不是当时的 revision
+数字。
+
+用户确认恢复时，用 **当前** Project 的该 `pattern_id` 与 Journal 指纹比较：
+
+| 目标 Pattern | 结果 |
+| --- | --- |
+| 存在、`bars` 不变、fingerprint 一致 | 允许 append；Command 带 **当刻** `expected_revision`（只防并发竞态，不替代指纹） |
+| 存在，但已清空、改写、fingerprint 不一致 | 不得静默 append。Query 报告 `reason=pattern_changed`。用户选：写入 **新的** Pattern id，或拒绝 |
+| `bars` 变短，任一恢复 `onset_tick` ≥ 新长度 | fail closed，保留恢复件，`INVALID_PROJECT` / details `reason=events_out_of_range` |
+| `pattern_id` 已删除 | fail closed，保留恢复件，`NOT_FOUND` |
+
+新鲜 revision **不得**单独构成「可以写回原槽」的理由。确认前 Project 不变。
+拒绝则删除该恢复件。
 
 ## 9. 结构
 
@@ -238,9 +362,47 @@ Host 不解析 `.lmdj`。现有 `take.begin` / `take.append` / `take.commit` 与
 - Host 从音频帧推导格子后只把 step 交给 Domain 却声称 Quantize 关仍保留手感。
 
 Facade / error Contract：`REVISION_CONFLICT` 仍用于真正的 stale revision。
-录音中被拒绝的 Sample 类 Command 使用既有 typed error（例如会话 active 时的
-`INVALID_ARGUMENT` 或明确的录音会话冲突码——实施计划选定一个，不新增只为
-文案服务的公开码）。恢复列表走 Query，不走 Candidate→Commit 的 AI Job 路径。
+录音中被拒绝的 Sample 类 Command、第二次 begin 使用 `INVALID_ARGUMENT` +
+`details.reason`。无 lease 由 Host 正规化为 `PROJECT_BUSY`。不新增只为文案
+服务的公开 error code。恢复列表走 Query，不走 Candidate→Commit 的 AI Job
+路径。
+
+### 10.1 事件不变量（SR-D26）
+
+4/4 下 `pattern_length_ticks = bars * 3840`。`onset_tick` 落在
+`[0, pattern_length_ticks)`。
+
+从 transport tick 到循环内 onset：
+
+1. `onset_mod = ((t % L) + L) % L`，`L = pattern_length_ticks`。
+2. Quantize 关：`onset_tick = onset_mod`。
+3. Quantize 开，网格 `G = 240`：
+   - `q = floor(onset_mod / G + 1/2)`，即最近倍数；**恰好半格**（
+     `onset_mod % G == 120`）时 **向更早的格子**（较小 tick）取整，即
+     `q = floor(onset_mod / G)`。
+   - `onset_tick = q * G`；若结果等于 `L`，wrap 到 `0`。
+
+`duration_tick`：
+
+- 最小 `1`。
+- 最大 `L - onset_tick`（clamp，音符不跨循环缝）。
+- 看到 Pad 释放：`duration_tick = clamp(release_tick - onset_tick, 1, max)`。
+- flush 时仍未释放：默认 `240`。
+- 播放仍遵守 Pad 的 One-shot / Gate；duration 是 Sequence 数据，不改 Pad
+  模式。
+
+Overdub 与「Pattern ∪ Journal」：
+
+- 合并键：`(bank, pad, onset_tick)`。
+- 后写入替换先写入（更新 velocity 与 duration）。同一格子多次敲击不保留
+  重复事件，也不另建 event id。
+- 多圈叠到同一键：仍是一条事件（后一次替换）。
+- 写入 Project 前 canonical 排序：
+  `(onset_tick, bank, pad, duration_tick, velocity)`。
+  相同键不得出现两次。
+
+这些规则是 Contract 不变量。C++ Domain、Web Host 与 v2→新 Contract 迁移器
+必须对同一输入产生相同 Project 字节；实施计划提供共享测试向量。
 
 ## 11. 迁移
 
@@ -249,8 +411,7 @@ Headless Core Proof 的 `RecordTake` 已同时写入 Pattern。迁移已有 v2 b
 1. 保留 `patterns`；
 2. 丢弃 `takes`；
 3. 把整数 `step` 转为 `onset_tick = step * 240`（在 16 step/小节、4/4、
-   PPQ 960 下），`duration_tick` 用实施计划选定的默认（建议一格 240 tick，
-   与 one-shot 触发兼容，后续可再编辑长度）。
+   PPQ 960 下），`duration_tick = 240`，再按 §10.1 canonical 排序。
 
 没有 Take 列表可展示或恢复。未提交的旧 Take Journal 若仍存在于
 `recovery/`，实施计划须规定：要么按本设计提示恢复进当时的 Pattern id，要么
@@ -261,18 +422,26 @@ Headless Core Proof 的 `RecordTake` 已同时写入 Pattern。迁移已有 v2 b
 
 Stage 9 实施必须覆盖：
 
-- 默认 120 + Quantize 开：格子外的敲击写入最近 1/16（240 tick 网格）。
+- 默认 120 + Quantize 开：格子外的敲击写入最近 1/16；半格向更早；末格 wrap
+  到 0（共享测试向量）。
 - Quantize 关：保留 onset tick；Project 中无第二份事件列表。
-- 叠录：下一圈听得到；停录前 revision 不变；停录后 Pattern 含新旧音且
+- 同一 `(slot, onset_tick)` 两击：后一次替换，canonical 排序后无重复键。
+- 叠录：下一圈听得到；停录前 revision 不变；停录后 Pattern 含合并结果且
   revision +1。
-- 录音中改 BPM：rebase，录音不停；已记 tick 不变。
+- 录音中改 BPM：rebase；锚点后 tick 连续，不跳格；已记 tick 不变。
 - 录音中关 Quantize：之后的音不吸格；之前已吸格的音不重排。
-- 切槽：旧槽已 commit，新槽继续录。
-- 切 Sample：停录 commit；随后 Trim 成功。
-- Record active 时发 Trim：Command 失败，Journal 仍在。
-- SR-D15：收音 Pad 不进 Pattern；停采 rebase 后该 Pad 可敲进 Sequence。
-- 从 Record 中切 Sample 再试图新开麦：会话已结束，不再叠加。
-- 崩溃恢复：确认写入 Pattern，拒绝则丢；确认前 Project 字节不变。
+- 切槽：下一 Bar 之前仍录旧槽；边界上旧槽已 commit，此后录新槽。
+- 切 Sample：停录 flush；随后 Trim 成功。
+- Record active 时发 Trim（含 CLI/MCP 持同一或另一入口）：Command 失败，
+  Journal 仍在。无 lease 的第二 Host 得到 `PROJECT_BUSY`。
+- 第二次 begin：`INVALID_ARGUMENT` / `sequence_session_active`。
+- Owner 崩溃后下一 lease：active Journal 被 seal `owner_lost`，不 resume。
+- Project 已提交、Journal 未删：重启只清理，不二次 overdub。
+- SR-D15：收音 Pad 不进 Pattern；停采进入 trimming overlay；确认提交后
+  rebase，再敲才进 Sequence。提交冲突保留缓冲。
+- 从 Record 中切 Sample 表面再试图新开麦：会话已结束，不再叠加。
+- 恢复：fingerprint 一致可 append；Pattern 已改不可静默写回；删除/越界
+  保留恢复件。确认前 Project 字节不变。
 - 旧 Proof bundle：无 `takes`，Pattern step→tick 后可 Cook。
 - Journal / Capture Ring 路径跑 `scripts/core.sh test dev stress`。
 
@@ -310,7 +479,8 @@ Documentation impact: required
 Affected portal pages: Sequence / Project Truth / Application Facade 的当前路由
 （实施时从 Portal 清单派生，不手猜 path）
 Reason: approved product recording model removes Raw Take and replaces the
-Proof concurrency rule
+Proof concurrency rule; Sequence-page capture overlay is an additional
+Host path on top of Stage 8B trimming, not a replacement of S8B-D3/D6
 ```
 
 同一 Task 还须：
@@ -343,8 +513,22 @@ Proof concurrency rule
 
 拒绝。会让 Raw Take 假活着，并卡住 Pattern 事件从 `step` 迁到 tick。
 
+### 15.5 停采即写入 Pad，跳过 Stage 8B trimming
+
+拒绝。与 S8B-D3/D6 的 ≤5 s 选区、显式提交、冲突保留缓冲冲突。SR-D15 只把
+trimming 放进 Sequence overlay。
+
+### 15.6 崩溃后自动 resume 同一 session
+
+拒绝。lease 丢失后磁盘 Journal 可能落后于用户对工程的后续编辑。必须 seal
+并确认。
+
+### 15.7 切槽瞬间改 Journal 目标
+
+拒绝。与 §6.3「默认下一 Bar 生效」叠加会出现听旧录新。
+
 ## 16. 后续
 
-1. 用户 review 本规格。
+1. 用户再次 review 本规格（须覆盖 SR-D20–D26）。
 2. writing-plans：决策落地 Task（PRD + 问题文件 + 勘误 + Portal）与 Stage 9
    实施 Plan。Stage 9 不得在决策合入前把本语义写进代码。
