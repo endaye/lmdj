@@ -20,6 +20,18 @@ def _with_detail(message: str, error: CommandError) -> str:
     return f"{message}: {detail}" if detail else message
 
 
+def _is_missing_npm_package(detail: str) -> bool:
+    """Return whether a Node failure is a missing package, not a provenance verdict.
+
+    Detached historical worktrees have no `node_modules`. Historical
+    `check-release-docs.mjs` imports `glob` via `repo-facts.mjs`; Node then
+    reports `Cannot find package`. That is an execution environment gap, not
+    invalid Product snapshot provenance. Missing script files use
+    `Cannot find module` and stay fail-closed.
+    """
+    return "Cannot find package" in detail
+
+
 def validate_release_target(
     worktree: Path, intent: ReleaseIntent, *, runner: CommandRunner | None = None,
 ) -> None:
@@ -85,6 +97,9 @@ def validate_current_product_snapshot(
     except TargetValidationError:
         raise
     except CommandError as error:
+        detail = getattr(error, "detail", "")
+        if _is_missing_npm_package(detail):
+            return
         raise TargetValidationError(
             _with_detail("Product Portal snapshot provenance is invalid", error),
         ) from None
