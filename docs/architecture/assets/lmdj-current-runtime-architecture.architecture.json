@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "LMDJ 当前端到端运行时架构",
+    "output": "lmdj-current-runtime-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/endaye/lmdj",
+      "revision": "c5307eea4b3e1868170f14c62eab495732feb443"
+    },
+    "legend": {
+      "mode": "auto",
+      "entries": {
+        "frontend": {"label": "Host"},
+        "backend": {"label": "Core Module"},
+        "database": {"label": "权威或派生状态"},
+        "external": {"label": "Provider"}
+      }
+    },
+    "viewBox": [1390, 650]
+  },
+  "components": [
+    {
+      "id": "web-hosts",
+      "type": "frontend",
+      "label": "Web Hosts",
+      "sublabel": "Creator Web · Formal Web Host",
+      "pos": [20, 80],
+      "size": [170, 76],
+      "sources": [
+        {"path": "apps/creator-web/module.json", "label": "Creator Host"},
+        {"path": "apps/web-runtime-host/module.json", "label": "Formal Web Host"}
+      ]
+    },
+    {
+      "id": "native-hosts",
+      "type": "frontend",
+      "label": "Native Hosts",
+      "sublabel": "CLI · MCP · Native Test Host",
+      "pos": [20, 400],
+      "size": [170, 76],
+      "sources": [
+        {"path": "apps/core-cli/module.json", "label": "CLI Host"},
+        {"path": "apps/core-mcp/module.json", "label": "MCP Host"},
+        {"path": "apps/native-test-host/module.json", "label": "Native test Host"}
+      ]
+    },
+    {
+      "id": "web-runtime-platform",
+      "type": "backend",
+      "label": "Web Runtime Platform",
+      "sublabel": "Manifest Gate · Session",
+      "pos": [215, 80],
+      "size": [180, 76],
+      "sources": [
+        {"path": "packages/web-runtime-platform/module.json", "label": "Module manifest"},
+        {"path": "packages/web-runtime-platform/web/runtime_session.mjs", "label": "Runtime Session"},
+        {"path": "packages/web-runtime-platform/src/control_runtime.cpp", "label": "Control Runtime"}
+      ]
+    },
+    {
+      "id": "application-facade",
+      "type": "backend",
+      "label": "Application Facade",
+      "sublabel": "唯一 Core 入口 · 应用编排",
+      "pos": [412, 240],
+      "size": [170, 76],
+      "sources": [
+        {"path": "packages/application-facade/module.json", "label": "Module manifest"},
+        {"path": "packages/application-facade/src/application.cpp", "label": "Application boundary"},
+        {"path": "packages/application-facade/src/c_api.cpp", "label": "C ABI"}
+      ]
+    },
+    {
+      "id": "project-truth",
+      "type": "database",
+      "label": "Authoring Domain",
+      "sublabel": "Project Truth · revision",
+      "pos": [605, 80],
+      "size": [170, 76],
+      "sources": [
+        {"path": "packages/authoring-domain/module.json", "label": "Module manifest"},
+        {"path": "packages/authoring-domain/src/project.cpp", "label": "Project Truth"},
+        {"path": "packages/authoring-domain/src/command_handler.cpp", "label": "Commands"}
+      ]
+    },
+    {
+      "id": "project-cooker",
+      "type": "backend",
+      "label": "Project Cooker",
+      "sublabel": "校验 · 派生",
+      "pos": [800, 240],
+      "size": [160, 76],
+      "sources": [
+        {"path": "packages/project-cooker/module.json", "label": "Module manifest"},
+        {"path": "packages/project-cooker/src/project_cooker.cpp", "label": "Cook path"}
+      ]
+    },
+    {
+      "id": "runtime-snapshot",
+      "type": "database",
+      "label": "Runtime Snapshot",
+      "sublabel": "不可变派生状态",
+      "pos": [995, 80],
+      "size": [170, 76],
+      "sources": [
+        {"path": "packages/project-cooker/src/project_cooker.cpp", "label": "Snapshot producer"},
+        {"path": "apps/architecture-portal/docs/contracts/runtime-snapshot.mdx", "label": "Current contract"}
+      ]
+    },
+    {
+      "id": "audio-runtime",
+      "type": "backend",
+      "label": "Audio Runtime",
+      "sublabel": "Prepared samples · Voice",
+      "pos": [1190, 240],
+      "size": [150, 76],
+      "sources": [
+        {"path": "packages/audio-runtime/module.json", "label": "Module manifest"},
+        {"path": "packages/audio-runtime/src/realtime_engine.cpp", "label": "Realtime engine"},
+        {"path": "packages/audio-runtime/src/offline_renderer.cpp", "label": "Offline renderer"}
+      ]
+    },
+    {
+      "id": "provider-sdk",
+      "type": "backend",
+      "label": "Provider SDK",
+      "sublabel": "Capability · Attempt",
+      "pos": [412, 400],
+      "size": [170, 76],
+      "sources": [
+        {"path": "packages/provider-sdk/module.json", "label": "Module manifest"},
+        {"path": "packages/provider-sdk/src/registry.cpp", "label": "Registry"},
+        {"path": "packages/provider-sdk/src/attempt_store.cpp", "label": "Attempt Store"}
+      ]
+    },
+    {
+      "id": "project-io",
+      "type": "database",
+      "label": "Project I/O",
+      "sublabel": "Store · Bundle · Cache",
+      "pos": [605, 400],
+      "size": [170, 76],
+      "sources": [
+        {"path": "packages/project-io/module.json", "label": "Module manifest"},
+        {"path": "packages/project-io/src/project_store.cpp", "label": "Atomic store"},
+        {"path": "packages/project-io/src/project_bundle_transfer.cpp", "label": "Bundle transfer"}
+      ]
+    },
+    {
+      "id": "proof-providers",
+      "type": "external",
+      "label": "Proof Providers",
+      "sublabel": "Local success / failure",
+      "pos": [412, 520],
+      "size": [170, 76],
+      "sources": [
+        {"path": "providers/local-proof-success/module.json", "label": "Success Provider"},
+        {"path": "providers/local-proof-failure/module.json", "label": "Failure Provider"}
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "产品中立 Headless Core",
+      "wraps": [
+        "web-runtime-platform",
+        "application-facade",
+        "project-truth",
+        "project-cooker",
+        "runtime-snapshot",
+        "audio-runtime",
+        "provider-sdk",
+        "project-io"
+      ],
+      "pad": 30
+    }
+  ],
+  "connections": [
+    {"id": "web-host-entry", "from": "web-hosts", "to": "web-runtime-platform", "variant": "emphasis"},
+    {"id": "web-facade-api", "from": "web-runtime-platform", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
+    {"id": "native-facade-api", "from": "native-hosts", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
+    {"id": "facade-commands", "from": "application-facade", "to": "project-truth", "label": "命令", "variant": "emphasis"},
+    {"id": "project-cook", "from": "project-truth", "to": "project-cooker", "label": "校验 / 派生", "variant": "emphasis"},
+    {"id": "cooked-snapshot", "from": "project-cooker", "to": "runtime-snapshot", "label": "不可变快照", "variant": "emphasis"},
+    {"id": "snapshot-audio", "from": "runtime-snapshot", "to": "audio-runtime", "label": "只读", "variant": "emphasis"},
+    {"id": "project-persist", "from": "project-truth", "to": "project-io", "label": "原子持久化", "labelAt": [690, 200]},
+    {"id": "facade-provider-sdk", "from": "application-facade", "to": "provider-sdk", "label": "Capability", "variant": "dashed", "labelAt": [497, 330]},
+    {"id": "provider-artifacts", "from": "provider-sdk", "to": "proof-providers", "label": "Artifact I/O", "variant": "dashed", "labelAt": [497, 485]}
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "权威状态",
+      "items": [
+        "Authoring Domain 独占 Project Truth",
+        "Runtime Snapshot 可丢弃、可重建、只读消费"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "装配与契约",
+      "items": [
+        "Product Assembly 锁定 Module、Host、Provider 与 Contract",
+        "Foundation 提供 Artifact、JSON 与 typed error 底座"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "禁止路径",
+      "items": [
+        "Host 不解析 Project Bundle；Provider 不接收 mutable Project",
+        "Provider failure 与 Runtime state 不写入 Project Truth"
+      ]
+    }
+  ]
+}
