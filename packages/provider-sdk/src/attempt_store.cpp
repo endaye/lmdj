@@ -25,6 +25,8 @@
 #include <lmdj/foundation/json.hpp>
 #include <lmdj/provider/provider.hpp>
 
+#include "durable_file.hpp"
+
 namespace lmdj::provider {
 namespace {
 
@@ -359,6 +361,10 @@ foundation::Result<void> publish_attempt_outputs(
             final_artifacts,
             rename_error));
   }
+  const auto synced = detail::sync_directory(attempt_root);
+  if (!synced.has_value()) {
+    return synced;
+  }
   std::error_code remove_error;
   if (!std::filesystem::remove(staging_root, remove_error) ||
       remove_error) {
@@ -496,38 +502,12 @@ foundation::Result<void> write_new_atomic(
   if (!temp_available.has_value()) {
     return temp_available;
   }
-  const auto written = write_bytes(temp_path, bytes);
+  const auto written =
+      detail::write_bytes_durable(temp_path, bytes);
   if (!written.has_value()) {
     return written;
   }
-  std::error_code publish_error;
-  std::filesystem::create_hard_link(
-      temp_path, final_path, publish_error);
-  if (publish_error) {
-    std::error_code cleanup_error;
-    std::filesystem::remove(temp_path, cleanup_error);
-    std::error_code final_status_error;
-    const auto final_status =
-        std::filesystem::symlink_status(final_path, final_status_error);
-    if (!final_status_error &&
-        final_status.type() !=
-            std::filesystem::file_type::not_found) {
-      return foundation::Result<void>::failure(
-          Error{
-              existing_code,
-              "destination already exists",
-              {{"path", final_path.generic_string()}},
-          });
-    }
-    return foundation::Result<void>::failure(
-        io_error(
-            "temporary file could not be published",
-            final_path,
-            publish_error));
-  }
-  std::error_code cleanup_error;
-  std::filesystem::remove(temp_path, cleanup_error);
-  return foundation::Result<void>::success();
+  return detail::publish_new_link(temp_path, final_path, existing_code);
 }
 
 foundation::Result<void> write_replace_atomic(
@@ -1555,31 +1535,14 @@ foundation::Result<AttemptResult> AttemptStore::execute(
       const auto temp_path =
           temporary_sibling(
               attempt_root / "staging/artifacts/output");
-      std::ofstream stream(
-          temp_path, std::ios::binary | std::ios::trunc);
-      if (!stream) {
-        return foundation::Result<ArtifactRef>::failure(
-            io_error("output artifact could not be opened", temp_path));
-      }
-      if (!bytes.empty()) {
-        stream.write(
-            reinterpret_cast<const char*>(bytes.data()),
-            static_cast<std::streamsize>(bytes.size()));
-      }
-      stream.flush();
-      if (!stream) {
-        stream.close();
-        std::error_code cleanup_error;
-        std::filesystem::remove(temp_path, cleanup_error);
-        return foundation::Result<ArtifactRef>::failure(
-            io_error("output artifact could not be written", temp_path));
-      }
-      stream.close();
-      if (stream.fail()) {
-        std::error_code cleanup_error;
-        std::filesystem::remove(temp_path, cleanup_error);
-        return foundation::Result<ArtifactRef>::failure(
-            io_error("output artifact could not be closed", temp_path));
+      const std::string_view payload{
+          reinterpret_cast<const char*>(bytes.data()),
+          bytes.size(),
+      };
+      const auto written =
+          detail::write_bytes_durable(temp_path, payload);
+      if (!written.has_value()) {
+        return foundation::Result<ArtifactRef>::failure(written.error());
       }
       const auto described =
           foundation::describe_artifact(temp_path, std::move(media_type));
@@ -1642,16 +1605,10 @@ foundation::Result<AttemptResult> AttemptStore::execute(
         std::error_code cleanup_error;
         std::filesystem::remove(temp_path, cleanup_error);
       } else {
-        std::error_code rename_error;
-        std::filesystem::rename(temp_path, final_path, rename_error);
-        if (rename_error) {
-          std::error_code cleanup_error;
-          std::filesystem::remove(temp_path, cleanup_error);
-          return foundation::Result<ArtifactRef>::failure(
-              io_error(
-                  "output artifact could not be published",
-                  final_path,
-                  rename_error));
+        const auto published =
+            detail::publish_replace(temp_path, final_path);
+        if (!published.has_value()) {
+          return foundation::Result<ArtifactRef>::failure(published.error());
         }
       }
       minted.push_back(ArtifactBinding{

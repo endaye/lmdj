@@ -4,6 +4,7 @@ add_library(
     src/capability.cpp
     src/registry.cpp
     src/attempt_store.cpp
+    src/durable_file.cpp
 )
 add_library(lmdj::provider_sdk ALIAS lmdj_provider_sdk)
 

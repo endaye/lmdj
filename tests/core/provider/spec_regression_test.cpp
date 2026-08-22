@@ -334,7 +334,7 @@ void verify_source_package(
       bytes == lmdj::foundation::canonical_json(manifest) + "\n");
   LMDJ_CHECK(manifest.at("format") == "provider-source-package");
   LMDJ_CHECK(manifest.at("provider_id") == expected_provider_id);
-  LMDJ_CHECK(manifest.at("provider_version") == "1.0.3");
+  LMDJ_CHECK(manifest.at("provider_version") == "1.0.4");
   LMDJ_CHECK(manifest.at("files").size() == 3);
   for (const auto& file : manifest.at("files")) {
     const auto source_path =
@@ -1043,6 +1043,84 @@ void test_proof_failure_result_remains_exact_but_record_is_redacted() {
   LMDJ_CHECK(inspected.value().error->details.empty());
 }
 
+void test_evidence_writes_are_durable_and_host_settings_are_not() {
+  const auto store_source =
+      read_bytes("packages/provider-sdk/src/attempt_store.cpp");
+  const auto durable_source =
+      read_bytes("packages/provider-sdk/src/durable_file.cpp");
+  LMDJ_CHECK(durable_source.find("::fsync") != std::string::npos);
+
+  const auto write_bytes_at =
+      store_source.find("foundation::Result<void> write_bytes(");
+  const auto write_new_at =
+      store_source.find("foundation::Result<void> write_new_atomic(");
+  const auto write_replace_at =
+      store_source.find("foundation::Result<void> write_replace_atomic(");
+  const auto read_settings_at =
+      store_source.find("foundation::Result<nlohmann::json> read_host_settings(");
+  LMDJ_CHECK(write_bytes_at != std::string::npos);
+  LMDJ_CHECK(write_new_at > write_bytes_at);
+  LMDJ_CHECK(write_replace_at > write_new_at);
+  LMDJ_CHECK(read_settings_at > write_replace_at);
+
+  const auto write_bytes_body =
+      store_source.substr(write_bytes_at, write_new_at - write_bytes_at);
+  LMDJ_CHECK(write_bytes_body.find("fsync") == std::string::npos);
+  LMDJ_CHECK(
+      write_bytes_body.find("write_bytes_durable") == std::string::npos);
+
+  const auto write_new_body =
+      store_source.substr(write_new_at, write_replace_at - write_new_at);
+  LMDJ_CHECK(
+      write_new_body.find("write_bytes_durable") != std::string::npos);
+  LMDJ_CHECK(
+      write_new_body.find("publish_new_link") != std::string::npos);
+  LMDJ_CHECK(write_new_body.find("write_bytes(") == std::string::npos);
+
+  const auto write_replace_body = store_source.substr(
+      write_replace_at, read_settings_at - write_replace_at);
+  LMDJ_CHECK(write_replace_body.find("write_bytes(") != std::string::npos);
+  LMDJ_CHECK(
+      write_replace_body.find("write_bytes_durable") == std::string::npos);
+  LMDJ_CHECK(write_replace_body.find("fsync") == std::string::npos);
+
+  LMDJ_CHECK(
+      store_source.find(
+          "std::ofstream stream(\n          temp_path") ==
+      std::string::npos);
+  LMDJ_CHECK(
+      store_source.find("publish_replace") != std::string::npos);
+}
+
+void test_successful_proof_attempt_leaves_inspectable_terminal_record() {
+  TempDirectory temp;
+  const auto registry = proof_registry();
+  auto store = store_at(temp.path());
+  LMDJ_CHECK(
+      store
+          .set_provider_selection(
+              std::string(kCapability),
+              "local.proof.success",
+              registry)
+          .has_value());
+  const auto result = store.execute(
+      AttemptId{"attempt-durable-success"}, proof_request(), registry);
+  LMDJ_CHECK(result.has_value());
+  LMDJ_CHECK(result.value().candidate.has_value());
+  const auto record_path =
+      temp.path() / ".lmdj-workspace/attempts/attempt-durable-success.json";
+  LMDJ_CHECK(std::filesystem::is_regular_file(record_path));
+  const auto inspected =
+      store.inspect(AttemptId{"attempt-durable-success"});
+  LMDJ_CHECK(inspected.has_value());
+  LMDJ_CHECK(inspected.value().status == AttemptStatus::succeeded);
+  LMDJ_CHECK(!inspected.value().minted_outputs.empty());
+  const auto artifact_path =
+      temp.path() / ".lmdj-workspace/attempts/attempt-durable-success" /
+      "artifacts" / inspected.value().minted_outputs.front().artifact.sha256;
+  LMDJ_CHECK(std::filesystem::is_regular_file(artifact_path));
+}
+
 }  // namespace
 
 int main() {
@@ -1059,6 +1137,8 @@ int main() {
     test_attempt_store_read_api_validates_private_terminal_formats();
     test_parameters_are_hashed_without_workspace_staging();
     test_proof_failure_result_remains_exact_but_record_is_redacted();
+    test_evidence_writes_are_durable_and_host_settings_are_not();
+    test_successful_proof_attempt_leaves_inspectable_terminal_record();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;
