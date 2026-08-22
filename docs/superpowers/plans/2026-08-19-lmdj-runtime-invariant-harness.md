@@ -274,7 +274,7 @@ own item; the harness's role is to keep them fixed, not to normalize them.
   (`attempt_store.cpp:364-398`). A process killed while holding it leaves
   `.host-settings.lock/` forever and every later write returns
   `io_error "host settings are busy"`.
-- [ ] **G5 — `PublishResult::publish_queue_full` is unreachable, so its
+- [x] **G5 — `PublishResult::publish_queue_full` is unreachable, so its
   rollback branch is dead code.** `kRealtimeBankCapacity` and
   `kRealtimePublishQueueCapacity` are both 4; a queue entry exists per pending
   publication, each pending publication owns a distinct slot, and `try_push` is
@@ -282,8 +282,9 @@ own item; the harness's role is to keep them fixed, not to normalize them.
   pending slots plus a fifth empty one. `bank_slots_full` always binds first.
   Found while implementing Task 3's stress case, and pinned there by a
   `static_assert` on the capacities plus a race asserting `publish_queue_drops`
-  stays 0. Decide whether the headroom should differ (making the branch live) or
-  the branch should be documented as defensive.
+  stays 0. **Resolved by Issue #205:** keep the equal capacities and document
+  the complete rollback as defence against a future capacity divergence. Do
+  not change realtime headroom merely to make an error path testable.
 - [ ] **G4 — temp-sibling names are not unique across processes.**
   `temporary_sibling` (`attempt_store.cpp:423-433`) mixes
   `steady_clock::now()` — which is boot- or process-relative, not globally
