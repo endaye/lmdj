@@ -156,8 +156,9 @@ Foundation 不额外制造指向所有 Module 的扇出箭头，而在说明卡�
 error 的共同底座。Contracts 同样放入说明卡，说明它们是 versioned cross-language boundaries，
 而不是运行时服务。
 
-Product-neutral Core 使用一个边界框包住 Web Runtime Platform 和七个 Headless Core Module。
-Host、Proof Provider、Product Assembly 说明卡位于该边界外，保持产品装配与产品中立代码的区别。
+Product-neutral Core 使用一个边界框包住七个显式 Module 节点和 Runtime Snapshot；Foundation
+作为第八个 Module 放在说明卡中，避免扇出箭头。Host、Proof Provider、Product Assembly 说明卡
+位于该边界外，保持产品装配与产品中立代码的区别。
 
 ## 8. 连接与权威性语义
 
@@ -276,15 +277,20 @@ node bin/archify.mjs check \
 ### 12.2 仓库验证
 
 ```bash
-rg -n "lmdj\.patch\.v1|lmdj\.materials\.v1|apps/api|apps/web|workers/audio|patchify" \
+if rg -n "apps/api/|apps/web/|workers/audio/|packages/patchify/|8-Pad Patch|Song Pipeline" \
   docs/architecture/current-product-architecture.md \
-  docs/architecture/assets/lmdj-current-runtime-architecture.architecture.json
+  docs/architecture/assets/lmdj-current-runtime-architecture.architecture.json; then
+  exit 1
+fi
+
+rg -n "已退役，不属于当前链路" docs/architecture/current-product-architecture.md
 
 scripts/architecture-portal.sh check
 git diff --check
 ```
 
-第一条命令预期无匹配。另需审计 `mermaid-config.json` 的所有引用后才能删除该文件。
+第一条命令预期无匹配并退出 0；第二条命令必须精确命中一次，证明 current 文档只为明确排除而
+提及退役 Contract。另需审计 `mermaid-config.json` 的所有引用后才能删除该文件。
 
 ### 12.3 视觉验收
 
