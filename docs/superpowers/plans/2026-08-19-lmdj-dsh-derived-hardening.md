@@ -180,15 +180,16 @@ Three findings are pinned as executable facts rather than prose: **G1** (an
 orphan Attempt reservation burns its id permanently), **G3** (an orphaned
 settings lock blocks every write forever while reads keep succeeding) and
 **G5** (`publish_queue_full` is unreachable at the current equal capacities, so
-its rollback branch is dead code — found while writing the stress case, which
-also closed the plan's last two open items on that basis).
+its rollback branch is dead code — found while writing the stress case and
+resolved by Issue #205 by keeping the rollback as defence against future
+capacity divergence without changing realtime headroom).
 
 Every finding now has an owner in
 [`2026-08-17-machine-task-todo.md`](../../quality/2026-08-17-machine-task-todo.md)
 as `G1`–`G5`, relabelled from `F*` because `F1`–`F6` were already taken there.
-`G1` and `G4` are mechanical; `G2`, `G3` and `G5` each pick a semantic
-(durability scope, crash-recovery meaning, intended queue headroom) and so need
-an argument, not just a diff. The list also records that `G1`, `G2` and `G4`
+`G1` and `G4` are mechanical; `G2` still needs a durability-scope argument.
+`G3` and `G5` have since been resolved by their dedicated Issues and plans.
+The list also records that `G1`, `G2` and `G4`
 should land as one commit, because all three edit `attempt_store.cpp` and a
 `provider-sdk` PATCH cascades to ten manifests, roughly twenty version literals,
 sixteen gate tables, hand-authored portal prose, a new Product Build and a portal

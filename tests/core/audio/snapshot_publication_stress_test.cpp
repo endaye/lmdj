@@ -170,7 +170,7 @@ void test_publication_accounting_is_conserved_under_concurrency() {
             << " reclaimed=" << outcomes.reclaimed << '\n';
 }
 
-// Finding G5, pinned rather than asserted away.
+// Finding G5, resolved by Issue #205 and pinned rather than asserted away.
 //
 // `PublishResult::publish_queue_full` is **unreachable while the two capacities
 // are equal**, so the rollback branch behind it is dead code today. The
@@ -189,10 +189,13 @@ void test_publication_accounting_is_conserved_under_concurrency() {
 // kRealtimeBankCapacity == 4 that is a contradiction, so `bank_slots_full`
 // always binds first.
 //
-// This test pins the consequence: across a heavy race, `publish_queue_drops`
-// stays 0 and `bank_slots_full` is the only capacity rejection. If either
-// capacity ever changes so the branch becomes live, this turns red and points
-// whoever changed it at the now-reachable rollback.
+// Issue #205 deliberately keeps the complete rollback as defence against a
+// future capacity divergence; it does not change realtime headroom merely to
+// exercise an error path. This test pins the current consequence: across a
+// heavy race, `publish_queue_drops` stays 0 and `bank_slots_full` is the only
+// capacity rejection. If either capacity ever changes so the branch becomes
+// live, this turns red and points whoever changed it at the now-reachable
+// rollback.
 void test_publish_queue_full_is_unreachable_at_equal_capacities() {
   static_assert(
       lmdj::audio::kRealtimeBankCapacity ==

@@ -309,6 +309,11 @@ PublishResult RealtimeEngine::publish_sample_bank(
 
   slot->state.store(BankState::pending, std::memory_order_release);
   pending_publications_.fetch_add(1, std::memory_order_release);
+  // With the current equal Bank and publish-queue capacities this push cannot
+  // fail: a full queue already owns every Bank slot in `pending`, while
+  // reaching this point requires another slot found in `empty`. Keep the
+  // rollback defensive and complete, though, because a future capacity
+  // divergence can make the queue the first wall (Issue #205).
   if (!publish_queue_.try_push(slot_index)) {
     pending_publications_.fetch_sub(1, std::memory_order_release);
     slot->bank.reset();
