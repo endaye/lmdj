@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -51,6 +51,12 @@ gate 会报告 authority、expected、found 与 consumer path；生成物 stale 
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 
 ## 标准 Release 控制面
+
+源码 Product Build 与匹配的 immutable snapshot 可以先完成分配，此时允许没有 release intent；
+零 intent 不授予任何 release 权限。Release intent 是独立 reviewed authorization，必须等该 Task
+经 protected `main` squash merge、精确 squash SHA 已存在后才能绑定；branch-only 或 pre-squash SHA
+无效。当前 Product Build 只允许零或一个 intent，重复 intent 会被拒绝；一旦 intent 存在，原有的
+exact-target、merged-main Proof、完整 CI 与 protected-main ancestry 门禁仍全部适用。
 
 仓库已实现四段正常路径：`scripts/release.sh prepare TAG` 只准备并验证本地状态，
 `scripts/release.sh push-tag TAG` 只 push/reconcile 一个 exact tag，

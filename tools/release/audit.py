@@ -379,11 +379,9 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
             _verify_active_components(root, assembly, lock)
         with _static_projection(root, "active release intent selection", "active-manifests"):
             active = [entry for entry in entries if entry.kind.value == "product" and entry.identity == identity]
-            if len(active) != 1:
-                raise ValueError(f"ledger holds {len(active)} Product intents for {identity}, expected exactly one")
-            active_intent = active[0]
-        with _static_projection(root, "exact release target validation", "exact-target", "architecture-portal"):
-            context.git.validate_release_target(root, active_intent)
+            if len(active) > 1:
+                raise ValueError(f"ledger holds {len(active)} Product intents for {identity}, expected at most one")
+            active_intent = active[0] if active else None
         with _static_projection(root, "immutable Portal snapshot projection", "architecture-portal"):
             snapshot_path = root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
             versions = _json_file(root / "apps/architecture-portal/versions.json")
@@ -392,16 +390,20 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
                 raise ValueError(f"Portal snapshot inventory does not carry {identity}")
             if snapshot.get("assembly_lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
                 raise ValueError("Portal snapshot lock digest does not match the active Assembly lock")
-        with _static_projection(root, "merged-main Proof projection", "architecture-portal"):
-            proof = context.proof_reader(root, active_intent)
-            if (
-                proof.source_branch != policy.branch
-                or proof.target_revision != active_intent.target_revision
-                or proof.product_build != identity
-                or proof.snapshot != active_intent.snapshot
-                or proof.snapshot_revision is None
-            ):
-                raise ValueError(f"Proof projection does not bind {active_intent.tag} to {identity}")
+            context.git.validate_current_product_snapshot(root, identity)
+        if active_intent is not None:
+            with _static_projection(root, "exact release target validation", "exact-target", "architecture-portal"):
+                context.git.validate_release_target(root, active_intent)
+            with _static_projection(root, "merged-main Proof projection", "architecture-portal"):
+                proof = context.proof_reader(root, active_intent)
+                if (
+                    proof.source_branch != policy.branch
+                    or proof.target_revision != active_intent.target_revision
+                    or proof.product_build != identity
+                    or proof.snapshot != active_intent.snapshot
+                    or proof.snapshot_revision is None
+                ):
+                    raise ValueError(f"Proof projection does not bind {active_intent.tag} to {identity}")
         with _static_projection(root, "release intent target objects", "active-manifests"):
             if (root / ".git").exists():
                 for entry in entries:
