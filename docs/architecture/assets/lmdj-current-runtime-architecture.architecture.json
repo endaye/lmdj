@@ -7,7 +7,7 @@
     "quality_profile": "showcase",
     "repository": {
       "url": "https://github.com/endaye/lmdj",
-      "revision": "5726c53e82b3053d97f4be19753921b13e65ae34"
+      "revision": "32a10d191c4395ef88a39ddfbec1a16ce3b2d5b2"
     },
     "legend": {
       "mode": "auto",
@@ -192,8 +192,9 @@
   "connections": [
     {"id": "web-host-entry", "from": "web-hosts", "to": "web-runtime-platform", "variant": "emphasis"},
     {"id": "web-facade-api", "from": "web-runtime-platform", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
+    {"id": "web-realtime-voice", "from": "web-runtime-platform", "to": "audio-runtime", "label": "实时数据面 / Voice", "variant": "emphasis", "fromSide": "top", "toSide": "right", "via": [[305, 18], [1382, 18], [1382, 278]]},
     {"id": "cli-mcp-facade-api", "from": "cli-mcp-hosts", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
-    {"id": "native-test-control", "from": "native-test-host", "to": "application-facade", "label": "控制面", "variant": "dashed", "fromSide": "right", "toSide": "top", "via": [[1358, 558], [1358, 30], [497, 30]]},
+    {"id": "native-test-control", "from": "native-test-host", "to": "application-facade", "label": "控制面", "variant": "dashed", "fromSide": "left", "toSide": "left", "via": [[1150, 558], [1150, 620], [390, 620], [390, 278]]},
     {"id": "native-test-realtime", "from": "native-test-host", "to": "audio-runtime", "label": "实时验收", "variant": "emphasis"},
     {"id": "facade-commands", "from": "application-facade", "to": "project-truth", "label": "命令", "variant": "emphasis"},
     {"id": "project-cook", "from": "project-truth", "to": "project-cooker", "label": "校验 / 派生", "variant": "emphasis"},

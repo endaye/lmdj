@@ -26,6 +26,11 @@ Web Hosts
   -> Audio Runtime
 ```
 
+Web Runtime Platform 同时拥有第二条当前实现路径：已经通过应用/控制面准备好的 Runtime 状态，
+由 Platform 的 ControlRuntime、input adapter 与 AudioWorklet 接线直接进入 Audio Runtime，传递
+实时触发与 ordered Voice state。这条实时数据面不逐次经过 Facade、Domain 或 Cooker；Project、
+Sample mutation、revision 与快照重建仍必须走上面的应用/控制面主路径。
+
 Core CLI 与 Core MCP 只通过 Application Facade 进入应用/控制面。Native Test Host 是验收专用
 Host：它通过 Facade 执行应用/控制面操作，同时直接连接 Audio Runtime 的 adapter/realtime 路径，
 用于实时音频、设备与采集验证；它不是产品 UI，也不解析 Project Bundle。Project I/O 与
@@ -41,7 +46,7 @@ Product Assembly 负责锁定 Module、Host、Provider、Contract 和 policy 的
 | Host | Creator Web / Formal Web Runtime Host | UI、Host identity、浏览器生命周期和协议适配 | `apps/creator-web/`、`apps/web-runtime-host/` |
 | Host | Core CLI / Core MCP | 只通过 Facade 提供终端与 stdio MCP 应用/控制面入口 | `apps/core-cli/`、`apps/core-mcp/` |
 | Acceptance Host | Native Test Host | 通过 Facade 执行应用/控制面操作，并直接使用 Audio Runtime adapter/realtime 路径验证实时音频、设备与采集；不是产品 UI | `apps/native-test-host/` |
-| Core Module | Web Runtime Platform | Manifest Gate、Runtime Session、输入适配、Control Runtime 与浏览器资源生命周期 | `packages/web-runtime-platform/` |
+| Core Module | Web Runtime Platform | Manifest Gate、Runtime Session、输入适配、Control Runtime、Audio Runtime 实时数据面/Voice 接线与浏览器资源生命周期 | `packages/web-runtime-platform/` |
 | Core Module | Application Facade | Host 唯一应用/控制面入口、应用编排、稳定结果与错误语义 | `packages/application-facade/` |
 | Core Module | Authoring Domain | Project Truth、命令规则、revision 与 Pad/Pattern/Sample 语义 | `packages/authoring-domain/` |
 | Core Module | Project I/O | 原子 Project store、Take recovery、portable Bundle transfer 与 Workspace cache | `packages/project-io/` |
@@ -66,9 +71,10 @@ Architecture Portal 派生。
 - **Runtime State**：Voice、transport、buffer、cache、telemetry 和浏览器生命周期状态；不持久化为 Project Truth。
 
 Facade 是控制面和应用用例边界，不是实时逐事件数据面的替代品。浏览器输入与 Audio Runtime 的
-低延迟路径由 Web Runtime Platform 和 Runtime/Voice 机制承担；Host 不能用自己的业务规则绕过
-Facade、Domain revision 或 Candidate commit 语义。Native Test Host 的直接 Audio Runtime 依赖
-只服务验收环境中的 adapter/realtime、设备与采集生命周期，不扩展为产品业务入口。
+低延迟触发与 Voice 路径由 Web Runtime Platform 直接连接 Audio Runtime；这不授权 Platform
+绕过 Facade 执行 Project/Sample mutation、revision 或 Candidate commit。Native Test Host 的直接
+Audio Runtime 依赖只服务验收环境中的 adapter/realtime、设备与采集生命周期，不扩展为产品
+业务入口。
 
 ## Provider 边界
 
@@ -82,6 +88,7 @@ Project bundle path。Provider failure 只能更新 Attempt/Workspace State，�
 ## 禁止路径
 
 - Host 不解析 Project Bundle，也不直接依赖 Domain、Project I/O 或 Provider implementation。
+- Web Runtime Platform 直连 Audio Runtime 只承载实时触发与 Voice 数据面，不承载 Project mutation。
 - Native Test Host 的直接依赖仅限 Audio Runtime 验收路径；它仍通过 Facade 进入应用/控制面。
 - Provider 不读取或修改 mutable Project，不把 failure 写入 Project Truth。
 - Runtime Snapshot 不持久化为 Project Truth，也不把 Runtime state 反写 Project。
