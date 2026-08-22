@@ -21,6 +21,12 @@ sys.path.insert(0, str(ROOT))
 
 from tools.release.audit import AuditContext, audit, format_report, write_report  # noqa: E402
 import tools.release.audit as audit_module  # noqa: E402
+from tools.release.commands import CommandRunner  # noqa: E402
+from tools.release.git_repository import GitRepositoryError  # noqa: E402
+from tools.release.target_validation import (  # noqa: E402
+    TargetValidationError,
+    validate_release_target,
+)
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
     CiScopeConflictError,
@@ -86,6 +92,7 @@ class ReadOnlyGit:
         self.detached_worktree_root: Path | None = None
         self.detached_worktree_error: Exception | None = None
         self.target_validation_error: Exception | None = None
+        self.real_target_validation = False
 
     def fetch_authority(self, repository: str, branch: str) -> None:
         self.fetches += 1
@@ -102,6 +109,20 @@ class ReadOnlyGit:
     def validate_release_target(self, worktree: Path, intent) -> None:
         if self.target_validation_error is not None:
             raise self.target_validation_error
+        if not self.real_target_validation:
+            return
+
+        def executor(vector, **kwargs):
+            if vector and vector[0] == "python3":
+                return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
+            return subprocess.run(vector, **kwargs)
+
+        try:
+            validate_release_target(
+                worktree, intent, runner=CommandRunner(executor=executor),
+            )
+        except TargetValidationError as error:
+            raise GitRepositoryError(str(error)) from None
 
     def remote_tag_state(self, tag: str) -> LocalTag | None:
         self.remote_reads += 1
@@ -301,6 +322,11 @@ class ReleaseAuditTest(unittest.TestCase):
             destination = root / source.relative_to(ROOT)
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
+
+    def install_glob_importing_release_docs(self) -> None:
+        path = self.root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("import {glob} from 'glob';\n", encoding="utf-8")
 
     def context(
         self,
@@ -562,6 +588,92 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertIn("RuntimeError: target <repo> authority <path>", finding.message)
         self.assertNotIn(str(exact_root), finding.message)
         self.assertNotIn(str(self.root), finding.message)
+
+    def test_remote_audit_does_not_treat_missing_portal_npm_package_as_invalid_provenance(self) -> None:
+        self.install_glob_importing_release_docs()
+        self.git.real_target_validation = True
+        report = audit(self.context(entries=[]), remote=True, tag=CURRENT_PRODUCT_TAG)
+        finding = next(item for item in report.findings if item.subject == CURRENT_PRODUCT_TAG)
+        self.assertEqual(finding.code, "ok")
+        self.assertNotIn("Cannot find package", finding.message)
+        self.assertNotIn("provenance is invalid", finding.message)
+        self.assertEqual(self.git.mutations + self.github.mutations, [])
+
+    def test_remote_audit_reports_backfilled_product_name_instead_of_missing_glob(self) -> None:
+        item = self.entry(
+            tag=CURRENT_PRODUCT_TAG, disposition="published", kind="product",
+            identity=CURRENT_PRODUCT_BUILD, profile="web-runtime-host",
+        )
+        tag = str(item["tag"])
+        self.install_glob_importing_release_docs()
+        self.git.real_target_validation = True
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(
+            tag,
+            name=f"LMDJ Product Build {CURRENT_PRODUCT_BUILD} · canary",
+            prerelease=True,
+            kind="product",
+            identity=CURRENT_PRODUCT_BUILD,
+            profile="web-runtime-host",
+            channel="canary",
+        )
+        report = audit(self.context([item]), remote=True, tag=tag)
+        finding = next(item for item in report.findings if item.subject == tag)
+        self.assertEqual(finding.code, "conflict")
+        self.assertEqual(finding.sources, ("github-release",))
+        self.assertIn("GitHub Release name conflicts with intent identity", finding.message)
+        self.assertNotIn("Cannot find package", finding.message)
+        self.assertNotIn("provenance is invalid", finding.message)
+        self.assertEqual(self.git.mutations + self.github.mutations, [])
+
+    def test_remote_audit_still_reports_genuine_snapshot_lock_mismatch(self) -> None:
+        metadata = (
+            self.root / "apps/architecture-portal/versioned_metadata"
+            / f"version-{CURRENT_PRODUCT_BUILD}.json"
+        )
+        document = json.loads(metadata.read_text(encoding="utf-8"))
+        document["assembly_lock_sha256"] = "0" * 64
+        metadata.write_text(json.dumps(document), encoding="utf-8")
+        self.install_glob_importing_release_docs()
+        self.git.real_target_validation = True
+        report = audit(self.context(entries=[]), remote=True, tag=CURRENT_PRODUCT_TAG)
+        finding = next(item for item in report.findings if item.subject == CURRENT_PRODUCT_TAG)
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertEqual(finding.sources, ("exact-target",))
+        self.assertIn("exact release target identity or support metadata is invalid", finding.message)
+        self.assertIn("Product Portal snapshot does not match the exact Assembly lock", finding.message)
+        self.assertNotIn("Cannot find package", finding.message)
+        self.assertEqual(self.git.mutations + self.github.mutations, [])
+
+    def test_remote_audit_still_reports_portal_provenance_command_failure(self) -> None:
+        path = self.root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            "console.error("
+            "'source projection is neither direct-parent nor squash-equivalent'"
+            ");\nprocess.exit(1);\n",
+            encoding="utf-8",
+        )
+        self.git.real_target_validation = True
+        report = audit(self.context(entries=[]), remote=True, tag=CURRENT_PRODUCT_TAG)
+        finding = next(item for item in report.findings if item.subject == CURRENT_PRODUCT_TAG)
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertEqual(finding.sources, ("exact-target",))
+        self.assertIn("Product Portal snapshot provenance is invalid", finding.message)
+        self.assertIn("source projection is neither direct-parent nor squash-equivalent", finding.message)
+        self.assertEqual(self.git.mutations + self.github.mutations, [])
+
+    def test_remote_audit_reports_backfilled_module_release_name_as_conflict(self) -> None:
+        item = self.entry()
+        tag = str(item["tag"])
+        self.git.tags[tag] = self.tag_state()
+        self.github.releases[tag] = self.release(tag, name="application-facade 1.0.1")
+        report = audit(self.context([item]), remote=True, tag=tag)
+        finding = next(item for item in report.findings if item.subject == tag)
+        self.assertEqual(finding.code, "conflict")
+        self.assertEqual(finding.sources, ("github-release",))
+        self.assertIn("GitHub Release name conflicts with intent identity", finding.message)
+        self.assertEqual(self.git.mutations + self.github.mutations, [])
 
     def test_published_remote_state_is_ok_and_read_only(self) -> None:
         tag = self.entry()["tag"]
