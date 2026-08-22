@@ -581,8 +581,27 @@ trimming 放进 Sequence overlay。
 
 拒绝。与 §6.3「默认下一 Bar 生效」叠加会出现听旧录新。
 
-## 16. 后续
+## 16. 实施入口
 
-1. 用户再次 review 本规格（须覆盖 SR-D20–D28）。
-2. writing-plans：决策落地 Task（PRD + 问题文件 + 勘误 + Portal）与 Stage 9
-   实施 Plan。Stage 9 不得在决策合入前把本语义写进代码。
+实施计划：
+[2026-08-23-lmdj-stage9-sequence-recording.md](../plans/2026-08-23-lmdj-stage9-sequence-recording.md)。
+
+GitHub 工作项：
+
+- umbrella：[Issue #265](https://github.com/endaye/lmdj/issues/265)
+- 决策落地：[Issue #266](https://github.com/endaye/lmdj/issues/266)
+- Project v3 / Domain：[Issue #267](https://github.com/endaye/lmdj/issues/267)
+- Journal / Project I/O：[Issue #268](https://github.com/endaye/lmdj/issues/268)
+- Cooker / Audio Runtime：[Issue #269](https://github.com/endaye/lmdj/issues/269)
+- Application Facade：[Issue #270](https://github.com/endaye/lmdj/issues/270)
+- CLI / MCP / Native Host：[Issue #271](https://github.com/endaye/lmdj/issues/271)
+- Web Runtime / Web Host：[Issue #272](https://github.com/endaye/lmdj/issues/272)
+- Creator：[Issue #273](https://github.com/endaye/lmdj/issues/273)
+- 版本 / Assembly / Portal current / automated acceptance：
+  [Issue #274](https://github.com/endaye/lmdj/issues/274)
+- immutable Portal snapshot / final local acceptance：
+  [Issue #275](https://github.com/endaye/lmdj/issues/275)
+
+实施门禁不变：#266 的决策文件与勘误合入后才能关闭 #238；#267 及之后的
+产品代码 Task 不得在该决策落地前开始。Push、PR、merge、Release、部署与 Channel
+promotion 仍各自需要独立授权。
