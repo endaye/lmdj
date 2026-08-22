@@ -124,6 +124,66 @@ async function installTransportObservability(page) {
 }
 
 
+async function installCapabilityProbeScheduling(page, {
+  delayMs,
+  timeoutMs = null,
+  workerErrorMs = null,
+}) {
+  await page.addInitScript(({ delayMs, timeoutMs, workerErrorMs }) => {
+    const NativeWorker = globalThis.Worker;
+    const nativeRevokeObjectURL = URL.revokeObjectURL.bind(URL);
+    const observations = { revocations: 0, terminations: 0 };
+    let capabilityProbeClaimed = false;
+    let capabilityProbeUrl = null;
+    globalThis.__lmdjCapabilityProbeScheduling = observations;
+    globalThis.Worker = class ScheduledCapabilityWorker extends NativeWorker {
+      constructor(url, options) {
+        super(url, options);
+        const candidateUrl = String(url);
+        this.isCapabilityProbe =
+          !capabilityProbeClaimed && candidateUrl.startsWith("blob:");
+        if (this.isCapabilityProbe) {
+          capabilityProbeClaimed = true;
+          capabilityProbeUrl = candidateUrl;
+        }
+      }
+
+      addEventListener(type, listener, options) {
+        if (
+          this.isCapabilityProbe &&
+          type === "error" &&
+          workerErrorMs !== null
+        ) {
+          setTimeout(() => listener.call(this, new Event("error")), workerErrorMs);
+          return;
+        }
+        if (!this.isCapabilityProbe || type !== "message") {
+          return super.addEventListener(type, listener, options);
+        }
+        return super.addEventListener(type, (event) => {
+          setTimeout(() => listener.call(this, event), delayMs);
+        }, options);
+      }
+
+      terminate() {
+        if (this.isCapabilityProbe) observations.terminations += 1;
+        return super.terminate();
+      }
+    };
+    URL.revokeObjectURL = (url) => {
+      if (String(url) === capabilityProbeUrl) observations.revocations += 1;
+      return nativeRevokeObjectURL(url);
+    };
+    if (timeoutMs !== null) {
+      globalThis.__LMDJ_WEB_HOST_SEAMS__ = {
+        ...(globalThis.__LMDJ_WEB_HOST_SEAMS__ ?? {}),
+        capabilityProbeTimeoutMs: timeoutMs,
+      };
+    }
+  }, { delayMs, timeoutMs, workerErrorMs });
+}
+
+
 async function openPackagedHost(page) {
   await installTransportObservability(page);
   await page.goto("/index.html");
@@ -949,6 +1009,91 @@ test("Chromium binds the verified packaged runtime to the real AudioWorklet", as
   await expect(page.locator("#host-state")).toHaveText("closed");
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost.transport.terminated))
     .toBe(true);
+});
+
+
+test("Chromium packaged capability probe tolerates delayed Control Worker response", async ({
+  browserName,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  await installCapabilityProbeScheduling(page, { delayMs: 2_500 });
+  await openPackagedHost(page);
+  expect(await page.evaluate(() => ({
+    capabilities: window.lmdjWebRuntimeController.diagnostics().capabilities,
+    cleanup: window.__lmdjCapabilityProbeScheduling,
+  }))).toMatchObject({
+    capabilities: {
+      opfs: true,
+      opfsSyncAccessHandle: true,
+      opfsWritableReplace: true,
+    },
+    cleanup: { revocations: 1, terminations: 1 },
+  });
+  expect(await page.evaluate(() => window.lmdjWebRuntimeController.close()))
+    .toBe(true);
+});
+
+test("Chromium packaged capability probe deadline reports HOST_TIMEOUT", async ({
+  browserName,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  await installCapabilityProbeScheduling(page, {
+    delayMs: 100,
+    timeoutMs: 25,
+  });
+  await installTransportObservability(page);
+  await page.goto("/index.html");
+  await expect(page.locator("#host-state")).toHaveText("failed");
+  expect(await page.evaluate(() => ({
+    cleanup: window.__lmdjCapabilityProbeScheduling,
+    errorCode: window.lmdjWebRuntimeController.diagnostics().error_code,
+  }))).toEqual({
+    cleanup: { revocations: 1, terminations: 1 },
+    errorCode: "HOST_TIMEOUT",
+  });
+  await page.waitForTimeout(125);
+  expect(await page.evaluate(() => ({
+    cleanup: window.__lmdjCapabilityProbeScheduling,
+    errorCode: window.lmdjWebRuntimeController.diagnostics().error_code,
+    state: document.querySelector("#host-state").textContent,
+  }))).toEqual({
+    cleanup: { revocations: 1, terminations: 1 },
+    errorCode: "HOST_TIMEOUT",
+    state: "failed",
+  });
+});
+
+test("Chromium packaged capability probe Worker error fails closed and cleans up", async ({
+  browserName,
+  page,
+}) => {
+  test.skip(browserName !== "chromium");
+  await installCapabilityProbeScheduling(page, {
+    delayMs: 100,
+    workerErrorMs: 0,
+  });
+  await installTransportObservability(page);
+  await page.goto("/index.html");
+  await expect(page.locator("#host-state")).toHaveText("failed");
+  expect(await page.evaluate(() => ({
+    cleanup: window.__lmdjCapabilityProbeScheduling,
+    errorCode: window.lmdjWebRuntimeController.diagnostics().error_code,
+  }))).toEqual({
+    cleanup: { revocations: 1, terminations: 1 },
+    errorCode: "UNSUPPORTED_WEB_RUNTIME",
+  });
+  await page.waitForTimeout(125);
+  expect(await page.evaluate(() => ({
+    cleanup: window.__lmdjCapabilityProbeScheduling,
+    errorCode: window.lmdjWebRuntimeController.diagnostics().error_code,
+    state: document.querySelector("#host-state").textContent,
+  }))).toEqual({
+    cleanup: { revocations: 1, terminations: 1 },
+    errorCode: "UNSUPPORTED_WEB_RUNTIME",
+    state: "failed",
+  });
 });
 
 

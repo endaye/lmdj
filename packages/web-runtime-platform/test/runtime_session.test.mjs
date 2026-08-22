@@ -98,6 +98,7 @@ function fixture({
   browserWindow = {},
   navigator = {},
   capabilities,
+  capabilityProbeTimeoutMs,
   inputConfiguration = {},
   runtimeTransport,
   runtimeTerminator,
@@ -159,6 +160,9 @@ function fixture({
     inputOwnership,
     seams: {
       ...(capabilities === undefined ? {} : {capabilities}),
+      ...(capabilityProbeTimeoutMs === undefined
+        ? {}
+        : {capabilityProbeTimeoutMs}),
       createAudioContext: () => context,
       loadRuntime: async () => ({
         registerAudioContext: () => 1,
@@ -245,6 +249,89 @@ test("reports the exact assembly identity and resolved browser capabilities", as
   });
   assert.equal(session.diagnostics().host_id, "web-runtime-host");
   assert.equal(session.diagnostics().platform_version, "0.3.1");
+});
+
+test("accepts only a positive safe integer capability probe timeout seam", () => {
+  for (const invalid of [
+    0,
+    -1,
+    1.5,
+    Number.MAX_SAFE_INTEGER + 1,
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    null,
+    "15000",
+  ]) {
+    assert.throws(
+      () => fixture({capabilityProbeTimeoutMs: invalid}),
+      /Capability probe timeout must be a positive safe integer/,
+    );
+  }
+  const {session} = fixture({capabilityProbeTimeoutMs: 25});
+  assert.equal(typeof session.start, "function");
+});
+
+test("default capability probe timeout fails startup without restart-required", async () => {
+  let terminated = 0;
+  let revoked = 0;
+  const session = createRuntimeSession({
+    document: {},
+    window: {
+      Blob,
+      Worker: class {
+        addEventListener() {}
+        postMessage() {}
+        terminate() {
+          terminated += 1;
+        }
+      },
+      URL: {
+        createObjectURL() {
+          return "blob:capability-probe";
+        },
+        revokeObjectURL() {
+          revoked += 1;
+        },
+      },
+      crypto: webcrypto,
+      setTimeout,
+      clearTimeout,
+    },
+    navigator: {},
+    crypto: webcrypto,
+    manifestSource: {resourceLimits: {imported_wav_bytes: 1_048_576}},
+    assemblyIdentity: {
+      distributionContract: "lmdj.web-runtime-host.distribution.v1",
+      hostId: "web-runtime-host",
+      hostVersion: "1.2.10",
+      platformVersion: "0.3.1",
+      productBuild: TEST_PRODUCT_BUILD,
+      protocolVersion: 1,
+    },
+    seams: {
+      capabilityProbeTimeoutMs: 1,
+      createAudioContext: () => ({state: "suspended"}),
+      loadRuntime: async () => ({workers: []}),
+      runtimeTerminator: async () => {},
+      transport: {send: async () => {}, subscribe: () => () => {}},
+      verifyManifest: async () => ({
+        host_id: "web-runtime-host",
+        host_version: "1.2.10",
+        platform_version: "0.3.1",
+        product_build: TEST_PRODUCT_BUILD,
+        protocol_version: 1,
+      }),
+    },
+  });
+  assert.equal(await session.start(), false);
+  await drainTasks();
+  assert.deepEqual(session.diagnostics(), {
+    ...session.diagnostics(),
+    error_code: "HOST_TIMEOUT",
+    state: "failed",
+  });
+  assert.equal(terminated, 1);
+  assert.equal(revoked, 1);
 });
 
 test("accepts only the declared compatible Host inventory in packaged manifests", async () => {
