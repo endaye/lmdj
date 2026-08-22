@@ -522,6 +522,14 @@ Channel promotion 分别授权、分别验证，并在一个 mutation 后停止�
 `published` 只读审计，`abandoned` 与 `superseded-unreleased` 拒绝发布。远端 tag 与 Draft 是
 live control plane 派生状态，不写回 ledger 充当缓存。
 
+源码 Product Build 与匹配 immutable snapshot 的分配不要求同时创建 release intent；这是让
+受保护 `main` 的 squash merge 先产生唯一、精确 target SHA 的必要顺序。Release intent 是后续
+独立 review 的授权记录，只能在该 squash SHA 已存在于 protected `main` 后绑定；branch-only 或
+pre-squash SHA 不是合法 release target。当前 Product Build 在 ledger 中允许零或一个 intent，
+零表示尚未授予发布意图，不削弱 manifest、Assembly lock、component digest 或 immutable
+snapshot 校验；重复 current intent 必须 fail closed。一个 current intent 存在时，exact-target、
+merged-main Proof、CI、main ancestry 与后续所有 release gate 仍全部适用。
+
 release target 的 CI 证据必须是 exact-main 的完整证据：该 target SHA 上一次
 completed、successful 的 `Core CI` run，其 `push` 或 `workflow_dispatch` 事件、`main`
 head branch、同一 run 内成功的 `Change Scope` 与 `PR Gate`，以及该 run 为同一 exact SHA

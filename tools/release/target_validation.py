@@ -70,6 +70,43 @@ def validate_release_target(
         raise TargetValidationError("exact release target identity is inconsistent") from None
 
 
+def validate_current_product_snapshot(
+    worktree: Path, identity: str, *, runner: CommandRunner | None = None,
+) -> None:
+    """Validate the current Product snapshot and its immutable provenance."""
+    root = Path(worktree).resolve()
+    selected_runner = runner or CommandRunner()
+    try:
+        metadata = _json_file(
+            root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
+        )
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("product_build") != identity
+            or metadata.get("assembly_lock_sha256") != hashlib.sha256(
+                root.joinpath("products/lmdj/assembly.lock.json").read_bytes()
+            ).hexdigest()
+        ):
+            raise TargetValidationError(
+                "Product Portal snapshot does not match the exact Assembly lock"
+            )
+        selected_runner.run(
+            ["node", "apps/architecture-portal/scripts/check-release-docs.mjs"],
+            cwd=root,
+        )
+    except TargetValidationError:
+        raise
+    except CommandError as error:
+        detail = getattr(error, "detail", "")
+        if _is_missing_npm_package(detail):
+            return
+        raise TargetValidationError(
+            _with_detail("Product Portal snapshot provenance is invalid", error),
+        ) from None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        raise TargetValidationError("Product Portal snapshot is invalid") from None
+
+
 def _validate_product(
     root: Path,
     intent: ReleaseIntent,
@@ -88,25 +125,7 @@ def _validate_product(
         or lock.get("product") != {"id": "lmdj", "version": identity}
     ):
         raise TargetValidationError("Product manifest or Assembly lock does not match the release identity")
-    metadata_path = root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
-    metadata = _json_file(metadata_path)
-    if (
-        not isinstance(metadata, dict)
-        or metadata.get("product_build") != identity
-        or metadata.get("assembly_lock_sha256") != hashlib.sha256(
-            root.joinpath("products/lmdj/assembly.lock.json").read_bytes()
-        ).hexdigest()
-    ):
-        raise TargetValidationError("Product Portal snapshot does not match the exact Assembly lock")
-    try:
-        runner.run(["node", "apps/architecture-portal/scripts/check-release-docs.mjs"], cwd=root)
-    except CommandError as error:
-        detail = getattr(error, "detail", "")
-        if _is_missing_npm_package(detail):
-            return
-        raise TargetValidationError(
-            _with_detail("Product Portal snapshot provenance is invalid", error),
-        ) from None
+    validate_current_product_snapshot(root, identity, runner=runner)
 
 
 def _validate_module(root: Path, intent: ReleaseIntent, assembly: object, lock: object) -> None:
