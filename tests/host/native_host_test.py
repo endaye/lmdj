@@ -405,7 +405,7 @@ def happy_path(
     }
     assert ready["result"]["resolved_pad_count"] == 2
     assert ready["result"]["project_revision"] == 5
-    assert ready["result"]["host_version"] == "1.0.13"
+    assert ready["result"]["host_version"] == "1.0.14"
     assert ready["result"]["product_build"] == PRODUCT_BUILD, (
         "Product Build mismatch: expected "
         f"{PRODUCT_BUILD} from products/lmdj/version.json, found "
