@@ -320,6 +320,37 @@ void test_repeated_selection_stays_canonical_and_readable() {
   LMDJ_CHECK(selected.value() == "local.proof.success");
 }
 
+// Cooperating SDK writers reuse the persistent lock path instead of
+// unlinking/replacing it. Successful writes therefore keep locking the same
+// filesystem object.
+void test_successful_writers_preserve_persistent_lock_inode() {
+  const TempDirectory temp;
+  const auto registry = proof_registry();
+  auto store = store_at(temp.path());
+  const auto lock_path =
+      temp.path() / ".lmdj-workspace/.host-settings.lock";
+
+  LMDJ_CHECK(store
+                 .set_provider_selection(
+                     std::string(kCapability), "local.proof.success", registry)
+                 .has_value());
+  struct stat initial {};
+  LMDJ_CHECK(::lstat(lock_path.c_str(), &initial) == 0);
+
+  LMDJ_CHECK(store
+                 .set_provider_selection(
+                     std::string(kCapability), "local.proof.failure", registry)
+                 .has_value());
+  struct stat updated {};
+  LMDJ_CHECK(::lstat(lock_path.c_str(), &updated) == 0);
+
+  LMDJ_CHECK(S_ISREG(updated.st_mode));
+  LMDJ_CHECK(updated.st_nlink == 1);
+  LMDJ_CHECK(updated.st_dev == initial.st_dev);
+  LMDJ_CHECK(updated.st_ino == initial.st_ino);
+  check_settings_hold(temp.path());
+}
+
 // Registry rejection happens before lock acquisition and must not damage the
 // selection already recorded. Descriptor cleanup is covered separately below.
 void test_registry_rejection_preserves_existing_settings() {
@@ -501,6 +532,7 @@ int main() {
   try {
     test_selection_leaves_canonical_settings_and_safe_lock();
     test_repeated_selection_stays_canonical_and_readable();
+    test_successful_writers_preserve_persistent_lock_inode();
     test_registry_rejection_preserves_existing_settings();
     test_invalid_settings_read_releases_lock_descriptor();
     test_harness_detects_each_corruption();

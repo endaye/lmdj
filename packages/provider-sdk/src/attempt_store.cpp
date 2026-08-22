@@ -483,6 +483,9 @@ foundation::Result<int> acquire_settings_lock(
 
   struct stat named_metadata {};
   int lstat_result;
+  // Cooperating SDK writers keep this persistent lock pathname in place. This
+  // lstat closes only the open/flock acquisition-time identity race; external
+  // same-UID unlink/replacement after this check is outside the mutex guarantee.
   do {
     lstat_result = ::lstat(lock_path.c_str(), &named_metadata);
   } while (lstat_result == -1 && errno == EINTR);

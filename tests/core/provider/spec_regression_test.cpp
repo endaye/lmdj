@@ -1028,6 +1028,9 @@ void test_host_settings_lock_uses_kernel_owned_nonblocking_file_lock() {
       std::string::npos);
   LMDJ_CHECK(
       lock_region.find("release_settings_lock") == std::string::npos);
+  LMDJ_CHECK(lock_region.find("::unlink(") == std::string::npos);
+  LMDJ_CHECK(
+      lock_region.find("std::filesystem::remove(") == std::string::npos);
 }
 
 void test_proof_failure_result_remains_exact_but_record_is_redacted() {

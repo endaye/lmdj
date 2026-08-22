@@ -17,17 +17,18 @@
 - Do not make `host-settings.json` durable; Issue #203 deliberately keeps it flush-and-rename configuration while making Attempt evidence durable.
 - Do not add public Provider SDK, Application Facade, Contract, Project Truth, or Web storage surface.
 - Native tests must use process synchronization, not sleeps, to prove contention and release after process death.
+- The mutex guarantee covers cooperating SDK writers. They must persistently reuse `.host-settings.lock` and never unlink or replace it; the post-acquisition `lstat` detects identity changes only across open/flock acquisition. External same-UID pathname replacement after that check is outside this guarantee.
 - Historical plans, release evidence through `1.0.25.0`, and earlier immutable Portal snapshots remain byte-identical. This plan may record the Controller execution evidence below.
 
 ## Controller execution amendment
 
-The Architecture Portal snapshot command requires a clean worktree and records the committed source revision. The Controller therefore committed the byte-final implementation and current Portal truth as `129f6908e932a7a840f5f52f6f5ba4b068b7ebd2`, then generated and committed the immutable `1.0.26.0` snapshot as descendant `20650c0deb8292639791d80983c0559f2da7447c`.
+The Architecture Portal snapshot command requires a clean worktree and records the committed source revision. The Controller originally committed implementation/current Portal truth as `129f6908e932a7a840f5f52f6f5ba4b068b7ebd2` and froze `1.0.26.0` at descendant `20650c0deb8292639791d80983c0559f2da7447c`. After protected-main PR #260 changed a projected current Portal page, that unmerged snapshot was removed and regenerated through `scripts/architecture-portal.sh version 1.0.26.0 canary` from the clean source-preparation commit immediately preceding the replacement snapshot commit. The regenerated metadata is the authority for that exact source revision and projection; the superseded branch-local snapshot never reaches the final Pull Request tree.
 
 The final local correction `1aa70b27ca1611ee23b8493617d6da46599b7a83` only aligns the source-package test expectation with the planned local-proof Provider version `1.0.5`; the complete implementation at that revision passed `scripts/core.sh test dev full` with `73/73` tests. These provenance commits remain in the reviewed branch ancestry, but this Pull Request does not register a `1.0.26.0` Release intent.
 
 Product Build `1.0.26.0` and its immutable `canary` snapshot are source allocation only. A future Release intent requires separate authorization and a separate reviewed Pull Request after this Pull Request squash-merges; it must target the exact protected-`main` squash SHA and satisfy the current release evidence gates. No branch-local provenance or documentation commit is a substitute for that target.
 
-These local provenance commits are required execution evidence; they do not change the integration contract. After exact-head review and CI, the Pull Request still squash-merges to `main` as one atomic Conventional Commit.
+These local provenance commits are required execution evidence; they do not change the integration contract. The replacement snapshot's source projection is byte-identical to the final reviewed projection, so a future squash does not require a pre-guessed SHA or a branch-authored witness. After exact-head review and CI, the Pull Request still squash-merges to `main` as one atomic Conventional Commit.
 
 ---
 
@@ -190,7 +191,7 @@ In `attempt_store.cpp`, add native POSIX includes under `#ifndef __EMSCRIPTEN__`
 - native `open(O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600)` with `EINTR` retry;
 - `fstat` validation that the descriptor is an owned single-link regular file, plus `fchmod(0600)`;
 - `flock(LOCK_EX | LOCK_NB)` with `EINTR` retry and the existing busy error for `EWOULDBLOCK`/`EAGAIN`;
-- post-lock `lstat` identity validation so replacing the named lock file cannot split writers across inodes;
+- post-lock `lstat` identity validation that detects replacement during open/flock acquisition; cooperating SDK writers persistently reuse the path, while external same-UID replacement after validation is outside the mutex guarantee;
 - an Emscripten compile path returning descriptor `-1`, whose RAII owner performs no close.
 
 Construct the RAII owner immediately after acquisition in `set_provider_selection`, delete every explicit release branch, and keep the owner alive through `read_host_settings` and `write_replace_atomic`.
@@ -255,7 +256,7 @@ Expected: every command exits 0; Proof reports `Assembly lock: MATCH`. Stress is
 
 - [x] **Step 9: Inspect local provenance and prepare atomic PR integration**
 
-The clean-worktree snapshot gate requires committed source provenance, so preserve the local implementation, snapshot, and follow-up evidence commits without rebasing, squashing, or rewriting them. Inspect their file lists and the final worktree, run `git diff --check`, and complete exact-head local verification before handoff.
+The clean-worktree snapshot gate requires committed source provenance, so preserve the local implementation, source-preparation, replacement-snapshot, and follow-up evidence commits without rebasing, squashing, or rewriting them. The replacement snapshot must be generated from the committed byte-final current projection, and a synthetic fresh squash onto the protected-main base must pass Portal provenance without a witness. Inspect the local commit file lists and final worktree, run `git diff --check`, and complete exact-head local verification before handoff.
 
 The reviewed Pull Request range is the task boundary. The Integration Queue squash-merges that range into one atomic `fix(provider-sdk): recover host settings lock after crashes` Conventional Commit on protected `main`. Only that resulting protected-main SHA can become a future Release-intent target through the separate authorization and Pull Request described above.
 
