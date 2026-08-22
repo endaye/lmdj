@@ -17,7 +17,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 ## 1. 目的与非职责
 事务式保存/加载 Project Truth、导入/导出 portable Project Bundle 并维护 Take Journal；不 Cook、渲染或拥有 Host UI。
 ## 2. 当前实现状态
-Project I/O `0.6.1` 的 Store、Journal、streaming Bundle parser/packer、v1/v2 双读/v2 写出、Workspace Cache 与 crash-safe Sample import/replace/update/reset publication 已实现；Native complete-read 在原子替换的瞬时失败上重试，使并发读者只观察到完整的旧版本或新版本。Web directory publication 绑定发起 platform identity，Native publication 复核目标 link count，并集中映射 private storage status。
+Project I/O `0.6.0` 的 Store、Journal、streaming Bundle parser/packer、v1/v2 双读/v2 写出、Workspace Cache 与 crash-safe Sample import/replace/update/reset publication 已实现；Web directory publication 绑定发起 platform identity，Native publication 复核目标 link count，并集中映射 private storage status。
 ## 3. 所有权与依赖
 依赖 Foundation 与 Authoring Domain；平台适配不能改变领域语义。
 ## 4. 架构与数据流

@@ -12,7 +12,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.26.0",
+      "1.0.27.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.2.0"},
@@ -20,16 +20,16 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
           CompiledComponent{"project-io", "0.6.1"},
           CompiledComponent{"project-cooker", "0.3.0"},
           CompiledComponent{"audio-runtime", "0.5.0"},
-          CompiledComponent{"provider-sdk", "1.1.3"},
-          CompiledComponent{"application-facade", "1.4.3"},
-          CompiledComponent{"web-runtime-platform", "0.3.3"},
+          CompiledComponent{"provider-sdk", "1.1.4"},
+          CompiledComponent{"application-facade", "1.4.4"},
+          CompiledComponent{"web-runtime-platform", "0.3.4"},
       },
       {
-          CompiledComponent{"core-cli", "1.0.15"},
-          CompiledComponent{"core-mcp", "1.1.12"},
-          CompiledComponent{"native-test-host", "1.0.13"},
-          CompiledComponent{"web-runtime-host", "1.2.12"},
-          CompiledComponent{"creator-web", "1.3.3"},
+          CompiledComponent{"core-cli", "1.0.16"},
+          CompiledComponent{"core-mcp", "1.1.13"},
+          CompiledComponent{"native-test-host", "1.0.14"},
+          CompiledComponent{"web-runtime-host", "1.2.13"},
+          CompiledComponent{"creator-web", "1.3.4"},
       },
       {
           CompiledComponent{"lmdj.project.v1", "1.0.0"},
@@ -44,13 +44,13 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
       {
           CompiledProvider{
               "local.proof.success",
-              "1.0.4",
+              "1.0.5",
               lmdj::providers::local_proof_success_registration,
               std::nullopt,
           },
           CompiledProvider{
               "local.proof.failure",
-              "1.0.4",
+              "1.0.5",
               lmdj::providers::local_proof_failure_registration,
               std::nullopt,
           },

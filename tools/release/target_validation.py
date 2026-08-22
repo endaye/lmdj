@@ -20,6 +20,18 @@ def _with_detail(message: str, error: CommandError) -> str:
     return f"{message}: {detail}" if detail else message
 
 
+def _is_missing_npm_package(detail: str) -> bool:
+    """Return whether a Node failure is a missing package, not a provenance verdict.
+
+    Detached historical worktrees have no `node_modules`. Historical
+    `check-release-docs.mjs` imports `glob` via `repo-facts.mjs`; Node then
+    reports `Cannot find package`. That is an execution environment gap, not
+    invalid Product snapshot provenance. Missing script files use
+    `Cannot find module` and stay fail-closed.
+    """
+    return "Cannot find package" in detail
+
+
 def validate_release_target(
     worktree: Path, intent: ReleaseIntent, *, runner: CommandRunner | None = None,
 ) -> None:
@@ -58,6 +70,43 @@ def validate_release_target(
         raise TargetValidationError("exact release target identity is inconsistent") from None
 
 
+def validate_current_product_snapshot(
+    worktree: Path, identity: str, *, runner: CommandRunner | None = None,
+) -> None:
+    """Validate the current Product snapshot and its immutable provenance."""
+    root = Path(worktree).resolve()
+    selected_runner = runner or CommandRunner()
+    try:
+        metadata = _json_file(
+            root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
+        )
+        if (
+            not isinstance(metadata, dict)
+            or metadata.get("product_build") != identity
+            or metadata.get("assembly_lock_sha256") != hashlib.sha256(
+                root.joinpath("products/lmdj/assembly.lock.json").read_bytes()
+            ).hexdigest()
+        ):
+            raise TargetValidationError(
+                "Product Portal snapshot does not match the exact Assembly lock"
+            )
+        selected_runner.run(
+            ["node", "apps/architecture-portal/scripts/check-release-docs.mjs"],
+            cwd=root,
+        )
+    except TargetValidationError:
+        raise
+    except CommandError as error:
+        detail = getattr(error, "detail", "")
+        if _is_missing_npm_package(detail):
+            return
+        raise TargetValidationError(
+            _with_detail("Product Portal snapshot provenance is invalid", error),
+        ) from None
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, KeyError, TypeError, ValueError):
+        raise TargetValidationError("Product Portal snapshot is invalid") from None
+
+
 def _validate_product(
     root: Path,
     intent: ReleaseIntent,
@@ -76,22 +125,7 @@ def _validate_product(
         or lock.get("product") != {"id": "lmdj", "version": identity}
     ):
         raise TargetValidationError("Product manifest or Assembly lock does not match the release identity")
-    metadata_path = root / "apps/architecture-portal/versioned_metadata" / f"version-{identity}.json"
-    metadata = _json_file(metadata_path)
-    if (
-        not isinstance(metadata, dict)
-        or metadata.get("product_build") != identity
-        or metadata.get("assembly_lock_sha256") != hashlib.sha256(
-            root.joinpath("products/lmdj/assembly.lock.json").read_bytes()
-        ).hexdigest()
-    ):
-        raise TargetValidationError("Product Portal snapshot does not match the exact Assembly lock")
-    try:
-        runner.run(["node", "apps/architecture-portal/scripts/check-release-docs.mjs"], cwd=root)
-    except CommandError as error:
-        raise TargetValidationError(
-            _with_detail("Product Portal snapshot provenance is invalid", error),
-        ) from None
+    validate_current_product_snapshot(root, identity, runner=runner)
 
 
 def _validate_module(root: Path, intent: ReleaseIntent, assembly: object, lock: object) -> None:

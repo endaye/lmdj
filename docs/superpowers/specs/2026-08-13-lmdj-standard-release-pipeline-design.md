@@ -130,6 +130,15 @@ docs/release-evidence/release-intents.json
 ```
 
 它记录 release authorization intent 与 lifecycle disposition，不声称缓存 GitHub 当前状态。
+源码 Product Build 与匹配 immutable snapshot 的分配不创建 release intent；允许它们随普通
+Product Build Task 通过受保护 `main` 的 squash workflow 落地，并在 ledger 中暂时没有该 current
+Product identity 的 intent。只有 squash merge 产生精确 protected-main SHA 后，后续独立 review
+才能新增或更新 intent 并把 `target_revision` 绑定到该 SHA；branch-only/pre-squash SHA 一律无效。
+因此 active current Product identity 的 intent cardinality 是零或一，重复记录 fail closed；零
+intent 不豁免 active manifests、Assembly/lock/component digest 与 matching immutable snapshot
+校验，一个 intent 存在时则继续强制 exact-target、merged-main Proof、CI、main ancestry 与全部
+后续发布门禁。
+
 最小形状为：
 
 ```json

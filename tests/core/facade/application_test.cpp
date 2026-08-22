@@ -1070,7 +1070,7 @@ void test_module_versions_and_dependencies_are_exact() {
        nlohmann::json{
            {"contract", "lmdj.module.v1"},
            {"module", "application-facade"},
-           {"version", "1.4.3"},
+           {"version", "1.4.4"},
            {"api_version", 2},
            {"dependencies",
             {
@@ -1079,7 +1079,7 @@ void test_module_versions_and_dependencies_are_exact() {
                 {"project-io", "0.6.1"},
                 {"project-cooker", "0.3.0"},
                 {"audio-runtime", "0.5.0"},
-                {"provider-sdk", "1.1.3"},
+                {"provider-sdk", "1.1.4"},
             }},
        }));
   LMDJ_CHECK(project_io.at("module") == "project-io");

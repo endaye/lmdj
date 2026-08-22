@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -515,9 +516,9 @@ class ReleasePrepareTest(unittest.TestCase):
                 ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
                 "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
             ),
-            (ReleaseKind.MODULE, "core-cli@1.0.15", "source-only", None, None),
+            (ReleaseKind.MODULE, "core-cli@1.0.16", "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
-            (ReleaseKind.PROVIDER, "local.proof.success@1.0.4", "source-only", None, None),
+            (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
         )
         for kind, identity, profile, channel, snapshot in cases:
             with self.subTest(kind=kind.value):
@@ -554,6 +555,66 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertIn("GITHUB_TOKEN=[redacted]", message)
         self.assertNotIn("ghs_fixturesecret000111222333", message)
         self.assertNotIn("/home/runner", message)
+
+    def _product_target_tree(self, root: Path) -> None:
+        for relative in (
+            "products/lmdj/version.json",
+            "products/lmdj/assembly.json",
+            "products/lmdj/assembly.lock.json",
+            f"apps/architecture-portal/versioned_metadata/version-{CURRENT_PRODUCT_BUILD}.json",
+        ):
+            destination = root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(ROOT / relative, destination)
+
+    def test_missing_npm_package_is_not_invalid_snapshot_provenance(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lmdj-target-glob-") as directory:
+            root = Path(directory)
+            self._product_target_tree(root)
+            script = root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text("import {glob} from 'glob';\n", encoding="utf-8")
+
+            def executor(vector, **kwargs):
+                if vector[0] == "python3":
+                    return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
+                return subprocess.run(vector, **kwargs)
+
+            intent = ReleaseIntent(
+                "fixture", ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD, "a" * 40,
+                Disposition.RELEASABLE, "web-runtime-host", ("evidence.md",),
+                "canary", CURRENT_PRODUCT_BUILD, 1,
+            )
+            validate_release_target(root, intent, runner=CommandRunner(executor=executor))
+
+    def test_portal_provenance_command_failure_stays_invalid(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="lmdj-target-provenance-") as directory:
+            root = Path(directory)
+            self._product_target_tree(root)
+            script = root / "apps/architecture-portal/scripts/check-release-docs.mjs"
+            script.parent.mkdir(parents=True, exist_ok=True)
+            script.write_text(
+                "console.error("
+                "'source projection is neither direct-parent nor squash-equivalent'"
+                ");\nprocess.exit(1);\n",
+                encoding="utf-8",
+            )
+
+            def executor(vector, **kwargs):
+                if vector[0] == "python3":
+                    return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
+                return subprocess.run(vector, **kwargs)
+
+            intent = ReleaseIntent(
+                "fixture", ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD, "a" * 40,
+                Disposition.RELEASABLE, "web-runtime-host", ("evidence.md",),
+                "canary", CURRENT_PRODUCT_BUILD, 1,
+            )
+            with self.assertRaises(TargetValidationError) as raised:
+                validate_release_target(root, intent, runner=CommandRunner(executor=executor))
+            message = str(raised.exception)
+            self.assertIn("Product Portal snapshot provenance is invalid", message)
+            self.assertIn("source projection is neither direct-parent nor squash-equivalent", message)
 
     def test_sanitized_diagnostics_drop_credentials_and_bound_length(self) -> None:
         self.assertEqual(
