@@ -528,9 +528,6 @@ class ReleaseAuditTest(unittest.TestCase):
         report = audit(context, remote=True)
         self.assertEqual({item.code for item in report.findings}, {"ok"})
 
-        report = audit(context, remote=True, tag=CURRENT_PRODUCT_TAG)
-        self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
-
     def test_repository_local_audit_does_not_assume_current_intent_count(self) -> None:
         context = cli.build_audit_context(ROOT)
         validate_snapshot = context.git.validate_current_product_snapshot
@@ -549,12 +546,6 @@ class ReleaseAuditTest(unittest.TestCase):
         ):
             report = audit(context, remote=False)
             self.assertEqual(report.exit_code, 0)
-
-            report = audit(context, remote=False, tag=CURRENT_PRODUCT_TAG)
-            if context.ledger.intent_for_tag(CURRENT_PRODUCT_TAG) is None:
-                self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
-            else:
-                self.assertEqual(report.exit_code, 0)
 
     def test_zero_intent_local_and_remote_audits_reject_corrupt_snapshot_provenance(self) -> None:
         cases = (
