@@ -1,8 +1,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstddef>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -45,6 +47,7 @@ FaultPoint expected_fault = FaultPoint::transaction_temp_sync;
 std::filesystem::path expected_final;
 std::uintmax_t expected_size = 0;
 int fault_calls = 0;
+int complete_read_fault_calls = 0;
 int active_journal_sync_calls = 0;
 bool fault_phase_is_exact = false;
 std::filesystem::path observed_sibling;
@@ -143,6 +146,27 @@ lmdj::foundation::Result<void> count_active_journal_sync(
     ++active_journal_sync_calls;
   }
   return lmdj::foundation::Result<void>::success();
+}
+
+lmdj::foundation::Result<void> fail_first_complete_read_open(
+    FaultPoint point,
+    const std::filesystem::path& path) {
+  if (point != FaultPoint::complete_read) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  ++complete_read_fault_calls;
+  if (complete_read_fault_calls != 1) {
+    return lmdj::foundation::Result<void>::success();
+  }
+  return lmdj::foundation::Result<void>::failure(
+      lmdj::foundation::Error{
+          ErrorCode::io_error,
+          "storage file could not be opened",
+          {
+              {"path", path.generic_string()},
+              {"system_error", std::strerror(ENOENT)},
+          },
+      });
 }
 
 class StorageFaultGuard {
@@ -781,6 +805,31 @@ void test_directory_transfer_primitives_are_atomic_and_path_safe() {
   LMDJ_CHECK(platform->remove_tree(collision_staging).has_value());
 }
 
+void test_complete_read_retries_replacement_transient_open() {
+  TempDirectory temp;
+  const auto directory = temp.path() / "retry";
+  const auto path = directory / "pointer.json";
+  auto platform = make_default_project_storage_platform();
+  LMDJ_CHECK(platform->ensure_directory(directory).has_value());
+  auto lease = platform->acquire_writer(temp.path());
+  LMDJ_CHECK(lease.has_value());
+  const auto payload = bytes("complete-version");
+  LMDJ_CHECK(platform->create_immutable(path, payload).has_value());
+
+  complete_read_fault_calls = 0;
+  StorageHookGuard hook(fail_first_complete_read_open);
+  const auto observed = platform->read_complete(path);
+  LMDJ_CHECK(observed.has_value());
+  LMDJ_CHECK(observed.value() == payload);
+  LMDJ_CHECK(complete_read_fault_calls >= 2);
+
+  const auto missing = directory / "missing.bin";
+  const auto absent = platform->read_complete(missing);
+  LMDJ_CHECK(!absent.has_value());
+  LMDJ_CHECK(absent.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(absent.error().message == "storage file could not be opened");
+}
+
 void test_replacement_readers_observe_only_complete_versions() {
   TempDirectory temp;
   const auto directory = temp.path() / "atomic";
@@ -793,41 +842,47 @@ void test_replacement_readers_observe_only_complete_versions() {
   const std::vector<std::byte> second(256U * 1024U, std::byte{'b'});
   LMDJ_CHECK(platform->create_immutable(path, first).has_value());
 
-  std::atomic<bool> started{false};
+  constexpr std::size_t reader_count = 4;
+  std::atomic<std::size_t> started{0};
   std::atomic<bool> stopped{false};
-  auto reader = std::async(
-      std::launch::async,
-      [&]() {
-        started.store(true, std::memory_order_release);
-        while (!stopped.load(std::memory_order_acquire)) {
-          const auto observed = platform->read_complete(path);
-          // A reader that races a replacement must still see one complete
-          // version. When that fails the message is the whole diagnosis, and
-          // a bare has_value() check throws it away: this failure is rare and
-          // platform-specific, so one occurrence has to be enough to identify
-          // the path that produced it.
-          if (!observed.has_value()) {
-            throw std::runtime_error(
-                "racing reader observed no complete version: code=" +
-                std::to_string(static_cast<int>(observed.error().code)) +
-                " message=" + observed.error().message);
-          }
-          if (observed.value() != first && observed.value() != second) {
-            throw std::runtime_error(
-                "racing reader observed a torn version: " +
-                std::to_string(observed.value().size()) + " bytes");
-          }
+  std::vector<std::future<void>> readers;
+  readers.reserve(reader_count);
+  for (std::size_t reader_index = 0; reader_index < reader_count;
+       ++reader_index) {
+    readers.push_back(std::async(std::launch::async, [&]() {
+      started.fetch_add(1, std::memory_order_release);
+      while (!stopped.load(std::memory_order_acquire)) {
+        const auto observed = platform->read_complete(path);
+        // A reader that races a replacement must still see one complete
+        // version. When that fails the message is the whole diagnosis, and
+        // a bare has_value() check throws it away: this failure is rare and
+        // platform-specific, so one occurrence has to be enough to identify
+        // the path that produced it.
+        if (!observed.has_value()) {
+          throw std::runtime_error(
+              "racing reader observed no complete version: code=" +
+              std::to_string(static_cast<int>(observed.error().code)) +
+              " message=" + observed.error().message);
         }
-      });
-  while (!started.load(std::memory_order_acquire)) {
+        if (observed.value() != first && observed.value() != second) {
+          throw std::runtime_error(
+              "racing reader observed a torn version: " +
+              std::to_string(observed.value().size()) + " bytes");
+        }
+      }
+    }));
+  }
+  while (started.load(std::memory_order_acquire) < reader_count) {
     std::this_thread::yield();
   }
-  for (std::size_t index = 0; index < 32; ++index) {
+  for (std::size_t index = 0; index < 64; ++index) {
     const auto& replacement = index % 2 == 0 ? second : first;
     LMDJ_CHECK(platform->replace_complete(path, replacement).has_value());
   }
   stopped.store(true, std::memory_order_release);
-  reader.get();
+  for (auto& reader : readers) {
+    reader.get();
+  }
 }
 
 void test_workspace_cache_validates_generated_keys_and_replaces_atomically() {
@@ -1089,6 +1144,7 @@ int main() {
     test_path_substitution_never_publishes_a_symlink();
     test_names_use_unsigned_byte_order();
     test_directory_transfer_primitives_are_atomic_and_path_safe();
+    test_complete_read_retries_replacement_transient_open();
     test_replacement_readers_observe_only_complete_versions();
     test_workspace_cache_validates_generated_keys_and_replaces_atomically();
     test_workspace_cache_corruption_is_a_bounded_miss_and_remove_is_idempotent();

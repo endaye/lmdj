@@ -14,6 +14,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <unordered_map>
 #include <utility>
 
@@ -39,6 +40,8 @@ namespace {
 
 using foundation::Error;
 using foundation::ErrorCode;
+
+constexpr std::size_t kCompleteReadAttempts = 16;
 
 Error storage_error(
     std::string message,
@@ -435,7 +438,7 @@ bool same_stable_metadata(
       left.st_ctim.tv_nsec == right.st_ctim.tv_nsec;
 #endif
   const bool replaced_snapshot_was_unlinked =
-      left.st_nlink == 1 && right.st_nlink == 0;
+      right.st_nlink == 0 && (left.st_nlink == 1 || left.st_nlink == 0);
   return same_identity(left, right) &&
          left.st_size == right.st_size &&
          left.st_mode == right.st_mode &&
@@ -443,6 +446,35 @@ bool same_stable_metadata(
          left.st_gid == right.st_gid &&
          modification_time_matches &&
          (change_time_matches || replaced_snapshot_was_unlinked);
+}
+
+bool system_error_is(const Error& error, int code) {
+  return error.details.contains("system_error") &&
+         error.details.at("system_error").is_string() &&
+         error.details.at("system_error").get<std::string>() ==
+             std::strerror(code);
+}
+
+bool replacement_transient_error(const Error& error) {
+  if (error.code != ErrorCode::io_error) {
+    return false;
+  }
+  if (error.message == "storage file changed during complete read" ||
+      error.message == "storage file changed while locking" ||
+      error.message == "storage file ended during complete read" ||
+      error.message == "storage metadata could not be revalidated") {
+    return true;
+  }
+  const bool vanished = system_error_is(error, ENOENT)
+#if defined(ESTALE)
+                        || system_error_is(error, ESTALE)
+#endif
+      ;
+  const bool retryable_io = vanished || system_error_is(error, EAGAIN) ||
+                            system_error_is(error, EWOULDBLOCK);
+  return retryable_io &&
+         (error.message == "storage file could not be opened" ||
+          error.message == "storage file could not be read completely");
 }
 
 foundation::Result<void> verify_named_identity(
@@ -1312,52 +1344,15 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
 
   foundation::Result<std::vector<std::byte>> read_complete(
       const std::filesystem::path& path) const override {
-    auto opened = open_regular_file(path);
-    if (!opened.has_value()) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          opened.error());
+    auto result = read_complete_once(path);
+    for (std::size_t attempt = 1;
+         !result.has_value() && replacement_transient_error(result.error()) &&
+         attempt < kCompleteReadAttempts;
+         ++attempt) {
+      std::this_thread::yield();
+      result = read_complete_once(path);
     }
-    auto descriptor = std::move(opened.value().first);
-    const auto before = opened.value().second;
-    if (before.st_size < 0 ||
-        static_cast<std::uintmax_t>(before.st_size) >
-            std::numeric_limits<std::size_t>::max()) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          storage_error("storage file is too large to read", path));
-    }
-    std::vector<std::byte> bytes(static_cast<std::size_t>(before.st_size));
-    std::size_t offset = 0;
-    while (offset < bytes.size()) {
-      const auto count = ::pread(
-          descriptor.get(),
-          bytes.data() + offset,
-          bytes.size() - offset,
-          static_cast<off_t>(offset));
-      if (count < 0) {
-        if (errno == EINTR) {
-          continue;
-        }
-        return foundation::Result<std::vector<std::byte>>::failure(
-            storage_error("storage file could not be read completely", path));
-      }
-      if (count == 0) {
-        return foundation::Result<std::vector<std::byte>>::failure(
-            storage_error("storage file ended during complete read", path));
-      }
-      offset += static_cast<std::size_t>(count);
-    }
-    struct stat after {};
-    if (fstat_retry(descriptor.get(), &after) != 0) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          storage_error("storage metadata could not be revalidated", path));
-    }
-    if (!S_ISREG(after.st_mode) ||
-        !same_stable_metadata(before, after)) {
-      return foundation::Result<std::vector<std::byte>>::failure(
-          storage_error("storage file changed during complete read", path));
-    }
-    return foundation::Result<std::vector<std::byte>>::success(
-        std::move(bytes));
+    return result;
   }
 
   foundation::Result<void> create_immutable(
@@ -2300,6 +2295,64 @@ class NativeProjectStoragePlatform final : public ProjectStoragePlatform {
 
  private:
   using OpenedRegularFile = std::pair<OwnedDescriptor, struct stat>;
+
+  foundation::Result<std::vector<std::byte>> read_complete_once(
+      const std::filesystem::path& path) const {
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+    const auto intercepted = testing::detail::invoke_fault(
+        testing::FaultPoint::complete_read, path);
+    if (!intercepted.has_value()) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          intercepted.error());
+    }
+#endif
+    auto opened = open_regular_file(path);
+    if (!opened.has_value()) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          opened.error());
+    }
+    auto descriptor = std::move(opened.value().first);
+    const auto before = opened.value().second;
+    if (before.st_size < 0 ||
+        static_cast<std::uintmax_t>(before.st_size) >
+            std::numeric_limits<std::size_t>::max()) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          storage_error("storage file is too large to read", path));
+    }
+    std::vector<std::byte> bytes(static_cast<std::size_t>(before.st_size));
+    std::size_t offset = 0;
+    while (offset < bytes.size()) {
+      const auto count = ::pread(
+          descriptor.get(),
+          bytes.data() + offset,
+          bytes.size() - offset,
+          static_cast<off_t>(offset));
+      if (count < 0) {
+        if (errno == EINTR) {
+          continue;
+        }
+        return foundation::Result<std::vector<std::byte>>::failure(
+            storage_error("storage file could not be read completely", path));
+      }
+      if (count == 0) {
+        return foundation::Result<std::vector<std::byte>>::failure(
+            storage_error("storage file ended during complete read", path));
+      }
+      offset += static_cast<std::size_t>(count);
+    }
+    struct stat after {};
+    if (fstat_retry(descriptor.get(), &after) != 0) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          storage_error("storage metadata could not be revalidated", path));
+    }
+    if (!S_ISREG(after.st_mode) ||
+        !same_stable_metadata(before, after)) {
+      return foundation::Result<std::vector<std::byte>>::failure(
+          storage_error("storage file changed during complete read", path));
+    }
+    return foundation::Result<std::vector<std::byte>>::success(
+        std::move(bytes));
+  }
 
   foundation::Result<OpenedRegularFile> open_regular_file(
       const std::filesystem::path& path) const {

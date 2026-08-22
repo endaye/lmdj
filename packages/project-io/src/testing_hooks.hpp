@@ -27,6 +27,7 @@ enum class FaultPoint {
   sample_after_artifact_creation,
   sample_after_manifest_preparation,
   sample_after_manifest_publication,
+  complete_read,
 };
 
 using FaultHook = foundation::Result<void> (*)(
