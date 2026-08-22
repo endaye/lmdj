@@ -4,7 +4,7 @@
 
 **Goal:** Replace the retired Patch/Worker-era “current product architecture” with a repository-evidenced Archify diagram and technical guide for the implemented Headless Core runtime.
 
-**Architecture:** Keep one left-to-right application/control spine from current Hosts through the Web Runtime Platform/Application Facade to Project Truth, cooking, the immutable Runtime Snapshot, and Audio Runtime. Show the implemented Web Runtime Platform -> Audio Runtime realtime data/Voice path explicitly, keep Project I/O and Provider Attempts as short branches, and express Product Assembly, Foundation, Contracts, and forbidden paths in concise conclusion cards.
+**Architecture:** Keep one left-to-right application/control spine from current Hosts through the Web Runtime Platform/Application Facade to Project Truth, cooking, the immutable Runtime Snapshot, and Audio Runtime. Show the implemented Web Runtime Platform -> Audio Runtime realtime-trigger path and Audio Runtime -> Web Runtime Platform ordered-Voice-state return explicitly, keep Project I/O and Provider Attempts as short branches, and express Product Assembly, Foundation, Contracts, and forbidden paths in concise conclusion cards.
 
 **Tech Stack:** Archify 2.15 architecture renderer and showcase validator, typed JSON, self-contained HTML/SVG, Markdown, `rg`, Git, and the existing Architecture Portal Node/Docusaurus checks.
 
@@ -16,7 +16,7 @@
 - Do not present, restore, wrap, translate, or emit `lmdj.patch.v1` or `lmdj.materials.v1` as active Contracts; current documentation may name them only to state explicitly that they are retired and outside the runtime.
 - Show only implemented and currently assembled runtime components. Production Provider, cloud infrastructure, release state, deployment state, and physical-device acceptance remain outside the diagram.
 - The Application Facade is every Host's only application/control-plane entry. The acceptance-only Native Test Host also uses the Audio Runtime adapter/realtime path for realtime audio, device, and capture verification; no Host parses Project bundles.
-- Web Runtime Platform uses Facade for Project/Sample application operations and connects directly to Audio Runtime for realtime trigger/ordered Voice data; the realtime path never authorizes Project mutation outside Facade/Domain revision rules.
+- Web Runtime Platform uses Facade for Project/Sample application operations. It sends realtime triggers directly to Audio Runtime; Audio Runtime publishes ordered Voice state to its ring, the Platform drains it and publishes `runtime.voice_state`, and Runtime Session observes it. Neither per-event direction traverses Facade/Domain/Cooker or changes Project Truth.
 - Project Truth is authoritative; Runtime Snapshot is immutable derived state and never writes back.
 - Provider selection and failure belong to Workspace/Attempt state, never Project Truth.
 - Provider code receives Artifact input and an Artifact output sink, not a mutable Project or bundle path.
@@ -342,7 +342,8 @@ Create `docs/architecture/assets/lmdj-current-runtime-architecture.architecture.
   "connections": [
     {"id": "web-host-entry", "from": "web-hosts", "to": "web-runtime-platform", "variant": "emphasis"},
     {"id": "web-facade-api", "from": "web-runtime-platform", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
-    {"id": "web-realtime-voice", "from": "web-runtime-platform", "to": "audio-runtime", "label": "实时数据面 / Voice", "variant": "emphasis"},
+    {"id": "web-realtime-trigger", "from": "web-runtime-platform", "to": "audio-runtime", "label": "实时触发", "variant": "emphasis"},
+    {"id": "audio-ordered-voice", "from": "audio-runtime", "to": "web-runtime-platform", "label": "ordered Voice state", "variant": "dashed"},
     {"id": "cli-mcp-facade-api", "from": "cli-mcp-hosts", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
     {"id": "native-test-control", "from": "native-test-host", "to": "application-facade", "label": "控制面", "variant": "dashed"},
     {"id": "native-test-realtime", "from": "native-test-host", "to": "audio-runtime", "label": "实时验收", "variant": "emphasis"},
@@ -480,8 +481,9 @@ Host：它通过 Facade 执行应用/控制面操作，同时直接连接 Audio 
 用于实时音频、设备与采集验证；它不是产品 UI，也不解析 Project Bundle。Project I/O 与
 Provider SDK/Proof Providers 是从其最近主路径节点延伸的支路，不是第二套 Project 或 Runtime。
 
-Web Runtime Platform 同时通过 `实时数据面 / Voice` 路径直接连接 Audio Runtime；实时触发与
-ordered Voice state 不逐次经过 Facade/Domain/Cooker，Project/Sample mutation 仍必须进入 Facade。
+Web Runtime Platform 向 Audio Runtime 发送实时触发；Audio Runtime 把 ordered Voice state 发布到
+ring，Platform drain 后发布 `runtime.voice_state`，Runtime Session 观察。两个逐事件方向都不经过
+Facade/Domain/Cooker，也不改变 Project Truth；Project/Sample mutation 仍必须进入 Facade。
 
 Product Assembly 负责锁定 Module、Host、Provider、Contract 和 policy 的组合身份。它是声明式
 装配边界，不执行用户工作流，也不动态增加 Facade operation。
@@ -493,7 +495,7 @@ Product Assembly 负责锁定 Module、Host、Provider、Contract 和 policy 的
 | Host | Creator Web / Formal Web Runtime Host | UI、Host identity、浏览器生命周期和协议适配 | `apps/creator-web/`、`apps/web-runtime-host/` |
 | Host | Core CLI / Core MCP | 只通过 Facade 提供终端与 stdio MCP 应用/控制面入口 | `apps/core-cli/`、`apps/core-mcp/` |
 | Acceptance Host | Native Test Host | 通过 Facade 执行应用/控制面操作，并直接使用 Audio Runtime adapter/realtime 路径验证实时音频、设备与采集；不是产品 UI | `apps/native-test-host/` |
-| Core Module | Web Runtime Platform | Manifest Gate、Runtime Session、输入适配、Control Runtime、Audio Runtime 实时数据面/Voice 接线与浏览器资源生命周期 | `packages/web-runtime-platform/` |
+| Core Module | Web Runtime Platform | Manifest Gate、Runtime Session、输入适配、Control Runtime、向 Audio Runtime 发送实时触发并接收 ordered Voice state，以及浏览器资源生命周期 | `packages/web-runtime-platform/` |
 | Core Module | Application Facade | Host 唯一应用/控制面入口、应用编排、稳定结果与错误语义 | `packages/application-facade/` |
 | Core Module | Authoring Domain | Project Truth、命令规则、revision 与 Pad/Pattern/Sample 语义 | `packages/authoring-domain/` |
 | Core Module | Project I/O | 原子 Project store、Take recovery、portable Bundle transfer 与 Workspace cache | `packages/project-io/` |
@@ -517,11 +519,12 @@ Architecture Portal 派生。
 - **Workspace/Attempt State**：Provider 选择、进行中状态与失败记录；不属于 Project Truth。
 - **Runtime State**：Voice、transport、buffer、cache、telemetry 和浏览器生命周期状态；不持久化为 Project Truth。
 
-Facade 是控制面和应用用例边界，不是实时逐事件数据面的替代品。浏览器输入与 Audio Runtime 的
-低延迟触发与 Voice 路径由 Web Runtime Platform 直接连接 Audio Runtime；这不授权 Platform
-绕过 Facade 执行 Project/Sample mutation、revision 或 Candidate commit。Native Test Host 的直接
-Audio Runtime 依赖只服务验收环境中的 adapter/realtime、设备与采集生命周期，不扩展为产品
-业务入口。
+Facade 是控制面和应用用例边界，不是实时逐事件数据面的替代品。Web Runtime Platform 向
+Audio Runtime 发送实时触发；Audio Runtime 反向发布 ordered Voice state，Platform drain 后以
+`runtime.voice_state` 交给 Runtime Session 观察。这两个逐事件方向都不经过 Facade、Domain 或
+Cooker，也不授权 Platform 执行 Project/Sample mutation、revision 或 Candidate commit，更不改变
+Project Truth。Native Test Host 的直接 Audio Runtime 依赖只服务验收环境中的 adapter/realtime、
+设备与采集生命周期，不扩展为产品业务入口。
 
 ## Provider 边界
 
@@ -535,7 +538,8 @@ Project bundle path。Provider failure 只能更新 Attempt/Workspace State，�
 ## 禁止路径
 
 - Host 不解析 Project Bundle，也不直接依赖 Domain、Project I/O 或 Provider implementation。
-- Web Runtime Platform 直连 Audio Runtime 只承载实时触发与 Voice 数据面，不承载 Project mutation。
+- Web Runtime Platform -> Audio Runtime 只承载实时触发；Audio Runtime -> Web Runtime Platform
+  只返回 ordered Voice state。两个方向都不逐次经过 Facade/Domain/Cooker，也不改变 Project Truth。
 - Native Test Host 的直接依赖仅限 Audio Runtime 验收路径；它仍通过 Facade 进入应用/控制面。
 - Provider 不读取或修改 mutable Project，不把 failure 写入 Project Truth。
 - Runtime Snapshot 不持久化为 Project Truth，也不把 Runtime state 反写 Project。

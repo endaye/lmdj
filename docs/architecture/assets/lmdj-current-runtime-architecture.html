@@ -4944,17 +4944,18 @@
         <!-- Connection paths (before components for correct z-order) -->
         <path data-edge-from="web-hosts" data-edge-to="web-runtime-platform" data-edge-key="0" data-edge-id="web-host-entry" data-composition-points="190,118;215,118" d="M 190 118 L 215 118" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
         <path data-edge-from="web-runtime-platform" data-edge-to="application-facade" data-edge-label="Facade API" data-edge-key="1" data-edge-id="web-facade-api" data-composition-points="395,118;403.5,118;403.5,271;412,271" d="M 395 118 L 399.25 118 Q 403.5 118 403.5 122.25 L 403.5 266.75 Q 403.5 271 407.75 271 L 412 271" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="web-runtime-platform" data-edge-to="audio-runtime" data-edge-label="实时数据面 / Voice" data-edge-key="2" data-edge-id="web-realtime-voice" data-composition-points="305,80;305,18;1382,18;1382,278;1340,278" d="M 305 80 L 305 26 Q 305 18 313 18 L 1374 18 Q 1382 18 1382 26 L 1382 270 Q 1382 278 1374 278 L 1340 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="cli-mcp-hosts" data-edge-to="application-facade" data-edge-label="Facade API" data-edge-key="3" data-edge-id="cli-mcp-facade-api" data-composition-points="190,438;301,438;301,285;412,285" d="M 190 438 L 293 438 Q 301 438 301 430 L 301 293 Q 301 285 309 285 L 412 285" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="native-test-host" data-edge-to="application-facade" data-edge-label="控制面" data-edge-key="4" data-edge-id="native-test-control" data-composition-points="1190,558;1150,558;1150,620;390,620;390,278;412,278" d="M 1190 558 L 1158 558 Q 1150 558 1150 566 L 1150 612 Q 1150 620 1142 620 L 398 620 Q 390 620 390 612 L 390 286 Q 390 278 398 278 L 412 278" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="native-test-host" data-edge-to="audio-runtime" data-edge-label="实时验收" data-edge-key="5" data-edge-id="native-test-realtime" data-composition-points="1265,520;1265,316" d="M 1265 520 L 1265 316" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="application-facade" data-edge-to="project-truth" data-edge-label="命令" data-edge-key="6" data-edge-id="facade-commands" data-composition-points="582,278;593.5,278;593.5,118;605,118" d="M 582 278 L 587.75 278 Q 593.5 278 593.5 272.25 L 593.5 123.75 Q 593.5 118 599.25 118 L 605 118" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="project-truth" data-edge-to="project-cooker" data-edge-label="校验 / 派生" data-edge-key="7" data-edge-id="project-cook" data-composition-points="775,118;787.5,118;787.5,278;800,278" d="M 775 118 L 781.25 118 Q 787.5 118 787.5 124.25 L 787.5 271.75 Q 787.5 278 793.75 278 L 800 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="project-cooker" data-edge-to="runtime-snapshot" data-edge-label="不可变快照" data-edge-key="8" data-edge-id="cooked-snapshot" data-composition-points="960,278;977.5,278;977.5,118;995,118" d="M 960 278 L 969.5 278 Q 977.5 278 977.5 270 L 977.5 126 Q 977.5 118 985.5 118 L 995 118" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="runtime-snapshot" data-edge-to="audio-runtime" data-edge-label="只读" data-edge-key="9" data-edge-id="snapshot-audio" data-composition-points="1165,118;1177.5,118;1177.5,278;1190,278" d="M 1165 118 L 1171.25 118 Q 1177.5 118 1177.5 124.25 L 1177.5 271.75 Q 1177.5 278 1183.75 278 L 1190 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
-        <path data-edge-from="project-truth" data-edge-to="project-io" data-edge-label="原子持久化" data-edge-key="10" data-edge-id="project-persist" data-composition-points="690,156;690,400" d="M 690 156 L 690 400" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
-        <path data-edge-from="application-facade" data-edge-to="provider-sdk" data-edge-label="Capability" data-edge-key="11" data-edge-id="facade-provider-sdk" data-composition-points="497,316;497,400" d="M 497 316 L 497 400" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
-        <path data-edge-from="provider-sdk" data-edge-to="proof-providers" data-edge-label="Artifact I/O" data-edge-key="12" data-edge-id="provider-artifacts" data-composition-points="497,476;497,520" d="M 497 476 L 497 520" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="web-runtime-platform" data-edge-to="audio-runtime" data-edge-label="实时触发" data-edge-key="2" data-edge-id="web-realtime-trigger" data-composition-points="305,80;305,18;1382,18;1382,278;1340,278" d="M 305 80 L 305 26 Q 305 18 313 18 L 1374 18 Q 1382 18 1382 26 L 1382 270 Q 1382 278 1374 278 L 1340 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="audio-runtime" data-edge-to="web-runtime-platform" data-edge-label="ordered Voice state" data-edge-key="3" data-edge-id="audio-ordered-voice" data-composition-points="1265,240;1265,60;415,60;415,118;395,118" d="M 1265 240 L 1265 68 Q 1265 60 1257 60 L 423 60 Q 415 60 415 68 L 415 110 Q 415 118 407 118 L 395 118" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="cli-mcp-hosts" data-edge-to="application-facade" data-edge-label="Facade API" data-edge-key="4" data-edge-id="cli-mcp-facade-api" data-composition-points="190,438;301,438;301,285;412,285" d="M 190 438 L 293 438 Q 301 438 301 430 L 301 293 Q 301 285 309 285 L 412 285" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="native-test-host" data-edge-to="application-facade" data-edge-label="控制面" data-edge-key="5" data-edge-id="native-test-control" data-composition-points="1190,558;1150,558;1150,620;390,620;390,278;412,278" d="M 1190 558 L 1158 558 Q 1150 558 1150 566 L 1150 612 Q 1150 620 1142 620 L 398 620 Q 390 620 390 612 L 390 286 Q 390 278 398 278 L 412 278" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="native-test-host" data-edge-to="audio-runtime" data-edge-label="实时验收" data-edge-key="6" data-edge-id="native-test-realtime" data-composition-points="1265,520;1265,316" d="M 1265 520 L 1265 316" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="application-facade" data-edge-to="project-truth" data-edge-label="命令" data-edge-key="7" data-edge-id="facade-commands" data-composition-points="582,278;593.5,278;593.5,118;605,118" d="M 582 278 L 587.75 278 Q 593.5 278 593.5 272.25 L 593.5 123.75 Q 593.5 118 599.25 118 L 605 118" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="project-truth" data-edge-to="project-cooker" data-edge-label="校验 / 派生" data-edge-key="8" data-edge-id="project-cook" data-composition-points="775,118;787.5,118;787.5,278;800,278" d="M 775 118 L 781.25 118 Q 787.5 118 787.5 124.25 L 787.5 271.75 Q 787.5 278 793.75 278 L 800 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="project-cooker" data-edge-to="runtime-snapshot" data-edge-label="不可变快照" data-edge-key="9" data-edge-id="cooked-snapshot" data-composition-points="960,278;977.5,278;977.5,118;995,118" d="M 960 278 L 969.5 278 Q 977.5 278 977.5 270 L 977.5 126 Q 977.5 118 985.5 118 L 995 118" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="runtime-snapshot" data-edge-to="audio-runtime" data-edge-label="只读" data-edge-key="10" data-edge-id="snapshot-audio" data-composition-points="1165,118;1177.5,118;1177.5,278;1190,278" d="M 1165 118 L 1171.25 118 Q 1177.5 118 1177.5 124.25 L 1177.5 271.75 Q 1177.5 278 1183.75 278 L 1190 278" class="a-emphasis" stroke-width="1.8" marker-end="url(#arrowhead-emphasis)"/>
+        <path data-edge-from="project-truth" data-edge-to="project-io" data-edge-label="原子持久化" data-edge-key="11" data-edge-id="project-persist" data-composition-points="690,156;690,400" d="M 690 156 L 690 400" class="a-default" stroke-width="1.5" marker-end="url(#arrowhead)"/>
+        <path data-edge-from="application-facade" data-edge-to="provider-sdk" data-edge-label="Capability" data-edge-key="12" data-edge-id="facade-provider-sdk" data-composition-points="497,316;497,400" d="M 497 316 L 497 400" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
+        <path data-edge-from="provider-sdk" data-edge-to="proof-providers" data-edge-label="Artifact I/O" data-edge-key="13" data-edge-id="provider-artifacts" data-composition-points="497,476;497,520" d="M 497 476 L 497 520" class="a-dashed" stroke-width="1.5" marker-end="url(#arrowhead-dashed)"/>
 
         <!-- Components -->
         <g id="node-web-hosts" data-node-id="web-hosts" data-node-label="Web Hosts" tabindex="0" role="button" aria-label="Focus Web Hosts, Creator Web · Formal Web Host, Architecture component" aria-pressed="false" data-node-kind="frontend" data-node-sublabel="Creator Web · Formal Web Host" data-node-context="Architecture component">
@@ -5108,47 +5109,51 @@
           <rect x="374.5" y="174.5" width="58" height="14" rx="3" class="c-mask"/>
           <text x="403.5" y="184.5" class="t-backend" font-size="8" text-anchor="middle">Facade API</text>
         </g>
-        <g data-detail="context" data-edge-from="web-runtime-platform" data-edge-to="audio-runtime" data-edge-label="实时数据面 / Voice" data-edge-key="2" data-edge-id="web-realtime-voice">
-          <rect x="795.3" y="-2" width="96.39999999999999" height="14" rx="3" class="c-mask"/>
-          <text x="843.5" y="8" class="t-backend" font-size="8" text-anchor="middle">实时数据面 / Voice</text>
+        <g data-detail="context" data-edge-from="web-runtime-platform" data-edge-to="audio-runtime" data-edge-label="实时触发" data-edge-key="2" data-edge-id="web-realtime-trigger">
+          <rect x="819.3" y="-2" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="843.5" y="8" class="t-backend" font-size="8" text-anchor="middle">实时触发</text>
         </g>
-        <g data-detail="context" data-edge-from="cli-mcp-hosts" data-edge-to="application-facade" data-edge-label="Facade API" data-edge-key="3" data-edge-id="cli-mcp-facade-api">
+        <g data-detail="context" data-edge-from="audio-runtime" data-edge-to="web-runtime-platform" data-edge-label="ordered Voice state" data-edge-key="3" data-edge-id="audio-ordered-voice">
+          <rect x="789.4" y="40" width="101.2" height="14" rx="3" class="c-mask"/>
+          <text x="840" y="50" class="t-messagebus" font-size="8" text-anchor="middle">ordered Voice state</text>
+        </g>
+        <g data-detail="context" data-edge-from="cli-mcp-hosts" data-edge-to="application-facade" data-edge-label="Facade API" data-edge-key="4" data-edge-id="cli-mcp-facade-api">
           <rect x="272" y="341.5" width="58" height="14" rx="3" class="c-mask"/>
           <text x="301" y="351.5" class="t-backend" font-size="8" text-anchor="middle">Facade API</text>
         </g>
-        <g data-detail="context" data-edge-from="native-test-host" data-edge-to="application-facade" data-edge-label="控制面" data-edge-key="4" data-edge-id="native-test-control">
+        <g data-detail="context" data-edge-from="native-test-host" data-edge-to="application-facade" data-edge-label="控制面" data-edge-key="5" data-edge-id="native-test-control">
           <rect x="1130.6" y="569" width="38.8" height="14" rx="3" class="c-mask"/>
           <text x="1150" y="579" class="t-messagebus" font-size="8" text-anchor="middle">控制面</text>
         </g>
-        <g data-detail="context" data-edge-from="native-test-host" data-edge-to="audio-runtime" data-edge-label="实时验收" data-edge-key="5" data-edge-id="native-test-realtime">
+        <g data-detail="context" data-edge-from="native-test-host" data-edge-to="audio-runtime" data-edge-label="实时验收" data-edge-key="6" data-edge-id="native-test-realtime">
           <rect x="1240.8" y="500" width="48.4" height="14" rx="3" class="c-mask"/>
           <text x="1265" y="510" class="t-backend" font-size="8" text-anchor="middle">实时验收</text>
         </g>
-        <g data-detail="context" data-edge-from="application-facade" data-edge-to="project-truth" data-edge-label="命令" data-edge-key="6" data-edge-id="facade-commands">
+        <g data-detail="context" data-edge-from="application-facade" data-edge-to="project-truth" data-edge-label="命令" data-edge-key="7" data-edge-id="facade-commands">
           <rect x="578.5" y="178" width="30" height="14" rx="3" class="c-mask"/>
           <text x="593.5" y="188" class="t-backend" font-size="8" text-anchor="middle">命令</text>
         </g>
-        <g data-detail="context" data-edge-from="project-truth" data-edge-to="project-cooker" data-edge-label="校验 / 派生" data-edge-key="7" data-edge-id="project-cook">
+        <g data-detail="context" data-edge-from="project-truth" data-edge-to="project-cooker" data-edge-label="校验 / 派生" data-edge-key="8" data-edge-id="project-cook">
           <rect x="756.1" y="178" width="62.8" height="14" rx="3" class="c-mask"/>
           <text x="787.5" y="188" class="t-backend" font-size="8" text-anchor="middle">校验 / 派生</text>
         </g>
-        <g data-detail="context" data-edge-from="project-cooker" data-edge-to="runtime-snapshot" data-edge-label="不可变快照" data-edge-key="8" data-edge-id="cooked-snapshot">
+        <g data-detail="context" data-edge-from="project-cooker" data-edge-to="runtime-snapshot" data-edge-label="不可变快照" data-edge-key="9" data-edge-id="cooked-snapshot">
           <rect x="948.5" y="178" width="58" height="14" rx="3" class="c-mask"/>
           <text x="977.5" y="188" class="t-backend" font-size="8" text-anchor="middle">不可变快照</text>
         </g>
-        <g data-detail="context" data-edge-from="runtime-snapshot" data-edge-to="audio-runtime" data-edge-label="只读" data-edge-key="9" data-edge-id="snapshot-audio">
+        <g data-detail="context" data-edge-from="runtime-snapshot" data-edge-to="audio-runtime" data-edge-label="只读" data-edge-key="10" data-edge-id="snapshot-audio">
           <rect x="1162.5" y="178" width="30" height="14" rx="3" class="c-mask"/>
           <text x="1177.5" y="188" class="t-backend" font-size="8" text-anchor="middle">只读</text>
         </g>
-        <g data-detail="context" data-edge-from="project-truth" data-edge-to="project-io" data-edge-label="原子持久化" data-edge-key="10" data-edge-id="project-persist">
+        <g data-detail="context" data-edge-from="project-truth" data-edge-to="project-io" data-edge-label="原子持久化" data-edge-key="11" data-edge-id="project-persist">
           <rect x="661" y="190" width="58" height="14" rx="3" class="c-mask"/>
           <text x="690" y="200" class="t-muted" font-size="8" text-anchor="middle">原子持久化</text>
         </g>
-        <g data-detail="context" data-edge-from="application-facade" data-edge-to="provider-sdk" data-edge-label="Capability" data-edge-key="11" data-edge-id="facade-provider-sdk">
+        <g data-detail="context" data-edge-from="application-facade" data-edge-to="provider-sdk" data-edge-label="Capability" data-edge-key="12" data-edge-id="facade-provider-sdk">
           <rect x="468" y="320" width="58" height="14" rx="3" class="c-mask"/>
           <text x="497" y="330" class="t-messagebus" font-size="8" text-anchor="middle">Capability</text>
         </g>
-        <g data-detail="context" data-edge-from="provider-sdk" data-edge-to="proof-providers" data-edge-label="Artifact I/O" data-edge-key="12" data-edge-id="provider-artifacts">
+        <g data-detail="context" data-edge-from="provider-sdk" data-edge-to="proof-providers" data-edge-label="Artifact I/O" data-edge-key="13" data-edge-id="provider-artifacts">
           <rect x="463.2" y="475" width="67.6" height="14" rx="3" class="c-mask"/>
           <text x="497" y="485" class="t-messagebus" font-size="8" text-anchor="middle">Artifact I/O</text>
         </g>

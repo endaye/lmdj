@@ -192,7 +192,8 @@
   "connections": [
     {"id": "web-host-entry", "from": "web-hosts", "to": "web-runtime-platform", "variant": "emphasis"},
     {"id": "web-facade-api", "from": "web-runtime-platform", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
-    {"id": "web-realtime-voice", "from": "web-runtime-platform", "to": "audio-runtime", "label": "实时数据面 / Voice", "variant": "emphasis", "fromSide": "top", "toSide": "right", "via": [[305, 18], [1382, 18], [1382, 278]]},
+    {"id": "web-realtime-trigger", "from": "web-runtime-platform", "to": "audio-runtime", "label": "实时触发", "variant": "emphasis", "fromSide": "top", "toSide": "right", "via": [[305, 18], [1382, 18], [1382, 278]]},
+    {"id": "audio-ordered-voice", "from": "audio-runtime", "to": "web-runtime-platform", "label": "ordered Voice state", "variant": "dashed", "fromSide": "top", "toSide": "right", "via": [[1265, 60], [415, 60], [415, 118]]},
     {"id": "cli-mcp-facade-api", "from": "cli-mcp-hosts", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
     {"id": "native-test-control", "from": "native-test-host", "to": "application-facade", "label": "控制面", "variant": "dashed", "fromSide": "left", "toSide": "left", "via": [[1150, 558], [1150, 620], [390, 620], [390, 278]]},
     {"id": "native-test-realtime", "from": "native-test-host", "to": "audio-runtime", "label": "实时验收", "variant": "emphasis"},

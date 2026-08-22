@@ -25,7 +25,8 @@ Application Facade -> Authoring Domain / Project Truth -> Project Cooker
                                                            v
                                                    Audio Runtime
 
-Web Runtime Platform ---------------- realtime data / Voice ------------> Audio Runtime
+Web Runtime Platform -------------------- realtime trigger -------------> Audio Runtime
+Web Runtime Platform <---------------- ordered Voice state -------------- Audio Runtime
 ```
 
 Core CLI 与 Core MCP 只进入 Application Facade；验收专用的 Native Test Host 同时连接
@@ -63,8 +64,10 @@ Portal current pages 和测试证据重建 `docs/architecture/` 下已经过时�
 - 明确 Project Bundle、Project I/O、Provider Attempt 和 Runtime Snapshot 的权威性边界。
 - 明确 Facade 是 Host 唯一应用/控制面入口，而不是实时逐事件数据面的替代品；Native Test Host
   直接使用 Audio Runtime 只用于实时音频、设备与采集验收。
-- 明确 Web Runtime Platform 的 Project/Sample 应用操作进入 Facade，而实时触发与 ordered Voice
-  数据面直接连接 Audio Runtime，不逐次穿过 Domain/Cook 链。
+- 明确 Web Runtime Platform 的 Project/Sample 应用操作进入 Facade；Platform 向 Audio Runtime
+  发送实时触发，Audio Runtime 通过 ring 反向发布 ordered Voice state，Platform drain 后发布
+  `runtime.voice_state`，Runtime Session 负责观察。两个逐事件方向都不穿过 Facade/Domain/Cooker，
+  也不改变 Project Truth。
 - 只呈现当前实现；规划中的生产 Provider、云基础设施和物理设备验收不进入主图。
 - 用 Archify 提供深浅主题和 PNG、JPEG、WebP、SVG 导出能力。
 - 删除旧图源和旧生成图，恢复“当前架构”名称的单一含义。
@@ -128,8 +131,9 @@ Portal current pages 和测试证据重建 `docs/architecture/` 下已经过时�
 - 可在十二个左右的节点内完成，不需要交叉箭头；
 - 适合作为仓库级技术总览，并能链接到 Portal 的模块细节页。
 
-代价是控制面与实时面不会分成两张独立图；通过 Web Runtime Platform -> Audio Runtime 的显式
-`实时数据面 / Voice` 边明确 Facade 不承载实时逐事件数据。
+代价是控制面与实时面不会分成两张独立图；通过 Web Runtime Platform -> Audio Runtime 的
+`实时触发` 和 Audio Runtime -> Web Runtime Platform 的 `ordered Voice state` 两条有向边，明确
+Facade 不承载这两个方向的实时逐事件数据。
 
 ### 6.2 未采用：控制面 / 实时面双平面
 
@@ -184,8 +188,10 @@ Web Hosts
 
 - Web Hosts 通过 shared Web Runtime Platform 完成 Host identity、preflight、Runtime Session、
   input/lifecycle 和 typed protocol adaptation。
-- Web Runtime Platform 的 Project/Sample 应用操作进入 Facade；已经准备的运行时状态、实时触发
-  与 ordered Voice state 通过 Platform 的 Audio Runtime 接线流动，不逐次经过 Domain/Cooker。
+- Web Runtime Platform 的 Project/Sample 应用操作进入 Facade；Platform 向 Audio Runtime 发送
+  实时触发。Audio Runtime 把 ordered Voice state 发布到 ring，Platform drain 后发布
+  `runtime.voice_state`，Runtime Session 观察该通知。两个逐事件方向都不经过 Facade、Domain 或
+  Cooker，也不改变 Project Truth。
 - Application Facade 是所有 Host 的唯一应用/控制面入口，负责跨模块应用编排和稳定错误语义。
 - Authoring Domain 是 Project Truth 唯一所有者。
 - Project Cooker 校验 Project 和 Artifact，生成可丢弃、可重建的 Runtime Snapshot。
@@ -193,8 +199,11 @@ Web Hosts
 
 ### 8.2 支路
 
-- Web Runtime Platform -> Audio Runtime：ControlRuntime、input adapter 与 AudioWorklet 的实时
-  数据面/Voice 路径；不得借此绕过 Facade 修改 Project Truth。
+- Web Runtime Platform -> Audio Runtime：ControlRuntime 与 input adapter 入队实时触发。
+- Audio Runtime -> Web Runtime Platform：Audio Runtime 发布 ordered Voice state 到 ring，
+  Platform drain 后发布 `runtime.voice_state`，Runtime Session 观察；这条回程也不逐次经过
+  Facade/Domain/Cooker。
+- 上述两个方向都不得借此绕过 Facade 修改 Project Truth。
 - Core CLI / Core MCP -> Application Facade：不经过浏览器 adapter，也不解析 Project bundle。
 - Native Test Host -> Application Facade：应用/控制面操作仍经 Facade，不解析 Project bundle。
 - Native Test Host -> Audio Runtime：仅通过 adapter/realtime 路径验证实时音频、设备与采集；
@@ -221,7 +230,7 @@ Web Hosts
 
 - 绿色 emphasis 箭头：端到端主要运行路径；
 - 中性实线：就近持久化、导入/导出或装配关系；
-- 虚线：Provider Attempt 等隔离支路；
+- 虚线：Provider Attempt 等隔离支路，以及 ordered Voice state 回程；
 - `c-frontend`：Host；
 - `c-backend`：Core control/application module；
 - `c-database`：Project Truth、Project I/O 或 immutable derived state；
