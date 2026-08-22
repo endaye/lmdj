@@ -6,6 +6,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+import hashlib
 import json
 import os
 import shutil
@@ -43,6 +44,7 @@ TARGET = "a" * 40
 TAG_OBJECT = "b" * 40
 PRODUCT = "2B5EE362F058800036AD4FB5116ECE156F954D29"
 CHECKSUM = "CB928A6E89DE498851688EF1AAC3E7019FC1478B"
+SYNTHETIC_PRODUCT_BUILD = "9.8.7.6"
 
 
 def current_product_build(root: Path = ROOT) -> str:
@@ -302,13 +304,63 @@ class ReleaseAuditTest(unittest.TestCase):
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, destination)
 
+    def install_product_build(self, root: Path, identity: str) -> None:
+        version_path = root / "products/lmdj/version.json"
+        assembly_path = root / "products/lmdj/assembly.json"
+        lock_path = root / "products/lmdj/assembly.lock.json"
+        versions_path = root / "apps/architecture-portal/versions.json"
+        source_snapshot_path = (
+            root / "apps/architecture-portal/versioned_metadata"
+            / f"version-{CURRENT_PRODUCT_BUILD}.json"
+        )
+        snapshot_path = (
+            root / "apps/architecture-portal/versioned_metadata"
+            / f"version-{identity}.json"
+        )
+
+        def write_document(path: Path, document: object) -> None:
+            path.write_text(
+                json.dumps(document, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+
+        milestone, minor, build, patch = (int(part) for part in identity.split("."))
+        version = json.loads(version_path.read_text(encoding="utf-8"))
+        version.update({
+            "milestone": milestone,
+            "minor": minor,
+            "build": build,
+            "patch": patch,
+        })
+        write_document(version_path, version)
+
+        assembly = json.loads(assembly_path.read_text(encoding="utf-8"))
+        assembly["product"]["version"] = identity
+        write_document(assembly_path, assembly)
+
+        lock = json.loads(lock_path.read_text(encoding="utf-8"))
+        lock["product"]["version"] = identity
+        lock["product_assembly"]["version"] = identity
+        lock["assembly_sha256"] = hashlib.sha256(assembly_path.read_bytes()).hexdigest()
+        write_document(lock_path, lock)
+
+        snapshot = json.loads(source_snapshot_path.read_text(encoding="utf-8"))
+        snapshot["product"]["version"] = identity
+        snapshot["product_build"] = identity
+        snapshot["assembly_lock_sha256"] = hashlib.sha256(lock_path.read_bytes()).hexdigest()
+        write_document(snapshot_path, snapshot)
+        versions = json.loads(versions_path.read_text(encoding="utf-8"))
+        write_document(versions_path, [identity, *versions])
+
     def context(
         self,
         entries: list[dict[str, object]] | None = None,
         exceptions: list[dict[str, object]] | None = None,
+        *,
+        ensure_current_product_intent: bool = True,
     ) -> AuditContext:
         selected = list(entries if entries is not None else [self.entry()])
-        if not any(
+        if ensure_current_product_intent and not any(
             item.get("identity") == CURRENT_PRODUCT_BUILD
             for item in selected
         ):
@@ -379,44 +431,95 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual(self.github.reads, 0)
         self.assertEqual(self.git.mutations + self.github.mutations, [])
 
-    def test_tracked_current_product_identity_is_locally_auditable(self) -> None:
-        context = cli.build_audit_context(ROOT)
-        report = audit(context, remote=False, tag=CURRENT_PRODUCT_TAG)
-        self.assertEqual({item.code for item in report.findings}, {"ok"})
-
-    def test_current_product_intent_target_exists_in_this_clone(self) -> None:
-        ledger = json.loads(
-            (ROOT / "docs/release-evidence/release-intents.json").read_text(
-                encoding="utf-8",
+    def test_current_product_build_and_snapshot_do_not_require_release_intent(self) -> None:
+        self.install_product_build(self.root, SYNTHETIC_PRODUCT_BUILD)
+        context = self.context(
+            entries=[self.entry()],
+            ensure_current_product_intent=False,
+        )
+        context = replace(
+            context,
+            proof_reader=lambda *args: (_ for _ in ()).throw(
+                AssertionError("Proof must not run without a current intent"),
             ),
         )
-        matches = [
-            entry
-            for entry in ledger["entries"]
-            if entry.get("kind") == "product"
-            and entry.get("identity") == CURRENT_PRODUCT_BUILD
-        ]
-        self.assertEqual(len(matches), 1)
-        target = matches[0]["target_revision"]
-        present = subprocess.run(
-            [
-                "git",
-                "-C",
-                str(ROOT),
-                "cat-file",
-                "-e",
-                f"{target}^{{commit}}",
-            ],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
+        self.git.target_validation_error = AssertionError(
+            "exact-target validation must not run without a current intent",
         )
-        self.assertEqual(
-            present.returncode,
-            0,
-            f"Product intent {CURRENT_PRODUCT_TAG} target {target} "
-            "is absent from this clone",
+        report = audit(context, remote=False)
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
+
+    def test_current_product_snapshot_is_required_without_release_intent(self) -> None:
+        self.install_product_build(self.root, SYNTHETIC_PRODUCT_BUILD)
+        snapshot = (
+            self.root / "apps/architecture-portal/versioned_metadata"
+            / f"version-{SYNTHETIC_PRODUCT_BUILD}.json"
         )
+        snapshot.unlink()
+        report = audit(
+            self.context(
+                entries=[self.entry()],
+                ensure_current_product_intent=False,
+            ),
+            remote=False,
+        )
+        finding = next(item for item in report.findings if item.code == "unverifiable")
+        self.assertIn("immutable Portal snapshot projection", finding.message)
+        self.assertEqual(finding.sources, ("architecture-portal",))
+
+    def test_multiple_current_product_intents_fail_closed(self) -> None:
+        context = self.context()
+        active_intent = context.ledger.intent_for_tag(CURRENT_PRODUCT_TAG)
+        assert active_intent is not None
+        finding = audit_module._local_repository_issue(
+            context,
+            [*context.ledger.entries, active_intent],
+        )
+        assert finding is not None
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertIn("expected at most one", finding.message)
+
+    def test_current_product_intent_exact_target_mismatch_fails_closed(self) -> None:
+        self.git.target_validation_error = RuntimeError("current target mismatch")
+        finding = audit(self.context(), remote=False).findings[0]
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertIn("exact release target validation", finding.message)
+        self.assertIn("current target mismatch", finding.message)
+
+    def test_current_product_intent_proof_mismatch_fails_closed(self) -> None:
+        context = replace(
+            self.context(),
+            proof_reader=lambda worktree, intent: ProductProof(
+                "feature/pre-squash", TARGET, intent.identity,
+                intent.snapshot or intent.identity, TARGET,
+            ),
+        )
+        finding = audit(context, remote=False).findings[0]
+        self.assertEqual(finding.code, "unverifiable")
+        self.assertIn("merged-main Proof projection", finding.message)
+
+    def test_local_audit_requires_every_non_abandoned_target_object(self) -> None:
+        missing = self.entry(disposition="allocated")
+        missing["target_revision"] = "d" * 40
+        context = self.context(entries=[missing])
+        (self.root / ".git").mkdir()
+
+        def git_probe(command, **kwargs):
+            missing_target = command[-1].startswith("d" * 40)
+            return subprocess.CompletedProcess(command, 1 if missing_target else 0)
+
+        with patch("tools.release.audit.subprocess.run", side_effect=git_probe):
+            report = audit(context, remote=False, tag=CURRENT_PRODUCT_TAG)
+        finding = next(item for item in report.findings if item.code == "unverifiable")
+        self.assertIn("release intent target objects", finding.message)
+        self.assertIn(str(missing["tag"]), finding.message)
+
+    def test_explicit_unregistered_tag_is_unauthorized_in_both_modes(self) -> None:
+        tag = "module/not-in-ledger/v9.9.9"
+        for remote in (False, True):
+            with self.subTest(remote=remote):
+                report = audit(self.context(), remote=remote, tag=tag)
+                self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
 
     def test_local_audit_does_not_require_abandoned_target_objects(self) -> None:
         abandoned = self.entry(
