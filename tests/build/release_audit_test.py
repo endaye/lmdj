@@ -564,73 +564,102 @@ class ReleaseAuditTest(unittest.TestCase):
         )
         revision = "760e2167914323dd70ea2e188da2f6136e8edc63"
         with self.repository_worktree(revision) as worktree:
+            def restore_exact_worktree() -> None:
+                subprocess.run(
+                    ["git", "-C", str(worktree), "reset", "--hard", revision],
+                    check=True, capture_output=True, text=True,
+                )
+
+            def assert_exact_worktree() -> None:
+                head = subprocess.run(
+                    ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                    check=True, capture_output=True, text=True,
+                ).stdout.strip()
+                status = subprocess.run(
+                    ["git", "-C", str(worktree), "status", "--porcelain"],
+                    check=True, capture_output=True, text=True,
+                ).stdout
+                self.assertEqual(head, revision)
+                self.assertEqual(status, "")
+
             for label, corruption in cases:
                 with self.subTest(label=label):
-                    context = self.zero_intent_repository_context(worktree, revision)
+                    restore_exact_worktree()
+                    assert_exact_worktree()
+                    try:
+                        context = self.zero_intent_repository_context(worktree, revision)
 
-                    product_build = current_product_build(worktree)
-                    metadata_path = (
-                        worktree / "apps/architecture-portal/versioned_metadata"
-                        / f"version-{product_build}.json"
-                    )
-                    if corruption == "squash-witness":
-                        path = (
-                            worktree / "apps/architecture-portal/versioned_provenance"
-                            / f"version-{product_build}-squash-witness.json"
+                        product_build = current_product_build(worktree)
+                        metadata_path = (
+                            worktree / "apps/architecture-portal/versioned_metadata"
+                            / f"version-{product_build}.json"
                         )
-                        document = json.loads(path.read_text(encoding="utf-8"))
-                        document["source_tree"] = "d" * 40
-                    else:
-                        path = metadata_path
-                        document = json.loads(path.read_text(encoding="utf-8"))
-                        if corruption == "metadata-revision":
-                            document["revision"] = "d" * 40
+                        if corruption == "squash-witness":
+                            path = (
+                                worktree / "apps/architecture-portal/versioned_provenance"
+                                / f"version-{product_build}-squash-witness.json"
+                            )
+                            document = json.loads(path.read_text(encoding="utf-8"))
+                            document["source_tree"] = "d" * 40
                         else:
-                            document["source_commit"]["tree"] = "d" * 40
-                    path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
-                    if corruption == "squash-witness":
-                        subprocess.run(
-                            ["git", "-C", str(worktree), "add", str(path)],
-                            check=True, capture_output=True, text=True,
+                            path = metadata_path
+                            document = json.loads(path.read_text(encoding="utf-8"))
+                            if corruption == "metadata-revision":
+                                document["revision"] = "d" * 40
+                            else:
+                                document["source_commit"]["tree"] = "d" * 40
+                        path.write_text(
+                            json.dumps(document, indent=2) + "\n", encoding="utf-8",
                         )
-                        subprocess.run(
-                            [
-                                "git", "-C", str(worktree),
-                                "-c", "user.name=LMDJ Release Audit Test",
-                                "-c", "user.email=release-audit-test@invalid",
-                                "commit", "-m", "test: corrupt squash witness",
-                            ],
-                            check=True, capture_output=True, text=True,
+                        if corruption == "squash-witness":
+                            subprocess.run(
+                                ["git", "-C", str(worktree), "add", str(path)],
+                                check=True, capture_output=True, text=True,
+                            )
+                            subprocess.run(
+                                [
+                                    "git", "-C", str(worktree),
+                                    "-c", "user.name=LMDJ Release Audit Test",
+                                    "-c", "user.email=release-audit-test@invalid",
+                                    "commit", "-m", "test: corrupt squash witness",
+                                ],
+                                check=True, capture_output=True, text=True,
+                            )
+
+                        validation_error: list[Exception] = []
+                        validation_calls: list[tuple[Path, str]] = []
+
+                        def validate_snapshot_once(selected_root: Path, identity: str) -> None:
+                            validation_calls.append((selected_root.resolve(), identity))
+                            if not validation_error:
+                                try:
+                                    target_validation_module.validate_current_product_snapshot(
+                                        selected_root, identity,
+                                    )
+                                except Exception as error:
+                                    validation_error.append(error)
+                            if validation_error:
+                                raise validation_error[0]
+
+                        self.git.current_snapshot_validator = validate_snapshot_once
+                        local = audit(context, remote=False)
+                        remote = audit(self.canonical_remote_context(context), remote=True)
+                        self.assertEqual(
+                            validation_calls,
+                            [(worktree.resolve(), product_build)] * 2,
                         )
-
-                    validation_error: list[Exception] = []
-
-                    def validate_snapshot_once(selected_root: Path, identity: str) -> None:
-                        if not validation_error:
-                            try:
-                                target_validation_module.validate_current_product_snapshot(
-                                    selected_root, identity,
-                                )
-                            except Exception as error:
-                                validation_error.append(error)
-                        if validation_error:
-                            raise validation_error[0]
-
-                    self.git.current_snapshot_validator = validate_snapshot_once
-                    local = audit(context, remote=False)
-                    remote = audit(self.canonical_remote_context(context), remote=True)
-                    for report in (local, remote):
-                        finding = next(
-                            item for item in report.findings if item.code == "unverifiable"
-                        )
-                        self.assertIn("immutable Portal snapshot projection", finding.message)
-                        self.assertEqual(finding.sources, ("architecture-portal",))
-
-                    if corruption != "squash-witness":
-                        subprocess.run(
-                            ["git", "-C", str(worktree), "restore", "--worktree", str(path)],
-                            check=True, capture_output=True, text=True,
-                        )
+                        for report in (local, remote):
+                            finding = next(
+                                item for item in report.findings
+                                if item.code == "unverifiable"
+                            )
+                            self.assertIn(
+                                "immutable Portal snapshot projection", finding.message,
+                            )
+                            self.assertEqual(finding.sources, ("architecture-portal",))
+                    finally:
+                        restore_exact_worktree()
+                        assert_exact_worktree()
 
     def test_current_product_snapshot_is_required_without_release_intent(self) -> None:
         self.install_product_build(self.root, SYNTHETIC_PRODUCT_BUILD)
