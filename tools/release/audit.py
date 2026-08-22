@@ -390,6 +390,7 @@ def _local_repository_issue(context: object, entries: list[ReleaseIntent]) -> Au
                 raise ValueError(f"Portal snapshot inventory does not carry {identity}")
             if snapshot.get("assembly_lock_sha256") != hashlib.sha256(lock_path.read_bytes()).hexdigest():
                 raise ValueError("Portal snapshot lock digest does not match the active Assembly lock")
+            context.git.validate_current_product_snapshot(root, identity)
         if active_intent is not None:
             with _static_projection(root, "exact release target validation", "exact-target", "architecture-portal"):
                 context.git.validate_release_target(root, active_intent)

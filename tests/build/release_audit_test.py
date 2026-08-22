@@ -38,6 +38,7 @@ from tools.release.model import load_ledger_document, load_policy  # noqa: E402
 from tools.release.openpgp import OpenPgpError  # noqa: E402
 from tools.release.prepare import LocalTag, ProductProof  # noqa: E402
 from tools.release import cli  # noqa: E402
+from tools.release import target_validation as target_validation_module  # noqa: E402
 
 
 TARGET = "a" * 40
@@ -88,6 +89,9 @@ class ReadOnlyGit:
         self.detached_worktree_root: Path | None = None
         self.detached_worktree_error: Exception | None = None
         self.target_validation_error: Exception | None = None
+        self.current_snapshot_validation_error: Exception | None = None
+        self.current_snapshot_validator = None
+        self.main_ancestor_targets = {TARGET}
 
     def fetch_authority(self, repository: str, branch: str) -> None:
         self.fetches += 1
@@ -96,7 +100,7 @@ class ReadOnlyGit:
         return TARGET
 
     def is_main_ancestor(self, target: str) -> bool:
-        return target == TARGET
+        return target in self.main_ancestor_targets
 
     def is_revision_ancestor(self, ancestor: str, descendant: str) -> bool:
         return descendant == TARGET
@@ -104,6 +108,12 @@ class ReadOnlyGit:
     def validate_release_target(self, worktree: Path, intent) -> None:
         if self.target_validation_error is not None:
             raise self.target_validation_error
+
+    def validate_current_product_snapshot(self, worktree: Path, identity: str) -> None:
+        if self.current_snapshot_validation_error is not None:
+            raise self.current_snapshot_validation_error
+        if self.current_snapshot_validator is not None:
+            self.current_snapshot_validator(worktree, identity)
 
     def remote_tag_state(self, tag: str) -> LocalTag | None:
         self.remote_reads += 1
@@ -352,6 +362,63 @@ class ReleaseAuditTest(unittest.TestCase):
         versions = json.loads(versions_path.read_text(encoding="utf-8"))
         write_document(versions_path, [identity, *versions])
 
+    @contextmanager
+    def repository_worktree(self, revision: str):
+        with tempfile.TemporaryDirectory(prefix="lmdj-release-audit-repository-") as directory:
+            worktree = Path(directory) / "target"
+            subprocess.run(
+                ["git", "-C", str(ROOT), "worktree", "add", "--detach", str(worktree), revision],
+                check=True, capture_output=True, text=True,
+            )
+            try:
+                yield worktree
+            finally:
+                subprocess.run(
+                    ["git", "-C", str(ROOT), "worktree", "remove", "--force", str(worktree)],
+                    check=True, capture_output=True, text=True,
+                )
+
+    def zero_intent_repository_context(self, root: Path, revision: str) -> AuditContext:
+        assembly = json.loads((root / "products/lmdj/assembly.json").read_text(encoding="utf-8"))
+        module = next(item for item in assembly["modules"] if item["id"] == "application-facade")
+        identity = f"{module['id']}@{module['version']}"
+        entry = self.entry(
+            tag=f"module/{module['id']}/v{module['version']}",
+            disposition="allocated",
+            identity=identity,
+        )
+        entry["target_revision"] = revision
+        entry["evidence_paths"] = ["AGENTS.md"]
+        context = self.context(entries=[entry], ensure_current_product_intent=False)
+        self.git.authority_root = root
+        self.git.main_ancestor_targets.add(revision)
+        self.git.current_snapshot_validator = (
+            lambda worktree, product_build:
+            target_validation_module.validate_current_product_snapshot(
+                worktree, product_build,
+            )
+        )
+        return replace(context, repo_root=root)
+
+    def canonical_remote_context(self, context: AuditContext) -> AuditContext:
+        def build_authority(root, policy, ledger):
+            return replace(
+                context,
+                repo_root=root,
+                policy=policy,
+                ledger=ledger,
+                tag_signer_fingerprint=policy.product_fingerprint,
+                checksum_signer_fingerprint=policy.checksum_fingerprint,
+                authority_reader=None,
+                authority_context_builder=None,
+            )
+
+        return replace(
+            context,
+            authority_reader=lambda root: (self.policy, context.ledger),
+            authority_context_builder=build_authority,
+        )
+
     def context(
         self,
         entries: list[dict[str, object]] | None = None,
@@ -448,6 +515,119 @@ class ReleaseAuditTest(unittest.TestCase):
         )
         report = audit(context, remote=False)
         self.assertEqual({item.code for item in report.findings}, {"ok"})
+
+    def test_remote_canonical_product_build_without_intent_audits_registered_entries(self) -> None:
+        revision = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        context = self.canonical_remote_context(
+            self.zero_intent_repository_context(ROOT, revision),
+        )
+
+        report = audit(context, remote=True)
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
+
+        report = audit(context, remote=True, tag=CURRENT_PRODUCT_TAG)
+        self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
+
+    def test_repository_local_audit_does_not_assume_current_intent_count(self) -> None:
+        context = cli.build_audit_context(ROOT)
+        validate_snapshot = context.git.validate_current_product_snapshot
+        validated: set[tuple[Path, str]] = set()
+
+        def validate_snapshot_once(worktree: Path, identity: str) -> None:
+            key = (worktree.resolve(), identity)
+            if key not in validated:
+                validate_snapshot(worktree, identity)
+                validated.add(key)
+
+        with patch.object(
+            context.git,
+            "validate_current_product_snapshot",
+            side_effect=validate_snapshot_once,
+        ):
+            report = audit(context, remote=False)
+            self.assertEqual(report.exit_code, 0)
+
+            report = audit(context, remote=False, tag=CURRENT_PRODUCT_TAG)
+            if context.ledger.intent_for_tag(CURRENT_PRODUCT_TAG) is None:
+                self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
+            else:
+                self.assertEqual(report.exit_code, 0)
+
+    def test_zero_intent_local_and_remote_audits_reject_corrupt_snapshot_provenance(self) -> None:
+        current_revision = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        cases = (
+            ("metadata revision", current_revision, "metadata-revision"),
+            ("metadata source tree", current_revision, "metadata-source-tree"),
+            (
+                "squash witness", "760e2167914323dd70ea2e188da2f6136e8edc63",
+                "squash-witness",
+            ),
+        )
+        for label, revision, corruption in cases:
+            with self.subTest(label=label), self.repository_worktree(revision) as worktree:
+                context = self.zero_intent_repository_context(worktree, revision)
+
+                product_build = current_product_build(worktree)
+                metadata_path = (
+                    worktree / "apps/architecture-portal/versioned_metadata"
+                    / f"version-{product_build}.json"
+                )
+                if corruption == "squash-witness":
+                    path = (
+                        worktree / "apps/architecture-portal/versioned_provenance"
+                        / f"version-{product_build}-squash-witness.json"
+                    )
+                    document = json.loads(path.read_text(encoding="utf-8"))
+                    document["source_tree"] = "d" * 40
+                else:
+                    path = metadata_path
+                    document = json.loads(path.read_text(encoding="utf-8"))
+                    if corruption == "metadata-revision":
+                        document["revision"] = "d" * 40
+                    else:
+                        document["source_commit"]["tree"] = "d" * 40
+                path.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+                if corruption == "squash-witness":
+                    subprocess.run(
+                        ["git", "-C", str(worktree), "add", str(path)],
+                        check=True, capture_output=True, text=True,
+                    )
+                    subprocess.run(
+                        [
+                            "git", "-C", str(worktree),
+                            "-c", "user.name=LMDJ Release Audit Test",
+                            "-c", "user.email=release-audit-test@invalid",
+                            "commit", "-m", "test: corrupt squash witness",
+                        ],
+                        check=True, capture_output=True, text=True,
+                    )
+
+                validation_error: list[Exception] = []
+
+                def validate_snapshot_once(selected_root: Path, identity: str) -> None:
+                    if not validation_error:
+                        try:
+                            target_validation_module.validate_current_product_snapshot(
+                                selected_root, identity,
+                            )
+                        except Exception as error:
+                            validation_error.append(error)
+                    if validation_error:
+                        raise validation_error[0]
+
+                self.git.current_snapshot_validator = validate_snapshot_once
+                local = audit(context, remote=False)
+                remote = audit(self.canonical_remote_context(context), remote=True)
+                for report in (local, remote):
+                    finding = next(item for item in report.findings if item.code == "unverifiable")
+                    self.assertIn("immutable Portal snapshot projection", finding.message)
+                    self.assertEqual(finding.sources, ("architecture-portal",))
 
     def test_current_product_snapshot_is_required_without_release_intent(self) -> None:
         self.install_product_build(self.root, SYNTHETIC_PRODUCT_BUILD)

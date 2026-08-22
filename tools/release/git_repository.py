@@ -19,7 +19,11 @@ from .model import (
     ReleaseIntent,
 )
 from .openpgp import OpenPgpError, OpenPgpVerifier
-from .target_validation import TargetValidationError, validate_release_target
+from .target_validation import (
+    TargetValidationError,
+    validate_current_product_snapshot,
+    validate_release_target,
+)
 
 
 class GitRepositoryError(RuntimeError):
@@ -71,6 +75,12 @@ class GitRepository:
     def validate_release_target(self, worktree: Path, intent: ReleaseIntent) -> None:
         try:
             validate_release_target(worktree, intent, runner=self.runner)
+        except TargetValidationError as error:
+            raise GitRepositoryError(str(error)) from None
+
+    def validate_current_product_snapshot(self, worktree: Path, identity: str) -> None:
+        try:
+            validate_current_product_snapshot(worktree, identity, runner=self.runner)
         except TargetValidationError as error:
             raise GitRepositoryError(str(error)) from None
 
