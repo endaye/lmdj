@@ -232,6 +232,7 @@ class MergeQueueTest(unittest.TestCase):
         self.assertFalse(report.ok)
         self.assertEqual(client.removed, [(220, "merge:queue")])
         self.assertIn("unauthorized-actor", client.comments[0][1])
+        self.assertNotIn("Evidence:", client.comments[0][1])
 
     def test_cleanup_retries_transient_errors_with_backoff(self):
         client = self.client(permission="read")
@@ -426,6 +427,34 @@ class MergeQueueTest(unittest.TestCase):
             "raw merge API response",
         ):
             self.assertNotIn(hostile, rendered)
+
+    def test_terminal_comment_redacts_hostile_evidence_but_keeps_safe_diagnostics(self):
+        client = self.client()
+        self.mq._cleanup_failure(
+            self.request(),
+            client,
+            self.mq._report(
+                code="validation-failed",
+                evidence=(
+                    "check:PR Gate=failure",
+                    "/Users/endaye/Projects/lmdj/private.txt",
+                    "https://api.github.com/repos/endaye/lmdj",
+                    "token=ghp_super_secret",
+                    '{"message":"raw merge API response"}',
+                ),
+            ),
+            sleeper=lambda _seconds: None,
+        )
+        self.assertEqual(len(client.comments), 1)
+        body = client.comments[0][1]
+        self.assertIn("Evidence: `check:PR Gate=failure`, `evidence-redacted`", body)
+        for hostile in (
+            "/Users/endaye",
+            "api.github.com",
+            "ghp_super_secret",
+            "raw merge API response",
+        ):
+            self.assertNotIn(hostile, body)
 
     def test_summary_with_empty_evidence_is_exactly_backward_compatible(self):
         report = self.mq.QueueReport(
@@ -623,11 +652,14 @@ class MergeQueueTest(unittest.TestCase):
                 self.mq.RequiredCheck("PR Gate", 15368, "failure"),
             ),
         )
-        report = self.run_item(self.client(validation_results=[failed]))
+        client = self.client(validation_results=[failed])
+        report = self.run_item(client)
         self.assertEqual(report.code, "validation-failed")
         self.assertNotEqual(report.code, "required-check-contract-mismatch")
         self.assertIn("check:PR Gate=failure", report.evidence)
         self.assert_evidence_is_safe(report)
+        self.assertEqual(len(client.comments), 1)
+        self.assertIn("Evidence: `check:PR Gate=failure`", client.comments[0][1])
 
     def test_missing_required_check_is_a_contract_mismatch_with_diff(self):
         missing = replace(

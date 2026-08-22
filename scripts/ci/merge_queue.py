@@ -246,6 +246,19 @@ def _report(
     )
 
 
+def _safe_evidence_values(evidence: Sequence[str]) -> tuple[str, ...]:
+    safe: list[str] = []
+    for value in evidence:
+        rendered = (
+            value
+            if any(pattern.fullmatch(value) for pattern in _SAFE_SUMMARY_EVIDENCE)
+            else "evidence-redacted"
+        )
+        if rendered not in safe:
+            safe.append(rendered)
+    return tuple(safe)
+
+
 def _retry_cleanup(
     operation: Callable[[], None], sleeper: Callable[[float], None]
 ) -> Exception | None:
@@ -268,14 +281,22 @@ def _cleanup_failure(
     *,
     sleeper: Callable[[float], None] = time.sleep,
 ) -> QueueReport:
-    comment = "\n".join((
+    comment_lines = [
         f"<!-- lmdj-merge-queue:{report.code}:{request.queue_run_id} -->",
         "## Integration Queue stopped",
         f"Stable code: `{report.code}`",
         f"Queue run: `{request.queue_run_id}`",
         f"Observed base/head: `{report.observed_base_sha}` / `{report.observed_head_sha}`",
-        "Fix the named condition, then explicitly add `merge:queue` again.",
-    ))
+    ]
+    safe_evidence = _safe_evidence_values(report.evidence)
+    if safe_evidence:
+        comment_lines.append(
+            "Evidence: " + ", ".join(f"`{value}`" for value in safe_evidence)
+        )
+    comment_lines.append(
+        "Fix the named condition, then explicitly add `merge:queue` again."
+    )
+    comment = "\n".join(comment_lines)
     cleanup_was_live = False
 
     def remove_live_label() -> None:
@@ -791,16 +812,9 @@ def render_markdown(report: QueueReport) -> str:
         f"- Message: {report.message}",
     ]
     if report.evidence:
-        safe_evidence: list[str] = []
-        for value in report.evidence:
-            rendered = (
-                value
-                if any(pattern.fullmatch(value) for pattern in _SAFE_SUMMARY_EVIDENCE)
-                else "evidence-redacted"
-            )
-            if rendered not in safe_evidence:
-                safe_evidence.append(rendered)
-        lines.append(f"- Evidence: {', '.join(safe_evidence)}")
+        lines.append(
+            f"- Evidence: {', '.join(_safe_evidence_values(report.evidence))}"
+        )
     lines.append("")
     return "\n".join(lines)
 
