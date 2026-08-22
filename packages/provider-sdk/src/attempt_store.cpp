@@ -396,6 +396,8 @@ class SettingsFileLock {
     if (descriptor_ >= 0) {
       ::close(descriptor_);
     }
+#else
+    static_cast<void>(descriptor_);
 #endif
   }
 

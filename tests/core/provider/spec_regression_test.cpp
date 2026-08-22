@@ -1014,14 +1014,21 @@ void test_parameters_are_hashed_without_workspace_staging() {
 void test_host_settings_lock_uses_kernel_owned_nonblocking_file_lock() {
   const auto source =
       read_bytes("packages/provider-sdk/src/attempt_store.cpp");
+  const auto owner_region_at = source.find("class SettingsFileLock");
   const auto lock_region_at = source.find("acquire_settings_lock(");
   const auto lock_region_end =
       source.find("reject_existing_or_symlink(", lock_region_at);
+  LMDJ_CHECK(owner_region_at != std::string::npos);
   LMDJ_CHECK(lock_region_at != std::string::npos);
   LMDJ_CHECK(lock_region_end > lock_region_at);
 
+  const auto owner_region =
+      source.substr(owner_region_at, lock_region_at - owner_region_at);
   const auto lock_region =
       source.substr(lock_region_at, lock_region_end - lock_region_at);
+  LMDJ_CHECK(
+      owner_region.find("static_cast<void>(descriptor_)") !=
+      std::string::npos);
   LMDJ_CHECK(lock_region.find("LOCK_EX | LOCK_NB") != std::string::npos);
   LMDJ_CHECK(
       lock_region.find("std::filesystem::create_directory(lock_path") ==
