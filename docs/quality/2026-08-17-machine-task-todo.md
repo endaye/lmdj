@@ -30,7 +30,7 @@ Compiled against `main` at `801fa450` on 2026-08-17.
 | --- | --- | --- | --- |
 | ~~B1~~ | ~~Make `audit` assert `main` ancestry, matching what `prepare` already requires~~ | triage B1 | **done 2026-08-18** (`33dbff7c`). Narrower than triage stated: ancestry was already asserted after a remote tag existed; the gap was the two pre-mutation paths. Abandoned and superseded-unreleased intents stay ungated by design |
 | ~~B2~~ | ~~Emit the Portal snapshot witness on the merge path, or make the failure name the exact command that resolves it~~ | triage B2 | **done 2026-08-18** (`edb16910`). The first option is impossible by construction — the witness records a revision that exists only after the merge, and must itself be committed. The failure now carries the command, and the command derives its second argument |
-| B3 | Derive Product Build identity wherever a gate can read committed truth; where a literal is unavoidable, make its failure message name the version | triage B3 | seven hand-maintained locations; none of the failures named a version. Two were converted during Stage 8, the rest remain literal ([#207](https://github.com/endaye/lmdj/issues/207)) |
+| ~~B3~~ | ~~Derive Product Build identity wherever a gate can read committed truth; where a literal is unavoidable, make its failure message name the version~~ | triage B3 | **done 2026-08-21** (`4312a6de`, [#226](https://github.com/endaye/lmdj/pull/226), plan [`2026-08-21-lmdj-product-version-identity-derivation.md`](../superpowers/plans/2026-08-21-lmdj-product-version-identity-derivation.md)). Current consumers derive from committed `products/lmdj/version.json`; Creator `module.json` / `package.json` / `package-lock.json` identity is gated; mismatch failures name expected, found, authority, and consumer. Issue [#207](https://github.com/endaye/lmdj/issues/207) stayed OPEN because the squash subject omitted `Closes #207` |
 | B4 | Fold `assembly.lock.json` regeneration into whatever writes the compiled assembly, or make `version.py lock` refuse to run before the source is final | triage B4 | bit twice in one allocation; the second time surfaced only at the portal freeze ([#208](https://github.com/endaye/lmdj/issues/208)) |
 | ~~C2~~ | ~~Restructure `decision-log.md` and `open-questions.md` so concurrent branches stop colliding~~ | triage C2 | **done 2026-08-18** (`5a9c11a7`, plan [`2026-08-18-lmdj-prd-append-structure.md`](../superpowers/plans/2026-08-18-lmdj-prd-append-structure.md)). One entry per file: new decisions in `docs/prd/decisions/`, each open question in `docs/prd/questions/`; no hand-maintained index — an index edited on every addition is itself a shared append point |
 | ~~C4~~ | ~~Give `project_store.cpp`'s JSON read paths the `O_NOFOLLOW` symmetry `read_artifact()` already has~~ | 2026-08-03 backlog C2, still open | **closed by verification 2026-08-19** ([record](2026-08-18-project-io-json-symlink-symmetry.md)). The asymmetry is gone: both read paths share `ProjectStoragePlatform::read_complete()`, whose native implementation already opens with `O_NOFOLLOW` — the placement the 2026-08-03 plan prescribed when it withdrew the in-`read_json` edit. What was missing was the file-level test; `test_json_reads_reject_symlinked_files` now locks it |
@@ -126,10 +126,10 @@ row is answered.
 3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
    one branch, and it is what makes Pad Capture usable by hand.
 4. ~~**C2**~~ — done 2026-08-18 on `docs/prd-append-structure`.
-5. **B3, B4, C5** — mechanical hardening, schedule as capacity allows. C5
-   is the smallest of them and sits in the path operators now walk on every
-   snapshot-carrying Build. (C4 closed by verification — see the Ready
-   table.)
+5. ~~**B3**~~ — done 2026-08-21 (`4312a6de`, #226). **B4, C5** — mechanical
+   hardening, schedule as capacity allows. C5 is the smallest of them and
+   sits in the path operators now walk on every snapshot-carrying Build.
+   (C4 closed by verification — see the Ready table.)
 6. **E2, E3** — only when the feature that needs them is actually built.
 
 Everything else waits on a decision, not on capacity.
