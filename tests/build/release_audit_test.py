@@ -720,8 +720,18 @@ class ReleaseAuditTest(unittest.TestCase):
     def test_explicit_unregistered_tag_is_unauthorized_in_both_modes(self) -> None:
         tag = "module/not-in-ledger/v9.9.9"
         for remote in (False, True):
-            with self.subTest(remote=remote):
+            with self.subTest(remote=remote, tag=tag):
                 report = audit(self.context(), remote=remote, tag=tag)
+                self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
+
+        zero_product_intent = self.context(
+            entries=[self.entry()], ensure_current_product_intent=False,
+        )
+        for remote in (False, True):
+            with self.subTest(remote=remote, tag=CURRENT_PRODUCT_TAG):
+                report = audit(
+                    zero_product_intent, remote=remote, tag=CURRENT_PRODUCT_TAG,
+                )
                 self.assertEqual({item.code for item in report.findings}, {"unauthorized"})
 
     def test_local_audit_does_not_require_abandoned_target_objects(self) -> None:
