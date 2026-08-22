@@ -320,9 +320,9 @@ void test_repeated_selection_stays_canonical_and_readable() {
   LMDJ_CHECK(selected.value() == "local.proof.success");
 }
 
-// A rejected selection must release lock ownership and must not damage the
-// selection already recorded. Failure paths are where descriptors leak.
-void test_rejected_selection_leaves_no_lock_owner_and_no_damage() {
+// Registry rejection happens before lock acquisition and must not damage the
+// selection already recorded. Descriptor cleanup is covered separately below.
+void test_registry_rejection_preserves_existing_settings() {
   const TempDirectory temp;
   const auto registry = proof_registry();
   auto store = store_at(temp.path());
@@ -342,6 +342,42 @@ void test_rejected_selection_leaves_no_lock_owner_and_no_damage() {
   const auto selected = store.selected_provider(std::string(kCapability));
   LMDJ_CHECK(selected.has_value());
   LMDJ_CHECK(selected.value() == "local.proof.success");
+}
+
+// A read failure after lock acquisition must release the descriptor before
+// returning, so a later writer can acquire the same persistent lock file.
+void test_invalid_settings_read_releases_lock_descriptor() {
+  const TempDirectory temp;
+  const auto registry = proof_registry();
+  auto store = store_at(temp.path());
+
+  LMDJ_CHECK(store
+                 .set_provider_selection(
+                     std::string(kCapability), "local.proof.success", registry)
+                 .has_value());
+  const auto settings_path =
+      temp.path() / ".lmdj-workspace/host-settings.json";
+  const auto valid_settings = read_bytes(settings_path);
+
+  std::ofstream(settings_path, std::ios::binary | std::ios::trunc)
+      << "{}\n";
+  const auto rejected = store.set_provider_selection(
+      std::string(kCapability), "local.proof.failure", registry);
+  LMDJ_CHECK(!rejected.has_value());
+  LMDJ_CHECK(rejected.error().code == ErrorCode::invalid_argument);
+  LMDJ_CHECK(rejected.error().message == "host settings have an invalid shape");
+
+  std::ofstream(settings_path, std::ios::binary | std::ios::trunc)
+      << valid_settings;
+  LMDJ_CHECK(store
+                 .set_provider_selection(
+                     std::string(kCapability), "local.proof.failure", registry)
+                 .has_value());
+
+  const auto selected = store.selected_provider(std::string(kCapability));
+  LMDJ_CHECK(selected.has_value());
+  LMDJ_CHECK(selected.value() == "local.proof.failure");
+  check_settings_hold(temp.path());
 }
 
 // The harness must detect real violations, or its passing cases prove nothing.
@@ -465,7 +501,8 @@ int main() {
   try {
     test_selection_leaves_canonical_settings_and_safe_lock();
     test_repeated_selection_stays_canonical_and_readable();
-    test_rejected_selection_leaves_no_lock_owner_and_no_damage();
+    test_registry_rejection_preserves_existing_settings();
+    test_invalid_settings_read_releases_lock_descriptor();
     test_harness_detects_each_corruption();
     test_write_recovers_after_lock_owner_death();
   } catch (const std::exception& error) {

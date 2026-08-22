@@ -17,15 +17,17 @@
 - Do not make `host-settings.json` durable; Issue #203 deliberately keeps it flush-and-rename configuration while making Attempt evidence durable.
 - Do not add public Provider SDK, Application Facade, Contract, Project Truth, or Web storage surface.
 - Native tests must use process synchronization, not sleeps, to prove contention and release after process death.
-- Historical plans, earlier release evidence, and earlier immutable Portal snapshots remain byte-identical. This plan and the current `1.0.26.0` intent may record the Controller execution evidence below.
+- Historical plans, release evidence through `1.0.25.0`, and earlier immutable Portal snapshots remain byte-identical. This plan may record the Controller execution evidence below.
 
 ## Controller execution amendment
 
 The Architecture Portal snapshot command requires a clean worktree and records the committed source revision. The Controller therefore committed the byte-final implementation and current Portal truth as `129f6908e932a7a840f5f52f6f5ba4b068b7ebd2`, then generated and committed the immutable `1.0.26.0` snapshot as descendant `20650c0deb8292639791d80983c0559f2da7447c`.
 
-The Release intent must bind a verified ancestor that already contains the snapshot. The final local correction `1aa70b27ca1611ee23b8493617d6da46599b7a83` only aligns the source-package test expectation with the planned local-proof Provider version `1.0.5`; the complete implementation at that revision passed `scripts/core.sh test dev full` with `73/73` tests. The `1.0.26.0` Release intent therefore binds `1aa70b27ca1611ee23b8493617d6da46599b7a83`, not this later documentation amendment commit.
+The final local correction `1aa70b27ca1611ee23b8493617d6da46599b7a83` only aligns the source-package test expectation with the planned local-proof Provider version `1.0.5`; the complete implementation at that revision passed `scripts/core.sh test dev full` with `73/73` tests. These provenance commits remain in the reviewed branch ancestry, but this Pull Request does not register a `1.0.26.0` Release intent.
 
-These local provenance commits are required execution evidence; they do not change the integration contract. The Pull Request still squash-merges to `main` as one atomic Conventional Commit after exact-head review and CI.
+Product Build `1.0.26.0` and its immutable `canary` snapshot are source allocation only. A future Release intent requires separate authorization and a separate reviewed Pull Request after this Pull Request squash-merges; it must target the exact protected-`main` squash SHA and satisfy the current release evidence gates. No branch-local provenance or documentation commit is a substitute for that target.
+
+These local provenance commits are required execution evidence; they do not change the integration contract. After exact-head review and CI, the Pull Request still squash-merges to `main` as one atomic Conventional Commit.
 
 ---
 
@@ -79,6 +81,8 @@ Reason: the Provider SDK's native cross-process lock lifetime and test evidence 
 
 **Files:**
 
+- Modify: `docs/superpowers/plans/2026-08-22-lmdj-host-settings-flock-crash-recovery.md`
+- Modify: `docs/quality/2026-08-17-machine-task-todo.md`
 - Modify: `tests/core/provider/host_settings_invariant_test.cpp`
 - Modify: `tests/core/provider/spec_regression_test.cpp`
 - Modify: `packages/provider-sdk/src/attempt_store.cpp`
@@ -148,7 +152,7 @@ Reason: the Provider SDK's native cross-process lock lifetime and test evidence 
 - Modify: `apps/architecture-portal/docs/providers/overview.mdx`
 - Modify: `apps/architecture-portal/test/repo-facts.test.mjs`
 - Modify: `apps/architecture-portal/versions.json`
-- Modify: `docs/release-evidence/release-intents.json`
+- Verify, no final Pull Request change: `docs/release-evidence/release-intents.json`
 - Generate: immutable Architecture Portal snapshot `1.0.26.0` / `canary`
 
 **Interfaces:**
@@ -249,21 +253,11 @@ scripts/core.sh proof
 
 Expected: every command exits 0; Proof reports `Assembly lock: MATCH`. Stress is explicit because this Task changes cross-process concurrency, even though it does not change lock-free realtime code.
 
-- [ ] **Step 9: Inspect and commit one atomic implementation version**
+- [x] **Step 9: Inspect local provenance and prepare atomic PR integration**
 
-Verify the branch is not `main`, stage only files declared by this plan, run `git diff --cached --check`, and commit:
+The clean-worktree snapshot gate requires committed source provenance, so preserve the local implementation, snapshot, and follow-up evidence commits without rebasing, squashing, or rewriting them. Inspect their file lists and the final worktree, run `git diff --check`, and complete exact-head local verification before handoff.
 
-```text
-fix(provider-sdk): recover host settings lock after crashes
-
-Replace the crash-orphanable directory mutex with a nonblocking native
-flock held for the complete Host settings read-modify-write. Prove a
-contending writer fails fast and that writes resume after owner death.
-
-Closes #204
-```
-
-Inspect `git show --name-status --stat HEAD` and final `git status` before push.
+The reviewed Pull Request range is the task boundary. The Integration Queue squash-merges that range into one atomic `fix(provider-sdk): recover host settings lock after crashes` Conventional Commit on protected `main`. Only that resulting protected-main SHA can become a future Release-intent target through the separate authorization and Pull Request described above.
 
 ---
 
@@ -274,7 +268,7 @@ Issue #204 is complete only when all of these are current and exact:
 - the regression test was observed RED on the directory-lock implementation and GREEN on `flock`;
 - the implementation holds one descriptor across the full read-modify-write and has no stale-lock reclamation heuristic;
 - provider neighborhood, full, stress, version, lock, Portal, and Proof gates pass locally;
-- the implementation commit contains only the planned files;
+- the reviewed branch range contains only the planned implementation, snapshot provenance, and follow-up evidence files, and the final Pull Request squash is one atomic Conventional Commit on `main`;
 - a PR targeting `main` declares the required Documentation Impact and expected CI mode;
 - exact-head selected CI and `PR Gate` pass;
 - the serialized Integration Queue squash-merges the exact reviewed head;
