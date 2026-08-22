@@ -31,7 +31,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.11` 已进入 Product Build `1.0.25.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.2`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
+<StatusBadge status="implemented" /> Formal Web Runtime Host `1.2.12` 已进入 Product Build `1.0.26.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.3`，不直接依赖 Facade、Audio Runtime 或 Project I/O；同构建私有协议仍为 `1`。这次 G3 identity 级联不改变 Web 产品能力。匹配 Product Build 的不可变快照状态与 provenance 由版本清单和 Portal 门禁派生，不在 current 页面手写生命周期结论。
 Formal Web Runtime Host `1.2.10` 已进入 Product Build `1.0.24.0` Assembly。Host 只依赖共享 Web Runtime Platform `0.3.1`。
 
 当前内部实现还保证 ControlBridge 先于 audio readiness 发布；该修复不改变公开 API、Contract、Assembly 或现有 Package/Product 身份。诊断 UI、协议 `1`、500-trigger、Take、restart-required 和成功路径没有新增能力。
@@ -42,7 +42,7 @@ Main thread 只负责诊断 UI、manifest/hash 装载门、Window 能力、用�
 
 ## 分发与身份门禁
 
-`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.11`、Platform `0.3.2`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。Browser Main readiness 只在 ControlBridge 与 audio adapter 均已发布后变为可见。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
+`scripts/web-runtime-host.sh build` 原子生成 `build/web/host/dist`：全部分发资产使用内容哈希文件名，canonical diagnostic distribution manifest 绑定 Product Build、Host `1.2.12`、Platform `0.3.3`、私有协议 `1`、固定 512 MiB heap、四项资源上限、固定 Emscripten 身份及精确资产 inventory。Browser Main 在装载 runtime 前校验完整形状与 canonical bytes；共享 native gate 在创建 proxy queue、OPFS、Facade 或 audio adapter 前再次验证 Product Assembly 注入的 Host/contract/version triple。Browser Main readiness 只在 ControlBridge 与 audio adapter 均已发布后变为可见。任何漂移、重复或迟到初始化均 fail closed 为 `HOST_PROTOCOL_MISMATCH`。该 ownership 协议不是公开跨版本 Contract。
 
 proof-only server 只暴露指定 dist，设置精确 COOP/COEP/CORP/CSP 与 WASM MIME；仅 index/manifest 使用 `no-store`，内容哈希资产使用 immutable cache。它不是生产发布服务。
 
@@ -81,7 +81,7 @@ reconcile production alias，仅在仍指向本次 Deploy 时恢复 exact prior�
 evidence v1。official site response 的 `disabled: true` 被规范化为 `state: disabled` 并在
 smoke/Draft 前拒绝自动 enable；publication projection 接受并保留 Netlify UTC `Z`
 时间戳中的可选小数秒。该 tooling、workflow、历史 `1.0.15.2` 的 tag/Release 或任何部署证据，都不
-自动证明当前 Product Build `1.0.25.0` 或历史 Product Build `1.0.24.0` 已获得 remote verified tag、Release、Deploy ID、
+自动证明当前 Product Build `1.0.26.0` 或历史 Product Build `1.0.25.0` / `1.0.24.0` 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。不可将本地 Host Proof、部署
 工具测试或 PR Preview 上升为当前候选的公开部署结论。
 

@@ -45,7 +45,7 @@ expected_modules = {
     ),
     "packages/application-facade/module.json": (
         "application-facade",
-        "1.4.2",
+        "1.4.3",
         2,
         {
             "foundation": "0.2.0",
@@ -53,44 +53,44 @@ expected_modules = {
             "project-io": "0.6.0",
             "project-cooker": "0.3.0",
             "audio-runtime": "0.5.0",
-            "provider-sdk": "1.1.3",
+            "provider-sdk": "1.1.4",
         },
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "0.3.2",
+        "0.3.3",
         1,
-        {"application-facade": "1.4.2", "audio-runtime": "0.5.0"},
+        {"application-facade": "1.4.3", "audio-runtime": "0.5.0"},
     ),
     "apps/core-cli/module.json": (
         "core-cli",
-        "1.0.14",
+        "1.0.15",
         2,
-        {"application-facade": "1.4.2"},
+        {"application-facade": "1.4.3"},
     ),
     "apps/core-mcp/module.json": (
         "core-mcp",
-        "1.1.11",
+        "1.1.12",
         2,
-        {"application-facade": "1.4.2"},
+        {"application-facade": "1.4.3"},
     ),
     "apps/native-test-host/module.json": (
         "native-test-host",
-        "1.0.12",
+        "1.0.13",
         1,
-        {"application-facade": "1.4.2", "audio-runtime": "0.5.0"},
+        {"application-facade": "1.4.3", "audio-runtime": "0.5.0"},
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.2.11",
+        "1.2.12",
         1,
-        {"web-runtime-platform": "0.3.2"},
+        {"web-runtime-platform": "0.3.3"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.3.2",
+        "1.3.3",
         1,
-        {"web-runtime-platform": "0.3.2"},
+        {"web-runtime-platform": "0.3.3"},
     ),
 }
 for relative, (
@@ -224,7 +224,7 @@ assert assembly["product"] == {"id": "lmdj", "version": current}
 assert assembly["providers"] == [
     {
         "id": "local.proof.success",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -232,7 +232,7 @@ assert assembly["providers"] == [
     },
     {
         "id": "local.proof.failure",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "capabilities": [
             {"id": "proof.candidate.v2", "version": "2.0.0"}
         ],
@@ -241,7 +241,7 @@ assert assembly["providers"] == [
 ]
 provider_module = repo_root / "providers/local-proof-success/module.json"
 provider_digest = _provider_source_package_sha256(
-    "local.proof.success", "1.0.4", provider_module,
+    "local.proof.success", "1.0.5", provider_module,
 )
 assert provider_digest == next(
     item["sha256"] for item in tracked_lock["providers"]
@@ -252,7 +252,7 @@ with tempfile.TemporaryDirectory() as temp_dir:
     copied_provider = authority_root / "providers/local-proof-success"
     shutil.copytree(provider_module.parent, copied_provider)
     assert _provider_source_package_sha256(
-        "local.proof.success", "1.0.4", copied_provider / "module.json",
+        "local.proof.success", "1.0.5", copied_provider / "module.json",
         repo_root=authority_root,
     ) == provider_digest
 assert assembly["contracts"] == [
@@ -291,16 +291,16 @@ expected_provider_manifests = {
     "providers/local-proof-failure/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.failure",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.3"},
+        "dependencies": {"provider-sdk": "1.1.4"},
     },
     "providers/local-proof-success/module.json": {
         "contract": "lmdj.module.v1",
         "module": "local.proof.success",
-        "version": "1.0.4",
+        "version": "1.0.5",
         "api_version": 2,
-        "dependencies": {"provider-sdk": "1.1.3"},
+        "dependencies": {"provider-sdk": "1.1.4"},
     },
 }
 actual_provider_manifests = sorted(

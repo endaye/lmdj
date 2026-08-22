@@ -7,7 +7,9 @@
 // whether a *completed* mutation left a state the next read would reject, and
 // whether the lock that serialized it survived. Those are the relations here.
 
+#include <algorithm>
 #include <chrono>
+#include <cerrno>
 #include <exception>
 #include <filesystem>
 #include <fstream>
@@ -18,7 +20,13 @@
 #include <utility>
 #include <vector>
 
+#include <fcntl.h>
 #include <nlohmann/json.hpp>
+#include <signal.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 #include <lmdj/foundation/error.hpp>
 #include <lmdj/foundation/json.hpp>
@@ -62,6 +70,84 @@ class TempDirectory {
   std::filesystem::path path_;
 };
 
+class ChildSettingsLock {
+ public:
+  explicit ChildSettingsLock(const std::filesystem::path& lock_path) {
+    int ready_pipe[2];
+    if (::pipe(ready_pipe) != 0) {
+      throw std::runtime_error("failed to create child readiness pipe");
+    }
+
+    child_ = ::fork();
+    if (child_ == -1) {
+      ::close(ready_pipe[0]);
+      ::close(ready_pipe[1]);
+      throw std::runtime_error("failed to fork child lock owner");
+    }
+    if (child_ == 0) {
+      ::close(ready_pipe[0]);
+      const auto descriptor = ::open(
+          lock_path.c_str(), O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+      if (descriptor == -1 || ::flock(descriptor, LOCK_EX) != 0) {
+        _exit(2);
+      }
+      constexpr char kReady = 'R';
+      if (::write(ready_pipe[1], &kReady, 1) != 1) {
+        _exit(3);
+      }
+      ::close(ready_pipe[1]);
+      for (;;) {
+        ::pause();
+      }
+    }
+
+    ::close(ready_pipe[1]);
+    char ready = 0;
+    ssize_t read_result;
+    do {
+      read_result = ::read(ready_pipe[0], &ready, 1);
+    } while (read_result == -1 && errno == EINTR);
+    ::close(ready_pipe[0]);
+    if (read_result != 1 || ready != 'R') {
+      terminate_and_reap();
+      throw std::runtime_error("child lock owner did not become ready");
+    }
+  }
+
+  ~ChildSettingsLock() { terminate_and_reap_noexcept(); }
+
+  ChildSettingsLock(const ChildSettingsLock&) = delete;
+  ChildSettingsLock& operator=(const ChildSettingsLock&) = delete;
+
+  void terminate_and_reap() {
+    if (!terminate_and_reap_noexcept()) {
+      throw std::runtime_error("failed to terminate and reap child lock owner");
+    }
+  }
+
+ private:
+  bool terminate_and_reap_noexcept() noexcept {
+    if (child_ <= 0) {
+      return true;
+    }
+    if (::kill(child_, SIGKILL) != 0 && errno != ESRCH) {
+      return false;
+    }
+    int status = 0;
+    pid_t waited;
+    do {
+      waited = ::waitpid(child_, &status, 0);
+    } while (waited == -1 && errno == EINTR);
+    if (waited != child_) {
+      return false;
+    }
+    child_ = -1;
+    return true;
+  }
+
+  pid_t child_ = -1;
+};
+
 std::string read_bytes(const std::filesystem::path& path) {
   std::ifstream stream(path, std::ios::binary);
   if (!stream) {
@@ -91,11 +177,16 @@ std::vector<std::string> host_settings_violations(
   const auto settings_path = workspace / "host-settings.json";
   const auto lock_path = workspace / ".host-settings.lock";
 
-  // Relation 1: the lock never survives a completed operation. A lock left
-  // behind blocks every later write with "host settings are busy", and no
-  // staleness, owner, or timeout recovery exists -- see finding G3.
-  if (std::filesystem::exists(lock_path)) {
-    violations.push_back("the host settings lock survived the sequence");
+  // Relation 1: the persistent lock path is a regular file. Ownership is held
+  // by the kernel, so the file remains while process death releases the lock.
+  std::error_code lock_status_error;
+  const auto lock_status =
+      std::filesystem::symlink_status(lock_path, lock_status_error);
+  if (!lock_status_error &&
+      lock_status.type() != std::filesystem::file_type::not_found &&
+      (std::filesystem::is_symlink(lock_status) ||
+       !std::filesystem::is_regular_file(lock_status))) {
+    violations.push_back("the host settings lock is not a regular file");
   }
 
   if (!std::filesystem::exists(settings_path)) {
@@ -188,8 +279,8 @@ AttemptStore store_at(const std::filesystem::path& workspace_root) {
 // Tests
 // ---------------------------------------------------------------------------
 
-// A single selection leaves a readable, canonical file and no lock.
-void test_selection_leaves_canonical_settings_and_no_lock() {
+// A single selection leaves a readable, canonical file and a safe lock file.
+void test_selection_leaves_canonical_settings_and_safe_lock() {
   const TempDirectory temp;
   const auto registry = proof_registry();
   auto store = store_at(temp.path());
@@ -200,6 +291,8 @@ void test_selection_leaves_canonical_settings_and_no_lock() {
                  .has_value());
 
   check_settings_hold(temp.path());
+  LMDJ_CHECK(!std::filesystem::is_directory(
+      temp.path() / ".lmdj-workspace/.host-settings.lock"));
 
   const auto selected = store.selected_provider(std::string(kCapability));
   LMDJ_CHECK(selected.has_value());
@@ -227,9 +320,9 @@ void test_repeated_selection_stays_canonical_and_readable() {
   LMDJ_CHECK(selected.value() == "local.proof.success");
 }
 
-// A rejected selection must not leave a lock behind, and must not damage the
-// selection already recorded. Failure paths are where locks leak.
-void test_rejected_selection_leaves_no_lock_and_no_damage() {
+// A rejected selection must release lock ownership and must not damage the
+// selection already recorded. Failure paths are where descriptors leak.
+void test_rejected_selection_leaves_no_lock_owner_and_no_damage() {
   const TempDirectory temp;
   const auto registry = proof_registry();
   auto store = store_at(temp.path());
@@ -305,16 +398,36 @@ void test_harness_detects_each_corruption() {
     std::ofstream(workspace / ".host-settings.json.tmp.1.1") << "x";
     LMDJ_CHECK(!host_settings_violations(temp.path()).empty());
   }
+
+  const auto check_invalid_lock = [&prepare](const auto& create_invalid_lock) {
+    const TempDirectory temp;
+    const auto workspace = prepare(temp);
+    create_invalid_lock(workspace / ".host-settings.lock");
+    const auto violations = host_settings_violations(temp.path());
+    LMDJ_CHECK(
+        std::find(
+            violations.begin(),
+            violations.end(),
+            "the host settings lock is not a regular file") !=
+        violations.end());
+  };
+  check_invalid_lock([](const std::filesystem::path& path) {
+    std::filesystem::remove(path);
+    std::filesystem::create_directory(path);
+  });
+  check_invalid_lock([](const std::filesystem::path& path) {
+    std::filesystem::remove(path);
+    std::filesystem::create_symlink("host-settings.json", path);
+  });
+  check_invalid_lock([](const std::filesystem::path& path) {
+    std::filesystem::remove(path);
+    LMDJ_CHECK(::mkfifo(path.c_str(), 0600) == 0);
+  });
 }
 
-// Finding G3, pinned as an observable fact.
-//
-// The lock is a bare create_directory with no pid, owner, or timestamp. A
-// process killed while holding it leaves the directory behind, and every
-// later write fails forever with "host settings are busy". This test asserts
-// the *current* behaviour so the defect cannot be lost; fixing G3 has to come
-// here and change the second assertion deliberately.
-void test_orphaned_lock_is_detected_and_blocks_every_write() {
+// A live process owns the kernel lock, so a contender fails fast. Process
+// death releases ownership even though the private regular lock file remains.
+void test_write_recovers_after_lock_owner_death() {
   const TempDirectory temp;
   const auto registry = proof_registry();
   auto store = store_at(temp.path());
@@ -324,37 +437,37 @@ void test_orphaned_lock_is_detected_and_blocks_every_write() {
                      std::string(kCapability), "local.proof.success", registry)
                  .has_value());
 
-  // Simulate a process killed while holding the lock.
   const auto lock_path =
       temp.path() / ".lmdj-workspace/.host-settings.lock";
-  std::filesystem::create_directory(lock_path);
-
-  // The harness sees it.
-  const auto violations = host_settings_violations(temp.path());
-  LMDJ_CHECK(violations.size() == 1);
-  LMDJ_CHECK(violations.front() == "the host settings lock survived the sequence");
-
-  // And no write can ever succeed again: there is no staleness recovery.
+  ChildSettingsLock child_lock(lock_path);
   const auto blocked = store.set_provider_selection(
       std::string(kCapability), "local.proof.failure", registry);
   LMDJ_CHECK(!blocked.has_value());
   LMDJ_CHECK(blocked.error().code == ErrorCode::io_error);
+  LMDJ_CHECK(blocked.error().message == "host settings are busy");
 
-  // Reads still work, so the failure is write-only and silent to a reader.
+  child_lock.terminate_and_reap();
+  LMDJ_CHECK(store
+                 .set_provider_selection(
+                     std::string(kCapability), "local.proof.failure", registry)
+                 .has_value());
+
   const auto selected = store.selected_provider(std::string(kCapability));
   LMDJ_CHECK(selected.has_value());
-  LMDJ_CHECK(selected.value() == "local.proof.success");
+  LMDJ_CHECK(selected.value() == "local.proof.failure");
+  check_settings_hold(temp.path());
+  LMDJ_CHECK(!std::filesystem::is_directory(lock_path));
 }
 
 }  // namespace
 
 int main() {
   try {
-    test_selection_leaves_canonical_settings_and_no_lock();
+    test_selection_leaves_canonical_settings_and_safe_lock();
     test_repeated_selection_stays_canonical_and_readable();
-    test_rejected_selection_leaves_no_lock_and_no_damage();
+    test_rejected_selection_leaves_no_lock_owner_and_no_damage();
     test_harness_detects_each_corruption();
-    test_orphaned_lock_is_detected_and_blocks_every_write();
+    test_write_recovers_after_lock_owner_death();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

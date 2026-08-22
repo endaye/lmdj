@@ -808,8 +808,8 @@ void test_provider_selection_updates_are_serialized() {
     LMDJ_CHECK(beta.value() == implementation->id());
   }
 
-  TempDirectory busy_temp;
-  auto store = store_at(busy_temp.path());
+  TempDirectory persistent_lock_temp;
+  auto store = store_at(persistent_lock_temp.path());
   LMDJ_CHECK(
       store
           .set_provider_selection(
@@ -818,14 +818,11 @@ void test_provider_selection_updates_are_serialized() {
               registry)
           .has_value());
   const auto lock_path =
-      busy_temp.path() / ".lmdj-workspace/.host-settings.lock";
-  LMDJ_CHECK(std::filesystem::create_directory(lock_path));
-  const auto busy = store.set_provider_selection(
+      persistent_lock_temp.path() / ".lmdj-workspace/.host-settings.lock";
+  LMDJ_CHECK(std::filesystem::is_regular_file(lock_path));
+  const auto continued = store.set_provider_selection(
       "proof.beta.v1", implementation->id(), registry);
-  LMDJ_CHECK(!busy.has_value());
-  LMDJ_CHECK(busy.error().code == ErrorCode::io_error);
-  LMDJ_CHECK(
-      busy.error().message.find("busy") != std::string::npos);
+  LMDJ_CHECK(continued.has_value());
 }
 
 void test_maximum_attempt_id_produces_a_valid_candidate_id() {
@@ -1014,6 +1011,25 @@ void test_parameters_are_hashed_without_workspace_staging() {
   LMDJ_CHECK(source.find("picosha2") != std::string::npos);
 }
 
+void test_host_settings_lock_uses_kernel_owned_nonblocking_file_lock() {
+  const auto source =
+      read_bytes("packages/provider-sdk/src/attempt_store.cpp");
+  const auto lock_region_at = source.find("acquire_settings_lock(");
+  const auto lock_region_end =
+      source.find("reject_existing_or_symlink(", lock_region_at);
+  LMDJ_CHECK(lock_region_at != std::string::npos);
+  LMDJ_CHECK(lock_region_end > lock_region_at);
+
+  const auto lock_region =
+      source.substr(lock_region_at, lock_region_end - lock_region_at);
+  LMDJ_CHECK(lock_region.find("LOCK_EX | LOCK_NB") != std::string::npos);
+  LMDJ_CHECK(
+      lock_region.find("std::filesystem::create_directory(lock_path") ==
+      std::string::npos);
+  LMDJ_CHECK(
+      lock_region.find("release_settings_lock") == std::string::npos);
+}
+
 void test_proof_failure_result_remains_exact_but_record_is_redacted() {
   TempDirectory temp;
   const auto registry = proof_registry();
@@ -1136,6 +1152,7 @@ int main() {
     test_provider_error_persistence_is_redacted();
     test_attempt_store_read_api_validates_private_terminal_formats();
     test_parameters_are_hashed_without_workspace_staging();
+    test_host_settings_lock_uses_kernel_owned_nonblocking_file_lock();
     test_proof_failure_result_remains_exact_but_record_is_redacted();
     test_evidence_writes_are_durable_and_host_settings_are_not();
     test_successful_proof_attempt_leaves_inspectable_terminal_record();

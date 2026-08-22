@@ -18,6 +18,14 @@
 #include <tuple>
 #include <utility>
 
+#ifndef __EMSCRIPTEN__
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/file.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#endif
+
 #include <nlohmann/json.hpp>
 #include <picosha2.h>
 
@@ -377,40 +385,124 @@ foundation::Result<void> publish_attempt_outputs(
   return foundation::Result<void>::success();
 }
 
-foundation::Result<void> acquire_settings_lock(
-    const std::filesystem::path& lock_path) {
-  std::error_code create_error;
-  if (std::filesystem::create_directory(lock_path, create_error)) {
-    return foundation::Result<void>::success();
-  }
-  if (!create_error ||
-      create_error == std::make_error_code(std::errc::file_exists)) {
-    return foundation::Result<void>::failure(
-        Error{
-            ErrorCode::io_error,
-            "host settings are busy",
-            {{"path", lock_path.generic_string()}},
-        });
-  }
-  return foundation::Result<void>::failure(
-      io_error(
-          "host settings lock could not be created",
-          lock_path,
-          create_error));
-}
+class SettingsFileLock {
+ public:
+  explicit SettingsFileLock(int descriptor) : descriptor_(descriptor) {}
+  SettingsFileLock(const SettingsFileLock&) = delete;
+  SettingsFileLock& operator=(const SettingsFileLock&) = delete;
 
-foundation::Result<void> release_settings_lock(
-    const std::filesystem::path& lock_path) {
-  std::error_code remove_error;
-  if (!std::filesystem::remove(lock_path, remove_error) ||
-      remove_error) {
-    return foundation::Result<void>::failure(
-        io_error(
-            "host settings lock could not be released",
-            lock_path,
-            remove_error));
+  ~SettingsFileLock() {
+#ifndef __EMSCRIPTEN__
+    if (descriptor_ >= 0) {
+      ::close(descriptor_);
+    }
+#endif
   }
-  return foundation::Result<void>::success();
+
+ private:
+  int descriptor_;
+};
+
+foundation::Result<int> acquire_settings_lock(
+    const std::filesystem::path& lock_path) {
+#ifdef __EMSCRIPTEN__
+  static_cast<void>(lock_path);
+  return foundation::Result<int>::success(-1);
+#else
+  int descriptor;
+  do {
+    descriptor = ::open(
+        lock_path.c_str(),
+        O_RDWR | O_CREAT | O_CLOEXEC | O_NOFOLLOW,
+        0600);
+  } while (descriptor == -1 && errno == EINTR);
+  if (descriptor == -1) {
+    return foundation::Result<int>::failure(
+        io_error(
+            "host settings lock could not be opened",
+            lock_path,
+            {errno, std::system_category()}));
+  }
+
+  struct stat descriptor_metadata {};
+  int stat_result;
+  do {
+    stat_result = ::fstat(descriptor, &descriptor_metadata);
+  } while (stat_result == -1 && errno == EINTR);
+  if (stat_result == -1) {
+    const auto error = io_error(
+        "host settings lock could not be inspected",
+        lock_path,
+        {errno, std::system_category()});
+    ::close(descriptor);
+    return foundation::Result<int>::failure(error);
+  }
+  if (!S_ISREG(descriptor_metadata.st_mode) ||
+      descriptor_metadata.st_uid != ::geteuid() ||
+      descriptor_metadata.st_nlink != 1) {
+    const auto error = io_error(
+        "host settings lock is not an owned single-link regular file",
+        lock_path);
+    ::close(descriptor);
+    return foundation::Result<int>::failure(error);
+  }
+
+  int chmod_result;
+  do {
+    chmod_result = ::fchmod(descriptor, 0600);
+  } while (chmod_result == -1 && errno == EINTR);
+  if (chmod_result == -1) {
+    const auto error = io_error(
+        "host settings lock could not be made private",
+        lock_path,
+        {errno, std::system_category()});
+    ::close(descriptor);
+    return foundation::Result<int>::failure(error);
+  }
+
+  while (::flock(descriptor, LOCK_EX | LOCK_NB) != 0) {
+    if (errno == EINTR) {
+      continue;
+    }
+    if (errno == EWOULDBLOCK || errno == EAGAIN) {
+      const auto error = Error{
+          ErrorCode::io_error,
+          "host settings are busy",
+          {{"path", lock_path.generic_string()}},
+      };
+      ::close(descriptor);
+      return foundation::Result<int>::failure(error);
+    }
+    const auto error = io_error(
+        "host settings lock could not be acquired",
+        lock_path,
+        {errno, std::system_category()});
+    ::close(descriptor);
+    return foundation::Result<int>::failure(error);
+  }
+
+  struct stat named_metadata {};
+  int lstat_result;
+  do {
+    lstat_result = ::lstat(lock_path.c_str(), &named_metadata);
+  } while (lstat_result == -1 && errno == EINTR);
+  if (lstat_result == -1 || !S_ISREG(named_metadata.st_mode) ||
+      named_metadata.st_uid != ::geteuid() || named_metadata.st_nlink != 1 ||
+      named_metadata.st_dev != descriptor_metadata.st_dev ||
+      named_metadata.st_ino != descriptor_metadata.st_ino) {
+    const auto system_error = lstat_result == -1
+                                  ? std::error_code(errno, std::system_category())
+                                  : std::error_code{};
+    const auto error = io_error(
+        "host settings lock identity changed while acquiring",
+        lock_path,
+        system_error);
+    ::close(descriptor);
+    return foundation::Result<int>::failure(error);
+  }
+
+  return foundation::Result<int>::success(descriptor);
+#endif
 }
 
 foundation::Result<void> reject_existing_or_symlink(
@@ -1084,28 +1176,20 @@ foundation::Result<void> AttemptStore::set_provider_selection(
       workspace.value() / ".host-settings.lock";
   const auto acquired = acquire_settings_lock(lock_path);
   if (!acquired.has_value()) {
-    return acquired;
+    return foundation::Result<void>::failure(acquired.error());
   }
+  const SettingsFileLock settings_lock(acquired.value());
   const auto settings_path = workspace.value() / "host-settings.json";
   const auto loaded = read_host_settings(settings_path, true);
   if (!loaded.has_value()) {
-    const auto released = release_settings_lock(lock_path);
-    if (!released.has_value()) {
-      return released;
-    }
     return foundation::Result<void>::failure(loaded.error());
   }
   auto settings = loaded.value();
   settings["provider_selections"][std::move(capability)] =
       std::move(provider_id);
-  const auto written = write_replace_atomic(
+  return write_replace_atomic(
       settings_path,
       foundation::canonical_json(settings) + "\n");
-  const auto released = release_settings_lock(lock_path);
-  if (!released.has_value()) {
-    return released;
-  }
-  return written;
 }
 
 foundation::Result<std::string> AttemptStore::selected_provider(
