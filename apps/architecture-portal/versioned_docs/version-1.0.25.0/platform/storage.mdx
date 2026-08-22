@@ -1,0 +1,24 @@
+---
+title: Storage Platform
+area: platform
+status: implemented
+owners: [core, platform]
+source_paths: [packages/project-io, contracts/project/lmdj.project-bundle.v1.schema.json, tests/core/project_io]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## Contract
+平台存储为 Project I/O 提供文件、目录 lease、原子发布与可丢弃 Workspace Cache 能力，不解释 Project 业务语义。
+## 事务模型
+Project/Asset 写入先进入 token 专属临时目录，完整校验后以一个 revision 发布；commit/abort/坏 offset/启动清理只删除整个目录，故障不得留下被误认作权威 Project 的半成品。
+## Journal
+Take Journal、Project Store、Sample staging、waveform cache 与 Bundle publication journal 的生命周期分开，恢复规则由 Project I/O/Facade 统一执行。
+## Portable transfer
+`lmdj.project-bundle.v1` 只传输完整 Project 内容。managed Bundle paths use the portable ASCII segment subset `[A-Za-z0-9._/-]`；Project payload text remains UTF-8。导入在临时 staging 中完成路径、大小、顺序与 hash 验证，再通过 journal 原子发布；Host 不解释或直接写入 Project internals。
+## 证据
+Storage platform contract、Sample cleanup retry/age gate/cache corruption rebuild、Bundle round trip/publication、fault matrix、project store 和 journal 测试覆盖本地与 OPFS 实现。
+## 限制
+云同步、冲突合并、协同与远程备份未在当前平台 Contract 中实现。

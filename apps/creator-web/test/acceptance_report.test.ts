@@ -9,8 +9,8 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
     identity: {
       productBuild: TEST_PRODUCT_BUILD,
       hostId: "creator-web",
-      hostVersion: "1.3.1",
-      platformVersion: "0.3.1",
+      hostVersion: "1.3.2",
+      platformVersion: "0.3.2",
       protocolVersion: 1,
     },
     capabilities: {
@@ -59,8 +59,8 @@ test("emits only deterministic privacy-safe acceptance facts", () => {
     contract: "lmdj.creator-web.acceptance.v1",
     product_build: TEST_PRODUCT_BUILD,
     host_id: "creator-web",
-    host_version: "1.3.1",
-    platform_version: "0.3.1",
+    host_version: "1.3.2",
+    platform_version: "0.3.2",
     protocol_version: 1,
     capabilities: {
       secure_context: true,

@@ -58,6 +58,24 @@ class CoreCoverageRunnerTest(unittest.TestCase):
             coverage_targets,
         )
 
+    def test_durable_file_test_is_a_coverage_object(self) -> None:
+        root_cmake = root_cmake_path.read_text(encoding="utf-8")
+        coverage_targets_start = root_cmake.index(
+            "    lmdj_coverage_targets\n"
+        )
+        coverage_targets_end = root_cmake.index(
+            "  )\n",
+            coverage_targets_start,
+        )
+        coverage_targets = root_cmake[
+            coverage_targets_start:coverage_targets_end
+        ]
+
+        self.assertIn(
+            "    lmdj_provider_durable_file_tests\n",
+            coverage_targets,
+        )
+
     def test_object_probe_keeps_native_audio_device_free(self) -> None:
         runner = runner_path.read_text(encoding="utf-8")
         probe_start = runner.index('probe_root="$run_root/probes"')

@@ -384,6 +384,40 @@ class ReleaseAuditTest(unittest.TestCase):
         report = audit(context, remote=False, tag=CURRENT_PRODUCT_TAG)
         self.assertEqual({item.code for item in report.findings}, {"ok"})
 
+    def test_current_product_intent_target_exists_in_this_clone(self) -> None:
+        ledger = json.loads(
+            (ROOT / "docs/release-evidence/release-intents.json").read_text(
+                encoding="utf-8",
+            ),
+        )
+        matches = [
+            entry
+            for entry in ledger["entries"]
+            if entry.get("kind") == "product"
+            and entry.get("identity") == CURRENT_PRODUCT_BUILD
+        ]
+        self.assertEqual(len(matches), 1)
+        target = matches[0]["target_revision"]
+        present = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(ROOT),
+                "cat-file",
+                "-e",
+                f"{target}^{{commit}}",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        self.assertEqual(
+            present.returncode,
+            0,
+            f"Product intent {CURRENT_PRODUCT_TAG} target {target} "
+            "is absent from this clone",
+        )
+
     def test_local_audit_does_not_require_abandoned_target_objects(self) -> None:
         abandoned = self.entry(
             tag="lmdj-v1.0.16.6", disposition="abandoned", kind="product",
