@@ -55,9 +55,10 @@ change.
 ### Workspace state defects found by the runtime invariant harness
 
 From [`2026-08-19-lmdj-runtime-invariant-harness.md`](../superpowers/plans/2026-08-19-lmdj-runtime-invariant-harness.md).
-That plan checks the relations; it deliberately does **not** fix these. `G1`,
-`G3` and `G5` are already pinned by tests asserting the current behaviour, so
-each fix has to come back and change its assertion deliberately.
+That plan checks the relations; it deliberately does **not** fix them. `G1`
+and `G3` have since deliberately replaced their pinned defect assertions with
+fixed-behaviour regressions; `G5` remains pinned to the current behaviour until
+its decision is made.
 
 **Batch G1, G2 and G4 into one commit.** All three edit
 `packages/provider-sdk/src/attempt_store.cpp`, and a `provider-sdk` PATCH
@@ -77,7 +78,7 @@ fixes rather than three times is the whole argument.
 | ID | Task | Why it needs an argument, not just a diff |
 | --- | --- | --- |
 | G2 | `fsync` the Host settings write, or state why this state is allowed to be non-durable | `write_bytes` flushes and closes but never `fsync`s, and `write_replace_atomic` never syncs the containing directory around the `rename`, so a crash can leave a truncated file that every later read rejects. The asymmetry looks unintentional — the lease path *does* sync (`native/storage_platform.cpp:1057`) — but the fix changes the I/O primitive, costs a sync per selection write, and means nothing on the Emscripten/OPFS path. Argue durability scope, not just the call ([#203](https://github.com/endaye/lmdj/issues/203)) |
-| G3 | Give the Host settings lock crash recovery, or define what a surviving lock means | The lock is a bare `create_directory` with no pid, owner, or timestamp, so a killed process blocks every later write forever with `host settings are busy` while **reads keep succeeding** — the failure is silent to a reader. Any fix picks crash-recovery semantics (staleness window? owner identity? pid reuse?), which is a Workspace-state decision, not a diff ([#204](https://github.com/endaye/lmdj/issues/204)) |
+| ~~G3~~ | ~~Give the Host settings lock crash recovery, or define what a surviving lock means~~ | **Done 2026-08-22** ([#204](https://github.com/endaye/lmdj/issues/204), [plan](../superpowers/plans/2026-08-22-lmdj-host-settings-flock-crash-recovery.md)). Native writers take fail-fast `flock(LOCK_EX | LOCK_NB)` and hold its descriptor across the complete read-modify-write; the kernel releases ownership when the process dies. Emscripten/Web remains a no-op because it has no persistent or concurrent Provider execution path. The crash-recovery regression deliberately replaces the pinned directory-lock behaviour. |
 | G5 | Decide whether `publish_queue_full` should be reachable, or document the branch as defensive | Unreachable at the current equal capacities, so its rollback is dead code. Either the Bank and publish-queue headroom should differ deliberately, or the branch is defence against a future capacity change and should say so. `audio.snapshot_publication_stress` pins the current answer with a `static_assert`, so whichever way this goes the test must be updated with it ([#205](https://github.com/endaye/lmdj/issues/205)) |
 | ~~C1~~ | ~~Stabilise the `application-facade` coverage gate~~ | **Done 2026-08-19**, though not as filed and not as first rebutted. A 2026-08-18 measurement claimed Ubuntu was deterministic and that C1 did not exist; that was undersampled and is **withdrawn** — a byte-identical tree measured 3526 and 3522 covered lines on two Ubuntu runs, the ±4 C1 described. The old 84 floor sat inside that band with ~2 lines of margin. Resolved by C6 raising real coverage and ratcheting the floor to 85, which leaves ~47 lines |
 | ~~C6~~ | ~~Raise facade line coverage to 90% and ratchet the floor~~ | **Substantially done 2026-08-19** (#188, `93b7d3f2`). 84.04% → **86.15%** Ubuntu, via behavioral tests for failure semantics that had none: 22 public catch-alls, Sample import storage seams, the session limit, and startup's staging refusal — all mutation-verified. Floor ratcheted 84 → 85. The 90% target remains open: `render_offline` and `cook_project` need a cook/render seam the storage decorator does not reach, and belong in the new `facade.failure_contracts` binary |

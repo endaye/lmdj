@@ -17,7 +17,15 @@
 - Do not make `host-settings.json` durable; Issue #203 deliberately keeps it flush-and-rename configuration while making Attempt evidence durable.
 - Do not add public Provider SDK, Application Facade, Contract, Project Truth, or Web storage surface.
 - Native tests must use process synchronization, not sleeps, to prove contention and release after process death.
-- Historical plans, release evidence, and immutable Portal snapshots remain byte-identical.
+- Historical plans, earlier release evidence, and earlier immutable Portal snapshots remain byte-identical. This plan and the current `1.0.26.0` intent may record the Controller execution evidence below.
+
+## Controller execution amendment
+
+The Architecture Portal snapshot command requires a clean worktree and records the committed source revision. The Controller therefore committed the byte-final implementation and current Portal truth as `129f6908e932a7a840f5f52f6f5ba4b068b7ebd2`, then generated and committed the immutable `1.0.26.0` snapshot as descendant `20650c0deb8292639791d80983c0559f2da7447c`.
+
+The Release intent must bind a verified ancestor that already contains the snapshot. The final local correction `1aa70b27ca1611ee23b8493617d6da46599b7a83` only aligns the source-package test expectation with the planned local-proof Provider version `1.0.5`; the complete implementation at that revision passed `scripts/core.sh test dev full` with `73/73` tests. The `1.0.26.0` Release intent therefore binds `1aa70b27ca1611ee23b8493617d6da46599b7a83`, not this later documentation amendment commit.
+
+These local provenance commits are required execution evidence; they do not change the integration contract. The Pull Request still squash-merges to `main` as one atomic Conventional Commit after exact-head review and CI.
 
 ---
 
@@ -148,17 +156,17 @@ Reason: the Provider SDK's native cross-process lock lifetime and test evidence 
 - Consumes: `AttemptStore::set_provider_selection`, the existing canonical `host-settings.json` format, and the private `.host-settings.lock` path.
 - Produces: no public API; native lock ownership is represented only by a private file descriptor and the existing typed error contract.
 
-- [ ] **Step 1: Write the failing crash-recovery test**
+- [x] **Step 1: Write the failing crash-recovery test**
 
 In `host_settings_invariant_test.cpp`, replace the test that pins an orphaned directory with a POSIX child-process fixture. The child opens `.host-settings.lock` as a regular file, takes `LOCK_EX`, signals readiness through a pipe, and waits. The parent must observe `host settings are busy`, terminate and reap the child, then successfully overwrite the selection and read back the new Provider. Make the fixture's destructor terminate/reap a still-live child so assertion failures cannot leak a process.
 
 Change `host_settings_violations` so a persistent owned regular lock file is valid, while a directory/symlink/special `.host-settings.lock` still reports `the host settings lock is not a regular file`. Assert the successful sequence leaves no violation and no `.host-settings.lock/` directory.
 
-- [ ] **Step 2: Add the failing implementation-shape regression**
+- [x] **Step 2: Add the failing implementation-shape regression**
 
 In `spec_regression_test.cpp`, read `attempt_store.cpp` and assert the Host settings lock region contains `LOCK_EX | LOCK_NB` and does not contain `std::filesystem::create_directory(lock_path` or `release_settings_lock`. This protects the required kernel-lifetime primitive without adding a public test hook.
 
-- [ ] **Step 3: Run RED**
+- [x] **Step 3: Run RED**
 
 ```bash
 scripts/core.sh build dev
@@ -169,7 +177,7 @@ ctest --preset dev \
 
 Expected: FAIL because the old implementation treats the child-created regular lock file as permanently busy and still contains the directory-lock acquisition/release functions.
 
-- [ ] **Step 4: Implement the private native file lock**
+- [x] **Step 4: Implement the private native file lock**
 
 In `attempt_store.cpp`, add native POSIX includes under `#ifndef __EMSCRIPTEN__`. Replace `acquire_settings_lock` / `release_settings_lock` with:
 
@@ -183,7 +191,7 @@ In `attempt_store.cpp`, add native POSIX includes under `#ifndef __EMSCRIPTEN__`
 
 Construct the RAII owner immediately after acquisition in `set_provider_selection`, delete every explicit release branch, and keep the owner alive through `read_host_settings` and `write_replace_atomic`.
 
-- [ ] **Step 5: Run GREEN and the provider neighborhood**
+- [x] **Step 5: Run GREEN and the provider neighborhood**
 
 ```bash
 scripts/core.sh build dev
@@ -194,7 +202,7 @@ ctest --preset dev \
 
 Expected: all selected tests PASS. Run the two changed tests at least twice to expose process cleanup or descriptor-lifetime flakiness.
 
-- [ ] **Step 6: Apply the exact version cascade**
+- [x] **Step 6: Apply the exact version cascade**
 
 Update every current manifest and baked identity from the Version Management table. Do not rewrite historical version statements or immutable snapshot files. Regenerate the lock and Web identity only after `assembly.json` and `compiled_assembly.cpp` are byte-final:
 
@@ -211,7 +219,7 @@ python3 scripts/version.py verify \
 python3 tools/web-runtime/generate_runtime_identity.py --check
 ```
 
-- [ ] **Step 7: Update current Portal truth and freeze the canary snapshot**
+- [x] **Step 7: Update current Portal truth and freeze the canary snapshot**
 
 Record on `/core/modules/provider-sdk/` that native Host settings writers fail fast on a kernel-owned advisory lock and recover automatically when the owner exits; reads remain lock-free because publication is atomic rename. Record the new invariant test on `/operations/testing-and-proof/`, and describe `1.0.26.0` as the G3 crash-recovery/identity cascade rather than a new product capability on the remaining affected routes.
 
@@ -222,7 +230,7 @@ scripts/architecture-portal.sh check
 
 Expected: the snapshot command freezes `1.0.26.0 (canary)` and the full Portal check exits 0.
 
-- [ ] **Step 8: Run full local verification**
+- [x] **Step 8: Run full local verification**
 
 ```bash
 scripts/core.sh test dev full
