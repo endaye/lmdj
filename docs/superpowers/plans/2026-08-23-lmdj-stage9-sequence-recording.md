@@ -529,8 +529,8 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 - Create: generated immutable Architecture Portal snapshot and provenance files for Product Build `1.0.31.0`
 - Modify: `docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md`
 
-- [ ] Start from Task 9's committed, clean head. Run `git status --short`; expect no output. Run `python3 scripts/version.py verify --version-file products/lmdj/version.json`; expect `1.0.30.0` verification PASS.
-- [ ] Run `scripts/architecture-portal.sh version 1.0.30.0 canary`; inspect the generated identity, provenance, route inventory, and Assembly lock digest.
+- [ ] Start from Task 9's committed, clean head. Run `git status --short`; expect no output. Run `python3 scripts/version.py verify --version-file products/lmdj/version.json`; expect `1.0.31.0` verification PASS.
+- [ ] Run `scripts/architecture-portal.sh version 1.0.31.0 canary`; inspect the generated identity, provenance, route inventory, and Assembly lock digest.
 - [ ] Run `scripts/architecture-portal.sh check`; expect the immutable snapshot and all checks PASS.
 - [ ] Run `scripts/core.sh proof`; expect PASS against the exact Task 9 source identity.
 - [ ] Update the acceptance ledger with the exact Task 9 revision, snapshot paths/digests, and command results. Do not claim merged-main, Release, deployment, Channel promotion, or unperformed physical evidence.
