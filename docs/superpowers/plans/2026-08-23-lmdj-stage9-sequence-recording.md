@@ -545,7 +545,7 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 - Foundation: `0.2.0 → 0.3.0` for `SequenceSessionId`.
 - Authoring Domain, Project I/O, Project Cooker, Audio Runtime, and Web Runtime Platform: move to `1.0.0` because their pre-1.0 Take/step or timing surfaces are replaced.
 - Application Facade: `1.4.4 → 2.0.0` because Take operations are removed and Sequence operations replace them.
-- Core CLI `1.0.16 → 2.0.0`, Core MCP `1.1.13 → 2.0.0`, Native Test Host `1.0.14 → 2.0.0`, Web Runtime Host `1.2.13 → 2.0.0`, and Creator Web `1.3.4 → 2.0.0` because their active recording/protocol surface changes incompatibly.
+- Core CLI `1.0.16 → 2.0.0`, Core MCP `1.1.13 → 2.0.0`, Native Test Host `1.0.14 → 2.0.0`, Web Runtime Host `1.2.13 → 2.0.0`, and Creator Web `1.4.0 → 2.0.0` because their active recording/protocol surface changes incompatibly. Creator `1.4.0` is the approved #213 pre-commit editing prerequisite after #212's corrected `1.3.6`.
 - Task 9 must re-read current manifests before applying versions. If another merged Build or module release has consumed an exact target, stop and amend this plan through design review; do not silently choose new identities.
 
 ## Documentation Impact
