@@ -22,6 +22,27 @@ function ceilProductQuotient(factor: number, total: number, divisor: number): nu
   return Number((bigProduct + bigDivisor - 1n) / bigDivisor);
 }
 
+function foldBlockPeaks(
+  peaks: number[],
+  samples: Float32Array,
+  startFrame: number,
+): void {
+  for (let sample = 0; sample < samples.length; sample += 1) {
+    const block = Math.floor((startFrame + sample) / ENVELOPE_BLOCK_FRAMES);
+    const magnitude = Math.abs(samples[sample] ?? 0);
+    const current = peaks[block];
+    if (current === undefined || magnitude > current) { peaks[block] = magnitude; }
+  }
+}
+
+function buildBlockPeaks(channels: readonly Float32Array[]): number[][] {
+  return channels.map((channel) => {
+    const peaks: number[] = [];
+    foldBlockPeaks(peaks, channel, 0);
+    return peaks;
+  });
+}
+
 export class CaptureBuffer {
   readonly channelCount: number;
   #chunks: Float32Array[][];
@@ -41,9 +62,8 @@ export class CaptureBuffer {
     result: Float32Array;
   } | null = null;
   // Per-channel max-abs peak of each ENVELOPE_BLOCK_FRAMES-sized block; the
-  // last entry is a partial block that keeps accumulating. Correct only
-  // because the buffer is append-only: slice() never mutates stored samples.
-  // If pre-commit editing is ever added, these summaries need invalidation.
+  // last entry is a partial block that keeps accumulating. Crop rebuilds the
+  // complete summary before publishing its replacement buffer revision.
   #blockPeaks: number[][];
 
   constructor(channelCount: 1 | 2) {
@@ -73,20 +93,34 @@ export class CaptureBuffer {
       if (chunkList === undefined || peaks === undefined) {
         throw new TypeError("Capture batch shape is invalid");
       }
-      chunkList.push(c.slice(0, accepted));
+      const acceptedChunk = c.slice(0, accepted);
+      chunkList.push(acceptedChunk);
       // Fold the new samples into the block summaries as they arrive; batch
       // boundaries and block boundaries are independent, so the last block
       // stays partial and keeps accumulating across appends.
-      for (let s = 0; s < accepted; s += 1) {
-        const block = Math.floor((this.#frames + s) / ENVELOPE_BLOCK_FRAMES);
-        const magnitude = Math.abs(c[s] ?? 0);
-        const current = peaks[block];
-        if (current === undefined || magnitude > current) { peaks[block] = magnitude; }
-      }
+      foldBlockPeaks(peaks, acceptedChunk, this.#frames);
     });
     this.#frames += accepted;
     this.#envelopeCache = null;
     return accepted;
+  }
+
+  crop(startFrame: number, frameCount: number): void {
+    if (!Number.isInteger(startFrame) || !Number.isInteger(frameCount) ||
+        startFrame < 0 || frameCount <= 0 || startFrame + frameCount > this.#frames) {
+      throw new RangeError("Capture crop is out of range");
+    }
+
+    const replacement = this.slice(startFrame, frameCount);
+    const replacementChunks = replacement.map((channel) => [channel]);
+    const replacementChunkStarts = [0];
+    const replacementPeaks = buildBlockPeaks(replacement);
+
+    this.#chunks = replacementChunks;
+    this.#chunkStarts = replacementChunkStarts;
+    this.#frames = frameCount;
+    this.#blockPeaks = replacementPeaks;
+    this.#envelopeCache = null;
   }
 
   slice(startFrame: number, frameCount: number): Float32Array[] {

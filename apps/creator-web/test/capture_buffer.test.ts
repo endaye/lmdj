@@ -33,6 +33,71 @@ describe("CaptureBuffer", () => {
     expect(() => buffer.slice(4, 8)).toThrow(RangeError);
   });
 
+  test("crops exact stereo frames across append chunks and rebases to zero", () => {
+    const buffer = new CaptureBuffer(2);
+    buffer.append([
+      Float32Array.from([0, 1, 2]),
+      Float32Array.from([10, 11, 12]),
+    ]);
+    buffer.append([
+      Float32Array.from([3, 4, 5]),
+      Float32Array.from([13, 14, 15]),
+    ]);
+
+    buffer.crop(2, 3);
+
+    expect(buffer.frameCount).toBe(3);
+    expect(buffer.slice(0, 3).map((channel) => Array.from(channel)))
+      .toEqual([[2, 3, 4], [12, 13, 14]]);
+  });
+
+  test("rejects invalid crops atomically without invalidating the envelope cache", () => {
+    const buffer = new CaptureBuffer(1);
+    buffer.append([Float32Array.from([0, 0.125, 0.25, 0.5])]);
+    const beforeFrames = buffer.frameCount;
+    const beforePcm = Array.from(buffer.slice(0, beforeFrames)[0] ?? []);
+    const beforeEnvelope = buffer.envelope(2, 0, beforeFrames);
+
+    for (const [startFrame, frameCount] of [
+      [-1, 2],
+      [0.5, 2],
+      [0, 0],
+      [3, 2],
+    ]) {
+      expect(() => buffer.crop(startFrame, frameCount)).toThrow(RangeError);
+      expect(buffer.frameCount).toBe(beforeFrames);
+      expect(Array.from(buffer.slice(0, beforeFrames)[0] ?? [])).toEqual(beforePcm);
+      expect(buffer.envelope(2, 0, beforeFrames)).toBe(beforeEnvelope);
+    }
+  });
+
+  test("rebuilds block peaks without retaining an excluded peak from the old block", () => {
+    const cropStart = 10;
+    const cropFrames = 4 * ENVELOPE_BLOCK_FRAMES;
+    const data = new Float32Array(cropStart + cropFrames).fill(0.25);
+    data[5] = 1;
+    const buffer = new CaptureBuffer(1);
+    buffer.append([data]);
+
+    buffer.crop(cropStart, cropFrames);
+
+    expect(Array.from(buffer.envelope(2, 0, cropFrames))).toEqual([0.25, 0.25]);
+  });
+
+  test("supports repeated crops and append after crop", () => {
+    const buffer = new CaptureBuffer(1);
+    buffer.append([Float32Array.from([0, 0.125, 0.25, 0.375, 0.5, 0.625])]);
+
+    buffer.crop(1, 5);
+    buffer.crop(1, 3);
+    expect(Array.from(buffer.slice(0, 3)[0] ?? [])).toEqual([0.25, 0.375, 0.5]);
+
+    buffer.append([Float32Array.from([0.75, 1])]);
+    expect(Array.from(buffer.slice(0, buffer.frameCount)[0] ?? []))
+      .toEqual([0.25, 0.375, 0.5, 0.75, 1]);
+    expect(Array.from(buffer.envelope(2, 0, buffer.frameCount))).toEqual([0.5, 1]);
+  });
+
   test("slices exact frames per channel and bins a max-abs envelope", () => {
     // Values k/8 are exact in float32, so equality assertions are stable.
     const left = Float32Array.from({length: 8}, (_, i) => (i + 1) / 8);
