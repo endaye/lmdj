@@ -61,6 +61,17 @@ describe("CaptureBuffer", () => {
     expect(Array.from(buffer.envelope(3, 2, 3))).toEqual([0.875, 0.375, 1]);
   });
 
+  test("uses exact integer bin boundaries for a 14-frame 400-bin window", () => {
+    const data = new Float32Array(14);
+    data[7] = 1;
+    const buffer = new CaptureBuffer(1);
+    buffer.append([data]);
+
+    const envelope = buffer.envelope(400, 0, 14);
+    expect(envelope[199]).toBe(0);
+    expect(envelope[200]).toBe(1);
+  });
+
   test("rejects malformed or out-of-buffer envelope ranges", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([new Float32Array(8)]);
@@ -153,6 +164,27 @@ describe("CaptureBuffer", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([data]);
     expect(Array.from(buffer.envelope(2, 0, frames))).toEqual([0.5, 0.75]);
+  });
+
+  test("summary path combines stereo block peaks", () => {
+    const frames = 4 * ENVELOPE_BLOCK_FRAMES;
+    const left = new Float32Array(frames).fill(0.125);
+    const right = new Float32Array(frames).fill(-0.25);
+    right[2 * ENVELOPE_BLOCK_FRAMES + 10] = -0.875;
+    const buffer = new CaptureBuffer(2);
+    buffer.append([left, right]);
+
+    expect(Array.from(buffer.envelope(2, 0, frames))).toEqual([0.25, 0.875]);
+  });
+
+  test("reads a late narrow range across many append chunks", () => {
+    const buffer = new CaptureBuffer(1);
+    for (let frame = 0; frame < 2_000; frame += 1) {
+      buffer.append([Float32Array.of(frame === 1_995 ? 0.75 : 0.125)]);
+    }
+
+    expect(Array.from(buffer.envelope(5, 1_990, 10)))
+      .toEqual([0.125, 0.125, 0.75, 0.125, 0.125]);
   });
 
   test("block peaks accumulate identically across arbitrary append boundaries", () => {

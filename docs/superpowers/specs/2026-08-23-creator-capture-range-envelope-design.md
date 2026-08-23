@@ -58,8 +58,11 @@ When each bin spans at least one summary block, the block path may consume an
 existing peak only if the entire block lies inside that bin's exact sample
 interval. Samples in partial blocks at either bin edge are scanned exactly.
 This prevents a peak immediately outside the selection, or across a bin
-boundary, from leaking into the displayed result while retaining
-`O(bins + covered blocks + edge samples)` work for long windows.
+boundary, from leaking into the displayed result. Exact integer quotient
+boundaries avoid floating-point `ceil` drift. Stored chunk starts plus a binary
+search and monotonic cursors prevent each bin from rescanning preceding append
+chunks, retaining `O(bins + covered blocks + overlapping chunks + edge
+samples)` work for long windows.
 
 ### CR-D5: The cache identity includes the range
 
@@ -94,14 +97,19 @@ the Architecture Portal check remain separate gates.
 
 ## Version Management
 
-- Product Build: `1.0.27.0 -> 1.0.28.0`. Creator Host identity changes in the
-  Product Assembly, so the prospective BUILD rule applies.
-- Creator Web Host: `1.3.4 -> 1.3.5`. This is a backward-compatible refinement
-  of the existing capture-trim surface; no Host protocol, Facade, Contract, or
-  persisted Project shape changes.
-- Product Build `1.0.29.0` is reserved for the separately approved #213 Crop
-  capability. Stage 9 is reallocated from `1.0.28.0` to `1.0.30.0`; abandoned
-  or superseded Build allocations are not reused.
+- Product Build `1.0.28.0` and Creator Web Host `1.3.5` identify the first
+  branch-local candidate. Its immutable Portal snapshot is retained, but the
+  candidate was abandoned after independent review found floating-point bin
+  drift and repeated preceding-chunk scans. It was never merged, tagged,
+  released, deployed, or promoted.
+- Corrected Product Build: `1.0.28.0 -> 1.0.29.0`. Creator Host identity changes
+  in the Product Assembly, so the prospective BUILD rule applies and the
+  abandoned Build identity is not reused.
+- Creator Web Host: `1.3.5 -> 1.3.6`. This PATCH corrects the existing
+  capture-trim refinement; no Host protocol, Facade, Contract, or persisted
+  Project shape changes.
+- Product Build `1.0.30.0` is reserved for the separately approved #213 Crop
+  capability. Stage 9 is reallocated to `1.0.31.0`.
 - No tag, Release, deployment, publication, or Channel promotion is authorized
   by this design or by snapshot generation.
 
@@ -124,6 +132,7 @@ Affected Portal routes:
 - `/operations/version-and-release/`
 
 Reason: the Creator capture workflow gains selection-driven waveform zoom and
-the Product Build/Creator Host identities change. A clean committed source
-revision must be frozen as the immutable Product Build `1.0.28.0 · canary`
-Portal snapshot after current-source integration.
+the Product Build/Creator Host identities change. A clean committed corrected
+source revision must be frozen as the immutable Product Build `1.0.29.0 ·
+canary` Portal snapshot after current-source integration; the abandoned
+`1.0.28.0` snapshot remains immutable evidence of the rejected candidate.

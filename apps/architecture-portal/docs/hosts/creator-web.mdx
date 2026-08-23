@@ -23,7 +23,7 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.3.5` 已进入 Product Build `1.0.28.0` Assembly。它只依赖共享 Web Runtime Platform `0.3.4`，不直接依赖或绕过 Application Facade；Capture 录音阶段显示完整缓冲，裁剪与提交重试阶段以固定 400 bins 显示当前选区。
+<StatusBadge status="implemented" /> Creator Web Host `1.3.6` 已进入 Product Build `1.0.29.0` Assembly。它只依赖共享 Web Runtime Platform `0.3.4`，不直接依赖或绕过 Application Facade；Capture 录音阶段显示完整缓冲，裁剪与提交重试阶段以固定 400 bins 显示当前选区。
 
 ## 创作边界
 
@@ -41,7 +41,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Capture range validation/cache/chunk/stereo/block-edge correctness、selection-driven repaint、Project action 串行化、MIDI channels 1–16、generation cleanup、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.28.0` 绑定 Creator `1.3.5`、Platform `0.3.4` 与 Formal Host `1.2.13`。Product Build `1.0.27.0` 绑定 Creator `1.3.4`、Platform `0.3.4` 与 Formal Host `1.2.13`；那是 Native complete-read 修复的 identity 级联。Product Build `1.0.26.0` 绑定 Creator `1.3.3`、Platform `0.3.3` 与 Formal Host `1.2.12`。Product Build `1.0.25.0` 绑定 Creator `1.3.2`、Platform `0.3.2` 与 Formal Host `1.2.11`。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Capture range validation/cache/chunk/stereo/block-edge correctness、整数 bin 边界、late-range chunk traversal、selection-driven repaint、Project action 串行化、MIDI channels 1–16、generation cleanup、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.29.0` 绑定 Creator `1.3.6`、Platform `0.3.4` 与 Formal Host `1.2.13`。`1.0.28.0` / Creator `1.3.5` 是未通过独立审查的 branch-local 候选。Product Build `1.0.27.0` 绑定 Creator `1.3.4`、Platform `0.3.4` 与 Formal Host `1.2.13`；那是 Native complete-read 修复的 identity 级联。Product Build `1.0.26.0` 绑定 Creator `1.3.3`、Platform `0.3.3` 与 Formal Host `1.2.12`。Product Build `1.0.25.0` 绑定 Creator `1.3.2`、Platform `0.3.2` 与 Formal Host `1.2.11`。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

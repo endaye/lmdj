@@ -68,7 +68,7 @@ test('facts match the current locked product composition', async () => {
   assert.deepEqual(facts.hosts.map(({id, version}) => ({id, version})), [
     {id: 'core-cli', version: '1.0.16'},
     {id: 'core-mcp', version: '1.1.13'},
-    {id: 'creator-web', version: '1.3.5'},
+    {id: 'creator-web', version: '1.3.6'},
     {id: 'native-test-host', version: '1.0.14'},
     {id: 'web-runtime-host', version: '1.2.13'},
   ]);
