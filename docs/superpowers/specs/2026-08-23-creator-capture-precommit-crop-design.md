@@ -235,6 +235,7 @@ Affected Portal routes:
 
 - `/overview/`
 - `/assembly/lmdj/`
+- `/core/modules/web-runtime-platform/`
 - `/hosts/overview/`
 - `/hosts/creator-web/`
 - `/hosts/web-runtime/`
