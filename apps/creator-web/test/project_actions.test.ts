@@ -84,7 +84,7 @@ function sessionFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       error_details: {},
       product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
-      host_version: "1.3.6",
+      host_version: "1.4.0",
       platform_version: "0.3.4",
       protocol_version: 1,
       capabilities: {

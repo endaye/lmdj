@@ -17,6 +17,10 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和 Take Journal。Host 不解析 Project bundle。
 
+## Pad Capture pre-commit 编辑
+
+Creator 录音后可在 Host-local ephemeral `CaptureBuffer` 里选择严格子区间并执行 **Crop to selection**。Crop 先准备精确 PCM、chunk 索引与增量 block peaks，再原子发布归零的新 buffer revision；缓存同时失效。它可重复执行，且 Commit 继续沿用原有 buffer + selection 接口。Project Truth 只在现有 Commit 成功后变化；当前没有 Undo、持久化 Asset 编辑、自动 silence trimming、fade、normalize 或其他 DSP。
+
 ## Cook 与演奏
 
 Project Cooker 校验 Project Truth 和 Artifact，产生不可变 Runtime Snapshot；Audio Runtime 从快照准备样本并在实时路径消费事件。快照不会反写为 Project Truth。
