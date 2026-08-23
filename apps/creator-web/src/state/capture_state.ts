@@ -54,6 +54,7 @@ export type CaptureEvent =
   | {kind: "frames"; frames: number; peak: number}
   | {kind: "stop"; reason: CaptureStopReason}
   | {kind: "select"; start: number; frames: number}
+  | {kind: "crop"; frames: number}
   | {kind: "discard"} | {kind: "commit"} | {kind: "committed"}
   | {kind: "commit-failed"; message: string; conflict: boolean};
 
@@ -93,6 +94,14 @@ export function reduceCapture(state: CaptureState, event: CaptureEvent): Capture
              event.start + event.frames <= state.frameCount
         ? {...state, phase: "trimming", selectionStart: event.start,
            selectionFrames: event.frames, errorMessage: null, conflict: false}
+        : state;
+    case "crop":
+      return (state.phase === "trimming" || state.phase === "commit-error") &&
+             Number.isInteger(event.frames) && event.frames > 0 &&
+             event.frames === state.selectionFrames
+        ? {...state, phase: "trimming", frameCount: event.frames,
+           selectionStart: 0, selectionFrames: event.frames,
+           errorMessage: null, conflict: false}
         : state;
     case "discard":
       return state.phase === "trimming" || state.phase === "commit-error"

@@ -263,6 +263,90 @@ test("waveform paints the complete recording then zooms and repaints with the se
   envelopeSpy.mockRestore();
 });
 
+test("Crop to selection mutates the same buffer, rebases PCM, and resets the view", async () => {
+  const envelopeSpy = vi.spyOn(CaptureBuffer.prototype, "envelope");
+  const cropSpy = vi.spyOn(CaptureBuffer.prototype, "crop");
+  try {
+    const {makeController, instances} = createFactory();
+    const onCommit = vi.fn(
+      async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+        ({kind: "committed"}) as const,
+    );
+    renderPanel({makeController, onCommit});
+    const {listener} = await startRecording(instances);
+    act(() => listener.onBatch([
+      Float32Array.from([0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 1]),
+    ], 1));
+    fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+    const cropButton = await screen.findByRole("button", {name: "Crop to selection"});
+    expect((cropButton as HTMLButtonElement).disabled).toBe(true);
+    const lengthSlider = screen.getByRole("slider", {name: "Pad A1 Selection length"});
+    const startSlider = screen.getByRole("slider", {name: "Pad A1 Selection start"});
+    fireEvent.change(lengthSlider, {target: {value: "4"}});
+    fireEvent.change(startSlider, {target: {value: "2"}});
+    expect((cropButton as HTMLButtonElement).disabled).toBe(false);
+
+    await userEvent.setup().click(cropButton);
+
+    await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 4));
+    expect((startSlider as HTMLInputElement).value).toBe("0");
+    expect((lengthSlider as HTMLInputElement).value).toBe("4");
+    expect((cropButton as HTMLButtonElement).disabled).toBe(true);
+
+    await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
+    await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1));
+    const [committedBuffer, selection] = onCommit.mock.calls[0]!;
+    const originalBuffer = cropSpy.mock.instances[0] as CaptureBuffer;
+    expect(committedBuffer).toBe(originalBuffer);
+    expect(committedBuffer.frameCount).toBe(4);
+    expect(Array.from(committedBuffer.slice(0, 4)[0] ?? []))
+      .toEqual([0.25, 0.375, 0.5, 0.625]);
+    expect(selection).toEqual({startFrame: 0, frameCount: 4});
+  } finally {
+    cropSpy.mockRestore();
+    envelopeSpy.mockRestore();
+  }
+});
+
+test("Crop clears a commit error and remains available for another edit", async () => {
+  const {makeController, instances} = createFactory();
+  const onCommit = vi.fn(
+    async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+      ({kind: "conflict", message: "Pad slot changed"}) as const,
+  );
+  renderPanel({makeController, onCommit});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([
+    Float32Array.from([0, 0.125, 0.25, 0.375, 0.5, 0.625, 0.75, 1]),
+  ], 1));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await userEvent.setup().click(await screen.findByRole("button", {name: "Commit"}));
+  expect((await screen.findByRole("alert")).textContent).toBe("Pad slot changed");
+
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
+    target: {value: "4"},
+  });
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+    target: {value: "2"},
+  });
+  await userEvent.setup().click(screen.getByRole("button", {name: "Crop to selection"}));
+
+  expect(screen.queryByRole("alert")).toBeNull();
+  const lengthSlider = screen.getByRole("slider", {name: "Pad A1 Selection length"});
+  fireEvent.change(lengthSlider, {target: {value: "2"}});
+  const secondCrop = screen.getByRole("button", {name: "Crop to selection"});
+  expect((secondCrop as HTMLButtonElement).disabled).toBe(false);
+  await userEvent.setup().click(secondCrop);
+  await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
+
+  await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(2));
+  const [buffer, selection] = onCommit.mock.calls[1]!;
+  expect(buffer.frameCount).toBe(2);
+  expect(Array.from(buffer.slice(0, 2)[0] ?? [])).toEqual([0.25, 0.375]);
+  expect(selection).toEqual({startFrame: 0, frameCount: 2});
+});
+
 test("shows the interruption reason once trimming (behavior 4)", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});

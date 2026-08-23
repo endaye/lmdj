@@ -80,6 +80,45 @@ describe("reduceCapture", () => {
     expect(reduceCapture(failed, {kind: "discard"})).toEqual(initialCaptureState);
   });
 
+  test("rebases an exact commit-error selection after Crop and clears retry errors", () => {
+    const trimming = run([
+      {kind: "record"}, {kind: "granted"},
+      {kind: "frames", frames: 480_000, peak: 0.4},
+      {kind: "stop", reason: "device-lost"},
+      {kind: "select", start: 1_000, frames: 200_000},
+    ]);
+    const failed = reduceCapture(
+      reduceCapture(trimming, {kind: "commit"}),
+      {kind: "commit-failed", message: "conflict", conflict: true},
+    );
+
+    const cropped = reduceCapture(failed, {kind: "crop", frames: 200_000});
+
+    expect(cropped).toMatchObject({
+      phase: "trimming",
+      frameCount: 200_000,
+      selectionStart: 0,
+      selectionFrames: 200_000,
+      errorMessage: null,
+      conflict: false,
+      stopReason: "device-lost",
+    });
+  });
+
+  test("ignores Crop outside editing phases or when frames diverge from the selection", () => {
+    const trimming = run([
+      {kind: "record"}, {kind: "granted"},
+      {kind: "frames", frames: 96_000, peak: 0.4},
+      {kind: "stop", reason: "user"},
+      {kind: "select", start: 12_000, frames: 48_000},
+    ]);
+
+    expect(reduceCapture(initialCaptureState, {kind: "crop", frames: 1}))
+      .toBe(initialCaptureState);
+    expect(reduceCapture(trimming, {kind: "crop", frames: 47_999})).toBe(trimming);
+    expect(reduceCapture(trimming, {kind: "crop", frames: 48_000.5})).toBe(trimming);
+  });
+
   test("surfaces a failure reason when nothing was captured", () => {
     const lost = run([{kind: "record"}, {kind: "granted"},
                       {kind: "stop", reason: "device-lost"}]);
