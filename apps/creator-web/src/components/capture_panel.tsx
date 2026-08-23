@@ -208,6 +208,13 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     dispatch({kind: "discard"});
   };
 
+  const handleCrop = () => {
+    const buffer = bufferRef.current;
+    if (buffer === null) return;
+    buffer.crop(state.selectionStart, state.selectionFrames);
+    dispatch({kind: "crop", frames: buffer.frameCount});
+  };
+
   const handleCommit = async () => {
     const buffer = bufferRef.current;
     if (buffer === null) return;
@@ -315,6 +322,14 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
                   handleSelectFrames(event.currentTarget.valueAsNumber)}
               />
             </label>
+            <button
+              type="button"
+              disabled={state.selectionStart === 0 &&
+                        state.selectionFrames === state.frameCount}
+              onClick={handleCrop}
+            >
+              Crop to selection
+            </button>
             <button type="button" onClick={() => void handleCommit()}>Commit</button>
             <button type="button" onClick={handleDiscard}>Discard</button>
           </>
