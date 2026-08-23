@@ -43,29 +43,75 @@ describe("CaptureBuffer", () => {
       throw new Error("expected slice to return one channel");
     }
     expect(Array.from(mono)).toEqual([0.375, 0.5, 0.625]);
-    const envelope = buffer.envelope(2);
+    const envelope = buffer.envelope(2, 0, buffer.frameCount);
     expect(Array.from(envelope)).toEqual([0.5, 1]);
   });
 
+  test("bins only the requested range across chunks and stereo channels", () => {
+    const buffer = new CaptureBuffer(2);
+    buffer.append([
+      Float32Array.from([0, 0.125, 0.25]),
+      Float32Array.from([0, -0.75, -0.875]),
+    ]);
+    buffer.append([
+      Float32Array.from([0.375, 0.5, 0.625]),
+      Float32Array.from([-0.125, -1, -0.25]),
+    ]);
+
+    expect(Array.from(buffer.envelope(3, 2, 3))).toEqual([0.875, 0.375, 1]);
+  });
+
+  test("uses exact integer bin boundaries for a 14-frame 400-bin window", () => {
+    const data = new Float32Array(14);
+    data[7] = 1;
+    const buffer = new CaptureBuffer(1);
+    buffer.append([data]);
+
+    const envelope = buffer.envelope(400, 0, 14);
+    expect(envelope[199]).toBe(0);
+    expect(envelope[200]).toBe(1);
+  });
+
+  test("rejects malformed or out-of-buffer envelope ranges", () => {
+    const buffer = new CaptureBuffer(1);
+    buffer.append([new Float32Array(8)]);
+
+    expect(() => buffer.envelope(0, 0, 8)).toThrow(TypeError);
+    expect(() => buffer.envelope(2, -1, 2)).toThrow(RangeError);
+    expect(() => buffer.envelope(2, 0.5, 2)).toThrow(RangeError);
+    expect(() => buffer.envelope(2, 0, 0)).toThrow(RangeError);
+    expect(() => buffer.envelope(2, 7, 2)).toThrow(RangeError);
+  });
+
   // Finding 4: envelope() is called ~10x/sec from the panel on an unchanged
-  // buffer between batches; memoizing on (frameCount, bins) must make a
+  // buffer between batches; memoizing on (frameCount, bins, start, count) must make a
   // repeated call with no intervening append return the identical cached
   // array instead of re-walking every sample.
   test("memoizes the envelope for an unchanged frame count and bin count", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([Float32Array.from({length: 8}, (_, i) => (i + 1) / 8)]);
-    const first = buffer.envelope(2);
-    const second = buffer.envelope(2);
+    const first = buffer.envelope(2, 0, 8);
+    const second = buffer.envelope(2, 0, 8);
     expect(second).toBe(first);
     expect(Array.from(second)).toEqual([0.5, 1]);
+  });
+
+  test("does not reuse an envelope cached for another range", () => {
+    const buffer = new CaptureBuffer(1);
+    buffer.append([Float32Array.from({length: 12}, (_, i) => (i + 1) / 16)]);
+
+    const first = buffer.envelope(2, 0, 8);
+    expect(buffer.envelope(2, 0, 8)).toBe(first);
+    expect(buffer.envelope(2, 1, 8)).not.toBe(first);
+    expect(buffer.envelope(2, 0, 7)).not.toBe(first);
   });
 
   test("append invalidates the memoized envelope", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([Float32Array.from({length: 8}, (_, i) => (i + 1) / 8)]);
-    const before = buffer.envelope(2);
+    const before = buffer.envelope(2, 0, 8);
     buffer.append([Float32Array.from({length: 8}, () => 1)]);
-    const after = buffer.envelope(2);
+    const after = buffer.envelope(2, 0, 16);
     expect(after).not.toBe(before);
     expect(Array.from(after)).toEqual([1, 1]);
   });
@@ -73,21 +119,39 @@ describe("CaptureBuffer", () => {
   // Long-take redraw cost: once a bin spans at least one summary block, the
   // envelope must be served from incrementally maintained per-block peaks
   // (O(blocks) per redraw) instead of re-walking every stored sample
-  // (O(total frames)). The block path snaps bin boundaries outward to block
-  // edges, so a boundary-straddling block contributes its peak to BOTH
-  // neighbouring bins: values may overestimate at bin edges but can never
-  // underestimate, and a peak is never dropped.
-  test("summary-path bins report block peaks, overestimating only at unaligned edges", () => {
+  // (O(total frames)). A boundary-straddling block must be scanned exactly at
+  // each bin edge so its peak contributes only to the bin that contains it.
+  test("summary-path bins scan unaligned edges exactly", () => {
     // 5 blocks (1280 frames), 2 bins => perBin = 640 = 2.5 blocks. The lone
     // 1.0 peak sits at frame 700 (block 2, truly inside bin 1). Block 2
-    // straddles the 640-frame bin boundary, so bin 0 also reports 1.0.
+    // straddles the 640-frame bin boundary, but frame 700 belongs only to bin 1.
     const frames = 5 * ENVELOPE_BLOCK_FRAMES;
     const data = Float32Array.from({length: frames}, () => 0.125);
     data[700] = 1;
     const buffer = new CaptureBuffer(1);
     buffer.append([data]);
-    const envelope = buffer.envelope(2);
-    expect(Array.from(envelope)).toEqual([1, 1]);
+    const envelope = buffer.envelope(2, 0, frames);
+    expect(Array.from(envelope)).toEqual([0.125, 1]);
+  });
+
+  test("summary path excludes peaks outside a ranged window and partial bin edges", () => {
+    const frames = 8 * ENVELOPE_BLOCK_FRAMES;
+    const data = new Float32Array(frames);
+    const start = ENVELOPE_BLOCK_FRAMES + 10;
+    const count = 4 * ENVELOPE_BLOCK_FRAMES;
+
+    data[start - 1] = 1;                                  // outside window
+    data[start + 34] = 0.5;                               // bin 0, partial block
+    data[2 * ENVELOPE_BLOCK_FRAMES + 20] = 0.625;         // bin 0, full block
+    data[3 * ENVELOPE_BLOCK_FRAMES + 2] = 0.75;           // bin 0 edge
+    data[3 * ENVELOPE_BLOCK_FRAMES + 12] = 0.375;         // bin 1 edge
+    data[4 * ENVELOPE_BLOCK_FRAMES + 20] = 0.875;         // bin 1, full block
+    data[start + count - 1] = 0.25;                       // bin 1, partial block
+    data[start + count] = 0.9375;                         // outside window
+
+    const buffer = new CaptureBuffer(1);
+    buffer.append([data]);
+    expect(Array.from(buffer.envelope(2, start, count))).toEqual([0.75, 0.875]);
   });
 
   test("summary path never underestimates and matches exact peaks on aligned bins", () => {
@@ -99,7 +163,28 @@ describe("CaptureBuffer", () => {
     data[3 * ENVELOPE_BLOCK_FRAMES + 7] = 0.75;   // bin 1
     const buffer = new CaptureBuffer(1);
     buffer.append([data]);
-    expect(Array.from(buffer.envelope(2))).toEqual([0.5, 0.75]);
+    expect(Array.from(buffer.envelope(2, 0, frames))).toEqual([0.5, 0.75]);
+  });
+
+  test("summary path combines stereo block peaks", () => {
+    const frames = 4 * ENVELOPE_BLOCK_FRAMES;
+    const left = new Float32Array(frames).fill(0.125);
+    const right = new Float32Array(frames).fill(-0.25);
+    right[2 * ENVELOPE_BLOCK_FRAMES + 10] = -0.875;
+    const buffer = new CaptureBuffer(2);
+    buffer.append([left, right]);
+
+    expect(Array.from(buffer.envelope(2, 0, frames))).toEqual([0.25, 0.875]);
+  });
+
+  test("reads a late narrow range across many append chunks", () => {
+    const buffer = new CaptureBuffer(1);
+    for (let frame = 0; frame < 2_000; frame += 1) {
+      buffer.append([Float32Array.of(frame === 1_995 ? 0.75 : 0.125)]);
+    }
+
+    expect(Array.from(buffer.envelope(5, 1_990, 10)))
+      .toEqual([0.125, 0.125, 0.75, 0.125, 0.125]);
   });
 
   test("block peaks accumulate identically across arbitrary append boundaries", () => {
@@ -115,13 +200,15 @@ describe("CaptureBuffer", () => {
       pieces.append([data.slice(at, at + take)]);
       at += take;
     }
-    expect(Array.from(pieces.envelope(3))).toEqual(Array.from(whole.envelope(3)));
+    expect(Array.from(pieces.envelope(3, 0, frames)))
+      .toEqual(Array.from(whole.envelope(3, 0, frames)));
   });
 
   test("summary-path envelope is memoized like the exact path", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([new Float32Array(4 * ENVELOPE_BLOCK_FRAMES)]);
-    expect(buffer.envelope(2)).toBe(buffer.envelope(2));
+    expect(buffer.envelope(2, 0, buffer.frameCount))
+      .toBe(buffer.envelope(2, 0, buffer.frameCount));
   });
 
   // Finding 3: COMMIT_MAX_FRAMES must never hand-enter a value that can drift

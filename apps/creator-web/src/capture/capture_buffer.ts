@@ -6,9 +6,26 @@ export const COMMIT_MAX_FRAMES = 240_000;    // manifest decoded_frames_per_pad
 // not samples, once bins are at least this wide.
 export const ENVELOPE_BLOCK_FRAMES = 256;
 
+interface EnvelopeRange {
+  startFrame: number;
+  endFrame: number;
+  bin: number;
+}
+
+function ceilProductQuotient(factor: number, total: number, divisor: number): number {
+  const product = factor * total;
+  if (Number.isSafeInteger(product)) {
+    return Math.floor(product / divisor) + (product % divisor === 0 ? 0 : 1);
+  }
+  const bigProduct = BigInt(factor) * BigInt(total);
+  const bigDivisor = BigInt(divisor);
+  return Number((bigProduct + bigDivisor - 1n) / bigDivisor);
+}
+
 export class CaptureBuffer {
   readonly channelCount: number;
   #chunks: Float32Array[][];
+  #chunkStarts: number[] = [];
   #frames = 0;
   // Finding 4: envelope() is called once per delivered batch (about 10x/sec).
   // Memoization only helps between batches; each append() invalidates it, so
@@ -16,7 +33,13 @@ export class CaptureBuffer {
   // sample visits per redraw over a full 60 s stereo take. append() therefore
   // also maintains per-block peak summaries (O(new frames), amortized free),
   // and envelope() serves wide bins from those blocks in O(blocks).
-  #envelopeCache: {frames: number; bins: number; result: Float32Array} | null = null;
+  #envelopeCache: {
+    frames: number;
+    bins: number;
+    startFrame: number;
+    frameCount: number;
+    result: Float32Array;
+  } | null = null;
   // Per-channel max-abs peak of each ENVELOPE_BLOCK_FRAMES-sized block; the
   // last entry is a partial block that keeps accumulating. Correct only
   // because the buffer is append-only: slice() never mutates stored samples.
@@ -43,6 +66,7 @@ export class CaptureBuffer {
     }
     const accepted = Math.min(first.length, CAPTURE_MAX_FRAMES - this.#frames);
     if (accepted <= 0) { return 0; }
+    this.#chunkStarts.push(this.#frames);
     channels.forEach((c, i) => {
       const chunkList = this.#chunks[i];
       const peaks = this.#blockPeaks[i];
@@ -87,56 +111,103 @@ export class CaptureBuffer {
     });
   }
 
-  envelope(bins: number): Float32Array {
-    if (!Number.isInteger(bins) || bins <= 0) {
+  #firstChunkIndex(frame: number): number {
+    let low = 0;
+    let high = this.#chunkStarts.length;
+    while (low < high) {
+      const middle = low + Math.floor((high - low) / 2);
+      if ((this.#chunkStarts[middle] ?? 0) <= frame) low = middle + 1;
+      else high = middle;
+    }
+    return Math.max(0, low - 1);
+  }
+
+  #accumulateRanges(out: Float32Array, ranges: readonly EnvelopeRange[]): void {
+    const firstRange = ranges[0];
+    if (firstRange === undefined) return;
+    for (const chunks of this.#chunks) {
+      let rangeIndex = 0;
+      let chunkIndex = this.#firstChunkIndex(firstRange.startFrame);
+      while (rangeIndex < ranges.length && chunkIndex < chunks.length) {
+        const range = ranges[rangeIndex];
+        const chunk = chunks[chunkIndex];
+        const base = this.#chunkStarts[chunkIndex];
+        if (range === undefined || chunk === undefined || base === undefined) break;
+        const chunkEnd = base + chunk.length;
+        if (chunkEnd <= range.startFrame) {
+          chunkIndex += 1;
+          continue;
+        }
+        if (base >= range.endFrame) {
+          rangeIndex += 1;
+          continue;
+        }
+        const from = Math.max(range.startFrame - base, 0);
+        const to = Math.min(range.endFrame - base, chunk.length);
+        let peak = out[range.bin] ?? 0;
+        for (let i = from; i < to; i += 1) {
+          const magnitude = Math.abs(chunk[i] ?? 0);
+          if (magnitude > peak) peak = magnitude;
+        }
+        out[range.bin] = peak;
+        if (chunkEnd >= range.endFrame) rangeIndex += 1;
+        else chunkIndex += 1;
+      }
+    }
+  }
+
+  envelope(bins: number, startFrame: number, frameCount: number): Float32Array {
+    if (!Number.isSafeInteger(bins) || bins <= 0) {
       throw new TypeError("Envelope bin count is invalid");
     }
+    if (!Number.isInteger(startFrame) || !Number.isInteger(frameCount) ||
+        startFrame < 0 || frameCount <= 0 || startFrame + frameCount > this.#frames) {
+      throw new RangeError("Envelope range is out of bounds");
+    }
     const cache = this.#envelopeCache;
-    if (cache !== null && cache.frames === this.#frames && cache.bins === bins) {
+    if (cache !== null && cache.frames === this.#frames && cache.bins === bins &&
+        cache.startFrame === startFrame && cache.frameCount === frameCount) {
       return cache.result;
     }
     const out = new Float32Array(bins);
-    const perBin = this.#frames / bins;
-    if (perBin >= ENVELOPE_BLOCK_FRAMES) {
-      // Block path: every bin spans at least one summary block, so serve the
-      // redraw from block peaks in O(blocks). Bin boundaries snap OUTWARD to
-      // block edges: a boundary-straddling block contributes its peak to both
-      // neighbouring bins, so edge values may overestimate but a peak can
-      // never be dropped or undercounted. This renders the whole buffer; if a
-      // zoom window is ever added (long-take trims), envelope() needs
-      // (bins, startFrame, frameCount) and the exact/block decision must use
-      // the window length, or narrow windows fall back to scanning the entire
-      // buffer again.
-      const lastBlock = Math.ceil(this.#frames / ENVELOPE_BLOCK_FRAMES) - 1;
+    const binBoundary = (bin: number): number =>
+      startFrame + ceilProductQuotient(bin, frameCount, bins);
+    if (frameCount / bins >= ENVELOPE_BLOCK_FRAMES) {
+      // Consume a summary only when the complete block belongs to this bin.
+      // Boundary-straddling blocks are scanned exactly so a peak outside the
+      // selected window or in an adjacent bin cannot leak into this result.
+      const edgeRanges: EnvelopeRange[] = [];
       for (let bin = 0; bin < bins; bin += 1) {
-        const from = Math.floor((bin * perBin) / ENVELOPE_BLOCK_FRAMES);
-        const to = Math.min(
-          Math.ceil(((bin + 1) * perBin) / ENVELOPE_BLOCK_FRAMES) - 1, lastBlock);
-        let peak = 0;
+        const from = binBoundary(bin);
+        const to = binBoundary(bin + 1);
+        const firstFullBlock = Math.ceil(from / ENVELOPE_BLOCK_FRAMES);
+        const fullBlockEnd = Math.floor(to / ENVELOPE_BLOCK_FRAMES);
+        const leadingEnd = Math.min(to, firstFullBlock * ENVELOPE_BLOCK_FRAMES);
+        if (from < leadingEnd) {
+          edgeRanges.push({startFrame: from, endFrame: leadingEnd, bin});
+        }
         for (const peaks of this.#blockPeaks) {
-          for (let block = from; block <= to; block += 1) {
+          for (let block = firstFullBlock; block < fullBlockEnd; block += 1) {
             const value = peaks[block];
-            if (value !== undefined && value > peak) { peak = value; }
+            if (value !== undefined && value > (out[bin] ?? 0)) { out[bin] = value; }
           }
         }
-        out[bin] = peak;
-      }
-    } else if (this.#frames > 0) {
-      for (const chunks of this.#chunks) {
-        let index = 0;
-        for (const chunk of chunks) {
-          const length = chunk.length;
-          for (let i = 0; i < length; i += 1) {
-            const bin = Math.min(Math.floor(index / perBin), bins - 1);
-            const magnitude = Math.abs(chunk[i] ?? 0);
-            const current = out[bin];
-            if (current === undefined || magnitude > current) { out[bin] = magnitude; }
-            index += 1;
-          }
+        const trailingStart = Math.max(leadingEnd, fullBlockEnd * ENVELOPE_BLOCK_FRAMES);
+        if (trailingStart < to) {
+          edgeRanges.push({startFrame: trailingStart, endFrame: to, bin});
         }
       }
+      this.#accumulateRanges(out, edgeRanges);
+    } else {
+      const ranges: EnvelopeRange[] = [];
+      for (let bin = 0; bin < bins; bin += 1) {
+        const from = binBoundary(bin);
+        const to = binBoundary(bin + 1);
+        if (from < to) ranges.push({startFrame: from, endFrame: to, bin});
+      }
+      this.#accumulateRanges(out, ranges);
     }
-    this.#envelopeCache = {frames: this.#frames, bins, result: out};
+    this.#envelopeCache = {frames: this.#frames, bins, startFrame, frameCount, result: out};
     return out;
   }
 }

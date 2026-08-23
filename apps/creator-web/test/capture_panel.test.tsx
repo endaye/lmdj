@@ -239,6 +239,30 @@ test("trimming clamps the selection sliders to COMMIT_MAX_FRAMES (behavior 4)", 
   expect((length as HTMLInputElement).value).toBe("240000");
 });
 
+test("waveform paints the complete recording then zooms and repaints with the selection", async () => {
+  const envelopeSpy = vi.spyOn(CaptureBuffer.prototype, "envelope");
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+
+  act(() => listener.onBatch([new Float32Array(480_000).fill(0.2)], 0.2));
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 480_000));
+
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 240_000));
+
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+    target: {value: "120000"},
+  });
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 120_000, 240_000));
+
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
+    target: {value: "96000"},
+  });
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 120_000, 96_000));
+  envelopeSpy.mockRestore();
+});
+
 test("shows the interruption reason once trimming (behavior 4)", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});
@@ -295,6 +319,7 @@ test("a conflict result renders a retry affordance with the buffer intact (behav
 });
 
 test("the waveform canvas repaints after remounting from committing into commit-error (Finding 1)", async () => {
+  const envelopeSpy = vi.spyOn(CaptureBuffer.prototype, "envelope");
   const {makeController, instances} = createFactory();
   const onCommit = vi.fn(
     async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
@@ -305,6 +330,12 @@ test("the waveform canvas repaints after remounting from committing into commit-
   act(() => listener.onBatch([new Float32Array(96_000).fill(0.4)], 0.4));
   fireEvent.click(screen.getByRole("button", {name: "Stop"}));
   await screen.findByRole("button", {name: "Commit"});
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
+    target: {value: "48000"},
+  });
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+    target: {value: "24000"},
+  });
 
   // Baseline: the trimming canvas has painted at least once already.
   expect(fillRectSpy).toHaveBeenCalled();
@@ -323,6 +354,8 @@ test("the waveform canvas repaints after remounting from committing into commit-
   await screen.findByRole("alert");
 
   expect(fillRectSpy).toHaveBeenCalled();
+  expect(envelopeSpy).toHaveBeenLastCalledWith(400, 24_000, 48_000);
+  envelopeSpy.mockRestore();
 });
 
 test("Discard resets to idle and clears the buffer", async () => {
