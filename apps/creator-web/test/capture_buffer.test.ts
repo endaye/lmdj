@@ -85,6 +85,23 @@ describe("CaptureBuffer", () => {
     expect(Array.from(buffer.envelope(2, 0, cropFrames))).toEqual([0.25, 0.25]);
   });
 
+  test("matches exact stereo peaks on partial summary edges after crop", () => {
+    const cropStart = 37;
+    const cropFrames = 5 * ENVELOPE_BLOCK_FRAMES;
+    const left = new Float32Array(cropStart + cropFrames).fill(0.125);
+    const right = new Float32Array(cropStart + cropFrames).fill(-0.25);
+    left[cropStart - 1] = 1;
+    right[cropStart + 300] = -0.875;
+    left[cropStart + 900] = 0.75;
+    const buffer = new CaptureBuffer(2);
+    buffer.append([left, right]);
+
+    buffer.crop(cropStart, cropFrames);
+
+    expect(Array.from(buffer.envelope(2, 11, 4 * ENVELOPE_BLOCK_FRAMES + 1)))
+      .toEqual([0.875, 0.75]);
+  });
+
   test("supports repeated crops and append after crop", () => {
     const buffer = new CaptureBuffer(1);
     buffer.append([Float32Array.from([0, 0.125, 0.25, 0.375, 0.5, 0.625])]);
