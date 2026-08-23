@@ -93,7 +93,9 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
   }, [state.phase, requestStop]);
 
   // Paint the growing waveform straight from the capture buffer ref; the
-  // buffer itself never lives in React state (S8B design note #4).
+  // buffer itself never lives in React state (S8B design note #4). Recording
+  // shows the complete take, while trimming and commit retry zoom the current
+  // selection at the same fixed canvas resolution (CR-D2).
   //
   // The canvas element is unmounted during "committing" (which renders only a
   // status paragraph) and remounted in "commit-error" (and again on the
@@ -109,7 +111,10 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     if (canvas === null || buffer === null || buffer.frameCount === 0) return;
     const ctx = canvas.getContext("2d");
     if (ctx === null) return;
-    const bins = buffer.envelope(WAVEFORM_BINS);
+    const selectionView = state.phase === "trimming" || state.phase === "commit-error";
+    const startFrame = selectionView ? state.selectionStart : 0;
+    const frameCount = selectionView ? state.selectionFrames : buffer.frameCount;
+    const bins = buffer.envelope(WAVEFORM_BINS, startFrame, frameCount);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const mid = canvas.height / 2;
     for (let i = 0; i < bins.length; i += 1) {
@@ -117,7 +122,13 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
       const barHeight = Math.max(1, magnitude * canvas.height);
       ctx.fillRect(i, mid - barHeight / 2, 1, barHeight);
     }
-  }, [state.phase, state.frameCount, state.peak]);
+  }, [
+    state.phase,
+    state.frameCount,
+    state.peak,
+    state.selectionStart,
+    state.selectionFrames,
+  ]);
 
   const handleRecord = async () => {
     // Single-owner lifecycle: the ref (not the reducer phase, which can lag a

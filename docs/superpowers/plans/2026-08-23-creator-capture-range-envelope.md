@@ -71,6 +71,7 @@ Product Assembly identity, Docusaurus Architecture Portal.
 - Modify: `products/lmdj/version.json`
 - Modify: `products/lmdj/assembly.json`
 - Modify: generated Assembly/Runtime identity consumers
+- Modify: `tests/build/version_test.py`
 - Modify: `products/lmdj/README.md`
 - Modify: current Portal pages that report Product/Creator/Web identities
 - Modify: `apps/architecture-portal/docs/hosts/creator-web.mdx`
@@ -137,9 +138,12 @@ Documentation impact: required.
 
 Affected Portal pages:
 
+- `/overview/`
+- `/assembly/lmdj/`
 - `/core/modules/web-runtime-platform/`
 - `/hosts/overview/`
 - `/hosts/creator-web/`
+- `/hosts/web-runtime/`
 - `/platform/input/`
 - `/platform/web-runtime/`
 - `/product/capability-map/`

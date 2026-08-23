@@ -239,6 +239,30 @@ test("trimming clamps the selection sliders to COMMIT_MAX_FRAMES (behavior 4)", 
   expect((length as HTMLInputElement).value).toBe("240000");
 });
 
+test("waveform paints the complete recording then zooms and repaints with the selection", async () => {
+  const envelopeSpy = vi.spyOn(CaptureBuffer.prototype, "envelope");
+  const {makeController, instances} = createFactory();
+  renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+
+  act(() => listener.onBatch([new Float32Array(480_000).fill(0.2)], 0.2));
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 480_000));
+
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 0, 240_000));
+
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+    target: {value: "120000"},
+  });
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 120_000, 240_000));
+
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection length"}), {
+    target: {value: "96000"},
+  });
+  await waitFor(() => expect(envelopeSpy).toHaveBeenLastCalledWith(400, 120_000, 96_000));
+  envelopeSpy.mockRestore();
+});
+
 test("shows the interruption reason once trimming (behavior 4)", async () => {
   const {makeController, instances} = createFactory();
   renderPanel({makeController});

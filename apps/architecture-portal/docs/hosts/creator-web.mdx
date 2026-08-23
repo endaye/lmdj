@@ -23,12 +23,11 @@ import {StatusBadge} from '@site/src/components/StatusBadge';
 
 ## 状态
 
-<StatusBadge status="implemented" /> Creator Web Host `1.3.4` 已进入 Product Build `1.0.27.0` Assembly。它只依赖共享 Web Runtime Platform `0.3.4`，不直接依赖或绕过 Application Facade；这次 Native complete-read 替换竞态修复级联不改变 Web 产品能力。
-Creator Web Host `1.3.1` 已进入 Product Build `1.0.24.0` Assembly。它只依赖共享 Web Runtime Platform `0.3.1`。
+<StatusBadge status="implemented" /> Creator Web Host `1.3.5` 已进入 Product Build `1.0.28.0` Assembly。它只依赖共享 Web Runtime Platform `0.3.4`，不直接依赖或绕过 Application Facade；Capture 录音阶段显示完整缓冲，裁剪与提交重试阶段以固定 400 bins 显示当前选区。
 
 ## 创作边界
 
-当前 UI 提供 browser-local Project discovery/open、portable Project Bundle import、64 个稳定 Pad Slot、四个 Bank、Sample Surface、PCM16 WAV import/replace、麦克风 Pad Capture（录音→裁剪→提交）、真实 mirrored waveform、trim/四模式/Volume/Mute/Reset、Project inspect 与 Runtime diagnostics。Host 不解析 Bundle 或 WAV；字节流和 mutation 交给 Facade，Project Truth、revision 与 Runtime publication 仍由 Core 决定。Capture 只是既有 import 边界的一个新字节来源：Host 在提交时把选区编码为 48 kHz PCM16 WAV，经同一条 `sample.import.*` 会话入 Core，Core Modules、Facade 表面、传输协议与全部 Contract 零变更。Host JS 缓冲上限 60 秒、到顶自动停，提交选区硬性上限 240,000 帧（5 秒），沿用活动 manifest 的 `decoded_frames_per_pad`；录音期间无输入监听，输入永不接到输出。空白 Project 创建、Bundle 导出与 Sequence 编辑尚未实现。
+当前 UI 提供 browser-local Project discovery/open、portable Project Bundle import、64 个稳定 Pad Slot、四个 Bank、Sample Surface、PCM16 WAV import/replace、麦克风 Pad Capture（录音→裁剪→提交）、真实 mirrored waveform、trim/四模式/Volume/Mute/Reset、Project inspect 与 Runtime diagnostics。Capture 的录音波形覆盖全部已录帧；进入裁剪后，同一画布随 selection start/length 缩放，只读取选区范围，长窗口只复用完全落入 bin 的增量 block peaks，边缘 block 精确扫描，避免选区外峰值泄漏。Host 不解析 Bundle 或 WAV；字节流和 mutation 交给 Facade，Project Truth、revision 与 Runtime publication 仍由 Core 决定。Capture 只是既有 import 边界的一个新字节来源：Host 在提交时把选区编码为 48 kHz PCM16 WAV，经同一条 `sample.import.*` 会话入 Core，Core Modules、Facade 表面、传输协议与全部 Contract 零变更。Host JS 缓冲上限 60 秒、到顶自动停，提交选区硬性上限 240,000 帧（5 秒），沿用活动 manifest 的 `decoded_frames_per_pad`；录音期间无输入监听，输入永不接到输出。空白 Project 创建、Bundle 导出与 Sequence 编辑尚未实现。
 
 Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次按下 Activate audio。
 
@@ -42,7 +41,7 @@ Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWork
 
 ## 自动化证据
 
-Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Project action 串行化、MIDI channels 1–16、generation cleanup、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.27.0` 绑定 Creator `1.3.4`、Platform `0.3.4` 与 Formal Host `1.2.13`。Product Build `1.0.26.0` 绑定 Creator `1.3.3`、Platform `0.3.3` 与 Formal Host `1.2.12`；那是 G3 crash-recovery 的 identity 级联，不新增 Creator 能力。Product Build `1.0.25.0` 绑定 Creator `1.3.2`、Platform `0.3.2` 与 Formal Host `1.2.11`。Product Build `1.0.24.0` 绑定 Creator `1.3.1`、Platform `0.3.1` 与 Formal Host `1.2.10`。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Capture range validation/cache/chunk/stereo/block-edge correctness、selection-driven repaint、Project action 串行化、MIDI channels 1–16、generation cleanup、可见错误与报告；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.28.0` 绑定 Creator `1.3.5`、Platform `0.3.4` 与 Formal Host `1.2.13`。Product Build `1.0.27.0` 绑定 Creator `1.3.4`、Platform `0.3.4` 与 Formal Host `1.2.13`；那是 Native complete-read 修复的 identity 级联。Product Build `1.0.26.0` 绑定 Creator `1.3.3`、Platform `0.3.3` 与 Formal Host `1.2.12`。Product Build `1.0.25.0` 绑定 Creator `1.3.2`、Platform `0.3.2` 与 Formal Host `1.2.11`。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
 
 自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
 

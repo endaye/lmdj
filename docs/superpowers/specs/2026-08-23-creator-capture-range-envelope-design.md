@@ -111,9 +111,12 @@ Documentation impact: required.
 
 Affected Portal routes:
 
+- `/overview/`
+- `/assembly/lmdj/`
 - `/core/modules/web-runtime-platform/`
 - `/hosts/overview/`
 - `/hosts/creator-web/`
+- `/hosts/web-runtime/`
 - `/platform/input/`
 - `/platform/web-runtime/`
 - `/product/capability-map/`
