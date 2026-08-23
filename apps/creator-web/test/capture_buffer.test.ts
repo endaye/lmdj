@@ -58,12 +58,13 @@ describe("CaptureBuffer", () => {
     const beforePcm = Array.from(buffer.slice(0, beforeFrames)[0] ?? []);
     const beforeEnvelope = buffer.envelope(2, 0, beforeFrames);
 
-    for (const [startFrame, frameCount] of [
+    const invalidCrops: Array<readonly [number, number]> = [
       [-1, 2],
       [0.5, 2],
       [0, 0],
       [3, 2],
-    ]) {
+    ];
+    for (const [startFrame, frameCount] of invalidCrops) {
       expect(() => buffer.crop(startFrame, frameCount)).toThrow(RangeError);
       expect(buffer.frameCount).toBe(beforeFrames);
       expect(Array.from(buffer.slice(0, beforeFrames)[0] ?? [])).toEqual(beforePcm);
