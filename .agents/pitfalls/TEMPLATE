@@ -1,0 +1,24 @@
+---
+id: replace-with-stable-kebab-case-id
+area: replace-with-area-label-suffix
+status: open
+recurrences:
+  - date: 2026-08-25
+    occurrence: https://github.com/endaye/lmdj/pull/000
+    observed_by: agent/model-or-unknown
+exit: none
+---
+
+# Replace with one-sentence pitfall
+
+## Why
+
+Explain the process invariant or root cause that cannot be derived from the
+product code.
+
+## How to apply
+
+Give imperative guidance that any human or coding agent can follow. If the
+entry remains open with `exit: none`, explain why no eligible mechanism exists
+yet. If absorbed, keep this section as a concise pointer to the enforcing
+`skill:` or `gate:` exit.

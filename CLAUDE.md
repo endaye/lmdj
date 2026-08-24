@@ -38,6 +38,14 @@ For shipping a locally completed issue or task, coding agents must read and foll
 `.agents/skills/issue-done/SKILL.md`. It governs the full transition from local verification
 and Conventional Commit to push, Pull Request creation, CI auto-merge, and worktree/branch cleanup.
 
+## Pitfall ledger
+
+Process and invariant knowledge that cannot be derived from product code lives
+in `.agents/pitfalls/` under the contract in
+[`docs/governance/pitfall-ledger.md`](docs/governance/pitfall-ledger.md). At the
+relevant skill trigger, search open entries by the Task's `area:*` labels;
+before shipping, follow `issue-done` to record or bump any qualifying pitfall.
+
 ## Release operations
 
 For any release audit or operation, coding agents must read and follow
