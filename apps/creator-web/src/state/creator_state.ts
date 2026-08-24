@@ -102,6 +102,10 @@ export type CreatorAction =
   | {type: "transfer-progressed"; completedBytes: number}
   | {type: "transfer-ended"}
   | {type: "audio-changed"; phase: CreatorState["audio"]["phase"]}
+  | {
+      type: "audio-activation-restored";
+      phase: "inactive" | "suspended";
+    }
   | {type: "bank-selected"; bank: Bank}
   | {type: "pad-pressed"; slot: number; outcome: PressOutcome}
   | {type: "pad-released"; slot: number}
@@ -201,6 +205,8 @@ export function isCreatorActionAllowed(
       return state.runtime.phase === "ready" && hasReadyProject(state) &&
         state.transfer.phase === "idle" &&
         ["activating", "recovering", "running"].includes(state.audio.phase);
+    case "audio-activation-restored":
+      return state.audio.phase === "activating";
     case "bank-selected":
       return state.runtime.phase === "ready" && hasReadyProject(state) &&
         state.transfer.phase === "idle";
@@ -319,6 +325,8 @@ export function creatorReducer(
         transfer: {phase: "idle", completedBytes: 0, totalBytes: 0},
       };
     case "audio-changed":
+      return {...state, audio: {phase: action.phase}};
+    case "audio-activation-restored":
       return {...state, audio: {phase: action.phase}};
     case "bank-selected":
       return {...state, activeBank: action.bank, pressed: new Map()};
