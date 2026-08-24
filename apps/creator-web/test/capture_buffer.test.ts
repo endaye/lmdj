@@ -85,6 +85,30 @@ describe("CaptureBuffer", () => {
     expect(Array.from(buffer.envelope(2, 0, cropFrames))).toEqual([0.25, 0.25]);
   });
 
+  test("reports the exact whole-take peak from the block summaries (F4 silence gate)", () => {
+    // An empty buffer and an all-zero take both peak at exactly 0 — that is
+    // the digital-silence signal the commit gate refuses on.
+    const buffer = new CaptureBuffer(2);
+    expect(buffer.peak).toBe(0);
+    buffer.append([new Float32Array(4_800), new Float32Array(4_800)]);
+    expect(buffer.peak).toBe(0);
+
+    // A single nonzero sample anywhere in the take — here a negative one in
+    // the second channel, past the first summary block — defeats the gate
+    // with its exact magnitude.
+    buffer.append([new Float32Array(4_800).fill(0.125), new Float32Array(4_800)]);
+    expect(buffer.peak).toBe(0.125);
+    const loud = new Float32Array(4_800);
+    loud[4_799] = -0.75;
+    buffer.append([new Float32Array(4_800), loud]);
+    expect(buffer.peak).toBe(0.75);
+
+    // Crop rebuilds the summaries before publishing, so the peak follows the
+    // kept range exactly and never leaks an excluded peak.
+    buffer.crop(0, 9_600);
+    expect(buffer.peak).toBe(0.125);
+  });
+
   test("matches exact stereo peaks on partial summary edges after crop", () => {
     const cropStart = 37;
     const cropFrames = 5 * ENVELOPE_BLOCK_FRAMES;

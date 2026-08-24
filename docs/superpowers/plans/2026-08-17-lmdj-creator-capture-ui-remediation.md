@@ -180,20 +180,28 @@ contract. It must not be settled inside a front-end Task.
 
 ### Task 1 — Design gate: the capture panel's presentation and the trim pointer model
 
-- [ ] Decide and record the capture panel's presentation: whether it becomes a
+**Done 2026-08-24.** All decisions recorded in
+[`docs/prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md`](../../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md):
+P2-D1 panel presentation (viewport-anchored modal, fixed geometry), P2-D2
+focus behaviour, P2-D3 trim pointer model (visible grips, midpoint
+partition, inert middle), P2-D4 `DUPLICATE_ID` recovery. The keyboard
+editing path, `Escape` cancel and accessible names survive unchanged
+(P2-D3). F4 and F6 were not settled here and remain person-level decisions.
+
+- [x] Decide and record the capture panel's presentation: whether it becomes a
       dialog anchored to the viewport, a fixed region of the Sample surface, or
       an in-flow panel with guaranteed scroll-into-view. State how it behaves
       when the panel grows on entering `recording`.
-- [ ] Decide and record focus behaviour on open, on phase change, and on close,
+- [x] Decide and record focus behaviour on open, on phase change, and on close,
       preserving the existing `returnFocus` contract.
-- [ ] Decide and record the replacement pointer model for the trim handles:
+- [x] Decide and record the replacement pointer model for the trim handles:
       what a press near a handle does, what a press in the middle of the
       waveform does, whether a press on the track is allowed to move a trim
       point at all, and how the two handles stay independently reachable when
       they are close together.
-- [ ] Confirm the keyboard editing path, the `Escape` cancel, and the
+- [x] Confirm the keyboard editing path, the `Escape` cancel, and the
       accessible names survive the replacement unchanged.
-- [ ] Record the decisions in `docs/prd/decision-log.md`, or as open questions
+- [x] Record the decisions in `docs/prd/decision-log.md`, or as open questions
       if any of them turns out to be a product-level choice rather than an
       implementation one.
 
@@ -202,12 +210,21 @@ No source change in this Task.
 
 ### Task 2 — Capture panel presentation, position and focus (F1 + F2)
 
-- [ ] Implement the Task 1 presentation decision in `styles.css` and
+**Done 2026-08-24.** Implemented the P2-D1/P2-D2 decisions: the panel is a
+viewport-anchored `<dialog>` + `showModal()` modal on a shared `ModalDialog`
+primitive extracted from `ConfirmationDialog` (whose behavior and callers are
+unchanged), with fixed outer geometry that does not change when entering
+`recording`, focus on the phase's primary action on open and after phase
+transitions, `Escape` closing in every phase, a non-dismissible backdrop, and
+the `returnFocus` restore owned solely by the dialog. Landed with Creator Web
+Host `1.5.5` in the integrated Product Build `1.0.36.0`.
+
+- [x] Implement the Task 1 presentation decision in `styles.css` and
       `capture_panel.tsx` / `sample_surface.tsx`.
-- [ ] Guarantee that opening the panel brings it and its primary action into
+- [x] Guarantee that opening the panel brings it and its primary action into
       view, and that entering `recording` keeps `Stop` reachable without the
       operator knowing to scroll.
-- [ ] Move focus into the panel on open and restore it on close.
+- [x] Move focus into the panel on open and restore it on close.
 
 **Verification:** a Playwright assertion that the panel's primary action and
 `Stop` are **within the viewport** — `boundingBox` compared against the
@@ -217,12 +234,25 @@ enough to reproduce the original failure. Component tests for focus movement.
 
 ### Task 3 — Trim handle interaction (F5)
 
-- [ ] Replace the two stacked full-width invisible range inputs with the
+**Done 2026-08-24.** Implemented the P2-D3 decisions: each handle line is a
+visible grip (14px bar with top/bottom affordances) whose grab zone spans
+12 px to each side of the line, partitioned at the midpoint between the two
+lines so zones never overlap and adjacent handles each keep half the gap; a
+press inside a zone grabs that handle, the drag preserves the grab offset
+(handle follows pointer delta, never jumps to the pointer position), a press
+on the waveform body outside both zones moves nothing, and
+`pointercancel`/`Escape` still cancel and restore through the existing
+gesture functions. Both range inputs remain the keyboard/assistive-technology
+channel with live-second accessible names, removed from the pointer path
+(`pointer-events: none`, visually hidden but focusable). Landed with Creator
+Web Host `1.5.5` in the integrated Product Build `1.0.36.0`.
+
+- [x] Replace the two stacked full-width invisible range inputs with the
       Task 1 pointer model.
-- [ ] Make the interactive regions visible, so which handle a pointer will grab
+- [x] Make the interactive regions visible, so which handle a pointer will grab
       is predictable before pressing.
-- [ ] Keep both handles independently reachable when their values are adjacent.
-- [ ] Preserve the keyboard path, `Escape` cancel, gesture begin/preview/commit
+- [x] Keep both handles independently reachable when their values are adjacent.
+- [x] Preserve the keyboard path, `Escape` cancel, gesture begin/preview/commit
       semantics, and the accessible names with live second values.
 
 **Verification:** component tests for grabbing each handle from a pointer
@@ -233,10 +263,24 @@ and the mirror case. Existing waveform tests continue to pass unchanged.
 
 ### Task 4 — Recoverable presentation for `DUPLICATE_ID` (F3)
 
-- [ ] Give `DUPLICATE_ID` a message that names the actual situation and a
+**Done 2026-08-24.** Implemented the P2-D4 decisions: `DUPLICATE_ID` no
+longer renders under the fatal `Creator unavailable` heading — the panel
+names the actual situation ("Project already on this device") and explains
+that the import was refused because the local copy of the Project has newer
+changes and that nothing was lost. A new `Open local Project` recovery
+control leads to the local Projects list — the same destination as the
+existing `Open local` affordance — and dismisses the panel through the
+existing listing path, without a reload; the diverged local Project's
+identity is not available to the Host (the Runtime's `DUPLICATE_ID` error
+carries no details and the Host must not parse the bundle), so the control
+targets the list rather than a direct open. Every other error code's
+heading, message and retry wiring is byte-identical. Landed with Creator
+Web Host `1.5.5` in the integrated Product Build `1.0.36.0`.
+
+- [x] Give `DUPLICATE_ID` a message that names the actual situation and a
       recovery control that leads to the existing local Project, rather than
       the bare `Creator unavailable` heading.
-- [ ] Confirm no other error code's presentation changes.
+- [x] Confirm no other error code's presentation changes.
 
 **Verification:** component tests for the message and the control; a Playwright
 journey that imports, diverges the local Project, re-imports, and recovers
@@ -266,10 +310,12 @@ revisions, OS and browser versions.
   Host surface, not internal refactors, and no Contract or protocol changes.
 - No Core Module, Provider, Contract or Application Facade version changes;
   the diff does not reach them.
-- A new Product Build must be allocated before any team-testing or release
-  distribution of these fixes, per `docs/governance/version-management.md`, and
-  that allocation carries its own immutable Architecture Portal snapshot made
-  with `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL`.
+- The final integration is Product Build `1.0.36.0` / Creator Web Host `1.5.5`.
+  Builds `1.0.33.0`–`1.0.35.0` were allocated by abandoned branch-local
+  compositions before the `1.0.32.0` consolidation and are not reused; the
+  additional post-merge audio-suspension barrier therefore advances BUILD.
+  The final allocation carries its own immutable Architecture Portal snapshot
+  made with `scripts/architecture-portal.sh version 1.0.36.0 canary`.
 - `assembly.lock.json` must be regenerated after the compiled assembly is
   final, not before — see B4 in the pre-Stage-9 triage.
 

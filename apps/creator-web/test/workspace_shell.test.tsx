@@ -247,18 +247,18 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
   // S8-D12: recording onto an assigned Pad is a replacement, so the existing
   // confirmation runs before the microphone is ever requested (S8B-D2).
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
-  expect(screen.queryByRole("region", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
   const dialog = screen.getByRole("dialog", {name: "Replace Pad A1?"});
   expect(dialog.textContent).toContain(
     "Replacing the Sample resets Start, End, trigger, Loop, Volume, and Mute.",
   );
 
   await userEvent.click(screen.getByRole("button", {name: "Cancel replace"}));
-  expect(screen.queryByRole("region", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
 
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
-  expect(screen.getByRole("region", {name: "Pad A1 Pad Capture"})).toBeTruthy();
+  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeTruthy();
 });
 
 test("Record on an empty Pad opens the capture panel with no replacement prompt", async () => {
@@ -269,11 +269,11 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
 
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("region", {name: "Pad A2 Pad Capture"})).toBeTruthy();
+  expect(screen.queryByRole("dialog", {name: "Replace Pad A2?"})).toBeNull();
+  expect(screen.getByRole("dialog", {name: "Pad A2 Pad Capture"})).toBeTruthy();
 
   await userEvent.click(screen.getByRole("button", {name: "Close"}));
-  expect(screen.queryByRole("region", {name: "Pad A2 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A2 Pad Capture"})).toBeNull();
 });
 
 const listedSummary: LocalProjectSummary = {
@@ -339,8 +339,8 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       error_details: {},
       product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
-      host_version: "1.4.0",
-      platform_version: "0.3.4",
+      host_version: "1.5.0",
+      platform_version: "0.3.6",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,
@@ -1760,7 +1760,8 @@ test("retries a busy Project open only after the visible Retry action", async ()
 
 test.each([
   ["INVALID_PROJECT", {}, "The Project Bundle is invalid."],
-  ["DUPLICATE_ID", {}, "The Project conflicts with existing local data."],
+  ["DUPLICATE_ID", {},
+    "The import was refused because the local copy of this Project has newer changes. Nothing was lost."],
   ["WEB_RUNTIME_RESOURCE_LIMIT", {
     resource: "decoded_frames_per_pad", observed: 240001, limit: 240000,
   }, "decoded_frames_per_pad: observed 240001, limit 240000."],
@@ -1797,4 +1798,62 @@ test.each([
     expect(screen.getByTestId("creator-phase").textContent).toBe("restart-required");
     expect(screen.getByRole("button", {name: "Retry runtime"})).toBeTruthy();
   }
+});
+
+test("presents DUPLICATE_ID as a recoverable conflict, not as Creator unavailable", async () => {
+  const user = userEvent.setup();
+  const fixture = runtimeFixture({
+    importProject: async () => {
+      throw Object.assign(new Error("identifier already exists"), {
+        code: "DUPLICATE_ID",
+        details: {},
+      });
+    },
+  });
+  const {container} = render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByRole("button", {name: "Open Project 11111111"});
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  await user.upload(input!, new File(["bundle"], "diverged.lmdj"));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Project already on this device");
+  expect(alert.textContent).toContain(
+    "The import was refused because the local copy of this Project has newer changes. Nothing was lost.",
+  );
+  expect(alert.textContent).not.toContain("Creator unavailable");
+  expect(screen.getByRole("button", {name: "Open local Project"})).toBeTruthy();
+  expect(screen.queryByRole("button", {name: "Retry project"})).toBeNull();
+  expect(screen.queryByRole("button", {name: "Retry runtime"})).toBeNull();
+});
+
+test("recovers from DUPLICATE_ID to the local Projects list without a reload", async () => {
+  const user = userEvent.setup();
+  let importAttempts = 0;
+  const fixture = runtimeFixture({
+    importProject: async () => {
+      importAttempts += 1;
+      throw Object.assign(new Error("identifier already exists"), {
+        code: "DUPLICATE_ID",
+        details: {},
+      });
+    },
+  });
+  const {container} = render(<App runtimeFactory={() => fixture.session} />);
+  await screen.findByRole("button", {name: "Open Project 11111111"});
+  const input = container.querySelector<HTMLInputElement>('input[type="file"]');
+  await user.upload(input!, new File(["bundle"], "diverged.lmdj"));
+  await screen.findByRole("alert");
+  const listingsBefore = fixture.calls.filter(
+    (call) => call === "listLocalProjects",
+  ).length;
+
+  await user.click(screen.getByRole("button", {name: "Open local Project"}));
+
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByRole("heading", {name: "Local Projects"})).toBeTruthy();
+  expect(screen.getByRole("button", {name: "Open Project 11111111"}))
+    .toBeTruthy();
+  expect(fixture.calls.filter((call) => call === "listLocalProjects").length)
+    .toBeGreaterThan(listingsBefore);
+  expect(importAttempts).toBe(1);
 });

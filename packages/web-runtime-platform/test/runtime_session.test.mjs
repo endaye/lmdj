@@ -151,8 +151,8 @@ function fixture({
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
-      hostVersion: "1.2.13",
-      platformVersion: "0.3.4",
+      hostVersion: "1.2.15",
+      platformVersion: "0.3.6",
       productBuild: TEST_PRODUCT_BUILD,
       protocolVersion: 1,
     },
@@ -180,8 +180,8 @@ function fixture({
       transport,
       verifyManifest: async () => ({
         host_id: "web-runtime-host",
-        host_version: "1.2.13",
-        platform_version: "0.3.4",
+        host_version: "1.2.15",
+        platform_version: "0.3.6",
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
       }),
@@ -248,7 +248,7 @@ test("reports the exact assembly identity and resolved browser capabilities", as
     webMidi: true,
   });
   assert.equal(session.diagnostics().host_id, "web-runtime-host");
-  assert.equal(session.diagnostics().platform_version, "0.3.4");
+  assert.equal(session.diagnostics().platform_version, "0.3.6");
 });
 
 test("accepts only a positive safe integer capability probe timeout seam", () => {
@@ -303,8 +303,8 @@ test("default capability probe timeout fails startup without restart-required", 
     assemblyIdentity: {
       distributionContract: "lmdj.web-runtime-host.distribution.v1",
       hostId: "web-runtime-host",
-      hostVersion: "1.2.13",
-      platformVersion: "0.3.4",
+      hostVersion: "1.2.15",
+      platformVersion: "0.3.6",
       productBuild: TEST_PRODUCT_BUILD,
       protocolVersion: 1,
     },
@@ -316,8 +316,8 @@ test("default capability probe timeout fails startup without restart-required", 
       transport: {send: async () => {}, subscribe: () => () => {}},
       verifyManifest: async () => ({
         host_id: "web-runtime-host",
-        host_version: "1.2.13",
-        platform_version: "0.3.4",
+        host_version: "1.2.15",
+        platform_version: "0.3.6",
         product_build: TEST_PRODUCT_BUILD,
         protocol_version: 1,
       }),
@@ -347,7 +347,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
     distributionContract: "lmdj.creator-web.distribution.v1",
     hostId: "creator-web",
     hostVersion: "1.2.0",
-    platformVersion: "0.3.4",
+    platformVersion: "0.3.6",
     productBuild: TEST_PRODUCT_BUILD,
     protocolVersion: 1,
   };
@@ -360,7 +360,7 @@ test("accepts only the declared compatible Host inventory in packaged manifests"
       emsdk_revision: "b".repeat(40),
       emsdk_tag: "6.0.5",
     },
-    compatibleHosts: [{host_id: "web-runtime-host", host_version: "1.2.13"}],
+    compatibleHosts: [{host_id: "web-runtime-host", host_version: "1.2.15"}],
     expectedAssets: [{
       prefix: "assets/main.", suffix: ".js", role: "host_main",
     }],
@@ -2240,6 +2240,35 @@ test("suspend and close clear inputs then previews then stop once before transit
   assert.equal(await session.close(), true);
   assert.deepEqual(operations, ["sample.stop", "host.close"]);
   assert.equal(session.diagnostics().state, "closed");
+});
+
+test("explicit suspend keeps the AudioContext rendering until Host quiescence", async () => {
+  let releaseHostSuspend;
+  let hostSuspendStartedResolve;
+  const hostSuspendStarted = new Promise((resolvePromise) => {
+    hostSuspendStartedResolve = resolvePromise;
+  });
+  const {context, session} = fixture({
+    send: async (envelope) => {
+      if (envelope.operation === "audio.suspend") {
+        hostSuspendStartedResolve();
+        return new Promise((resolvePromise) => {
+          releaseHostSuspend = () => resolvePromise(success(envelope, {}));
+        });
+      }
+      return success(envelope, defaultResult(envelope.operation));
+    },
+  });
+  await session.start();
+  await session.activateAudio(createUserGestureToken({isTrusted: true}));
+
+  const suspending = session.suspendAudio();
+  await hostSuspendStarted;
+  assert.equal(context.state, "running");
+
+  releaseHostSuspend();
+  assert.equal(await suspending, true);
+  assert.equal(context.state, "suspended");
 });
 
 test("visibility cleanup is once per adverse edge and repeats after a later edge", async () => {

@@ -71,6 +71,16 @@ using lmdj::foundation::ProjectId;
 
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
 
+constexpr std::uint32_t kRampFrames = lmdj::audio::kRealtimeRampFrames;
+constexpr float kRampScale = 1.0F / static_cast<float>(kRampFrames);
+
+// Mirrors the engine's ramp arithmetic exactly (same operands, same order):
+// one ramp component is `frames * (1/96)` and components multiply into a
+// single factor that scales `sample * gain`.
+float ramp_part(std::uint32_t frames) noexcept {
+  return static_cast<float>(frames) * kRampScale;
+}
+
 PreparedSampleBank bank_with_sample(
     std::uint64_t revision,
     std::span<const float> sample,
@@ -133,13 +143,17 @@ void one_shot_snapshots_trim_gain_and_ignores_release() {
 
   std::array<float, 2> left{};
   std::array<float, 2> right{};
+  // F6 ramp: the first rendered frame carries attack gain 0/96.
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.1F && right.at(0) == 0.1F);
+  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
   LMDJ_CHECK(
       engine.enqueue_control(control(11, 0, PadControlKind::release)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 2);
-  LMDJ_CHECK(left.at(0) == 0.15F && left.at(1) == 0.2F);
+  // F6 ramp: attack (1/96 then 2/96) times the non-looping boundary fade
+  // (end_frame - cursor is 2 then 1).
+  LMDJ_CHECK(left.at(0) == 0.3F * 0.5F * (ramp_part(1) * ramp_part(2)));
+  LMDJ_CHECK(left.at(1) == 0.4F * 0.5F * (ramp_part(2) * ramp_part(1)));
   LMDJ_CHECK(right == left);
 
   const auto states = drain_voice_states(engine, 2);
@@ -155,7 +169,7 @@ void one_shot_snapshots_trim_gain_and_ignores_release() {
   LMDJ_CHECK(states.at(1).source_frame == 4);
 }
 
-void gate_release_stops_at_the_exact_cursor() {
+void gate_release_fades_a_ramp_tail_from_the_exact_cursor() {
   RealtimeEngine engine;
   const std::array<float, 5> sample{0.1F, 0.2F, 0.3F, 0.4F, 0.5F};
   auto bank = bank_with_playback(
@@ -171,7 +185,9 @@ void gate_release_stops_at_the_exact_cursor() {
   std::array<float, 2> left{};
   std::array<float, 2> right{};
   engine.render(left.data(), right.data(), 2);
-  const std::array<float, 2> expected_gate{0.2F, 0.3F};
+  const std::array<float, 2> expected_gate{
+      0.0F,
+      0.3F * (ramp_part(1) * ramp_part(3))};
   LMDJ_CHECK(left == expected_gate);
 
   LMDJ_CHECK(
@@ -180,9 +196,18 @@ void gate_release_stops_at_the_exact_cursor() {
   left.fill(1.0F);
   right.fill(1.0F);
   engine.render(left.data(), right.data(), 2);
-  const std::array<float, 2> silence{};
-  LMDJ_CHECK(left == silence);
+  // F6 ramp: the release no longer silences the voice at once. The stopped
+  // edge is published at stop initiation (below) while the voice renders a
+  // ramped tail: attack times boundary times the release factor (full scale
+  // on the first tail frame, 95/96 on the second). The tail reaches
+  // end_frame on the second frame and the voice deactivates there.
+  const std::array<float, 2> expected_tail{
+      0.4F * (ramp_part(2) * ramp_part(2)),
+      0.5F * ((ramp_part(3) * ramp_part(1)) * ramp_part(95))};
+  LMDJ_CHECK(left == expected_tail);
   LMDJ_CHECK(right == left);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
 
   const auto states = drain_voice_states(engine, 2);
   LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
@@ -210,8 +235,15 @@ void loop_gate_wraps_only_inside_the_selection_then_releases() {
   std::array<float, 5> left{};
   std::array<float, 5> right{};
   engine.render(left.data(), right.data(), 5);
+  // F6 ramp: the attack counter keeps rising across the loop wrap — the
+  // wrap does NOT restart the ramp — and looping voices get no boundary
+  // fade.
   const std::array<float, 5> expected_loop{
-      0.1F, 0.2F, 0.1F, 0.2F, 0.1F};
+      0.0F,
+      0.2F * ramp_part(1),
+      0.1F * ramp_part(2),
+      0.2F * ramp_part(3),
+      0.1F * ramp_part(4)};
   LMDJ_CHECK(left == expected_loop);
   LMDJ_CHECK(right == left);
 
@@ -219,7 +251,11 @@ void loop_gate_wraps_only_inside_the_selection_then_releases() {
       engine.enqueue_control(control(31, 0, PadControlKind::release)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
+  // F6 ramp: the stopped edge is published at stop initiation (below) while
+  // the voice renders its release tail; the first tail frame carries the
+  // full release scale times the current attack factor.
+  LMDJ_CHECK(left.at(0) == 0.2F * ramp_part(5));
+  LMDJ_CHECK(right == left);
   const auto states = drain_voice_states(engine, 2);
   LMDJ_CHECK(states.at(1).sequence == 30);
   LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::stopped);
@@ -246,20 +282,38 @@ void loop_toggle_is_latched_per_pad_and_stops_on_its_next_press() {
       engine.enqueue_control(control(40, 0, PadControlKind::press, 127)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.1F);
+  // F6 ramp: the first rendered frame carries attack gain 0/96.
+  LMDJ_CHECK(left.at(0) == 0.0F);
   LMDJ_CHECK(
       engine.enqueue_control(control(41, 1, PadControlKind::press, 127)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.5F);
+  LMDJ_CHECK(left.at(0) == 0.2F * ramp_part(1));
   LMDJ_CHECK(engine.telemetry().active_voices == 2);
 
   LMDJ_CHECK(
       engine.enqueue_control(control(42, 0, PadControlKind::press, 127)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.4F);
+  // F6 ramp: the toggled voice keeps rendering its release tail, so it is
+  // still active and audible (first tail frame at full release scale). The
+  // expectation mirrors the engine's per-voice rounding exactly: each
+  // voice term is rounded through a named value before the accumulation,
+  // so no FMA contraction can reorder rounding.
+  const float toggle_tail = 0.1F * ramp_part(2);
+  const float latched_second = 0.4F * ramp_part(1);
+  float expected_mix = 0.0F;
+  expected_mix += toggle_tail;
+  expected_mix += latched_second;
+  LMDJ_CHECK(left.at(0) == expected_mix);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+  // The tail lasts exactly kRealtimeRampFrames rendered frames: one above
+  // plus 95 more, then the voice deactivates.
+  std::array<float, 95> tail_left{};
+  std::array<float, 95> tail_right{};
+  engine.render(tail_left.data(), tail_right.data(), 95);
   LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
   const auto states = drain_voice_states(engine, 3);
   LMDJ_CHECK(states.at(0).sequence == 40);
   LMDJ_CHECK(states.at(0).slot == 0);
@@ -343,8 +397,10 @@ void preview_set_and_clear_affect_only_later_voice_snapshots() {
   std::array<float, 4> left{};
   std::array<float, 4> right{};
   engine.render(left.data(), right.data(), 3);
-  LMDJ_CHECK(left.at(0) == 0.2F);
-  LMDJ_CHECK(left.at(1) == 0.3F);
+  // F6 ramp: attack 0/96 on the first frame, then attack times the
+  // non-looping boundary fade (the preview selection is 2 frames long).
+  LMDJ_CHECK(left.at(0) == 0.0F);
+  LMDJ_CHECK(left.at(1) == 0.6F * 0.5F * (ramp_part(1) * ramp_part(1)));
   LMDJ_CHECK(left.at(2) == 0.0F);
   LMDJ_CHECK(right == left);
 
@@ -352,7 +408,12 @@ void preview_set_and_clear_affect_only_later_voice_snapshots() {
       engine.enqueue_control(control(63, 0, PadControlKind::press, 127)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 4);
-  LMDJ_CHECK(left == sample);
+  const std::array<float, 4> expected_second{
+      0.0F,
+      0.4F * (ramp_part(1) * ramp_part(3)),
+      0.6F * (ramp_part(2) * ramp_part(2)),
+      0.8F * (ramp_part(3) * ramp_part(1))};
+  LMDJ_CHECK(left == expected_second);
   LMDJ_CHECK(right == left);
   const auto states = drain_voice_states(engine, 4);
   LMDJ_CHECK(states.at(0).sequence == 61);
@@ -395,7 +456,11 @@ void legacy_enqueue_uses_published_snapshot_while_preview_is_active() {
   std::array<float, 2> right{};
   engine.render(left.data(), right.data(), 2);
 
-  const std::array<float, 2> published{0.1F, 0.2F};
+  // F6 ramp: attack times the boundary fade on the 2-frame published
+  // selection.
+  const std::array<float, 2> published{
+      0.0F,
+      0.4F * 0.5F * (ramp_part(1) * ramp_part(1))};
   LMDJ_CHECK(left == published);
   LMDJ_CHECK(right == published);
   const auto states = drain_voice_states(engine, 2);
@@ -484,7 +549,12 @@ void control_queue_overflow_rejects_preview_without_applying_it() {
       engine.enqueue_control(control(1'025, 0, PadControlKind::press, 127)) ==
       EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.25F && right.at(0) == 0.25F);
+  // F6 ramp: attack gain 0/96 on the first rendered frame.
+  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(
+      left.at(0) == 0.5F * (ramp_part(1) * ramp_part(1)) &&
+      right.at(0) == left.at(0));
 }
 
 void stop_slot_targets_one_pad_and_stop_all_clears_latched_voices() {
@@ -514,23 +584,47 @@ void stop_slot_targets_one_pad_and_stop_all_clears_latched_voices() {
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.4F);
+  // F6 ramp: both voices are on attack frame 0/96.
+  LMDJ_CHECK(left.at(0) == 0.0F);
 
   LMDJ_CHECK(engine.enqueue_control(control(72, 0, PadControlKind::stop_slot)) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.4F);
-  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+  // F6 ramp: the stopped one-shot keeps rendering its release tail
+  // (full release scale on the first tail frame) next to the latched loop.
+  // Each voice term is rounded through a named value before accumulation
+  // so no FMA contraction can reorder rounding.
+  const float stopped_tail = 0.1F * (ramp_part(1) * ramp_part(3));
+  const float latched_loop = 0.4F * ramp_part(1);
+  float expected_mix = 0.0F;
+  expected_mix += stopped_tail;
+  expected_mix += latched_loop;
+  LMDJ_CHECK(left.at(0) == expected_mix);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
   LMDJ_CHECK(engine.enqueue_control(control(73, 0, PadControlKind::press, 127)) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+  LMDJ_CHECK(engine.telemetry().active_voices == 3);
 
   LMDJ_CHECK(engine.enqueue_control(control(74, 0, PadControlKind::stop_all)) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
+  // F6 ramp: stop_all hard-kills the already-releasing one-shot (no second
+  // stopped publication) and starts release tails on the other two voices.
+  const float latched_tail = 0.4F * ramp_part(3);
+  const float restarted_tail = 0.1F * (ramp_part(1) * ramp_part(3));
+  float expected_stop_all = 0.0F;
+  expected_stop_all += latched_tail;
+  expected_stop_all += restarted_tail;
+  LMDJ_CHECK(left.at(0) == expected_stop_all);
+  LMDJ_CHECK(engine.telemetry().active_voices == 2);
+  // The tails last exactly kRealtimeRampFrames rendered frames: one above
+  // plus 95 more, then both voices deactivate.
+  std::array<float, 95> tail_left{};
+  std::array<float, 95> tail_right{};
+  engine.render(tail_left.data(), tail_right.data(), 95);
   LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 3);
   const auto states = drain_voice_states(engine, 6);
   LMDJ_CHECK(states.at(2).sequence == 70);
   LMDJ_CHECK(states.at(2).slot == 0);
@@ -605,9 +699,12 @@ void plays_a_sample_and_reports_render_telemetry() {
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == 0.5F && right[0] == 0.5F);
+  // F6 ramp: attack gain 0/96 on the first rendered frame.
+  LMDJ_CHECK(left[0] == 0.0F && right[0] == 0.0F);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == -0.5F && right[0] == -0.5F);
+  LMDJ_CHECK(
+      left[0] == -0.5F * (ramp_part(1) * ramp_part(1)) &&
+      right[0] == left[0]);
 
   std::array<RuntimeTriggerOutcomeEvent, 1> outcomes{};
   LMDJ_CHECK(engine.drain_trigger_outcomes(outcomes) == 1);
@@ -672,7 +769,10 @@ void supports_exact_64_slot_boundary() {
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == 0.625F && right[0] == 0.625F);
+  // F6 ramp: a one-frame voice renders only its attack-0 frame; the voice
+  // still completes on schedule.
+  LMDJ_CHECK(left[0] == 0.0F && right[0] == 0.0F);
+  LMDJ_CHECK(engine.telemetry().completed_voices == 1);
 
   engine.stop();
   LMDJ_CHECK(engine.clear_sample(63).has_value());
@@ -712,7 +812,7 @@ void validates_events_and_cleared_slots() {
 
 void applies_velocity_gain_and_clamps_after_mixing() {
   RealtimeEngine engine;
-  const std::array<float, 1> unit{1.0F};
+  const std::array<float, 2> unit{1.0F, 1.0F};
   LMDJ_CHECK(engine.load_sample(0, unit).has_value());
   LMDJ_CHECK(engine.start().has_value());
   LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 64}) ==
@@ -720,19 +820,34 @@ void applies_velocity_gain_and_clamps_after_mixing() {
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == 64.0F / 127.0F);
-  LMDJ_CHECK(right[0] == 64.0F / 127.0F);
+  // F6 ramp: attack gain 0/96 on the first rendered frame.
+  LMDJ_CHECK(left[0] == 0.0F && right[0] == 0.0F);
+  engine.render(left.data(), right.data(), 1);
+  const auto expected_velocity =
+      1.0F * (64.0F / 127.0F) * (ramp_part(1) * ramp_part(1));
+  LMDJ_CHECK(left[0] == expected_velocity);
+  LMDJ_CHECK(right[0] == expected_velocity);
 
   engine.stop();
-  const std::array<float, 1> loud{0.8F};
+  // Long enough to reach full scale: 96 attack frames, then a full-gain
+  // plateau before the 96-frame boundary fade.
+  const std::array<float, 200> loud = [] {
+    std::array<float, 200> value{};
+    value.fill(0.8F);
+    return value;
+  }();
   LMDJ_CHECK(engine.load_sample(0, loud).has_value());
   LMDJ_CHECK(engine.start().has_value());
   LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 0, 127}) ==
              EnqueueResult::accepted);
   LMDJ_CHECK(engine.enqueue(TriggerEvent{3, 0, 127}) ==
              EnqueueResult::accepted);
-  engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == 1.0F && right[0] == 1.0F);
+  std::array<float, 100> mix_left{};
+  std::array<float, 100> mix_right{};
+  engine.render(mix_left.data(), mix_right.data(), 100);
+  // On the full-gain plateau the two voices sum to 1.6 and clamp to 1.0.
+  LMDJ_CHECK(mix_left[96] == 1.0F && mix_right[96] == 1.0F);
+  LMDJ_CHECK(mix_left[99] == 1.0F && mix_right[99] == 1.0F);
 }
 
 void reports_queue_capacity_and_drops() {
@@ -756,7 +871,6 @@ void reports_queue_capacity_and_drops() {
 void caps_simultaneous_voices_and_mixes_each_admitted_voice() {
   RealtimeEngine engine;
   constexpr float kVoiceAmplitude = 1.0F / 1'024.0F;
-  constexpr float kExpectedMix = 128.0F / 1'024.0F;
   const std::array<float, 2> sample{kVoiceAmplitude, kVoiceAmplitude};
   LMDJ_CHECK(engine.load_sample(0, sample).has_value());
   LMDJ_CHECK(engine.start().has_value());
@@ -768,11 +882,29 @@ void caps_simultaneous_voices_and_mixes_each_admitted_voice() {
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
 
-  LMDJ_CHECK(left[0] == kExpectedMix);
-  LMDJ_CHECK(right[0] == kExpectedMix);
+  // F6 ramp: every admitted voice is on attack frame 0/96.
+  LMDJ_CHECK(left[0] == 0.0F);
+  LMDJ_CHECK(right[0] == 0.0F);
+  const auto during = engine.telemetry();
+  LMDJ_CHECK(during.started_voices == 128);
+  LMDJ_CHECK(during.active_voices == 128);
+  LMDJ_CHECK(during.voice_drops == 1);
+  engine.render(left.data(), right.data(), 1);
+  // The second frame mixes every admitted voice at attack 1/96 times the
+  // boundary fade 1/96 (the sample is 2 frames long). The term is rounded
+  // through a named value before accumulation, mirroring the engine's
+  // per-voice rounding (no FMA contraction).
+  const float ramped_voice = kVoiceAmplitude * (ramp_part(1) * ramp_part(1));
+  float expected_mix = 0.0F;
+  for (std::uint32_t voice = 0; voice < 128; ++voice) {
+    expected_mix += ramped_voice;
+  }
+  LMDJ_CHECK(left[0] == expected_mix);
+  LMDJ_CHECK(right[0] == expected_mix);
   const auto telemetry = engine.telemetry();
   LMDJ_CHECK(telemetry.started_voices == 128);
-  LMDJ_CHECK(telemetry.active_voices == 128);
+  LMDJ_CHECK(telemetry.completed_voices == 128);
+  LMDJ_CHECK(telemetry.active_voices == 0);
   LMDJ_CHECK(telemetry.voice_drops == 1);
 }
 
@@ -876,10 +1008,14 @@ void completes_a_sample_across_callback_blocks() {
   std::array<float, 3> left{};
   std::array<float, 3> right{};
   engine.render(left.data(), right.data(), 2);
-  LMDJ_CHECK(left[0] == 0.1F && left[1] == 0.2F);
+  // F6 ramp: attack 0/96 on the first frame, then attack times the
+  // non-looping boundary fade.
+  LMDJ_CHECK(left[0] == 0.0F && left[1] == 0.2F * (ramp_part(1) * ramp_part(4)));
   LMDJ_CHECK(engine.telemetry().active_voices == 1);
   engine.render(left.data(), right.data(), 3);
-  LMDJ_CHECK(left[0] == 0.3F && left[1] == 0.4F && left[2] == 0.5F);
+  LMDJ_CHECK(left[0] == 0.3F * (ramp_part(2) * ramp_part(3)));
+  LMDJ_CHECK(left[1] == 0.4F * (ramp_part(3) * ramp_part(2)));
+  LMDJ_CHECK(left[2] == 0.5F * (ramp_part(4) * ramp_part(1)));
   LMDJ_CHECK(engine.telemetry().completed_voices == 1);
   LMDJ_CHECK(engine.telemetry().max_callback_frames == 3);
 }
@@ -899,7 +1035,8 @@ void publishes_sample_banks_only_at_safe_render_boundaries() {
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.1F);
+  // F6 ramp: attack gain 0/96 on the first rendered frame.
+  LMDJ_CHECK(left.at(0) == 0.0F);
 
   const std::array<float, 1> new_sample{0.4F};
   auto second = bank_with_sample(11, new_sample);
@@ -910,13 +1047,17 @@ void publishes_sample_banks_only_at_safe_render_boundaries() {
              EnqueueResult::bank_transition);
 
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.2F);
+  // The previous Bank keeps serving the in-flight voice (attack times the
+  // boundary fade on the 3-frame sample).
+  LMDJ_CHECK(left.at(0) == 0.2F * (ramp_part(1) * ramp_part(2)));
   LMDJ_CHECK(engine.bank_telemetry().current_generation == 2);
   LMDJ_CHECK(engine.bank_telemetry().pending_publications == 0);
   LMDJ_CHECK(engine.enqueue(TriggerEvent{3, 0, 127}) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.5F);
+  // The old voice renders its last faded frame; the new voice is on attack
+  // frame 0/96.
+  LMDJ_CHECK(left.at(0) == 0.1F * (ramp_part(2) * ramp_part(1)));
   LMDJ_CHECK(engine.telemetry().active_voices == 0);
   LMDJ_CHECK(engine.reclaim_retired_banks() == 1);
   LMDJ_CHECK(engine.bank_telemetry().reclaimed_banks == 1);
@@ -927,7 +1068,7 @@ void publishes_sample_banks_only_at_safe_render_boundaries() {
 
 void rejects_publication_until_trigger_queue_is_empty() {
   RealtimeEngine engine;
-  const std::array<float, 1> first_sample{0.25F};
+  const std::array<float, 2> first_sample{0.25F, 0.25F};
   auto first = bank_with_sample(20, first_sample);
   LMDJ_CHECK(engine.publish_sample_bank(std::move(first)) ==
              PublishResult::accepted);
@@ -935,22 +1076,28 @@ void rejects_publication_until_trigger_queue_is_empty() {
   LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
              EnqueueResult::accepted);
 
-  const std::array<float, 1> second_sample{0.75F};
+  const std::array<float, 2> second_sample{0.75F, 0.75F};
   auto second = bank_with_sample(21, second_sample);
   LMDJ_CHECK(engine.publish_sample_bank(std::move(second)) ==
              PublishResult::events_pending);
   std::array<float, 1> left{};
   std::array<float, 1> right{};
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.25F);
+  // F6 ramp: attack gain 0/96 on the first rendered frame.
+  LMDJ_CHECK(left.at(0) == 0.0F);
 
   LMDJ_CHECK(engine.publish_sample_bank(std::move(second)) ==
              PublishResult::accepted);
   engine.render(left.data(), right.data(), 1);
+  // The in-flight voice keeps rendering from the previous Bank (attack
+  // times the boundary fade on the 2-frame sample).
+  LMDJ_CHECK(left.at(0) == 0.25F * (ramp_part(1) * ramp_part(1)));
   LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 0, 127}) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left.at(0) == 0.75F);
+  LMDJ_CHECK(left.at(0) == 0.0F);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.75F * (ramp_part(1) * ramp_part(1)));
 }
 
 void applies_explicit_bank_slot_backpressure_until_reclaimed() {
@@ -1248,7 +1395,12 @@ void restart_resets_counters_retains_samples_and_replays_no_event() {
   LMDJ_CHECK(engine.enqueue(TriggerEvent{1'158, 0, 127}) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == 0.75F && right[0] == 0.75F);
+  // F6 ramp: attack gain 0/96 on the first rendered frame; the retained
+  // sample is audible from the next frame on.
+  LMDJ_CHECK(left[0] == 0.0F && right[0] == 0.0F);
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left[0] == 0.5F * (ramp_part(1) * ramp_part(2)));
+  LMDJ_CHECK(right[0] == left[0]);
 }
 
 void render_does_not_allocate_or_deallocate() {
@@ -1281,9 +1433,197 @@ void render_does_not_allocate_or_deallocate() {
   g_track_allocations.store(false, std::memory_order_relaxed);
   LMDJ_CHECK(g_allocations.load(std::memory_order_relaxed) == 0);
   LMDJ_CHECK(g_deallocations.load(std::memory_order_relaxed) == 0);
-  LMDJ_CHECK(left.at(0) == 0.5F);
+  // F6 ramp: attack 1/96 times the boundary fade 1/96 on the second frame
+  // of the 2-frame sample.
+  LMDJ_CHECK(left.at(0) == 0.5F * (ramp_part(1) * ramp_part(1)));
   LMDJ_CHECK(engine.capture_telemetry().captured_events == 1);
   LMDJ_CHECK(engine.reclaim_retired_banks() == 1);
+}
+
+void attack_ramps_to_full_gain_over_exactly_the_ramp_frames() {
+  static_assert(kRampFrames == 96);
+  RealtimeEngine engine;
+  const std::array<float, 200> sample = [] {
+    std::array<float, 200> value{};
+    value.fill(1.0F);
+    return value;
+  }();
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 104> left{};
+  std::array<float, 104> right{};
+  engine.render(left.data(), right.data(), 104);
+  for (std::uint32_t frame = 0; frame < kRampFrames; ++frame) {
+    LMDJ_CHECK(left[frame] == ramp_part(frame));
+    LMDJ_CHECK(right[frame] == ramp_part(frame));
+  }
+  // Full scale from frame 96 on; the boundary fade has not started yet
+  // (end_frame - cursor is still above the ramp length).
+  for (std::size_t frame = kRampFrames; frame < left.size(); ++frame) {
+    LMDJ_CHECK(left[frame] == 1.0F);
+    LMDJ_CHECK(right[frame] == 1.0F);
+  }
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+}
+
+void non_loop_boundary_fades_to_exact_zero_at_end_frame() {
+  RealtimeEngine engine;
+  const std::array<float, 200> sample = [] {
+    std::array<float, 200> value{};
+    value.fill(1.0F);
+    return value;
+  }();
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 200> left{};
+  std::array<float, 200> right{};
+  engine.render(left.data(), right.data(), 200);
+  // Past the attack, every frame inside the last kRealtimeRampFrames is
+  // scaled by (end_frame - cursor)/96 alone; the last rendered frame
+  // carries exactly 1/96 and the voice completes at end_frame.
+  for (std::uint32_t frame = 105; frame < 200; ++frame) {
+    LMDJ_CHECK(left[frame] == ramp_part(200 - frame));
+    LMDJ_CHECK(right[frame] == ramp_part(200 - frame));
+  }
+  LMDJ_CHECK(left[199] == ramp_part(1));
+  LMDJ_CHECK(engine.telemetry().completed_voices == 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+}
+
+void stop_voice_renders_a_full_ramp_tail_then_deactivates() {
+  RealtimeEngine engine;
+  const std::array<float, 300> sample = [] {
+    std::array<float, 300> value{};
+    value.fill(1.0F);
+    return value;
+  }();
+  auto bank = bank_with_playback(
+      9,
+      sample,
+      ResolvedPlayback{
+          0,
+          static_cast<std::uint32_t>(sample.size()),
+          TriggerMode::gate,
+          1.0F,
+          false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(90, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  std::array<float, 100> warmup_left{};
+  std::array<float, 100> warmup_right{};
+  engine.render(warmup_left.data(), warmup_right.data(), 100);
+  LMDJ_CHECK(warmup_left[99] == 1.0F);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(91, 0, PadControlKind::release)) ==
+      EnqueueResult::accepted);
+  std::array<float, kRampFrames> left{};
+  std::array<float, kRampFrames> right{};
+  engine.render(left.data(), right.data(), kRampFrames);
+  // The first tail frame carries the full release scale; frame k carries
+  // (96 - k)/96; the last tail frame carries exactly 1/96.
+  LMDJ_CHECK(left[0] == 1.0F);
+  for (std::uint32_t frame = 1; frame < kRampFrames; ++frame) {
+    LMDJ_CHECK(left[frame] == ramp_part(kRampFrames - frame));
+    LMDJ_CHECK(right[frame] == ramp_part(kRampFrames - frame));
+  }
+  LMDJ_CHECK(left[kRampFrames - 1] == ramp_part(1));
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
+  LMDJ_CHECK(engine.telemetry().completed_voices == 0);
+
+  // The stopped edge is published at stop initiation, not after the tail.
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(0).sequence == 90);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(0).runtime_frame == 0);
+  LMDJ_CHECK(states.at(1).sequence == 90);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(1).runtime_frame == 100);
+  LMDJ_CHECK(states.at(1).source_frame == 100);
+}
+
+void releasing_voice_is_hard_killed_by_a_second_stop() {
+  RealtimeEngine engine;
+  const std::array<float, 200> sample = [] {
+    std::array<float, 200> value{};
+    value.fill(0.5F);
+    return value;
+  }();
+  auto bank = bank_with_playback(
+      10,
+      sample,
+      ResolvedPlayback{
+          0,
+          static_cast<std::uint32_t>(sample.size()),
+          TriggerMode::loop_toggle,
+          1.0F,
+          false});
+  LMDJ_CHECK(engine.publish_sample_bank(std::move(bank)) ==
+             PublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(
+      engine.enqueue_control(control(95, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  std::array<float, 100> warmup_left{};
+  std::array<float, 100> warmup_right{};
+  engine.render(warmup_left.data(), warmup_right.data(), 100);
+
+  LMDJ_CHECK(
+      engine.enqueue_control(control(96, 0, PadControlKind::press, 127)) ==
+      EnqueueResult::accepted);
+  std::array<float, 10> tail_left{};
+  std::array<float, 10> tail_right{};
+  engine.render(tail_left.data(), tail_right.data(), 10);
+  LMDJ_CHECK(tail_left[0] == 0.5F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 1);
+
+  // A second stop hard-kills the releasing voice: no ramp, no second
+  // stopped publication, immediate silence.
+  LMDJ_CHECK(engine.enqueue_control(control(97, 0, PadControlKind::stop_all)) ==
+             EnqueueResult::accepted);
+  std::array<float, 1> left{};
+  std::array<float, 1> right{};
+  engine.render(left.data(), right.data(), 1);
+  LMDJ_CHECK(left.at(0) == 0.0F && right.at(0) == 0.0F);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
+  LMDJ_CHECK(engine.telemetry().cancelled_voices == 1);
+
+  const auto states = drain_voice_states(engine, 2);
+  LMDJ_CHECK(states.at(0).state == RuntimeVoiceState::started);
+  LMDJ_CHECK(states.at(1).state == RuntimeVoiceState::stopped);
+  LMDJ_CHECK(states.at(1).runtime_frame == 100);
+}
+
+void voice_shorter_than_the_ramp_multiplies_attack_and_boundary() {
+  RealtimeEngine engine;
+  const std::array<float, 4> sample{0.1F, 0.2F, 0.4F, 0.8F};
+  LMDJ_CHECK(engine.load_sample(0, sample).has_value());
+  LMDJ_CHECK(engine.start().has_value());
+  LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
+             EnqueueResult::accepted);
+
+  std::array<float, 4> left{};
+  std::array<float, 4> right{};
+  engine.render(left.data(), right.data(), 4);
+  const std::array<float, 4> expected{
+      0.0F,
+      0.2F * (ramp_part(1) * ramp_part(3)),
+      0.4F * (ramp_part(2) * ramp_part(2)),
+      0.8F * (ramp_part(3) * ramp_part(1))};
+  LMDJ_CHECK(left == expected);
+  LMDJ_CHECK(right == expected);
+  LMDJ_CHECK(engine.telemetry().completed_voices == 1);
+  LMDJ_CHECK(engine.telemetry().active_voices == 0);
 }
 
 }  // namespace
@@ -1324,7 +1664,7 @@ void operator delete[](
 int main() {
   fixed_control_and_voice_messages_are_realtime_safe_values();
   one_shot_snapshots_trim_gain_and_ignores_release();
-  gate_release_stops_at_the_exact_cursor();
+  gate_release_fades_a_ramp_tail_from_the_exact_cursor();
   loop_gate_wraps_only_inside_the_selection_then_releases();
   loop_toggle_is_latched_per_pad_and_stops_on_its_next_press();
   mute_starts_no_voice_and_invalid_preview_bounds_are_rejected();
@@ -1354,4 +1694,9 @@ int main() {
   stop_cancels_queued_events_and_active_voices();
   restart_resets_counters_retains_samples_and_replays_no_event();
   render_does_not_allocate_or_deallocate();
+  attack_ramps_to_full_gain_over_exactly_the_ramp_frames();
+  non_loop_boundary_fades_to_exact_zero_at_end_frame();
+  stop_voice_renders_a_full_ramp_tail_then_deactivates();
+  releasing_voice_is_hard_killed_by_a_second_stop();
+  voice_shorter_than_the_ramp_multiplies_attack_and_boundary();
 }

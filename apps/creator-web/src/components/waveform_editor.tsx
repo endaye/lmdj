@@ -39,6 +39,12 @@ interface EditGesture {
   latest: Readonly<PadPlayback>;
 }
 
+interface GripDrag {
+  kind: "start" | "end";
+  pointerId: number;
+  grabOffset: number;
+}
+
 interface AcceptedViewportEnvelope {
   readonly viewport: Readonly<SampleViewport>;
   readonly envelope: Readonly<WaveformEnvelope>;
@@ -152,6 +158,8 @@ export function WaveformEditor({
   const [draftPlayback, setDraftPlayback] = useState<Readonly<PadPlayback> | null>(null);
   const gesture = useRef<EditGesture | null>(null);
   const gesturePointerId = useRef<number | null>(null);
+  const gripDrag = useRef<GripDrag | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const commitGestureRef = useRef<() => void>(() => {});
   const cancelGestureRef = useRef<() => void>(() => {});
   const queryEpoch = useRef(0);
@@ -222,6 +230,7 @@ export function WaveformEditor({
     const current = gesture.current;
     if (current === null) return;
     gesturePointerId.current = null;
+    gripDrag.current = null;
     gesture.current = null;
     setDraftPlayback(null);
     if (!samePlayback(current.base, current.latest)) onCommit(current.latest);
@@ -230,6 +239,7 @@ export function WaveformEditor({
   const cancelGesture = () => {
     if (gesture.current === null) return;
     gesturePointerId.current = null;
+    gripDrag.current = null;
     gesture.current = null;
     setDraftPlayback(null);
     onCancel();
@@ -313,7 +323,7 @@ export function WaveformEditor({
     );
   };
 
-  const capturePointer = (event: React.PointerEvent<HTMLInputElement>) => {
+  const capturePointer = (event: React.PointerEvent<HTMLElement>) => {
     gesturePointerId.current = event.pointerId;
     if (typeof event.currentTarget.setPointerCapture === "function") {
       try {
@@ -324,6 +334,55 @@ export function WaveformEditor({
     }
   };
 
+  const frameAtClientX = (clientX: number): number => {
+    const rect = canvasRef.current?.getBoundingClientRect();
+    if (rect === undefined || rect.width <= 0) return Number.NaN;
+    const fraction = (clientX - rect.left) / rect.width;
+    return viewport.startFrame +
+      fraction * (viewport.endFrame - viewport.startFrame);
+  };
+
+  const gripPointerDown = (
+    event: React.PointerEvent<HTMLElement>,
+    kind: "start" | "end",
+  ) => {
+    if (disabled || !envelopeIsValid || event.button !== 0) return;
+    event.preventDefault();
+    const handleFrame = kind === "start" ? effective.trimStartFrame : resolvedEnd;
+    gripDrag.current = {
+      kind,
+      pointerId: event.pointerId,
+      grabOffset: handleFrame - frameAtClientX(event.clientX),
+    };
+    capturePointer(event);
+    beginGesture();
+  };
+
+  const gripPointerMove = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = gripDrag.current;
+    if (drag === null || drag.pointerId !== event.pointerId) return;
+    // The handle follows the pointer delta from the press, never the pointer
+    // position itself, so a press can never jump a trim point.
+    preview(
+      drag.kind,
+      Math.round(frameAtClientX(event.clientX) + drag.grabOffset),
+    );
+  };
+
+  const gripsInteractive = !disabled && envelopeIsValid &&
+    visibleBuckets.length > 0;
+  const startPct = startX / SVG_WIDTH * 100;
+  const endPct = endX / SVG_WIDTH * 100;
+  const midPct = (startPct + endPct) / 2;
+  const gripZone = (handlePct: number, boundaryPct: number, isStart: boolean) => ({
+    left: isStart
+      ? `max(0px, calc(${handlePct}% - 12px))`
+      : `max(${boundaryPct}%, calc(${handlePct}% - 12px))`,
+    right: isStart
+      ? `calc(100% - min(${boundaryPct}%, calc(${handlePct}% + 12px)))`
+      : `max(0px, calc(100% - ${handlePct}% - 12px))`,
+  });
+
   return (
     <section
       className="waveform-editor"
@@ -332,7 +391,7 @@ export function WaveformEditor({
       data-viewport-start={viewport.startFrame}
       data-viewport-end={viewport.endFrame}
     >
-      <div className="waveform-canvas">
+      <div className="waveform-canvas" ref={canvasRef}>
         {envelopeIsValid && visibleBuckets.length > 0 ? (
           <svg
             viewBox={`0 0 ${SVG_WIDTH} ${SVG_HEIGHT}`}
@@ -369,6 +428,46 @@ export function WaveformEditor({
             )}
           </svg>
         ) : <p className="waveform-unavailable">Waveform unavailable</p>}
+        {envelopeIsValid && visibleBuckets.length > 0 ? (
+          <>
+            {gripsInteractive ? (
+              <div
+                className="waveform-grip-zone"
+                data-grip-zone="start"
+                aria-hidden="true"
+                style={gripZone(startPct, midPct, true)}
+                onPointerDown={(event) => gripPointerDown(event, "start")}
+                onPointerMove={gripPointerMove}
+                onPointerUp={commitGesture}
+                onPointerCancel={cancelGesture}
+              />
+            ) : null}
+            <span
+              className="waveform-grip-bar"
+              data-grip="start"
+              aria-hidden="true"
+              style={{left: `calc(${startPct}% - 7px)`}}
+            />
+            {gripsInteractive ? (
+              <div
+                className="waveform-grip-zone"
+                data-grip-zone="end"
+                aria-hidden="true"
+                style={gripZone(endPct, midPct, false)}
+                onPointerDown={(event) => gripPointerDown(event, "end")}
+                onPointerMove={gripPointerMove}
+                onPointerUp={commitGesture}
+                onPointerCancel={cancelGesture}
+              />
+            ) : null}
+            <span
+              className="waveform-grip-bar"
+              data-grip="end"
+              aria-hidden="true"
+              style={{left: `calc(${endPct}% - 7px)`}}
+            />
+          </>
+        ) : null}
         <input
           className="waveform-handle waveform-start-handle"
           type="range"
@@ -378,12 +477,7 @@ export function WaveformEditor({
           value={effective.trimStartFrame}
           disabled={disabled || !envelopeIsValid}
           aria-label={`${padLabel} Start — ${seconds(effective.trimStartFrame, sampleRate)} s`}
-          onPointerDown={(event) => {
-            capturePointer(event);
-            beginGesture();
-          }}
-          onPointerUp={commitGesture}
-          onPointerCancel={cancelGesture}
+          style={{left: `calc(${startPct}% - 22px)`}}
           onChange={(event) => preview("start", event.currentTarget.valueAsNumber)}
           onKeyDown={(event) => keyboardEdit(event, "start")}
           onKeyUp={(event) => {
@@ -399,12 +493,7 @@ export function WaveformEditor({
           value={resolvedEnd}
           disabled={disabled || !envelopeIsValid}
           aria-label={`${padLabel} End — ${seconds(resolvedEnd, sampleRate)} s`}
-          onPointerDown={(event) => {
-            capturePointer(event);
-            beginGesture();
-          }}
-          onPointerUp={commitGesture}
-          onPointerCancel={cancelGesture}
+          style={{left: `calc(${endPct}% - 22px)`}}
           onChange={(event) => preview("end", event.currentTarget.valueAsNumber)}
           onKeyDown={(event) => keyboardEdit(event, "end")}
           onKeyUp={(event) => {

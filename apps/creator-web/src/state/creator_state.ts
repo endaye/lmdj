@@ -43,6 +43,7 @@ export type CreatorPhase =
   | "opening"
   | "empty"
   | "activating"
+  | "suspending"
   | "recovering"
   | "running"
   | "suspended"
@@ -69,7 +70,13 @@ export interface CreatorState {
     errorDetails?: Readonly<Record<string, unknown>>;
   };
   audio: {
-    phase: "inactive" | "activating" | "recovering" | "running" | "suspended";
+    phase:
+      | "inactive"
+      | "activating"
+      | "suspending"
+      | "recovering"
+      | "running"
+      | "suspended";
   };
   transfer: {
     phase: "idle" | "importing";
@@ -192,6 +199,10 @@ export function isCreatorActionAllowed(
       if (action.phase === "activating") {
         return selectCanActivateAudio(state);
       }
+      if (action.phase === "suspending") {
+        return state.runtime.phase === "ready" && hasReadyProject(state) &&
+          state.transfer.phase === "idle" && state.audio.phase === "running";
+      }
       if (action.phase === "recovering") {
         return state.runtime.phase === "ready" && hasReadyProject(state) &&
           state.transfer.phase === "idle" && state.audio.phase === "suspended";
@@ -199,12 +210,13 @@ export function isCreatorActionAllowed(
       if (action.phase === "running") {
         return state.runtime.phase === "ready" && hasReadyProject(state) &&
           state.transfer.phase === "idle" &&
-          ["inactive", "activating", "recovering", "suspended"]
+          ["inactive", "activating", "suspending", "recovering", "suspended"]
             .includes(state.audio.phase);
       }
       return state.runtime.phase === "ready" && hasReadyProject(state) &&
         state.transfer.phase === "idle" &&
-        ["activating", "recovering", "running"].includes(state.audio.phase);
+        ["activating", "suspending", "recovering", "running"]
+          .includes(state.audio.phase);
     case "audio-activation-restored":
       return state.audio.phase === "activating";
     case "bank-selected":
@@ -502,6 +514,7 @@ export function selectCreatorPhase(state: CreatorState): CreatorPhase {
   if (state.project.phase === "opening") return "opening";
   if (state.project.phase === "empty") return "empty";
   if (state.audio.phase === "activating") return "activating";
+  if (state.audio.phase === "suspending") return "suspending";
   if (state.audio.phase === "recovering") return "recovering";
   if (state.audio.phase === "running") return "running";
   if (state.audio.phase === "suspended") return "suspended";

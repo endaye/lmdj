@@ -1,9 +1,9 @@
 {
   "contract": "lmdj.module.v1",
   "module": "creator-web",
-  "version": "1.4.0",
+  "version": "1.5.5",
   "api_version": 1,
   "dependencies": {
-    "web-runtime-platform": "0.3.4"
+    "web-runtime-platform": "0.3.6"
   }
 }

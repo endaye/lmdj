@@ -64,6 +64,31 @@ function renderEditor(overrides: Partial<React.ComponentProps<typeof WaveformEdi
   return {onPreview, onCommit, onCancel, ...view};
 }
 
+// jsdom layout is all zeros; the grip drag math maps clientX through the
+// canvas rect, so tests pin it to the 400-unit SVG coordinate space.
+function mockCanvasRect(container: HTMLElement, {left = 0, width = 400} = {}) {
+  const canvas = container.querySelector<HTMLElement>(".waveform-canvas")!;
+  Object.defineProperty(canvas, "getBoundingClientRect", {
+    configurable: true,
+    value: () => ({
+      left,
+      right: left + width,
+      width,
+      top: 0,
+      bottom: 192,
+      height: 192,
+      x: left,
+      y: 0,
+      toJSON: () => ({}),
+    }),
+  });
+  return canvas;
+}
+
+function gripZone(container: HTMLElement, kind: "start" | "end") {
+  return container.querySelector<HTMLElement>(`[data-grip-zone="${kind}"]`)!;
+}
+
 test("renders one integer-bucket path mirrored around the zero line", () => {
   const {container} = renderEditor();
   const waveform = container.querySelector<SVGPathElement>("path[data-waveform]");
@@ -150,12 +175,13 @@ test("exposes Pad and time labels on focusable handles and numeric inputs", () =
 });
 
 test("previews a pointer drag without mutation and commits once on release", () => {
-  const {onPreview, onCommit} = renderEditor();
-  const start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const {container, onPreview, onCommit} = renderEditor();
+  mockCanvasRect(container);
+  const start = gripZone(container, "start");
 
-  fireEvent.pointerDown(start, {pointerId: 7, clientX: 50});
-  fireEvent.change(start, {target: {value: "2"}});
-  fireEvent.change(start, {target: {value: "3"}});
+  fireEvent.pointerDown(start, {pointerId: 7, clientX: 50, button: 0});
+  fireEvent.pointerMove(start, {pointerId: 7, clientX: 100});
+  fireEvent.pointerMove(start, {pointerId: 7, clientX: 150});
 
   expect(onPreview).toHaveBeenLastCalledWith({...playback, trimStartFrame: 3});
   expect(onCommit).not.toHaveBeenCalled();
@@ -166,16 +192,17 @@ test("previews a pointer drag without mutation and commits once on release", () 
 });
 
 test("captures the pointer so a release outside the handle still completes the gesture", () => {
-  const {onCommit} = renderEditor();
-  const start = screen.getByRole("slider", {name: /Pad A1 Start/});
+  const {container, onCommit} = renderEditor();
+  mockCanvasRect(container);
+  const start = gripZone(container, "start");
   const setPointerCapture = vi.fn();
   Object.defineProperty(start, "setPointerCapture", {
     configurable: true,
     value: setPointerCapture,
   });
 
-  fireEvent.pointerDown(start, {pointerId: 17});
-  fireEvent.change(start, {target: {value: "2"}});
+  fireEvent.pointerDown(start, {pointerId: 17, clientX: 50, button: 0});
+  fireEvent.pointerMove(start, {pointerId: 17, clientX: 100});
   expect(setPointerCapture).toHaveBeenCalledWith(17);
   fireEvent.pointerUp(window, {pointerId: 17});
   fireEvent.pointerUp(window, {pointerId: 17});
@@ -186,14 +213,17 @@ test("captures the pointer so a release outside the handle still completes the g
 test.each(["pointercancel", "Escape"] as const)(
   "%s cancels a draft without committing",
   (cancellation) => {
-    const {onCancel, onCommit} = renderEditor();
-    const start = screen.getByRole("slider", {name: /Pad A1 Start/});
-    fireEvent.pointerDown(start, {pointerId: 9});
-    fireEvent.change(start, {target: {value: "2"}});
+    const {container, onCancel, onCommit} = renderEditor();
+    mockCanvasRect(container);
+    const start = gripZone(container, "start");
+    fireEvent.pointerDown(start, {pointerId: 9, clientX: 50, button: 0});
+    fireEvent.pointerMove(start, {pointerId: 9, clientX: 100});
     if (cancellation === "pointercancel") {
       fireEvent.pointerCancel(start, {pointerId: 9});
     } else {
-      fireEvent.keyDown(start, {key: "Escape"});
+      fireEvent.keyDown(screen.getByRole("slider", {name: /Pad A1 Start/}), {
+        key: "Escape",
+      });
     }
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onCommit).not.toHaveBeenCalled();
@@ -201,13 +231,118 @@ test.each(["pointercancel", "Escape"] as const)(
 );
 
 test("unmount cancels an active draft without committing", () => {
-  const {onCancel, onCommit, unmount} = renderEditor();
-  const start = screen.getByRole("slider", {name: /Pad A1 Start/});
-  fireEvent.pointerDown(start, {pointerId: 11});
-  fireEvent.change(start, {target: {value: "2"}});
+  const {container, onCancel, onCommit, unmount} = renderEditor();
+  mockCanvasRect(container);
+  const start = gripZone(container, "start");
+  fireEvent.pointerDown(start, {pointerId: 11, clientX: 50, button: 0});
+  fireEvent.pointerMove(start, {pointerId: 11, clientX: 100});
   unmount();
   expect(onCancel).toHaveBeenCalledTimes(1);
   expect(onCommit).not.toHaveBeenCalled();
+});
+
+test("grab zones span 12 px each side of the handle line, bounded by the midpoint", () => {
+  const {container} = renderEditor();
+  // trimStartFrame 1 → 12.5%, trimEndFrame 7 → 87.5%, midpoint 50%.
+  // jsdom re-serializes min()/max(), so assert the geometry by its parts.
+  const start = gripZone(container, "start");
+  const end = gripZone(container, "end");
+  expect(start.style.left).toContain("max(0px");
+  expect(start.style.left).toContain("12.5% - 12px");
+  expect(start.style.right).toContain("min(50%");
+  expect(start.style.right).toContain("12.5% + 12px");
+  expect(end.style.left).toContain("max(50%");
+  expect(end.style.left).toContain("87.5% - 12px");
+  expect(end.style.right).toContain("100% - 87.5% - 12px");
+});
+
+test("a press near a handle line grabs that handle, whatever the pointer's height", () => {
+  const {container, onPreview, onCommit} = renderEditor();
+  mockCanvasRect(container);
+  // The retired bands grabbed End for a press under the Start line and Start
+  // for a press over the End line; clientY no longer decides anything.
+  const start = gripZone(container, "start");
+  fireEvent.pointerDown(start, {pointerId: 21, clientX: 55, clientY: 180, button: 0});
+  fireEvent.pointerMove(start, {pointerId: 21, clientX: 105, clientY: 180});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, trimStartFrame: 2});
+  fireEvent.pointerUp(start, {pointerId: 21});
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, trimStartFrame: 2});
+
+  const end = gripZone(container, "end");
+  fireEvent.pointerDown(end, {pointerId: 22, clientX: 345, clientY: 8, button: 0});
+  fireEvent.pointerMove(end, {pointerId: 22, clientX: 295, clientY: 8});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, trimEndFrame: 6});
+  fireEvent.pointerUp(end, {pointerId: 22});
+  expect(onCommit).toHaveBeenLastCalledWith({...playback, trimEndFrame: 6});
+});
+
+test("a press on a grip never jumps the trim point to the pressed position", () => {
+  const {container, onPreview, onCommit} = renderEditor();
+  mockCanvasRect(container);
+  const start = gripZone(container, "start");
+  // Press 12 px from the handle line: the native range input this replaces
+  // would have jumped the trim point to the pressed track position.
+  fireEvent.pointerDown(start, {pointerId: 23, clientX: 62, button: 0});
+  expect(onPreview).not.toHaveBeenCalled();
+  fireEvent.pointerUp(start, {pointerId: 23});
+  expect(onCommit).not.toHaveBeenCalled();
+
+  // A drag moves the handle by the delta from the press, keeping the grab
+  // offset: 175 is frame 3.5 at the pointer, the preserved 0.5-frame offset
+  // lands the handle on 3, not 4.
+  fireEvent.pointerDown(start, {pointerId: 24, clientX: 75, button: 0});
+  fireEvent.pointerMove(start, {pointerId: 24, clientX: 175});
+  expect(onPreview).toHaveBeenLastCalledWith({...playback, trimStartFrame: 3});
+  fireEvent.pointerUp(start, {pointerId: 24});
+});
+
+test("a press on the waveform body outside both grab zones moves nothing", () => {
+  const {container, onPreview, onCommit, onCancel} = renderEditor();
+  mockCanvasRect(container);
+  const waveform = container.querySelector("path[data-waveform]")!;
+  fireEvent.pointerDown(waveform, {pointerId: 25, clientX: 200, button: 0});
+  fireEvent.pointerMove(waveform, {pointerId: 25, clientX: 250});
+  fireEvent.pointerUp(window, {pointerId: 25});
+  expect(onPreview).not.toHaveBeenCalled();
+  expect(onCommit).not.toHaveBeenCalled();
+  expect(onCancel).not.toHaveBeenCalled();
+});
+
+test("adjacent handles partition at the midpoint and stay independently grabbable", () => {
+  const adjacent = {...playback, trimStartFrame: 3, trimEndFrame: 4};
+  const {container, onPreview} = renderEditor({playback: adjacent});
+  mockCanvasRect(container);
+  // x 37.5% and x 50%: each zone shrinks to half the 12.5% gap, so both
+  // handles remain reachable instead of overlapping.
+  const start = gripZone(container, "start");
+  const end = gripZone(container, "end");
+  expect(start.style.right).toContain("min(43.75%");
+  expect(start.style.right).toContain("37.5% + 12px");
+  expect(end.style.left).toContain("max(43.75%");
+  expect(end.style.left).toContain("50% - 12px");
+
+  fireEvent.pointerDown(start, {pointerId: 26, clientX: 155, button: 0});
+  fireEvent.pointerMove(start, {pointerId: 26, clientX: 105});
+  expect(onPreview).toHaveBeenLastCalledWith({...adjacent, trimStartFrame: 2});
+  fireEvent.pointerUp(start, {pointerId: 26});
+
+  fireEvent.pointerDown(end, {pointerId: 27, clientX: 195, button: 0});
+  fireEvent.pointerMove(end, {pointerId: 27, clientX: 220});
+  expect(onPreview).toHaveBeenLastCalledWith({...adjacent, trimEndFrame: 5});
+  fireEvent.pointerUp(end, {pointerId: 27});
+});
+
+test("disabled or invalid envelope removes the grip pointer path", () => {
+  const disabledView = renderEditor({disabled: true});
+  expect(disabledView.container.querySelector("[data-grip-zone]")).toBeNull();
+  disabledView.unmount();
+
+  const malformed = {
+    ...envelope,
+    buckets: [{startFrame: 0, endFrame: 8, peakMagnitude: 0.5}],
+  } as WaveformEnvelope;
+  const invalidView = renderEditor({envelope: malformed});
+  expect(invalidView.container.querySelector("[data-grip-zone]")).toBeNull();
 });
 
 test("keyboard handles move one frame or the nearest 10 ms without crossing", () => {

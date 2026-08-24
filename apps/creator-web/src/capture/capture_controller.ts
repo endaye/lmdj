@@ -40,6 +40,14 @@ export class CaptureController {
     this.#listener = listener;
   }
 
+  // The input device's identity as the browser reports it
+  // (MediaStreamTrack.label). Empty before start() resolves and whenever the
+  // browser withholds the label; the panel degrades that to a "Default
+  // input" placeholder rather than guessing (F4, visible input identity).
+  get inputLabel(): string {
+    return this.#resources?.track.label ?? "";
+  }
+
   // start() publishes the in-flight promise so stop() can await it. Without
   // this, a stop() arriving mid-start finds #resources still null, no-ops, and
   // the microphone goes live afterwards with no owner able to release it.

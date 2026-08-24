@@ -1,9 +1,9 @@
 {
   "contract": "lmdj.module.v1",
   "module": "core-cli",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "api_version": 2,
   "dependencies": {
-    "application-facade": "1.4.4"
+    "application-facade": "1.4.5"
   }
 }
