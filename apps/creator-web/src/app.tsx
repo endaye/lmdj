@@ -430,14 +430,13 @@ function Workspace({
   const activateAudio = async (event: MouseEvent) => {
     if (!session) return;
     const priorPhase = stateRef.current.audio.phase;
+    if (priorPhase !== "inactive" && priorPhase !== "suspended") return;
     dispatch({type: "audio-changed", phase: "activating"});
     // A refused activation is a non-destructive no-op: the surface returns
     // to the phase it held before the attempt, unless a Runtime publication
     // already moved it elsewhere.
     const restorePriorPhase = () => {
-      if (stateRef.current.audio.phase === "activating") {
-        dispatch({type: "audio-changed", phase: priorPhase});
-      }
+      dispatch({type: "audio-activation-restored", phase: priorPhase});
     };
     try {
       const activated = await activateCreatorAudio(session, event);
@@ -448,6 +447,7 @@ function Workspace({
             code: diagnostics.error_code,
             details: diagnostics.error_details,
           }));
+          restorePriorPhase();
         } else {
           restorePriorPhase();
         }
@@ -455,13 +455,11 @@ function Workspace({
         dispatch({type: "audio-changed", phase: "running"});
       }
     } catch (error) {
-      if (error instanceof TypeError) {
-        // An untrusted gesture never reached the Runtime.
-        restorePriorPhase();
-      } else {
-        reportProjectError(error);
-        dispatch({type: "audio-changed", phase: "inactive"});
-      }
+      // An untrusted gesture never reached the Runtime. Other failures remain
+      // visible through normal error reporting, but none may destroy the
+      // pre-attempt audio phase.
+      if (!(error instanceof TypeError)) reportProjectError(error);
+      restorePriorPhase();
     }
   };
 

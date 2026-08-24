@@ -110,6 +110,27 @@ describe("Creator state", () => {
     })).toBe(false);
   });
 
+  test("restores a failed activation only while the attempt still owns the phase", () => {
+    const activating = creatorReducer(readyState(), {
+      type: "audio-changed",
+      phase: "activating",
+    });
+    const restored = creatorReducer(activating, {
+      type: "audio-activation-restored",
+      phase: "suspended",
+    });
+    expect(restored.audio.phase).toBe("suspended");
+
+    const published = creatorReducer(activating, {
+      type: "audio-changed",
+      phase: "running",
+    });
+    expect(creatorReducer(published, {
+      type: "audio-activation-restored",
+      phase: "suspended",
+    })).toBe(published);
+  });
+
   test.each<[string, CreatorState, CreatorAction]>([
     ["list while Runtime is booting", initialCreatorState, {type: "projects-listing"}],
     ["load before listing", readyState(), {type: "projects-loaded", projects: []}],

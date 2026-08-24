@@ -48,7 +48,7 @@ export function StatusBar({
       <button
         type="button"
         disabled={!selectCanActivateAudio(state) || !onActivateAudio ||
-          audioActivationReady === false}
+          audioActivationReady !== true}
         onClick={onActivateAudio}
       >
         Activate audio

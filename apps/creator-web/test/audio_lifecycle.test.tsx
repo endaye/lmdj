@@ -403,6 +403,90 @@ test("a refused activation leaves the surface in its prior phase", async () => {
   }
 });
 
+test("a failed activation with Runtime diagnostics restores its prior phase", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("diagnostic-failure");
+  activationStub.current = async () => {
+    value.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+    return false;
+  };
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("HOST_STATE_INVALID");
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
+test("a rejected activation restores its prior phase while reporting the error", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("rejected");
+  activationStub.current = async () => {
+    throw Object.assign(new Error("activation failed"), {
+      code: "HOST_STATE_INVALID",
+    });
+  };
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("HOST_STATE_INVALID");
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
+test("a Runtime publication during activation wins over later refusal", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("publication-wins");
+  let finishActivation: ((activated: boolean) => void) | undefined;
+  activationStub.current = () => new Promise((resolve) => {
+    finishActivation = resolve;
+  });
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    await screen.findByText("Audio activating");
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await screen.findByText("Audio running");
+    await act(async () => finishActivation?.(false));
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
 test("Activate audio is disabled unless the Host is parked at audio-suspended", async () => {
   const user = userEvent.setup();
   const value = sessionFixture("gate");
