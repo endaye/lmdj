@@ -109,8 +109,8 @@ row is answered.
 
 | ID | Task | Blocked by |
 | --- | --- | --- |
-| F4 | Whatever the device/silence resolution turns out to be | F4 decision ([#214](https://github.com/endaye/lmdj/issues/214)) |
-| F6 | Amplitude ramp in the render path, under a realtime-safety review | F6 decision ([#214](https://github.com/endaye/lmdj/issues/214)) |
+| ~~F4~~ | ~~Whatever the device/silence resolution turns out to be~~ | **decision landed 2026-08-24** ([record](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md)) — implement the digital-silence commit gate plus visible input identity in the Capture panel |
+| ~~F6~~ | ~~Amplitude ramp in the render path, under a realtime-safety review~~ | **decision landed 2026-08-24** ([record](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)) — implement the 96-frame attack/release ramp in `audio-runtime`, stress tier required |
 | A2 | Rename `native-test-host` and change the Assembly, **or** remove it from the Assembly and every distribution and return it to `tests/`; either way, write the rule for what may enter a distribution package | A2 decision ([#210](https://github.com/endaye/lmdj/issues/210)) |
 | A3 | Reshape the published artifacts to whichever reproducibility option is chosen | A3 decision ([#211](https://github.com/endaye/lmdj/issues/211)) |
 | D1, D2 | Cooker Bank allocation, `PreparedSampleBank` publication layout, manifest semantics, Facade validation, and a new "quota consumed by another Pad" failure class | D1 + D2 decision |

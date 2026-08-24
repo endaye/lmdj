@@ -199,8 +199,8 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 | --- | --- | --- | --- |
 | P1 | Does a physical pass carry forward across Product Builds? | whether M2 and M6 are re-runs or already satisfied; recurs at every Build | short |
 | ~~P2~~ | ~~The capture panel's presentation, focus behaviour, and the replacement trim pointer model~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md): modal capture panel (P2-D1), focus follows the primary action (P2-D2), visible-grip midpoint-partitioned trim handles (P2-D3), recoverable `DUPLICATE_ID` (P2-D4). Tasks 2–4 of the Creator UI remediation plan (F1, F2, F3, F5) are unblocked | — |
-| F4 | Device picker, visible input identity, an input-level gate before commit, or some combination ([question](../prd/questions/capture-input-device-and-silence-gate.md)) | closing the silent-capture gap; the picker's absence is a declared `1.0.23.0` boundary, so this widens scope | design review |
-| F6 | Amplitude ramp policy in the render path — ramp length, zero-crossing snap, crossfade, or a combination ([question](../prd/questions/render-path-amplitude-ramp.md)) | M2 checks 1 and 5, which fail by construction today; needs a realtime-safety review because the render path is allocation-free and lock-free | design review |
+| ~~F4~~ | ~~Device picker, visible input identity, an input-level gate before commit, or some combination~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md): input-level gate before commit (digital-silence refusal) plus visible input identity; no device picker | — |
+| ~~F6~~ | ~~Amplitude ramp policy in the render path — ramp length, zero-crossing snap, crossfade, or a combination~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md): 96-frame (2 ms) linear attack/release ramp; loop-seam crossfade deferred until M2 evaluation | — |
 | A2 | Is `native-test-host` a product component to be renamed, or does it leave the Assembly and every distribution? | the Assembly cleanup; also needs a written rule for what may enter a distribution package | short |
 | A3 | Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim | first external distribution (`dev` Channel or above) | short |
 | D1 + D2 | Long-material resource model and Loop BPM time-stretch — one review | any long-material work; touches Cooker Bank allocation, the lock-free publication layout, manifest semantics and Facade validation | design review |
@@ -259,13 +259,14 @@ omitted and not called passed.
    and can run at any time — it is the only verification row available today
    with no blocker.
 2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)); the Creator UI remediation branch is unblocked. **P1** — determines whether the remaining verification list is thirteen rows or six.
-3. **F6**, then **D4 + D5** — F6 unblocks the rest of M2; D4 and D5 are what
+3. ~~**F6**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)); M2 can resume once the ramp lands. **D4 + D5** — what
    Stage 9 itself waits on.
 4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
    distribution.
 5. **M5 + M6** — when the external interface and controller are on hand.
-6. **F4**, **A2**, **A3**, **D1 + D2**, **D3** — schedule as the work they gate
+6. **A2**, **A3**, **D1 + D2**, **D3** — schedule as the work they gate
    comes up; A2 and A3 are due before the first external distribution.
+   (~~**F4**~~ — settled 2026-08-24, [decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md).)
 7. **L1 through L5** — most expensive, needs instrumentation and five runs of
    500 triggers plus ten minutes. Schedule when the Web/PWA launch-platform
    conclusion actually has to land.
