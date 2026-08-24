@@ -190,13 +190,17 @@ def main() -> int:
         assert archive.parent == output_dir.resolve()
         assert archive.suffix == ".zip"
 
-        # A detached digest is the only out-of-band integrity signal a consumer
-        # has; build-manifest.json ships inside the archive.
+        # The detached digest and the detached Manifest are the out-of-band
+        # integrity signals a consumer has; the archive ships payload only.
         checksum = archive.with_name(archive.name + ".sha256")
         assert checksum.is_file(), checksum
         assert checksum.read_text(encoding="utf-8") == (
             f"{sha256(archive)}  {archive.name}\n"
         )
+        manifest_path = archive.with_name(
+            archive.name[: -len(".zip")] + ".build-manifest.json"
+        )
+        assert manifest_path.is_file(), manifest_path
 
         extraction = temporary_root / "fresh-extraction"
         extraction.mkdir()
@@ -224,7 +228,6 @@ def main() -> int:
             "bin/lmdj-core",
             "bin/lmdj-core-mcp",
             "bin/lmdj-native-host",
-            "build-manifest.json",
             f"lib/{library_name}",
             "libexec/lmdj-core",
             "python/lmdj_core_mcp/__init__.py",
@@ -254,9 +257,7 @@ def main() -> int:
             assert mode & stat.S_IXUSR, relative
 
         manifest = json.loads(
-            (package_root / "build-manifest.json").read_text(
-                encoding="utf-8"
-            )
+            manifest_path.read_text(encoding="utf-8")
         )
         version = json.loads(
             (package_root / "share/lmdj/version.json").read_text(
@@ -282,9 +283,7 @@ def main() -> int:
             )
             for artifact in manifest["artifacts"]
         }
-        assert set(manifest_artifacts) == expected - {
-            "build-manifest.json"
-        }
+        assert set(manifest_artifacts) == expected
         for relative, (byte_length, digest) in manifest_artifacts.items():
             path = package_root / relative
             assert byte_length == path.stat().st_size
