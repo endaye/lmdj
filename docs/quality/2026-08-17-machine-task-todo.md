@@ -115,7 +115,7 @@ row is answered.
 | F6 | Amplitude ramp in the render path, under a realtime-safety review | F6 decision ([#214](https://github.com/endaye/lmdj/issues/214)) |
 | A2 | Rename `native-test-host` and change the Assembly, **or** remove it from the Assembly and every distribution and return it to `tests/`; either way, write the rule for what may enter a distribution package | A2 decision ([#210](https://github.com/endaye/lmdj/issues/210)) |
 | D1, D2 | Cooker Bank allocation, `PreparedSampleBank` publication layout, manifest semantics, Facade validation, and a new "quota consumed by another Pad" failure class | D1 + D2 decision |
-| D3 | Schema provenance on `ArtifactRef` and an input resolver on `AttemptStore`; retire the prototype's Host-injected bridge rather than graduating it | D3 decision ([#206](https://github.com/endaye/lmdj/issues/206)) |
+| ~~D3~~ | ~~Schema provenance on `ArtifactRef` and an input resolver on `AttemptStore`; retire the prototype's Host-injected bridge rather than graduating it~~ | **Decided 2026-08-24** ([#206](https://github.com/endaye/lmdj/issues/206), [decision](../prd/decisions/2026-08-24-provider-artifact-byte-access.md), plan [`2026-08-24-lmdj-provider-artifact-byte-access-decision.md`](../superpowers/plans/2026-08-24-lmdj-provider-artifact-byte-access-decision.md)). A capability-gated `ArtifactSource` in provider-sdk is the sanctioned shape, deliberately **not implemented yet** — the trigger is the first formal Capability that must parse structured Artifact bytes. Option C is permanently rejected; the replay Provider proceeds under option B |
 | D4, D5 | Sequence/Take Contract implementation | D4 + D5 decision — this is Stage 9 |
 
 ---
