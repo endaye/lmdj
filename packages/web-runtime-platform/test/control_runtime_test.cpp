@@ -3006,6 +3006,8 @@ void test_take_stop_stops_capture_batches_at_the_original_deadline() {
       runtime->engine().capture_telemetry().captured_events ==
       lmdj::audio::kRealtimeCaptureCapacity);
   ContinuousAudioDriver driver(runtime->engine());
+  coordinator.engine = &runtime->engine();
+  coordinator.driver = &driver;
 
   check_error(
       runtime->dispatch(
