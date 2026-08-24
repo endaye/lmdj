@@ -61,6 +61,13 @@ them still blocks a full physical-pass claim.
 
 ### A2. `native-test-host` is in the Product Assembly and every distribution
 
+**Resolved 2026-08-24 by the rename option** ([#210](https://github.com/endaye/lmdj/issues/210),
+decision [`../prd/decisions/2026-08-24-native-test-host-classification.md`](../prd/decisions/2026-08-24-native-test-host-classification.md)):
+`native-test-host` (retired at `1.0.14`) became `native-host 1.0.0` in Product
+Build `1.0.31.0`, and the distribution-contents rule now lives in
+[`../governance/distribution-contents.md`](../governance/distribution-contents.md).
+The original finding follows as filed.
+
 A component whose module id says "test" ships in `products/lmdj/assembly.json`
 and in every distribution package, while `CLAUDE.md` defines `apps/` as "thin
 Core Hosts" with no test-host category. One of the two is wrong.
@@ -76,7 +83,7 @@ distribution and return it to `tests/`.
 Recorded in `docs/prd/open-questions.md`. The backlog marked this ✅ but the
 component is still in the Assembly today, so the mark is stale.
 
-### A3. Build Manifest reproducibility contradicts itself
+### ~~A3. Build Manifest reproducibility contradicts itself~~ — decided 2026-08-24
 
 `create_zip()` pins timestamps, ordering and file modes for reproducibility,
 but `build-manifest.json` sits inside the archive and carries `build_time`, so
@@ -85,11 +92,18 @@ rebuilds and compares hashes" cannot work. `build_time` is required by
 `version-management.md` §4, so this is two correct requirements in one
 container, not an implementation defect.
 
-Options: publish the manifest detached; strip mutable fields from the archived
-copy and keep a detached one; or accept irreproducibility and drop that
-verification claim explicitly. Changes the shape of published artifacts.
-
-Due before the first external distribution (`dev` Channel or above).
+**Decided 2026-08-24** in
+[`../prd/decisions/2026-08-24-build-manifest-detached.md`](../prd/decisions/2026-08-24-build-manifest-detached.md)
+([#211](https://github.com/endaye/lmdj/issues/211)): the Manifest becomes a
+detached sibling asset, the archive keeps payload only, and the Contract and
+fields are unchanged. **Implemented the same day** as machine task A3
+([#286](https://github.com/endaye/lmdj/issues/286), plan
+[`../superpowers/plans/2026-08-24-lmdj-detached-build-manifest.md`](../superpowers/plans/2026-08-24-lmdj-detached-build-manifest.md)):
+the packager ships `<package-name>.build-manifest.json` beside the archive, two
+clean packagings produce byte-identical ZIPs, and the release inventory gates
+are profile-aware (core-package four assets, web-runtime-host three). This
+clears the A3 item ahead of the first external distribution (`dev` Channel or
+above).
 
 ---
 
@@ -321,10 +335,9 @@ F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 cam
 from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
-F1 and F2 are fixed in Product Build `1.0.31.0` (Creator `1.5.0`), F5 in
-`1.0.32.0` (Creator `1.5.1`), F3 in `1.0.33.0` (Creator `1.5.2`), F4 in
-`1.0.34.0` (Creator `1.5.3`), F6 in `1.0.35.0` (audio-runtime `0.5.1`) — all
-six session defects are fixed.
+F1–F5 and F6 are combined into Product Build `1.0.32.0` (Creator `1.5.4`,
+audio-runtime `0.5.1`) — all six session defects are fixed in source, while
+their physical re-runs remain open.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
@@ -334,7 +347,7 @@ that plan; both decisions landed 2026-08-24, F4 is implemented in
 and F6 in
 [`2026-08-24-lmdj-render-path-amplitude-ramp.md`](../superpowers/plans/2026-08-24-lmdj-render-path-amplitude-ramp.md).
 
-### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.31.0`
+### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.32.0`
 
 `.capture-panel` has no rule in `apps/creator-web/src/styles.css`. It renders
 as an unstyled flow element at the end of the Sample surface, with no
@@ -343,14 +356,14 @@ height `157`, document height `983`. In a real browser window the panel and its
 `Record into Pad N` button are entirely below the fold, so pressing
 `Record Sample` looks like nothing happened.
 
-### ~~F2. Stop is pushed off screen when recording starts~~ — fixed in `1.0.31.0`
+### ~~F2. Stop is pushed off screen when recording starts~~ — fixed in `1.0.32.0`
 
 Same root cause. Entering `recording` adds the level meter and waveform canvas,
 growing the panel from 157 px to 277 px, all downward, and the page does not
 scroll to follow. The take cannot be stopped from the visible surface.
 
-F1 and F2 are one fix, landed 2026-08-24 in Product Build `1.0.31.0` / Creator
-`1.5.0` (remediation plan Task 2): the panel is now a viewport-anchored modal
+F1 and F2 are one fix, combined 2026-08-24 into Product Build `1.0.32.0` /
+Creator `1.5.4` (remediation plan Task 2): the panel is now a viewport-anchored modal
 `<dialog>` with fixed geometry that does not grow when entering `recording`,
 focus moves to the phase's primary action on open and after phase transitions,
 and the Playwright gate asserts the panel's and `Stop`'s `boundingBox` against
@@ -361,7 +374,7 @@ label, which never requires the element to be above the fold — this class of
 defect was invisible to the whole browser gate until the `boundingBox`
 assertion was added.
 
-### ~~F3. `DUPLICATE_ID` presents as fatal with no way out~~ — fixed in `1.0.33.0`
+### ~~F3. `DUPLICATE_ID` presents as fatal with no way out~~ — fixed in `1.0.32.0`
 
 Re-importing a bundle whose local Project has since diverged renders under
 `Creator unavailable` with no recovery control (`error_panel.tsx:36`); only
@@ -369,7 +382,7 @@ Re-importing a bundle whose local Project has since diverged renders under
 `Open local` still opens the diverged Project, and a plain reload clears the
 error. The defect is the presentation and the missing affordance.
 
-Fixed 2026-08-24 in Product Build `1.0.33.0` / Creator `1.5.2` (remediation
+Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.4` (remediation
 plan Task 4): `DUPLICATE_ID` no longer renders under the fatal
 `Creator unavailable` heading — the panel names the actual situation
 ("Project already on this device"), explains that the import was refused
@@ -381,7 +394,7 @@ retry wiring is unchanged. The physical re-walk that confirms the fix by
 hand stays open in `2026-08-17-manual-verification-todo.md` (remediation
 plan Task 5).
 
-### ~~F4. A silent default input commits silence with no indication~~ — fixed in `1.0.34.0`
+### ~~F4. A silent default input commits silence with no indication~~ — fixed in `1.0.32.0`
 
 `capture_controller.ts:62` requests audio with no `deviceId`, so capture follows
 the OS default input; the absent device picker is a **declared** scope boundary
@@ -392,7 +405,7 @@ silence onto a Pad with no input-level gate, no silence detection and no
 warning. The operator's only signal is the level meter, which F1 and F2 keep
 off screen.
 
-Fixed 2026-08-24 in Product Build `1.0.34.0` / Creator `1.5.3`, implementing
+Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.4`, implementing
 the [2026-08-24 decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md)
 (option a + b, no device picker): committing a take whose whole-take measured
 peak is exactly zero — digital silence — is refused with an in-panel
@@ -424,7 +437,7 @@ rather than being ignored. `opacity: .01` makes none of it learnable.
 Found within a minute of a human first trying to trim a Sample. The keyboard
 path is sound and must survive the fix.
 
-Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.1` (remediation
+Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.4` (remediation
 plan Task 3): each handle line is now a visible grip (14px bar with top/bottom
 affordances) whose grab zone spans 12 px to each side of the line, partitioned
 at the midpoint between the two lines so adjacent handles stay independently
@@ -440,7 +453,7 @@ Scoped in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
 with F1–F3.
 
-### ~~F6. The render path has no amplitude ramp anywhere~~ — fixed in `1.0.35.0`
+### ~~F6. The render path has no amplitude ramp anywhere~~ — fixed in `1.0.32.0`
 
 Trimming a Sample and triggering it produces audible clicks at the trim
 boundaries — the first check of row M2, 2026-08-17.
@@ -456,7 +469,7 @@ discontinuity, which is what the click is.
 The same absence predicts clicks at the loop seam and on releasing a held
 voice; neither has been tested yet.
 
-Fixed 2026-08-24 in Product Build `1.0.35.0` (audio-runtime `0.5.1`),
+Fixed 2026-08-24 in Product Build `1.0.32.0` (audio-runtime `0.5.1`),
 implementing the
 [2026-08-24 decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)
 (96-frame linear attack/release, no zero-crossing snap): the realtime render
@@ -492,8 +505,9 @@ Re-verified against `main` at `9d079796`; do not re-do these.
 | D3 | `build_time` breaks ZIP reproducibility | Superseded by A3 above, still open as a governance question |
 
 **Still open from that backlog:** C2 (`project_store.cpp` JSON read paths lack
-the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
-(`native-test-host` in the Assembly, listed as A2 above).
+the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
+(`native-test-host` in the Assembly, listed as A2 above)~~ — resolved
+2026-08-24 by the rename; see A2.
 
 ---
 
@@ -501,9 +515,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
 
 1. ~~**A1 real-microphone check**~~ — done 2026-08-17. The capture chain
    passed all five hearing criteria; the session returned F1–F4, of which
-   ~~**F1 + F2 are one cheap fix**~~ — fixed in `1.0.31.0` (2026-08-24);
-   ~~F5~~ fixed in `1.0.32.0` (2026-08-24); ~~F3~~ fixed in `1.0.33.0`
-   (2026-08-24); ~~F4~~ fixed in `1.0.34.0` (2026-08-24). Only the physical
+   ~~**F1 + F2 are one cheap fix**~~, ~~F5~~, ~~F3~~ and ~~F4~~ are combined
+   into `1.0.32.0` (2026-08-24). Only the physical
    re-walks remain (remediation plan Task 5 and the F4 trigger row).
 2. ~~**B1 + B2 together**~~ — done 2026-08-18. ~~B3~~ done 2026-08-21 in #226
    (`4312a6de`). B4 remains open.
@@ -511,6 +524,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    coverage-raise plan (machine list C6).
 4. **D4 + D5** — Stage 9 depends on them.
 5. **D1 + D2** — one review, before any long-material work.
-6. **A2, A3** — before the first external distribution.
+6. ~~**A2**~~ — done 2026-08-24 (rename to `native-host` + distribution
+   contents rule; see the A2 section). (~~A3~~ decided and implemented
+   2026-08-24, [#286](https://github.com/endaye/lmdj/issues/286).)
 7. ~~**B3**~~ — done 2026-08-21 in #226. **B4, C2, backlog C2** — mechanical
    hardening, schedule as capacity allows.

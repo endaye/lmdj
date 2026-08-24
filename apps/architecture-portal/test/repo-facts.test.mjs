@@ -69,7 +69,7 @@ test('facts match the current locked product composition', async () => {
     {id: 'core-cli', version: '1.0.17'},
     {id: 'core-mcp', version: '1.1.14'},
     {id: 'creator-web', version: '1.5.4'},
-    {id: 'native-test-host', version: '1.0.15'},
+    {id: 'native-host', version: '1.0.1'},
     {id: 'web-runtime-host', version: '1.2.14'},
   ]);
   assert.equal(facts.providers.length, 2);

@@ -3,7 +3,7 @@ title: Version 与 Release
 area: operations
 status: implemented
 owners: [release, core]
-source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py]
+source_paths: [docs/governance/version-management.md, docs/governance/git-workflow.md, docs/superpowers/plans/2026-08-09-lmdj-stage8-sample-editor.md, docs/release-evidence/release-intents.json, tools/release/policy.json, tools/release/audit.py, tools/release/target_validation.py, tools/release/ci_evidence.py, scripts/release.sh, .github/workflows/publish-release.yml, .github/workflows/deploy-web-runtime-host.yml, docs/quality/2026-08-11-web-runtime-hardening-acceptance.md, scripts/version.py, docs/prd/decisions/2026-08-24-build-manifest-detached.md]
 ---
 
 import {BuildIdentity} from '@site/src/components/BuildIdentity';
@@ -14,7 +14,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 Product Build 使用四段式；Core Module、Host 与 Provider 使用独立 SemVer；Contract 使用稳定 ID + Contract SemVer。
 ## Assembly Lock
 锁文件记录确切组件版本与 source hash，门户同样从它生成身份，防止文档手填漂移。
-当前 source candidate 是 Product Build `1.0.35.0 · canary · g<short-sha>`。这次分配在实时渲染路径加入恰好 96 帧（固定 48 kHz 下 2 ms）的线性 attack/release 斜坡（F6 修复），Audio Runtime 升至 `0.5.1` 并按 Core Module 级联更新 Application Facade `1.4.5`、Web Runtime Platform `0.3.5` 与全部 Host 的精确依赖身份；循环接缝 crossfade 按 2026-08-24 决策暂缓。Product Build `1.0.34.0` / Creator `1.5.3` 曾交付提交前输入电平门（数字静音拒绝）与可见输入身份（F4）；`1.0.33.0` / Creator `1.5.2` 曾交付 `DUPLICATE_ID` 可恢复呈现；`1.0.32.0` / Creator `1.5.1` 曾交付 trim 握把指针模型；`1.0.31.0` / Creator `1.5.0` 曾交付 Capture 面板视口锚定模态化；`1.0.30.0` / Creator `1.4.0` 曾交付 Capture pre-commit Crop；Product Build `1.0.29.0` / Creator `1.3.6` 曾交付修正后的选区波形缩放；`1.0.28.0` / Creator `1.3.5` 是独立审查未通过、从未合并或发布的 branch-local 候选，其快照只保留为不可变拒绝证据。当前 source 按 squash 前规则可以没有 active Product intent。
+当前 source candidate 是 Product Build `1.0.32.0 · canary · g<short-sha>`。这次分配在 `1.0.31.0` 的 Native Host 重命名与分发规则基线上组合 Creator Capture UI F1–F5 和 Audio Runtime F6。Product Build `1.0.30.0` / Creator `1.4.0` 曾交付 Capture pre-commit Crop；`1.0.29.0` / Creator `1.3.6` 曾交付修正后的选区波形缩放；`1.0.28.0` / Creator `1.3.5` 是独立审查未通过、从未合并或发布的 branch-local 候选，其快照只保留为不可变拒绝证据。当前 source 按 squash 前规则可以没有 active Product intent。
 Product Build `1.0.26.0 · canary · g<short-sha>` 曾是 G3 Host settings crash-recovery/identity source candidate。
 Product Build `1.0.25.0 · canary · g<short-sha>` 曾是 G2 evidence-durability source candidate。
 Product Build `1.0.24.0 · canary · g<short-sha>` 曾是 source candidate。那次候选来自 provider-sdk G1/G4 缺陷修复级联：Attempt reservation 泄漏回收与 temp sibling 进程级唯一性修复已经进入 active manifests 与 Assembly Lock；历史 `1.0.21.0` 的 MPD218 复验和 `1.0.22.0` / `1.0.23.0` 的旧候选证据都不自动升级为 `1.0.24.0` 的候选结论。版本值由 active manifests 与 Assembly Lock 派生。
@@ -42,12 +42,12 @@ gate 会报告 authority、expected、found 与 consumer path；生成物 stale 
 | Web Runtime Platform | `0.3.5` | 精确 Facade/Audio Runtime 依赖更新 |
 | Core CLI | `1.0.17` | 精确 Facade 依赖更新 |
 | Core MCP | `1.1.14` | 精确 Facade 依赖更新 |
-| Native Test Host | `1.0.15` | 精确 Facade/Audio Runtime 依赖更新 |
+| Native Host | `1.0.1` | 在 `1.0.31.0` 重命名基线上更新 Facade/Audio Runtime 依赖；Sample host coverage 不变 |
 | Web Runtime Host | `1.2.14` | 精确 Platform 依赖更新 |
-| Creator Web | `1.5.4` | 精确 Platform 依赖更新 |
+| Creator Web | `1.5.4` | Capture UI F1–F5：模态面板、焦点、trim 握把、可恢复 `DUPLICATE_ID`、静音门与输入身份 |
 | Project Contract | `lmdj.project.v2 · 2.0.0` | 新写入真相；`lmdj.project.v1 · 1.0.0` 继续只读兼容 |
 
-这些 Major/Minor/Patch 变化按各组件公开边界独立分配。Stage 8B Pad Capture 已在 `1.0.23.0` 交付；`1.0.28.0` 是未通过审查的 Capture 选区波形缩放候选，`1.0.29.0` 修正其整数边界与 chunk traversal，`1.0.30.0` 增加真实 pre-commit Crop，`1.0.31.0` 把 Capture 面板模态化并修复焦点契约，`1.0.32.0` 把 trim 手柄改为可见握把加中点划界的指针模型，`1.0.33.0` 把 `DUPLICATE_ID` 错误改为可恢复呈现并给出恢复控件，`1.0.34.0` 增加提交前静音门与输入设备身份，当前 `1.0.35.0` 在实时渲染路径加入 96 帧线性 attack/release 斜坡（F6）并承担 Core Module 级联。历史身份及快照保持只读。已分配身份、branch-local Proof 或 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion；`1.0.21.0` 的这些边界已分别记录，不相互替代。
+这些 Major/Minor/Patch 变化按各组件公开边界独立分配。Stage 8B Pad Capture 已在 `1.0.23.0` 交付；`1.0.28.0` 是未通过审查的 Capture 选区波形缩放候选，`1.0.29.0` 修正其整数边界与 chunk traversal，`1.0.30.0` 增加真实 pre-commit Crop，`1.0.31.0` 把 `native-test-host` 改名为 Native Host `1.0.0`，当前 `1.0.32.0` 组合 #214 的 Capture UI 与渲染斜坡。历史身份及快照保持只读。已分配身份、branch-local Proof 或 immutable snapshot 都不等于 merged-main Proof、团队测试、Release 或 Channel promotion；`1.0.21.0` 的这些边界已分别记录，不相互替代。
 ## Git 与发布
 Task commit、push、PR、squash merge、signed product tag、Release、部署和 Channel promotion 是不同授权与证据。
 
@@ -96,7 +96,7 @@ schema-2 快照冻结 37 页源码、sidebar、十张图的 20 个 HTML/SVG 资�
 ## 发布门禁
 实现计划必须声明 Version impact；测试发布和 stable release 前都验证匹配的说明书快照，再分别运行该 Channel 所需的版本验证、测试、CI、产品验收与发布证据门禁。
 
-当前候选 Product tag 文本为 `lmdj-v1.0.35.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。拒绝候选 `1.0.28.0` 不得打 tag；历史候选 `1.0.34.0` / `1.0.33.0` / `1.0.32.0` / `1.0.31.0` / `1.0.30.0` / `1.0.29.0` 及更早 Product tag 文本也只表示各自当时的候选身份。`1.0.21.0` 的 PR #134、squash merge `5613158`、完整 exact-main CI 和本地 merged-tree Proof 已完成，但这些历史事实不授权或证明当前构建的 tag、Release、部署、发布、public smoke 或 Channel promotion。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
+当前候选 Product tag 文本为 `lmdj-v1.0.32.0`，仅是未来 tag 文本；只能在 squash merge、完整 CI、精确 tag-target 的 merged-main Proof 与单独授权之后创建 signed annotated tag。拒绝候选 `1.0.28.0` 不得打 tag；历史候选 `1.0.31.0`、`1.0.30.0`、`1.0.29.0` 及更早 Product tag 文本也只表示各自当时的候选身份。`1.0.21.0` 的 PR #134、squash merge `5613158`、完整 exact-main CI 和本地 merged-tree Proof 已完成，但这些历史事实不授权或证明当前构建的 tag、Release、部署、发布、public smoke 或 Channel promotion。当前源码身份不宣称远端 CI、merge、tag、Release、部署、发布、public smoke 或 Channel promotion。匹配 Product Build 的不可变快照与 provenance 由 `versions.json`、冻结 metadata 和 Portal 校验器共同判定；历史 Build 的证据不自动升级为当前候选证据。
 
 ## Runtime Host 公共发布
 
@@ -106,6 +106,12 @@ preflight job 先从 canonical origin 验证 remote annotated signed Product tag
 detached armored signature，并完成资产下载与 staging；Product tag key 与 checksum key 的
 固定指纹和用途相互独立，不能替代，signature 验证先于 checksum 解析。只有它通过后才安装
 Node/Chromium，部署 job 在接触 Netlify 前对同一 Release 再验证一次。
+Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
+signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
+`<archive-stem>.build-manifest.json` 发布（决策
+`docs/prd/decisions/2026-08-24-build-manifest-detached.md`，#211）。归档自此只含
+payload，同一源码与工具链下字节可复现；Manifest 字段不变，仍含构建时间与构建平台。
+Web Runtime Host Release 保持上述精确三资产不变。
 发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
 HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
 API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
@@ -113,7 +119,7 @@ API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact pri
 HTTP JSON、browser、publish/restore response 和时间。它定义可审计的操作路径；实际发布
 状态必须由与精确身份绑定的 evidence 独立报告。
 
-该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.35.0`、历史 `1.0.34.0` / `1.0.33.0` / `1.0.32.0` / `1.0.31.0` / `1.0.30.0` / `1.0.29.0`、拒绝候选 `1.0.28.0` 或更早 Product Build 已获得 remote verified
+该能力已进入仓库源码，但其存在不等于当前 Product Build `1.0.32.0`、历史 `1.0.31.0` / `1.0.30.0` / `1.0.29.0`、拒绝候选 `1.0.28.0` 或更早 Product Build 已获得 remote verified
 tag、Release、Deploy ID、immutable URL、production alias、deployment evidence 或 Channel
 promotion。历史 `1.0.15.2` 的 tag、Release 或部署证据不自动升级为当前候选证据；只有与
 精确 Product/Host 身份绑定的实际 evidence record 才能让 Portal 报告公共部署。本地工具、

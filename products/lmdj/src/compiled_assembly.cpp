@@ -12,7 +12,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
   using lmdj::facade::CompiledProvider;
   return lmdj::facade::CompiledAssemblyCatalog{
       "lmdj",
-      "1.0.35.0",
+      "1.0.32.0",
       "17cc4b06a4e074448a6cdfb3177f4564134197a45eb5affc6b8697909b934ae4",
       {
           CompiledComponent{"foundation", "0.2.0"},
@@ -27,7 +27,7 @@ lmdj::facade::CompiledAssemblyCatalog lmdj_catalog() {
       {
           CompiledComponent{"core-cli", "1.0.17"},
           CompiledComponent{"core-mcp", "1.1.14"},
-          CompiledComponent{"native-test-host", "1.0.15"},
+          CompiledComponent{"native-host", "1.0.1"},
           CompiledComponent{"web-runtime-host", "1.2.14"},
           CompiledComponent{"creator-web", "1.5.4"},
       },

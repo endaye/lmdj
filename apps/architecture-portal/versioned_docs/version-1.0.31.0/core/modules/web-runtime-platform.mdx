@@ -31,7 +31,7 @@ Manifest mismatch、生命周期失效和 terminal failure 均 fail closed；Mai
 
 Runtime Session 启动只运行一次真实 Control Worker/OPFS capability probe，默认等待预算为 15 秒。明确缺少 Worker/Blob、Worker 返回 negative 或 Worker error 继续 fail closed 为 `UNSUPPORTED_WEB_RUNTIME`；纯调度预算耗尽精确进入 `HOST_TIMEOUT`，不能伪造 `opfs`、`opfsSyncAccessHandle` 或 `opfsWritableReplace` 缺失。message、error 与 timeout 三条 settlement 路径都由同一 `finally` terminate Worker 并 revoke Blob URL。
 ## 7. 产品使用方
-`creator-web 1.5.0` 与 `web-runtime-host 1.2.13`。Creator 的 Capture 模态面板只是 Host 呈现，pre-commit Crop 仍是 Host-local ephemeral 编辑，都不进入 Platform、Facade 或 Project Truth。
+`creator-web 1.4.0` 与 `web-runtime-host 1.2.13`。Creator 的 pre-commit Crop 仍是 Host-local ephemeral 编辑，不进入 Platform、Facade 或 Project Truth。
 ## 8. 测试与证据
 C++ manifest/control/realtime tests、Node Runtime Session tests、Chromium/WebKit browser proof 与分发验证覆盖共享边界；Node 与 Creator packaged Proof 还覆盖 recovery readiness 的 `false -> true -> false -> running` 序列。
 ## 9. 限制与下一门禁

@@ -12,7 +12,7 @@ const requiredRoutes = [
   '/core/modules/project-io/', '/core/modules/project-cooker/', '/core/modules/audio-runtime/',
   '/core/modules/provider-sdk/', '/core/modules/application-facade/', '/hosts/overview/',
   '/core/modules/web-runtime-platform/', '/hosts/core-cli/', '/hosts/core-mcp/',
-  '/hosts/native-test-host/', '/hosts/web-runtime/', '/hosts/creator-web/',
+  '/hosts/native-host/', '/hosts/web-runtime/', '/hosts/creator-web/',
   '/providers/overview/', '/providers/local-proof/', '/contracts/overview/',
   '/contracts/project/', '/contracts/project-bundle/', '/contracts/runtime-snapshot/', '/contracts/capability/',
   '/contracts/assembly/', '/contracts/error-module-version/', '/assembly/lmdj/',

@@ -67,6 +67,7 @@ from tools.release.prepare import (  # noqa: E402
 from tools.release.profiles import (  # noqa: E402
     AssetBuild,
     ProfileBuild,
+    ProfileError,
     ProfileRuntime,
     _create_dist_zip,
     _stage_and_sign,
@@ -783,6 +784,41 @@ class ReleasePrepareTest(unittest.TestCase):
         archive = assets_root / "core.zip"
         checksum = assets_root / "core.zip.sha256"
         signature = assets_root / "core.zip.sha256.asc"
+        manifest = assets_root / "core.build-manifest.json"
+        key = self.root / ".github/release-signing-keys/lmdj-release-checksum.asc"
+        key.parent.mkdir(parents=True)
+        archive.write_bytes(b"persisted archive")
+        checksum.write_text(
+            hashlib.sha256(archive.read_bytes()).hexdigest() + "  core.zip\n", encoding="ascii"
+        )
+        signature.write_text("persisted detached signature", encoding="ascii")
+        manifest.write_text(json.dumps({
+            "contract": "lmdj.build-manifest.v1",
+            "product": {"id": "lmdj", "version": "1.0.21.0"},
+            "git_revision": self.target_sha,
+        }), encoding="utf-8")
+        key.write_text("public", encoding="ascii")
+        assets = tuple(
+            AssetBuild(path, path.name, len(path.read_bytes()), hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in (archive, checksum, signature, manifest)
+        )
+        verifier = RecordingVerifier()
+        runtime = ProfileRuntime(
+            runner=CommandRunner(), checksum_verifier=verifier, checksum_home=self.root,
+            checksum_fingerprint=self.policy.checksum_fingerprint,
+        )
+        intent = self.ledger.entries[0]
+        verify_existing_profile("core-package", self.root, assets_root, intent, assets, runtime)
+        self.assertEqual([name for name, _ in verifier.calls], ["import", "verify"])
+        self.assertEqual(verifier.calls[0][1], verifier.calls[1][1])
+        self.assertEqual(verifier.calls[0][1], 0o700)
+
+    def test_existing_core_profile_requires_the_detached_manifest(self) -> None:
+        assets_root = self.root / "existing-assets"
+        assets_root.mkdir()
+        archive = assets_root / "core.zip"
+        checksum = assets_root / "core.zip.sha256"
+        signature = assets_root / "core.zip.sha256.asc"
         key = self.root / ".github/release-signing-keys/lmdj-release-checksum.asc"
         key.parent.mkdir(parents=True)
         archive.write_bytes(b"persisted archive")
@@ -795,16 +831,54 @@ class ReleasePrepareTest(unittest.TestCase):
             AssetBuild(path, path.name, len(path.read_bytes()), hashlib.sha256(path.read_bytes()).hexdigest())
             for path in (archive, checksum, signature)
         )
-        verifier = RecordingVerifier()
         runtime = ProfileRuntime(
-            runner=CommandRunner(), checksum_verifier=verifier, checksum_home=self.root,
+            runner=CommandRunner(), checksum_verifier=RecordingVerifier(), checksum_home=self.root,
             checksum_fingerprint=self.policy.checksum_fingerprint,
         )
-        intent = self.ledger.entries[0]
-        verify_existing_profile("core-package", self.root, assets_root, intent, assets, runtime)
-        self.assertEqual([name for name, _ in verifier.calls], ["import", "verify"])
-        self.assertEqual(verifier.calls[0][1], verifier.calls[1][1])
-        self.assertEqual(verifier.calls[0][1], 0o700)
+        with self.assertRaisesRegex(ProfileError, "detached Build Manifest"):
+            verify_existing_profile(
+                "core-package", self.root, assets_root, self.ledger.entries[0], assets, runtime
+            )
+
+    def test_existing_core_profile_rejects_a_manifest_for_another_build(self) -> None:
+        assets_root = self.root / "existing-assets"
+        assets_root.mkdir()
+        archive = assets_root / "core.zip"
+        checksum = assets_root / "core.zip.sha256"
+        signature = assets_root / "core.zip.sha256.asc"
+        manifest = assets_root / "core.build-manifest.json"
+        key = self.root / ".github/release-signing-keys/lmdj-release-checksum.asc"
+        key.parent.mkdir(parents=True)
+        archive.write_bytes(b"persisted archive")
+        checksum.write_text(
+            hashlib.sha256(archive.read_bytes()).hexdigest() + "  core.zip\n", encoding="ascii"
+        )
+        signature.write_text("persisted detached signature", encoding="ascii")
+        key.write_text("public", encoding="ascii")
+        runtime = ProfileRuntime(
+            runner=CommandRunner(), checksum_verifier=RecordingVerifier(), checksum_home=self.root,
+            checksum_fingerprint=self.policy.checksum_fingerprint,
+        )
+        for document, message in (
+            ({"contract": "other", "product": {"id": "lmdj", "version": "1.0.21.0"},
+              "git_revision": self.target_sha}, "contract identity"),
+            ({"contract": "lmdj.build-manifest.v1", "product": {"id": "lmdj", "version": "1.0.22.0"},
+              "git_revision": self.target_sha}, "Product identity"),
+            ({"contract": "lmdj.build-manifest.v1", "product": {"id": "lmdj", "version": "1.0.21.0"},
+              "git_revision": "b" * 40}, "Git revision"),
+        ):
+            with self.subTest(message=message):
+                manifest.write_text(json.dumps(document), encoding="utf-8")
+                assets = tuple(
+                    AssetBuild(
+                        path, path.name, len(path.read_bytes()), hashlib.sha256(path.read_bytes()).hexdigest()
+                    )
+                    for path in (archive, checksum, signature, manifest)
+                )
+                with self.assertRaisesRegex(ProfileError, message):
+                    verify_existing_profile(
+                        "core-package", self.root, assets_root, self.ledger.entries[0], assets, runtime
+                    )
 
     def test_checksum_record_requires_exact_canonical_bytes(self) -> None:
         archive = self.root / "archive.zip"

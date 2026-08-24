@@ -106,7 +106,7 @@ run against the current Build.
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. The F6 ramp landed in Product Build `1.0.35.0` (audio-runtime `0.5.1`), so checks 1 and 5 are ready to re-run — with check 5 (loop seam) EXPECTED to remain clicky until the deferred crossfade lands. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. The F6 ramp is combined into Product Build `1.0.32.0` (audio-runtime `0.5.1`), so checks 1 and 5 are ready to re-run — with check 5 (loop seam) EXPECTED to remain clicky until the deferred crossfade lands. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
 | M3 | Pointer input | inherited from Stage 6/7 | not started |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
@@ -116,6 +116,15 @@ run against the current Build.
 | --- | --- | --- |
 | M5 | External audio interface input | 1.0.23.0 |
 | M6 | Physical MIDI controller | 1.0.22.0 |
+
+M6 application of the carry-forward rule (P1, resolved 2026-08-24): the
+`1.0.21.0` MIDI canary in "Already passed" is a valid historical pass, but
+M6's trigger trees (`input`, `lifecycle`, `audio-path`, `packaging-csp`)
+changed between `56131582` and the current Build — Stage 8/8B alone touched
+the shared input adapter, the session layer, the Creator runtime and the
+packaging tooling. No unchanged-tree derivation is available and no exemption
+was recorded, so **M6 is a re-run** on the Build under test; the canary does
+not satisfy it.
 
 ### Session M-C — macOS Safari
 
@@ -197,20 +206,23 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 
 | ID | Decision | What it unblocks | Cost |
 | --- | --- | --- | --- |
-| P1 | Does a physical pass carry forward across Product Builds? | whether M2 and M6 are re-runs or already satisfied; recurs at every Build | short |
+| ~~P1~~ | ~~Does a physical pass carry forward across Product Builds?~~ **resolved 2026-08-24** — the [physical acceptance carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md) ([#236](https://github.com/endaye/lmdj/issues/236)) | answered: M2 has no pass to carry; M6 is a re-run because its trigger trees changed after `1.0.21.0`; every new Build derives its own re-run set per the rule | done |
 | ~~P2~~ | ~~The capture panel's presentation, focus behaviour, and the replacement trim pointer model~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md): modal capture panel (P2-D1), focus follows the primary action (P2-D2), visible-grip midpoint-partitioned trim handles (P2-D3), recoverable `DUPLICATE_ID` (P2-D4). Tasks 2–4 of the Creator UI remediation plan (F1, F2, F3, F5) are unblocked | — |
 | ~~F4~~ | ~~Device picker, visible input identity, an input-level gate before commit, or some combination~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md): input-level gate before commit (digital-silence refusal) plus visible input identity; no device picker | — |
 | ~~F6~~ | ~~Amplitude ramp policy in the render path — ramp length, zero-crossing snap, crossfade, or a combination~~ | **settled 2026-08-24** — [decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md): 96-frame (2 ms) linear attack/release ramp; loop-seam crossfade deferred until M2 evaluation | — |
-| A2 | Is `native-test-host` a product component to be renamed, or does it leave the Assembly and every distribution? | the Assembly cleanup; also needs a written rule for what may enter a distribution package | short |
-| A3 | Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim | first external distribution (`dev` Channel or above) | short |
+| ~~A2~~ | ~~Is `native-test-host` a product component to be renamed, or does it leave the Assembly and every distribution?~~ **decided 2026-08-24**: product component, renamed `native-host 1.0.0`; rule written in `docs/governance/distribution-contents.md` ([decision](../prd/decisions/2026-08-24-native-test-host-classification.md)) | the Assembly cleanup; also needs a written rule for what may enter a distribution package | ~~short~~ done |
+| ~~A3~~ | ~~Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim~~ — **decided 2026-08-24**: detached sibling asset, payload-only archive, Contract and fields unchanged; [decision](../prd/decisions/2026-08-24-build-manifest-detached.md) ([#211](https://github.com/endaye/lmdj/issues/211)). The reshaping is now machine task A3 | first external distribution (`dev` Channel or above) | short |
 | D1 + D2 | Long-material resource model and Loop BPM time-stretch — one review | any long-material work; touches Cooker Bank allocation, the lock-free publication layout, manifest semantics and Facade validation | design review |
-| D3 | Provider SDK Artifact byte access, both directions | the first Capability implementation that parses structured Artifact bytes | design review |
+| ~~D3~~ | ~~Provider SDK Artifact byte access, both directions~~ | **Decided 2026-08-24** ([#206](https://github.com/endaye/lmdj/issues/206), [decision](../prd/decisions/2026-08-24-provider-artifact-byte-access.md)): capability-gated `ArtifactSource` in provider-sdk, both directions in the SDK layer; implementation deferred to the first Capability that parses structured Artifact bytes; option C permanently rejected | ~~design review~~ |
 | D4 + D5 | Recording concurrency semantics, and Take scope — events only or audio bounce too | **Stage 9 itself** | design review |
 
-P1 in full: the four passes above are bound to `1.0.11.0`, `1.0.20.0`,
-`1.0.21.0` and `1.0.23.0`, and the current Build is `1.0.23.0`. No governance
-document states when a physical pass expires or what kind of change invalidates
-it.
+P1, resolved 2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)):
+the [physical acceptance carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md)
+now states when a physical pass expires and what kind of change invalidates
+it. The four passes above remain bound to `1.0.11.0`, `1.0.20.0`, `1.0.21.0`
+and `1.0.23.0` as historical evidence; none of them is a current-Build claim,
+and any carry to a later Build requires the recorded derivation the rule
+defines.
 
 Full statements of A2, A3 and D1–D5 are in
 [the triage document](2026-08-16-outstanding-work-before-stage9.md); F4 and F6
@@ -226,10 +238,10 @@ untestable by hand.
 
 | Trigger | Rows to run | Why |
 | --- | --- | --- |
-| Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. F1 + F2 landed 2026-08-24 in Product Build `1.0.31.0` / Creator `1.5.0` (Task 2: viewport-anchored modal panel, focus follows the primary action); F5 landed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.1` (Task 3: visible-grip midpoint-partitioned trim handles); F3 landed 2026-08-24 in Product Build `1.0.33.0` / Creator `1.5.2` (Task 4: recoverable `DUPLICATE_ID` presentation with an `Open local Project` control). All four fixes are now landed, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
-| F6 ramp policy lands | M2 checks 1 and 5 | both failed by construction before the fix. The ramp landed 2026-08-24 in Product Build `1.0.35.0` / audio-runtime `0.5.1` (96-frame linear attack, boundary fade and `stop_voice` release tail), so the re-run is ready. Check 1 (trim boundaries) should now be clean; check 5 (loop seam) is EXPECTED to remain clicky — the loop-seam crossfade is explicitly deferred by the decision, so record that outcome as expected, not as a new regression |
-| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution landed 2026-08-24 in Product Build `1.0.34.0` / Creator `1.5.3` (digital-silence commit gate plus visible input identity), so the re-run is ready |
-| Any new Product Build allocated for team testing or release | every row P1 says does not carry forward | unanswered until P1 is settled |
+| Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. All four fixes are combined into Product Build `1.0.32.0` / Creator `1.5.4`, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
+| F6 ramp policy lands | M2 checks 1 and 5 | both failed by construction before the fix. The ramp is combined into Product Build `1.0.32.0` / audio-runtime `0.5.1`, so the re-run is ready. Check 1 should now be clean; check 5 is expected to remain clicky because loop-seam crossfade is explicitly deferred |
+| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution is combined into Product Build `1.0.32.0` / Creator `1.5.4`, so the re-run is ready |
+| Any new Product Build allocated for team testing or release | every row whose trigger-set diff is non-empty since its last pass, derived per the [carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md); the derivation is recorded in the Build's acceptance record | answered 2026-08-24 by P1 ([#236](https://github.com/endaye/lmdj/issues/236)) |
 
 ---
 
@@ -253,12 +265,15 @@ omitted and not called passed.
 ## Suggested order
 
 1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 stopped at its
-   first check**; both blockers are now landed — F5 in `1.0.32.0` and F6 in
-   `1.0.35.0` — so checks 1–2 can be performed and checks 1 and 5 re-run,
-   with check 5 (loop seam) expected to remain clicky until the deferred
-   crossfade lands. **M3** is independent of both and can run at any time.
-2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)); the Creator UI remediation branch is unblocked. **P1** — determines whether the remaining verification list is thirteen rows or six.
-3. ~~**F6**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)); the ramp landed in Product Build `1.0.35.0` / audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. **D4 + D5** — what
+   first check**; both blockers are combined into `1.0.32.0`, so checks 1–2 can
+   be performed and checks 1 and 5 re-run, with check 5 expected to remain
+   clicky until the deferred crossfade lands. **M3** is independent and can run
+   at any time.
+2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)). ~~P1~~ resolved
+   2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
+   unless a recorded unchanged-tree derivation carries them, so M6 stays on
+   the list and every future Build derives its own re-run set.
+3. ~~**F6**~~ — settled 2026-08-24 and combined into Product Build `1.0.32.0` / audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. **D4 + D5** — what
    Stage 9 itself waits on.
 4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
    distribution.

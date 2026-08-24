@@ -19,7 +19,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity />
 
-LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库在 Product Build `1.0.35.0` 给实时渲染路径装配恰好 96 帧（固定 48 kHz 下 2 ms）的线性 attack/release 斜坡：voice 触发、修剪边界与停止不再是阶跃不连续（2026-08-17 实机会话发现的 F6 修复），循环接缝 crossfade 按决策暂缓。Product Build `1.0.34.0` 曾给 Creator 装配提交前输入电平门与可见输入身份（F4 修复），`1.0.33.0` 曾把 Creator 的 `DUPLICATE_ID` 错误装配为可恢复呈现（F3 修复），`1.0.32.0` 曾把 Sample trim 手柄装配为可见握把加中点划界的指针模型（F5 修复），`1.0.31.0` 曾把 Capture 面板装配为视口锚定的模态会话（F1/F2 修复），`1.0.30.0` 曾装配真实 pre-commit Crop，`1.0.29.0` 曾修正选区波形缩放，`1.0.28.0` 是独立审查未通过且未发布的 branch-local 候选。Creator 已提供本地 Project discovery/open、portable Bundle import、PCM16 WAV import/replace、真实波形与 per-Pad Start/End、四种触发模式、Mute、Volume、Reset、麦克风 Pad Capture（模态面板）、选区缩放、pre-commit Crop 和共享 Runtime 试听；空白 Project 创建、Bundle 导出、Sequence 编辑、生产/云 Provider、离线安装和物理设备验收仍按各自页面的门禁推进。
+LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库在 Product Build `1.0.32.0` 组合交付 Creator Capture UI 的 F1–F5 修复与 Audio Runtime F6：Capture 面板成为视口锚定模态会话，焦点跟随主操作，Sample trim 使用可见握把与中点划界，`DUPLICATE_ID` 可恢复，数字静音提交被拦截且输入身份可见；实时渲染路径装配恰好 96 帧（固定 48 kHz 下 2 ms）的线性 attack/release 斜坡，循环接缝 crossfade 按决策暂缓。Product Build `1.0.31.0` 曾将 `native-test-host` 改名为 Native Host 并确立分发包内容准则，`1.0.30.0` 曾装配真实 pre-commit Crop，`1.0.29.0` 曾修正选区波形缩放，`1.0.28.0` 是独立审查未通过且未发布的 branch-local 候选。Creator 已提供本地 Project discovery/open、portable Bundle import、PCM16 WAV import/replace、真实波形与 per-Pad Start/End、四种触发模式、Mute、Volume、Reset、麦克风 Pad Capture（模态面板）、选区缩放、pre-commit Crop 和共享 Runtime 试听；空白 Project 创建、Bundle 导出、Sequence 编辑、生产/云 Provider、离线安装和物理设备验收仍按各自页面的门禁推进。
 
 :::info[构建身份]
 上方 Build Identity 会明确标出本页属于随 `main` 演进的 current 说明书，还是某个 Product Build 的不可变正式快照；版本下拉菜单用于在两类证据之间切换。

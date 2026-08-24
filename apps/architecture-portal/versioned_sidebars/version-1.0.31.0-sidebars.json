@@ -32,7 +32,7 @@
         "hosts/overview",
         "hosts/core-cli",
         "hosts/core-mcp",
-        "hosts/native-test-host",
+        "hosts/native-host",
         "hosts/web-runtime",
         "hosts/creator-web"
       ]

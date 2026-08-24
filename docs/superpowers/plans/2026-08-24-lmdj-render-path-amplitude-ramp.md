@@ -141,25 +141,27 @@ Core-Module cascade (precedent: `2fc9cfe9`): every manifest in the dependency
 closure bumps its reference and its own patch — `application-facade`
 `1.4.4 → 1.4.5`, `web-runtime-platform` `0.3.4 → 0.3.5`, `core-cli`
 `1.0.16 → 1.0.17`, `core-mcp` `1.1.13 → 1.1.14` (+ `pyproject.toml`,
-`__init__.py`), `native-test-host` `1.0.14 → 1.0.15` (+ `main.cpp`),
+`__init__.py`), `native-host` `1.0.0 → 1.0.1` (+ `main.cpp`, after the
+latest-main rename),
 `web-runtime-host` `1.2.13 → 1.2.14`, `creator-web` `1.5.3 → 1.5.4` (+
 `package.json`, `package-lock.json`). Providers are not in the closure and
-stay `1.0.5`. Product Build **1.0.35.0** (`products/lmdj/version.json` build
-34 → 35), `assembly.json`, `products/lmdj/CMakeLists.txt` + `README.md`
+stay `1.0.5`. The final integration combines the cascade into Product Build
+**1.0.32.0** on the latest `main`; update `assembly.json`,
+`products/lmdj/CMakeLists.txt` + `README.md`
 literals, then regenerate `assembly.lock.json` + `compiled_assembly.cpp`
 (`python3 scripts/version.py lock`, run **after** the CMakeLists/README
 edits — the source-package hash covers `products/lmdj`) and the web-runtime
 identity (`tools/web-runtime/generate_runtime_identity.py`). Literal
 expectations: `tests/build/version_test.py`,
 `tests/conformance/module_graph_test.py`, portal `repo-facts.test.mjs`, Host
-test literals. Quality ledgers: mark F6 fixed in `1.0.35.0` in
+test literals. Quality ledgers: mark F6 fixed in `1.0.32.0` in
 `docs/quality/2026-08-16-outstanding-work-before-stage9.md` section F, F6 row
 done in `docs/quality/2026-08-17-machine-task-todo.md`, and note the build on
 the M2 row of `docs/quality/2026-08-17-manual-verification-todo.md` (row
 stays stopped-at-check-1 for the human re-run; check 5 loop seam is expected
 to remain clicky until the deferred crossfade lands). Portal: update the
 current `audio-runtime` module page and version-carrying pages, then freeze
-`scripts/architecture-portal.sh version 1.0.35.0 canary` as a second commit
+`scripts/architecture-portal.sh version 1.0.32.0 canary` as a second commit
 on a clean worktree; post-freeze `scripts/architecture-portal.sh check` must
 exit 0.
 
@@ -178,9 +180,9 @@ products/lmdj/version.json`, `python3 tests/build/version_test.py`,
   Contract or the lock-free/realtime contract.
 - Every module and Host in `audio-runtime`'s dependency closure takes a
   SemVer patch bump with its dependency reference updated (Task 3 list).
-- Product Build **1.0.35.0** is allocated for the new Assembly composition,
+- Product Build **1.0.32.0** is allocated for the integrated Assembly composition,
   with its immutable Architecture Portal snapshot
-  (`scripts/architecture-portal.sh version 1.0.35.0 canary`) as a second
+  (`scripts/architecture-portal.sh version 1.0.32.0 canary`) as a second
   commit.
 - No Contract, Provider or Application Facade `api_version` changes.
 
@@ -190,7 +192,7 @@ products/lmdj/version.json`, `python3 tests/build/version_test.py`,
 
 - `core/modules/audio-runtime` describes the render path and must describe
   the ramp; the version-carrying portal pages change with the new Product
-  Build; the `1.0.35.0` snapshot is frozen in the same Task (second commit).
+  Build; the `1.0.32.0` snapshot is frozen in the same Task (second commit).
 - The quality ledgers listed in Task 3 change in the same commit that closes
   F6.
 - Run `scripts/architecture-portal.sh check` before every commit (the

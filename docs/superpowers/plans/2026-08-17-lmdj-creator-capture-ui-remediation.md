@@ -217,7 +217,7 @@ unchanged), with fixed outer geometry that does not change when entering
 `recording`, focus on the phase's primary action on open and after phase
 transitions, `Escape` closing in every phase, a non-dismissible backdrop, and
 the `returnFocus` restore owned solely by the dialog. Landed with Creator Web
-Host `1.5.0` in Product Build `1.0.31.0`.
+Host `1.5.4` in the integrated Product Build `1.0.32.0`.
 
 - [x] Implement the Task 1 presentation decision in `styles.css` and
       `capture_panel.tsx` / `sample_surface.tsx`.
@@ -245,7 +245,7 @@ on the waveform body outside both zones moves nothing, and
 gesture functions. Both range inputs remain the keyboard/assistive-technology
 channel with live-second accessible names, removed from the pointer path
 (`pointer-events: none`, visually hidden but focusable). Landed with Creator
-Web Host `1.5.1` in Product Build `1.0.32.0`.
+Web Host `1.5.4` in the integrated Product Build `1.0.32.0`.
 
 - [x] Replace the two stacked full-width invisible range inputs with the
       Task 1 pointer model.
@@ -275,7 +275,7 @@ identity is not available to the Host (the Runtime's `DUPLICATE_ID` error
 carries no details and the Host must not parse the bundle), so the control
 targets the list rather than a direct open. Every other error code's
 heading, message and retry wiring is byte-identical. Landed with Creator
-Web Host `1.5.2` in Product Build `1.0.33.0`.
+Web Host `1.5.4` in the integrated Product Build `1.0.32.0`.
 
 - [x] Give `DUPLICATE_ID` a message that names the actual situation and a
       recovery control that leads to the existing local Project, rather than

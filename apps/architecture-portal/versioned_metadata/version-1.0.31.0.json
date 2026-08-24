@@ -5,8 +5,8 @@
     "version": "1.0.31.0"
   },
   "channel": "canary",
-  "revision": "df0cc3d6cf3857c9cafa5b9fe5544225ca35ca98",
-  "assembly_lock_sha256": "d0818b86101aa2ce2d83aebf8819f7a0803a47b8455dc360b84532e3cbf5b78d",
+  "revision": "1d9a228c8fc1c2d6ada2989963e7a1835a7f4525",
+  "assembly_lock_sha256": "43743c2bbf5750b59d9ef70e0065d238ac75f10b3423a055c0db95cf555701dc",
   "modules": [
     {
       "id": "application-facade",
@@ -62,13 +62,13 @@
     },
     {
       "id": "creator-web",
-      "sha256": "edb944b51ce1ec7fc0503737437e508e8fa7116c34e1ca957d796fde1d2e0bad",
-      "version": "1.5.0"
+      "sha256": "8a81a132e75843eb1b01f0f7626e3fca2e91970526c9f56c88626c09ab8b9caa",
+      "version": "1.4.0"
     },
     {
-      "id": "native-test-host",
-      "sha256": "78df58df956c146c42fabf313f162abc1f27ee937ef9685c0a43c99b343aa1e1",
-      "version": "1.0.14"
+      "id": "native-host",
+      "sha256": "5650ba5f11c23403c51b87da923a9644427706b640dd9aa82e89ca16c177dc11",
+      "version": "1.0.0"
     },
     {
       "id": "web-runtime-host",
@@ -132,12 +132,12 @@
   ],
   "product_build": "1.0.31.0",
   "source_commit": {
-    "raw_base64": "dHJlZSA3Y2RlNWI5MWMyMjhiNWM0MGFhYTgzY2ZjNTgyZmRiNmYzM2ViNWI3CnBhcmVudCBlOGY5OTg3MmM0Nzg2YzY4NWMzMWQxZDMxNDA2Yjg5MmViMDgwNTcxCmF1dGhvciBlbmRheWUgPGVuQGVuZGF5ZS5jb20+IDE3ODc1NDkxMjMgKzA4MDAKY29tbWl0dGVyIGVuZGF5ZSA8ZW5AZW5kYXllLmNvbT4gMTc4NzU0OTEyMyArMDgwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogaVFIUEJBQUJDQUE1RmlFRUsxN2pZdkJZZ0FBMnJVKzFFVzdPRlcrVlRTa0ZBbXFMMWNNYkZJQUFBQUFBQkFBTwogYldGdWRUSXNNaTQxS3pFdU1USXNNQ3d6QUFvSkVCRnV6aFZ2bFUwcGhra01BSkJ5UTRaRkdqdExsYTZ0L0xKYwogN1ptMWJrQWxjYUlRZjR2aEl2U2xKbnYxUlNBRkJGRGh6SzcwZERxR28zVnczUXpyWStOMUZpbXJsTVgrRUVBbQogaTRTWHhHemZkSFhiWWUrWHNOeU9NWmd0S2RXbVJYVGVYZndscXpxaklSQlRWUkdOOXNnbGV0bmdwY2Q2VzRuaQogc3RobWsybWZvcEZTZGRTeXMyUHNwNTQ3cmtsWTBWYUkweXRGcmhGR0dsTWtnTk9Dc1JPV0pOL0d1VHNKL0t0WQogSStTYmxDMGxSaGpFbnBQUDFEK2dWQmlGdWVUSFdDak5Za3llZkc3U25NeisvQXEvY2hpQTRVZ2toVTZLakdiSAogNUxUNXpxOHRGSE5XWENCaGkwalF6RzZENWdXZUFJUU9QOFBqbk9xS3RTejhESWt0Vm9XamNEenRCVE5Qc1dsaQogbWt5R1FqdDA1RXRDN0ZqdnFQanJZaStmbzg2QzBuV0lEMW40a3ozVGpvUjQyTStSUU9udjFvMVVaMG5tbXVneAogQW8rVWxCOFpBajRRR3JlVkRlM2JCa2NxVWVVZEdHWUE3dHhnaGh4dy95SmNnT1RMTSsvMkVOcSszUC82UlpsUgogMVVqUDZFY21lU24rS3Z2QmR0RzBuNnZjYjQwT0ErclIvbklqNi9ra29OZG5RZz09CiA9ODJGSAogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCgpmaXgoY3JlYXRvcik6IGFuY2hvciBjYXB0dXJlIHBhbmVsIHRvIHZpZXdwb3J0IGFzIG1vZGFsIGRpYWxvZwoKVGhlIGNhcHR1cmUgcGFuZWwgcmVuZGVyZWQgYXMgYW4gdW5zdHlsZWQgaW4tZmxvdyBzZWN0aW9uIGJlbG93IHRoZSBQYWQKZ3JpZCwgb3BlbmluZyBiZWxvdyB0aGUgZm9sZCBhbmQgZ3Jvd2luZyBkb3dud2FyZCB3aGVuIGVudGVyaW5nIHJlY29yZGluZwooRjEvRjIpLiBJbXBsZW1lbnQgdGhlIFAyLUQxL1AyLUQyIGRlY2lzaW9uczogdGhlIHBhbmVsIGlzIG5vdyBhIG5hdGl2ZQo8ZGlhbG9nPiArIHNob3dNb2RhbCgpIHdpdGggZml4ZWQgZ2VvbWV0cnkgKG1pbig0NHJlbSwgMTAwdncgLSAycmVtKSB3aWRlLAoxMDBkdmggLSAycmVtIG1heCBoZWlnaHQgd2l0aCBpbnRlcm5hbCBzY3JvbGwpLCB0aHJlZSBmaXhlZCByZWdpb25zCihoZWFkZXIsIGZpeGVkLWhlaWdodCB3YXZlZm9ybS9tZXRlciB2aWV3LCBib3R0b20gYWN0aW9uIHJvdykgc28gZW50ZXJpbmcKcmVjb3JkaW5nIG5ldmVyIGNoYW5nZXMgdGhlIG91dGVyIGZyYW1lLCBmb2N1cyBvbiB0aGUgcGhhc2UncyBwcmltYXJ5CmFjdGlvbiBvbiBvcGVuIGFuZCBhZnRlciBwaGFzZSB0cmFuc2l0aW9ucywgRXNjYXBlIGNsb3NpbmcgaW4gZXZlcnkgcGhhc2UsCmEgbm9uLWRpc21pc3NpYmxlIGJhY2tkcm9wLCBhbmQgdGhlIHJldHVybkZvY3VzIHJlc3RvcmUgb3duZWQgc29sZWx5IGJ5CnRoZSBkaWFsb2cuIFRoZSBtb2RhbCBtYWNoaW5lcnkgaXMgZXh0cmFjdGVkIGZyb20gQ29uZmlybWF0aW9uRGlhbG9nIGludG8KYSBzaGFyZWQgTW9kYWxEaWFsb2cgcHJpbWl0aXZlOyBDb25maXJtYXRpb25EaWFsb2cncyBiZWhhdmlvciBhbmQgY2FsbGVycwphcmUgdW5jaGFuZ2VkLgoKQ3JlYXRvciBXZWIgSG9zdCAxLjUuMCwgUHJvZHVjdCBCdWlsZCAxLjAuMzEuMC4K",
-    "committed_at_utc": "2026-08-24T05:25:23.000Z",
-    "tree": "7cde5b91c228b5c40aaa83cfc582fdb6f33eb5b7"
+    "raw_base64": "dHJlZSA2NTE2MGZjZTc2ZTBhYjJkNzBhZjc3NDA5OTBiYzc4YWVkZjg3ZDI1CnBhcmVudCA2MTFmOGFiNDc2ZDlkNTgwNTZjMGM0NWZkYzc0ODQ2NjA5N2FhYWFhCmF1dGhvciBlbmRheWUgPGVuQGVuZGF5ZS5jb20+IDE3ODc1MzkzNDkgKzA4MDAKY29tbWl0dGVyIGVuZGF5ZSA8ZW5AZW5kYXllLmNvbT4gMTc4NzUzOTM0OSArMDgwMApncGdzaWcgLS0tLS1CRUdJTiBQR1AgU0lHTkFUVVJFLS0tLS0KIAogaVFIUEJBQUJDQUE1RmlFRUsxN2pZdkJZZ0FBMnJVKzFFVzdPRlcrVlRTa0ZBbXFMcjVVYkZJQUFBQUFBQkFBTwogYldGdWRUSXNNaTQxS3pFdU1USXNNQ3d6QUFvSkVCRnV6aFZ2bFUwcFhkc0wrd2FSbDMxVFhzNVdoY0wxdzhhYQogOW9nOWxlbFpWa2ZoOUE3Q0p3bGdNRDRITFE3WllvWWJvUmUvVkhsdVFMYVZtYlVJRU1ZT1NaSjhtTzREckJCYgogODVHRHFOa2NuOGRkYjNKZFhlbnZobzRyUE1ZTXpEUi9rQ1pqUjk2dkw2dGNmbUxIcFpVVWk1OWFlWGdzQ2VNeAogVWV1TDBVUSs3YUY4cGIwL3E4d3lWOUo5bTh0VXErWm81blE3VDdSdWU1OVZ5ZkNXd1Q3cjQzcUdzMDgvTkRabgogV3B5OExZbC8rdFg1MmxDTjFOSkhZYmplaDh1Vm5jdjV3OThWaDdZWHNIUkozOEFPdE55VlJEanVYWUIrT3gyYgogeWtUTlcycFZnTVo2cjY1WHROSUJxTk8yb2VocWJBdUlnOXpwOTFBQk1RdUV2TXo0M3Jic2FrNWFxc2xKdllRTAogWDdtWnNJeEdrRTdUYW9vcnRxMGE4MVNENEtRcFVPWVdvcTlJaFcwMEQzRXBuWHE2Um5oZTVDNkdUeVhlUUlVTwogemtqc3ZsME9hd0VybjRPZ1V6YnFLMUtGWmUrUTArRGVyRjhiSW4zZjg4c2dwdzQrdTlqS3FCN0xtSE10Y0IvUAogclhkN2c5VG5CT0liQTd5TnFrWVR0VHdVdXdDdmZWRXBSeFUyL3hzNTQwa2EvQT09CiA9UDZxMQogLS0tLS1FTkQgUEdQIFNJR05BVFVSRS0tLS0tCgpmZWF0KHByb2R1Y3QpOiByZW5hbWUgbmF0aXZlLXRlc3QtaG9zdCB0byBuYXRpdmUtaG9zdCBhbmQgYWRkIHRoZSBkaXN0cmlidXRpb24gY29udGVudHMgcnVsZQoKbmF0aXZlLXRlc3QtaG9zdCB3YXMgYnVpbHQgYXMgdGhlIGZvcm1hbCBoZWFkbGVzcyBOYXRpdmUgSG9zdAooMjAyNi0wOC0wMiBkZXNpZ24pIGFuZCBpcyBkZWxpYmVyYXRlbHkgc2hpcHBlZCBpbiBldmVyeSBkaXN0cmlidXRpb24KcGFja2FnZTsgb25seSBpdHMgbW9kdWxlIGlkIHN0aWxsIHNhaWQgInRlc3QiLiBUYWtlIHRoZSByZW5hbWUgb3B0aW9uCmZyb20gdGhlIEEyIGRlY2lzaW9uOiB0aGUgcmV0aXJlZCBpZCBlbmRzIGF0IDEuMC4xNCBhbmQgaXMgbmV2ZXIKcmV1c2VkLCBhbmQgbmF0aXZlLWhvc3Qgc3RhcnRzIGl0cyBvd24gU2VtVmVyIGxpbmUgYXQgMS4wLjAgd2l0aCB0aGUKYmluYXJ5IG5hbWUsIHByb3RvY29sLCBhbmQgdGVzdCBzdXJmYWNlIHVuY2hhbmdlZC4gVGhlIEFzc2VtYmx5CmlkZW50aXR5IGNoYW5nZSBhbGxvY2F0ZXMgUHJvZHVjdCBCdWlsZCAxLjAuMzEuMC4KCkFsc28gd3JpdGUgdGhlIG1pc3NpbmcgcnVsZSBmb3Igd2hhdCBtYXkgZW50ZXIgYSBkaXN0cmlidXRpb24gcGFja2FnZToKZG9jcy9nb3Zlcm5hbmNlL2Rpc3RyaWJ1dGlvbi1jb250ZW50cy5tZCBtYWtlcyBBc3NlbWJseSBtZW1iZXJzaGlwIG9yCnBhY2thZ2UtdmVyaWZpY2F0aW9uIG1ldGFkYXRhIHRoZSBvbmx5IHR3byBsZWdpdGltYXRlIGNhdGVnb3JpZXMsIHdpdGgKc2NyaXB0cy9wYWNrYWdlLWNvcmUucHkgYXMgdGhlIHNpbmdsZSBtZWNoYW5pY2FsIGludmVudG9yeS4KCkNsb3NlcyAjMjEwCg==",
+    "committed_at_utc": "2026-08-24T02:42:29.000Z",
+    "tree": "65160fce76e0ab2d70af7740990bc78aedf87d25"
   },
   "source_projection": {
-    "sha256": "0101b165f8794024758e2fe68c83ce7fa72b6325835fc6e245b2fe8931e48b79",
+    "sha256": "94b823c6c4148fd62946b57b07c286564237dac7568e029f9e73b28f4b5d215b",
     "files": [
       {
         "path": "apps/architecture-portal/diagrams/application-facade.architecture.json",
@@ -191,8 +191,8 @@
       },
       {
         "path": "apps/architecture-portal/docs/assembly/lmdj.mdx",
-        "bytes": 3350,
-        "sha256": "f05dfbb97a3f7a3d085a9cdcf9606f4767a954af8bffef25667caa46494770c2"
+        "bytes": 3283,
+        "sha256": "4aa88691d3186b9d044aa58b1350aaa323a7180cdc6985283a96a9d1f3f10cb9"
       },
       {
         "path": "apps/architecture-portal/docs/contracts/assembly.mdx",
@@ -231,13 +231,13 @@
       },
       {
         "path": "apps/architecture-portal/docs/core/modules/application-facade.mdx",
-        "bytes": 2084,
-        "sha256": "936f48d8d7be86bde08e27724452d068cc811b22175afdefc1e81d99fc00b58d"
+        "bytes": 2079,
+        "sha256": "9ddbf00cb52a3b39216a3d187f3433f5960b5817529437641b37d417dc7ff784"
       },
       {
         "path": "apps/architecture-portal/docs/core/modules/audio-runtime.mdx",
-        "bytes": 1807,
-        "sha256": "e55c72f86242d752dd559001d5229820f1e8186847ba9b77cd0cc6ee3452c48b"
+        "bytes": 1802,
+        "sha256": "f284ae5d01da009185e3e2a74ae3d6d1defe0fb83205efeec6c5cd0b7c9f56fc"
       },
       {
         "path": "apps/architecture-portal/docs/core/modules/authoring-domain.mdx",
@@ -266,8 +266,8 @@
       },
       {
         "path": "apps/architecture-portal/docs/core/modules/web-runtime-platform.mdx",
-        "bytes": 3684,
-        "sha256": "276f44c0b9ef1af6d8431cd1c861e9ac5a86f1fc2783a29521497ad4c4f5cbbf"
+        "bytes": 3640,
+        "sha256": "c576779e0aeacc59e11fe87838343a479aa77c20d4dbad7405600daa9953bf14"
       },
       {
         "path": "apps/architecture-portal/docs/core/overview.mdx",
@@ -291,23 +291,23 @@
       },
       {
         "path": "apps/architecture-portal/docs/hosts/creator-web.mdx",
-        "bytes": 9062,
-        "sha256": "86edd5c6641236d63cd5423ccde4c866e12c7b6dca2c71a9278b8f514aa470fb"
+        "bytes": 7452,
+        "sha256": "7861038056bdca571126e6ca87af8b31940caaca6728cf7edb2f92361a979aa6"
       },
       {
-        "path": "apps/architecture-portal/docs/hosts/native-test-host.mdx",
-        "bytes": 802,
-        "sha256": "6e48bd81aa9aa6a696548a17666a996c81ae110ce4c0147dadd3a6e2c0402251"
+        "path": "apps/architecture-portal/docs/hosts/native-host.mdx",
+        "bytes": 1188,
+        "sha256": "f0bac5bb1b212ae302b4836623edbe05aa930b80d08c66b4ebda454a739ae1b3"
       },
       {
         "path": "apps/architecture-portal/docs/hosts/overview.mdx",
-        "bytes": 1869,
-        "sha256": "6c87401b94f0dd6787f2641c52514602cfa15f9ee4ca10c022bf52a1279c4cfb"
+        "bytes": 1888,
+        "sha256": "b94749e7773d55cd89d9e9a5c8724acfd402a8cdcd63fc66fc9eb601718ad910"
       },
       {
         "path": "apps/architecture-portal/docs/hosts/web-runtime.mdx",
-        "bytes": 10663,
-        "sha256": "7879d6ff1b3d7e64e6cd1403e9562bf83478d6442b3a0fd6e903e769f8125eef"
+        "bytes": 10696,
+        "sha256": "a89310db465b29b7530f15311d0f73f3e57cfd9b4f08e28ded765a089d04da62"
       },
       {
         "path": "apps/architecture-portal/docs/operations/documentation-governance.mdx",
@@ -316,28 +316,28 @@
       },
       {
         "path": "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
-        "bytes": 45196,
-        "sha256": "bd8cc159586c3fda081e0693bd372365dfe6796f8f3d88193cf056916ba71797"
+        "bytes": 44969,
+        "sha256": "345c580348a2267db8921a2a4ab4c139feb74988caccfbb9cf04b8ce3d072c43"
       },
       {
         "path": "apps/architecture-portal/docs/operations/version-and-release.mdx",
-        "bytes": 12658,
-        "sha256": "c21951de4299e1502ed55e960176d0c7d76b1b8cfdc0ebd37d6922715b7e2d4c"
+        "bytes": 12683,
+        "sha256": "235e32ea956db76f2df82d93a67a03855cc79e64ba0f06496c63fb2050f79f62"
       },
       {
         "path": "apps/architecture-portal/docs/overview/index.mdx",
-        "bytes": 4205,
-        "sha256": "1622c9681e77dba7e94f1e561ee1aa6f74510855e89b3783f0df11fb761a8c6c"
+        "bytes": 4178,
+        "sha256": "ca522be5731e1c157ba14feeb359eb234c1321cee18cb7632b2c34eaed2757e1"
       },
       {
         "path": "apps/architecture-portal/docs/platform/input.mdx",
-        "bytes": 3813,
-        "sha256": "24101cc207915b13eca82191541a2923baf874b486a3459d53cf24751a5c9096"
+        "bytes": 3769,
+        "sha256": "aa350e05356b23c0602cf25d1efd6b7d1fb7bdd117bc1170c4d7ee2f095a09fe"
       },
       {
         "path": "apps/architecture-portal/docs/platform/native-audio.mdx",
-        "bytes": 1021,
-        "sha256": "701dbfeeb7dff473153e0f56bcca2680576a85dd7669495dffe778c2ab6bc921"
+        "bytes": 1016,
+        "sha256": "9a865ec425930ed7a93a5010e843803d9d9a2613ac18d95e1d760beafd8e1208"
       },
       {
         "path": "apps/architecture-portal/docs/platform/storage.mdx",
@@ -346,13 +346,13 @@
       },
       {
         "path": "apps/architecture-portal/docs/platform/web-runtime.mdx",
-        "bytes": 8272,
-        "sha256": "74f2a6975b1bdc20156cbff8e46067dc314f24027e7d9208c52207b493726e0c"
+        "bytes": 8324,
+        "sha256": "477cbb2248979e27c7c6a4dbd04648e70042e39bf30fa9555ef662434b13bc11"
       },
       {
         "path": "apps/architecture-portal/docs/product/capability-map.mdx",
-        "bytes": 2963,
-        "sha256": "064f5f69b8c1297fb25637da20f82933610cd9478bbea302482e1566364c81dc"
+        "bytes": 2717,
+        "sha256": "c160964e5497a59bd0e115aa1a6569403645e4fc9c4ec7c3ccdd450959af1eda"
       },
       {
         "path": "apps/architecture-portal/docs/product/positioning.mdx",
@@ -361,8 +361,8 @@
       },
       {
         "path": "apps/architecture-portal/docs/product/workflows.mdx",
-        "bytes": 2244,
-        "sha256": "3d029839ec72fc6a7629dc75f2331604115c1823d4793c9a7a25d6204f2f83d3"
+        "bytes": 1746,
+        "sha256": "690ec1a22157d723d9a37508cad3f79984edb92abc27f24255421ef1511c3ece"
       },
       {
         "path": "apps/architecture-portal/docs/providers/local-proof.mdx",
@@ -381,8 +381,8 @@
       },
       {
         "path": "apps/architecture-portal/sidebars.ts",
-        "bytes": 1682,
-        "sha256": "4d88f3ac16cc6ea3d698f3fa2f0695cca6f907288e58998bbb1f6ea1748b8a90"
+        "bytes": 1677,
+        "sha256": "c2405734e77ee54e809d176a6119b048a544f6ecd9999b2b4492f8a9233b3fd8"
       },
       {
         "path": "apps/architecture-portal/src/components/BuildIdentity.tsx",
@@ -517,12 +517,12 @@
       {
         "path": "apps/creator-web/module.json",
         "bytes": 165,
-        "sha256": "edb944b51ce1ec7fc0503737437e508e8fa7116c34e1ca957d796fde1d2e0bad"
+        "sha256": "8a81a132e75843eb1b01f0f7626e3fca2e91970526c9f56c88626c09ab8b9caa"
       },
       {
-        "path": "apps/native-test-host/module.json",
-        "bytes": 199,
-        "sha256": "78df58df956c146c42fabf313f162abc1f27ee937ef9685c0a43c99b343aa1e1"
+        "path": "apps/native-host/module.json",
+        "bytes": 193,
+        "sha256": "5650ba5f11c23403c51b87da923a9644427706b640dd9aa82e89ca16c177dc11"
       },
       {
         "path": "apps/web-runtime-host/module.json",
@@ -622,37 +622,37 @@
       {
         "path": "products/lmdj/CMakeLists.txt",
         "bytes": 1946,
-        "sha256": "7c6646790f49f5499a14f975c4862aea598b4ef146232cadea9282adf211f991"
+        "sha256": "6309408d753b531ad52d1169ec8fed0e222af760faa0b62f6ec4886f8277dc55"
       },
       {
         "path": "products/lmdj/README.md",
         "bytes": 1798,
-        "sha256": "65dd481cd647549a7bfa1df490c6b2b1018d7e37d260ed763ac8e808d0e4bc41"
+        "sha256": "0d80145a6403eab62aff1d163c2406639e714d3fe0a539174621e84427feeae3"
       },
       {
         "path": "products/lmdj/assembly.json",
-        "bytes": 2262,
-        "sha256": "6eaddd67740e93f8ab97d68b0296ba3496f9ddd86a5359de2095bf468720bad3"
+        "bytes": 2256,
+        "sha256": "07bbe8368d239b8d8529cf72e9a0bff328ae2fa418d5a65d4bdbbb29c2dfaed9"
       },
       {
         "path": "products/lmdj/assembly.lock.json",
-        "bytes": 3054,
-        "sha256": "d0818b86101aa2ce2d83aebf8819f7a0803a47b8455dc360b84532e3cbf5b78d"
+        "bytes": 3048,
+        "sha256": "43743c2bbf5750b59d9ef70e0065d238ac75f10b3423a055c0db95cf555701dc"
       },
       {
         "path": "products/lmdj/generated/web-runtime-identity.json",
         "bytes": 2880,
-        "sha256": "57335ed9ab9e3d2b3c2f4beeaba735ceaaf5c8826cece9e479b513a88ccaee85"
+        "sha256": "73dd4694ac5fc2c5b90fe4d3404ff143978f14dae34ebe271a6443263da72c0c"
       },
       {
         "path": "products/lmdj/generated/web-runtime-identity.mjs",
         "bytes": 3113,
-        "sha256": "03b158ee194932f88fb8bdb890d547014ee1d6ec1ecf532269d01c303a486c51"
+        "sha256": "8689bd2953d8ba914337bca097df7b723bfac38ed7ffe0b84cac2e1bb73e0a17"
       },
       {
         "path": "products/lmdj/src/compiled_assembly.cpp",
-        "bytes": 2337,
-        "sha256": "3e2da7f461cf660f460ee332c0e9f70ca5247d961edb6c09e331b59a674463ae"
+        "bytes": 2331,
+        "sha256": "f3dc2fac8fd7933cc81afea0e19df78a32c4460960a6ab3e2ca5ff81df9bcf2e"
       },
       {
         "path": "products/lmdj/version.json",
@@ -705,8 +705,8 @@
     {
       "source_path": "apps/architecture-portal/docs/assembly/lmdj.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/assembly/lmdj.mdx",
-      "bytes": 3350,
-      "sha256": "f05dfbb97a3f7a3d085a9cdcf9606f4767a954af8bffef25667caa46494770c2"
+      "bytes": 3283,
+      "sha256": "4aa88691d3186b9d044aa58b1350aaa323a7180cdc6985283a96a9d1f3f10cb9"
     },
     {
       "source_path": "apps/architecture-portal/docs/contracts/assembly.mdx",
@@ -753,14 +753,14 @@
     {
       "source_path": "apps/architecture-portal/docs/core/modules/application-facade.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/core/modules/application-facade.mdx",
-      "bytes": 2084,
-      "sha256": "936f48d8d7be86bde08e27724452d068cc811b22175afdefc1e81d99fc00b58d"
+      "bytes": 2079,
+      "sha256": "9ddbf00cb52a3b39216a3d187f3433f5960b5817529437641b37d417dc7ff784"
     },
     {
       "source_path": "apps/architecture-portal/docs/core/modules/audio-runtime.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/core/modules/audio-runtime.mdx",
-      "bytes": 1807,
-      "sha256": "e55c72f86242d752dd559001d5229820f1e8186847ba9b77cd0cc6ee3452c48b"
+      "bytes": 1802,
+      "sha256": "f284ae5d01da009185e3e2a74ae3d6d1defe0fb83205efeec6c5cd0b7c9f56fc"
     },
     {
       "source_path": "apps/architecture-portal/docs/core/modules/authoring-domain.mdx",
@@ -795,8 +795,8 @@
     {
       "source_path": "apps/architecture-portal/docs/core/modules/web-runtime-platform.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/core/modules/web-runtime-platform.mdx",
-      "bytes": 3684,
-      "sha256": "276f44c0b9ef1af6d8431cd1c861e9ac5a86f1fc2783a29521497ad4c4f5cbbf"
+      "bytes": 3640,
+      "sha256": "c576779e0aeacc59e11fe87838343a479aa77c20d4dbad7405600daa9953bf14"
     },
     {
       "source_path": "apps/architecture-portal/docs/core/overview.mdx",
@@ -825,26 +825,26 @@
     {
       "source_path": "apps/architecture-portal/docs/hosts/creator-web.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/hosts/creator-web.mdx",
-      "bytes": 9062,
-      "sha256": "86edd5c6641236d63cd5423ccde4c866e12c7b6dca2c71a9278b8f514aa470fb"
+      "bytes": 7452,
+      "sha256": "7861038056bdca571126e6ca87af8b31940caaca6728cf7edb2f92361a979aa6"
     },
     {
-      "source_path": "apps/architecture-portal/docs/hosts/native-test-host.mdx",
-      "snapshot_path": "versioned_docs/version-1.0.31.0/hosts/native-test-host.mdx",
-      "bytes": 802,
-      "sha256": "6e48bd81aa9aa6a696548a17666a996c81ae110ce4c0147dadd3a6e2c0402251"
+      "source_path": "apps/architecture-portal/docs/hosts/native-host.mdx",
+      "snapshot_path": "versioned_docs/version-1.0.31.0/hosts/native-host.mdx",
+      "bytes": 1188,
+      "sha256": "f0bac5bb1b212ae302b4836623edbe05aa930b80d08c66b4ebda454a739ae1b3"
     },
     {
       "source_path": "apps/architecture-portal/docs/hosts/overview.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/hosts/overview.mdx",
-      "bytes": 1869,
-      "sha256": "6c87401b94f0dd6787f2641c52514602cfa15f9ee4ca10c022bf52a1279c4cfb"
+      "bytes": 1888,
+      "sha256": "b94749e7773d55cd89d9e9a5c8724acfd402a8cdcd63fc66fc9eb601718ad910"
     },
     {
       "source_path": "apps/architecture-portal/docs/hosts/web-runtime.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/hosts/web-runtime.mdx",
-      "bytes": 10663,
-      "sha256": "7879d6ff1b3d7e64e6cd1403e9562bf83478d6442b3a0fd6e903e769f8125eef"
+      "bytes": 10696,
+      "sha256": "a89310db465b29b7530f15311d0f73f3e57cfd9b4f08e28ded765a089d04da62"
     },
     {
       "source_path": "apps/architecture-portal/docs/operations/documentation-governance.mdx",
@@ -855,32 +855,32 @@
     {
       "source_path": "apps/architecture-portal/docs/operations/testing-and-proof.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/operations/testing-and-proof.mdx",
-      "bytes": 45196,
-      "sha256": "bd8cc159586c3fda081e0693bd372365dfe6796f8f3d88193cf056916ba71797"
+      "bytes": 44969,
+      "sha256": "345c580348a2267db8921a2a4ab4c139feb74988caccfbb9cf04b8ce3d072c43"
     },
     {
       "source_path": "apps/architecture-portal/docs/operations/version-and-release.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/operations/version-and-release.mdx",
-      "bytes": 12658,
-      "sha256": "c21951de4299e1502ed55e960176d0c7d76b1b8cfdc0ebd37d6922715b7e2d4c"
+      "bytes": 12683,
+      "sha256": "235e32ea956db76f2df82d93a67a03855cc79e64ba0f06496c63fb2050f79f62"
     },
     {
       "source_path": "apps/architecture-portal/docs/overview/index.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/overview/index.mdx",
-      "bytes": 4205,
-      "sha256": "1622c9681e77dba7e94f1e561ee1aa6f74510855e89b3783f0df11fb761a8c6c"
+      "bytes": 4178,
+      "sha256": "ca522be5731e1c157ba14feeb359eb234c1321cee18cb7632b2c34eaed2757e1"
     },
     {
       "source_path": "apps/architecture-portal/docs/platform/input.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/platform/input.mdx",
-      "bytes": 3813,
-      "sha256": "24101cc207915b13eca82191541a2923baf874b486a3459d53cf24751a5c9096"
+      "bytes": 3769,
+      "sha256": "aa350e05356b23c0602cf25d1efd6b7d1fb7bdd117bc1170c4d7ee2f095a09fe"
     },
     {
       "source_path": "apps/architecture-portal/docs/platform/native-audio.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/platform/native-audio.mdx",
-      "bytes": 1021,
-      "sha256": "701dbfeeb7dff473153e0f56bcca2680576a85dd7669495dffe778c2ab6bc921"
+      "bytes": 1016,
+      "sha256": "9a865ec425930ed7a93a5010e843803d9d9a2613ac18d95e1d760beafd8e1208"
     },
     {
       "source_path": "apps/architecture-portal/docs/platform/storage.mdx",
@@ -891,14 +891,14 @@
     {
       "source_path": "apps/architecture-portal/docs/platform/web-runtime.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/platform/web-runtime.mdx",
-      "bytes": 8272,
-      "sha256": "74f2a6975b1bdc20156cbff8e46067dc314f24027e7d9208c52207b493726e0c"
+      "bytes": 8324,
+      "sha256": "477cbb2248979e27c7c6a4dbd04648e70042e39bf30fa9555ef662434b13bc11"
     },
     {
       "source_path": "apps/architecture-portal/docs/product/capability-map.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/product/capability-map.mdx",
-      "bytes": 2963,
-      "sha256": "064f5f69b8c1297fb25637da20f82933610cd9478bbea302482e1566364c81dc"
+      "bytes": 2717,
+      "sha256": "c160964e5497a59bd0e115aa1a6569403645e4fc9c4ec7c3ccdd450959af1eda"
     },
     {
       "source_path": "apps/architecture-portal/docs/product/positioning.mdx",
@@ -909,8 +909,8 @@
     {
       "source_path": "apps/architecture-portal/docs/product/workflows.mdx",
       "snapshot_path": "versioned_docs/version-1.0.31.0/product/workflows.mdx",
-      "bytes": 2244,
-      "sha256": "3d029839ec72fc6a7629dc75f2331604115c1823d4793c9a7a25d6204f2f83d3"
+      "bytes": 1746,
+      "sha256": "690ec1a22157d723d9a37508cad3f79984edb92abc27f24255421ef1511c3ece"
     },
     {
       "source_path": "apps/architecture-portal/docs/providers/local-proof.mdx",
@@ -927,13 +927,13 @@
   ],
   "source_sidebar": {
     "path": "apps/architecture-portal/sidebars.ts",
-    "bytes": 1682,
-    "sha256": "4d88f3ac16cc6ea3d698f3fa2f0695cca6f907288e58998bbb1f6ea1748b8a90"
+    "bytes": 1677,
+    "sha256": "c2405734e77ee54e809d176a6119b048a544f6ecd9999b2b4492f8a9233b3fd8"
   },
   "snapshot_sidebar": {
     "path": "versioned_sidebars/version-1.0.31.0-sidebars.json",
-    "bytes": 2075,
-    "sha256": "1b56f7a37cddd170ec19599aecc0988d5dc32841adc6ef54c943ed4a755e218b"
+    "bytes": 2070,
+    "sha256": "0b53c96bf33887703ac2c93177f8ef18b23fb480ffd81bc31aeeaeba0ccdb9c8"
   },
   "diagrams": {
     "ids": [
@@ -1112,5 +1112,5 @@
       }
     ]
   },
-  "frozen_at_utc": "2026-08-24T05:26:48.395Z"
+  "frozen_at_utc": "2026-08-24T02:43:21.835Z"
 }
