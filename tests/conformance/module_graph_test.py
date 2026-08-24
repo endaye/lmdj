@@ -180,7 +180,7 @@ assert creator_path == REPO_ROOT / "apps/creator-web/module.json"
 assert creator_manifest == {
     "contract": "lmdj.module.v1",
     "module": "creator-web",
-    "version": "1.5.0",
+    "version": "1.5.1",
     "api_version": 1,
     "dependencies": EXPECTED_WEB_HOST_DEPENDENCIES,
 }

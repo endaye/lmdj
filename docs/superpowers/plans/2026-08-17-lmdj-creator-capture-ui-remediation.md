@@ -234,12 +234,25 @@ enough to reproduce the original failure. Component tests for focus movement.
 
 ### Task 3 — Trim handle interaction (F5)
 
-- [ ] Replace the two stacked full-width invisible range inputs with the
+**Done 2026-08-24.** Implemented the P2-D3 decisions: each handle line is a
+visible grip (14px bar with top/bottom affordances) whose grab zone spans
+12 px to each side of the line, partitioned at the midpoint between the two
+lines so zones never overlap and adjacent handles each keep half the gap; a
+press inside a zone grabs that handle, the drag preserves the grab offset
+(handle follows pointer delta, never jumps to the pointer position), a press
+on the waveform body outside both zones moves nothing, and
+`pointercancel`/`Escape` still cancel and restore through the existing
+gesture functions. Both range inputs remain the keyboard/assistive-technology
+channel with live-second accessible names, removed from the pointer path
+(`pointer-events: none`, visually hidden but focusable). Landed with Creator
+Web Host `1.5.1` in Product Build `1.0.32.0`.
+
+- [x] Replace the two stacked full-width invisible range inputs with the
       Task 1 pointer model.
-- [ ] Make the interactive regions visible, so which handle a pointer will grab
+- [x] Make the interactive regions visible, so which handle a pointer will grab
       is predictable before pressing.
-- [ ] Keep both handles independently reachable when their values are adjacent.
-- [ ] Preserve the keyboard path, `Escape` cancel, gesture begin/preview/commit
+- [x] Keep both handles independently reachable when their values are adjacent.
+- [x] Preserve the keyboard path, `Escape` cancel, gesture begin/preview/commit
       semantics, and the accessible names with live second values.
 
 **Verification:** component tests for grabbing each handle from a pointer

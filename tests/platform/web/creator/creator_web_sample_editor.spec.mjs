@@ -502,6 +502,39 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   const postReloadOperations = await page.evaluate(() => window.__sampleProofOperations ?? []);
   expect(postReloadOperations.filter((operation) => operation === "sample.import.commit"))
     .toHaveLength(0);
+
+  // F5: a pointer drag aimed at a trim grip moves only that trim point. The
+  // retired invisible range bands grabbed the wrong handle or jumped the
+  // trim point to the pressed track position.
+  await selectPadWithoutPress(page, "Pad A1 — assigned");
+  await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
+    .toBeVisible({timeout: 120_000});
+  const trimStart = page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
+  const trimEnd = page.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"});
+  await expect(trimStart).toHaveValue("0.01");
+  await expect(trimEnd).toHaveValue("2");
+  const dragGrip = async (grip, deltaX) => {
+    const box = await grip.boundingBox();
+    expect(box).not.toBeNull();
+    const pressX = box.x + box.width / 2;
+    const pressY = box.y + box.height / 2;
+    await page.mouse.move(pressX, pressY);
+    await page.mouse.down();
+    await page.mouse.move(pressX + deltaX, pressY, {steps: 4});
+    await page.mouse.up();
+  };
+  await waitForControlMutation(page, trimStart, async () => {
+    await dragGrip(page.locator('[data-grip-zone="start"]'), 40);
+  }, 59);
+  await expect(trimStart).not.toHaveValue("0.01");
+  await expect(trimEnd).toHaveValue("2");
+  const movedStart = await trimStart.inputValue();
+  await waitForControlMutation(page, trimEnd, async () => {
+    await dragGrip(page.locator('[data-grip-zone="end"]'), -40);
+  }, 60);
+  await expect(trimEnd).not.toHaveValue("2");
+  await expect(trimStart).toHaveValue(movedStart);
+
   await page.evaluate(() => window.__sampleVoiceUnsubscribe?.());
 });
 
