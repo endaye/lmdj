@@ -517,7 +517,7 @@ class ReleasePrepareTest(unittest.TestCase):
                 ReleaseKind.PRODUCT, CURRENT_PRODUCT_BUILD,
                 "web-runtime-host", "canary", CURRENT_PRODUCT_BUILD,
             ),
-            (ReleaseKind.MODULE, "core-cli@1.0.16", "source-only", None, None),
+            (ReleaseKind.MODULE, "core-cli@1.0.17", "source-only", None, None),
             (ReleaseKind.CONTRACT, "lmdj.capability.v2@2.0.0", "source-only", None, None),
             (ReleaseKind.PROVIDER, "local.proof.success@1.0.5", "source-only", None, None),
         )

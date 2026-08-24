@@ -49,7 +49,7 @@ async function selectPadWithoutPress(page, label) {
 // sleeping for a wall-clock duration.
 async function recordAtLeast(page, padLabel, seconds) {
   await page.getByRole("button", {name: "Record Sample"}).click();
-  const panel = page.getByRole("region", {name: `${padLabel} Pad Capture`});
+  const panel = page.getByRole("dialog", {name: `${padLabel} Pad Capture`});
   await expect(panel).toBeVisible();
   await panel.getByRole("button", {name: `Record into ${padLabel}`}).click();
   await expect(panel.getByRole("button", {name: "Stop"}))
@@ -60,6 +60,52 @@ async function recordAtLeast(page, padLabel, seconds) {
   );
   return panel;
 }
+
+// F1/F2: the panel is a viewport-anchored modal, so its primary action must be
+// geometrically inside the viewport — a boundingBox check, not isVisible(),
+// which never requires the element to be on screen.
+async function expectWithinViewport(page, locator) {
+  const viewport = page.viewportSize();
+  const box = await locator.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box.x).toBeGreaterThanOrEqual(0);
+  expect(box.y).toBeGreaterThanOrEqual(0);
+  expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+  expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+}
+
+test("the capture panel and its primary actions stay within the viewport (F1/F2)", async ({page}, testInfo) => {
+  test.skip(testInfo.project.name !== GRANTED);
+  test.setTimeout(600_000);
+  // Short enough that the old in-flow panel failed: at 1440×900 it rendered at
+  // y ≈ 790 and grew to 277 px on recording, all below the fold.
+  await page.setViewportSize({width: 1280, height: 720});
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await enterSampleEditor(page);
+
+  await selectPadWithoutPress(page, "Pad A1 — empty");
+  await page.getByRole("button", {name: "Record Sample"}).click();
+  const panel = page.getByRole("dialog", {name: "Pad A1 Pad Capture"});
+  await expect(panel).toBeVisible();
+
+  // idle: the panel and its primary action are inside the viewport.
+  await expectWithinViewport(page, panel);
+  await expectWithinViewport(
+    page, panel.getByRole("button", {name: "Record into Pad A1"}),
+  );
+
+  // recording: entering the phase must not change the outer geometry, and
+  // Stop must sit inside the viewport without any scrolling.
+  await panel.getByRole("button", {name: "Record into Pad A1"}).click();
+  const stop = panel.getByRole("button", {name: "Stop"});
+  await expect(stop).toBeVisible({timeout: 30_000});
+  await expectWithinViewport(page, panel);
+  await expectWithinViewport(page, stop);
+
+  await panel.getByRole("button", {name: "Close"}).click();
+  await expect(panel).toBeHidden();
+});
 
 test("records, trims and commits a capture onto an empty Pad", async ({page}, testInfo) => {
   test.skip(testInfo.project.name !== GRANTED);
@@ -81,18 +127,20 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
     .toBeVisible();
 
   await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  // Commit returns the modal panel to idle. Close it before asserting the
+  // background Project surface: native modal semantics make that surface
+  // intentionally inert while the dialog remains open.
+  await expect(panel.getByRole("button", {name: "Record into Pad A1"}))
     .toBeVisible({timeout: 180_000});
+  await panel.getByRole("button", {name: "Close"}).click();
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
   // the Pad reads assigned and the Sample Editor renders its waveform.
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
-  // Commit returns the panel to idle rather than dismissing it: the buffer is
-  // released and only an explicit Close leaves capture.
-  await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
-  await panel.getByRole("button", {name: "Close"}).click();
-  await expect(panel).toBeHidden();
 });
 
 test("clamps a long take to the committable selection", async ({page}, testInfo) => {
@@ -142,7 +190,7 @@ test("a denied microphone permission is explicit and retryable", async ({page}, 
 
   await selectPadWithoutPress(page, "Pad A1 — empty");
   await page.getByRole("button", {name: "Record Sample"}).click();
-  const panel = page.getByRole("region", {name: "Pad A1 Pad Capture"});
+  const panel = page.getByRole("dialog", {name: "Pad A1 Pad Capture"});
   await expect(panel).toBeVisible();
   await panel.getByRole("button", {name: "Record into Pad A1"}).click();
 
@@ -163,8 +211,12 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
   const panel = await recordAtLeast(page, "Pad A1", 1);
   await panel.getByRole("button", {name: "Stop"}).click();
   await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(panel.getByRole("button", {name: "Record into Pad A1"}))
     .toBeVisible({timeout: 180_000});
+  await panel.getByRole("button", {name: "Close"}).click();
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible();
 
   // Only the Artifact bytes and their SHA-256 identity persist: no device
   // label, no device id, no host path (design §8).

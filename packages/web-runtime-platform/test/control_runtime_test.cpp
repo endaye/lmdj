@@ -1373,6 +1373,12 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
       runtime->dispatch("sample.stop", {{"slot", slot(0, 0)}}, {}),
       {"accepted", "scope"});
   runtime->engine().render(left.data(), right.data(), 1);
+  // F6 ramp: the stop starts a kRealtimeRampFrames release tail instead of
+  // silencing the voice at once, so it is still active after one frame.
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
+  std::array<float, 96> tail_left{};
+  std::array<float, 96> tail_right{};
+  runtime->engine().render(tail_left.data(), tail_right.data(), 96);
   LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
 
   const auto preview = playback_payload(100, 200, "gate", -1'200, false);
@@ -1391,6 +1397,10 @@ void test_sample_editing_binds_current_project_and_drives_fixed_controls() {
           "trigger", {{"slot", 0}, {"kind", "release"}}, {}),
       {"accepted"});
   runtime->engine().render(left.data(), right.data(), 1);
+  // F6 ramp: the gate release renders its 96-frame tail before the voice
+  // deactivates (the tail ends well before end_frame 200).
+  LMDJ_CHECK(runtime->engine().telemetry().active_voices == 1);
+  runtime->engine().render(tail_left.data(), tail_right.data(), 96);
   LMDJ_CHECK(runtime->engine().telemetry().active_voices == 0);
 
   // A real Worklet continues draining fixed controls while the control thread
@@ -2996,6 +3006,8 @@ void test_take_stop_stops_capture_batches_at_the_original_deadline() {
       runtime->engine().capture_telemetry().captured_events ==
       lmdj::audio::kRealtimeCaptureCapacity);
   ContinuousAudioDriver driver(runtime->engine());
+  coordinator.engine = &runtime->engine();
+  coordinator.driver = &driver;
 
   check_error(
       runtime->dispatch(

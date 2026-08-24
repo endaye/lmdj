@@ -502,6 +502,39 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   const postReloadOperations = await page.evaluate(() => window.__sampleProofOperations ?? []);
   expect(postReloadOperations.filter((operation) => operation === "sample.import.commit"))
     .toHaveLength(0);
+
+  // F5: a pointer drag aimed at a trim grip moves only that trim point. The
+  // retired invisible range bands grabbed the wrong handle or jumped the
+  // trim point to the pressed track position.
+  await selectPadWithoutPress(page, "Pad A1 — assigned");
+  await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
+    .toBeVisible({timeout: 120_000});
+  const trimStart = page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
+  const trimEnd = page.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"});
+  await expect(trimStart).toHaveValue("0");
+  await expect(trimEnd).toHaveValue("2");
+  const dragGrip = async (grip, deltaX) => {
+    const box = await grip.boundingBox();
+    expect(box).not.toBeNull();
+    const pressX = box.x + box.width / 2;
+    const pressY = box.y + box.height / 2;
+    await page.mouse.move(pressX, pressY);
+    await page.mouse.down();
+    await page.mouse.move(pressX + deltaX, pressY, {steps: 4});
+    await page.mouse.up();
+  };
+  await waitForControlMutation(page, trimStart, async () => {
+    await dragGrip(page.locator('[data-grip-zone="start"]'), 40);
+  }, 59);
+  await expect(trimStart).not.toHaveValue("0");
+  await expect(trimEnd).toHaveValue("2");
+  const movedStart = await trimStart.inputValue();
+  await waitForControlMutation(page, trimEnd, async () => {
+    await dragGrip(page.locator('[data-grip-zone="end"]'), -40);
+  }, 60);
+  await expect(trimEnd).not.toHaveValue("2");
+  await expect(trimStart).toHaveValue(movedStart);
+
   await page.evaluate(() => window.__sampleVoiceUnsubscribe?.());
 });
 
@@ -519,4 +552,60 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
   expect(await page.evaluate(() => window.lmdjWebRuntimeHost === undefined)).toBe(true);
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
+});
+
+test("re-importing a diverged Project Bundle recovers through Open local Project without a reload", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await installHostProofRecorder(page);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await activateAudio(page);
+  await enterSampleEditor(page);
+
+  // F3: diverge the local Project from the imported bundle. Committing a
+  // Sample to Pad A1 advances the local Project to revision 47.
+  await expect(page.getByRole("button", {name: "Pad A1 — empty"})).toBeVisible();
+  await chooseSampleFile(
+    page,
+    "Add Sample to Pad A1",
+    "proof-ramp.wav",
+    pcm16Wav({}),
+  );
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 120_000});
+  await expectProjectRevision(page, 47);
+
+  // Re-importing the original bundle is refused as DUPLICATE_ID: the local
+  // copy of the same Project has newer changes. The refusal must present as
+  // a recoverable situation, not as "Creator unavailable".
+  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
+  await page.getByRole("button", {name: "Project"}).click();
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByRole("button", {name: "Import .lmdj"}).click();
+  await (await chooserPromise).setFiles(sampleBundle);
+  const alert = page.getByRole("alert");
+  await expect(alert).toBeVisible({timeout: 120_000});
+  await expect(alert).toContainText("Project already on this device");
+  await expect(alert).toContainText(
+    "The import was refused because the local copy of this Project has newer changes. Nothing was lost.",
+  );
+  await expect(alert).not.toContainText("Creator unavailable");
+
+  // The recovery control dismisses the panel and leads to the local Projects
+  // list — the same destination as Open local — without a reload.
+  await page.getByRole("button", {name: "Open local Project"}).click();
+  await expect(alert).toHaveCount(0);
+  await expect(page.getByRole("heading", {name: "Local Projects"}))
+    .toBeVisible();
+  const diverged = page.locator(".local-projects li")
+    .filter({hasText: "Project 00000000"});
+  await expect(diverged).toContainText("Revision 47");
+  await diverged.getByRole("button", {name: "Open Project 00000000"}).click();
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
+    .toBeVisible({timeout: 120_000});
+  await expect(page.locator(".project-summary")).toContainText("Revision47");
 });

@@ -315,12 +315,11 @@ async function report(page) {
 // keeps the recovery epoch it opened, re-enters `recovering` on its own and
 // asks only for the one probe Trigger; the Host never parks at
 // `audio-suspended` and therefore never needs an Activate gesture here. The
-// Runtime refuses an Activate gesture in any other Host state, the Creator
-// reports a refused activation as "Audio inactive", and no Host state left in
-// this recovery can carry the surface out of it again. "Audio suspended" is
-// published as soon as the Host reaches `interrupted`, which is where the
-// interruption starts, so a gesture issued against that label races the
-// in-flight interruption. Wait for the guaranteed recovery instead.
+// Runtime accepts an Activate gesture only while parked at `audio-suspended`,
+// and the Creator disables "Activate audio" in every other Host state, so the
+// surface never offers a gesture that is guaranteed to be refused. "Audio
+// suspended" is published as soon as the Host reaches `interrupted`, which is
+// where the interruption starts; wait for the guaranteed recovery instead.
 async function recoverFromLifecycleEdge(page) {
   await expect(page.getByTestId("audio-state")).toHaveText("Audio recovering", {
     timeout: AUDIO_TRANSITION_TIMEOUT_MS,

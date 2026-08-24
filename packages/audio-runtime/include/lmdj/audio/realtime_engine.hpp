@@ -16,6 +16,8 @@
 namespace lmdj::audio {
 
 inline constexpr std::uint32_t kRealtimeSampleRate = 48'000;
+// Voice attack/release ramp length: 2 ms at the fixed realtime sample rate.
+inline constexpr std::uint32_t kRealtimeRampFrames = 96;
 inline constexpr std::uint16_t kRealtimeChannels = 2;
 inline constexpr std::size_t kRealtimeSampleSlots = 64;
 inline constexpr std::size_t kRealtimeQueueCapacity = 1'024;
@@ -310,6 +312,9 @@ class RealtimeEngine final {
     domain::TriggerMode trigger_mode = domain::TriggerMode::one_shot;
     bool active = false;
     std::uint8_t bank_slot = kLegacyBankSlot;
+    std::uint32_t attack_frames_remaining = 0;
+    bool releasing = false;
+    std::uint32_t release_frames_remaining = 0;
   };
 
   std::uint64_t legacy_availability_mask() const noexcept;
@@ -329,6 +334,7 @@ class RealtimeEngine final {
       std::uint64_t runtime_frame,
       std::uint32_t source_frame) noexcept;
   void stop_voice(Voice& voice, std::uint64_t runtime_frame) noexcept;
+  void deactivate_voice(Voice& voice) noexcept;
 
   std::array<std::vector<float>, kRealtimeSampleSlots> samples_;
   detail::FixedSpscQueue<PadControlEvent, kRealtimeQueueCapacity> queue_;

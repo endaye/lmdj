@@ -130,7 +130,7 @@ test("packaged Creator owns an exact local-only asset inventory", async ({reques
   const manifest = JSON.parse(manifestBytes.toString("utf8"));
   expect(manifest.distribution_contract).toBe("lmdj.creator-web.distribution.v1");
   expect(manifest.compatible_hosts).toEqual([
-    {host_id: "web-runtime-host", host_version: "1.2.13"},
+    {host_id: "web-runtime-host", host_version: "1.2.15"},
   ]);
   // capture_worklet ships as its own same-origin asset because the CSP below
   // (script-src 'self') rejects blob:/data: AudioWorklet module URLs.

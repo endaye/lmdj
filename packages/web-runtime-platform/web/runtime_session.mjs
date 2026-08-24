@@ -2086,10 +2086,12 @@ function createRuntimeSessionController(options = {}) {
       }
       machine.handleOperation("audio.suspend");
       expectedContextSuspend = true;
-      await Promise.all([
-        boundedRequest("audio.suspend", {}),
-        audioContext?.suspend?.() ?? Promise.resolve(),
-      ]);
+      // The Host closes its admission gate by requesting one final
+      // AudioWorklet quantum. Suspending the browser context concurrently can
+      // remove that quantum and strand Host quiescence until its deadline.
+      // Commit Host quiescence first, then park the browser context.
+      await boundedRequest("audio.suspend", {});
+      await (audioContext?.suspend?.() ?? Promise.resolve());
       return true;
     } catch (error) {
       fail(error);
