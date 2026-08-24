@@ -180,20 +180,28 @@ contract. It must not be settled inside a front-end Task.
 
 ### Task 1 — Design gate: the capture panel's presentation and the trim pointer model
 
-- [ ] Decide and record the capture panel's presentation: whether it becomes a
+**Done 2026-08-24.** All decisions recorded in
+[`docs/prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md`](../../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md):
+P2-D1 panel presentation (viewport-anchored modal, fixed geometry), P2-D2
+focus behaviour, P2-D3 trim pointer model (visible grips, midpoint
+partition, inert middle), P2-D4 `DUPLICATE_ID` recovery. The keyboard
+editing path, `Escape` cancel and accessible names survive unchanged
+(P2-D3). F4 and F6 were not settled here and remain person-level decisions.
+
+- [x] Decide and record the capture panel's presentation: whether it becomes a
       dialog anchored to the viewport, a fixed region of the Sample surface, or
       an in-flow panel with guaranteed scroll-into-view. State how it behaves
       when the panel grows on entering `recording`.
-- [ ] Decide and record focus behaviour on open, on phase change, and on close,
+- [x] Decide and record focus behaviour on open, on phase change, and on close,
       preserving the existing `returnFocus` contract.
-- [ ] Decide and record the replacement pointer model for the trim handles:
+- [x] Decide and record the replacement pointer model for the trim handles:
       what a press near a handle does, what a press in the middle of the
       waveform does, whether a press on the track is allowed to move a trim
       point at all, and how the two handles stay independently reachable when
       they are close together.
-- [ ] Confirm the keyboard editing path, the `Escape` cancel, and the
+- [x] Confirm the keyboard editing path, the `Escape` cancel, and the
       accessible names survive the replacement unchanged.
-- [ ] Record the decisions in `docs/prd/decision-log.md`, or as open questions
+- [x] Record the decisions in `docs/prd/decision-log.md`, or as open questions
       if any of them turns out to be a product-level choice rather than an
       implementation one.
 

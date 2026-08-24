@@ -92,13 +92,13 @@ fixes rather than three times is the whole argument.
 
 | ID | Task | Plan | Status |
 | --- | --- | --- | --- |
-| F1 + F2 | Capture panel presentation, position and focus | [Creator UI remediation](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md) Task 2 | blocked on P2 |
-| F5 | Replace the trim handle pointer model | same plan, Task 3 | blocked on P2 ([#214](https://github.com/endaye/lmdj/issues/214)) |
-| F3 | Recoverable presentation for `DUPLICATE_ID` | same plan, Task 4 | blocked on P2 ([#214](https://github.com/endaye/lmdj/issues/214)) |
-| — | Design gate for the above | same plan, Task 1 | **this is P2** — a person decides, the agent records |
+| F1 + F2 | Capture panel presentation, position and focus | [Creator UI remediation](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md) Task 2 | **ready** — P2 settled 2026-08-24 |
+| F5 | Replace the trim handle pointer model | same plan, Task 3 | **ready** — P2 settled 2026-08-24 ([#214](https://github.com/endaye/lmdj/issues/214)) |
+| F3 | Recoverable presentation for `DUPLICATE_ID` | same plan, Task 4 | **ready** — P2 settled 2026-08-24 ([#214](https://github.com/endaye/lmdj/issues/214)) |
+| ~~—~~ | ~~Design gate for the above~~ | same plan, Task 1 | **done 2026-08-24** — [decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md): modal capture panel, focus follows the primary action, visible-grip midpoint-partitioned trim handles, recoverable `DUPLICATE_ID` |
 
-The whole plan is one branch's worth of work once P2 lands. Its Task 5 hands
-back to the human list.
+The whole plan is one branch's worth of work now that P2 has landed. Its
+Task 5 hands back to the human list.
 
 ---
 
@@ -109,7 +109,6 @@ row is answered.
 
 | ID | Task | Blocked by |
 | --- | --- | --- |
-| F1, F2, F3, F5 | Creator UI remediation Tasks 2–4 | P2 |
 | F4 | Whatever the device/silence resolution turns out to be | F4 decision ([#214](https://github.com/endaye/lmdj/issues/214)) |
 | F6 | Amplitude ramp in the render path, under a realtime-safety review | F6 decision ([#214](https://github.com/endaye/lmdj/issues/214)) |
 | A2 | Rename `native-test-host` and change the Assembly, **or** remove it from the Assembly and every distribution and return it to `tests/`; either way, write the rule for what may enter a distribution package | A2 decision ([#210](https://github.com/endaye/lmdj/issues/210)) |
@@ -127,8 +126,10 @@ row is answered.
 2. ~~**C1**~~ — invalidated by measurement; the gate is deterministic where it
    enforces. **C6 replaces it at the top of the ready queue**: Tier A alone is
    one Task and lands ≈88–89%.
-3. **The Creator UI remediation branch** — the moment P2 lands. Four findings,
-   one branch, and it is what makes Pad Capture usable by hand.
+3. **The Creator UI remediation branch** — P2 landed 2026-08-24
+   ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)).
+   Four findings, one branch, and it is what makes Pad Capture usable by
+   hand.
 4. ~~**C2**~~ — done 2026-08-18 on `docs/prd-append-structure`.
 5. ~~**B3**~~ — done 2026-08-21 (`4312a6de`, #226). **B4, C5** — mechanical
    hardening, schedule as capacity allows. C5 is the smallest of them and
