@@ -262,7 +262,7 @@ class ReadOnlyGitHub:
         raise AssertionError("audit called a mutation method")
 
 
-class ReleaseAuditTest(unittest.TestCase):
+class ReleaseAuditFixture:
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="lmdj-release-audit-")
         self.root = Path(self.temporary.name)
@@ -515,6 +515,8 @@ class ReleaseAuditTest(unittest.TestCase):
             assets, target,
         )
 
+
+class ReleaseAuditTest(ReleaseAuditFixture, unittest.TestCase):
     def test_local_audit_has_no_remote_dependency_or_mutation(self) -> None:
         report = audit(self.context(), remote=False)
         self.assertEqual({item.code for item in report.findings}, {"ok"})
@@ -541,142 +543,6 @@ class ReleaseAuditTest(unittest.TestCase):
         )
         report = audit(context, remote=False)
         self.assertEqual({item.code for item in report.findings}, {"ok"})
-
-    def test_remote_canonical_product_build_without_intent_audits_registered_entries(self) -> None:
-        revision = subprocess.run(
-            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
-            check=True, capture_output=True, text=True,
-        ).stdout.strip()
-        context = self.canonical_remote_context(
-            self.zero_intent_repository_context(ROOT, revision),
-        )
-
-        report = audit(context, remote=True)
-        self.assertEqual({item.code for item in report.findings}, {"ok"})
-
-    def test_repository_local_audit_does_not_assume_current_intent_count(self) -> None:
-        context = replace(
-            cli.build_audit_context(ROOT),
-            # Canonical key import is covered independently; this integration
-            # test owns the current manifest, snapshot, ledger, and intent-count
-            # projections that dominate the zero-intent behavior under test.
-            trust_anchor_verifier=lambda root, policy: None,
-        )
-        with patch.object(
-            context.git,
-            "validate_current_product_snapshot",
-            # The corruption matrix below owns the real provenance command;
-            # this test keeps the repository's manifest, lock, inventory, and
-            # ledger projections real while isolating the intent-count rule.
-            return_value=None,
-        ):
-            report = audit(context, remote=False)
-            self.assertEqual(report.exit_code, 0)
-
-    def test_zero_intent_local_and_remote_audits_reject_corrupt_snapshot_provenance(self) -> None:
-        cases = (
-            ("metadata revision", "metadata-revision"),
-            ("metadata source tree", "metadata-source-tree"),
-            ("squash witness", "squash-witness"),
-        )
-        revision = "760e2167914323dd70ea2e188da2f6136e8edc63"
-        with self.repository_worktree(revision) as worktree:
-            def restore_exact_worktree() -> None:
-                subprocess.run(
-                    ["git", "-C", str(worktree), "reset", "--hard", revision],
-                    check=True, capture_output=True, text=True,
-                )
-
-            def assert_exact_worktree() -> None:
-                head = subprocess.run(
-                    ["git", "-C", str(worktree), "rev-parse", "HEAD"],
-                    check=True, capture_output=True, text=True,
-                ).stdout.strip()
-                status = subprocess.run(
-                    ["git", "-C", str(worktree), "status", "--porcelain"],
-                    check=True, capture_output=True, text=True,
-                ).stdout
-                self.assertEqual(head, revision)
-                self.assertEqual(status, "")
-
-            for label, corruption in cases:
-                with self.subTest(label=label):
-                    restore_exact_worktree()
-                    assert_exact_worktree()
-                    try:
-                        context = self.zero_intent_repository_context(worktree, revision)
-
-                        product_build = current_product_build(worktree)
-                        metadata_path = (
-                            worktree / "apps/architecture-portal/versioned_metadata"
-                            / f"version-{product_build}.json"
-                        )
-                        if corruption == "squash-witness":
-                            path = (
-                                worktree / "apps/architecture-portal/versioned_provenance"
-                                / f"version-{product_build}-squash-witness.json"
-                            )
-                            document = json.loads(path.read_text(encoding="utf-8"))
-                            document["source_tree"] = "d" * 40
-                        else:
-                            path = metadata_path
-                            document = json.loads(path.read_text(encoding="utf-8"))
-                            if corruption == "metadata-revision":
-                                document["revision"] = "d" * 40
-                            else:
-                                document["source_commit"]["tree"] = "d" * 40
-                        path.write_text(
-                            json.dumps(document, indent=2) + "\n", encoding="utf-8",
-                        )
-                        if corruption == "squash-witness":
-                            subprocess.run(
-                                ["git", "-C", str(worktree), "add", str(path)],
-                                check=True, capture_output=True, text=True,
-                            )
-                            subprocess.run(
-                                [
-                                    "git", "-C", str(worktree),
-                                    "-c", "user.name=LMDJ Release Audit Test",
-                                    "-c", "user.email=release-audit-test@invalid",
-                                    "commit", "-m", "test: corrupt squash witness",
-                                ],
-                                check=True, capture_output=True, text=True,
-                            )
-
-                        validation_error: list[Exception] = []
-                        validation_calls: list[tuple[Path, str]] = []
-
-                        def validate_snapshot_once(selected_root: Path, identity: str) -> None:
-                            validation_calls.append((selected_root.resolve(), identity))
-                            if not validation_error:
-                                try:
-                                    target_validation_module.validate_current_product_snapshot(
-                                        selected_root, identity,
-                                    )
-                                except Exception as error:
-                                    validation_error.append(error)
-                            if validation_error:
-                                raise validation_error[0]
-
-                        self.git.current_snapshot_validator = validate_snapshot_once
-                        local = audit(context, remote=False)
-                        remote = audit(self.canonical_remote_context(context), remote=True)
-                        self.assertEqual(
-                            validation_calls,
-                            [(worktree.resolve(), product_build)] * 2,
-                        )
-                        for report in (local, remote):
-                            finding = next(
-                                item for item in report.findings
-                                if item.code == "unverifiable"
-                            )
-                            self.assertIn(
-                                "immutable Portal snapshot projection", finding.message,
-                            )
-                            self.assertEqual(finding.sources, ("architecture-portal",))
-                    finally:
-                        restore_exact_worktree()
-                        assert_exact_worktree()
 
     def test_current_product_snapshot_is_required_without_release_intent(self) -> None:
         self.install_product_build(self.root, SYNTHETIC_PRODUCT_BUILD)
@@ -1735,6 +1601,144 @@ class ReleaseAuditTest(unittest.TestCase):
         self.assertEqual(completed.returncode, 0, completed.stderr)
         self.assertIn("{prepare,push-tag,create-draft", completed.stdout)
         self.assertIn("audit", completed.stdout)
+
+
+class ReleaseAuditIntegrationTest(ReleaseAuditFixture, unittest.TestCase):
+    def test_remote_canonical_product_build_without_intent_audits_registered_entries(self) -> None:
+        revision = subprocess.run(
+            ["git", "-C", str(ROOT), "rev-parse", "HEAD"],
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+        context = self.canonical_remote_context(
+            self.zero_intent_repository_context(ROOT, revision),
+        )
+
+        report = audit(context, remote=True)
+        self.assertEqual({item.code for item in report.findings}, {"ok"})
+
+    def test_repository_local_audit_does_not_assume_current_intent_count(self) -> None:
+        context = replace(
+            cli.build_audit_context(ROOT),
+            # Canonical key import is covered independently; this integration
+            # test owns the current manifest, snapshot, ledger, and intent-count
+            # projections that dominate the zero-intent behavior under test.
+            trust_anchor_verifier=lambda root, policy: None,
+        )
+        with patch.object(
+            context.git,
+            "validate_current_product_snapshot",
+            # The corruption matrix below owns the real provenance command;
+            # this test keeps the repository's manifest, lock, inventory, and
+            # ledger projections real while isolating the intent-count rule.
+            return_value=None,
+        ):
+            report = audit(context, remote=False)
+            self.assertEqual(report.exit_code, 0)
+
+    def test_zero_intent_local_and_remote_audits_reject_corrupt_snapshot_provenance(self) -> None:
+        cases = (
+            ("metadata revision", "metadata-revision"),
+            ("metadata source tree", "metadata-source-tree"),
+            ("squash witness", "squash-witness"),
+        )
+        revision = "760e2167914323dd70ea2e188da2f6136e8edc63"
+        with self.repository_worktree(revision) as worktree:
+            def restore_exact_worktree() -> None:
+                subprocess.run(
+                    ["git", "-C", str(worktree), "reset", "--hard", revision],
+                    check=True, capture_output=True, text=True,
+                )
+
+            def assert_exact_worktree() -> None:
+                head = subprocess.run(
+                    ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                    check=True, capture_output=True, text=True,
+                ).stdout.strip()
+                status = subprocess.run(
+                    ["git", "-C", str(worktree), "status", "--porcelain"],
+                    check=True, capture_output=True, text=True,
+                ).stdout
+                self.assertEqual(head, revision)
+                self.assertEqual(status, "")
+
+            for label, corruption in cases:
+                with self.subTest(label=label):
+                    restore_exact_worktree()
+                    assert_exact_worktree()
+                    try:
+                        context = self.zero_intent_repository_context(worktree, revision)
+
+                        product_build = current_product_build(worktree)
+                        metadata_path = (
+                            worktree / "apps/architecture-portal/versioned_metadata"
+                            / f"version-{product_build}.json"
+                        )
+                        if corruption == "squash-witness":
+                            path = (
+                                worktree / "apps/architecture-portal/versioned_provenance"
+                                / f"version-{product_build}-squash-witness.json"
+                            )
+                            document = json.loads(path.read_text(encoding="utf-8"))
+                            document["source_tree"] = "d" * 40
+                        else:
+                            path = metadata_path
+                            document = json.loads(path.read_text(encoding="utf-8"))
+                            if corruption == "metadata-revision":
+                                document["revision"] = "d" * 40
+                            else:
+                                document["source_commit"]["tree"] = "d" * 40
+                        path.write_text(
+                            json.dumps(document, indent=2) + "\n", encoding="utf-8",
+                        )
+                        if corruption == "squash-witness":
+                            subprocess.run(
+                                ["git", "-C", str(worktree), "add", str(path)],
+                                check=True, capture_output=True, text=True,
+                            )
+                            subprocess.run(
+                                [
+                                    "git", "-C", str(worktree),
+                                    "-c", "user.name=LMDJ Release Audit Test",
+                                    "-c", "user.email=release-audit-test@invalid",
+                                    "commit", "-m", "test: corrupt squash witness",
+                                ],
+                                check=True, capture_output=True, text=True,
+                            )
+
+                        validation_error: list[Exception] = []
+                        validation_calls: list[tuple[Path, str]] = []
+
+                        def validate_snapshot_once(selected_root: Path, identity: str) -> None:
+                            validation_calls.append((selected_root.resolve(), identity))
+                            if not validation_error:
+                                try:
+                                    target_validation_module.validate_current_product_snapshot(
+                                        selected_root, identity,
+                                    )
+                                except Exception as error:
+                                    validation_error.append(error)
+                            if validation_error:
+                                raise validation_error[0]
+
+                        self.git.current_snapshot_validator = validate_snapshot_once
+                        local = audit(context, remote=False)
+                        remote = audit(self.canonical_remote_context(context), remote=True)
+                        self.assertEqual(
+                            validation_calls,
+                            [(worktree.resolve(), product_build)] * 2,
+                        )
+                        for report in (local, remote):
+                            finding = next(
+                                item for item in report.findings
+                                if item.code == "unverifiable"
+                            )
+                            self.assertIn(
+                                "immutable Portal snapshot projection", finding.message,
+                            )
+                            self.assertEqual(finding.sources, ("architecture-portal",))
+                    finally:
+                        restore_exact_worktree()
+                        assert_exact_worktree()
 
 
 if __name__ == "__main__":
