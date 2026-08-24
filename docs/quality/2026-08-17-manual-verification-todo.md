@@ -228,7 +228,7 @@ untestable by hand.
 | --- | --- | --- |
 | Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. F1 + F2 landed 2026-08-24 in Product Build `1.0.31.0` / Creator `1.5.0` (Task 2: viewport-anchored modal panel, focus follows the primary action); F5 landed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.1` (Task 3: visible-grip midpoint-partitioned trim handles); F3 landed 2026-08-24 in Product Build `1.0.33.0` / Creator `1.5.2` (Task 4: recoverable `DUPLICATE_ID` presentation with an `Open local Project` control). All four fixes are now landed, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
 | F6 ramp policy lands | M2 checks 1 and 5 | both fail by construction today |
-| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated |
+| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution landed 2026-08-24 in Product Build `1.0.34.0` / Creator `1.5.3` (digital-silence commit gate plus visible input identity), so the re-run is ready |
 | Any new Product Build allocated for team testing or release | every row P1 says does not carry forward | unanswered until P1 is settled |
 
 ---

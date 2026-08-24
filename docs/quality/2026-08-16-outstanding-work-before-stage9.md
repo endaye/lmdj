@@ -322,13 +322,14 @@ from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
 F1 and F2 are fixed in Product Build `1.0.31.0` (Creator `1.5.0`), F5 in
-`1.0.32.0` (Creator `1.5.1`), F3 in `1.0.33.0` (Creator `1.5.2`); the rest
-are not fixed.
+`1.0.32.0` (Creator `1.5.1`), F3 in `1.0.33.0` (Creator `1.5.2`), F4 in
+`1.0.34.0` (Creator `1.5.3`); the rest are not fixed.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
-F4 and F6 each need a product decision and are explicitly excluded from that
-plan.
+F4 and F6 each needed a product decision and were explicitly excluded from
+that plan; both decisions landed 2026-08-24, and F4 is implemented in
+[`2026-08-24-lmdj-capture-input-gate-and-identity.md`](../superpowers/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md).
 
 ### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.31.0`
 
@@ -377,7 +378,7 @@ retry wiring is unchanged. The physical re-walk that confirms the fix by
 hand stays open in `2026-08-17-manual-verification-todo.md` (remediation
 plan Task 5).
 
-### F4. A silent default input commits silence with no indication
+### ~~F4. A silent default input commits silence with no indication~~ — fixed in `1.0.34.0`
 
 `capture_controller.ts:62` requests audio with no `deviceId`, so capture follows
 the OS default input; the absent device picker is a **declared** scope boundary
@@ -388,9 +389,20 @@ silence onto a Pad with no input-level gate, no silence detection and no
 warning. The operator's only signal is the level meter, which F1 and F2 keep
 off screen.
 
-Needs a product decision — device picker, visible input identity, an
-input-level gate before commit, or some combination — not a unilateral fix
-inside an implementation Task. Belongs with D1–D5 in a design review.
+Fixed 2026-08-24 in Product Build `1.0.34.0` / Creator `1.5.3`, implementing
+the [2026-08-24 decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md)
+(option a + b, no device picker): committing a take whose whole-take measured
+peak is exactly zero — digital silence — is refused with an in-panel
+explanation that the input device may have been switched by the system; the
+take is kept intact so the operator can re-record or discard, and only
+strict zero refuses, so quiet-but-nonzero real takes are never blocked. The
+Capture panel also shows the current input device name during recording and
+trimming (falling back to a "Default input" placeholder when the browser
+withholds the label) and shows a non-blocking notice when the device set
+changes mid-recording. The device picker remains a declared scope boundary.
+The physical re-run that proves the gap is closed by hand stays open in
+`2026-08-17-manual-verification-todo.md` (the "F4 resolution lands" trigger
+row).
 
 ### ~~F5. The waveform trim handles cannot be aimed~~ — fixed in `1.0.32.0`
 
@@ -476,8 +488,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    passed all five hearing criteria; the session returned F1–F4, of which
    ~~**F1 + F2 are one cheap fix**~~ — fixed in `1.0.31.0` (2026-08-24);
    ~~F5~~ fixed in `1.0.32.0` (2026-08-24); ~~F3~~ fixed in `1.0.33.0`
-   (2026-08-24). Only the Task 5 physical re-walk remains on the remediation
-   plan.
+   (2026-08-24); ~~F4~~ fixed in `1.0.34.0` (2026-08-24). Only the physical
+   re-walks remain (remediation plan Task 5 and the F4 trigger row).
 2. ~~**B1 + B2 together**~~ — done 2026-08-18. ~~B3~~ done 2026-08-21 in #226
    (`4312a6de`). B4 remains open.
 3. ~~**C1**~~ — invalidated by measurement; superseded by the facade

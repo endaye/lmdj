@@ -19,7 +19,7 @@ import {DiagramFrame} from '@site/src/components/DiagramFrame';
 
 <BuildIdentity />
 
-LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库在 Product Build `1.0.33.0` 把 Creator 的 `DUPLICATE_ID` 错误装配为可恢复呈现：标题命名真实情形、说明无数据丢失，并给出 `Open local Project` 恢复控件，无需 reload（2026-08-17 实机会话发现的 F3 修复）。Product Build `1.0.32.0` 曾把 Sample trim 手柄装配为可见握把加中点划界的指针模型（F5 修复），`1.0.31.0` 曾把 Capture 面板装配为视口锚定的模态会话（F1/F2 修复），`1.0.30.0` 曾装配真实 pre-commit Crop，`1.0.29.0` 曾修正选区波形缩放，`1.0.28.0` 是独立审查未通过且未发布的 branch-local 候选。Creator 已提供本地 Project discovery/open、portable Bundle import、PCM16 WAV import/replace、真实波形与 per-Pad Start/End、四种触发模式、Mute、Volume、Reset、麦克风 Pad Capture（模态面板）、选区缩放、pre-commit Crop 和共享 Runtime 试听；空白 Project 创建、Bundle 导出、Sequence 编辑、生产/云 Provider、离线安装和物理设备验收仍按各自页面的门禁推进。
+LMDJ 的产品方向是 **64-Pad Playable Beat Instrument**。当前仓库在 Product Build `1.0.34.0` 给 Creator 装配提交前输入电平门与可见输入身份：整段数字静音的 take 被拒绝提交、面板内说明原因且 take 保留，recording/trimming 阶段显示当前输入设备名，录音期间设备集合变化给出非阻塞提示（2026-08-17 实机会话发现的 F4 修复，不引入设备选择器）。Product Build `1.0.33.0` 曾把 Creator 的 `DUPLICATE_ID` 错误装配为可恢复呈现（F3 修复），`1.0.32.0` 曾把 Sample trim 手柄装配为可见握把加中点划界的指针模型（F5 修复），`1.0.31.0` 曾把 Capture 面板装配为视口锚定的模态会话（F1/F2 修复），`1.0.30.0` 曾装配真实 pre-commit Crop，`1.0.29.0` 曾修正选区波形缩放，`1.0.28.0` 是独立审查未通过且未发布的 branch-local 候选。Creator 已提供本地 Project discovery/open、portable Bundle import、PCM16 WAV import/replace、真实波形与 per-Pad Start/End、四种触发模式、Mute、Volume、Reset、麦克风 Pad Capture（模态面板）、选区缩放、pre-commit Crop 和共享 Runtime 试听；空白 Project 创建、Bundle 导出、Sequence 编辑、生产/云 Provider、离线安装和物理设备验收仍按各自页面的门禁推进。
 
 :::info[构建身份]
 上方 Build Identity 会明确标出本页属于随 `main` 演进的 current 说明书，还是某个 Product Build 的不可变正式快照；版本下拉菜单用于在两类证据之间切换。

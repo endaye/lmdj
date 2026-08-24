@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useReducer, useRef} from "react";
+import {useCallback, useEffect, useReducer, useRef, useState} from "react";
 
 import {CAPTURE_SAMPLE_RATE, COMMIT_MAX_FRAMES, CaptureBuffer} from "../capture/capture_buffer";
 import {
@@ -17,6 +17,18 @@ import {
 
 const WAVEFORM_BINS = 400;
 const WAVEFORM_HEIGHT = 96;
+
+// F4 (2026-08-24 decision, option a): a whole-take peak of exactly zero is
+// digital silence — the observed symptom of the OS silently switching the
+// default input (macOS Continuity rerouting to an iPhone). The commit is
+// refused with this explanation and the take is kept. Strict zero only:
+// quiet-but-nonzero real takes must never be blocked.
+const SILENT_TAKE_MESSAGE =
+  "Nothing but digital silence was captured. The input device may have been " +
+  "switched by the system. The take is unchanged — discard it to record again.";
+// F4 (option b): non-blocking notice when the device set changes mid-take.
+const DEVICE_CHANGE_NOTICE =
+  "The system's input devices changed during this recording.";
 
 export interface CapturePanelProps {
   padLabel: string;
@@ -71,6 +83,13 @@ export function CapturePanel({
   const primaryRef = useRef<HTMLButtonElement | null>(null);
   const dialogElementRef = useRef<HTMLDialogElement | null>(null);
   const resolvePrimaryFocus = useCallback(() => primaryRef.current, []);
+  // F4 (option b): the capture track's label as the controller reported it
+  // when start() resolved; "" renders as the "Default input" placeholder.
+  const [inputLabel, setInputLabel] = useState("");
+  const [deviceChanged, setDeviceChanged] = useState(false);
+  // F4 (option a): set when Commit was refused for a digitally silent take;
+  // cleared by discard and by starting a new recording.
+  const [silenceRefused, setSilenceRefused] = useState(false);
 
   const requestStop = useCallback((reason: CaptureStopReason) => {
     recordingRef.current = false;
@@ -108,6 +127,20 @@ export function CapturePanel({
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [state.phase, requestStop]);
+
+  // F4 (option b): a device-set change mid-recording is the observable half
+  // of the silent-input-switch failure mode, so surface it as a non-blocking
+  // notice. Scoped to the recording phase exactly like the blur/hidden
+  // listeners above; mediaDevices is absent in some contexts (jsdom, older
+  // browsers), so availability is guarded.
+  useEffect(() => {
+    if (state.phase !== "recording") return;
+    const mediaDevices = navigator.mediaDevices as MediaDevices | undefined;
+    if (mediaDevices === undefined) return;
+    const onDeviceChange = () => setDeviceChanged(true);
+    mediaDevices.addEventListener("devicechange", onDeviceChange);
+    return () => mediaDevices.removeEventListener("devicechange", onDeviceChange);
+  }, [state.phase]);
 
   // P2-D2: opening the panel focuses the phase's primary action (handled by
   // the dialog's resolveInitialFocus), and a phase transition that unmounts
@@ -177,6 +210,9 @@ export function CapturePanel({
     if (controllerRef.current !== null) return;
     dispatch({kind: "record"});
     bufferRef.current = null;
+    setInputLabel("");
+    setDeviceChanged(false);
+    setSilenceRefused(false);
     const listener: CaptureListener = {
       onBatch(channels, peak) {
         // The delivered audio is the single authority on channel width
@@ -209,6 +245,7 @@ export function CapturePanel({
     try {
       await controller.start();
       recordingRef.current = true;
+      setInputLabel(controller.inputLabel);
       dispatch({kind: "granted"});
     } catch (error) {
       controllerRef.current = null;
@@ -245,6 +282,7 @@ export function CapturePanel({
 
   const handleDiscard = () => {
     bufferRef.current = null;
+    setSilenceRefused(false);
     dispatch({kind: "discard"});
   };
 
@@ -258,6 +296,15 @@ export function CapturePanel({
   const handleCommit = async () => {
     const buffer = bufferRef.current;
     if (buffer === null) return;
+    // F4 (option a): refuse to commit a digitally silent take. The gate reads
+    // the WHOLE take's peak — never the current selection — and only strict
+    // zero refuses, so a quiet-but-nonzero take always commits. The take is
+    // kept intact and the phase does not change; the operator can re-record
+    // (via Discard) or keep editing.
+    if (buffer.peak === 0) {
+      setSilenceRefused(true);
+      return;
+    }
     const selection = {startFrame: state.selectionStart, frameCount: state.selectionFrames};
     dispatch({kind: "commit"});
     const result = await onCommit(buffer, selection);
@@ -330,10 +377,21 @@ export function CapturePanel({
     }
   };
 
+  // F4 (option b): the label the browser gave the capture track, or the
+  // placeholder when it withheld one (empty string).
+  const inputLabelText = inputLabel === "" ? "Default input" : inputLabel;
+
   const renderDetails = () => {
     switch (state.phase) {
       case "permission-error":
         return <p role="alert">{state.errorMessage}</p>;
+      case "recording":
+        return (
+          <>
+            <p>Input: {inputLabelText}</p>
+            {deviceChanged && <p role="status">{DEVICE_CHANGE_NOTICE}</p>}
+          </>
+        );
       case "trimming":
       case "commit-error": {
         const maxSelectionFrames = Math.min(
@@ -342,6 +400,8 @@ export function CapturePanel({
         );
         return (
           <>
+            <p>Input: {inputLabelText}</p>
+            {silenceRefused && <p role="alert">{SILENT_TAKE_MESSAGE}</p>}
             {captureStopReasonMessage(state.stopReason) !== null && (
               <p>{captureStopReasonMessage(state.stopReason)}</p>
             )}

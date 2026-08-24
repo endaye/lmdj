@@ -30,6 +30,7 @@ afterAll(() => vi.restoreAllMocks());
 interface FakeController {
   start: ReturnType<typeof vi.fn>;
   stop: ReturnType<typeof vi.fn>;
+  inputLabel: string;
 }
 
 interface ControllerInstance {
@@ -39,12 +40,14 @@ interface ControllerInstance {
 
 function createFactory(options: {
   startImpl?: () => Promise<void>;
+  inputLabel?: string;
 } = {}) {
   const instances: ControllerInstance[] = [];
   const makeController = (listener: CaptureListener): CaptureController => {
     const controller: FakeController = {
       start: vi.fn(options.startImpl ?? (async () => {})),
       stop: vi.fn(async () => {}),
+      inputLabel: options.inputLabel ?? "Test Microphone",
     };
     instances.push({controller, listener});
     return controller as unknown as CaptureController;
@@ -490,6 +493,131 @@ test("a conflict result renders a retry affordance with the buffer intact (behav
   await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
   await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(2));
   expect(onCommit.mock.calls[1]![0]).toBe(onCommit.mock.calls[0]![0]);
+});
+
+test("a digitally silent take is refused at Commit with an explanation, and the take is kept (F4)", async () => {
+  const {makeController, instances} = createFactory();
+  const onCommit = vi.fn(
+    async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+      ({kind: "committed"}) as const,
+  );
+  renderPanel({makeController, onCommit});
+  const {listener} = await startRecording(instances);
+  // The observed F4 failure shape: getUserMedia succeeded, but the whole
+  // take is digital silence (the OS silently switched the default input).
+  act(() => listener.onBatch([new Float32Array(48_000)], 0));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  await userEvent.setup().click(await screen.findByRole("button", {name: "Commit"}));
+
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toContain("Nothing but digital silence was captured");
+  expect(alert.textContent).toContain("switched by the system");
+  expect(onCommit).not.toHaveBeenCalled();
+
+  // The take is intact: Commit stays available and is refused again, and
+  // Discard still clears the take so the operator can re-record.
+  await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
+  expect(onCommit).not.toHaveBeenCalled();
+  expect(screen.getByRole("slider", {name: "Pad A1 Selection length"})).toBeTruthy();
+  await userEvent.setup().click(screen.getByRole("button", {name: "Discard"}));
+  expect(await screen.findByRole("button", {name: "Record into Pad A1"})).toBeTruthy();
+});
+
+test("a quiet-but-nonzero take commits — the gate is strict zero only (F4)", async () => {
+  const {makeController, instances} = createFactory();
+  const onCommit = vi.fn(
+    async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+      ({kind: "committed"}) as const,
+  );
+  renderPanel({makeController, onCommit});
+  const {listener} = await startRecording(instances);
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.0001)], 0.0001));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  await userEvent.setup().click(await screen.findByRole("button", {name: "Commit"}));
+
+  await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+test("the silence gate reads the whole take, not the current selection (F4)", async () => {
+  const {makeController, instances} = createFactory();
+  const onCommit = vi.fn(
+    async (_buffer: CaptureBuffer, _selection: {startFrame: number; frameCount: number}) =>
+      ({kind: "committed"}) as const,
+  );
+  renderPanel({makeController, onCommit});
+  const {listener} = await startRecording(instances);
+  // The take's only nonzero content sits in its first half; the selection
+  // below covers only the silent second half. A selection-scoped gate would
+  // refuse this commit; the whole-take gate must let it through.
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.5)], 0.5));
+  act(() => listener.onBatch([new Float32Array(48_000)], 0));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+
+  fireEvent.change(await screen.findByRole("slider", {name: "Pad A1 Selection length"}), {
+    target: {value: "48000"},
+  });
+  fireEvent.change(screen.getByRole("slider", {name: "Pad A1 Selection start"}), {
+    target: {value: "48000"},
+  });
+
+  await userEvent.setup().click(screen.getByRole("button", {name: "Commit"}));
+
+  await waitFor(() => expect(onCommit).toHaveBeenCalledTimes(1));
+  expect(onCommit.mock.calls[0]![1]).toEqual({startFrame: 48_000, frameCount: 48_000});
+});
+
+test("shows the current input device name during recording and trimming (F4)", async () => {
+  const {makeController, instances} = createFactory({inputLabel: "USB Microphone"});
+  renderPanel({makeController});
+  const {listener} = await startRecording(instances);
+  expect(screen.getByText("Input: USB Microphone")).toBeTruthy();
+
+  act(() => listener.onBatch([new Float32Array(48_000).fill(0.3)], 0.3));
+  fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+  await screen.findByRole("button", {name: "Commit"});
+  expect(screen.getByText("Input: USB Microphone")).toBeTruthy();
+});
+
+test("falls back to a placeholder when the browser withholds the input label (F4)", async () => {
+  const {makeController, instances} = createFactory({inputLabel: ""});
+  renderPanel({makeController});
+  await startRecording(instances);
+  expect(screen.getByText("Input: Default input")).toBeTruthy();
+});
+
+test("a device-set change mid-recording shows a non-blocking notice, and the listener leaves with the recording phase (F4)", async () => {
+  const mediaDevices = new EventTarget();
+  const removeSpy = vi.spyOn(mediaDevices, "removeEventListener");
+  Object.defineProperty(window.navigator, "mediaDevices", {
+    configurable: true,
+    value: mediaDevices,
+  });
+  try {
+    const {makeController, instances} = createFactory();
+    renderPanel({makeController});
+    const {listener} = await startRecording(instances);
+
+    expect(screen.queryByText(/input devices changed/)).toBeNull();
+    act(() => { mediaDevices.dispatchEvent(new Event("devicechange")); });
+    expect(await screen.findByText(/input devices changed/)).toBeTruthy();
+
+    act(() => listener.onBatch([new Float32Array(48_000).fill(0.3)], 0.3));
+    fireEvent.click(screen.getByRole("button", {name: "Stop"}));
+    await screen.findByRole("button", {name: "Commit"});
+
+    // The listener is scoped to the recording phase exactly like the
+    // blur/hidden listeners: recording is over, so it was removed, the
+    // notice is not part of the trimming view, and a later change is a no-op.
+    expect(removeSpy).toHaveBeenCalledWith("devicechange", expect.any(Function));
+    expect(screen.queryByText(/input devices changed/)).toBeNull();
+    act(() => { mediaDevices.dispatchEvent(new Event("devicechange")); });
+    expect(screen.queryByText(/input devices changed/)).toBeNull();
+  } finally {
+    delete (window.navigator as {mediaDevices?: EventTarget}).mediaDevices;
+  }
 });
 
 test("the waveform canvas repaints after remounting from committing into commit-error (Finding 1)", async () => {
