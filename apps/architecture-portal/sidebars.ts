@@ -11,7 +11,7 @@ const sidebars: SidebarsConfig = {
       'core/modules/application-facade', 'core/modules/web-runtime-platform',
     ]},
     {type: 'category', label: 'Hosts', items: [
-      'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-test-host',
+      'hosts/overview', 'hosts/core-cli', 'hosts/core-mcp', 'hosts/native-host',
       'hosts/web-runtime', 'hosts/creator-web',
     ]},
     {type: 'category', label: 'Providers', items: ['providers/overview', 'providers/local-proof']},

@@ -61,7 +61,7 @@
     {"match": {"kind": "prefix", "value": "apps/chameleon-lab/"}, "lanes": ["portal", "chameleon_lab"]},
     {"match": {"kind": "prefix", "value": "apps/core-cli/"}, "lanes": ["portal", "core_ubuntu", "core_macos"]},
     {"match": {"kind": "prefix", "value": "apps/core-mcp/"}, "lanes": ["portal", "core_ubuntu", "core_macos"]},
-    {"match": {"kind": "prefix", "value": "apps/native-test-host/"}, "lanes": ["portal", "core_ubuntu", "core_macos"]},
+    {"match": {"kind": "prefix", "value": "apps/native-host/"}, "lanes": ["portal", "core_ubuntu", "core_macos"]},
     {"match": {"kind": "exact", "value": "packages/README.md"}, "lanes": ["portal"]},
     {"match": {"kind": "prefix", "value": "packages/application-facade/"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
     {"match": {"kind": "prefix", "value": "packages/audio-runtime/"}, "lanes": ["portal", "core_ubuntu", "core_asan", "core_coverage", "core_macos"]},
