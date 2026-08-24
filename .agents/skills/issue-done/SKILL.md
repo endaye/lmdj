@@ -1,9 +1,9 @@
 ---
-name: ship-task
+name: issue-done
 description: Universal skill for shipping a completed local task/issue to main - handles verification, Conventional Commit, push, PR creation with governance declarations, CI tracking, auto-merging, and local worktree/branch cleanup.
 ---
 
-# Ship Task (Local Task → Main & Cleanup)
+# Issue Done (Local Issue/Task → Main & Cleanup)
 
 This skill defines the canonical, universal workflow for taking a locally completed GitHub issue/task in an isolated worktree branch, verifying it, creating a Conventional Commit, pushing, opening a Pull Request, waiting for CI / auto-merging into `main`, and cleaning up the branch and worktree.
 
