@@ -117,6 +117,15 @@ run against the current Build.
 | M5 | External audio interface input | 1.0.23.0 |
 | M6 | Physical MIDI controller | 1.0.22.0 |
 
+M6 application of the carry-forward rule (P1, resolved 2026-08-24): the
+`1.0.21.0` MIDI canary in "Already passed" is a valid historical pass, but
+M6's trigger trees (`input`, `lifecycle`, `audio-path`, `packaging-csp`)
+changed between `56131582` and the current Build — Stage 8/8B alone touched
+the shared input adapter, the session layer, the Creator runtime and the
+packaging tooling. No unchanged-tree derivation is available and no exemption
+was recorded, so **M6 is a re-run** on the Build under test; the canary does
+not satisfy it.
+
 ### Session M-C — macOS Safari
 
 | ID | Journey | Origin |
@@ -197,7 +206,7 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 
 | ID | Decision | What it unblocks | Cost |
 | --- | --- | --- | --- |
-| P1 | Does a physical pass carry forward across Product Builds? | whether M2 and M6 are re-runs or already satisfied; recurs at every Build | short |
+| ~~P1~~ | ~~Does a physical pass carry forward across Product Builds?~~ **resolved 2026-08-24** — the [physical acceptance carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md) ([#236](https://github.com/endaye/lmdj/issues/236)) | answered: M2 has no pass to carry; M6 is a re-run because its trigger trees changed after `1.0.21.0`; every new Build derives its own re-run set per the rule | done |
 | P2 | The capture panel's presentation, focus behaviour, and the replacement trim pointer model | Tasks 2–4 of the Creator UI remediation plan (F1, F2, F3, F5) | short, one design gate |
 | F4 | Device picker, visible input identity, an input-level gate before commit, or some combination | closing the silent-capture gap; the picker's absence is a declared `1.0.23.0` boundary, so this widens scope | design review |
 | F6 | Amplitude ramp policy in the render path — ramp length, zero-crossing snap, crossfade, or a combination | M2 checks 1 and 5, which fail by construction today; needs a realtime-safety review because the render path is allocation-free and lock-free | design review |
@@ -207,10 +216,13 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 | ~~D3~~ | ~~Provider SDK Artifact byte access, both directions~~ | **Decided 2026-08-24** ([#206](https://github.com/endaye/lmdj/issues/206), [decision](../prd/decisions/2026-08-24-provider-artifact-byte-access.md)): capability-gated `ArtifactSource` in provider-sdk, both directions in the SDK layer; implementation deferred to the first Capability that parses structured Artifact bytes; option C permanently rejected | ~~design review~~ |
 | D4 + D5 | Recording concurrency semantics, and Take scope — events only or audio bounce too | **Stage 9 itself** | design review |
 
-P1 in full: the four passes above are bound to `1.0.11.0`, `1.0.20.0`,
-`1.0.21.0` and `1.0.23.0`, and the current Build is `1.0.23.0`. No governance
-document states when a physical pass expires or what kind of change invalidates
-it.
+P1, resolved 2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)):
+the [physical acceptance carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md)
+now states when a physical pass expires and what kind of change invalidates
+it. The four passes above remain bound to `1.0.11.0`, `1.0.20.0`, `1.0.21.0`
+and `1.0.23.0` as historical evidence; none of them is a current-Build claim,
+and any carry to a later Build requires the recorded derivation the rule
+defines.
 
 Full statements of A2, A3 and D1–D5 are in
 [the triage document](2026-08-16-outstanding-work-before-stage9.md); F4 and F6
@@ -229,7 +241,7 @@ untestable by hand.
 | Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. This does **not** re-open M1's hearing result, which stands on its own |
 | F6 ramp policy lands | M2 checks 1 and 5 | both fail by construction today |
 | F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated |
-| Any new Product Build allocated for team testing or release | every row P1 says does not carry forward | unanswered until P1 is settled |
+| Any new Product Build allocated for team testing or release | every row whose trigger-set diff is non-empty since its last pass, derived per the [carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md); the derivation is recorded in the Build's acceptance record | answered 2026-08-24 by P1 ([#236](https://github.com/endaye/lmdj/issues/236)) |
 
 ---
 
@@ -258,9 +270,11 @@ omitted and not called passed.
    F6 makes checks 1 and 5 fail by construction. **M3** is independent of both
    and can run at any time — it is the only verification row available today
    with no blocker.
-2. **P2**, then **P1** — P2 is the design gate that unblocks four machine
-   Tasks and is the shortest path to making the Creator usable by hand; P1
-   determines whether the remaining verification list is thirteen rows or six.
+2. **P2** — the design gate that unblocks four machine Tasks and is the
+   shortest path to making the Creator usable by hand. ~~P1~~ resolved
+   2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
+   unless a recorded unchanged-tree derivation carries them, so M6 stays on
+   the list and every future Build derives its own re-run set.
 3. **F6**, then **D4 + D5** — F6 unblocks the rest of M2; D4 and D5 are what
    Stage 9 itself waits on.
 4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
