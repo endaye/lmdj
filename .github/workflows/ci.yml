@@ -284,7 +284,29 @@ jobs:
         uses: ./.github/actions/configure-build-acceleration
         with:
           use-ccache: false
+      # This lane deliberately skips `verify-core-dependencies.sh` and every
+      # fixture-generation step: packaging runs only the unit and component
+      # tiers, and the LFS fixtures checked out above are sufficient for them.
+      # A generated fixture entering either tier breaks that assumption and
+      # must add its generation step here.
       - run: scripts/core.sh package
+      # The archive itself dies with the runner -- release assets are rebuilt
+      # and signed by `release.sh prepare` on the operator machine. These few
+      # kilobytes are the digest-level cross-check between what CI proved
+      # packageable and what an operator later ships, and the baseline for
+      # multi-platform distribution. They are comparison evidence, never a
+      # release input, so this retention is not the release-evidence contract
+      # that `tools/release/ci_evidence.py` reads.
+      - name: Retain the packaging digest evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: core-package-digest-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/core/dist/*.build-manifest.json
+            build/core/dist/*.zip.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
   web-toolchain-conformance:
     # First lane cut over to the dedicated CI-only netcup node. The earlier

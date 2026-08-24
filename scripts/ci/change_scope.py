@@ -351,11 +351,17 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
     if not isinstance(known, list) or len(known) != len(set(known)) or not all(isinstance(item, str) and item for item in known):
         raise ValueError("invalid known top levels")
     for rule in policy["rules"]:
-        if not isinstance(rule, dict) or set(rule) != {"match", "lanes"}:
+        # A routing rule may carry a `note`: the load-bearing assumption behind
+        # its lane set, stated where the next editor of the rule reads it. JSON
+        # has no comments, and a rule whose coverage comes from somewhere else
+        # is exactly the kind of thing that is silently invalidated.
+        if not isinstance(rule, dict) or set(rule) not in ({"match", "lanes"}, {"match", "lanes", "note"}):
             raise ValueError("rule schema is not closed")
         _validate_match(rule["match"])
         if not isinstance(rule["lanes"], list) or not rule["lanes"] or not set(rule["lanes"]).issubset(lane_set):
             raise ValueError("rule references unknown lane")
+        if "note" in rule and (not isinstance(rule["note"], str) or not rule["note"]):
+            raise ValueError("invalid rule note")
     for rule in policy["full_rules"]:
         if not isinstance(rule, dict) or set(rule) != {"match", "reason"}:
             raise ValueError("full rule schema is not closed")

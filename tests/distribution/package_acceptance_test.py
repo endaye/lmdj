@@ -224,6 +224,7 @@ def main() -> int:
             else "liblmdj_core_c.so"
         )
         expected = {
+            "LICENSE",
             "README.md",
             "bin/lmdj-core",
             "bin/lmdj-core-mcp",

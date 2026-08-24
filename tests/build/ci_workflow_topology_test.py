@@ -705,6 +705,38 @@ class CiWorkflowTopologyTest(unittest.TestCase):
         self.assertIn("if-no-files-found: error", job)
         self.assertIn("path: ${{ runner.temp }}/ci-scope.json", job)
 
+    def test_package_lane_retains_its_digest_evidence(self) -> None:
+        """The archive dies with the runner; its digests must outlive it.
+
+        Release assets are rebuilt and signed by `release.sh prepare` on the
+        operator machine. Without these few kilobytes there is no digest-level
+        cross-check between what CI proved packageable and what an operator
+        later ships, and no baseline for multi-platform distribution. This is
+        comparison evidence, not a release input, so it is deliberately not
+        the manifest `tools/release/ci_evidence.py` reads.
+        """
+        job = self.workflow_job("package")
+        self.assertIn("uses: actions/upload-artifact@v4", job)
+        self.assertIn("name: core-package-digest-${{", job)
+        self.assertIn("build/core/dist/*.build-manifest.json", job)
+        self.assertIn("build/core/dist/*.zip.sha256", job)
+        self.assertNotIn("build/core/dist/*.zip\n", job)
+        self.assertIn("if-no-files-found: error", job)
+        self.assertIn("retention-days: 14", job)
+
+    def test_package_lane_states_its_fixture_and_dependency_assumption(self) -> None:
+        """This lane skips dependency verification and fixture generation.
+
+        Both are safe only because `scripts/core.sh package` runs the unit and
+        component tiers against LFS-checked fixtures. A generated fixture
+        entering either tier invalidates that silently, so the assumption is
+        stated where the next editor of the job will read it.
+        """
+        job = self.workflow_job("package")
+        self.assertIn("verify-core-dependencies.sh", job)
+        self.assertIn("generated fixture", job)
+        self.assertIn("unit and component", job)
+
     def test_push_classification_uses_the_exact_before_range(self) -> None:
         job = self.workflow_job("change-scope")
         self.assertIn(

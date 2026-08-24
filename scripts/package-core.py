@@ -183,6 +183,14 @@ def stage_package(
         package_root / "README.md",
         0o644,
     )
+    # Distribution metadata under docs/governance/distribution-contents.md
+    # section 2: the terms the archive is distributed under travel with the
+    # bytes, so an extraction outside the team carries its own licence.
+    copy_file(
+        REPO_ROOT / "LICENSE",
+        package_root / "LICENSE",
+        0o644,
+    )
 
 
 def validate_manifest(manifest: dict, package_root: Path, version: str) -> None:

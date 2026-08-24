@@ -21,9 +21,9 @@ Module 的成员资格决策。
 1. **Assembly 成员产物**：它是 active Product Assembly
    （`products/lmdj/assembly.json` + `assembly.lock.json`）锁定的 Module、
    Host 或 Provider 的构建产物或运行必需清单；或
-2. **分发元数据**：校验和使用该包本身所必需的文件（Build Manifest、
-   Assembly/lock 副本、Contract schema、包 README、启动器与分离的
-   SHA-256 摘要）。
+2. **分发元数据**：校验、使用或合法再分发该包本身所必需的文件（Build
+   Manifest、Assembly/lock 副本、Contract schema、包 README、许可证文件
+   `LICENSE`、启动器与分离的 SHA-256 摘要）。
 
 推论：
 

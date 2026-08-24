@@ -383,6 +383,45 @@ class ChangeScopeTest(unittest.TestCase):
                         event_name="pull_request", draft=False, labels=(),
                     )
 
+    def test_packaging_rule_states_the_assumption_its_lane_set_rests_on(self):
+        """`packages/**` reaches no packaging lane; say so where the rule is read.
+
+        Packaging correctness for `packages/**` is proved only by
+        `tests/distribution/package_acceptance_test.py` running inside
+        `scripts/core.sh proof` on the core lanes. Nothing in this policy says
+        so, so moving that acceptance test out of proof would silently leave
+        `packages/**` with no packaging coverage.
+        """
+        rule = next(
+            rule for rule in self.policy["rules"]
+            if rule["match"] == {"kind": "prefix", "value": "packaging/core/"}
+        )
+        self.assertIn("package_acceptance_test.py", rule.get("note", ""))
+        self.assertNotIn(
+            "package",
+            self.true_lanes(self.classify(["packages/foundation/src/artifact.cpp"])),
+        )
+
+    def test_a_rule_note_is_optional_but_must_be_a_nonempty_string(self):
+        for name, note in {"empty": "", "wrong type": 7}.items():
+            with self.subTest(name=name):
+                policy = copy.deepcopy(self.policy)
+                policy["rules"][0]["note"] = note
+                with self.assertRaises(ValueError):
+                    self.module.classify(
+                        policy, changed(self.module, "docs/guide.md"),
+                        base_sha="a" * 40, head_sha="b" * 40,
+                        event_name="pull_request", draft=False, labels=(),
+                    )
+        policy = copy.deepcopy(self.policy)
+        policy["rules"][0]["surprise"] = "unknown key"
+        with self.assertRaises(ValueError):
+            self.module.classify(
+                policy, changed(self.module, "docs/guide.md"),
+                base_sha="a" * 40, head_sha="b" * 40,
+                event_name="pull_request", draft=False, labels=(),
+            )
+
     def test_every_case_uses_union_semantics(self):
         for path, expected in CASES.items():
             with self.subTest(path=path):
