@@ -282,6 +282,7 @@ def package(
         f"lmdj-core-{version}-{platform_name}-{architecture}"
     )
     archive = output_dir / f"{package_name}.zip"
+    manifest_path = output_dir / f"{package_name}.build-manifest.json"
     with tempfile.TemporaryDirectory(
         prefix=".lmdj-core-package-",
         dir=output_dir,
@@ -289,20 +290,28 @@ def package(
         package_root = Path(temporary) / package_name
         package_root.mkdir()
         stage_package(package_root, build_root, library_name)
+        # Stage the Manifest outside the package root and publish it only
+        # after the archive succeeds, so a failed package leaves no partial
+        # asset set behind.
+        staged_manifest = Path(temporary) / manifest_path.name
         manifest = generate_manifest(
             REPO_ROOT / "products/lmdj/version.json",
             REPO_ROOT / "products/lmdj/assembly.json",
             REPO_ROOT / "products/lmdj/assembly.lock.json",
             "canary",
             package_root,
-            package_root / "build-manifest.json",
+            staged_manifest,
         )
-        (package_root / "build-manifest.json").chmod(0o644)
+        staged_manifest.chmod(0o644)
         validate_manifest(manifest, package_root, str(version))
         create_zip(package_root, archive)
-    # A detached digest is the only out-of-band integrity signal a consumer
-    # gets: build-manifest.json lives inside the archive, so anyone who can
-    # rewrite the archive can rewrite it too.
+        os.replace(staged_manifest, manifest_path)
+    # The Manifest ships beside the archive, not inside it: an archived copy
+    # carries build_time, which would make the same source produce different
+    # archive bytes on every build, and anyone who can rewrite the archive
+    # could rewrite it too. Detached, it keeps build_time per
+    # version-management.md §4 while the payload-only archive stays
+    # reproducible, and its per-file digests become an out-of-band signal.
     digest = hashlib.sha256(archive.read_bytes()).hexdigest()
     checksum = archive.with_name(archive.name + ".sha256")
     checksum.write_text(f"{digest}  {archive.name}\n", encoding="utf-8")
