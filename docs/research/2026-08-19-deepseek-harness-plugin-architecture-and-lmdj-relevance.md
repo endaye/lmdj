@@ -63,7 +63,7 @@ DeepSeek Harness（下称 dsh）宣称的「一切皆插件」在产品层**基�
 - 不承诺任何 dsh 代码可直接引入 LMDJ。dsh 是 TypeScript/Node 生态，LMDJ Core 是 C++20；不存在直接复用路径。
 - 不评价 dsh 的产品质量、性能或商业前景。仓库内 `BENCHMARK.md` 只有三行说明、无任何数据，本报告不推测其性能。
 - 不构成对 LMDJ 规格 §12.3（Job）、§12.4（Event）的设计批准。相关约束以采纳文档为准。
-- 不涉及 Provider 字节访问缺口的裁定，该问题归属 `docs/prd/questions/provider-artifact-byte-access.md`。
+- 不涉及 Provider 字节访问缺口的裁定，该问题已由 `docs/prd/decisions/2026-08-24-provider-artifact-byte-access.md` 裁定。
 
 ## 3. dsh 是什么
 
