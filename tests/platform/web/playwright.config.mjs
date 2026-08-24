@@ -6,8 +6,6 @@ import { defineConfig, devices } from "@playwright/test";
 import { ensureCaptureFixture } from "./creator/fixtures/make_capture_fixture.mjs";
 
 const webRoot = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(webRoot, "../../..");
-const cleanRoom = process.env.LMDJ_WEB_HOST_CLEAN_ROOM === "1";
 const creatorExternal = process.env.LMDJ_CREATOR_WEB_EXTERNAL_SERVER === "1";
 const fullChromium = process.env.LMDJ_WEB_HOST_FULL_CHROMIUM === "1" ||
   process.env.LMDJ_CREATOR_WEB_FULL_CHROMIUM === "1";
@@ -19,38 +17,24 @@ const captureSpec = /creator_web_capture\.spec\.mjs/;
 const captureFixture = ensureCaptureFixture(
   resolve(webRoot, "creator/fixtures/capture-440hz-2s-mono-48k.wav"),
 );
-const externalServer =
-  cleanRoom || creatorExternal ||
-  process.env.LMDJ_WEB_HOST_EXTERNAL_SERVER === "1";
-const port = Number.parseInt(process.env.LMDJ_WEB_TOOLCHAIN_PORT ?? "4174", 10);
-if (!Number.isInteger(port) || port < 1 || port > 65535) {
-  throw new Error(`invalid LMDJ_WEB_TOOLCHAIN_PORT: ${process.env.LMDJ_WEB_TOOLCHAIN_PORT}`);
-}
-const baseURL = `http://127.0.0.1:${port}`;
-if (externalServer && !process.env.LMDJ_WEB_HOST_BASE_URL) {
-  if (!creatorExternal || !process.env.LMDJ_CREATOR_WEB_BASE_URL) {
-    throw new Error("an owned external-server base URL is required");
-  }
-}
+// Every proof owns the server it drives: the lane starts one on a
+// kernel-assigned ephemeral port and passes its base URL in. Playwright's
+// managed `webServer` cannot work that way — it needs the URL before the
+// server exists, so it can only bind a fixed port. Two runner services on one
+// host then contend for that port, and a server leaked by a crashed lane keeps
+// holding it and fails every later lane (issue #297). So there is no managed
+// server here and no default base URL: an unowned run fails closed instead of
+// silently proving itself against whatever already listens.
 const browserProofBaseURL = creatorExternal
   ? process.env.LMDJ_CREATOR_WEB_BASE_URL
-  : process.env.LMDJ_WEB_HOST_BASE_URL ?? baseURL;
-const webServer = externalServer
-  ? undefined
-  : {
-      command: [
-        "python3",
-        resolve(webRoot, "toolchain/server.py"),
-        "--root",
-        resolve(repoRoot, "build/web/toolchain"),
-        "--port",
-        String(port),
-      ].join(" "),
-      url: `${baseURL}/health.json`,
-      reuseExistingServer: false,
-      timeout: 120_000,
-    };
-
+  : process.env.LMDJ_WEB_HOST_BASE_URL;
+if (!browserProofBaseURL) {
+  throw new Error(
+    "an owned external-server base URL is required: set " +
+      "LMDJ_WEB_HOST_BASE_URL, or LMDJ_CREATOR_WEB_BASE_URL together with " +
+      "LMDJ_CREATOR_WEB_EXTERNAL_SERVER=1",
+  );
+}
 
 export default defineConfig({
   testDir: webRoot,
@@ -71,7 +55,6 @@ export default defineConfig({
     baseURL: browserProofBaseURL,
     trace: "retain-on-failure",
   },
-  webServer,
   projects: [
     {
       name: "chromium",
