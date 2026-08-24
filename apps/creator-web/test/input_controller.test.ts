@@ -117,7 +117,7 @@ function fixture() {
       product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
       host_version: "1.5.0",
-      platform_version: "0.3.4",
+      platform_version: "0.3.5",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

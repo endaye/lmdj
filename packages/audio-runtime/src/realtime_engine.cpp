@@ -80,6 +80,9 @@ bool is_looping(domain::TriggerMode mode) noexcept {
          mode == domain::TriggerMode::loop_toggle;
 }
 
+constexpr float kRealtimeRampScale =
+    1.0F / static_cast<float>(kRealtimeRampFrames);
+
 }  // namespace
 
 std::uint64_t RealtimeEngine::legacy_availability_mask() const noexcept {
@@ -192,9 +195,24 @@ bool RealtimeEngine::publish_voice_state(
   return false;
 }
 
+void RealtimeEngine::deactivate_voice(Voice& voice) noexcept {
+  voice.active = false;
+  release_voice_bank(voice);
+  cancelled_voices_.fetch_add(1, std::memory_order_relaxed);
+  active_voices_.fetch_sub(1, std::memory_order_relaxed);
+}
+
 void RealtimeEngine::stop_voice(
     Voice& voice, std::uint64_t runtime_frame) noexcept {
   if (!voice.active) {
+    return;
+  }
+  if (voice.releasing) {
+    // A second stop (stop_all after a gate release, a toggle re-press, or
+    // voice stealing) hard-kills the tail. The stopped edge was already
+    // published when the release began, so only the physical deactivation
+    // remains.
+    deactivate_voice(voice);
     return;
   }
   static_cast<void>(publish_voice_state(
@@ -202,10 +220,10 @@ void RealtimeEngine::stop_voice(
       RuntimeVoiceState::stopped,
       runtime_frame,
       static_cast<std::uint32_t>(voice.cursor)));
-  voice.active = false;
-  release_voice_bank(voice);
-  cancelled_voices_.fetch_add(1, std::memory_order_relaxed);
-  active_voices_.fetch_sub(1, std::memory_order_relaxed);
+  // The voice keeps rendering a kRealtimeRampFrames tail to avoid a step
+  // discontinuity; the logical stop (publication) has already happened.
+  voice.releasing = true;
+  voice.release_frames_remaining = kRealtimeRampFrames;
 }
 
 void RealtimeEngine::capture_voice_start(
@@ -679,6 +697,9 @@ void RealtimeEngine::render(
         playback.trigger_mode,
         false,
         bank_slot,
+        kRealtimeRampFrames,
+        false,
+        0,
     };
     if (!publish_voice_state(
             *voice,
@@ -712,16 +733,54 @@ void RealtimeEngine::render(
       continue;
     }
     for (std::uint32_t frame = 0; frame < frames; ++frame) {
-      const auto value = voice.samples[voice.cursor] * voice.gain;
+      // F6 amplitude ramps: attack from the per-voice counter (a looping
+      // voice attacks only on its initial trigger), a stateless boundary
+      // fade over the last kRealtimeRampFrames before end_frame for
+      // non-looping voices, and the stop_voice release tail. Each component
+      // is skipped at full scale so unramped output stays bit-identical.
+      float ramp = 1.0F;
+      if (voice.attack_frames_remaining != 0) {
+        ramp *= static_cast<float>(
+                    kRealtimeRampFrames - voice.attack_frames_remaining) *
+                kRealtimeRampScale;
+        --voice.attack_frames_remaining;
+      }
+      if (!is_looping(voice.trigger_mode)) {
+        const auto boundary_remaining = voice.end_frame - voice.cursor;
+        if (boundary_remaining < kRealtimeRampFrames) {
+          ramp *=
+              static_cast<float>(boundary_remaining) * kRealtimeRampScale;
+        }
+      }
+      if (voice.releasing &&
+          voice.release_frames_remaining < kRealtimeRampFrames) {
+        ramp *=
+            static_cast<float>(voice.release_frames_remaining) *
+            kRealtimeRampScale;
+      }
+      const auto value = voice.samples[voice.cursor] * voice.gain * ramp;
       left[frame] += value;
       right[frame] += value;
       ++voice.cursor;
+      if (voice.releasing &&
+          --voice.release_frames_remaining == 0) {
+        // The release tail ends at exact zero gain; deactivate immediately
+        // so no denormal residue lingers.
+        deactivate_voice(voice);
+        break;
+      }
       if (voice.cursor != voice.end_frame) {
         continue;
       }
       if (is_looping(voice.trigger_mode)) {
         voice.cursor = voice.start_frame;
         continue;
+      }
+      if (voice.releasing) {
+        // The tail reached end_frame: the terminal state was already
+        // published as stopped at stop initiation, so no completed edge.
+        deactivate_voice(voice);
+        break;
       }
       static_cast<void>(publish_voice_state(
           voice,

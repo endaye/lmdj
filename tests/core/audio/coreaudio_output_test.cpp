@@ -31,6 +31,10 @@ using lmdj::audio::TriggerEvent;
 using lmdj::audio::apple::CoreAudioState;
 using lmdj::audio::apple::CoreAudioOutput;
 using lmdj::audio::apple::detail::CoreAudioApi;
+
+// F6 ramp: one ramp component at n frames is n * (1/96).
+constexpr float kRampScale =
+    1.0F / static_cast<float>(lmdj::audio::kRealtimeRampFrames);
 using lmdj::audio::apple::detail::CoreAudioCallbackContext;
 using lmdj::audio::apple::detail::CoreAudioOutputStateMachine;
 using lmdj::audio::apple::detail::CoreAudioServices;
@@ -628,7 +632,7 @@ void terminal_destruction_keeps_disabled_callback_refcon_alive() {
 
 void retired_callbacks_stay_inert_across_restart() {
   Harness harness;
-  const std::array<float, 1> sample{0.625F};
+  const std::array<float, 2> sample{0.625F, 0.625F};
   LMDJ_CHECK(harness.engine.load_sample(0, sample).has_value());
   LMDJ_CHECK(harness.output->start().has_value());
 
@@ -644,8 +648,8 @@ void retired_callbacks_stay_inert_across_restart() {
   LMDJ_CHECK(harness.engine.enqueue(TriggerEvent{1, 0, 127}) ==
              EnqueueResult::accepted);
 
-  std::array<float, 1> left{0.75F};
-  std::array<float, 1> right{-0.75F};
+  std::array<float, 2> left{0.75F, 0.75F};
+  std::array<float, 2> right{-0.75F, -0.75F};
   StereoBufferList storage{
       2,
       {{1, static_cast<UInt32>(sizeof(left)), left.data()},
@@ -653,10 +657,10 @@ void retired_callbacks_stay_inert_across_restart() {
   };
   auto* const buffers = reinterpret_cast<AudioBufferList*>(&storage);
   LMDJ_CHECK(
-      invoke_render_callback(old_render, old_render_context, 1, buffers) ==
+      invoke_render_callback(old_render, old_render_context, 2, buffers) ==
       noErr);
-  LMDJ_CHECK((left == std::array<float, 1>{0.0F}));
-  LMDJ_CHECK((right == std::array<float, 1>{0.0F}));
+  LMDJ_CHECK((left == std::array<float, 2>{0.0F, 0.0F}));
+  LMDJ_CHECK((right == std::array<float, 2>{0.0F, 0.0F}));
   LMDJ_CHECK(harness.engine.telemetry().callback_count == 0);
 
   invoke_overload_callback(old_overload, old_overload_context);
@@ -668,8 +672,13 @@ void retired_callbacks_stay_inert_across_restart() {
 
   left.fill(0.0F);
   right.fill(0.0F);
-  LMDJ_CHECK(harness.services->render(1, buffers) == noErr);
-  LMDJ_CHECK(left == sample && right == sample);
+  LMDJ_CHECK(harness.services->render(2, buffers) == noErr);
+  // F6 ramp: the live callback renders through the engine, so the first
+  // frame carries attack gain 0/96 and the second attack 1/96 times the
+  // boundary fade 1/96 (the sample is 2 frames long).
+  const std::array<float, 2> expected{
+      0.0F, 0.625F * ((1.0F * kRampScale) * (1.0F * kRampScale))};
+  LMDJ_CHECK(left == expected && right == expected);
   harness.services->notify_overload();
   LMDJ_CHECK(harness.output->telemetry().device_overloads == 1);
   LMDJ_CHECK(harness.output->stop().has_value());
@@ -1361,7 +1370,7 @@ void failed_listener_removal_is_terminal() {
 
 void failed_disposal_is_terminal_and_preserves_engine_samples() {
   Harness harness;
-  const std::array<float, 1> sample{0.375F};
+  const std::array<float, 2> sample{0.375F, 0.375F};
   LMDJ_CHECK(harness.engine.load_sample(0, sample).has_value());
   harness.services->fail_once("start");
   harness.services->fail_once("dispose");
@@ -1373,10 +1382,15 @@ void failed_disposal_is_terminal_and_preserves_engine_samples() {
   LMDJ_CHECK(harness.engine.telemetry().state == RealtimeState::running);
   LMDJ_CHECK(harness.engine.enqueue(TriggerEvent{1, 0, 127}) ==
              EnqueueResult::accepted);
-  std::array<float, 1> left{};
-  std::array<float, 1> right{};
-  harness.engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == sample[0] && right[0] == sample[0]);
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  harness.engine.render(left.data(), right.data(), 2);
+  // F6 ramp: attack 0/96 on the first frame, then attack 1/96 times the
+  // boundary fade 1/96 on the second frame of the 2-frame sample.
+  LMDJ_CHECK(left[0] == 0.0F && right[0] == 0.0F);
+  LMDJ_CHECK(
+      left[1] == sample[1] * ((1.0F * kRampScale) * (1.0F * kRampScale)) &&
+      right[1] == left[1]);
 
   const auto terminal_start = harness.output->start();
   const auto terminal_stop = harness.output->stop();
@@ -1391,7 +1405,7 @@ void failed_disposal_is_terminal_and_preserves_engine_samples() {
 
 void failed_stop_disposal_is_terminal_and_preserves_engine_samples() {
   Harness harness;
-  const std::array<float, 1> sample{-0.625F};
+  const std::array<float, 2> sample{-0.625F, -0.625F};
   LMDJ_CHECK(harness.engine.load_sample(0, sample).has_value());
   LMDJ_CHECK(harness.output->start().has_value());
   harness.services->fail_once("dispose");
@@ -1403,10 +1417,15 @@ void failed_stop_disposal_is_terminal_and_preserves_engine_samples() {
   LMDJ_CHECK(harness.engine.telemetry().state == RealtimeState::running);
   LMDJ_CHECK(harness.engine.enqueue(TriggerEvent{2, 0, 127}) ==
              EnqueueResult::accepted);
-  std::array<float, 1> left{};
-  std::array<float, 1> right{};
-  harness.engine.render(left.data(), right.data(), 1);
-  LMDJ_CHECK(left[0] == sample[0] && right[0] == sample[0]);
+  std::array<float, 2> left{};
+  std::array<float, 2> right{};
+  harness.engine.render(left.data(), right.data(), 2);
+  // F6 ramp: attack 0/96 on the first frame, then attack 1/96 times the
+  // boundary fade 1/96 on the second frame of the 2-frame sample.
+  LMDJ_CHECK(left[0] == 0.0F && right[0] == 0.0F);
+  LMDJ_CHECK(
+      left[1] == sample[1] * ((1.0F * kRampScale) * (1.0F * kRampScale)) &&
+      right[1] == left[1]);
 }
 
 void renders_engine_output_and_reports_callback_telemetry() {
@@ -1430,7 +1449,11 @@ void renders_engine_output_and_reports_callback_telemetry() {
   };
   auto* buffers = reinterpret_cast<AudioBufferList*>(&storage);
   LMDJ_CHECK(harness.services->render(2, buffers) == noErr);
-  LMDJ_CHECK(left == sample && right == sample);
+  // F6 ramp: attack 0/96 on the first frame, then attack 1/96 times the
+  // boundary fade 1/96 on the second frame of the 2-frame sample.
+  const std::array<float, 2> expected{
+      0.0F, -0.5F * ((1.0F * kRampScale) * (1.0F * kRampScale))};
+  LMDJ_CHECK(left == expected && right == expected);
   LMDJ_CHECK(harness.clock->observed_begin == 1);
   LMDJ_CHECK(harness.clock->observed_end == 2);
 

@@ -192,8 +192,10 @@ void test_digest_and_exact_identity_mismatches_fail_closed() {
                                         .get_ref<const std::string&>();
   for (const auto& [manifest, digest] : {
            std::pair{valid, std::string(64, '0')},
-           std::pair{canonical_manifest("1.0.34.0"),
-                     sha256(canonical_manifest("1.0.34.0"))},
+           // A synthetic, never-allocated Product Build: any manifest naming
+           // a build other than the expected one is a mismatch.
+           std::pair{canonical_manifest("999.0.0.0"),
+                     sha256(canonical_manifest("999.0.0.0"))},
            std::pair{canonical_manifest(configuration.product_build, "1.0.3"),
                      sha256(canonical_manifest(
                          configuration.product_build, "1.0.3"))},

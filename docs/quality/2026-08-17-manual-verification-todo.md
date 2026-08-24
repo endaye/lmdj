@@ -106,7 +106,7 @@ run against the current Build.
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. The F6 ramp landed in Product Build `1.0.35.0` (audio-runtime `0.5.1`), so checks 1 and 5 are ready to re-run — with check 5 (loop seam) EXPECTED to remain clicky until the deferred crossfade lands. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
 | M3 | Pointer input | inherited from Stage 6/7 | not started |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
@@ -227,7 +227,7 @@ untestable by hand.
 | Trigger | Rows to run | Why |
 | --- | --- | --- |
 | Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. F1 + F2 landed 2026-08-24 in Product Build `1.0.31.0` / Creator `1.5.0` (Task 2: viewport-anchored modal panel, focus follows the primary action); F5 landed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.1` (Task 3: visible-grip midpoint-partitioned trim handles); F3 landed 2026-08-24 in Product Build `1.0.33.0` / Creator `1.5.2` (Task 4: recoverable `DUPLICATE_ID` presentation with an `Open local Project` control). All four fixes are now landed, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
-| F6 ramp policy lands | M2 checks 1 and 5 | both fail by construction today |
+| F6 ramp policy lands | M2 checks 1 and 5 | both failed by construction before the fix. The ramp landed 2026-08-24 in Product Build `1.0.35.0` / audio-runtime `0.5.1` (96-frame linear attack, boundary fade and `stop_voice` release tail), so the re-run is ready. Check 1 (trim boundaries) should now be clean; check 5 (loop seam) is EXPECTED to remain clicky — the loop-seam crossfade is explicitly deferred by the decision, so record that outcome as expected, not as a new regression |
 | F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution landed 2026-08-24 in Product Build `1.0.34.0` / Creator `1.5.3` (digital-silence commit gate plus visible input identity), so the re-run is ready |
 | Any new Product Build allocated for team testing or release | every row P1 says does not carry forward | unanswered until P1 is settled |
 
@@ -253,13 +253,12 @@ omitted and not called passed.
 ## Suggested order
 
 1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 stopped at its
-   first check** and should not resume until F5 and F6 are resolved: F5 makes
-   the trim controls unaimable, so checks 1–2 cannot be performed reliably, and
-   F6 makes checks 1 and 5 fail by construction. **M3** is independent of both
-   and can run at any time — it is the only verification row available today
-   with no blocker.
+   first check**; both blockers are now landed — F5 in `1.0.32.0` and F6 in
+   `1.0.35.0` — so checks 1–2 can be performed and checks 1 and 5 re-run,
+   with check 5 (loop seam) expected to remain clicky until the deferred
+   crossfade lands. **M3** is independent of both and can run at any time.
 2. ~~**P2**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md)); the Creator UI remediation branch is unblocked. **P1** — determines whether the remaining verification list is thirteen rows or six.
-3. ~~**F6**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)); M2 can resume once the ramp lands. **D4 + D5** — what
+3. ~~**F6**~~ — settled 2026-08-24 ([decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)); the ramp landed in Product Build `1.0.35.0` / audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. **D4 + D5** — what
    Stage 9 itself waits on.
 4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
    distribution.

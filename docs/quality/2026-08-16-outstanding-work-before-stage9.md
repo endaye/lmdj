@@ -323,13 +323,16 @@ traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
 F1 and F2 are fixed in Product Build `1.0.31.0` (Creator `1.5.0`), F5 in
 `1.0.32.0` (Creator `1.5.1`), F3 in `1.0.33.0` (Creator `1.5.2`), F4 in
-`1.0.34.0` (Creator `1.5.3`); the rest are not fixed.
+`1.0.34.0` (Creator `1.5.3`), F6 in `1.0.35.0` (audio-runtime `0.5.1`) — all
+six session defects are fixed.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
 F4 and F6 each needed a product decision and were explicitly excluded from
-that plan; both decisions landed 2026-08-24, and F4 is implemented in
-[`2026-08-24-lmdj-capture-input-gate-and-identity.md`](../superpowers/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md).
+that plan; both decisions landed 2026-08-24, F4 is implemented in
+[`2026-08-24-lmdj-capture-input-gate-and-identity.md`](../superpowers/plans/2026-08-24-lmdj-capture-input-gate-and-identity.md)
+and F6 in
+[`2026-08-24-lmdj-render-path-amplitude-ramp.md`](../superpowers/plans/2026-08-24-lmdj-render-path-amplitude-ramp.md).
 
 ### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.31.0`
 
@@ -437,7 +440,7 @@ Scoped in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
 with F1–F3.
 
-### F6. The render path has no amplitude ramp anywhere
+### ~~F6. The render path has no amplitude ramp anywhere~~ — fixed in `1.0.35.0`
 
 Trimming a Sample and triggering it produces audible clicks at the trim
 boundaries — the first check of row M2, 2026-08-17.
@@ -453,10 +456,22 @@ discontinuity, which is what the click is.
 The same absence predicts clicks at the loop seam and on releasing a held
 voice; neither has been tested yet.
 
-Needs a Core/DSP product decision — ramp length, zero-crossing snap, crossfade,
-or a combination — with a realtime-safety review, since the render path is
-allocation-free and lock-free and any ramp state must stay inside that
-contract. Explicitly out of scope for the Creator UI plan.
+Fixed 2026-08-24 in Product Build `1.0.35.0` (audio-runtime `0.5.1`),
+implementing the
+[2026-08-24 decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)
+(96-frame linear attack/release, no zero-crossing snap): the realtime render
+path now ramps voice gain from 0 to full over exactly 96 frames (2 ms at the
+engine's fixed 48 kHz) from trigger, fades non-looping voices linearly to
+zero across the last 96 frames before `end_frame`, and turns `stop_voice`
+into a 96-frame release tail with the `stopped` publication timing unchanged
+(published at stop initiation) — a second stop or a steal hard-kills a
+releasing voice. All ramp state is POD fields on the voice; the render path
+stays allocation-free and lock-free. The loop-seam crossfade remains
+**deferred** by the decision: M2 check 5 (loop seam) is EXPECTED to remain
+clicky until it lands — that expectation is recorded here, not hidden. The
+human re-run of M2 checks 1 and 5 stays open in
+`2026-08-17-manual-verification-todo.md` (the "F6 ramp policy lands" trigger
+row).
 
 ---
 
