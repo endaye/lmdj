@@ -246,6 +246,9 @@ def main() -> int:
             if path.is_file()
         }
         assert actual == expected, (actual - expected, expected - actual)
+        # The closed inventory already fails on an absent LICENSE; this also
+        # fails a LICENSE whose bytes are not the ones this repository ships.
+        assert sha256(package_root / "LICENSE") == sha256(REPO_ROOT / "LICENSE")
         for path in package_root.rglob("*"):
             assert not path.is_symlink(), path
         for relative in (
