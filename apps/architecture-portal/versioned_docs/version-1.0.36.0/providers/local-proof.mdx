@@ -1,0 +1,23 @@
+---
+title: Local Proof Providers
+area: providers
+status: implemented
+owners: [providers]
+providers: [local.proof.success, local.proof.failure]
+source_paths: [providers/local-proof-success, providers/local-proof-failure, tests/core/provider]
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity kind="providers" id="local.proof.success" />
+
+## 目的
+成功 Provider 产生确定性 Artifact，失败 Provider 产生规范错误，共同证明 SDK 与 Attempt 边界。
+## 版本与能力
+两者各有独立 Provider SemVer，并由 Assembly Lock 固定；当前能力仅用于 Proof candidate。
+## 数据与状态
+输入/输出均为 Artifact；失败不污染 Project Truth，尝试之间相互隔离。
+## 测试与证据
+Provider conformance、attempt isolation 和 spec regression 测试覆盖两条路径。
+## 限制
+它们不是生成式生产服务，也不代表云基础设施已存在。
