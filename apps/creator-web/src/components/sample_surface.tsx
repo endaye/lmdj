@@ -805,10 +805,11 @@ export function SampleSurface({
           padLabel={`Pad ${padAddress({slot: captureSlot, assetId: null})}`}
           onCommit={(buffer, selection) =>
             performCaptureCommit(captureSlot, buffer, selection)}
-          onClose={() => {
-            setCaptureSlot(null);
-            replaceReturnFocus.current?.focus();
-          }}
+          // The panel's modal dialog owns focus restore on close (P2-D2), so
+          // onClose only clears state — a second .focus() here would race the
+          // dialog's own restore.
+          returnFocus={replaceReturnFocus.current}
+          onClose={() => setCaptureSlot(null)}
         />
       )}
       {pendingCaptureSlot === null ? null : (

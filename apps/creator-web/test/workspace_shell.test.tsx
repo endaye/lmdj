@@ -240,18 +240,18 @@ test("Record on an assigned Pad confirms the replacement before the panel opens"
   // S8-D12: recording onto an assigned Pad is a replacement, so the existing
   // confirmation runs before the microphone is ever requested (S8B-D2).
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
-  expect(screen.queryByRole("region", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
   const dialog = screen.getByRole("dialog", {name: "Replace Pad A1?"});
   expect(dialog.textContent).toContain(
     "Replacing the Sample resets Start, End, trigger, Loop, Volume, and Mute.",
   );
 
   await userEvent.click(screen.getByRole("button", {name: "Cancel replace"}));
-  expect(screen.queryByRole("region", {name: "Pad A1 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeNull();
 
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
   await userEvent.click(screen.getByRole("button", {name: "Confirm replace"}));
-  expect(screen.getByRole("region", {name: "Pad A1 Pad Capture"})).toBeTruthy();
+  expect(screen.getByRole("dialog", {name: "Pad A1 Pad Capture"})).toBeTruthy();
 });
 
 test("Record on an empty Pad opens the capture panel with no replacement prompt", async () => {
@@ -262,11 +262,11 @@ test("Record on an empty Pad opens the capture panel with no replacement prompt"
   await userEvent.click(screen.getByRole("button", {name: "Pad A2 — empty"}));
 
   await userEvent.click(screen.getByRole("button", {name: "Record Sample"}));
-  expect(screen.queryByRole("dialog")).toBeNull();
-  expect(screen.getByRole("region", {name: "Pad A2 Pad Capture"})).toBeTruthy();
+  expect(screen.queryByRole("dialog", {name: "Replace Pad A2?"})).toBeNull();
+  expect(screen.getByRole("dialog", {name: "Pad A2 Pad Capture"})).toBeTruthy();
 
   await userEvent.click(screen.getByRole("button", {name: "Close"}));
-  expect(screen.queryByRole("region", {name: "Pad A2 Pad Capture"})).toBeNull();
+  expect(screen.queryByRole("dialog", {name: "Pad A2 Pad Capture"})).toBeNull();
 });
 
 const listedSummary: LocalProjectSummary = {
@@ -332,7 +332,7 @@ function runtimeFixture(overrides: Partial<CreatorRuntimeSession> = {}) {
       error_details: {},
       product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
-      host_version: "1.4.0",
+      host_version: "1.5.0",
       platform_version: "0.3.4",
       protocol_version: 1,
       capabilities: {

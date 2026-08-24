@@ -210,12 +210,21 @@ No source change in this Task.
 
 ### Task 2 — Capture panel presentation, position and focus (F1 + F2)
 
-- [ ] Implement the Task 1 presentation decision in `styles.css` and
+**Done 2026-08-24.** Implemented the P2-D1/P2-D2 decisions: the panel is a
+viewport-anchored `<dialog>` + `showModal()` modal on a shared `ModalDialog`
+primitive extracted from `ConfirmationDialog` (whose behavior and callers are
+unchanged), with fixed outer geometry that does not change when entering
+`recording`, focus on the phase's primary action on open and after phase
+transitions, `Escape` closing in every phase, a non-dismissible backdrop, and
+the `returnFocus` restore owned solely by the dialog. Landed with Creator Web
+Host `1.5.0` in Product Build `1.0.31.0`.
+
+- [x] Implement the Task 1 presentation decision in `styles.css` and
       `capture_panel.tsx` / `sample_surface.tsx`.
-- [ ] Guarantee that opening the panel brings it and its primary action into
+- [x] Guarantee that opening the panel brings it and its primary action into
       view, and that entering `recording` keeps `Stop` reachable without the
       operator knowing to scroll.
-- [ ] Move focus into the panel on open and restore it on close.
+- [x] Move focus into the panel on open and restore it on close.
 
 **Verification:** a Playwright assertion that the panel's primary action and
 `Stop` are **within the viewport** — `boundingBox` compared against the

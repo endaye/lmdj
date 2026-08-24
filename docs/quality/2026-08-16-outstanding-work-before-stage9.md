@@ -321,14 +321,15 @@ F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 cam
 from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
-None is fixed.
+F1 and F2 are fixed in Product Build `1.0.31.0` (Creator `1.5.0`); the rest are
+not fixed.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
 F4 and F6 each need a product decision and are explicitly excluded from that
 plan.
 
-### F1. The capture panel has no styling and opens below the fold
+### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.31.0`
 
 `.capture-panel` has no rule in `apps/creator-web/src/styles.css`. It renders
 as an unstyled flow element at the end of the Sample surface, with no
@@ -337,15 +338,23 @@ height `157`, document height `983`. In a real browser window the panel and its
 `Record into Pad N` button are entirely below the fold, so pressing
 `Record Sample` looks like nothing happened.
 
-### F2. Stop is pushed off screen when recording starts
+### ~~F2. Stop is pushed off screen when recording starts~~ — fixed in `1.0.31.0`
 
 Same root cause. Entering `recording` adds the level meter and waveform canvas,
 growing the panel from 157 px to 277 px, all downward, and the page does not
 scroll to follow. The take cannot be stopped from the visible surface.
 
-F1 and F2 are one fix. Every automated journey locates the panel by role and
+F1 and F2 are one fix, landed 2026-08-24 in Product Build `1.0.31.0` / Creator
+`1.5.0` (remediation plan Task 2): the panel is now a viewport-anchored modal
+`<dialog>` with fixed geometry that does not grow when entering `recording`,
+focus moves to the phase's primary action on open and after phase transitions,
+and the Playwright gate asserts the panel's and `Stop`'s `boundingBox` against
+a 1280×720 viewport. The physical re-walk that confirms the fix by hand stays
+open in `2026-08-17-manual-verification-todo.md` (remediation plan Task 5).
+Every automated journey locates the panel by role and
 label, which never requires the element to be above the fold — this class of
-defect is invisible to the whole browser gate.
+defect was invisible to the whole browser gate until the `boundingBox`
+assertion was added.
 
 ### F3. `DUPLICATE_ID` presents as fatal with no way out
 
@@ -440,8 +449,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
 
 1. ~~**A1 real-microphone check**~~ — done 2026-08-17. The capture chain
    passed all five hearing criteria; the session returned F1–F4, of which
-   **F1 + F2 are one cheap fix** and should be taken next in this group, since
-   they make Pad Capture unusable on a normal window without knowing to scroll.
+   ~~**F1 + F2 are one cheap fix**~~ — fixed in `1.0.31.0` (2026-08-24); F3
+   and F5 remain ready on the same remediation plan.
 2. ~~**B1 + B2 together**~~ — done 2026-08-18. ~~B3~~ done 2026-08-21 in #226
    (`4312a6de`). B4 remains open.
 3. ~~**C1**~~ — invalidated by measurement; superseded by the facade
