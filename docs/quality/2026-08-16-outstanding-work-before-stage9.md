@@ -76,7 +76,7 @@ distribution and return it to `tests/`.
 Recorded in `docs/prd/open-questions.md`. The backlog marked this ✅ but the
 component is still in the Assembly today, so the mark is stale.
 
-### A3. Build Manifest reproducibility contradicts itself
+### ~~A3. Build Manifest reproducibility contradicts itself~~ — decided 2026-08-24
 
 `create_zip()` pins timestamps, ordering and file modes for reproducibility,
 but `build-manifest.json` sits inside the archive and carries `build_time`, so
@@ -85,11 +85,14 @@ rebuilds and compares hashes" cannot work. `build_time` is required by
 `version-management.md` §4, so this is two correct requirements in one
 container, not an implementation defect.
 
-Options: publish the manifest detached; strip mutable fields from the archived
-copy and keep a detached one; or accept irreproducibility and drop that
-verification claim explicitly. Changes the shape of published artifacts.
-
-Due before the first external distribution (`dev` Channel or above).
+**Decided 2026-08-24** in
+[`../prd/decisions/2026-08-24-build-manifest-detached.md`](../prd/decisions/2026-08-24-build-manifest-detached.md)
+([#211](https://github.com/endaye/lmdj/issues/211)): the Manifest becomes a
+detached sibling asset, the archive keeps payload only, and the Contract and
+fields are unchanged. The reshaping itself is now unblocked machine work —
+row A3 in
+[`2026-08-17-machine-task-todo.md`](2026-08-17-machine-task-todo.md) — and
+remains due before the first external distribution (`dev` Channel or above).
 
 ---
 
@@ -448,6 +451,7 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    coverage-raise plan (machine list C6).
 4. **D4 + D5** — Stage 9 depends on them.
 5. **D1 + D2** — one review, before any long-material work.
-6. **A2, A3** — before the first external distribution.
+6. **A2** and the **A3 reshaping** (decided 2026-08-24; implementation is the
+   machine-list A3 row) — before the first external distribution.
 7. ~~**B3**~~ — done 2026-08-21 in #226. **B4, C2, backlog C2** — mechanical
    hardening, schedule as capacity allows.
