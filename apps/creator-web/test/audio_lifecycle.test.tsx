@@ -1,6 +1,6 @@
 import {act, fireEvent, render, screen, waitFor} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import {expect, test} from "vitest";
+import {expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {activateCreatorAudio} from "../src/runtime/runtime_context";
@@ -12,6 +12,30 @@ import type {
   RuntimeHostState,
   RuntimeOutcome,
 } from "../src/runtime/runtime_types";
+
+// jsdom events are never trusted, so a Creator click can never reach the
+// Runtime activation path. This seam lets a test decide what the Runtime
+// answers; a null stub delegates to the real gesture-token check.
+const activationStub = vi.hoisted(() => ({
+  current: null as
+    | null
+    | ((session: CreatorRuntimeSession, event: {isTrusted: boolean}) =>
+      Promise<boolean>),
+}));
+
+vi.mock("../src/runtime/runtime_context", async (importOriginal) => {
+  const original = await importOriginal<
+    typeof import("../src/runtime/runtime_context")
+  >();
+  return {
+    ...original,
+    activateCreatorAudio: (
+      session: CreatorRuntimeSession,
+      event: {isTrusted: boolean},
+    ) => activationStub.current?.(session, event) ??
+      original.activateCreatorAudio(session, event),
+  };
+});
 
 const TEST_PRODUCT_BUILD = "9.8.7.6";
 
@@ -340,6 +364,159 @@ test("an admitted recovery probe stays owned after readiness is consumed", async
   }));
   await waitFor(() => expect(pad.dataset.outcome).toBe("started"));
   fireEvent.keyUp(window, {code: "KeyQ"});
+});
+
+test("a refused activation leaves the surface in its prior phase", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("refused");
+  activationStub.current = async () => {
+    value.calls.push("refused:activate");
+    return false;
+  };
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await screen.findByText("Audio running");
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    const activate = screen.getByRole("button", {name: "Activate audio"});
+    expect(activate.hasAttribute("disabled")).toBe(false);
+    await user.click(activate);
+    await waitFor(() => expect(value.calls).toContain("refused:activate"));
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+
+    // The recovery epoch survives the refusal: later Runtime publications
+    // still carry the surface forward instead of wedging at "Audio inactive".
+    await act(async () => value.emit({state: "recovering", errorCode: null}));
+    value.setRecoveryProbeReady(true);
+    await screen.findByText("Audio recovering");
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await screen.findByText("Audio running");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
+test("a failed activation with Runtime diagnostics restores its prior phase", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("diagnostic-failure");
+  activationStub.current = async () => {
+    value.emit({state: "failed", errorCode: "HOST_STATE_INVALID"});
+    return false;
+  };
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("HOST_STATE_INVALID");
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
+test("a rejected activation restores its prior phase while reporting the error", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("rejected");
+  activationStub.current = async () => {
+    throw Object.assign(new Error("activation failed"), {
+      code: "HOST_STATE_INVALID",
+    });
+  };
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    expect((await screen.findByRole("alert")).textContent)
+      .toContain("HOST_STATE_INVALID");
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio suspended");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
+test("a Runtime publication during activation wins over later refusal", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("publication-wins");
+  let finishActivation: ((activated: boolean) => void) | undefined;
+  activationStub.current = () => new Promise((resolve) => {
+    finishActivation = resolve;
+  });
+  try {
+    render(<App runtimeFactory={() => value.session} />);
+
+    await user.click(await screen.findByRole("button", {
+      name: "Open Project 11111111",
+    }));
+    await screen.findByRole("heading", {name: "Project 11111111"});
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+    await screen.findByText("Audio suspended");
+
+    await user.click(screen.getByRole("button", {name: "Activate audio"}));
+    await screen.findByText("Audio activating");
+    await act(async () => value.emit({state: "running", errorCode: null}));
+    await screen.findByText("Audio running");
+    await act(async () => finishActivation?.(false));
+    expect(screen.getByTestId("audio-state").textContent).toBe("Audio running");
+  } finally {
+    activationStub.current = null;
+  }
+});
+
+test("Activate audio is disabled unless the Host is parked at audio-suspended", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("gate");
+  render(<App runtimeFactory={() => value.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  const activate = screen.getByRole("button", {name: "Activate audio"});
+  expect(activate.hasAttribute("disabled")).toBe(false);
+
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await screen.findByText("Audio running");
+  expect(activate.hasAttribute("disabled")).toBe(true);
+
+  await act(async () => value.emit({state: "interrupted", errorCode: null}));
+  // The surface still reads "Audio suspended", but the Host is interrupted,
+  // so an Activate gesture would be refused: the action stays disabled.
+  await screen.findByText("Audio suspended");
+  expect(activate.hasAttribute("disabled")).toBe(true);
+
+  await act(async () => value.emit({state: "recovering", errorCode: null}));
+  value.setRecoveryProbeReady(true);
+  await screen.findByText("Audio recovering");
+  expect(activate.hasAttribute("disabled")).toBe(true);
+
+  await act(async () => value.emit({state: "audio-suspended", errorCode: null}));
+  await screen.findByText("Audio suspended");
+  expect(activate.hasAttribute("disabled")).toBe(false);
 });
 
 test("audio activation consumes only an explicit trusted gesture", async () => {

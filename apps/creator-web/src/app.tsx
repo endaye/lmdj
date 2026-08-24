@@ -141,6 +141,7 @@ function Workspace({
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
+  const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
   const sampleRetryAction = useRef<SampleRetryToken | null>(null);
@@ -211,6 +212,10 @@ function Workspace({
               stateRef.current.audio.phase === "recovering"),
         });
     inputController.current = controller;
+    // Re-render so handlers detached while the controller was absent are
+    // offered again; without this the ref mutation alone never reaches the
+    // surface.
+    setInputControllerRevision((revision) => revision + 1);
     return () => {
       if (inputController.current === controller) {
         inputController.current = null;
@@ -424,7 +429,15 @@ function Workspace({
 
   const activateAudio = async (event: MouseEvent) => {
     if (!session) return;
+    const priorPhase = stateRef.current.audio.phase;
+    if (priorPhase !== "inactive" && priorPhase !== "suspended") return;
     dispatch({type: "audio-changed", phase: "activating"});
+    // A refused activation is a non-destructive no-op: the surface returns
+    // to the phase it held before the attempt, unless a Runtime publication
+    // already moved it elsewhere.
+    const restorePriorPhase = () => {
+      dispatch({type: "audio-activation-restored", phase: priorPhase});
+    };
     try {
       const activated = await activateCreatorAudio(session, event);
       if (!activated) {
@@ -434,15 +447,19 @@ function Workspace({
             code: diagnostics.error_code,
             details: diagnostics.error_details,
           }));
+          restorePriorPhase();
         } else {
-          dispatch({type: "audio-changed", phase: "inactive"});
+          restorePriorPhase();
         }
       } else if (session.diagnostics().state === "running") {
         dispatch({type: "audio-changed", phase: "running"});
       }
     } catch (error) {
+      // An untrusted gesture never reached the Runtime. Other failures remain
+      // visible through normal error reporting, but none may destroy the
+      // pre-attempt audio phase.
       if (!(error instanceof TypeError)) reportProjectError(error);
-      dispatch({type: "audio-changed", phase: "inactive"});
+      restorePriorPhase();
     }
   };
 
@@ -556,6 +573,7 @@ function Workspace({
         state={state}
         {...(session && inputController.current
           ? {
+              audioActivationReady: runtimeHostState === "audio-suspended",
               onActivateAudio: (event) => { void activateAudio(event.nativeEvent); },
               onSuspendAudio: () => { void suspendAudio(); },
               onEnableMidi: () => { void inputController.current?.enableMidi(); },

@@ -6,6 +6,7 @@ import {afterAll, beforeAll, expect, test, vi} from "vitest";
 
 import {App} from "../src/app";
 import {SampleSurface} from "../src/components/sample_surface";
+import {StatusBar} from "../src/components/status_bar";
 import {initialCreatorState, type CreatorState} from "../src/state/creator_state";
 import type {
   CreatorRuntimeSession,
@@ -49,6 +50,12 @@ const ready: CreatorState = {
   runtime: {phase: "ready", errorCode: null},
 };
 
+test("keeps Activate audio disabled when Host readiness is unknown", () => {
+  render(<StatusBar state={ready} onActivateAudio={() => {}} />);
+  expect(screen.getByRole("button", {name: "Activate audio"})
+    .hasAttribute("disabled")).toBe(true);
+});
+
 test("enables keyboard-reachable Sample while preserving the other mode states", async () => {
   const user = userEvent.setup();
   render(<App initialState={ready} />);
@@ -84,10 +91,10 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
     .toEqual(keys);
 
-  await user.tab();
-  expect(document.activeElement).toBe(
-    screen.getByRole("button", {name: "Activate audio"}),
-  );
+  // Without a Runtime session the Activate handler is detached, so the
+  // action is disabled instead of offering a gesture that cannot run.
+  expect(screen.getByRole("button", {name: "Activate audio"})
+    .hasAttribute("disabled")).toBe(true);
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
