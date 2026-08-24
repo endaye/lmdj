@@ -46,15 +46,15 @@
       ]
     },
     {
-      "id": "native-test-host",
+      "id": "native-host",
       "type": "frontend",
-      "label": "Native Test Host",
-      "sublabel": "验收 · 设备 · 采集",
+      "label": "Native Host",
+      "sublabel": "播放 · 设备 · 采集",
       "pos": [1190, 520],
       "size": [150, 76],
       "sources": [
-        {"path": "apps/native-test-host/module.json", "label": "Host dependencies"},
-        {"path": "apps/native-test-host/src/main.cpp", "label": "Realtime acceptance"}
+        {"path": "apps/native-host/module.json", "label": "Host dependencies"},
+        {"path": "apps/native-host/src/main.cpp", "label": "Realtime playback/capture"}
       ]
     },
     {
@@ -195,8 +195,8 @@
     {"id": "web-realtime-trigger", "from": "web-runtime-platform", "to": "audio-runtime", "label": "实时触发", "variant": "emphasis", "fromSide": "top", "toSide": "right", "via": [[305, 18], [1382, 18], [1382, 278]]},
     {"id": "audio-ordered-voice", "from": "audio-runtime", "to": "web-runtime-platform", "label": "ordered Voice state", "variant": "dashed", "fromSide": "top", "toSide": "right", "via": [[1265, 60], [415, 60], [415, 118]]},
     {"id": "cli-mcp-facade-api", "from": "cli-mcp-hosts", "to": "application-facade", "label": "Facade API", "variant": "emphasis"},
-    {"id": "native-test-control", "from": "native-test-host", "to": "application-facade", "label": "控制面", "variant": "dashed", "fromSide": "left", "toSide": "left", "via": [[1150, 558], [1150, 620], [390, 620], [390, 278]]},
-    {"id": "native-test-realtime", "from": "native-test-host", "to": "audio-runtime", "label": "实时验收", "variant": "emphasis"},
+    {"id": "native-control", "from": "native-host", "to": "application-facade", "label": "控制面", "variant": "dashed", "fromSide": "left", "toSide": "left", "via": [[1150, 558], [1150, 620], [390, 620], [390, 278]]},
+    {"id": "native-realtime", "from": "native-host", "to": "audio-runtime", "label": "实时播放/采集", "variant": "emphasis"},
     {"id": "facade-commands", "from": "application-facade", "to": "project-truth", "label": "命令", "variant": "emphasis"},
     {"id": "project-cook", "from": "project-truth", "to": "project-cooker", "label": "校验 / 派生", "variant": "emphasis"},
     {"id": "cooked-snapshot", "from": "project-cooker", "to": "runtime-snapshot", "label": "不可变快照", "variant": "emphasis"},

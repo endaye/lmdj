@@ -61,6 +61,13 @@ them still blocks a full physical-pass claim.
 
 ### A2. `native-test-host` is in the Product Assembly and every distribution
 
+**Resolved 2026-08-24 by the rename option** ([#210](https://github.com/endaye/lmdj/issues/210),
+decision [`../prd/decisions/2026-08-24-native-test-host-classification.md`](../prd/decisions/2026-08-24-native-test-host-classification.md)):
+`native-test-host` (retired at `1.0.14`) became `native-host 1.0.0` in Product
+Build `1.0.31.0`, and the distribution-contents rule now lives in
+[`../governance/distribution-contents.md`](../governance/distribution-contents.md).
+The original finding follows as filed.
+
 A component whose module id says "test" ships in `products/lmdj/assembly.json`
 and in every distribution package, while `CLAUDE.md` defines `apps/` as "thin
 Core Hosts" with no test-host category. One of the two is wrong.
@@ -431,8 +438,9 @@ Re-verified against `main` at `9d079796`; do not re-do these.
 | D3 | `build_time` breaks ZIP reproducibility | Superseded by A3 above, still open as a governance question |
 
 **Still open from that backlog:** C2 (`project_store.cpp` JSON read paths lack
-the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
-(`native-test-host` in the Assembly, listed as A2 above).
+the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
+(`native-test-host` in the Assembly, listed as A2 above)~~ — resolved
+2026-08-24 by the rename; see A2.
 
 ---
 
@@ -448,6 +456,8 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
    coverage-raise plan (machine list C6).
 4. **D4 + D5** — Stage 9 depends on them.
 5. **D1 + D2** — one review, before any long-material work.
-6. **A2, A3** — before the first external distribution.
+6. ~~**A2**~~ — done 2026-08-24 (rename to `native-host` + distribution
+   contents rule; see the A2 section). **A3** — before the first external
+   distribution.
 7. ~~**B3**~~ — done 2026-08-21 in #226. **B4, C2, backlog C2** — mechanical
    hardening, schedule as capacity allows.
