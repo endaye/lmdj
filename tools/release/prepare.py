@@ -241,14 +241,21 @@ def _verify_profile_assets(intent: ReleaseIntent, built: ProfileBuild) -> tuple[
         if assets:
             raise PrepareError("source-only releases must not create release assets")
         return assets
-    if len(assets) != 3:
-        raise PrepareError("Product release profile must produce exactly three assets")
+    if intent.profile not in {"core-package", "web-runtime-host"}:
+        raise PrepareError("unknown release profile")
     names = [asset.name for asset in assets]
     if len(names) != len(set(names)) or any(asset.path.name != asset.name for asset in assets):
         raise PrepareError("release asset inventory contains duplicate or renamed assets")
     archive = next((name for name in names if name.endswith(".zip")), None)
-    if archive is None or set(names) != {archive, archive + ".sha256", archive + ".sha256.asc"}:
-        raise PrepareError("Product release asset inventory is not canonical")
+    expected = (
+        None
+        if archive is None
+        else {archive, archive + ".sha256", archive + ".sha256.asc"}
+    )
+    if intent.profile == "core-package" and expected is not None:
+        expected.add(archive[: -len(".zip")] + ".build-manifest.json")
+    if archive is None or set(names) != expected:
+        raise PrepareError("Product release asset inventory is not canonical for its profile")
     for asset in assets:
         try:
             if not asset.path.is_file() or asset.path.is_symlink():

@@ -77,9 +77,14 @@ def build_core_package(
     archive = _require_regular(archives[0], "Core archive")
     checksum = _require_regular(archive.with_name(archive.name + ".sha256"), "Core checksum")
     _verify_checksum(checksum, archive)
+    manifest = _require_regular(
+        archive.with_name(archive.name[: -len(".zip")] + ".build-manifest.json"),
+        "Core Build Manifest",
+    )
     build = _stage_and_sign(
         (archive, checksum), output, selected,
         worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
+        extra=(manifest,),
     )
     selected.runner.run([
         "python3", "tests/distribution/package_acceptance_test.py", "--build-root", "build/core/release",
@@ -133,13 +138,15 @@ def verify_existing_profile(
     if profile not in {"core-package", "web-runtime-host"}:
         raise ValueError("unknown release profile")
     selected = _require_runtime(runtime)
-    archive, checksum, signature = _profile_asset_paths(assets_root, assets)
+    archive, checksum, signature, manifest = _profile_asset_paths(assets_root, assets, profile)
     _verify_checksum(checksum, archive)
     _verify_detached_checksum_signature(
         checksum, signature,
         worktree / ".github/release-signing-keys/lmdj-release-checksum.asc",
         selected,
     )
+    if manifest is not None:
+        _verify_core_manifest(manifest, intent)
     if profile == "web-runtime-host":
         host_version = _host_version(worktree)
         with tempfile.TemporaryDirectory(prefix="lmdj-release-existing-web-") as directory:
@@ -156,6 +163,7 @@ def _require_runtime(runtime: ProfileRuntime | None) -> ProfileRuntime:
 
 def _stage_and_sign(
     inputs: tuple[Path, Path], output: Path, runtime: ProfileRuntime, checksum_public_key_path: Path,
+    extra: tuple[Path, ...] = (),
 ) -> ProfileBuild:
     archive, checksum = inputs
     output.mkdir(parents=True, exist_ok=True)
@@ -170,14 +178,22 @@ def _stage_and_sign(
         runtime.checksum_home, staged_checksum, signature, runtime.checksum_fingerprint,
     )
     _verify_detached_checksum_signature(staged_checksum, signature, checksum_public_key_path, runtime)
-    return ProfileBuild(tuple(_asset(path) for path in (staged_archive, staged_checksum, signature)))
+    staged_extra: list[Path] = []
+    for source in extra:
+        destination = output / source.name
+        if source.resolve() != destination.resolve():
+            shutil.copyfile(source, destination)
+        staged_extra.append(destination)
+    return ProfileBuild(tuple(_asset(path) for path in (staged_archive, staged_checksum, signature, *staged_extra)))
 
 
-def _profile_asset_paths(assets_root: Path, assets: tuple[AssetBuild, ...]) -> tuple[Path, Path, Path]:
+def _profile_asset_paths(
+    assets_root: Path, assets: tuple[AssetBuild, ...], profile: str
+) -> tuple[Path, Path, Path, Path | None]:
     paths = {asset.name: asset.path for asset in assets}
     archives = [path for name, path in paths.items() if name.endswith(".zip")]
     if len(archives) != 1:
-        raise ProfileError("Product release profile must produce exactly three assets")
+        raise ProfileError("Product release profile must produce exactly one archive")
     archive = archives[0]
     checksum = paths.get(archive.name + ".sha256")
     signature = paths.get(archive.name + ".sha256.asc")
@@ -186,7 +202,26 @@ def _profile_asset_paths(assets_root: Path, assets: tuple[AssetBuild, ...]) -> t
         or checksum.parent != assets_root or signature.parent != assets_root
     ):
         raise ProfileError("release asset inventory is not canonical")
-    return archive, checksum, signature
+    manifest: Path | None = None
+    if profile == "core-package":
+        manifest = paths.get(archive.name[: -len(".zip")] + ".build-manifest.json")
+        if manifest is None or manifest.parent != assets_root:
+            raise ProfileError("Core release profile must produce a detached Build Manifest")
+    return archive, checksum, signature, manifest
+
+
+def _verify_core_manifest(manifest: Path, intent: ReleaseIntent) -> None:
+    try:
+        document = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ProfileError("Core Build Manifest is not readable JSON") from error
+    if not isinstance(document, dict) or document.get("contract") != "lmdj.build-manifest.v1":
+        raise ProfileError("Core Build Manifest contract identity is invalid")
+    product = document.get("product")
+    if not isinstance(product, dict) or product.get("id") != "lmdj" or product.get("version") != intent.identity:
+        raise ProfileError("Core Build Manifest Product identity conflicts with the release intent")
+    if document.get("git_revision") != intent.target_revision:
+        raise ProfileError("Core Build Manifest Git revision conflicts with the release intent")
 
 
 def _verify_detached_checksum_signature(

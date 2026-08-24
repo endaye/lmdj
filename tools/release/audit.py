@@ -826,13 +826,16 @@ def _asset_problem(context: object, intent: ReleaseIntent, release: GitHubReleas
         return "GitHub Release asset inventory is ambiguous"
     if intent.profile == "source-only":
         return None if not assets else "source-only Release contains unauthorized assets"
-    if len(assets) != 3:
-        return "Product Release asset inventory is incomplete"
+    if intent.profile not in {"core-package", "web-runtime-host"}:
+        return "Product Release profile is unknown"
     archive_names = [name for name in names if name.endswith(".zip")]
     if len(archive_names) != 1:
         return "Product Release archive inventory is not canonical"
     archive_name = archive_names[0]
-    if set(names) != {archive_name, archive_name + ".sha256", archive_name + ".sha256.asc"}:
+    expected_names = {archive_name, archive_name + ".sha256", archive_name + ".sha256.asc"}
+    if intent.profile == "core-package":
+        expected_names.add(archive_name[: -len(".zip")] + ".build-manifest.json")
+    if set(names) != expected_names:
         return "Product Release asset names conflict with its profile"
     with tempfile.TemporaryDirectory(prefix="lmdj-release-audit-assets-") as directory:
         root = Path(directory)
