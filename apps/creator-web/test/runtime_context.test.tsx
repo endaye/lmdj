@@ -30,8 +30,8 @@ function defaultDiagnostics(): RuntimeDiagnostics {
     error_details: {},
     product_build: TEST_PRODUCT_BUILD,
     host_id: "creator-web",
-    host_version: "1.4.0",
-    platform_version: "0.3.4",
+    host_version: "1.5.0",
+    platform_version: "0.3.6",
     protocol_version: 1,
     capabilities: {
       secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,

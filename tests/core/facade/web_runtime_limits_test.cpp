@@ -1069,7 +1069,7 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
   Application application(config(temp.path()));
 
   auto prior = PreparedSampleBank::empty(ProjectId{std::string(kProjectId)}, 9);
-  const std::array<float, 1> prior_pcm{0.5F};
+  const std::array<float, 2> prior_pcm{0.5F, 0.5F};
   LMDJ_CHECK(prior.set_sample(0, prior_pcm).has_value());
   RealtimeEngine engine;
   LMDJ_CHECK(engine.publish_sample_bank(std::move(prior)) ==
@@ -1078,11 +1078,18 @@ void test_web_runtime_limits_keep_oversized_projects_inspectable_and_prior_bank(
   const auto check_prior = [&engine]() {
     LMDJ_CHECK(engine.enqueue(TriggerEvent{99, 0, 127}) ==
                EnqueueResult::accepted);
-    std::array<float, 1> left{};
-    std::array<float, 1> right{};
-    engine.render(left.data(), right.data(), 1);
-    LMDJ_CHECK(left.at(0) == 0.5F);
-    LMDJ_CHECK(right.at(0) == 0.5F);
+    std::array<float, 2> left{};
+    std::array<float, 2> right{};
+    engine.render(left.data(), right.data(), 2);
+    // F6 ramp: attack 0/96 on the first frame, then attack 1/96 times the
+    // boundary fade 1/96 on the second frame of the 2-frame sample.
+    constexpr float kRampScale =
+        1.0F / static_cast<float>(lmdj::audio::kRealtimeRampFrames);
+    const auto second_frame =
+        0.5F * ((1.0F * kRampScale) * (1.0F * kRampScale));
+    LMDJ_CHECK(left.at(0) == 0.0F);
+    LMDJ_CHECK(left.at(1) == second_frame);
+    LMDJ_CHECK(right == left);
   };
   const auto check_limit = [&check_prior](
                                const auto& rejected,

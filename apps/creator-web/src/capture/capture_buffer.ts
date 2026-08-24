@@ -78,6 +78,24 @@ export class CaptureBuffer {
   get frameCount(): number { return this.#frames; }
   get atCapacity(): boolean { return this.#frames >= CAPTURE_MAX_FRAMES; }
 
+  // Exact whole-take max-abs peak across all channels. append() folds every
+  // accepted sample into the per-block summaries, so the maximum over all
+  // block peaks IS the take's peak — O(blocks), no rescan of the PCM — and
+  // crop() rebuilds the summaries before publishing its replacement
+  // revision, so the value stays exact after a Crop. The commit-time
+  // digital-silence gate (F4) reads this instead of envelope(): a strictly
+  // zero peak means digital silence, and any nonzero sample anywhere in the
+  // take defeats the gate.
+  get peak(): number {
+    let peak = 0;
+    for (const peaks of this.#blockPeaks) {
+      for (const value of peaks) {
+        if (value > peak) peak = value;
+      }
+    }
+    return peak;
+  }
+
   append(channels: readonly Float32Array[]): number {
     const first = channels[0];
     if (channels.length !== this.channelCount || first === undefined ||

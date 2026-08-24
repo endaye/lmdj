@@ -38,6 +38,7 @@ import {
   initialCreatorState,
   selectCanImportProject,
   selectCanOpenProject,
+  selectCreatorPhase,
   type CreatorState,
 } from "./state/creator_state";
 
@@ -141,6 +142,7 @@ function Workspace({
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
+  const [inputControllerRevision, setInputControllerRevision] = useState(0);
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
   const sampleRetryAction = useRef<SampleRetryToken | null>(null);
@@ -211,6 +213,10 @@ function Workspace({
               stateRef.current.audio.phase === "recovering"),
         });
     inputController.current = controller;
+    // Re-render so handlers detached while the controller was absent are
+    // offered again; without this the ref mutation alone never reaches the
+    // surface.
+    setInputControllerRevision((revision) => revision + 1);
     return () => {
       if (inputController.current === controller) {
         inputController.current = null;
@@ -237,20 +243,26 @@ function Workspace({
       if (inputAdverseState.current !== runtimeHostState) {
         inputAdverseState.current = runtimeHostState;
         resetInputForAdverseLifecycle();
-        dispatch({type: "audio-changed", phase: "suspended"});
+        if (stateRef.current.audio.phase !== "suspending") {
+          dispatch({type: "audio-changed", phase: "suspended"});
+        }
       }
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
 
   useEffect(() => {
-    if (!session || !runtimePhase) return;
-    setBusyRetry(null);
+    if (!runtimePhase) return;
     dispatch({
       type: "runtime-changed",
       phase: runtimePhase,
       errorCode: runtimeErrorCode ?? null,
       errorDetails: runtimeErrorDetails ?? {},
     });
+  }, [runtimePhase, runtimeErrorCode, runtimeErrorDetails]);
+
+  useEffect(() => {
+    if (!session || !runtimePhase) return;
+    setBusyRetry(null);
     if (runtimePhase !== "ready") return;
     let active = true;
     dispatch({type: "projects-listing"});
@@ -317,8 +329,6 @@ function Workspace({
   }, [
     session,
     runtimePhase,
-    runtimeErrorCode,
-    runtimeErrorDetails,
     listAttempt,
   ]);
 
@@ -424,7 +434,15 @@ function Workspace({
 
   const activateAudio = async (event: MouseEvent) => {
     if (!session) return;
+    const priorPhase = stateRef.current.audio.phase;
+    if (priorPhase !== "inactive" && priorPhase !== "suspended") return;
     dispatch({type: "audio-changed", phase: "activating"});
+    // A refused activation is a non-destructive no-op: the surface returns
+    // to the phase it held before the attempt, unless a Runtime publication
+    // already moved it elsewhere.
+    const restorePriorPhase = () => {
+      dispatch({type: "audio-activation-restored", phase: priorPhase});
+    };
     try {
       const activated = await activateCreatorAudio(session, event);
       if (!activated) {
@@ -434,27 +452,37 @@ function Workspace({
             code: diagnostics.error_code,
             details: diagnostics.error_details,
           }));
+          restorePriorPhase();
         } else {
-          dispatch({type: "audio-changed", phase: "inactive"});
+          restorePriorPhase();
         }
       } else if (session.diagnostics().state === "running") {
         dispatch({type: "audio-changed", phase: "running"});
       }
     } catch (error) {
+      // An untrusted gesture never reached the Runtime. Other failures remain
+      // visible through normal error reporting, but none may destroy the
+      // pre-attempt audio phase.
       if (!(error instanceof TypeError)) reportProjectError(error);
-      dispatch({type: "audio-changed", phase: "inactive"});
+      restorePriorPhase();
     }
   };
 
   const suspendAudio = async () => {
-    if (!session) return;
-    if (await session.suspendAudio()) {
-      if (inputAdverseState.current !== "audio-suspended") {
-        inputAdverseState.current = "audio-suspended";
-        resetInputForAdverseLifecycle();
+    if (!session || stateRef.current.audio.phase !== "running") return;
+    dispatch({type: "audio-changed", phase: "suspending"});
+    if (!(await session.suspendAudio())) {
+      if (selectCreatorPhase(stateRef.current) === "suspending" &&
+        session.diagnostics().state === "running") {
+        dispatch({type: "audio-changed", phase: "running"});
       }
-      dispatch({type: "audio-changed", phase: "suspended"});
+      return;
     }
+    if (inputAdverseState.current !== "audio-suspended") {
+      inputAdverseState.current = "audio-suspended";
+      resetInputForAdverseLifecycle();
+    }
+    dispatch({type: "audio-changed", phase: "suspended"});
   };
 
   const retryPrepare = async () => {
@@ -556,6 +584,7 @@ function Workspace({
         state={state}
         {...(session && inputController.current
           ? {
+              audioActivationReady: runtimeHostState === "audio-suspended",
               onActivateAudio: (event) => { void activateAudio(event.nativeEvent); },
               onSuspendAudio: () => { void suspendAudio(); },
               onEnableMidi: () => { void inputController.current?.enableMidi(); },
@@ -632,6 +661,12 @@ function Workspace({
       <ErrorPanel
         code={state.runtime.errorCode}
         details={state.runtime.errorDetails}
+        {...(session && state.runtime.errorCode === "DUPLICATE_ID"
+          ? {onOpenLocalProject: () => {
+              setShowLocalProjects(true);
+              setListAttempt((attempt) => attempt + 1);
+            }}
+          : {})}
         {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
           ? {onRetryProject: () => {
               if (busyRetry.kind === "list") {

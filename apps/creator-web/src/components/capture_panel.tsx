@@ -1,4 +1,4 @@
-import {useCallback, useEffect, useReducer, useRef} from "react";
+import {useCallback, useEffect, useReducer, useRef, useState} from "react";
 
 import {CAPTURE_SAMPLE_RATE, COMMIT_MAX_FRAMES, CaptureBuffer} from "../capture/capture_buffer";
 import {
@@ -7,6 +7,7 @@ import {
   browserCaptureDeps,
   type CaptureListener,
 } from "../capture/capture_controller";
+import {ModalDialog} from "./modal_dialog";
 import {
   captureStopReasonMessage,
   initialCaptureState,
@@ -17,6 +18,18 @@ import {
 const WAVEFORM_BINS = 400;
 const WAVEFORM_HEIGHT = 96;
 
+// F4 (2026-08-24 decision, option a): a whole-take peak of exactly zero is
+// digital silence — the observed symptom of the OS silently switching the
+// default input (macOS Continuity rerouting to an iPhone). The commit is
+// refused with this explanation and the take is kept. Strict zero only:
+// quiet-but-nonzero real takes must never be blocked.
+const SILENT_TAKE_MESSAGE =
+  "Nothing but digital silence was captured. The input device may have been " +
+  "switched by the system. The take is unchanged — discard it to record again.";
+// F4 (option b): non-blocking notice when the device set changes mid-take.
+const DEVICE_CHANGE_NOTICE =
+  "The system's input devices changed during this recording.";
+
 export interface CapturePanelProps {
   padLabel: string;
   onCommit(
@@ -26,6 +39,9 @@ export interface CapturePanelProps {
     {kind: "committed"} | {kind: "conflict"; message: string} | {kind: "failed"; message: string}
   >;
   onClose(): void;
+  // Element focus returns to when the panel closes (P2-D2); the modal dialog
+  // owns the restore so there is exactly one restore path.
+  returnFocus?: HTMLElement | null;
   makeController?(listener: CaptureListener): CaptureController;
 }
 
@@ -44,7 +60,13 @@ function secondsLabel(frames: number): string {
   return `${(frames / CAPTURE_SAMPLE_RATE).toFixed(1)} s`;
 }
 
-export function CapturePanel({padLabel, onCommit, onClose, makeController}: CapturePanelProps) {
+export function CapturePanel({
+  padLabel,
+  onCommit,
+  onClose,
+  returnFocus = null,
+  makeController,
+}: CapturePanelProps) {
   const [state, dispatch] = useReducer(reduceCapture, initialCaptureState);
   const bufferRef = useRef<CaptureBuffer | null>(null);
   // The buffer is now created lazily from the first delivered batch (Finding
@@ -54,6 +76,20 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
   const recordingRef = useRef(false);
   const controllerRef = useRef<CaptureController | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  // The current phase's primary action (idle/permission-error: Record;
+  // recording: Stop; trimming/commit-error: Commit) and the dialog element
+  // itself, which is the focus fallback for phases with no primary action
+  // (requesting-permission, committing).
+  const primaryRef = useRef<HTMLButtonElement | null>(null);
+  const dialogElementRef = useRef<HTMLDialogElement | null>(null);
+  const resolvePrimaryFocus = useCallback(() => primaryRef.current, []);
+  // F4 (option b): the capture track's label as the controller reported it
+  // when start() resolved; "" renders as the "Default input" placeholder.
+  const [inputLabel, setInputLabel] = useState("");
+  const [deviceChanged, setDeviceChanged] = useState(false);
+  // F4 (option a): set when Commit was refused for a digitally silent take;
+  // cleared by discard and by starting a new recording.
+  const [silenceRefused, setSilenceRefused] = useState(false);
 
   const requestStop = useCallback((reason: CaptureStopReason) => {
     recordingRef.current = false;
@@ -91,6 +127,43 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
       document.removeEventListener("visibilitychange", onVisibilityChange);
     };
   }, [state.phase, requestStop]);
+
+  // F4 (option b): a device-set change mid-recording is the observable half
+  // of the silent-input-switch failure mode, so surface it as a non-blocking
+  // notice. Scoped to the recording phase exactly like the blur/hidden
+  // listeners above; mediaDevices is absent in some contexts (jsdom, older
+  // browsers), so availability is guarded.
+  useEffect(() => {
+    if (state.phase !== "recording") return;
+    const mediaDevices = navigator.mediaDevices as MediaDevices | undefined;
+    if (mediaDevices === undefined) return;
+    const onDeviceChange = () => setDeviceChanged(true);
+    mediaDevices.addEventListener("devicechange", onDeviceChange);
+    return () => mediaDevices.removeEventListener("devicechange", onDeviceChange);
+  }, [state.phase]);
+
+  // P2-D2: opening the panel focuses the phase's primary action (handled by
+  // the dialog's resolveInitialFocus), and a phase transition that unmounts
+  // the focused control moves focus to the new phase's primary action — focus
+  // must never drop to <body>. Focus resting on a control that survived the
+  // transition (e.g. Close or a selection slider) is left where it is.
+  const previousPhase = useRef(state.phase);
+  useEffect(() => {
+    if (previousPhase.current === state.phase) return;
+    previousPhase.current = state.phase;
+    const active = document.activeElement;
+    // Real browsers drop focus to <body> when the focused control unmounts;
+    // jsdom instead lands it on whatever was inserted at the same position
+    // (here the disabled Crop button), so a disabled active element counts as
+    // dropped too.
+    const focusDropped = !(active instanceof HTMLElement) ||
+      active === document.body || !active.isConnected ||
+      active.matches(":disabled");
+    const onDialogFallback = active === dialogElementRef.current;
+    if (focusDropped || onDialogFallback) {
+      (primaryRef.current ?? dialogElementRef.current)?.focus();
+    }
+  }, [state.phase]);
 
   // Paint the growing waveform straight from the capture buffer ref; the
   // buffer itself never lives in React state (S8B design note #4). Recording
@@ -137,6 +210,9 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     if (controllerRef.current !== null) return;
     dispatch({kind: "record"});
     bufferRef.current = null;
+    setInputLabel("");
+    setDeviceChanged(false);
+    setSilenceRefused(false);
     const listener: CaptureListener = {
       onBatch(channels, peak) {
         // The delivered audio is the single authority on channel width
@@ -169,6 +245,7 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     try {
       await controller.start();
       recordingRef.current = true;
+      setInputLabel(controller.inputLabel);
       dispatch({kind: "granted"});
     } catch (error) {
       controllerRef.current = null;
@@ -205,6 +282,7 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
 
   const handleDiscard = () => {
     bufferRef.current = null;
+    setSilenceRefused(false);
     dispatch({kind: "discard"});
   };
 
@@ -218,6 +296,15 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
   const handleCommit = async () => {
     const buffer = bufferRef.current;
     if (buffer === null) return;
+    // F4 (option a): refuse to commit a digitally silent take. The gate reads
+    // the WHOLE take's peak — never the current selection — and only strict
+    // zero refuses, so a quiet-but-nonzero take always commits. The take is
+    // kept intact and the phase does not change; the operator can re-record
+    // (via Discard) or keep editing.
+    if (buffer.peak === 0) {
+      setSilenceRefused(true);
+      return;
+    }
     const selection = {startFrame: state.selectionStart, frameCount: state.selectionFrames};
     dispatch({kind: "commit"});
     const result = await onCommit(buffer, selection);
@@ -233,25 +320,14 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
     }
   };
 
-  const renderBody = () => {
+  // P2-D1: the panel is a viewport-anchored modal with fixed outer geometry.
+  // Three fixed regions — header, a fixed-height waveform/meter view that is
+  // always rendered, and a bottom action row — so entering "recording" only
+  // swaps region contents and "Stop" sits exactly where "Record into Pad N"
+  // was. Phase details (messages, selection sliders) scroll inside the
+  // content region under the view.
+  const renderView = () => {
     switch (state.phase) {
-      case "idle":
-        return (
-          <button type="button" onClick={() => void handleRecord()}>
-            Record into {padLabel}
-          </button>
-        );
-      case "requesting-permission":
-        return <p role="status">Requesting microphone access…</p>;
-      case "permission-error":
-        return (
-          <>
-            <p role="alert">{state.errorMessage}</p>
-            <button type="button" onClick={() => void handleRecord()}>
-              Record into {padLabel}
-            </button>
-          </>
-        );
       case "recording":
         return (
           <>
@@ -270,7 +346,50 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
               width={WAVEFORM_BINS}
               height={WAVEFORM_HEIGHT}
             />
-            <button type="button" onClick={handleStop}>Stop</button>
+          </>
+        );
+      case "trimming":
+      case "commit-error":
+        return (
+          <>
+            <p>{secondsLabel(state.frameCount)} captured</p>
+            <canvas
+              ref={canvasRef}
+              role="img"
+              aria-label={`${padLabel} capture waveform`}
+              data-frame-count={state.frameCount}
+              width={WAVEFORM_BINS}
+              height={WAVEFORM_HEIGHT}
+            />
+          </>
+        );
+      case "requesting-permission":
+        return <p role="status">Requesting microphone access…</p>;
+      case "committing":
+        return <p role="status">Committing…</p>;
+      case "idle":
+      case "permission-error":
+        return (
+          <p className="capture-panel-view-placeholder">
+            Ready to record into {padLabel}
+          </p>
+        );
+    }
+  };
+
+  // F4 (option b): the label the browser gave the capture track, or the
+  // placeholder when it withheld one (empty string).
+  const inputLabelText = inputLabel === "" ? "Default input" : inputLabel;
+
+  const renderDetails = () => {
+    switch (state.phase) {
+      case "permission-error":
+        return <p role="alert">{state.errorMessage}</p>;
+      case "recording":
+        return (
+          <>
+            <p>Input: {inputLabelText}</p>
+            {deviceChanged && <p role="status">{DEVICE_CHANGE_NOTICE}</p>}
           </>
         );
       case "trimming":
@@ -281,21 +400,14 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
         );
         return (
           <>
-            <p>{secondsLabel(state.frameCount)} captured</p>
+            <p>Input: {inputLabelText}</p>
+            {silenceRefused && <p role="alert">{SILENT_TAKE_MESSAGE}</p>}
             {captureStopReasonMessage(state.stopReason) !== null && (
               <p>{captureStopReasonMessage(state.stopReason)}</p>
             )}
             {state.phase === "commit-error" && (
               <p role="alert">{state.errorMessage}</p>
             )}
-            <canvas
-              ref={canvasRef}
-              role="img"
-              aria-label={`${padLabel} capture waveform`}
-              data-frame-count={state.frameCount}
-              width={WAVEFORM_BINS}
-              height={WAVEFORM_HEIGHT}
-            />
             <label>
               <span>Selection start</span>
               <input
@@ -322,6 +434,35 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
                   handleSelectFrames(event.currentTarget.valueAsNumber)}
               />
             </label>
+          </>
+        );
+      }
+      default:
+        return null;
+    }
+  };
+
+  const renderActions = () => {
+    switch (state.phase) {
+      case "idle":
+      case "permission-error":
+        return (
+          <button
+            ref={primaryRef}
+            type="button"
+            onClick={() => void handleRecord()}
+          >
+            Record into {padLabel}
+          </button>
+        );
+      case "recording":
+        return (
+          <button ref={primaryRef} type="button" onClick={handleStop}>Stop</button>
+        );
+      case "trimming":
+      case "commit-error":
+        return (
+          <>
             <button
               type="button"
               disabled={state.selectionStart === 0 &&
@@ -330,23 +471,39 @@ export function CapturePanel({padLabel, onCommit, onClose, makeController}: Capt
             >
               Crop to selection
             </button>
-            <button type="button" onClick={() => void handleCommit()}>Commit</button>
+            <button
+              ref={primaryRef}
+              type="button"
+              onClick={() => void handleCommit()}
+            >
+              Commit
+            </button>
             <button type="button" onClick={handleDiscard}>Discard</button>
           </>
         );
-      }
-      case "committing":
-        return <p role="status">Committing…</p>;
+      default:
+        return null;
     }
   };
 
   return (
-    <section className="capture-panel" aria-label={`${padLabel} Pad Capture`}>
+    <ModalDialog
+      label={`${padLabel} Pad Capture`}
+      returnFocus={returnFocus}
+      onCancel={handleClose}
+      dialogClassName="capture-panel-dialog"
+      resolveInitialFocus={resolvePrimaryFocus}
+      dialogRef={dialogElementRef}
+    >
       <div className="capture-panel-header">
         <h2>{padLabel} Capture</h2>
         <button type="button" onClick={handleClose}>Close</button>
       </div>
-      {renderBody()}
-    </section>
+      <div className="capture-panel-content">
+        <div className="capture-panel-view">{renderView()}</div>
+        {renderDetails()}
+      </div>
+      <div className="capture-panel-actions">{renderActions()}</div>
+    </ModalDialog>
   );
 }

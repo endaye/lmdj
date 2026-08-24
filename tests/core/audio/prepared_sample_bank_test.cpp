@@ -132,6 +132,11 @@ void prepares_all_snapshot_slots_and_metadata() {
 }
 
 void renders_exact_mono_and_stereo_pcm16_conversion() {
+  constexpr float kRampScale =
+      1.0F / static_cast<float>(lmdj::audio::kRealtimeRampFrames);
+  const auto ramp_part = [](std::uint32_t frames) {
+    return static_cast<float>(frames) * kRampScale;
+  };
   auto prepared = PreparedSampleBank::from_snapshot(valid_snapshot());
   LMDJ_CHECK(prepared.has_value());
   RealtimeEngine engine;
@@ -140,8 +145,14 @@ void renders_exact_mono_and_stereo_pcm16_conversion() {
   LMDJ_CHECK(engine.start().has_value());
 
   constexpr auto positive_half = 16'384.0F / 32'767.0F;
+  // F6 ramp: each frame carries the attack ramp times the non-looping
+  // boundary fade (the mono selection is 5 frames long, the stereo one 2).
   const std::array<float, 5> expected_mono{
-      -1.0F, -0.5F, 0.0F, positive_half, 1.0F};
+      0.0F,
+      -0.5F * (ramp_part(1) * ramp_part(4)),
+      0.0F,
+      positive_half * (ramp_part(3) * ramp_part(2)),
+      1.0F * (ramp_part(4) * ramp_part(1))};
   LMDJ_CHECK(engine.enqueue(TriggerEvent{1, 0, 127}) ==
              EnqueueResult::accepted);
   std::array<float, 5> left{};
@@ -150,7 +161,8 @@ void renders_exact_mono_and_stereo_pcm16_conversion() {
   LMDJ_CHECK(left == expected_mono);
   LMDJ_CHECK(right == expected_mono);
 
-  const std::array<float, 2> expected_stereo{0.0F, positive_half};
+  const std::array<float, 2> expected_stereo{
+      0.0F, positive_half * (ramp_part(1) * ramp_part(1))};
   LMDJ_CHECK(engine.enqueue(TriggerEvent{2, 63, 127}) ==
              EnqueueResult::accepted);
   engine.render(left.data(), right.data(), 2);
@@ -292,7 +304,7 @@ void accepts_exact_web_limits_and_rejects_boundary_plus_one() {
 
 void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   auto prior = PreparedSampleBank::empty(ProjectId{kProjectId}, 6);
-  const std::array<float, 1> prior_pcm{0.25F};
+  const std::array<float, 2> prior_pcm{0.25F, 0.25F};
   LMDJ_CHECK(prior.set_sample(0, prior_pcm).has_value());
   RealtimeEngine engine;
   LMDJ_CHECK(engine.publish_sample_bank(std::move(prior)) ==
@@ -302,11 +314,17 @@ void bounded_preparation_rejects_before_allocation_and_retains_prior_bank() {
   const auto check_prior = [&engine]() {
     LMDJ_CHECK(engine.enqueue(TriggerEvent{9, 0, 127}) ==
                EnqueueResult::accepted);
-    std::array<float, 1> left{};
-    std::array<float, 1> right{};
-    engine.render(left.data(), right.data(), 1);
-    LMDJ_CHECK(left.at(0) == 0.25F);
-    LMDJ_CHECK(right.at(0) == 0.25F);
+    std::array<float, 2> left{};
+    std::array<float, 2> right{};
+    engine.render(left.data(), right.data(), 2);
+    // F6 ramp: attack 0/96 on the first frame, then attack 1/96 times the
+    // boundary fade 1/96 on the second frame of the 2-frame sample.
+    constexpr float kRampScale =
+        1.0F / static_cast<float>(lmdj::audio::kRealtimeRampFrames);
+    LMDJ_CHECK(left.at(0) == 0.0F);
+    LMDJ_CHECK(
+        left.at(1) == 0.25F * ((1.0F * kRampScale) * (1.0F * kRampScale)));
+    LMDJ_CHECK(right == left);
   };
 
   const auto snapshot = valid_snapshot();

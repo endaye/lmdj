@@ -124,17 +124,48 @@ button:disabled { color: #737b87; }
 .waveform-canvas line[data-playhead] { stroke: #ffb36b; stroke-width: 2; }
 .waveform-canvas rect[data-selection-mask] { fill: rgb(3 5 8 / 62%); }
 .waveform-unavailable { display: grid; min-height: 12rem; margin: 0; place-items: center; color: #9da6b4; }
+.waveform-grip-zone {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 2px;
+  cursor: ew-resize;
+  touch-action: none;
+}
+.waveform-grip-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 14px;
+  border: 1px solid #b7ffc5;
+  border-radius: 4px;
+  background: rgb(183 255 197 / 26%);
+  pointer-events: none;
+}
+.waveform-grip-bar::before, .waveform-grip-bar::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  translate: -50% 0;
+  border-radius: 50%;
+  background: #b7ffc5;
+}
+.waveform-grip-bar::before { top: 6px; }
+.waveform-grip-bar::after { bottom: 6px; }
+.waveform-grip-zone:hover + .waveform-grip-bar { background: rgb(183 255 197 / 46%); }
 .waveform-handle {
   position: absolute;
-  inset-inline: 0;
-  width: 100%;
+  top: 0;
+  width: 44px;
   min-height: 44px;
   margin: 0;
-  opacity: .01;
-  cursor: ew-resize;
+  padding: 0;
+  opacity: 0;
+  pointer-events: none;
 }
-.waveform-start-handle { top: 1rem; }
-.waveform-end-handle { bottom: 1rem; }
+.waveform-handle:focus { opacity: 1; }
 .waveform-values, .waveform-viewport-actions, .sample-toggle-row,
 .confirmation-actions {
   display: flex;
@@ -196,6 +227,55 @@ button:disabled { color: #737b87; }
 .sample-confirmation::backdrop { background: transparent; }
 .sample-confirmation h2 { margin-top: 0; }
 .confirmation-actions { justify-content: flex-end; }
+
+/* P2-D1: the Pad Capture panel is a viewport-anchored modal with fixed outer
+   geometry, so opening it never depends on the Pad grid height and entering
+   "recording" never pushes the action row off screen (F1/F2). */
+.capture-panel-dialog {
+  position: fixed;
+  z-index: 11;
+  inset: 50% auto auto 50%;
+  width: min(44rem, calc(100vw - 2rem));
+  max-height: calc(100dvh - 2rem);
+  margin: 0;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding: 1.25rem;
+  border: 1px solid #b7ffc5;
+  border-radius: .85rem;
+  color: #f4f5f7;
+  background: #171b21;
+  box-shadow: 0 1.5rem 5rem rgb(0 0 0 / 65%);
+}
+.capture-panel-dialog::backdrop { background: transparent; }
+.capture-panel-header { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+.capture-panel-header h2 { margin: 0; }
+.capture-panel-content {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: .75rem;
+  padding-block: .75rem;
+}
+.capture-panel-view {
+  flex: none;
+  height: 11rem;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: .5rem;
+  padding: .75rem;
+  border: 1px solid #353b45;
+  border-radius: .65rem;
+}
+.capture-panel-view p { margin: 0; }
+.capture-panel-view canvas { width: 100%; height: 6rem; }
+.capture-panel-view-placeholder { color: #9da6b4; text-align: center; }
+.capture-panel-actions { flex: none; display: flex; flex-wrap: wrap; gap: .65rem; align-items: center; justify-content: flex-end; }
 
 .pads { grid-area: pads; padding: 1rem 1.25rem 1.25rem; border-top: 1px solid #353b45; }
 .bank-selector { display: flex; gap: .5rem; margin-bottom: .75rem; }

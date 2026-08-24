@@ -9,6 +9,7 @@ import {
 function makeDeps(overrides: Record<string, unknown> = {}) {
   const track = {
     stopped: 0, stop() { this.stopped += 1; },
+    label: "USB Microphone",
     onended: null as (() => void) | null,
     addEventListener(name: string, handler: () => void) { if (name === "ended") this.onended = handler; },
     removeEventListener() {},
@@ -144,6 +145,22 @@ describe("CaptureController", () => {
     await controller.start();
     track.onended?.();
     expect(onEnded).toHaveBeenCalledWith("device-lost");
+  });
+
+  test("exposes the capture track's label as the input identity (F4)", async () => {
+    const {deps, track} = makeDeps();
+    const controller = new CaptureController(deps as never, {onBatch: vi.fn(), onEnded: vi.fn()});
+    // Before start() there is no stream, so there is no identity to report.
+    expect(controller.inputLabel).toBe("");
+    await controller.start();
+    expect(controller.inputLabel).toBe("USB Microphone");
+
+    // A browser that withholds the label reports an empty string; the panel
+    // degrades that to a placeholder rather than guessing.
+    track.label = "";
+    expect(controller.inputLabel).toBe("");
+    await controller.stop();
+    expect(controller.inputLabel).toBe("");
   });
 });
 
