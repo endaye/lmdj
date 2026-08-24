@@ -32,11 +32,10 @@ state transition still require explicit authorization.
 A commit does not authorize push, Pull Request creation, merge, tag push,
 release, publication, deployment, or Channel promotion.
 
-## Task shipping operations
+## Task shipping and issue operations
 
-For shipping a locally completed issue or task, coding agents must read and follow
-`.agents/skills/issue-done/SKILL.md`. It governs the full transition from local verification
-and Conventional Commit to push, Pull Request creation, CI auto-merge, and worktree/branch cleanup.
+- For querying and triaging open issues and parallel workstreams, follow `.agents/skills/issue-list/SKILL.md`.
+- For shipping a locally completed issue or task, coding agents must follow `.agents/skills/issue-done/SKILL.md` (handles verification, Conventional Commit, push, PR creation, CI auto-merge, and worktree/branch cleanup).
 
 ## Release operations
 
