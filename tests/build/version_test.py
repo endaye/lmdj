@@ -74,9 +74,9 @@ expected_modules = {
         2,
         {"application-facade": "1.4.4"},
     ),
-    "apps/native-test-host/module.json": (
-        "native-test-host",
-        "1.0.14",
+    "apps/native-host/module.json": (
+        "native-host",
+        "1.0.0",
         1,
         {"application-facade": "1.4.4", "audio-runtime": "0.5.0"},
     ),
@@ -344,10 +344,10 @@ assert compiled_providers == [
 ]
 
 native_host_source = (
-    repo_root / "apps/native-test-host/src/main.cpp"
+    repo_root / "apps/native-host/src/main.cpp"
 ).read_text(encoding="utf-8")
 native_host_cmake = (
-    repo_root / "apps/native-test-host/CMakeLists.txt"
+    repo_root / "apps/native-host/CMakeLists.txt"
 ).read_text(encoding="utf-8")
 assert "1.0.14.0" not in native_host_source
 assert re.search(

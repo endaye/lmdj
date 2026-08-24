@@ -50,7 +50,7 @@ if(APPLE AND TARGET lmdj_native_audio_probe)
 endif()
 
 add_subdirectory(apps/core-cli)
-add_subdirectory(apps/native-test-host)
+add_subdirectory(apps/native-host)
 add_subdirectory(products/lmdj)
 
 lmdj_add_test(
