@@ -97,28 +97,25 @@ Two further constraints bound any answer:
 | **B. Fixture embedded in `src/provider.cpp`** | Recorded bytes as a byte-array literal inside the one file already covered by the source-package hash | No core change; fixture becomes part of `artifact_sha256`, i.e. self-verifying | Works only for small fixtures; a real stem-separation output is megabytes; each new fixture is a new provider version and `BUILD` |
 | **C. Fixture root via `parameters`** | Host passes a directory path in `CapabilityRequest::parameters`; provider reads it | No core change | **Recommend against.** Parameters are hashed, never stored, so the record cannot say which fixture was replayed; and it grants ambient filesystem authority to Provider code, which is the opposite of the artifact-port model |
 
-### The question is already open — do not file a duplicate
+### The question was open — and is now settled
 
 `docs/prd/questions/provider-artifact-byte-access.md` (status *待架构设计*)
-already owns exactly this gap, and already records that it is **bidirectional**:
-`ArtifactRef` carries no Schema provenance, `AttemptStore` has no input
-Artifact resolver, and the output side has no read access either, so a Host can
-only rebuild paths from the private `.lmdj-workspace/attempts/` layout. It also
-records that the 2026-08-16 analysis-bench prototype's Host injection bridge
-was a stopgap that **must not graduate into a formal interface**. Its stated
-timing is "before the first formal Capability implementation that needs to
-parse structured Artifact bytes".
+owned exactly this gap and recorded that it is **bidirectional**: `ArtifactRef`
+carries no Schema provenance, `AttemptStore` has no input Artifact resolver,
+and the output side has no read access either, so a Host can only rebuild paths
+from the private `.lmdj-workspace/attempts/` layout. It also recorded that the
+2026-08-16 analysis-bench prototype's Host injection bridge was a stopgap that
+**must not graduate into a formal interface**.
 
-A replay Provider is a second, independent consumer arriving at the same wall,
-which is new evidence for that question rather than a new question.
-
-**It is also already on the machine-task list, as `D3`** —
-[`2026-08-17-machine-task-todo.md`](../../quality/2026-08-17-machine-task-todo.md)
-carries "Schema provenance on `ArtifactRef` and an input resolver on
-`AttemptStore`; retire the prototype's Host-injected bridge rather than
-graduating it", blocked on the D3 decision. So this track's blocker has an owner
-in both places already: the question file states it, and `D3` schedules it. Do
-not open a third.
+**Settled 2026-08-24** by
+[`docs/prd/decisions/2026-08-24-provider-artifact-byte-access.md`](../../prd/decisions/2026-08-24-provider-artifact-byte-access.md)
+([#206](https://github.com/endaye/lmdj/issues/206)); the question file was
+deleted in the same Task, per convention. The ruling: the formal read interface
+is a capability-gated `ArtifactSource` in provider-sdk (option A), deliberately
+**not implemented yet** — its trigger is the first formal Capability that must
+parse structured Artifact bytes. Option C is permanently rejected. Option B is
+sanctioned as this track's stopgap, so **this plan proceeds with Tasks 1–4 as
+written**, scoped to small proof-domain fixtures.
 
 ### What Task 0 must produce
 
@@ -130,13 +127,20 @@ not open a third.
   makes waiting tolerable.
 - [x] Do **not** create a new question file, and do not restate the gap in
   `docs/prd/open-questions.md`, which carries conventions only and no index.
-- [ ] When the question is settled, the deciding Task writes the decision file
+- [x] When the question is settled, the deciding Task writes the decision file
   and deletes the question file in the same commit, per
-  `docs/prd/decisions/README.md`.
-- [ ] Only then continue. If the answer is **A**, that SDK work is its own
+  `docs/prd/decisions/README.md`. **Done 2026-08-24** by
+  [`2026-08-24-lmdj-provider-artifact-byte-access-decision.md`](2026-08-24-lmdj-provider-artifact-byte-access-decision.md):
+  decision
+  [`docs/prd/decisions/2026-08-24-provider-artifact-byte-access.md`](../../prd/decisions/2026-08-24-provider-artifact-byte-access.md),
+  question file deleted.
+- [x] Only then continue. If the answer is **A**, that SDK work is its own
   Task and its own plan, and this plan resumes afterwards with a Provider that
   needs no privilege. If the answer is **B**, continue with Tasks 1–4 below as
-  written, scoped explicitly to small proof-domain fixtures.
+  written, scoped explicitly to small proof-domain fixtures. **Resolved
+  2026-08-24:** the decision sanctions **B** for this track now, with **A** as
+  the formal interface deferred to its own trigger — so Tasks 1–4 proceed as
+  written.
 
 **Why this may not be settled inside this Task.** Expanding what Provider code
 can read is a Capability-layer architecture decision, not an implementation

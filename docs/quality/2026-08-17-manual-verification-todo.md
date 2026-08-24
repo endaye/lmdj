@@ -204,7 +204,7 @@ implementation detail. Record the outcome in `docs/prd/decision-log.md`, in
 | A2 | Is `native-test-host` a product component to be renamed, or does it leave the Assembly and every distribution? | the Assembly cleanup; also needs a written rule for what may enter a distribution package | short |
 | A3 | Build Manifest reproducibility — detached manifest, stripped archived copy, or drop the rebuild-and-compare claim | first external distribution (`dev` Channel or above) | short |
 | D1 + D2 | Long-material resource model and Loop BPM time-stretch — one review | any long-material work; touches Cooker Bank allocation, the lock-free publication layout, manifest semantics and Facade validation | design review |
-| D3 | Provider SDK Artifact byte access, both directions | the first Capability implementation that parses structured Artifact bytes | design review |
+| ~~D3~~ | ~~Provider SDK Artifact byte access, both directions~~ | **Decided 2026-08-24** ([#206](https://github.com/endaye/lmdj/issues/206), [decision](../prd/decisions/2026-08-24-provider-artifact-byte-access.md)): capability-gated `ArtifactSource` in provider-sdk, both directions in the SDK layer; implementation deferred to the first Capability that parses structured Artifact bytes; option C permanently rejected | ~~design review~~ |
 | D4 + D5 | Recording concurrency semantics, and Take scope — events only or audio bounce too | **Stage 9 itself** | design review |
 
 P1 in full: the four passes above are bound to `1.0.11.0`, `1.0.20.0`,
