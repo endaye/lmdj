@@ -35,7 +35,7 @@ release, publication, deployment, or Channel promotion.
 ## Task shipping operations
 
 For shipping a locally completed issue or task, coding agents must read and follow
-`.agents/skills/ship-task/SKILL.md`. It governs the full transition from local verification
+`.agents/skills/issue-done/SKILL.md`. It governs the full transition from local verification
 and Conventional Commit to push, Pull Request creation, CI auto-merge, and worktree/branch cleanup.
 
 ## Release operations
