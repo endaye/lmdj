@@ -94,7 +94,7 @@ fixes rather than three times is the whole argument.
 | --- | --- | --- | --- |
 | ~~F1 + F2~~ | ~~Capture panel presentation, position and focus~~ | [Creator UI remediation](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md) Task 2 | **done 2026-08-24** — viewport-anchored modal panel on a shared `ModalDialog` primitive, focus follows the phase's primary action, `Escape` closes in every phase; landed in Product Build `1.0.31.0` / Creator `1.5.0` |
 | ~~F5~~ | ~~Replace the trim handle pointer model~~ | same plan, Task 3 | **done 2026-08-24** — visible grips with midpoint-partitioned grab zones, grab-offset drags with no jump-to-click, inert waveform middle, keyboard/AT channel unchanged; landed in Product Build `1.0.32.0` / Creator `1.5.1` |
-| F3 | Recoverable presentation for `DUPLICATE_ID` | same plan, Task 4 | **ready** — P2 settled 2026-08-24 ([#214](https://github.com/endaye/lmdj/issues/214)) |
+| ~~F3~~ | ~~Recoverable presentation for `DUPLICATE_ID`~~ | same plan, Task 4 | **done 2026-08-24** — distinct non-fatal heading ("Project already on this device"), body names the refusal and that nothing was lost, `Open local Project` control leads to the local Projects list and dismisses the panel without a reload; landed in Product Build `1.0.33.0` / Creator `1.5.2` |
 | ~~—~~ | ~~Design gate for the above~~ | same plan, Task 1 | **done 2026-08-24** — [decision](../prd/decisions/2026-08-24-capture-panel-modal-and-trim-handles.md): modal capture panel, focus follows the primary action, visible-grip midpoint-partitioned trim handles, recoverable `DUPLICATE_ID` |
 
 The whole plan is one branch's worth of work now that P2 has landed. Its

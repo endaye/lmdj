@@ -632,6 +632,12 @@ function Workspace({
       <ErrorPanel
         code={state.runtime.errorCode}
         details={state.runtime.errorDetails}
+        {...(session && state.runtime.errorCode === "DUPLICATE_ID"
+          ? {onOpenLocalProject: () => {
+              setShowLocalProjects(true);
+              setListAttempt((attempt) => attempt + 1);
+            }}
+          : {})}
         {...(session && state.runtime.errorCode === "PROJECT_BUSY" && busyRetry
           ? {onRetryProject: () => {
               if (busyRetry.kind === "list") {

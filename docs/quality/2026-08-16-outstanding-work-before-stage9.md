@@ -322,7 +322,8 @@ from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
 F1 and F2 are fixed in Product Build `1.0.31.0` (Creator `1.5.0`), F5 in
-`1.0.32.0` (Creator `1.5.1`); the rest are not fixed.
+`1.0.32.0` (Creator `1.5.1`), F3 in `1.0.33.0` (Creator `1.5.2`); the rest
+are not fixed.
 
 F1, F2, F3 and F5 are Creator front-end defects and are scoped together in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md).
@@ -356,13 +357,25 @@ label, which never requires the element to be above the fold — this class of
 defect was invisible to the whole browser gate until the `boundingBox`
 assertion was added.
 
-### F3. `DUPLICATE_ID` presents as fatal with no way out
+### ~~F3. `DUPLICATE_ID` presents as fatal with no way out~~ — fixed in `1.0.33.0`
 
 Re-importing a bundle whose local Project has since diverged renders under
 `Creator unavailable` with no recovery control (`error_panel.tsx:36`); only
 `PROJECT_BUSY` and `HOST_RESTART_REQUIRED` get one. No data is lost —
 `Open local` still opens the diverged Project, and a plain reload clears the
 error. The defect is the presentation and the missing affordance.
+
+Fixed 2026-08-24 in Product Build `1.0.33.0` / Creator `1.5.2` (remediation
+plan Task 4): `DUPLICATE_ID` no longer renders under the fatal
+`Creator unavailable` heading — the panel names the actual situation
+("Project already on this device"), explains that the import was refused
+because the local copy of the Project has newer changes and that nothing was
+lost, and offers an `Open local Project` recovery control that leads to the
+local Projects list (the same destination as `Open local`) and dismisses the
+panel without a reload. Every other error code's heading, message and
+retry wiring is unchanged. The physical re-walk that confirms the fix by
+hand stays open in `2026-08-17-manual-verification-todo.md` (remediation
+plan Task 5).
 
 ### F4. A silent default input commits silence with no indication
 
@@ -462,8 +475,9 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has) and D4
 1. ~~**A1 real-microphone check**~~ — done 2026-08-17. The capture chain
    passed all five hearing criteria; the session returned F1–F4, of which
    ~~**F1 + F2 are one cheap fix**~~ — fixed in `1.0.31.0` (2026-08-24);
-   ~~F5~~ fixed in `1.0.32.0` (2026-08-24); F3 remains ready on the same
-   remediation plan.
+   ~~F5~~ fixed in `1.0.32.0` (2026-08-24); ~~F3~~ fixed in `1.0.33.0`
+   (2026-08-24). Only the Task 5 physical re-walk remains on the remediation
+   plan.
 2. ~~**B1 + B2 together**~~ — done 2026-08-18. ~~B3~~ done 2026-08-21 in #226
    (`4312a6de`). B4 remains open.
 3. ~~**C1**~~ — invalidated by measurement; superseded by the facade

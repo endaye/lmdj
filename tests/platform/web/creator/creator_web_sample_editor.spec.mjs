@@ -553,3 +553,58 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
   await expect(page.getByRole("button", {name: "Activate audio"})).toBeDisabled();
   await expect(page.getByRole("button", {name: "Export report"})).toBeDisabled();
 });
+
+test("re-importing a diverged Project Bundle recovers through Open local Project without a reload", async ({page, browserName}) => {
+  test.skip(browserName !== "chromium");
+  test.setTimeout(300_000);
+  await page.goto("/index.html");
+  await importV1SampleProject(page);
+  await activateAudio(page);
+  await enterSampleEditor(page);
+
+  // F3: diverge the local Project from the imported bundle. Committing a
+  // Sample to Pad A1 advances the local Project to revision 47.
+  await expect(page.getByRole("button", {name: "Pad A1 — empty"})).toBeVisible();
+  await chooseSampleFile(
+    page,
+    "Add Sample to Pad A1",
+    "proof-ramp.wav",
+    pcm16Wav({}),
+  );
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible({timeout: 120_000});
+  await expectProjectRevision(page, 47);
+
+  // Re-importing the original bundle is refused as DUPLICATE_ID: the local
+  // copy of the same Project has newer changes. The refusal must present as
+  // a recoverable situation, not as "Creator unavailable".
+  await page.getByRole("button", {name: "Suspend audio"}).click();
+  await expect(page.getByTestId("audio-state")).toHaveText("Audio suspended", {
+    timeout: AUDIO_TRANSITION_TIMEOUT_MS,
+  });
+  await page.getByRole("button", {name: "Project"}).click();
+  const chooserPromise = page.waitForEvent("filechooser");
+  await page.getByRole("button", {name: "Import .lmdj"}).click();
+  await (await chooserPromise).setFiles(sampleBundle);
+  const alert = page.getByRole("alert");
+  await expect(alert).toBeVisible({timeout: 120_000});
+  await expect(alert).toContainText("Project already on this device");
+  await expect(alert).toContainText(
+    "The import was refused because the local copy of this Project has newer changes. Nothing was lost.",
+  );
+  await expect(alert).not.toContainText("Creator unavailable");
+
+  // The recovery control dismisses the panel and leads to the local Projects
+  // list — the same destination as Open local — without a reload.
+  await page.getByRole("button", {name: "Open local Project"}).click();
+  await expect(alert).toHaveCount(0);
+  await expect(page.getByRole("heading", {name: "Local Projects"}))
+    .toBeVisible();
+  const diverged = page.locator(".local-projects li")
+    .filter({hasText: "Project 00000000"});
+  await expect(diverged).toContainText("Revision 47");
+  await diverged.getByRole("button", {name: "Open Project 00000000"}).click();
+  await expect(page.getByRole("heading", {name: "Project 00000000"}))
+    .toBeVisible({timeout: 120_000});
+  await expect(page.locator(".project-summary")).toContainText("Revision47");
+});

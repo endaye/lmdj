@@ -3,6 +3,7 @@ interface ErrorPanelProps {
   details?: Readonly<Record<string, unknown>> | undefined;
   onRetryProject?: () => void;
   onRetryRuntime?: () => void;
+  onOpenLocalProject?: () => void;
 }
 
 const STORAGE_CONDITIONS = new Set([
@@ -34,7 +35,7 @@ function messageFor(
     case "INVALID_PROJECT":
       return "The Project Bundle is invalid.";
     case "DUPLICATE_ID":
-      return "The Project conflicts with existing local data.";
+      return "The import was refused because the local copy of this Project has newer changes. Nothing was lost.";
     case "PROJECT_BUSY":
       return "The local Project is busy in another tab or process.";
     case "WEB_RUNTIME_RESOURCE_LIMIT":
@@ -66,12 +67,20 @@ export function ErrorPanel({
   details = {},
   onRetryProject,
   onRetryRuntime,
+  onOpenLocalProject,
 }: ErrorPanelProps) {
   if (code === null) return null;
   return (
     <aside className="error-panel" role="alert">
-      <strong>Creator unavailable</strong>
+      <strong>{code === "DUPLICATE_ID"
+        ? "Project already on this device"
+        : "Creator unavailable"}</strong>
       <span>{messageFor(code, details)}</span>
+      {code === "DUPLICATE_ID" && onOpenLocalProject && (
+        <button type="button" onClick={onOpenLocalProject}>
+          Open local Project
+        </button>
+      )}
       {onRetryProject && (
         <button type="button" onClick={onRetryProject}>Retry project</button>
       )}

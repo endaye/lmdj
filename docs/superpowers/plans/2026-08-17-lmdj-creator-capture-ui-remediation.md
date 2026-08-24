@@ -263,10 +263,24 @@ and the mirror case. Existing waveform tests continue to pass unchanged.
 
 ### Task 4 — Recoverable presentation for `DUPLICATE_ID` (F3)
 
-- [ ] Give `DUPLICATE_ID` a message that names the actual situation and a
+**Done 2026-08-24.** Implemented the P2-D4 decisions: `DUPLICATE_ID` no
+longer renders under the fatal `Creator unavailable` heading — the panel
+names the actual situation ("Project already on this device") and explains
+that the import was refused because the local copy of the Project has newer
+changes and that nothing was lost. A new `Open local Project` recovery
+control leads to the local Projects list — the same destination as the
+existing `Open local` affordance — and dismisses the panel through the
+existing listing path, without a reload; the diverged local Project's
+identity is not available to the Host (the Runtime's `DUPLICATE_ID` error
+carries no details and the Host must not parse the bundle), so the control
+targets the list rather than a direct open. Every other error code's
+heading, message and retry wiring is byte-identical. Landed with Creator
+Web Host `1.5.2` in Product Build `1.0.33.0`.
+
+- [x] Give `DUPLICATE_ID` a message that names the actual situation and a
       recovery control that leads to the existing local Project, rather than
       the bare `Creator unavailable` heading.
-- [ ] Confirm no other error code's presentation changes.
+- [x] Confirm no other error code's presentation changes.
 
 **Verification:** component tests for the message and the control; a Playwright
 journey that imports, diverges the local Project, re-imports, and recovers
