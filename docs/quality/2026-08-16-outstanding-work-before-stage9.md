@@ -335,7 +335,7 @@ F1–F4 were found while performing A1's real-microphone row (M1); F5 and F6 cam
 from the first check of row M2, which stopped there. Each was reproduced or
 traced to source before being recorded; measurements for F1–F4 are in the
 [evidence file](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md).
-F1–F5 and F6 are combined into Product Build `1.0.32.0` (Creator `1.5.4`,
+F1–F5 and F6 are combined into Product Build `1.0.36.0` (Creator `1.5.5`,
 audio-runtime `0.5.1`) — all six session defects are fixed in source, while
 their physical re-runs remain open.
 
@@ -347,7 +347,7 @@ that plan; both decisions landed 2026-08-24, F4 is implemented in
 and F6 in
 [`2026-08-24-lmdj-render-path-amplitude-ramp.md`](../superpowers/plans/2026-08-24-lmdj-render-path-amplitude-ramp.md).
 
-### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.32.0`
+### ~~F1. The capture panel has no styling and opens below the fold~~ — fixed in `1.0.36.0`
 
 `.capture-panel` has no rule in `apps/creator-web/src/styles.css`. It renders
 as an unstyled flow element at the end of the Sample surface, with no
@@ -356,14 +356,14 @@ height `157`, document height `983`. In a real browser window the panel and its
 `Record into Pad N` button are entirely below the fold, so pressing
 `Record Sample` looks like nothing happened.
 
-### ~~F2. Stop is pushed off screen when recording starts~~ — fixed in `1.0.32.0`
+### ~~F2. Stop is pushed off screen when recording starts~~ — fixed in `1.0.36.0`
 
 Same root cause. Entering `recording` adds the level meter and waveform canvas,
 growing the panel from 157 px to 277 px, all downward, and the page does not
 scroll to follow. The take cannot be stopped from the visible surface.
 
-F1 and F2 are one fix, combined 2026-08-24 into Product Build `1.0.32.0` /
-Creator `1.5.4` (remediation plan Task 2): the panel is now a viewport-anchored modal
+F1 and F2 are one fix, combined 2026-08-24 into Product Build `1.0.36.0` /
+Creator `1.5.5` (remediation plan Task 2): the panel is now a viewport-anchored modal
 `<dialog>` with fixed geometry that does not grow when entering `recording`,
 focus moves to the phase's primary action on open and after phase transitions,
 and the Playwright gate asserts the panel's and `Stop`'s `boundingBox` against
@@ -374,7 +374,7 @@ label, which never requires the element to be above the fold — this class of
 defect was invisible to the whole browser gate until the `boundingBox`
 assertion was added.
 
-### ~~F3. `DUPLICATE_ID` presents as fatal with no way out~~ — fixed in `1.0.32.0`
+### ~~F3. `DUPLICATE_ID` presents as fatal with no way out~~ — fixed in `1.0.36.0`
 
 Re-importing a bundle whose local Project has since diverged renders under
 `Creator unavailable` with no recovery control (`error_panel.tsx:36`); only
@@ -382,7 +382,7 @@ Re-importing a bundle whose local Project has since diverged renders under
 `Open local` still opens the diverged Project, and a plain reload clears the
 error. The defect is the presentation and the missing affordance.
 
-Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.4` (remediation
+Fixed 2026-08-24 in Product Build `1.0.36.0` / Creator `1.5.5` (remediation
 plan Task 4): `DUPLICATE_ID` no longer renders under the fatal
 `Creator unavailable` heading — the panel names the actual situation
 ("Project already on this device"), explains that the import was refused
@@ -394,7 +394,7 @@ retry wiring is unchanged. The physical re-walk that confirms the fix by
 hand stays open in `2026-08-17-manual-verification-todo.md` (remediation
 plan Task 5).
 
-### ~~F4. A silent default input commits silence with no indication~~ — fixed in `1.0.32.0`
+### ~~F4. A silent default input commits silence with no indication~~ — fixed in `1.0.36.0`
 
 `capture_controller.ts:62` requests audio with no `deviceId`, so capture follows
 the OS default input; the absent device picker is a **declared** scope boundary
@@ -405,7 +405,7 @@ silence onto a Pad with no input-level gate, no silence detection and no
 warning. The operator's only signal is the level meter, which F1 and F2 keep
 off screen.
 
-Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.4`, implementing
+Fixed 2026-08-24 in Product Build `1.0.36.0` / Creator `1.5.5`, implementing
 the [2026-08-24 decision](../prd/decisions/2026-08-24-capture-input-gate-and-identity.md)
 (option a + b, no device picker): committing a take whose whole-take measured
 peak is exactly zero — digital silence — is refused with an in-panel
@@ -420,7 +420,7 @@ The physical re-run that proves the gap is closed by hand stays open in
 `2026-08-17-manual-verification-todo.md` (the "F4 resolution lands" trigger
 row).
 
-### ~~F5. The waveform trim handles cannot be aimed~~ — fixed in `1.0.32.0`
+### ~~F5. The waveform trim handles cannot be aimed~~ — fixed in `1.0.36.0`
 
 Both trim handles are native `input[type="range"]` elements
 (`waveform_editor.tsx:372`, `:393`) styled `position: absolute; inset-inline: 0;
@@ -437,7 +437,7 @@ rather than being ignored. `opacity: .01` makes none of it learnable.
 Found within a minute of a human first trying to trim a Sample. The keyboard
 path is sound and must survive the fix.
 
-Fixed 2026-08-24 in Product Build `1.0.32.0` / Creator `1.5.4` (remediation
+Fixed 2026-08-24 in Product Build `1.0.36.0` / Creator `1.5.5` (remediation
 plan Task 3): each handle line is now a visible grip (14px bar with top/bottom
 affordances) whose grab zone spans 12 px to each side of the line, partitioned
 at the midpoint between the two lines so adjacent handles stay independently
@@ -453,7 +453,7 @@ Scoped in
 [`2026-08-17-lmdj-creator-capture-ui-remediation.md`](../superpowers/plans/2026-08-17-lmdj-creator-capture-ui-remediation.md)
 with F1–F3.
 
-### ~~F6. The render path has no amplitude ramp anywhere~~ — fixed in `1.0.32.0`
+### ~~F6. The render path has no amplitude ramp anywhere~~ — fixed in `1.0.36.0`
 
 Trimming a Sample and triggering it produces audible clicks at the trim
 boundaries — the first check of row M2, 2026-08-17.
@@ -469,7 +469,7 @@ discontinuity, which is what the click is.
 The same absence predicts clicks at the loop seam and on releasing a held
 voice; neither has been tested yet.
 
-Fixed 2026-08-24 in Product Build `1.0.32.0` (audio-runtime `0.5.1`),
+Fixed 2026-08-24 in Product Build `1.0.36.0` (audio-runtime `0.5.1`),
 implementing the
 [2026-08-24 decision](../prd/decisions/2026-08-24-render-path-amplitude-ramp.md)
 (96-frame linear attack/release, no zero-crossing snap): the realtime render
@@ -516,7 +516,7 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
 1. ~~**A1 real-microphone check**~~ — done 2026-08-17. The capture chain
    passed all five hearing criteria; the session returned F1–F4, of which
    ~~**F1 + F2 are one cheap fix**~~, ~~F5~~, ~~F3~~ and ~~F4~~ are combined
-   into `1.0.32.0` (2026-08-24). Only the physical
+   into `1.0.36.0` (2026-08-24). Only the physical
    re-walks remain (remediation plan Task 5 and the F4 trigger row).
 2. ~~**B1 + B2 together**~~ — done 2026-08-18. ~~B3~~ done 2026-08-21 in #226
    (`4312a6de`). B4 remains open.

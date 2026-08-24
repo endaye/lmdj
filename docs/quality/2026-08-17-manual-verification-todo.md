@@ -106,7 +106,7 @@ run against the current Build.
 | ID | Journey | Origin | Status |
 | --- | --- | --- | --- |
 | M1 | Real microphone capture → commit → playback hearing | 1.0.23.0 ([Stage 8B](2026-08-16-stage8b-pad-capture-acceptance.md)) | **`PASS` 2026-08-17** ([evidence](../release-evidence/2026-08-17-stage8b-real-microphone-capture-1.0.23.0.md)) |
-| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. The F6 ramp is combined into Product Build `1.0.32.0` (audio-runtime `0.5.1`), so checks 1 and 5 are ready to re-run — with check 5 (loop seam) EXPECTED to remain clicky until the deferred crossfade lands. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
+| M2 | Human hearing and subjective audio quality | 1.0.22.0 ([Stage 8](2026-08-09-stage8-sample-editor-acceptance.md)) | **started 2026-08-17, stopped at check 1** — trimming produces audible clicks at the boundaries (F6); the trim handles could not be aimed (F5). Checks 2–8 not performed. The F6 ramp is combined into Product Build `1.0.36.0` (audio-runtime `0.5.1`), so checks 1 and 5 are ready to re-run — with check 5 (loop seam) EXPECTED to remain clicky until the deferred crossfade lands. Row stays `unverified`; a measured failure is not a pass and not a silent omission |
 | M3 | Pointer input | inherited from Stage 6/7 | not started |
 | M4 | *(optional)* record past 60 s and observe the buffer cap in a browser | E1 in the triage doc; unit coverage only today | open |
 
@@ -238,9 +238,9 @@ untestable by hand.
 
 | Trigger | Rows to run | Why |
 | --- | --- | --- |
-| Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. All four fixes are combined into Product Build `1.0.32.0` / Creator `1.5.4`, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
-| F6 ramp policy lands | M2 checks 1 and 5 | both failed by construction before the fix. The ramp is combined into Product Build `1.0.32.0` / audio-runtime `0.5.1`, so the re-run is ready. Check 1 should now be clean; check 5 is expected to remain clicky because loop-seam crossfade is explicitly deferred |
-| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution is combined into Product Build `1.0.32.0` / Creator `1.5.4`, so the re-run is ready |
+| Creator UI remediation lands (F1, F2, F3, F5) | re-walk M1's capture journey far enough to confirm the panel, `Stop` and the recovery path are usable without prior knowledge; then run M2 and M3 | Task 5 of the remediation plan. All four fixes are combined into Product Build `1.0.36.0` / Creator `1.5.5`, so the re-walk is ready to run. This does **not** re-open M1's hearing result, which stands on its own |
+| F6 ramp policy lands | M2 checks 1 and 5 | both failed by construction before the fix. The ramp is combined into Product Build `1.0.36.0` / audio-runtime `0.5.1`, so the re-run is ready. Check 1 should now be clean; check 5 is expected to remain clicky because loop-seam crossfade is explicitly deferred |
+| F4 resolution lands | M1's capture journey with the input deliberately switched mid-session | proves the gap is actually closed rather than only mitigated. The resolution is combined into Product Build `1.0.36.0` / Creator `1.5.5`, so the re-run is ready |
 | Any new Product Build allocated for team testing or release | every row whose trigger-set diff is non-empty since its last pass, derived per the [carry-forward rule](../prd/decisions/2026-08-24-physical-acceptance-carry-forward.md); the derivation is recorded in the Build's acceptance record | answered 2026-08-24 by P1 ([#236](https://github.com/endaye/lmdj/issues/236)) |
 
 ---
@@ -265,7 +265,7 @@ omitted and not called passed.
 ## Suggested order
 
 1. ~~**M1**~~ — done 2026-08-17, `PASS`, four findings. **M2 stopped at its
-   first check**; both blockers are combined into `1.0.32.0`, so checks 1–2 can
+   first check**; both blockers are combined into `1.0.36.0`, so checks 1–2 can
    be performed and checks 1 and 5 re-run, with check 5 expected to remain
    clicky until the deferred crossfade lands. **M3** is independent and can run
    at any time.
@@ -273,7 +273,7 @@ omitted and not called passed.
    2026-08-24 ([#236](https://github.com/endaye/lmdj/issues/236)): rows re-run
    unless a recorded unchanged-tree derivation carries them, so M6 stays on
    the list and every future Build derives its own re-run set.
-3. ~~**F6**~~ — settled 2026-08-24 and combined into Product Build `1.0.32.0` / audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. **D4 + D5** — what
+3. ~~**F6**~~ — settled 2026-08-24 and combined into Product Build `1.0.36.0` / audio-runtime `0.5.1`, so M2 checks 1 and 5 can be re-run. **D4 + D5** — what
    Stage 9 itself waits on.
 4. **M7 + M8**, then **M9 + M10 + M11** — one session each, before any external
    distribution.

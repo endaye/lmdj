@@ -127,18 +127,20 @@ test("records, trims and commits a capture onto an empty Pad", async ({page}, te
     .toBeVisible();
 
   await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  // Commit returns the modal panel to idle. Close it before asserting the
+  // background Project surface: native modal semantics make that surface
+  // intentionally inert while the dialog remains open.
+  await expect(panel.getByRole("button", {name: "Record into Pad A1"}))
     .toBeVisible({timeout: 180_000});
+  await panel.getByRole("button", {name: "Close"}).click();
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible();
   // The committed capture flows through the ordinary post-import behaviour:
   // the Pad reads assigned and the Sample Editor renders its waveform.
   await expect(page.getByRole("img", {name: "Pad A1 mirrored waveform"}))
     .toBeVisible({timeout: 120_000});
   await expectProjectRevision(page, 47);
-  // Commit returns the panel to idle rather than dismissing it: the buffer is
-  // released and only an explicit Close leaves capture.
-  await expect(panel.getByRole("button", {name: "Record into Pad A1"})).toBeVisible();
-  await panel.getByRole("button", {name: "Close"}).click();
-  await expect(panel).toBeHidden();
 });
 
 test("clamps a long take to the committable selection", async ({page}, testInfo) => {
@@ -209,8 +211,12 @@ test("capture never leaks device identity or filesystem paths", async ({page}, t
   const panel = await recordAtLeast(page, "Pad A1", 1);
   await panel.getByRole("button", {name: "Stop"}).click();
   await panel.getByRole("button", {name: "Commit"}).click();
-  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+  await expect(panel.getByRole("button", {name: "Record into Pad A1"}))
     .toBeVisible({timeout: 180_000});
+  await panel.getByRole("button", {name: "Close"}).click();
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole("button", {name: "Pad A1 — assigned"}))
+    .toBeVisible();
 
   // Only the Artifact bytes and their SHA-256 identity persist: no device
   // label, no device id, no host path (design §8).

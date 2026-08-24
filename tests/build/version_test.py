@@ -58,7 +58,7 @@ expected_modules = {
     ),
     "packages/web-runtime-platform/module.json": (
         "web-runtime-platform",
-        "0.3.5",
+        "0.3.6",
         1,
         {"application-facade": "1.4.5", "audio-runtime": "0.5.1"},
     ),
@@ -82,15 +82,15 @@ expected_modules = {
     ),
     "apps/web-runtime-host/module.json": (
         "web-runtime-host",
-        "1.2.14",
+        "1.2.15",
         1,
-        {"web-runtime-platform": "0.3.5"},
+        {"web-runtime-platform": "0.3.6"},
     ),
     "apps/creator-web/module.json": (
         "creator-web",
-        "1.5.4",
+        "1.5.5",
         1,
-        {"web-runtime-platform": "0.3.5"},
+        {"web-runtime-platform": "0.3.6"},
     ),
 }
 for relative, (

@@ -20,8 +20,8 @@ rebase.
 
 - Designed: full new product/core architecture.
 - Implemented: Headless Core Proof, the Formal Native Host, Creator Web Host
-  `1.5.4`, Formal Web Runtime Host `1.2.14`, and their shared Web Runtime
-  Platform `0.3.5`, including the Stage 8 Sample Editor and Project Truth v2.
+  `1.5.5`, Formal Web Runtime Host `1.2.15`, and their shared Web Runtime
+  Platform `0.3.6`, including the Stage 8 Sample Editor and Project Truth v2.
   Browser Hosts depend only on that Platform; Product Assembly owns exact Host
   identities and Provider catalog wiring.
 - Not implemented: installable/offline PWA behavior, Sample intelligence,

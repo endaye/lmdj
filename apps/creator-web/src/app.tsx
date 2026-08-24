@@ -38,6 +38,7 @@ import {
   initialCreatorState,
   selectCanImportProject,
   selectCanOpenProject,
+  selectCreatorPhase,
   type CreatorState,
 } from "./state/creator_state";
 
@@ -242,20 +243,26 @@ function Workspace({
       if (inputAdverseState.current !== runtimeHostState) {
         inputAdverseState.current = runtimeHostState;
         resetInputForAdverseLifecycle();
-        dispatch({type: "audio-changed", phase: "suspended"});
+        if (stateRef.current.audio.phase !== "suspending") {
+          dispatch({type: "audio-changed", phase: "suspended"});
+        }
       }
     }
   }, [runtimeHostState, runtimeRecoveryProbeReady]);
 
   useEffect(() => {
-    if (!session || !runtimePhase) return;
-    setBusyRetry(null);
+    if (!runtimePhase) return;
     dispatch({
       type: "runtime-changed",
       phase: runtimePhase,
       errorCode: runtimeErrorCode ?? null,
       errorDetails: runtimeErrorDetails ?? {},
     });
+  }, [runtimePhase, runtimeErrorCode, runtimeErrorDetails]);
+
+  useEffect(() => {
+    if (!session || !runtimePhase) return;
+    setBusyRetry(null);
     if (runtimePhase !== "ready") return;
     let active = true;
     dispatch({type: "projects-listing"});
@@ -322,8 +329,6 @@ function Workspace({
   }, [
     session,
     runtimePhase,
-    runtimeErrorCode,
-    runtimeErrorDetails,
     listAttempt,
   ]);
 
@@ -464,14 +469,20 @@ function Workspace({
   };
 
   const suspendAudio = async () => {
-    if (!session) return;
-    if (await session.suspendAudio()) {
-      if (inputAdverseState.current !== "audio-suspended") {
-        inputAdverseState.current = "audio-suspended";
-        resetInputForAdverseLifecycle();
+    if (!session || stateRef.current.audio.phase !== "running") return;
+    dispatch({type: "audio-changed", phase: "suspending"});
+    if (!(await session.suspendAudio())) {
+      if (selectCreatorPhase(stateRef.current) === "suspending" &&
+        session.diagnostics().state === "running") {
+        dispatch({type: "audio-changed", phase: "running"});
       }
-      dispatch({type: "audio-changed", phase: "suspended"});
+      return;
     }
+    if (inputAdverseState.current !== "audio-suspended") {
+      inputAdverseState.current = "audio-suspended";
+      resetInputForAdverseLifecycle();
+    }
+    dispatch({type: "audio-changed", phase: "suspended"});
   };
 
   const retryPrepare = async () => {

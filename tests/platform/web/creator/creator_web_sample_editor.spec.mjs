@@ -511,7 +511,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
     .toBeVisible({timeout: 120_000});
   const trimStart = page.getByRole("spinbutton", {name: "Pad A1 Start time (seconds)"});
   const trimEnd = page.getByRole("spinbutton", {name: "Pad A1 End time (seconds)"});
-  await expect(trimStart).toHaveValue("0.01");
+  await expect(trimStart).toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
   const dragGrip = async (grip, deltaX) => {
     const box = await grip.boundingBox();
@@ -526,7 +526,7 @@ test("packaged Sample Editor proves the real Facade v1-to-v2 journey", async ({p
   await waitForControlMutation(page, trimStart, async () => {
     await dragGrip(page.locator('[data-grip-zone="start"]'), 40);
   }, 59);
-  await expect(trimStart).not.toHaveValue("0.01");
+  await expect(trimStart).not.toHaveValue("0");
   await expect(trimEnd).toHaveValue("2");
   const movedStart = await trimStart.inputValue();
   await waitForControlMutation(page, trimEnd, async () => {
@@ -557,6 +557,7 @@ test("Sample Editor WebKit capability boundary is explicit, private, and non-phy
 test("re-importing a diverged Project Bundle recovers through Open local Project without a reload", async ({page, browserName}) => {
   test.skip(browserName !== "chromium");
   test.setTimeout(300_000);
+  await installHostProofRecorder(page);
   await page.goto("/index.html");
   await importV1SampleProject(page);
   await activateAudio(page);

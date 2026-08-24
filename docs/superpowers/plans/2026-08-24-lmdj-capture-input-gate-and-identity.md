@@ -103,7 +103,7 @@ and `npx tsc --noEmit` stay green.
 
 Creator Web Host **patch** `1.5.2` → `1.5.3` (module.json, package.json,
 package-lock.json); the final integration combines this change into Product
-Build **1.0.32.0** on the latest `main`. Regenerate with repo tooling
+Build **1.0.36.0** on the latest `main`. Regenerate with repo tooling
 (`python3 scripts/version.py lock`, runtime-identity generator) and update
 the literal expectations (`tests/build/version_test.py`,
 `tests/conformance/module_graph_test.py`, portal repo-facts,
@@ -111,14 +111,14 @@ the literal expectations (`tests/build/version_test.py`,
 `products/lmdj/assembly.json`). Update the current portal pages (at minimum
 `hosts/creator-web` — the capture surface description and the device-picker
 boundary note both change) and the quality ledgers: mark F4 fixed in
-`1.0.32.0` in section F of
+`1.0.36.0` in section F of
 `docs/quality/2026-08-16-outstanding-work-before-stage9.md` (F3/F5
 convention), mark the F4 row done in
 `docs/quality/2026-08-17-machine-task-todo.md`, and note the build number on
 the open "F4 resolution lands" trigger row in
 `docs/quality/2026-08-17-manual-verification-todo.md` (physical rows
 untouched; the human re-run stays open). Then freeze the portal snapshot as
-a SECOND commit: `scripts/architecture-portal.sh version 1.0.32.0 canary`
+a SECOND commit: `scripts/architecture-portal.sh version 1.0.36.0 canary`
 (freezer needs a clean worktree); post-freeze
 `scripts/architecture-portal.sh check` must exit 0.
 
@@ -142,9 +142,9 @@ Vitest component tests only — stated explicitly rather than forced.
 - `creator-web` takes a SemVer **patch** bump `1.5.2` → `1.5.3`: the gate
   and identity display repair a defective Host surface behaviour without
   changing any public Host boundary, Contract or protocol.
-- Product Build **1.0.32.0** is allocated for the integrated Assembly composition,
+- Product Build **1.0.36.0** is allocated for the integrated Assembly composition,
   with its immutable Architecture Portal snapshot
-  (`scripts/architecture-portal.sh version 1.0.32.0 canary`).
+  (`scripts/architecture-portal.sh version 1.0.36.0 canary`).
 - No Core Module, Provider, Contract or Application Facade version changes;
   the diff does not reach them.
 
@@ -156,7 +156,7 @@ Vitest component tests only — stated explicitly rather than forced.
   device-picker boundary; both change when this lands (silence gate, input
   identity, devicechange notice; the picker remains out of scope).
 - The version-carrying portal pages change with the new Product Build, and
-  the `1.0.32.0` snapshot is frozen in the same Task (second commit).
+  the `1.0.36.0` snapshot is frozen in the same Task (second commit).
 - The quality ledgers listed in Task 4 change in the same commit that closes
   F4.
 - Run `scripts/architecture-portal.sh check` before every commit (the

@@ -22,7 +22,7 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 当前组成
 
-Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.3.5`、Diagnostic Web Runtime Host `1.2.14` 与 Creator Web Host `1.5.4` 组成，并锁入 Product Build `1.0.32.0`。这次分配组合 Creator Capture UI F1–F5 与 Audio Runtime 渲染路径 96 帧线性斜坡 F6：共享 Platform 只更新精确 Facade/Audio Runtime 依赖，两个 Host 只更新精确 Platform 依赖。Creator 的提交前静音门与输入身份、`DUPLICATE_ID` 可恢复呈现、trim 握把指针模型与 Capture 模态面板只改变 Host 呈现，pre-commit Crop 只修改 Host-local ephemeral capture，都不改变共享 Platform 或 Diagnostic Host。
+Web Runtime Lab 继续作为独立实验与物理证据准备器，不在 Product Assembly。正式产品路径由共享 Web Runtime Platform `0.3.6`、Diagnostic Web Runtime Host `1.2.15` 与 Creator Web Host `1.5.5` 组成，并锁入 Product Build `1.0.36.0`。这次分配组合 Creator Capture UI F1–F5、Audio Runtime 渲染路径 96 帧线性斜坡 F6，以及 CI 发现的显式暂停竞态修复：共享 Platform 先提交 Host quiescence，再 suspend 浏览器 Context；两个 Host 绑定新的精确 Platform 身份。Creator 的提交前静音门与输入身份、`DUPLICATE_ID` 可恢复呈现、trim 握把指针模型与 Capture 模态面板只改变 Host 呈现，pre-commit Crop 只修改 Host-local ephemeral capture，都不改变 Facade 或 Project Truth。
 
 ## 共享 Platform
 
@@ -74,7 +74,7 @@ Netlify 静态托管同一份已验证的 release `dist`，不运行该 Python s
 `docs/quality/2026-08-08-web-runtime-public-deployment-acceptance.md`。
 
 发布工具、workflow、历史 Build 的 tag/Release 或任何部署证据，都不自动证明当前 Product
-Build `1.0.32.0`、历史 `1.0.31.0` / `1.0.30.0` / `1.0.29.0`、未通过审查的 `1.0.28.0` 或历史 Product Build `1.0.27.0` / `1.0.26.0` / `1.0.25.0` 已获得 remote verified tag、Release、Deploy ID、
+Build `1.0.36.0`、历史 `1.0.31.0` / `1.0.30.0` / `1.0.29.0`、未通过审查的 `1.0.28.0` 或历史 Product Build `1.0.27.0` / `1.0.26.0` / `1.0.25.0` 已获得 remote verified tag、Release、Deploy ID、
 immutable URL、production publication 或 Channel promotion。Portal 只接受与精确 Product/Host 身份绑定并经审查的 evidence
 record；本地 Proof 或 PR Preview 不能替代公共部署证据。
 

@@ -120,7 +120,7 @@ function sessionFixture(name: string) {
       product_build: TEST_PRODUCT_BUILD,
       host_id: "creator-web",
       host_version: "1.5.0",
-      platform_version: "0.3.5",
+      platform_version: "0.3.6",
       protocol_version: 1,
       capabilities: {
         secureContext: true, crossOriginIsolated: true, sharedArrayBuffer: true,
@@ -191,6 +191,84 @@ test("suspend stays explicit and restart rebuilds, lists, and reopens without au
   expect(second.calls).not.toContain("second:activate");
   expect(screen.getByTestId("creator-phase").textContent).toBe("ready");
   expect(screen.getByTestId("audio-state").textContent).toBe("Audio inactive");
+});
+
+test("Project actions stay disabled until audio suspension settles", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("suspend-barrier");
+  let finishSuspend: ((settled: boolean) => void) | undefined;
+  value.session.suspendAudio = () => {
+    value.calls.push("suspend-barrier:suspend");
+    value.emit({state: "audio-suspended", errorCode: null});
+    return new Promise((resolve) => { finishSuspend = resolve; });
+  };
+  render(<App runtimeFactory={() => value.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await screen.findByText("Audio running");
+
+  await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await screen.findByText("Audio suspending");
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(true);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
+    .toBe(true);
+
+  await act(async () => finishSuspend?.(true));
+  await screen.findByText("Audio suspended");
+  expect(screen.getByRole("button", {name: "Open local"}).hasAttribute("disabled"))
+    .toBe(false);
+  expect(screen.getByRole("button", {name: "Import .lmdj"}).hasAttribute("disabled"))
+    .toBe(false);
+});
+
+test("ready-state diagnostics do not reopen the current Project", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("diagnostic-refresh");
+  render(<App runtimeFactory={() => value.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  expect(value.calls.filter((call) => call === "diagnostic-refresh:list"))
+    .toHaveLength(1);
+  expect(value.calls.filter((call) => call === "diagnostic-refresh:open"))
+    .toHaveLength(1);
+
+  await act(async () => value.emit({
+    state: "running",
+    errorCode: "NON_FATAL_DIAGNOSTIC",
+    errorDetails: {observation: "fresh"},
+  }));
+  await screen.findByText("Audio running");
+  await act(async () => { await new Promise((resolve) => setTimeout(resolve, 0)); });
+
+  expect(value.calls.filter((call) => call === "diagnostic-refresh:list"))
+    .toHaveLength(1);
+  expect(value.calls.filter((call) => call === "diagnostic-refresh:open"))
+    .toHaveLength(1);
+});
+
+test("a refused audio suspension restores the running surface", async () => {
+  const user = userEvent.setup();
+  const value = sessionFixture("suspend-refused");
+  value.session.suspendAudio = async () => false;
+  render(<App runtimeFactory={() => value.session} />);
+
+  await user.click(await screen.findByRole("button", {
+    name: "Open Project 11111111",
+  }));
+  await screen.findByRole("heading", {name: "Project 11111111"});
+  await act(async () => value.emit({state: "running", errorCode: null}));
+  await screen.findByText("Audio running");
+
+  await user.click(screen.getByRole("button", {name: "Suspend audio"}));
+  await screen.findByText("Audio running");
 });
 
 test("automatic reopen owns the same Project action lane until completion", async () => {

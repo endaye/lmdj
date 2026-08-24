@@ -217,7 +217,7 @@ unchanged), with fixed outer geometry that does not change when entering
 `recording`, focus on the phase's primary action on open and after phase
 transitions, `Escape` closing in every phase, a non-dismissible backdrop, and
 the `returnFocus` restore owned solely by the dialog. Landed with Creator Web
-Host `1.5.4` in the integrated Product Build `1.0.32.0`.
+Host `1.5.5` in the integrated Product Build `1.0.36.0`.
 
 - [x] Implement the Task 1 presentation decision in `styles.css` and
       `capture_panel.tsx` / `sample_surface.tsx`.
@@ -245,7 +245,7 @@ on the waveform body outside both zones moves nothing, and
 gesture functions. Both range inputs remain the keyboard/assistive-technology
 channel with live-second accessible names, removed from the pointer path
 (`pointer-events: none`, visually hidden but focusable). Landed with Creator
-Web Host `1.5.4` in the integrated Product Build `1.0.32.0`.
+Web Host `1.5.5` in the integrated Product Build `1.0.36.0`.
 
 - [x] Replace the two stacked full-width invisible range inputs with the
       Task 1 pointer model.
@@ -275,7 +275,7 @@ identity is not available to the Host (the Runtime's `DUPLICATE_ID` error
 carries no details and the Host must not parse the bundle), so the control
 targets the list rather than a direct open. Every other error code's
 heading, message and retry wiring is byte-identical. Landed with Creator
-Web Host `1.5.4` in the integrated Product Build `1.0.32.0`.
+Web Host `1.5.5` in the integrated Product Build `1.0.36.0`.
 
 - [x] Give `DUPLICATE_ID` a message that names the actual situation and a
       recovery control that leads to the existing local Project, rather than
@@ -310,10 +310,12 @@ revisions, OS and browser versions.
   Host surface, not internal refactors, and no Contract or protocol changes.
 - No Core Module, Provider, Contract or Application Facade version changes;
   the diff does not reach them.
-- A new Product Build must be allocated before any team-testing or release
-  distribution of these fixes, per `docs/governance/version-management.md`, and
-  that allocation carries its own immutable Architecture Portal snapshot made
-  with `scripts/architecture-portal.sh version PRODUCT_BUILD CHANNEL`.
+- The final integration is Product Build `1.0.36.0` / Creator Web Host `1.5.5`.
+  Builds `1.0.33.0`–`1.0.35.0` were allocated by abandoned branch-local
+  compositions before the `1.0.32.0` consolidation and are not reused; the
+  additional post-merge audio-suspension barrier therefore advances BUILD.
+  The final allocation carries its own immutable Architecture Portal snapshot
+  made with `scripts/architecture-portal.sh version 1.0.36.0 canary`.
 - `assembly.lock.json` must be regenerated after the compiled assembly is
   final, not before — see B4 in the pre-Stage-9 triage.
 
