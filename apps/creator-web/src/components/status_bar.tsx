@@ -8,6 +8,7 @@ import type {MouseEvent} from "react";
 
 interface StatusBarProps {
   state: CreatorState;
+  audioActivationReady?: boolean;
   onActivateAudio?: (event: MouseEvent<HTMLButtonElement>) => void;
   onSuspendAudio?: () => void;
   onEnableMidi?: () => void;
@@ -16,6 +17,7 @@ interface StatusBarProps {
 
 export function StatusBar({
   state,
+  audioActivationReady,
   onActivateAudio,
   onSuspendAudio,
   onEnableMidi,
@@ -45,7 +47,8 @@ export function StatusBar({
       </div>
       <button
         type="button"
-        disabled={!selectCanActivateAudio(state)}
+        disabled={!selectCanActivateAudio(state) || !onActivateAudio ||
+          audioActivationReady === false}
         onClick={onActivateAudio}
       >
         Activate audio

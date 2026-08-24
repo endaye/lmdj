@@ -84,10 +84,10 @@ test("enables keyboard-reachable Sample while preserving the other mode states",
   expect(Array.from(document.querySelectorAll(".pad kbd"), (key) => key.textContent))
     .toEqual(keys);
 
-  await user.tab();
-  expect(document.activeElement).toBe(
-    screen.getByRole("button", {name: "Activate audio"}),
-  );
+  // Without a Runtime session the Activate handler is detached, so the
+  // action is disabled instead of offering a gesture that cannot run.
+  expect(screen.getByRole("button", {name: "Activate audio"})
+    .hasAttribute("disabled")).toBe(true);
   await user.tab();
   expect(document.activeElement).toBe(projectMode);
   await user.tab();
