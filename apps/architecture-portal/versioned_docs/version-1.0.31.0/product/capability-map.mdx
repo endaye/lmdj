@@ -1,0 +1,38 @@
+---
+title: 产品能力地图
+area: product
+status: partial
+owners: [product, core]
+source_paths:
+  - products/lmdj/assembly.json
+  - products/lmdj/assembly.lock.json
+  - docs/prd/decision-log.md
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+
+<BuildIdentity />
+
+## 创作能力
+
+Project Truth、命令处理、项目存取、portable Bundle transfer 与确定性 Cook 已实现于 Headless Core；Creator Web 已提供 Project discovery/open、portable import、64-Pad Runtime surface，以及 Sample inspect/waveform、WAV import/replace、trim/gain/mute、四种触发模式、preview、reset、麦克风 Pad Capture、pre-commit Crop 与 Cook retry。Crop 只修改未提交 capture，不是持久化 Asset 编辑；多素材浏览、自动 slicing、Undo、非破坏音频处理和 Sequence 编排仍待后续 Stage。
+
+## 演奏能力
+
+Runtime Snapshot、样本准备、离线渲染、实时引擎、Voice 状态与 Sample preview 具有自动化覆盖。低延迟手感、MIDI/触控输入和设备生命周期需要独立物理验收。
+
+## 智能能力
+
+Capability Contract、Registry、Attempt Store 与本地成功/失败 Proof Provider 已实现。生产模型、云服务、鉴权、计费和数据政策尚未实现。
+
+## Host 与交付能力
+
+当前 source 已为 Product Build `1.0.31.0` 把 `native-test-host` 改名为 Native Host `1.0.0`：Creator Web Host `1.4.0` 与 Formal Web Runtime Host `1.2.13` 已装配，并共用 Web Runtime Platform `0.3.4`；CLI `1.0.16`、MCP `1.1.13` 与 Project I/O `0.6.1` 身份不变；退役的 `native-test-host` 止于 `1.0.14`，不再复用。该 Build 同时确立分发包内容准则。Product Build `1.0.30.0` 曾分配 Creator Capture 的真实 pre-commit Crop；`1.0.29.0` 曾分配 Creator `1.3.6` 的选区波形缩放修正。
+Product Build `1.0.25.0` 曾分配 G2 evidence-durability 级联，同样不新增公开产品能力。
+Product Build `1.0.24.0` 曾分配 provider-sdk 修复级联：CLI `1.0.13`、MCP `1.1.10` 与 Native Test Host `1.0.11` 已装配；Creator Web Host `1.3.1` 与 Formal Web Runtime Host `1.2.10` 已装配，并共用 Web Runtime Platform `0.3.1`；本地成功/失败 Proof Provider 也同步升至 `1.0.3`。那次分配修复的是 Attempt reservation 回收与 temp sibling 命名冲突，不新增公开产品能力。
+
+Web Runtime Lab 保持为独立实验工具，不属于 Product Assembly，也不替代正式 Host 或物理设备验收。Product Assembly 锁定确切组件身份，版本发布不由任意 Host 决定。
+
+## 状态解释
+
+“已实现”表示 active source 加当前测试；“部分实现”明确缺口；“已设计/规划中”不作为可用功能宣传。

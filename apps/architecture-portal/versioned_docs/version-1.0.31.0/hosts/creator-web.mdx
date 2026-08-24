@@ -1,0 +1,52 @@
+---
+title: Creator Web Host
+area: hosts
+status: implemented
+host: creator-web
+owners: [product, hosts, web]
+source_paths:
+  - apps/creator-web
+  - apps/creator-web/module.json
+  - packages/web-runtime-platform
+  - products/lmdj/assembly.json
+  - docs/quality/2026-08-07-stage7-creator-editor-acceptance.md
+  - docs/quality/2026-08-09-stage8-sample-editor-acceptance.md
+  - docs/quality/2026-08-16-stage8b-pad-capture-acceptance.md
+  - docs/quality/2026-08-24-creator-capture-precommit-crop.md
+  - docs/superpowers/specs/2026-08-23-creator-capture-precommit-crop-design.md
+  - scripts/creator-web.sh
+  - tests/platform/web/creator
+---
+
+import {BuildIdentity} from '@site/src/components/BuildIdentity';
+import {StatusBadge} from '@site/src/components/StatusBadge';
+
+<BuildIdentity />
+
+## 状态
+
+<StatusBadge status="implemented" /> Creator Web Host `1.4.0` 已进入 Product Build `1.0.31.0` Assembly。它只依赖共享 Web Runtime Platform `0.3.4`，不直接依赖或绕过 Application Facade；Capture 录音阶段显示完整缓冲，trimming 与提交重试阶段以固定 400 bins 显示当前选区，并可把严格子选区真正 Crop 成归零的新缓冲 revision。
+
+## 创作边界
+
+当前 UI 提供 browser-local Project discovery/open、portable Project Bundle import、64 个稳定 Pad Slot、四个 Bank、Sample Surface、PCM16 WAV import/replace、麦克风 Pad Capture（录音→trimming→可选 Crop→提交）、真实 mirrored waveform、trim/四模式/Volume/Mute/Reset、Project inspect 与 Runtime diagnostics。Capture 的录音波形覆盖全部已录帧；进入 trimming 后，同一画布随 selection start/length 缩放，只读取选区范围，长窗口只复用完全落入 bin 的增量 block peaks，边缘 block 精确扫描，避免选区外峰值泄漏。**Crop to selection** 会在同一个 Host-local `CaptureBuffer` 中保留精确 mono/stereo PCM、把首帧重置为 0，并在发布前完整重建 chunks、索引与 block peaks；cache 与所有字段作为同一 revision 切换，旧区间 peak 不会泄漏。重复 Crop 和 Crop 后继续 append 仍受相同边界约束；无效 Crop 原子拒绝。Host 不解析 Bundle 或 WAV；字节流和 mutation 交给 Facade，Project Truth、revision 与 Runtime publication 仍由 Core 决定。Capture 只是既有 import 边界的一个新字节来源：Host 在提交时把当前选区编码为 48 kHz PCM16 WAV，经同一条 `sample.import.*` 会话入 Core，Core Modules、Facade 表面、传输协议与全部 Contract 零变更。Host JS 缓冲上限 60 秒、到顶自动停，提交选区硬性上限 240,000 帧（5 秒），沿用活动 manifest 的 `decoded_frames_per_pad`；录音期间无输入监听，输入永不接到输出。空白 Project 创建、Bundle 导出与 Sequence 编辑尚未实现。
+
+Open local 在已有 Project 时仍保持可达；list/import/open/reopen 属于同一串行 Project action 边界，后发 action 不得与旧 action 重叠或提交过期结果。旧 Runtime generation 的 import 被 replacement 取消时，过期 action 不能提交 Project 结果，但它拥有的 transfer UI 必须独立回到 `idle`，避免新 Session 已 ready 而 Creator 永久显示 `importing`。persisted `pagehide` retains the shared Runtime 并进入受控恢复契约；non-persisted terminal `pagehide` performs close。新 Runtime generation 只能在旧 generation 的资源清理完成后接管，Project 会自动 reopen，但 Audio 必须保持 inactive，直到用户再次按下 Activate audio。
+
+## 演奏边界
+
+Creator 使用共享 Runtime Session 进入同一 Wasm Core、OPFS 与 AudioWorklet 路径。Pointer、Keyboard 与 MIDI 使用统一输入 adapter。默认实体键盘按空间顺序映射：上方 `Q W E R T Y U I` 对应当前 Bank 的 Pad 1–8，下方 `A S D F G H J K` 对应 Pad 9–16；每个 Pad 从同一共享 mapping truth 派生并显示键帽提示。用户明确授权 Web MIDI 后，Creator 在 channels 1–16 上接受 Note `36..51` 并映射到当前 Bank；Platform 的可选单 channel filter 不由 Creator 启用。每个 Sample press 以串行 inspect→trigger admission 确定 Runtime-effective playback，release/cancel/stop 与 ordered Voice state 共同维护视觉和真实声音。saved Project revision 与 Runtime revision 分开显示，Cook 失败只重试 prepare、不重放 mutation。恢复期间只有 Platform diagnostics 证明唯一 recovery probe window 已 armed 时才开放一个真实 Trigger；Probe 后立即重新封闭输入，直到 Runtime 报告 `running`。未完成的物理设备/延迟验收不会被 UI 可用性或 Playwright 结果替代。
+
+## 分发与身份
+
+`scripts/creator-web.sh package` 生成内容哈希资产和 canonical Creator distribution manifest；manifest 绑定 Product Build、Host、Platform、协议、固定 Emscripten 身份、heap 与资源上限，并显式声明兼容的诊断 Host 身份。共享 native manifest gate 只接受 Product Assembly 注入的精确 Host/contract/version 组合。该同构建 manifest ownership 协议不是公开跨版本 Contract。
+
+## 自动化证据
+
+Node/Vitest 覆盖 UI 状态、Sample state/action/input/control/waveform/file/lifecycle/recovery/privacy、Capture range validation/cache/chunk/stereo/block-edge correctness、整数 bin 边界、late-range chunk traversal、selection-driven repaint，以及 Crop 的跨 chunk 精确 PCM、原子拒绝、summary 重建、重复编辑、append-after-Crop、同实例 Commit 与 commit-error 恢复；Python 覆盖 deterministic/atomic package 和 secure server；required Playwright lane 用真实 Facade 完成 v1→v2、WAV、四模式、Cook split/retry/reload、16-trigger mapping、active resize 与 restart-required replacement，并另证 WebKit capability boundary。Product Build `1.0.31.0` 绑定 Creator `1.4.0`、Platform `0.3.4` 与 Formal Host `1.2.13`，同时把 `native-test-host` 改名为 Native Host `1.0.0`。Product Build `1.0.30.0` 曾绑定 Creator `1.4.0` 的 pre-commit Crop；Product Build `1.0.29.0` 绑定 Creator `1.3.6` 的选区波形缩放修正；`1.0.28.0` / Creator `1.3.5` 是未通过独立审查的 branch-local 候选。Product Build `1.0.27.0` 绑定 Creator `1.3.4`、Platform `0.3.4` 与 Formal Host `1.2.13`；那是 Native complete-read 修复的 identity 级联。历史构建的本地 Proof 不能替代本构建重新执行的 clean-source Proof、Portal、CI、tag、发布或部署证据。
+
+自动化结论不是物理 Safari/Chrome Pointer、Chrome MIDI、iPadOS Touch/lifecycle 验收，也不表示 CI、merge、tag、部署或 Channel promotion 已完成。
+
+## 非能力
+
+当前不宣称离线安装/PWA、云同步、协作、素材智能、Sequence 编辑、生产部署、`beta`/`stable` 或物理设备体验已完成。Crop 只修改未提交的 ephemeral capture；没有 Undo/redo/edit history，不修改已持久化 Asset，不做自动 silence trimming、fade、normalize 或其他 DSP。Pad Capture 的自动化把关限于 Chromium 假设备：macOS Chrome 真实麦克风听感已于 2026-08-17 在 `1.0.23.0` 实机通过（五条听感判据含大电平不削波），外置声卡输入、Safari 桌面与 iPadOS 的采集行为仍记入 deferred 台账，未做即不计入；本 Build 的 Crop 自动化不会升级任何物理行。输入设备选择器、长素材共享 prepared-PCM 配额与 Take/Pattern 录制不属于本 Build。
