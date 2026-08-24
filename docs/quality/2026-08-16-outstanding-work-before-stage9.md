@@ -96,10 +96,14 @@ container, not an implementation defect.
 [`../prd/decisions/2026-08-24-build-manifest-detached.md`](../prd/decisions/2026-08-24-build-manifest-detached.md)
 ([#211](https://github.com/endaye/lmdj/issues/211)): the Manifest becomes a
 detached sibling asset, the archive keeps payload only, and the Contract and
-fields are unchanged. The reshaping itself is now unblocked machine work —
-row A3 in
-[`2026-08-17-machine-task-todo.md`](2026-08-17-machine-task-todo.md) — and
-remains due before the first external distribution (`dev` Channel or above).
+fields are unchanged. **Implemented the same day** as machine task A3
+([#286](https://github.com/endaye/lmdj/issues/286), plan
+[`../superpowers/plans/2026-08-24-lmdj-detached-build-manifest.md`](../superpowers/plans/2026-08-24-lmdj-detached-build-manifest.md)):
+the packager ships `<package-name>.build-manifest.json` beside the archive, two
+clean packagings produce byte-identical ZIPs, and the release inventory gates
+are profile-aware (core-package four assets, web-runtime-host three). This
+clears the A3 item ahead of the first external distribution (`dev` Channel or
+above).
 
 ---
 
@@ -460,8 +464,7 @@ the `O_NOFOLLOW` symmetry that `read_artifact()` has). ~~D4
 4. **D4 + D5** — Stage 9 depends on them.
 5. **D1 + D2** — one review, before any long-material work.
 6. ~~**A2**~~ — done 2026-08-24 (rename to `native-host` + distribution
-   contents rule; see the A2 section). The **A3 reshaping** (decided
-   2026-08-24; implementation is the machine-list A3 row) remains before the
-   first external distribution.
+   contents rule; see the A2 section). (~~A3~~ decided and implemented
+   2026-08-24, [#286](https://github.com/endaye/lmdj/issues/286).)
 7. ~~**B3**~~ — done 2026-08-21 in #226. **B4, C2, backlog C2** — mechanical
    hardening, schedule as capacity allows.

@@ -72,15 +72,16 @@ ship, it is not.
 **Exit — met.**
 [`2026-08-19-lmdj-attempt-replay-provider.md`](2026-08-19-lmdj-attempt-replay-provider.md).
 
-That plan is **blocked at its Task 0**, and the block is the track's main
+That plan was **blocked at its Task 0**, and the block was the track's main
 finding: the feature is not expressible through the current Provider
 interface. `Provider::run` receives a write-only `ArtifactSink` and
 content-addressed descriptors with no path and no resolver, so the input half
 of `CLAUDE.md`'s "Provider code receives Artifact inputs and an Artifact
-output sink" is unimplemented. The gap already has an owner —
-[`docs/prd/questions/provider-artifact-byte-access.md`](../../prd/questions/provider-artifact-byte-access.md),
-status *待架构设计* — and the replay Provider is recorded there as a second
-independent consumer rather than as a new question. Tasks 1–4 wait on that
+output sink" is unimplemented. **Resolved 2026-08-24** by
+[`docs/prd/decisions/2026-08-24-provider-artifact-byte-access.md`](../../prd/decisions/2026-08-24-provider-artifact-byte-access.md):
+a capability-gated `ArtifactSource` in provider-sdk is the sanctioned formal
+interface, deferred to its own trigger, and the replay Provider proceeds under
+the embedded-fixture stopgap (option B). Tasks 1–4 no longer wait on that
 decision.
 
 ## Track 2 — Event-layer contract discipline (rider on spec §12.4)

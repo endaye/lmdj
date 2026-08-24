@@ -246,6 +246,13 @@ tag 中的 `/` 必须使用无歧义编码，禁止直接拼接为目录层级�
 }
 ```
 
+`core-package` profile 自 2026-08-24 起在上述三资产之外增加并列的
+`<archive-stem>.build-manifest.json`（决策
+[`../../prd/decisions/2026-08-24-build-manifest-detached.md`](../../prd/decisions/2026-08-24-build-manifest-detached.md)，
+#211）：Manifest 不再打进归档，归档只含 payload，因此同一源码与工具链的归档
+字节可复现；Manifest 字段不变，仍含 version-management.md §4 要求的
+`build_time` 与 `platform`。`web-runtime-host` 保持三资产。
+
 Plan 使用 canonical JSON 序列化并输出自己的 SHA-256。它是本地执行记录与 workflow
 输入绑定，不是 Product Manifest、Project Truth、public Contract 或额外 Release asset。
 尤其 Web Runtime Host Release 仍保持部署 verifier 要求的精确三资产，不能把 plan 当成

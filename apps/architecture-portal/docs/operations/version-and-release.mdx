@@ -106,11 +106,12 @@ preflight job 先从 canonical origin 验证 remote annotated signed Product tag
 detached armored signature，并完成资产下载与 staging；Product tag key 与 checksum key 的
 固定指纹和用途相互独立，不能替代，signature 验证先于 checksum 解析。只有它通过后才安装
 Node/Chromium，部署 job 在接触 Netlify 前对同一 Release 再验证一次。
-2026-08-24 的 A3 决策（[#211](https://github.com/endaye/lmdj/issues/211)，
-`docs/prd/decisions/2026-08-24-build-manifest-detached.md`）确定
-`build-manifest.json` 将移出归档、作为并列 detached 资产发布，资产集随之从三资产变为
-四资产；该形态在机器任务 A3 落地时才生效，且必须早于首个对外分发（`dev` 及以上
-Channel），此前当前三资产清单不变。
+Core Release 的资产集自 2026-08-24 起为四资产（#286）：除 ZIP、checksum 和受信
+signature 外，`build-manifest.json` 不再打进归档，而是作为并列 detached 资产
+`<archive-stem>.build-manifest.json` 发布（决策
+`docs/prd/decisions/2026-08-24-build-manifest-detached.md`，#211）。归档自此只含
+payload，同一源码与工具链下字节可复现；Manifest 字段不变，仍含构建时间与构建平台。
+Web Runtime Host Release 保持上述精确三资产不变。
 发布前会发现真实 prior 身份，并先在 prior immutable/production 上运行完整
 HTTP/Chromium；draft smoke 通过后只发布同一个 ready Deploy ID。发布后任何失败、中断或
 API error 都先 reconcile alias；若仍指向本次 Deploy 就恢复 exact prior，首次无 prior 则
