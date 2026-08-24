@@ -647,6 +647,21 @@ async function observationMarker(page) {
 }
 
 
+async function waitForTriggerResponsesSince(page, responseMarker, expectedCount) {
+  // Input release handlers enqueue their Runtime request without awaiting its
+  // transport response, so the press outcome is not a release-response barrier.
+  await expect.poll(() => page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start)
+      .filter(({ operation }) => operation === "trigger").length,
+  responseMarker)).toBe(expectedCount);
+  return page.evaluate((start) =>
+    window.__lmdjTask11.responses.slice(start)
+      .filter(({ operation }) => operation === "trigger")
+      .map(({ payload }) => payload),
+  responseMarker);
+}
+
+
 async function waitForRecoveryReadiness(page, responseMarker) {
   await expect.poll(() => page.evaluate((start) =>
     window.__lmdjTask11.responses.slice(start).some(({ operation, response }) =>
@@ -1097,6 +1112,31 @@ test("Chromium packaged capability probe Worker error fails closed and cleans up
 });
 
 
+test("trigger response proof waits for the asynchronous release boundary", async ({
+  page,
+}) => {
+  await page.evaluate(() => {
+    window.__lmdjTask11 = {
+      responses: [{
+        operation: "trigger",
+        payload: { slot: 0, velocity: 100 },
+      }],
+    };
+    window.setTimeout(() => {
+      window.__lmdjTask11.responses.push({
+        operation: "trigger",
+        payload: { slot: 0, kind: "release" },
+      });
+    }, 100);
+  });
+
+  expect(await waitForTriggerResponsesSince(page, 0, 2)).toEqual([
+    { slot: 0, velocity: 100 },
+    { slot: 0, kind: "release" },
+  ]);
+});
+
+
 test("Chromium visible diagnostic project completes the packaged runtime journey", async ({
   browserName,
   context,
@@ -1171,11 +1211,11 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     pointerAdmissions,
     pointerMarker.notifications,
   );
-  expect(await page.evaluate((start) =>
-    window.__lmdjTask11.responses.slice(start)
-      .filter(({ operation }) => operation === "trigger")
-      .map(({ payload }) => payload),
-  pointerMarker.responses)).toEqual([
+  expect(await waitForTriggerResponsesSince(
+    page,
+    pointerMarker.responses,
+    2,
+  )).toEqual([
     { slot: 0, velocity: 100 },
     { slot: 0, kind: "release" },
   ]);
@@ -1194,11 +1234,11 @@ test("Chromium visible diagnostic project completes the packaged runtime journey
     keyboardAdmissions,
     keyboardMarker.notifications,
   );
-  expect(await page.evaluate((start) =>
-    window.__lmdjTask11.responses.slice(start)
-      .filter(({ operation }) => operation === "trigger")
-      .map(({ payload }) => payload),
-  keyboardMarker.responses)).toEqual([
+  expect(await waitForTriggerResponsesSince(
+    page,
+    keyboardMarker.responses,
+    2,
+  )).toEqual([
     { slot: 9, velocity: 100 },
     { slot: 9, kind: "release" },
   ]);
