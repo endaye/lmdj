@@ -2,7 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver Product Build `1.0.31.0` as a testable Stage 9 candidate in which Creator records, overdubs, switches, trims, reloads, and recovers deterministic Pattern events without a Raw Take or Take product object.
+**Goal:** Deliver Product Build `1.0.37.0` as a testable Stage 9 candidate in which Creator records, overdubs, switches, trims, reloads, and recovers deterministic Pattern events without a Raw Take or Take product object.
+
+**Plan refresh (2026-08-26, #321):** Protected `main` is now Product Build `1.0.36.0`. The original `1.0.31.0` allocation was consumed by the Native Test Host to Native Host identity migration and has an immutable Portal snapshot, so it must not be reused. This refresh reserves the next verified unused Build, `1.0.37.0`, updates current component baselines and paths, and adds #321 as the implementation prerequisite. It does not change SR-D1–D28 or claim that any Stage 9 runtime behavior exists.
 
 **Architecture:** Replace Project Truth with total `lmdj.project.v3` migration, then build one Project-scoped Sequence session above Project I/O's existing writer lease and manifest publication commit point. Application Facade owns admission, selective rebase, idempotent flush, and recovery orchestration; Cooker and Audio Runtime consume tick-native immutable snapshots; CLI, MCP, Native, Web Runtime, and Creator expose one shared semantic surface. The implementation is split into ten independently reviewable Tasks, with Host work parallel only after its Contract, Project I/O, Runtime, and Facade dependencies merge; the immutable Portal snapshot is a separate clean-commit boundary after version integration.
 
@@ -11,7 +13,7 @@
 ## Global Constraints
 
 - The approved design is `docs/superpowers/specs/2026-08-22-sequence-recording-semantics-design.md`. Any conflict returns to design review; an implementation Task must not silently choose a different semantic.
-- Stage 9 implementation starts only after the design/plan commit is merged and Issue #238's durable-decision acceptance is satisfied. The question Issue is not evidence that runtime behavior exists.
+- Stage 9 implementation starts only after the design/plan commit and the #321 plan refresh are merged. Task 1 turns the approved semantics into durable product authority and satisfies Issue #238's remaining acceptance; the question Issue is not evidence that runtime behavior exists.
 - Execute each Task on a short-lived `feat/<task>` or `docs/<task>` branch in an isolated worktree. Never implement on `main` or in this retained design worktree.
 - Each Task below maps one-to-one to one GitHub Issue, one reviewable Conventional Commit, and one Pull Request. Do not combine Tasks to bypass dependency gates.
 - Functional Tasks keep active manifests and Product Build at their current values until Task 9. Task 9 is the version/current-truth integration boundary; Task 10 is the separate clean-commit immutable Portal snapshot boundary.
@@ -190,15 +192,16 @@ Operation names are `sequence.record.begin`, `sequence.record.event`, `sequence.
 ## Dependency Order
 
 ```text
-Task 1 durable decision
-  └─ Task 2 Project v3 Contract and Domain
-       ├─ Task 3 Sequence Journal and Project I/O
-       │    └─ Task 5 Application Facade
-       └─ Task 4 tick-native Cooker and Audio Runtime
-            └─ Task 5 Application Facade
-                 ├─ Task 6 CLI, MCP, and Native Host
-                 └─ Task 7 Web Runtime Platform and Web Host
-                      └─ Task 8 Creator Sequence UX
+Prerequisite #321 plan and portfolio refresh
+  └─ Task 1 durable decision
+       └─ Task 2 Project v3 Contract and Domain
+            ├─ Task 3 Sequence Journal and Project I/O
+            │    └─ Task 5 Application Facade
+            └─ Task 4 tick-native Cooker and Audio Runtime
+                 └─ Task 5 Application Facade
+                      ├─ Task 6 CLI, MCP, and Native Host
+                      └─ Task 7 Web Runtime Platform and Web Host
+                           └─ Task 8 Creator Sequence UX
 Tasks 1–8 ────────────────└─ Task 9 version, current Portal, and acceptance integration
                                    └─ Task 10 immutable snapshot and final acceptance
 ```
@@ -234,8 +237,8 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 - Delete: `docs/prd/questions/recording-concurrency-semantics.md`
 - Modify: `docs/superpowers/specs/2026-07-30-lmdj-playable-beat-instrument-core-redesign.md`
 - Modify: `products/lmdj/README.md`
-- Modify: `apps/architecture-portal/docs/contracts/project.md`
-- Modify: `apps/architecture-portal/docs/product/workflows.md`
+- Modify: `apps/architecture-portal/docs/contracts/project.mdx`
+- Modify: `apps/architecture-portal/docs/product/workflows.mdx`
 - Test: `tests/build/test_active_tree.sh`
 
 - [ ] Add `docs/prd/decisions/2026-08-23-sequence-recording-semantics.md` and a dated decision-log entry that name `lmdj.project.v3`, no Raw Take, one Project-scoped session, idempotent flush, selective rebase, and fingerprint-gated recovery; link the approved design, plan, and implementation Issues.
@@ -397,9 +400,9 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 - Modify: `apps/core-mcp/lmdj_core_mcp/server.py`
 - Modify: `tests/host/mcp_stdio_test.py`
 - Modify: `tests/host/mcp_facade_parity_test.py`
-- Modify: `apps/native-test-host/src/main.cpp`
-- Modify: `apps/native-test-host/src/capture_writer.hpp`
-- Modify: `apps/native-test-host/src/capture_writer.cpp`
+- Modify: `apps/native-host/src/main.cpp`
+- Modify: `apps/native-host/src/capture_writer.hpp`
+- Modify: `apps/native-host/src/capture_writer.cpp`
 - Modify: `tests/host/native_host_test.py`
 - Modify: `tests/host/native_host_apple_smoke.py`
 
@@ -497,7 +500,7 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 - Modify: `packages/web-runtime-platform/module.json`
 - Modify: `apps/core-cli/module.json`
 - Modify: `apps/core-mcp/module.json`
-- Modify: `apps/native-test-host/module.json`
+- Modify: `apps/native-host/module.json`
 - Modify: `apps/web-runtime-host/module.json`
 - Modify: `apps/creator-web/module.json`
 - Modify: current Portal pages for Assembly, modules, Hosts, Project Contract, storage, web runtime, native audio, workflows, capability map, and testing/proof
@@ -506,8 +509,8 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 - Create: `docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md`
 
 - [ ] Rebase onto the merged Tasks 1–8 and audit for unresolved Take symbols, v1/v2 writers, `step` event fields, duplicate quantizers, floating musical clocks, or Host-side bundle parsing.
-- [ ] Set Product Build to `1.0.31.0` and update Assembly to Project Contract v3 only.
-- [ ] Apply these module versions exactly: Foundation `0.3.0`; Authoring Domain `1.0.0`; Project I/O `1.0.0`; Project Cooker `1.0.0`; Audio Runtime `1.0.0`; Application Facade `2.0.0`; Web Runtime Platform `1.0.0`; Core CLI `2.0.0`; Core MCP `2.0.0`; Native Test Host `2.0.0`; Web Runtime Host `2.0.0`; Creator Web `2.0.0`.
+- [ ] Set Product Build to `1.0.37.0` and update Assembly to Project Contract v3 only.
+- [ ] Apply these module versions exactly: Foundation `0.3.0`; Authoring Domain `1.0.0`; Project I/O `1.0.0`; Project Cooker `1.0.0`; Audio Runtime `1.0.0`; Application Facade `2.0.0`; Web Runtime Platform `1.0.0`; Core CLI `2.0.0`; Core MCP `2.0.0`; Native Host `2.0.0`; Web Runtime Host `2.0.0`; Creator Web `2.0.0`.
 - [ ] Update Assembly dependency requirements and `api_version` values coherently; run `python3 scripts/version.py verify --version-file products/lmdj/version.json` and `python3 tests/build/version_test.py`; expect PASS.
 - [ ] Update Portal current-state pages and source diagrams so they distinguish Project Truth, journal overlay, immutable Runtime Snapshot, commit receipt, and recovery artifact.
 - [ ] Update headless and browser E2E Proof for deterministic v3 Pattern recording, idempotent replay, owner-loss recovery, next-Bar switching, and cross-Host status.
@@ -526,26 +529,26 @@ Task 9 reruns the integrated automated witnesses; Task 10 binds their committed 
 
 **Files:**
 
-- Create: generated immutable Architecture Portal snapshot and provenance files for Product Build `1.0.31.0`
+- Create: generated immutable Architecture Portal snapshot and provenance files for Product Build `1.0.37.0`
 - Modify: `docs/quality/2026-08-23-stage9-sequence-recording-acceptance.md`
 
-- [ ] Start from Task 9's committed, clean head. Run `git status --short`; expect no output. Run `python3 scripts/version.py verify --version-file products/lmdj/version.json`; expect `1.0.31.0` verification PASS.
-- [ ] Run `scripts/architecture-portal.sh version 1.0.31.0 canary`; inspect the generated identity, provenance, route inventory, and Assembly lock digest.
+- [ ] Start from Task 9's committed, clean head. Run `git status --short`; expect no output. Run `python3 scripts/version.py verify --version-file products/lmdj/version.json`; expect `1.0.37.0` verification PASS.
+- [ ] Run `scripts/architecture-portal.sh version 1.0.37.0 canary`; inspect the generated identity, provenance, route inventory, and Assembly lock digest.
 - [ ] Run `scripts/architecture-portal.sh check`; expect the immutable snapshot and all checks PASS.
 - [ ] Run `scripts/core.sh proof`; expect PASS against the exact Task 9 source identity.
 - [ ] Update the acceptance ledger with the exact Task 9 revision, snapshot paths/digests, and command results. Do not claim merged-main, Release, deployment, Channel promotion, or unperformed physical evidence.
 - [ ] Stage only the generated snapshot/provenance files and the acceptance ledger; inspect `git diff --cached --name-status` and `git diff --cached --check`.
-- [ ] Commit with `docs(portal): snapshot Product Build 1.0.31.0`.
+- [ ] Commit with `docs(portal): snapshot Product Build 1.0.37.0`.
 - [ ] Inspect `git show --name-status --oneline HEAD` and `git status --short`; expect only the declared snapshot/ledger files in the commit and a clean worktree.
 
 ## Version Management
 
-- Product Build: `1.0.27.0 → 1.0.31.0`. Build `1.0.28.0` is the immutable rejected first #212 candidate; corrected `1.0.29.0` and `1.0.30.0` are allocated, with explicit user approval, to the prerequisite Creator capture Tasks #212 and #213. Those identities are not reused; `1.0.31.0` is reserved for the integrated Stage 9 candidate. This allocation does not publish, deploy, or promote a Channel.
+- Product Build: `1.0.36.0 → 1.0.37.0`. Builds `1.0.28.0` through `1.0.36.0` have been consumed or retained by prerequisite work, rejected/abandoned candidates, or immutable snapshots; notably, `1.0.31.0` records the Native Host identity migration and must not be reused. Issue #321 verified `1.0.37.0` unused across active manifests, immutable snapshots, release intents, tags, Issues, and Pull Requests before reserving it for the integrated Stage 9 candidate. This allocation does not publish, deploy, or promote a Channel.
 - Contract: add `lmdj.project.v3` Contract SemVer `3.0.0`; v1/v2 remain read-only migration inputs and are removed from active Assembly output.
 - Foundation: `0.2.0 → 0.3.0` for `SequenceSessionId`.
-- Authoring Domain, Project I/O, Project Cooker, Audio Runtime, and Web Runtime Platform: move to `1.0.0` because their pre-1.0 Take/step or timing surfaces are replaced.
-- Application Facade: `1.4.4 → 2.0.0` because Take operations are removed and Sequence operations replace them.
-- Core CLI `1.0.16 → 2.0.0`, Core MCP `1.1.13 → 2.0.0`, Native Test Host `1.0.14 → 2.0.0`, Web Runtime Host `1.2.13 → 2.0.0`, and Creator Web `1.4.0 → 2.0.0` because their active recording/protocol surface changes incompatibly. Creator `1.4.0` is the approved #213 pre-commit editing prerequisite after #212's corrected `1.3.6`.
+- Authoring Domain `0.2.0 → 1.0.0`, Project I/O `0.6.1 → 1.0.0`, Project Cooker `0.3.0 → 1.0.0`, Audio Runtime `0.5.1 → 1.0.0`, and Web Runtime Platform `0.3.6 → 1.0.0` because their pre-1.0 Take/step or timing surfaces are replaced.
+- Application Facade: `1.4.5 → 2.0.0` because Take operations are removed and Sequence operations replace them.
+- Core CLI `1.0.17 → 2.0.0`, Core MCP `1.1.14 → 2.0.0`, Native Host `1.0.1 → 2.0.0`, Web Runtime Host `1.2.15 → 2.0.0`, and Creator Web `1.5.5 → 2.0.0` because their active recording/protocol surface changes incompatibly.
 - Task 9 must re-read current manifests before applying versions. If another merged Build or module release has consumed an exact target, stop and amend this plan through design review; do not silently choose new identities.
 
 ## Documentation Impact
@@ -565,7 +568,7 @@ Task 1 updates durable product authority and designed state. Task 9 updates impl
 - `/core/modules/web-runtime-platform/`
 - `/hosts/core-cli/`
 - `/hosts/core-mcp/`
-- `/hosts/native-test-host/`
+- `/hosts/native-host/`
 - `/hosts/web-runtime/`
 - `/hosts/creator-web/`
 - `/platform/storage/`
@@ -575,7 +578,7 @@ Task 1 updates durable product authority and designed state. Task 9 updates impl
 - `/product/capability-map/`
 - `/operations/testing-and-proof/`
 
-The immutable Product Build `1.0.31.0 · canary` snapshot is created only after the version/current-source commit is clean. Snapshot creation is documentation evidence, not Channel promotion.
+The immutable Product Build `1.0.37.0 · canary` snapshot is created only after the version/current-source commit is clean. Snapshot creation is documentation evidence, not Channel promotion.
 
 ## Issue Map
 
@@ -583,7 +586,8 @@ Umbrella: [#265 — feature: deliver Stage 9 Sequence recording semantics](https
 
 | Plan Task | GitHub Issue | Priority | Primary Project area | Hard dependencies |
 |---|---|---|---|---|
-| 1 | [#266 — durable Stage 9 decision](https://github.com/endaye/lmdj/issues/266) | P1 | Product | #238 |
+| Prerequisite | [#321 — refresh Stage 9 plan and portfolio identities](https://github.com/endaye/lmdj/issues/321) | P1 | Docs/Governance | merged design/plan PR #276 |
+| 1 | [#266 — durable Stage 9 decision](https://github.com/endaye/lmdj/issues/266) | P1 | Product | #321; satisfies #238 |
 | 2 | [#267 — Project v3 and tick-native Domain](https://github.com/endaye/lmdj/issues/267) | P1 | Contracts | #266 |
 | 3 | [#268 — Sequence journal and flush recovery](https://github.com/endaye/lmdj/issues/268) | P1 | Core | #267 |
 | 4 | [#269 — tick-native Audio Runtime](https://github.com/endaye/lmdj/issues/269) | P1 | Core | #267 |
@@ -594,8 +598,8 @@ Umbrella: [#265 — feature: deliver Stage 9 Sequence recording semantics](https
 | 9 | [#274 — versions, current Portal, automated acceptance](https://github.com/endaye/lmdj/issues/274) | P1 | Product | #266–#273 |
 | 10 | [#275 — immutable Portal snapshot](https://github.com/endaye/lmdj/issues/275) | P2 | Docs/Governance | #274 |
 
-All eleven Issues are in the `LMDJ Work` Project with Status `Todo`, Stage `Stage 9`, the listed Project Priority/Area, and an explicit Target. Labels may carry secondary areas that the single-select Project field cannot represent.
+All twelve preparation/delivery Issues are in the `LMDJ Work` Project with Stage `Stage 9`, the listed Project Priority/Area, and an explicit Target. Issue #321 is `In Progress`; #265–#275 remain `Todo`. Labels may carry secondary areas that the single-select Project field cannot represent. Question Issue #238 remains the pre-implementation semantic gate until Task 1 records the durable decision.
 
 ## Final Acceptance Boundary
 
-Stage 9 is implementation-complete only when all ten Task Issues are merged and individually accepted, Project v3 is the sole active writer Contract, the full and stress suites pass on the integrated head, Browser and Native evidence is attached, and Product Build `1.0.31.0` has an immutable Portal snapshot. This does not by itself authorize a tag, GitHub Release, deployment, or `canary`/`beta`/`stable` Channel promotion.
+Stage 9 is implementation-complete only when the prerequisite and all ten Task Issues are merged and individually accepted, Project v3 is the sole active writer Contract, the full and stress suites pass on the integrated head, Browser and Native evidence is attached, and Product Build `1.0.37.0` has an immutable Portal snapshot. This does not by itself authorize a tag, GitHub Release, deployment, or `canary`/`beta`/`stable` Channel promotion.
