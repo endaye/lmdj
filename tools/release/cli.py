@@ -230,7 +230,9 @@ def main(argv: list[str] | None = None) -> int:
         CommandError, GitHubApiError, GitRepositoryError, OpenPgpError, PrepareError,
         ProfileError, RehearsalError, ReleaseModelError, TransitionError, OSError,
     ) as error:
-        print(f"release verification error: {error}", file=sys.stderr)
+        detail = error.detail if isinstance(error, CommandError) else ""
+        suffix = f": {detail}" if detail else ""
+        print(f"release verification error: {error}{suffix}", file=sys.stderr)
         return 2
     return 0
 
