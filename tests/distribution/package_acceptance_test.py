@@ -224,6 +224,7 @@ def main() -> int:
             else "liblmdj_core_c.so"
         )
         expected = {
+            "LICENSE",
             "README.md",
             "bin/lmdj-core",
             "bin/lmdj-core-mcp",
@@ -245,6 +246,9 @@ def main() -> int:
             if path.is_file()
         }
         assert actual == expected, (actual - expected, expected - actual)
+        # A closed inventory already fails if LICENSE is absent; this also
+        # fails a LICENSE that is not the exact one the repository ships.
+        assert sha256(package_root / "LICENSE") == sha256(REPO_ROOT / "LICENSE")
         for path in package_root.rglob("*"):
             assert not path.is_symlink(), path
         for relative in (

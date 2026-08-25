@@ -359,7 +359,10 @@ function isProjectionPath(relative) {
   return false;
 }
 
-async function projectionManifest(repoRoot, revision, requestedPaths) {
+// Exported so the pre-merge gate computes the exact projection this module
+// compares a landed snapshot against, rather than a second implementation
+// that could drift from the verdict it is supposed to predict.
+export async function projectionManifest(repoRoot, revision, requestedPaths) {
   const paths = requestedPaths
     ? [...requestedPaths].map(validateRelativePath).sort()
     : (await listRevisionPaths(repoRoot, revision)).filter(isProjectionPath);

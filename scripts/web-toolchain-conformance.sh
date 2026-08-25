@@ -12,6 +12,9 @@ formal_audio_root="$toolchain_root/formal-audio"
 audio_runtime_root="$build_root/audio-runtime"
 audio_runtime_cmake_root="$audio_runtime_root/cmake"
 web_test_root="$repo_root/tests/platform/web"
+proof_server_pid=""
+proof_server_ready_root=""
+proof_server_base_url=""
 
 usage() {
   cat >&2 <<'EOF'
@@ -136,6 +139,95 @@ build_audio_runtime() {
   fi
 }
 
+cleanup_proof_server() {
+  if [[ -n "$proof_server_pid" ]]; then
+    kill "$proof_server_pid" 2>/dev/null || true
+    wait "$proof_server_pid" 2>/dev/null || true
+    proof_server_pid=""
+  fi
+  if [[ -n "$proof_server_ready_root" ]]; then
+    rm -rf "$proof_server_ready_root"
+    proof_server_ready_root=""
+  fi
+  proof_server_base_url=""
+}
+
+# The Proof owns the server its browsers drive. Port 0 makes the kernel hand
+# this run a private ephemeral port, so two runner services on one host can
+# never contend for a fixed one, and a server leaked by a crashed lane can
+# neither be collided with nor silently answer this lane's requests: the port
+# is read back from this child's own handshake file and the health response on
+# it must identify this service.
+start_proof_server() {
+  local log_path="$build_root/toolchain-proof-server.log"
+  local port_file
+  local port=""
+  cleanup_proof_server
+  cmake -E make_directory "$build_root"
+  proof_server_ready_root="$(
+    mktemp -d "${TMPDIR:-/tmp}/lmdj-web-toolchain-server.XXXXXX"
+  )"
+  port_file="$proof_server_ready_root/port"
+  python3 "$web_test_root/toolchain/server.py" \
+    --root "$toolchain_root" \
+    --port 0 \
+    --write-port "$port_file" >"$log_path" 2>&1 &
+  proof_server_pid=$!
+  trap cleanup_proof_server EXIT
+  for _ in {1..200}; do
+    if [[ -s "$port_file" ]] && port="$(python3 - "$port_file" <<'PY'
+import pathlib
+import sys
+
+try:
+    encoded = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8")
+    value = int(encoded)
+except (OSError, UnicodeDecodeError, ValueError):
+    raise SystemExit(1)
+if encoded != f"{value}\n" or value < 1 or value > 65_535:
+    raise SystemExit(1)
+print(value)
+PY
+    )"; then
+      break
+    fi
+    kill -0 "$proof_server_pid" 2>/dev/null || break
+    sleep 0.05
+  done
+  if [[ -z "$port" ]] || ! kill -0 "$proof_server_pid" 2>/dev/null; then
+    echo "web toolchain error: proof server did not become ready" >&2
+    sed -n '1,120p' "$log_path" >&2 || true
+    return 2
+  fi
+  if ! python3 - "http://127.0.0.1:$port/health.json" <<'PY'
+import json
+import sys
+import urllib.request
+
+with urllib.request.urlopen(sys.argv[1], timeout=0.5) as response:
+    payload = json.load(response)
+if payload != {"ok": True, "service": "web-toolchain-conformance"}:
+    raise SystemExit(1)
+PY
+  then
+    echo "web toolchain error: owned proof server is unreachable" >&2
+    sed -n '1,120p' "$log_path" >&2 || true
+    return 2
+  fi
+  proof_server_base_url="http://127.0.0.1:$port"
+}
+
+# Playwright clears outputDir at the start of every run, so each invocation
+# needs its own results slot or the last one destroys every earlier trace.
+run_proof_specs() {
+  local slot="$1"
+  shift
+  LMDJ_WEB_RESULTS_SLOT="$slot" \
+    LMDJ_WEB_HOST_EXTERNAL_SERVER=1 \
+    LMDJ_WEB_HOST_BASE_URL="$proof_server_base_url" \
+    npm --prefix "$web_test_root" test -- "$@"
+}
+
 clean_fixture() {
   if [[ -z "$repo_root" || "$repo_root" == "/" ]]; then
     echo "web toolchain error: unsafe repository root" >&2
@@ -230,22 +322,24 @@ case "$command_name" in
     build_project_io
     build_audio_runtime
     python3 "$web_test_root/toolchain/toolchain_identity_test.py"
-    npm --prefix "$web_test_root" test -- \
+    start_proof_server
+    run_proof_specs toolchain-chromium \
       --project=chromium \
       "$web_test_root/toolchain/toolchain_conformance.spec.mjs"
-    npm --prefix "$web_test_root" test -- \
+    run_proof_specs toolchain-webkit \
       --project=webkit \
       "$web_test_root/toolchain/toolchain_conformance.spec.mjs"
-    npm --prefix "$web_test_root" test -- \
+    run_proof_specs project-io-chromium \
       --project=chromium \
       "$web_test_root/project_io/project_io_web_conformance.spec.mjs"
-    npm --prefix "$web_test_root" test -- \
+    run_proof_specs project-io-webkit \
       --project=webkit \
       "$web_test_root/project_io/project_io_web_conformance.spec.mjs"
-    npm --prefix "$web_test_root" test -- \
+    run_proof_specs audio-chromium \
       --project=chromium \
       "$web_test_root/audio/realtime_audio_worklet.spec.mjs" \
       "$web_test_root/audio/realtime_failure.spec.mjs"
+    cleanup_proof_server
     echo "Web Toolchain Conformance Proof: PASS"
     ;;
   clean)

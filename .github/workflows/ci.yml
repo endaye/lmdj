@@ -284,7 +284,26 @@ jobs:
         uses: ./.github/actions/configure-build-acceleration
         with:
           use-ccache: false
+      # `package` builds Release and runs only the unit and component tiers,
+      # so it deliberately skips scripts/verify-core-dependencies.sh and
+      # fixture generation: both tiers must stay satisfiable by the LFS
+      # fixtures rehydrated above. A generated fixture entering either tier
+      # must break this job rather than silently invalidate that assumption.
       - run: scripts/core.sh package
+      # Digest-level comparison evidence, never a release input: release assets
+      # stay rebuilt and signed by `prepare` on the operator machine, and this
+      # lets an operator confirm they describe the same package CI proved
+      # packageable. Detached Manifest and checksum only -- a few KB.
+      - name: Retain the packaging comparison evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: package-evidence-${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: |
+            build/core/dist/*.build-manifest.json
+            build/core/dist/*.zip.sha256
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 14
 
   web-toolchain-conformance:
     # First lane cut over to the dedicated CI-only netcup node. The earlier
