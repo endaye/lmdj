@@ -921,6 +921,9 @@ class ReleaseTransitionsTest(unittest.TestCase):
             second: HttpResponse(
                 200, {}, json.dumps({"total_count": 2, "workflow_runs": [self._run_json(2)]}).encode(),
             ),
+            self._workflow_url(): HttpResponse(
+                200, {}, json.dumps(self._workflow_json()).encode(),
+            ),
         }
         client = GitHubClient(http_transport=lambda method, url, headers, body: pages[url])
         self.assertEqual([run.id for run in client.list_runs_for_sha("endaye/lmdj", self.target)], [1, 2])
@@ -1432,8 +1435,21 @@ class ReleaseTransitionsTest(unittest.TestCase):
     def _run_json(self, identifier: int) -> dict[str, object]:
         return {
             "id": identifier, "event": "push", "head_sha": self.target,
-            "head_branch": "main", "name": "Core CI", "status": "completed",
+            "head_branch": "main", "name": "Core CI / main",
+            "workflow_id": 313388832, "path": ".github/workflows/ci.yml",
+            "status": "completed",
             "conclusion": "success",
+        }
+
+    @staticmethod
+    def _workflow_url() -> str:
+        return "/repos/endaye/lmdj/actions/workflows/313388832"
+
+    @staticmethod
+    def _workflow_json() -> dict[str, object]:
+        return {
+            "id": 313388832, "name": "Core CI",
+            "path": ".github/workflows/ci.yml", "state": "active",
         }
 
     def _release_json(self, identifier: int) -> dict[str, object]:

@@ -35,9 +35,12 @@ from tools.release.github_api import (  # noqa: E402
 
 REPOSITORY = "endaye/lmdj"
 RUN_ID = 4242
+SECOND_RUN_ID = 4243
 TARGET = "a" * 40
 BASE = "b" * 40
 TOKEN = "fixture-token"
+WORKFLOW_ID = 313388832
+WORKFLOW_PATH = ".github/workflows/ci.yml"
 ARTIFACT_ID = 7001
 BLOB_HOST = "productionresultssa12.blob.core.windows.net"
 SIGNED_REDIRECT = f"https://{BLOB_HOST}/actions-results/fixture?sig=fixture&se=2026"
@@ -103,8 +106,35 @@ def job_document(identifier: int, name: str, **overrides: object) -> dict[str, o
         "name": name,
         "status": "completed",
         "conclusion": "success",
-        "workflow_name": "Core CI",
+        "workflow_name": "Core CI / main",
         "head_sha": TARGET,
+    }
+    document.update(overrides)
+    return document
+
+
+def run_document(identifier: int = RUN_ID, **overrides: object) -> dict[str, object]:
+    document: dict[str, object] = {
+        "id": identifier,
+        "event": "workflow_dispatch",
+        "head_sha": TARGET,
+        "head_branch": "main",
+        "name": "Core CI / main",
+        "workflow_id": WORKFLOW_ID,
+        "path": WORKFLOW_PATH,
+        "status": "completed",
+        "conclusion": "success",
+    }
+    document.update(overrides)
+    return document
+
+
+def workflow_document(**overrides: object) -> dict[str, object]:
+    document: dict[str, object] = {
+        "id": WORKFLOW_ID,
+        "name": "Core CI",
+        "path": WORKFLOW_PATH,
+        "state": "active",
     }
     document.update(overrides)
     return document
@@ -176,6 +206,13 @@ class ReleaseGitHubApiTest(unittest.TestCase):
         base = f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/jobs?filter=latest&per_page=100"
         return base if page is None else f"{base}&page={page}"
 
+    def runs_url(self, page: int | None = None) -> str:
+        base = f"/repos/{REPOSITORY}/actions/runs?head_sha={TARGET}&per_page=100"
+        return base if page is None else f"{base}&page={page}"
+
+    def workflow_url(self) -> str:
+        return f"/repos/{REPOSITORY}/actions/workflows/{WORKFLOW_ID}"
+
     def artifacts_url(self, page: int | None = None) -> str:
         base = f"/repos/{REPOSITORY}/actions/runs/{RUN_ID}/artifacts?per_page=100"
         return base if page is None else f"{base}&page={page}"
@@ -212,6 +249,51 @@ class ReleaseGitHubApiTest(unittest.TestCase):
             location, HttpResponse(status, {"Content-Type": content_type}, payload),
         )
 
+    def test_run_projection_resolves_stable_workflow_identity_once(self) -> None:
+        self.transport.json_route(
+            self.runs_url(),
+            {
+                "total_count": 2,
+                "workflow_runs": [run_document(), run_document(SECOND_RUN_ID)],
+            },
+        )
+        self.transport.json_route(self.workflow_url(), workflow_document())
+
+        runs = self.client.list_runs_for_sha(REPOSITORY, TARGET)
+
+        self.assertEqual(
+            runs,
+            [
+                RunProjection(
+                    RUN_ID, "workflow_dispatch", TARGET, "main", "Core CI",
+                    "completed", "success",
+                ),
+                RunProjection(
+                    SECOND_RUN_ID, "workflow_dispatch", TARGET, "main", "Core CI",
+                    "completed", "success",
+                ),
+            ],
+        )
+        self.assertEqual(
+            [url for _, url, _ in self.transport.requests if url == self.workflow_url()],
+            [self.workflow_url()],
+        )
+
+    def test_run_and_workflow_metadata_identity_must_match(self) -> None:
+        for name, run, workflow in (
+            ("workflow id", run_document(), workflow_document(id=WORKFLOW_ID + 1)),
+            ("workflow path", run_document(), workflow_document(path=".github/workflows/nightly.yml")),
+            ("missing stable name", run_document(), workflow_document(name="")),
+        ):
+            with self.subTest(name=name):
+                self.transport.responses.clear()
+                self.transport.json_route(
+                    self.runs_url(), {"total_count": 1, "workflow_runs": [run]},
+                )
+                self.transport.json_route(self.workflow_url(), workflow)
+                with self.assertRaises(GitHubApiError):
+                    self.client.list_runs_for_sha(REPOSITORY, TARGET)
+
     def test_run_jobs_require_complete_pagination(self) -> None:
         self.transport.json_route(
             self.jobs_url(),
@@ -225,8 +307,8 @@ class ReleaseGitHubApiTest(unittest.TestCase):
         self.assertEqual(
             jobs,
             [
-                RunJobProjection(1, RUN_ID, "Change Scope", "completed", "success", "Core CI", TARGET),
-                RunJobProjection(2, RUN_ID, "PR Gate", "completed", "success", "Core CI", TARGET),
+                RunJobProjection(1, RUN_ID, "Change Scope", "completed", "success", "Core CI / main", TARGET),
+                RunJobProjection(2, RUN_ID, "PR Gate", "completed", "success", "Core CI / main", TARGET),
             ],
         )
 

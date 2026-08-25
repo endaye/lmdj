@@ -149,6 +149,19 @@ class CiEvidenceVerifierTest(unittest.TestCase):
         ]
         self.assertEqual(self.verify().code, "ok")
 
+    def test_dynamic_job_run_name_does_not_replace_stable_workflow_identity(self) -> None:
+        self.github.jobs = [
+            RunJobProjection(
+                1, RUN_ID, CHANGE_SCOPE_JOB, "completed", "success",
+                "Core CI / main", TARGET,
+            ),
+            RunJobProjection(
+                2, RUN_ID, PR_GATE_JOB, "completed", "success",
+                "Core CI / main", TARGET,
+            ),
+        ]
+        self.assertEqual(self.verify().code, "ok")
+
     def test_focused_mode_is_a_conflict(self) -> None:
         self.github.scope = full_scope(mode="focused", selected_lanes=("docs_static",), required_jobs=("docs-static",))
         result = self.verify()
@@ -227,10 +240,6 @@ class CiEvidenceVerifierTest(unittest.TestCase):
                 RunJobProjection(2, RUN_ID + 1, PR_GATE_JOB, "completed", "success", WORKFLOW, TARGET),
             ],
             "gate on another sha": gate_jobs(sha="c" * 40),
-            "gate in another workflow": [
-                gate_jobs()[0],
-                RunJobProjection(2, RUN_ID, PR_GATE_JOB, "completed", "success", "Nightly", TARGET),
-            ],
         }
         for name, jobs in cases.items():
             with self.subTest(name=name):
