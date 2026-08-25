@@ -351,8 +351,12 @@ def _validate_policy(policy: Mapping[str, object]) -> None:
     if not isinstance(known, list) or len(known) != len(set(known)) or not all(isinstance(item, str) and item for item in known):
         raise ValueError("invalid known top levels")
     for rule in policy["rules"]:
-        if not isinstance(rule, dict) or set(rule) != {"match", "lanes"}:
+        # `note` is an optional editor-facing annotation: a rule whose lanes
+        # depend on coverage owned elsewhere says so where it is edited.
+        if not isinstance(rule, dict) or set(rule) - {"note"} != {"match", "lanes"}:
             raise ValueError("rule schema is not closed")
+        if "note" in rule and (not isinstance(rule["note"], str) or not rule["note"]):
+            raise ValueError("invalid rule note")
         _validate_match(rule["match"])
         if not isinstance(rule["lanes"], list) or not rule["lanes"] or not set(rule["lanes"]).issubset(lane_set):
             raise ValueError("rule references unknown lane")

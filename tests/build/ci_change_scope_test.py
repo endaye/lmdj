@@ -383,6 +383,44 @@ class ChangeScopeTest(unittest.TestCase):
                         event_name="pull_request", draft=False, labels=(),
                     )
 
+    def test_rule_note_is_an_optional_annotation_and_never_a_lane_input(self):
+        # A rule whose lane set depends on coverage owned elsewhere says so
+        # where it is edited: `packaging/core/` does not route `packages/**`
+        # here because tests/distribution/package_acceptance_test.py runs
+        # inside scripts/core.sh proof on the core lanes. The note is an
+        # annotation only -- selection must be identical without it, and an
+        # empty one fails closed rather than reading as an absent note.
+        noted = [rule for rule in self.policy["rules"] if "note" in rule]
+        self.assertTrue(noted, "no rule states the assumption its lanes rest on")
+        for rule in noted:
+            self.assertIsInstance(rule["note"], str)
+            self.assertTrue(rule["note"].strip())
+
+        stripped = copy.deepcopy(self.policy)
+        for rule in stripped["rules"]:
+            rule.pop("note", None)
+        for path in ("packaging/core/README.md", "docs/guide.md"):
+            with self.subTest(path=path):
+                self.assertEqual(
+                    self.true_lanes(self.classify([path])),
+                    self.true_lanes(self.module.classify(
+                        stripped, changed(self.module, path),
+                        base_sha="a" * 40, head_sha="b" * 40,
+                        event_name="pull_request", draft=False, labels=(),
+                    )),
+                )
+
+        for invalid in ("", 0):
+            with self.subTest(note=invalid):
+                policy = copy.deepcopy(self.policy)
+                policy["rules"][0]["note"] = invalid
+                with self.assertRaises(ValueError):
+                    self.module.classify(
+                        policy, changed(self.module, "docs/guide.md"),
+                        base_sha="a" * 40, head_sha="b" * 40,
+                        event_name="pull_request", draft=False, labels=(),
+                    )
+
     def test_every_case_uses_union_semantics(self):
         for path, expected in CASES.items():
             with self.subTest(path=path):

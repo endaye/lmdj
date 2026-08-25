@@ -183,6 +183,13 @@ def stage_package(
         package_root / "README.md",
         0o644,
     )
+    # The archive is distributable on its own, so the license that governs it
+    # travels inside it rather than being inferred from the repository.
+    copy_file(
+        REPO_ROOT / "LICENSE",
+        package_root / "LICENSE",
+        0o644,
+    )
 
 
 def validate_manifest(manifest: dict, package_root: Path, version: str) -> None:
