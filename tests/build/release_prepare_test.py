@@ -3,16 +3,19 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stderr
 from dataclasses import dataclass
 import hashlib
+import io
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 import zipfile
 
 
@@ -32,7 +35,7 @@ def current_product_build() -> str:
 
 CURRENT_PRODUCT_BUILD = current_product_build()
 
-from tools.release.commands import CommandRunner, sanitize_diagnostic  # noqa: E402
+from tools.release.commands import CommandError, CommandRunner, sanitize_diagnostic  # noqa: E402
 from tools.release.github_api import (  # noqa: E402
     BranchProjection,
     CiScopeConflictError,
@@ -723,6 +726,50 @@ class ReleasePrepareTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unknown release profile"):
             build_profile("source-and-binary", self.root, self.root / "invalid", None)
 
+    def test_web_profile_installs_locked_dependencies_before_configuring(self) -> None:
+        dependencies_ready = False
+
+        def executor(vector, **kwargs):
+            nonlocal dependencies_ready
+            if vector == ("npm", "--prefix", "tests/platform/web", "ci"):
+                dependencies_ready = (
+                    kwargs["env"]["PATH"].split(os.pathsep)[0]
+                    == "/locked/node/bin"
+                )
+                return subprocess.CompletedProcess(vector, 0, stdout="", stderr="")
+            if vector == ("bash", "scripts/web-runtime-host.sh", "configure"):
+                detail = (
+                    "diagnostic stop after dependency bootstrap"
+                    if dependencies_ready
+                    else "locked Web dependencies are absent"
+                )
+                return subprocess.CompletedProcess(vector, 2, stdout="", stderr=detail)
+            return subprocess.CompletedProcess(
+                vector, 70, stdout="", stderr="unexpected release builder command",
+            )
+
+        runtime = ProfileRuntime(
+            runner=CommandRunner(executor=executor),
+            checksum_verifier=RecordingVerifier(),
+            checksum_home=self.root,
+            checksum_fingerprint=self.policy.checksum_fingerprint,
+        )
+        with (
+            mock.patch.dict(
+                os.environ,
+                {"EMSDK_NODE": "/locked/node/bin/node", "PATH": "/host/bin"},
+            ),
+            self.assertRaises(CommandError) as raised,
+        ):
+            build_profile(
+                "web-runtime-host", self.root, self.root / "web-output",
+                self.ledger.entries[0], runtime=runtime,
+            )
+        self.assertEqual(
+            raised.exception.detail,
+            "diagnostic stop after dependency bootstrap",
+        )
+
     def test_default_proof_reader_parses_the_tracked_immutable_snapshot(self) -> None:
         intent = next(
             entry for entry in load_ledger_document(
@@ -758,6 +805,25 @@ class ReleasePrepareTest(unittest.TestCase):
     def test_cli_normalizes_usage_and_verification_failures(self) -> None:
         self.assertEqual(cli.main(["prepare"]), 64)
         self.assertEqual(cli.main(["--repo-root", str(self.root), "prepare", "bad-tag"]), 2)
+
+    def test_cli_reports_the_sanitized_subprocess_reason(self) -> None:
+        diagnostic = "Web Runtime Host error: EMSDK is not configured"
+        output = io.StringIO()
+        with (
+            mock.patch.object(cli, "build_context", return_value=object()),
+            mock.patch.object(
+                cli, "prepare",
+                side_effect=CommandError(
+                    "release command failed: bash (exit 2)", detail=diagnostic,
+                ),
+            ),
+            redirect_stderr(output),
+        ):
+            status = cli.main([
+                "--repo-root", str(self.root), "prepare", self.tag,
+            ])
+        self.assertEqual(status, 2)
+        self.assertIn(diagnostic, output.getvalue())
 
     def test_core_profile_verifies_the_fresh_signature_before_returning_assets(self) -> None:
         archive = self.root / "core.zip"

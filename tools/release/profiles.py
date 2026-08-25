@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
@@ -98,6 +99,16 @@ def build_web_runtime_host(
     if intent is None or intent.kind.value != "product":
         raise ProfileError("Web Runtime Host profile requires a Product intent")
     selected = _require_runtime(runtime)
+    node = os.environ.get("EMSDK_NODE")
+    environment = (
+        {"PATH": str(Path(node).parent) + os.pathsep + os.environ.get("PATH", "")}
+        if node else None
+    )
+    selected.runner.run(
+        ["npm", "--prefix", "tests/platform/web", "ci"],
+        cwd=worktree,
+        environment=environment,
+    )
     for command in ("configure", "build", "test", "proof"):
         selected.runner.run(["bash", "scripts/web-runtime-host.sh", command], cwd=worktree)
     dist = _require_directory(worktree / "build/web/host/dist", "Web Runtime Host distribution")
