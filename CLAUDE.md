@@ -37,6 +37,14 @@ release, publication, deployment, or Channel promotion.
 - For querying and triaging open issues and parallel workstreams, follow `.agents/skills/issue-list/SKILL.md`.
 - For shipping a locally completed issue or task, coding agents must follow `.agents/skills/issue-done/SKILL.md` (handles verification, Conventional Commit, push, PR creation, CI auto-merge, and worktree/branch cleanup).
 
+## Pitfall ledger
+
+Process and invariant knowledge that cannot be derived from product code lives
+in `.agents/pitfalls/` under the contract in
+[`docs/governance/pitfall-ledger.md`](docs/governance/pitfall-ledger.md). At the
+relevant skill trigger, search open entries by the Task's `area:*` labels;
+before shipping, follow `issue-done` to record or bump any qualifying pitfall.
+
 ## Release operations
 
 For any release audit or operation, coding agents must read and follow
