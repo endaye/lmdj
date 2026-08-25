@@ -213,6 +213,21 @@ class ReleaseModelTest(unittest.TestCase):
             "51d9e4748cc12a4423954a159949b7b165513789",
         )
         self.assertEqual(stage8.snapshot, "1.0.22.0")  # type: ignore[union-attr]
+        candidate = ledger.intent_for_tag("lmdj-v1.0.36.0")
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.disposition.value, "releasable")  # type: ignore[union-attr]
+        self.assertEqual(candidate.channel, "canary")  # type: ignore[union-attr]
+        self.assertEqual(candidate.profile, "web-runtime-host")  # type: ignore[union-attr]
+        self.assertEqual(  # type: ignore[union-attr]
+            candidate.target_revision,
+            "4a145f4aeba8594cf4b9c53cddfe8a67fabb5bf2",
+        )
+        self.assertEqual(candidate.snapshot, "1.0.36.0")  # type: ignore[union-attr]
+        self.assertEqual(candidate.merged_main_run_id, 32857088479)  # type: ignore[union-attr]
+        self.assertEqual(  # type: ignore[union-attr]
+            candidate.evidence_paths,
+            ("docs/release-evidence/2026-08-25-lmdj-1.0.36.0-canary-release-intent.md",),
+        )
         self.assertEqual(len(ledger.historical_exceptions), 3)
 
     def test_canonical_json_digest_and_slash_safe_output_name_are_deterministic(self) -> None:
