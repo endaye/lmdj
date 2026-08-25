@@ -99,3 +99,27 @@ inputs `tag`, `release_id`, and `plan_sha256`. Do not approve the protected
 `release` Environment or claim publication on the user's behalf. Keep
 Deployment and Channel promotion separate; report only independently verified
 status and never infer either from Release publication.
+
+## Pitfalls
+
+Open the entries below before the step each one names. They are recorded
+recurrences from this repository's own history, not general advice; the
+contract is [`docs/governance/pitfall-ledger.md`](../../../docs/governance/pitfall-ledger.md).
+
+- Before treating a Product Build as allocated —
+  [`squash-witness-provenance`](../../pitfalls/squash-witness-provenance.md).
+  A squash rewrites the introducing commit, so a snapshot frozen from a branch
+  SHA loses its provenance. Generate the witness for the exact post-squash
+  `main` SHA with `scripts/architecture-portal.sh witness PRODUCT_BUILD
+  INTRODUCING_REVISION` and verify it; never hand-edit an immutable snapshot to
+  make provenance agree.
+- Before creating or binding a release intent —
+  [`release-intent-binding`](../../pitfalls/release-intent-binding.md).
+  Allocation needs no intent. Bind the intent only after the exact
+  protected-main squash SHA exists; a pre-squash or branch SHA is not a
+  protected-main ancestor and fails closed.
+
+When a release operation exposes a new process invariant, record it through the
+Pitfall Ledger step in
+[`.agents/skills/issue-done/SKILL.md`](../issue-done/SKILL.md) rather than
+leaving it in a report.

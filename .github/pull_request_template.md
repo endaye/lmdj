@@ -33,6 +33,15 @@ Reason: <!-- Explain the product/manual effect or why none. -->
 and include the matching immutable Product Build snapshot. PR-only previews do
 not create a new snapshot. -->
 
+## Pitfall Impact
+
+Pitfall impact: none — reason: <!-- Write exactly one: new <id> | recurrence <id> | none — reason: ... -->
+
+<!-- A process or invariant defect whose root cause is not derivable from the
+code must record or bump an entry under `.agents/pitfalls/` in this same
+commit; see docs/governance/pitfall-ledger.md. A product-logic defect fully
+captured by its regression test is out of scope: that test is its exit. -->
+
 ## Release Impact
 
 Release impact: none
