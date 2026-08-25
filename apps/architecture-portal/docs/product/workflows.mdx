@@ -15,7 +15,11 @@ import {BuildIdentity} from '@site/src/components/BuildIdentity';
 
 ## 创作与保存
 
-Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和 Take Journal。Host 不解析 Project bundle。
+Host 向 Application Facade 发出命令；Authoring Domain 更新 Project Truth；Project I/O 负责事务式存取和录音会话 Journal。Host 不解析 Project bundle。
+
+## Sequence 录音（设计态，尚未实现）
+
+[2026-08-23 决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)批准的 Stage 9 录音模型：录音是往当前 Pattern 槽写入 tick-native 打击事件的 Project 级会话，没有 Take 对象、没有音频 bounce。会话落在 bundle Journal 上、受 writer lease 保护；BPM 与 Quantize/Swing 等白名单变更选择性 rebase 后录音继续，Sample 类 Command 失败但不中断录音，flush 幂等且以 manifest 发布为 commit point，中断恢复由 Pattern 指纹门控。当前实现仍是 Headless Core Proof 的严格冲突规则，直至 Stage 9 实施合入。
 
 ## Pad Capture pre-commit 编辑
 

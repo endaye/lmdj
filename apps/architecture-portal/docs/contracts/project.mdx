@@ -21,3 +21,5 @@ Runtime Snapshot、Provider 选择、Attempt failure、设备句柄和 Host 偏�
 Pattern event 引用 Pad Slot，Slot 再关联 Asset；事件不直接绑定 Asset。playback 属于 Slot，不属于不可变 Asset，同一 WAV 可被多个 Slot 以不同参数引用。
 ## 使用方与证据
 Authoring Domain、Project I/O、Cooker 与 Facade 消费该 Contract，并由 schema、领域、dual-read/v2-write、Cook 与 packaged v1→v2 Creator Proof 验证。
+## 设计态（尚未实现）
+[2026-08-23 Sequence 录音语义决策](https://github.com/endaye/lmdj/blob/main/docs/prd/decisions/2026-08-23-sequence-recording-semantics.md)批准了下一档 Project Contract（精确 Contract ID 与 SemVer 见决策文件与实施计划，Stage 9 实施时进入活动 manifest）：删除 `takes` 与 raw-take 定义，Pattern 事件改为 tick-native（PPQ 960）的 `{slot, onset_tick, duration_tick, velocity}`，`quantize_enabled` 与 `swing_percent` 进入 Project Truth，v2 到下一档为确定性总迁移。v2 在 Stage 9 实施合入前仍是唯一当前写入真相；本节不改变上方由活动 manifest 派生的身份。
