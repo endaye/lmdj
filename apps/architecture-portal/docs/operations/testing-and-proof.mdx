@@ -81,6 +81,16 @@ transport timeout。它要求 PR/main/merge SHA/tree equality 收敛，绝不重
 platform timeout，再查 controller report；scheduled watchdog 会重新核验 head、摘掉 label，
 并只留一条幂等 conversation-comment marker。reconciliation 完成前不得直接重新入队。
 
+Queue validation 证明将要落地的 tree，而不是它将以何种 history 落地：两条路径都在已含
+exact current `main` 的 head 上跑 CI，因此被验证的 tree 就是 GitHub 发布的 tree，但 commit
+形状不同——squash 只保留该 tree，parent 是 current `main`，分支提交永不进入 `main` 历史。
+凡是读取 main 历史形状的 invariant，合并前后就可能给出不同结论。Portal snapshot provenance
+曾属此类，现已改为只依赖目标 tree 判定：一次变更引入的 Product Build snapshot，其记录的
+source projection 必须等于该变更自身 tree 中被投影文件的内容；portal lane 在合并前判定，落地
+后的 provenance gate 在恰好落地的 tree 上重判，两个结论按构造一致。Squash witness 仍只是对
+已落地 divergence 的修复——它记录 introducing commit，因此在 squash 存在之前无法写出；先冻结
+快照又继续修改被投影文件的变更，必须在自己的 tip 重新冻结。
+
 Queue validation 只证明 exact synchronized PR head；merge 后的 focused main run 与
 exact-main release evidence 始终独立。Release 仍要求 exact target main SHA 上 successful full
 `Core CI`、同 run Gate 和 retained full manifest，不能从 queue、PR CI 或 squash merge 推断。

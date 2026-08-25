@@ -205,6 +205,25 @@ bound to one ticket, PR number, base SHA, head SHA, and numeric
 Actions App ID `15368`. Only live-confirmed base/head drift may consume another
 attempt, with three attempts total.
 
+Queue validation proves the tree that will land, not the history it will land
+as. Both paths run CI on a head that already contains exact current `main`, so
+the validated tree is the tree GitHub publishes; the commit shape is not the
+same, because the squash keeps only that tree with current `main` as its single
+parent, and the branch commits never enter `main`'s history. Any invariant that
+reads main's history shape can therefore answer differently before and after the
+merge. Portal snapshot provenance was such an invariant, and it is settled by
+making it decidable from the target tree alone: a Product Build snapshot
+introduced by a change must record a source projection equal to the projected
+files in that change's own tree. The portal lane decides that before the merge
+and the landed provenance gate re-decides it on exactly the tree that landed, so
+the two verdicts are identical by construction. A squash witness remains what it
+always was, a repair for a divergence that already landed: it names the
+introducing commit, so it cannot be written before the squash exists. A change
+that freezes a snapshot and then keeps editing projected files must re-freeze at
+its own tip rather than rely on a witness it cannot yet produce. This rule is
+motivated by the green-then-red failure documented in Issue #296, where PR #282
+passed every gate and turned `main` red for 2h50m on the squash it produced.
+
 Once the queue is enabled, it is the default path for every non-control-plane
 PR merging into `main`. While an `lmdj-merge-main` queue item is queued or
 in-progress, ordinary manual merging of a non-control-plane PR is prohibited:

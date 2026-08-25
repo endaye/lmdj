@@ -11,10 +11,12 @@ import {
   createSquashWitness,
   createSnapshotMetadata,
   freezeDiagramAssets,
+  projectionManifest,
   readRepoFactsAtRevision,
   resolveIntroducingRevision,
   verifySnapshotProvenance,
 } from '../scripts/lib/snapshot-provenance.mjs';
+import {checkSnapshotProjection} from '../scripts/check-snapshot-projection.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -158,6 +160,71 @@ function verifierOptions(fixture, metadata, headRevision) {
     },
   };
 }
+
+const METADATA_PATH = `apps/architecture-portal/versioned_metadata/version-${VERSION}.json`;
+
+async function squashOnto(fixture, headRevision, baseRevision) {
+  const tree = (await git(fixture.repoRoot, ['rev-parse', `${headRevision}^{tree}`])).stdout.trim();
+  const squash = (await git(fixture.repoRoot, [
+    'commit-tree', tree, '-p', baseRevision, '-m', 'squash merge',
+  ], {env: {GIT_AUTHOR_DATE: INTRO_DATE, GIT_COMMITTER_DATE: INTRO_DATE}})).stdout.trim();
+  await git(fixture.repoRoot, ['update-ref', 'refs/heads/main', squash]);
+  await git(fixture.repoRoot, ['reset', '--hard', squash]);
+  return squash;
+}
+
+function preMergeProjectionGate(fixture, metadata, headRevision) {
+  return checkSnapshotProjection({
+    addedFiles: [METADATA_PATH],
+    readMetadata: async () => metadata,
+    readProjection: (paths) => projectionManifest(fixture.repoRoot, headRevision, paths),
+  });
+}
+
+// Issue #296: every gate that authorizes a merge runs on the pre-merge head,
+// while the provenance invariant is decided on the squash GitHub creates. A
+// snapshot frozen mid-branch is accepted on the branch by the direct-parent
+// rule and can only be accepted on main by projection equality, so the two
+// verdicts disagree by construction. These two tests are the contract that
+// the pre-merge gate returns the verdict the squash will produce.
+test('a snapshot frozen before later edits fails the pre-merge gate exactly as the squash will', async () => {
+  const fixture = await initializeFixture();
+  try {
+    const metadata = await generateWorkingSnapshot(fixture);
+    await put(fixture.repoRoot, 'apps/architecture-portal/docs/overview/index.mdx', 'post-freeze overview\n');
+    const branchTip = await commit(fixture.repoRoot, 'snapshot plus later edits', INTRO_DATE);
+
+    const preMerge = await preMergeProjectionGate(fixture, metadata, branchTip);
+    assert.equal(preMerge.length, 1, preMerge.join('\n'));
+    assert.match(preMerge[0], /does not match this change's own tree/);
+    assert.match(preMerge[0], new RegExp(`scripts/architecture-portal\\.sh version ${VERSION}`));
+
+    const squash = await squashOnto(fixture, branchTip, fixture.base);
+    assert.match(
+      (await verifySnapshotProvenance(verifierOptions(fixture, metadata, squash))).join('\n'),
+      /source projection is neither direct-parent nor squash-equivalent/,
+    );
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
+
+test('a snapshot frozen at the branch tip passes the pre-merge gate and the squash it produces', async () => {
+  const fixture = await initializeFixture();
+  try {
+    await put(fixture.repoRoot, 'apps/architecture-portal/docs/overview/index.mdx', 'current docs move on\n');
+    fixture.revision = await commit(fixture.repoRoot, 'current docs move on', '2026-08-04T00:00:30Z');
+    const metadata = await generateWorkingSnapshot(fixture);
+    const branchTip = await commit(fixture.repoRoot, 'freeze at the branch tip', INTRO_DATE);
+
+    assert.deepEqual(await preMergeProjectionGate(fixture, metadata, branchTip), []);
+
+    const squash = await squashOnto(fixture, branchTip, fixture.base);
+    assert.deepEqual(await verifySnapshotProvenance(verifierOptions(fixture, metadata, squash)), []);
+  } finally {
+    await rm(fixture.repoRoot, {recursive: true, force: true});
+  }
+});
 
 test('source-tree archive reads committed bytes without running content filters', async () => {
   // A checkout that skipped the Git LFS smudge holds pointers and no objects, and
