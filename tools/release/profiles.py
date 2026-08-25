@@ -10,6 +10,7 @@ import os
 from pathlib import Path, PurePosixPath
 import shutil
 import stat
+import sys
 import tempfile
 import zipfile
 from typing import Callable
@@ -308,6 +309,7 @@ def _stage_web_bundle(
     if spec is None or spec.loader is None:
         raise ProfileError("Web Runtime Host release verifier is unavailable")
     module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     archive, checksum, signature = (asset.path for asset in build.assets)
     stage = output / ".verified"
