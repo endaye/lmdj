@@ -73,6 +73,7 @@ from tools.release.profiles import (  # noqa: E402
     ProfileError,
     ProfileRuntime,
     _create_dist_zip,
+    _stage_web_bundle,
     _stage_and_sign,
     _verify_checksum,
     build_profile,
@@ -843,6 +844,59 @@ class ReleasePrepareTest(unittest.TestCase):
         self.assertEqual([name for name, _ in verifier.calls], ["sign", "import", "verify"])
         self.assertEqual(verifier.calls[1][1], verifier.calls[2][1])
         self.assertEqual(verifier.calls[1][1], 0o700)
+
+    def test_web_profile_loads_an_exact_target_verifier_that_uses_dataclasses(self) -> None:
+        worktree = self.root / "worktree"
+        tool = worktree / "apps/web-runtime-host/tools/release_bundle.py"
+        tool.parent.mkdir(parents=True)
+        tool.write_text(
+            """from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+@dataclass(frozen=True)
+class LoadedVerifier:
+    identity: str
+
+def stage_release_bundle(**arguments):
+    LoadedVerifier("exact-target")
+    Path(arguments["repo_root"], "verifier-loaded").write_text("yes", encoding="ascii")
+    arguments["output_root"].mkdir(parents=True)
+""",
+            encoding="utf-8",
+        )
+        output = self.root / "output"
+        output.mkdir()
+        paths = tuple(output / name for name in ("host.zip", "host.zip.sha256", "host.zip.sha256.asc"))
+        for path in paths:
+            path.write_bytes(b"fixture")
+        build = ProfileBuild(tuple(
+            AssetBuild(path, path.name, path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+            for path in paths
+        ))
+        runtime = ProfileRuntime(
+            runner=CommandRunner(), checksum_verifier=RecordingVerifier(), checksum_home=self.root,
+            checksum_fingerprint=self.policy.checksum_fingerprint,
+        )
+        previous_module = sys.modules.pop("lmdj_release_bundle", None)
+
+        def restore_module() -> None:
+            sys.modules.pop("lmdj_release_bundle", None)
+            if previous_module is not None:
+                sys.modules["lmdj_release_bundle"] = previous_module
+
+        self.addCleanup(restore_module)
+
+        try:
+            _stage_web_bundle(
+                worktree, build, output, self.ledger.entries[0], "1.2.3", runtime,
+            )
+        except Exception as error:
+            self.fail(f"exact-target release verifier import failed: {type(error).__name__}: {error}")
+
+        self.assertEqual((worktree / "verifier-loaded").read_text(encoding="ascii"), "yes")
+        self.assertFalse((output / ".verified").exists())
 
     def test_existing_core_profile_assets_are_reverified_in_a_fresh_keyring(self) -> None:
         assets_root = self.root / "existing-assets"
