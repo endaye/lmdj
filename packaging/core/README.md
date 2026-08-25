@@ -7,6 +7,11 @@ a component locked in that Assembly or package verification metadata; the rule
 is `docs/governance/distribution-contents.md` in the source repository, and
 `scripts/package-core.py` is its single mechanical inventory.
 
+## License
+
+`LICENSE` in this extraction states the terms this distribution is licensed
+under. It ships inside the archive so the terms travel with the bytes.
+
 ## Requirements
 
 - macOS or Linux matching the package name
