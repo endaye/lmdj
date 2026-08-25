@@ -77,16 +77,22 @@ def push_tag(tag: str, context: PrepareContext) -> TransitionResult:
     if authority.intent.disposition is Disposition.PUBLISHED and remote is None:
         raise TransitionError("published release intent cannot authorize a missing remote tag")
     status = "already-pushed"
+    transport_detail = ""
     if remote is None:
         _require_releasable(authority, "formal tag push")
         try:
             authority.context.git.push_tag(tag)
-        except Exception:
+        except Exception as error:
             # A transport failure can occur after the server accepted the push.
-            pass
+            transport_detail = getattr(error, "detail", "")
         status = "pushed"
 
-    refreshed = _formal_authority(tag, context, require_local=True, require_remote=True)
+    try:
+        refreshed = _formal_authority(tag, context, require_local=True, require_remote=True)
+    except TransitionError as error:
+        if transport_detail:
+            raise TransitionError(f"{error}; tag push transport: {transport_detail}") from None
+        raise
     remote = refreshed.context.git.remote_tag_state(tag)
     if remote != local:
         raise TransitionError("remote tag push could not be reconciled")

@@ -29,6 +29,10 @@ from .target_validation import (
 class GitRepositoryError(RuntimeError):
     """A Git release authority or local-tag gate failed."""
 
+    def __init__(self, message: str, *, detail: str = "") -> None:
+        super().__init__(message)
+        self.detail = detail
+
 
 @dataclass(frozen=True)
 class LocalTag:
@@ -247,7 +251,9 @@ class GitRepository:
         try:
             return self.runner.run(arguments, cwd=self.root, environment=environment)
         except CommandError as error:
-            raise GitRepositoryError("Git release authority command failed") from None
+            raise GitRepositoryError(
+                "Git release authority command failed", detail=error.detail,
+            ) from None
 
 
 def _signer_from_status(output: str) -> str | None:

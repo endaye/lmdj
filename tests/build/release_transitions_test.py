@@ -19,7 +19,7 @@ from unittest.mock import patch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from tools.release.commands import CommandResult  # noqa: E402
+from tools.release.commands import CommandError, CommandResult  # noqa: E402
 from tools.release.git_repository import (  # noqa: E402
     GitRepository,
     GitRepositoryError,
@@ -78,6 +78,7 @@ class FakeGit:
         self.pushes = 0
         self.push_raises_after_write = False
         self.push_raises_without_write = False
+        self.push_failure_detail: str | None = None
         self.main_contains_target = True
         self.target_validation_error: Exception | None = None
 
@@ -106,7 +107,10 @@ class FakeGit:
     def push_tag(self, tag: str) -> None:
         self.pushes += 1
         if self.push_raises_without_write:
-            raise RuntimeError("network failure before write")
+            raise GitRepositoryError(
+                "Git release authority command failed",
+                detail=self.push_failure_detail or "",
+            )
         self.remote = self.local
         if self.push_raises_after_write:
             raise RuntimeError("network failure after write")
@@ -473,6 +477,34 @@ class ReleaseTransitionsTest(unittest.TestCase):
         GitRepository(self.root, runner=runner).push_tag("module/core-cli/v1.0.2")
         self.assertEqual(runner.commands[-1][:3], ["git", "push", "origin"])
 
+    def test_git_repository_preserves_sanitized_command_detail(self) -> None:
+        class FailingPushRunner(RecordingRunner):
+            def run(self, arguments, *, cwd=None, environment=None) -> CommandResult:
+                result = super().run(arguments, cwd=cwd, environment=environment)
+                if list(arguments) in (
+                    ["git", "remote", "get-url", "--all", "origin"],
+                    ["git", "remote", "get-url", "--push", "--all", "origin"],
+                ):
+                    return CommandResult(
+                        tuple(arguments), 0, "https://github.com/endaye/lmdj.git\n", "",
+                    )
+                if list(arguments)[:2] == ["git", "push"]:
+                    raise CommandError(
+                        "release command failed: git (exit 128)",
+                        detail="remote: permission denied for refs/tags/lmdj-v1.0.36.0",
+                    )
+                return result
+
+        with self.assertRaises(GitRepositoryError) as caught:
+            GitRepository(self.root, runner=FailingPushRunner()).push_tag(
+                "lmdj-v1.0.36.0",
+            )
+
+        self.assertEqual(
+            caught.exception.detail,
+            "remote: permission denied for refs/tags/lmdj-v1.0.36.0",
+        )
+
     def test_fetch_authority_prunes_deleted_tags_from_the_scratch_namespace(self) -> None:
         runner = RecordingRunner()
         GitRepository(self.root, runner=runner).fetch_authority("endaye/lmdj", "main")
@@ -509,6 +541,18 @@ class ReleaseTransitionsTest(unittest.TestCase):
         self.git.push_raises_without_write = True
         with self.assertRaisesRegex(TransitionError, "freshly fetched remote tag"):
             push_tag(self.tag, self.context())
+
+    def test_failed_push_reports_sanitized_transport_detail_after_remote_absence(self) -> None:
+        self.git.push_raises_without_write = True
+        self.git.push_failure_detail = (
+            "remote: permission denied for refs/tags/lmdj-v1.0.21.0"
+        )
+
+        with self.assertRaises(TransitionError) as caught:
+            push_tag(self.tag, self.context())
+
+        self.assertIn("freshly fetched remote tag", str(caught.exception))
+        self.assertIn(self.git.push_failure_detail, str(caught.exception))
 
     def test_push_rejects_remote_conflict_without_mutation(self) -> None:
         self.git.remote = LocalTag("c" * 40, self.target, self.policy.product_fingerprint)
