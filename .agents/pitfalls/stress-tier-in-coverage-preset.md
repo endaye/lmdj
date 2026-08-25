@@ -8,7 +8,7 @@ recurrences:
     observed_by: unknown
   - date: 2026-08-20
     occurrence: https://github.com/endaye/lmdj/pull/196
-    observed_by: claude-code
+    observed_by: unknown
 exit: skill:.agents/skills/issue-done/SKILL.md
 ---
 
@@ -21,7 +21,9 @@ timeout multiplier, so a 30s `component` budget has nothing to absorb CPU
 contention. A yield-free loop saturates a core regardless of how briefly it
 runs: on 2026-08-19 the new stress test in #196 ran in 0.8s locally and still
 took `core-coverage` red by timing out `facade.application` — a test it has no
-relationship to. The same decision had already been made once, silently, when
+relationship to. A first-hand note from the session that hit it survives and is
+the source of this entry, but it does not record which model, so `observed_by`
+stays `unknown` rather than a plausible guess. The same decision had already been made once, silently, when
 `audio.realtime_spsc_stress` was added to the exclusion in #74; nothing recorded
 it, so it had to be rediscovered from a red lane.
 

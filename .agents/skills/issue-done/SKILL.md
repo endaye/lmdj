@@ -55,7 +55,16 @@ agent brand and every human reads; the contract is
 3. **Bump or create, in the same commit as the fix**:
    - Existing entry: append one occurrence to `recurrences:` with today's date,
      the Pull Request or commit URL, and `observed_by:` naming the agent or
-     model that hit it (`unknown` only when it genuinely cannot be attributed).
+     model that hit it.
+
+     `observed_by` is **self-reported by the agent writing the entry, at the
+     moment it writes**. Never infer it from the commit author, the Pull
+     Request author, or the Git identity: concurrent sessions share one
+     identity, and a branch can also carry commits made through the GitHub web
+     interface, so that metadata cannot say which agent did the work. If you
+     cannot state it from your own record of what you did, write `unknown`
+     rather than a guess. See
+     [`cross-agent-commit-attribution`](../../pitfalls/cross-agent-commit-attribution.md).
    - New entry: copy `.agents/pitfalls/TEMPLATE` to
      `.agents/pitfalls/<id>.md`, where `<id>` matches the filename stem.
 4. **Escalate at recurrence 2** — when the bump takes the entry's recurrence
