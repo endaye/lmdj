@@ -81,10 +81,15 @@ def verify_exact_main_ci(
             "missing", "recorded merged-main CI run is absent", CI_EVIDENCE_SOURCES,
         )
     run = matching[0]
+    if run.workflow_name != workflow:
+        return _conflict(
+            "recorded merged-main CI run resolves to a different stable workflow; "
+            "record an exact-main full run from the policy workflow"
+        )
     if (
         run.event not in _ALLOWED_EVENTS or run.head_sha != target_revision
-        or run.head_branch != branch or run.workflow_name != workflow
-        or run.status != "completed" or run.conclusion != "success"
+        or run.head_branch != branch or run.status != "completed"
+        or run.conclusion != "success"
     ):
         return _conflict("recorded merged-main CI run does not satisfy policy")
     if not require_full_scope:
@@ -97,7 +102,7 @@ def verify_exact_main_ci(
         jobs = github.list_run_jobs(repository, run.id)
     except Exception:
         return _outage("GitHub Actions job projection is unavailable")
-    gate_problem = _gate_problem(jobs, run, workflow)
+    gate_problem = _gate_problem(jobs, run)
     if gate_problem is not None:
         return _conflict(gate_problem)
 
@@ -129,17 +134,14 @@ def verify_exact_main_ci(
 
 
 def _gate_problem(
-    jobs: object, run: RunProjection, workflow: str,
+    jobs: object, run: RunProjection,
 ) -> str | None:
     if not isinstance(jobs, list) or not all(
         isinstance(job, RunJobProjection) for job in jobs
     ):
         return "recorded merged-main CI job projection is invalid"
     for job in jobs:
-        if (
-            job.run_id != run.id or job.workflow_name != workflow
-            or job.head_sha != run.head_sha
-        ):
+        if job.run_id != run.id or job.head_sha != run.head_sha:
             return "recorded merged-main CI job identity conflicts with its run"
     for name in (CHANGE_SCOPE_JOB, PR_GATE_JOB):
         selected = [job for job in jobs if job.name == name]

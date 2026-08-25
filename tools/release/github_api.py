@@ -207,7 +207,9 @@ class GitHubClient:
         required_query = {"head_sha": sha, "per_page": "100"}
         next_path: str | None = f"{endpoint}?{urlencode(required_query)}"
         visited: set[str] = set()
+        raw_runs: list[object] = []
         parsed: list[RunProjection] = []
+        workflows: dict[int, tuple[str, str]] = {}
         total_count: int | None = None
         while next_path is not None:
             if next_path in visited or len(visited) >= self._page_cap:
@@ -223,16 +225,48 @@ class GitHubClient:
                 total_count = page_total
             elif page_total != total_count:
                 raise GitHubApiError("GitHub run pagination is invalid")
-            parsed.extend(_parse_run(run) for run in runs)
+            raw_runs.extend(runs)
             next_path = _next_link(
                 response.headers, endpoint, required_query, subject="run",
             )
+        if total_count != len(raw_runs):
+            raise GitHubApiError("GitHub run pagination is incomplete")
+        for run in raw_runs:
+            workflow_id, workflow_path = _run_workflow_reference(run)
+            cached = workflows.get(workflow_id)
+            if cached is None:
+                workflow_name = self._get_workflow_name(
+                    repository, workflow_id, workflow_path,
+                )
+                workflows[workflow_id] = (workflow_path, workflow_name)
+            else:
+                cached_path, workflow_name = cached
+                if cached_path != workflow_path:
+                    raise GitHubApiError("GitHub run workflow identity is invalid")
+            parsed.append(_parse_run(run, workflow_name))
         identifiers = [run.id for run in parsed]
         if len(identifiers) != len(set(identifiers)):
             raise GitHubApiError("GitHub run pagination returned duplicate IDs")
-        if total_count != len(parsed):
-            raise GitHubApiError("GitHub run pagination is incomplete")
         return parsed
+
+    def _get_workflow_name(
+        self, repository: str, workflow_id: int, expected_path: str,
+    ) -> str:
+        response = self._request(
+            "GET", f"/repos/{repository}/actions/workflows/{workflow_id}",
+        )
+        document = _json_response(response, {200})
+        if not isinstance(document, dict):
+            raise GitHubApiError("GitHub workflow projection is invalid")
+        identifier, name, path = (
+            document.get("id"), document.get("name"), document.get("path"),
+        )
+        if (
+            identifier != workflow_id or not isinstance(name, str) or not name
+            or path != expected_path
+        ):
+            raise GitHubApiError("GitHub run workflow identity is invalid")
+        return name
 
     def list_run_jobs(self, repository: str, run_id: int) -> list[RunJobProjection]:
         """Return every latest-attempt job of one run bound to that run's identity."""
@@ -707,22 +741,37 @@ def _json_response(response: HttpResponse, allowed: set[int]) -> object:
         raise GitHubApiError("GitHub release response is invalid") from None
 
 
-def _parse_run(run: object) -> RunProjection:
+def _run_workflow_reference(run: object) -> tuple[int, str]:
     if not isinstance(run, dict):
         raise GitHubApiError("GitHub run projection is invalid")
-    identifier, event, head_sha, head_branch, workflow_name, status, conclusion = (
+    workflow_id, workflow_path = run.get("workflow_id"), run.get("path")
+    if (
+        not _positive_id(workflow_id) or not isinstance(workflow_path, str)
+        or not workflow_path.startswith(".github/workflows/")
+        or workflow_path.endswith("/")
+    ):
+        raise GitHubApiError("GitHub run workflow identity is invalid")
+    return workflow_id, workflow_path
+
+
+def _parse_run(run: object, stable_workflow_name: str) -> RunProjection:
+    if not isinstance(run, dict):
+        raise GitHubApiError("GitHub run projection is invalid")
+    identifier, event, head_sha, head_branch, run_name, status, conclusion = (
         run.get("id"), run.get("event"), run.get("head_sha"), run.get("head_branch"),
         run.get("name"), run.get("status"), run.get("conclusion"),
     )
     if (
         not _positive_id(identifier) or not isinstance(event, str)
         or not _sha(head_sha) or not isinstance(head_branch, str)
-        or not isinstance(workflow_name, str) or not isinstance(status, str)
+        or not isinstance(run_name, str) or not run_name
+        or not isinstance(stable_workflow_name, str) or not stable_workflow_name
+        or not isinstance(status, str)
         or (conclusion is not None and not isinstance(conclusion, str))
     ):
         raise GitHubApiError("GitHub run projection is invalid")
     return RunProjection(
-        identifier, event, head_sha, head_branch, workflow_name, status, conclusion,
+        identifier, event, head_sha, head_branch, stable_workflow_name, status, conclusion,
     )
 
 

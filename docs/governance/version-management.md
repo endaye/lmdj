@@ -533,7 +533,10 @@ merged-main Proof、CI、main ancestry 与后续所有 release gate 仍全部适
 release target 的 CI 证据必须是 exact-main 的完整证据：该 target SHA 上一次
 completed、successful 的 `Core CI` run，其 `push` 或 `workflow_dispatch` 事件、`main`
 head branch、同一 run 内成功的 `Change Scope` 与 `PR Gate`，以及该 run 为同一 exact SHA
-保留的 scope manifest 必须是 `lmdj.ci-scope.v2`、`mode=full`、`trusted_head=true`。普通
+保留的 scope manifest 必须是 `lmdj.ci-scope.v2`、`mode=full`、`trusted_head=true`。
+这里的 `Core CI` 是 run 的 `workflow_id` 与 path 共同绑定后，由 workflow metadata `name:`
+解析出的稳定身份；会按 ref 或 input 展开的 `run-name:` 以及 REST run/job display name 只用于
+显示，不能替代或否决 policy identity。
 `main` merge 按精确改动路径分类，可能合法地只跑 focused CI；因此当 target SHA 自身的 push
 是 focused 时，操作者必须对该 exact SHA 以空 `lanes` 输入显式 dispatch 一次 full run，并把新的
 run ID 写入 release intent 后才能请求任何 mutation。`requested`（指定 lane）与 focused 都不是

@@ -69,7 +69,10 @@ Git/GitHub 重建真相；historical exception 只能由 audit 显式报告，�
 `audit --remote` 与 `prepare` 之前还有一道 CI 证据边界：release target 必须有一次 exact-main 的
 full 证据——该 SHA 上 completed、successful 的 `Core CI` run，同一 run 内 `Change Scope` 与
 `PR Gate` 均成功，且该 run 为同一 exact SHA 保留的 scope manifest 为 `lmdj.ci-scope` 的 v2、
-`mode=full`、`trusted_head=true`。普通 `main` merge 现在按精确路径分类，可能只跑 focused CI，
+`mode=full`、`trusted_head=true`。
+其中 `Core CI` 由 run 的 `workflow_id` 和 path 绑定到 workflow metadata 的稳定 `name:`；动态
+`run-name:` 与 REST run/job display name 只用于显示，不参与 policy identity 判定。普通 `main`
+merge 现在按精确路径分类，可能只跑 focused CI，
 所以 focused target 必须由操作者对该 exact SHA 以空 `lanes` 显式 dispatch 一次 full run 并把 run
 ID 写入 release intent；`requested` 与 focused 都会被拒绝，而一次 full dispatch 本身也不授权任何
 mutation。该 manifest artifact 保留 14 天：过期后只能在 run 仍被保留时重跑其全部 job，或另行授权
