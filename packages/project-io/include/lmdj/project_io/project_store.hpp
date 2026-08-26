@@ -123,6 +123,11 @@ class ProjectStore {
   replay_sequence_flush(
       const std::filesystem::path& bundle,
       const SequenceFlushIdentity& identity);
+  foundation::Result<std::optional<SequenceFlushExecution>>
+  replay_sequence_flush(
+      const std::filesystem::path& bundle,
+      const foundation::SequenceSessionId& session_id,
+      const foundation::CommandId& command_id);
   foundation::Result<std::vector<SequenceRecoveryCandidate>>
   reconcile_sequence_recovery(const std::filesystem::path& bundle);
   foundation::Result<std::vector<std::byte>> read_artifact(

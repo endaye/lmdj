@@ -827,6 +827,13 @@ void test_sequence_flush_identity_is_durable_and_replayable_after_cleanup() {
   LMDJ_CHECK(replayed.value()->outcome.state.revision == 1);
   LMDJ_CHECK(
       replayed.value()->outcome.state.patterns.at(pattern_id).events == events);
+  const auto replayed_by_public_identity = restarted.replay_sequence_flush(
+      bundle, session_id, command_id);
+  LMDJ_CHECK(replayed_by_public_identity.has_value());
+  LMDJ_CHECK(replayed_by_public_identity.value().has_value());
+  LMDJ_CHECK(replayed_by_public_identity.value()->outcome.replayed);
+  LMDJ_CHECK(
+      replayed_by_public_identity.value()->identity == identity);
 }
 
 void test_nonzero_revision_v1_history_opens_without_migration() {

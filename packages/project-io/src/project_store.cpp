@@ -3107,6 +3107,62 @@ ProjectStore::replay_sequence_flush(
       });
 }
 
+foundation::Result<std::optional<SequenceFlushExecution>>
+ProjectStore::replay_sequence_flush(
+    const std::filesystem::path& bundle,
+    const foundation::SequenceSessionId& session_id,
+    const foundation::CommandId& command_id) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(command_id.value())) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
+        Error{ErrorCode::invalid_argument,
+              "Sequence flush replay identity is invalid"});
+  }
+  std::optional<SequenceFlushIdentity> identity;
+  {
+    auto tree = validate_managed_bundle_tree(*platform_, bundle);
+    if (!tree.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(tree.error());
+    }
+    auto lease = platform_->acquire_writer(bundle);
+    if (!lease.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(lease.error());
+    }
+    auto operation = std::move(lease.value());
+    (void)operation;
+    auto loaded = load_project(*platform_, bundle);
+    if (!loaded.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(loaded.error());
+    }
+    const auto recovered =
+        recover_uncommitted(*platform_, bundle, loaded.value());
+    if (!recovered.has_value()) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(recovered.error());
+    }
+    if (!loaded.value().commands.contains(command_id)) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::success(std::nullopt);
+    }
+    const auto stored =
+        loaded.value().sequence_flush_identities.find(command_id);
+    if (stored == loaded.value().sequence_flush_identities.end() ||
+        stored->second.session_id != session_id) {
+      return foundation::Result<
+          std::optional<SequenceFlushExecution>>::failure(Error{
+          ErrorCode::invalid_argument,
+          "Sequence flush identity does not match the persisted command",
+      });
+    }
+    identity = stored->second;
+  }
+  return replay_sequence_flush(bundle, *identity);
+}
+
 foundation::Result<SequenceFlushExecution>
 ProjectStore::execute_sequence_flush(
     const std::filesystem::path& bundle,

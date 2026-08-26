@@ -86,6 +86,13 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       SequenceSessionState state);
+  foundation::Result<void> switch_pattern(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      foundation::PatternId pattern_id,
+      std::uint8_t bars,
+      std::string pattern_fingerprint,
+      std::uint64_t expected_revision);
   foundation::Result<std::filesystem::path> seal(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,

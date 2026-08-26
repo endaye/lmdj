@@ -159,6 +159,14 @@ void test_sequence_lifecycle_idempotence_and_mutation_exclusion() {
   LMDJ_CHECK(stopped.value().status.state == SequenceRecordState::inactive);
   LMDJ_CHECK(!std::filesystem::exists(
       project / "recovery/active/sequence.jsonl"));
+
+  Application restarted(config(temp.path()));
+  const auto cross_host_replay = restarted.flush_sequence(flush);
+  LMDJ_CHECK(cross_host_replay.has_value());
+  LMDJ_CHECK(cross_host_replay.value().replayed);
+  LMDJ_CHECK(cross_host_replay.value().committed_revision == 3);
+  LMDJ_CHECK(
+      cross_host_replay.value().status.state == SequenceRecordState::inactive);
 }
 
 void test_owner_loss_apply_and_discard_are_explicit() {

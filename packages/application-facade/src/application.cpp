@@ -2106,25 +2106,15 @@ struct Application::Impl {
       return foundation::Result<void>::failure(sequence_error(
           ErrorCode::not_found, "next Sequence Pattern was not found"));
     }
-    auto stopped = sequence_journals.set_state(
-        path, runtime.session_id, project_io::SequenceSessionState::stopped);
-    if (!stopped.has_value()) {
-      return stopped;
-    }
-    auto removed = sequence_journals.remove_active_if_complete(
-        path, runtime.session_id);
-    if (!removed.has_value()) {
-      return removed;
-    }
-    auto begun = sequence_journals.begin(
+    auto switched = sequence_journals.switch_pattern(
         path,
         runtime.session_id,
         next->second.id,
         next->second.bars,
         project_io::sequence_pattern_fingerprint(next->second),
         project.revision);
-    if (!begun.has_value()) {
-      return begun;
+    if (!switched.has_value()) {
+      return switched;
     }
     runtime.pattern_id = next->second.id;
     runtime.bars = next->second.bars;
@@ -2143,6 +2133,23 @@ struct Application::Impl {
     auto found = sequence_sessions.find(key);
     if (found == sequence_sessions.end() ||
         found->second.session_id != request.session_id) {
+      auto replayed = projects.replay_sequence_flush(
+          request.project_path, request.session_id, request.command_id);
+      if (!replayed.has_value()) {
+        return foundation::Result<SequenceMutationResult>::failure(
+            replayed.error());
+      }
+      if (replayed.value().has_value()) {
+        SequenceStatus status;
+        status.expected_revision =
+            replayed.value()->outcome.state.revision;
+        return foundation::Result<SequenceMutationResult>::success(
+            SequenceMutationResult{
+                status,
+                replayed.value()->outcome.state.revision,
+                true,
+            });
+      }
       return foundation::Result<SequenceMutationResult>::failure(
           sequence_error(ErrorCode::invalid_argument,
                          "Sequence flush owner does not match",

@@ -301,6 +301,62 @@ void test_sequence_flush_commits_once_and_replays_receipt() {
           .events.size() == 1);
 }
 
+void test_pattern_switch_preserves_session_flush_sequence() {
+  TempDirectory temp("switch");
+  ProjectStore store;
+  const auto bundle = create_bundle(temp, store);
+  SequenceJournal journal;
+  begin(journal, bundle);
+  const auto session_id = SequenceSessionId{std::string{kSessionId}};
+  const auto first = journal.append_flush(
+      bundle,
+      session_id,
+      CommandId{std::string{kCommandId}},
+      PatternId{std::string{kPatternId}},
+      0,
+      std::vector{event()});
+  LMDJ_CHECK(first.has_value());
+  LMDJ_CHECK(
+      store
+          .execute_sequence_flush(
+              bundle,
+              {session_id,
+               first.value().flush_seq,
+               CommandId{std::string{kCommandId}},
+               PatternId{std::string{kPatternId}}})
+          .has_value());
+
+  const Pattern next{PatternId{uuid_for(9)}, 2, {}};
+  LMDJ_CHECK(
+      journal
+          .switch_pattern(
+              bundle,
+              session_id,
+              next.id,
+              next.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(next),
+              1)
+          .has_value());
+  const auto switched = journal.read_active(bundle);
+  LMDJ_CHECK(switched.has_value());
+  LMDJ_CHECK(switched.value().session_id == session_id);
+  LMDJ_CHECK(switched.value().pattern_id == next.id);
+  LMDJ_CHECK(switched.value().bars == 2);
+  LMDJ_CHECK(switched.value().expected_revision == 1);
+  LMDJ_CHECK(switched.value().next_flush_seq == 1);
+  LMDJ_CHECK(switched.value().flushes.size() == 1);
+
+  const auto second = journal.append_flush(
+      bundle,
+      session_id,
+      CommandId{uuid_for(10)},
+      next.id,
+      1,
+      std::vector{event(1)});
+  LMDJ_CHECK(second.has_value());
+  LMDJ_CHECK(second.value().flush_seq == 1);
+}
+
 FaultPoint selected_fault = FaultPoint::sequence_receipt_reload;
 
 lmdj::foundation::Result<void> fail_selected(
@@ -577,6 +633,7 @@ int main(int argc, char** argv) {
     test_one_project_session_and_monotonic_durable_flush_identity();
     test_writer_lease_contention_fails_before_begin();
     test_sequence_flush_commits_once_and_replays_receipt();
+    test_pattern_switch_preserves_session_flush_sequence();
     test_restart_reconciles_reload_visible_receipt_without_overdub();
     test_flush_fault_matrix_has_only_recoverable_or_single_commit_outcomes();
     test_uncommitted_flush_seals_owner_lost_recovery();

@@ -467,6 +467,31 @@ foundation::Result<JournalDocument> read_journal(
       } else if (kind == "state") {
         document.journal.state =
             parse_state(payload.value().at("state").get<std::string>());
+      } else if (kind == "switch") {
+        const auto pattern_id = foundation::PatternId{
+            payload.value().at("pattern_id").get<std::string>()};
+        const auto bars = payload.value().at("bars").get<std::uint8_t>();
+        const auto fingerprint =
+            payload.value().at("pattern_fingerprint").get<std::string>();
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (!domain::is_valid_uuid(pattern_id.value()) || !valid_bars(bars) ||
+            !lowercase_sha256(fingerprint) ||
+            expected_revision != document.journal.expected_revision ||
+            pattern_id == document.journal.pattern_id ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error("Sequence switch metadata is invalid");
+        }
+        document.journal.pattern_id = pattern_id;
+        document.journal.bars = bars;
+        document.journal.pattern_fingerprint = fingerprint;
+        document.journal.expected_revision = expected_revision;
+        document.journal.state = SequenceSessionState::active;
       } else {
         throw std::runtime_error("Sequence Journal record kind is invalid");
       }
@@ -796,6 +821,58 @@ foundation::Result<void> SequenceJournal::set_state(
   return append_record(
       platform_, bundle, document.value(),
       {{"kind", "state"}, {"state", state_string(state)}});
+}
+
+foundation::Result<void> SequenceJournal::switch_pattern(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    foundation::PatternId pattern_id,
+    std::uint8_t bars,
+    std::string pattern_fingerprint,
+    std::uint64_t expected_revision) {
+  if (!domain::is_valid_uuid(session_id.value()) ||
+      !domain::is_valid_uuid(pattern_id.value()) || !valid_bars(bars) ||
+      !lowercase_sha256(pattern_fingerprint)) {
+    return foundation::Result<void>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence switch metadata is invalid",
+        });
+  }
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id || journal.pattern_id == pattern_id ||
+      journal.expected_revision != expected_revision ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching) ||
+      std::any_of(
+          journal.flushes.begin(), journal.flushes.end(),
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Sequence switch does not match the active session",
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      {
+          {"bars", bars},
+          {"expected_revision", expected_revision},
+          {"kind", "switch"},
+          {"pattern_fingerprint", std::move(pattern_fingerprint)},
+          {"pattern_id", pattern_id.value()},
+      });
 }
 
 foundation::Result<std::filesystem::path> SequenceJournal::seal(
