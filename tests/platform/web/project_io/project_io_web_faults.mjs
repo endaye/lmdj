@@ -32,3 +32,16 @@ export const STORAGE_CONDITION_FAULTS = Object.freeze([
   "QuotaExceededError",
   "InvalidStateError",
 ]);
+
+// Mirrors the native Project I/O Sequence flush commit/recovery boundaries.
+// Web conformance consumes this list so new boundaries cannot silently lose
+// OPFS restart coverage.
+export const SEQUENCE_FLUSH_FAULT_POINTS = Object.freeze([
+  "journal_write",
+  "transaction_write",
+  "checkpoint_write",
+  "manifest_publish",
+  "receipt_reload",
+  "journal_completion",
+  "journal_deletion",
+]);

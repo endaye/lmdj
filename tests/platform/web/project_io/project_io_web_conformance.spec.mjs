@@ -1,12 +1,53 @@
 import {expect, test} from "@playwright/test";
+import {createHash} from "node:crypto";
+import {readFile} from "node:fs/promises";
 
 import {
   PUBLICATION_CLEANUP_FAULT,
   PUBLICATION_FAULT_POINTS,
   REPLACEMENT_FAULT_POINTS,
+  SEQUENCE_FLUSH_FAULT_POINTS,
   STORAGE_CONDITION_FAULTS,
   replacementReachedCommit,
 } from "./project_io_web_faults.mjs";
+
+function canonicalJson(value) {
+  if (Array.isArray(value)) {
+    return `[${value.map(canonicalJson).join(",")}]`;
+  }
+  if (value !== null && typeof value === "object") {
+    const keys = Object.keys(value).sort((left, right) =>
+      Buffer.compare(Buffer.from(left, "utf8"), Buffer.from(right, "utf8")));
+    return `{${keys.map((key) =>
+      `${JSON.stringify(key)}:${canonicalJson(value[key])}`).join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+test("SR-D22 fingerprint vectors are byte-exact in JavaScript", async () => {
+  const vectorUrl = new URL(
+    "../../../fixtures/golden/sequence-pattern-fingerprint-v1.json",
+    import.meta.url);
+  const document = JSON.parse(await readFile(vectorUrl, "utf8"));
+  expect(document.contract).toBe("lmdj.sequence-pattern-fingerprint-v1");
+  for (const vector of document.vectors) {
+    const bytes = Buffer.from(vector.canonical_json, "utf8");
+    expect(bytes.subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))).toBe(false);
+    expect(bytes.at(-1)).not.toBe(0x0a);
+    expect(canonicalJson(JSON.parse(vector.canonical_json))).toBe(
+      vector.canonical_json);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(vector.sha256);
+  }
+  expect(SEQUENCE_FLUSH_FAULT_POINTS).toEqual([
+    "journal_write",
+    "transaction_write",
+    "checkpoint_write",
+    "manifest_publish",
+    "receipt_reload",
+    "journal_completion",
+    "journal_deletion",
+  ]);
+});
 
 const STORAGE_CAPABILITY_ORDER = Object.freeze([
   "opfs",

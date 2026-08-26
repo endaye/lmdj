@@ -24,6 +24,7 @@
 #include <picosha2.h>
 
 #include <lmdj/foundation/json.hpp>
+#include <lmdj/project_io/sequence_journal.hpp>
 #include <lmdj/project_io/take_journal.hpp>
 
 #include "publish_token.hpp"
@@ -67,6 +68,8 @@ struct LoadedProject {
   std::map<foundation::CommandId, PersistedCommand> commands;
   std::map<foundation::CommandId, domain::CommandReceipt> receipts;
   std::map<foundation::CommandId, foundation::TakeId> cleanup_obligations;
+  std::map<foundation::CommandId, SequenceFlushIdentity>
+      sequence_flush_identities;
   std::vector<std::string> transactions;
 };
 
@@ -1552,6 +1555,7 @@ foundation::Result<LoadedProject> load_project(
         {},
         {},
         {},
+        {},
     };
     for (const auto& encoded_path : manifest.at("transactions")) {
       const auto relative =
@@ -1610,6 +1614,39 @@ foundation::Result<LoadedProject> load_project(
         }
         loaded.cleanup_obligations.emplace(
             meta.command_id, cleanup_take_id);
+      }
+      if (transaction.value().contains("sequence_flush")) {
+        try {
+          const auto& encoded = transaction.value().at("sequence_flush");
+          SequenceFlushIdentity identity{
+              foundation::SequenceSessionId{
+                  encoded.at("session_id").get<std::string>()},
+              encoded.at("flush_seq").get<std::uint64_t>(),
+              foundation::CommandId{
+                  encoded.at("command_id").get<std::string>()},
+              foundation::PatternId{
+                  encoded.at("pattern_id").get<std::string>()},
+          };
+          const auto* merge =
+              std::get_if<domain::MergePatternEvents>(&command.value());
+          if (merge == nullptr ||
+              !domain::is_valid_uuid(identity.session_id.value()) ||
+              identity.command_id != meta.command_id ||
+              identity.pattern_id != merge->pattern_id) {
+            return foundation::Result<LoadedProject>::failure(
+                invalid_project(
+                    "project transaction Sequence flush identity is invalid",
+                    bundle / relative));
+          }
+          loaded.sequence_flush_identities.emplace(
+              meta.command_id, std::move(identity));
+        } catch (const std::exception& exception) {
+          return foundation::Result<LoadedProject>::failure(
+              invalid_project(
+                  "project transaction Sequence flush identity is invalid",
+                  bundle / relative,
+                  exception.what()));
+        }
       }
       loaded.state = applied.value().state;
       loaded.transactions.push_back(relative.generic_string());
@@ -2251,7 +2288,9 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
     LoadedProject loaded,
     const PersistedCommand& command,
     const std::optional<ArtifactStage>& artifact_stage,
-    PersistedCommand* persisted_identity) {
+    PersistedCommand* persisted_identity,
+    const std::optional<SequenceFlushIdentity>& sequence_flush_identity =
+        std::nullopt) {
   const auto& meta = command_meta(command);
   if (!domain::is_valid_uuid(meta.command_id.value())) {
     return foundation::Result<domain::AppliedCommand>::failure(
@@ -2436,8 +2475,26 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   if (cleanup_take_id.has_value()) {
     transaction["cleanup_take_id"] = cleanup_take_id->value();
   }
+  if (sequence_flush_identity.has_value()) {
+    transaction["sequence_flush"] = {
+        {"command_id", sequence_flush_identity->command_id.value()},
+        {"flush_seq", sequence_flush_identity->flush_seq},
+        {"pattern_id", sequence_flush_identity->pattern_id.value()},
+        {"session_id", sequence_flush_identity->session_id.value()},
+    };
+  }
   const auto transaction_bytes =
       foundation::canonical_json(transaction) + "\n";
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  if (sequence_flush_identity.has_value()) {
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_transaction_write, transaction_final);
+    if (!fault.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+#endif
   auto written = platform->create_immutable(
       transaction_final, byte_span(transaction_bytes));
   if (!written.has_value()) {
@@ -2450,6 +2507,17 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
 
   const auto checkpoint_bytes =
       foundation::canonical_json(project_json(applied.value().state)) + "\n";
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  if (sequence_flush_identity.has_value()) {
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_checkpoint_write, checkpoint_final);
+    if (!fault.has_value()) {
+      (void)platform->remove(transaction_final);
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+#endif
   written = platform->create_immutable(
       checkpoint_final, byte_span(checkpoint_bytes));
   if (!written.has_value()) {
@@ -2519,6 +2587,18 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
             {{"stage", "manifest_settlement"}},
         });
   }
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  if (sequence_flush_identity.has_value()) {
+    const auto fault = testing::detail::invoke_fault(
+        testing::FaultPoint::sequence_manifest_publish,
+        bundle / "manifest.json");
+    if (!fault.has_value()) {
+      detail::abort_publish();
+      return foundation::Result<domain::AppliedCommand>::failure(
+          fault.error());
+    }
+  }
+#endif
   written = platform->replace_complete(
       bundle / "manifest.json", byte_span(manifest_bytes));
   if (!written.has_value()) {
@@ -2949,6 +3029,307 @@ ProjectStore::replay_record_take(
               true,
           },
       });
+}
+
+foundation::Result<std::optional<SequenceFlushExecution>>
+ProjectStore::replay_sequence_flush(
+    const std::filesystem::path& bundle,
+    const SequenceFlushIdentity& identity) {
+  if (!domain::is_valid_uuid(identity.session_id.value()) ||
+      !domain::is_valid_uuid(identity.command_id.value()) ||
+      !domain::is_valid_uuid(identity.pattern_id.value())) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush identity is invalid",
+        });
+  }
+  auto tree = validate_managed_bundle_tree(*platform_, bundle);
+  if (!tree.has_value()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(tree.error());
+  }
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto loaded = load_project(*platform_, bundle);
+  if (!loaded.has_value()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(loaded.error());
+  }
+  const auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+  if (!recovered.has_value()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(recovered.error());
+  }
+  const auto original = loaded.value().commands.find(identity.command_id);
+  if (original == loaded.value().commands.end()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::success(std::nullopt);
+  }
+  const auto stored_identity =
+      loaded.value().sequence_flush_identities.find(identity.command_id);
+  const auto* merge =
+      std::get_if<domain::MergePatternEvents>(&original->second);
+  if (stored_identity == loaded.value().sequence_flush_identities.end() ||
+      stored_identity->second != identity || merge == nullptr ||
+      merge->pattern_id != identity.pattern_id) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush identity does not match the persisted command",
+        });
+  }
+  const auto receipt = loaded.value().receipts.find(identity.command_id);
+  if (receipt == loaded.value().receipts.end()) {
+    return foundation::Result<
+        std::optional<SequenceFlushExecution>>::failure(
+        invalid_project(
+            "persisted Sequence flush receipt is missing",
+            bundle / "manifest.json"));
+  }
+  return foundation::Result<
+      std::optional<SequenceFlushExecution>>::success(
+      SequenceFlushExecution{
+          identity,
+          *merge,
+          domain::AppliedCommand{
+              std::move(loaded.value().state),
+              receipt->second.event,
+              true,
+          },
+      });
+}
+
+foundation::Result<SequenceFlushExecution>
+ProjectStore::execute_sequence_flush(
+    const std::filesystem::path& bundle,
+    const SequenceFlushIdentity& identity) {
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(active.error());
+  }
+  if (active.value().session_id != identity.session_id) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush session does not match the active Journal",
+        });
+  }
+  const auto flush = std::find_if(
+      active.value().flushes.begin(), active.value().flushes.end(),
+      [&identity](const auto& candidate) {
+        return candidate.flush_seq == identity.flush_seq;
+      });
+  if (flush == active.value().flushes.end() ||
+      flush->command_id != identity.command_id ||
+      flush->pattern_id != identity.pattern_id) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::invalid_argument,
+            "Sequence flush identity is not durably journaled",
+        });
+  }
+  const domain::MergePatternEvents command{
+      {identity.command_id, flush->expected_revision},
+      identity.pattern_id,
+      flush->canonical_events,
+  };
+
+  auto committed = [&]() -> foundation::Result<domain::AppliedCommand> {
+    auto tree = validate_managed_bundle_tree(*platform_, bundle);
+    if (!tree.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(tree.error());
+    }
+    auto lease = platform_->acquire_writer(bundle);
+    if (!lease.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(lease.error());
+    }
+    auto operation = std::move(lease.value());
+    (void)operation;
+    auto loaded = load_project(*platform_, bundle);
+    if (!loaded.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          loaded.error());
+    }
+    auto recovered = recover_uncommitted(*platform_, bundle, loaded.value());
+    if (!recovered.has_value()) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          recovered.error());
+    }
+    auto locked_active = journal.read_active(bundle);
+    if (!locked_active.has_value() ||
+        locked_active.value().session_id != identity.session_id) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          locked_active.has_value()
+              ? Error{
+                    ErrorCode::invalid_argument,
+                    "Sequence Journal changed before flush admission",
+                }
+              : locked_active.error());
+    }
+    const auto locked_flush = std::find_if(
+        locked_active.value().flushes.begin(),
+        locked_active.value().flushes.end(),
+        [&identity](const auto& candidate) {
+          return candidate.flush_seq == identity.flush_seq;
+        });
+    if (locked_flush == locked_active.value().flushes.end() ||
+        locked_flush->command_id != identity.command_id ||
+        locked_flush->pattern_id != identity.pattern_id ||
+        locked_flush->expected_revision != flush->expected_revision ||
+        locked_flush->canonical_events != flush->canonical_events) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "Sequence Journal changed before flush admission",
+          });
+    }
+    const auto existing =
+        loaded.value().sequence_flush_identities.find(identity.command_id);
+    if (loaded.value().receipts.contains(identity.command_id) &&
+        (existing == loaded.value().sequence_flush_identities.end() ||
+         existing->second != identity)) {
+      return foundation::Result<domain::AppliedCommand>::failure(
+          Error{
+              ErrorCode::invalid_argument,
+              "command id is bound to a different Sequence flush identity",
+          });
+    }
+    auto persisted = PersistedCommand{command};
+    return commit_loaded(
+        platform_, bundle, std::move(loaded.value()), persisted,
+        std::nullopt, nullptr, identity);
+  }();
+  if (!committed.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        committed.error());
+  }
+
+#if defined(LMDJ_PROJECT_IO_TESTING) && LMDJ_PROJECT_IO_TESTING
+  const auto visibility_fault = testing::detail::invoke_fault(
+      testing::FaultPoint::sequence_receipt_reload,
+      bundle / "manifest.json");
+  if (!visibility_fault.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        visibility_fault.error());
+  }
+#endif
+  auto visible = replay_sequence_flush(bundle, identity);
+  if (!visible.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        visible.error());
+  }
+  if (!visible.value().has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::io_error,
+            "Sequence flush receipt is not visible from the manifest head",
+        });
+  }
+  const auto pattern =
+      visible.value()->outcome.state.patterns.find(identity.pattern_id);
+  if (pattern == visible.value()->outcome.state.patterns.end()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        Error{
+            ErrorCode::invalid_project,
+            "Sequence flush target disappeared after manifest publication",
+        });
+  }
+  auto completed = journal.complete_flush(
+      bundle, identity.session_id, identity.flush_seq,
+      visible.value()->outcome.state.revision,
+      sequence_pattern_fingerprint(pattern->second));
+  if (!completed.has_value()) {
+    return foundation::Result<SequenceFlushExecution>::failure(
+        completed.error());
+  }
+  auto result = std::move(*visible.value());
+  result.outcome.replayed = committed.value().replayed;
+  return foundation::Result<SequenceFlushExecution>::success(
+      std::move(result));
+}
+
+foundation::Result<std::vector<SequenceRecoveryCandidate>>
+ProjectStore::reconcile_sequence_recovery(
+    const std::filesystem::path& bundle) {
+  SequenceJournal journal{platform_};
+  auto active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    if (active.error().code == ErrorCode::not_found) {
+      return journal.list_recoverable(bundle);
+    }
+    return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
+        active.error());
+  }
+  for (const auto& flush : active.value().flushes) {
+    if (flush.completed) {
+      continue;
+    }
+    const SequenceFlushIdentity identity{
+        active.value().session_id,
+        flush.flush_seq,
+        flush.command_id,
+        flush.pattern_id,
+    };
+    auto visible = replay_sequence_flush(bundle, identity);
+    if (!visible.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(visible.error());
+    }
+    if (!visible.value().has_value()) {
+      continue;
+    }
+    const auto pattern =
+        visible.value()->outcome.state.patterns.find(identity.pattern_id);
+    if (pattern == visible.value()->outcome.state.patterns.end()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(
+          Error{
+              ErrorCode::invalid_project,
+              "committed Sequence flush target is missing",
+          });
+    }
+    auto completed = journal.complete_flush(
+        bundle, identity.session_id, identity.flush_seq,
+        visible.value()->outcome.state.revision,
+        sequence_pattern_fingerprint(pattern->second));
+    if (!completed.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(completed.error());
+    }
+  }
+  active = journal.read_active(bundle);
+  if (!active.has_value()) {
+    return foundation::Result<std::vector<SequenceRecoveryCandidate>>::failure(
+        active.error());
+  }
+  const bool has_pending = std::any_of(
+      active.value().flushes.begin(), active.value().flushes.end(),
+      [](const auto& flush) { return !flush.completed; });
+  if (has_pending || active.value().flushes.empty()) {
+    auto sealed = journal.seal(
+        bundle, active.value().session_id, "owner_lost");
+    if (!sealed.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(sealed.error());
+    }
+  } else {
+    auto removed = journal.remove_active_if_complete(
+        bundle, active.value().session_id);
+    if (!removed.has_value()) {
+      return foundation::Result<
+          std::vector<SequenceRecoveryCandidate>>::failure(removed.error());
+    }
+  }
+  return journal.list_recoverable(bundle);
 }
 
 foundation::Result<ImportArtifactExecution>

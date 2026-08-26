@@ -9,6 +9,7 @@ add_library(
     src/project_store.cpp
     src/workspace_cache.cpp
     src/project_bundle_transfer.cpp
+    src/sequence_journal.cpp
     src/take_journal.cpp
     ${lmdj_project_io_platform_source}
 )
@@ -64,6 +65,7 @@ if(BUILD_TESTING)
       src/project_store.cpp
       src/workspace_cache.cpp
       src/project_bundle_transfer.cpp
+      src/sequence_journal.cpp
       src/take_journal.cpp
       src/native/storage_platform.cpp
   )
@@ -205,6 +207,53 @@ if(BUILD_TESTING)
     TIER component
     COMMAND lmdj_take_journal_tests
     LABELS persistence
+  )
+
+  add_executable(
+    lmdj_sequence_journal_tests
+    "${CMAKE_SOURCE_DIR}/tests/core/project_io/sequence_journal_test.cpp"
+  )
+  target_include_directories(
+    lmdj_sequence_journal_tests
+    PRIVATE
+      "${CMAKE_SOURCE_DIR}"
+  )
+  target_link_libraries(
+    lmdj_sequence_journal_tests
+    PRIVATE
+      lmdj_project_io_testable
+      lmdj_picosha2
+      nlohmann_json::nlohmann_json
+      Threads::Threads
+  )
+  target_compile_definitions(
+    lmdj_sequence_journal_tests
+    PRIVATE
+      LMDJ_PROJECT_IO_TESTING=1
+      LMDJ_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+  )
+  lmdj_target_warnings(lmdj_sequence_journal_tests)
+  lmdj_target_sanitizers(lmdj_sequence_journal_tests)
+  lmdj_add_test(
+    NAME project_io.sequence_journal
+    TIER component
+    COMMAND lmdj_sequence_journal_tests
+    LABELS persistence concurrency
+  )
+  lmdj_add_test(
+    NAME project_io.sequence_journal_stress
+    TIER stress
+    COMMAND lmdj_sequence_journal_tests --stress
+    LABELS persistence concurrency
+    TIMEOUT 30
+  )
+  lmdj_add_test(
+    NAME project_io.sequence_fingerprint_vectors
+    TIER component
+    COMMAND
+      "${Python3_EXECUTABLE}"
+      "${CMAKE_SOURCE_DIR}/tests/conformance/sequence_fingerprint_vector_test.py"
+    LABELS persistence conformance
   )
 
   add_executable(

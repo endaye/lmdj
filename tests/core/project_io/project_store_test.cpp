@@ -51,6 +51,8 @@ using lmdj::foundation::ProjectId;
 using lmdj::project_io::ProjectStore;
 using lmdj::project_io::ProjectStoragePlatform;
 using lmdj::project_io::ProjectWriterLease;
+using lmdj::project_io::SequenceFlushIdentity;
+using lmdj::project_io::SequenceJournal;
 
 lmdj::foundation::Result<void> fail_manifest_publish(
     lmdj::project_io::testing::FaultPoint point,
@@ -768,6 +770,63 @@ void test_tick_commands_round_trip_with_canonical_replay_identity() {
   LMDJ_CHECK(replayed.value().replayed);
   LMDJ_CHECK(replayed.value().state == committed.value().state);
   LMDJ_CHECK(managed_bundle_snapshot(bundle) == before_replay);
+}
+
+void test_sequence_flush_identity_is_durable_and_replayable_after_cleanup() {
+  TempDirectory temp;
+  const auto bundle = temp.path() / "sequence-flush-identity.lmdj";
+  auto initial = new_project();
+  const auto pattern_id = PatternId{test_uuid("sequence-flush-pattern")};
+  const Pattern pattern{pattern_id, 1, {}};
+  initial.patterns.emplace(pattern_id, pattern);
+  ProjectStore store;
+  LMDJ_CHECK(store.create(bundle, initial).has_value());
+  SequenceJournal journal;
+  const auto session_id = lmdj::foundation::SequenceSessionId{
+      test_uuid("sequence-flush-session")};
+  LMDJ_CHECK(
+      journal
+          .begin(
+              bundle,
+              session_id,
+              pattern_id,
+              pattern.bars,
+              lmdj::project_io::sequence_pattern_fingerprint(pattern),
+              0)
+          .has_value());
+  const auto command_id = CommandId{test_uuid("sequence-flush-command")};
+  const std::vector events{
+      PatternEvent{PadSlotId{0, 0}, 0, 240, 100}};
+  const auto pending = journal.append_flush(
+      bundle, session_id, command_id, pattern_id, 0, events);
+  LMDJ_CHECK(pending.has_value());
+  const SequenceFlushIdentity identity{
+      session_id, pending.value().flush_seq, command_id, pattern_id};
+  const auto committed = store.execute_sequence_flush(bundle, identity);
+  LMDJ_CHECK(committed.has_value());
+  LMDJ_CHECK(!committed.value().outcome.replayed);
+
+  const auto transaction = read_json(
+      bundle / "history/transactions" /
+      ("1-" + command_id.value() + ".json"));
+  LMDJ_CHECK(transaction.at("sequence_flush").at("session_id") ==
+             session_id.value());
+  LMDJ_CHECK(transaction.at("sequence_flush").at("flush_seq") == 0);
+  LMDJ_CHECK(transaction.at("sequence_flush").at("command_id") ==
+             command_id.value());
+  LMDJ_CHECK(transaction.at("sequence_flush").at("pattern_id") ==
+             pattern_id.value());
+  LMDJ_CHECK(
+      journal.remove_active_if_complete(bundle, session_id).has_value());
+
+  ProjectStore restarted;
+  const auto replayed = restarted.replay_sequence_flush(bundle, identity);
+  LMDJ_CHECK(replayed.has_value());
+  LMDJ_CHECK(replayed.value().has_value());
+  LMDJ_CHECK(replayed.value()->outcome.replayed);
+  LMDJ_CHECK(replayed.value()->outcome.state.revision == 1);
+  LMDJ_CHECK(
+      replayed.value()->outcome.state.patterns.at(pattern_id).events == events);
 }
 
 void test_nonzero_revision_v1_history_opens_without_migration() {
@@ -1980,6 +2039,7 @@ int main() {
     test_v1_load_migrates_in_memory_and_first_mutation_writes_v3();
     test_v2_total_migration_discards_takes_and_is_byte_stable();
     test_tick_commands_round_trip_with_canonical_replay_identity();
+    test_sequence_flush_identity_is_durable_and_replayable_after_cleanup();
     test_nonzero_revision_v1_history_opens_without_migration();
     test_v2_checkpoint_rejects_extra_playback_keys();
     test_reset_pad_playback_persists_v2_defaults();

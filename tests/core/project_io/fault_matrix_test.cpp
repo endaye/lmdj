@@ -117,6 +117,16 @@ constexpr std::array kCases{
     },
 };
 
+constexpr std::array kSequenceFlushCases{
+    FaultPoint::sequence_journal_write,
+    FaultPoint::sequence_transaction_write,
+    FaultPoint::sequence_checkpoint_write,
+    FaultPoint::sequence_manifest_publish,
+    FaultPoint::sequence_receipt_reload,
+    FaultPoint::sequence_journal_completion,
+    FaultPoint::sequence_journal_deletion,
+};
+
 constexpr std::size_t point_index(FaultPoint point) {
   return static_cast<std::size_t>(point);
 }
@@ -785,6 +795,14 @@ void test_every_fault_point_is_observed_exactly_once() {
   for (const auto observations : matrix_observations) {
     LMDJ_CHECK(observations == 1);
   }
+  std::set<std::size_t> sequence_points;
+  for (const auto point : kSequenceFlushCases) {
+    sequence_points.insert(point_index(point));
+  }
+  LMDJ_CHECK(sequence_points.size() == kSequenceFlushCases.size());
+  LMDJ_CHECK(
+      point_index(kSequenceFlushCases.back()) + 1 ==
+      point_index(FaultPoint::complete_read));
 }
 
 }  // namespace
