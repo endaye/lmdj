@@ -44,10 +44,47 @@ jobs:
         with:
           python-version: "3.11"
 
+      # The repository is private and the checkout deliberately persists no
+      # credential, so every step whose git commands must reach the canonical
+      # https://github.com/ remote (the release tooling's authority fetch and
+      # the intent hydration below) scopes this job's own read-level token
+      # through environment-only git config. Nothing is written to disk and
+      # no write token enters preflight.
+      # Allocated release intents may target pre-squash commits that no
+      # branch or tag reaches, so a fresh full clone lacks their objects and
+      # the release audit reports the intents unverifiable; hydrate them by
+      # SHA before any release.sh invocation. Pitfall:
+      # .agents/pitfalls/release-intent-target-reachability.md
+      - name: Hydrate release intent target objects
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
+        run: |
+          python3 - <<'EOF'
+          import json, subprocess
+          data = json.load(open("docs/release-evidence/release-intents.json"))
+          revisions = [entry["target_revision"] for entry in data["entries"]]
+          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
+          missing = [
+              revision for revision in revisions
+              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+                                capture_output=True).returncode != 0
+          ]
+          if missing:
+              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
+              print("hydrated intent targets:", " ".join(missing))
+          else:
+              print("all intent targets already present")
+          EOF
+
       - name: Verify exact Draft Release
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_ID: ${{ inputs.release_id }}
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
@@ -60,6 +97,9 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -87,10 +127,39 @@ jobs:
         with:
           python-version: "3.11"
 
+      # Same environment-only fetch credential and hydration contract as
+      # preflight; see the comment there. Pitfall:
+      # .agents/pitfalls/release-intent-target-reachability.md
+      - name: Hydrate release intent target objects
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
+        run: |
+          python3 - <<'EOF'
+          import json, subprocess
+          data = json.load(open("docs/release-evidence/release-intents.json"))
+          revisions = [entry["target_revision"] for entry in data["entries"]]
+          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
+          missing = [
+              revision for revision in revisions
+              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+                                capture_output=True).returncode != 0
+          ]
+          if missing:
+              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
+              print("hydrated intent targets:", " ".join(missing))
+          else:
+              print("all intent targets already present")
+          EOF
+
       - name: Reverify exact Draft Release before publication
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_ID: ${{ inputs.release_id }}
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
@@ -103,6 +172,9 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
@@ -112,6 +184,9 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
           RELEASE_ID: ${{ inputs.release_id }}
           PLAN_SHA256: ${{ inputs.plan_sha256 }}
@@ -124,6 +199,9 @@ jobs:
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail

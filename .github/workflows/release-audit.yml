@@ -41,10 +41,45 @@ jobs:
         with:
           node-version: "22"
 
+      # The repository is private and the checkout deliberately persists no
+      # credential, so the steps whose git commands must reach the canonical
+      # https://github.com/ remote (the remote audit's authority fetch and
+      # the intent hydration below) scope this job's read-level token through
+      # environment-only git config; nothing is written to disk.
+      # Allocated release intents may target pre-squash commits that no
+      # branch or tag reaches, so a fresh full clone lacks their objects and
+      # the audit reports the intents unverifiable; hydrate them by SHA
+      # first. Pitfall: .agents/pitfalls/release-intent-target-reachability.md
+      - name: Hydrate release intent target objects
+        env:
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
+        run: |
+          python3 - <<'EOF'
+          import json, subprocess
+          data = json.load(open("docs/release-evidence/release-intents.json"))
+          revisions = [entry["target_revision"] for entry in data["entries"]]
+          revisions += [entry["target_revision"] for entry in data["historical_exceptions"]]
+          missing = [
+              revision for revision in revisions
+              if subprocess.run(["git", "cat-file", "-e", f"{revision}^{{commit}}"],
+                                capture_output=True).returncode != 0
+          ]
+          if missing:
+              subprocess.run(["git", "fetch", "--no-tags", "origin", *missing], check=True)
+              print("hydrated intent targets:", " ".join(missing))
+          else:
+              print("all intent targets already present")
+          EOF
+
       - name: Audit release identity and drift
         shell: bash
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
+          GIT_CONFIG_VALUE_0: https://github.com/
           REPORT_PATH: build/release/audit/report.json
         run: |
           set -euo pipefail
