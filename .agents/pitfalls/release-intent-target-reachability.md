@@ -6,6 +6,9 @@ recurrences:
   - date: 2026-08-26
     occurrence: https://github.com/endaye/lmdj/pull/328
     observed_by: claude-code/fable-5
+  - date: 2026-08-26
+    occurrence: https://github.com/endaye/lmdj/issues/331
+    observed_by: claude-code/fable-5
 exit: none
 ---
 
@@ -33,7 +36,14 @@ any operator running `scripts/release.sh audit --local` from a fresh clone.
 - When a release audit reports an intent target absent from the local object
   store, first `git fetch --no-tags origin <sha>` before treating the intent
   as inconsistent.
+- `release-audit.yml` and both `publish-release.yml` jobs now hydrate the same
+  way before invoking `scripts/release.sh`, and their workflow contract tests
+  assert the hydration step runs first
+  (`tests/build/release_audit_workflow_test.py`,
+  `tests/build/release_publish_workflow_test.py`).
 - No gate exit yet: reachability cannot be asserted repo-statically (it is a
   property of the remote), and the audit tool's own fetch-on-miss behavior is
   a release-tooling decision that should not be settled inside an unrelated
-  Task. If this recurs, that decision is the escalation.
+  Task. The recurrence-2 escalation is
+  [#332](https://github.com/endaye/lmdj/issues/332): decide fetch-on-miss
+  hydration inside the release tooling instead of per-workflow copies.

@@ -64,6 +64,20 @@ class ReleaseAuditWorkflowTest(unittest.TestCase):
         self.assertIn("uses: actions/setup-node@", source)
         self.assertIn('node-version: "22"', source)
 
+    def test_fresh_runner_fetch_credential_is_env_scoped_and_intents_hydrate_first(self) -> None:
+        source = self.source()
+        self.assertLess(
+            source.index("Hydrate release intent target objects"),
+            source.index("Audit release identity and drift"),
+        )
+        credential = (
+            "GIT_CONFIG_KEY_0: "
+            "url.https://x-access-token:${{ github.token }}@github.com/.insteadOf"
+        )
+        self.assertEqual(source.count('GIT_CONFIG_COUNT: "1"'), 2)
+        self.assertEqual(source.count(credential), 2)
+        self.assertEqual(source.count("GIT_CONFIG_VALUE_0: https://github.com/"), 2)
+
     def test_actions_are_exactly_pinned_and_checkout_has_no_credentials(self) -> None:
         source = self.source()
         uses_lines = [line.strip() for line in source.splitlines() if "uses:" in line]
