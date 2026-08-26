@@ -20,23 +20,21 @@ using lmdj::domain::CommandReceipt;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
 using lmdj::domain::ImportAssignSample;
+using lmdj::domain::MergePatternEvents;
 using lmdj::domain::PadPlayback;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
-using lmdj::domain::RawTake;
-using lmdj::domain::RawTakeEvent;
-using lmdj::domain::RecordTake;
 using lmdj::domain::ResetPadPlayback;
 using lmdj::domain::TriggerMode;
 using lmdj::domain::UpdatePadPlayback;
+using lmdj::domain::UpdateSequenceSettings;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
-using lmdj::foundation::TakeId;
 
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
 constexpr auto kImportCommand1 = "10000000-0000-4000-8000-000000000001";
@@ -44,7 +42,7 @@ constexpr auto kImportCommand2 = "10000000-0000-4000-8000-000000000002";
 constexpr auto kAssignCommand1 = "10000000-0000-4000-8000-000000000003";
 constexpr auto kPatternCommand = "10000000-0000-4000-8000-000000000004";
 constexpr auto kAssignCommand2 = "10000000-0000-4000-8000-000000000005";
-constexpr auto kRecordCommand = "10000000-0000-4000-8000-000000000006";
+constexpr auto kMergeCommand = "10000000-0000-4000-8000-000000000006";
 constexpr auto kPlaybackCommand = "10000000-0000-4000-8000-000000000007";
 constexpr auto kResetCommand = "10000000-0000-4000-8000-000000000008";
 constexpr auto kImportAssignCommand = "10000000-0000-4000-8000-000000000009";
@@ -52,7 +50,6 @@ constexpr auto kAsset1 = "20000000-0000-4000-8000-000000000001";
 constexpr auto kAsset2 = "20000000-0000-4000-8000-000000000002";
 constexpr auto kPattern1 = "30000000-0000-4000-8000-000000000001";
 constexpr auto kPattern2 = "30000000-0000-4000-8000-000000000002";
-constexpr auto kTake1 = "40000000-0000-4000-8000-000000000001";
 constexpr auto kValidSha256 =
     "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
@@ -130,7 +127,7 @@ void test_valid_command_increments_revision_once() {
       initial, Command{import_asset(kImportCommand1, 0, kAsset1)});
 
   LMDJ_CHECK(applied.state.revision == 1);
-  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v2);
+  LMDJ_CHECK(applied.state.contract == lmdj::domain::ProjectContract::v3);
   LMDJ_CHECK(applied.state.assets.size() == 1);
   LMDJ_CHECK(!applied.replayed);
   LMDJ_CHECK(applied.event.at("command_id") == kImportCommand1);
@@ -179,7 +176,7 @@ void test_import_assign_sample_is_one_revision_and_resets_playback() {
 
   LMDJ_CHECK(result.has_value());
   const auto& state = result.value().state;
-  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v2);
+  LMDJ_CHECK(state.contract == lmdj::domain::ProjectContract::v3);
   LMDJ_CHECK(state.revision == 1);
   LMDJ_CHECK(state.assets.size() == 1);
   LMDJ_CHECK(state.banks[0][0].asset_id == AssetId{kAsset1});
@@ -198,7 +195,7 @@ void test_update_pad_playback_migrates_an_unassigned_v1_project() {
 
   LMDJ_CHECK(updated.has_value());
   LMDJ_CHECK(updated.value().state.contract ==
-             lmdj::domain::ProjectContract::v2);
+             lmdj::domain::ProjectContract::v3);
   LMDJ_CHECK(updated.value().state.revision == 1);
   LMDJ_CHECK(
       updated.value().state.banks[0][0].playback.trim_start_frame == 10);
@@ -230,7 +227,7 @@ void test_update_pad_playback_accepts_all_modes_bounds_and_nullable_end() {
     LMDJ_CHECK(applied.has_value());
     LMDJ_CHECK(applied.value().state.revision == state.revision + 1);
     LMDJ_CHECK(applied.value().state.contract ==
-               lmdj::domain::ProjectContract::v2);
+               lmdj::domain::ProjectContract::v3);
     LMDJ_CHECK(applied.value().state.banks[0][0].playback == cases[index]);
     state = applied.value().state;
   }
@@ -604,83 +601,83 @@ void test_create_pattern_rejects_invalid_pattern_id() {
   }
 }
 
-void test_record_take_commits_unquantized_take_and_explicit_pattern_atomically() {
-  const auto initial = new_project();
-  const auto command = Command{RecordTake{
-      meta(kRecordCommand, 0),
-      {TakeId{kTake1}, 48000, {{PadSlotId{0, 1}, 12345, 96}}},
-      {PatternId{kPattern1}, 1, {{PadSlotId{0, 1}, 7, 96}}},
-  }};
+void test_merge_pattern_events_replaces_duplicates_and_orders_canonically() {
+  auto state = apply_or_throw(
+                   new_project(),
+                   Command{CreatePattern{
+                       meta(kPatternCommand, 0),
+                       {PatternId{kPattern1},
+                        1,
+                        {
+                            {PadSlotId{1, 0}, 480, 120, 80},
+                            {PadSlotId{0, 2}, 0, 240, 90},
+                        }},
+                   }})
+                   .state;
+  const auto merged = lmdj::domain::apply(
+      state,
+      Command{MergePatternEvents{
+          meta(kMergeCommand, 1),
+          PatternId{kPattern1},
+          {
+              {PadSlotId{1, 0}, 480, 300, 127},
+              {PadSlotId{0, 1}, 0, 120, 100},
+              {PadSlotId{0, 1}, 0, 60, 110},
+          },
+      }},
+      {});
 
-  const auto result = lmdj::domain::apply(initial, command, {});
-  LMDJ_CHECK(result.has_value());
-  const auto& committed = result.value().state;
-  LMDJ_CHECK(committed.revision == 1);
-  LMDJ_CHECK(committed.takes.size() == 1);
-  LMDJ_CHECK(committed.patterns.size() == 1);
-  LMDJ_CHECK(
-      committed.takes.at(TakeId{kTake1}).events.at(0).frame_offset == 12345);
-  LMDJ_CHECK(
-      committed.patterns.at(PatternId{kPattern1}).events.at(0).step == 7);
+  LMDJ_CHECK(merged.has_value());
+  const auto& events =
+      merged.value().state.patterns.at(PatternId{kPattern1}).events;
+  LMDJ_CHECK(events.size() == 3);
+  LMDJ_CHECK((events[0].slot == PadSlotId{0, 1}));
+  LMDJ_CHECK(events[0].duration_tick == 60);
+  LMDJ_CHECK(events[0].velocity == 110);
+  LMDJ_CHECK((events[1].slot == PadSlotId{0, 2}));
+  LMDJ_CHECK((events[2].slot == PadSlotId{1, 0}));
+  LMDJ_CHECK(events[2].duration_tick == 300);
+  LMDJ_CHECK(events[2].velocity == 127);
 }
 
-void test_record_take_validates_ids_and_requires_48_khz_atomically() {
+void test_tick_pattern_validation_enforces_loop_remainder() {
   const auto initial = new_project();
-  for (const std::string_view invalid : {
-           "40000000.0000.4000.8000.000000000001",
-           "40000000-0000-4000-8000-00000000000A",
-           "40000000-0000-4000-8000-00000000001",
-           "40000000-0000-6000-8000-000000000001",
+  for (const PatternEvent invalid : {
+           PatternEvent{PadSlotId{4, 0}, 0, 240, 100},
+           PatternEvent{PadSlotId{0, 0}, 0, 240, 0},
+           PatternEvent{PadSlotId{0, 0}, 3840, 1, 100},
+           PatternEvent{PadSlotId{0, 0}, 3839, 2, 100},
+           PatternEvent{PadSlotId{0, 0}, 0, 0, 100},
        }) {
     check_invalid_without_state_change(
         initial,
-        Command{RecordTake{
-            meta(kRecordCommand, 0),
-            {TakeId{std::string(invalid)}, 48000, {}},
-            {PatternId{kPattern1}, 1, {}},
-        }});
-  }
-
-  for (const std::string_view invalid : {
-           "30000000.0000.4000.8000.000000000001",
-           "30000000-0000-4000-8000-00000000000A",
-           "30000000-0000-4000-8000-00000000001",
-           "30000000-0000-6000-8000-000000000001",
-       }) {
-    check_invalid_without_state_change(
-        initial,
-        Command{RecordTake{
-            meta(kRecordCommand, 0),
-            {TakeId{kTake1}, 48000, {}},
-            {PatternId{std::string(invalid)}, 1, {}},
-        }});
-  }
-
-  for (const std::uint32_t invalid_rate : {0U, 44100U, 96000U}) {
-    check_invalid_without_state_change(
-        initial,
-        Command{RecordTake{
-            meta(kRecordCommand, 0),
-            {TakeId{kTake1}, invalid_rate, {}},
-            {PatternId{kPattern2}, 1, {}},
+        Command{CreatePattern{
+            meta(kPatternCommand, 0),
+            {PatternId{kPattern2}, 1, {invalid}},
         }});
   }
 }
 
-void test_record_take_rejects_invalid_events_atomically() {
-  const auto initial = new_project();
-  for (const RawTakeEvent invalid : {
-           RawTakeEvent{PadSlotId{4, 0}, 0, 100},
-           RawTakeEvent{PadSlotId{0, 0}, 0, 0},
-           RawTakeEvent{PadSlotId{0, 0}, 0, 128},
+void test_sequence_settings_update_enforces_locked_ranges() {
+  auto state = new_project();
+  const auto updated = lmdj::domain::apply(
+      state,
+      Command{UpdateSequenceSettings{
+          meta(kMergeCommand, 0), 240, false, 75}},
+      {});
+  LMDJ_CHECK(updated.has_value());
+  LMDJ_CHECK(updated.value().state.bpm == 240);
+  LMDJ_CHECK(!updated.value().state.quantize_enabled);
+  LMDJ_CHECK(updated.value().state.swing_percent == 75);
+
+  for (const auto& command : {
+           UpdateSequenceSettings{meta(kMergeCommand, 0), 39, {}, {}},
+           UpdateSequenceSettings{meta(kMergeCommand, 0), 241, {}, {}},
+           UpdateSequenceSettings{meta(kMergeCommand, 0), {}, {}, 49},
+           UpdateSequenceSettings{meta(kMergeCommand, 0), {}, {}, 76},
+           UpdateSequenceSettings{meta(kMergeCommand, 0), {}, {}, {}},
        }) {
-    check_invalid_without_state_change(
-        initial,
-        Command{RecordTake{
-            meta(kRecordCommand, 0),
-            {TakeId{kTake1}, 48000, {invalid}},
-            {PatternId{kPattern1}, 1, {}},
-        }});
+    check_invalid_without_state_change(state, Command{command});
   }
 }
 
@@ -710,9 +707,9 @@ int main() {
     test_pattern_events_keep_slot_reference_through_pad_reassignment();
     test_pattern_validation_enforces_velocity_bars_and_explicit_steps();
     test_create_pattern_rejects_invalid_pattern_id();
-    test_record_take_commits_unquantized_take_and_explicit_pattern_atomically();
-    test_record_take_validates_ids_and_requires_48_khz_atomically();
-    test_record_take_rejects_invalid_events_atomically();
+    test_merge_pattern_events_replaces_duplicates_and_orders_canonically();
+    test_tick_pattern_validation_enforces_loop_remainder();
+    test_sequence_settings_update_enforces_locked_ranges();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

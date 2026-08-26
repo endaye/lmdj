@@ -19,6 +19,9 @@ TOOL_PATH = REPO_ROOT / "tools" / "project-bundle" / "project_bundle.py"
 SCHEMA_PATH = (
     REPO_ROOT / "contracts" / "project" / "lmdj.project-bundle.v1.schema.json"
 )
+PROJECT_V3_SCHEMA_PATH = (
+    REPO_ROOT / "contracts" / "project" / "lmdj.project.v3.schema.json"
+)
 FIXTURE_ROOT = REPO_ROOT / "tests" / "fixtures" / "contracts"
 PROJECT_ID = "12345678-1234-4123-8123-123456789abc"
 
@@ -118,6 +121,26 @@ def test_schema_and_fixtures() -> None:
     json_schema.check(valid, schema, "project-bundle-valid")
     errors = json_schema.validate(invalid, schema)
     assert any("does not match pattern" in error for error in errors), errors
+
+
+def test_v3_project_truth_fixture_is_canonical_and_tick_native() -> None:
+    schema = load_json(PROJECT_V3_SCHEMA_PATH)
+    project = load_json(FIXTURE_ROOT / "project-v3-valid.json")
+    json_schema.check(project, schema, "project-v3-valid")
+    assert project["contract"] == "lmdj.project.v3"
+    assert "takes" not in project
+    assert isinstance(project["assets"], list)
+    assert isinstance(project["patterns"], list)
+    for pattern in project["patterns"]:
+        loop_length = pattern["bars"] * 3840
+        for event in pattern["events"]:
+            assert "step" not in event
+            assert 0 <= event["onset_tick"] < loop_length
+            assert 1 <= event["duration_tick"] <= (
+                loop_length - event["onset_tick"]
+            )
+    encoded = project_bundle.canonical_json(project)
+    assert encoded == project_bundle.canonical_json(json.loads(encoded))
 
 
 def test_pack_header_digest_payload_and_determinism(root: Path) -> None:
@@ -368,6 +391,7 @@ def test_pack_rejects_unsafe_tree(root: Path) -> None:
 
 def main() -> None:
     test_schema_and_fixtures()
+    test_v3_project_truth_fixture_is_canonical_and_tick_native()
     with tempfile.TemporaryDirectory(prefix="lmdj-project-bundle-test-") as raw:
         root = Path(raw)
         test_pack_header_digest_payload_and_determinism(root)

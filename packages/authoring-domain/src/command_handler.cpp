@@ -75,10 +75,11 @@ foundation::Result<void> validate_pattern(const Pattern& pattern) {
             "pattern bars must be one of 1, 2, 4, or 8",
         });
   }
-  const auto step_limit = static_cast<std::uint32_t>(pattern.bars) * 16;
+  const auto tick_limit = pattern_length_ticks(pattern.bars);
   for (const auto& event : pattern.events) {
     if (!is_valid_slot(event.slot) || !valid_velocity(event.velocity) ||
-        event.step >= step_limit) {
+        event.onset_tick >= tick_limit || event.duration_tick == 0 ||
+        event.duration_tick > tick_limit - event.onset_tick) {
       return foundation::Result<void>::failure(
           foundation::Error{
               foundation::ErrorCode::invalid_argument,
@@ -131,7 +132,7 @@ AppliedCommand applied(
     ProjectState state,
     std::string_view type,
     const CommandMeta& meta) {
-  state.contract = ProjectContract::v2;
+  state.contract = ProjectContract::v3;
   ++state.revision;
   const auto committed_revision = state.revision;
   return AppliedCommand{
@@ -264,9 +265,67 @@ foundation::Result<AppliedCommand> apply_new_command(
         });
   }
   auto copy = state;
-  copy.patterns.emplace(command.pattern.id, command.pattern);
+  auto pattern = command.pattern;
+  pattern.events = merge_pattern_events({}, pattern.events);
+  copy.patterns.emplace(pattern.id, std::move(pattern));
   return foundation::Result<AppliedCommand>::success(
       applied(std::move(copy), "pattern.created", command.meta));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const MergePatternEvents& command) {
+  if (!is_valid_uuid(command.pattern_id.value())) {
+    return invalid("pattern id must be a lowercase UUID");
+  }
+  const auto found = state.patterns.find(command.pattern_id);
+  if (found == state.patterns.end()) {
+    return foundation::Result<AppliedCommand>::failure(
+        foundation::Error{
+            foundation::ErrorCode::invalid_argument,
+            "pattern does not exist",
+        });
+  }
+  Pattern incoming{command.pattern_id, found->second.bars, command.events};
+  const auto validation = validate_pattern(incoming);
+  if (!validation.has_value()) {
+    return foundation::Result<AppliedCommand>::failure(validation.error());
+  }
+  auto copy = state;
+  copy.patterns.at(command.pattern_id).events = merge_pattern_events(
+      found->second.events, command.events);
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "pattern.events_merged", command.meta));
+}
+
+foundation::Result<AppliedCommand> apply_new_command(
+    const ProjectState& state,
+    const UpdateSequenceSettings& command) {
+  if (!command.bpm.has_value() && !command.quantize_enabled.has_value() &&
+      !command.swing_percent.has_value()) {
+    return invalid("sequence settings update is empty");
+  }
+  if (command.bpm.has_value() &&
+      (*command.bpm < 40 || *command.bpm > 240)) {
+    return invalid("project BPM must be between 40 and 240");
+  }
+  if (command.swing_percent.has_value() &&
+      (*command.swing_percent < kSwingPercentMin ||
+       *command.swing_percent > kSwingPercentMax)) {
+    return invalid("swing percent must be between 50 and 75");
+  }
+  auto copy = state;
+  if (command.bpm.has_value()) {
+    copy.bpm = *command.bpm;
+  }
+  if (command.quantize_enabled.has_value()) {
+    copy.quantize_enabled = *command.quantize_enabled;
+  }
+  if (command.swing_percent.has_value()) {
+    copy.swing_percent = *command.swing_percent;
+  }
+  return foundation::Result<AppliedCommand>::success(
+      applied(std::move(copy), "sequence.settings_updated", command.meta));
 }
 
 foundation::Result<AppliedCommand> apply_new_command(
@@ -291,7 +350,9 @@ foundation::Result<AppliedCommand> apply_new_command(
   }
   auto copy = state;
   copy.takes.emplace(command.take.id, command.take);
-  copy.patterns.emplace(command.pattern.id, command.pattern);
+  auto pattern = command.pattern;
+  pattern.events = merge_pattern_events({}, pattern.events);
+  copy.patterns.emplace(pattern.id, std::move(pattern));
   return foundation::Result<AppliedCommand>::success(
       applied(std::move(copy), "take.recorded", command.meta));
 }

@@ -6,6 +6,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <lmdj/domain/command_handler.hpp>
@@ -13,6 +14,9 @@
 #include <lmdj/project_io/storage_platform.hpp>
 
 namespace lmdj::project_io {
+
+inline constexpr std::string_view kProjectWriterContract =
+    "lmdj.project.v3";
 
 struct RecordTakeReplayIdentity {
   domain::CommandMeta meta;

@@ -31,20 +31,18 @@ using lmdj::domain::CommandMeta;
 using lmdj::domain::CommandReceipt;
 using lmdj::domain::CreatePattern;
 using lmdj::domain::ImportAsset;
+using lmdj::domain::MergePatternEvents;
 using lmdj::domain::PadSlotId;
 using lmdj::domain::Pattern;
 using lmdj::domain::PatternEvent;
 using lmdj::domain::ProjectState;
-using lmdj::domain::RawTake;
-using lmdj::domain::RawTakeEvent;
-using lmdj::domain::RecordTake;
+using lmdj::domain::UpdateSequenceSettings;
 using lmdj::foundation::ArtifactRef;
 using lmdj::foundation::AssetId;
 using lmdj::foundation::CommandId;
 using lmdj::foundation::ErrorCode;
 using lmdj::foundation::PatternId;
 using lmdj::foundation::ProjectId;
-using lmdj::foundation::TakeId;
 using lmdj::test::DeterministicRng;
 
 constexpr std::array<std::uint64_t, 5> kSeedOneValues{
@@ -111,25 +109,6 @@ nlohmann::json canonical_state_value(const ProjectState& state) {
     }));
   }
 
-  auto takes = nlohmann::json::array();
-  for (const auto& [id, take] : state.takes) {
-    auto events = nlohmann::json::array();
-    for (const auto& event : take.events) {
-      events.push_back(nlohmann::json::array({
-          event.slot.bank,
-          event.slot.pad,
-          event.frame_offset,
-          event.velocity,
-      }));
-    }
-    takes.push_back(nlohmann::json::array({
-        id.value(),
-        take.id.value(),
-        take.sample_rate,
-        std::move(events),
-    }));
-  }
-
   auto patterns = nlohmann::json::array();
   for (const auto& [id, pattern] : state.patterns) {
     auto events = nlohmann::json::array();
@@ -137,7 +116,8 @@ nlohmann::json canonical_state_value(const ProjectState& state) {
       events.push_back(nlohmann::json::array({
           event.slot.bank,
           event.slot.pad,
-          event.step,
+          event.onset_tick,
+          event.duration_tick,
           event.velocity,
       }));
     }
@@ -153,9 +133,10 @@ nlohmann::json canonical_state_value(const ProjectState& state) {
       state.id.value(),
       state.revision,
       state.bpm,
+      state.quantize_enabled,
+      state.swing_percent,
       std::move(banks),
       std::move(assets),
-      std::move(takes),
       std::move(patterns),
   });
 }
@@ -181,6 +162,10 @@ std::string canonical_state(const ProjectState& state) {
   append_integer(state.revision);
   encoded.push_back(',');
   append_integer(state.bpm);
+  encoded.push_back(',');
+  encoded += state.quantize_enabled ? "true" : "false";
+  encoded.push_back(',');
+  append_integer(state.swing_percent);
   encoded += ",[";
   bool first = true;
   for (const auto& bank : state.banks) {
@@ -225,39 +210,6 @@ std::string canonical_state(const ProjectState& state) {
 
   encoded += "],[";
   first = true;
-  for (const auto& [id, take] : state.takes) {
-    if (!first) {
-      encoded.push_back(',');
-    }
-    first = false;
-    encoded.push_back('[');
-    append_string(id.value());
-    encoded.push_back(',');
-    append_string(take.id.value());
-    encoded.push_back(',');
-    append_integer(take.sample_rate);
-    encoded += ",[";
-    bool first_event = true;
-    for (const auto& event : take.events) {
-      if (!first_event) {
-        encoded.push_back(',');
-      }
-      first_event = false;
-      encoded.push_back('[');
-      append_integer(event.slot.bank);
-      encoded.push_back(',');
-      append_integer(event.slot.pad);
-      encoded.push_back(',');
-      append_integer(event.frame_offset);
-      encoded.push_back(',');
-      append_integer(event.velocity);
-      encoded.push_back(']');
-    }
-    encoded += "]]";
-  }
-
-  encoded += "],[";
-  first = true;
   for (const auto& [id, pattern] : state.patterns) {
     if (!first) {
       encoded.push_back(',');
@@ -281,7 +233,9 @@ std::string canonical_state(const ProjectState& state) {
       encoded.push_back(',');
       append_integer(event.slot.pad);
       encoded.push_back(',');
-      append_integer(event.step);
+      append_integer(event.onset_tick);
+      encoded.push_back(',');
+      append_integer(event.duration_tick);
       encoded.push_back(',');
       append_integer(event.velocity);
       encoded.push_back(']');
@@ -331,24 +285,14 @@ std::vector<PatternEvent> generated_pattern_events(
   const auto count = 1U + static_cast<std::size_t>(rng.bounded(4));
   events.reserve(count);
   for (std::size_t index = 0; index < count; ++index) {
+    const auto loop_length =
+        static_cast<std::uint64_t>(bars) * lmdj::domain::kBarTicks4x4;
+    const auto onset = rng.bounded(loop_length);
     events.push_back(PatternEvent{
         generated_slot(rng),
-        static_cast<std::uint32_t>(rng.bounded(
-            static_cast<std::uint64_t>(bars) * 16U)),
-        static_cast<std::uint8_t>(1U + rng.bounded(127)),
-    });
-  }
-  return events;
-}
-
-std::vector<RawTakeEvent> generated_take_events(DeterministicRng& rng) {
-  std::vector<RawTakeEvent> events;
-  const auto count = 1U + static_cast<std::size_t>(rng.bounded(4));
-  events.reserve(count);
-  for (std::size_t index = 0; index < count; ++index) {
-    events.push_back(RawTakeEvent{
-        generated_slot(rng),
-        static_cast<std::uint32_t>(rng.bounded(192000)),
+        static_cast<std::uint32_t>(onset),
+        static_cast<std::uint32_t>(
+            1U + rng.bounded(loop_length - onset)),
         static_cast<std::uint8_t>(1U + rng.bounded(127)),
     });
   }
@@ -410,19 +354,11 @@ Command generated_valid_command(
       }};
     }
     default: {
-      const auto bars = kBarChoices.at(rng.bounded(kBarChoices.size()));
-      return Command{RecordTake{
+      return Command{UpdateSequenceSettings{
           meta,
-          RawTake{
-              TakeId{generated_uuid('4', seed, ordinal + 1U)},
-              48000,
-              generated_take_events(rng),
-          },
-          Pattern{
-              PatternId{generated_uuid('3', seed, ordinal + 1U)},
-              bars,
-              generated_pattern_events(rng, bars),
-          },
+          static_cast<std::uint16_t>(40U + rng.bounded(201)),
+          rng.bounded(2) == 0,
+          static_cast<std::uint8_t>(50U + rng.bounded(26)),
       }};
     }
   }
@@ -441,10 +377,23 @@ void check_applied_effect(
               state.banks.at(value.slot.bank).at(value.slot.pad).asset_id ==
               value.asset_id);
         } else if constexpr (std::is_same_v<Value, CreatePattern>) {
-          LMDJ_CHECK(state.patterns.at(value.pattern.id) == value.pattern);
-        } else {
-          LMDJ_CHECK(state.takes.at(value.take.id) == value.take);
-          LMDJ_CHECK(state.patterns.at(value.pattern.id) == value.pattern);
+          LMDJ_CHECK(
+              state.patterns.at(value.pattern.id).events ==
+              lmdj::domain::merge_pattern_events({}, value.pattern.events));
+        } else if constexpr (std::is_same_v<Value, MergePatternEvents>) {
+          LMDJ_CHECK(state.patterns.contains(value.pattern_id));
+        } else if constexpr (
+            std::is_same_v<Value, UpdateSequenceSettings>) {
+          if (value.bpm.has_value()) {
+            LMDJ_CHECK(state.bpm == *value.bpm);
+          }
+          if (value.quantize_enabled.has_value()) {
+            LMDJ_CHECK(
+                state.quantize_enabled == *value.quantize_enabled);
+          }
+          if (value.swing_percent.has_value()) {
+            LMDJ_CHECK(state.swing_percent == *value.swing_percent);
+          }
         }
       },
       command);

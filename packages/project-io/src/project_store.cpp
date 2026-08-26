@@ -56,6 +56,8 @@ using PersistedCommand = std::variant<
     domain::AssignPad,
     domain::RecordTake,
     domain::CreatePattern,
+    domain::MergePatternEvents,
+    domain::UpdateSequenceSettings,
     domain::ImportAssignSample,
     domain::UpdatePadPlayback,
     domain::ResetPadPlayback>;
@@ -282,10 +284,19 @@ nlohmann::json playback_json(const domain::PadPlayback& playback) {
   };
 }
 
-nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
+nlohmann::json legacy_pattern_event_json(const domain::PatternEvent& event) {
   return {
       {"slot", slot_json(event.slot)},
       {"step", event.step},
+      {"velocity", event.velocity},
+  };
+}
+
+nlohmann::json pattern_event_json(const domain::PatternEvent& event) {
+  return {
+      {"duration_tick", event.duration_tick},
+      {"onset_tick", event.onset_tick},
+      {"slot", slot_json(event.slot)},
       {"velocity", event.velocity},
   };
 }
@@ -298,10 +309,14 @@ nlohmann::json raw_take_event_json(const domain::RawTakeEvent& event) {
   };
 }
 
-nlohmann::json pattern_value_json(const domain::Pattern& pattern) {
+nlohmann::json pattern_value_json(
+    const domain::Pattern& pattern,
+    bool legacy = false) {
   auto events = nlohmann::json::array();
   for (const auto& event : pattern.events) {
-    events.push_back(pattern_event_json(event));
+    events.push_back(
+        legacy ? legacy_pattern_event_json(event)
+               : pattern_event_json(event));
   }
   return {
       {"bars", pattern.bars},
@@ -332,6 +347,22 @@ nlohmann::json take_json(const domain::RawTake& take) {
   return encoded;
 }
 
+domain::ProjectState persisted_v3_projection(
+    const domain::ProjectState& state) {
+  auto projected = state;
+  if (projected.contract != domain::ProjectContract::v3) {
+    projected.quantize_enabled = true;
+    projected.swing_percent = 50;
+  }
+  projected.contract = domain::ProjectContract::v3;
+  projected.takes.clear();
+  for (auto& [id, pattern] : projected.patterns) {
+    (void)id;
+    pattern.events = domain::merge_pattern_events({}, pattern.events);
+  }
+  return projected;
+}
+
 nlohmann::json project_json(const domain::ProjectState& state) {
   auto banks = nlohmann::json::array();
   for (std::size_t bank = 0; bank < state.banks.size(); ++bank) {
@@ -344,7 +375,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
                : nlohmann::json(nullptr)},
           {"pad", slot.id.pad},
       };
-      if (state.contract == domain::ProjectContract::v2) {
+      if (state.contract != domain::ProjectContract::v1) {
         encoded_pad["playback"] = playback_json(slot.playback);
       }
       pads.push_back(std::move(encoded_pad));
@@ -354,6 +385,34 @@ nlohmann::json project_json(const domain::ProjectState& state) {
             {"bank", bank},
             {"pads", std::move(pads)},
         });
+  }
+
+  if (state.contract == domain::ProjectContract::v3) {
+    auto assets = nlohmann::json::array();
+    for (const auto& [id, asset] : state.assets) {
+      assets.push_back(
+          {{"artifact", asset.artifact}, {"asset_id", id.value()}});
+    }
+    auto patterns = nlohmann::json::array();
+    for (const auto& [id, pattern] : state.patterns) {
+      auto encoded = pattern_value_json(pattern);
+      encoded["pattern_id"] = id.value();
+      patterns.push_back(std::move(encoded));
+    }
+    return {
+        {"assets", std::move(assets)},
+        {"banks", std::move(banks)},
+        {"bpm", state.bpm},
+        {"contract", kProjectWriterContract},
+        {"patterns", std::move(patterns)},
+        {"project_id", state.id.value()},
+        {"revision", state.revision},
+        {"sequence_settings",
+         {
+             {"quantize_enabled", state.quantize_enabled},
+             {"swing_percent", state.swing_percent},
+         }},
+    };
   }
 
   auto assets = nlohmann::json::object();
@@ -366,7 +425,7 @@ nlohmann::json project_json(const domain::ProjectState& state) {
   }
   auto patterns = nlohmann::json::object();
   for (const auto& [id, pattern] : state.patterns) {
-    patterns[id.value()] = pattern_value_json(pattern);
+    patterns[id.value()] = pattern_value_json(pattern, true);
   }
   return {
       {"assets", std::move(assets)},
@@ -527,20 +586,33 @@ foundation::Result<domain::Pattern> parse_pattern(
       return foundation::Result<domain::Pattern>::failure(
           invalid_project("project pattern metadata is invalid", path));
     }
-    const auto step_limit =
-        static_cast<std::uint32_t>(pattern.bars) * 16;
+    const auto tick_limit = domain::pattern_length_ticks(pattern.bars);
     for (const auto& encoded : input.at("events")) {
-      if (!exact_object_keys(
-              encoded, {"slot", "step", "velocity"})) {
+      const bool legacy_event = exact_object_keys(
+          encoded, {"slot", "step", "velocity"});
+      const bool tick_event = exact_object_keys(
+          encoded,
+          {"duration_tick", "onset_tick", "slot", "velocity"});
+      if (!legacy_event && !tick_event) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event shape is invalid", path));
       }
-      const auto step = unsigned_integer_value(encoded.at("step"));
+      const auto onset_tick = unsigned_integer_value(
+          encoded.at(legacy_event ? "step" : "onset_tick"));
+      const auto duration_tick = legacy_event
+                                     ? std::optional<std::uint64_t>{
+                                           domain::kSixteenthTicks}
+                                     : unsigned_integer_value(
+                                           encoded.at("duration_tick"));
       const auto velocity =
           unsigned_integer_value(encoded.at("velocity"));
-      if (!step.has_value() || !velocity.has_value() ||
-          *step > std::numeric_limits<std::uint32_t>::max() ||
-          *velocity > std::numeric_limits<std::uint8_t>::max()) {
+      if (!onset_tick.has_value() || !duration_tick.has_value() ||
+          !velocity.has_value() ||
+          *onset_tick > std::numeric_limits<std::uint32_t>::max() ||
+          *duration_tick > std::numeric_limits<std::uint32_t>::max() ||
+          *velocity > std::numeric_limits<std::uint8_t>::max() ||
+          (legacy_event &&
+           *onset_tick >= static_cast<std::uint64_t>(pattern.bars) * 16U)) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event is invalid", path));
       }
@@ -550,16 +622,21 @@ foundation::Result<domain::Pattern> parse_pattern(
       }
       domain::PatternEvent event{
           slot.value(),
-          static_cast<std::uint32_t>(*step),
+          static_cast<std::uint32_t>(
+              legacy_event ? *onset_tick * domain::kSixteenthTicks
+                           : *onset_tick),
+          static_cast<std::uint32_t>(*duration_tick),
           static_cast<std::uint8_t>(*velocity),
       };
       if (event.velocity < 1 || event.velocity > 127 ||
-          event.step >= step_limit) {
+          event.onset_tick >= tick_limit || event.duration_tick == 0 ||
+          event.duration_tick > tick_limit - event.onset_tick) {
         return foundation::Result<domain::Pattern>::failure(
             invalid_project("project pattern event is invalid", path));
       }
       pattern.events.push_back(event);
     }
+    pattern.events = domain::merge_pattern_events({}, pattern.events);
     return foundation::Result<domain::Pattern>::success(std::move(pattern));
   } catch (const std::exception& exception) {
     return foundation::Result<domain::Pattern>::failure(
@@ -676,7 +753,10 @@ foundation::Result<domain::ProjectState> parse_project(
                               : std::string{};
     const bool is_v1 = contract == "lmdj.project.v1";
     const bool is_v2 = contract == "lmdj.project.v2";
-    if (!exact_object_keys(
+    const bool is_v3 = contract == "lmdj.project.v3";
+    const bool legacy_shape =
+        (is_v1 || is_v2) &&
+        exact_object_keys(
             input,
             {
                 "assets",
@@ -687,14 +767,33 @@ foundation::Result<domain::ProjectState> parse_project(
                 "project_id",
                 "revision",
                 "takes",
-            }) ||
-        (!is_v1 && !is_v2) ||
+            }) &&
+        input.at("assets").is_object() &&
+        input.at("takes").is_object() &&
+        input.at("patterns").is_object();
+    const bool v3_shape =
+        is_v3 &&
+        exact_object_keys(
+            input,
+            {
+                "assets",
+                "banks",
+                "bpm",
+                "contract",
+                "patterns",
+                "project_id",
+                "revision",
+                "sequence_settings",
+            }) &&
+        input.at("assets").is_array() &&
+        input.at("patterns").is_array() &&
+        exact_object_keys(
+            input.at("sequence_settings"),
+            {"quantize_enabled", "swing_percent"});
+    if ((!legacy_shape && !v3_shape) ||
         !nonnegative_integer(input.at("revision")) ||
         !nonnegative_integer(input.at("bpm")) ||
-        !input.at("banks").is_array() ||
-        !input.at("assets").is_object() ||
-        !input.at("takes").is_object() ||
-        !input.at("patterns").is_object()) {
+        !input.at("banks").is_array()) {
       return foundation::Result<domain::ProjectState>::failure(
           invalid_project("project checkpoint contract is invalid", path));
     }
@@ -715,9 +814,25 @@ foundation::Result<domain::ProjectState> parse_project(
           invalid_project("project metadata is invalid", path));
     }
     auto state = std::move(created.value());
-    state.contract = is_v1 ? domain::ProjectContract::v1
-                           : domain::ProjectContract::v2;
+    state.contract = domain::ProjectContract::v3;
     state.revision = *revision;
+    if (is_v3) {
+      const auto swing = unsigned_integer_value(
+          input.at("sequence_settings").at("swing_percent"));
+      if (!input.at("sequence_settings")
+               .at("quantize_enabled")
+               .is_boolean() ||
+          !swing.has_value() ||
+          *swing < domain::kSwingPercentMin ||
+          *swing > domain::kSwingPercentMax) {
+        return foundation::Result<domain::ProjectState>::failure(
+            invalid_project("project sequence settings are invalid", path));
+      }
+      state.quantize_enabled = input.at("sequence_settings")
+                                   .at("quantize_enabled")
+                                   .get<bool>();
+      state.swing_percent = static_cast<std::uint8_t>(*swing);
+    }
 
     const auto& banks = input.at("banks");
     if (banks.size() != state.banks.size()) {
@@ -778,7 +893,7 @@ foundation::Result<domain::ProjectState> parse_project(
           state.banks.at(*bank).at(*pad).asset_id =
               foundation::AssetId{asset_id};
         }
-        if (is_v2) {
+        if (!is_v1) {
           auto playback = parse_playback(encoded_pad.at("playback"), path);
           if (!playback.has_value()) {
             return foundation::Result<domain::ProjectState>::failure(
@@ -789,11 +904,11 @@ foundation::Result<domain::ProjectState> parse_project(
       }
     }
 
-    for (auto iterator = input.at("assets").begin();
-         iterator != input.at("assets").end();
-         ++iterator) {
-      const auto& encoded = iterator.value();
-      if (!domain::is_valid_uuid(iterator.key()) ||
+    const auto parse_asset_entry = [&state, &path](
+                                       std::string_view id,
+                                       const nlohmann::json& encoded)
+        -> foundation::Result<void> {
+      if (!domain::is_valid_uuid(id) ||
           !exact_object_keys(encoded, {"artifact"}) ||
           !exact_object_keys(
               encoded.at("artifact"),
@@ -805,11 +920,11 @@ foundation::Result<domain::ProjectState> parse_project(
               .get<std::string>()
               .empty() ||
           !encoded.at("artifact").at("sha256").is_string()) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<void>::failure(
             invalid_project("project asset entry is invalid", path));
       }
       domain::Asset asset{
-          foundation::AssetId{iterator.key()},
+          foundation::AssetId{std::string{id}},
           foundation::ArtifactRef{
               encoded.at("artifact")
                   .at("sha256")
@@ -823,10 +938,39 @@ foundation::Result<domain::ProjectState> parse_project(
           },
       };
       if (!valid_sha256(asset.artifact.sha256)) {
-        return foundation::Result<domain::ProjectState>::failure(
+        return foundation::Result<void>::failure(
             invalid_project("project artifact reference is invalid", path));
       }
-      state.assets.emplace(asset.id, asset);
+      if (!state.assets.emplace(asset.id, asset).second) {
+        return foundation::Result<void>::failure(
+            invalid_project("project asset id is duplicated", path));
+      }
+      return foundation::Result<void>::success();
+    };
+    if (is_v3) {
+      for (const auto& encoded : input.at("assets")) {
+        if (!exact_object_keys(encoded, {"artifact", "asset_id"}) ||
+            !encoded.at("asset_id").is_string()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              invalid_project("project asset entry is invalid", path));
+        }
+        auto value = nlohmann::json{{"artifact", encoded.at("artifact")}};
+        auto parsed = parse_asset_entry(
+            encoded.at("asset_id").get<std::string>(), value);
+        if (!parsed.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              parsed.error());
+        }
+      }
+    } else {
+      for (auto iterator = input.at("assets").begin();
+           iterator != input.at("assets").end(); ++iterator) {
+        auto parsed = parse_asset_entry(iterator.key(), iterator.value());
+        if (!parsed.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              parsed.error());
+        }
+      }
     }
     for (const auto& bank : state.banks) {
       for (const auto& slot : bank) {
@@ -840,26 +984,46 @@ foundation::Result<domain::ProjectState> parse_project(
       }
     }
 
-    for (auto iterator = input.at("takes").begin();
-         iterator != input.at("takes").end();
-         ++iterator) {
-      auto take =
-          parse_project_take(iterator.key(), iterator.value(), path);
-      if (!take.has_value()) {
-        return foundation::Result<domain::ProjectState>::failure(take.error());
+    if (is_v3) {
+      for (const auto& encoded : input.at("patterns")) {
+        if (!exact_object_keys(
+                encoded, {"bars", "events", "pattern_id"}) ||
+            !encoded.at("pattern_id").is_string()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              invalid_project("project pattern entry is invalid", path));
+        }
+        auto value = encoded;
+        value["id"] = value.at("pattern_id");
+        value.erase("pattern_id");
+        auto pattern = parse_pattern(value, path);
+        if (!pattern.has_value() ||
+            !state.patterns.emplace(pattern.value().id, pattern.value()).second) {
+          return foundation::Result<domain::ProjectState>::failure(
+              pattern.has_value()
+                  ? invalid_project("project pattern id is duplicated", path)
+                  : pattern.error());
+        }
       }
-      state.takes.emplace(take.value().id, take.value());
-    }
-    for (auto iterator = input.at("patterns").begin();
-         iterator != input.at("patterns").end();
-         ++iterator) {
-      auto pattern = parse_project_pattern(
-          iterator.key(), iterator.value(), path);
-      if (!pattern.has_value()) {
-        return foundation::Result<domain::ProjectState>::failure(
-            pattern.error());
+    } else {
+      // v1/v2 Take data is intentionally discarded by total migration.
+      for (auto iterator = input.at("takes").begin();
+           iterator != input.at("takes").end(); ++iterator) {
+        auto take = parse_project_take(iterator.key(), iterator.value(), path);
+        if (!take.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              take.error());
+        }
       }
-      state.patterns.emplace(pattern.value().id, pattern.value());
+      for (auto iterator = input.at("patterns").begin();
+           iterator != input.at("patterns").end(); ++iterator) {
+        auto pattern = parse_project_pattern(
+            iterator.key(), iterator.value(), path);
+        if (!pattern.has_value()) {
+          return foundation::Result<domain::ProjectState>::failure(
+              pattern.error());
+        }
+        state.patterns.emplace(pattern.value().id, pattern.value());
+      }
     }
     return foundation::Result<domain::ProjectState>::success(std::move(state));
   } catch (const std::exception& exception) {
@@ -922,6 +1086,35 @@ nlohmann::json command_json(const PersistedCommand& command) {
               {"meta", meta_json(value.meta)},
               {"pattern", pattern_json(value.pattern)},
               {"type", "CreatePattern"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::MergePatternEvents>) {
+          auto events = nlohmann::json::array();
+          for (const auto& event : value.events) {
+            events.push_back(pattern_event_json(event));
+          }
+          return {
+              {"events", std::move(events)},
+              {"meta", meta_json(value.meta)},
+              {"pattern_id", value.pattern_id.value()},
+              {"type", "MergePatternEvents"},
+          };
+        } else if constexpr (
+            std::is_same_v<Type, domain::UpdateSequenceSettings>) {
+          return {
+              {"bpm",
+               value.bpm.has_value() ? nlohmann::json(*value.bpm)
+                                     : nlohmann::json(nullptr)},
+              {"meta", meta_json(value.meta)},
+              {"quantize_enabled",
+               value.quantize_enabled.has_value()
+                   ? nlohmann::json(*value.quantize_enabled)
+                   : nlohmann::json(nullptr)},
+              {"swing_percent",
+               value.swing_percent.has_value()
+                   ? nlohmann::json(*value.swing_percent)
+                   : nlohmann::json(nullptr)},
+              {"type", "UpdateSequenceSettings"},
           };
         } else if constexpr (
             std::is_same_v<Type, domain::ImportAssignSample>) {
@@ -1064,6 +1257,85 @@ foundation::Result<PersistedCommand> parse_command(
               std::move(pattern.value()),
           }});
     }
+    if (type == "MergePatternEvents") {
+      if (!exact_object_keys(
+              input, {"events", "meta", "pattern_id", "type"}) ||
+          !input.at("events").is_array() ||
+          !input.at("pattern_id").is_string()) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "MergePatternEvents transaction shape is invalid", path));
+      }
+      const auto pattern_id =
+          input.at("pattern_id").get<std::string>();
+      if (!domain::is_valid_uuid(pattern_id)) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "MergePatternEvents pattern id is invalid", path));
+      }
+      auto encoded_pattern = nlohmann::json{
+          {"bars", 8},
+          {"events", input.at("events")},
+          {"id", pattern_id},
+      };
+      auto parsed = parse_pattern(encoded_pattern, path);
+      if (!parsed.has_value()) {
+        return foundation::Result<PersistedCommand>::failure(parsed.error());
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::MergePatternEvents{
+              std::move(meta.value()),
+              foundation::PatternId{pattern_id},
+              std::move(parsed.value().events),
+          }});
+    }
+    if (type == "UpdateSequenceSettings") {
+      if (!exact_object_keys(
+              input,
+              {"bpm",
+               "meta",
+               "quantize_enabled",
+               "swing_percent",
+               "type"}) ||
+          !(input.at("bpm").is_null() ||
+            nonnegative_integer(input.at("bpm"))) ||
+          !(input.at("quantize_enabled").is_null() ||
+            input.at("quantize_enabled").is_boolean()) ||
+          !(input.at("swing_percent").is_null() ||
+            nonnegative_integer(input.at("swing_percent")))) {
+        return foundation::Result<PersistedCommand>::failure(
+            invalid_project(
+                "UpdateSequenceSettings transaction shape is invalid", path));
+      }
+      std::optional<std::uint16_t> bpm;
+      std::optional<bool> quantize_enabled;
+      std::optional<std::uint8_t> swing_percent;
+      if (!input.at("bpm").is_null()) {
+        const auto value = unsigned_integer_value(input.at("bpm"));
+        if (!value.has_value() ||
+            *value > std::numeric_limits<std::uint16_t>::max()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project("UpdateSequenceSettings BPM is invalid", path));
+        }
+        bpm = static_cast<std::uint16_t>(*value);
+      }
+      if (!input.at("quantize_enabled").is_null()) {
+        quantize_enabled = input.at("quantize_enabled").get<bool>();
+      }
+      if (!input.at("swing_percent").is_null()) {
+        const auto value = unsigned_integer_value(input.at("swing_percent"));
+        if (!value.has_value() ||
+            *value > std::numeric_limits<std::uint8_t>::max()) {
+          return foundation::Result<PersistedCommand>::failure(
+              invalid_project(
+                  "UpdateSequenceSettings Swing is invalid", path));
+        }
+        swing_percent = static_cast<std::uint8_t>(*value);
+      }
+      return foundation::Result<PersistedCommand>::success(
+          PersistedCommand{domain::UpdateSequenceSettings{
+              std::move(meta.value()), bpm, quantize_enabled, swing_percent}});
+    }
     if (type == "ImportAssignSample") {
       if (!exact_object_keys(input, {"asset", "meta", "slot", "type"}) ||
           !exact_object_keys(input.at("asset"), {"artifact", "id"})) {
@@ -1156,7 +1428,22 @@ foundation::Result<domain::AppliedCommand> apply_command(
 
 PersistedCommand persisted_command(const domain::Command& command) {
   return std::visit(
-      [](const auto& value) -> PersistedCommand { return value; }, command);
+      [](const auto& value) -> PersistedCommand {
+        auto normalized = value;
+        using Type = std::decay_t<decltype(value)>;
+        if constexpr (
+            std::is_same_v<Type, domain::CreatePattern> ||
+            std::is_same_v<Type, domain::RecordTake>) {
+          normalized.pattern.events = domain::merge_pattern_events(
+              {}, normalized.pattern.events);
+        } else if constexpr (
+            std::is_same_v<Type, domain::MergePatternEvents>) {
+          normalized.events = domain::merge_pattern_events(
+              {}, normalized.events);
+        }
+        return PersistedCommand{std::move(normalized)};
+      },
+      command);
 }
 
 foundation::Result<domain::Command> legacy_command(
@@ -1256,9 +1543,8 @@ foundation::Result<LoadedProject> load_project(
     if (!checkpoint.has_value()) {
       return foundation::Result<LoadedProject>::failure(checkpoint.error());
     }
-    const bool replay_as_v1 =
-        initial.value().contract == domain::ProjectContract::v1 &&
-        checkpoint.value().contract == domain::ProjectContract::v1;
+    const bool checkpoint_is_v3 =
+        checkpoint_json.value().at("contract") == "lmdj.project.v3";
 
     LoadedProject loaded{
         std::move(initial.value()),
@@ -1291,9 +1577,6 @@ foundation::Result<LoadedProject> load_project(
             invalid_project(
                 "project transaction could not be replayed",
                 bundle / relative));
-      }
-      if (replay_as_v1) {
-        applied.value().state.contract = domain::ProjectContract::v1;
       }
       const auto revision =
           transaction.value().at("revision").get<std::uint64_t>();
@@ -1338,9 +1621,10 @@ foundation::Result<LoadedProject> load_project(
               manifest_path));
     }
 
-    if (checkpoint.value() != loaded.state ||
-        foundation::canonical_json(checkpoint_json.value()) !=
-            foundation::canonical_json(project_json(loaded.state))) {
+    if (checkpoint.value() != persisted_v3_projection(loaded.state) ||
+        (checkpoint_is_v3 &&
+         foundation::canonical_json(checkpoint_json.value()) !=
+             foundation::canonical_json(project_json(loaded.state)))) {
       return foundation::Result<LoadedProject>::failure(
           invalid_project(
               "project checkpoint does not match transaction replay",
@@ -2063,7 +2347,8 @@ foundation::Result<domain::AppliedCommand> commit_loaded(
   const auto validated_state =
       parse_project(encoded_state, bundle / "manifest.json");
   if (!validated_state.has_value() ||
-      validated_state.value() != applied.value().state) {
+      validated_state.value() !=
+          persisted_v3_projection(applied.value().state)) {
     return foundation::Result<domain::AppliedCommand>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -2339,9 +2624,10 @@ foundation::Result<void> ProjectStore::create(
             "project bundle must end in .lmdj and start at revision zero",
         });
   }
-  const auto encoded = project_json(initial);
+  const auto persisted_initial = persisted_v3_projection(initial);
+  const auto encoded = project_json(persisted_initial);
   const auto validated = parse_project(encoded, bundle);
-  if (!validated.has_value() || validated.value() != initial) {
+  if (!validated.has_value() || validated.value() != persisted_initial) {
     return foundation::Result<void>::failure(
         Error{
             ErrorCode::invalid_argument,
@@ -2404,7 +2690,7 @@ foundation::Result<void> ProjectStore::create(
     auto existing_state =
         parse_project(existing_json.value(), checkpoint_final);
     if (!existing_state.has_value() ||
-        existing_state.value() != initial ||
+        existing_state.value() != persisted_initial ||
         existing_bytes.value() != checkpoint_bytes) {
       return foundation::Result<void>::failure(
           invalid_project(
