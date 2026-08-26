@@ -55,6 +55,8 @@ interface CreatorInputControllerCommonOptions {
   now?: () => number;
   windowTarget?: Window;
   documentTarget?: Document;
+  getArmedCaptureSlot?: () => number | null;
+  onArmedCaptureStop?: (slot: number, source: RuntimeTriggerSource) => void;
 }
 
 interface CreatorLegacyInputControllerOptions
@@ -121,13 +123,16 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
     now = () => performance.now(),
     windowTarget = window,
     documentTarget = document,
+    getArmedCaptureSlot = () => null,
+    onArmedCaptureStop,
   } = options;
   const sampleOptions = typeof options.onFilePickIntent === "function"
     ? options as CreatorSampleInputControllerOptions
     : null;
-  const adapterAvailable = sampleOptions === null
-    ? (options as CreatorLegacyInputControllerOptions).isAssigned
-    : () => true;
+  const adapterAvailable = (slot: number) => getArmedCaptureSlot() === slot ||
+    (sampleOptions === null
+      ? (options as CreatorLegacyInputControllerOptions).isAssigned(slot)
+      : true);
   const activeGestures = new Set<string>();
   const gestureModes = new Map<string, SampleTriggerMode>();
   const sampleGestureTokens = new Map<string, SampleGestureToken[]>();
@@ -509,6 +514,10 @@ export function createCreatorInputController(options: CreatorInputControllerOpti
   }
 
   function trigger(slot: number, velocity: number, source: RuntimeTriggerSource) {
+    if (getArmedCaptureSlot() === slot && onArmedCaptureStop !== undefined) {
+      onArmedCaptureStop(slot, source);
+      return;
+    }
     const currentGesture = gesture(source, slot);
     if (sampleOptions === null) {
       activeGestures.add(currentGesture);

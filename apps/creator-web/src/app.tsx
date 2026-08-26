@@ -1,4 +1,4 @@
-import {useEffect, useReducer, useRef, useState} from "react";
+import {useCallback, useEffect, useReducer, useRef, useState} from "react";
 
 import {BankSelector} from "./components/bank_selector";
 import {ErrorPanel} from "./components/error_panel";
@@ -6,6 +6,7 @@ import {ModeRail, type CreatorMode} from "./components/mode_rail";
 import {PadSurface} from "./components/pad_surface";
 import {ProjectSurface} from "./components/project_surface";
 import {SampleSurface} from "./components/sample_surface";
+import {SequenceSurface} from "./components/sequence_surface";
 import {StatusBar} from "./components/status_bar";
 import {
   createAcceptanceReport,
@@ -20,6 +21,12 @@ import {
 } from "./runtime/project_actions";
 import {createCreatorInputController} from "./runtime/input_controller";
 import {retryPrepareJourney} from "./runtime/sample_actions";
+import {
+  beginSequenceJourney,
+  isSequenceSession,
+  refreshSequenceJourney,
+  stopSequenceJourney,
+} from "./runtime/sequence_actions";
 import {
   activateCreatorAudio,
   RuntimeProvider,
@@ -41,6 +48,8 @@ import {
   selectCreatorPhase,
   type CreatorState,
 } from "./state/creator_state";
+import {initialSequenceState, reduceSequence} from "./state/sequence_state";
+import type {CapturePhase} from "./state/capture_state";
 
 interface AppProps {
   initialState?: CreatorState;
@@ -137,20 +146,57 @@ function Workspace({
   onRetryRuntime,
 }: WorkspaceProps) {
   const [state, dispatch] = useReducer(creatorReducer, initialState);
+  const [sequence, dispatchSequence] = useReducer(reduceSequence, initialSequenceState);
   const [listAttempt, setListAttempt] = useState(0);
   const [busyRetry, setBusyRetry] = useState<BusyRetry | null>(null);
   const [showLocalProjects, setShowLocalProjects] = useState(false);
   const [activeMode, setActiveMode] = useState<CreatorMode>("project");
   const [inputControllerEpoch, setInputControllerEpoch] = useState(0);
   const [inputControllerRevision, setInputControllerRevision] = useState(0);
+  const [armedCaptureSlot, setArmedCaptureSlot] = useState<number | null>(null);
+  const [captureStopRequest, setCaptureStopRequest] = useState(0);
   const importController = useRef<AbortController | null>(null);
   const projectActions = useRef(createProjectActionLane()).current;
+  const sequenceAuthoringTail = useRef<Promise<void>>(Promise.resolve());
+  const sequenceAuthoringRevision = useRef(0);
+  const sequenceAuthoringProjectId = useRef<string | null>(null);
   const sampleRetryAction = useRef<SampleRetryToken | null>(null);
   const inputController = useRef<ReturnType<typeof createCreatorInputController> | null>(null);
   const inputAdverseState = useRef<string | null>(null);
   const sampleFilePickIntent = useRef<(slot: number) => void>(() => {});
+  const armedCaptureStopIntent = useRef<() => void>(() => {});
   const stateRef = useRef(state);
+  const sequenceRef = useRef(sequence);
+  const armedCaptureSlotRef = useRef(armedCaptureSlot);
   stateRef.current = state;
+  sequenceRef.current = sequence;
+  armedCaptureSlotRef.current = armedCaptureSlot;
+  if (sequenceAuthoringProjectId.current !== (state.project.current?.projectId ?? null)) {
+    sequenceAuthoringProjectId.current = state.project.current?.projectId ?? null;
+    sequenceAuthoringRevision.current = state.project.current?.revision ?? 0;
+  } else {
+    sequenceAuthoringRevision.current = Math.max(
+      sequenceAuthoringRevision.current,
+      state.project.current?.revision ?? 0,
+      sequence.status?.expectedRevision ?? 0,
+    );
+  }
+
+  useEffect(() => {
+    const project = state.project.current;
+    if (project === null || sequence.selectedPatternId !== null) return;
+    dispatchSequence({type: "selected", patternId: project.patternId});
+  }, [state.project.current, sequence.selectedPatternId]);
+
+  useEffect(() => {
+    if (!isSequenceSession(session)) return;
+    const unsubscribe = session.subscribeSequenceBarBoundary((boundary) => {
+      void session.querySequenceStatus().then((status) => {
+        dispatchSequence({type: "boundary", status, patternId: boundary.patternId});
+      }, sequenceFailure);
+    });
+    return () => { unsubscribe(); };
+  }, [session]);
 
   const resetInputForAdverseLifecycle = () => {
     const current = inputController.current;
@@ -187,6 +233,8 @@ function Workspace({
           stateRef.current.sample.inspect?.assetId !== null &&
           stateRef.current.sample.inspect?.assetId !== undefined),
       dispatch,
+      getArmedCaptureSlot: () => armedCaptureSlotRef.current,
+      onArmedCaptureStop: () => armedCaptureStopIntent.current(),
     };
     const controller = isSampleSession(session)
       ? createCreatorInputController({
@@ -552,6 +600,17 @@ function Workspace({
           : [],
         triggerModeCoverage: [],
       },
+      sequenceEvidence: {
+        semanticState: sequence.phase,
+        sessionId: sequence.sessionId,
+        lastCommandId: sequence.lastCommandId,
+        projectRevision: state.project.current?.revision ?? null,
+        expectedRevision: sequence.status?.expectedRevision ?? null,
+        nextFlushSequence: sequence.status?.nextFlushSequence ?? 0,
+        pendingEventCount: sequence.status?.pendingEventCount ?? 0,
+        effectiveRuntimeFrame: sequence.status?.effectiveRuntimeFrame ?? null,
+        recoveryCandidateCount: sequence.recovery.length,
+      },
     });
     const url = URL.createObjectURL(new Blob(
       [serializeAcceptanceReport(report)],
@@ -562,6 +621,151 @@ function Workspace({
     anchor.download = `lmdj-creator-web-${diagnostics.product_build}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
+  };
+
+  const sequenceFailure = (error: unknown) => {
+    dispatchSequence({type: "failed", errorCode: errorCode(error)});
+  };
+
+  const refreshSequence = async () => {
+    const project = stateRef.current.project.current;
+    if (!isSequenceSession(session) || project === null) return;
+    try {
+      const authority = await refreshSequenceJourney(session, project.projectId);
+      dispatchSequence({type: "authority", status: authority.status});
+      dispatchSequence({type: "recovery", candidates: authority.recovery});
+    } catch (error) {
+      sequenceFailure(error);
+    }
+  };
+
+  const recordSequence = async () => {
+    const project = stateRef.current.project.current;
+    if (!isSequenceSession(session) || project === null ||
+        stateRef.current.audio.phase !== "running") return;
+    const sessionId = crypto.randomUUID();
+    try {
+      const status = await beginSequenceJourney(session, {
+        sessionId,
+        patternId: sequence.selectedPatternId ?? project.patternId,
+        expectedRevision: project.revision,
+      });
+      dispatchSequence({type: "recording", status, sessionId});
+    } catch (error) {
+      sequenceFailure(error);
+    }
+  };
+
+  const stopSequence = async (): Promise<boolean> => {
+    const currentSequence = sequenceRef.current;
+    if (!isSequenceSession(session) || currentSequence.sessionId === null) return false;
+    const commandId = crypto.randomUUID();
+    dispatchSequence({type: "flushing", commandId});
+    try {
+      const status = await stopSequenceJourney(
+        session, currentSequence.sessionId, commandId,
+      );
+      dispatchSequence({type: "stopped", status, commandId});
+      const project = stateRef.current.project.current;
+      if (project !== null && status.committedRevision !== null) {
+        dispatch({
+          type: "project-revision-updated",
+          revision: status.committedRevision,
+        });
+      }
+      return true;
+    } catch (error) {
+      sequenceFailure(error);
+      await refreshSequence();
+      return false;
+    }
+  };
+
+  const stopArmedCapture = async () => {
+    const current = sequenceRef.current;
+    if (["recording", "switch-pending", "flushing"].includes(current.phase)) {
+      if (current.phase === "flushing" || !(await stopSequence())) return;
+    }
+    setCaptureStopRequest((request) => request + 1);
+  };
+  armedCaptureStopIntent.current = () => { void stopArmedCapture(); };
+
+  const updateSequenceSettings = (changes: Readonly<{
+    bpm?: number;
+    quantizeEnabled?: boolean;
+    swingPercent?: number;
+  }>): Promise<void> => {
+    const operation = sequenceAuthoringTail.current.then(async () => {
+      const project = stateRef.current.project.current;
+      const currentSequence = sequenceRef.current;
+      if (!isSequenceSession(session) || project === null) return;
+      const result = await session.updateSequenceSettings({
+        expectedRevision: sequenceAuthoringRevision.current,
+        sessionId: currentSequence.sessionId,
+        bpm: changes.bpm ?? null,
+        quantizeEnabled: changes.quantizeEnabled ?? null,
+        swingPercent: changes.swingPercent ?? null,
+      });
+      sequenceAuthoringRevision.current = result.committedRevision;
+      dispatch({
+        type: "project-sequence-settings-updated",
+        revision: result.committedRevision,
+        bpm: result.bpm,
+        quantizeEnabled: result.quantizeEnabled,
+        swingPercent: result.swingPercent,
+      });
+      await refreshSequence();
+    }).catch(sequenceFailure);
+    sequenceAuthoringTail.current = operation;
+    return operation;
+  };
+
+  const createPattern = (bars: 1 | 2 | 4 | 8): Promise<void> => {
+    const operation = sequenceAuthoringTail.current.then(async () => {
+      const project = stateRef.current.project.current;
+      if (!isSequenceSession(session) || project === null ||
+          sequenceRef.current.phase !== "stopped") return;
+      const patternId = crypto.randomUUID();
+      const result = await session.createPattern({
+        patternId,
+        bars,
+        expectedRevision: sequenceAuthoringRevision.current,
+      });
+      sequenceAuthoringRevision.current = result.committedRevision;
+      dispatch({
+        type: "project-pattern-created",
+        revision: result.committedRevision,
+        pattern: {patternId: result.patternId, bars: result.bars},
+      });
+      dispatchSequence({type: "selected", patternId: result.patternId});
+    }).catch(sequenceFailure);
+    sequenceAuthoringTail.current = operation;
+    return operation;
+  };
+
+  const capturePhaseChanged = useCallback((phase: CapturePhase) => {
+    if (phase === "trimming" || phase === "commit-error" || phase === "committing") {
+      dispatchSequence({type: "trim-overlay"});
+    } else if (phase === "idle" || phase === "permission-error") {
+      dispatchSequence({type: "trim-closed"});
+    }
+  }, []);
+
+  const selectSequencePattern = async (patternId: string) => {
+    if (!isSequenceSession(session)) return;
+    if (sequence.phase === "recording" && sequence.sessionId !== null) {
+      try {
+        const status = await session.requestPatternSwitch({
+          sessionId: sequence.sessionId,
+          nextPatternId: patternId,
+        });
+        dispatchSequence({type: "switch-pending", status});
+      } catch (error) {
+        sequenceFailure(error);
+      }
+      return;
+    }
+    dispatchSequence({type: "selected", patternId});
   };
 
   const canOpenProject = session !== undefined &&
@@ -594,8 +798,19 @@ function Workspace({
       />
       <ModeRail
         activeMode={activeMode}
+        sequenceEnabled={isSequenceSession(session) &&
+          state.project.phase === "ready" && state.project.current !== null}
         onSelect={(mode) => {
           inputController.current?.clearPressed();
+          if (mode === "sample" && ["recording", "switch-pending", "flushing"]
+            .includes(sequenceRef.current.phase)) {
+            if (sequenceRef.current.phase !== "flushing") {
+              void stopSequence().then((stopped) => {
+                if (stopped) setActiveMode("sample");
+              });
+            }
+            return;
+          }
           setActiveMode(mode);
         }}
       />
@@ -624,15 +839,8 @@ function Workspace({
             />
           </section>
         </>
-      ) : (
+      ) : activeMode === "sample" ? (
         <>
-          <SampleSurface
-            state={state}
-            dispatch={dispatch}
-            filePickIntent={sampleFilePickIntent}
-            {...(isSampleSession(session) ? {session} : {})}
-            {...(inputController.current ? {controller: inputController.current} : {})}
-          />
           {state.sample.lastError?.code === "UNSUPPORTED_AUDIO" ? (
             <p className="sample-error" role="status">
               Accepted format: PCM16 WAV, mono or stereo, 44.1 or 48 kHz
@@ -657,7 +865,68 @@ function Workspace({
             </section>
           ) : null}
         </>
-      )}
+      ) : state.project.current !== null ? (
+        <>
+          <SequenceSurface
+            project={state.project.current}
+            state={sequence}
+            ready={isSequenceSession(session) && state.audio.phase === "running"}
+            onRecord={() => { void recordSequence(); }}
+            onStop={() => { void stopSequence(); }}
+            onRefresh={() => { void refreshSequence(); }}
+            onSwitch={(patternId) => { void selectSequencePattern(patternId); }}
+            onCreatePattern={(bars) => { void createPattern(bars); }}
+            onSettingsChange={(changes) => { void updateSequenceSettings(changes); }}
+            onRecover={(candidate, destinationPatternId) => {
+              if (!isSequenceSession(session)) return;
+              void session.applySequenceRecovery({
+                sessionId: candidate.sessionId,
+                destinationPatternId,
+              }).then((status) => {
+                if (status.committedRevision !== null) {
+                  dispatch({type: "project-revision-updated", revision: status.committedRevision});
+                }
+                return refreshSequence();
+              }, sequenceFailure);
+            }}
+            onDiscard={(candidate) => {
+              if (!isSequenceSession(session)) return;
+              void session.discardSequenceRecovery(candidate.sessionId)
+                .then(() => refreshSequence(), sequenceFailure);
+            }}
+          />
+          <section className="pads" aria-label="Sequence instrument">
+            <BankSelector activeBank={state.activeBank} onSelect={(bank) => {
+              inputController.current?.clearPressed();
+              dispatch({type: "bank-selected", bank});
+            }} />
+            <PadSurface state={state} armedCaptureSlot={armedCaptureSlot}
+              {...(inputController.current ? {controller: inputController.current} : {})} />
+          </section>
+        </>
+      ) : null}
+      {activeMode === "sample" || armedCaptureSlot !== null ||
+      sequence.phase === "trim-overlay" ? (
+        <div className={sequence.phase === "trim-overlay" ? "sample-overlay-host" : ""}
+          hidden={activeMode !== "sample" && sequence.phase !== "trim-overlay"}>
+          <SampleSurface
+            state={state}
+            dispatch={dispatch}
+            filePickIntent={sampleFilePickIntent}
+            captureStopRequest={captureStopRequest}
+            closeCaptureAfterResolution={activeMode !== "sample"}
+            onCaptureSlotChange={setArmedCaptureSlot}
+            onCapturePhaseChange={capturePhaseChanged}
+            onContinueCaptureInSequence={() => {
+              if (isSequenceSession(session) && state.project.current !== null) {
+                setActiveMode("sequence");
+              }
+            }}
+            {...(isSampleSession(session) ? {session} : {})}
+            {...(inputController.current ? {controller: inputController.current} : {})}
+          />
+        </div>
+      ) : null}
       <ErrorPanel
         code={state.runtime.errorCode}
         details={state.runtime.errorDetails}

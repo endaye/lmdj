@@ -94,6 +94,19 @@ interface AcceptanceReportInput {
   bankCount: number;
   padCount: number;
   sampleEvidence?: CreatorAcceptanceSampleEvidence;
+  sequenceEvidence?: CreatorAcceptanceSequenceEvidence;
+}
+
+interface CreatorAcceptanceSequenceEvidence {
+  semanticState: string;
+  sessionId: string | null;
+  lastCommandId: string | null;
+  projectRevision: number | null;
+  expectedRevision: number | null;
+  nextFlushSequence: number;
+  pendingEventCount: number;
+  effectiveRuntimeFrame: number | null;
+  recoveryCandidateCount: number;
 }
 
 interface CreatorAcceptanceSampleEvidence {
@@ -139,6 +152,7 @@ export function createAcceptanceReport({
   bankCount,
   padCount,
   sampleEvidence,
+  sequenceEvidence,
 }: AcceptanceReportInput) {
   if (!HOST_STATES.has(diagnostics.state)) {
     throw new TypeError("Host state is invalid");
@@ -152,6 +166,25 @@ export function createAcceptanceReport({
   const sample = sampleEvidence === undefined
     ? undefined
     : normalizeSampleEvidence(sampleEvidence);
+  const sequence = sequenceEvidence === undefined
+    ? undefined
+    : Object.freeze({
+        semantic_state: requireSequenceState(sequenceEvidence.semanticState),
+        session_id: sequenceEvidence.sessionId,
+        last_command_id: sequenceEvidence.lastCommandId,
+        project_revision: requireRevision(sequenceEvidence.projectRevision, "Project revision"),
+        expected_revision: requireRevision(sequenceEvidence.expectedRevision, "Expected revision"),
+        next_flush_sequence: requireCount(sequenceEvidence.nextFlushSequence, "Flush sequence"),
+        pending_event_count: requireCount(sequenceEvidence.pendingEventCount, "Pending event count"),
+        effective_runtime_frame: requireRevision(
+          sequenceEvidence.effectiveRuntimeFrame,
+          "Effective Runtime frame",
+        ),
+        recovery_candidate_count: requireCount(
+          sequenceEvidence.recoveryCandidateCount,
+          "Recovery candidate count",
+        ),
+      });
   return Object.freeze({
     contract: "lmdj.creator-web.acceptance.v1" as const,
     product_build: requireIdentity(identity.productBuild, "Product Build"),
@@ -199,6 +232,7 @@ export function createAcceptanceReport({
     ),
     error_code: diagnostics.error_code,
     ...(sample === undefined ? {} : {sample}),
+    ...(sequence === undefined ? {} : {sequence}),
     physical: Object.freeze({
       macos_safari_pointer: "deferred / unverified" as const,
       macos_chrome_pointer: "deferred / unverified" as const,
@@ -207,6 +241,12 @@ export function createAcceptanceReport({
       ipados_safari_lifecycle: "deferred / unverified" as const,
     }),
   });
+}
+
+function requireSequenceState(value: string): string {
+  if (!["stopped", "recording", "switch-pending", "flushing", "recovery", "trim-overlay"]
+    .includes(value)) throw new TypeError("Sequence state is invalid");
+  return value;
 }
 
 function normalizeSampleEvidence(value: CreatorAcceptanceSampleEvidence) {

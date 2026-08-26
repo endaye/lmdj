@@ -11,6 +11,7 @@ import type {createCreatorInputController} from "../runtime/input_controller";
 interface PadSurfaceProps {
   state: CreatorState;
   controller?: ReturnType<typeof createCreatorInputController>;
+  armedCaptureSlot?: number | null;
 }
 
 const KEYBOARD_CODE_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
@@ -26,13 +27,14 @@ const KEYBOARD_KEY_BY_LOCAL_PAD: ReadonlyMap<number, string> = new Map(
   ] as const),
 );
 
-export function PadSurface({state, controller}: PadSurfaceProps) {
+export function PadSurface({state, controller, armedCaptureSlot = null}: PadSurfaceProps) {
   const canTrigger = selectCanTrigger(state);
   return (
     <div className="pad-grid" aria-label="Playable Pads">
       {selectVisiblePads(state).map((pad) => {
         const address = padAddress(pad);
         const assigned = pad.assetId !== null;
+        const capturing = armedCaptureSlot === pad.slot;
         const outcome = state.pressed.get(pad.slot);
         const keyboardKey = KEYBOARD_KEY_BY_LOCAL_PAD.get(pad.slot % 16) ?? "—";
         return (
@@ -40,8 +42,8 @@ export function PadSurface({state, controller}: PadSurfaceProps) {
             type="button"
             className="pad"
             data-outcome={outcome ?? "idle"}
-            disabled={!assigned || !canTrigger}
-            aria-label={`Pad ${address} — ${assigned ? "assigned" : "empty"} — Key ${keyboardKey}`}
+            disabled={(!assigned && !capturing) || !canTrigger}
+            aria-label={`Pad ${address} — ${capturing ? "capturing" : assigned ? "assigned" : "empty"} — Key ${keyboardKey}`}
             key={pad.slot}
             onPointerDown={(event) => controller?.pointerDown(event, pad.slot)}
             onMouseDown={(event) => controller?.pointerDown(event, pad.slot)}
@@ -73,7 +75,7 @@ export function PadSurface({state, controller}: PadSurfaceProps) {
             }}
           >
             <strong>{address}</strong>
-            <span>{assigned ? "Assigned" : "Empty"}</span>
+            <span>{capturing ? "Capturing" : assigned ? "Assigned" : "Empty"}</span>
             <kbd aria-hidden="true">{keyboardKey}</kbd>
           </button>
         );

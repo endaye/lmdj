@@ -248,23 +248,10 @@ for slot in range(64):
         "asset_id": asset_id,
     }, revision + 1)
     revision += 1
-take_id = "00000000-0000-4000-8000-000000000201"
 invoke("command", {
-    "operation": "take.begin", "project_path": str(project),
-    "take_id": take_id, "expected_revision": revision, "sample_rate": 48000,
-}, revision)
-invoke("command", {
-    "operation": "take.append", "project_path": str(project),
-    "take_id": take_id,
-    "event": {"slot": {"bank": 0, "pad": 0}, "frame_offset": 0, "velocity": 100},
-}, revision)
-invoke("command", {
-    "operation": "take.commit", "project_path": str(project),
+    "operation": "pattern.create", "project_path": str(project),
     "command_id": "00000000-0000-4000-8000-000000000066",
-    "expected_revision": revision, "take_id": take_id,
-    "pattern": {"pattern_id": pattern_id, "bars": 1, "events": [{
-        "slot": {"bank": 0, "pad": 0}, "step": 0, "velocity": 100,
-    }]},
+    "expected_revision": revision, "pattern_id": pattern_id, "bars": 1,
 }, revision + 1)
 PY
   python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \
@@ -341,16 +328,10 @@ for slot in range(1, 45):
         "asset_id": asset_id,
     }, revision + 1)
     revision += 1
-take_id = "00000000-0000-4000-8000-000000000401"
 invoke("command", {
-    "operation": "take.begin", "project_path": str(project),
-    "take_id": take_id, "expected_revision": revision, "sample_rate": 48_000,
-}, revision)
-invoke("command", {
-    "operation": "take.commit", "project_path": str(project),
+    "operation": "pattern.create", "project_path": str(project),
     "command_id": "00000000-0000-4000-8000-000000000402",
-    "expected_revision": revision, "take_id": take_id,
-    "pattern": {"pattern_id": pattern_id, "bars": 1, "events": []},
+    "expected_revision": revision, "pattern_id": pattern_id, "bars": 1,
 }, revision + 1)
 PY
   python3 "$repo_root/tools/project-bundle/project_bundle.py" pack \

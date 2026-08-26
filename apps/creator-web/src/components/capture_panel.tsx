@@ -12,6 +12,7 @@ import {
   captureStopReasonMessage,
   initialCaptureState,
   reduceCapture,
+  type CapturePhase,
   type CaptureStopReason,
 } from "../state/capture_state";
 
@@ -43,6 +44,10 @@ export interface CapturePanelProps {
   // owns the restore so there is exactly one restore path.
   returnFocus?: HTMLElement | null;
   makeController?(listener: CaptureListener): CaptureController;
+  stopRequest?: number;
+  onPhaseChange?(phase: CapturePhase): void;
+  onContinueInSequence?(): void;
+  closeAfterResolution?: boolean;
 }
 
 function defaultMakeController(listener: CaptureListener): CaptureController {
@@ -66,6 +71,10 @@ export function CapturePanel({
   onClose,
   returnFocus = null,
   makeController,
+  stopRequest = 0,
+  onPhaseChange,
+  onContinueInSequence,
+  closeAfterResolution = false,
 }: CapturePanelProps) {
   const [state, dispatch] = useReducer(reduceCapture, initialCaptureState);
   const bufferRef = useRef<CaptureBuffer | null>(null);
@@ -100,6 +109,17 @@ export function CapturePanel({
       void controller.stop().catch(() => {});
     }
   }, []);
+
+  useEffect(() => {
+    onPhaseChange?.(state.phase);
+  }, [onPhaseChange, state.phase]);
+
+  const priorStopRequest = useRef(stopRequest);
+  useEffect(() => {
+    if (priorStopRequest.current === stopRequest) return;
+    priorStopRequest.current = stopRequest;
+    if (state.phase === "recording") requestStop("user");
+  }, [requestStop, state.phase, stopRequest]);
 
   // Single-owner lifecycle: whatever controller is active when this component
   // unmounts must be stopped exactly once, even if that happens mid-recording.
@@ -284,6 +304,7 @@ export function CapturePanel({
     bufferRef.current = null;
     setSilenceRefused(false);
     dispatch({kind: "discard"});
+    if (closeAfterResolution) onClose();
   };
 
   const handleCrop = () => {
@@ -311,6 +332,7 @@ export function CapturePanel({
     if (result.kind === "committed") {
       bufferRef.current = null;
       dispatch({kind: "committed"});
+      if (closeAfterResolution) onClose();
     } else {
       dispatch({
         kind: "commit-failed",
@@ -457,7 +479,14 @@ export function CapturePanel({
         );
       case "recording":
         return (
-          <button ref={primaryRef} type="button" onClick={handleStop}>Stop</button>
+          <>
+            <button ref={primaryRef} type="button" onClick={handleStop}>Stop</button>
+            {onContinueInSequence === undefined ? null : (
+              <button type="button" onClick={onContinueInSequence}>
+                Continue in Sequence
+              </button>
+            )}
+          </>
         );
       case "trimming":
       case "commit-error":

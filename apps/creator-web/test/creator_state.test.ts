@@ -26,6 +26,8 @@ const project: ProjectView = {
     slot,
     assetId: slot === 0 || slot === 32 ? `asset-${slot}` : null,
   })),
+  patterns: [{patternId: "22222222-2222-4222-8222-222222222222", bars: 1}],
+  sequenceSettings: {quantizeEnabled: true, swingPercent: 50},
 };
 
 function readyState(): CreatorState {
