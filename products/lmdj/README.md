@@ -11,10 +11,13 @@ path explicitly; Provider selection remains Workspace/Host state and is never
 written into Project Truth.
 
 The Headless Core Proof intentionally treats every revision change during a
-recording as `REVISION_CONFLICT` and seals the Take for recovery. This is a
-Proof-only safety rule. It does not decide which product Commands are
-irrelevant to a Take or whether the user-facing product may selectively
-rebase.
+recording as `REVISION_CONFLICT` and seals the recording for recovery. This
+Proof-only safety rule is superseded as product authority by the approved
+[2026-08-23 Sequence recording decision](../../docs/prd/decisions/2026-08-23-sequence-recording-semantics.md):
+the product classifies concurrency (a closed selective-rebase allowlist,
+Sample-class Commands failing while recording continues, unknown Commands
+failing closed) and records event-only Pattern data with no Take object. The
+Proof rule remains in effect in the implemented Core until Stage 9 ships.
 
 ## Status
 
