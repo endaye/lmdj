@@ -10,6 +10,13 @@
 Project BPM 的关系（Time-stretch）记入
 [open-questions.md](../../prd/open-questions.md)
 
+勘误（2026-08-23 Sequence 录音语义决策，
+[决策文件](../../prd/decisions/2026-08-23-sequence-recording-semantics.md)）：
+§6.2 / §6.5 由该决策取代——Project Truth 不含 Raw Take / Take 对象，录音
+只写 tick-native Pattern 事件；Quantize / Swing 在录入时破坏性写入之后的
+新事件，不保留隐藏原始 timing。§6.4、§8、§10.1、§12.1、§18.1 的 Take 措辞
+一并按该决策更正。
+
 优先级：本设计在冲突处取代旧 Stage 1 Creator、`lmdj.patch.v1`、
 `lmdj.materials.v1` 与 Agent Orchestration 产品假设
 
@@ -192,14 +199,17 @@ Beat 必须由用户亲手演奏。系统保存：
 - Pitch 或 Playback 参数；
 - Overdub 和编辑历史。
 
-### 6.2 Take 与 Pattern
+### 6.2 Pattern 录音（2026-08-23 决策勘误）
 
-- Raw Take 保存用户原始演奏；
+- 录音直接往当前 Pattern 槽写入 tick-native 打击事件（PPQ 960）；没有
+  Raw Take / Take 对象，也没有录音会话的音频 bounce；
 - Pattern 是可循环、可编辑的结构；
 - 首版提供 16 个 Pattern Slot；
 - 录制长度支持 1、2、4、8 Bars；
 - 支持 Overdub、Undo/Redo、Clear、Duplicate；
-- Quantize 和 Swing 非破坏性应用；
+- Quantize 和 Swing 在录入时破坏性写入之后的新事件：Quantize 开则原始
+  时间丢弃、不保留第二份未吸格档案，Swing 只烘焙进之后新写入事件的
+  onset；
 - 首版使用简化 Step Grid，不做完整 Piano Roll。
 
 ### 6.3 Pattern 切换
@@ -225,19 +235,24 @@ Sequence 阶段可以生成候选：
 - 替换当前编辑版本；
 - Discard。
 
-它不得覆盖 Raw Take。
+它不得覆盖用户已录入 Pattern 的演奏事件。
 
-### 6.5 Raw Take 持久化边界
+### 6.5 录音持久化边界（2026-08-23 决策勘误）
 
-用户演奏不可再现，Take 的丢失成本与可重跑的 AI Job 不对称，因此 Take 不走
+用户演奏不可再现，其丢失成本与可重跑的 AI Job 不对称，因此录音不走
 Candidate → Commit 流程：
 
-- `RecordTake` 完成即作为 Command 原子进入 Project Truth；
+- Journal 只服务录音会话；录音在 flush 边界（停录、停 Play、切 Sample、
+  切槽）以幂等 Command 原子写入 Pattern，不创建 Take 对象；
 - 录音进行中，演奏事件必须尽早写入本地 Journal，不允许只存在内存；
-- 录音中断按 §18.1 封存为可恢复 Candidate，下次打开 Project 时提示恢复；
+- 录音中断按 §18.1 封存为恢复件，下次打开 Project 时提示恢复；恢复写回
+  由目标 Pattern 的 canonical fingerprint 门控，新鲜 revision 不单独构成
+  写回理由；
 - Workspace Cache 的清理策略不得清除尚未恢复的中断录音；
-- 录音进行中的并发 Command 与 Expected Revision 的具体交互语义见
-  [open-questions.md](../../prd/open-questions.md)，在实施计划中确定。
+- 录音进行中的并发 Command 按分类处理（选择性 rebase 白名单、Sample 类
+  失败但录音继续、未知 Command fail closed），完整语义见
+  [2026-08-23 决策](../../prd/decisions/2026-08-23-sequence-recording-semantics.md)
+  与其引用的设计文档。
 
 ### 6.6 Pattern 引用语义
 
@@ -284,7 +299,6 @@ Sound → Pad → Pattern → Performance → New Sound
 - 名称；
 - BPM / Key；
 - 64 Pads / 4 Banks；
-- Takes；
 - Patterns；
 - Performances；
 - Save / Load / Duplicate / Export。
@@ -364,7 +378,7 @@ Headless Core 可以在没有 UI 的情况下：
 - 创建、加载和检查 Project；
 - 导入或录入 Artifact；
 - 分配和编辑 Pad；
-- 创建 Take / Pattern / Performance；
+- 创建 Pattern / Performance（含 Sequence 录音会话）；
 - Cook Runtime Snapshot；
 - Offline Render；
 - 调用 Capability；
@@ -449,7 +463,7 @@ Audio Thread
 - AssignPad；
 - TrimAsset；
 - CommitCandidate；
-- RecordTake；
+- Sequence 录音会话的 flush（把本批事件写入 Pattern）；
 - SavePattern；
 - ResamplePerformance。
 
@@ -731,7 +745,7 @@ Attempt 记录：
 - Provider 超时：当前 Attempt 失败，Project 不变；
 - Snapshot 构建失败：继续使用上一有效 Snapshot；
 - Audio Device 丢失：安全挂起 I/O，不修改工程；
-- 录音中断：尽可能封存为可恢复 Candidate；
+- 录音中断：尽可能封存为恢复件，确认写回由指纹门控（§6.5）；
 - Asset 丢失：Pad 标记 Offline，保留引用，不自动换音色；
 - Storage Full：原子写失败并保留旧 Project；
 - Multi-Agent 冲突：Provider 内部解决，对外只产生一个终态结果；
