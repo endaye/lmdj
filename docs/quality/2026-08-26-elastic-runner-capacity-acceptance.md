@@ -96,6 +96,13 @@ provisioning) showed every service with the expected user, workspace, slice,
    controller classifies the running job from the listener journal against
    declared core job names, treating an unclassifiable job as core. Issue
    #327's design section was updated accordingly.
+4. **Workspace-residue-dependent Deploy contract lane**: the first real
+   elastic scale-out (netcup-lmdj-linux-04, taken by this PR's own rerun)
+   exposed that allocated release intents can target pre-squash commits no
+   branch or tag reaches; established runners passed only through leftover
+   `_work` objects. The lane now hydrates intent target objects by SHA before
+   the release suite. Recorded as pitfall
+   `release-intent-target-reachability`.
 
 ## Accepted residual risks
 
