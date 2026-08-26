@@ -78,21 +78,13 @@ jobs:
               print("all intent targets already present")
           EOF
 
-      - name: Verify exact Draft Release
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-          GIT_CONFIG_COUNT: "1"
-          GIT_CONFIG_KEY_0: url.https://x-access-token:${{ github.token }}@github.com/.insteadOf
-          GIT_CONFIG_VALUE_0: https://github.com/
-          RELEASE_TAG: ${{ inputs.tag }}
-          RELEASE_ID: ${{ inputs.release_id }}
-          PLAN_SHA256: ${{ inputs.plan_sha256 }}
-        run: |
-          set -euo pipefail
-          scripts/release.sh verify-draft \
-            "$RELEASE_TAG" "$RELEASE_ID" "$PLAN_SHA256"
-
+      # GitHub exposes Draft Releases only to write-scoped identities, so a
+      # read-only preflight cannot run verify-draft at all (the Actions token
+      # receives 403). Draft verification is owned entirely by the publish
+      # job, which re-runs verify-draft and the audit with contents: write
+      # after the release Environment gate and before the single mutation.
+      # Spec amendment 2026-08-26; pitfall:
+      # .agents/pitfalls/draft-release-read-visibility.md
       - name: Audit exact tag before publication job
         shell: bash
         env:

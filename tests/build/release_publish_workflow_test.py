@@ -113,7 +113,10 @@ class ReleasePublishWorkflowTest(unittest.TestCase):
             self.direct_mapping(self.mapping_block(publish, "permissions", 4), 6),
             {"contents": "write", "actions": "read", "deployments": "read"},
         )
-        self.assertIn("scripts/release.sh verify-draft", preflight)
+        # GitHub hides Draft Releases from read-scoped identities, so a
+        # read-only preflight can never run verify-draft; the publish job
+        # owns draft verification (spec amendment 2026-08-26).
+        self.assertNotIn("scripts/release.sh verify-draft", preflight)
         self.assertIn("scripts/release.sh audit --remote --tag", preflight)
         verify_index = publish.index("scripts/release.sh verify-draft")
         audit_index = publish.index("scripts/release.sh audit --remote --tag")
