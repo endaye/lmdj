@@ -20,6 +20,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "project.import.abort",
   "asset.import",
   "pad.assign",
+  "pattern.create",
   "snapshot.reload",
   "snapshot.retry",
   "sample.inspect",
@@ -42,6 +43,7 @@ export const HOST_OPERATIONS = Object.freeze([
   "sequence.record.stop",
   "sequence.record.switch-request",
   "sequence.record.status",
+  "sequence.settings.update",
   "sequence.recovery.list",
   "sequence.recovery.apply",
   "sequence.recovery.discard",
@@ -261,6 +263,19 @@ function requireSampleOperationPayload(operation, payload) {
         isUnsignedInteger(payload.expected_revision) &&
         validSlot(payload.slot);
       break;
+    case "pattern.create":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "pattern_id",
+          "bars",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        UUID_PATTERN.test(payload.pattern_id) &&
+        [1, 2, 4, 8].includes(payload.bars);
+      break;
     case "sample.preview.set":
       valid =
         hasExactKeys(payload, ["slot", "playback"]) &&
@@ -325,6 +340,29 @@ function requireSampleOperationPayload(operation, payload) {
         hasExactKeys(payload, ["session_id", "next_pattern_id"]) &&
         UUID_PATTERN.test(payload.session_id) &&
         UUID_PATTERN.test(payload.next_pattern_id);
+      break;
+    case "sequence.settings.update":
+      valid =
+        hasExactKeys(payload, [
+          "command_id",
+          "expected_revision",
+          "session_id",
+          "bpm",
+          "quantize_enabled",
+          "swing_percent",
+        ]) &&
+        UUID_PATTERN.test(payload.command_id) &&
+        isUnsignedInteger(payload.expected_revision) &&
+        (payload.session_id === null || UUID_PATTERN.test(payload.session_id)) &&
+        (payload.bpm === null ||
+          (isUnsignedInteger(payload.bpm, 240) && payload.bpm >= 40)) &&
+        (payload.quantize_enabled === null ||
+          typeof payload.quantize_enabled === "boolean") &&
+        (payload.swing_percent === null ||
+          (isUnsignedInteger(payload.swing_percent, 75) &&
+            payload.swing_percent >= 50)) &&
+        (payload.bpm !== null || payload.quantize_enabled !== null ||
+          payload.swing_percent !== null);
       break;
     case "sequence.record.status":
     case "sequence.recovery.list":

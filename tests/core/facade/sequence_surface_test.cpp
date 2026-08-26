@@ -230,6 +230,58 @@ void test_writer_lease_blocks_competing_sequence_owner() {
       rejected.error().details.at("storage_condition") == "project_busy");
 }
 
+void test_settings_rebase_and_pattern_creation_are_authoritative() {
+  TempDirectory temp;
+  const auto project = temp.path() / "authoring.lmdj";
+  const PatternId pattern_id{uuid(50)};
+  const SequenceSessionId session_id{uuid(51)};
+  Application application(config(temp.path()));
+  create_recordable_project(application, project, pattern_id);
+  LMDJ_CHECK(application.begin_sequence(
+      {project, session_id, pattern_id, 2, 0}).has_value());
+
+  const auto updated = application.command({
+      {"operation", "sequence.settings.update"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(52)},
+      {"expected_revision", 2},
+      {"session_id", session_id.value()},
+      {"runtime_frame", 6'000},
+      {"bpm", 140},
+      {"quantize_enabled", false},
+      {"swing_percent", 60},
+  });
+  LMDJ_CHECK(updated.value("ok", false));
+  LMDJ_CHECK(updated.at("project_revision") == 3);
+  LMDJ_CHECK(updated.at("result").at("bpm") == 140);
+  LMDJ_CHECK(!updated.at("result").at("quantize_enabled").get<bool>());
+  LMDJ_CHECK(application.query_sequence_status({project})
+                 .value().expected_revision == 3);
+
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 100, 6'001, 1, true}})
+                 .has_value());
+  LMDJ_CHECK(application.record_sequence_event(
+      {project, session_id, {PadSlotId{0, 0}, 0, 12'000, 2, false}})
+                 .has_value());
+  const auto stopped = application.stop_sequence(
+      {project, session_id, CommandId{uuid(53)}, 12'001});
+  LMDJ_CHECK(stopped.has_value());
+  LMDJ_CHECK(stopped.value().committed_revision == 4);
+
+  const auto created = application.command({
+      {"operation", "pattern.create"},
+      {"project_path", project.generic_string()},
+      {"command_id", uuid(54)},
+      {"expected_revision", 4},
+      {"pattern_id", uuid(55)},
+      {"bars", 4},
+  });
+  LMDJ_CHECK(created.value("ok", false));
+  LMDJ_CHECK(created.at("project_revision") == 5);
+  LMDJ_CHECK(created.at("result").at("bars") == 4);
+}
+
 }  // namespace
 
 int main() {
@@ -237,6 +289,7 @@ int main() {
     test_sequence_lifecycle_idempotence_and_mutation_exclusion();
     test_owner_loss_apply_and_discard_are_explicit();
     test_writer_lease_blocks_competing_sequence_owner();
+    test_settings_rebase_and_pattern_creation_are_authoritative();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

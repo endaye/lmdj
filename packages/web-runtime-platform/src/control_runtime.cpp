@@ -1712,6 +1712,31 @@ Json ControlRuntime::dispatch(
       }
       return impl_->open_result(selected_pattern, snapshot);
     }
+    if (operation == "pattern.create") {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "pattern_id", "bars"}));
+      require(sidecar.empty());
+      if (!impl_->session_available() || impl_->active_sequence.has_value()) {
+        return state_error();
+      }
+      auto response = impl_->application.command({
+          {"operation", "pattern.create"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"pattern_id", uuid_field(payload, "pattern_id")},
+          {"bars", unsigned_field(payload, "bars", 8)},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      return success(std::move(result));
+    }
     if (operation == "project.inspect") {
       require(exact_keys(payload, {}));
       require(sidecar.empty());
@@ -2400,6 +2425,63 @@ Json ControlRuntime::dispatch(
           {"tick_numerator", 0},
           {"bpm", *impl_->project_bpm},
       };
+      return success(std::move(result));
+    }
+    if (operation == "sequence.settings.update") {
+      require(exact_keys(
+          payload,
+          {"command_id", "expected_revision", "session_id", "bpm",
+           "quantize_enabled", "swing_percent"}));
+      require(sidecar.empty());
+      if (!impl_->session_available()) {
+        return state_error();
+      }
+      const auto session_id = payload.at("session_id").is_null()
+          ? std::optional<std::string>{}
+          : std::optional<std::string>{uuid_field(payload, "session_id")};
+      if ((impl_->active_sequence.has_value() &&
+           (!session_id.has_value() ||
+            impl_->active_sequence->id.value() != *session_id)) ||
+          (!impl_->active_sequence.has_value() && session_id.has_value())) {
+        return state_error();
+      }
+      const auto runtime_frame = impl_->engine.telemetry().rendered_frames;
+      auto response = impl_->application.command({
+          {"operation", "sequence.settings.update"},
+          {"project_path", impl_->retained_project_path->generic_string()},
+          {"command_id", uuid_field(payload, "command_id")},
+          {"expected_revision", unsigned_field(payload, "expected_revision")},
+          {"session_id", session_id.has_value()
+                             ? nlohmann::json(*session_id)
+                             : nlohmann::json(nullptr)},
+          {"runtime_frame", runtime_frame},
+          {"bpm", payload.at("bpm")},
+          {"quantize_enabled", payload.at("quantize_enabled")},
+          {"swing_percent", payload.at("swing_percent")},
+      });
+      if (!response.value("ok", false)) {
+        return normalized_facade_error(response);
+      }
+      impl_->project_revision =
+          response.at("project_revision").get<std::uint64_t>();
+      impl_->project_bpm =
+          response.at("result").at("bpm").get<std::uint16_t>();
+      nlohmann::json publication = nullptr;
+      if (!payload.at("bpm").is_null()) {
+        auto published = impl_->publish_project_pattern(
+            foundation::PatternId{*impl_->pattern_id});
+        if (!published.has_value()) {
+          fail_and_seal("sequence_settings_publication_failed");
+          return normalized_error(published.error());
+        }
+        publication = {
+            {"generation", published.value().generation},
+            {"activation_frame", published.value().activation_frame},
+        };
+      }
+      auto result = response.at("result");
+      result["project_revision"] = response.at("project_revision");
+      result["pattern_publication"] = std::move(publication);
       return success(std::move(result));
     }
     if (operation == "sequence.record.event") {

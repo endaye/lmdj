@@ -2438,6 +2438,116 @@ function createRuntimeSessionController(options = {}) {
     });
   }
 
+  function createPattern(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, ["patternId", "bars", "expectedRevision"]) ||
+      !UUID_PATTERN.test(request.patternId) ||
+      ![1, 2, 4, 8].includes(request.bars) ||
+      !isUnsignedInteger(request.expectedRevision)
+    ) {
+      return Promise.reject(new TypeError("Pattern create request is invalid"));
+    }
+    return serializeProjectAction(async () => {
+      const value = await boundedRequest("pattern.create", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        pattern_id: request.patternId,
+        bars: request.bars,
+      });
+      if (
+        !exactKeys(value, [
+          "committed_revision",
+          "pattern_id",
+          "bars",
+          "replayed",
+          "project_revision",
+        ]) ||
+        !isUnsignedInteger(value.committed_revision) ||
+        value.pattern_id !== request.patternId ||
+        value.bars !== request.bars ||
+        typeof value.replayed !== "boolean" ||
+        value.project_revision !== value.committed_revision
+      ) {
+        throw protocolMismatch("Pattern create result is invalid");
+      }
+      return Object.freeze({
+        committedRevision: value.committed_revision,
+        patternId: value.pattern_id,
+        bars: value.bars,
+        replayed: value.replayed,
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
+  function updateSequenceSettings(request) {
+    if (
+      request === null ||
+      typeof request !== "object" ||
+      !exactKeys(request, [
+        "expectedRevision",
+        "sessionId",
+        "bpm",
+        "quantizeEnabled",
+        "swingPercent",
+      ]) ||
+      !isUnsignedInteger(request.expectedRevision) ||
+      !(request.sessionId === null || UUID_PATTERN.test(request.sessionId)) ||
+      !(request.bpm === null ||
+        (isUnsignedInteger(request.bpm, 240) && request.bpm >= 40)) ||
+      !(request.quantizeEnabled === null ||
+        typeof request.quantizeEnabled === "boolean") ||
+      !(request.swingPercent === null ||
+        (isUnsignedInteger(request.swingPercent, 75) &&
+          request.swingPercent >= 50)) ||
+      (request.bpm === null && request.quantizeEnabled === null &&
+        request.swingPercent === null)
+    ) {
+      return Promise.reject(new TypeError("Sequence settings request is invalid"));
+    }
+    return serializeRuntimeAction(async () => {
+      const value = await boundedRequest("sequence.settings.update", {
+        command_id: crypto.randomUUID(),
+        expected_revision: request.expectedRevision,
+        session_id: request.sessionId,
+        bpm: request.bpm,
+        quantize_enabled: request.quantizeEnabled,
+        swing_percent: request.swingPercent,
+      });
+      if (
+        !exactKeys(value, [
+          "committed_revision",
+          "bpm",
+          "quantize_enabled",
+          "swing_percent",
+          "replayed",
+          "pattern_publication",
+          "project_revision",
+        ]) ||
+        !isUnsignedInteger(value.committed_revision) ||
+        !isUnsignedInteger(value.bpm, 240) || value.bpm < 40 ||
+        typeof value.quantize_enabled !== "boolean" ||
+        !isUnsignedInteger(value.swing_percent, 75) ||
+        value.swing_percent < 50 ||
+        typeof value.replayed !== "boolean" ||
+        value.project_revision !== value.committed_revision
+      ) {
+        throw protocolMismatch("Sequence settings result is invalid");
+      }
+      return Object.freeze({
+        committedRevision: value.committed_revision,
+        bpm: value.bpm,
+        quantizeEnabled: value.quantize_enabled,
+        swingPercent: value.swing_percent,
+        replayed: value.replayed,
+        patternPublication: normalizePatternPublication(value.pattern_publication),
+        projectRevision: value.project_revision,
+      });
+    });
+  }
+
   async function querySequenceStatus(projectId = null) {
     const payload = projectId === null
       ? {}
@@ -3114,6 +3224,8 @@ function createRuntimeSessionController(options = {}) {
     flushSequence,
     stopSequence,
     requestPatternSwitch,
+    createPattern,
+    updateSequenceSettings,
     querySequenceStatus,
     listSequenceRecovery,
     applySequenceRecovery,

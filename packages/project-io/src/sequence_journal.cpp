@@ -467,6 +467,19 @@ foundation::Result<JournalDocument> read_journal(
       } else if (kind == "state") {
         document.journal.state =
             parse_state(payload.value().at("state").get<std::string>());
+      } else if (kind == "rebase") {
+        const auto expected_revision =
+            payload.value().at("expected_revision").get<std::uint64_t>();
+        if (expected_revision <= document.journal.expected_revision ||
+            (document.journal.state != SequenceSessionState::active &&
+             document.journal.state != SequenceSessionState::switching) ||
+            std::any_of(
+                document.journal.flushes.begin(),
+                document.journal.flushes.end(),
+                [](const auto& flush) { return !flush.completed; })) {
+          throw std::runtime_error("Sequence rebase metadata is invalid");
+        }
+        document.journal.expected_revision = expected_revision;
       } else if (kind == "switch") {
         const auto pattern_id = foundation::PatternId{
             payload.value().at("pattern_id").get<std::string>()};
@@ -821,6 +834,40 @@ foundation::Result<void> SequenceJournal::set_state(
   return append_record(
       platform_, bundle, document.value(),
       {{"kind", "state"}, {"state", state_string(state)}});
+}
+
+foundation::Result<void> SequenceJournal::rebase(
+    const std::filesystem::path& bundle,
+    foundation::SequenceSessionId session_id,
+    std::uint64_t expected_revision) {
+  auto mutex = append_mutex(platform_);
+  std::lock_guard append_operation(*mutex);
+  auto lease = platform_->acquire_writer(bundle);
+  if (!lease.has_value()) {
+    return foundation::Result<void>::failure(lease.error());
+  }
+  auto operation = std::move(lease.value());
+  (void)operation;
+  auto document = read_journal(*platform_, bundle);
+  if (!document.has_value()) {
+    return foundation::Result<void>::failure(document.error());
+  }
+  const auto& journal = document.value().journal;
+  if (journal.session_id != session_id ||
+      expected_revision <= journal.expected_revision ||
+      (journal.state != SequenceSessionState::active &&
+       journal.state != SequenceSessionState::switching) ||
+      std::any_of(
+          journal.flushes.begin(), journal.flushes.end(),
+          [](const auto& flush) { return !flush.completed; })) {
+    return foundation::Result<void>::failure(Error{
+        ErrorCode::invalid_argument,
+        "Sequence rebase does not match the active session",
+    });
+  }
+  return append_record(
+      platform_, bundle, document.value(),
+      {{"expected_revision", expected_revision}, {"kind", "rebase"}});
 }
 
 foundation::Result<void> SequenceJournal::switch_pattern(

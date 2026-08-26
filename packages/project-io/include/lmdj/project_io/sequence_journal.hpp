@@ -86,6 +86,10 @@ class SequenceJournal {
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,
       SequenceSessionState state);
+  foundation::Result<void> rebase(
+      const std::filesystem::path& bundle,
+      foundation::SequenceSessionId session_id,
+      std::uint64_t expected_revision);
   foundation::Result<void> switch_pattern(
       const std::filesystem::path& bundle,
       foundation::SequenceSessionId session_id,

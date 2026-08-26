@@ -59,6 +59,32 @@ export interface SequenceRecoveryCandidate {
 }
 
 export interface SequenceRuntimeSession {
+  createPattern(request: {
+    readonly patternId: string;
+    readonly bars: 1 | 2 | 4 | 8;
+    readonly expectedRevision: number;
+  }): Promise<Readonly<{
+    committedRevision: number;
+    patternId: string;
+    bars: 1 | 2 | 4 | 8;
+    replayed: boolean;
+    projectRevision: number;
+  }>>;
+  updateSequenceSettings(request: {
+    readonly expectedRevision: number;
+    readonly sessionId: string | null;
+    readonly bpm: number | null;
+    readonly quantizeEnabled: boolean | null;
+    readonly swingPercent: number | null;
+  }): Promise<Readonly<{
+    committedRevision: number;
+    bpm: number;
+    quantizeEnabled: boolean;
+    swingPercent: number;
+    replayed: boolean;
+    patternPublication: SequencePatternPublication | null;
+    projectRevision: number;
+  }>>;
   subscribeSequenceBarBoundary(
     listener: (event: Readonly<{
       sessionId: string;

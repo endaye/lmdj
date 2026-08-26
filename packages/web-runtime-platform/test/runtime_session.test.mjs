@@ -14,6 +14,7 @@ const API = [
   "beginSequence",
   "clearSamplePreview",
   "close",
+  "createPattern",
   "diagnostics",
   "discardSequenceRecovery",
   "flushSequence",
@@ -46,6 +47,7 @@ const API = [
   "suspendAudio",
   "trigger",
   "updatePad",
+  "updateSequenceSettings",
 ].sort();
 
 const PLAYBACK = Object.freeze({
@@ -545,6 +547,24 @@ test("bridges Sequence authority without browser musical-clock math", async () =
               activation_frame: 96_000,
             },
           });
+        case "pattern.create":
+          return success(envelope, {
+            committed_revision: 6,
+            pattern_id: nextPatternId,
+            bars: 4,
+            replayed: false,
+            project_revision: 6,
+          });
+        case "sequence.settings.update":
+          return success(envelope, {
+            committed_revision: 6,
+            bpm: 132,
+            quantize_enabled: false,
+            swing_percent: 60,
+            replayed: false,
+            pattern_publication: null,
+            project_revision: 6,
+          });
         case "sequence.record.status":
           return success(envelope, {...baseStatus, project_revision: null});
         case "sequence.recovery.list":
@@ -616,6 +636,34 @@ test("bridges Sequence authority without browser musical-clock math", async () =
     generation: 2,
   }]);
   assert.equal(Object.isFrozen(boundaries[0]), true);
+  const settings = await session.updateSequenceSettings({
+    expectedRevision: 5,
+    sessionId,
+    bpm: 132,
+    quantizeEnabled: false,
+    swingPercent: 60,
+  });
+  assert.deepEqual(settings, {
+    committedRevision: 6,
+    bpm: 132,
+    quantizeEnabled: false,
+    swingPercent: 60,
+    replayed: false,
+    patternPublication: null,
+    projectRevision: 6,
+  });
+  const created = await session.createPattern({
+    patternId: nextPatternId,
+    bars: 4,
+    expectedRevision: 5,
+  });
+  assert.deepEqual(created, {
+    committedRevision: 6,
+    patternId: nextPatternId,
+    bars: 4,
+    replayed: false,
+    projectRevision: 6,
+  });
   assert.equal((await session.querySequenceStatus()).state, "active");
   assert.deepEqual(await session.listSequenceRecovery(), [{
     sessionId,
@@ -641,6 +689,21 @@ test("bridges Sequence authority without browser musical-clock math", async () =
   });
   assert.equal(Object.hasOwn(eventPayload, "runtime_frame"), false);
   assert.equal(Object.hasOwn(eventPayload, "input_sequence"), false);
+  const settingsPayload = operations.find(
+    ({operation}) => operation === "sequence.settings.update",
+  ).payload;
+  assert.match(
+    settingsPayload.command_id,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+  );
+  delete settingsPayload.command_id;
+  assert.deepEqual(settingsPayload, {
+    expected_revision: 5,
+    session_id: sessionId,
+    bpm: 132,
+    quantize_enabled: false,
+    swing_percent: 60,
+  });
 });
 
 test("pushes immutable diagnostics and honors unsubscribe", async () => {

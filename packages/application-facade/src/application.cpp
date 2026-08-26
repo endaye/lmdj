@@ -116,6 +116,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"asset.import", OperationKind::command},
       {"attempt.inspect", OperationKind::query},
       {"pad.assign", OperationKind::command},
+      {"pattern.create", OperationKind::command},
       {"project.create", OperationKind::command},
       {"project.inspect", OperationKind::query},
       {"provider.list", OperationKind::query},
@@ -138,6 +139,7 @@ const std::map<std::string, OperationKind>& operations() {
       {"sequence.record.stop", OperationKind::command},
       {"sequence.record.switch-request", OperationKind::command},
       {"sequence.record.status", OperationKind::query},
+      {"sequence.settings.update", OperationKind::command},
       {"sequence.recovery.list", OperationKind::query},
       {"sequence.recovery.apply", OperationKind::command},
       {"sequence.recovery.discard", OperationKind::command},
@@ -2895,6 +2897,9 @@ struct Application::Impl {
     if (operation == "project.create") {
       return project_create(request);
     }
+    if (operation == "pattern.create") {
+      return pattern_create(request);
+    }
     if (operation == "sample.inspect") {
       return sample_inspect(request);
     }
@@ -2939,6 +2944,9 @@ struct Application::Impl {
     }
     if (operation == "sequence.record.switch-request") {
       return sequence_switch(request);
+    }
+    if (operation == "sequence.settings.update") {
+      return sequence_settings_update(request);
     }
     if (operation == "sequence.recovery.apply") {
       return sequence_recovery_apply(request);
@@ -4046,6 +4054,140 @@ struct Application::Impl {
       result["pattern_id"] = pattern_id->value();
     }
     return success_envelope(std::move(result), 0);
+  }
+
+  nlohmann::json pattern_create(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "pattern_id", "bars"}),
+        "pattern.create request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto pattern_id = uuid_field(request, "pattern_id");
+    const auto bars = unsigned_field(request, "bars", 8);
+    require(bars == 1 || bars == 2 || bars == 4 || bars == 8,
+            "Pattern bars are invalid");
+    auto admitted = reject_if_sequence_active(path);
+    if (!admitted.has_value()) {
+      return error_envelope(admitted.error());
+    }
+    const auto created = projects.execute_with_identity(
+        path,
+        domain::Command{domain::CreatePattern{
+            domain::CommandMeta{
+                foundation::CommandId{command_id}, revision},
+            domain::Pattern{
+                foundation::PatternId{pattern_id},
+                static_cast<std::uint8_t>(bars),
+                {}},
+        }});
+    if (!created.has_value()) {
+      return error_envelope(created.error());
+    }
+    return success_envelope(
+        {{"committed_revision", created.value().outcome.state.revision},
+         {"pattern_id", pattern_id},
+         {"bars", bars},
+         {"replayed", created.value().outcome.replayed}},
+        created.value().outcome.state.revision);
+  }
+
+  nlohmann::json sequence_settings_update(const nlohmann::json& request) {
+    require(
+        exact_keys(
+            request,
+            {"operation", "project_path", "command_id", "expected_revision",
+             "session_id", "runtime_frame", "bpm", "quantize_enabled",
+             "swing_percent"}),
+        "sequence.settings.update request shape is invalid");
+    const auto path = absolute_path_field(request, "project_path");
+    const auto command_id = uuid_field(request, "command_id");
+    const auto revision = unsigned_field(request, "expected_revision");
+    const auto runtime_frame = unsigned_field(request, "runtime_frame");
+    std::optional<foundation::SequenceSessionId> session_id;
+    if (!request.at("session_id").is_null()) {
+      session_id = foundation::SequenceSessionId{
+          uuid_field(request, "session_id")};
+    }
+    std::optional<std::uint16_t> bpm;
+    if (!request.at("bpm").is_null()) {
+      const auto value = unsigned_field(request, "bpm", 240);
+      require(value >= 40, "Sequence BPM is invalid");
+      bpm = static_cast<std::uint16_t>(value);
+    }
+    std::optional<bool> quantize_enabled;
+    if (!request.at("quantize_enabled").is_null()) {
+      require(request.at("quantize_enabled").is_boolean(),
+              "Sequence Quantize is invalid");
+      quantize_enabled = request.at("quantize_enabled").get<bool>();
+    }
+    std::optional<std::uint8_t> swing_percent;
+    if (!request.at("swing_percent").is_null()) {
+      const auto value = unsigned_field(request, "swing_percent", 75);
+      require(value >= 50, "Sequence Swing is invalid");
+      swing_percent = static_cast<std::uint8_t>(value);
+    }
+    require(bpm.has_value() || quantize_enabled.has_value() ||
+                swing_percent.has_value(),
+            "Sequence settings update is empty");
+
+    std::lock_guard lock(sequence_mutex);
+    const auto found = sequence_sessions.find(sequence_key(path));
+    if (found == sequence_sessions.end()) {
+      require(!session_id.has_value(),
+              "Sequence settings owner does not match");
+    } else {
+      require(session_id.has_value() &&
+                  found->second.session_id == *session_id &&
+                  found->second.expected_revision == revision &&
+                  runtime_frame >= found->second.last_runtime_frame,
+              "Sequence settings owner does not match");
+    }
+    const auto updated = projects.execute_with_identity(
+        path,
+        domain::Command{domain::UpdateSequenceSettings{
+            domain::CommandMeta{
+                foundation::CommandId{command_id}, revision},
+            bpm,
+            quantize_enabled,
+            swing_percent,
+        }});
+    if (!updated.has_value()) {
+      return error_envelope(updated.error());
+    }
+    const auto& outcome = updated.value().outcome;
+    if (found != sequence_sessions.end()) {
+      auto& runtime = found->second;
+      if (outcome.state.revision > runtime.expected_revision) {
+        auto rebased = sequence_journals.rebase(
+            path, runtime.session_id, outcome.state.revision);
+        if (!rebased.has_value()) {
+          return error_envelope(rebased.error());
+        }
+      }
+      if (bpm.has_value()) {
+        auto anchor = audio::freeze_transport_bpm(
+            runtime.anchor, runtime_frame, outcome.state.bpm);
+        if (!anchor.has_value()) {
+          return error_envelope(anchor.error());
+        }
+        runtime.anchor = anchor.value();
+      }
+      runtime.expected_revision = outcome.state.revision;
+      runtime.quantize_enabled = outcome.state.quantize_enabled;
+      runtime.swing_percent = outcome.state.swing_percent;
+      runtime.last_runtime_frame = runtime_frame;
+    }
+    return success_envelope(
+        {{"committed_revision", outcome.state.revision},
+         {"bpm", outcome.state.bpm},
+         {"quantize_enabled", outcome.state.quantize_enabled},
+         {"swing_percent", outcome.state.swing_percent},
+         {"replayed", outcome.replayed}},
+        outcome.state.revision);
   }
 
   nlohmann::json asset_import(const nlohmann::json& request) {

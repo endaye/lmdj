@@ -204,6 +204,8 @@ export function createWebRuntimeHostController(options = {}) {
     flushSequence: session.flushSequence,
     stopSequence: session.stopSequence,
     requestPatternSwitch: session.requestPatternSwitch,
+    createPattern: session.createPattern,
+    updateSequenceSettings: session.updateSequenceSettings,
     querySequenceStatus: session.querySequenceStatus,
     listSequenceRecovery: session.listSequenceRecovery,
     applySequenceRecovery: session.applySequenceRecovery,

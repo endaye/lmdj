@@ -494,7 +494,7 @@ FacadeBundleFixture facade_bundle_fixture(
       {"contract", "lmdj.project-bundle.v1"},
       {"contract_version", "1.0.0"},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v1"},
+      {"project_contract", "lmdj.project.v3"},
       {"project_id", std::move(declared_project_id)},
       {"uncompressed_bytes", offset},
   };

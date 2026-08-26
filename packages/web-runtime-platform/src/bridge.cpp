@@ -219,7 +219,7 @@ std::chrono::milliseconds operation_deadline(std::string_view operation) {
 }
 
 bool supported_operation(std::string_view operation) {
-  static constexpr std::array<std::string_view, 38> operations{
+  static constexpr std::array<std::string_view, 40> operations{
       "host.status",
       "project.create",
       "project.open",
@@ -232,6 +232,7 @@ bool supported_operation(std::string_view operation) {
       "project.import.abort",
       "asset.import",
       "pad.assign",
+      "pattern.create",
       "snapshot.reload",
       "snapshot.retry",
       "sample.inspect",
@@ -254,6 +255,7 @@ bool supported_operation(std::string_view operation) {
       "sequence.record.stop",
       "sequence.record.switch-request",
       "sequence.record.status",
+      "sequence.settings.update",
       "sequence.recovery.list",
       "sequence.recovery.apply",
       "sequence.recovery.discard",
