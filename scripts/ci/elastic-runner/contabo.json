@@ -1,0 +1,26 @@
+{
+  "host": "contabo",
+  "slice": "lmdj-ci.slice",
+  "baseline": [
+    {"service": "actions.runner.endaye-lmdj.contabo-lmdj-linux.service", "user": "lmdj-runner-01", "index": 1, "roles": ["ci-general", "ci-core"]},
+    {"service": "actions.runner.endaye-lmdj.contabo-lmdj-linux-02.service", "user": "lmdj-runner-02", "index": 2, "roles": ["ci-general", "ci-core"]}
+  ],
+  "elastic": [
+    {"service": "actions.runner.endaye-lmdj.contabo-lmdj-linux-03.service", "user": "lmdj-runner-03", "index": 3, "roles": ["ci-general"]},
+    {"service": "actions.runner.endaye-lmdj.contabo-lmdj-linux-04.service", "user": "lmdj-runner-04", "index": 4, "roles": ["ci-general"]},
+    {"service": "actions.runner.endaye-lmdj.contabo-lmdj-linux-05.service", "user": "lmdj-runner-05", "index": 5, "roles": ["ci-general"]},
+    {"service": "actions.runner.endaye-lmdj.contabo-lmdj-linux-06.service", "user": "lmdj-runner-06", "index": 6, "roles": ["ci-general"]}
+  ],
+  "operational_ceiling": 4,
+  "busy_observations_required": 3,
+  "idle_observations_required": 15,
+  "cooldown_seconds": 300,
+  "grace_seconds": 10,
+  "heartbeat_interval_seconds": 604800,
+  "heartbeat_timeout_seconds": 180,
+  "next_job_memory_bytes": 4294967296,
+  "system_memory_reserve_bytes": 4294967296,
+  "cpu_load_max_ratio": 0.85,
+  "io_pressure_max_pct": 40.0,
+  "core_job_names": ["core (ubuntu-latest)", "core-asan", "core-coverage", "Core package"]
+}

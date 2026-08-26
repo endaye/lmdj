@@ -301,16 +301,43 @@ state of a dead role is therefore a cancelled run plus a runner-availability
 alert — not an unbounded wait, and not a silent bill.
 
 Concurrency is per role and equals the number of online runner services
-carrying that role; additional selected jobs queue behind them. Both hosts run
-the approved two services each, so `ci-general` offers four concurrent slots
-across the two hosts, `ci-web-heavy` two on netcup, and `ci-core` two on the
-Contabo host it shares with LMDJ staging. Raising the count is an operational
-change on the existing hosts, not a workflow change. Two per host is bounded
-rather than maximal because each CI CMake build is already capped at three
-parallel jobs, so services per host multiply into concurrent compile jobs per
-host: two services means at most six, which the hosts absorb, while three would
-mean nine and would slow every job on the machine. `web-runtime-host` is the
-lane most exposed to that contention, at roughly 40 minutes on the shared pool
+carrying that role; additional selected jobs queue behind them. Capacity is no
+longer a fixed count: each host runs a baseline of always-on services plus
+pre-registered elastic services that are stopped by default, and a host-local,
+systemd-timer-driven controller (`scripts/ci/elastic_runner.py`, issue #327)
+decides expansion. Netcup runs three baseline services with an elastic ceiling
+of eight; Contabo runs two baseline services with four elastic services
+registered and an operational ceiling of four — runners 05-06 exist as GitHub
+identities but stay outside controller consideration until real queueing
+evidence from operation at four justifies the approved ceiling of six.
+
+The controller holds no GitHub PAT and observes only host-local state. It
+scales out one service at a time, only when every active service has been busy
+for consecutive observations, a cooldown has elapsed, and CPU, slice-memory,
+system-memory, and I/O guards all admit one more worst-case job; the memory
+guards admit the *next* job rather than the current state and never count swap
+as relief, because netcup has none and overshoot there is an OOM kill. While a
+ci-core service is running a core job (or one the observer cannot classify,
+which is treated as core), scale-out is suppressed: admission guards cannot
+shed load already admitted, so timing-sensitive Core work wins by not
+admitting more, and baseline services additionally carry a higher CPUWeight
+than elastic ones. It scales in the highest-numbered idle elastic service
+after a sustained idle window, re-checks a grace window against the
+job-assignment race before stopping, and never stops a service with a live
+Runner.Worker. Invalid observations fail closed and preserve capacity. Stopped
+elastic services heartbeat on a schedule well inside GitHub's 14-day offline
+auto-removal window; a heartbeat that cannot reach listener-ready is reported
+as a registration loss and never silently retried, because re-registration is
+an off-host operation under the no-PAT design. A reboot restores baseline
+capacity because only baseline services are enabled. Operational rollback is
+`systemctl disable --now lmdj-elastic-runner.timer` plus stopping any active
+elastic services; it never deregisters healthy runners. The decision core is
+pure and covered by `tests/build/ci_elastic_runner_test.py`.
+
+Per-service CMake builds stay capped at three parallel jobs (four on netcup
+units), so services multiply into concurrent compile jobs; the elastic guards,
+not a fixed service count, now bound that product. `web-runtime-host` is the
+lane most exposed to contention, at roughly 40 minutes on the shared pool
 against 16-19 GitHub-hosted; its netcup timings are not yet recorded, so its
 75-minute limit stays a hang detector with headroom rather than a performance
 budget.
@@ -319,10 +346,19 @@ Linux CI routes by role label rather than by the shared `contabo` origin label,
 which is no longer a selection condition anywhere. The Contabo Singapore host,
 which also runs LMDJ staging, keeps `shared-with-staging` and carries the
 `ci-general` and `ci-core` roles under a resource slice that reserves at least
-about 2 vCPU and 8 GiB for the application and the OS. The CI-only netcup node
-carries `ci-only-host` and the `ci-general` and `ci-web-heavy` roles, with two
-runner services bounded to roughly 14 vCore and 48 GB and the rest left for the
-OS and cache maintenance. Routing splits two ways:
+about 2 vCPU and 8 GiB for the application and the OS; its elastic services
+carry `ci-general` only, so burst capacity can never broaden `ci-core` or
+reach deploy, release, production, sudo, or Docker authority. The CI-only
+netcup node carries `ci-only-host` and the `ci-general` and `ci-web-heavy`
+roles, with all runner services bounded by the `lmdj-ci.slice` at roughly 14
+vCore and 48 GB and the rest left for the OS and cache maintenance. Both hosts
+also serve as Tailscale exit nodes: that is a documented co-tenant workload
+covered by the headroom outside the CI slices, capacity math must never assume
+the runners own the host, and degraded exit-node latency during full elastic
+load is an accepted effect. Because the controller sees no GitHub queue, a
+burst ramps one service per cooldown interval rather than jumping to the
+ceiling; that ramp latency is the accepted cost of keeping credentials off the
+hosts, not a defect. Routing splits two ways:
 
 - **Hosted control plane, the declared exception.** Change Scope, PR Gate and
   `select-macos-runner` stay on `ubuntu-24.04`. Change Scope decides what runs

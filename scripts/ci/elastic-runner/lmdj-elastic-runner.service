@@ -1,0 +1,10 @@
+[Unit]
+Description=LMDJ elastic runner capacity controller (one observation tick)
+Documentation=https://github.com/endaye/lmdj/issues/327
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/lmdj/elastic_runner.py --config /etc/lmdj/elastic-runner.json --state /var/lib/lmdj-elastic/state.json
+StateDirectory=lmdj-elastic
+Nice=10

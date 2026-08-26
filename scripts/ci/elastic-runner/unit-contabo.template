@@ -1,0 +1,32 @@
+[Unit]
+Description=GitHub Actions Runner @NAME@
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=lmdj-runner-@INDEX@
+Group=lmdj-runner-@INDEX@
+WorkingDirectory=@WORKDIR@
+ExecStart=@WORKDIR@/runsvc.sh
+Restart=always
+RestartSec=5
+Slice=lmdj-ci.slice
+CPUWeight=@CPUWEIGHT@
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+UMask=0027
+ReadWritePaths=@WORKDIR@ /var/lib/lmdj-runner-@INDEX@ /var/cache/lmdj-ccache
+Environment=CCACHE_DIR=/var/cache/lmdj-ccache
+Environment=CCACHE_UMASK=002
+Environment=CMAKE_BUILD_PARALLEL_LEVEL=3
+
+[Install]
+WantedBy=multi-user.target
