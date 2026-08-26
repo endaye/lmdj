@@ -215,7 +215,8 @@ class ReleaseModelTest(unittest.TestCase):
         self.assertEqual(stage8.snapshot, "1.0.22.0")  # type: ignore[union-attr]
         candidate = ledger.intent_for_tag("lmdj-v1.0.36.0")
         self.assertIsNotNone(candidate)
-        self.assertEqual(candidate.disposition.value, "releasable")  # type: ignore[union-attr]
+        # Published 2026-08-26 through publish-release.yml run 32982586705.
+        self.assertEqual(candidate.disposition.value, "published")  # type: ignore[union-attr]
         self.assertEqual(candidate.channel, "canary")  # type: ignore[union-attr]
         self.assertEqual(candidate.profile, "web-runtime-host")  # type: ignore[union-attr]
         self.assertEqual(  # type: ignore[union-attr]
