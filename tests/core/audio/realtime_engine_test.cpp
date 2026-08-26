@@ -1683,6 +1683,7 @@ void voice_shorter_than_the_ramp_multiplies_attack_and_boundary() {
 
 void publishes_immutable_patterns_at_the_next_bar_boundary() {
   RealtimeEngine engine;
+  LMDJ_CHECK(!engine.current_pattern_origin_frame().has_value());
   std::array<float, 128> old_sample{};
   std::array<float, 128> next_sample{};
   old_sample.fill(0.25F);
@@ -1709,6 +1710,7 @@ void publishes_immutable_patterns_at_the_next_bar_boundary() {
   LMDJ_CHECK(first_publication.result == PatternPublishResult::accepted);
   LMDJ_CHECK(first_publication.activation_frame == 0);
   LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternA});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 0);
   LMDJ_CHECK(engine.start().has_value());
 
   render_frames(engine, 100);
@@ -1731,10 +1733,17 @@ void publishes_immutable_patterns_at_the_next_bar_boundary() {
 
   engine.render(left.data(), right.data(), 1);
   LMDJ_CHECK(engine.current_pattern_id() == PatternId{kPatternB});
+  LMDJ_CHECK(engine.current_pattern_origin_frame() == 96'000);
   LMDJ_CHECK(!engine.pending_pattern_id().has_value());
   LMDJ_CHECK(engine.pattern_telemetry().current_generation ==
              pending.generation);
   LMDJ_CHECK(engine.pattern_telemetry().applied_publications == 2);
+  LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
+  LMDJ_CHECK(!engine.clear_pattern_view().has_value());
+  engine.stop();
+  LMDJ_CHECK(engine.clear_pattern_view().has_value());
+  LMDJ_CHECK(!engine.current_pattern_id().has_value());
+  LMDJ_CHECK(!engine.current_pattern_origin_frame().has_value());
   LMDJ_CHECK(engine.reclaim_retired_patterns() == 1);
 }
 

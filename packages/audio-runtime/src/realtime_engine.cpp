@@ -553,6 +553,25 @@ PatternPublication RealtimeEngine::publish_pattern_view(
   };
 }
 
+foundation::Result<void> RealtimeEngine::clear_pattern_view() noexcept {
+  if (state_.load(std::memory_order_acquire) != RealtimeState::stopped) {
+    return invalid_argument(
+        "realtime Pattern may only be cleared while stopped");
+  }
+  if (pending_pattern_generation_.load(std::memory_order_acquire) != 0) {
+    return invalid_argument("realtime Pattern publication is pending");
+  }
+  const auto current =
+      current_pattern_slot_.exchange(kNoPatternSlot, std::memory_order_acq_rel);
+  if (current != kNoPatternSlot) {
+    pattern_slots_[current].state.store(
+        PatternState::reclaimable, std::memory_order_release);
+  }
+  pattern_origin_frame_.store(0, std::memory_order_release);
+  pattern_event_index_ = 0;
+  return foundation::Result<void>::success();
+}
+
 std::size_t RealtimeEngine::reclaim_retired_patterns() noexcept {
   std::size_t reclaimed = 0;
   for (auto& slot : pattern_slots_) {
@@ -594,6 +613,14 @@ RealtimeEngine::pending_pattern_id() const {
              ? std::nullopt
              : std::optional<foundation::PatternId>{
                    slot->pattern->pattern_id()};
+}
+
+std::optional<std::uint64_t>
+RealtimeEngine::current_pattern_origin_frame() const noexcept {
+  if (current_pattern_slot_.load(std::memory_order_acquire) == kNoPatternSlot) {
+    return std::nullopt;
+  }
+  return pattern_origin_frame_.load(std::memory_order_acquire);
 }
 
 ReclaimedBankTelemetry

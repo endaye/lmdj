@@ -274,9 +274,11 @@ class RealtimeEngine final {
   // remain Runtime-only and never mutate the source Runtime Snapshot.
   PatternPublication publish_pattern_view(
       PreparedPatternView&& pattern) noexcept;
+  foundation::Result<void> clear_pattern_view() noexcept;
   std::size_t reclaim_retired_patterns() noexcept;
   std::optional<foundation::PatternId> current_pattern_id() const;
   std::optional<foundation::PatternId> pending_pattern_id() const;
+  std::optional<std::uint64_t> current_pattern_origin_frame() const noexcept;
   // Control thread, concurrent with render. Frees only reclaimable banks,
   // which by construction hold no live Voice.
   ReclaimedBankTelemetry reclaim_retired_bank_telemetry() noexcept;
