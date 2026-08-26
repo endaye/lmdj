@@ -43,9 +43,12 @@
 namespace {
 
 using lmdj::audio::PreparedSampleBank;
+using lmdj::audio::PreparedPatternView;
+using lmdj::audio::PatternPublishResult;
 using lmdj::audio::PublishResult;
 using lmdj::audio::RealtimeEngine;
 using lmdj::foundation::ProjectId;
+using lmdj::foundation::PatternId;
 
 constexpr auto kProjectId = "00000000-0000-4000-8000-000000000001";
 constexpr std::uint64_t kPublications = 2'000;
@@ -55,6 +58,26 @@ PreparedSampleBank bank_at(std::uint64_t revision) {
   auto bank = PreparedSampleBank::empty(ProjectId{kProjectId}, revision);
   LMDJ_CHECK(bank.set_sample(0, std::span<const float>(kSample)).has_value());
   return bank;
+}
+
+PreparedPatternView pattern_at(std::uint64_t revision) {
+  const auto pattern_id = revision % 2 == 0
+                              ? "30000000-0000-4000-8000-000000000001"
+                              : "30000000-0000-4000-8000-000000000002";
+  auto prepared = PreparedPatternView::from_snapshot(
+      lmdj::cooker::RuntimeSnapshot{
+          ProjectId{kProjectId},
+          PatternId{pattern_id},
+          revision,
+          240,
+          1,
+          lmdj::domain::kPpq,
+          lmdj::domain::kBarTicks4x4,
+          {},
+          {},
+      });
+  LMDJ_CHECK(prepared.has_value());
+  return std::move(prepared.value());
 }
 
 struct Outcomes {
@@ -255,12 +278,63 @@ void test_publish_queue_full_is_unreachable_at_equal_capacities() {
       PublishResult::accepted);
 }
 
+void test_pattern_publication_switches_are_conserved_under_concurrency() {
+  constexpr std::uint64_t kPatternPublications = 40;
+  RealtimeEngine engine;
+  const auto initial = engine.publish_pattern_view(pattern_at(1));
+  LMDJ_CHECK(initial.result == PatternPublishResult::accepted);
+  LMDJ_CHECK(engine.start().has_value());
+
+  std::atomic<bool> rendering{true};
+  std::thread audio_thread([&] {
+    std::array<float, 128> left{};
+    std::array<float, 128> right{};
+    while (rendering.load(std::memory_order_acquire)) {
+      engine.render(
+          left.data(),
+          right.data(),
+          static_cast<std::uint32_t>(left.size()));
+    }
+  });
+
+  std::uint64_t accepted = 1;
+  for (std::uint64_t revision = 2;
+       revision <= kPatternPublications;
+       ++revision) {
+    while (engine.pattern_telemetry().pending_generation != 0) {
+      engine.reclaim_retired_patterns();
+      std::this_thread::yield();
+    }
+    engine.reclaim_retired_patterns();
+    auto publication = engine.publish_pattern_view(pattern_at(revision));
+    LMDJ_CHECK(publication.result == PatternPublishResult::accepted);
+    ++accepted;
+  }
+  while (engine.pattern_telemetry().pending_generation != 0) {
+    engine.reclaim_retired_patterns();
+    std::this_thread::yield();
+  }
+  rendering.store(false, std::memory_order_release);
+  audio_thread.join();
+  engine.reclaim_retired_patterns();
+
+  const auto telemetry = engine.pattern_telemetry();
+  LMDJ_CHECK(telemetry.accepted_publications == accepted);
+  LMDJ_CHECK(telemetry.applied_publications == accepted);
+  LMDJ_CHECK(telemetry.pending_generation == 0);
+  LMDJ_CHECK(telemetry.current_generation == accepted);
+  LMDJ_CHECK(telemetry.publication_rejections == 0);
+  LMDJ_CHECK(engine.current_pattern_id() ==
+             PatternId{"30000000-0000-4000-8000-000000000001"});
+}
+
 }  // namespace
 
 int main() {
   try {
     test_publication_accounting_is_conserved_under_concurrency();
     test_publish_queue_full_is_unreachable_at_equal_capacities();
+    test_pattern_publication_switches_are_conserved_under_concurrency();
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';
     return 1;

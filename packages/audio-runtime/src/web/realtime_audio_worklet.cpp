@@ -1,5 +1,19 @@
 #include <lmdj/audio/web/realtime_audio_worklet.hpp>
 
+#include <lmdj/audio/prepared_sample_bank.hpp>
+
+static_assert(lmdj::audio::kTickDenominator == 2'880'000);
+static_assert(lmdj::audio::integrate_tick_numerator(0, 62, 192).value() ==
+              11'427'840);
+static_assert(lmdj::audio::whole_tick(
+                  lmdj::audio::integrate_tick_numerator(0, 62, 192).value()) ==
+              3);
+static_assert(lmdj::audio::whole_tick(
+                  lmdj::audio::integrate_tick_numerator(0, 63, 192).value()) ==
+              4);
+static_assert(lmdj::audio::integrate_tick_numerator(
+                  2'007'360, 31, 97).value() == 4'894'080);
+
 #if defined(__EMSCRIPTEN__)
 
 #include <algorithm>

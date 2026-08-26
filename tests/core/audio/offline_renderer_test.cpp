@@ -181,9 +181,12 @@ std::shared_ptr<const RuntimeSnapshot> snapshot(
   return std::make_shared<const RuntimeSnapshot>(
       RuntimeSnapshot{
           ProjectId{"00000000-0000-4000-8000-000000000001"},
+          PatternId{"30000000-0000-4000-8000-000000000001"},
           17,
           bpm,
           bars,
+          lmdj::domain::kPpq,
+          lmdj::domain::pattern_length_ticks(bars),
           std::move(pads),
           std::move(events),
       });
@@ -194,9 +197,12 @@ std::shared_ptr<const RuntimeSnapshot> snapshot_with_playback(
     ResolvedPlayback playback) {
   return std::make_shared<const RuntimeSnapshot>(RuntimeSnapshot{
       ProjectId{"00000000-0000-4000-8000-000000000001"},
+      PatternId{"30000000-0000-4000-8000-000000000001"},
       17,
       120,
       1,
+      lmdj::domain::kPpq,
+      lmdj::domain::kBarTicks4x4,
       {
           ResolvedPad{
               event.slot,
@@ -252,10 +258,10 @@ void test_render_writes_exact_header_frame_count_and_step_positions() {
   TempDirectory temp;
   const auto impulse = sample(1, {1'200});
   const auto input = snapshot({
-      {PadSlotId{0, 0}, 0, 127, impulse},
-      {PadSlotId{0, 0}, 4, 127, impulse},
-      {PadSlotId{0, 0}, 8, 127, impulse},
-      {PadSlotId{0, 0}, 12, 127, impulse},
+      {PadSlotId{0, 0}, 0, 240, 127, impulse},
+      {PadSlotId{0, 0}, 960, 240, 127, impulse},
+      {PadSlotId{0, 0}, 1'920, 240, 127, impulse},
+      {PadSlotId{0, 0}, 2'880, 240, 127, impulse},
   });
   const auto output_path = temp.path() / "positions.wav";
 
@@ -298,7 +304,7 @@ void test_render_preserves_stereo_and_scales_velocity() {
   TempDirectory temp;
   const auto stereo = sample(2, {-2, 1'000});
   const auto input =
-      snapshot({{PadSlotId{0, 1}, 0, 64, stereo}});
+      snapshot({{PadSlotId{0, 1}, 0, 240, 64, stereo}});
   const auto output_path = temp.path() / "stereo-velocity.wav";
 
   const auto rendered =
@@ -316,7 +322,7 @@ void test_pattern_events_apply_trim_gain_and_mute_as_one_shot_starts() {
       2,
       {100, -100, 2'000, -2'000, 3'000, -3'000, 4'000, -4'000});
   const auto trimmed = snapshot_with_playback(
-      ResolvedEvent{PadSlotId{0, 0}, 0, 127, stereo},
+      ResolvedEvent{PadSlotId{0, 0}, 0, 240, 127, stereo},
       ResolvedPlayback{
           1, 3, TriggerMode::loop_toggle, 0.5F, false});
   const auto trimmed_path = temp.path() / "trimmed.wav";
@@ -330,11 +336,11 @@ void test_pattern_events_apply_trim_gain_and_mute_as_one_shot_starts() {
   LMDJ_CHECK(read_pcm16(wav, 0, 1) == -1'000);
   LMDJ_CHECK(read_pcm16(wav, 1, 0) == 1'500);
   LMDJ_CHECK(read_pcm16(wav, 1, 1) == -1'500);
-  LMDJ_CHECK(read_pcm16(wav, 2, 0) == 0);
-  LMDJ_CHECK(read_pcm16(wav, 2, 1) == 0);
+  LMDJ_CHECK(read_pcm16(wav, 2, 0) == 1'000);
+  LMDJ_CHECK(read_pcm16(wav, 2, 1) == -1'000);
 
   const auto muted = snapshot_with_playback(
-      ResolvedEvent{PadSlotId{0, 0}, 0, 127, stereo},
+      ResolvedEvent{PadSlotId{0, 0}, 0, 240, 127, stereo},
       ResolvedPlayback{0, 4, TriggerMode::gate, 1.0F, true});
   const auto muted_path = temp.path() / "muted.wav";
   LMDJ_CHECK(render_offline(OfflineRenderRequest{muted, muted_path})
@@ -350,8 +356,8 @@ void test_render_saturates_overlapping_events_without_wrap() {
   TempDirectory temp;
   const auto loud = sample(2, {30'000, -30'000});
   const auto input = snapshot({
-      {PadSlotId{0, 0}, 0, 127, loud},
-      {PadSlotId{0, 1}, 0, 127, loud},
+      {PadSlotId{0, 0}, 0, 240, 127, loud},
+      {PadSlotId{0, 1}, 0, 240, 127, loud},
   });
   const auto output_path = temp.path() / "saturation.wav";
 
@@ -375,9 +381,9 @@ void test_render_saturates_each_event_in_snapshot_order() {
       render_offline(
           OfflineRenderRequest{
               snapshot({
-                  {PadSlotId{0, 0}, 0, 127, positive},
-                  {PadSlotId{0, 1}, 0, 127, positive},
-                  {PadSlotId{0, 2}, 0, 127, negative},
+                  {PadSlotId{0, 0}, 0, 240, 127, positive},
+                  {PadSlotId{0, 1}, 0, 240, 127, positive},
+                  {PadSlotId{0, 2}, 0, 240, 127, negative},
               }),
               forward_path,
           });
@@ -385,9 +391,9 @@ void test_render_saturates_each_event_in_snapshot_order() {
       render_offline(
           OfflineRenderRequest{
               snapshot({
-                  {PadSlotId{0, 2}, 0, 127, negative},
-                  {PadSlotId{0, 0}, 0, 127, positive},
-                  {PadSlotId{0, 1}, 0, 127, positive},
+                  {PadSlotId{0, 2}, 0, 240, 127, negative},
+                  {PadSlotId{0, 0}, 0, 240, 127, positive},
+                  {PadSlotId{0, 1}, 0, 240, 127, positive},
               }),
               reverse_path,
           });
@@ -406,7 +412,7 @@ void test_render_does_not_mutate_the_input_snapshot() {
   TempDirectory temp;
   const auto source = sample(1, {-1, 2, -3});
   const auto input =
-      snapshot({{PadSlotId{0, 2}, 8, 96, source}});
+      snapshot({{PadSlotId{0, 2}, 1'920, 240, 96, source}});
   static_assert(
       std::is_const_v<std::remove_reference_t<decltype(*input)>>);
   const auto source_before = source->interleaved;
@@ -422,7 +428,9 @@ void test_render_does_not_mutate_the_input_snapshot() {
   LMDJ_CHECK(input->bars == 1);
   LMDJ_CHECK(input->events.size() == 1);
   LMDJ_CHECK(input->events.front().slot == event_before.slot);
-  LMDJ_CHECK(input->events.front().step == event_before.step);
+  LMDJ_CHECK(input->events.front().onset_tick == event_before.onset_tick);
+  LMDJ_CHECK(input->events.front().duration_tick ==
+             event_before.duration_tick);
   LMDJ_CHECK(input->events.front().velocity == event_before.velocity);
   LMDJ_CHECK(input->events.front().sample == event_before.sample);
   LMDJ_CHECK(source->interleaved == source_before);
@@ -433,10 +441,10 @@ void test_render_matches_independent_golden_audio_sha() {
   const auto kick = fixture_sample("kick.wav");
   const auto snare = fixture_sample("snare.wav");
   const auto input = snapshot({
-      {PadSlotId{0, 0}, 0, 127, kick},
-      {PadSlotId{0, 1}, 4, 127, snare},
-      {PadSlotId{0, 0}, 8, 127, kick},
-      {PadSlotId{0, 1}, 12, 127, snare},
+      {PadSlotId{0, 0}, 0, 240, 127, kick},
+      {PadSlotId{0, 1}, 960, 240, 127, snare},
+      {PadSlotId{0, 0}, 1'920, 240, 127, kick},
+      {PadSlotId{0, 1}, 2'880, 240, 127, snare},
   });
   const auto output_path = temp.path() / "one_bar_120bpm.wav";
 
@@ -553,10 +561,10 @@ void test_authoring_project_cooks_directly_into_golden_render() {
               PatternId{kPatternId},
               1,
               {
-                  {PadSlotId{0, 0}, 0, 127},
-                  {PadSlotId{0, 1}, 4, 127},
-                  {PadSlotId{0, 0}, 8, 127},
-                  {PadSlotId{0, 1}, 12, 127},
+                  {PadSlotId{0, 0}, 0, 240, 127},
+                  {PadSlotId{0, 1}, 960, 240, 127},
+                  {PadSlotId{0, 0}, 1'920, 240, 127},
+                  {PadSlotId{0, 1}, 2'880, 240, 127},
               },
           },
       }});
@@ -642,10 +650,18 @@ void test_render_rejects_snapshot_invariants_before_allocating() {
   const auto impulse = sample(1, {1});
   expect_invalid_snapshot(
       snapshot(
-          {{PadSlotId{0, 0}, 128, 127, impulse}},
+          {{PadSlotId{0, 0}, 30'720, 240, 127, impulse}},
           40,
           8),
-      temp.path() / "step-invalid.wav");
+      temp.path() / "tick-invalid.wav");
+  auto wrong_ppq = std::make_shared<RuntimeSnapshot>(*snapshot({}));
+  wrong_ppq->ppq = 480;
+  expect_invalid_snapshot(wrong_ppq, temp.path() / "ppq-invalid.wav");
+  auto zero_duration = std::make_shared<RuntimeSnapshot>(
+      *snapshot({{PadSlotId{0, 0}, 0, 240, 127, impulse}}));
+  zero_duration->events.front().duration_tick = 0;
+  expect_invalid_snapshot(
+      zero_duration, temp.path() / "duration-invalid.wav");
 }
 
 void test_render_accepts_the_largest_task5_snapshot_shape() {

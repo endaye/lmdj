@@ -17,7 +17,9 @@ SAMPLE_RATE = 48_000
 CHANNELS = 2
 BPM = 120
 BARS = 1
-STEPS_PER_BAR = 16
+PPQ = 960
+TICKS_PER_BAR = 4 * PPQ
+TICK_DENOMINATOR = SAMPLE_RATE * 60
 VELOCITY_MAX = 127
 
 GOLDEN_DIR = Path(__file__).resolve().parent
@@ -32,6 +34,29 @@ def floor_div(numerator: int, denominator: int) -> int:
 
 def scale_velocity(sample_value: int, velocity: int) -> int:
     return floor_div(sample_value * velocity + 63, VELOCITY_MAX)
+
+
+def tick_numerator(anchor: int, frames: int, bpm: int) -> int:
+    return anchor + frames * bpm * PPQ
+
+
+def whole_tick(numerator: int) -> int:
+    return numerator // TICK_DENOMINATOR
+
+
+def tick_boundary_frame(tick: int, bpm: int) -> int:
+    numerator = tick * TICK_DENOMINATOR
+    rate = bpm * PPQ
+    return (numerator + rate - 1) // rate
+
+
+def verify_transport_vectors() -> None:
+    assert tick_numerator(0, 62, 192) == 11_427_840
+    assert whole_tick(tick_numerator(0, 62, 192)) == 3
+    assert whole_tick(tick_numerator(0, 63, 192)) == 4
+    frozen = tick_numerator(0, 17, 123)
+    assert frozen == 2_007_360
+    assert tick_numerator(frozen, 31, 97) == 4_894_080
 
 
 def read_pcm16(path: Path) -> tuple[int, list[int]]:
@@ -53,22 +78,24 @@ def read_pcm16(path: Path) -> tuple[int, list[int]]:
 
 
 def render() -> list[int]:
-    bar_frames = (4 * 60 * SAMPLE_RATE) // BPM
-    frame_count = BARS * bar_frames
+    frame_count = tick_boundary_frame(BARS * TICKS_PER_BAR, BPM)
     output = [0] * (frame_count * CHANNELS)
     events = (
-        ("kick.wav", 0, 127),
-        ("snare.wav", 4, 127),
-        ("kick.wav", 8, 127),
-        ("snare.wav", 12, 127),
+        ("kick.wav", 0, 240, 127),
+        ("snare.wav", 960, 240, 127),
+        ("kick.wav", 1_920, 240, 127),
+        ("snare.wav", 2_880, 240, 127),
     )
 
-    for filename, step, velocity in events:
+    for filename, onset_tick, duration_tick, velocity in events:
         source_channels, source = read_pcm16(AUDIO_DIR / filename)
-        step_frame = (step * SAMPLE_RATE * 60) // (BPM * 4)
+        start_frame = tick_boundary_frame(onset_tick, BPM)
+        release_frame = tick_boundary_frame(onset_tick + duration_tick, BPM)
+        if release_frame <= start_frame:
+            raise ValueError("invalid Golden Audio event duration")
         source_frames = len(source) // source_channels
         for source_frame in range(source_frames):
-            output_frame = step_frame + source_frame
+            output_frame = start_frame + source_frame
             if output_frame >= frame_count:
                 break
             for channel in range(CHANNELS):
@@ -121,6 +148,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
+    verify_transport_vectors()
     wav_bytes, sha_bytes = expected_outputs()
     digest = hashlib.sha256(wav_bytes).hexdigest()
 

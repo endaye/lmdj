@@ -25,9 +25,12 @@ struct ResolvedPlayback {
 
 struct ResolvedEvent {
   domain::PadSlotId slot;
-  std::uint32_t step;
+  std::uint32_t onset_tick;
+  std::uint32_t duration_tick;
   std::uint8_t velocity;
   std::shared_ptr<const PcmSample> sample;
+
+  bool operator==(const ResolvedEvent&) const = default;
 };
 
 struct ResolvedPad {
@@ -39,9 +42,12 @@ struct ResolvedPad {
 
 struct RuntimeSnapshot {
   foundation::ProjectId project_id;
+  foundation::PatternId pattern_id;
   std::uint64_t project_revision;
   std::uint16_t bpm;
   std::uint8_t bars;
+  std::uint32_t ppq;
+  std::uint32_t loop_length_ticks;
   std::vector<ResolvedPad> pads;
   std::vector<ResolvedEvent> events;
 };

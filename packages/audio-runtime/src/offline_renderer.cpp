@@ -1,6 +1,7 @@
 #include <lmdj/audio/offline_renderer.hpp>
 
 #include <lmdj/audio/mix_math.hpp>
+#include <lmdj/audio/prepared_sample_bank.hpp>
 #include <lmdj/audio/wav_writer.hpp>
 
 #include <algorithm>
@@ -19,7 +20,6 @@ constexpr std::uint16_t kOutputChannels = 2;
 constexpr std::uint8_t kMaximumVelocity = 127;
 constexpr std::uint16_t kMinimumBpm = 40;
 constexpr std::uint16_t kMaximumBpm = 240;
-constexpr std::uint32_t kStepsPerBar = 16;
 constexpr std::uint64_t kRiffPcmOverhead = 36;
 
 constexpr bool has_supported_bar_count(std::uint8_t bars) {
@@ -48,6 +48,22 @@ constexpr bool checked_add(
   }
   result = left + right;
   return true;
+}
+
+constexpr bool is_looping(domain::TriggerMode mode) noexcept {
+  return mode == domain::TriggerMode::loop_gate ||
+         mode == domain::TriggerMode::loop_toggle;
+}
+
+constexpr bool valid_trigger_mode(domain::TriggerMode mode) noexcept {
+  switch (mode) {
+    case domain::TriggerMode::one_shot:
+    case domain::TriggerMode::gate:
+    case domain::TriggerMode::loop_gate:
+    case domain::TriggerMode::loop_toggle:
+      return true;
+  }
+  return false;
 }
 
 foundation::Result<OfflineRenderResult> invalid_request(
@@ -86,38 +102,34 @@ foundation::Result<OfflineRenderResult> render_offline(
     return invalid_request(
         "offline render BPM is outside the Snapshot range");
   }
-  if (!has_supported_bar_count(snapshot.bars)) {
+  if (!has_supported_bar_count(snapshot.bars) ||
+      snapshot.ppq != kTransportPpq ||
+      snapshot.loop_length_ticks == 0 ||
+      snapshot.loop_length_ticks !=
+          domain::pattern_length_ticks(snapshot.bars)) {
     return invalid_request(
-        "offline render bar count is outside the Snapshot set");
+        "offline render Pattern timing is outside the Snapshot set");
   }
-  const auto step_limit =
-      static_cast<std::uint32_t>(snapshot.bars) * kStepsPerBar;
   for (const auto& event : snapshot.events) {
-    if (event.step >= step_limit) {
+    if (event.onset_tick >= snapshot.loop_length_ticks ||
+        event.duration_tick < 1 ||
+        event.duration_tick >
+            snapshot.loop_length_ticks - event.onset_tick) {
       return invalid_request(
-          "offline render event step is outside the Snapshot");
+          "offline render event ticks are outside the Snapshot");
     }
   }
 
-  std::uint64_t bar_frame_numerator = 0;
-  std::uint64_t frame_count = 0;
+  auto frame_boundary = tick_boundary_frame(
+      snapshot.loop_length_ticks, snapshot.bpm, snapshot.ppq);
+  if (!frame_boundary.has_value() || frame_boundary.value() == 0) {
+    return invalid_request("offline render frame count is invalid");
+  }
+  const auto frame_count = frame_boundary.value();
   std::uint64_t interleaved_samples = 0;
   std::uint64_t pcm_bytes = 0;
   std::uint64_t riff_size = 0;
-  if (!checked_multiply(4, 60, bar_frame_numerator) ||
-      !checked_multiply(
-          bar_frame_numerator,
-          kSampleRate,
-          bar_frame_numerator)) {
-    return invalid_request("offline render frame count is invalid");
-  }
-  const auto bar_frames = bar_frame_numerator / snapshot.bpm;
-  if (bar_frames == 0 ||
-      !checked_multiply(
-          bar_frames,
-          snapshot.bars,
-          frame_count) ||
-      !checked_multiply(
+  if (!checked_multiply(
           frame_count,
           kOutputChannels,
           interleaved_samples) ||
@@ -169,15 +181,27 @@ foundation::Result<OfflineRenderResult> render_offline(
       return invalid_request("offline render event has no resolved Pad");
     }
 
-    const auto step_frame =
-        (static_cast<std::uint64_t>(event.step) * kSampleRate * 60U) /
-        (static_cast<std::uint64_t>(snapshot.bpm) * 4U);
+    auto start_boundary = tick_boundary_frame(
+        event.onset_tick, snapshot.bpm, snapshot.ppq);
+    auto release_boundary = tick_boundary_frame(
+        static_cast<std::uint64_t>(event.onset_tick) +
+            event.duration_tick,
+        snapshot.bpm,
+        snapshot.ppq);
+    if (!start_boundary.has_value() || !release_boundary.has_value() ||
+        release_boundary.value() <= start_boundary.value() ||
+        release_boundary.value() > frame_count) {
+      return invalid_request("offline render event frame is invalid");
+    }
+    const auto start_frame = start_boundary.value();
+    const auto release_frame = release_boundary.value();
 
     const auto source_frames =
         source.interleaved.size() / source.channels;
     const auto& playback = pad->playback;
     if (playback.start_frame >= playback.end_frame ||
         playback.end_frame > source_frames ||
+        !valid_trigger_mode(playback.trigger_mode) ||
         !std::isfinite(playback.linear_gain) ||
         playback.linear_gain < 0.0F) {
       return invalid_request("offline render Pad playback is invalid");
@@ -185,13 +209,25 @@ foundation::Result<OfflineRenderResult> render_offline(
     if (playback.muted) {
       continue;
     }
-    for (std::size_t source_frame = playback.start_frame;
-         source_frame < playback.end_frame &&
-         step_frame + source_frame - playback.start_frame < frame_count;
-         ++source_frame) {
+    const auto playback_frames =
+        static_cast<std::uint64_t>(playback.end_frame - playback.start_frame);
+    auto audible_frames = playback_frames;
+    if (playback.trigger_mode != domain::TriggerMode::one_shot) {
+      audible_frames = std::min(
+          release_frame - start_frame,
+          is_looping(playback.trigger_mode)
+              ? release_frame - start_frame
+              : playback_frames);
+    }
+    audible_frames = std::min(audible_frames, frame_count - start_frame);
+    for (std::uint64_t relative_frame = 0;
+         relative_frame < audible_frames;
+         ++relative_frame) {
+      const auto source_frame = static_cast<std::size_t>(
+          playback.start_frame + relative_frame % playback_frames);
       const auto output_offset =
           static_cast<std::size_t>(
-              step_frame + source_frame - playback.start_frame) *
+              start_frame + relative_frame) *
           kOutputChannels;
       const auto source_offset = source_frame * source.channels;
       if (source.channels == 1) {

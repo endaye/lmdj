@@ -3,6 +3,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -14,6 +16,119 @@
 namespace lmdj::audio {
 
 class RealtimeEngine;
+
+inline constexpr std::uint32_t kTransportPpq = 960;
+inline constexpr std::uint32_t kTransportSampleRate = 48'000;
+inline constexpr std::uint64_t kTickDenominator = 2'880'000;
+static_assert(
+    kTickDenominator ==
+    static_cast<std::uint64_t>(kTransportSampleRate) * 60U);
+
+constexpr std::optional<std::uint64_t> integrate_tick_numerator(
+    std::uint64_t anchor_numerator,
+    std::uint64_t frame_delta,
+    std::uint16_t bpm,
+    std::uint32_t ppq = kTransportPpq) noexcept {
+  const auto rate = static_cast<std::uint64_t>(bpm) * ppq;
+  if (rate == 0 ||
+      frame_delta >
+          (std::numeric_limits<std::uint64_t>::max() - anchor_numerator) /
+              rate) {
+    return std::nullopt;
+  }
+  return anchor_numerator + frame_delta * rate;
+}
+
+constexpr std::uint64_t whole_tick(
+    std::uint64_t tick_numerator) noexcept {
+  return tick_numerator / kTickDenominator;
+}
+
+struct TransportAnchor {
+  std::uint64_t runtime_frame{};
+  std::uint64_t tick_numerator{};
+  std::uint16_t bpm{};
+
+  bool operator==(const TransportAnchor&) const = default;
+};
+
+foundation::Result<std::uint64_t> tick_numerator_at(
+    const TransportAnchor& anchor,
+    std::uint64_t runtime_frame) noexcept;
+foundation::Result<std::uint64_t> raw_tick_at(
+    const TransportAnchor& anchor,
+    std::uint64_t runtime_frame) noexcept;
+foundation::Result<TransportAnchor> freeze_transport_bpm(
+    const TransportAnchor& anchor,
+    std::uint64_t runtime_frame,
+    std::uint16_t new_bpm) noexcept;
+foundation::Result<std::uint64_t> tick_boundary_frame(
+    std::uint64_t tick,
+    std::uint16_t bpm,
+    std::uint32_t ppq = kTransportPpq) noexcept;
+
+struct PreparedPatternEvent {
+  domain::PadSlotId slot;
+  std::uint32_t onset_tick{};
+  std::uint32_t duration_tick{};
+  std::uint8_t velocity{};
+  std::uint64_t start_frame{};
+  std::uint64_t release_frame{};
+
+  bool operator==(const PreparedPatternEvent&) const = default;
+};
+
+class PreparedPatternView final {
+ public:
+  PreparedPatternView(PreparedPatternView&&) noexcept = default;
+  PreparedPatternView& operator=(PreparedPatternView&&) noexcept = default;
+  PreparedPatternView(const PreparedPatternView&) = delete;
+  PreparedPatternView& operator=(const PreparedPatternView&) = delete;
+
+  static foundation::Result<PreparedPatternView> from_snapshot(
+      const cooker::RuntimeSnapshot& snapshot);
+  static foundation::Result<PreparedPatternView> from_snapshot_with_overlay(
+      const cooker::RuntimeSnapshot& snapshot,
+      std::span<const domain::PatternEvent> journal_overlay);
+
+  const foundation::ProjectId& project_id() const noexcept;
+  const foundation::PatternId& pattern_id() const noexcept;
+  std::uint64_t project_revision() const noexcept;
+  std::uint16_t bpm() const noexcept;
+  std::uint32_t ppq() const noexcept;
+  std::uint32_t loop_length_ticks() const noexcept;
+  std::uint64_t loop_frames() const noexcept;
+  std::uint64_t bar_frames() const noexcept;
+  const std::vector<PreparedPatternEvent>& events() const noexcept;
+  bool has_overlay() const noexcept;
+
+ private:
+  static foundation::Result<PreparedPatternView> prepare(
+      const cooker::RuntimeSnapshot& snapshot,
+      std::span<const domain::PatternEvent> journal_overlay);
+  PreparedPatternView(
+      foundation::ProjectId project_id,
+      foundation::PatternId pattern_id,
+      std::uint64_t project_revision,
+      std::uint16_t bpm,
+      std::uint32_t ppq,
+      std::uint32_t loop_length_ticks,
+      std::uint64_t loop_frames,
+      std::uint64_t bar_frames,
+      std::vector<PreparedPatternEvent> events,
+      bool has_overlay);
+
+  foundation::ProjectId project_id_;
+  foundation::PatternId pattern_id_;
+  std::uint64_t project_revision_{};
+  std::uint16_t bpm_{};
+  std::uint32_t ppq_{};
+  std::uint32_t loop_length_ticks_{};
+  std::uint64_t loop_frames_{};
+  std::uint64_t bar_frames_{};
+  std::vector<PreparedPatternEvent> events_;
+  bool has_overlay_{};
+};
 
 class PreparedSampleBank final {
  public:
