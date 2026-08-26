@@ -262,15 +262,20 @@ lmdj_add_test(
   TIMEOUT 30
 )
 
+# Host tier, not contract: this case validates the real assembled-product
+# snapshot by launching the portal's Node release-docs checker (~5s idle), so
+# its cost scales with host contention, not with contract parsing. The 30s
+# contract budget left <6x headroom and timed out at 30.2x s repeatedly on the
+# loaded ci-core host (issue #291); 120s is 4x the observed loaded worst case.
 lmdj_add_test(
   NAME build.release_audit.remote_canonical
-  TIER contract
+  TIER host
   COMMAND
     "${Python3_EXECUTABLE}"
     tests/build/release_audit_test.py
     ReleaseAuditIntegrationTest.test_remote_canonical_product_build_without_intent_audits_registered_entries
   WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
-  TIMEOUT 30
+  TIMEOUT 120
 )
 
 lmdj_add_test(
