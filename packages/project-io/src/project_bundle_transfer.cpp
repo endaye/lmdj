@@ -214,7 +214,10 @@ foundation::Result<ParsedIndex> parse_index(std::string_view encoded) {
       index.at("contract") != "lmdj.project-bundle.v1" ||
       index.at("contract_version") != "1.0.0" ||
       index.at("compression") != "none" ||
-      index.at("project_contract") != "lmdj.project.v1" ||
+      !index.at("project_contract").is_string() ||
+      (index.at("project_contract") != "lmdj.project.v1" &&
+       index.at("project_contract") != "lmdj.project.v2" &&
+       index.at("project_contract") != "lmdj.project.v3") ||
       !index.at("project_id").is_string() ||
       !index.at("bundle_digest").is_string() ||
       !index.at("entries").is_array()) {
@@ -415,7 +418,7 @@ foundation::Result<std::string> project_digest(
       {"contract", "lmdj.project-bundle.v1"},
       {"contract_version", "1.0.0"},
       {"entries", std::move(encoded_entries)},
-      {"project_contract", "lmdj.project.v1"},
+      {"project_contract", "lmdj.project.v3"},
       {"project_id", project_id.value()},
       {"uncompressed_bytes", offset},
   };
